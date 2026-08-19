@@ -29,3 +29,4 @@ An ADR that merely describes the code is not worth having.
 | [0019](0019-mcp-lands-in-milestone-3-not-milestone-1.md) | MCP lands in Milestone 3, not Milestone 1 | Proposed |
 | [0020](0020-managed-linked-and-vault-assets.md) | Managed, linked and vault assets | Accepted |
 | [0021](0021-encrypted-vault-content.md) | Encrypted vault content | Proposed |
+| [0022](0022-device-enrolment-and-key-recovery.md) | Device enrolment and key recovery | Proposed |
