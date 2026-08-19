@@ -15,6 +15,16 @@ concurrency:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Build-tagged files are invisible to a lint run on another platform —
+        # a gosec finding in reflink_linux.go survived a clean local darwin lint
+        # and only surfaced here. Lint every platform we build for.
+        goos: [linux, darwin, windows]
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: amd64
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6

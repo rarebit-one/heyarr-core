@@ -22,6 +22,7 @@ func reflink(src, dst string) error {
 	}
 	defer func() { _ = in.Close() }()
 
+	// #nosec G304 -- dst is derived from a validated hash inside the CAS root
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, blobPerm)
 	if err != nil {
 		return fmt.Errorf("%w: creating %s: %w", errDegrade, dst, err)
