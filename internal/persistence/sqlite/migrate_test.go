@@ -49,11 +49,7 @@ func TestMigrateUpThenAllTheWayDown(t *testing.T) {
 		t.Fatalf("migration did not create its table: %v", err)
 	}
 
-	for range head {
-		if err := MigrateDown(ctx, db); err != nil {
-			t.Fatalf("MigrateDown: %v", err)
-		}
-	}
+	migrateAllTheWayDown(t, db)
 	back, err := SchemaVersion(ctx, db)
 	if err != nil {
 		t.Fatal(err)
@@ -155,4 +151,26 @@ func TestMaxKnownVersionTracksTheEmbeddedMigrations(t *testing.T) {
 	if sqlFiles == 0 {
 		t.Error("no migrations are embedded — the binary would create an empty database")
 	}
+}
+
+// migrateAllTheWayDown rolls back until the database is at version 0.
+//
+// It loops on the version rather than counting steps: a version NUMBER is not a
+// migration COUNT, and treating them as interchangeable breaks the moment two
+// branches take non-contiguous numbers — which is exactly how this was found.
+func migrateAllTheWayDown(t *testing.T, db *DB) {
+	t.Helper()
+	for range 100 {
+		v, err := SchemaVersion(t.Context(), db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v == 0 {
+			return
+		}
+		if err := MigrateDown(t.Context(), db); err != nil {
+			t.Fatalf("MigrateDown from version %d: %v", v, err)
+		}
+	}
+	t.Fatal("still not at version 0 after 100 rollbacks")
 }
