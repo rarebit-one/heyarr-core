@@ -282,3 +282,41 @@ func TestDatabaseFileIsSelfContainedAfterClose(t *testing.T) {
 		t.Errorf("WAL is %d bytes after Close, want it checkpointed away", info.Size())
 	}
 }
+
+// Regression: PRAGMA journal_mode=WAL takes a brief exclusive lock, and the DSN
+// applied busy_timeout *after* it — so the one statement that contends ran with
+// no timeout. Two openers racing (two roles starting together, or even one
+// process's own reader and writer pools) meant one failed with SQLITE_BUSY.
+//
+// Found because a test polled Open in a tight loop and every early attempt
+// failed. It is timing-dependent, so it would have appeared as a rare, baffling
+// startup failure in production rather than anything reproducible.
+func TestConcurrentOpenersDoNotRaceOnJournalMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "heyarr.db")
+
+	const openers = 8
+	errs := make([]error, openers)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range openers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start // release together so they genuinely contend
+			db, err := Open(t.Context(), Options{Path: path})
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			errs[i] = db.Close()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("concurrent opener %d failed: %v", i, err)
+		}
+	}
+}

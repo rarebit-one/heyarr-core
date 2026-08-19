@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go driver; see ADR-0004
@@ -78,6 +79,15 @@ func Open(ctx context.Context, opts Options) (*DB, error) {
 		opts.Logger = slog.New(slog.DiscardHandler)
 	}
 
+	// Converting a fresh database to WAL takes a brief exclusive lock, and it is
+	// a one-time database-level transition — once done, every later connection
+	// setting journal_mode=WAL is a no-op needing no lock. So do it once, up
+	// front, with a retry, rather than letting every pool connection race for
+	// it and letting one lose with a baffling SQLITE_BUSY at startup.
+	if err := ensureWALMode(ctx, opts); err != nil {
+		return nil, err
+	}
+
 	writer, err := openPool(dsn(opts, true), 1)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: opening writer: %w", err)
@@ -96,13 +106,59 @@ func Open(ctx context.Context, opts Options) (*DB, error) {
 	return db, nil
 }
 
+// ensureWALMode performs the one-time journal-mode transition on a single
+// connection, retrying while the database is locked by another process doing
+// the same thing.
+func ensureWALMode(ctx context.Context, opts Options) error {
+	conn, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=busy_timeout(%d)",
+		opts.Path, opts.BusyTimeout.Milliseconds()))
+	if err != nil {
+		return fmt.Errorf("sqlite: opening %s: %w", opts.Path, err)
+	}
+	defer func() { _ = conn.Close() }()
+	conn.SetMaxOpenConns(1)
+
+	deadline := time.Now().Add(opts.BusyTimeout)
+	backoff := 2 * time.Millisecond
+	for attempt := 1; ; attempt++ {
+		var mode string
+		err = conn.QueryRowContext(ctx, "PRAGMA journal_mode(WAL)").Scan(&mode)
+		if err == nil && strings.EqualFold(mode, "wal") {
+			return nil
+		}
+		if err == nil {
+			err = fmt.Errorf("journal_mode is %q after requesting WAL", mode)
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("sqlite: enabling WAL on %s: %w", opts.Path, ctx.Err())
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("sqlite: enabling WAL on %s after %d attempts: %w", opts.Path, attempt, err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("sqlite: enabling WAL on %s: %w", opts.Path, ctx.Err())
+		case <-time.After(backoff):
+		}
+		if backoff < 100*time.Millisecond {
+			backoff *= 2
+		}
+	}
+}
+
 func dsn(opts Options, writer bool) string {
 	ms := opts.BusyTimeout.Milliseconds()
 	// _txlock=immediate makes a write transaction take its lock up front rather
 	// than upgrading mid-transaction, which is where SQLite's deadlock-shaped
 	// SQLITE_BUSY comes from — the upgrade cannot wait, so it fails instantly
 	// regardless of busy_timeout.
-	d := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(%d)"+
+	// busy_timeout MUST come first. Pragmas are applied in order, and
+	// journal_mode=WAL needs a brief exclusive lock — so if busy_timeout is set
+	// after it, the one statement that actually contends is the one running
+	// with no timeout at all. Two roles starting together, or even this
+	// process's own reader and writer pools, then race and one fails to open
+	// with SQLITE_BUSY.
+	d := fmt.Sprintf("file:%s?_pragma=busy_timeout(%d)&_pragma=journal_mode(WAL)"+
 		"&_pragma=foreign_keys(ON)&_pragma=synchronous(NORMAL)", opts.Path, ms)
 	if writer {
 		d += "&_txlock=immediate"

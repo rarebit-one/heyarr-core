@@ -8,12 +8,31 @@ import (
 	"io/fs"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/pressly/goose/v3"
 )
 
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
+
+// goose keeps its filesystem, dialect and logger in package-level globals, so
+// configuring them per call is a data race the moment two callers overlap —
+// which they do: the controller migrates while anything else reads the schema
+// version. Configure once.
+var gooseOnce struct {
+	sync.Once
+	err error
+}
+
+func configureGoose() error {
+	gooseOnce.Do(func() {
+		goose.SetBaseFS(migrationsFS)
+		goose.SetLogger(goose.NopLogger())
+		gooseOnce.err = goose.SetDialect("sqlite3")
+	})
+	return gooseOnce.err
+}
 
 // ErrSchemaNewerThanBinary is returned when the database has been migrated by a
 // newer build than the one now trying to open it.
@@ -28,9 +47,7 @@ var ErrSchemaNewerThanBinary = errors.New("sqlite: database schema is newer than
 // notices, the damage predates every backup they still have. Refusing to start
 // is the only safe response (§49).
 func Migrate(ctx context.Context, db *DB) error {
-	goose.SetBaseFS(migrationsFS)
-	goose.SetLogger(goose.NopLogger())
-	if err := goose.SetDialect("sqlite3"); err != nil {
+	if err := configureGoose(); err != nil {
 		return fmt.Errorf("sqlite: selecting migration dialect: %w", err)
 	}
 
@@ -68,9 +85,7 @@ func Migrate(ctx context.Context, db *DB) error {
 // recovery; it is deliberately not wired to a command, because a downgrade that
 // is one keystroke away is a downgrade that happens by accident.
 func MigrateDown(ctx context.Context, db *DB) error {
-	goose.SetBaseFS(migrationsFS)
-	goose.SetLogger(goose.NopLogger())
-	if err := goose.SetDialect("sqlite3"); err != nil {
+	if err := configureGoose(); err != nil {
 		return fmt.Errorf("sqlite: selecting migration dialect: %w", err)
 	}
 	if err := goose.DownContext(ctx, db.Writer(), "migrations"); err != nil {
@@ -81,8 +96,7 @@ func MigrateDown(ctx context.Context, db *DB) error {
 
 // SchemaVersion reports the version currently applied to the database.
 func SchemaVersion(ctx context.Context, db *DB) (int64, error) {
-	goose.SetBaseFS(migrationsFS)
-	if err := goose.SetDialect("sqlite3"); err != nil {
+	if err := configureGoose(); err != nil {
 		return 0, err
 	}
 	return goose.GetDBVersionContext(ctx, db.Writer())
