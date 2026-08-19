@@ -1,0 +1,35 @@
+version: 2
+project_name: heyarr
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: heyarr
+    main: ./cmd/heyarr
+    binary: heyarr
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/rarebit-one/heyarr-core/internal/buildinfo.Version={{.Version}}
+      - -X github.com/rarebit-one/heyarr-core/internal/buildinfo.Commit={{.FullCommit}}
+      - -X github.com/rarebit-one/heyarr-core/internal/buildinfo.Date={{.Date}}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    files: [README.md, LICENSE, CHANGELOG.md]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github-native
+
+release:
+  prerelease: auto
+  footer: |
+    Heyarr is pre-alpha. On-disk formats are not yet stable.

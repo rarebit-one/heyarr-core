@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose something Heyarr should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that Heyarr makes hard or impossible?
+    validations: { required: true }
+  - type: dropdown
+    id: plane
+    attributes:
+      label: Which plane does this belong to?
+      description: "Spec §83 — every feature must belong clearly to exactly one."
+      options:
+        - Control plane (catalog, desired state, policy, orchestration)
+        - Content storage fabric (blobs, chunks, replication, placement)
+        - Personal state plane (encrypted user state)
+        - External specialist (FFmpeg, download client, indexer)
+        - Not sure
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes: { label: Proposal }
