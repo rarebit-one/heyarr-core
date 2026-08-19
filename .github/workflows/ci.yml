@@ -22,6 +22,12 @@ jobs:
       - run: go vet ./...
       - uses: golangci/golangci-lint-action@v8
         with: { version: latest }
+      # A malformed workflow file does not fail — it silently never runs.
+      # actionlint catches that before it can hide a broken pipeline.
+      - name: lint workflow files
+        uses: docker://rhysd/actionlint:latest
+        with:
+          args: -color
 
   generate-check:
     name: generated code is current
@@ -44,7 +50,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
-        with: { go-version: ${{ matrix.go }}, cache: true }
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
       - run: go test -race -count=1 -coverprofile=coverage.out ./...
 
   build:
