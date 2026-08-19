@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/rarebit-one/heyarr-core/discussions
+    about: Ask about deployment, topology or design here rather than opening an issue.
+  - name: Security vulnerability
+    url: https://github.com/rarebit-one/heyarr-core/security/advisories/new
+    about: Report privately, not as a public issue.

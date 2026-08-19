@@ -1,0 +1,90 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with: { go-version: stable, cache: true }
+      - run: go vet ./...
+      - uses: golangci/golangci-lint-action@v8
+        with: { version: latest }
+
+  generate-check:
+    name: generated code is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with: { go-version: stable, cache: true }
+      - run: ./scripts/gen.sh
+      - name: fail if generated output drifted
+        run: git diff --exit-code
+
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        go: [stable, oldstable]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with: { go-version: ${{ matrix.go }}, cache: true }
+      - run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: linux,  goarch: amd64 }
+          - { goos: linux,  goarch: arm64 }
+          - { goos: darwin, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with: { go-version: stable, cache: true }
+      - env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -trimpath -o /dev/null ./cmd/heyarr
+
+  acceptance:
+    name: acceptance (end-to-end)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with: { go-version: stable, cache: true }
+      - run: make build
+      - run: ./scripts/acceptance.sh
+
+  # Aggregate status so branch protection needs exactly one required check.
+  ci:
+    name: ci
+    if: always()
+    needs: [lint, generate-check, test, build, acceptance]
+    runs-on: ubuntu-latest
+    steps:
+      - name: fail if any job failed
+        run: |
+          if echo '${{ toJSON(needs) }}' | grep -q '"result": *"\(failure\|cancelled\)"'; then
+            echo "one or more ci jobs failed"; exit 1
+          fi
+          echo "all ci jobs passed"

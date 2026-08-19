@@ -1,0 +1,30 @@
+name: Bug report
+description: Something behaves differently from the specification or its documentation
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Heyarr is pre-alpha — most things are unimplemented rather than broken.
+        Check the roadmap in the README before filing.
+  - type: input
+    id: version
+    attributes: { label: Version, description: "Output of `heyarr version`" }
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got.
+    validations: { required: true }
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, filesystem (this matters — reflink support changes ingest behaviour), how Heyarr is deployed, how many peers.
+    validations: { required: true }
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      render: shell

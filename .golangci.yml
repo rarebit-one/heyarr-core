@@ -1,0 +1,74 @@
+version: "2"
+
+linters:
+  enable:
+    - bodyclose
+    - copyloopvar
+    - depguard
+    - errcheck
+    - errorlint
+    - gosec
+    - govet
+    - misspell
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - staticcheck
+    - unused
+
+  settings:
+    errcheck:
+      # Writes to an already-open stdout/stderr: there is no useful recovery, and
+      # checking each one buries the usage text in error handling. Every other
+      # unchecked error is a finding.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+
+    depguard:
+      rules:
+        # Spec §18: "The content-management domain must not depend on physical
+        # path layout, chunking algorithm, local vs remote storage, or
+        # replication transport." This rule is that sentence, enforced.
+        # See docs/adr/0006 and docs/adr/0007.
+        domain-is-storage-agnostic:
+          files:
+            - "**/internal/domain/**"
+          deny:
+            - pkg: path/filepath
+              desc: "the domain layer must not know about filesystem paths — paths are ingest inputs, not identity (spec §61, ADR-0006)"
+            - pkg: os
+              desc: "the domain layer must not touch the filesystem — go through a Storage Fabric interface (spec §18, ADR-0007)"
+            - pkg: database/sql
+              desc: "the domain layer must not know how it is persisted — go through a repository interface"
+            - pkg: github.com/rarebit-one/heyarr-core/internal/persistence
+              desc: "the domain layer must not import persistence (spec §18, ADR-0007)"
+            - pkg: github.com/rarebit-one/heyarr-core/internal/storagefabric/cas
+              desc: "the domain layer must not import the CAS implementation — depend on an interface it defines (spec §18, ADR-0007)"
+
+        # The Storage Fabric is a self-contained subsystem that may one day be
+        # extracted as its own module (spec §18). It must not reach back up.
+        fabric-does-not-depend-on-domain:
+          files:
+            - "**/internal/storagefabric/**"
+          deny:
+            - pkg: github.com/rarebit-one/heyarr-core/internal/domain
+              desc: "the Storage Fabric must stay extractable — it may not depend on Heyarr's content domain (spec §18, ADR-0007)"
+            - pkg: github.com/rarebit-one/heyarr-core/internal/api
+              desc: "the Storage Fabric must stay extractable — it may not depend on Heyarr's API layer (spec §18, ADR-0007)"
+
+    revive:
+      rules:
+        - name: package-comments
+        - name: exported
+
+  exclusions:
+    rules:
+      - path: _test\.go$
+        linters: [gosec]
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
