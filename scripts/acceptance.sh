@@ -1,15 +1,167 @@
 #!/usr/bin/env bash
 # The executable definition of "the current milestone is done".
 #
-# This script is the merge gate. It builds the binary, drives it end to end
-# against a synthetic library, and asserts the properties that every later
-# milestone depends on — above all that a second run is a no-op, because
-# idempotent convergence, not file count, is what Heyarr is built on.
+# This script is the merge gate. It drives the real binary end to end and
+# asserts the properties every later milestone depends on. It grows with each
+# milestone; M1-18 completes it with the scan/ingest/range/idempotency checks.
 #
-# Filled in by M1-18. Until then it fails loudly rather than passing vacuously.
+# Everything here runs against a temporary data directory and touches nothing
+# outside it. No network required.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "acceptance: not implemented yet (milestone 1, issue M1-18)"
-echo "acceptance: skipping — this script becomes a required check when M1-18 lands"
-exit 0
+BIN=${BIN:-./bin/heyarr}
+WORK=$(mktemp -d)
+FAILED=0
+trap 'rm -rf "$WORK"' EXIT
+
+pass() { printf '  \033[32mok\033[0m   %s\n' "$1"; }
+fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILED=1; }
+note() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+
+assert_contains() { # haystack needle description
+  if [[ "$1" == *"$2"* ]]; then pass "$3"; else
+    fail "$3"; printf '       wanted to find: %s\n       in: %s\n' "$2" "$1"
+  fi
+}
+assert_not_contains() {
+  if [[ "$1" != *"$2"* ]]; then pass "$3"; else
+    fail "$3"; printf '       did not want to find: %s\n' "$2"
+  fi
+}
+
+# Runs a command that MUST exit, bounded by a deadline, and captures its output.
+# Without the deadline a regressed refusal turns this script into a hang rather
+# than a failure — and a test that hangs is as useless as one that passes
+# silently, because CI cannot tell it apart from a slow machine.
+# Sets REPLY to the combined output. Returns 0 if the command exited non-zero
+# (the expected refusal), 1 if it succeeded, 2 if it had to be killed.
+expect_refusal() { # deadline_seconds command...
+  local deadline=$1; shift
+  local out="$WORK/refusal.$$.out" pid rc waited=0
+  "$@" >"$out" 2>&1 &
+  pid=$!
+  while (( waited < deadline * 10 )); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    REPLY=$(cat "$out"); rm -f "$out"
+    return 2
+  fi
+  wait "$pid" && rc=0 || rc=$?
+  REPLY=$(cat "$out"); rm -f "$out"
+  (( rc == 0 )) && return 1
+  return 0
+}
+
+# Asserts that a command refuses to start, and that it says why.
+assert_refuses() { # description needle command...
+  local desc=$1 needle=$2 status=0; shift 2
+  # `set -e` would kill the script on expect_refusal's non-zero return, which is
+  # its normal signal rather than an error — and it would do so producing no
+  # output, so a regression would look like a silent early exit rather than a
+  # failure. Capture the status instead of letting it propagate.
+  expect_refusal 10 "$@" || status=$?
+  case $status in
+    0) assert_contains "$REPLY" "$needle" "$desc" ;;
+    1) fail "$desc — it started instead of refusing" ;;
+    2) fail "$desc — it hung and had to be killed (a refusal must be immediate)" ;;
+  esac
+}
+
+[[ -x "$BIN" ]] || { echo "acceptance: $BIN not built — run 'make build'"; exit 1; }
+
+cat > "$WORK/heyarr.yaml" <<YAML
+data_dir: $WORK/data
+peer:
+  name: acceptance
+  site: test
+log:
+  level: info
+  format: json
+YAML
+
+note "build identity"
+V=$("$BIN" version --json)
+if echo "$V" | grep -q '"version"' && echo "$V" | grep -q '"go_version"'; then
+  pass "version --json carries build identity"
+else
+  fail "version --json is missing fields"; echo "$V"
+fi
+
+note "configuration layering"
+OUT=$("$BIN" --config "$WORK/heyarr.yaml" config print)
+assert_contains "$OUT" "$WORK/data/cas"      "cas root is derived from data_dir"
+assert_contains "$OUT" "$WORK/data/heyarr.db" "database path is derived from data_dir"
+OUT=$(HEYARR_PEER_SITE=overridden "$BIN" --config "$WORK/heyarr.yaml" config print)
+assert_contains "$OUT" "overridden" "HEYARR_ environment overrides the config file"
+
+note "refusals — configuration is validated before anything starts"
+# ADR-0011: this server range-serves the whole library and milestone 1 has no
+# identity model, so an unauthenticated non-loopback listener is refused.
+assert_refuses "refuses an unauthenticated public bind" "refusing to start" \
+  env HEYARR_HTTP_ADDR=0.0.0.0:7777 HEYARR_HTTP_AUTH_ENABLED=false \
+  "$BIN" --config "$WORK/heyarr.yaml" all
+assert_refuses "rejects an invalid log level, naming the field" "log.level" \
+  env HEYARR_LOG_LEVEL=verbose "$BIN" --config "$WORK/heyarr.yaml" all
+assert_refuses "names the config path it could not read" "$WORK/nope.yaml" \
+  "$BIN" --config "$WORK/nope.yaml" all
+
+# Runs one role set, sends SIGTERM, and asserts a clean exit within the deadline.
+run_and_term() { # label deadline_seconds role...
+  local label=$1 deadline=$2; shift 2
+  local log="$WORK/$label.log" pids=() rc=0
+  for role in "$@"; do
+    "$BIN" --config "$WORK/heyarr.yaml" "$role" >>"$log" 2>&1 &
+    pids+=($!)
+  done
+  sleep 0.5
+  for p in "${pids[@]}"; do kill -TERM "$p" 2>/dev/null || true; done
+
+  local waited=0
+  while (( waited < deadline * 10 )); do
+    local alive=0
+    for p in "${pids[@]}"; do kill -0 "$p" 2>/dev/null && alive=1; done
+    (( alive == 0 )) && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  for p in "${pids[@]}"; do wait "$p" || rc=1; done
+  if (( waited >= deadline * 10 )); then
+    fail "$label did not stop within ${deadline}s of SIGTERM"; return
+  fi
+  if (( rc != 0 )); then fail "$label exited non-zero"; cat "$log"; return; fi
+  pass "$label starts and exits 0 within ${deadline}s of SIGTERM"
+  cat "$log"
+}
+
+note "single-process mode"
+LOG=$(run_and_term all 5 all)
+echo "$LOG" | grep -q '^  ok' && echo "$LOG" | grep '^  ' || true
+ALLLOG=$(cat "$WORK/all.log")
+assert_contains "$ALLLOG" '"version"'        "startup line carries the build version"
+assert_contains "$ALLLOG" '"commit"'         "startup line carries the commit"
+for r in controller worker peer; do
+  assert_contains "$ALLLOG" "$r started" "heyarr all starts the $r"
+  assert_contains "$ALLLOG" "$r stopped" "heyarr all stops the $r"
+done
+
+# ADR-0002: roles must be independently runnable as OS processes. Running the
+# acceptance checks in both configurations is what keeps that honest — otherwise
+# only one of the two is ever exercised.
+note "split-process mode (ADR-0002)"
+run_and_term split 5 controller worker peer >/dev/null
+SPLITLOG=$(cat "$WORK/split.log")
+for r in controller worker peer; do
+  assert_contains "$SPLITLOG" "$r started" "$r runs as its own process"
+done
+
+note "not yet implemented (milestone 1)"
+echo "  --   library scan, ingest, range serving, idempotency, integrity: M1-18"
+
+if (( FAILED )); then
+  printf '\n\033[31macceptance: FAILED\033[0m\n'; exit 1
+fi
+printf '\n\033[32macceptance: all checks passed\033[0m\n'
