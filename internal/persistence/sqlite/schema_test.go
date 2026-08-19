@@ -279,8 +279,16 @@ func TestCoreMigrationRollsBackCleanly(t *testing.T) {
 		t.Fatalf("expected 12 core tables after migrating, found %d", before)
 	}
 
-	if err := MigrateDown(ctx, db); err != nil {
-		t.Fatalf("MigrateDown: %v", err)
+	// Roll back to zero rather than one step: this migration is no longer the
+	// last one, and a test that assumes it is breaks every time another lands.
+	head, err := SchemaVersion(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range head {
+		if err := MigrateDown(ctx, db); err != nil {
+			t.Fatalf("MigrateDown: %v", err)
+		}
 	}
 
 	var after int
