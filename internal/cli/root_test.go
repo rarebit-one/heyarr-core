@@ -7,9 +7,29 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+// syncBuffer lets the test read stderr while the process is still writing it,
+// so it can wait for a readiness line instead of guessing a duration.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 func run(t *testing.T, ctx context.Context, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
@@ -93,8 +113,14 @@ func TestConfigPrintSurfacesValidationErrors(t *testing.T) {
 	}
 }
 
-// The M1-02 acceptance criterion: `heyarr all` starts, logs a structured line
+// The M1-02 acceptance criterion: each role starts, logs a structured line
 // carrying version and commit, and exits cleanly when its context is cancelled.
+//
+// It waits for the role's own "started" line rather than sleeping a fixed
+// duration. A fixed wait is a bet on machine speed, and it lost as soon as the
+// core schema migration got bigger: on a slow CI runner the cancel arrived
+// mid-migration, the controller correctly reported a clean stop during startup,
+// and the test failed looking for a line that was never going to appear.
 func TestRolesStartAndStopCleanly(t *testing.T) {
 	for _, role := range []string{"controller", "worker", "peer", "all"} {
 		t.Run(role, func(t *testing.T) {
@@ -105,40 +131,62 @@ func TestRolesStartAndStopCleanly(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			var out bytes.Buffer
+			errb := &syncBuffer{}
 			ctx, cancel := context.WithCancel(context.Background())
-			type result struct {
-				stderr string
-				err    error
-			}
-			done := make(chan result, 1)
-			go func() {
-				_, errb, err := run(t, ctx, "--config", path, role)
-				done <- result{errb, err}
-			}()
 
-			// Give the roles a moment to start, then ask them to stop.
-			time.Sleep(150 * time.Millisecond)
+			cmd := NewRootCommand(Options{Stdout: &out, Stderr: errb, ShutdownGrace: 2 * time.Second})
+			cmd.SetArgs([]string{"--config", path, role})
+
+			done := make(chan error, 1)
+			go func() { done <- cmd.ExecuteContext(ctx) }()
+
+			// Wait until every role this command runs has reported itself up.
+			for _, want := range startupLines(role) {
+				waitForLog(t, errb, want)
+			}
 			cancel()
 
 			select {
-			case got := <-done:
-				if got.err != nil {
-					t.Fatalf("%s exited with %v\n%s", role, got.err, got.stderr)
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("%s exited with %v\n%s", role, err, errb.String())
 				}
-				assertLogged(t, got.stderr, "heyarr starting")
-				assertLogged(t, got.stderr, "heyarr stopped")
-				// Every startup line must carry build identity, so a support
-				// question never starts with "which build is that".
-				assertLogged(t, got.stderr, `"version"`)
-				assertLogged(t, got.stderr, `"commit"`)
+				logs := errb.String()
+				assertLogged(t, logs, "heyarr starting")
+				assertLogged(t, logs, "heyarr stopped")
+				// Every startup line carries build identity, so a support
+				// question never begins with "which build is that".
+				assertLogged(t, logs, `"version"`)
+				assertLogged(t, logs, `"commit"`)
 				for _, want := range expectedRoleLogs(role) {
-					assertLogged(t, got.stderr, want)
+					assertLogged(t, logs, want)
 				}
-			case <-time.After(5 * time.Second):
-				t.Fatalf("%s did not exit within 5s of cancellation", role)
+			case <-time.After(30 * time.Second):
+				t.Fatalf("%s did not exit within 30s of cancellation\n%s", role, errb.String())
 			}
 		})
 	}
+}
+
+// startupLines is what must appear before the role set is fully up.
+func startupLines(role string) []string {
+	if role == "all" {
+		return []string{"controller started", "worker started", "peer started"}
+	}
+	return []string{role + " started"}
+}
+
+func waitForLog(t *testing.T, b *syncBuffer, want string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(b.String(), want) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("never saw %q in the logs\n--- logs ---\n%s", want, b.String())
 }
 
 func expectedRoleLogs(role string) []string {
