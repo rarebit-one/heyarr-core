@@ -158,6 +158,28 @@ for r in controller worker peer; do
   assert_contains "$SPLITLOG" "$r started" "$r runs as its own process"
 done
 
+note "persistence"
+DB="$WORK/data/heyarr.db"
+if [[ -f "$DB" ]]; then pass "the controller created its database"; else fail "no database at $DB"; fi
+# After shutdown the database file must stand alone: §50 replicates controller
+# backups to peers, and a populated -wal beside a copied file is a silently
+# stale backup. SQLite removes the WAL itself on last-connection close, so this
+# asserts the property rather than our implementation of it.
+if [[ -s "$DB-wal" ]]; then
+  fail "a populated WAL survived shutdown ($(wc -c <"$DB-wal") bytes) — a file-copy backup would be stale"
+else
+  pass "the database file is self-contained after shutdown"
+fi
+# The schema must survive a restart rather than being rebuilt each time.
+V1=$(grep -ao '"schema_version":[0-9]*' "$WORK/all.log" | head -1 | cut -d: -f2)
+run_and_term restart 5 all >/dev/null
+V2=$(grep -ao '"schema_version":[0-9]*' "$WORK/restart.log" | head -1 | cut -d: -f2)
+if [[ -n "$V1" && "$V1" == "$V2" ]]; then
+  pass "the schema survives a restart (version $V1)"
+else
+  fail "schema version changed across a restart: '$V1' then '$V2'"
+fi
+
 note "not yet implemented (milestone 1)"
 echo "  --   library scan, ingest, range serving, idempotency, integrity: M1-18"
 
