@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -283,5 +284,47 @@ func TestCanonicalKeysDoNotCollide(t *testing.T) {
 			t.Errorf("keys %q and %q collide as %q — environment mapping would be ambiguous", prev, key, sq)
 		}
 		seen[sq] = key
+	}
+}
+
+// Regression: the write probe used a fixed filename, so the three roles
+// starting as separate processes against one data_dir — the topology ADR-0002
+// mandates — raced, and one process removed the probe another had just
+// created. The loser failed to start with "cannot clean up in data_dir".
+//
+// It passed locally and failed on CI, because locally the starts were staggered
+// enough to miss each other. That is the shape of bug this test exists to stop.
+func TestEnsureDataDirIsSafeUnderConcurrentStart(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	cfg := Defaults()
+	cfg.DataDir = dir
+
+	const n = 8
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start // release them together, so they actually collide
+			errs[i] = cfg.EnsureDataDir()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("concurrent start %d failed: %v", i, err)
+		}
+	}
+	// And no probe files may be left behind by any of them.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("concurrent starts left %d files behind: %v", len(entries), entries)
 	}
 }

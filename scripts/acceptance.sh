@@ -43,7 +43,7 @@ expect_refusal() { # deadline_seconds command...
   pid=$!
   while (( waited < deadline * 10 )); do
     kill -0 "$pid" 2>/dev/null || break
-    sleep 0.1; ((waited++))
+    sleep 0.1; waited=$(( waited + 1 ))
   done
   if kill -0 "$pid" 2>/dev/null; then
     kill -KILL "$pid" 2>/dev/null || true
@@ -126,7 +126,7 @@ run_and_term() { # label deadline_seconds role...
     local alive=0
     for p in "${pids[@]}"; do kill -0 "$p" 2>/dev/null && alive=1; done
     (( alive == 0 )) && break
-    sleep 0.1; ((waited++))
+    sleep 0.1; waited=$(( waited + 1 ))
   done
   for p in "${pids[@]}"; do wait "$p" || rc=1; done
   if (( waited >= deadline * 10 )); then

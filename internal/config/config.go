@@ -255,13 +255,16 @@ func (c Config) EnsureDataDir() error {
 	if err := os.MkdirAll(c.DataDir, 0o750); err != nil {
 		return fmt.Errorf("config: cannot create data_dir %s: %w", c.DataDir, err)
 	}
-	probe := filepath.Join(c.DataDir, ".heyarr-write-probe")
-	// #nosec G304 -- the path is built from validated configuration, not caller
-	// input, and the fixed basename cannot escape DataDir.
-	f, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	// The probe must be unique per caller. ADR-0002 has the controller, worker
+	// and peer running as separate processes against one data_dir, so they call
+	// this concurrently at startup — and with a fixed name one process deletes
+	// the probe another just created, failing a start for no reason. CreateTemp
+	// gives each caller its own file.
+	f, err := os.CreateTemp(c.DataDir, ".heyarr-write-probe-*")
 	if err != nil {
 		return fmt.Errorf("config: data_dir %s is not writable: %w", c.DataDir, err)
 	}
+	probe := f.Name()
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("config: data_dir %s is not writable: %w", c.DataDir, err)
 	}
