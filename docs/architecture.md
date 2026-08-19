@@ -36,6 +36,13 @@ A **Work** is the conceptual thing. An **Edition** is a specific version, cut or
 release. An **Asset** is a usable local representation. A **Blob** is an
 immutable byte sequence identified by its BLAKE3 digest.
 
+Assets carry a **source class** that says what Heyarr promises about them
+(ADR-0020): `managed` bytes live in the CAS with every guarantee; `linked` bytes
+stay where the user keeps them and have **no Blob at all**, so they are
+catalogued and playable but never replicated, verified or garbage-collected;
+`vault` bytes are in the CAS as ciphertext the infrastructure cannot read
+(ADR-0021).
+
 The load-bearing sentence from §3: *semantic objects are not hashes; bytes are.*
 Content addressing identifies immutable data; desired-state policy determines
 where it should exist. Those are separate questions, and most of the design
