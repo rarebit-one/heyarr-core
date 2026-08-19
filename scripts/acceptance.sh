@@ -118,7 +118,39 @@ run_and_term() { # label deadline_seconds role...
     "$BIN" --config "$WORK/heyarr.yaml" "$role" >>"$log" 2>&1 &
     pids+=($!)
   done
-  sleep 0.5
+
+  # Wait for each role to report itself up, rather than sleeping a fixed
+  # duration. A fixed wait is a bet on machine speed, and it lost as soon as
+  # the schema migration grew: on a slow runner the SIGTERM arrived
+  # mid-migration and the role correctly reported a clean stop during startup,
+  # so the "started" line this asserts was never going to appear.
+  # `all` runs the three roles concurrently, so waiting for any one of them
+  # proves nothing about the others — the controller is the slow one, because
+  # it migrates.
+  local wanted=()
+  for role in "$@"; do
+    if [[ "$role" == "all" ]]; then
+      wanted+=("controller started" "worker started" "peer started")
+    else
+      wanted+=("$role started")
+    fi
+  done
+
+  local waited_start
+  for want in "${wanted[@]}"; do
+    waited_start=0
+    while (( waited_start < 300 )); do          # 30s
+      grep -q "$want" "$log" 2>/dev/null && break
+      sleep 0.1; waited_start=$(( waited_start + 1 ))
+    done
+    if (( waited_start >= 300 )); then
+      fail "$label: never saw \"$want\""
+      cat "$log"
+      for p in "${pids[@]}"; do kill -KILL "$p" 2>/dev/null || true; done
+      return
+    fi
+  done
+
   for p in "${pids[@]}"; do kill -TERM "$p" 2>/dev/null || true; done
 
   local waited=0
