@@ -17,6 +17,12 @@ linters:
     - unused
 
   settings:
+    govet:
+      disable:
+        # Reports that a third-party constructor "should be inlined". It is a
+        # performance hint about code we do not own, not a correctness finding.
+        - inline
+
     errcheck:
       # Writes to an already-open stdout/stderr: there is no useful recovery, and
       # checking each one buries the usage text in error handling. Every other
