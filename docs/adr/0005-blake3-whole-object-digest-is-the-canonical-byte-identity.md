@@ -17,9 +17,21 @@ they are **never** an identity. Blobs are immutable (§14): retagging a file
 produces a different Blob, and an Asset may point at the new one while remaining
 the same semantic object.
 
-Implementation: `zeebo/blake3`, chosen for its hand-written AVX2/AVX-512 and
-NEON assembly. This is the throughput-critical dependency, so the repository
-carries its own benchmark rather than trusting a README.
+Implementation: `zeebo/blake3`. This is the throughput-critical dependency, so
+the repository carries its own benchmark rather than trusting a README.
+
+**Measured** (`go test -bench . ./internal/hashing`), single core:
+
+| Platform | In-memory | From file |
+|---|---|---|
+| darwin/arm64 (M-series, dev) | 621 MB/s | 550 MB/s |
+
+That is below the ≥1 GB/s originally assumed, and the assumption was for amd64
+where the AVX2 assembly applies; the arm64 path is slower. It does not change
+the decision, because the practical ceiling is the disk: a spinning drive
+delivers 150–250 MB/s, so on an HDD-backed library hashing is not the
+bottleneck. It matters on NVMe, where it is, and it is the first thing to
+re-measure if ingest is slower than expected.
 
 ## Consequences
 
