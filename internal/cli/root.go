@@ -68,6 +68,7 @@ One logical library, multiple complete sovereign peers.`,
 	root.AddCommand(
 		newVersionCommand(opts),
 		newConfigCommand(opts, &configPath),
+		newTokenCommand(opts, &configPath),
 		newRoleCommand("controller",
 			"Own coordinated mutable state: catalog, policy, jobs, API", opts, &configPath, rolesController),
 		newRoleCommand("worker",
