@@ -933,6 +933,64 @@ YAML
     -m 2 2>/dev/null | grep -c '^event: playback.session.')" "4" \
     "the session's four transitions are all on the event stream"
 
+  note "  the playback planner (§68)"
+  # The planner is a pure function, exhaustively table-tested. What this adds
+  # is the join: real probe rows, real device profiles and real replicas, over
+  # a real socket — because each of those three being right in isolation is
+  # how a wiring bug survives.
+  local plan_device limited_device plan_asset plan_json
+  plan_asset=$(api_all /api/v1/assets '.items[] | select(.filename != null) | select(.filename | endswith(".mkv") or endswith(".mp4")) | .id' | head -1)
+
+  plan_device=$(api /api/v1/devices -X POST -H 'Content-Type: application/json' \
+    -d '{"device_key":"acceptance-tv","name":"Acceptance TV","platform":"tvos",
+         "profile":{"containers":["mp4","mkv"],"video_codecs":["h264","hevc"],
+                    "audio_codecs":["aac"],"max_width":3840,"max_height":2160}}' | jq -r '.id')
+  limited_device=$(api /api/v1/devices -X POST -H 'Content-Type: application/json' \
+    -d '{"device_key":"acceptance-potato","name":"Acceptance Potato","platform":"linux",
+         "profile":{"containers":["mp4"],"video_codecs":["mpeg2video"],"audio_codecs":["mp2"]}}' \
+    | jq -r '.id')
+
+  plan_json=$(api /api/v1/playback/plan -X POST -H 'Content-Type: application/json' \
+    -d "{\"asset_id\":\"$plan_asset\",\"device_id\":\"$plan_device\"}")
+
+  if command -v ffprobe >/dev/null 2>&1; then
+    # With a probe, the planner decides against what the file actually is.
+    assert_eq "$(jq -r '.decision' <<<"$plan_json")" "direct" \
+      "h264/aac in a container the device takes plans DIRECT"
+    assert_eq "$(jq -r '.reasons | length' <<<"$plan_json")" "0" \
+      "a clean DIRECT carries no reasons"
+
+    # The refusal, with its rationale. A verdict without a reason cannot answer
+    # "why is my television transcoding this".
+    local limited_json
+    limited_json=$(api /api/v1/playback/plan -X POST -H 'Content-Type: application/json' \
+      -d "{\"asset_id\":\"$plan_asset\",\"device_id\":\"$limited_device\"}")
+    assert_contains "$(jq -r '.decision' <<<"$limited_json")" "transcode" \
+      "a device that refuses the codec plans TRANSCODE"
+    assert_contains "$(jq -r '[.reasons[].code] | join(",")' <<<"$limited_json")" \
+      "video_codec_unsupported" "the plan says which codec it refused"
+    # And it does not hand over the original bytes, which would invite the
+    # client to play exactly what the plan just refused.
+    assert_eq "$(jq -r '.content_url // "absent"' <<<"$limited_json")" "absent" \
+      "a TRANSCODE plan offers no content_url"
+  else
+    # ADR-0023 again, at the planner: nothing has probed anything, and the
+    # answer is DIRECT with the guess declared — because a node with no
+    # ffprobe cannot transcode either, so any other answer makes the whole
+    # library unplayable.
+    assert_eq "$(jq -r '.decision' <<<"$plan_json")" "direct" \
+      "unprobed media plans DIRECT rather than making the library unplayable"
+    assert_contains "$(jq -r '[.reasons[].code] | join(",")' <<<"$plan_json")" "no_probe" \
+      "the plan declares that it is a guess"
+  fi
+
+  # §31: with exactly one peer (ADR-0010) every replica is local, which is the
+  # only locality case that can be asserted against reality today.
+  assert_eq "$(jq -r '.remote' <<<"$plan_json")" "false" \
+    "the single-peer deployment plans from a local replica"
+  assert_contains "$(jq -r '.peer_id' <<<"$plan_json")" "-" \
+    "the plan names the peer it would serve from"
+
   note "  probing (§29, ADR-0023)"
   # Capability routing existed from M1-05 and had no user until M2: the worker
   # built its runtime with an empty capability set, so no job could ever

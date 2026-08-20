@@ -188,6 +188,10 @@ func (a *API) Mount(r chi.Router) {
 	// Consumption is ordinary client traffic like device registration: a
 	// television reporting where it has reached needs a write token, not an
 	// admin one.
+	// Planning is a POST because the body carries the device and asset, not
+	// because it changes anything: it opens no session and writes nothing. It
+	// needs only `read`, which the router already requires.
+	r.Post("/playback/plan", a.planPlayback)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/consumption/sessions", a.createSession)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).
 		Post("/consumption/sessions/{id}/transitions", a.applyTransition)

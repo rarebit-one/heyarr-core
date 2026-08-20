@@ -723,6 +723,46 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/playback/plan:
+    post:
+      tags: [playback]
+      operationId: planPlayback
+      summary: What should this device do with this asset? (§68)
+      description: |
+        DIRECT, REMUX, TRANSCODE — or `unplayable` when nothing holds the bytes.
+
+        **It writes nothing and opens no session.** A client shows a "play"
+        button by planning and opens a session when someone presses it; if
+        planning created state, every hover would too.
+
+        The `reasons` are the point. "Why is my television transcoding this" is
+        the single most common question this class of software is asked, and a
+        planner that answers only with a verb cannot answer it. Codes are
+        stable strings because clients branch on them; `detail` is prose for a
+        human and may change.
+
+        **Media nothing has probed plans DIRECT**, with a `no_probe` reason
+        saying the plan is a guess. The conservative-looking answer is
+        TRANSCODE and it is wrong: a node with no probes is precisely a node
+        with no ffprobe (ADR-0023), which cannot transcode either — so
+        planning TRANSCODE there would make the entire library unplayable,
+        while DIRECT makes most of it work and fails visibly when it does not.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlanRequest" }
+      responses:
+        "200":
+          description: The plan.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlaybackPlan" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/consumption/sessions:
     get:
       tags: [playback]
@@ -1565,6 +1605,63 @@ components:
           description: |
             The ordinary blob endpoint. Named here so the single-endpoint
             contract is visible in the response rather than only in ADR-0013.
+
+    PlanRequest:
+      type: object
+      required: [asset_id, device_id]
+      properties:
+        asset_id: { type: string }
+        device_id: { type: string }
+
+    PlaybackPlan:
+      type: object
+      properties:
+        asset_id: { type: string }
+        device_id: { type: string }
+        decision:
+          type: string
+          enum: [direct, remux, transcode, unplayable]
+        reasons:
+          type: array
+          description: |
+            Why the decision is not DIRECT, or why nothing can be played. Empty
+            for a clean DIRECT.
+          items: { $ref: "#/components/schemas/PlanReason" }
+        peer_id:
+          type: string
+          description: The replica chosen to serve from. Absent when unplayable.
+        remote:
+          type: boolean
+          description: |
+            The chosen replica is at another site. §31 prefers a local one, so
+            an instance where this is usually true is one where replication is
+            not working.
+
+            **Unproven:** nothing has ever run against a second peer
+            (ADR-0010), so this path is unit-tested against synthetic replicas
+            and nothing more until Milestone 4.
+        content_url:
+          type: string
+          description: |
+            Where the bytes are, for a DIRECT plan. **Absent otherwise** — a
+            REMUX or TRANSCODE plan has no bytes to point at yet, and offering
+            the original would invite the client to play exactly what the plan
+            just said it cannot.
+
+    PlanReason:
+      type: object
+      properties:
+        code:
+          type: string
+          enum:
+            [no_replica, container_unsupported, video_codec_unsupported,
+             audio_codec_unsupported, resolution_too_high, bitrate_too_high,
+             hdr_unsupported, no_probe, remote_replica_only,
+             device_declares_nothing]
+          description: Stable. Clients branch on this, and a client branching on prose breaks when the prose improves.
+        detail:
+          type: string
+          description: Prose for a human. May change.
 
     ConsumptionSession:
       type: object
