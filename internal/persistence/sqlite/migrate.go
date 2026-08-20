@@ -131,3 +131,53 @@ func maxKnownVersion() (int64, error) {
 	}
 	return maxVersion, nil
 }
+
+// AppliedSchemaVersion reports the applied version without touching anything.
+//
+// SchemaVersion goes through goose, and goose CREATES its bookkeeping table if
+// it is missing — so asking it "what version are you at?" is a write. A second
+// role asking that question while the controller migrates races it on the
+// CREATE, and one of the two loses with "table goose_db_version already
+// exists". The controller is usually the loser, because it is doing more work,
+// which turns a harmless status check by a worker into a failed startup for the
+// role that owns the schema.
+//
+// So this reads, on the reader pool, and reports 0 for a database that has
+// never been migrated. Roles that do not own the schema (§7, ADR-0003) must use
+// this one.
+func AppliedSchemaVersion(ctx context.Context, db *DB) (int64, error) {
+	var exists int
+	if err := db.Reader().QueryRowContext(ctx,
+		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).
+		Scan(&exists); err != nil {
+		return 0, fmt.Errorf("sqlite: looking for the migration table: %w", err)
+	}
+	if exists == 0 {
+		return 0, nil
+	}
+
+	// Mirror goose's own ordering: the most recently recorded applied row wins,
+	// so a rollback is reflected rather than averaged away by a max().
+	rows, err := db.Reader().QueryContext(ctx,
+		`SELECT version_id, is_applied FROM goose_db_version ORDER BY id DESC`)
+	if err != nil {
+		return 0, fmt.Errorf("sqlite: reading the applied schema version: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			version int64
+			applied bool
+		)
+		if err := rows.Scan(&version, &applied); err != nil {
+			return 0, fmt.Errorf("sqlite: reading the applied schema version: %w", err)
+		}
+		if applied {
+			return version, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("sqlite: reading the applied schema version: %w", err)
+	}
+	return 0, nil
+}
