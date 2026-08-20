@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/scanner"
 )
@@ -23,6 +25,23 @@ var _ scanner.Store = (*Catalog)(nil)
 // the scan, which for a million files is tens of megabytes — the trade that
 // makes a rescan take seconds.
 func (c *Catalog) Fingerprints(ctx context.Context, rootID string) (map[string]scanner.Fingerprint, error) {
+	// Which of this root's enqueued ingests have given up. Read as its own
+	// query rather than joined per row: jobs.dedupe_key is indexed only for
+	// LIVE jobs (the uniqueness rule applies only to those), so an EXISTS
+	// subquery would scan the jobs table once per cached file — a million times
+	// on a large library, to answer a question with a handful of rows in it.
+	//
+	// Derived rather than stored, and that is the whole fix. A first attempt
+	// added a scanned_files.ingest_state column that ingest set on success —
+	// and sabotaging that write changed no observable behaviour, because a file
+	// that ingested cleanly has no dead job either way. The column was doing
+	// nothing, so it is not here: the job queue already knows which ingests
+	// gave up, and asking it cannot go stale.
+	dead, err := c.deadIngestPaths(ctx, rootID)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := c.db.Reader().QueryContext(ctx,
 		`SELECT path, size, mtime_ns, dev, inode FROM scanned_files WHERE root_id = ?`, rootID)
 	if err != nil {
@@ -36,10 +55,46 @@ func (c *Catalog) Fingerprints(ctx context.Context, rootID string) (map[string]s
 		if err := rows.Scan(&fp.RelPath, &fp.Size, &fp.MtimeNS, &fp.Dev, &fp.Inode); err != nil {
 			return nil, fmt.Errorf("catalog: reading the fingerprint cache for root %s: %w", rootID, err)
 		}
+		// The job that was going to ingest this file has given up, so the file
+		// is on disk and not in the library. The scanner must look at it again
+		// (#54).
+		fp.IngestFailed = dead[fp.RelPath]
 		out[fp.RelPath] = fp
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("catalog: reading the fingerprint cache for root %s: %w", rootID, err)
+	}
+	return out, nil
+}
+
+// deadIngestPaths returns the paths under a root whose ingest job has exhausted
+// its attempts.
+//
+// The join is the job's own dedupe key — exactly "ingest:<root>:<relpath>",
+// ingest.DedupeKey — which survives the job going dead because the uniqueness
+// index covers only live states. Matching on that rather than on the payload
+// JSON means the two sides agree by construction.
+func (c *Catalog) deadIngestPaths(ctx context.Context, rootID string) (map[string]bool, error) {
+	prefix := ingest.DedupeKey(rootID, "")
+	rows, err := c.db.Reader().QueryContext(ctx,
+		`SELECT dedupe_key FROM jobs
+		 WHERE type = ? AND state = 'dead' AND dedupe_key LIKE ? || '%'`,
+		ingest.JobType, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: finding failed ingests for root %s: %w", rootID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := map[string]bool{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("catalog: finding failed ingests for root %s: %w", rootID, err)
+		}
+		out[strings.TrimPrefix(key, prefix)] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: finding failed ingests for root %s: %w", rootID, err)
 	}
 	return out, nil
 }

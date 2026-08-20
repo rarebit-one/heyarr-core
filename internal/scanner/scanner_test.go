@@ -684,3 +684,100 @@ func TestDedupeKeysAreDistinct(t *testing.T) {
 type nopStore struct{ scanner.Store }
 
 type nopQueue struct{ scanner.Queue }
+
+// #54: a file whose ingest job died must come back.
+//
+// The cache records a fingerprint at ENQUEUE time, so a job that exhausted its
+// attempts leaves a row matching the disk perfectly with no asset behind it.
+// Before this, every later scan skipped that file without reading it and it
+// stayed out of the library for ever — invisible to fsck too, which reconciles
+// the catalog against the CAS and would find it in neither.
+func TestAFileWhoseIngestDiedIsScannedAgain(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	const files = 5
+	f.writeTree(files)
+
+	if p := f.mustScan(); p.FilesEnqueued != files {
+		t.Fatalf("first scan enqueued %d, want %d", p.FilesEnqueued, files)
+	}
+
+	// One job dies; the rest land.
+	victim := f.pendingIngests()[0]
+	f.killIngest(victim.RelPath)
+	f.drainIngests()
+	f.fs.reset()
+
+	second := f.mustScan()
+	if second.FilesEnqueued != 1 {
+		t.Fatalf("the rescan enqueued %d files, want exactly the 1 whose ingest died — "+
+			"a file that never landed is not 'unchanged', it is missing", second.FilesEnqueued)
+	}
+	if second.FilesUnchanged != files-1 {
+		t.Fatalf("the rescan re-examined %d files, want %d — only the dead one should come back",
+			int64(files)-second.FilesUnchanged, files-1)
+	}
+	if got := f.pendingIngests(); len(got) != 1 || got[0].RelPath != victim.RelPath {
+		t.Fatalf("the rescan enqueued %v, want just %s", got, victim.RelPath)
+	}
+	// It was actually re-read, not merely re-counted.
+	if f.fs.Opens() == 0 {
+		t.Error("the rescan enqueued the file without opening it — the count moved but nothing happened")
+	}
+}
+
+// ...and a job that is still going is NOT re-enqueued. A resumed scan must not
+// pay an open() per file for work that is simply still in the queue.
+func TestAFileWhoseIngestIsStillQueuedIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	const files = 5
+	f.writeTree(files)
+
+	if p := f.mustScan(); p.FilesEnqueued != files {
+		t.Fatalf("first scan enqueued %d, want %d", p.FilesEnqueued, files)
+	}
+	// Deliberately do NOT drain: every job is still pending.
+	f.fs.reset()
+
+	second := f.mustScan()
+	if second.FilesEnqueued != 0 {
+		t.Fatalf("the rescan re-enqueued %d files whose jobs are still queued — "+
+			"pending is not failed, and the queue will get to them", second.FilesEnqueued)
+	}
+	if got := f.fs.Opens(); got != 0 {
+		t.Errorf("the rescan opened %d files that were merely still queued", got)
+	}
+}
+
+// The REAL ingest pipeline is what marks a file as landed, and the scanner is
+// what reads that mark. This drives both, because a test that marks the cache
+// itself is testing its own fixture.
+//
+// Without the mark, a rescan re-enqueues everything that was already ingested —
+// which is not data loss, but it is a full re-hash of the library on every
+// scan, and the fingerprint cache exists precisely to avoid that.
+func TestARealIngestMarksTheFileAsLandedSoARescanSkipsIt(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	const files = 5
+	f.writeTree(files)
+
+	if p := f.mustScan(); p.FilesEnqueued != files {
+		t.Fatalf("first scan enqueued %d, want %d", p.FilesEnqueued, files)
+	}
+	f.ingestPending() // the real pipeline, not a fixture shortcut
+	f.fs.reset()
+
+	second := f.mustScan()
+	if second.FilesEnqueued != 0 {
+		t.Fatalf("the rescan re-enqueued %d files after a real ingest — nothing marked them landed",
+			second.FilesEnqueued)
+	}
+	if second.FilesUnchanged != files {
+		t.Fatalf("the rescan saw %d unchanged, want %d", second.FilesUnchanged, files)
+	}
+	if got := f.fs.Opens(); got != 0 {
+		t.Errorf("the rescan opened %d files that were already in the library", got)
+	}
+}

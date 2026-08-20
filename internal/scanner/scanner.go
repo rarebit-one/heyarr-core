@@ -81,6 +81,20 @@ type Fingerprint struct {
 	// (fingerprint_windows.go) and in rows written before it did.
 	Dev   int64
 	Inode int64
+	// IngestFailed reports that this file was enqueued and its ingest job then
+	// died, so the file is on disk and not in the library.
+	//
+	// The cache records a fingerprint at ENQUEUE time, which is right — the
+	// queue is durable and the job outlives the scan. But it meant "we have
+	// seen this path" and "this path is in the library" were the same fact, and
+	// a job that exhausted its attempts left a row matching the disk perfectly
+	// with no asset behind it. Every later scan skipped the file without
+	// reading it, and it stayed out of the library for ever (#54).
+	//
+	// A row whose job is still pending or leased is NOT failed: that job is
+	// going to run, and re-enqueueing would cost an open() per file on every
+	// resumed scan for no gain.
+	IngestFailed bool
 }
 
 // Unchanged reports whether a file on disk matches what the cache recorded.
@@ -490,8 +504,14 @@ func (w *walk) file(ctx context.Context, full, rel string) error {
 	// The line the whole package exists for. An unchanged file is not opened,
 	// not hashed, and not enqueued — and its cache row is not rewritten either,
 	// so a no-op rescan is a read-only pass over the database as well.
+	//
+	// "Unchanged" is not enough on its own: the file's ingest must not have
+	// DIED. A fingerprint is written when a file is enqueued, so a job that
+	// later exhausted its attempts leaves a row matching the disk perfectly and
+	// no asset behind it — and skipping that is not recoverable, because
+	// nothing else will ever look at the file again (#54).
 	if !w.full {
-		if previous, known := w.cached[rel]; known && fp.Unchanged(previous) {
+		if previous, known := w.cached[rel]; known && !previous.IngestFailed && fp.Unchanged(previous) {
 			w.run.Progress.FilesUnchanged++
 			return w.maybeProgress(ctx)
 		}
