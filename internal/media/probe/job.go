@@ -86,6 +86,11 @@ func EndpointClient(endpoint string, timeout time.Duration) (*http.Client, strin
 // It is assembled here rather than by each caller so that the one endpoint
 // ADR-0013 describes has one spelling. A second spelling is how a contract
 // with four consumers acquires a fifth that is subtly different.
+//
+// base is an ORIGIN — "http://peer:7777", or "" for a URL relative to this
+// API. It is not the API prefix: passing httpapi.APIPrefix produces
+// "/api/v1/api/v1/blobs/...", which is a 404 for every caller and was caught
+// by a test rather than by review.
 func BlobURL(base, hash string) string {
 	return base + "/api/v1/blobs/" + hash + "/content"
 }

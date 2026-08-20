@@ -192,6 +192,9 @@ func (a *API) Mount(r chi.Router) {
 	// because it changes anything: it opens no session and writes nothing. It
 	// needs only `read`, which the router already requires.
 	r.Post("/playback/plan", a.planPlayback)
+	// Starting a playback opens a session and mints a credential, so it is a
+	// write even though the bytes it points at are read-only.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/playback", a.startPlayback)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/consumption/sessions", a.createSession)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).
 		Post("/consumption/sessions/{id}/transitions", a.applyTransition)
