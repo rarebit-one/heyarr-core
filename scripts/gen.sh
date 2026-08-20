@@ -10,9 +10,11 @@ if [[ -f sqlc.yaml ]]; then
   sqlc generate
 fi
 
-# CLI reference docs, generated from the cobra command tree (M1-02).
-if [[ -d docs/cli ]] && command -v go >/dev/null; then
-  :
-fi
+# CLI reference docs, generated from the cobra command tree (M1-17).
+#
+# The generator removes pages no command produces any more, which the diff
+# check below cannot do on its own: a deleted command's page is still committed
+# and still unchanged, so `git diff` would never mention it.
+go run ./internal/tools/gendocs docs/cli
 
 echo "generate: ok"
