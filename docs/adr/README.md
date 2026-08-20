@@ -31,3 +31,4 @@ An ADR that merely describes the code is not worth having.
 | [0021](0021-encrypted-vault-content.md) | Encrypted vault content | Proposed |
 | [0022](0022-device-enrolment-and-key-recovery.md) | Device enrolment and key recovery | Proposed |
 | [0023](0023-the-external-media-toolchain-is-optional.md) | The external media toolchain is optional, capability-routed and pinned | Accepted |
+| [0024](0024-one-consumption-session-model.md) | One ConsumptionSession model for watching, listening and reading | Accepted |

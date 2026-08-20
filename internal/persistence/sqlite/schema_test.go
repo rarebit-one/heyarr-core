@@ -344,3 +344,98 @@ func TestDeviceKeyIsUnique(t *testing.T) {
 		t.Error("two devices share a device_key; registration would multiply rows per app launch")
 	}
 }
+
+// Consumption sessions (M2-06, ADR-0024). The constraints here are the floor
+// under the domain's state machine, not a duplicate of it: the state machine
+// runs in a process, and a migration or a repair script does not go through it.
+func TestConsumptionSessionConstraints(t *testing.T) {
+	db := openTestDB(t)
+	seedSessionPrerequisites(t, db)
+
+	insert := func(id, cols string) error {
+		return exec(t, db, `INSERT INTO consumption_sessions
+			(id, asset_id, device_id, verb, state, progress_locator, progress_unit,
+			 created_at, updated_at, started_at, ended_at)
+			VALUES (?, 'a1', 'dev1', `+cols+`)`, id)
+	}
+
+	if err := insert("s1", `'watch', 'playing', '12.5', 'seconds', '`+ts+`', '`+ts+`', '`+ts+`', NULL`); err != nil {
+		t.Fatalf("a valid session was rejected: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		cols string
+	}{
+		{"an unknown verb", `'skim', 'playing', '', '', '` + ts + `', '` + ts + `', NULL, NULL`},
+		{"an unknown state", `'watch', 'buffering', '', '', '` + ts + `', '` + ts + `', NULL, NULL`},
+		{"an unknown unit", `'watch', 'playing', '5', 'furlongs', '` + ts + `', '` + ts + `', NULL, NULL`},
+		{
+			// A number nobody can interpret. The reverse — a unit with no
+			// locator — is legitimate and is not refused.
+			"a locator with no unit",
+			`'watch', 'playing', '12.5', '', '` + ts + `', '` + ts + `', NULL, NULL`,
+		},
+		{
+			// The pairing that makes the history readable: terminal states
+			// have an end, non-terminal ones do not.
+			"a completed session with no end time",
+			`'watch', 'completed', '', '', '` + ts + `', '` + ts + `', '` + ts + `', NULL`,
+		},
+		{
+			"a playing session with an end time",
+			`'watch', 'playing', '', '', '` + ts + `', '` + ts + `', '` + ts + `', '` + ts + `'`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := insert("s-"+tc.name, tc.cols); err == nil {
+				t.Error("the database accepted it")
+			}
+		})
+	}
+
+	// A unit with no locator is a reader that knows how to measure and has not
+	// measured yet. Legitimate, and explicitly not refused.
+	if err := insert("s-unit-only", `'read', 'created', '', 'page', '`+ts+`', '`+ts+`', NULL, NULL`); err != nil {
+		t.Errorf("a unit with no locator was refused: %v", err)
+	}
+}
+
+// A session for a deleted asset is a dangling reference every read path would
+// have to special-case; a session for a deleted device is history worth keeping
+// over a delete that is either an operator or a bug.
+func TestConsumptionSessionReferentialBehaviour(t *testing.T) {
+	db := openTestDB(t)
+	seedSessionPrerequisites(t, db)
+	mustExec(t, db, `INSERT INTO consumption_sessions
+		(id, asset_id, device_id, verb, state, created_at, updated_at)
+		VALUES ('s1', 'a1', 'dev1', 'watch', 'created', ?, ?)`, ts, ts)
+
+	if err := exec(t, db, `DELETE FROM devices WHERE id = 'dev1'`); err == nil {
+		t.Error("deleting a device with sessions was allowed; the history would vanish with it")
+	}
+
+	mustExec(t, db, `DELETE FROM assets WHERE id = 'a1'`)
+	var n int
+	if err := db.Reader().QueryRow(`SELECT count(*) FROM consumption_sessions`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("%d sessions survived their asset being deleted", n)
+	}
+}
+
+// seedSessionPrerequisites writes the rows a session references.
+func seedSessionPrerequisites(t *testing.T, db *DB) {
+	t.Helper()
+	mustExec(t, db, `INSERT INTO devices (id, device_key, name, created_at, updated_at, last_seen_at)
+		VALUES ('dev1', 'k1', 'TV', ?, ?, ?)`, ts, ts, ts)
+	mustExec(t, db, `INSERT INTO works (id, content_type, work_key, title, sort_title, created_at, updated_at)
+		VALUES ('w1', 'movie', 'k', 'T', 't', ?, ?)`, ts, ts)
+	mustExec(t, db, `INSERT INTO editions (id, work_id, created_at) VALUES ('e1', 'w1', ?)`, ts)
+	mustExec(t, db, `INSERT INTO blobs (hash, size, first_seen_at) VALUES
+		('blake3:1111111111111111111111111111111111111111111111111111111111111111', 1, ?)`, ts)
+	mustExec(t, db, `INSERT INTO assets (id, edition_id, source_class, blob_hash, created_at, updated_at)
+		VALUES ('a1', 'e1', 'managed',
+		 'blake3:1111111111111111111111111111111111111111111111111111111111111111', ?, ?)`, ts, ts)
+}
