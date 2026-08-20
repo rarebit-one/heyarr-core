@@ -246,6 +246,18 @@ func validateTarget(target Target) error {
 	return nil
 }
 
+// SetHTTPClient replaces the client the proxy uses upstream.
+//
+// It exists because the endpoint may be a unix socket, which needs a transport
+// rather than a URL — see EndpointClient. It is a setter rather than an Option
+// so that New stays usable without one, which is what every test that probes a
+// plain http peer wants.
+func (p *Prober) SetHTTPClient(c *http.Client) {
+	if c != nil {
+		p.client = c
+	}
+}
+
 // ErrProbeFailed means ffprobe could not describe the target, over ranges or
 // whole. It is typed so the job layer can tell "this is not media Heyarr can
 // read" from "the network went away", and act differently.

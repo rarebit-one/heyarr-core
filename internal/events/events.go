@@ -34,7 +34,12 @@ const (
 	// TypeReplicaMissing is a blob the catalog knows about whose bytes are not
 	// on this peer at all. Distinct from corrupt: corrupt means we still hold
 	// evidence and it is quarantined, missing means we hold nothing.
-	TypeReplicaMissing   = "replica.missing"
+	TypeReplicaMissing = "replica.missing"
+	// TypeBlobProbed is ffprobe having described a blob's bytes (§29). It is
+	// under blob.* rather than content.* because a probe describes BYTES —
+	// two assets sharing a blob share one probe, and there is no asset in the
+	// subject at all.
+	TypeBlobProbed       = "blob.probed"
 	TypeIngestCompleted  = "ingest.completed"
 	TypeAssetCreated     = "content.asset.created"
 	TypeLibraryCreated   = "content.library.created"

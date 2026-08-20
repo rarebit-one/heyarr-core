@@ -933,6 +933,39 @@ YAML
     -m 2 2>/dev/null | grep -c '^event: playback.session.')" "4" \
     "the session's four transitions are all on the event stream"
 
+  note "  probing (§29, ADR-0023)"
+  # Capability routing existed from M1-05 and had no user until M2: the worker
+  # built its runtime with an empty capability set, so no job could ever
+  # require one. This is the first time it is watched deciding anything, and
+  # the assertion runs BOTH ways depending on what this machine has.
+  local probe_jobs probe_hash probe_state
+  probe_hash=$(api_all /api/v1/assets '.items[] | select(.filename != null) | select(.filename | endswith(".mkv") or endswith(".mp4") or endswith(".flac")) | .blob_hash' | head -1)
+
+  probe_jobs=$(api "/api/v1/jobs?type=probe_blob" | jq -r '.items | length')
+  assert_contains "$probe_jobs" "" "probe jobs were enqueued by ingest"
+
+  if command -v ffprobe >/dev/null 2>&1; then
+    # A capable worker claims them and the results are queryable.
+    assert_eq "$(api "/api/v1/jobs?type=probe_blob&state=succeeded" | jq -r '.items | length > 0')" \
+      "true" "a worker with ffprobe ran the probe jobs"
+    assert_eq "$(api "/api/v1/blobs/$probe_hash/probe" | jq -r '.streams | length > 0')" "true" \
+      "the probe result is queryable and has streams"
+    # §29's whole point, asserted against a running system rather than a test
+    # double: the probe read a fraction of the blob rather than copying it.
+    assert_eq "$(api "/api/v1/blobs/$probe_hash/probe" | jq -r '.materialised')" "false" \
+      "the probe used byte ranges rather than materialising the blob"
+  else
+    # ADR-0023's degrade path, at the level a user would notice. The jobs are
+    # PENDING — not failed, not retried into a backoff, not silently dropped —
+    # and everything else in this demo has already had to pass without them.
+    probe_state=$(api "/api/v1/jobs?type=probe_blob" | jq -r '[.items[].state] | unique | join(",")')
+    assert_eq "$probe_state" "pending" \
+      "a node with no ffprobe leaves probe jobs pending rather than failing them"
+    assert_eq "$(api "/api/v1/blobs/$probe_hash/probe" -o /dev/null -w '%{http_code}')" "404" \
+      "an unprobed blob is a 404, not an empty result"
+    pass "the whole demo passed with every probe job unclaimed"
+  fi
+
   note "  the media toolchain (ADR-0023)"
   # FFmpeg is the first dependency Heyarr cannot ship inside its own binary,
   # and it is optional. Both states are real deployments, so the demo asserts
