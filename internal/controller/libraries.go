@@ -11,7 +11,45 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/scanner"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
+
+// warnIfIngestWillCopy says so, once per root, when the store and the library
+// are on different filesystems.
+//
+// ADR-0014 says cross-filesystem ingest "degrades to a copy with a warning,
+// never an error". The degrading was implemented; the warning was not, and its
+// absence is expensive in a way nothing else notices. Both cheap rungs of the
+// ladder need the source and destination on one filesystem — reflink because
+// cloning is a filesystem operation, hardlink because an inode does not span
+// devices — so a CAS on the root disk and a library on the media disk means
+// EVERY ingest is a full byte copy and adopting a library doubles its storage.
+// That is the outcome ADR-0014 exists to avoid, and it arrives silently, one
+// file at a time.
+//
+// Once per root at startup, not once per file: this is a configuration
+// question, answerable before any bytes move, and a million-line log is not a
+// warning.
+func warnIfIngestWillCopy(casRoot, libraryPath string, log *slog.Logger) {
+	same, known, err := cas.SameFilesystem(casRoot, libraryPath)
+	if err != nil {
+		// Not fatal. The library may not be mounted yet, which the scan will
+		// report far more usefully than a startup check can.
+		log.Debug("could not compare the content store and the library filesystem",
+			"cas_root", casRoot, "path", libraryPath, "error", err)
+		return
+	}
+	if !known || same {
+		return
+	}
+	log.Warn("ingest from this library will COPY every file rather than share its bytes",
+		"path", libraryPath,
+		"cas_root", casRoot,
+		"why", "the content store and the library are on different filesystems, "+
+			"and both reflink and hardlink require one filesystem",
+		"cost", "adopting this library will consume a second full copy of it",
+		"fix", "set cas.root to a directory on the same filesystem as the library")
+}
 
 // reconcileLibraries turns the `libraries:` block of the configuration into
 // libraries and library_roots rows, and enqueues a scan for each root.
@@ -78,6 +116,8 @@ func reconcileLibraries(ctx context.Context, db *sqlite.DB, cfg config.Config, l
 		log.Info("library root reconciled",
 			"root_id", root.ID, "library_id", root.LibraryID, "path", root.Path,
 			"created", root.Created, "scan_job", job.ID)
+
+		warnIfIngestWillCopy(cfg.CAS.Root, root.Path, log)
 	}
 	log.Info("libraries reconciled", "libraries", len(specs), "roots", len(roots))
 	return nil

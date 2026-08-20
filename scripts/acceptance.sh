@@ -224,9 +224,9 @@ else
   pass "the database file is self-contained after shutdown"
 fi
 # The schema must survive a restart rather than being rebuilt each time.
-V1=$(grep -ao '"schema_version":[0-9]*' "$WORK/all.log" | head -1 | cut -d: -f2)
+V1=$(grep -aom1 '"schema_version":[0-9]*' "$WORK/all.log" | cut -d: -f2)
 run_and_term restart 5 all >/dev/null
-V2=$(grep -ao '"schema_version":[0-9]*' "$WORK/restart.log" | head -1 | cut -d: -f2)
+V2=$(grep -aom1 '"schema_version":[0-9]*' "$WORK/restart.log" | cut -d: -f2)
 if [[ -n "$V1" && "$V1" == "$V2" ]]; then
   pass "the schema survives a restart (version $V1)"
 else
@@ -806,8 +806,13 @@ YAML
   done
   # A consumer replaying in seq order must never meet an asset before its blob.
   local first_blob first_asset
-  first_blob=$(grep -n 'blob.created' <<<"$events_out" | head -1 | cut -d: -f1)
-  first_asset=$(grep -n 'content.asset.created' <<<"$events_out" | head -1 | cut -d: -f1)
+  # `grep -m1`, not `grep | head -1`. With `set -o pipefail`, head exiting after
+  # one line sends grep SIGPIPE, the pipeline reports failure, and `set -e`
+  # takes the whole script down — which is exactly what happened once the event
+  # log grew big enough for grep to still be writing when head left:
+  # "grep: write error: Broken pipe", then the demo died mid-run.
+  first_blob=$(grep -n -m1 'blob.created' <<<"$events_out" | cut -d: -f1)
+  first_asset=$(grep -n -m1 'content.asset.created' <<<"$events_out" | cut -d: -f1)
   if [[ -n "$first_blob" && -n "$first_asset" ]] && (( first_blob < first_asset )); then
     pass "the log orders a blob before the asset that names it"
   else
