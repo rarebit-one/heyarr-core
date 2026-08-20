@@ -20,6 +20,10 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 )
 
+// streamGapEventName mirrors the unexported constant in the package under
+// test, so this file can assert a gap is ABSENT.
+const streamGapEventName = "heyarr.stream.gap"
+
 // sseFrame is one parsed event-stream frame.
 type sseFrame struct {
 	ID   int64
@@ -250,7 +254,21 @@ func assertNoGapsOrDuplicates(t *testing.T, want, got []int64) {
 // that the server really does block on the write and the subscription really
 // does overflow. Flooding an ordinary socket and hoping the kernel buffer fills
 // is a test that passes on one machine and not the next.
-func TestTheStreamSaysSoWhenItHasDroppedEvents(t *testing.T) {
+// A slow consumer must not lose events.
+//
+// The log drops NOTIFICATIONS for a subscriber that falls behind rather than
+// backpressuring whoever is writing (ADR-0009). That used to mean a slow client
+// lost events, so the stream reported a gap and closed, and the client had to
+// reconnect to recover them.
+//
+// It no longer does. Every frame is read from the log rather than taken from
+// the notification, so a dropped notification costs latency and nothing else,
+// and a slow client backpressures its own read instead: the write blocks, the
+// drain waits, and the log is untouched. This asserts the stronger property
+// that replaced the gap — everything arrives, in order, with no reconnect.
+func TestASlowConsumerReceivesEverythingInOrder(t *testing.T) {
+	// A one-event subscription buffer, so the notifications are certainly
+	// dropped. If delivery depended on them, this test could not pass.
 	h := newHarness(t, withStreamBuffer(1))
 
 	addr := strings.TrimPrefix(h.http.URL, "http://")
@@ -269,9 +287,7 @@ func TestTheStreamSaysSoWhenItHasDroppedEvents(t *testing.T) {
 	}
 
 	reader := bufio.NewReader(conn)
-	// Read up to and including the ready comment, then stop reading entirely.
-	// From here the server can only write as much as the socket will hold.
-	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+	if err := conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	for {
@@ -285,7 +301,7 @@ func TestTheStreamSaysSoWhenItHasDroppedEvents(t *testing.T) {
 	}
 
 	// Each event carries a kilobyte, so the socket fills long before the log
-	// does. The subscription holds one event; everything past that is dropped.
+	// does and the subscription certainly overflows.
 	payload := strings.Repeat("x", 1024)
 	const flood = 300
 	var last int64
@@ -298,73 +314,37 @@ func TestTheStreamSaysSoWhenItHasDroppedEvents(t *testing.T) {
 		last = e.Seq
 	}
 
-	// Now drain. The server unblocks, notices the drop, tells us where to
-	// resume and closes.
-	if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	var gap struct {
-		ResumeAfter int64  `json:"resume_after"`
-		Dropped     int64  `json:"dropped"`
-		Detail      string `json:"detail"`
-	}
-	found := false
-	var delivered []int64
-	var currentID int64
-	for !found {
+	// Now read, slowly and to the end. Every sequence must appear exactly once,
+	// in order, and no gap notice may appear at all.
+	var (
+		seen      []int64
+		currentID int64
+	)
+	for seen == nil || seen[len(seen)-1] < last {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			break
+			t.Fatalf("after %d events: %v", len(seen), err)
 		}
 		line = strings.TrimRight(line, "\r\n")
 		switch {
 		case strings.HasPrefix(line, "id: "):
 			currentID, _ = strconv.ParseInt(strings.TrimPrefix(line, "id: "), 10, 64)
-		case line == "event: heyarr.stream.gap":
-			found = true
-		case strings.HasPrefix(line, "data: ") && !found && currentID != 0:
-			delivered = append(delivered, currentID)
+		case line == "event: "+streamGapEventName:
+			t.Fatalf("the stream reported a gap after %d events; a dropped notification is not a "+
+				"lost event once delivery comes from the log", len(seen))
+		case strings.HasPrefix(line, "data: ") && currentID != 0:
+			seen = append(seen, currentID)
 			currentID = 0
 		}
 	}
-	if !found {
-		t.Fatalf("the stream delivered %d of %d events and never said it had dropped any; "+
-			"a client would believe it was current", len(delivered), flood)
-	}
-	// Read the gap payload.
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		t.Fatalf("the gap event had no data line: %v", err)
-	}
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(strings.TrimRight(line, "\r\n"), "data: ")), &gap); err != nil {
-		t.Fatalf("the gap event's data is not JSON: %v", err)
-	}
-	if gap.Dropped == 0 {
-		t.Error("the gap event reports zero dropped events, which is not a gap")
-	}
-	if gap.ResumeAfter == 0 {
-		t.Error("the gap event does not say where to resume from, which is the only thing it is for")
-	}
-	if gap.Detail == "" {
-		t.Error("the gap event does not say what happened")
-	}
 
-	// The recovery has to actually work: reconnecting where it said picks up
-	// everything that was dropped.
-	recovered := h.openStream("?after=" + strconv.FormatInt(gap.ResumeAfter, 10))
-	defer recovered.close()
-	missing := int(last - gap.ResumeAfter)
-	if missing <= 0 {
-		t.Fatalf("resume_after (%d) is at or past the last event (%d), so nothing was actually recovered",
-			gap.ResumeAfter, last)
+	if int64(len(seen)) != last {
+		t.Fatalf("received %d events, want %d — every sequence from 1 to %d exactly once",
+			len(seen), last, last)
 	}
-	seqs := []int64{}
-	for _, f := range recovered.take(missing) {
-		seqs = append(seqs, f.ID)
-	}
-	for i, seq := range seqs {
-		if want := gap.ResumeAfter + int64(i) + 1; seq != want {
-			t.Fatalf("the refill delivered %d where %d was expected — resuming did not close the gap", seq, want)
+	for i, seq := range seen {
+		if want := int64(i + 1); seq != want {
+			t.Fatalf("event %d was seq %d, want %d — delivery is out of order or has a hole", i, seq, want)
 		}
 	}
 }

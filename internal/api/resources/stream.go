@@ -26,10 +26,13 @@ import (
 //   - The catch-up read therefore overlaps the live feed. Live events at or
 //     below the sequence the catch-up reached are dropped, which is the only
 //     place a duplicate could come from.
-//   - A slow consumer is dropped by the event log rather than backpressured
-//     (ADR-0009), so the stream reports the drop and closes instead of quietly
-//     continuing with a hole in it. A client that is told to reconnect recovers
-//     everything from the log; a client that is told nothing does not.
+//   - A slow consumer cannot lose events. The log drops NOTIFICATIONS for a
+//     subscriber that falls behind rather than backpressuring the writer
+//     (ADR-0009) — but since every frame is read from the log rather than taken
+//     from the notification, a dropped notification costs latency and nothing
+//     else. A slow client instead backpressures its own read: the write blocks,
+//     the drain waits, and the log is unaffected. The gap notice therefore
+//     survives only for the case where the log itself cannot be read.
 //
 // # Why this polls the log as well as subscribing
 //
@@ -198,10 +201,12 @@ func (a *API) streamEvents(w http.ResponseWriter, r *http.Request) {
 			// the event that woke us. See the note above — delivering here
 			// would let this path advance past an earlier event another role
 			// emitted, and that event would be lost.
-			if n := sub.Dropped(); n > 0 {
-				s.gap(maxSeq, n, "this connection fell behind and events were dropped")
-				return
-			}
+			//
+			// sub.Dropped() is deliberately NOT consulted. Once delivery comes
+			// from the log, a dropped notification costs latency and nothing
+			// else: the event is still in the log and the next read returns it,
+			// in order. Reporting a gap here would close a connection that had
+			// missed nothing.
 			if !drain() {
 				return
 			}
@@ -210,14 +215,6 @@ func (a *API) streamEvents(w http.ResponseWriter, r *http.Request) {
 			}
 
 		case <-poll.C:
-			// A dropped subscription is still a gap even though the poll would
-			// recover the events: the client has already been told a sequence
-			// it can trust, and silently resuming past a hole is the failure
-			// this endpoint exists to not have.
-			if n := sub.Dropped(); n > 0 {
-				s.gap(maxSeq, n, "this connection fell behind and events were dropped")
-				return
-			}
 			if !drain() {
 				return
 			}
@@ -226,12 +223,6 @@ func (a *API) streamEvents(w http.ResponseWriter, r *http.Request) {
 			}
 
 		case <-ticker.C:
-			// A drop while the stream is idle must still be reported, or a
-			// client sits on a silent connection believing it is current.
-			if n := sub.Dropped(); n > 0 {
-				s.gap(maxSeq, n, "this connection fell behind and events were dropped")
-				return
-			}
 			s.raw(": heartbeat\n\n")
 			if !s.flush() {
 				return
