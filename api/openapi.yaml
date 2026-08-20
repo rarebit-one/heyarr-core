@@ -1,0 +1,175 @@
+# The Heyarr HTTP API (spec §77).
+#
+# Hand-written, per ADR-0015: handlers are written by hand and this document is
+# written by hand, and a contract test asserts that every registered route
+# appears here and every documented path is registered. Generating either side
+# from the other produces something that is accurate and useless.
+#
+# Add a path when you add a route. Keep the sections in path order.
+openapi: 3.1.0
+info:
+  title: Heyarr
+  version: "1"
+  description: >-
+    The canonical JSON/HTTP API of a Heyarr peer. Everything under /api/v1
+    requires a bearer token carrying at least the `read` scope, unless
+    authentication is disabled — which is only permitted on a loopback listener
+    (ADR-0011).
+  license:
+    name: AGPL-3.0-or-later
+    identifier: AGPL-3.0-or-later
+servers:
+  - url: /api/v1
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    BlobHash:
+      name: hash
+      in: path
+      required: true
+      description: The BLAKE3 digest that names the blob, as `blake3:<64 lowercase hex characters>`.
+      schema:
+        type: string
+        pattern: '^blake3:[0-9a-f]{64}$'
+  responses:
+    Problem:
+      description: An RFC 9457 problem document.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Problem:
+      type: object
+      description: RFC 9457 problem details.
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        request_id: { type: string }
+      required: [type, title, status]
+
+security:
+  - bearerAuth: []
+
+paths:
+  /blobs/{hash}/content:
+    parameters:
+      - $ref: '#/components/parameters/BlobHash'
+    get:
+      operationId: getBlobContent
+      summary: Serve a blob's bytes, whole or by range.
+      description: >-
+        The byte-serving contract of spec §28, and deliberately one endpoint
+        with four consumers: direct playback, remote ffprobe (§29),
+        replication, and HTTP web-seeding (§27). See ADR-0013 — it is not "the
+        playback endpoint" and must not be tuned as one.
+
+
+        The response carries a strong `ETag` derived from the content, and
+        `Cache-Control: public, max-age=31536000, immutable`. Immutable caching
+        is correct here rather than risky because the URL is the digest: this
+        path can never mean different bytes. No `Last-Modified` is sent —
+        a modification time is a property of one peer's copy, and two peers
+        holding identical bytes must advertise identical validators.
+
+
+        The media type is always `application/octet-stream`: the content store
+        knows the digest and the length and nothing else. What the bytes mean
+        is catalog metadata.
+      parameters:
+        - name: download
+          in: query
+          required: false
+          description: >-
+            `1`, `true` or `yes` adds `Content-Disposition: attachment`. The
+            bytes, ranges and validators are identical either way.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The whole blob.
+          headers:
+            ETag:
+              description: '`"blake3-<hex digest>"`.'
+              schema: { type: string }
+            Accept-Ranges:
+              schema: { type: string, const: bytes }
+            Cache-Control:
+              schema: { type: string }
+            Content-Disposition:
+              description: Present only when `download` was requested.
+              schema: { type: string }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '206':
+          description: The requested range or ranges.
+          headers:
+            Content-Range:
+              schema: { type: string }
+            ETag:
+              schema: { type: string }
+            Accept-Ranges:
+              schema: { type: string, const: bytes }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+            multipart/byteranges:
+              schema: { type: string, format: binary }
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '404':
+          description: This peer holds no such blob. Ask another peer.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '416':
+          description: The requested range lies outside the blob.
+          headers:
+            Content-Range:
+              description: '`bytes */<size>`.'
+              schema: { type: string }
+    head:
+      operationId: headBlobContent
+      summary: Report a blob's size and range support without transferring it.
+      description: >-
+        Identical to `get` in every header, with no body. This is how a remote
+        prober or a replication client learns the length and confirms range
+        support before it starts.
+      responses:
+        '200':
+          description: The blob exists; `Content-Length` is its size.
+          headers:
+            ETag:
+              schema: { type: string }
+            Accept-Ranges:
+              schema: { type: string, const: bytes }
+            Content-Length:
+              schema: { type: integer, format: int64 }
+        '206':
+          description: The blob exists and the requested range is satisfiable.
+          headers:
+            Content-Range:
+              schema: { type: string }
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '404':
+          $ref: '#/components/responses/Problem'
+        '416':
+          description: The requested range lies outside the blob.
