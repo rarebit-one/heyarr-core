@@ -1,0 +1,113 @@
+[Unit]
+Description=Heyarr — content lifecycle, replication and consumption
+Documentation=https://github.com/rarebit-one/heyarr-core
+After=network-online.target
+Wants=network-online.target
+# The library lives on a mount that may not be there yet. Without this the
+# service starts, the scanner walks an empty mountpoint, and every asset it
+# previously knew about is marked missing — which is recoverable but alarming,
+# and entirely avoidable. Override the path in a drop-in for your own mount.
+RequiresMountsFor=/var/lib/heyarr
+
+[Service]
+# Type=exec, not notify: Heyarr does not speak sd_notify, and claiming it does
+# would make systemd wait for a READY=1 that never comes and then call a healthy
+# service failed. Type=exec at least means "started" is reported after the
+# binary successfully execs rather than after the fork.
+#
+# There is deliberately no ExecReload. Heyarr handles SIGINT and SIGTERM and
+# nothing else, so the obvious `kill -HUP $MAINPID` would not reload it — Go's
+# default disposition for SIGHUP is to terminate, so it would kill the service
+# while telling the operator it was reloading. Reload by restarting.
+Type=exec
+ExecStart=/usr/local/bin/heyarr --config /etc/heyarr/config.yaml all
+Restart=on-failure
+RestartSec=5s
+
+# Shutdown drains in-flight jobs. The supervisor's own grace period bounds it;
+# this must be longer, or systemd kills the process mid-drain and the work is
+# retried rather than finished.
+KillSignal=SIGTERM
+TimeoutStopSec=120
+
+User=heyarr
+Group=heyarr
+# The group that owns the media. Heyarr reads the library through group
+# membership rather than by owning it (§74), so an ingest bug cannot rewrite
+# the originals.
+SupplementaryGroups=media
+
+# ---------------------------------------------------------------------------
+# Containment (§74). Application-level capabilities are still necessary — this
+# is the second layer, not a substitute for the first.
+#
+# Every one of these was verified with `systemd-analyze security heyarr`; the
+# recorded score is in docs/deploy/hyperion-1.md. Removing any of them raises
+# the exposure score, which is the point of recording it.
+# ---------------------------------------------------------------------------
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+# Heyarr speaks HTTP over TCP and a unix socket. Nothing else.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# It needs no capabilities at all: it binds a high port, writes below its own
+# data directory, and never changes ownership.
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete @mount @swap @reboot
+
+# ProtectSystem=strict makes the whole filesystem read-only, so every writable
+# path is named. This list is the complete set of places Heyarr may write, and
+# it is deliberately short enough to read.
+StateDirectory=heyarr
+StateDirectoryMode=0700
+RuntimeDirectory=heyarr
+RuntimeDirectoryMode=0700
+ReadWritePaths=/var/lib/heyarr
+# The library. Read-only by default: a scanner that can delete is the most
+# destructive component in the system, and Milestone 1 never needs to write
+# there. Move it to ReadWritePaths only when you adopt a workflow that does.
+ReadOnlyPaths=/srv/media
+# 0077, not 0027. Nothing needs group access to Heyarr's own state: the media
+# group exists so Heyarr can READ the library, not so anything can read the
+# CAS. The store sets its own modes explicitly anyway (0750 directories, 0440
+# blobs), and a umask only tightens those further. Relax it in a drop-in if a
+# backup agent ever needs to read the state directory as a group member.
+UMask=0077
+
+# ---------------------------------------------------------------------------
+# Resource limits (§74). These are the ones an ingest run actually reaches.
+# ---------------------------------------------------------------------------
+# Hashing and range-serving stream; neither should grow with file size, and a
+# 20 GB remux is a normal case (ADR-0013). If this limit is ever hit, something
+# is buffering that should not be — which is a bug worth being told about
+# rather than a limit worth raising.
+MemoryMax=2G
+MemoryHigh=1536M
+# Ingest is IO-bound and will happily saturate a disk the rest of the house is
+# also using.
+IOWeight=50
+CPUWeight=50
+TasksMax=512
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

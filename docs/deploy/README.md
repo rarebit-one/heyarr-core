@@ -1,14 +1,35 @@
 # Deployment
 
-Heyarr is pre-alpha and not yet deployable. This directory will carry:
+Heyarr ships as a single static binary, a hardened systemd unit, and a
+distroless container image. Pick one; they install the same thing in the same
+places.
 
-- `hyperion-1.md` — the reference two-site deployment: ZFS dataset layout (the
-  CAS and the controller database want very different `recordsize`), block
-  cloning prerequisites for reflink ingest (ADR-0014), and the service account,
-  group and POSIX ACL model from spec §74.
-- `systemd.md` — running the roles as hardened units.
-- `docker.md` — the container image.
+- **[`hyperion-1.md`](hyperion-1.md)** — the reference deployment, measured on
+  the real host: filesystem layout, the service account/group/ACL model from
+  §74, the recorded `systemd-analyze security` score, and what the absence of
+  block cloning on that machine actually costs.
+- **[`../../deploy/systemd/heyarr.service`](../../deploy/systemd/heyarr.service)** —
+  the unit. Read its comments before changing it; two of the directives that
+  look missing are absent on purpose.
+- **[`../../deploy/docker/Dockerfile`](../../deploy/docker/Dockerfile)** — the
+  image. No shell, no package manager, runs as uid 65532.
 
-The invariant worth knowing in advance: Heyarr expects OS-level containment as
-well as application-level capabilities (§74). Do not run it as root, and do not
-give it write access to a library it is only meant to read.
+## Two invariants worth knowing before you start
+
+**Heyarr expects OS-level containment as well as application-level
+capabilities** (§74). Do not run it as root, and do not give it write access to
+a library it is only meant to read. The unit does both for you; a hand install
+has to do it deliberately.
+
+**It refuses to serve the library unauthenticated on a routable address**
+(ADR-0011). This is a refusal to start, not a warning, and it holds inside the
+container too — a published port with `http.auth.enabled=false` will not run.
+If a deployment appears to hang at startup, read the first error line: it is
+usually this, and it is telling you something true.
+
+## Verifying
+
+`scripts/acceptance.sh` — `make demo` — is how you verify a build, including on
+the host you just deployed to. See the README's *Verifying a build*, and
+`hyperion-1.md` for running it against a packaged binary on a machine with no Go
+toolchain.

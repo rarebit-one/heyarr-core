@@ -1,0 +1,85 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  # The release must not be the first place the gate runs. A tag that fails
+  # acceptance has already been pushed, and an immutable tag pointing at a build
+  # nobody verified is worse than a delayed release.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v7
+        with: { go-version: stable, cache: true }
+      - run: go test -race -count=1 ./...
+      - run: make demo
+
+  release:
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload archives
+      packages: write # push to ghcr.io
+      id-token: write # provenance is signed with a workload identity token
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 } # goreleaser derives the changelog from history
+
+      - uses: actions/setup-go@v7
+        with: { go-version: stable, cache: true }
+
+      # Multi-architecture images without an arm64 runner.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: anchore/sbom-action/download-syft@v0
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Provenance: a signed statement of which workflow, at which commit, on
+      # which runner produced these bytes. The checksums file says the archives
+      # have not changed since the build; this says who built them, which is the
+      # half a checksum cannot cover.
+      - name: attest the archives
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+
+      - name: read the image digest
+        id: image
+        run: |
+          digest=$(jq -r '[.[] | select(.type == "Docker Manifest")] | .[0].extra.Digest // empty' dist/artifacts.json)
+          if [[ -z "$digest" ]]; then
+            echo "no image digest in dist/artifacts.json — attestation would be a no-op" >&2
+            exit 1
+          fi
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+
+      - name: attest the image
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/rarebit-one/heyarr
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
