@@ -1,0 +1,14 @@
+{
+  "secret": "<redacted>",
+  "token": {
+    "created_at": "2026-08-20T12:00:00Z",
+    "expires_at": null,
+    "id": "<redacted>",
+    "last_used_at": null,
+    "name": "jellyfin",
+    "revoked_at": null,
+    "scopes": [
+      "read"
+    ]
+  }
+}

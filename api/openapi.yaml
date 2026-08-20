@@ -1,68 +1,458 @@
-# The Heyarr HTTP API (spec §77).
+# The Heyarr JSON API (spec §77).
 #
-# Hand-written, per ADR-0015: handlers are written by hand and this document is
-# written by hand, and a contract test asserts that every registered route
-# appears here and every documented path is registered. Generating either side
-# from the other produces something that is accurate and useless.
+# This document is written by hand and kept honest by a test, not generated
+# (ADR-0015). internal/controller/openapi_test.go walks the real router and
+# asserts parity in both directions: a route that is served and not documented
+# fails, and an operation documented here that is not served fails too.
 #
-# Add a path when you add a route. Keep the sections in path order.
+# So: add a route, add it here. The test tells you the exact string to write —
+# `go test -run TestRouteInventory -v ./internal/controller`.
+#
+# Paths are absolute rather than relative to a /api/v1 server URL, because
+# /healthz, /readyz and /metrics are real routes that live outside it. With a
+# prefixed server URL those three could not be written down at all, and the
+# parity test would have to be taught to ignore them — which is the same thing
+# as not checking them.
 openapi: 3.1.0
+
 info:
   title: Heyarr
   version: "1"
-  description: >-
-    The canonical JSON/HTTP API of a Heyarr peer. Everything under /api/v1
-    requires a bearer token carrying at least the `read` scope, unless
-    authentication is disabled — which is only permitted on a loopback listener
-    (ADR-0011).
-  license:
-    name: AGPL-3.0-or-later
-    identifier: AGPL-3.0-or-later
-servers:
-  - url: /api/v1
+  summary: Headless content lifecycle, replication and consumption for homelabs.
+  description: |
+    Every error is an RFC 9457 problem document with a stable `type` URI. Clients
+    branch on `type` — not on the title, not on the detail, and not on the HTTP
+    status alone, which several different conditions share.
 
-components:
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-  parameters:
-    BlobHash:
-      name: hash
-      in: path
-      required: true
-      description: The BLAKE3 digest that names the blob, as `blake3:<64 lowercase hex characters>`.
-      schema:
-        type: string
-        pattern: '^blake3:[0-9a-f]{64}$'
-  responses:
-    Problem:
-      description: An RFC 9457 problem document.
-      content:
-        application/problem+json:
-          schema:
-            $ref: '#/components/schemas/Problem'
-  schemas:
-    Problem:
-      type: object
-      description: RFC 9457 problem details.
-      properties:
-        type: { type: string }
-        title: { type: string }
-        status: { type: integer }
-        detail: { type: string }
-        instance: { type: string }
-        request_id: { type: string }
-      required: [type, title, status]
+    Collections are paginated by keyset with an opaque cursor. `next_cursor` is
+    absent on the last page, so "keep going while next_cursor is set" is the
+    whole client loop. The cursor's contents are not a contract: it encodes the
+    sort key of the last row returned, and a client that parses it breaks the
+    first time a sort order changes.
+  license:
+    name: AGPL-3.0-only
+    identifier: AGPL-3.0-only
+
+servers:
+  - url: http://127.0.0.1:8385
+    description: The default loopback bind (ADR-0011).
 
 security:
   - bearerAuth: []
 
+tags:
+  - name: content
+    description: Works, editions, assets and the libraries they come from.
+  - name: bytes
+    description: Blob metadata. The bytes themselves are a separate contract (ADR-0013).
+  - name: fabric
+    description: Peers and replicas.
+  - name: operations
+    description: Jobs, events, credentials and system state.
+
 paths:
-  /blobs/{hash}/content:
-    parameters:
-      - $ref: '#/components/parameters/BlobHash'
+  /healthz:
     get:
+      tags: [operations]
+      operationId: healthz
+      summary: Liveness.
+      description: |
+        This process is running and its HTTP stack works. It checks nothing else
+        on purpose: a liveness probe that fails because the database is busy
+        causes a restart loop that makes the database busier.
+      security: []
+      responses:
+        "200":
+          description: Alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ok }
+
+  /readyz:
+    get:
+      tags: [operations]
+      operationId: readyz
+      summary: Readiness.
+      description: |
+        Whether this process can actually serve requests. Deliberately free of
+        anything an unauthenticated caller should not learn — no paths, no
+        versions, no counts.
+      security: []
+      responses:
+        "200":
+          description: Ready.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+        "503":
+          description: Not ready.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+
+  /metrics:
+    get:
+      tags: [operations]
+      operationId: metrics
+      summary: Prometheus metrics.
+      description: |
+        Authenticated exactly like the API and requiring `read`. Route names,
+        library sizes and request patterns are not "just metrics".
+      responses:
+        "200":
+          description: Metrics in the Prometheus text exposition format.
+          content:
+            text/plain:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/system:
+    get:
+      tags: [operations]
+      operationId: getSystem
+      summary: What this node is and what it is running.
+      responses:
+        "200":
+          description: System information.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SystemInfo" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/works:
+    get:
+      tags: [content]
+      operationId: listWorks
+      summary: Page the catalog.
+      description: |
+        Ordered by `(sort_title, id)`. The id is in the sort key because
+        sort_title is not unique, and a non-unique keyset boundary skips and
+        repeats rows exactly as OFFSET does.
+      parameters:
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+        - name: content_type
+          in: query
+          schema: { type: string }
+          description: Restrict to one content type.
+        - name: library_id
+          in: query
+          schema: { type: string }
+          description: Works with at least one asset in this library.
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Case-insensitive substring match over `sort_title`.
+      responses:
+        "200":
+          description: A page of works.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/Work" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/works/{id}:
+    get:
+      tags: [content]
+      operationId: getWork
+      summary: One work.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: The work.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Work" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/editions/{id}:
+    get:
+      tags: [content]
+      operationId: getEdition
+      summary: One edition.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: The edition.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Edition" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/assets:
+    get:
+      tags: [content]
+      operationId: listAssets
+      summary: Page the files.
+      parameters:
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+        - name: library_id
+          in: query
+          schema: { type: string }
+        - name: content_type
+          in: query
+          schema: { type: string }
+        - name: state
+          in: query
+          schema: { type: string, enum: [present, missing] }
+          description: |
+            `missing` is an asset whose source path has vanished. It is not a
+            deletion: the catalog row and any blob both remain (ADR-0018).
+      responses:
+        "200":
+          description: A page of assets.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/Asset" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/assets/{id}:
+    get:
+      tags: [content]
+      operationId: getAsset
+      summary: One asset.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: The asset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Asset" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [content]
+      operationId: deleteAsset
+      summary: Delete an asset. Requires `write`.
+      description: |
+        Logical, per ADR-0018. The asset stops existing; its blob does not. A
+        later `gc_blobs` sweep reclaims blobs that no asset references, once a
+        grace window has passed — which is what makes a mistaken delete
+        reversible. Nothing is unlinked inside this request.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "204":
+          description: Deleted. No bytes were removed.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/libraries:
+    get:
+      tags: [content]
+      operationId: listLibraries
+      summary: Page the libraries, each with its roots.
+      parameters:
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+        - name: content_type
+          in: query
+          schema: { type: string }
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Case-insensitive substring match over the name.
+      responses:
+        "200":
+          description: A page of libraries.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/Library" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [content]
+      operationId: createLibrary
+      summary: Create a library. Requires `write`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, content_type]
+              additionalProperties: false
+              properties:
+                name: { type: string }
+                content_type: { type: string }
+                enabled: { type: boolean, default: true }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Library" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/libraries/{id}:
+    get:
+      tags: [content]
+      operationId: getLibrary
+      summary: One library, with its roots.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: The library.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Library" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/libraries/{id}/roots:
+    post:
+      tags: [content]
+      operationId: createLibraryRoot
+      summary: Add a root to a library. Requires `write`.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              additionalProperties: false
+              properties:
+                path: { type: string }
+                ingest_mode:
+                  type: string
+                  enum: [reflink, hardlink, copy, link]
+                  default: reflink
+                  description: |
+                    How ingest materialises bytes into the CAS (ADR-0014).
+                    `link` catalogues files where they are and never copies them
+                    (ADR-0020).
+                enabled: { type: boolean, default: true }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LibraryRoot" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/libraries/{id}/scan:
+    post:
+      tags: [content]
+      operationId: scanLibrary
+      summary: Enqueue a scan. Requires `write`.
+      description: |
+        One `scan_library` job per enabled root, because the scanner's job is
+        root-scoped. A library with two roots therefore yields two jobs, and a
+        client waiting on the scan must wait on all of them — waiting on the
+        first only is how a CLI exits 0 with half the library unscanned.
+
+        Enqueueing is idempotent while a scan of the same root is still live: a
+        second request returns the running job rather than queueing a second
+        walk of the same tree (ADR-0008).
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "202":
+          description: Accepted; the jobs are queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  library_id: { type: string }
+                  jobs:
+                    type: array
+                    items: { $ref: "#/components/schemas/Job" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            The library has no enabled roots, so there is nothing to scan.
+            Returning 202 here would let a client believe a scan is running.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /api/v1/blobs/{hash}:
+    get:
+      tags: [bytes]
+      operationId: getBlob
+      summary: Blob metadata.
+      description: |
+        Metadata only. The bytes are served by `/api/v1/blobs/{hash}/content`,
+        which is deliberately a separate contract with four consumers
+        (ADR-0013).
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: { type: string, pattern: "^blake3:[0-9a-f]{64}$" }
+      responses:
+        "200":
+          description: The blob record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Blob" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/blobs/{hash}/content:
+    parameters:
+      - name: hash
+        in: path
+        required: true
+        description: The BLAKE3 digest that names the blob, as `blake3:<64 lowercase hex characters>`.
+        schema:
+          type: string
+          pattern: '^blake3:[0-9a-f]{64}$'
+    get:
+      tags: [bytes]
       operationId: getBlobContent
       summary: Serve a blob's bytes, whole or by range.
       description: >-
@@ -123,18 +513,14 @@ paths:
               schema: { type: string, format: binary }
             multipart/byteranges:
               schema: { type: string, format: binary }
-        '400':
-          $ref: '#/components/responses/Problem'
-        '401':
-          $ref: '#/components/responses/Problem'
-        '403':
-          $ref: '#/components/responses/Problem'
+        '400': { $ref: "#/components/responses/BadRequest" }
+        '401': { $ref: "#/components/responses/Unauthorized" }
+        '403': { $ref: "#/components/responses/Forbidden" }
         '404':
           description: This peer holds no such blob. Ask another peer.
           content:
             application/problem+json:
-              schema:
-                $ref: '#/components/schemas/Problem'
+              schema: { $ref: "#/components/schemas/Problem" }
         '416':
           description: The requested range lies outside the blob.
           headers:
@@ -142,6 +528,7 @@ paths:
               description: '`bytes */<size>`.'
               schema: { type: string }
     head:
+      tags: [bytes]
       operationId: headBlobContent
       summary: Report a blob's size and range support without transferring it.
       description: >-
@@ -163,13 +550,571 @@ paths:
           headers:
             Content-Range:
               schema: { type: string }
-        '400':
-          $ref: '#/components/responses/Problem'
-        '401':
-          $ref: '#/components/responses/Problem'
-        '403':
-          $ref: '#/components/responses/Problem'
-        '404':
-          $ref: '#/components/responses/Problem'
+        '400': { $ref: "#/components/responses/BadRequest" }
+        '401': { $ref: "#/components/responses/Unauthorized" }
+        '403': { $ref: "#/components/responses/Forbidden" }
+        '404': { $ref: "#/components/responses/NotFound" }
         '416':
           description: The requested range lies outside the blob.
+
+  /api/v1/peers:
+    get:
+      tags: [fabric]
+      operationId: listPeers
+      summary: Page the peers.
+      description: |
+        A paginated collection even though Milestone 1 has exactly one peer
+        (ADR-0010). A client written against a single-object response would have
+        to be rewritten for Milestone 4, and the ones that are not keep showing
+        one peer.
+      parameters:
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+        - name: mode
+          in: query
+          schema: { type: string, enum: [full, partial, cache, archive, compute] }
+      responses:
+        "200":
+          description: A page of peers.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/Peer" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/replicas:
+    get:
+      tags: [fabric]
+      operationId: listReplicas
+      summary: Page the replicas.
+      parameters:
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+        - name: state
+          in: query
+          schema: { type: string, enum: [present, pending, corrupt, missing] }
+        - name: peer_id
+          in: query
+          schema: { type: string }
+        - name: blob_hash
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: A page of replicas.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/Replica" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/jobs:
+    get:
+      tags: [operations]
+      operationId: listJobs
+      summary: Page the job queue.
+      parameters:
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+        - name: state
+          in: query
+          schema: { type: string, enum: [pending, leased, succeeded, failed, dead] }
+        - name: type
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: A page of jobs.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/Job" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/jobs/{id}:
+    get:
+      tags: [operations]
+      operationId: getJob
+      summary: One job.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: The job.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/jobs/{id}/retry:
+    post:
+      tags: [operations]
+      operationId: retryJob
+      summary: Put a finished job back on the queue. Requires `write`.
+      description: |
+        An operator action: something was wrong and has been fixed. Only a
+        succeeded, failed or dead job may be retried; a pending or leased one is
+        a 409, because "retry" on a job that is already running would mean
+        running it twice.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: The job, back in `pending`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/events:
+    get:
+      tags: [operations]
+      operationId: streamEvents
+      summary: The event stream (server-sent events).
+      description: |
+        A live SSE feed of §76 events, preceded by everything after `after`.
+
+        Reconnection is gapless: a client that saw sequence N reconnects with
+        `?after=N` and receives everything since, with no hole and no duplicate.
+        The subscription is opened before the catch-up read — the other order
+        leaves a window in which committed events are in neither half, and both
+        halves look complete on their own.
+
+        Each frame carries `id: <seq>`, so a browser `EventSource` resumes on
+        its own via `Last-Event-ID`, which this endpoint honours when `after` is
+        absent.
+
+        A slow consumer is dropped rather than backpressured (ADR-0009). When
+        that happens the stream emits one `heyarr.stream.gap` event carrying
+        `resume_after` and `dropped`, and closes. Reconnect with
+        `?after=resume_after`. Closing silently would be indistinguishable from
+        a network blip, and a client cannot tell "refill" from "carry on".
+
+        Resume from the highest sequence number you have seen. Under concurrent
+        writes a straggler may arrive slightly out of order; nothing is ever
+        delivered twice.
+      parameters:
+        - name: after
+          in: query
+          schema: { type: integer, format: int64, minimum: 0 }
+          description: Deliver everything with a sequence number greater than this.
+        - name: types
+          in: query
+          schema: { type: string }
+          description: |
+            Comma-separated event types. Each is an exact name (`job.failed`) or
+            a trailing-`*` namespace prefix (`job.*`).
+      responses:
+        "200":
+          description: The stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/tokens:
+    get:
+      tags: [operations]
+      operationId: listTokens
+      summary: Every credential. Requires `admin`.
+      description: |
+        Not paginated: the number of tokens is the number of integrations an
+        operator has set up, and unlike the catalog nothing writes to this table
+        while it is being read.
+      responses:
+        "200":
+          description: The credentials. Never any secret material.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Token" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [operations]
+      operationId: createToken
+      summary: Mint a credential. Requires `admin`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, scopes]
+              additionalProperties: false
+              properties:
+                name: { type: string }
+                scopes:
+                  type: array
+                  minItems: 1
+                  items: { type: string, enum: [read, write, admin] }
+                expires_at: { type: string, format: date-time, nullable: true }
+      responses:
+        "201":
+          description: |
+            The credential and its secret. The secret is returned exactly once
+            and is not recoverable: only its argon2id hash was stored.
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { $ref: "#/components/schemas/Token" }
+                  secret: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/tokens/{id}:
+    get:
+      tags: [operations]
+      operationId: getToken
+      summary: One credential. Requires `admin`.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: The credential.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Token" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [operations]
+      operationId: revokeToken
+      summary: Revoke a credential. Requires `admin`.
+      description: |
+        Logical: the row stays and `revoked_at` is set. An audit trail that
+        deletes the thing being audited is not one. Revoking twice is a 409, so
+        a script cannot mistake "already revoked" for "revoked something just
+        now".
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: The revoked credential.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Token" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        An opaque scoped token (ADR-0011), presented as `Authorization: Bearer
+        heyarr_…`. The header is the only place a credential is accepted: a
+        `?token=` parameter would write it into every proxy log, browser history
+        and Referer header between the client and here.
+
+        Scopes are ordered — `admin` implies `write` implies `read`. Every
+        route under /api/v1 requires at least `read`.
+
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+      description: |
+        An opaque position from a previous page's `next_cursor`. It is scoped to
+        one collection: a cursor from `/works` is rejected by `/jobs` rather
+        than being read as a position in a different sort order.
+    limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      description: Values above the maximum are clamped, not rejected.
+
+  responses:
+    BadRequest:
+      description: The request is malformed or semantically invalid.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Unauthorized:
+      description: No credential, or one that was rejected.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Forbidden:
+      description: A valid credential that does not carry the required scope.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotFound:
+      description: |
+        No such resource. Never an empty 200: a client cannot tell "no such
+        work" from "a work with nothing in it" if both are 200, and it is the
+        difference between retrying and giving up.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Conflict:
+      description: The request contradicts current state.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Problem:
+      type: object
+      description: RFC 9457. Clients branch on `type` and nothing else.
+      required: [type, title, status]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        request_id:
+          type: string
+          description: Correlates the response with the server log line.
+
+    Page:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: {} }
+        next_cursor:
+          type: string
+          description: Absent on the last page.
+
+    Work:
+      type: object
+      required: [id, content_type, work_key, title, sort_title, attributes, created_at, updated_at]
+      properties:
+        id: { type: string }
+        content_type: { type: string }
+        work_key:
+          type: string
+          description: Normalised identity, so a rescan converges on the same work.
+        title: { type: string }
+        sort_title: { type: string }
+        year: { type: [integer, "null"] }
+        attributes:
+          type: object
+          description: |
+            Per-content-type fields. They live here rather than as columns so
+            that registering a fourth content type is not a migration.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Edition:
+      type: object
+      required: [id, work_id, label, edition_type, attributes, created_at]
+      properties:
+        id: { type: string }
+        work_id: { type: string }
+        label: { type: string }
+        edition_type: { type: string }
+        language: { type: [string, "null"] }
+        attributes: { type: object }
+        created_at: { type: string, format: date-time }
+
+    Asset:
+      type: object
+      required: [id, edition_id, source_class, role, identification_source, created_at, updated_at]
+      properties:
+        id: { type: string }
+        edition_id: { type: string }
+        library_id: { type: [string, "null"] }
+        source_class:
+          type: string
+          enum: [managed, linked, vault]
+        blob_hash:
+          type: [string, "null"]
+          description: |
+            Null for a `linked` asset, which has no blob at all — not a mutable
+            one, not a special one, none (ADR-0020). That is what keeps blob
+            immutability absolute.
+        source_path: { type: [string, "null"] }
+        role: { type: string }
+        filename: { type: [string, "null"] }
+        mime: { type: [string, "null"] }
+        identification_source: { type: string }
+        missing_since:
+          type: [string, "null"]
+          format: date-time
+          description: Set when the source path vanished. Not a deletion.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Blob:
+      type: object
+      required: [hash, size, chunked, first_seen_at]
+      properties:
+        hash:
+          type: string
+          description: "`blake3:<64 hex>` — the canonical byte identity (ADR-0005)."
+        size: { type: integer, format: int64 }
+        mime: { type: [string, "null"] }
+        chunked: { type: boolean }
+        first_seen_at: { type: string, format: date-time }
+
+    Library:
+      type: object
+      required: [id, name, content_type, enabled, created_at, roots]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        content_type: { type: string }
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        roots:
+          type: array
+          items: { $ref: "#/components/schemas/LibraryRoot" }
+
+    LibraryRoot:
+      type: object
+      required: [id, library_id, path, ingest_mode, enabled, created_at]
+      properties:
+        id: { type: string }
+        library_id: { type: string }
+        path: { type: string }
+        ingest_mode: { type: string, enum: [reflink, hardlink, copy, link] }
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    Peer:
+      type: object
+      required: [id, name, site, mode, is_self, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        site: { type: string, description: The failure domain this peer is in. }
+        mode: { type: string, enum: [full, partial, cache, archive, compute] }
+        endpoint: { type: [string, "null"] }
+        is_self: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    Replica:
+      type: object
+      required: [blob_hash, peer_id, state, bytes_present, updated_at]
+      properties:
+        blob_hash: { type: string }
+        peer_id: { type: string }
+        state: { type: string, enum: [present, pending, corrupt, missing] }
+        bytes_present: { type: integer, format: int64 }
+        verified_at: { type: [string, "null"], format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Job:
+      type: object
+      required: [id, type, payload, state, priority, required_capability, run_after, attempts, max_attempts, created_at, updated_at]
+      properties:
+        id: { type: string }
+        type: { type: string }
+        payload: { type: object }
+        state: { type: string, enum: [pending, leased, succeeded, failed, dead] }
+        priority: { type: integer, description: Lower runs first. }
+        dedupe_key: { type: [string, "null"] }
+        required_capability: { type: string }
+        run_after: { type: string, format: date-time }
+        attempts: { type: integer }
+        max_attempts: { type: integer }
+        lease_owner: { type: [string, "null"] }
+        lease_expires_at: { type: [string, "null"], format: date-time }
+        last_error: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+
+    Token:
+      type: object
+      required: [id, name, scopes, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        scopes:
+          type: array
+          items: { type: string, enum: [read, write, admin] }
+        created_at: { type: string, format: date-time }
+        last_used_at: { type: [string, "null"], format: date-time }
+        expires_at: { type: [string, "null"], format: date-time }
+        revoked_at: { type: [string, "null"], format: date-time }
+
+    SystemInfo:
+      type: object
+      properties:
+        build:
+          type: object
+          properties:
+            version: { type: string }
+            commit: { type: string }
+            date: { type: string }
+        peer:
+          type: object
+          properties:
+            name: { type: string }
+            site: { type: string }
+        schema_version: { type: integer }
+        database:
+          $ref: "#/components/schemas/StorageInfo"
+        cas:
+          $ref: "#/components/schemas/StorageInfo"
+        auth_enabled: { type: boolean }
+
+    StorageInfo:
+      type: object
+      properties:
+        path: { type: string }
+        ok: { type: boolean }
+
+    Readiness:
+      type: object
+      properties:
+        status: { type: string }
+        checks:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              ok: { type: boolean }
+              detail: { type: string }
