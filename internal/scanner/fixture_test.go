@@ -237,6 +237,24 @@ func (f *fixture) mustScan() scanner.Progress {
 }
 
 // pendingIngests returns the ingest_artifact jobs waiting to run.
+// killIngest drives one file's ingest job to dead, the way an ingest that keeps
+// failing eventually would.
+func (f *fixture) killIngest(relPath string) {
+	f.t.Helper()
+	res, err := f.db.Writer().ExecContext(f.t.Context(),
+		`UPDATE jobs SET state = 'dead', lease_owner = NULL, lease_expires_at = NULL,
+			last_error = 'killed by the test', finished_at = ?, updated_at = ?
+		 WHERE type = ? AND dedupe_key = ?`,
+		time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano),
+		ingest.JobType, ingest.DedupeKey(f.rootID, relPath))
+	if err != nil {
+		f.t.Fatalf("killing the ingest of %s: %v", relPath, err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		f.t.Fatalf("killing the ingest of %s affected %d jobs, want 1", relPath, n)
+	}
+}
+
 func (f *fixture) pendingIngests() []ingest.Payload {
 	f.t.Helper()
 	rows, err := f.db.Reader().QueryContext(f.t.Context(),
