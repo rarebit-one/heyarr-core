@@ -723,6 +723,65 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/playback:
+    post:
+      tags: [playback]
+      operationId: startPlayback
+      summary: Plan, open a session, and return somewhere to play from.
+      description: |
+        The one call a client makes when someone presses play.
+
+        **The controller stays out of the content data path (§32).** It returns
+        a direct URL to the peer holding the replica; it does not proxy bytes.
+        A controller that proxied would make playback's availability depend on
+        its own, which is exactly the coupling §53's degraded-operation model
+        exists to avoid — a Full Peer must keep streaming when the controller
+        has gone.
+
+        The URL is `/api/v1/blobs/{hash}/content`, unchanged. ADR-0013's
+        consequences forbid "adding a player-shaped session token" to it, so
+        playback gets no byte route, no auth scheme and no signed URL of its
+        own — it gets a short-lived credential and the same endpoint
+        replication and the BitTorrent web-seed use.
+
+        **The credential is scoped to `read` and expires, but is not scoped to
+        one blob.** A client holding one can read any blob until it expires.
+        Per-blob scoping is a *grant* (§77's `/grants`), which is a later
+        milestone with principals behind it; inventing a lesser version here
+        would be a second authorisation model to reconcile with the real one.
+
+        **Anything that is not DIRECT is a 409** carrying the planner's first
+        reason, not a 501. The request is well-formed and the asset is real;
+        what cannot happen is this pairing of asset and device. No session is
+        opened — a session for a playback that cannot happen is state nobody
+        will clean up, and it would appear in "continue watching" for something
+        nobody watched. `POST /playback/plan` has the full rationale.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartPlayback" }
+      responses:
+        "201":
+          description: The session, the plan, and where to play from.
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StartedPlayback" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            The plan is not DIRECT, or nothing holds the bytes. No session was
+            opened.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /api/v1/playback/plan:
     post:
       tags: [playback]
@@ -1605,6 +1664,37 @@ components:
           description: |
             The ordinary blob endpoint. Named here so the single-endpoint
             contract is visible in the response rather than only in ADR-0013.
+
+    StartPlayback:
+      type: object
+      required: [asset_id, device_id]
+      properties:
+        asset_id: { type: string }
+        device_id: { type: string }
+        verb:
+          type: string
+          enum: [watch, listen, read]
+          description: |
+            Optional. Derived from the probe when omitted — watching when there
+            is video, listening when there is not. Derived from the probe
+            rather than the extension because a `.mkv` holding only audio is a
+            legitimate thing, and calling it "watching" puts it in the wrong
+            row of every continue-watching list.
+
+    StartedPlayback:
+      type: object
+      properties:
+        session_id: { type: string }
+        plan: { $ref: "#/components/schemas/PlaybackPlan" }
+        content_url:
+          type: string
+          description: The ordinary blob endpoint (ADR-0013).
+        token:
+          type: string
+          description: |
+            A short-lived `read` credential for that URL. **Not scoped to one
+            blob** — see the endpoint description.
+        expires_at: { type: string, format: date-time }
 
     PlanRequest:
       type: object

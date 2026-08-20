@@ -81,8 +81,15 @@ func (a *API) planPlayback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	plan := playback.Choose(media, device, replicas)
+	a.write(w, r, http.StatusOK, renderPlan(body.AssetID, body.DeviceID, plan, blobHash))
+}
+
+// renderPlan maps the domain's plan onto the wire type. It is shared with
+// POST /playback so the two endpoints cannot drift into describing one
+// decision two ways.
+func renderPlan(assetID, deviceID string, plan playback.Plan, blobHash string) PlanResponse {
 	out := PlanResponse{
-		AssetID: body.AssetID, DeviceID: body.DeviceID,
+		AssetID: assetID, DeviceID: deviceID,
 		Decision: string(plan.Decision), PeerID: plan.PeerID, Remote: plan.Remote,
 		Reasons: make([]PlanReason, 0, len(plan.Reasons)),
 	}
@@ -90,9 +97,9 @@ func (a *API) planPlayback(w http.ResponseWriter, r *http.Request) {
 		out.Reasons = append(out.Reasons, PlanReason{Code: reason.Code, Detail: reason.Detail})
 	}
 	if plan.Direct() && blobHash != "" {
-		out.ContentURL = probe.BlobURL(httpapi.APIPrefix, blobHash)
+		out.ContentURL = probe.BlobURL("", blobHash)
 	}
-	a.write(w, r, http.StatusOK, out)
+	return out
 }
 
 // deviceProfile loads what a device declared (M2-05).

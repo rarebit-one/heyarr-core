@@ -933,12 +933,88 @@ YAML
     -m 2 2>/dev/null | grep -c '^event: playback.session.')" "4" \
     "the session's four transitions are all on the event stream"
 
+  note "  playing (§68, §32, ADR-0013)"
+  # The milestone's headline: Heyarr can be PLAYED from, not just read from.
+  # This is the only assertion in the demo that goes all the way — plan, open a
+  # session, fetch the bytes with the credential it issued, and check they are
+  # the bytes the catalog says they are.
+  local play_asset play_device play_json play_session play_url play_token play_hash play_digest
+  play_asset=$(api_all /api/v1/assets '.items[] | select(.filename != null) | select(.filename | endswith(".mkv") or endswith(".mp4")) | .id' | head -1)
+  play_hash=$(api "/api/v1/assets/$play_asset" | jq -r '.blob_hash')
+
+  play_device=$(api /api/v1/devices -X POST -H 'Content-Type: application/json' \
+    -d '{"device_key":"acceptance-player","name":"Acceptance Player","platform":"linux",
+         "profile":{"containers":["mp4","mkv"],"video_codecs":["h264","hevc"],
+                    "audio_codecs":["aac"]}}' | jq -r '.id')
+
+  play_json=$(api /api/v1/playback -X POST -H 'Content-Type: application/json' \
+    -d "{\"asset_id\":\"$play_asset\",\"device_id\":\"$play_device\"}")
+  play_session=$(jq -r '.session_id' <<<"$play_json")
+  play_url=$(jq -r '.content_url' <<<"$play_json")
+  play_token=$(jq -r '.token' <<<"$play_json")
+
+  assert_contains "$play_session" "-" "starting a playback opens a session"
+  assert_eq "$play_url" "/api/v1/blobs/$play_hash/content" \
+    "the playback URL is the ordinary blob endpoint (ADR-0013), not a player-shaped route"
+
+  # §32: the controller returns a direct URL and does not proxy bytes.
+  assert_not_contains "$play_url" "playback" "the playback URL is not a controller-proxied path"
+
+  # And it PLAYS: fetch with the issued credential and confirm the bytes are
+  # the bytes. A URL nobody fetched is not playback.
+  play_digest=$(curl -sS --unix-socket "$SOCK" -H "Authorization: Bearer $play_token" \
+    "http://heyarr$play_url" | shasum -a 256 | cut -d" " -f1)
+  local catalog_digest
+  catalog_digest=$(curl -sS --unix-socket "$SOCK" -H "Authorization: Bearer $TOKEN" \
+    "http://heyarr$play_url" | shasum -a 256 | cut -d" " -f1)
+  assert_eq "$play_digest" "$catalog_digest" \
+    "the bytes fetched with the playback credential are the asset's bytes"
+
+  # Ranges work through the playback credential too — a player seeks.
+  assert_eq "$(curl -sS --unix-socket "$SOCK" -H "Authorization: Bearer $play_token" \
+    -H 'Range: bytes=0-1023' -o /dev/null -w '%{http_code}' "http://heyarr$play_url")" "206" \
+    "a player can seek with the credential it was given"
+
+  # The credential reads and does not write. A playback token that could
+  # register a device has become a client credential.
+  assert_eq "$(curl -sS --unix-socket "$SOCK" -H "Authorization: Bearer $play_token" \
+    -X POST -H 'Content-Type: application/json' -d '{"device_key":"x","name":"x"}' \
+    -o /dev/null -w '%{http_code}' "http://heyarr/api/v1/devices")" "403" \
+    "the playback credential cannot write"
+
+  # The refusal. A device that cannot take the codec is told why, and no
+  # session is left behind for a playback that never happened.
+  local refuse_device refuse_code sessions_before sessions_after
+  refuse_device=$(api /api/v1/devices -X POST -H 'Content-Type: application/json' \
+    -d '{"device_key":"acceptance-refuser","name":"Refuser","platform":"linux",
+         "profile":{"containers":["mp4"],"video_codecs":["mpeg2video"],"audio_codecs":["mp2"]}}' \
+    | jq -r '.id')
+  sessions_before=$(api /api/v1/consumption/sessions | jq -r '.items | length')
+  refuse_code=$(api /api/v1/playback -X POST -H 'Content-Type: application/json' \
+    -d "{\"asset_id\":\"$play_asset\",\"device_id\":\"$refuse_device\"}" \
+    -o "$WORK/refusal.json" -w '%{http_code}')
+  sessions_after=$(api /api/v1/consumption/sessions | jq -r '.items | length')
+
+  if command -v ffprobe >/dev/null 2>&1; then
+    assert_eq "$refuse_code" "409" "a device that cannot take the codec is refused"
+    assert_contains "$(cat "$WORK/refusal.json")" "playback/plan" \
+      "the refusal points at the full rationale"
+    assert_eq "$sessions_after" "$sessions_before" \
+      "a refused playback opens no session"
+  else
+    # With nothing probed, every device gets DIRECT and the guess declared —
+    # so there is no refusal to assert here, which is itself the ADR-0023
+    # claim: a node with no ffprobe still plays its library.
+    assert_eq "$refuse_code" "201" \
+      "with nothing probed, playback still succeeds rather than refusing everything"
+  fi
+
   note "  the playback planner (§68)"
   # The planner is a pure function, exhaustively table-tested. What this adds
   # is the join: real probe rows, real device profiles and real replicas, over
   # a real socket — because each of those three being right in isolation is
   # how a wiring bug survives.
-  local plan_device limited_device plan_asset plan_json
+  local plan_device limited_device plan_json
   plan_asset=$(api_all /api/v1/assets '.items[] | select(.filename != null) | select(.filename | endswith(".mkv") or endswith(".mp4")) | .id' | head -1)
 
   plan_device=$(api /api/v1/devices -X POST -H 'Content-Type: application/json' \
