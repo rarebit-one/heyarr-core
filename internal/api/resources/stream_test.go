@@ -506,3 +506,171 @@ func TestTheStreamSubscribesBeforeItSaysItIsReady(t *testing.T) {
 			"read and the subscription is lost with nothing to show for it", n)
 	}
 }
+
+// The property #58 was filed for: an event emitted by ANOTHER ROLE reaches an
+// open stream without the client reconnecting.
+//
+// events.Log.publish fans out to that Log's own subscribers, and every role
+// constructs its own Log against the same database — even inside `heyarr all`,
+// because roles may not share an in-process pointer (ADR-0002). A second Log
+// here is exactly what the worker is to the controller: same database, separate
+// subscriber set, no way to reach this connection except through the log
+// itself.
+//
+// Before the stream tailed the log, this event was durable immediately and
+// invisible until the next reconnect, so `heyarr events tail` could not watch a
+// scan happen.
+func TestAnEventFromAnotherRoleReachesAnOpenStream(t *testing.T) {
+	h := newHarness(t)
+	stream := h.openStream("?after=0")
+	defer stream.close()
+
+	// Get past the catch-up read FIRST, by emitting locally and waiting for it.
+	//
+	// Without this the test passes for the wrong reason: openStream returns as
+	// soon as the stream reports itself ready, which is before the catch-up
+	// loop has finished, so an event emitted immediately afterwards is picked
+	// up by the catch-up READ rather than by the live path. Verified — with the
+	// poll disabled this test still passed until this handshake existed.
+	marker, err := h.events.Emit(t.Context(), events.TypeSystemStarted, "system", "marker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if f := stream.next(); f.ID >= marker.Seq {
+			break
+		}
+	}
+
+	// A separate Log on the same database: the worker's, as far as this
+	// connection is concerned.
+	otherRole, err := events.New(events.Options{Writer: h.db.Writer(), Reader: h.db.Reader()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherRole == h.events {
+		t.Fatal("the test built the same Log twice — it would prove nothing")
+	}
+
+	emitted, err := otherRole.Emit(t.Context(), events.TypeIngestCompleted, "asset", "asset-from-worker",
+		map[string]any{"deduplicated": false})
+	if err != nil {
+		t.Fatalf("emitting from the other role: %v", err)
+	}
+
+	frame := stream.next()
+	if frame.ID != emitted.Seq {
+		t.Fatalf("received seq %d, want the event the other role emitted (%d)", frame.ID, emitted.Seq)
+	}
+	if !strings.Contains(frame.Data, "asset-from-worker") {
+		t.Errorf("frame does not carry the emitted event: %s", frame.Data)
+	}
+}
+
+// ...and it must arrive exactly once. The stream both subscribes and polls, so
+// an event emitted by THIS role can reach the connection twice unless the two
+// paths share a high-water mark.
+func TestAnEventIsDeliveredExactlyOnceDespiteBothPaths(t *testing.T) {
+	h := newHarness(t)
+	stream := h.openStream("?after=0")
+	defer stream.close()
+
+	otherRole, err := events.New(events.Options{Writer: h.db.Writer(), Reader: h.db.Reader()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Emit through both Logs: the local one reaches the subscription AND the
+	// poll, the remote one only the poll.
+	const each = 4
+	want := map[int64]string{}
+	for i := range each {
+		local, err := h.events.Emit(t.Context(), events.TypeBlobCreated, "blob", fmt.Sprintf("local-%d", i), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[local.Seq] = local.ID
+		remote, err := otherRole.Emit(t.Context(), events.TypeBlobCreated, "blob", fmt.Sprintf("remote-%d", i), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[remote.Seq] = remote.ID
+	}
+
+	// Fail on the FIRST duplicate rather than waiting for a deadline. A
+	// duplicate never adds a new key, so a set-based loop would simply hang and
+	// report "nothing arrived", which is true and useless.
+	seen := map[int64]int{}
+	for len(seen) < len(want) {
+		frame := stream.next() // fails the test on its own deadline
+		seen[frame.ID]++
+		if seen[frame.ID] > 1 {
+			t.Fatalf("seq %d was delivered twice — the subscription and the poll are not sharing "+
+				"a high-water mark, so an event emitted by this role arrives once from each", frame.ID)
+		}
+		if _, ok := want[frame.ID]; !ok {
+			t.Fatalf("seq %d was delivered but never emitted", frame.ID)
+		}
+	}
+}
+
+// The ordering hazard of having two delivery paths.
+//
+// The subscription is instant; the poll is not. So a locally-emitted event can
+// reach the connection BEFORE an earlier event emitted by another role. If the
+// subscription is allowed to advance the high-water mark, the next poll reads
+// from a sequence past the earlier event and it is never delivered — silently,
+// which is the failure mode this endpoint exists not to have.
+//
+// Emit remote-then-local with no gap between them, so the local event's
+// subscription delivery races ahead of the poll that would have carried the
+// remote one.
+func TestAnEarlierEventFromAnotherRoleIsNotSkippedByALaterLocalOne(t *testing.T) {
+	h := newHarness(t)
+	stream := h.openStream("?after=0")
+	defer stream.close()
+
+	otherRole, err := events.New(events.Options{Writer: h.db.Writer(), Reader: h.db.Reader()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Past the catch-up read first, or this tests the catch-up rather than the
+	// live path.
+	marker, err := h.events.Emit(t.Context(), events.TypeSystemStarted, "system", "marker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if f := stream.next(); f.ID >= marker.Seq {
+			break
+		}
+	}
+
+	const rounds = 6
+	want := make([]int64, 0, rounds*2)
+	for i := range rounds {
+		remote, err := otherRole.Emit(t.Context(), events.TypeBlobCreated, "blob", fmt.Sprintf("remote-%d", i), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		local, err := h.events.Emit(t.Context(), events.TypeAssetCreated, "asset", fmt.Sprintf("local-%d", i), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, remote.Seq, local.Seq)
+	}
+
+	got := make([]int64, 0, len(want))
+	for len(got) < len(want) {
+		got = append(got, stream.next().ID)
+	}
+
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("frame %d was seq %d, want %d\n  emitted: %v\n  received: %v\n"+
+				"an event from another role was skipped or reordered: delivery must be ordered by "+
+				"the log, not by whichever path happened to see it first", i, got[i], want[i], want, got)
+		}
+	}
+}
