@@ -1,0 +1,8 @@
+{
+  "hash": "blake3:9349ce5e5e4cd87b95fed95a6f13591ddc4c76888e8ec72f03316942ca0cff7a",
+  "output": "<data_dir>/out.bin",
+  "bytes_written": 19,
+  "total_bytes": 19,
+  "resumed": false,
+  "started_from": 0
+}

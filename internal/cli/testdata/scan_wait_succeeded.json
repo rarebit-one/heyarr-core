@@ -1,0 +1,29 @@
+{
+  "library_id": "01990000-0000-7000-8000-0000000000l1",
+  "jobs": [
+    {
+      "id": "<uuid>",
+      "type": "scan_library",
+      "payload": {
+        "root_id": "01990000-0000-7000-8000-0000000000r1"
+      },
+      "state": "succeeded",
+      "priority": 100,
+      "dedupe_key": "scan:01990000-0000-7000-8000-0000000000r1",
+      "required_capability": "",
+      "run_after": "<timestamp>",
+      "attempts": 1,
+      "max_attempts": 5,
+      "lease_owner": null,
+      "lease_expires_at": null,
+      "last_error": null,
+      "created_at": "<timestamp>",
+      "updated_at": "<timestamp>",
+      "finished_at": "<timestamp>"
+    }
+  ],
+  "waited": true,
+  "succeeded": 1,
+  "dead": 0,
+  "outcome": "succeeded"
+}

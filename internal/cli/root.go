@@ -71,6 +71,18 @@ One logical library, multiple complete sovereign peers.`,
 		newTokenCommand(opts, &configPath),
 		newFsckCommand(opts, &configPath),
 		newGCCommand(opts, &configPath),
+		// The client commands. Everything below this line talks to a running
+		// controller over /api/v1; everything above it is host administration
+		// that has to work before a credential exists or when the controller
+		// will not start.
+		newLibraryCommand(opts, &configPath),
+		newScanCommand(opts, &configPath),
+		newWorksCommand(opts, &configPath),
+		newAssetsCommand(opts, &configPath),
+		newBlobsCommand(opts, &configPath),
+		newJobsCommand(opts, &configPath),
+		newPeersCommand(opts, &configPath),
+		newEventsCommand(opts, &configPath),
 		newRoleCommand("controller",
 			"Own coordinated mutable state: catalog, policy, jobs, API", opts, &configPath, rolesController),
 		newRoleCommand("worker",

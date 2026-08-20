@@ -1,0 +1,11 @@
+[
+  {
+    "id": "01990000-0000-7000-8000-000000000p01",
+    "name": "bartley",
+    "site": "bartley-ridge",
+    "mode": "full",
+    "endpoint": "http://127.0.0.1:7777",
+    "is_self": true,
+    "created_at": "<timestamp>"
+  }
+]

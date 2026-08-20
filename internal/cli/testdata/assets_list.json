@@ -1,0 +1,47 @@
+[
+  {
+    "id": "<uuid>",
+    "edition_id": "<uuid>",
+    "library_id": "01990000-0000-7000-8000-0000000000l1",
+    "source_class": "managed",
+    "blob_hash": "blake3:1111111111111111111111111111111111111111111111111111111111111111",
+    "source_path": "/srv/films/Arrival.mkv",
+    "role": "primary",
+    "filename": "Arrival.mkv",
+    "mime": "video/x-matroska",
+    "identification_source": "path",
+    "missing_since": null,
+    "created_at": "<timestamp>",
+    "updated_at": "<timestamp>"
+  },
+  {
+    "id": "<uuid>",
+    "edition_id": "<uuid>",
+    "library_id": "01990000-0000-7000-8000-0000000000l1",
+    "source_class": "managed",
+    "blob_hash": "blake3:2222222222222222222222222222222222222222222222222222222222222222",
+    "source_path": "/srv/films/BR2049.mp4",
+    "role": "primary",
+    "filename": "BR2049.mp4",
+    "mime": "video/mp4",
+    "identification_source": "path",
+    "missing_since": "<timestamp>",
+    "created_at": "<timestamp>",
+    "updated_at": "<timestamp>"
+  },
+  {
+    "id": "<uuid>",
+    "edition_id": "<uuid>",
+    "library_id": "01990000-0000-7000-8000-0000000000l2",
+    "source_class": "linked",
+    "blob_hash": null,
+    "source_path": "/srv/books/Dune.epub",
+    "role": "primary",
+    "filename": "Dune.epub",
+    "mime": "application/epub+zip",
+    "identification_source": "filename",
+    "missing_since": null,
+    "created_at": "<timestamp>",
+    "updated_at": "<timestamp>"
+  }
+]

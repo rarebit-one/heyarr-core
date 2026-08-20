@@ -54,6 +54,10 @@ Prowlarr for indexer integration.
 Canonical: **JSON/HTTP API**, **MCP**, **event stream (SSE)**, **CLI**.
 Compatibility adapters (later): OpenSubsonic, OPDS.
 
+The CLI is a client of the JSON API over the unix socket, and every command has
+`--json` alongside its table output. Its reference is generated from the command
+tree: [`docs/cli/`](docs/cli/).
+
 Clients consume ordinary HTTP/HLS. BitTorrent, where used, is an *internal transfer
 optimisation* — never something a client needs to speak.
 

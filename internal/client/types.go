@@ -1,0 +1,183 @@
+package client
+
+import (
+	"encoding/json"
+	"time"
+)
+
+// The wire types, from the client's side.
+//
+// They are declared here rather than imported from internal/api/resources on
+// purpose, and the duplication is the point. If the client shared the server's
+// structs, a field renamed on the server would rename itself on the client and
+// the two would agree forever — including about a change that breaks every
+// other consumer of the API. Two independent declarations mean a breaking
+// change shows up as a failing test here (see TestWireTypesMatchTheServer,
+// which decodes the API's own golden files into these structs with unknown
+// fields rejected).
+//
+// Every timestamp is RFC 3339 in UTC (ADR-0017).
+
+// Work is a semantic unit of content (§11).
+type Work struct {
+	ID          string          `json:"id"`
+	ContentType string          `json:"content_type"`
+	WorkKey     string          `json:"work_key"`
+	Title       string          `json:"title"`
+	SortTitle   string          `json:"sort_title"`
+	Year        *int64          `json:"year"`
+	Attributes  json.RawMessage `json:"attributes"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+}
+
+// Edition is one concrete form of a Work.
+type Edition struct {
+	ID          string          `json:"id"`
+	WorkID      string          `json:"work_id"`
+	Label       string          `json:"label"`
+	EditionType string          `json:"edition_type"`
+	Language    *string         `json:"language"`
+	Attributes  json.RawMessage `json:"attributes"`
+	CreatedAt   time.Time       `json:"created_at"`
+}
+
+// Asset is a file belonging to an Edition. BlobHash is null for a `linked`
+// asset, which has no blob at all (ADR-0020).
+type Asset struct {
+	ID                   string     `json:"id"`
+	EditionID            string     `json:"edition_id"`
+	LibraryID            *string    `json:"library_id"`
+	SourceClass          string     `json:"source_class"`
+	BlobHash             *string    `json:"blob_hash"`
+	SourcePath           *string    `json:"source_path"`
+	Role                 string     `json:"role"`
+	Filename             *string    `json:"filename"`
+	MIME                 *string    `json:"mime"`
+	IdentificationSource string     `json:"identification_source"`
+	MissingSince         *time.Time `json:"missing_since"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+}
+
+// Blob is byte identity and nothing else (ADR-0005).
+type Blob struct {
+	Hash        string    `json:"hash"`
+	Size        int64     `json:"size"`
+	MIME        *string   `json:"mime"`
+	Chunked     bool      `json:"chunked"`
+	FirstSeenAt time.Time `json:"first_seen_at"`
+}
+
+// Library is a configured collection of roots.
+type Library struct {
+	ID          string        `json:"id"`
+	Name        string        `json:"name"`
+	ContentType string        `json:"content_type"`
+	Enabled     bool          `json:"enabled"`
+	CreatedAt   time.Time     `json:"created_at"`
+	Roots       []LibraryRoot `json:"roots"`
+}
+
+// LibraryRoot is one directory a library is scanned from.
+type LibraryRoot struct {
+	ID         string    `json:"id"`
+	LibraryID  string    `json:"library_id"`
+	Path       string    `json:"path"`
+	IngestMode string    `json:"ingest_mode"`
+	Enabled    bool      `json:"enabled"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// Peer is a node in the instance (ADR-0010).
+type Peer struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Site      string    `json:"site"`
+	Mode      string    `json:"mode"`
+	Endpoint  *string   `json:"endpoint"`
+	IsSelf    bool      `json:"is_self"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Replica is one peer's holding of one blob (§8).
+type Replica struct {
+	BlobHash     string     `json:"blob_hash"`
+	PeerID       string     `json:"peer_id"`
+	State        string     `json:"state"`
+	BytesPresent int64      `json:"bytes_present"`
+	VerifiedAt   *time.Time `json:"verified_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// JobState is where a job is in its life. The two that end a wait are
+// JobSucceeded and JobDead; JobFailed is an attempt that will be retried, and
+// treating it as terminal is how `--wait` learns to report failure for work
+// that then quietly succeeds.
+type JobState string
+
+// The job states (§75).
+const (
+	JobPending   JobState = "pending"
+	JobLeased    JobState = "leased"
+	JobSucceeded JobState = "succeeded"
+	JobFailed    JobState = "failed"
+	JobDead      JobState = "dead"
+)
+
+// Terminal reports whether a job has stopped for good.
+func (s JobState) Terminal() bool { return s == JobSucceeded || s == JobDead }
+
+// Job is one unit of durable work (§75).
+type Job struct {
+	ID                 string          `json:"id"`
+	Type               string          `json:"type"`
+	Payload            json.RawMessage `json:"payload"`
+	State              JobState        `json:"state"`
+	Priority           int             `json:"priority"`
+	DedupeKey          *string         `json:"dedupe_key"`
+	RequiredCapability string          `json:"required_capability"`
+	RunAfter           time.Time       `json:"run_after"`
+	Attempts           int             `json:"attempts"`
+	MaxAttempts        int             `json:"max_attempts"`
+	LeaseOwner         *string         `json:"lease_owner"`
+	LeaseExpiresAt     *time.Time      `json:"lease_expires_at"`
+	LastError          *string         `json:"last_error"`
+	CreatedAt          time.Time       `json:"created_at"`
+	UpdatedAt          time.Time       `json:"updated_at"`
+	FinishedAt         *time.Time      `json:"finished_at"`
+}
+
+// ScanResponse is what POST /libraries/{id}/scan returns. It is a list because
+// a scan is enqueued per root, and a library may have several — a single job id
+// would be a lie for every library with two roots, and `--wait` would exit 0
+// while half the scan was still running.
+type ScanResponse struct {
+	LibraryID string `json:"library_id"`
+	Jobs      []Job  `json:"jobs"`
+}
+
+// Event is one recorded state transition (§76).
+type Event struct {
+	Seq         int64           `json:"seq"`
+	ID          string          `json:"id"`
+	Type        string          `json:"type"`
+	SubjectType string          `json:"subject_type,omitempty"`
+	SubjectID   string          `json:"subject_id,omitempty"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+}
+
+// CreateLibraryRequest is the POST /libraries body.
+type CreateLibraryRequest struct {
+	Name        string `json:"name"`
+	ContentType string `json:"content_type"`
+	Enabled     *bool  `json:"enabled,omitempty"`
+}
+
+// CreateRootRequest is the POST /libraries/{id}/roots body.
+type CreateRootRequest struct {
+	Path       string `json:"path"`
+	IngestMode string `json:"ingest_mode,omitempty"`
+	Enabled    *bool  `json:"enabled,omitempty"`
+}
