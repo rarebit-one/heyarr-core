@@ -822,6 +822,66 @@ YAML
   present=$(api_all "/api/v1/replicas?state=present" '.items[] | select(.peer_id == "'"$self_peer"'") | .blob_hash' | sort -u | wc -l | tr -d ' ')
   assert_eq "$present" "$blobs" "every blob has a present replica on the self peer"
 
+  note "  the CLI (M1-17)"
+  # The CLI is what a person actually uses, so the demo drives it rather than
+  # only the API underneath it. Every count is cross-checked against the API's
+  # own answer: if the two ever disagree, one of them is lying and it matters
+  # which.
+  cli() { "$BIN" --config "$WORK/full.yaml" --token "$TOKEN" "$@"; }
+
+  local cli_works cli_assets cli_libs cli_peers
+  cli_works=$(cli works list --json | jq -r 'length')
+  cli_assets=$(cli assets list --json | jq -r 'length')
+  cli_libs=$(cli library list --json | jq -r 'length')
+  cli_peers=$(cli peers list --json | jq -r 'length')
+
+  assert_eq "$cli_works" "$got_works" "the CLI and the API agree on the work count"
+  assert_eq "$cli_assets" "$got_assets" "the CLI and the API agree on the asset count"
+
+  # ...and again with a page size small enough that the cursor loop actually
+  # runs. Without this the cross-check above proves nothing about pagination:
+  # a dozen assets fit in one page, so a client that stopped after the first
+  # page would return exactly the same number. Confirmed by sabotage — stopping
+  # after page one left the whole demo green until this line existed.
+  assert_eq "$(cli assets list --page-size 3 --json | jq -r 'length')" "$got_assets" \
+    "the CLI follows pagination cursors to the end"
+  assert_eq "$(cli assets list --page-size 3 --json | jq -r '[.[].id] | unique | length')" "$got_assets" \
+    "paging returns each asset exactly once, with none skipped"
+  assert_eq "$cli_libs" "4" "the CLI lists the four configured libraries"
+  assert_eq "$cli_peers" "1" "the CLI lists exactly one peer (ADR-0010)"
+
+  # A collection is a bare array, not the API's page envelope: the CLI already
+  # followed the cursors, so a next_cursor would be a lie.
+  if cli works list --json | jq -e 'type == "array"' >/dev/null; then
+    pass "--json collections are arrays, not a paging envelope"
+  else
+    fail "--json did not emit a bare array"
+  fi
+
+  # blobs stat reaches the same blob the range assertions used.
+  assert_eq "$(cli blobs stat "$big_hash" --json | jq -r '.size')" "$big_size" \
+    "blobs stat reports the streaming fixture's size"
+
+  # The bytes, through the CLI this time, verified against the digest.
+  cli blobs cat "$big_hash" -o "$WORK/cli-cat.bin" --json >/dev/null
+  assert_eq "$("$GEN" -hash "$WORK/cli-cat.bin")" "$big_hash" \
+    "blobs cat writes bytes that hash to the digest asked for"
+
+  # §18's blunt requirement: a CLI that exits 0 when the work failed is worse
+  # than no CLI. Here the work succeeds, so it must exit 0 — the dead-job half
+  # is a Go test, because making a scan die on demand is not something a demo
+  # should be able to do.
+  local wait_rc=0
+  cli scan films --wait --json >"$WORK/scan-wait.json" 2>&1 || wait_rc=$?
+  assert_eq "$wait_rc" "0" "scan --wait exits 0 when every job succeeds"
+  assert_eq "$(jq -r '.outcome' "$WORK/scan-wait.json")" "succeeded" \
+    "scan --wait reports the outcome it exited on"
+
+  # events tail is JSON Lines, one event per line, so it composes with jq.
+  local tailed
+  tailed=$(cli events tail --after 0 --limit 5 --json | jq -rs 'length')
+  assert_eq "$tailed" "5" "events tail emits JSON Lines a line at a time"
+
   local jobs_before
   jobs_before=$(api_all /api/v1/jobs '.items[].id' | sort -u | wc -l | tr -d ' ')
 
