@@ -624,6 +624,41 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/v1/blobs/{hash}/probe:
+    get:
+      tags: [content]
+      operationId: getBlobProbe
+      summary: What ffprobe said about a blob's bytes.
+      description: |
+        Hangs off the blob rather than the asset because a probe describes
+        **bytes**, and bytes are identity: two assets sharing a blob share one
+        probe (§29, invariant 1).
+
+        A blob with no probe is **404, not an empty 200**. "We have not probed
+        this" and "this has no streams" are different answers, and a client
+        that cannot tell them apart cannot decide whether to wait — which is
+        exactly the state every blob is in on a node with no ffprobe
+        (ADR-0023).
+
+        `bytes_read` and `materialised` are how the probe was obtained, exposed
+        so §29 is auditable in a running deployment. An instance where every
+        probe materialised is one where remote probing is silently not working,
+        and the only other symptom is that it feels slow.
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The probe.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlobProbe" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/publications:
     get:
       tags: [content]
@@ -1443,6 +1478,58 @@ components:
           description: |
             Why an unavailable tool is unavailable, in a few words — "not found
             on PATH", "did not report a version". Absent when available.
+
+    BlobProbe:
+      type: object
+      properties:
+        blob_hash: { type: string }
+        container:
+          type: string
+          description: |
+            ffprobe's `format_name` verbatim — a comma-separated list of every
+            name the demuxer answers to, e.g. `mov,mp4,m4a,3gp,3g2,mj2`. Kept
+            whole rather than reduced to one name, because which of those a
+            file "is" is a question with no answer, and the planner matches by
+            membership.
+        format_long: { type: string }
+        duration_seconds: { type: number, nullable: true }
+        bitrate_bps:
+          type: integer
+          format: int64
+          nullable: true
+          description: Null when the container declared none — a Matroska file legitimately has none.
+        streams:
+          type: array
+          items: { $ref: "#/components/schemas/ProbeStream" }
+        bytes_read:
+          type: integer
+          format: int64
+          description: What crossed the wire to answer this. §29's evidence.
+        materialised:
+          type: boolean
+          description: |
+            True when Range probing did not work and the whole blob was copied
+            (§29's fallback). Counted rather than silent: a fallback nobody can
+            see becomes the default without anyone noticing.
+        probed_at: { type: string, format: date-time }
+
+    ProbeStream:
+      type: object
+      properties:
+        index: { type: integer }
+        type:
+          type: string
+          description: video, audio, subtitle or data.
+        codec: { type: string }
+        profile: { type: string }
+        level: { type: integer }
+        width: { type: integer }
+        height: { type: integer }
+        frame_rate: { type: string }
+        channels: { type: integer }
+        sample_rate: { type: integer }
+        bitrate_bps: { type: integer, format: int64 }
+        language: { type: string }
 
     Publication:
       type: object

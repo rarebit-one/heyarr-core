@@ -6,6 +6,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
+	"github.com/rarebit-one/heyarr-core/internal/media/probe"
 )
 
 // Capability routing has been in the queue and the runtime since M1-05 and
@@ -26,14 +27,17 @@ func TestANodeWithNoToolchainAdvertisesNothingAndClaimsNothingThatNeedsIt(t *tes
 		t.Fatalf("a bare node advertises %v", got)
 	}
 
+	// The REAL job type and capability, not literals that happen to match.
+	// A test that spells them itself would pass while the production
+	// registration drifted, which is exactly the bug worth catching here.
 	q := newFakeQueue(
-		jobs.Job{ID: "p1", Type: "probe", RequiredCapability: media.CapabilityFFprobe},
+		jobs.Job{ID: "p1", Type: probe.JobType, RequiredCapability: probe.Capability},
 		jobs.Job{ID: "t1", Type: "transcode", RequiredCapability: media.CapabilityFFmpeg},
 		jobs.Job{ID: "h1", Type: "hash_blob"},
 	)
 	reg := NewRegistry()
-	reg.Register("probe", Registration{
-		RequiredCapability: media.CapabilityFFprobe,
+	reg.Register(probe.JobType, Registration{
+		RequiredCapability: probe.Capability,
 		Handler:            HandlerFunc(func(context.Context, jobs.Job) error { return nil }),
 	})
 	reg.Register("transcode", Registration{
@@ -68,12 +72,12 @@ func TestANodeWithNoToolchainAdvertisesNothingAndClaimsNothingThatNeedsIt(t *tes
 // must actually claim the work.
 func TestANodeWithTheToolchainClaimsTheJobsThatNeedIt(t *testing.T) {
 	q := newFakeQueue(
-		jobs.Job{ID: "p1", Type: "probe", RequiredCapability: media.CapabilityFFprobe},
+		jobs.Job{ID: "p1", Type: probe.JobType, RequiredCapability: probe.Capability},
 		jobs.Job{ID: "t1", Type: "transcode", RequiredCapability: media.CapabilityFFmpeg},
 	)
 	reg := NewRegistry()
-	reg.Register("probe", Registration{
-		RequiredCapability: media.CapabilityFFprobe,
+	reg.Register(probe.JobType, Registration{
+		RequiredCapability: probe.Capability,
 		Handler:            HandlerFunc(func(context.Context, jobs.Job) error { return nil }),
 	})
 	reg.Register("transcode", Registration{
@@ -85,7 +89,7 @@ func TestANodeWithTheToolchainClaimsTheJobsThatNeedIt(t *testing.T) {
 	// What a resolved toolchain produces, spelled the same way the worker
 	// spells it — if these constants ever drift from the job registrations,
 	// this test is what notices.
-	cfg.Capabilities = []string{media.CapabilityFFprobe, media.CapabilityFFmpeg}
+	cfg.Capabilities = []string{probe.Capability, media.CapabilityFFmpeg}
 	rt, err := NewRuntime(cfg, q, reg, discard())
 	if err != nil {
 		t.Fatal(err)

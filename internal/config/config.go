@@ -66,6 +66,16 @@ type Auth struct {
 // Peer identifies this node within the Heyarr instance. A peer row exists from
 // Milestone 1 even though there is only one (ADR-0010).
 type Peer struct {
+	// Endpoint is how OTHER roles reach this node's HTTP API — the worker
+	// probing a blob over ranges (§29), and in Milestone 4 another peer.
+	//
+	// Empty means "derive it", which covers every single-host deployment:
+	// a configured unix socket becomes unix://<path>, and a concrete TCP bind
+	// becomes http://<addr>. It has to be settable because derivation cannot
+	// work across hosts — 127.0.0.1 is not an address another machine can use,
+	// and a wildcard bind names no host at all.
+	Endpoint string `koanf:"endpoint"`
+
 	// Name is this peer's stable name within the instance.
 	Name string `koanf:"name"`
 	// Site is the physical failure domain (spec §35). Two peers sharing a site
@@ -92,6 +102,38 @@ type Log struct {
 type Media struct {
 	FFprobePath string `koanf:"ffprobe_path"`
 	FFmpegPath  string `koanf:"ffmpeg_path"`
+}
+
+// PeerEndpoint is how another role reaches this node's API.
+//
+// The unix socket is preferred over TCP when both exist, for the same reason
+// the CLI prefers it: it is always present, always local, and needs no port to
+// be guessed. A wildcard or ephemeral TCP bind ("", ":0", "0.0.0.0:8080")
+// yields nothing, because none of those name an address anything can dial —
+// and returning a plausible-looking one would produce a probe that fails at
+// runtime instead of a configuration that is visibly incomplete.
+func (c Config) PeerEndpoint() string {
+	if c.Peer.Endpoint != "" {
+		return c.Peer.Endpoint
+	}
+	if c.HTTP.UnixSocket != "" {
+		return "unix://" + c.HTTP.UnixSocket
+	}
+	addr := c.HTTP.Addr
+	if addr == "" {
+		return ""
+	}
+	host, port, found := strings.Cut(addr, ":")
+	if !found || port == "" || port == "0" {
+		return ""
+	}
+	if host == "" || host == "0.0.0.0" || host == "[::]" {
+		// A wildcard bind is reachable at many addresses and names none of
+		// them. Guessing 127.0.0.1 would be right on one host and wrong the
+		// moment the worker moves, which is a supported deployment.
+		return ""
+	}
+	return "http://" + addr
 }
 
 // Library is a managed collection of content rooted at one or more paths.

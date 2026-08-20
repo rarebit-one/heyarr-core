@@ -10,12 +10,14 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
+	"github.com/rarebit-one/heyarr-core/internal/media/probe"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/scanner"
@@ -178,7 +180,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 
 	registry := NewRegistry()
-	registry.RegisterFunc(ingest.JobType, IngestHandler(pipeline))
+	registry.RegisterFunc(ingest.JobType, IngestHandler(pipeline, queue))
 	registry.RegisterFunc(scanner.JobType, ScanHandler(scan))
 	registry.RegisterFunc(integrity.VerifyJobType, VerifyBlobHandler(checker, w.log))
 	// One garbage collection at a time. Two concurrent sweeps would each walk
@@ -188,6 +190,51 @@ func (w *Worker) Run(ctx context.Context) error {
 		Handler:       GCHandler(collector, w.log),
 		MaxConcurrent: 1,
 	})
+
+	// The probe handler, registered only when this worker can actually run it.
+	//
+	// Registering it unconditionally with RequiredCapability set would also
+	// work — claimableTypes() filters on the capability — but not registering
+	// it at all makes the degraded state visible in the startup log, which
+	// lists the types this worker will claim. "Why is nothing probing" should
+	// be answerable from the log a worker prints when it starts.
+	if toolchain.FFprobe.Available {
+		prober, err := probe.New(probe.Options{
+			FFprobePath: toolchain.FFprobe.Path,
+			TempDir:     w.cfg.DataDir,
+			Logger:      w.log,
+		})
+		if err != nil {
+			return fmt.Errorf("worker: building the prober: %w", err)
+		}
+		endpoint := w.cfg.PeerEndpoint()
+		client, baseURL, err := probe.EndpointClient(endpoint, 30*time.Second)
+		if err != nil {
+			// A node that can probe but cannot reach itself is a
+			// misconfiguration worth stopping for: the alternative is every
+			// probe job failing at runtime with the same error, five times
+			// each, forever.
+			return fmt.Errorf("worker: %w", err)
+		}
+		prober.SetHTTPClient(client)
+
+		authStore, err := auth.NewStore(auth.StoreOptions{Writer: db.Writer(), Reader: db.Reader()})
+		if err != nil {
+			return fmt.Errorf("worker: opening the credential store for probes: %w", err)
+		}
+		registry.Register(probe.JobType, Registration{
+			RequiredCapability: probe.Capability,
+			Handler: ProbeHandler(ProbeHandlerOptions{
+				Prober: prober, Recorder: cat, Tokens: authStore,
+				BaseURL: baseURL, Logger: w.log,
+			}),
+			// Probes are subprocesses that read over the network. Two at once
+			// is fine; twenty is a worker that has stopped doing anything else
+			// and a peer serving twenty concurrent range storms.
+			MaxConcurrent: 2,
+		})
+		w.log.Info("probing is available", "endpoint", endpoint, "ffprobe", toolchain.FFprobe.Version)
+	}
 
 	runtime, err := NewRuntime(Config{
 		Owner: owner(),

@@ -464,7 +464,7 @@ func TestTheHandlerRunsWhenTheQueueHandsItAJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := NewRegistry()
-	registry.RegisterFunc(ingest.JobType, IngestHandler(h.pipeline))
+	registry.RegisterFunc(ingest.JobType, IngestHandler(h.pipeline, nil))
 
 	runtime, err := NewRuntime(Config{
 		Owner: "test", Slots: 2, PollInterval: 10 * time.Millisecond, HeartbeatInterval: time.Second,
@@ -575,7 +575,7 @@ func TestTheCASAdapterCarriesTheLadderResultBack(t *testing.T) {
 
 func TestTheHandlerRejectsAnUndecodablePayload(t *testing.T) {
 	h := newHarness(t)
-	handler := IngestHandler(h.pipeline)
+	handler := IngestHandler(h.pipeline, nil)
 	err := handler(t.Context(), jobs.Job{Type: ingest.JobType, Payload: json.RawMessage(`{"root_id": 12}`)})
 	if err == nil {
 		t.Fatal("an undecodable payload was accepted")
