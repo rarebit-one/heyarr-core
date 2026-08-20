@@ -459,7 +459,7 @@ func TestTheHandlerRunsWhenTheQueueHandsItAJob(t *testing.T) {
 	h := newHarness(t)
 	h.write("Movie Title (2019)/Movie Title (2019).mkv", "delivered by the queue")
 
-	queue, err := jobs.New(jobs.Options{Writer: h.db.Writer(), Reader: h.db.Reader()})
+	queue, err := jobs.New(jobs.Options{Writer: h.db.Writer(), Reader: h.db.Reader(), Events: h.events})
 	if err != nil {
 		t.Fatal(err)
 	}
