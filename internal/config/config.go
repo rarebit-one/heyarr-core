@@ -213,6 +213,12 @@ func (c Config) Validate() error {
 		if lib.Name == "" {
 			return fmt.Errorf("config: libraries[%d] has no name", i)
 		}
+		// A library's content type steers identification, so a library without
+		// one would silently identify nothing (M1-11). It is checked here
+		// rather than defaulted, because guessing wrong is worse than asking.
+		if lib.ContentType == "" {
+			return fmt.Errorf("config: library %q has no content_type", lib.Name)
+		}
 		if len(lib.Roots) == 0 {
 			return fmt.Errorf("config: library %q has no roots", lib.Name)
 		}

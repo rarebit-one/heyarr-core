@@ -62,10 +62,12 @@ func (c *Catalog) Blob(ctx context.Context, h hashing.Hash) (integrity.Blob, err
 	return b, err
 }
 
-// scanner is what a *sql.Row and a *sql.Rows have in common.
-type scanner interface{ Scan(dest ...any) error }
+// rowScanner is what a *sql.Row and a *sql.Rows have in common. It is not
+// called `scanner`: this package imports internal/scanner (M1-12), and a local
+// type of that name shadows the package for the whole file.
+type rowScanner interface{ Scan(dest ...any) error }
 
-func scanBlob(s scanner) (integrity.Blob, error) {
+func scanBlob(s rowScanner) (integrity.Blob, error) {
 	var (
 		raw, since sql.NullString
 		size       int64

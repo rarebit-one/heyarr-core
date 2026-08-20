@@ -84,6 +84,20 @@ func (c *Controller) Run(ctx context.Context) error {
 		return fmt.Errorf("controller: reading schema version: %w", err)
 	}
 
+	// The libraries block is control-plane configuration, so the controller
+	// owns turning it into rows — and the scan that follows is a job, because
+	// the worker that runs it may be another process entirely (§4, ADR-0002).
+	//
+	// Like the migration above it, this runs on the STARTUP context rather than
+	// the shutdown one, and for the same reason: it is idempotent schema-shaped
+	// work that the next start would only have to redo, and a SIGTERM arriving
+	// here should be an ordinary stop rather than a start that half-happened.
+	// A misconfigured library is a startup failure — discovering it hours later
+	// when a scan silently never happens is much more expensive.
+	if err := reconcileLibraries(startupCtx, db, c.cfg, c.log); err != nil {
+		return err
+	}
+
 	// Shutdown may have been requested while the schema work ran. That is a
 	// clean stop, not a failure — report it as one.
 	if ctx.Err() != nil {

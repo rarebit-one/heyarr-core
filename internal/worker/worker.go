@@ -17,6 +17,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/scanner"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
 )
@@ -148,8 +149,22 @@ func (w *Worker) Run(ctx context.Context) error {
 		return fmt.Errorf("worker: building the garbage collector: %w", err)
 	}
 
+	// The scanner walks roots and enqueues ingest work; it never reads a file
+	// it has already seen unchanged (M1-12). It runs here rather than in the
+	// controller because walking a 4 TB library is computation, and computation
+	// belongs to workers (§9).
+	scan, err := scanner.New(scanner.Options{
+		Store:  cat,
+		Queue:  queue,
+		Logger: w.log,
+	})
+	if err != nil {
+		return fmt.Errorf("worker: building the scanner: %w", err)
+	}
+
 	registry := NewRegistry()
 	registry.RegisterFunc(ingest.JobType, IngestHandler(pipeline))
+	registry.RegisterFunc(scanner.JobType, ScanHandler(scan))
 	registry.RegisterFunc(integrity.VerifyJobType, VerifyBlobHandler(checker, w.log))
 	// One garbage collection at a time. Two concurrent sweeps would each walk
 	// the store while the other unlinked from it, and the loser would spend the

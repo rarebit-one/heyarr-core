@@ -146,10 +146,13 @@ func TestValidateRejectsBadValues(t *testing.T) {
 			c.Libraries = []Library{{Roots: []string{"/srv/media"}}}
 		}, "has no name"},
 		{"library without roots", func(c *Config) {
-			c.Libraries = []Library{{Name: "films"}}
+			c.Libraries = []Library{{Name: "films", ContentType: "movie"}}
 		}, "has no roots"},
+		{"library without content type", func(c *Config) {
+			c.Libraries = []Library{{Name: "films", Roots: []string{"/srv/media"}}}
+		}, "has no content_type"},
 		{"relative library root", func(c *Config) {
-			c.Libraries = []Library{{Name: "films", Roots: []string{"media"}}}
+			c.Libraries = []Library{{Name: "films", ContentType: "movie", Roots: []string{"media"}}}
 		}, "must be an absolute path"},
 	}
 	for _, tt := range tests {
