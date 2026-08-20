@@ -1098,7 +1098,30 @@ components:
           $ref: "#/components/schemas/StorageInfo"
         cas:
           $ref: "#/components/schemas/StorageInfo"
+        events:
+          $ref: "#/components/schemas/EventsInfo"
         auth_enabled: { type: boolean }
+
+    EventsInfo:
+      type: object
+      description: |
+        Where the event log currently is, so a client can follow the stream
+        from *now* rather than replaying from sequence zero.
+      properties:
+        head:
+          type: integer
+          format: int64
+          description: |
+            The most recent sequence number, and a resume point: pass it as
+            `?after=` on `/api/v1/events` to receive everything from here. An
+            empty log reports 0, which is already what "everything" means.
+        ok:
+          type: boolean
+          description: |
+            False when the head could not be read, in which case `head` is
+            meaningless. It is reported rather than 500ing because 0 is a
+            legitimate head, so a client cannot otherwise tell "nothing has
+            happened" from "we could not find out".
 
     StorageInfo:
       type: object

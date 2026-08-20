@@ -180,6 +180,7 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 		Logger:        slog.New(slog.DiscardHandler),
 		DB:            db,
 		Verifier:      verifier,
+		Events:        eventLog,
 		Build:         buildinfo.Info{Version: "test", Commit: "abc123", Date: "2026-08-20T00:00:00Z"},
 		SchemaVersion: 4,
 		CASRoot:       store2.Root(),

@@ -34,6 +34,15 @@ import (
 // The router is chi's, and the path parameters are read with chi.URLParam.
 type MountFunc func(r chi.Router)
 
+// EventHead reports the highest sequence number in the event log.
+//
+// It is an interface rather than *events.Log so that this package — the HTTP
+// foundation everything else mounts onto — does not take a dependency on the
+// event log to answer one field of one endpoint. events.Log satisfies it.
+type EventHead interface {
+	Latest(ctx context.Context) (int64, error)
+}
+
 // Options configure a Server.
 type Options struct {
 	// Config supplies the listen addresses and the auth switch. The server
@@ -47,6 +56,12 @@ type Options struct {
 	// Verifier authenticates bearer tokens. Required unless authentication is
 	// disabled.
 	Verifier *auth.Verifier
+	// Events reports the log's head sequence for GET /api/v1/system. Required:
+	// the alternative is a server that reports head 0 because it was wired
+	// without a log, which is indistinguishable from an empty log and would
+	// send a client that trusted it back to sequence zero. There is no
+	// configuration in which that field should be a guess.
+	Events EventHead
 	// Build identifies the running binary for GET /api/v1/system.
 	Build buildinfo.Info
 	// SchemaVersion is the migration version the database is at.
@@ -66,6 +81,7 @@ type Server struct {
 	log      *slog.Logger
 	db       *sqlite.DB
 	verifier *auth.Verifier
+	events   EventHead
 	build    buildinfo.Info
 	schema   int64
 	casRoot  string
@@ -99,6 +115,9 @@ func New(opts Options) (*Server, error) {
 	if opts.Config.HTTP.Auth.Enabled && opts.Verifier == nil {
 		return nil, errors.New("httpapi: authentication is enabled but no verifier was supplied")
 	}
+	if opts.Events == nil {
+		return nil, errors.New("httpapi: an event log is required")
+	}
 	log := opts.Logger
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -119,6 +138,7 @@ func New(opts Options) (*Server, error) {
 		log:      log.With("component", "http"),
 		db:       opts.DB,
 		verifier: opts.Verifier,
+		events:   opts.Events,
 		build:    opts.Build,
 		schema:   opts.SchemaVersion,
 		casRoot:  opts.CASRoot,

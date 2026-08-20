@@ -9,11 +9,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +30,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
@@ -54,6 +57,7 @@ func (b *syncBuffer) String() string {
 type harness struct {
 	server *httpapi.Server
 	store  *auth.Store
+	events *events.Log
 	logs   *syncBuffer
 	cfg    config.Config
 	casDir string
@@ -107,6 +111,10 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	logs := &syncBuffer{}
 	srv, err := httpapi.New(httpapi.Options{
@@ -114,6 +122,7 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		Logger:        slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		DB:            db,
 		Verifier:      verifier,
+		Events:        eventLog,
 		Build:         buildinfo.Info{Version: "test", Commit: "abc123", Date: "2026-08-20T00:00:00Z"},
 		SchemaVersion: 4,
 		CASRoot:       casDir,
@@ -122,7 +131,7 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{server: srv, store: store, logs: logs, cfg: cfg, casDir: casDir}
+	return &harness{server: srv, store: store, events: eventLog, logs: logs, cfg: cfg, casDir: casDir}
 }
 
 // testRoutes stands in for the resource API that lands on top of this branch.
@@ -921,4 +930,144 @@ func TestAnOverlongSocketPathIsFatalWhenItIsTheOnlyListener(t *testing.T) {
 	if !strings.Contains(err.Error(), "too long") {
 		t.Errorf("error = %v, want it to name the path length", err)
 	}
+}
+
+// The event log's head is what makes "follow the stream from now" expressible.
+// Without it a client's only options are to replay from sequence zero or to
+// guess, and both get worse the longer the instance has been up (§76,
+// ADR-0009).
+//
+// Zero for an empty log is the deliberate choice, not an absence: ?after=0
+// already means "everything", so the empty case needs no special handling at
+// the client.
+func TestSystemReportsTheEventLogHead(t *testing.T) {
+	h := newHarness(t).start(t)
+	token := h.mint(t, "svc", auth.ScopeRead)
+
+	if got := h.systemInfo(t, token.Secret).Events; got.Head != 0 || !got.OK {
+		t.Fatalf("a fresh instance reports events = %+v, want head 0 and ok", got)
+	}
+
+	var last int64
+	for i := range 3 {
+		e, err := h.events.Emit(t.Context(), events.TypeBlobCreated, "blob", fmt.Sprintf("b%d", i), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		last = e.Seq
+	}
+
+	got := h.systemInfo(t, token.Secret).Events
+	if !got.OK {
+		t.Fatalf("events.ok is false against a healthy log: %+v", got)
+	}
+	if got.Head != last {
+		t.Errorf("events.head = %d, want %d — the head must be the most recent sequence, "+
+			"not a count and not the next one", got.Head, last)
+	}
+}
+
+// failingEventHead stands in for a log that cannot be read.
+type failingEventHead struct{}
+
+func (failingEventHead) Latest(context.Context) (int64, error) {
+	return 0, errors.New("the event log is unreadable")
+}
+
+// A head that could not be read must not present itself as an empty log.
+//
+// Zero is a legitimate head, so a client cannot tell "nothing has happened yet"
+// from "we could not find out" unless something says so — and a client that
+// resumed from a fabricated 0 would replay the entire backlog it was trying to
+// skip. Reporting rather than failing the whole request matches what this
+// endpoint already does for the database and the CAS: /api/v1/system exists to
+// describe a degraded node, not to become unavailable alongside it.
+func TestSystemReportsAnUnreadableEventLogRatherThanZero(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := sqlite.Migrate(t.Context(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Defaults()
+	cfg.DataDir = dir
+	cfg.HTTP.Addr = "127.0.0.1:0"
+	cfg.HTTP.UnixSocket = ""
+	cfg.HTTP.Auth.Enabled = false
+
+	srv, err := httpapi.New(httpapi.Options{
+		Config: cfg, DB: db, Events: failingEventHead{},
+		Logger: slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/system", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — a node with an unreadable log still has an identity to report",
+			resp.StatusCode)
+	}
+	var got httpapi.SystemInfo
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Events.OK {
+		t.Error("events.ok is true after the head could not be read")
+	}
+	if got.Events.Head != 0 {
+		t.Errorf("events.head = %d after a failed read, want 0", got.Events.Head)
+	}
+}
+
+// A server wired without a log would report head 0 forever, which reads as an
+// empty log and sends any client that trusted it back to sequence zero. There
+// is no configuration in which that field should be a guess, so it is refused
+// at construction rather than defaulted.
+func TestNewRequiresAnEventLog(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	cfg := config.Defaults()
+	cfg.DataDir = dir
+	cfg.HTTP.Addr = "127.0.0.1:0"
+	cfg.HTTP.UnixSocket = ""
+	cfg.HTTP.Auth.Enabled = false
+
+	if _, err := httpapi.New(httpapi.Options{Config: cfg, DB: db}); err == nil {
+		t.Fatal("a server was built with no event log")
+	}
+}
+
+// systemInfo reads GET /api/v1/system.
+func (h *harness) systemInfo(t *testing.T, token string) httpapi.SystemInfo {
+	t.Helper()
+	resp := h.do(t, http.MethodGet, "/api/v1/system", token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/api/v1/system = %d", resp.StatusCode)
+	}
+	var got httpapi.SystemInfo
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	return got
 }

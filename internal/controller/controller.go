@@ -181,7 +181,17 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}
-	mounts, err := c.mounts(db, store, blobStore)
+	// The log is built here rather than inside mounts because it now has two
+	// consumers: the resource API, which appends to it, and GET /api/v1/system,
+	// which reports its head. One log, so the head the endpoint reports is the
+	// head the stream resumes from.
+	eventLog, err := events.New(events.Options{
+		Writer: db.Writer(), Reader: db.Reader(), Logger: c.log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+	mounts, err := c.mounts(db, store, blobStore, eventLog)
 	if err != nil {
 		return nil, err
 	}
@@ -190,6 +200,7 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 		Logger:        c.log,
 		DB:            db,
 		Verifier:      verifier,
+		Events:        eventLog,
 		Build:         buildinfo.Get(),
 		SchemaVersion: schemaVersion,
 		CASRoot:       c.cfg.CAS.Root,
@@ -207,15 +218,10 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 // OpenAPI parity test (ADR-0015) drives *this* list. A test that built its own
 // list of mounts would be asserting that the specification matches a second
 // hand-maintained list, which is the failure the ADR exists to prevent.
-func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Store) ([]httpapi.MountFunc, error) {
-	// The log is built before the queue because the queue records its own
-	// transitions through it (§76, ADR-0009).
-	eventLog, err := events.New(events.Options{
-		Writer: db.Writer(), Reader: db.Reader(), Logger: c.log,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("controller: %w", err)
-	}
+// The event log is passed in rather than built here because the queue records
+// its own transitions through it (§76, ADR-0009) and GET /api/v1/system reports
+// its head — and those must be the same log.
+func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Store, eventLog *events.Log) ([]httpapi.MountFunc, error) {
 	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)

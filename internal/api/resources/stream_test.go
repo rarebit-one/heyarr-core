@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 )
 
@@ -653,4 +654,64 @@ func TestAnEarlierEventFromAnotherRoleIsNotSkippedByALaterLocalOne(t *testing.T)
 				"the log, not by whichever path happened to see it first", i, got[i], want[i], want, got)
 		}
 	}
+}
+
+// The head reported by /api/v1/system must be a resume point the stream
+// accepts, and it must be exactly right — a resume point that is off by one in
+// either direction fails silently, which is the whole class of bug this pairing
+// exists to close.
+//
+// One assertion catches both directions. Resuming from head and asserting that
+// the FIRST frame is an event emitted afterwards means:
+//
+//   - too low, and the frame is a replay of history the client already had;
+//   - too high, and the new event is filtered out and nothing ever arrives.
+//
+// This lives here rather than beside the endpoint because it is the pairing
+// that matters, not either half: /api/v1/system knows what the head is and
+// /api/v1/events knows what ?after= means, and they are only correct together.
+func TestSystemHeadIsAUsableStreamResumePoint(t *testing.T) {
+	h := newHarness(t)
+
+	if got := h.eventsHead(); got != 0 {
+		t.Fatalf("a fresh instance reports head %d, want 0", got)
+	}
+
+	// History the client is deliberately not going to see.
+	var last int64
+	for i := range 3 {
+		last = h.emit(events.TypeBlobCreated, fmt.Sprintf("before-%d", i))
+	}
+	head := h.eventsHead()
+	if head != last {
+		t.Fatalf("head = %d after %d events, want %d", head, 3, last)
+	}
+
+	c := h.openStream("?after=" + strconv.FormatInt(head, 10))
+	defer c.close()
+
+	want := h.emit(events.TypeBlobCreated, "after-the-mark")
+	got := c.next()
+	if got.ID != want {
+		t.Fatalf("the first frame after resuming from head %d was seq %d, want %d — "+
+			"a lower frame means the head replayed history, and no frame at all means it skipped an event",
+			head, got.ID, want)
+	}
+}
+
+// eventsHead reads the head sequence from GET /api/v1/system.
+func (h *harness) eventsHead() int64 {
+	h.t.Helper()
+	resp := h.get("/api/v1/system")
+	if resp.StatusCode != http.StatusOK {
+		h.t.Fatalf("/api/v1/system = %d", resp.StatusCode)
+	}
+	var info httpapi.SystemInfo
+	if err := json.Unmarshal(h.body(resp), &info); err != nil {
+		h.t.Fatal(err)
+	}
+	if !info.Events.OK {
+		h.t.Fatal("/api/v1/system reports the event log as unreadable")
+	}
+	return info.Events.Head
 }

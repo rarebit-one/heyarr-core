@@ -111,6 +111,7 @@ type SystemInfo struct {
 	SchemaVersion int64          `json:"schema_version"`
 	Database      StorageInfo    `json:"database"`
 	CAS           StorageInfo    `json:"cas"`
+	Events        EventsInfo     `json:"events"`
 	AuthEnabled   bool           `json:"auth_enabled"`
 }
 
@@ -120,6 +121,33 @@ type SystemInfo struct {
 type PeerInfo struct {
 	Name string `json:"name"`
 	Site string `json:"site"`
+}
+
+// EventsInfo says where the event log currently is, so a client can follow the
+// stream from *now* (§76, ADR-0009).
+//
+// Without it, `GET /api/v1/events` with no `?after=` replays from sequence
+// zero, and there is no way to ask for anything else. That is survivable while
+// the log is a few hundred rows and `events tail` is a debugging tool. It stops
+// being survivable the moment a consumption session emits playback transitions
+// (§67): a client opening a session wants that session's events from here, and
+// replaying the entire history of the instance to reach them makes session
+// start-up cost proportional to how long the server has been up.
+//
+// Head is a resume point, not a count. `?after=Head` means "everything from
+// now", so an empty log is 0 — the same value that already means "everything",
+// which is why it needs no special case at the client.
+//
+// OK is not decoration. A failed read must not present itself as an empty log:
+// 0 is a legitimate value, so a client cannot tell "nothing has happened" from
+// "we could not find out" unless something says so. When OK is false, Head is
+// meaningless and resuming from it would silently skip the whole backlog.
+// Reporting rather than failing the request matches what this endpoint already
+// does for the database and the CAS — /api/v1/system exists to describe a
+// degraded node, not to become unavailable alongside it.
+type EventsInfo struct {
+	Head int64 `json:"head"`
+	OK   bool  `json:"ok"`
 }
 
 // StorageInfo reports one dependency's location and health.
@@ -134,6 +162,7 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 
 	dbCheck := s.checkDatabase(ctx)
 	casCheck := s.checkCAS()
+	eventsInfo := s.eventsHead(ctx)
 
 	s.writeJSON(w, r, http.StatusOK, SystemInfo{
 		Build:         s.build,
@@ -141,6 +170,17 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 		SchemaVersion: s.schema,
 		Database:      StorageInfo{Path: s.db.Path(), OK: dbCheck.OK},
 		CAS:           StorageInfo{Path: s.casRoot, OK: casCheck.OK},
+		Events:        eventsInfo,
 		AuthEnabled:   s.cfg.HTTP.Auth.Enabled,
 	})
+}
+
+// eventsHead reads the event log's current head for GET /api/v1/system.
+func (s *Server) eventsHead(ctx context.Context) EventsInfo {
+	head, err := s.events.Latest(ctx)
+	if err != nil {
+		s.log.Warn("the event log head could not be read", "error", err)
+		return EventsInfo{OK: false}
+	}
+	return EventsInfo{Head: head, OK: true}
 }
