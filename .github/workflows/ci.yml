@@ -96,7 +96,7 @@ jobs:
           # "Optional" quietly meaning "untested" is the specific failure this
           # milestone is most exposed to, and a skipped test looks exactly like
           # a passing one in the summary line.
-          go test -count=1 -run 'Toolchain|Media' -v ./internal/media/... | tee /tmp/media.log
+          go test -count=1 -v ./internal/media/... | tee /tmp/media.log
           # The fixture probe tests are the other half: they are the assertion
           # that the committed media is real, and they are skip-guarded the
           # same way.
