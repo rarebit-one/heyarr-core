@@ -54,10 +54,16 @@ sha256_of() {
 # $2. It checks the version rather than only presence: a leftover install from
 # an older pin is exactly the drift this file exists to prevent, and it looks
 # identical to a correct one until something behaves differently.
+# The comparison is EXACT, on the parsed field, and not a substring match on
+# the banner. `grep -F " version 7.0.2"` also matches " version 7.0.2-static",
+# so a substring check accepts a binary the lock does not describe — which is
+# the whole thing this file exists to prevent, and which is exactly what the
+# first version of this function did.
 verify_installed() {
-  local path=$1 version=$2
+  local path=$1 version=$2 reported
   [ -x "$path" ] || return 1
-  "$path" -version 2>/dev/null | head -1 | grep -qF " version $version" || return 1
+  reported=$("$path" -version 2>/dev/null | head -1 | awk '{print $3}')
+  [ "$reported" = "$version" ] || return 1
   return 0
 }
 
