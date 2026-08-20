@@ -53,6 +53,9 @@ type Options struct {
 	// StreamHeartbeat is how often the SSE stream writes a keep-alive comment.
 	// Zero means the default.
 	StreamHeartbeat time.Duration
+	// StreamPoll is how often an open SSE connection re-reads the event log for
+	// events emitted by another process. Zero means defaultStreamPoll.
+	StreamPoll time.Duration
 	// StreamBuffer is how many events may queue for one SSE connection before
 	// the log gives up on it. Zero means the default. It is configurable so a
 	// test can actually drive the drop path rather than assuming it works.
@@ -70,14 +73,24 @@ type API struct {
 	now    func() time.Time
 	newID  func() string
 
-	heartbeat time.Duration
-	buffer    int
+	heartbeat  time.Duration
+	streamPoll time.Duration
+	buffer     int
 }
 
 // defaultHeartbeat keeps an idle SSE connection alive through proxies that time
 // out a silent stream. It is a comment line, so a client never sees it as an
 // event.
 const defaultHeartbeat = 15 * time.Second
+
+// defaultStreamPoll is how often an open stream re-reads the log.
+//
+// It is the whole latency budget for an event emitted by a role other than the
+// one serving this connection — see the "why this polls" note in stream.go.
+// One second is short enough that `events tail` feels live and long enough that
+// an idle connection costs one indexed lookup per second on the events primary
+// key.
+const defaultStreamPoll = time.Second
 
 // New constructs the resource API.
 func New(opts Options) (*API, error) {
@@ -109,21 +122,26 @@ func New(opts Options) (*API, error) {
 	if heartbeat <= 0 {
 		heartbeat = defaultHeartbeat
 	}
+	streamPoll := opts.StreamPoll
+	if streamPoll <= 0 {
+		streamPoll = defaultStreamPoll
+	}
 	buffer := opts.StreamBuffer
 	if buffer <= 0 {
 		buffer = subscriberBuffer
 	}
 	return &API{
-		db:        opts.DB,
-		reader:    opts.DB.Reader(),
-		jobs:      opts.Jobs,
-		events:    opts.Events,
-		tokens:    opts.Tokens,
-		log:       log.With("component", "api"),
-		now:       now,
-		newID:     newID,
-		heartbeat: heartbeat,
-		buffer:    buffer,
+		db:         opts.DB,
+		reader:     opts.DB.Reader(),
+		jobs:       opts.Jobs,
+		events:     opts.Events,
+		tokens:     opts.Tokens,
+		log:        log.With("component", "api"),
+		now:        now,
+		newID:      newID,
+		heartbeat:  heartbeat,
+		streamPoll: streamPoll,
+		buffer:     buffer,
 	}, nil
 }
 

@@ -877,6 +877,49 @@ YAML
   assert_eq "$(jq -r '.outcome' "$WORK/scan-wait.json")" "succeeded" \
     "scan --wait reports the outcome it exited on"
 
+  # The property #58 was filed for: an OPEN stream sees events emitted by
+  # another role, live, without reconnecting.
+  #
+  # Every role builds its own event log, so before the stream tailed the log
+  # itself, a scan could run to completion with `events tail` sitting silent —
+  # the events were durable immediately and invisible until the next connect.
+  # This opens the tail FIRST, then makes the worker emit, which is the only
+  # ordering that can tell the two apart.
+  local head_seq tail_out tail_pid tail_rc=0
+  head_seq=$(api "/api/v1/events?after=0" --max-time 5 2>/dev/null | grep -c '^id:' || true)
+  tail_out="$WORK/live-tail.json"
+  cli events tail --after "$head_seq" --limit 1 --json >"$tail_out" 2>&1 &
+  tail_pid=$!
+
+  # Give the tail time to be listening, by waiting for the condition that it is
+  # — a subscriber registered on the log — rather than for a duration.
+  local waited=0
+  while (( waited < 100 )); do
+    kill -0 "$tail_pid" 2>/dev/null || break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+
+  # The worker, not the API, is what emits scan progress.
+  cli scan shows >/dev/null 2>&1 || true
+
+  waited=0
+  while (( waited < 300 )); do
+    kill -0 "$tail_pid" 2>/dev/null || break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if kill -0 "$tail_pid" 2>/dev/null; then
+    kill -TERM "$tail_pid" 2>/dev/null || true
+    wait "$tail_pid" 2>/dev/null || true
+    fail "an open event stream never saw an event from another role (#58)"
+  else
+    wait "$tail_pid" || tail_rc=$?
+    if [[ -s "$tail_out" ]] && jq -e '.type' <"$tail_out" >/dev/null 2>&1; then
+      pass "an open stream sees another role's events live, without reconnecting"
+    else
+      fail "the live tail produced nothing usable: $(head -c 200 "$tail_out")"
+    fi
+  fi
+
   # events tail is JSON Lines, one event per line, so it composes with jq.
   local tailed
   tailed=$(cli events tail --after 0 --limit 5 --json | jq -rs 'length')

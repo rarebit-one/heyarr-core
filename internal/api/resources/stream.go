@@ -30,6 +30,38 @@ import (
 //     (ADR-0009), so the stream reports the drop and closes instead of quietly
 //     continuing with a hole in it. A client that is told to reconnect recovers
 //     everything from the log; a client that is told nothing does not.
+//
+// # Why this polls the log as well as subscribing
+//
+// events.Log.publish fans out to THAT Log's subscribers, and every role builds
+// its own Log — the controller, the worker and the peer each construct one
+// against the same database. Even under `heyarr all`, where the roles are
+// goroutines in one process, they are three separate subscriber sets. That is
+// not an oversight to fix by sharing a pointer: roles communicate only through
+// the job table and HTTP, never a shared in-process pointer, even in the
+// single-binary configuration (ADR-0002). Sharing one would work today and
+// break the moment the worker moved to another host, which is a supported
+// deployment the acceptance demo already exercises.
+//
+// So the log itself is the only thing the roles genuinely share, and the stream
+// tails it. Without this, an event emitted by the worker — ingest.completed,
+// blob.created, system.scan.progress — is durable immediately but reaches a
+// subscriber on the controller only on the next reconnect. `heyarr events tail`
+// could not watch a scan happen, which is most of what it is for.
+//
+// The subscription stays, but only as a WAKE-UP. It does not deliver.
+//
+// Two delivery paths cannot both advance the high-water mark, because they do
+// not arrive in the same order: the subscription is instant and the poll is
+// not, so a locally-emitted event overtakes an earlier one from another role.
+// Whichever path moved the mark first would then cause the other to read from a
+// sequence past the event it was carrying, and that event would never be
+// delivered — silently, which is the failure this endpoint exists to not have.
+//
+// So every frame comes from the log, in sequence order, and the subscription
+// only says "there may be something new, look now" for the events this role
+// emitted itself. Correctness comes from the ordered read; latency comes from
+// being told when to do it.
 
 // streamGapEvent is the SSE event name used to tell a client its stream lost
 // events. It is namespaced away from §76's event types so it can never collide
@@ -119,29 +151,77 @@ func (a *API) streamEvents(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(a.heartbeat)
 	defer ticker.Stop()
 
+	poll := time.NewTicker(a.streamPoll)
+	defer poll.Stop()
+
 	maxSeq := catchUpTo
+
+	// drain emits everything in the log newer than what this connection has
+	// already sent. It is what makes an event from another role visible here.
+	drain := func() bool {
+		for {
+			batch, err := a.events.Since(r.Context(), maxSeq, types, backlogBatch)
+			if err != nil {
+				if r.Context().Err() != nil {
+					return false // the client went away; not a gap worth reporting
+				}
+				a.log.Error("re-reading the event log failed",
+					"request_id", httpapi.RequestIDFrom(r.Context()), "after", maxSeq, "error", err)
+				s.gap(maxSeq, 0, "the event log could not be read")
+				return false
+			}
+			for _, e := range batch {
+				if e.Seq <= maxSeq {
+					continue
+				}
+				if !s.event(e) {
+					return false
+				}
+				maxSeq = e.Seq
+			}
+			if len(batch) < backlogBatch {
+				return true
+			}
+		}
+	}
+
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 
-		case e, open := <-sub.Events():
+		case _, open := <-sub.Events():
 			if !open {
 				return
 			}
-			// Already delivered by the catch-up read. This is the one place a
-			// duplicate could enter the stream.
-			if e.Seq <= catchUpTo {
-				continue
-			}
-			if !s.event(e) {
-				return
-			}
-			if e.Seq > maxSeq {
-				maxSeq = e.Seq
-			}
+			// A notification, not a delivery: read the log rather than writing
+			// the event that woke us. See the note above — delivering here
+			// would let this path advance past an earlier event another role
+			// emitted, and that event would be lost.
 			if n := sub.Dropped(); n > 0 {
 				s.gap(maxSeq, n, "this connection fell behind and events were dropped")
+				return
+			}
+			if !drain() {
+				return
+			}
+			if !s.flush() {
+				return
+			}
+
+		case <-poll.C:
+			// A dropped subscription is still a gap even though the poll would
+			// recover the events: the client has already been told a sequence
+			// it can trust, and silently resuming past a hole is the failure
+			// this endpoint exists to not have.
+			if n := sub.Dropped(); n > 0 {
+				s.gap(maxSeq, n, "this connection fell behind and events were dropped")
+				return
+			}
+			if !drain() {
+				return
+			}
+			if !s.flush() {
 				return
 			}
 
