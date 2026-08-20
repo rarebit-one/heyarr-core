@@ -74,6 +74,16 @@ linters:
       - path: _test\.go$
         linters: [gosec]
 
+      # On a platform without copy-on-write cloning, reflink() is an
+      # unconditional error by construction (see reflink_other.go), so
+      # staticcheck correctly reports the error check as always true — on that
+      # build only. The ladder degrading to hardlink and then copy is the
+      # intended design (ADR-0014), not a bug, and the same code is a real
+      # check on linux and darwin.
+      - path: internal/storagefabric/cas/fs\.go$
+        text: "SA4023"
+        linters: [staticcheck]
+
 formatters:
   enable:
     - gofumpt
