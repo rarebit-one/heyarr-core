@@ -349,7 +349,7 @@ func (s *FS) Stat(_ context.Context, h hashing.Hash) (Descriptor, error) {
 		}
 		return Descriptor{}, fmt.Errorf("cas: stat %s: %w", h, err)
 	}
-	return Descriptor{Hash: h, Size: info.Size()}, nil
+	return Descriptor{Hash: h, Size: info.Size(), ModTime: info.ModTime()}, nil
 }
 
 // Has reports presence without verifying contents.
@@ -379,28 +379,38 @@ func (s *FS) Verify(ctx context.Context, h hashing.Hash) error {
 	if _, err := hashing.Verify(&ctxReader{ctx: ctx, r: rc}, h); err != nil {
 		var mismatch *hashing.ErrMismatch
 		if errors.As(err, &mismatch) {
-			if qErr := s.quarantine(h); qErr != nil {
-				return errors.Join(fmt.Errorf("%w: %s", ErrCorrupt, mismatch.Error()), qErr)
+			corrupt := &Corruption{Hash: h, Actual: mismatch.Got, Size: mismatch.Size}
+			dst, qErr := s.quarantine(h)
+			if qErr != nil {
+				return errors.Join(corrupt, qErr)
 			}
-			return fmt.Errorf("%w: %s", ErrCorrupt, mismatch.Error())
+			corrupt.Path = dst
+			return corrupt
 		}
 		return err
 	}
 	return nil
 }
 
-// Quarantine moves a blob out of the addressable tree, preserving it for
-// inspection.
-func (s *FS) quarantine(h hashing.Hash) error {
+// quarantine moves a blob out of the addressable tree, preserving it for
+// inspection, and reports where it went.
+//
+// Moving rather than deleting is ADR-0018 and it is load-bearing rather than
+// cautious: a blob materialised as a hardlink shares its inode with the file
+// it was adopted from, so "these bytes changed" frequently means an external tool rewrote the
+// operator's original — and on hyperion-1 hardlink is the outcome for every
+// file (#43). Deleting would destroy the only copy of something that was never
+// Heyarr's to delete.
+func (s *FS) quarantine(h hashing.Hash) (string, error) {
 	dst := filepath.Join(s.root, quarantineDir,
 		fmt.Sprintf("%s.%d", h.Hex(), time.Now().UTC().UnixNano()))
 	if err := os.Chmod(s.blobPath(h), tempPerm); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("cas: preparing to quarantine %s: %w", h, err)
+		return "", fmt.Errorf("cas: preparing to quarantine %s: %w", h, err)
 	}
 	if err := os.Rename(s.blobPath(h), dst); err != nil {
-		return fmt.Errorf("cas: quarantining %s: %w", h, err)
+		return "", fmt.Errorf("cas: quarantining %s: %w", h, err)
 	}
-	return nil
+	return dst, nil
 }
 
 // Delete removes a blob. The store does not know about references; establishing
@@ -447,10 +457,69 @@ func (s *FS) Walk(ctx context.Context, fn func(Descriptor) error) error {
 		if err != nil {
 			return err
 		}
-		return fn(Descriptor{Hash: h, Size: info.Size()})
+		return fn(Descriptor{Hash: h, Size: info.Size(), ModTime: info.ModTime()})
 	})
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("cas: walking %s: %w", base, err)
+	}
+	return nil
+}
+
+// TempFile is a partial write left behind by an interrupted Put or Link.
+type TempFile struct {
+	// Name is the base name within tmp/, never a path. Callers pass it back to
+	// RemoveTemp, which is what keeps a caller from asking the store to unlink
+	// something outside its own tree.
+	Name    string
+	Size    int64
+	ModTime time.Time
+}
+
+// TempFiles lists the partial writes currently on disk.
+//
+// Listing and removing are separate operations because garbage collection is
+// dry-run by default (ADR-0018): "here is what I would delete" has to be
+// answerable without deleting anything.
+func (s *FS) TempFiles() ([]TempFile, error) {
+	dir := filepath.Join(s.root, tmpDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("cas: reading %s: %w", dir, err)
+	}
+	var out []TempFile
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".part") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			// The file went away between the listing and the stat, which is
+			// exactly what a concurrent reap looks like. Not a finding.
+			continue
+		}
+		out = append(out, TempFile{Name: e.Name(), Size: info.Size(), ModTime: info.ModTime()})
+	}
+	return out, nil
+}
+
+// RemoveTemp deletes one partial write by the name TempFiles reported.
+//
+// It refuses anything that is not a bare .part base name. The store owns its
+// layout and nothing outside this package may assume it (§18); accepting a path
+// here would make "delete this file" an operation the caller aims, and garbage
+// collection is the one caller you least want holding a loaded one.
+func (s *FS) RemoveTemp(name string) error {
+	if name == "" || name != filepath.Base(name) || !strings.HasSuffix(name, ".part") {
+		return fmt.Errorf("cas: %q is not a temporary file name", name)
+	}
+	if err := os.Remove(filepath.Join(s.root, tmpDir, name)); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("cas: removing temporary file %s: %w", name, err)
 	}
 	return nil
 }
@@ -459,25 +528,17 @@ func (s *FS) Walk(ctx context.Context, fn func(Descriptor) error) error {
 // older than age. An interrupted Put leaves nothing addressable, but it does
 // leave bytes on disk, and nothing else will clean them up.
 func (s *FS) ReapTemp(olderThan time.Duration) (int, error) {
-	dir := filepath.Join(s.root, tmpDir)
-	entries, err := os.ReadDir(dir)
+	files, err := s.TempFiles()
 	if err != nil {
-		return 0, fmt.Errorf("cas: reading %s: %w", dir, err)
+		return 0, err
 	}
 	cutoff := time.Now().Add(-olderThan)
 	var removed int
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".part") {
+	for _, f := range files {
+		if f.ModTime.After(cutoff) {
 			continue
 		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().After(cutoff) {
-			continue
-		}
-		if err := os.Remove(filepath.Join(dir, e.Name())); err == nil {
+		if err := s.RemoveTemp(f.Name); err == nil {
 			removed++
 		}
 	}

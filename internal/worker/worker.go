@@ -18,6 +18,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
 )
 
 // Worker is the compute role.
@@ -37,7 +38,7 @@ func (w *Worker) Name() string { return "worker" }
 // minSchemaVersion is the migration this role's handlers require. A worker that
 // starts against an older schema does not fail at startup — it fails on the
 // first job, hours later, having already told the operator it was healthy.
-const minSchemaVersion = 5
+const minSchemaVersion = 7
 
 // schemaWait bounds how long the worker waits for the controller to migrate.
 // The roles start concurrently (ADR-0002) and the controller is the slow one
@@ -137,8 +138,26 @@ func (w *Worker) Run(ctx context.Context) error {
 		return fmt.Errorf("worker: opening the job queue: %w", err)
 	}
 
+	integrityOpts := integrity.Options{Store: store, Catalog: cat, Logger: w.log}
+	checker, err := integrity.NewChecker(integrityOpts)
+	if err != nil {
+		return fmt.Errorf("worker: building the integrity checker: %w", err)
+	}
+	collector, err := integrity.NewCollector(integrityOpts)
+	if err != nil {
+		return fmt.Errorf("worker: building the garbage collector: %w", err)
+	}
+
 	registry := NewRegistry()
 	registry.RegisterFunc(ingest.JobType, IngestHandler(pipeline))
+	registry.RegisterFunc(integrity.VerifyJobType, VerifyBlobHandler(checker, w.log))
+	// One garbage collection at a time. Two concurrent sweeps would each walk
+	// the store while the other unlinked from it, and the loser would spend the
+	// pass reporting the winner's deletions as missing blobs.
+	registry.Register(integrity.GCJobType, Registration{
+		Handler:       GCHandler(collector, w.log),
+		MaxConcurrent: 1,
+	})
 
 	runtime, err := NewRuntime(Config{Owner: owner()}, queue, registry, w.log)
 	if err != nil {

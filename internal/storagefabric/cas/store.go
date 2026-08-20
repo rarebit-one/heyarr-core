@@ -9,7 +9,9 @@ package cas
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/hashing"
 )
@@ -47,11 +49,47 @@ var (
 	ErrCorrupt = errors.New("cas: stored bytes do not match their hash")
 )
 
+// Corruption is the detail behind ErrCorrupt: what was expected, what was
+// found, and where the bytes were preserved.
+//
+// It is a typed error rather than a formatted string because the quarantine
+// path is the actionable half. "Blob X is corrupt" tells an operator to go
+// looking; "the bytes are at quarantine/<hash>.<nanos>" tells them where, and
+// lets the catalog record it as evidence (ADR-0018). It unwraps to ErrCorrupt,
+// so callers that only care whether the bytes were bad are unaffected.
+type Corruption struct {
+	// Hash is the name the blob was stored under, which is also the digest its
+	// bytes were expected to have (ADR-0005).
+	Hash hashing.Hash
+	// Actual is what the bytes hash to now.
+	Actual hashing.Hash
+	// Size is how many bytes were read.
+	Size int64
+	// Path is where the bytes were moved. Empty only when quarantining itself
+	// failed, in which case that error is joined onto this one.
+	Path string
+}
+
+func (c *Corruption) Error() string {
+	return fmt.Sprintf("%s: %s hashes to %s over %d bytes, quarantined at %s",
+		ErrCorrupt.Error(), c.Hash, c.Actual, c.Size, c.Path)
+}
+
+// Unwrap keeps errors.Is(err, ErrCorrupt) true.
+func (c *Corruption) Unwrap() error { return ErrCorrupt }
+
 // Descriptor is what the store knows about a blob. Deliberately not a domain
 // object: the content domain never sees one of these.
 type Descriptor struct {
 	Hash hashing.Hash
 	Size int64
+	// ModTime is the file's modification time, populated by Stat and Walk.
+	//
+	// It is not identity and never will be (ADR-0005). Garbage collection uses
+	// it only as a crude age for bytes that have no catalog row: a file written
+	// seconds ago is far more likely to be an ingest that has not committed yet
+	// than an orphan worth reclaiming (ADR-0018).
+	ModTime time.Time
 	// Materialised records how the bytes arrived, so an operator can tell
 	// whether a blob shares storage with a file outside the store.
 	Materialised Materialisation

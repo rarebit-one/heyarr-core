@@ -22,9 +22,19 @@ import (
 
 // Event namespaces from §76. Milestone 1 uses this subset.
 const (
-	TypeBlobCreated       = "blob.created"
-	TypeReplicaPresent    = "replica.present"
-	TypeReplicaCorrupt    = "replica.corrupt"
+	TypeBlobCreated = "blob.created"
+	// TypeBlobReclaimed is a garbage collection sweep freeing bytes (ADR-0018).
+	// There is deliberately no matching "blob.verified": a deep fsck over a
+	// healthy library would emit one per blob, which is a hundred thousand
+	// events recording that nothing happened. A successful verification is
+	// recorded as replicas.verified_at, which is state rather than a transition.
+	TypeBlobReclaimed  = "blob.reclaimed"
+	TypeReplicaPresent = "replica.present"
+	TypeReplicaCorrupt = "replica.corrupt"
+	// TypeReplicaMissing is a blob the catalog knows about whose bytes are not
+	// on this peer at all. Distinct from corrupt: corrupt means we still hold
+	// evidence and it is quarantined, missing means we hold nothing.
+	TypeReplicaMissing    = "replica.missing"
 	TypeIngestCompleted   = "ingest.completed"
 	TypeAssetCreated      = "content.asset.created"
 	TypeAssetMissing      = "content.asset.missing"
