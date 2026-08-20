@@ -1,0 +1,8 @@
+{
+  "detail": "year must be a number",
+  "instance": "/api/v1/example",
+  "request_id": "01920000-0000-7000-8000-000000000000",
+  "status": 400,
+  "title": "Bad Request",
+  "type": "https://heyarr.dev/problems/bad-request"
+}

@@ -1,0 +1,8 @@
+{
+  "detail": "this token does not carry the write scope",
+  "instance": "/api/v1/example",
+  "request_id": "01920000-0000-7000-8000-000000000000",
+  "status": 403,
+  "title": "Forbidden",
+  "type": "https://heyarr.dev/problems/forbidden"
+}

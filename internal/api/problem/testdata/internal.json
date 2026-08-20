@@ -1,0 +1,8 @@
+{
+  "detail": "the server failed to handle this request; see the server log for the request id",
+  "instance": "/api/v1/example",
+  "request_id": "01920000-0000-7000-8000-000000000000",
+  "status": 500,
+  "title": "Internal Server Error",
+  "type": "https://heyarr.dev/problems/internal"
+}

@@ -1,0 +1,8 @@
+{
+  "detail": "the presented credential was rejected",
+  "instance": "/api/v1/example",
+  "request_id": "01920000-0000-7000-8000-000000000000",
+  "status": 401,
+  "title": "Unauthorized",
+  "type": "https://heyarr.dev/problems/unauthorized"
+}

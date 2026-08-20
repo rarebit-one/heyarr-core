@@ -1,0 +1,12 @@
+{
+  "id": "<uuid>",
+  "name": "jellyfin",
+  "scopes": [
+    "read",
+    "write"
+  ],
+  "created_at": "<timestamp>",
+  "expires_at": "<timestamp>",
+  "token": "<token>",
+  "warning": "this token is shown once and is not recoverable — it is stored only as an argon2id hash"
+}

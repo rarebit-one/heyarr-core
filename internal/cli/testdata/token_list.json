@@ -1,0 +1,11 @@
+[
+  {
+    "id": "<uuid>",
+    "name": "jellyfin",
+    "scopes": [
+      "read"
+    ],
+    "status": "active",
+    "created_at": "<timestamp>"
+  }
+]

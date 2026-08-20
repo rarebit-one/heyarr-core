@@ -7,8 +7,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
+	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
+	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
@@ -34,10 +38,16 @@ func (c *Controller) Name() string { return "controller" }
 // wedged migration cannot make the process unkillable.
 const startupTimeout = 5 * time.Minute
 
+// shutdownTimeout bounds draining in-flight HTTP requests. It sits inside
+// cli.DefaultShutdownGrace so that the server gives up before the supervisor
+// does — otherwise the supervisor's message ("roles did not stop") replaces the
+// server's, which is the one that says what was still in flight.
+const shutdownTimeout = 10 * time.Second
+
 // Run blocks until ctx is cancelled, then shuts down cleanly.
 //
-// Milestone 1 fills this in: the JSON API (M1-14), the job scheduler (M1-05)
-// and the reconcilers. Today it is the wiring only.
+// Milestone 1 fills this in: the resource API (M1-14), the job scheduler
+// (M1-05) and the reconcilers mount onto the HTTP foundation started here.
 func (c *Controller) Run(ctx context.Context) error {
 	// Startup deliberately does NOT use the shutdown context.
 	//
@@ -80,12 +90,81 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 
 	c.db = db
+
+	// The CAS root is the controller's to have ready before it says it is up:
+	// /readyz reports on it, and an operator who has not created it yet should
+	// learn that from a readiness probe rather than from an ingest failing
+	// hours into a scan. The layout inside it belongs to the storage fabric
+	// (ADR-0006); all that happens here is that the directory exists.
+	if c.cfg.CAS.Root != "" {
+		if err := os.MkdirAll(c.cfg.CAS.Root, 0o750); err != nil {
+			return fmt.Errorf("controller: creating the CAS root %s: %w", c.cfg.CAS.Root, err)
+		}
+	}
+
+	srv, err := c.newServer(db, version)
+	if err != nil {
+		return err
+	}
+	if err := srv.Start(); err != nil {
+		return fmt.Errorf("controller: %w", err)
+	}
+
+	// "started" is logged only after every listener is bound. A start line
+	// printed before the socket exists is a lie that costs someone an
+	// afternoon: the supervisor, the acceptance script and an operator tailing
+	// the log all treat it as "you can talk to it now".
 	c.log.Info("controller started",
 		"database", c.cfg.Database.Path,
 		"schema_version", version,
-		"http_addr", c.cfg.HTTP.Addr,
+		"http_addr", srv.Addr(),
+		"unix_socket", srv.SocketPath(),
 		"auth_enabled", c.cfg.HTTP.Auth.Enabled)
-	<-ctx.Done()
+
+	var runErr error
+	select {
+	case <-ctx.Done():
+	case err := <-srv.Err():
+		runErr = err
+	}
+
+	// Draining must not use the cancelled context, or shutdown would return
+	// instantly and kill every in-flight request — including a range response
+	// halfway through a large blob, which is precisely the request most worth
+	// finishing.
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	defer cancelShutdown()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		c.log.Error("the http server did not shut down cleanly", "error", err)
+	}
+
 	c.log.Info("controller stopped")
-	return nil
+	return runErr
+}
+
+// newServer wires the HTTP API. Authentication is constructed even when it is
+// disabled, so the two configurations differ in one boolean rather than in
+// which objects exist.
+func (c *Controller) newServer(db *sqlite.DB, schemaVersion int64) (*httpapi.Server, error) {
+	store, err := auth.NewStore(auth.StoreOptions{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+	verifier, err := auth.NewVerifier(auth.VerifierOptions{Store: store})
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+	srv, err := httpapi.New(httpapi.Options{
+		Config:        c.cfg,
+		Logger:        c.log,
+		DB:            db,
+		Verifier:      verifier,
+		Build:         buildinfo.Get(),
+		SchemaVersion: schemaVersion,
+		CASRoot:       c.cfg.CAS.Root,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+	return srv, nil
 }
