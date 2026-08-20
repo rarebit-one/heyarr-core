@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
 	"github.com/rarebit-one/heyarr-core/internal/hashing"
 )
 
@@ -60,6 +61,16 @@ type File struct {
 	// Role is the asset role identification should land on, so the demo can
 	// check that a subtitle beside a film did not become a film.
 	Role string `json:"role"`
+	// Ingestable reports whether the SCANNER will pick this file up.
+	//
+	// It is derived from ingest.MIMEForExtension — the same table the scanner
+	// consults — rather than restated, because the demo's expected counts hang
+	// off it and two lists that must agree is how they stop agreeing. A file
+	// with an extension Heyarr does not recognise is skipped before
+	// identification ever runs, which is why the deliberately unidentifiable
+	// fixture never reaches ingest through a scan (see the note on that entry
+	// in library()).
+	Ingestable bool `json:"ingestable"`
 }
 
 // Manifest describes a generated library.
@@ -68,9 +79,14 @@ type Manifest struct {
 	Seed  uint64 `json:"seed"`
 	Files []File `json:"files"`
 
-	// DistinctBlobs is how many blobs the catalog must end up with. It is less
-	// than len(Files) exactly because of DuplicateHash.
+	// DistinctBlobs is how many blobs a run that ingested EVERY file would end
+	// up with. It is less than len(Files) exactly because of DuplicateHash.
 	DistinctBlobs int `json:"distinct_blobs"`
+	// IngestableFiles and IngestableBlobs are what a SCAN produces: the
+	// scanner skips extensions the built-in table does not know, so these are
+	// the numbers the acceptance demo asserts against.
+	IngestableFiles int `json:"ingestable_files"`
+	IngestableBlobs int `json:"ingestable_blobs"`
 	// DuplicateHash is the hash deliberately shared by two files at different
 	// paths — the case that must produce one blob and two assets (§13). It is
 	// the single most valuable assertion in the demo, so the generator
@@ -149,7 +165,13 @@ func library() []plan {
 			contentType: "movie", role: "primary",
 			duplicateOf: "movies/Twice Told (2010)/Twice Told (2010) - 1080p.mp4",
 		},
-		// Identification failure must never be ingest failure (M1-11).
+		// Identification failure must never be ingest failure (M1-11) — but note
+		// this file never gets the chance to prove that through a SCAN. The
+		// scanner filters on extension before identification runs, and `.bin`
+		// is not in the built-in table, so it is skipped. Reaching ingest with
+		// something unidentifiable needs a producer that does not filter, which
+		// is why #11 tests that path directly. It stays here because "the
+		// scanner leaves junk alone" is itself worth asserting.
 		{
 			path:        "movies/____ nothing parses this ____.bin",
 			contentType: "unknown", role: "primary",
@@ -262,7 +284,11 @@ func WriteLibrary(root string, opts Options) (Manifest, error) {
 			return Manifest{}, fmt.Errorf("fixtures: writing %s: %w", p.path, err)
 		}
 
-		f := File{Path: p.path, Size: size, Hash: hash.String(), ContentType: p.contentType, Role: p.role}
+		f := File{
+			Path: p.path, Size: size, Hash: hash.String(),
+			ContentType: p.contentType, Role: p.role,
+			Ingestable: ingest.MIMEForExtension(ingest.Ext(ingest.Base(p.path))) != "",
+		}
 		byPath[p.path] = f
 		manifest.Files = append(manifest.Files, f)
 		seen[f.Hash]++
@@ -276,6 +302,16 @@ func WriteLibrary(root string, opts Options) (Manifest, error) {
 	}
 
 	manifest.DistinctBlobs = len(seen)
+
+	ingestable := map[string]struct{}{}
+	for _, f := range manifest.Files {
+		if !f.Ingestable {
+			continue
+		}
+		manifest.IngestableFiles++
+		ingestable[f.Hash] = struct{}{}
+	}
+	manifest.IngestableBlobs = len(ingestable)
 
 	// The duplicate pair is the demo's most valuable assertion, so verify the
 	// generator actually produced it rather than trusting the plan. A fixture

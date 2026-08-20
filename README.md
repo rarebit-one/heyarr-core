@@ -61,6 +61,31 @@ tree: [`docs/cli/`](docs/cli/).
 Clients consume ordinary HTTP/HLS. BitTorrent, where used, is an *internal transfer
 optimisation* — never something a client needs to speak.
 
+## Verifying a build
+
+```bash
+make demo
+```
+
+`scripts/acceptance.sh` is the executable definition of "this build works". It
+runs in well under two minutes on an ordinary laptop, needs no network and no
+FFmpeg, and touches nothing outside a temporary directory.
+
+It builds the binary, generates a synthetic library covering every content type,
+and then drives the **real** thing end to end: scan, ingest, deduplication,
+catalog and replica state over the HTTP API, byte ranges reassembled and checked
+against the blob's own BLAKE3 digest, the event log replayed from zero, a
+restart, a rescan that must change nothing, a deliberately corrupted blob found
+and quarantined by `fsck --deep`, and a garbage collector that must do nothing
+at all unless asked.
+
+It runs the whole sequence **twice**: once under `heyarr all`, once with the
+controller, worker and peer as three separate processes. Otherwise only one of
+the two supported configurations is ever exercised.
+
+If it is green, the build works. If you change something and it goes red, the
+failure names what broke and what it expected.
+
 ## Roadmap
 
 | | Milestone | Delivers |
