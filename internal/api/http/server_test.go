@@ -142,6 +142,24 @@ func testRoutes(r chi.Router) {
 	})
 }
 
+// shutdownBudget is how long a test waits for the server to stop.
+//
+// It is deliberately far larger than a shutdown ever takes, because it is a
+// STARVATION guard rather than a service-level objective. Shutdown itself is
+// fast: it closes listeners, drops idle connections and joins two goroutines.
+// What made five seconds too short was nothing in this package at all —
+// `go test ./...` runs packages in parallel, and the blob soak in
+// internal/api/blobs pushes 20 GiB through a loopback connection, saturating a
+// core on a two-core runner for the better part of a minute. Under -race, this
+// package can then simply not be scheduled for several seconds at a time.
+//
+// A fixed deadline that a busy machine can miss is a bet on how fast the
+// machine is, which is the same mistake as sleeping a fixed duration to wait
+// for readiness; four tests in this repository have already failed on CI for
+// that. If the server is genuinely wedged, a longer budget still fails — it
+// just fails for a reason that is true.
+const shutdownBudget = 60 * time.Second
+
 // shortTempDir gives a directory short enough for a unix socket path.
 func shortTempDir(t *testing.T) string {
 	t.Helper()
@@ -160,7 +178,7 @@ func (h *harness) start(t *testing.T) *harness {
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
 		defer cancel()
 		if err := h.server.Shutdown(ctx); err != nil {
 			t.Errorf("Shutdown: %v", err)
@@ -267,7 +285,7 @@ func TestListenerConstructionRefusesAnUnauthenticatedPublicBind(t *testing.T) {
 			})
 			err := h.server.Start()
 			if err == nil {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
 				defer cancel()
 				_ = h.server.Shutdown(ctx)
 			}
@@ -569,7 +587,7 @@ func TestTheSocketIsRestrictedAndRemovedOnShutdown(t *testing.T) {
 		t.Errorf("the socket is mode %o — anything on the machine can talk to it", perm)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
 	defer cancel()
 	if err := h.server.Shutdown(ctx); err != nil {
 		t.Fatal(err)
@@ -624,7 +642,7 @@ func TestALiveSocketIsNotStolenFromAnotherProcess(t *testing.T) {
 	})
 	err := second.server.Start()
 	if err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
 		defer cancel()
 		_ = second.server.Shutdown(ctx)
 		t.Fatal("a second server stole a socket that was still being served")
@@ -823,7 +841,7 @@ func TestShutdownIsCleanAndReportsNoError(t *testing.T) {
 	}
 	waitForListener(t, "tcp", h.server.Addr())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
 	defer cancel()
 	if err := h.server.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
@@ -869,7 +887,7 @@ func TestAnOverlongSocketPathDoesNotTakeTheServerDown(t *testing.T) {
 		t.Fatalf("Start failed over a socket path length: %v", err)
 	}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
 		defer cancel()
 		_ = h.server.Shutdown(ctx)
 	})
