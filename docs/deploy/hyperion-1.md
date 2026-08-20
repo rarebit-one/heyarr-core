@@ -41,9 +41,11 @@ validated with a control copy first:
 
 So:
 
-- **Adoption is still free.** Ingesting an existing library costs ~12 KiB per
-  file, not a second copy. ADR-0014's adoptability argument survives — through
-  the ladder's second rung, not its first.
+- **Adoption is free *only if the CAS is on the media filesystem*.** Ingesting
+  an existing library costs ~12 KiB per file — but that measurement was taken
+  with the source and the store on the same disk, which is the only arrangement
+  in which it is true. See the warning below; getting this wrong is the single
+  most expensive mistake available in this deployment.
 - **The first rung is dead here.** ext4 has no block cloning. Nothing Heyarr
   does can change that; the ladder degrading is the designed behaviour and the
   mode actually achieved is recorded per blob.
@@ -72,6 +74,55 @@ them. Block cloning additionally needs `zpool set feature@block_cloning=enabled`
 and ZFS ≥ 2.2; without it, ingest degrades to hardlink exactly as it does on
 ext4 today and nothing else changes.
 
+## The one thing to get right: where the CAS lives
+
+**The content store must be on the same filesystem as the library.** Not nearby,
+not on faster storage — the same filesystem.
+
+Both cheap rungs of ADR-0014's ladder require it. Reflink because block cloning
+is a filesystem operation; hardlink because a hardlink is a second name for one
+inode, and inodes do not span devices. Put them on different filesystems and
+every rung fails, so **every ingest is a full byte copy** and adopting a library
+consumes a second complete copy of it. On this host that is 4 TB.
+
+It is easy to get wrong because the *default* gets it wrong here. `data_dir`
+puts the store at `<data_dir>/cas`, so the shipped default of
+`/var/lib/heyarr` lands the CAS on the root NVMe while the library sits on
+`/dev/sdb1`:
+
+```
+$ stat -c '%d %n' /var/lib/heyarr /srv/nas-seed
+64512 /var/lib/heyarr
+2065  /srv/nas-seed
+```
+
+Different devices, so `os.Link` returns `EXDEV`, the ladder degrades past
+hardlink, and ingest copies. Silently — one file at a time.
+
+So on this host, override the store's location and leave the database where it
+is:
+
+```yaml
+data_dir: /var/lib/heyarr        # database and socket, on the fast NVMe
+cas:
+  root: /srv/nas-seed/heyarr/cas # the store, beside the library it adopts
+```
+
+That split is right on its own merits, not just for reflink: SQLite wants low
+latency and small writes, the CAS wants to be next to the bytes it shares.
+
+The unit must then be told the store is writable, since `ProtectSystem=strict`
+makes everything else read-only:
+
+```ini
+[Service]
+ReadWritePaths=/srv/nas-seed/heyarr
+```
+
+Heyarr warns about this at startup, once per library root — `ingest from this
+library will COPY every file rather than share its bytes` — which is the
+warning ADR-0014 always promised and did not implement until this was found.
+
 ## Filesystem layout
 
 FHS, so that a package and a hand install put things in the same places:
@@ -80,7 +131,8 @@ FHS, so that a package and a hand install put things in the same places:
 /usr/local/bin/heyarr              the binary
 /etc/heyarr/config.yaml            configuration, 0640 root:heyarr
 /var/lib/heyarr/heyarr.db          the controller database
-/var/lib/heyarr/cas/               the content-addressed store
+/srv/nas-seed/heyarr/cas/          the content-addressed store — see above,
+                                   it must share a filesystem with the library
 /run/heyarr/                       the unix socket
 /srv/nas-seed/<library>/           the media, read-only to Heyarr
 ```

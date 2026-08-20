@@ -82,6 +82,11 @@ StateDirectoryMode=0700
 RuntimeDirectory=heyarr
 RuntimeDirectoryMode=0700
 ReadWritePaths=/var/lib/heyarr
+# If cas.root is moved out of the data directory — and on most real deployments
+# it MUST be, because the store has to share a filesystem with the library it
+# adopts or every ingest becomes a full byte copy (ADR-0014) — add that path
+# here in a drop-in. ProtectSystem=strict makes anything unlisted read-only,
+# and the failure reads as "no such file", not "permission denied".
 # The library. Read-only by default: a scanner that can delete is the most
 # destructive component in the system, and Milestone 1 never needs to write
 # there. Move it to ReadWritePaths only when you adopt a workflow that does.
