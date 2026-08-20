@@ -1,0 +1,27 @@
+{
+  "id": "01990000-0000-7000-8000-0000000000d1",
+  "device_key": "tv-living-room",
+  "name": "Living Room",
+  "platform": "tvos",
+  "profile": {
+    "containers": [
+      "mp4",
+      "mkv"
+    ],
+    "video_codecs": [
+      "h264",
+      "hevc"
+    ],
+    "audio_codecs": [
+      "aac",
+      "eac3"
+    ],
+    "max_width": 3840,
+    "max_height": 2160,
+    "max_bitrate_bps": 120000000,
+    "supports_hdr": true
+  },
+  "created_at": "2026-08-01T00:00:00Z",
+  "updated_at": "2026-08-01T00:00:00Z",
+  "last_seen_at": "2026-08-01T00:00:00Z"
+}

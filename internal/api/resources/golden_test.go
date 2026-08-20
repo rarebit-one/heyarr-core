@@ -50,6 +50,8 @@ func TestResponseShapes(t *testing.T) {
 		{"peers", "/api/v1/peers", "peers_list.json"},
 		{"replicas", "/api/v1/replicas", "replicas_list.json"},
 		{"corrupt replicas", "/api/v1/replicas?state=corrupt", "replicas_corrupt.json"},
+		{"devices", "/api/v1/devices", "devices_list.json"},
+		{"one device", "/api/v1/devices/" + device1ID, "device.json"},
 		{"jobs", "/api/v1/jobs", "jobs_list.json"},
 		{"one job", "/api/v1/jobs/" + job2ID, "job_dead.json"},
 	}
