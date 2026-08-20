@@ -1,12 +1,14 @@
 package cas
 
 import (
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ADR-0014 claims that on a filesystem with block cloning, adopting a large
@@ -54,22 +56,19 @@ func TestReflinkCostsMetadataNotBytes(t *testing.T) {
 	// The measurement that matters, retried because free space is a GLOBAL
 	// resource and this suite is not the only thing writing to the volume.
 	//
-	// `go test ./...` runs packages in parallel, and a sibling package writing
-	// a few hundred megabytes during the clone window lands entirely in this
+	// `go test ./...` runs packages in parallel, and a sibling package writing a
+	// few hundred megabytes during the clone window lands entirely in this
 	// reading — measured once at 166 336 KiB consumed for an operation that
-	// consumes nothing. That is not a flaky assertion, it is an instrument
-	// being read while someone else moves the scale.
+	// consumes nothing. That is not a flaky assertion, it is an instrument being
+	// read while someone else moves the scale.
 	//
-	// Noise almost always ADDS consumption, so a clean window is a lower
-	// reading and the retry costs nothing when the first attempt is quiet.
-	// Each attempt needs its own source: re-linking the same bytes would
-	// deduplicate and consume nothing whether or not cloning works, which is a
-	// test that cannot fail.
-	const attempts = 3
-	var (
-		cloneDelta int64
-		desc       Descriptor
-	)
+	// Noise almost always ADDS consumption, so the TRUE cost is the minimum
+	// across attempts, not the last one. Each attempt needs its own source:
+	// re-linking the same bytes would deduplicate and consume nothing whether or
+	// not cloning works, which is a test that cannot fail.
+	const attempts = 5
+	best := int64(math.MaxInt64)
+	var desc Descriptor
 	for attempt := 1; attempt <= attempts; attempt++ {
 		source := src
 		if attempt > 1 {
@@ -83,7 +82,8 @@ func TestReflinkCostsMetadataNotBytes(t *testing.T) {
 			t.Fatal(err)
 		}
 		syncDisk()
-		cloneDelta = before - freeKiB(t, dir)
+		cloneDelta := before - freeKiB(t, dir)
+		best = min(best, cloneDelta)
 
 		t.Logf("attempt %d: materialised as %s, a %d MiB file consumed %d KiB "+
 			"(an ordinary copy consumed %d KiB)", attempt, desc.Materialised, sizeMiB, cloneDelta, controlDelta)
@@ -97,8 +97,46 @@ func TestReflinkCostsMetadataNotBytes(t *testing.T) {
 		}
 	}
 
-	t.Errorf("over %d attempts a clone consumed %d KiB against a copy's %d KiB — cloning is not "+
-		"saving space, so ADR-0014's premise does not hold on this filesystem", attempts, cloneDelta, controlDelta)
+	// Every attempt read high. That is either a real finding — this filesystem
+	// does not clone — or a machine too busy to measure on. Those deserve
+	// different verdicts, and guessing between them is how a test becomes
+	// either a liar or a nuisance, so measure which one it is.
+	//
+	// Sampling free space across a window of comparable length with NO work in
+	// it isolates what the rest of the machine is doing. If that alone moves
+	// the needle as much as the clone appeared to, the reading proves nothing.
+	drift := ambientDriftKiB(t, dir, cloneWindow)
+	t.Logf("ambient free-space drift over %s with no work: %d KiB", cloneWindow, drift)
+
+	if drift > controlDelta/4 {
+		t.Skipf("free space moved %d KiB on its own over %s, against a clone that appeared to "+
+			"consume %d KiB — this machine is too busy to measure cloning on; "+
+			"run this package alone to get a verdict", drift, cloneWindow, best)
+	}
+
+	t.Errorf("over %d attempts the cheapest clone consumed %d KiB against a copy's %d KiB, "+
+		"with only %d KiB of ambient drift to explain it — cloning is not saving space, "+
+		"so ADR-0014's premise does not hold on this filesystem",
+		attempts, best, controlDelta, drift)
+}
+
+// cloneWindow is how long the ambient-drift probe watches for. A clone is a
+// metadata operation and takes milliseconds, so this is generous: the drift it
+// reports is an upper bound on what could have polluted the clone reading.
+const cloneWindow = 500 * time.Millisecond
+
+// ambientDriftKiB reports how much free space moves on its own, in either
+// direction, while this test does nothing at all.
+func ambientDriftKiB(t *testing.T, dir string, window time.Duration) int64 {
+	t.Helper()
+	before := freeKiB(t, dir)
+	time.Sleep(window)
+	syncDisk()
+	drift := before - freeKiB(t, dir)
+	if drift < 0 {
+		drift = -drift
+	}
+	return drift
 }
 
 func writeIncompressible(t *testing.T, path string, sizeMiB int) {
