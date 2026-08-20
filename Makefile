@@ -39,6 +39,9 @@ tidy:                         ## tidy modules
 demo: build fixtures          ## run the end-to-end acceptance demo (the milestone gate)
 	./scripts/acceptance.sh
 
+snapshot:                     ## build release artefacts locally, without publishing
+	goreleaser release --snapshot --clean --skip=publish
+
 clean:
 	rm -rf bin dist
 

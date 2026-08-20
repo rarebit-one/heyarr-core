@@ -18,10 +18,54 @@ builds:
       - -X github.com/rarebit-one/heyarr-core/internal/buildinfo.Date={{.Date}}
     goos: [linux, darwin]
     goarch: [amd64, arm64]
+    # There is no linux/darwin cross-product worth shipping beyond these: the
+    # deployment target is linux/amd64 and linux/arm64, and darwin is for
+    # developers, none of whom are on Intel any more.
+    ignore:
+      - goos: darwin
+        goarch: amd64
+    mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
   - formats: [tar.gz]
-    files: [README.md, LICENSE, CHANGELOG.md]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+      - CHANGELOG.md
+      # A glob, not a single path: with a literal src, goreleaser treats dst as
+      # the destination FILE, so the unit lands in the archive as a file called
+      # "deploy/systemd" with no .service extension. Verified by listing the
+      # archive rather than assuming.
+      - src: deploy/systemd/*.service
+        dst: deploy/systemd
+      - src: docs/deploy/*.md
+        dst: docs/deploy/
+
+# A software bill of materials per archive. It is the other half of provenance:
+# the attestation says who built it, the SBOM says what is in it.
+sboms:
+  - artifacts: archive
+
+# dockers_v2 rather than the older dockers + docker_manifests pair: that pair is
+# deprecated, and a config written today should not ship a deprecation. It also
+# builds both architectures and their manifest from one block, so the two
+# cannot drift.
+dockers_v2:
+  - id: heyarr
+    images: ["ghcr.io/rarebit-one/heyarr"]
+    tags: ["{{ .Version }}", "latest"]
+    platforms: [linux/amd64, linux/arm64]
+    dockerfile: deploy/docker/Dockerfile
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.description: "Headless, self-hosted content lifecycle, replication and consumption"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+      org.opencontainers.image.source: "https://github.com/rarebit-one/heyarr-core"
+      org.opencontainers.image.licenses: "AGPL-3.0-or-later"
 
 checksum:
   name_template: checksums.txt
