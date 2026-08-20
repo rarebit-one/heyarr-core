@@ -1071,3 +1071,131 @@ func (h *harness) systemInfo(t *testing.T, token string) httpapi.SystemInfo {
 	}
 	return got
 }
+
+// A degraded node must be able to say it is degraded. A Heyarr with no ffprobe
+// still scans, ingests and serves — but probe jobs then sit pending forever,
+// and "why is nothing probing" should be one request rather than an
+// investigation (ADR-0023).
+func TestSystemReportsTheMediaToolchain(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		media []httpapi.ToolInfo
+		check func(*testing.T, []httpapi.ToolInfo)
+	}{
+		{
+			name: "available",
+			media: []httpapi.ToolInfo{
+				{Name: "ffprobe", Path: "/opt/bin/ffprobe", Version: "7.0.2", Available: true},
+				{Name: "ffmpeg", Path: "/opt/bin/ffmpeg", Version: "7.0.2", Available: true},
+			},
+			check: func(t *testing.T, got []httpapi.ToolInfo) {
+				t.Helper()
+				if len(got) != 2 {
+					t.Fatalf("media = %+v, want two tools", got)
+				}
+				if !got[0].Available || got[0].Version != "7.0.2" || got[0].Path == "" {
+					t.Errorf("ffprobe = %+v", got[0])
+				}
+			},
+		},
+		{
+			name: "absent",
+			media: []httpapi.ToolInfo{
+				{Name: "ffprobe", Detail: "not found on PATH"},
+				{Name: "ffmpeg", Detail: "not found on PATH"},
+			},
+			check: func(t *testing.T, got []httpapi.ToolInfo) {
+				t.Helper()
+				for _, tool := range got {
+					if tool.Available {
+						t.Errorf("%s reported available on a bare node", tool.Name)
+					}
+					if tool.Detail == "" {
+						t.Errorf("%s is unavailable and says nothing about why", tool.Name)
+					}
+					// An unavailable tool must not carry a path or a version:
+					// a client rendering "ffprobe 7.0.2 (unavailable)" has
+					// been handed a contradiction.
+					if tool.Path != "" || tool.Version != "" {
+						t.Errorf("%s is unavailable but reports %+v", tool.Name, tool)
+					}
+				}
+			},
+		},
+		{
+			// Nothing wired at all. The field must still be a list, because a
+			// client should not have to handle both null and [] for the same
+			// "nothing here".
+			name:  "unwired",
+			media: nil,
+			check: func(t *testing.T, got []httpapi.ToolInfo) {
+				t.Helper()
+				if got == nil {
+					t.Error("media is null rather than an empty list")
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, info := systemWithMedia(t, tc.media)
+			tc.check(t, info.Media)
+			if !strings.Contains(string(raw), `"media"`) {
+				t.Errorf("the system body has no media key: %s", raw)
+			}
+		})
+	}
+}
+
+// systemWithMedia builds a minimal server reporting the given toolchain and
+// reads GET /api/v1/system from it.
+func systemWithMedia(t *testing.T, tools []httpapi.ToolInfo) ([]byte, httpapi.SystemInfo) {
+	t.Helper()
+	dir := t.TempDir()
+	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := sqlite.Migrate(t.Context(), db); err != nil {
+		t.Fatal(err)
+	}
+	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Defaults()
+	cfg.DataDir = dir
+	cfg.HTTP.Addr = "127.0.0.1:0"
+	cfg.HTTP.UnixSocket = ""
+	cfg.HTTP.Auth.Enabled = false
+
+	srv, err := httpapi.New(httpapi.Options{
+		Config: cfg, DB: db, Events: eventLog, Media: tools,
+		Logger: slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/system", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info httpapi.SystemInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		t.Fatal(err)
+	}
+	return raw, info
+}

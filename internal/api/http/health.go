@@ -112,6 +112,7 @@ type SystemInfo struct {
 	Database      StorageInfo    `json:"database"`
 	CAS           StorageInfo    `json:"cas"`
 	Events        EventsInfo     `json:"events"`
+	Media         []ToolInfo     `json:"media"`
 	AuthEnabled   bool           `json:"auth_enabled"`
 }
 
@@ -150,6 +151,39 @@ type EventsInfo struct {
 	OK   bool  `json:"ok"`
 }
 
+// ToolInfo reports one external media binary (§10, ADR-0023).
+//
+// It exists so that a degraded node can SAY it is degraded. A Heyarr with no
+// ffprobe is a supported configuration — it scans, ingests, serves ranges and
+// plays what it can identify — but probe and remux jobs then sit pending
+// forever, and "why is nothing probing" must be one request rather than an
+// investigation.
+//
+// # It describes THIS node, not the fleet
+//
+// The toolchain that matters for a probe job is the one on the WORKER that
+// claims it, and in a split-process deployment (ADR-0002) that is a different
+// machine from the controller answering this request. Milestone 1's peer model
+// has no capability advertisement — peers have a mode, not a capability list —
+// so there is nowhere to read a fleet-wide answer from yet.
+//
+// So this is honestly scoped: it is what the node serving the request
+// resolved. Under `heyarr all` that is the whole answer. Split across hosts it
+// is one datum, and the other is /api/v1/jobs showing probe jobs pending. A
+// fleet-wide view needs worker capability advertisement, which is tracked
+// separately rather than guessed at here.
+type ToolInfo struct {
+	Name string `json:"name"`
+	// Path and Version are present only when the tool is available. Path is
+	// safe to expose: /api/v1/system requires the `read` scope and already
+	// names the database and CAS paths.
+	Path      string `json:"path,omitempty"`
+	Version   string `json:"version,omitempty"`
+	Available bool   `json:"available"`
+	// Detail says why an unavailable tool is unavailable.
+	Detail string `json:"detail,omitempty"`
+}
+
 // StorageInfo reports one dependency's location and health.
 type StorageInfo struct {
 	Path string `json:"path"`
@@ -171,6 +205,7 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 		Database:      StorageInfo{Path: s.db.Path(), OK: dbCheck.OK},
 		CAS:           StorageInfo{Path: s.casRoot, OK: casCheck.OK},
 		Events:        eventsInfo,
+		Media:         s.media,
 		AuthEnabled:   s.cfg.HTTP.Auth.Enabled,
 	})
 }

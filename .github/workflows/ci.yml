@@ -50,6 +50,13 @@ jobs:
       - name: fail if generated output drifted
         run: git diff --exit-code
 
+  # The toolchain matrix is the point, not an accident (ADR-0023).
+  #
+  # Linux carries the pinned FFmpeg; macOS deliberately does not. No publisher
+  # offers one FFmpeg version across both platforms, so rather than pretend,
+  # macOS becomes a real test of the degrade path: every build proves on a real
+  # machine that a Heyarr with no ffprobe still starts, scans, ingests and
+  # serves. A unit test cannot make that claim about a whole process tree.
   test:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -63,7 +70,37 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
           cache: true
+      - name: install the pinned media toolchain
+        if: runner.os == 'Linux'
+        # The script prints the bin directory on stdout and its progress on
+        # stderr, so this appends exactly the path.
+        run: ./scripts/toolchain.sh >> "$GITHUB_PATH"
+      - name: the toolchain is the pinned version, or there is none
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            ffprobe -version | head -1
+            ./scripts/toolchain.sh --check
+          else
+            # Assert the ABSENCE. A macOS runner that quietly acquired ffmpeg
+            # would silently stop testing the degrade path, and nothing would
+            # go red to say so.
+            if command -v ffprobe >/dev/null 2>&1; then
+              echo "this runner has ffprobe; it is supposed to be the bare one" >&2
+              exit 1
+            fi
+          fi
       - run: go test -race -count=1 -coverprofile=coverage.out ./...
+      - name: the toolchain tests ran rather than skipping
+        if: runner.os == 'Linux'
+        run: |
+          # "Optional" quietly meaning "untested" is the specific failure this
+          # milestone is most exposed to, and a skipped test looks exactly like
+          # a passing one in the summary line.
+          go test -count=1 -run 'Toolchain|Media' -v ./internal/media/... | tee /tmp/media.log
+          if grep -q -- '--- SKIP' /tmp/media.log; then
+            echo "a media test skipped on the runner that has the toolchain" >&2
+            exit 1
+          fi
 
   build:
     runs-on: ubuntu-latest
@@ -99,6 +136,12 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with: { go-version: stable, cache: true }
+      - name: install the pinned media toolchain
+        if: runner.os == 'Linux'
+        run: ./scripts/toolchain.sh >> "$GITHUB_PATH"
+      # Linux runs the demo with a toolchain, macOS without one. Both must
+      # pass: everything M1 proved is independent of FFmpeg, and ADR-0023 says
+      # it stays that way.
       - run: make demo
 
   # Aggregate status so branch protection needs exactly one required check.

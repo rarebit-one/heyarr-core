@@ -1,0 +1,50 @@
+# Pinned FFmpeg toolchain (ADR-0023).
+#
+# Format: <tool>-<goos>-<goarch> <version> <sha256> <url>
+#
+# The DIGEST is the pin. The version is recorded so an install can assert it
+# rather than merely check that a file exists — a leftover binary from an older
+# pin looks identical to a correct one until something behaves differently.
+#
+# Why a digest and not a package manager: a distro package drifts, and two
+# machines running "the latest ffmpeg" are two different test environments. Why
+# not a marketplace Action: that is another supply-chain dependency in a public
+# AGPL repository, and it gives no story at all for the deployment host, which
+# has no Go toolchain and no CI. A GitHub release asset CAN be replaced by its
+# publisher after the fact; a committed digest is the difference between
+# noticing that and not.
+#
+# ---------------------------------------------------------------------------
+# THE VERSIONS ARE NOT THE SAME ON EVERY PLATFORM, AND THAT IS NOT A TYPO
+# ---------------------------------------------------------------------------
+#
+# The upstream release tagged `b6.1.1` ships ffmpeg 7.0.2 for linux and ffmpeg
+# 6.0 for darwin/arm64. The tag names the project's own release, not the
+# binaries in it, and no static-build publisher offers one version across both
+# linux and macOS/arm64 — checked while writing this file, which is how the
+# skew was found at all.
+#
+# Rather than pretend otherwise, the skew is made load-bearing:
+#
+#   * LINUX IS THE CANONICAL TOOLCHAIN PLATFORM. Golden probe output is
+#     generated and asserted there, and CI installs the toolchain on the Linux
+#     runners only.
+#   * The macOS runners deliberately run WITHOUT a toolchain, which makes them
+#     a real test of ADR-0023's degrade path rather than a second version of
+#     the same test. The claim "a Heyarr with no ffprobe still works" is then
+#     exercised on a real machine every build.
+#   * The darwin entries exist for local development convenience. A developer's
+#     probe output may differ from CI's; when it does, CI is right.
+#
+# What would make us revisit: a publisher offering matched static builds across
+# linux and darwin/arm64, or ffprobe's JSON output changing in a way that makes
+# the skew visible to the tests rather than merely present.
+
+ffmpeg-linux-amd64   7.0.2 bfe8a8fc511530457b528c48d77b5737527b504a3797a9bc4866aeca69c2dffa https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-linux-x64.gz
+ffprobe-linux-amd64  7.0.2 25d9b6ccb05e3d9de9e04e31e2506d8dd7f9f0418981965ac6df12e8d3afd067 https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-linux-x64.gz
+ffmpeg-linux-arm64   7.0.2 754a678672298bc68156adff58aa7385a592c2b30b1d0ae8750c45c915c4bac0 https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-linux-arm64.gz
+ffprobe-linux-arm64  7.0.2 2ab6aba60ee84412dff9188720703376cb4e7aaf7e0b5e43aa8249f2acae5bf8 https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-linux-arm64.gz
+ffmpeg-darwin-arm64  6.0   8923876afa8db5585022d7860ec7e589af192f441c56793971276d450ed3bbfa https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-arm64.gz
+ffprobe-darwin-arm64 6.0   d986a8ec7b030899fe66a8a288ed809a3543338705a3ce178cfb85869c5d80be https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-darwin-arm64.gz
+ffmpeg-darwin-amd64  6.0   929b375c1182d956c51f7ac25e0b2b0411fb01f6f407aa15c9758efeb4242106 https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-x64.gz
+ffprobe-darwin-amd64 6.0   d4da574d6e2e197bd259b47d69cf262df9e312af24ad960444f6d806d3d4c186 https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-darwin-x64.gz

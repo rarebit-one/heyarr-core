@@ -33,6 +33,7 @@ type Config struct {
 	HTTP      HTTP      `koanf:"http"`
 	Peer      Peer      `koanf:"peer"`
 	Log       Log       `koanf:"log"`
+	Media     Media     `koanf:"media"`
 	Libraries []Library `koanf:"libraries"`
 }
 
@@ -81,6 +82,18 @@ type Log struct {
 	Format string `koanf:"format"`
 }
 
+// Media locates the external audiovisual toolchain (§10, ADR-0023).
+//
+// Both paths are empty by default, which means "look on PATH, and degrade if
+// it is not there" — a node with no FFmpeg is a supported configuration, not a
+// broken one. Setting one is a statement that THIS binary is to be used, and a
+// value that does not work is a startup failure rather than a silent fall back
+// to PATH. See internal/media for why those two cases are not symmetrical.
+type Media struct {
+	FFprobePath string `koanf:"ffprobe_path"`
+	FFmpegPath  string `koanf:"ffmpeg_path"`
+}
+
 // Library is a managed collection of content rooted at one or more paths.
 type Library struct {
 	Name        string   `koanf:"name"`
@@ -99,6 +112,7 @@ func Defaults() Config {
 		Log:      Log{Level: "info", Format: "auto"},
 		CAS:      CAS{},
 		Database: Database{},
+		Media:    Media{},
 	}
 }
 

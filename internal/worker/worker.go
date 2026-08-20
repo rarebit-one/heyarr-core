@@ -15,6 +15,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/media"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/scanner"
@@ -69,6 +70,20 @@ func (w *Worker) Run(ctx context.Context) error {
 	// stop, not a startup error that the next start has to redo.
 	startupCtx, cancelStartup := context.WithTimeout(context.WithoutCancel(ctx), schemaWait+time.Minute)
 	defer cancelStartup()
+
+	// The toolchain is resolved before anything else touches the database, so a
+	// misconfigured ffprobe path is a startup failure rather than something
+	// discovered by the first probe job hours into a scan (ADR-0023). An
+	// ABSENT toolchain is not a failure: this worker simply advertises fewer
+	// capabilities and never claims the jobs that need them.
+	toolchain, err := media.Resolve(startupCtx, media.Options{
+		FFprobePath: w.cfg.Media.FFprobePath,
+		FFmpegPath:  w.cfg.Media.FFmpegPath,
+		Logger:      w.log,
+	})
+	if err != nil {
+		return fmt.Errorf("worker: %w", err)
+	}
 
 	db, err := sqlite.Open(startupCtx, sqlite.Options{Path: w.cfg.Database.Path, Logger: w.log})
 	if err != nil {
@@ -174,7 +189,13 @@ func (w *Worker) Run(ctx context.Context) error {
 		MaxConcurrent: 1,
 	})
 
-	runtime, err := NewRuntime(Config{Owner: owner()}, queue, registry, w.log)
+	runtime, err := NewRuntime(Config{
+		Owner: owner(),
+		// What this worker can do, not what it would like to. A job requiring
+		// a capability nobody advertises stays pending and visible rather than
+		// failing (§75, ADR-0023).
+		Capabilities: toolchain.Capabilities(),
+	}, queue, registry, w.log)
 	if err != nil {
 		return fmt.Errorf("worker: building the runtime: %w", err)
 	}

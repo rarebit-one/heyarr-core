@@ -30,3 +30,4 @@ An ADR that merely describes the code is not worth having.
 | [0020](0020-managed-linked-and-vault-assets.md) | Managed, linked and vault assets | Accepted |
 | [0021](0021-encrypted-vault-content.md) | Encrypted vault content | Proposed |
 | [0022](0022-device-enrolment-and-key-recovery.md) | Device enrolment and key recovery | Proposed |
+| [0023](0023-the-external-media-toolchain-is-optional.md) | The external media toolchain is optional, capability-routed and pinned | Accepted |

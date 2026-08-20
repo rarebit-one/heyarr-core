@@ -62,6 +62,12 @@ type Options struct {
 	// send a client that trusted it back to sequence zero. There is no
 	// configuration in which that field should be a guess.
 	Events EventHead
+	// Media is the external toolchain this node resolved, reported by
+	// GET /api/v1/system. Nil means "this node resolved none", which is a
+	// legitimate state rather than a wiring mistake — unlike Events, an empty
+	// answer here is indistinguishable from the true one, so it is not
+	// required.
+	Media []ToolInfo
 	// Build identifies the running binary for GET /api/v1/system.
 	Build buildinfo.Info
 	// SchemaVersion is the migration version the database is at.
@@ -82,6 +88,7 @@ type Server struct {
 	db       *sqlite.DB
 	verifier *auth.Verifier
 	events   EventHead
+	media    []ToolInfo
 	build    buildinfo.Info
 	schema   int64
 	casRoot  string
@@ -139,6 +146,10 @@ func New(opts Options) (*Server, error) {
 		db:       opts.DB,
 		verifier: opts.Verifier,
 		events:   opts.Events,
+		// Normalised so the JSON shape is stable: a nil slice marshals as
+		// null, and a client parsing `media` should not have to handle both
+		// null and [] for the same "nothing here".
+		media:    append([]ToolInfo{}, opts.Media...),
 		build:    opts.Build,
 		schema:   opts.SchemaVersion,
 		casRoot:  opts.CASRoot,

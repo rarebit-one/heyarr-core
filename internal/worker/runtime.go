@@ -267,9 +267,15 @@ func (r *Runtime) Run(ctx context.Context) error {
 	// moment it is alive and supervised, which is before the schema is ready
 	// and therefore before this runtime exists. Two lines saying "started"
 	// about different things is how a startup log stops being readable.
+	// This line is load-bearing beyond readability: it is the only place the
+	// capabilities this runtime will ACTUALLY claim with are observable, and
+	// the acceptance demo asserts on it. It must report r.cfg — a field
+	// re-derived from wherever the caller got the list is a log that agrees
+	// with itself while the wiring between them is broken, which is a mistake
+	// this repository has now made once.
 	r.log.Info("worker runtime started",
 		"slots", r.cfg.Slots,
-		"capabilities", r.cfg.Capabilities,
+		"capabilities", capabilitiesFor(r.cfg),
 		"types", r.registry.Types())
 
 claimLoop:
@@ -366,6 +372,18 @@ func (r *Runtime) claimableTypes() []string {
 		out = append(out, t)
 	}
 	return out
+}
+
+// capabilitiesFor renders a runtime's capabilities for logging, as [] rather
+// than null when there are none. "Advertises nothing" is a deliberate, normal
+// state — a worker with no FFmpeg (ADR-0023) — and null reads as "never set".
+// Someone reading this log is usually reading it because work is not being
+// claimed, which is exactly when that distinction matters.
+func capabilitiesFor(cfg Config) []string {
+	if cfg.Capabilities == nil {
+		return []string{}
+	}
+	return cfg.Capabilities
 }
 
 func (r *Runtime) hasCapability(c string) bool {
