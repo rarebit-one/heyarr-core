@@ -264,6 +264,14 @@ func (c *Catalog) Record(ctx context.Context, rec ingest.Recording) (ingest.Resu
 			return err
 		}
 
+		// Beside the blob, because it describes the bytes rather than this use
+		// of them (§69, M2-08). It goes in the same transaction as everything
+		// else: a publication row for a blob whose asset rolled back would be
+		// metadata about something the catalog does not think exists.
+		if err := c.recordPublication(ctx, tx, rec, now); err != nil {
+			return err
+		}
+
 		workID, workCreated, err := c.resolveWork(ctx, tx, rec.Candidate, now)
 		if err != nil {
 			return err
@@ -568,4 +576,41 @@ func nullYear(y int) any {
 		return nil
 	}
 	return y
+}
+
+// recordPublication stores what a publication container declared about itself.
+//
+// It is an upsert on the blob hash and therefore safely re-runnable, which
+// matters because ingest jobs are re-run by design (invariant 9). Re-examining
+// an unchanged archive writes the same numbers; re-examining one whose index
+// has become readable since — a truncated download completed, say — improves
+// them.
+func (c *Catalog) recordPublication(ctx context.Context, tx *sql.Tx, rec ingest.Recording, now string) error {
+	if rec.Publication == nil {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO publications (blob_hash, format, page_count, chapter_count, examined_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (blob_hash) DO UPDATE SET
+			format = excluded.format,
+			page_count = excluded.page_count,
+			chapter_count = excluded.chapter_count,
+			examined_at = excluded.examined_at`,
+		rec.Blob.Hash, string(rec.Publication.Format),
+		nullableCount(rec.Publication.PageCount),
+		nullableCount(rec.Publication.ChapterCount),
+		now)
+	if err != nil {
+		return fmt.Errorf("catalog: recording the publication for %s: %w", rec.Blob.Hash, err)
+	}
+	return nil
+}
+
+// nullableCount keeps "not read" distinct from zero all the way to the column.
+func nullableCount(n *int) any {
+	if n == nil {
+		return nil
+	}
+	return *n
 }

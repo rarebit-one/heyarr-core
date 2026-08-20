@@ -165,6 +165,8 @@ func (a *API) Mount(r chi.Router) {
 	r.Get("/replicas", a.listReplicas)
 	r.Get("/devices", a.listDevices)
 	r.Get("/devices/{id}", a.getDevice)
+	r.Get("/publications", a.listPublications)
+	r.Get("/publications/{id}", a.getPublication)
 	r.Get("/consumption/sessions", a.listSessions)
 	r.Get("/consumption/sessions/{id}", a.getSession)
 	r.Get("/jobs", a.listJobs)

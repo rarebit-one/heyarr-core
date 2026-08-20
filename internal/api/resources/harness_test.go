@@ -411,6 +411,13 @@ func (h *harness) seed() *harness {
 		session1ID, asset1ID, device1ID, seedTime, seedTime, seedTime,
 		session2ID, asset1ID, device2ID, seedTime, seedTime, seedTime, seedTime)
 
+	// Publication metadata against the seeded blobs, spanning the two answers
+	// §69 produces: a container whose index Heyarr reads, and one it
+	// deliberately does not.
+	h.exec(`INSERT INTO publications (blob_hash, format, page_count, chapter_count, examined_at) VALUES
+		(?, 'epub', NULL, 12, ?), (?, 'pdf', NULL, NULL, ?)`,
+		blob1Hash, seedTime, blob2Hash, seedTime)
+
 	h.exec(`INSERT INTO replicas (blob_hash, peer_id, state, bytes_present, verified_at, updated_at) VALUES
 		(?, ?, 'present', 42949672960, ?, ?), (?, ?, 'corrupt', 0, NULL, ?)`,
 		blob1Hash, peerID, seedTime, seedTime, blob2Hash, peerID, seedTime)

@@ -852,6 +852,87 @@ YAML
   present=$(api_all "/api/v1/replicas?state=present" '.items[] | select(.peer_id == "'"$self_peer"'") | .blob_hash' | sort -u | wc -l | tr -d ' ')
   assert_eq "$present" "$blobs" "every blob has a present replica on the self peer"
 
+  note "  publications (§69)"
+  # Heyarr stores and serves EPUB, PDF, CBZ and CBR, and does not render them.
+  # The import-graph guard asserts the second half in the test suite; this
+  # asserts the first half against a running binary, which is the half a user
+  # would notice.
+  local pubs epub_asset epub_chapters pub_bytes pub_hash
+  pubs=$(api /api/v1/publications | jq -r '.items | length')
+  assert_eq "$pubs" "2" "the fixture library's epub and cbz are catalogued as publications"
+
+  # The counts come from each container's own manifest, read at ingest. The
+  # EPUB fixture declares six spine items and the CBZ eight page images.
+  epub_asset=$(api "/api/v1/publications?format=epub" | jq -r '.items[0].asset_id')
+  epub_chapters=$(api "/api/v1/publications?format=epub" | jq -r '.items[0].chapter_count')
+  assert_eq "$epub_chapters" "6" "the epub reports the spine count its own package document declares"
+  assert_eq "$(api "/api/v1/publications?format=cbz" | jq -r '.items[0].page_count')" "8" \
+    "the cbz reports the page count its own zip index declares"
+
+  # A spine is not a page count, and reporting one as the other would be a
+  # plausible-looking lie.
+  assert_eq "$(api "/api/v1/publications?format=epub" | jq -r '.items[0].page_count // "absent"')" \
+    "absent" "the epub reports no page count"
+
+  # And the bytes are served from the ordinary blob endpoint, with ranges.
+  # ADR-0013: one endpoint, several consumers, and a reader is another one
+  # rather than another endpoint.
+  pub_hash=$(api "/api/v1/publications?format=cbz" | jq -r '.items[0].blob_hash')
+  assert_eq "$(api "/api/v1/publications?format=cbz" | jq -r '.items[0].content_url')" \
+    "/api/v1/blobs/$pub_hash/content" "a publication points at the ordinary blob endpoint"
+  pub_bytes=$(api "/api/v1/blobs/$pub_hash/content" -H "Range: bytes=0-3" -o - | head -c 4 | xxd -p)
+  assert_eq "${pub_bytes:0:4}" "504b" "a range request against a publication returns its zip magic"
+
+  note "  consumption sessions (§67, ADR-0024)"
+  # Devices and sessions had no executable-level coverage at all until now:
+  # both were tested only in-process, so neither had ever crossed a real
+  # socket. This is that gap closed for the read path.
+  local device_id session_id
+  device_id=$(api /api/v1/devices -X POST -H 'Content-Type: application/json' \
+    -d '{"device_key":"acceptance-reader","name":"Acceptance Reader","platform":"linux",
+         "profile":{"containers":["epub","cbz"]}}' | jq -r '.id')
+  assert_contains "$device_id" "-" "a device registers over a real socket"
+
+  # Registration is an upsert: a client announcing itself twice is one device.
+  assert_eq "$(api /api/v1/devices -X POST -H 'Content-Type: application/json' \
+    -d '{"device_key":"acceptance-reader","name":"Acceptance Reader","platform":"linux",
+         "profile":{"containers":["epub","cbz"]}}' | jq -r '.id')" "$device_id" \
+    "registering the same device twice converges on one row"
+
+  session_id=$(api /api/v1/consumption/sessions -X POST -H 'Content-Type: application/json' \
+    -d "{\"asset_id\":\"$epub_asset\",\"device_id\":\"$device_id\",\"verb\":\"read\"}" \
+    | jq -r '.id')
+  assert_contains "$session_id" "-" "a reading session opens"
+
+  api "/api/v1/consumption/sessions/$session_id/transitions" -X POST \
+    -H 'Content-Type: application/json' -d '{"transition":"start"}' >/dev/null
+  api "/api/v1/consumption/sessions/$session_id/transitions" -X POST \
+    -H 'Content-Type: application/json' \
+    -d '{"transition":"progress","progress":{"locator":"epubcfi(/6/14!/4/10/3:10)","unit":"cfi"}}' >/dev/null
+  api "/api/v1/consumption/sessions/$session_id/transitions" -X POST \
+    -H 'Content-Type: application/json' -d '{"transition":"stop"}' >/dev/null
+
+  # Resume: the exact locator comes back. An EPUB CFI is opaque to Heyarr,
+  # which does not render EPUBs — it is stored and returned unchanged.
+  assert_eq "$(api "/api/v1/consumption/sessions/$session_id" | jq -r '.progress.locator')" \
+    "epubcfi(/6/14!/4/10/3:10)" "a stopped reading session resumes at its exact locator"
+  assert_eq "$(api "/api/v1/consumption/sessions/$session_id" | jq -r '.progress.unit')" \
+    "cfi" "the locator keeps its unit"
+
+  # An illegal transition is a 409 and changes nothing. A constraint nobody has
+  # watched reject anything is decoration.
+  assert_eq "$(api "/api/v1/consumption/sessions/$session_id/transitions" -X POST \
+    -H 'Content-Type: application/json' -d '{"transition":"resume"}' \
+    -o /dev/null -w '%{http_code}')" "409" \
+    "resuming a stopped session is refused"
+  assert_eq "$(api "/api/v1/consumption/sessions/$session_id" | jq -r '.state')" "stopped" \
+    "the refused transition left the session alone"
+
+  # Every transition is on the event stream (invariant 7).
+  assert_eq "$(api "/api/v1/events?after=0&types=playback.session.*" \
+    -m 2 2>/dev/null | grep -c '^event: playback.session.')" "4" \
+    "the session's four transitions are all on the event stream"
+
   note "  the media toolchain (ADR-0023)"
   # FFmpeg is the first dependency Heyarr cannot ship inside its own binary,
   # and it is optional. Both states are real deployments, so the demo asserts

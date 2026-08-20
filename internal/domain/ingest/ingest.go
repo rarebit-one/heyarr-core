@@ -18,11 +18,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
+	"github.com/rarebit-one/heyarr-core/internal/domain/publication"
 )
 
 // JobType is the queue's name for this work. The scanner, the acquisition
@@ -107,6 +109,10 @@ type Recording struct {
 	MIME       string
 	PeerID     string
 	Now        time.Time
+	// Publication is what the container declared about itself, when it is one
+	// of §69's four and its index was readable. Nil otherwise, which covers
+	// both "not a publication" and "a publication we do not index".
+	Publication *publication.Info
 }
 
 // Result reports what one ingest actually changed. The Created flags are what
@@ -133,6 +139,24 @@ type Result struct {
 // domain never learns where the bytes went or how they are laid out (§18).
 type ByteStore interface {
 	Link(ctx context.Context, sourcePath string, mode Materialisation) (Blob, error)
+
+	// OpenBlob returns random access to stored bytes, for reading a
+	// container's own index (§69). The caller closes it.
+	//
+	// It is on this port rather than a second one because the domain's
+	// question is the same either way — "give me these bytes" — and a
+	// publication examiner that took its own storage interface would be a
+	// second place to answer where bytes live.
+	OpenBlob(ctx context.Context, hash string) (ReaderAtCloser, int64, error)
+}
+
+// ReaderAtCloser is random access to a blob. It is io.ReaderAt rather than
+// io.Reader because a ZIP's central directory is at the END of the file, so a
+// sequential reader would mean materialising the whole archive to count its
+// entries.
+type ReaderAtCloser interface {
+	io.ReaderAt
+	io.Closer
 }
 
 // Identifier turns a path into a content candidate. It never fails: an
@@ -284,16 +308,28 @@ func (p *Pipeline) Ingest(ctx context.Context, req Request) (Result, error) {
 		mimeType = MIMEForExtension(Ext(filename))
 	}
 
+	// §66 puts examination inside the pipeline, between materialisation and
+	// recording. It happens AFTER the bytes are in the store rather than
+	// against the source file, so that what is examined is what is managed —
+	// on a hardlink-ingested root the two are the same file, and on a copied one they
+	// need not be.
+	//
+	// A container that cannot be read is not an ingest failure. Heyarr stores
+	// bytes it cannot interpret; that is the premise, and a comic with a
+	// corrupt index is still a comic worth having.
+	pubInfo := p.examinePublication(ctx, blob.Hash, filename)
+
 	res, err := p.cat.Record(ctx, Recording{
-		Root:       root,
-		Candidate:  candidate,
-		Blob:       blob,
-		SourcePath: req.SourcePath,
-		RelPath:    req.RelPath,
-		Filename:   filename,
-		MIME:       mimeType,
-		PeerID:     peerID,
-		Now:        p.clock.Now(),
+		Root:        root,
+		Candidate:   candidate,
+		Blob:        blob,
+		SourcePath:  req.SourcePath,
+		RelPath:     req.RelPath,
+		Filename:    filename,
+		MIME:        mimeType,
+		PeerID:      peerID,
+		Now:         p.clock.Now(),
+		Publication: pubInfo,
 	})
 	if err != nil {
 		// The bytes are in the store and nothing references them. That is the
@@ -314,6 +350,41 @@ func (p *Pipeline) Ingest(ctx context.Context, req Request) (Result, error) {
 		"identification", candidate.Source,
 		"rule", candidate.Rule)
 	return res, nil
+}
+
+// examinePublication reads a publication container's own index, or returns nil.
+//
+// Every failure path here is a nil and a log line, never an error. The only
+// thing that could go wrong is that Heyarr knows slightly less about a file it
+// has nonetheless stored, hashed, replicated and can serve — and failing the
+// ingest over that would be trading a whole asset for a page count.
+func (p *Pipeline) examinePublication(ctx context.Context, hash, filename string) *publication.Info {
+	format := publication.FormatForExtension(Ext(filename))
+	if format == "" {
+		return nil
+	}
+	if !format.Indexed() {
+		// Recognised, deliberately not read. It is still recorded as a
+		// publication of that format — "we know what this is and did not count
+		// it" is a different and more useful answer than silence.
+		return &publication.Info{Format: format}
+	}
+
+	r, size, err := p.store.OpenBlob(ctx, hash)
+	if err != nil {
+		p.logger.Warn("a publication could not be opened for examination",
+			"blob", hash, "format", string(format), "error", err)
+		return &publication.Info{Format: format}
+	}
+	defer func() { _ = r.Close() }()
+
+	info, err := publication.Examine(r, size, format)
+	if err != nil {
+		p.logger.Warn("a publication container could not be read; it is stored anyway",
+			"blob", hash, "format", string(format), "error", err)
+		return &publication.Info{Format: format}
+	}
+	return &info
 }
 
 // Base is the final element of a slash-separated relative path. The domain may
