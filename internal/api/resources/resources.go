@@ -163,6 +163,8 @@ func (a *API) Mount(r chi.Router) {
 	r.Get("/blobs/{hash}", a.getBlob)
 	r.Get("/peers", a.listPeers)
 	r.Get("/replicas", a.listReplicas)
+	r.Get("/devices", a.listDevices)
+	r.Get("/devices/{id}", a.getDevice)
 	r.Get("/jobs", a.listJobs)
 	r.Get("/jobs/{id}", a.getJob)
 	r.Get("/events", a.streamEvents)
@@ -173,6 +175,11 @@ func (a *API) Mount(r chi.Router) {
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/libraries/{id}/scan", a.scanLibrary)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Delete("/assets/{id}", a.deleteAsset)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/jobs/{id}/retry", a.retryJob)
+	// Registering a device is a write, not an admin action: a television
+	// announcing what it can play is ordinary client traffic, and requiring an
+	// admin token for it would put an admin credential on every set-top box in
+	// the house.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/devices", a.registerDevice)
 
 	// Credentials are admin-only in both directions. A `write` token that could
 	// mint itself a token is a `write` token that can become admin, and listing

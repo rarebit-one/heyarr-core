@@ -291,3 +291,56 @@ func TestCoreMigrationRollsBackCleanly(t *testing.T) {
 		t.Errorf("%d core tables survived the rollback, want 0", after)
 	}
 }
+
+// Devices (M2-05). The CHECK constraints here are the floor under the API's
+// validation, not a duplicate of it: the invariant is the database's job, and
+// a second writer — a migration, a repair script, a future import — must not be
+// able to store a profile the planner cannot reason about.
+func TestDeviceProfileConstraints(t *testing.T) {
+	db := openTestDB(t)
+
+	insert := func(id, key, extra string) error {
+		return exec(t, db, `INSERT INTO devices
+			(id, device_key, name, platform, max_width, max_height, max_bitrate_bps, supports_hdr,
+			 containers, video_codecs, audio_codecs, created_at, updated_at, last_seen_at)
+			VALUES (?, ?, 'TV', 'tvos', `+extra+`, ?, ?, ?)`, id, key, ts, ts, ts)
+	}
+
+	if err := insert("d1", "k1", `3840, 2160, 120000000, 1, '["mp4"]', '["h264"]', '["aac"]'`); err != nil {
+		t.Fatalf("a valid device was rejected: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		extra string
+	}{
+		{"negative width", `-1, 2160, 0, 0, '[]', '[]', '[]'`},
+		{"negative bitrate", `0, 0, -1, 0, '[]', '[]', '[]'`},
+		{"hdr is not a boolean", `0, 0, 0, 2, '[]', '[]', '[]'`},
+		{"containers is not JSON", `0, 0, 0, 0, 'mp4', '[]', '[]'`},
+		// The one json_valid alone would let through. `"h264"` is perfectly
+		// valid JSON and is not a list of codecs; a scalar smuggled into a list
+		// column produces a planner that silently matches nothing, which looks
+		// like a device that can play nothing rather than like corruption.
+		{"a scalar where a list belongs", `0, 0, 0, 0, '[]', '"h264"', '[]'`},
+		{"an object where a list belongs", `0, 0, 0, 0, '[]', '[]', '{"aac":true}'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := insert("d-"+tc.name, "k-"+tc.name, tc.extra); err == nil {
+				t.Error("the database accepted it")
+			}
+		})
+	}
+}
+
+// One device, one row. The uniqueness is what makes registration idempotent,
+// and it is enforced here rather than by the handler remembering to check.
+func TestDeviceKeyIsUnique(t *testing.T) {
+	db := openTestDB(t)
+	stmt := `INSERT INTO devices (id, device_key, name, created_at, updated_at, last_seen_at)
+		VALUES (?, 'tv-living-room', 'TV', ?, ?, ?)`
+	mustExec(t, db, stmt, "d1", ts, ts, ts)
+	if err := exec(t, db, stmt, "d2", ts, ts, ts); err == nil {
+		t.Error("two devices share a device_key; registration would multiply rows per app launch")
+	}
+}

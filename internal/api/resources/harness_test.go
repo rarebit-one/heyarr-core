@@ -337,6 +337,8 @@ const (
 	asset3ID   = "01990000-0000-7000-8000-0000000000a3"
 	job1ID     = "01990000-0000-7000-8000-0000000000j1"
 	job2ID     = "01990000-0000-7000-8000-0000000000j2"
+	device1ID  = "01990000-0000-7000-8000-0000000000d1"
+	device2ID  = "01990000-0000-7000-8000-0000000000d2"
 
 	blob1Hash = "blake3:1111111111111111111111111111111111111111111111111111111111111111"
 	blob2Hash = "blake3:2222222222222222222222222222222222222222222222222222222222222222"
@@ -351,6 +353,19 @@ func (h *harness) seed() *harness {
 
 	h.exec(`INSERT INTO peers (id, name, site, mode, endpoint, is_self, created_at)
 		VALUES (?, 'bartley', 'bartley-ridge', 'full', 'http://127.0.0.1:8385', 1, ?)`, peerID, seedTime)
+
+	// Two devices spanning what the planner will have to distinguish: one that
+	// takes almost everything, and one deliberately limited so that the
+	// non-DIRECT path has something real to be tested against in M2-07.
+	h.exec(`INSERT INTO devices
+		(id, device_key, name, platform, max_width, max_height, max_bitrate_bps, supports_hdr,
+		 containers, video_codecs, audio_codecs, created_at, updated_at, last_seen_at) VALUES
+		(?, 'tv-living-room', 'Living Room', 'tvos', 3840, 2160, 120000000, 1,
+		 '["mp4","mkv"]', '["h264","hevc"]', '["aac","eac3"]', ?, ?, ?),
+		(?, 'kitchen-speaker', 'Kitchen Speaker', 'linux', 0, 0, 320000, 0,
+		 '["mp3","flac"]', '[]', '["mp3","flac"]', ?, ?, ?)`,
+		device1ID, seedTime, seedTime, seedTime,
+		device2ID, seedTime, seedTime, seedTime)
 
 	h.exec(`INSERT INTO libraries (id, name, content_type, enabled, created_at) VALUES
 		(?, 'films', 'movie', 1, ?), (?, 'books', 'book', 1, ?)`,

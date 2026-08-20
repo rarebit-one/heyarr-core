@@ -42,16 +42,28 @@ const (
 	TypeAssetMissing     = "content.asset.missing"
 	TypeAssetDeleted     = "content.asset.deleted"
 	// #nosec G101 -- an event type name, not a credential
-	TypeTokenCreated      = "system.token.created"
-	TypeTokenRevoked      = "system.token.revoked"
-	TypeJobEnqueued       = "job.enqueued"
-	TypeJobSucceeded      = "job.succeeded"
-	TypeJobFailed         = "job.failed"
-	TypeScanProgress      = "system.scan.progress"
-	TypeSystemStarted     = "system.started"
-	TypeSystemStopped     = "system.stopped"
-	TypePeerRegistered    = "peer.registered"
-	TypeDesiredSatisfied  = "desired.satisfied"
+	TypeTokenCreated     = "system.token.created"
+	TypeTokenRevoked     = "system.token.revoked"
+	TypeJobEnqueued      = "job.enqueued"
+	TypeJobSucceeded     = "job.succeeded"
+	TypeJobFailed        = "job.failed"
+	TypeScanProgress     = "system.scan.progress"
+	TypeSystemStarted    = "system.started"
+	TypeSystemStopped    = "system.stopped"
+	TypePeerRegistered   = "peer.registered"
+	TypeDesiredSatisfied = "desired.satisfied"
+
+	// Device registration lives under playback.* rather than a namespace of
+	// its own: §76 enumerates the categories, a device is not content, and a
+	// device exists in this system for exactly one reason. A client following
+	// playback.* wants to know a new television appeared.
+	//
+	// There is no "device.seen" event. A device re-registering with an
+	// unchanged profile is not a state transition, and emitting for it would
+	// turn every app launch in the house into an event — an event stream that
+	// is mostly noise is one nobody follows (M2-05).
+	TypeDeviceRegistered  = "playback.device.registered"
+	TypeDeviceUpdated     = "playback.device.updated"
 	TypePrivateStateHeads = "private_state.heads"
 )
 

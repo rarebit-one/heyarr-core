@@ -624,6 +624,95 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/v1/devices:
+    get:
+      tags: [playback]
+      operationId: listDevices
+      summary: Page the registered devices.
+      description: Ordered by `(name, id)`.
+      parameters:
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+      responses:
+        "200":
+          description: A page of devices.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/Device" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [playback]
+      operationId: registerDevice
+      summary: Register a device, or update the one already registered.
+      description: |
+        An **upsert on `device_key`**, not a create. An app announces itself on
+        every launch; if that created a row each time, this collection would
+        fill with duplicates named "Living Room" and the playback planner would
+        be choosing between four thousand copies of one television.
+
+        `201` with a `Location` header the first time, `200` afterwards.
+
+        A device here is a **capability profile, not an identity** (§68).
+        Nothing in it is a credential and nothing is authenticated: Heyarr has
+        no way to interrogate a television, so a client declares what it can
+        play and Heyarr believes it. Device enrolment, keypairs and key
+        recovery are ADR-0022 and Milestone 8.
+
+        Codec and container names are lower-cased, trimmed and de-duplicated,
+        so two clients spelling one capability differently converge rather than
+        producing a planner that matches one device and not its identical twin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterDevice" }
+      responses:
+        "200":
+          description: The device already existed; its profile was updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Device" }
+        "201":
+          description: A new device.
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Device" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/devices/{id}:
+    get:
+      tags: [playback]
+      operationId: getDevice
+      summary: One device.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The device.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Device" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/jobs:
     get:
       tags: [operations]
@@ -1154,6 +1243,61 @@ components:
           description: |
             Why an unavailable tool is unavailable, in a few words — "not found
             on PATH", "did not report a version". Absent when available.
+
+    Device:
+      type: object
+      description: A registered device and the capabilities it declares (§68).
+      properties:
+        id: { type: string }
+        device_key:
+          type: string
+          description: |
+            The client's own stable identifier, and the idempotency key for
+            registration. Not a credential and never checked as one.
+        name: { type: string }
+        platform:
+          type: string
+          description: Free text — `tvos`, `android`, `web`.
+        profile: { $ref: "#/components/schemas/DeviceProfile" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        last_seen_at:
+          type: string
+          format: date-time
+          description: |
+            When this device last registered. The only thing that makes a stale
+            row identifiable later.
+
+    DeviceProfile:
+      type: object
+      description: |
+        What a device says it can play. A zero maximum means **no limit
+        stated**, which is deliberately different from a limit of zero: a
+        client that omits `max_bitrate_bps` is not claiming it can play
+        nothing.
+      properties:
+        containers:
+          type: array
+          items: { type: string }
+        video_codecs:
+          type: array
+          items: { type: string }
+        audio_codecs:
+          type: array
+          items: { type: string }
+        max_width: { type: integer }
+        max_height: { type: integer }
+        max_bitrate_bps: { type: integer, format: int64 }
+        supports_hdr: { type: boolean }
+
+    RegisterDevice:
+      type: object
+      required: [device_key, name]
+      properties:
+        device_key: { type: string }
+        name: { type: string }
+        platform: { type: string }
+        profile: { $ref: "#/components/schemas/DeviceProfile" }
 
     StorageInfo:
       type: object
