@@ -34,12 +34,16 @@ const (
 	// TypeReplicaMissing is a blob the catalog knows about whose bytes are not
 	// on this peer at all. Distinct from corrupt: corrupt means we still hold
 	// evidence and it is quarantined, missing means we hold nothing.
-	TypeReplicaMissing    = "replica.missing"
-	TypeIngestCompleted   = "ingest.completed"
-	TypeAssetCreated      = "content.asset.created"
-	TypeLibraryCreated    = "content.library.created"
-	TypeLibraryRootAdded  = "content.library_root.added"
-	TypeAssetMissing      = "content.asset.missing"
+	TypeReplicaMissing   = "replica.missing"
+	TypeIngestCompleted  = "ingest.completed"
+	TypeAssetCreated     = "content.asset.created"
+	TypeLibraryCreated   = "content.library.created"
+	TypeLibraryRootAdded = "content.library_root.added"
+	TypeAssetMissing     = "content.asset.missing"
+	TypeAssetDeleted     = "content.asset.deleted"
+	// #nosec G101 -- an event type name, not a credential
+	TypeTokenCreated      = "system.token.created"
+	TypeTokenRevoked      = "system.token.revoked"
 	TypeJobEnqueued       = "job.enqueued"
 	TypeJobSucceeded      = "job.succeeded"
 	TypeJobFailed         = "job.failed"

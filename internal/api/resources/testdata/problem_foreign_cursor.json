@@ -1,0 +1,8 @@
+{
+  "type": "https://heyarr.dev/problems/bad-request",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "the cursor is not usable on jobs; start the collection again without one",
+  "instance": "/api/v1/jobs",
+  "request_id": "golden-request-id"
+}

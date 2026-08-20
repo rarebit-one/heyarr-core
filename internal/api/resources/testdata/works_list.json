@@ -1,0 +1,39 @@
+{
+  "items": [
+    {
+      "id": "01990000-0000-7000-8000-0000000000w1",
+      "content_type": "movie",
+      "work_key": "arrival|2016",
+      "title": "Arrival",
+      "sort_title": "arrival",
+      "year": 2016,
+      "attributes": {
+        "director": "Villeneuve"
+      },
+      "created_at": "2026-08-01T00:00:00Z",
+      "updated_at": "2026-08-01T00:00:00Z"
+    },
+    {
+      "id": "01990000-0000-7000-8000-0000000000w2",
+      "content_type": "movie",
+      "work_key": "blade-runner-2049|2017",
+      "title": "Blade Runner 2049",
+      "sort_title": "blade runner 2049",
+      "year": 2017,
+      "attributes": {},
+      "created_at": "2026-08-01T00:00:00Z",
+      "updated_at": "2026-08-01T00:00:00Z"
+    },
+    {
+      "id": "01990000-0000-7000-8000-0000000000w3",
+      "content_type": "book",
+      "work_key": "dune|1965",
+      "title": "Dune",
+      "sort_title": "dune",
+      "year": 1965,
+      "attributes": {},
+      "created_at": "2026-08-01T00:00:00Z",
+      "updated_at": "2026-08-01T00:00:00Z"
+    }
+  ]
+}

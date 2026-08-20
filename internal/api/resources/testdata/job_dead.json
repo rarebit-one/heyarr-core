@@ -1,0 +1,20 @@
+{
+  "id": "01990000-0000-7000-8000-0000000000j2",
+  "type": "ingest_artifact",
+  "payload": {
+    "path": "/srv/films/Broken.mkv"
+  },
+  "state": "dead",
+  "priority": 100,
+  "dedupe_key": null,
+  "required_capability": "",
+  "run_after": "2026-08-01T00:00:00Z",
+  "attempts": 5,
+  "max_attempts": 5,
+  "lease_owner": null,
+  "lease_expires_at": null,
+  "last_error": "the file could not be read",
+  "created_at": "2026-08-01T00:00:00Z",
+  "updated_at": "2026-08-01T00:00:00Z",
+  "finished_at": "2026-08-01T00:00:00Z"
+}

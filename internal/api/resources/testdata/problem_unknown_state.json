@@ -1,0 +1,8 @@
+{
+  "type": "https://heyarr.dev/problems/bad-request",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "state must be one of pending, leased, succeeded, failed, dead, not \"finished\"",
+  "instance": "/api/v1/jobs",
+  "request_id": "golden-request-id"
+}

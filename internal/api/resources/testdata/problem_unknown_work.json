@@ -1,0 +1,8 @@
+{
+  "type": "https://heyarr.dev/problems/not-found",
+  "title": "Not Found",
+  "status": 404,
+  "detail": "no work with that identifier",
+  "instance": "/api/v1/works/nope",
+  "request_id": "golden-request-id"
+}

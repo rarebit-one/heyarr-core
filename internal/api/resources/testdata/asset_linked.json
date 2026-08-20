@@ -1,0 +1,15 @@
+{
+  "id": "01990000-0000-7000-8000-0000000000a3",
+  "edition_id": "01990000-0000-7000-8000-0000000000e3",
+  "library_id": "01990000-0000-7000-8000-0000000000l2",
+  "source_class": "linked",
+  "blob_hash": null,
+  "source_path": "/srv/books/Dune.epub",
+  "role": "primary",
+  "filename": "Dune.epub",
+  "mime": "application/epub+zip",
+  "identification_source": "filename",
+  "missing_since": null,
+  "created_at": "2026-08-01T00:00:00Z",
+  "updated_at": "2026-08-01T00:00:00Z"
+}

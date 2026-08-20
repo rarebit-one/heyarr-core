@@ -12,9 +12,12 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
+	"github.com/rarebit-one/heyarr-core/internal/api/resources"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
@@ -178,9 +181,9 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}
-	blobHandler, err := blobs.New(blobs.Options{Store: blobStore, Logger: c.log})
+	mounts, err := c.mounts(db, store, blobStore)
 	if err != nil {
-		return nil, fmt.Errorf("controller: %w", err)
+		return nil, err
 	}
 	srv, err := httpapi.New(httpapi.Options{
 		Config:        c.cfg,
@@ -190,10 +193,44 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 		Build:         buildinfo.Get(),
 		SchemaVersion: schemaVersion,
 		CASRoot:       c.cfg.CAS.Root,
-		Mount:         []httpapi.MountFunc{blobHandler.Mount},
+		Mount:         mounts,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}
 	return srv, nil
+}
+
+// mounts is the API surface this controller serves.
+//
+// It is one function rather than a literal inside newServer because the
+// OpenAPI parity test (ADR-0015) drives *this* list. A test that built its own
+// list of mounts would be asserting that the specification matches a second
+// hand-maintained list, which is the failure the ADR exists to prevent.
+func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Store) ([]httpapi.MountFunc, error) {
+	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+	eventLog, err := events.New(events.Options{
+		Writer: db.Writer(), Reader: db.Reader(), Logger: c.log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+	api, err := resources.New(resources.Options{
+		DB:     db,
+		Jobs:   queue,
+		Events: eventLog,
+		Tokens: store,
+		Logger: c.log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+	blobHandler, err := blobs.New(blobs.Options{Store: blobStore, Logger: c.log})
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+	return []httpapi.MountFunc{api.Mount, blobHandler.Mount}, nil
 }

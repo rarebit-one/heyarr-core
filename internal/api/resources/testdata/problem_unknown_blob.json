@@ -1,0 +1,8 @@
+{
+  "type": "https://heyarr.dev/problems/not-found",
+  "title": "Not Found",
+  "status": 404,
+  "detail": "no blob is recorded with the hash blake3:deadbeef",
+  "instance": "/api/v1/blobs/blake3:deadbeef",
+  "request_id": "golden-request-id"
+}
