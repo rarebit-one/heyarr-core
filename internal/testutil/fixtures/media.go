@@ -1,194 +1,156 @@
 package fixtures
 
 import (
+	"embed"
 	"encoding/binary"
 	"math"
 )
 
-// The media builders below produce **structurally valid containers that no
-// decoder has ever opened**, and that distinction is deliberate.
+// The media fixtures are real files that a real decoder has really opened.
 //
-// Milestone 1 decodes nothing: it hashes bytes, parses paths, and serves byte
-// ranges. What it needs from a fixture is a real extension, a plausible header
-// and enough bytes to range over. Building a fully decodable MP4 by hand — a
-// complete moov with a sample table — and shipping it *unverified*, on a
-// machine with no ffprobe anywhere to check it against, would buy false
-// confidence rather than coverage: nobody would find out it was wrong until
-// Milestone 2 tried to probe it, by which point it looks like a probing bug.
+// # What changed, and why the old note mattered
 //
-// So each builder is parsed back and asserted in media_test.go, and each says
-// in its own comment exactly how far its validity goes. Milestone 2 introduces
-// remote probing (§29) and must replace the audio and video fixtures with real
-// samples at that point.
+// Milestone 1's builders produced structurally valid containers that no decoder
+// had ever opened, and said so at the top of this file. The MP4 had no `moov`,
+// so no track and no codec; the MP3 frames were silent; the FLAC had a
+// STREAMINFO and no subframes. That was deliberate: building a "decodable" MP4
+// by hand on a machine with no ffprobe anywhere to check it against would have
+// bought false confidence rather than coverage, and the bill would have arrived
+// in Milestone 2 looking like a probing bug rather than a fixture bug.
+//
+// The note is kept rather than deleted because the reasoning is why the debt
+// was survivable, and because the same trap is available to anyone adding a
+// format Heyarr cannot yet decode.
+//
+// Milestone 2 has a decoder (ADR-0023), so these are now genuine: encoded by
+// FFmpeg from synthetic sources, committed, and asserted against ffprobe in
+// media_test.go wherever the toolchain is installed.
+//
+// # Committed, not generated
+//
+// The bytes are in the repository, so `go test ./...` needs no external binary
+// and the pure-Go suite stays hermetic. scripts/genmedia.sh regenerates them
+// and is only run deliberately.
+//
+// Everything is synthetic — testsrc2 and sine — so the bytes are ours and the
+// licensing of a public AGPL repository stays simple. No third-party samples.
+//
+// # What is still not decodable, on purpose
+//
+// JPEG below is a header with no scan data, and the large streaming fixture in
+// fixtures.go is a real Matroska header followed by pseudorandom bytes. Neither
+// is decoded by anything: the first exists so the artwork asset role has a file
+// with the right magic, and the second exists to be range-served at gigabyte
+// scale, which real encoded video cannot be without putting a gigabyte in git.
+// Both say so where they are defined, which is the part Milestone 1 got right.
 
-// box writes an ISO base media file format box: a big-endian size covering the
-// header, a four-character type, then the payload (ISO/IEC 14496-12 §4.2).
-func box(kind string, payload []byte) []byte {
-	out := make([]byte, 8, 8+len(payload))
-	binary.BigEndian.PutUint32(out[0:4], uint32(len(payload)+8)) // #nosec G115 -- fixtures are kilobytes
-	copy(out[4:8], kind)
-	return append(out, payload...)
+//go:embed media/*.mp4 media/*.mkv media/*.flac media/*.mp3
+var mediaFS embed.FS
+
+// The committed samples are roughly one second at 160x120, or two seconds of a
+// tone: they are hashed, ranged over and copied by a large fraction of the test
+// suite, so they are not a place to put megabytes.
+//
+// The set spans what the playback planner (§68, M2-07) has to tell apart,
+// because a planner tested only against files that happen to exist is a planner
+// tested against one case:
+//
+//	SampleMP4     h264 + aac in mp4       — DIRECT for almost any device
+//	SampleMKV     the same streams in mkv — REMUX: right codecs, wrong container
+//	SampleHEVCMP4 hevc + aac in mp4       — TRANSCODE for a device without HEVC
+//	SampleFLAC    flac                    — lossless audio
+//	SampleMP3     mp3                     — lossy audio
+
+// SampleMP4 is H.264 video and AAC audio in an MP4 container.
+//
+// variant selects between two files that differ in CONTENT rather than by
+// appended padding. The ingest fixtures need files that must not deduplicate,
+// and padding a real container to make it distinct is how a fixture stops being
+// a representative of the thing it stands for.
+func SampleMP4(variant int) []byte {
+	return mediaFile("media/h264_aac_" + variantSuffix(variant) + ".mp4")
 }
 
-// MP4 builds an ISO base media file format container: an `ftyp` brand
-// declaration, a `free` box, and an `mdat` carrying payload.
-//
-// The box structure is real and round-trips, and the brands are ones a parser
-// recognises. There is no `moov`, so there is no track, no codec and nothing to
-// decode. See the note at the top of this file.
-func MP4(payload []byte) []byte {
-	ftyp := make([]byte, 0, 24)
-	ftyp = append(ftyp, "isom"...)                  // major brand
-	ftyp = binary.BigEndian.AppendUint32(ftyp, 512) // minor version
-	ftyp = append(ftyp, "isomiso2avc1mp41"...)      // compatible brands
-
-	out := box("ftyp", ftyp)
-	out = append(out, box("free", []byte("heyarr fixture - not decodable, see media.go"))...)
-	return append(out, box("mdat", payload)...)
+// SampleMKV is SampleMP4's streams in Matroska — the same video and audio, a
+// different container. That pairing is the REMUX case, and having both means a
+// test can assert that a remux changed the container and nothing else.
+func SampleMKV(variant int) []byte {
+	return mediaFile("media/h264_aac_" + variantSuffix(variant) + ".mkv")
 }
 
-// mpegBitrates maps a bitrate index to MPEG-1 Layer III kbit/s (ISO/IEC
-// 11172-3 table 4). Index 0 means "free" and 15 is reserved; neither is used.
-var mpegBitrates = [16]int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0}
+// SampleHEVCMP4 is HEVC video, which an ordinary device profile refuses.
+func SampleHEVCMP4() []byte { return mediaFile("media/hevc_aac.mp4") }
 
-// MPEG-1 Layer III constants for the frames MP3 emits.
-const (
-	mp3BitrateIndex = 9     // 128 kbit/s
-	mp3SampleRate   = 44100 // sample-rate index 0
-	mp3Samples      = 1152  // samples per frame
-)
+// SampleFLAC is two seconds of a 440 Hz tone, losslessly encoded.
+func SampleFLAC() []byte { return mediaFile("media/flac.flac") }
 
-// MP3FrameLength is the byte length of the frames MP3 produces. Exported so a
-// caller can size a fixture in frames and know what it will cost.
-func MP3FrameLength() int {
-	// ISO/IEC 11172-3: frame length = samples/8 * bitrate / sample rate, plus
-	// a padding byte this builder never asks for.
-	return mp3Samples / 8 * (mpegBitrates[mp3BitrateIndex] * 1000) / mp3SampleRate
-}
+// SampleMP3 is two seconds of a 330 Hz tone at 128 kbit/s.
+func SampleMP3() []byte { return mediaFile("media/mp3.mp3") }
 
-// MP3 builds a run of MPEG-1 Layer III frames at 128 kbit/s, 44.1 kHz, joint
-// stereo.
-//
-// The frame headers are genuine — sync word, version, layer, bitrate index and
-// sample-rate index are all real values, and the frame length is derived from
-// them, so a parser walking frame to frame lands exactly on each sync word.
-// media_test.go asserts precisely that. The bytes inside each frame are zero
-// rather than a Huffman-coded granule, so there is nothing to decode. See the
-// note at the top of this file.
-func MP3(frames int) []byte {
-	frameLen := MP3FrameLength()
-	header := [4]byte{
-		0xFF,                       // sync
-		0xFB,                       // sync, MPEG-1, Layer III, no CRC
-		byte(mp3BitrateIndex << 4), // bitrate index, sample-rate index 0, unpadded
-		0x40,                       // joint stereo
+// variantSuffix maps a variant to a file. Anything outside the set wraps rather
+// than panicking, so a caller asking for variant 7 gets a real file instead of
+// a test failure that has nothing to do with what it was testing.
+func variantSuffix(variant int) string {
+	if variant%2 == 0 {
+		return "2"
 	}
+	return "1"
+}
 
-	out := make([]byte, 0, frames*frameLen)
-	for range frames {
-		frame := make([]byte, frameLen)
-		copy(frame, header[:])
-		out = append(out, frame...)
+// mediaFile reads an embedded sample.
+//
+// It panics on a missing file, which is correct here and nowhere else: the
+// files are embedded at build time, so a miss means the embed pattern and the
+// accessor have drifted apart, and every caller is a test that would otherwise
+// fail somewhere far less informative.
+func mediaFile(name string) []byte {
+	b, err := mediaFS.ReadFile(name)
+	if err != nil {
+		panic("fixtures: embedded media is missing: " + err.Error())
 	}
+	// A copy, so a caller that appends to or mutates the slice cannot corrupt
+	// the embedded bytes for every later test in the process.
+	out := make([]byte, len(b))
+	copy(out, b)
 	return out
 }
 
-// FLAC builds a FLAC stream: the `fLaC` marker, then a STREAMINFO metadata
-// block carrying a real sample rate, channel count and bit depth.
+// MatroskaHeader is a Matroska EBML header with no clusters, used as the prefix
+// of the large streaming fixture.
 //
-// STREAMINFO is genuine and parses. What follows it is padding rather than
-// encoded subframes. See the note at the top of this file.
-func FLAC(payload []byte) []byte {
-	const (
-		blockSize  = 4096
-		sampleRate = 44100
-		channels   = 2
-		bitsPer    = 16
-	)
-
-	info := make([]byte, 34)
-	binary.BigEndian.PutUint16(info[0:2], blockSize) // minimum block size
-	binary.BigEndian.PutUint16(info[2:4], blockSize) // maximum block size
-	// info[4:10] is min/max frame size; all-zero is defined as "unknown".
-
-	// 64 packed bits: 20 sample rate, 3 (channels-1), 5 (bits per sample - 1),
-	// 36 total samples. Zero total samples is defined as "unknown".
-	var packed uint64
-	packed |= uint64(sampleRate) << 44
-	packed |= uint64(channels-1) << 41
-	packed |= uint64(bitsPer-1) << 36
-	binary.BigEndian.PutUint64(info[10:18], packed)
-	// info[18:34] is the MD5 of the unencoded audio; all-zero means "not
-	// computed", which the format explicitly permits.
-
-	out := []byte("fLaC")
-	// Metadata block header: last-block flag (0x80) | type 0 (STREAMINFO),
-	// then a 24-bit big-endian length.
-	out = append(out, 0x80, 0x00, 0x00, 34)
-	out = append(out, info...)
-	return append(out, payload...)
-}
-
-// Matroska builds an EBML document with a Matroska DocType header, followed by
-// a Segment element carrying payload.
-//
-// The EBML header is real: the magic, the element ids and the variable-length
-// integers are all encoded correctly, and a parser reads DocType "matroska"
-// out of it. The Segment holds opaque bytes rather than tracks and clusters.
-// See the note at the top of this file.
-func Matroska(payload []byte) []byte {
-	// EBML variable-size integers, one-byte form: the marker bit is 0x80, so
-	// values up to 127 encode directly. Every length here is small enough.
-	ebmlUint := func(id []byte, value uint64) []byte {
-		var v []byte
-		if value == 0 {
-			v = []byte{0}
-		}
-		for value > 0 {
-			v = append([]byte{byte(value & 0xFF)}, v...)
-			value >>= 8
-		}
-		out := append([]byte{}, id...)
-		out = append(out, byte(0x80|len(v))) // #nosec G115 -- v is at most 8 bytes
-		return append(out, v...)
+// It is deliberately NOT decodable, and that is not the same mistake Milestone
+// 1 made. The streaming fixture is gigabytes of pseudorandom bytes whose whole
+// purpose is to be range-served without putting gigabytes in git; there is no
+// version of it that is also real video. What matters is that a file named
+// .mkv identifies as Matroska rather than as "data", which is exactly where the
+// range assertions look.
+func MatroskaHeader() []byte {
+	ebml := []byte{
+		0x42, 0x86, 0x81, 0x01, // EBMLVersion 1
+		0x42, 0xF7, 0x81, 0x01, // EBMLReadVersion 1
+		0x42, 0xF2, 0x81, 0x04, // EBMLMaxIDLength 4
+		0x42, 0xF3, 0x81, 0x08, // EBMLMaxSizeLength 8
+		0x42, 0x82, 0x88, 'm', 'a', 't', 'r', 'o', 's', 'k', 'a',
+		0x42, 0x87, 0x81, 0x04, // DocTypeVersion 4
+		0x42, 0x85, 0x81, 0x02, // DocTypeReadVersion 2
 	}
-	ebmlString := func(id []byte, s string) []byte {
-		out := append([]byte{}, id...)
-		out = append(out, byte(0x80|len(s))) // #nosec G115 -- callers pass short strings
-		return append(out, s...)
-	}
-
-	var header []byte
-	header = append(header, ebmlUint([]byte{0x42, 0x86}, 1)...)            // EBMLVersion
-	header = append(header, ebmlUint([]byte{0x42, 0xF7}, 1)...)            // EBMLReadVersion
-	header = append(header, ebmlUint([]byte{0x42, 0xF2}, 4)...)            // EBMLMaxIDLength
-	header = append(header, ebmlUint([]byte{0x42, 0xF3}, 8)...)            // EBMLMaxSizeLength
-	header = append(header, ebmlString([]byte{0x42, 0x82}, "matroska")...) // DocType
-	header = append(header, ebmlUint([]byte{0x42, 0x87}, 4)...)            // DocTypeVersion
-	header = append(header, ebmlUint([]byte{0x42, 0x85}, 2)...)            // DocTypeReadVersion
-
-	if len(header) > 127 {
-		// The one-byte EBML length form tops out at 127. Every header this
-		// builder produces is far below that, so exceeding it means the builder
-		// changed and the encoding must change with it.
-		panic("fixtures: EBML header outgrew the one-byte length form")
-	}
-	out := []byte{0x1A, 0x45, 0xDF, 0xA3}     // EBML magic
-	out = append(out, byte(0x80|len(header))) // #nosec G115 -- bounded above
-	out = append(out, header...)
-
-	// Segment (id 0x18538067) with an unknown-length marker, which Matroska
-	// permits for streaming, followed by the payload.
-	out = append(out, 0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF)
-	return append(out, payload...)
+	out := []byte{0x1A, 0x45, 0xDF, 0xA3} // EBML header id
+	// #nosec G115 -- ebml is a fixed literal above, 33 bytes, and an EBML
+	// one-byte length can carry up to 127.
+	out = append(out, 0x80|byte(len(ebml)))
+	out = append(out, ebml...)
+	// An unknown-length Segment, which is what a live or streamed Matroska file
+	// legitimately looks like.
+	return append(out, 0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF)
 }
 
 // JPEG builds a baseline JPEG header: SOI, a real JFIF APP0 segment, an
 // optional comment, then EOI.
 //
 // There is no scan data, so there is no image. It carries the extension, the
-// magic bytes and enough structure for the artwork asset role. See the note at
-// the top of this file.
+// magic bytes and enough structure for the artwork asset role — and unlike the
+// Milestone 1 video builders, nothing in Milestone 2 decodes it, so it is not
+// a fixture pretending to be something a decoder would accept.
 func JPEG(comment string) []byte {
 	out := []byte{0xFF, 0xD8} // SOI
 

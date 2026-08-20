@@ -97,8 +97,13 @@ jobs:
           # milestone is most exposed to, and a skipped test looks exactly like
           # a passing one in the summary line.
           go test -count=1 -run 'Toolchain|Media' -v ./internal/media/... | tee /tmp/media.log
+          # The fixture probe tests are the other half: they are the assertion
+          # that the committed media is real, and they are skip-guarded the
+          # same way.
+          go test -count=1 -v ./internal/testutil/fixtures/... | tee -a /tmp/media.log
           if grep -q -- '--- SKIP' /tmp/media.log; then
             echo "a media test skipped on the runner that has the toolchain" >&2
+            grep -B2 -- '--- SKIP' /tmp/media.log >&2
             exit 1
           fi
 

@@ -142,12 +142,12 @@ func library() []plan {
 		{
 			path:        "movies/Blue Harvest (2019)/Blue Harvest (2019) - 2160p.mkv",
 			contentType: "movie", role: "primary", large: true,
-			prefix: func() []byte { return Matroska(nil) },
+			prefix: MatroskaHeader,
 		},
 		{
 			path:        "movies/The Quiet Room (2001)/The Quiet Room (2001) - 1080p.mp4",
 			contentType: "movie", role: "primary",
-			build: func(Options) ([]byte, error) { return MP4([]byte(strings.Repeat("quiet ", 4096))), nil },
+			build: func(Options) ([]byte, error) { return SampleMP4(1), nil },
 		},
 		{
 			path:        "movies/The Quiet Room (2001)/poster.jpg",
@@ -158,7 +158,7 @@ func library() []plan {
 		{
 			path:        "movies/Twice Told (2010)/Twice Told (2010) - 1080p.mp4",
 			contentType: "movie", role: "primary",
-			build: func(Options) ([]byte, error) { return MP4([]byte(strings.Repeat("twice ", 8192))), nil },
+			build: func(Options) ([]byte, error) { return SampleMP4(2), nil },
 		},
 		{
 			path:        "movies/Told Twice (2011)/Told Twice (2011) - 1080p.mp4",
@@ -182,7 +182,7 @@ func library() []plan {
 		{
 			path:        "tv/Night Shift/Season 01/S01E01 - Pilot.mkv",
 			contentType: "series", role: "primary",
-			build: func(Options) ([]byte, error) { return Matroska([]byte(strings.Repeat("pilot ", 4096))), nil },
+			build: func(Options) ([]byte, error) { return SampleMKV(1), nil },
 		},
 		{
 			path:        "tv/Night Shift/Season 01/S01E01 - Pilot.en.srt",
@@ -192,19 +192,19 @@ func library() []plan {
 		{
 			path:        "tv/Night Shift/Season 01/S01E02 - Handover.mkv",
 			contentType: "series", role: "primary",
-			build: func(Options) ([]byte, error) { return Matroska([]byte(strings.Repeat("handover ", 4096))), nil },
+			build: func(Options) ([]byte, error) { return SampleMKV(2), nil },
 		},
 
 		// Music.
 		{
 			path:        "music/The Cartographers/Contour Lines (2001)/01 - Datum.flac",
 			contentType: "music", role: "primary",
-			build: func(Options) ([]byte, error) { return FLAC([]byte(strings.Repeat("datum ", 8192))), nil },
+			build: func(Options) ([]byte, error) { return SampleFLAC(), nil },
 		},
 		{
 			path:        "music/The Cartographers/Contour Lines (2001)/02 - Benchmark.mp3",
 			contentType: "music", role: "primary",
-			build: func(Options) ([]byte, error) { return MP3(600), nil },
+			build: func(Options) ([]byte, error) { return SampleMP3(), nil },
 		},
 
 		// Books.
