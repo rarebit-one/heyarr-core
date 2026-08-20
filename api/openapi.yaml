@@ -782,6 +782,62 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /api/v1/playback/remux:
+    post:
+      tags: [playback]
+      operationId: enqueueRemux
+      summary: Queue a remux for an asset a device cannot take as it is (§10, §75).
+      description: |
+        Rewraps the encoded streams into a container the device declares. It
+        does **not** re-encode: `-c copy` is the whole contract, and Milestone
+        2 has no quality ladder, no HLS or DASH segmenting and no transcode.
+
+        **Separate from `POST /playback` deliberately.** A remux is minutes of
+        work and disk; starting one because a client asked what it could play
+        would let a browsing client fill a disk. When to spend that is a policy
+        question, and policy is §55's.
+
+        Only a **REMUX** plan is actionable. A DIRECT plan needs no work, and a
+        TRANSCODE plan would produce a remux that still does not play — a
+        failure the client would discover only after waiting for it. Both are
+        409.
+
+        Returns the job. Poll `/jobs/{id}` or follow `job.*` on the event
+        stream, then re-plan.
+
+        The output is recorded as an **Asset** with role `derived` on the same
+        Edition, so replication, integrity and garbage collection treat it like
+        any other managed asset. That means it will be replicated and will be
+        reclaimed when nothing references it — both correct, neither free.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RemuxRequest" }
+      responses:
+        "202":
+          description: The remux was queued.
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id: { type: string }
+                  container: { type: string, enum: [mp4, mkv] }
+                  asset_id: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The plan is not REMUX, so there is nothing useful to queue.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /api/v1/playback/plan:
     post:
       tags: [playback]
@@ -1695,6 +1751,13 @@ components:
             A short-lived `read` credential for that URL. **Not scoped to one
             blob** — see the endpoint description.
         expires_at: { type: string, format: date-time }
+
+    RemuxRequest:
+      type: object
+      required: [asset_id, device_id]
+      properties:
+        asset_id: { type: string }
+        device_id: { type: string }
 
     PlanRequest:
       type: object

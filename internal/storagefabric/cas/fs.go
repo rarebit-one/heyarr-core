@@ -123,6 +123,16 @@ func (s *FS) ensureMarker() error {
 // Root is the directory this store occupies.
 func (s *FS) Root() string { return s.root }
 
+// LocalPath returns the file backing a blob, checking it is there first: a
+// path to something absent is worse than an error, because the caller finds
+// out from a subprocess that failed for reasons it cannot explain.
+func (s *FS) LocalPath(ctx context.Context, h hashing.Hash) (string, error) {
+	if _, err := s.Stat(ctx, h); err != nil {
+		return "", err
+	}
+	return s.blobPath(h), nil
+}
+
 // blobPath is the canonical location of a blob's bytes.
 func (s *FS) blobPath(h hashing.Hash) string {
 	hex := h.Hex()

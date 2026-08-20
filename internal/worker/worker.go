@@ -17,6 +17,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
+	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
 	"github.com/rarebit-one/heyarr-core/internal/media/probe"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
@@ -234,6 +235,37 @@ func (w *Worker) Run(ctx context.Context) error {
 			MaxConcurrent: 2,
 		})
 		w.log.Info("probing is available", "endpoint", endpoint, "ffprobe", toolchain.FFprobe.Version)
+	}
+
+	// The remux handler, registered only when this worker can run it — same
+	// reasoning as the prober: not registering it makes the degraded state
+	// visible in the startup log, which lists the types this worker claims.
+	if toolchain.FFmpeg.Available {
+		remuxer, err := ffmpeg.New(ffmpeg.Options{
+			FFmpegPath: toolchain.FFmpeg.Path,
+			// Inside the data directory, so the output shares a filesystem
+			// with the store and adoption is metadata rather than a copy
+			// (ADR-0014).
+			WorkDir: w.cfg.DataDir,
+			Logger:  w.log,
+		})
+		if err != nil {
+			return fmt.Errorf("worker: building the remuxer: %w", err)
+		}
+		registry.Register(ffmpeg.JobType, Registration{
+			RequiredCapability: ffmpeg.Capability,
+			Handler: RemuxHandler(RemuxHandlerOptions{
+				Remuxer:  remuxer,
+				Store:    NewCASRemuxStore(store),
+				Recorder: cat,
+				Logger:   w.log,
+			}),
+			// One at a time. A remux is bounded by disk rather than CPU, and
+			// two concurrent ones on the same spindle are slower than two in
+			// sequence while also filling the work directory twice as fast.
+			MaxConcurrent: 1,
+		})
+		w.log.Info("remuxing is available", "ffmpeg", toolchain.FFmpeg.Version)
 	}
 
 	runtime, err := NewRuntime(Config{
