@@ -150,3 +150,42 @@ func enqueueProbe(ctx context.Context, probes ProbeEnqueuer, res ingest.Result, 
 		_ = err
 	}
 }
+
+// CASRemuxStore adapts the content-addressed store for remuxing.
+//
+// It is separate from CASByteStore because the two answer different questions:
+// ingest asks "take this file under management", and a remux asks "where are
+// these bytes, and here is a new file". Folding them together would give the
+// ingest domain a path-returning method it must never use — the domain does
+// not know where bytes live (§18, ADR-0006), and a method that told it would
+// be an invitation.
+type CASRemuxStore struct {
+	store cas.Store
+}
+
+// NewCASRemuxStore adapts a CAS store for remuxing.
+func NewCASRemuxStore(store cas.Store) *CASRemuxStore { return &CASRemuxStore{store: store} }
+
+var _ RemuxStore = (*CASRemuxStore)(nil)
+
+// SourcePath locates a blob's bytes on this filesystem.
+func (a *CASRemuxStore) SourcePath(ctx context.Context, blobHash string) (string, error) {
+	h, err := hashing.Parse(blobHash)
+	if err != nil {
+		return "", err
+	}
+	return a.store.LocalPath(ctx, h)
+}
+
+// Adopt takes a finished remux into the store, hashing it on the way in.
+//
+// Link rather than a copy: a remux output is on the same filesystem as the
+// store by construction — the work directory is inside the data directory — so
+// this is metadata, and it degrades down ADR-0014's ladder if it is not.
+func (a *CASRemuxStore) Adopt(ctx context.Context, path string) (string, int64, error) {
+	desc, err := a.store.Link(ctx, path, cas.Materialisation(ingest.Reflink))
+	if err != nil {
+		return "", 0, err
+	}
+	return desc.Hash.String(), desc.Size, nil
+}

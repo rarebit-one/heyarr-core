@@ -11,8 +11,10 @@ import (
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
+	"github.com/rarebit-one/heyarr-core/internal/domain/playback"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
 )
 
 // jobFromQueue converts the queue's job to the wire shape. The two are
@@ -184,4 +186,84 @@ func (a *API) retryJob(w http.ResponseWriter, r *http.Request) {
 			"request_id", httpapi.RequestIDFrom(r.Context()), "job_id", id, "error", err)
 	}
 	a.write(w, r, http.StatusOK, jobFromQueue(updated))
+}
+
+// RemuxRequest is the POST /playback/remux body.
+type RemuxRequest struct {
+	AssetID  string `json:"asset_id"`
+	DeviceID string `json:"device_id"`
+}
+
+// enqueueRemux queues a remux for an asset a device cannot take as it is
+// (§10, §75, M2-10).
+//
+// It is a separate call from POST /playback rather than something that
+// endpoint does automatically, and that is deliberate for Milestone 2: a
+// remux is minutes of work and disk, and starting one because a client asked
+// what it could play would let a browsing client fill a disk. Deciding when to
+// spend that is a policy question, and policy is §55's, not this endpoint's.
+//
+// It returns the job. The client polls /jobs/{id} or follows job.* on the
+// event stream, and re-plans when it succeeds.
+func (a *API) enqueueRemux(w http.ResponseWriter, r *http.Request) {
+	var body RemuxRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	for _, f := range []struct{ name, value string }{
+		{"asset_id", body.AssetID}, {"device_id", body.DeviceID},
+	} {
+		if err := required(f.name, f.value); err != nil {
+			httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+			return
+		}
+	}
+
+	device, err := a.deviceProfile(r, body.DeviceID)
+	if err != nil {
+		a.fail(w, r, "device", err)
+		return
+	}
+	media, blobHash, err := a.mediaProfile(r, body.AssetID)
+	if err != nil {
+		a.fail(w, r, "asset", err)
+		return
+	}
+	replicas, err := a.replicasFor(r, blobHash)
+	if err != nil {
+		a.fail(w, r, "replica", err)
+		return
+	}
+
+	plan := playback.Choose(media, device, replicas)
+	// Only a REMUX plan is actionable in Milestone 2. Queueing work for a
+	// DIRECT plan would be spending minutes of disk to produce a file nobody
+	// needs, and queueing it for a TRANSCODE plan would produce a remux that
+	// still does not play — a failure the client would discover only after
+	// waiting for it.
+	if plan.Decision != playback.DecisionRemux {
+		httpapi.Fail(w, r, problem.Conflict(
+			"this asset plans "+string(plan.Decision)+" on this device, and Milestone 2 remuxes only; "+
+				"POST /api/v1/playback/plan for the full rationale"))
+		return
+	}
+
+	target := ffmpeg.TargetFor(device.Containers)
+	job, err := a.jobs.Enqueue(r.Context(), jobs.EnqueueOptions{
+		Type: ffmpeg.JobType,
+		Payload: ffmpeg.Payload{
+			BlobHash: blobHash, AssetID: body.AssetID, Container: target,
+		},
+		DedupeKey:          ffmpeg.DedupeKey(blobHash, target),
+		RequiredCapability: ffmpeg.Capability,
+	})
+	if err != nil {
+		a.fail(w, r, "job", err)
+		return
+	}
+	w.Header().Set("Location", httpapi.APIPrefix+"/jobs/"+job.ID)
+	a.write(w, r, http.StatusAccepted, map[string]any{
+		"job_id": job.ID, "container": string(target), "asset_id": body.AssetID,
+	})
 }

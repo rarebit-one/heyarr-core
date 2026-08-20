@@ -195,6 +195,7 @@ func (a *API) Mount(r chi.Router) {
 	// Starting a playback opens a session and mints a credential, so it is a
 	// write even though the bytes it points at are read-only.
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/playback", a.startPlayback)
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/playback/remux", a.enqueueRemux)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/consumption/sessions", a.createSession)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).
 		Post("/consumption/sessions/{id}/transitions", a.applyTransition)

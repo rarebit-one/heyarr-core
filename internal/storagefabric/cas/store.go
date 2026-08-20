@@ -123,6 +123,22 @@ type Store interface {
 	// Open returns a seekable reader over a blob's bytes.
 	Open(ctx context.Context, h hashing.Hash) (ReadSeekCloser, Descriptor, error)
 
+	// LocalPath returns a filesystem path for a blob's bytes, for the callers
+	// that genuinely need one rather than a reader.
+	//
+	// There is exactly one such caller and it is an external process: FFmpeg
+	// needs a seekable file it can open itself, and handing it a pipe means a
+	// remux of a trailing-index container cannot work. Everything inside
+	// Heyarr uses Open.
+	//
+	// It is on the Store rather than being reachable only through *FS because
+	// the alternative is a type assertion at the call site, which is a
+	// dependency on the implementation wearing a disguise. Note that this does
+	// NOT relax ADR-0006: paths are still not identity, the domain still may
+	// not call this, and a store with no local paths is free to return an
+	// error rather than inventing one.
+	LocalPath(ctx context.Context, h hashing.Hash) (string, error)
+
 	// Stat reports what the store knows about a blob without opening it.
 	Stat(ctx context.Context, h hashing.Hash) (Descriptor, error)
 

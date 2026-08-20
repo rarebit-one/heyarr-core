@@ -591,6 +591,13 @@ func (s synthStore) Has(_ context.Context, h hashing.Hash) (bool, error) { retur
 
 func (s synthStore) Verify(context.Context, hashing.Hash) error { return nil }
 
+// A synthetic blob exists nowhere on disk, so it has no local path. Returning
+// an error rather than a plausible one is the contract: LocalPath's own
+// comment says a store with no local paths is free to refuse.
+func (s synthStore) LocalPath(context.Context, hashing.Hash) (string, error) {
+	return "", errReadOnly
+}
+
 func (s synthStore) Put(context.Context, io.Reader) (cas.Descriptor, error) {
 	return cas.Descriptor{}, errReadOnly
 }

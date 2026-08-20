@@ -3,6 +3,7 @@ package resources
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -160,7 +161,7 @@ func (a *API) mediaProfile(r *http.Request, assetID string) (playback.MediaProfi
 		FROM blob_probes WHERE blob_hash = ?`, blobHash.String).
 		Scan(&container, &duration, &bitrate, &streams)
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		// Not an error. Nothing has probed these bytes, which the planner
 		// handles explicitly.
 		return playback.MediaProfile{}, blobHash.String, nil

@@ -1009,6 +1009,73 @@ YAML
       "with nothing probed, playback still succeeds rather than refusing everything"
   fi
 
+  note "  remuxing (§10, §75)"
+  # A remux is the case the planner returns most often and the one that costs
+  # almost nothing to serve. This drives it through the real binary: queue the
+  # job, wait for a capable worker to run it, and confirm a NEW asset appeared
+  # on the same edition in a container the device actually declares.
+  if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+    local mkv_asset mkv_edition remux_device remux_job remux_code derived_before derived_after
+    mkv_asset=$(api_all /api/v1/assets '.items[] | select(.filename != null) | select(.filename | endswith(".mkv")) | .id' | head -1)
+    mkv_edition=$(api "/api/v1/assets/$mkv_asset" | jq -r '.edition_id')
+
+    # A device that takes the streams and refuses the container: the REMUX
+    # case exactly.
+    remux_device=$(api /api/v1/devices -X POST -H 'Content-Type: application/json' \
+      -d '{"device_key":"acceptance-mp4only","name":"MP4 Only","platform":"tvos",
+           "profile":{"containers":["mp4"],"video_codecs":["h264"],"audio_codecs":["aac"]}}' \
+      | jq -r '.id')
+
+    local remux_decision
+    remux_decision=$(api /api/v1/playback/plan -X POST -H 'Content-Type: application/json' \
+      -d "{\"asset_id\":\"$mkv_asset\",\"device_id\":\"$remux_device\"}" | jq -r '.decision')
+    assert_eq "$remux_decision" "remux" "matroska on an mp4-only device plans REMUX"
+
+    derived_before=$(api "/api/v1/assets?edition_id=$mkv_edition" | jq -r '[.items[] | select(.role == "derived")] | length')
+
+    remux_job=$(api /api/v1/playback/remux -X POST -H 'Content-Type: application/json' \
+      -d "{\"asset_id\":\"$mkv_asset\",\"device_id\":\"$remux_device\"}" | jq -r '.job_id')
+    assert_contains "$remux_job" "-" "the remux was queued"
+
+    # Poll for the CONDITION, never a fixed sleep.
+    waited=0
+    while (( waited < 600 )); do
+      [[ "$(api "/api/v1/jobs/$remux_job" | jq -r '.state')" == "succeeded" ]] && break
+      sleep 0.1; waited=$(( waited + 1 ))
+    done
+    assert_eq "$(api "/api/v1/jobs/$remux_job" | jq -r '.state')" "succeeded" \
+      "a worker with ffmpeg ran the remux"
+
+    derived_after=$(api "/api/v1/assets?edition_id=$mkv_edition" | jq -r '[.items[] | select(.role == "derived")] | length')
+    assert_eq "$derived_after" "$(( derived_before + 1 ))" \
+      "the remux produced one derived asset on the same edition"
+
+    # And the derived asset is a real, servable, MP4 blob — not a row claiming
+    # to be one.
+    local derived_hash derived_magic
+    derived_hash=$(api "/api/v1/assets?edition_id=$mkv_edition" | jq -r '.items[] | select(.role == "derived") | .blob_hash' | head -1)
+    derived_magic=$(api "/api/v1/blobs/$derived_hash/content" -H 'Range: bytes=4-7' -o - | head -c 4)
+    assert_eq "$derived_magic" "ftyp" "the derived blob is an MP4 and is range-servable"
+
+    # Re-running is idempotent: the job dedupes and the edition does not grow a
+    # second identical derivative.
+    api /api/v1/playback/remux -X POST -H 'Content-Type: application/json' \
+      -d "{\"asset_id\":\"$mkv_asset\",\"device_id\":\"$remux_device\"}" >/dev/null
+    assert_eq "$(api "/api/v1/assets?edition_id=$mkv_edition" | jq -r '[.items[] | select(.role == "derived")] | length')" \
+      "$derived_after" "asking for the same remux twice adds no second derivative"
+
+    # The refusal: a DIRECT plan has nothing worth queueing.
+    remux_code=$(api /api/v1/playback/remux -X POST -H 'Content-Type: application/json' \
+      -d "{\"asset_id\":\"$mkv_asset\",\"device_id\":\"$play_device\"}" \
+      -o /dev/null -w '%{http_code}')
+    assert_eq "$remux_code" "409" "a DIRECT plan is refused rather than queueing pointless work"
+  else
+    # ADR-0023 once more: no ffmpeg, no remuxing, and everything else still
+    # works. A remux job queued here would sit pending, which is the whole
+    # degrade contract.
+    pass "the demo passed with no ffmpeg, so nothing could be remuxed"
+  fi
+
   note "  the playback planner (§68)"
   # The planner is a pure function, exhaustively table-tested. What this adds
   # is the join: real probe rows, real device profiles and real replicas, over
