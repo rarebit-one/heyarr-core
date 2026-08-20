@@ -263,7 +263,11 @@ func (r *Runtime) Run(ctx context.Context) error {
 		}()
 	}
 
-	r.log.Info("worker started",
+	// Deliberately not "worker started": the worker ROLE reports that the
+	// moment it is alive and supervised, which is before the schema is ready
+	// and therefore before this runtime exists. Two lines saying "started"
+	// about different things is how a startup log stops being readable.
+	r.log.Info("worker runtime started",
 		"slots", r.cfg.Slots,
 		"capabilities", r.cfg.Capabilities,
 		"types", r.registry.Types())

@@ -51,27 +51,54 @@ func TestReflinkCostsMetadataNotBytes(t *testing.T) {
 			"registered only %d KiB, so a clone measurement would prove nothing", sizeMiB, controlDelta)
 	}
 
-	// The measurement that matters.
-	before = freeKiB(t, dir)
-	desc, err := store.Link(t.Context(), src, Reflink)
-	if err != nil {
-		t.Fatal(err)
-	}
-	syncDisk()
-	cloneDelta := before - freeKiB(t, dir)
+	// The measurement that matters, retried because free space is a GLOBAL
+	// resource and this suite is not the only thing writing to the volume.
+	//
+	// `go test ./...` runs packages in parallel, and a sibling package writing
+	// a few hundred megabytes during the clone window lands entirely in this
+	// reading — measured once at 166 336 KiB consumed for an operation that
+	// consumes nothing. That is not a flaky assertion, it is an instrument
+	// being read while someone else moves the scale.
+	//
+	// Noise almost always ADDS consumption, so a clean window is a lower
+	// reading and the retry costs nothing when the first attempt is quiet.
+	// Each attempt needs its own source: re-linking the same bytes would
+	// deduplicate and consume nothing whether or not cloning works, which is a
+	// test that cannot fail.
+	const attempts = 3
+	var (
+		cloneDelta int64
+		desc       Descriptor
+	)
+	for attempt := 1; attempt <= attempts; attempt++ {
+		source := src
+		if attempt > 1 {
+			source = filepath.Join(dir, "big-"+strconv.Itoa(attempt)+".bin")
+			writeIncompressible(t, source, sizeMiB)
+		}
 
-	t.Logf("materialised as %s: a %d MiB file consumed %d KiB (an ordinary copy consumed %d KiB)",
-		desc.Materialised, sizeMiB, cloneDelta, controlDelta)
+		before = freeKiB(t, dir)
+		desc, err = store.Link(t.Context(), source, Reflink)
+		if err != nil {
+			t.Fatal(err)
+		}
+		syncDisk()
+		cloneDelta = before - freeKiB(t, dir)
 
-	if desc.Materialised != Reflink {
-		t.Skipf("this filesystem degraded to %s, so there is no cloning to measure", desc.Materialised)
+		t.Logf("attempt %d: materialised as %s, a %d MiB file consumed %d KiB "+
+			"(an ordinary copy consumed %d KiB)", attempt, desc.Materialised, sizeMiB, cloneDelta, controlDelta)
+
+		if desc.Materialised != Reflink {
+			t.Skipf("this filesystem degraded to %s, so there is no cloning to measure", desc.Materialised)
+		}
+		// Generous threshold: the point is order-of-magnitude, not exactness.
+		if cloneDelta <= controlDelta/2 {
+			return
+		}
 	}
-	// Generous threshold: the point is order-of-magnitude, not exactness, and
-	// other processes share the volume.
-	if cloneDelta > controlDelta/2 {
-		t.Errorf("a clone consumed %d KiB against a copy's %d KiB — cloning is not saving space, "+
-			"so ADR-0014's premise does not hold on this filesystem", cloneDelta, controlDelta)
-	}
+
+	t.Errorf("over %d attempts a clone consumed %d KiB against a copy's %d KiB — cloning is not "+
+		"saving space, so ADR-0014's premise does not hold on this filesystem", attempts, cloneDelta, controlDelta)
 }
 
 func writeIncompressible(t *testing.T, path string, sizeMiB int) {

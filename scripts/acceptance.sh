@@ -127,13 +127,19 @@ run_and_term() { # label deadline_seconds role...
   # `all` runs the three roles concurrently, so waiting for any one of them
   # proves nothing about the others — the controller is the slow one, because
   # it migrates.
+  # Wait for READINESS, not liveness. The worker reports "worker started" the
+  # moment it is alive and supervised, which is before the controller has
+  # migrated and therefore before it can claim anything — so waiting for that
+  # line means SIGTERM can arrive while it is still waiting for the schema, and
+  # everything downstream of readiness silently never happens. Waiting for a
+  # proxy is the same mistake as sleeping a fixed duration, one level up.
   local wanted=()
   for role in "$@"; do
-    if [[ "$role" == "all" ]]; then
-      wanted+=("controller started" "worker started" "peer started")
-    else
-      wanted+=("$role started")
-    fi
+    case "$role" in
+      all)    wanted+=("controller started" "worker ready" "peer started") ;;
+      worker) wanted+=("worker ready") ;;
+      *)      wanted+=("$role started") ;;
+    esac
   done
 
   local waited_start
@@ -212,8 +218,96 @@ else
   fail "schema version changed across a restart: '$V1' then '$V2'"
 fi
 
+note "ingest wiring (M1-10)"
+# Started and ready are different things. A worker alive before any controller
+# has migrated is legitimately unable to work, and saying so is the difference
+# between "starting up" and "broken" (ADR-0002).
+assert_contains "$ALLLOG" "worker ready" "the worker reports readiness separately from liveness"
+
+# A handler registered in a map nobody has watched be read is not wiring. The
+# worker runtime logs the job types it will claim, so assert the one that
+# matters is among them — this is the single path bytes enter Heyarr (§65).
+assert_contains "$ALLLOG" "ingest_artifact" "the worker registers the ingest_artifact handler"
+
+# ADR-0010: the peer model exists from milestone 1 with exactly one peer, and
+# it is this node. It is created on first start and never again — a second
+# self peer is unrecoverable once replication has run, which is why the
+# database refuses it and why this asserts the count rather than the ability.
+assert_contains "$ALLLOG" "registered this peer" "the self peer is registered on first start"
+RESTARTLOG=$(cat "$WORK/restart.log")
+assert_not_contains "$RESTARTLOG" "registered this peer" \
+  "the self peer is registered once, not once per start"
+
+# §7 and ADR-0003: the controller owns the schema. Two processes racing to
+# apply the same DDL is a way to find out how goose handles concurrent
+# migrations, and that is not a thing to find out in production. The worker
+# waits for the schema; it never applies it.
+MIGRATIONS=$(grep -c "database schema ready" "$WORK/all.log" || true)
+if [[ "$MIGRATIONS" == "1" ]]; then
+  pass "exactly one role migrates the schema, even with three running"
+else
+  fail "the schema was migrated $MIGRATIONS times in one start — only the controller may migrate"
+fi
+SPLITMIGRATIONS=$(grep -c "database schema ready" "$WORK/split.log" || true)
+if [[ "$SPLITMIGRATIONS" == "1" ]]; then
+  pass "in split-process mode the worker waits for the schema rather than applying it"
+else
+  fail "split mode migrated $SPLITMIGRATIONS times — only the controller may migrate"
+fi
+
+# A worker started with no controller anywhere is the ADR-0002 case: roles are
+# independently runnable, so it must wait for the schema rather than migrate it
+# — and must still stop when told to. The first cut of that wait ignored the
+# shutdown context and polled for two minutes past the point anyone wanted the
+# process alive.
+note "a worker with no controller (ADR-0002)"
+LONEDIR="$WORK/lone"
+mkdir -p "$LONEDIR"
+cat > "$WORK/lone.yaml" <<YAML
+data_dir: $LONEDIR
+peer:
+  name: lone
+log:
+  level: info
+  format: json
+YAML
+"$BIN" --config "$WORK/lone.yaml" worker >"$WORK/lone.log" 2>&1 &
+LONEPID=$!
+waited=0
+while (( waited < 300 )); do
+  grep -q "waiting for the controller to migrate" "$WORK/lone.log" 2>/dev/null && break
+  sleep 0.1; waited=$(( waited + 1 ))
+done
+if (( waited >= 300 )); then
+  fail "a lone worker never reported that it was waiting for the schema"
+  cat "$WORK/lone.log"
+  kill -KILL "$LONEPID" 2>/dev/null || true
+else
+  pass "a lone worker waits for the controller instead of migrating"
+  kill -TERM "$LONEPID" 2>/dev/null || true
+  waited=0
+  while (( waited < 100 )); do
+    kill -0 "$LONEPID" 2>/dev/null || break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if kill -0 "$LONEPID" 2>/dev/null; then
+    kill -KILL "$LONEPID" 2>/dev/null || true
+    wait "$LONEPID" 2>/dev/null || true
+    fail "a lone worker ignored SIGTERM while waiting for the schema"
+  else
+    wait "$LONEPID" && pass "a waiting worker still stops within 10s of SIGTERM" \
+      || fail "a waiting worker exited non-zero on SIGTERM"
+  fi
+fi
+LONEMIGRATIONS=$(grep -c "database schema ready" "$WORK/lone.log" || true)
+if [[ "$LONEMIGRATIONS" == "0" ]]; then
+  pass "a lone worker never migrates the schema, even with nobody else running"
+else
+  fail "a lone worker applied the schema itself — only the controller may (§7)"
+fi
+
 note "not yet implemented (milestone 1)"
-echo "  --   library scan, ingest, range serving, idempotency, integrity: M1-18"
+echo "  --   library scan, range serving, end-to-end idempotency, integrity: M1-18"
 
 if (( FAILED )); then
   printf '\n\033[31macceptance: FAILED\033[0m\n'; exit 1

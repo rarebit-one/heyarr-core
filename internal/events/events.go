@@ -109,8 +109,56 @@ func New(opts Options) (*Log, error) {
 	}, nil
 }
 
-// Emit appends an event and publishes it.
+// rowQuerier is the one method appending an event needs, so the same code can
+// run on the writer pool or inside a caller's transaction.
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// Emit appends an event durably and then publishes it to live subscribers.
+//
+// It writes on the writer pool, which holds exactly one connection (ADR-0003).
+// Calling it from inside a transaction started on that same pool would
+// therefore wait for a connection the caller is holding, and block until the
+// context expires. Emit from inside a transaction with EmitTx.
 func (l *Log) Emit(ctx context.Context, eventType, subjectType, subjectID string, payload any) (Event, error) {
+	e, err := l.append(ctx, l.writer, eventType, subjectType, subjectID, payload)
+	if err != nil {
+		return Event{}, err
+	}
+	l.publish(e)
+	return e, nil
+}
+
+// EmitTx appends an event inside the caller's transaction and does NOT publish
+// it. Publish the returned events with Publish once the transaction commits.
+//
+// Two things make this the only correct way to record a state transition that
+// is part of a larger write:
+//
+//   - The writer pool is a single connection (ADR-0003). An Emit nested inside
+//     an InTx on that pool waits for a connection its own caller is holding,
+//     and the symptom is a hang until the context expires rather than an error.
+//   - A subscriber must never see an event whose transaction later rolls back.
+//     It may act on it, and the log is the record of what happened (§76).
+//
+// The database still assigns seq, so ordering remains the database's job.
+func (l *Log) EmitTx(ctx context.Context, tx *sql.Tx, eventType, subjectType, subjectID string, payload any) (Event, error) {
+	if tx == nil {
+		return Event{}, errors.New("events: a transaction is required — use Emit outside one")
+	}
+	return l.append(ctx, tx, eventType, subjectType, subjectID, payload)
+}
+
+// Publish fans out events that are already durable. It is the second half of
+// EmitTx and must be called only after the transaction has committed.
+func (l *Log) Publish(evs ...Event) {
+	for _, e := range evs {
+		l.publish(e)
+	}
+}
+
+func (l *Log) append(ctx context.Context, q rowQuerier, eventType, subjectType, subjectID string, payload any) (Event, error) {
 	if eventType == "" {
 		return Event{}, errors.New("events: type must be set")
 	}
@@ -134,15 +182,13 @@ func (l *Log) Emit(ctx context.Context, eventType, subjectType, subjectID string
 
 	// The database assigns seq, so ordering is the database's job rather than a
 	// counter two writers could race on.
-	row := l.writer.QueryRowContext(ctx, `
+	row := q.QueryRowContext(ctx, `
 		INSERT INTO events (id, type, subject_type, subject_id, payload, created_at)
 		VALUES (?, ?, ?, ?, ?, ?) RETURNING seq`,
 		e.ID, e.Type, e.SubjectType, e.SubjectID, string(e.Payload), e.CreatedAt.Format(timeFormat))
 	if err := row.Scan(&e.Seq); err != nil {
 		return Event{}, fmt.Errorf("events: appending %s: %w", eventType, err)
 	}
-
-	l.publish(e)
 	return e, nil
 }
 
