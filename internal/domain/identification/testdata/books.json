@@ -1,0 +1,1000 @@
+[
+  {
+    "path": "Author/Title.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Series 03 - Title.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author",
+        "series": "Series",
+        "series_index": 3
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir-series",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author - Title (2011).epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title:2011",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 2011,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-title",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Comics/Author/Series 01 - Issue.cbz",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:issue",
+      "Title": "Issue",
+      "SortTitle": "issue",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author",
+        "series": "Series",
+        "series_index": 1
+      },
+      "EditionAttributes": {
+        "format": "comic"
+      },
+      "EditionKey": "cbz",
+      "EditionLabel": "CBZ",
+      "EditionType": "cbz",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir-series",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Neal Stephenson/Cryptonomicon.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:neal stephenson:cryptonomicon",
+      "Title": "Cryptonomicon",
+      "SortTitle": "cryptonomicon",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Neal Stephenson"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Brandon Sanderson/Mistborn 01 - The Final Empire.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:brandon sanderson:final empire",
+      "Title": "The Final Empire",
+      "SortTitle": "final empire",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Brandon Sanderson",
+        "series": "Mistborn",
+        "series_index": 1
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir-series",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Calibre/Isaac Asimov/Foundation (123)/Foundation - Isaac Asimov.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:isaac asimov:foundation",
+      "Title": "Foundation",
+      "SortTitle": "foundation",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Isaac Asimov"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/calibre",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Isaac Asimov - Foundation (1951).epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:isaac asimov:foundation:1951",
+      "Title": "Foundation",
+      "SortTitle": "foundation",
+      "Year": 1951,
+      "WorkAttributes": {
+        "author": "Isaac Asimov"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-title",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Title (2011).epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title:2011",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 2011,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Title.mobi",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "mobi",
+      "EditionLabel": "MOBI",
+      "EditionType": "mobi",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Title.azw3",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "azw3",
+      "EditionLabel": "AZW3",
+      "EditionType": "azw3",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Title.pdf",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "pdf",
+      "EditionLabel": "PDF",
+      "EditionType": "pdf",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Title.cbz",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {
+        "format": "comic"
+      },
+      "EditionKey": "cbz",
+      "EditionLabel": "CBZ",
+      "EditionType": "cbz",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Title.cbr",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {
+        "format": "comic"
+      },
+      "EditionKey": "cbr",
+      "EditionLabel": "CBR",
+      "EditionType": "cbr",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Title.m4b",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {
+        "format": "audiobook"
+      },
+      "EditionKey": "m4b",
+      "EditionLabel": "M4B",
+      "EditionType": "m4b",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Books/Ursula K Le Guin/The Left Hand of Darkness.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:ursula k le guin:left hand of darkness",
+      "Title": "The Left Hand Of Darkness",
+      "SortTitle": "left hand of darkness",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Ursula K Le Guin"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Author - Title.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Terry Pratchett/Discworld 05 - Sourcery.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:terry pratchett:sourcery",
+      "Title": "Sourcery",
+      "SortTitle": "sourcery",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Terry Pratchett",
+        "series": "Discworld",
+        "series_index": 5
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir-series",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Terry Pratchett/Discworld Book 5 - Sourcery.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:terry pratchett:sourcery",
+      "Title": "Sourcery",
+      "SortTitle": "sourcery",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Terry Pratchett",
+        "series": "Discworld",
+        "series_index": 5
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir-series",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Magazines/New Scientist/New Scientist Issue 3421.pdf",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:new scientist:new scientist issue 3421",
+      "Title": "New Scientist Issue 3421",
+      "SortTitle": "new scientist issue 3421",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "New Scientist"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "pdf",
+      "EditionLabel": "PDF",
+      "EditionType": "pdf",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Title - Subtitle.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title subtitle",
+      "Title": "Title Subtitle",
+      "SortTitle": "title subtitle",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "J.R.R. Tolkien/The Hobbit.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:j r r tolkien:hobbit",
+      "Title": "The Hobbit",
+      "SortTitle": "hobbit",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "J R R Tolkien"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "J R R Tolkien/The Lord of the Rings 01 - The Fellowship of the Ring.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:j r r tolkien:fellowship of the ring",
+      "Title": "The Fellowship Of The Ring",
+      "SortTitle": "fellowship of the ring",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "J R R Tolkien",
+        "series": "The Lord Of The Rings",
+        "series_index": 1
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir-series",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Title.djvu",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "djvu",
+      "EditionLabel": "DJVU",
+      "EditionType": "djvu",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Title.fb2",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "fb2",
+      "EditionLabel": "FB2",
+      "EditionType": "fb2",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Title.lit",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "lit",
+      "EditionLabel": "LIT",
+      "EditionType": "lit",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Comics/Batman/Batman 001 - Origin.cbz",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:batman:origin",
+      "Title": "Origin",
+      "SortTitle": "origin",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Batman",
+        "series": "Batman",
+        "series_index": 1
+      },
+      "EditionAttributes": {
+        "format": "comic"
+      },
+      "EditionKey": "cbz",
+      "EditionLabel": "CBZ",
+      "EditionType": "cbz",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir-series",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author Name/Book Title (2011) [EPUB].epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author name:book title:2011",
+      "Title": "Book Title",
+      "SortTitle": "book title",
+      "Year": 2011,
+      "WorkAttributes": {
+        "author": "Author Name"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Andy Weir/The Martian.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:andy weir:martian",
+      "Title": "The Martian",
+      "SortTitle": "martian",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Andy Weir"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Andy Weir - The Martian.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:andy weir:martian",
+      "Title": "The Martian",
+      "SortTitle": "martian",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Andy Weir"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-title",
+      "Identified": true
+    }
+  },
+  {
+    "path": "The Martian.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:martian",
+      "Title": "The Martian",
+      "SortTitle": "martian",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/title-only",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Book Series 02 - Second Book (2015).epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:second book:2015",
+      "Title": "Second Book",
+      "SortTitle": "second book",
+      "Year": 2015,
+      "WorkAttributes": {
+        "author": "Author",
+        "series": "Book Series",
+        "series_index": 2
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir-series",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Title.pdb",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "pdb",
+      "EditionLabel": "PDB",
+      "EditionType": "pdb",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Papers/Author/Some Paper Title.pdf",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:some paper title",
+      "Title": "Some Paper Title",
+      "SortTitle": "some paper title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "pdf",
+      "EditionLabel": "PDF",
+      "EditionType": "pdf",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Title.azw",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "azw",
+      "EditionLabel": "AZW",
+      "EditionType": "azw",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Title.cb7",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:author:title",
+      "Title": "Title",
+      "SortTitle": "title",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Author"
+      },
+      "EditionAttributes": {
+        "format": "comic"
+      },
+      "EditionKey": "cb7",
+      "EditionLabel": "CB7",
+      "EditionType": "cb7",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Frank Herbert/Dune.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:frank herbert:dune",
+      "Title": "Dune",
+      "SortTitle": "dune",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Frank Herbert"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Frank Herbert - Dune (1965).epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:frank herbert:dune:1965",
+      "Title": "Dune",
+      "SortTitle": "dune",
+      "Year": 1965,
+      "WorkAttributes": {
+        "author": "Frank Herbert"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-title",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Frank Herbert/Dune Chronicles 01 - Dune.epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:frank herbert:dune",
+      "Title": "Dune",
+      "SortTitle": "dune",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Frank Herbert",
+        "series": "Dune Chronicles",
+        "series_index": 1
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir-series",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Comics/Saga/Saga 01 - Chapter One.cbz",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:saga:chapter one",
+      "Title": "Chapter One",
+      "SortTitle": "chapter one",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Saga",
+        "series": "Saga",
+        "series_index": 1
+      },
+      "EditionAttributes": {
+        "format": "comic"
+      },
+      "EditionKey": "cbz",
+      "EditionLabel": "CBZ",
+      "EditionType": "cbz",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir-series",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Frank Herbert/Dune.jpg",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:frank herbert:dune",
+      "Title": "Dune",
+      "SortTitle": "dune",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Frank Herbert"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "artwork",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Neal Stephenson/Seveneves.azw3",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:neal stephenson:seveneves",
+      "Title": "Seveneves",
+      "SortTitle": "seveneves",
+      "Year": 0,
+      "WorkAttributes": {
+        "author": "Neal Stephenson"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "azw3",
+      "EditionLabel": "AZW3",
+      "EditionType": "azw3",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Author/Title.epub.bak",
+    "candidate": {
+      "ContentType": "unknown",
+      "WorkKey": "unidentified",
+      "Title": "Unidentified",
+      "SortTitle": "unidentified",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "unidentified",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "unidentified",
+      "Rule": "",
+      "Identified": false
+    }
+  },
+  {
+    "path": "Books/Kurt Vonnegut/Slaughterhouse Five (1969).epub",
+    "candidate": {
+      "ContentType": "book",
+      "WorkKey": "book:kurt vonnegut:slaughterhouse five:1969",
+      "Title": "Slaughterhouse Five",
+      "SortTitle": "slaughterhouse five",
+      "Year": 1969,
+      "WorkAttributes": {
+        "author": "Kurt Vonnegut"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "epub",
+      "EditionLabel": "EPUB",
+      "EditionType": "epub",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "book/author-dir",
+      "Identified": true
+    }
+  }
+]
