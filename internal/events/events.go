@@ -37,6 +37,8 @@ const (
 	TypeReplicaMissing    = "replica.missing"
 	TypeIngestCompleted   = "ingest.completed"
 	TypeAssetCreated      = "content.asset.created"
+	TypeLibraryCreated    = "content.library.created"
+	TypeLibraryRootAdded  = "content.library_root.added"
 	TypeAssetMissing      = "content.asset.missing"
 	TypeJobEnqueued       = "job.enqueued"
 	TypeJobSucceeded      = "job.succeeded"
