@@ -149,11 +149,40 @@ jobs:
       # it stays that way.
       - run: make demo
 
+  # The degraded pass, on the SAME operating system as the equipped one.
+  #
+  # macOS already runs without a toolchain, but that confounds two variables:
+  # a failure there could be the missing FFmpeg or it could be macOS. This job
+  # changes exactly one thing against the Linux acceptance job above, so
+  # "Heyarr works with no FFmpeg" is tested rather than inferred.
+  #
+  # It is also the job that would catch the toolchain quietly becoming
+  # mandatory — the failure mode ADR-0023 exists to prevent, and the one that
+  # would otherwise be discovered by a user on a NAS.
+  acceptance-degraded:
+    name: acceptance (no media toolchain)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: stable, cache: true }
+      - name: assert this runner has no toolchain
+        run: |
+          # A runner that quietly acquired ffmpeg would silently stop testing
+          # the degrade path, and nothing would go red to say so.
+          for tool in ffmpeg ffprobe; do
+            if command -v "$tool" >/dev/null 2>&1; then
+              echo "this runner has $tool; it is supposed to be the bare one" >&2
+              exit 1
+            fi
+          done
+      - run: make demo
+
   # Aggregate status so branch protection needs exactly one required check.
   ci:
     name: ci
     if: always()
-    needs: [lint, generate-check, test, build, acceptance]
+    needs: [lint, generate-check, test, build, acceptance, acceptance-degraded]
     runs-on: ubuntu-latest
     steps:
       - name: fail if any job failed

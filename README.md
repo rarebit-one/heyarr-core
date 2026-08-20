@@ -10,7 +10,9 @@ while separately brokering privacy-preserving user state across trusted devices 
 It is designed for homelabs, and it should feel less like a collection of media
 applications and more like a **distributed content operating system**.
 
-> 🚧 **Status: pre-alpha.** Nothing works yet. Milestone 1 is in progress. The
+> 🚧 **Status: pre-alpha.** Milestones 1 and 2 are done: Heyarr scans a library,
+> brings its bytes under management, serves them over HTTP with byte ranges, and
+> can be played, listened to and read from. The
 > [technical specification](docs/spec/) is the authority; the code is catching up.
 
 ## Why
@@ -88,14 +90,27 @@ failure names what broke and what it expected.
 
 ## Roadmap
 
-Milestone 1 is **done** — Heyarr scans a library, brings its bytes under
-management, serves them over HTTP with byte ranges, and tells you what it did.
-`make demo` is how you check that on your own machine, in about fifteen seconds.
+Milestones 1 and 2 are **done**.
+
+Heyarr scans a library, brings its bytes under management, serves them over
+HTTP with byte ranges, and tells you what it did. It probes media over those
+same byte ranges rather than copying whole files, plans DIRECT / REMUX /
+TRANSCODE against what a device says it can play, opens a consumption session
+for watching, listening or reading, and hands a client somewhere to play from.
+It stores and serves EPUB, PDF, CBZ and CBR without rendering them.
+
+FFmpeg is **optional**: a Heyarr with no `ffprobe` still scans, ingests, serves
+and plays — probe and remux jobs simply wait for a worker that has it
+([ADR-0023](docs/adr/0023-the-external-media-toolchain-is-optional.md)).
+
+`make demo` is how you check all of that on your own machine, in about half a
+minute. It runs twice — once as one process, once as three — and passes with or
+without a media toolchain.
 
 | | Milestone | Delivers | |
 |---|---|---|---|
 | 1 | Local Heyarr | controller, local full peer, content model, BLAKE3 CAS, scanner, HTTP Range, API, CLI | ✅ |
-| 2 | Consumption | playback sessions, direct A/V, publications, ffprobe | |
+| 2 | Consumption | playback sessions, direct A/V, publications, ffprobe, remux | ✅ |
 | 3 | Desired State & Acquisition | DesiredItem, quality profiles, Prowlarr, Transmission, ingest, upgrades | |
 | 4 | Second Full Peer | registration, inventory exchange, replication, catalog snapshots, read routing | |
 | 5 | Efficient Replication | FastCDC, chunk manifests, resumable transfer, integrity repair | |

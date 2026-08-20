@@ -1,6 +1,6 @@
 # Data model
 
-The Milestone 1 slice of spec §79. The authority is
+The Milestone 1–2 slice of spec §79. The authority is
 [the specification](spec/heyarr-spec.md); this page explains the shape and,
 more importantly, **which guarantees apply to which tables**.
 
