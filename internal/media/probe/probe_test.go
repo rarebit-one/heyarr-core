@@ -115,30 +115,38 @@ func newProber(t *testing.T, opts probe.Options) *probe.Prober {
 	return p
 }
 
-// The §29 claim, measured — and measured as the property that actually
-// matters.
+// The §29 claim, measured — and measured as the property that survives being
+// run somewhere else.
 //
-// The first version of this test asserted "the probe reads under 10% of the
-// blob" and failed at 13.2%. The reason is worth keeping: ffprobe reads up to
-// its `probesize` (5 MB by default) while detecting streams, so the bytes it
-// pulls are bounded by a CONSTANT, not by a fraction. A percentage assertion
-// was therefore measuring the size of the padding I happened to choose.
+// This assertion has been wrong twice, and both versions are worth recording
+// because they were wrong in the same way: they measured something incidental
+// and called it the property.
 //
-// The right claim is the one §29 is really about: **the cost of probing does
-// not scale with the size of the blob.** So this probes the same container at
-// two very different sizes and asserts the bytes read barely move. On a 20 GB
-// remux that constant is a rounding error, which is the whole point.
+//	v1: "the probe reads under 10% of the blob" — failed locally at 13.2%.
+//	    A percentage of a file whose size I chose is a fact about my padding.
+//	v2: "the bytes read barely move as the blob grows" — passed on darwin with
+//	    ffprobe 6.0 (2.45 MB → 2.90 MB) and failed on Linux CI with 7.0.2
+//	    (1.52 MB → 3.51 MB). "Roughly constant" was a fact about one build.
 //
-// # Conditions
+// What is true in both, and is what §29 is actually about:
 //
-// A faststart MP4 — `moov` at the FRONT — padded with zeros. A trailing-moov
-// file gives a very different answer; TestATrailingMoovCostsMore covers that
-// rather than quoting only the flattering number.
-func TestProbingCostDoesNotScaleWithBlobSize(t *testing.T) {
+//   - the bytes read are bounded by a CONSTANT — ffprobe reads up to its
+//     `probesize` (about 5 MB by default) while detecting streams, and stops;
+//   - so the FRACTION of the blob read falls as the blob grows.
+//
+// Neither depends on the version, the platform, or the padding. A 20 GB remux
+// costs the same few megabytes as a 30 MB one, which is the whole point of not
+// materialising it.
+func TestProbingCostIsBoundedAndDoesNotScaleWithBlobSize(t *testing.T) {
 	container := fixtures.SampleMP4(1)
 	prober := newProber(t, probe.Options{})
 
-	measure := func(t *testing.T, padding int) (int64, int64) {
+	// probeCeiling is a generous multiple of ffprobe's 5 MB default probesize.
+	// It is an absolute bound, deliberately: the claim is "bounded by a
+	// constant", so the assertion is against a constant.
+	const probeCeiling = 16 << 20
+
+	measure := func(t *testing.T, padding int) (bytesRead int64, size int64, fraction float64) {
 		t.Helper()
 		body := append(append([]byte{}, container...), make([]byte, padding)...)
 		p := newPeer(t, body, "probe-token")
@@ -157,26 +165,37 @@ func TestProbingCostDoesNotScaleWithBlobSize(t *testing.T) {
 		if audio, ok := result.AudioStream(); !ok || audio.Codec != "aac" {
 			t.Errorf("audio = %+v, want aac", audio)
 		}
+		f := stats.Fraction(int64(len(body)))
 		t.Logf("%d-byte blob: probe read %d bytes (%.3f%%) in %d requests, %s",
-			len(body), stats.BytesRead, 100*stats.Fraction(int64(len(body))),
-			stats.Requests, stats.Elapsed)
-		return stats.BytesRead, int64(len(body))
+			len(body), stats.BytesRead, 100*f, stats.Requests, stats.Elapsed)
+		return stats.BytesRead, int64(len(body)), f
 	}
 
-	small, smallSize := measure(t, 32<<20)
-	large, largeSize := measure(t, 256<<20)
+	small, smallSize, smallFraction := measure(t, 32<<20)
+	large, largeSize, largeFraction := measure(t, 256<<20)
 
-	// The blob grew eightfold. The probe must not.
-	if large > small*2 {
-		t.Errorf("probing a %d-byte blob read %d bytes while a %d-byte one read %d — "+
-			"the cost is scaling with the blob, which is what §29 exists to prevent",
-			largeSize, large, smallSize, small)
+	// Bounded by a constant, on any blob.
+	for _, m := range []struct {
+		bytes, size int64
+	}{{small, smallSize}, {large, largeSize}} {
+		if m.bytes > probeCeiling {
+			t.Errorf("probing a %d-byte blob read %d bytes, past the %d-byte ceiling — "+
+				"the probe is no longer bounded by ffprobe's probesize",
+				m.size, m.bytes, int64(probeCeiling))
+		}
 	}
-	// And it stays a small fraction of a large file, which is the user-visible
-	// consequence.
-	if f := float64(large) / float64(largeSize); f > 0.05 {
-		t.Errorf("the probe read %.1f%% of a %d-byte blob", 100*f, largeSize)
+
+	// And therefore a smaller share of a larger file. This is the assertion
+	// that would catch a genuinely linear read, which is what §29 forbids: a
+	// probe that materialised would show the fraction pinned at 100%.
+	if largeFraction >= smallFraction {
+		t.Errorf("the fraction read did not fall as the blob grew: %.3f%% of %d, then %.3f%% of %d — "+
+			"the cost is tracking the blob, which is what §29 exists to prevent",
+			100*smallFraction, smallSize, 100*largeFraction, largeSize)
 	}
+	t.Logf("blob grew %.1f×, bytes read grew %.1f×, fraction fell %.3f%% → %.3f%%",
+		float64(largeSize)/float64(smallSize), float64(large)/float64(small),
+		100*smallFraction, 100*largeFraction)
 }
 
 // The unflattering case, stated rather than omitted. An MP4 whose `moov` is at
@@ -511,5 +530,55 @@ func TestOnlyHTTPTargetsAreFetched(t *testing.T) {
 		if _, _, err := prober.Probe(t.Context(), probe.Target{URL: target}); err == nil {
 			t.Errorf("%q was accepted as a probe target", target)
 		}
+	}
+}
+
+// A sample rate from a media container is a number that arrived from wherever
+// the user's library came from. CodeQL flagged the unbounded int64→int
+// conversion on this PR, correctly: it is a truncation on any 32-bit build.
+//
+// An absurd declared rate is reported as ABSENT rather than clamped. Clamping
+// would invent a plausible number, and a planner comparing a device against an
+// invented rate is worse than one comparing against nothing.
+func TestAnAbsurdSampleRateIsAbsentNotTruncated(t *testing.T) {
+	body := fixtures.SampleMP4(1)
+	p := newPeer(t, body, "")
+
+	for _, tc := range []struct {
+		name string
+		rate string
+		want int
+	}{
+		{"ordinary", `"44100"`, 44100},
+		{"high but real", `"768000"`, 768000},
+		{"past the ceiling", `"1099511627776"`, 0},
+		{"one that would truncate to something plausible", `"4294967296"`, 0},
+		{"negative", `"-44100"`, 0},
+		{"not a number", `"N/A"`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prober, err := probe.New(probe.Options{
+				FFprobePath: fakeFFprobe(t, `{"format":{"format_name":"mp4","duration":"1.0"},
+					"streams":[{"index":0,"codec_type":"audio","codec_name":"aac",
+					"sample_rate":`+tc.rate+`}]}`),
+				TempDir: t.TempDir(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, _, err := prober.Probe(t.Context(), probe.Target{
+				URL: p.URL + "/blob", Size: int64(len(body)),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			audio, ok := result.AudioStream()
+			if !ok {
+				t.Fatal("no audio stream")
+			}
+			if audio.SampleRate != tc.want {
+				t.Errorf("sample_rate = %d, want %d", audio.SampleRate, tc.want)
+			}
+		})
 	}
 }

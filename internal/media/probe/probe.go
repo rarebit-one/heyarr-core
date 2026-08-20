@@ -595,12 +595,36 @@ func parse(raw []byte) (Result, error) {
 			Height:     s.Height,
 			FrameRate:  s.RFrameRate,
 			Channels:   s.Channels,
-			SampleRate: int(parseInt(s.SampleRate)),
+			SampleRate: parseSampleRate(s.SampleRate),
 			BitrateBPS: parseInt(s.BitRate),
 			Language:   s.Tags["language"],
 		})
 	}
 	return out, nil
+}
+
+// maxSampleRate is a ceiling on a declared audio sample rate.
+//
+// The highest rate anything real uses is 768 kHz (DSD-adjacent gear); a
+// container declaring more than a megahertz is corrupt or hostile, not
+// high-fidelity.
+const maxSampleRate = 1 << 20
+
+// parseSampleRate converts a declared sample rate to int, bounded.
+//
+// The unbounded version — int(parseInt(...)) — is a 64-to-32 bit truncation on
+// any 32-bit build, and CodeQL flagged it on this PR. The value comes out of a
+// media container that arrived from wherever the user's library came from, so
+// "it will always be 44100" is an assumption about someone else's file. A
+// declared rate past the ceiling is reported as ABSENT rather than clamped:
+// clamping would invent a plausible number, and the planner comparing a device
+// against an invented rate is worse than it comparing against nothing.
+func parseSampleRate(s string) int {
+	v := parseInt(s)
+	if v <= 0 || v > maxSampleRate {
+		return 0
+	}
+	return int(v)
 }
 
 // parseFloat and parseInt tolerate ffprobe's "N/A" and empty values, which it
