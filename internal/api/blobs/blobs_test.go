@@ -29,6 +29,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
@@ -83,6 +84,10 @@ func newHarness(t *testing.T, store cas.Store, opts ...harnessOption) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	handler, err := blobs.New(blobs.Options{Store: store, Logger: slog.New(slog.DiscardHandler)})
 	if err != nil {
@@ -94,6 +99,7 @@ func newHarness(t *testing.T, store cas.Store, opts ...harnessOption) *harness {
 		Logger:        slog.New(slog.DiscardHandler),
 		DB:            db,
 		Verifier:      verifier,
+		Events:        eventLog,
 		Build:         buildinfo.Info{Version: "test"},
 		SchemaVersion: 1,
 		CASRoot:       dir,
