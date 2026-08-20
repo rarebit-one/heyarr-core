@@ -10,11 +10,13 @@ import (
 	"os"
 	"time"
 
+	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
 
 // Controller is the control-plane role.
@@ -102,7 +104,15 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 	}
 
-	srv, err := c.newServer(db, version)
+	// The CAS is opened once, here, and handed to whatever serves from it. The
+	// controller does not know the layout inside the root (ADR-0006) — only
+	// that a store exists to read blobs through.
+	blobStore, err := cas.OpenFS(c.cfg.CAS.Root)
+	if err != nil {
+		return fmt.Errorf("controller: opening the CAS at %s: %w", c.cfg.CAS.Root, err)
+	}
+
+	srv, err := c.newServer(db, blobStore, version)
 	if err != nil {
 		return err
 	}
@@ -145,12 +155,16 @@ func (c *Controller) Run(ctx context.Context) error {
 // newServer wires the HTTP API. Authentication is constructed even when it is
 // disabled, so the two configurations differ in one boolean rather than in
 // which objects exist.
-func (c *Controller) newServer(db *sqlite.DB, schemaVersion int64) (*httpapi.Server, error) {
+func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion int64) (*httpapi.Server, error) {
 	store, err := auth.NewStore(auth.StoreOptions{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}
 	verifier, err := auth.NewVerifier(auth.VerifierOptions{Store: store})
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+	blobHandler, err := blobs.New(blobs.Options{Store: blobStore, Logger: c.log})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}
@@ -162,6 +176,7 @@ func (c *Controller) newServer(db *sqlite.DB, schemaVersion int64) (*httpapi.Ser
 		Build:         buildinfo.Get(),
 		SchemaVersion: schemaVersion,
 		CASRoot:       c.cfg.CAS.Root,
+		Mount:         []httpapi.MountFunc{blobHandler.Mount},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
