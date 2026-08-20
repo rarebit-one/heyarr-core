@@ -172,7 +172,7 @@ func newFixture(t *testing.T, opts ...func(*fixtureOptions)) *fixture {
 		t.Fatalf("reconcile produced %d roots, want 1", len(roots))
 	}
 
-	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader()})
+	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
 	if err != nil {
 		t.Fatalf("opening the job queue: %v", err)
 	}

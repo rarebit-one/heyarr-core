@@ -134,7 +134,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		return fmt.Errorf("worker: building the ingest pipeline: %w", err)
 	}
 
-	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader()})
+	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
 	if err != nil {
 		return fmt.Errorf("worker: opening the job queue: %w", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
@@ -47,16 +48,29 @@ func newQueue(t *testing.T) (*Queue, *fakeClock) {
 	}
 
 	clock := newClock()
+	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
 	q, err := New(Options{
 		Writer: db.Writer(),
 		Reader: db.Reader(),
 		Clock:  clock,
 		Rand:   rand.New(rand.NewPCG(42, 42)), // deterministic jitter
+		Events: eventLog,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return q, clock
+}
+
+// newQueueWithLog is newQueue for the tests that assert on what the queue
+// recorded, rather than only on what it did.
+func newQueueWithLog(t *testing.T) (*Queue, *events.Log, *fakeClock) {
+	t.Helper()
+	q, clock := newQueue(t)
+	return q, q.events, clock
 }
 
 func enqueue(t *testing.T, q *Queue, opts EnqueueOptions) Job {

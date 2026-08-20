@@ -59,7 +59,7 @@ func reconcileLibraries(ctx context.Context, db *sqlite.DB, cfg config.Config, l
 		return fmt.Errorf("controller: reconciling libraries: %w", err)
 	}
 
-	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader()})
+	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
 	if err != nil {
 		return fmt.Errorf("controller: opening the job queue: %w", err)
 	}

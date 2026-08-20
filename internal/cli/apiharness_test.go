@@ -132,16 +132,16 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
 	queue, err := jobs.New(jobs.Options{
-		Writer: db.Writer(), Reader: db.Reader(), Clock: clock,
+		Writer: db.Writer(), Reader: db.Reader(), Clock: clock, Events: eventLog,
 		// Seeded, so a retried job's backoff is the same on every run and in
 		// every order. The jitter is a production property, not a test one.
 		Rand: rand.New(rand.NewPCG(1, 2)), // #nosec G404 -- determinism in a test
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {
 		t.Fatal(err)
 	}

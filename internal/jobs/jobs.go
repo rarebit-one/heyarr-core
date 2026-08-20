@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/rarebit-one/heyarr-core/internal/events"
 )
 
 // State is where a job is in its life.
@@ -99,6 +101,7 @@ type Queue struct {
 	reader *sql.DB
 	clock  Clock
 	rand   *rand.Rand
+	events *events.Log
 }
 
 // Options configure a Queue.
@@ -112,12 +115,20 @@ type Options struct {
 	Clock  Clock
 	// Rand makes backoff jitter reproducible in tests. Nil means seeded.
 	Rand *rand.Rand
+	// Events records the queue's state transitions. Required, not optional:
+	// every state transition emits an event, with no exceptions, and an
+	// exception that a caller can create by leaving a field nil is still an
+	// exception (§76, ADR-0009).
+	Events *events.Log
 }
 
 // New constructs a Queue.
 func New(opts Options) (*Queue, error) {
 	if opts.Writer == nil {
 		return nil, errors.New("jobs: a writer database is required")
+	}
+	if opts.Events == nil {
+		return nil, errors.New("jobs: an event log is required — every state transition emits an event (ADR-0009)")
 	}
 	reader := opts.Reader
 	if reader == nil {
@@ -131,7 +142,60 @@ func New(opts Options) (*Queue, error) {
 	if r == nil {
 		r = rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 0x9E3779B97F4A7C15)) // #nosec G404 -- jitter, not security
 	}
-	return &Queue{writer: opts.Writer, reader: reader, clock: clock, rand: r}, nil
+	return &Queue{writer: opts.Writer, reader: reader, clock: clock, rand: r, events: opts.Events}, nil
+}
+
+// inTx runs fn inside a write transaction and publishes whatever it recorded
+// once the transaction commits.
+//
+// Both halves matter. The state change and the event it describes go in one
+// transaction, or the log can disagree with the table. And the events fan out
+// only AFTER the commit, because a subscriber that acts on a transition which
+// then rolls back has acted on something that did not happen.
+//
+// Note the events are appended with EmitTx, never Emit: the writer pool is a
+// single connection and the transaction holds the write lock, so a nested Emit
+// would wait for what its own caller is holding and hang until the context
+// expired.
+func (q *Queue) inTx(ctx context.Context, fn func(tx *sql.Tx) ([]events.Event, error)) error {
+	tx, err := q.writer.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("jobs: beginning transaction: %w", err)
+	}
+	recorded, err := fn(tx)
+	if err != nil {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			return errors.Join(err, fmt.Errorf("jobs: rolling back: %w", rbErr))
+		}
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("jobs: committing: %w", err)
+	}
+	q.events.Publish(recorded...)
+	return nil
+}
+
+// transition payloads carry everything a consumer needs to decide what to do
+// without reading the job back — which a client watching a stream cannot
+// cheaply do, and which would race the next transition anyway.
+func transitionPayload(job Job, extra map[string]any) map[string]any {
+	out := map[string]any{
+		"type":         job.Type,
+		"state":        string(job.State),
+		"attempts":     job.Attempts,
+		"max_attempts": job.MaxAttempts,
+	}
+	if job.DedupeKey != "" {
+		out["dedupe_key"] = job.DedupeKey
+	}
+	if job.LastError != "" {
+		out["error"] = job.LastError
+	}
+	for k, v := range extra {
+		out[k] = v
+	}
+	return out
 }
 
 // EnqueueOptions describe work to be done.
@@ -197,13 +261,22 @@ func (q *Queue) Enqueue(ctx context.Context, opts EnqueueOptions) (Job, error) {
 		UpdatedAt:          now,
 	}
 
-	_, err := q.writer.ExecContext(ctx, `
-		INSERT INTO jobs (id, type, payload, state, priority, dedupe_key,
-			required_capability, run_after, attempts, max_attempts, created_at, updated_at)
-		VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, 0, ?, ?, ?)`,
-		job.ID, job.Type, string(job.Payload), job.Priority, nullable(job.DedupeKey),
-		job.RequiredCapability, format(job.RunAfter), job.MaxAttempts,
-		format(job.CreatedAt), format(job.UpdatedAt))
+	err := q.inTx(ctx, func(tx *sql.Tx) ([]events.Event, error) {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO jobs (id, type, payload, state, priority, dedupe_key,
+				required_capability, run_after, attempts, max_attempts, created_at, updated_at)
+			VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, 0, ?, ?, ?)`,
+			job.ID, job.Type, string(job.Payload), job.Priority, nullable(job.DedupeKey),
+			job.RequiredCapability, format(job.RunAfter), job.MaxAttempts,
+			format(job.CreatedAt), format(job.UpdatedAt)); err != nil {
+			return nil, err
+		}
+		e, err := q.events.EmitTx(ctx, tx, events.TypeJobEnqueued, "job", job.ID, transitionPayload(job, nil))
+		if err != nil {
+			return nil, err
+		}
+		return []events.Event{e}, nil
+	})
 	if err != nil {
 		// A unique-index violation means an equivalent job is already live.
 		if opts.DedupeKey != "" {
@@ -314,15 +387,28 @@ func (q *Queue) Heartbeat(ctx context.Context, id, owner string, ttl time.Durati
 // Complete marks a job succeeded.
 func (q *Queue) Complete(ctx context.Context, id, owner string) error {
 	now := q.clock.Now()
-	res, err := q.writer.ExecContext(ctx, `
-		UPDATE jobs SET state = 'succeeded', lease_owner = NULL, lease_expires_at = NULL,
-			finished_at = ?, updated_at = ?, last_error = NULL
-		WHERE id = ? AND lease_owner = ? AND state = 'leased'`,
-		format(now), format(now), id, owner)
-	if err != nil {
-		return fmt.Errorf("jobs: completing %s: %w", id, err)
-	}
-	return expectOneRow(res, id)
+	return q.inTx(ctx, func(tx *sql.Tx) ([]events.Event, error) {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE jobs SET state = 'succeeded', lease_owner = NULL, lease_expires_at = NULL,
+				finished_at = ?, updated_at = ?, last_error = NULL
+			WHERE id = ? AND lease_owner = ? AND state = 'leased'`,
+			format(now), format(now), id, owner)
+		if err != nil {
+			return nil, fmt.Errorf("jobs: completing %s: %w", id, err)
+		}
+		if err := expectOneRow(res, id); err != nil {
+			return nil, err
+		}
+		job, err := scanJob(tx.QueryRowContext(ctx, `SELECT `+claimableSelectCols+` FROM jobs WHERE id = ?`, id))
+		if err != nil {
+			return nil, err
+		}
+		e, err := q.events.EmitTx(ctx, tx, events.TypeJobSucceeded, "job", id, transitionPayload(job, nil))
+		if err != nil {
+			return nil, err
+		}
+		return []events.Event{e}, nil
+	})
 }
 
 // Fail records a failed attempt. The job is rescheduled with backoff, or moved
@@ -343,27 +429,54 @@ func (q *Queue) Fail(ctx context.Context, id, owner string, cause error) error {
 	}
 
 	if job.Attempts >= job.MaxAttempts {
-		res, err := q.writer.ExecContext(ctx, `
-			UPDATE jobs SET state = 'dead', lease_owner = NULL, lease_expires_at = NULL,
-				last_error = ?, finished_at = ?, updated_at = ?
-			WHERE id = ? AND lease_owner = ? AND state = 'leased'`,
-			message, format(now), format(now), id, owner)
-		if err != nil {
-			return fmt.Errorf("jobs: marking %s dead: %w", id, err)
-		}
-		return expectOneRow(res, id)
+		return q.inTx(ctx, func(tx *sql.Tx) ([]events.Event, error) {
+			res, err := tx.ExecContext(ctx, `
+				UPDATE jobs SET state = 'dead', lease_owner = NULL, lease_expires_at = NULL,
+					last_error = ?, finished_at = ?, updated_at = ?
+				WHERE id = ? AND lease_owner = ? AND state = 'leased'`,
+				message, format(now), format(now), id, owner)
+			if err != nil {
+				return nil, fmt.Errorf("jobs: marking %s dead: %w", id, err)
+			}
+			if err := expectOneRow(res, id); err != nil {
+				return nil, err
+			}
+			job.State, job.LastError = Dead, message
+			// Terminal, and the flag says so without a consumer having to know
+			// that dead is the state attempts run out into. `heyarr scan
+			// --wait` branches on exactly this.
+			e, err := q.events.EmitTx(ctx, tx, events.TypeJobFailed, "job", id,
+				transitionPayload(job, map[string]any{"terminal": true}))
+			if err != nil {
+				return nil, err
+			}
+			return []events.Event{e}, nil
+		})
 	}
 
 	retryAt := now.Add(q.backoff(job.Attempts))
-	res, err := q.writer.ExecContext(ctx, `
-		UPDATE jobs SET state = 'pending', lease_owner = NULL, lease_expires_at = NULL,
-			run_after = ?, last_error = ?, updated_at = ?
-		WHERE id = ? AND lease_owner = ? AND state = 'leased'`,
-		format(retryAt), message, format(now), id, owner)
-	if err != nil {
-		return fmt.Errorf("jobs: rescheduling %s: %w", id, err)
-	}
-	return expectOneRow(res, id)
+	return q.inTx(ctx, func(tx *sql.Tx) ([]events.Event, error) {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE jobs SET state = 'pending', lease_owner = NULL, lease_expires_at = NULL,
+				run_after = ?, last_error = ?, updated_at = ?
+			WHERE id = ? AND lease_owner = ? AND state = 'leased'`,
+			format(retryAt), message, format(now), id, owner)
+		if err != nil {
+			return nil, fmt.Errorf("jobs: rescheduling %s: %w", id, err)
+		}
+		if err := expectOneRow(res, id); err != nil {
+			return nil, err
+		}
+		job.State, job.LastError = Pending, message
+		// A spent attempt, not an outcome: the job is going to run again, and a
+		// client that treated this as failure would give up early.
+		e, err := q.events.EmitTx(ctx, tx, events.TypeJobFailed, "job", id,
+			transitionPayload(job, map[string]any{"terminal": false, "run_after": format(retryAt)}))
+		if err != nil {
+			return nil, err
+		}
+		return []events.Event{e}, nil
+	})
 }
 
 // backoff is exponential with full jitter.
@@ -390,20 +503,74 @@ func (q *Queue) backoff(attempt int) time.Duration {
 // repeatedly still walks toward dead rather than retrying forever.
 func (q *Queue) ReapExpiredLeases(ctx context.Context) (int, error) {
 	now := q.clock.Now()
-	res, err := q.writer.ExecContext(ctx, `
-		UPDATE jobs SET state = 'pending', lease_owner = NULL, lease_expires_at = NULL,
-			last_error = 'lease expired; the worker holding this job stopped reporting',
-			updated_at = ?
-		WHERE state = 'leased' AND lease_expires_at <= ?`,
-		format(now), format(now))
+	const reason = "lease expired; the worker holding this job stopped reporting"
+
+	// The ids are read first so each reaped job can be reported individually.
+	// A bulk UPDATE that returned only a count would leave "your job went back
+	// to pending because the worker running it died" as something a client
+	// could only discover by polling — which is the integration model §61 names
+	// as an *arr failure.
+	reaped := 0
+	err := q.inTx(ctx, func(tx *sql.Tx) ([]events.Event, error) {
+		ids, err := expiredLeaseIDs(ctx, tx, format(now))
+		if err != nil {
+			return nil, err
+		}
+		if len(ids) == 0 {
+			return nil, nil
+		}
+
+		out := make([]events.Event, 0, len(ids))
+		for _, id := range ids {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE jobs SET state = 'pending', lease_owner = NULL, lease_expires_at = NULL,
+					last_error = ?, updated_at = ?
+				WHERE id = ? AND state = 'leased'`, reason, format(now), id); err != nil {
+				return nil, fmt.Errorf("jobs: reaping %s: %w", id, err)
+			}
+			job, err := scanJob(tx.QueryRowContext(ctx, `SELECT `+claimableSelectCols+` FROM jobs WHERE id = ?`, id))
+			if err != nil {
+				return nil, err
+			}
+			e, err := q.events.EmitTx(ctx, tx, events.TypeJobFailed, "job", id,
+				transitionPayload(job, map[string]any{"terminal": false, "reaped": true}))
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, e)
+		}
+		reaped = len(ids)
+		return out, nil
+	})
 	if err != nil {
-		return 0, fmt.Errorf("jobs: reaping expired leases: %w", err)
+		return 0, err
 	}
-	n, err := res.RowsAffected()
+	return reaped, nil
+}
+
+// expiredLeaseIDs collects the jobs whose leases have run out. It is its own
+// function so the rows can be closed with defer on every path, including the
+// scan error one.
+func expiredLeaseIDs(ctx context.Context, tx *sql.Tx, now string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id FROM jobs WHERE state = 'leased' AND lease_expires_at <= ?`, now)
 	if err != nil {
-		return 0, fmt.Errorf("jobs: counting reaped leases: %w", err)
+		return nil, fmt.Errorf("jobs: finding expired leases: %w", err)
 	}
-	return int(n), nil
+	defer func() { _ = rows.Close() }()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("jobs: reading expired leases: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("jobs: reading expired leases: %w", err)
+	}
+	return ids, nil
 }
 
 // Get returns one job.
@@ -415,15 +582,29 @@ func (q *Queue) Get(ctx context.Context, id string) (Job, error) {
 // This is an operator action: something was wrong and has been fixed.
 func (q *Queue) Retry(ctx context.Context, id string) error {
 	now := q.clock.Now()
-	res, err := q.writer.ExecContext(ctx, `
-		UPDATE jobs SET state = 'pending', attempts = 0, run_after = ?,
-			lease_owner = NULL, lease_expires_at = NULL, finished_at = NULL, updated_at = ?
-		WHERE id = ? AND state IN ('dead', 'failed', 'succeeded')`,
-		format(now), format(now), id)
-	if err != nil {
-		return fmt.Errorf("jobs: retrying %s: %w", id, err)
-	}
-	return expectOneRow(res, id)
+	return q.inTx(ctx, func(tx *sql.Tx) ([]events.Event, error) {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE jobs SET state = 'pending', attempts = 0, run_after = ?,
+				lease_owner = NULL, lease_expires_at = NULL, finished_at = NULL, updated_at = ?
+			WHERE id = ? AND state IN ('dead', 'failed', 'succeeded')`,
+			format(now), format(now), id)
+		if err != nil {
+			return nil, fmt.Errorf("jobs: retrying %s: %w", id, err)
+		}
+		if err := expectOneRow(res, id); err != nil {
+			return nil, err
+		}
+		job, err := scanJob(tx.QueryRowContext(ctx, `SELECT `+claimableSelectCols+` FROM jobs WHERE id = ?`, id))
+		if err != nil {
+			return nil, err
+		}
+		e, err := q.events.EmitTx(ctx, tx, events.TypeJobEnqueued, "job", id,
+			transitionPayload(job, map[string]any{"retried": true}))
+		if err != nil {
+			return nil, err
+		}
+		return []events.Event{e}, nil
+	})
 }
 
 // Stats counts jobs by state, for operational visibility (§60).

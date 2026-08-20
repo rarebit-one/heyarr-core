@@ -116,11 +116,13 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
+	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
+	queue, err := jobs.New(jobs.Options{
+		Writer: db.Writer(), Reader: db.Reader(), Clock: clock, Events: eventLog,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
