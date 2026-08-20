@@ -1,0 +1,1130 @@
+[
+  {
+    "path": "Series/Season 02/S02E05 - Title.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:series",
+      "Title": "Series",
+      "SortTitle": "series",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "episode_title": "Title",
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "The Wire (2002)/Season 01/The Wire - S01E01 - The Target.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:wire:2002",
+      "Title": "The Wire",
+      "SortTitle": "wire",
+      "Year": 2002,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "episode_title": "The Target",
+        "season": 1
+      },
+      "EditionKey": "season-01",
+      "EditionLabel": "Season 01",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Breaking.Bad.S05E14.1080p.WEB-DL.x264-GRP.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:breaking bad",
+      "Title": "Breaking Bad",
+      "SortTitle": "breaking bad",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 14,
+        "season": 5
+      },
+      "EditionKey": "season-05",
+      "EditionLabel": "Season 05",
+      "EditionType": "web-dl",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show Name/Season 2/Show Name - 2x05 - Episode.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show name",
+      "Title": "Show Name",
+      "SortTitle": "show name",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "episode_title": "Episode",
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/nxnn",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show Name/Season 2/Episode 5 - Title.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show name",
+      "Title": "Show Name",
+      "SortTitle": "show name",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "episode_title": "Title",
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/season-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show Name/Season 2/05 - Title.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show name",
+      "Title": "Show Name",
+      "SortTitle": "show name",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "episode_title": "Title",
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/season-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Series/Specials/S00E01 - Christmas Special.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:series",
+      "Title": "Series",
+      "SortTitle": "series",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "episode_title": "Christmas Special",
+        "season": 0
+      },
+      "EditionKey": "season-00",
+      "EditionLabel": "Specials",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Series/Specials/01 - Special.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:series",
+      "Title": "Series",
+      "SortTitle": "series",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "episode_title": "Special",
+        "season": 0
+      },
+      "EditionKey": "season-00",
+      "EditionLabel": "Specials",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/season-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 02/Show.s02e05e06.1080p.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "episodes": [
+          5,
+          6
+        ],
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 02/Show - S02E05-E06 - Double.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "episode_title": "Double",
+        "episodes": [
+          5,
+          6
+        ],
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Firefly (2002)/Season 01/Firefly - S01E01 - Serenity [Bluray-1080p].mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:firefly:2002",
+      "Title": "Firefly",
+      "SortTitle": "firefly",
+      "Year": 2002,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "episode_title": "Serenity",
+        "season": 1
+      },
+      "EditionKey": "season-01",
+      "EditionLabel": "Season 01",
+      "EditionType": "bluray",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "TV/Chernobyl/Season 01/Chernobyl.S01E03.1080p.AMZN.WEB-DL.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:chernobyl",
+      "Title": "Chernobyl",
+      "SortTitle": "chernobyl",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 3,
+        "season": 1
+      },
+      "EditionKey": "season-01",
+      "EditionLabel": "Season 01",
+      "EditionType": "web-dl",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/S02/S02E05.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Staffel 2/S02E05.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Temporada 2/S02E05.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "The Office (US)/Season 03/The Office (US) - S03E10 - A Benihana Christmas.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:office us",
+      "Title": "The Office US",
+      "SortTitle": "office us",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 10,
+        "episode_title": "A Benihana Christmas",
+        "season": 3
+      },
+      "EditionKey": "season-03",
+      "EditionLabel": "Season 03",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 10/Show - S10E100 - Big.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 100,
+        "episode_title": "Big",
+        "season": 10
+      },
+      "EditionKey": "season-10",
+      "EditionLabel": "Season 10",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show Name S01E01.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show name",
+      "Title": "Show Name",
+      "SortTitle": "show name",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "season": 1
+      },
+      "EditionKey": "season-01",
+      "EditionLabel": "Season 01",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show.Name.S01E01.Pilot.720p.HDTV.x264.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show name",
+      "Title": "Show Name",
+      "SortTitle": "show name",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "episode_title": "Pilot",
+        "season": 1
+      },
+      "EditionKey": "season-01",
+      "EditionLabel": "Season 01",
+      "EditionType": "hdtv",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Series/Season 02/S02E05 - Title.en.srt",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:series",
+      "Title": "Series",
+      "SortTitle": "series",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "episode_title": "Title",
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "en",
+      "AssetRole": "subtitle",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Series/Season 02/Subs/S02E05.eng.srt",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:series",
+      "Title": "Series",
+      "SortTitle": "series",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "en",
+      "AssetRole": "subtitle",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "The Expanse (2015)/poster.jpg",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:expanse:2015",
+      "Title": "The Expanse",
+      "SortTitle": "expanse",
+      "Year": 2015,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "artwork",
+      "Source": "path-heuristic",
+      "Rule": "series/show",
+      "Identified": true
+    }
+  },
+  {
+    "path": "The Expanse (2015)/Season 02/season02-poster.jpg",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:expanse:2015",
+      "Title": "The Expanse",
+      "SortTitle": "expanse",
+      "Year": 2015,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "artwork",
+      "Source": "path-heuristic",
+      "Rule": "series/season-artwork",
+      "Identified": true
+    }
+  },
+  {
+    "path": "The Expanse (2015)/Extras/Gag Reel.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:expanse:2015",
+      "Title": "The Expanse",
+      "SortTitle": "expanse",
+      "Year": 2015,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "extra",
+      "Source": "path-heuristic",
+      "Rule": "series/show",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Series (2010)/Season 01/Series (2010) - S01E01.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:series:2010",
+      "Title": "Series",
+      "SortTitle": "series",
+      "Year": 2010,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "season": 1
+      },
+      "EditionKey": "season-01",
+      "EditionLabel": "Season 01",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Doctor Who (2005)/Season 04/Doctor Who (2005) - S04E13 - Journeys End.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:doctor who:2005",
+      "Title": "Doctor Who",
+      "SortTitle": "doctor who",
+      "Year": 2005,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 13,
+        "episode_title": "Journeys End",
+        "season": 4
+      },
+      "EditionKey": "season-04",
+      "EditionLabel": "Season 04",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 1/Show 1x01.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "season": 1
+      },
+      "EditionKey": "season-01",
+      "EditionLabel": "Season 01",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/nxnn",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/season 1/show.1x01.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "season": 1
+      },
+      "EditionKey": "season-01",
+      "EditionLabel": "Season 01",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/nxnn",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 01/Show - s01e01 - a.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "episode_title": "A",
+        "season": 1
+      },
+      "EditionKey": "season-01",
+      "EditionLabel": "Season 01",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Anime/Show/Season 01/Show - S01E01 - [1080p].mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "season": 1
+      },
+      "EditionKey": "season-01",
+      "EditionLabel": "Season 01",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 00/S00E02 - Behind.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 2,
+        "episode_title": "Behind",
+        "season": 0
+      },
+      "EditionKey": "season-00",
+      "EditionLabel": "Specials",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 3/Ep 7 - Title.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 7,
+        "episode_title": "Title",
+        "season": 3
+      },
+      "EditionKey": "season-03",
+      "EditionLabel": "Season 03",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/season-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 3/E07 - Title.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 7,
+        "episode_title": "Title",
+        "season": 3
+      },
+      "EditionKey": "season-03",
+      "EditionLabel": "Season 03",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/season-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 03/Show.S03E07.PROPER.1080p.WEB.h264-GRP.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 7,
+        "season": 3
+      },
+      "EditionKey": "season-03",
+      "EditionLabel": "Season 03",
+      "EditionType": "web-dl",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 03/Show.S03E07.REPACK.2160p.HDR.WEB-DL.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 7,
+        "season": 3
+      },
+      "EditionKey": "season-03",
+      "EditionLabel": "Season 03",
+      "EditionType": "web-dl",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Mini Series/Season 01/Mini Series - S01E01.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:mini series",
+      "Title": "Mini Series",
+      "SortTitle": "mini series",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "season": 1
+      },
+      "EditionKey": "season-01",
+      "EditionLabel": "Season 01",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 02/Show - S02E05 - Title.fr.srt",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "episode_title": "Title",
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "fr",
+      "AssetRole": "subtitle",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 02/Show - S02E05 - Title.mp4",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "episode_title": "Title",
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 02/Show - S02E05 - Title.avi",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "episode_title": "Title",
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Planet Earth II (2016)/Season 01/Planet Earth II - S01E01 - Islands.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:planet earth ii:2016",
+      "Title": "Planet Earth II",
+      "SortTitle": "planet earth ii",
+      "Year": 2016,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "episode_title": "Islands",
+        "season": 1
+      },
+      "EditionKey": "season-01",
+      "EditionLabel": "Season 01",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 4/Show.4x02.HDTV.XviD.avi",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 2,
+        "season": 4
+      },
+      "EditionKey": "season-04",
+      "EditionLabel": "Season 04",
+      "EditionType": "hdtv",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/nxnn",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show Name - S01E02 - Second.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show name",
+      "Title": "Show Name",
+      "SortTitle": "show name",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 2,
+        "episode_title": "Second",
+        "season": 1
+      },
+      "EditionKey": "season-01",
+      "EditionLabel": "Season 01",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 02/Show - S02E05.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Featurettes/Making Of.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "extra",
+      "Source": "path-heuristic",
+      "Rule": "series/show",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Severance (2022)/Season 02/Severance.S02E01.2160p.ATVP.WEB-DL.DV.HDR.H265.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:severance:2022",
+      "Title": "Severance",
+      "SortTitle": "severance",
+      "Year": 2022,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "web-dl",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Season 02/Show - S02E05 - Title - Bluray-1080p.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "episode_title": "Title",
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "bluray",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show/Specials/Show - S00E03 - Extra.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show",
+      "Title": "Show",
+      "SortTitle": "show",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 3,
+        "episode_title": "Extra",
+        "season": 0
+      },
+      "EditionKey": "season-00",
+      "EditionLabel": "Specials",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "The Expanse (2015)/Season 02/The Expanse - S02E05 - Home.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:expanse:2015",
+      "Title": "The Expanse",
+      "SortTitle": "expanse",
+      "Year": 2015,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "episode_title": "Home",
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  }
+]

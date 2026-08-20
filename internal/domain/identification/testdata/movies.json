@@ -1,0 +1,1050 @@
+[
+  {
+    "path": "Movie Title (2019)/Movie Title (2019) - 2160p.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "resolution": "2160p"
+      },
+      "EditionKey": "2160p",
+      "EditionLabel": "2160p",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movie.Title.2019.2160p.WEB-DL.x265-GRP.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "codec": "x265",
+        "resolution": "2160p",
+        "source": "web-dl"
+      },
+      "EditionKey": "2160p-web-dl-x265",
+      "EditionLabel": "2160p",
+      "EditionType": "web-dl",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "movie_title_2019.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movies/Blade Runner 2049 (2017)/Blade Runner 2049 (2017) Bluray-1080p.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:blade runner 2049:2017",
+      "Title": "Blade Runner 2049",
+      "SortTitle": "blade runner 2049",
+      "Year": 2017,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "resolution": "1080p",
+        "source": "bluray"
+      },
+      "EditionKey": "1080p-bluray",
+      "EditionLabel": "1080p",
+      "EditionType": "bluray",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "The.Matrix.1999.1080p.BluRay.x264-AMIABLE.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:matrix:1999",
+      "Title": "The Matrix",
+      "SortTitle": "matrix",
+      "Year": 1999,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "codec": "x264",
+        "resolution": "1080p",
+        "source": "bluray"
+      },
+      "EditionKey": "1080p-bluray-x264",
+      "EditionLabel": "1080p",
+      "EditionType": "bluray",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "The Matrix (1999)/The Matrix (1999).mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:matrix:1999",
+      "Title": "The Matrix",
+      "SortTitle": "matrix",
+      "Year": 1999,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Inception (2010)/Inception (2010) - 1080p Remux.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:inception:2010",
+      "Title": "Inception",
+      "SortTitle": "inception",
+      "Year": 2010,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "resolution": "1080p",
+        "source": "remux"
+      },
+      "EditionKey": "1080p-remux",
+      "EditionLabel": "1080p",
+      "EditionType": "remux",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Arrival.2016.2160p.UHD.BluRay.REMUX.HDR.HEVC.DTS-HD.MA.7.1-BLURANiUM.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:arrival:2016",
+      "Title": "Arrival",
+      "SortTitle": "arrival",
+      "Year": 2016,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "codec": "x265",
+        "dynamic_range": "HDR",
+        "resolution": "2160p",
+        "source": "remux"
+      },
+      "EditionKey": "2160p-remux-hdr-x265",
+      "EditionLabel": "2160p HDR",
+      "EditionType": "remux",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Dune.Part.Two.2024.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-FLUX.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:dune part two:2024",
+      "Title": "Dune Part Two",
+      "SortTitle": "dune part two",
+      "Year": 2024,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "dynamic_range": "DV HDR",
+        "resolution": "2160p",
+        "source": "web-dl"
+      },
+      "EditionKey": "2160p-web-dl-dv-hdr",
+      "EditionLabel": "2160p DV HDR",
+      "EditionType": "web-dl",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Spider-Man No Way Home (2021)/Spider-Man - No Way Home (2021) [1080p].mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:spider man no way home:2021",
+      "Title": "Spider Man No Way Home",
+      "SortTitle": "spider man no way home",
+      "Year": 2021,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "resolution": "1080p"
+      },
+      "EditionKey": "1080p",
+      "EditionLabel": "1080p",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Oceans Eleven (2001)/Ocean's Eleven (2001).mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:oceans eleven:2001",
+      "Title": "Oceans Eleven",
+      "SortTitle": "oceans eleven",
+      "Year": 2001,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movies/1917 (2019)/1917.2019.1080p.BluRay.x264.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:1917:2019",
+      "Title": "1917",
+      "SortTitle": "1917",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "codec": "x264",
+        "resolution": "1080p",
+        "source": "bluray"
+      },
+      "EditionKey": "1080p-bluray-x264",
+      "EditionLabel": "1080p",
+      "EditionType": "bluray",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "2001 A Space Odyssey (1968)/2001 A Space Odyssey (1968) - 4K.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:2001 a space odyssey:1968",
+      "Title": "2001 A Space Odyssey",
+      "SortTitle": "2001 a space odyssey",
+      "Year": 1968,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "resolution": "2160p"
+      },
+      "EditionKey": "2160p",
+      "EditionLabel": "2160p",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Fast \u0026 Furious (2009)/Fast and Furious (2009).mp4",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:fast and furious:2009",
+      "Title": "Fast \u0026 Furious",
+      "SortTitle": "fast and furious",
+      "Year": 2009,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Amelie.2001.1080p.BluRay.x264.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:amelie:2001",
+      "Title": "Amelie",
+      "SortTitle": "amelie",
+      "Year": 2001,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "codec": "x264",
+        "resolution": "1080p",
+        "source": "bluray"
+      },
+      "EditionKey": "1080p-bluray-x264",
+      "EditionLabel": "1080p",
+      "EditionType": "bluray",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movie Title (2019)/poster.jpg",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "artwork",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movie Title (2019)/fanart.jpg",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "artwork",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movie Title (2019)/Movie Title (2019)-poster.jpg",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "artwork",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movie Title (2019)/Movie Title (2019).en.srt",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "en",
+      "AssetRole": "subtitle",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movie Title (2019)/Subs/Movie Title (2019).eng.forced.srt",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "en",
+      "AssetRole": "subtitle",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movie Title (2019)/Featurettes/Deleted Scene.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "extra",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movie Title (2019)/Extras/Behind the Scenes.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "extra",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "The.Godfather.1972.REMASTERED.1080p.BluRay.x265-RARBG.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:godfather:1972",
+      "Title": "The Godfather",
+      "SortTitle": "godfather",
+      "Year": 1972,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "codec": "x265",
+        "resolution": "1080p",
+        "source": "bluray"
+      },
+      "EditionKey": "1080p-bluray-x265",
+      "EditionLabel": "1080p",
+      "EditionType": "bluray",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Leon The Professional (1994)/Leon.The.Professional.1994.EXTENDED.1080p.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:leon the professional:1994",
+      "Title": "Leon The Professional",
+      "SortTitle": "leon the professional",
+      "Year": 1994,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "resolution": "1080p"
+      },
+      "EditionKey": "1080p",
+      "EditionLabel": "1080p",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movies/Her (2013)/Her (2013) [Bluray-1080p].mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:her:2013",
+      "Title": "Her",
+      "SortTitle": "her",
+      "Year": 2013,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "resolution": "1080p",
+        "source": "bluray"
+      },
+      "EditionKey": "1080p-bluray",
+      "EditionLabel": "1080p",
+      "EditionType": "bluray",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Up (2009)/Up (2009).mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:up:2009",
+      "Title": "Up",
+      "SortTitle": "up",
+      "Year": 2009,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "It (2017)/It.2017.1080p.WEBRip.x264.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:it:2017",
+      "Title": "It",
+      "SortTitle": "it",
+      "Year": 2017,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "codec": "x264",
+        "resolution": "1080p",
+        "source": "webrip"
+      },
+      "EditionKey": "1080p-webrip-x264",
+      "EditionLabel": "1080p",
+      "EditionType": "webrip",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Mad.Max.Fury.Road.2015.1080p.BluRay.DTS.x264-HDMaNiAcS.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:mad max fury road:2015",
+      "Title": "Mad Max Fury Road",
+      "SortTitle": "mad max fury road",
+      "Year": 2015,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "codec": "x264",
+        "resolution": "1080p",
+        "source": "bluray"
+      },
+      "EditionKey": "1080p-bluray-x264",
+      "EditionLabel": "1080p",
+      "EditionType": "bluray",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Star Wars Episode IV - A New Hope (1977)/Star Wars Episode IV - A New Hope (1977).mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:star wars episode iv a new hope:1977",
+      "Title": "Star Wars Episode IV A New Hope",
+      "SortTitle": "star wars episode iv a new hope",
+      "Year": 1977,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movies/Untitled Film/Untitled Film.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:untitled film",
+      "Title": "Untitled Film",
+      "SortTitle": "untitled film",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-only",
+      "Identified": true
+    }
+  },
+  {
+    "path": "random movie.mp4",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:random movie",
+      "Title": "Random Movie",
+      "SortTitle": "random movie",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-only",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movie.Title.2019.1080p.WEB-DL.DDP5.1.H.264-NTb.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "resolution": "1080p",
+        "source": "web-dl"
+      },
+      "EditionKey": "1080p-web-dl",
+      "EditionLabel": "1080p",
+      "EditionType": "web-dl",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movie Title 2019 2160p.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "resolution": "2160p"
+      },
+      "EditionKey": "2160p",
+      "EditionLabel": "2160p",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movie Title (2019)/Movie Title (2019) - Bluray-2160p Remux.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "resolution": "2160p",
+        "source": "remux"
+      },
+      "EditionKey": "2160p-remux",
+      "EditionLabel": "2160p",
+      "EditionType": "remux",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "The Lord of the Rings The Fellowship of the Ring (2001)/The Lord of the Rings The Fellowship of the Ring (2001) - 1080p.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:lord of the rings the fellowship of the ring:2001",
+      "Title": "The Lord Of The Rings The Fellowship Of The Ring",
+      "SortTitle": "lord of the rings the fellowship of the ring",
+      "Year": 2001,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "resolution": "1080p"
+      },
+      "EditionKey": "1080p",
+      "EditionLabel": "1080p",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "A Quiet Place (2018)/A Quiet Place (2018).mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:quiet place:2018",
+      "Title": "A Quiet Place",
+      "SortTitle": "quiet place",
+      "Year": 2018,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "An American Werewolf in London (1981)/An American Werewolf in London (1981).mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:american werewolf in london:1981",
+      "Title": "An American Werewolf In London",
+      "SortTitle": "american werewolf in london",
+      "Year": 1981,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movies/Casablanca (1942)/Casablanca.1942.720p.HDTV.x264.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:casablanca:1942",
+      "Title": "Casablanca",
+      "SortTitle": "casablanca",
+      "Year": 1942,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "codec": "x264",
+        "resolution": "720p",
+        "source": "hdtv"
+      },
+      "EditionKey": "720p-hdtv-x264",
+      "EditionLabel": "720p",
+      "EditionType": "hdtv",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "WALL-E (2008)/WALL-E (2008).mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:wall e:2008",
+      "Title": "WALL E",
+      "SortTitle": "wall e",
+      "Year": 2008,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movies/Zone.of.Interest.2023.2160p.DV.HDR.WEB-DL.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:zone of interest:2023",
+      "Title": "Zone Of Interest",
+      "SortTitle": "zone of interest",
+      "Year": 2023,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "dynamic_range": "DV HDR",
+        "resolution": "2160p",
+        "source": "web-dl"
+      },
+      "EditionKey": "2160p-web-dl-dv-hdr",
+      "EditionLabel": "2160p DV HDR",
+      "EditionType": "web-dl",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movie Title (2019)/cover.jpg",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "artwork",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movie Title (2019)/Movie Title (2019).fr.srt",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "fr",
+      "AssetRole": "subtitle",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movie Title (2019)/Trailers/Trailer 1.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "extra",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Some.Film.2018.720p.BRRip.XviD.AC3-EVO.avi",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:some film:2018",
+      "Title": "Some Film",
+      "SortTitle": "some film",
+      "Year": 2018,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "codec": "xvid",
+        "resolution": "720p",
+        "source": "bluray"
+      },
+      "EditionKey": "720p-bluray-xvid",
+      "EditionLabel": "720p",
+      "EditionType": "bluray",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Another Film (2020)/Another Film (2020) - 1080p.DV.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:another film:2020",
+      "Title": "Another Film",
+      "SortTitle": "another film",
+      "Year": 2020,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "dynamic_range": "DV",
+        "resolution": "1080p"
+      },
+      "EditionKey": "1080p-dv",
+      "EditionLabel": "1080p DV",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movies/Parasite (2019)/Parasite (2019) - Bluray-2160p Remux HDR.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:parasite:2019",
+      "Title": "Parasite",
+      "SortTitle": "parasite",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "dynamic_range": "HDR",
+        "resolution": "2160p",
+        "source": "remux"
+      },
+      "EditionKey": "2160p-remux-hdr",
+      "EditionLabel": "2160p HDR",
+      "EditionType": "remux",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Nope.2022.1080p.AMZN.WEB-DL.DDP5.1.H.264-EVO.mkv",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:nope:2022",
+      "Title": "Nope",
+      "SortTitle": "nope",
+      "Year": 2022,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "resolution": "1080p",
+        "source": "web-dl"
+      },
+      "EditionKey": "1080p-web-dl",
+      "EditionLabel": "1080p",
+      "EditionType": "web-dl",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Movie Title (2019)/Movie Title (2019) - 1080p.iso",
+    "candidate": {
+      "ContentType": "movie",
+      "WorkKey": "movie:movie title:2019",
+      "Title": "Movie Title",
+      "SortTitle": "movie title",
+      "Year": 2019,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "resolution": "1080p"
+      },
+      "EditionKey": "1080p",
+      "EditionLabel": "1080p",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "movie/title-year-dir",
+      "Identified": true
+    }
+  }
+]

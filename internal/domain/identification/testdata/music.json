@@ -1,0 +1,1098 @@
+[
+  {
+    "path": "Artist/Album (2001)/03 - Track.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist - Album/01 Track.mp3",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 0,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 1,
+        "track_title": "Track"
+      },
+      "EditionKey": "mp3",
+      "EditionLabel": "MP3",
+      "EditionType": "lossy",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/2001 - Album/1-03 Track.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "disc": 1,
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Music/Radiohead/OK Computer (1997)/06 - Karma Police.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:radiohead:ok computer:1997",
+      "Title": "OK Computer",
+      "SortTitle": "ok computer",
+      "Year": 1997,
+      "WorkAttributes": {
+        "artist": "Radiohead"
+      },
+      "EditionAttributes": {
+        "track": 6,
+        "track_title": "Karma Police"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Radiohead/1997 - OK Computer/06 Karma Police.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:radiohead:ok computer:1997",
+      "Title": "OK Computer",
+      "SortTitle": "ok computer",
+      "Year": 1997,
+      "WorkAttributes": {
+        "artist": "Radiohead"
+      },
+      "EditionAttributes": {
+        "track": 6,
+        "track_title": "Karma Police"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Radiohead - OK Computer/06 - Karma Police.mp3",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:radiohead:ok computer",
+      "Title": "OK Computer",
+      "SortTitle": "ok computer",
+      "Year": 0,
+      "WorkAttributes": {
+        "artist": "Radiohead"
+      },
+      "EditionAttributes": {
+        "track": 6,
+        "track_title": "Karma Police"
+      },
+      "EditionKey": "mp3",
+      "EditionLabel": "MP3",
+      "EditionType": "lossy",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/CD1/03 - Track.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "disc": 1,
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/Disc 2/05 - Track.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "disc": 2,
+        "track": 5,
+        "track_title": "Track"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Various Artists/Compilation (1999)/01 - Someone - Song.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:various artists:compilation:1999",
+      "Title": "Compilation",
+      "SortTitle": "compilation",
+      "Year": 1999,
+      "WorkAttributes": {
+        "artist": "Various Artists"
+      },
+      "EditionAttributes": {
+        "track": 1,
+        "track_title": "Someone Song"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album/01. Track.m4a",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 0,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 1,
+        "track_title": "Track"
+      },
+      "EditionKey": "m4a",
+      "EditionLabel": "M4A",
+      "EditionType": "lossy",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist - Album - 01 - Track.mp3",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 0,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 1,
+        "track_title": "Track"
+      },
+      "EditionKey": "mp3",
+      "EditionLabel": "MP3",
+      "EditionType": "lossy",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/flat",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist - Track.mp3",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:track",
+      "Title": "Track",
+      "SortTitle": "track",
+      "Year": 0,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track_title": "Track"
+      },
+      "EditionKey": "mp3",
+      "EditionLabel": "MP3",
+      "EditionType": "lossy",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/flat",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/cover.jpg",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "artwork",
+      "Source": "path-heuristic",
+      "Rule": "music/companion",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/folder.jpg",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "artwork",
+      "Source": "path-heuristic",
+      "Rule": "music/companion",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Miles Davis/Kind of Blue (1959)/01 - So What.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:miles davis:kind of blue:1959",
+      "Title": "Kind Of Blue",
+      "SortTitle": "kind of blue",
+      "Year": 1959,
+      "WorkAttributes": {
+        "artist": "Miles Davis"
+      },
+      "EditionAttributes": {
+        "track": 1,
+        "track_title": "So What"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Music/Daft Punk/Discovery (2001)/04 - Crescendolls.mp3",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:daft punk:discovery:2001",
+      "Title": "Discovery",
+      "SortTitle": "discovery",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Daft Punk"
+      },
+      "EditionAttributes": {
+        "track": 4,
+        "track_title": "Crescendolls"
+      },
+      "EditionKey": "mp3",
+      "EditionLabel": "MP3",
+      "EditionType": "lossy",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/[2001] Album/03 Track.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/03 Track.opus",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "opus",
+      "EditionLabel": "OPUS",
+      "EditionType": "lossy",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/03 - Track.wav",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "wav",
+      "EditionLabel": "WAV",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/03 - Track.ogg",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "ogg",
+      "EditionLabel": "OGG",
+      "EditionType": "lossy",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "The Beatles/Abbey Road (1969)/01 - Come Together.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:beatles:abbey road:1969",
+      "Title": "Abbey Road",
+      "SortTitle": "abbey road",
+      "Year": 1969,
+      "WorkAttributes": {
+        "artist": "The Beatles"
+      },
+      "EditionAttributes": {
+        "track": 1,
+        "track_title": "Come Together"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/2-01 Track.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "disc": 2,
+        "track": 1,
+        "track_title": "Track"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album/Vol 2/03 Track.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 0,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "disc": 2,
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Live Album (2005)/12 - Encore.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:live album:2005",
+      "Title": "Live Album",
+      "SortTitle": "live album",
+      "Year": 2005,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 12,
+        "track_title": "Encore"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Pink Floyd/The Dark Side of the Moon (1973)/05 - Money.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:pink floyd:dark side of the moon:1973",
+      "Title": "The Dark Side Of The Moon",
+      "SortTitle": "dark side of the moon",
+      "Year": 1973,
+      "WorkAttributes": {
+        "artist": "Pink Floyd"
+      },
+      "EditionAttributes": {
+        "track": 5,
+        "track_title": "Money"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/03 - Track.alac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "alac",
+      "EditionLabel": "ALAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/03 - Track.wma",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "wma",
+      "EditionLabel": "WMA",
+      "EditionType": "lossy",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/03 - Track.aac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "aac",
+      "EditionLabel": "AAC",
+      "EditionType": "lossy",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/03 - Track.ape",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "ape",
+      "EditionLabel": "APE",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Nirvana/Nevermind (1991)/02 - In Bloom.mp3",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:nirvana:nevermind:1991",
+      "Title": "Nevermind",
+      "SortTitle": "nevermind",
+      "Year": 1991,
+      "WorkAttributes": {
+        "artist": "Nirvana"
+      },
+      "EditionAttributes": {
+        "track": 2,
+        "track_title": "In Bloom"
+      },
+      "EditionKey": "mp3",
+      "EditionLabel": "MP3",
+      "EditionType": "lossy",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Nirvana - Nevermind (1991)/02 In Bloom.mp3",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:nirvana:nevermind:1991",
+      "Title": "Nevermind",
+      "SortTitle": "nevermind",
+      "Year": 1991,
+      "WorkAttributes": {
+        "artist": "Nirvana"
+      },
+      "EditionAttributes": {
+        "track": 2,
+        "track_title": "In Bloom"
+      },
+      "EditionKey": "mp3",
+      "EditionLabel": "MP3",
+      "EditionType": "lossy",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Nirvana/1991 - Nevermind/02 - In Bloom.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:nirvana:nevermind:1991",
+      "Title": "Nevermind",
+      "SortTitle": "nevermind",
+      "Year": 1991,
+      "WorkAttributes": {
+        "artist": "Nirvana"
+      },
+      "EditionAttributes": {
+        "track": 2,
+        "track_title": "In Bloom"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Album Only/01 Track.mp3",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:album only",
+      "Title": "Album Only",
+      "SortTitle": "album only",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "track": 1,
+        "track_title": "Track"
+      },
+      "EditionKey": "mp3",
+      "EditionLabel": "MP3",
+      "EditionType": "lossy",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/Artist - Album - 03 - Track.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Music/Artist/Album (2001)/03 - Track.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001) [FLAC]/03 - Track.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/03 - Track (Remastered).flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album/A1 Track.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 0,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track_title": "A1 Track"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/03 - Track.dsf",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "dsf",
+      "EditionLabel": "DSF",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Sigur Ros/Agaetis byrjun (1999)/03 - Svefn-g-englar.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:sigur ros:agaetis byrjun:1999",
+      "Title": "Agaetis Byrjun",
+      "SortTitle": "agaetis byrjun",
+      "Year": 1999,
+      "WorkAttributes": {
+        "artist": "Sigur Ros"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Svefn G Englar"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/03 - Track.m4a",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "m4a",
+      "EditionLabel": "M4A",
+      "EditionType": "lossy",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Music/Boards of Canada/Music Has the Right to Children (1998)/04 - Telephasic Workshop.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:boards of canada:music has the right to children:1998",
+      "Title": "Music Has The Right To Children",
+      "SortTitle": "music has the right to children",
+      "Year": 1998,
+      "WorkAttributes": {
+        "artist": "Boards Of Canada"
+      },
+      "EditionAttributes": {
+        "track": 4,
+        "track_title": "Telephasic Workshop"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/Disc 1/01 - Opener.flac",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "disc": 1,
+        "track": 1,
+        "track_title": "Opener"
+      },
+      "EditionKey": "flac",
+      "EditionLabel": "FLAC",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Artist/Album (2001)/03 - Track.aiff",
+    "candidate": {
+      "ContentType": "music",
+      "WorkKey": "music:artist:album:2001",
+      "Title": "Album",
+      "SortTitle": "album",
+      "Year": 2001,
+      "WorkAttributes": {
+        "artist": "Artist"
+      },
+      "EditionAttributes": {
+        "track": 3,
+        "track_title": "Track"
+      },
+      "EditionKey": "aiff",
+      "EditionLabel": "AIFF",
+      "EditionType": "lossless",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "music/artist-dir-album-dir",
+      "Identified": true
+    }
+  }
+]
