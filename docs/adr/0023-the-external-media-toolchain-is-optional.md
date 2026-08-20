@@ -77,12 +77,43 @@ split across hosts it is one datum and `/api/v1/jobs` showing pending probes is
 the other. A fleet-wide view needs worker capability advertisement, which is
 tracked separately rather than invented here.
 
+**Two mechanisms hold the degrade path up, and only one of them is
+load-bearing.** A worker that resolved no toolchain does not *register* the
+probe and remux handlers at all, and separately the registrations declare a
+`RequiredCapability`. The registration guard is what actually holds: sabotaging
+it makes a bare worker fail to start, which the acceptance demo catches.
+Sabotaging the registration's `RequiredCapability` changes nothing observable,
+because a handler is never registered without its capability — both derive from
+the same `Available` flag.
+
+The capability on the registration is therefore defence in depth that cannot
+currently fire, kept because a registered type that declares what it needs is
+self-documenting and correct if the two ever diverge. What genuinely routes
+work is the `RequiredCapability` on the *job*, which the queue filters on
+(M2-04). This is written down because the discovery cost two rounds of
+sabotage, and the second one is the sort of thing a reader would otherwise
+assume was tested.
+
 **A job that no worker can claim waits forever, silently, by design.** That is
 the intended degradation and it is also a way to be confused for hours. The
 mitigation is that the node says so on `/api/v1/system` and the job is visible
 on `/api/v1/jobs` — not a timeout, because failing a job whose handler simply
 is not deployed yet would lose work that a later `apt install` would have
 completed.
+
+## Evidence
+
+A mixed fleet is exercised on every build: the acceptance demo starts a second
+worker against the same database with a scrubbed `PATH`, and asserts it becomes
+ready, advertises nothing, registers no media handler, claims no probe job it
+cannot run — and that the capable worker alongside it keeps probing. Before
+that existed, a fleet with one incapable member was the one configuration this
+ADR describes and nothing tested.
+
+There is also a CI job that runs the whole demo on Linux with no toolchain,
+alongside the Linux job that has one. macOS already ran bare, but that
+confounded two variables: a failure there could have been the missing FFmpeg or
+it could have been macOS. The degraded job changes exactly one thing.
 
 ## What would make us revisit
 

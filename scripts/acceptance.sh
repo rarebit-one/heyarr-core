@@ -1296,6 +1296,68 @@ YAML
 
 
 
+  note "  a mixed fleet (§75, ADR-0023)"
+  # The one claim in ADR-0023 with no evidence behind it until now.
+  #
+  # Capability routing only does anything in a MIXED fleet. On a bare node the
+  # probe handler is not registered at all, so probe jobs stay pending
+  # regardless of the capability; on an equipped node the worker holds it
+  # anyway. Sabotaging RequiredCapability in the production registration
+  # therefore passed every test and both acceptance passes — the gap was filed
+  # rather than papered over, and this closes it.
+  #
+  # A second worker is started against the SAME database with a scrubbed PATH,
+  # so it resolves no toolchain and advertises nothing. If capability routing
+  # were broken it would claim a probe job it cannot run and fail it.
+  if command -v ffprobe >/dev/null 2>&1; then
+    local bare_log bare_pid bare_probe_hash bare_before bare_failures
+    bare_log=$WORK/bare-worker.log
+
+    bare_before=$(api "/api/v1/jobs?type=probe_blob&state=failed" | jq -r '.items | length')
+
+    # env -i keeps nothing but what the worker genuinely needs. PATH points at
+    # a directory that exists and holds no toolchain, which is the honest
+    # simulation of a machine that never had one.
+    mkdir -p "$WORK/empty-bin"
+    env -i PATH="$WORK/empty-bin" HOME="$HOME" \
+      "$PWD/$BIN" --config "$WORK/full.yaml" worker >"$bare_log" 2>&1 &
+    bare_pid=$!
+
+    waited=0
+    while (( waited < 300 )); do
+      grep -q "worker ready" "$bare_log" 2>/dev/null && break
+      sleep 0.1; waited=$(( waited + 1 ))
+    done
+    assert_contains "$(cat "$bare_log")" "worker ready" "a worker with no toolchain starts and becomes ready"
+    assert_contains "$(cat "$bare_log")" '"capabilities":[]' \
+      "the bare worker advertises nothing"
+    # It did not register the handlers either, which is what makes the
+    # degraded state readable in the log rather than only in behaviour.
+    assert_not_contains "$(cat "$bare_log")" "probing is available" \
+      "the bare worker did not register the probe handler"
+
+    # Give it long enough to have claimed something if it were going to. There
+    # is no positive condition to poll for here — the assertion is that
+    # NOTHING happened — so this waits a bounded interval and then checks, and
+    # says so rather than pretending to poll.
+    sleep 2
+
+    bare_failures=$(api "/api/v1/jobs?type=probe_blob&state=failed" | jq -r '.items | length')
+    assert_eq "$bare_failures" "$bare_before" \
+      "the bare worker claimed no probe job it could not run"
+
+    # And the equipped worker is still doing its job alongside it: a fleet
+    # with one incapable member is not a broken fleet.
+    bare_probe_hash=$(api_all /api/v1/assets '.items[] | select(.filename != null) | select(.filename | endswith(".mkv") or endswith(".mp4")) | .blob_hash' | head -1)
+    assert_eq "$(api "/api/v1/blobs/$bare_probe_hash/probe" -o /dev/null -w '%{http_code}')" "200" \
+      "the capable worker still probed while an incapable one was running"
+
+    kill "$bare_pid" 2>/dev/null || true
+    wait "$bare_pid" 2>/dev/null || true
+  else
+    pass "no toolchain here, so there is no mixed fleet to make"
+  fi
+
   note "  remuxing (§10, §75)"
   # A remux is the case the planner returns most often and the one that costs
   # almost nothing to serve. This drives it through the real binary: queue the
@@ -1484,6 +1546,18 @@ YAML
   stop_full
 }
 
+# The gate is only a gate if people run it, and people stop running a gate
+# they have to wait for. Milestone 1 finished at about fifteen seconds and 100
+# assertions; Milestone 2 adds probing, remuxing and a second worker process,
+# all of which cost real time.
+#
+# The budget is generous rather than tight — a loaded CI runner is slower than
+# a laptop and this must not be flaky — but it exists so that a change which
+# doubles the runtime is noticed by CI rather than by whoever stops running
+# `make demo` six weeks later.
+DEMO_BUDGET_SECONDS=${DEMO_BUDGET_SECONDS:-240}
+DEMO_STARTED=$SECONDS
+
 if ! command -v jq >/dev/null 2>&1; then
   fail "jq is not installed — the API assertions in this demo need it"
 elif [[ ! -x "$GEN" ]]; then
@@ -1494,6 +1568,15 @@ else
   note "split-process mode, end to end (ADR-0002)"
   split_process_demo
   stop_full
+fi
+
+DEMO_ELAPSED=$(( SECONDS - DEMO_STARTED ))
+if (( DEMO_ELAPSED > DEMO_BUDGET_SECONDS )); then
+  fail "the demo took ${DEMO_ELAPSED}s, past its ${DEMO_BUDGET_SECONDS}s budget"
+  printf '       A gate nobody waits for is a gate people stop running. Either make it\n'
+  printf '       faster or raise DEMO_BUDGET_SECONDS deliberately, in a commit that says why.\n'
+else
+  pass "the demo finished in ${DEMO_ELAPSED}s, within its ${DEMO_BUDGET_SECONDS}s budget"
 fi
 
 if (( FAILED )); then
