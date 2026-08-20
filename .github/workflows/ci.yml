@@ -26,11 +26,11 @@ jobs:
       GOOS: ${{ matrix.goos }}
       GOARCH: amd64
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with: { go-version: stable, cache: true }
       - run: go vet ./...
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with: { version: latest }
       # A malformed workflow file does not fail — it silently never runs.
       # actionlint catches that before it can hide a broken pipeline.
@@ -43,8 +43,8 @@ jobs:
     name: generated code is current
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with: { go-version: stable, cache: true }
       - run: ./scripts/gen.sh
       - name: fail if generated output drifted
@@ -58,8 +58,8 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         go: [stable, oldstable]
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
           cache: true
@@ -74,8 +74,8 @@ jobs:
           - { goos: linux,  goarch: arm64 }
           - { goos: darwin, goarch: arm64 }
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with: { go-version: stable, cache: true }
       - env:
           CGO_ENABLED: "0"
@@ -87,8 +87,8 @@ jobs:
     name: acceptance (end-to-end)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with: { go-version: stable, cache: true }
       - run: make build
       - run: ./scripts/acceptance.sh
