@@ -1100,6 +1100,19 @@ components:
           $ref: "#/components/schemas/StorageInfo"
         events:
           $ref: "#/components/schemas/EventsInfo"
+        media:
+          type: array
+          description: |
+            The external media toolchain THIS node resolved (ADR-0023). FFmpeg
+            is optional: a node without it still scans, ingests and serves byte
+            ranges, but probe and remux jobs stay pending until a worker that
+            has it claims them.
+
+            In a split-process deployment this describes the node answering the
+            request, not the fleet — the worker that would claim a probe job may
+            be another machine. `/api/v1/jobs` showing pending probes is the
+            other half of that picture.
+          items: { $ref: "#/components/schemas/ToolInfo" }
         auth_enabled: { type: boolean }
 
     EventsInfo:
@@ -1122,6 +1135,25 @@ components:
             meaningless. It is reported rather than 500ing because 0 is a
             legitimate head, so a client cannot otherwise tell "nothing has
             happened" from "we could not find out".
+
+    ToolInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          description: The binary described, `ffprobe` or `ffmpeg`.
+        available: { type: boolean }
+        path:
+          type: string
+          description: Where it was found. Absent when unavailable.
+        version:
+          type: string
+          description: What it reported, e.g. `7.0.2`. Absent when unavailable.
+        detail:
+          type: string
+          description: |
+            Why an unavailable tool is unavailable, in a few words — "not found
+            on PATH", "did not report a version". Absent when available.
 
     StorageInfo:
       type: object

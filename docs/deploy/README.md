@@ -13,6 +13,8 @@ places.
   look missing are absent on purpose.
 - **[`../../deploy/docker/Dockerfile`](../../deploy/docker/Dockerfile)** — the
   image. No shell, no package manager, runs as uid 65532.
+- **[`toolchain.md`](toolchain.md)** — FFmpeg and ffprobe: optional, pinned by
+  digest, and what a node without them can still do (ADR-0023).
 
 ## Two invariants worth knowing before you start
 

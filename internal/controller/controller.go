@@ -18,6 +18,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/media"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
@@ -181,6 +182,18 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}
+	// Resolved here so a misconfigured path stops startup rather than being
+	// discovered later, and so GET /api/v1/system can report what this node
+	// can actually do (ADR-0023). An absent toolchain is not an error.
+	toolchain, err := media.Resolve(context.Background(), media.Options{
+		FFprobePath: c.cfg.Media.FFprobePath,
+		FFmpegPath:  c.cfg.Media.FFmpegPath,
+		Logger:      c.log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+
 	// The log is built here rather than inside mounts because it now has two
 	// consumers: the resource API, which appends to it, and GET /api/v1/system,
 	// which reports its head. One log, so the head the endpoint reports is the
@@ -201,6 +214,7 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 		DB:            db,
 		Verifier:      verifier,
 		Events:        eventLog,
+		Media:         mediaInfo(toolchain),
 		Build:         buildinfo.Get(),
 		SchemaVersion: schemaVersion,
 		CASRoot:       c.cfg.CAS.Root,
@@ -241,4 +255,25 @@ func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Stor
 		return nil, fmt.Errorf("controller: %w", err)
 	}
 	return []httpapi.MountFunc{api.Mount, blobHandler.Mount}, nil
+}
+
+// mediaInfo renders a resolved toolchain for GET /api/v1/system.
+//
+// The mapping lives here rather than in internal/media so that the media
+// package stays free of the API's wire shape, and in the controller rather
+// than in the HTTP package so that the HTTP foundation does not import the
+// toolchain to describe it.
+func mediaInfo(tc media.Toolchain) []httpapi.ToolInfo {
+	tools := tc.Tools()
+	out := make([]httpapi.ToolInfo, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, httpapi.ToolInfo{
+			Name:      t.Name,
+			Path:      t.Path,
+			Version:   t.Version,
+			Available: t.Available,
+			Detail:    t.Detail,
+		})
+	}
+	return out
 }

@@ -244,6 +244,31 @@ assert_contains "$ALLLOG" "worker ready" "the worker reports readiness separatel
 # matters is among them — this is the single path bytes enter Heyarr (§65).
 assert_contains "$ALLLOG" "ingest_artifact" "the worker registers the ingest_artifact handler"
 
+# What the WORKER advertises has to come from what it actually resolved
+# (ADR-0023), and that join is one line in worker.go that no unit test can
+# reach: the runtime's capability filtering is tested, the toolchain's
+# capability list is tested, and deleting the line that connects them left
+# every one of those tests passing. This is the assertion that noticed.
+#
+# It asserts on the RUNTIME's own startup line — the value it will actually
+# claim with — and not on anything the worker re-derives for logging. The first
+# version of this check did the latter, and the sabotage passed: the log agreed
+# with itself while the wiring between it and the runtime was cut.
+#
+# A log line rather than an API because Milestone 1's peer model has no
+# capability advertisement; there is nowhere else to observe what a worker will
+# claim.
+if command -v ffprobe >/dev/null 2>&1; then
+  assert_contains "$ALLLOG" '"capabilities":["ffprobe","ffmpeg"]' \
+    "a worker with a toolchain claims with it"
+else
+  # [] and not null. "Advertises nothing" is a deliberate state; null reads as
+  # "never asked", and the two need to be tellable apart in a log someone is
+  # reading because probing is not happening.
+  assert_contains "$ALLLOG" '"capabilities":[]' \
+    "a worker with no toolchain claims with nothing rather than defaulting"
+fi
+
 # ADR-0010: the peer model exists from milestone 1 with exactly one peer, and
 # it is this node. It is created on first start and never again — a second
 # self peer is unrecoverable once replication has run, which is why the
@@ -826,6 +851,36 @@ YAML
   self_peer=$(api /api/v1/peers | jq -r '.items[] | select(.is_self) | .id')
   present=$(api_all "/api/v1/replicas?state=present" '.items[] | select(.peer_id == "'"$self_peer"'") | .blob_hash' | sort -u | wc -l | tr -d ' ')
   assert_eq "$present" "$blobs" "every blob has a present replica on the self peer"
+
+  note "  the media toolchain (ADR-0023)"
+  # FFmpeg is the first dependency Heyarr cannot ship inside its own binary,
+  # and it is optional. Both states are real deployments, so the demo asserts
+  # that what the node REPORTS matches what it actually has, rather than
+  # asserting one of the two and hoping.
+  #
+  # This is the assertion that would catch the toolchain silently becoming
+  # mandatory: on a runner with no ffprobe, everything above this line has
+  # already had to pass.
+  local media_tools ffprobe_reported ffprobe_real
+  media_tools=$(api /api/v1/system | jq -r '.media | length')
+  assert_eq "$media_tools" "2" "/api/v1/system reports both media tools"
+
+  ffprobe_reported=$(api /api/v1/system | jq -r '.media[] | select(.name == "ffprobe") | .available')
+  if command -v ffprobe >/dev/null 2>&1; then ffprobe_real=true; else ffprobe_real=false; fi
+  assert_eq "$ffprobe_reported" "$ffprobe_real" \
+    "the reported ffprobe availability matches this machine"
+
+  if [[ "$ffprobe_real" == "false" ]]; then
+    # The degrade path, proven end to end rather than claimed: this whole
+    # script has just scanned, ingested, hashed, verified and range-served on
+    # a machine with no FFmpeg at all.
+    assert_eq "$(api /api/v1/system | jq -r '.media[] | select(.name == "ffprobe") | .detail')" \
+      "not found on PATH" "a node without ffprobe says why"
+    pass "the whole demo passed on a node with no media toolchain"
+  else
+    assert_contains "$(api /api/v1/system | jq -r '.media[] | select(.name == "ffprobe") | .version')" \
+      "." "an available ffprobe reports a version"
+  fi
 
   note "  the CLI (M1-17)"
   # The CLI is what a person actually uses, so the demo drives it rather than
