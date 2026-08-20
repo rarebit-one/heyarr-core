@@ -339,6 +339,8 @@ const (
 	job2ID     = "01990000-0000-7000-8000-0000000000j2"
 	device1ID  = "01990000-0000-7000-8000-0000000000d1"
 	device2ID  = "01990000-0000-7000-8000-0000000000d2"
+	session1ID = "01990000-0000-7000-8000-0000000000s1"
+	session2ID = "01990000-0000-7000-8000-0000000000s2"
 
 	blob1Hash = "blake3:1111111111111111111111111111111111111111111111111111111111111111"
 	blob2Hash = "blake3:2222222222222222222222222222222222222222222222222222222222222222"
@@ -397,6 +399,17 @@ func (h *harness) seed() *harness {
 		asset1ID, edition1ID, libFilmsID, blob1Hash, seedTime, seedTime,
 		asset2ID, edition2ID, libFilmsID, blob2Hash, seedTime, seedTime, seedTime,
 		asset3ID, edition3ID, libBooksID, seedTime, seedTime)
+
+	// Sessions come after assets and devices, which they reference. Two of
+	// them, spanning what ADR-0024's single model has to carry: a paused film
+	// holding a media timestamp, and a finished book holding a page number.
+	h.exec(`INSERT INTO consumption_sessions
+		(id, asset_id, device_id, verb, state, progress_locator, progress_unit,
+		 created_at, updated_at, started_at, ended_at) VALUES
+		(?, ?, ?, 'watch', 'paused', '1284.5', 'seconds', ?, ?, ?, NULL),
+		(?, ?, ?, 'read', 'completed', '312', 'page', ?, ?, ?, ?)`,
+		session1ID, asset1ID, device1ID, seedTime, seedTime, seedTime,
+		session2ID, asset1ID, device2ID, seedTime, seedTime, seedTime, seedTime)
 
 	h.exec(`INSERT INTO replicas (blob_hash, peer_id, state, bytes_present, verified_at, updated_at) VALUES
 		(?, ?, 'present', 42949672960, ?, ?), (?, ?, 'corrupt', 0, NULL, ?)`,

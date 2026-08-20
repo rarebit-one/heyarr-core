@@ -624,6 +624,142 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/v1/consumption/sessions:
+    get:
+      tags: [playback]
+      operationId: listConsumptionSessions
+      summary: Page consumption sessions, newest first.
+      description: |
+        `?state=resumable` is the **"continue watching"** query: every session
+        that has not reached a terminal state, most recently touched first, for
+        watching, listening and reading alike (§67).
+
+        It is a named filter rather than `state=created,playing,paused` because
+        "resumable" is the question clients actually ask, and spelling it as
+        three states would put the state machine's shape into every client.
+      parameters:
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum: [resumable, created, playing, paused, stopped, completed]
+        - name: asset_id
+          in: query
+          schema: { type: string }
+        - name: device_id
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: A page of sessions.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/ConsumptionSession" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [playback]
+      operationId: createConsumptionSession
+      summary: Open a consumption session.
+      description: |
+        One model covers watching, listening and reading (§67, ADR-0024). The
+        session starts in `created` — a real state, not a formality: the gap
+        between "I intend to watch this" and "bytes are moving" is where the
+        planner runs, and collapsing it makes an abandoned plan
+        indistinguishable from a playback that stalled instantly.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateConsumptionSession" }
+      responses:
+        "201":
+          description: The session.
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConsumptionSession" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/consumption/sessions/{id}:
+    get:
+      tags: [playback]
+      operationId: getConsumptionSession
+      summary: One session.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConsumptionSession" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/consumption/sessions/{id}/transitions:
+    post:
+      tags: [playback]
+      operationId: transitionConsumptionSession
+      summary: Move a session through its state machine.
+      description: |
+        One endpoint rather than six (`/start`, `/pause`, `/resume`, …),
+        because the state machine is one thing: six endpoints would each need
+        to know the transition table, and the first one to disagree with it
+        would be a session in a state the domain says is impossible.
+
+        Every transition emits a `playback.session.*` event, inside the same
+        transaction that wrote the row (invariant 7, ADR-0009).
+
+        An illegal transition — resuming a completed session, progressing a
+        stopped one — is **409**, not 400. The request is well-formed and would
+        be legal against a different state, and a client cannot tell "you sent
+        nonsense" from "you are out of date" if both are 400. Only the second
+        is fixed by re-reading the session.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SessionTransition" }
+      responses:
+        "200":
+          description: The session after the transition.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConsumptionSession" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The transition is illegal from the session's current state.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /api/v1/devices:
     get:
       tags: [playback]
@@ -1243,6 +1379,84 @@ components:
           description: |
             Why an unavailable tool is unavailable, in a few words — "not found
             on PATH", "did not report a version". Absent when available.
+
+    ConsumptionSession:
+      type: object
+      description: |
+        One consumption of one asset by one device — watching, listening or
+        reading (§67, ADR-0024).
+      properties:
+        id: { type: string }
+        asset_id: { type: string }
+        device_id: { type: string }
+        verb:
+          type: string
+          enum: [watch, listen, read]
+        state:
+          type: string
+          enum: [created, playing, paused, stopped, completed]
+        progress:
+          allOf:
+            - $ref: "#/components/schemas/SessionProgress"
+          description: |
+            **Absent** until something has been recorded — not a zero locator.
+            Position zero is a real position, and a client cannot tell "at the
+            very beginning" from "never played" if both render as 0.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            When the session first played. Null for one created and abandoned,
+            which is what makes "nobody watched this" distinguishable from
+            "someone watched two minutes".
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When it reached a terminal state.
+
+    SessionProgress:
+      type: object
+      description: |
+        Where a session reached, as a **locator and a unit** — never a bare
+        number. A page number is not a number of seconds, and storing both as
+        "position" makes every reader guess which it has.
+      properties:
+        locator:
+          type: string
+          description: |
+            A decimal offset for `seconds`, a decimal page number for `page`,
+            or an `epubcfi(...)` expression for `cfi`. A CFI is opaque to
+            Heyarr, which stores and serves publications and never renders
+            them (§69).
+        unit:
+          type: string
+          enum: [seconds, page, cfi]
+
+    CreateConsumptionSession:
+      type: object
+      required: [asset_id, device_id, verb]
+      properties:
+        asset_id: { type: string }
+        device_id: { type: string }
+        verb:
+          type: string
+          enum: [watch, listen, read]
+
+    SessionTransition:
+      type: object
+      required: [transition]
+      properties:
+        transition:
+          type: string
+          enum: [start, pause, resume, progress, stop, complete]
+        progress:
+          allOf:
+            - $ref: "#/components/schemas/SessionProgress"
+          description: Recorded with the transition. Usually sent with `progress`.
 
     Device:
       type: object
