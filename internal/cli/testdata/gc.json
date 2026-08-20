@@ -1,0 +1,22 @@
+{
+  "dry_run": true,
+  "grace": "168h0m0s",
+  "considered": 1,
+  "referenced": 0,
+  "marked": [
+    {
+      "hash": "blake3:6f40f8f8265d10a0d43e18732d7141f3bd1df82b45bcc75e087bf7771431b6a3",
+      "size": 36,
+      "unreferenced_since": "<timestamp>",
+      "eligible_at": "<timestamp>"
+    }
+  ],
+  "waiting": [],
+  "reclaimed": [],
+  "untracked": [],
+  "untracked_waiting": 1,
+  "temp_removed": [],
+  "bytes_reclaimed": 0,
+  "started_at": "<timestamp>",
+  "finished_at": "<timestamp>"
+}

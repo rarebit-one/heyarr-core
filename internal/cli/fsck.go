@@ -1,0 +1,283 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
+)
+
+// withIntegrity opens the database and the content store and hands both to fn.
+//
+// Like `heyarr token`, these commands talk to the database directly rather than
+// to the API, and for the same reason: they are host administration, not a role
+// (ADR-0002). fsck in particular has to work when the controller will not start,
+// which is precisely when someone reaches for it.
+//
+// It migrates, because a schema one version behind would otherwise present as
+// "no such column: unreferenced_since" — a puzzle rather than an error.
+func withIntegrity(ctx context.Context, configPath string,
+	fn func(context.Context, integrity.Options) error,
+) error {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	if err := cfg.EnsureDataDir(); err != nil {
+		return err
+	}
+	db, err := sqlite.Open(ctx, sqlite.Options{Path: cfg.Database.Path})
+	if err != nil {
+		return fmt.Errorf("opening the controller database: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := sqlite.Migrate(ctx, db); err != nil {
+		return fmt.Errorf("migrating the controller database: %w", err)
+	}
+
+	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		return err
+	}
+	cat, err := catalog.New(catalog.Options{
+		DB: db, Events: eventLog, PeerName: cfg.Peer.Name, PeerSite: cfg.Peer.Site,
+	})
+	if err != nil {
+		return err
+	}
+	store, err := cas.OpenFS(cfg.CAS.Root)
+	if err != nil {
+		return fmt.Errorf("opening the content store: %w", err)
+	}
+	return fn(ctx, integrity.Options{Store: store, Catalog: cat})
+}
+
+// ErrDamage is returned when fsck finds content that is missing or corrupt.
+//
+// It exists so `heyarr fsck` exits non-zero on damage. A checker that reports
+// corruption and then exits 0 is worse than no checker: it will be wired into
+// a cron job, its output will stop being read, and its silence will be trusted.
+var ErrDamage = fmt.Errorf("fsck: integrity damage found")
+
+func newFsckCommand(_ Options, configPath *string) *cobra.Command {
+	var (
+		deep   bool
+		asJSON bool
+	)
+	cmd := &cobra.Command{
+		Use:   "fsck",
+		Short: "Check stored bytes against the catalog (§57, ADR-0018)",
+		Long: `Reconcile expected hashes against the bytes actually on disk.
+
+A shallow check confirms every blob the catalog knows about exists and is the
+right length. It is fast and it catches a deleted or truncated file, but it
+cannot catch a file that was rewritten in place at the same length.
+
+--deep re-hashes everything. That is the check that matters on a hardlink-
+ingested library, where a blob shares its inode with the file it was adopted
+from and an external tool writing to that file rewrites the blob. Any blob whose
+bytes no longer hash to their own name is moved to quarantine and recorded —
+never deleted, because on such a library the "corruption" may be the operator's
+original (ADR-0018).
+
+Bytes with no catalog row and partial writes are reported too, but they are
+waste rather than damage. fsck exits non-zero only for damage.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return withIntegrity(cmd.Context(), *configPath, func(ctx context.Context, opts integrity.Options) error {
+				checker, err := integrity.NewChecker(opts)
+				if err != nil {
+					return err
+				}
+				report, err := checker.Check(ctx, integrity.CheckOptions{Deep: deep})
+				if err != nil {
+					return err
+				}
+				if err := printReport(cmd.OutOrStdout(), report, asJSON); err != nil {
+					return err
+				}
+				if report.Damage() > 0 {
+					return fmt.Errorf("%w: %d of %d blobs checked are missing or corrupt",
+						ErrDamage, report.Damage(), report.BlobsChecked)
+				}
+				return nil
+			})
+		},
+	}
+	cmd.Flags().BoolVar(&deep, "deep", false, "re-hash every blob instead of checking existence and length")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
+	return cmd
+}
+
+func printReport(w io.Writer, report integrity.Report, asJSON bool) error {
+	if asJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(report)
+	}
+
+	mode := "shallow"
+	if report.Deep {
+		mode = "deep"
+	}
+	fmt.Fprintf(w, "fsck (%s)\n\n", mode)
+	fmt.Fprintf(w, "  blobs in catalog  %d\n", report.BlobsInCatalog)
+	fmt.Fprintf(w, "  blobs checked     %d\n", report.BlobsChecked)
+	fmt.Fprintf(w, "  files in store    %d\n", report.FilesInStore)
+	if report.Deep {
+		fmt.Fprintf(w, "  bytes re-hashed   %d\n", report.BytesRead)
+	}
+	fmt.Fprintf(w, "  damage            %d\n", report.Damage())
+	fmt.Fprintf(w, "  reclaimable       %d\n\n", report.Reclaimable())
+
+	if len(report.Findings) == 0 {
+		fmt.Fprintln(w, "no problems found")
+		return nil
+	}
+	for _, f := range report.Findings {
+		subject := f.Hash
+		if subject == "" {
+			subject = f.Path
+		}
+		severity := "waste"
+		if f.Kind.Damage() {
+			severity = "DAMAGE"
+		}
+		fmt.Fprintf(w, "%-7s %-14s %s\n", severity, f.Kind, subject)
+		if f.Detail != "" {
+			fmt.Fprintf(w, "        %s\n", f.Detail)
+		}
+		if f.ActualHash != "" {
+			fmt.Fprintf(w, "        hashes to %s\n", f.ActualHash)
+		}
+		if f.ExpectedSize != 0 && f.ActualSize != f.ExpectedSize {
+			fmt.Fprintf(w, "        expected %d bytes, found %d\n", f.ExpectedSize, f.ActualSize)
+		}
+		if f.Quarantined {
+			fmt.Fprintf(w, "        quarantined at %s\n", f.Path)
+		}
+	}
+	if report.Damage() > 0 {
+		fmt.Fprintf(w, "\nQuarantined bytes are kept, never deleted. On a hardlink-ingested\n"+
+			"library a mismatch may be the original file changing under Heyarr rather\n"+
+			"than storage failing — compare before you conclude (ADR-0018).\n")
+	}
+	return nil
+}
+
+func newGCCommand(_ Options, configPath *string) *cobra.Command {
+	var (
+		apply     bool
+		dryRun    bool
+		grace     time.Duration
+		tempGrace time.Duration
+		asJSON    bool
+	)
+	cmd := &cobra.Command{
+		Use:   "gc",
+		Short: "Reclaim bytes nothing references (ADR-0018)",
+		Long: `Reclaim blobs that no asset references, plus orphaned partial writes and
+bytes in the store with no catalog row.
+
+This command changes nothing unless you pass --apply. That is the default
+because a garbage collector is the one piece of Heyarr whose bugs are not
+recoverable by re-running it.
+
+Reclamation is two-pass. The first sweep that sees a blob with no references
+records when it noticed and reclaims nothing; a later sweep, once the grace
+window has passed, frees the bytes. So a mistaken delete stays reversible for
+the length of the window, and a blob that regains a reference gets a fresh
+window rather than a partly spent one.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if apply && cmd.Flags().Changed("dry-run") && dryRun {
+				return fmt.Errorf("gc: --apply and --dry-run contradict each other; " +
+					"pass --apply alone to reclaim, or neither to report")
+			}
+			// Zero means "use the default" everywhere below this point, which
+			// is the safe reading of an unset field but the wrong reading of a
+			// flag somebody typed. Say so rather than silently applying a week.
+			if cmd.Flags().Changed("grace") && grace == 0 {
+				return fmt.Errorf("gc: --grace 0 is ambiguous — it reads as "+
+					"\"use the default\" (%s). Pass a small non-zero duration such as 1ns "+
+					"to reclaim without waiting", integrity.DefaultGrace)
+			}
+			return withIntegrity(cmd.Context(), *configPath, func(ctx context.Context, opts integrity.Options) error {
+				collector, err := integrity.NewCollector(opts)
+				if err != nil {
+					return err
+				}
+				result, err := collector.Collect(ctx, integrity.CollectOptions{
+					Apply:     apply,
+					Grace:     grace,
+					TempGrace: tempGrace,
+				})
+				if err != nil {
+					return err
+				}
+				return printCollection(cmd.OutOrStdout(), result, asJSON)
+			})
+		},
+	}
+	cmd.Flags().BoolVar(&apply, "apply", false, "actually reclaim; without it nothing is changed")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", true, "report what would be reclaimed without doing it (the default)")
+	cmd.Flags().DurationVar(&grace, "grace", integrity.DefaultGrace,
+		"how long a blob must have been unreferenced before its bytes may be freed")
+	cmd.Flags().DurationVar(&tempGrace, "temp-grace", integrity.DefaultTempGrace,
+		"how old a partial write must be before it is swept")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
+	return cmd
+}
+
+func printCollection(w io.Writer, result integrity.Collection, asJSON bool) error {
+	if asJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	}
+
+	mode := "dry run — nothing was changed"
+	if !result.DryRun {
+		mode = "applied"
+	}
+	fmt.Fprintf(w, "gc (%s)\n\n", mode)
+	fmt.Fprintf(w, "  grace window        %s\n", result.Grace)
+	fmt.Fprintf(w, "  blobs considered    %d\n", result.Considered)
+	fmt.Fprintf(w, "  still referenced    %d\n", result.Referenced)
+	fmt.Fprintf(w, "  window started      %d\n", len(result.Marked))
+	fmt.Fprintf(w, "  waiting out window  %d\n", len(result.Waiting))
+	fmt.Fprintf(w, "  reclaimed           %d\n", len(result.Reclaimed))
+	fmt.Fprintf(w, "  untracked files     %d\n", len(result.Untracked))
+	fmt.Fprintf(w, "  partial writes      %d\n", len(result.TempRemoved))
+	fmt.Fprintf(w, "  bytes reclaimed     %d\n", result.BytesReclaimed)
+
+	if len(result.Reclaimed) > 0 || len(result.Untracked) > 0 {
+		fmt.Fprintln(w)
+		for _, c := range result.Reclaimed {
+			fmt.Fprintf(w, "  unreferenced  %s  %d bytes\n", c.Hash, c.Size)
+		}
+		for _, c := range result.Untracked {
+			fmt.Fprintf(w, "  untracked     %s  %d bytes\n", c.Hash, c.Size)
+		}
+	}
+	if len(result.Waiting) > 0 {
+		fmt.Fprintln(w)
+		for _, c := range result.Waiting {
+			fmt.Fprintf(w, "  waiting       %s  eligible %s\n", c.Hash, c.EligibleAt.Format(time.RFC3339))
+		}
+	}
+	if result.DryRun && (len(result.Reclaimed) > 0 || len(result.Untracked) > 0 || len(result.TempRemoved) > 0) {
+		fmt.Fprintf(w, "\nNothing was removed. Re-run with --apply to reclaim.\n")
+	}
+	return nil
+}

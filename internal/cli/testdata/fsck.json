@@ -1,0 +1,27 @@
+{
+  "deep": true,
+  "blobs_in_catalog": 1,
+  "blobs_checked": 1,
+  "bytes_read": 3,
+  "files_in_store": 1,
+  "findings": [
+    {
+      "kind": "corrupt",
+      "hash": "blake3:075d63c2f4ed5d2a05efb2604908c7439c14ad6138f7c67c08c6cb2c510f7125",
+      "actual_hash": "blake3:8ca842ff830363e22cae965075d9e7fdf392a3565eb0dd32f822568396418aeb",
+      "expected_size": 28,
+      "actual_size": 3,
+      "path": "<root>/quarantine/075d63c2f4ed5d2a05efb2604908c7439c14ad6138f7c67c08c6cb2c510f7125.<nanos>",
+      "quarantined": true,
+      "detail": "stored bytes no longer hash to their own name"
+    },
+    {
+      "kind": "untracked",
+      "hash": "blake3:eb88cc1a24f3397cfb4d213df8b1f8aad2dd2d83fe8f7546f76272f3d5b25e3e",
+      "actual_size": 25,
+      "detail": "bytes in the store with no catalog row — garbage collection reclaims these"
+    }
+  ],
+  "started_at": "<timestamp>",
+  "finished_at": "<timestamp>"
+}
