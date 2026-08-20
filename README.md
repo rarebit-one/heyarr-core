@@ -88,19 +88,23 @@ failure names what broke and what it expected.
 
 ## Roadmap
 
-| | Milestone | Delivers |
-|---|---|---|
-| 1 | Local Heyarr | controller, local full peer, content model, BLAKE3 CAS, scanner, HTTP Range, API, CLI |
-| 2 | Consumption | playback sessions, direct A/V, publications, ffprobe |
-| 3 | Desired State & Acquisition | DesiredItem, quality profiles, Prowlarr, Transmission, ingest, upgrades |
-| 4 | Second Full Peer | registration, inventory exchange, replication, catalog snapshots, read routing |
-| 5 | Efficient Replication | FastCDC, chunk manifests, resumable transfer, integrity repair |
-| 6 | Cooperative Acquisition | TransferSession, internal BitTorrent transport, web-seeding |
-| 7 | Controller Resilience | continuous backup, restore tooling, cached leases, degraded read mode |
-| 8 | Self-Sovereign Identity | device keys, delegations, grants, pairing, recovery |
-| 9 | Encrypted Personal State | encrypted spaces, wrapped keys, CRDT sync, offline concurrent edits |
-| 10 | Progressive Playback | playback over a partially-available blob |
-| 11 | Compatibility | OpenSubsonic, OPDS, more clients and providers |
+Milestone 1 is **done** — Heyarr scans a library, brings its bytes under
+management, serves them over HTTP with byte ranges, and tells you what it did.
+`make demo` is how you check that on your own machine, in about fifteen seconds.
+
+| | Milestone | Delivers | |
+|---|---|---|---|
+| 1 | Local Heyarr | controller, local full peer, content model, BLAKE3 CAS, scanner, HTTP Range, API, CLI | ✅ |
+| 2 | Consumption | playback sessions, direct A/V, publications, ffprobe | |
+| 3 | Desired State & Acquisition | DesiredItem, quality profiles, Prowlarr, Transmission, ingest, upgrades | |
+| 4 | Second Full Peer | registration, inventory exchange, replication, catalog snapshots, read routing | |
+| 5 | Efficient Replication | FastCDC, chunk manifests, resumable transfer, integrity repair | |
+| 6 | Cooperative Acquisition | TransferSession, internal BitTorrent transport, web-seeding | |
+| 7 | Controller Resilience | continuous backup, restore tooling, cached leases, degraded read mode | |
+| 8 | Self-Sovereign Identity | device keys, delegations, grants, pairing, recovery | |
+| 9 | Encrypted Personal State | encrypted spaces, wrapped keys, CRDT sync, offline concurrent edits | |
+| 10 | Progressive Playback | playback over a partially-available blob | |
+| 11 | Compatibility | OpenSubsonic, OPDS, more clients and providers | |
 
 ## Licence
 
