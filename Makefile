@@ -8,13 +8,17 @@ LDFLAGS := -s -w \
   -X $(PKG)/internal/buildinfo.Commit=$(COMMIT) \
   -X $(PKG)/internal/buildinfo.Date=$(DATE)
 
-.PHONY: all build test race lint fmt gen tidy demo clean help
+.PHONY: all build fixtures test race lint fmt gen tidy demo clean help
 
 all: lint test build          ## lint, test and build
 
 build:                        ## build ./bin/heyarr
 	@mkdir -p bin
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/heyarr
+
+fixtures:                     ## build the acceptance fixture generator (dev only, never released)
+	@mkdir -p bin
+	CGO_ENABLED=0 go build -trimpath -o bin/genlibrary ./internal/testutil/fixtures/cmd/genlibrary
 
 test:                         ## run tests with the race detector
 	go test -race -count=1 ./...
@@ -32,7 +36,7 @@ gen:                          ## regenerate committed generated code (sqlc, CLI 
 tidy:                         ## tidy modules
 	go mod tidy
 
-demo:                         ## run the end-to-end acceptance demo (the milestone gate)
+demo: build fixtures          ## run the end-to-end acceptance demo (the milestone gate)
 	./scripts/acceptance.sh
 
 clean:

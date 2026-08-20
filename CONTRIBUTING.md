@@ -59,8 +59,20 @@ the alternatives, and what would make us revisit it.
 - An injected clock, never `time.Sleep`, for anything involving leases or backoff.
 - `-race` always.
 
-`scripts/acceptance.sh` is the end-to-end gate and the real signal that a
-milestone is done. Coverage percentage is not a target.
+`scripts/acceptance.sh` (`make demo`) is the end-to-end gate and the real signal
+that a milestone is done — it is how you verify a Heyarr build. It runs on both
+Linux and macOS in CI and feeds the single required check on `main`, so a change
+that breaks it does not merge. Coverage percentage is not a target.
+
+**Sabotage anything load-bearing.** A green suite nobody has watched go red is
+not evidence. Break the mechanism, confirm the test fails, restore it, and quote
+the numbers in the pull request. Four tests in this repository have been found
+to be incapable of failing, three of them only because someone tried exactly
+this — including one that could not reproduce the cross-process race it was
+written for, and one whose counts were all relative to what happened to be
+cached, so dropping the work it was checking self-adjusted. If a sabotage does
+not turn a test red, the test is a comment: say so, and fix the test rather than
+the sabotage.
 
 ## Commit messages
 

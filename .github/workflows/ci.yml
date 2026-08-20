@@ -83,15 +83,23 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: go build -trimpath -o /dev/null ./cmd/heyarr
 
+  # The milestone gate. It runs on both operating systems deliberately: the
+  # demo drives unix sockets, SIGTERM handling, filesystem materialisation and
+  # free-space behaviour, and every one of those differs between Linux and
+  # macOS. Running it on one of the two would leave the other untested in
+  # exactly the places it is most likely to differ.
   acceptance:
     name: acceptance (end-to-end)
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with: { go-version: stable, cache: true }
-      - run: make build
-      - run: ./scripts/acceptance.sh
+      - run: make demo
 
   # Aggregate status so branch protection needs exactly one required check.
   ci:

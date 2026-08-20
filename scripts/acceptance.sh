@@ -13,7 +13,16 @@ cd "$(dirname "$0")/.."
 BIN=${BIN:-./bin/heyarr}
 WORK=$(mktemp -d)
 FAILED=0
-trap 'rm -rf "$WORK"' EXIT
+# Kill anything this script started before removing its data directory. Without
+# this an interrupted run leaves a server holding a port and a database, and the
+# next run fails to bind with an error that points at neither.
+cleanup() {
+  local p
+  for p in "${FULL_PIDS[@]:-}"; do kill -KILL "$p" 2>/dev/null || true; done
+  pkill -f "$WORK" 2>/dev/null || true
+  rm -rf "$WORK"
+}
+trap cleanup EXIT INT TERM
 
 pass() { printf '  \033[32mok\033[0m   %s\n' "$1"; }
 fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILED=1; }
@@ -82,6 +91,12 @@ peer:
 log:
   level: info
   format: json
+# Unix socket only. The default TCP bind is a FIXED port, so two runs on one
+# machine collide and a leaked server from an interrupted run breaks every later
+# run with a bind error that explains nothing. Nothing here needs TCP — the
+# refusal checks below set http.addr explicitly for the cases that do.
+http:
+  addr: ""
 YAML
 
 note "build identity"
@@ -335,6 +350,10 @@ peer:
 log:
   level: info
   format: json
+# Unix socket only — see the note on the base config. A fixed TCP port makes two
+# runs on one machine collide.
+http:
+  addr: ""
 libraries:
   - name: acceptance-films
     content_type: movie
@@ -481,8 +500,511 @@ if run_scan scan1; then
   fi
 fi
 
-note "not yet implemented (milestone 1)"
-echo "  --   range-serving, integrity and garbage-collection assertions: M1-18"
+
+# ---------------------------------------------------------------------------
+# The full library over the API (M1-18)
+#
+# Everything below drives the real HTTP API against a GENERATED library that
+# contains every content type, both non-primary asset roles, a file the scanner
+# must decline, a byte-identical pair at two paths, and a large file so that
+# range serving is exercised on something that does not fit in one buffer.
+#
+# Every expected count is read out of the generator's manifest rather than
+# typed here. A number in a shell script drifts from the fixture the first time
+# anyone adds a file, and then the demo asserts something that used to be true.
+# ---------------------------------------------------------------------------
+
+FULLROOT="$WORK/full"
+FULLLIB="$FULLROOT/library"
+FULLDATA="$FULLROOT/data"
+SOCK="$FULLDATA/heyarr.sock"
+MANIFEST="$FULLROOT/manifest.json"
+
+# The fixture generator is a dev helper, not part of the product: goreleaser
+# builds ./cmd/heyarr and nothing else (ADR-0002). `make fixtures` builds it.
+# It is resolved rather than assumed because the real deployment host has no Go
+# toolchain — there both binaries are cross-compiled and shipped, and GEN points
+# at the one that arrived.
+GEN=${GEN:-./bin/genlibrary}
+if [[ ! -x "$GEN" ]] && command -v go >/dev/null 2>&1; then
+  go build -o "$WORK/genlibrary" ./internal/testutil/fixtures/cmd/genlibrary 2>/dev/null && GEN="$WORK/genlibrary"
+fi
+
+# A ~200 MB streaming fixture is the point: a file that fits in one buffer
+# proves nothing about the 20 GB remux ADR-0013 calls a normal case. Shrinkable
+# for a quick local loop, and the size is printed so a green run against a tiny
+# fixture is never mistaken for a green run against a real one.
+LARGE=${HEYARR_ACCEPTANCE_LARGE_SIZE:-209715200}
+
+api() { # path [curl args...]
+  local path=$1; shift
+  curl -sS --unix-socket "$SOCK" -H "Authorization: Bearer $TOKEN" "$@" "http://heyarr$path"
+}
+
+# Follows keyset cursors to the end. A list command that reads one page and
+# stops is wrong for a real library, and a demo that asserts on one page would
+# never notice.
+# NextCursor is absent on the last page, so "keep going while next_cursor is
+# set" is the whole loop.
+api_all() { # path jq-filter
+  local path=$1 filter=$2 cursor="" url page sep="?"
+  [[ "$path" == *"?"* ]] && sep="&"
+  while :; do
+    url="$path"
+    if [[ -n "$cursor" ]]; then
+      url="${path}${sep}cursor=${cursor}"
+    fi
+    page=$(api "$url")
+    jq -r "$filter" <<<"$page"
+    cursor=$(jq -r '.next_cursor // empty' <<<"$page")
+    [[ -z "$cursor" ]] && break
+  done
+}
+
+# Starts heyarr, waits for readiness and for the scan to finish ingesting, and
+# leaves it running. Waits for CONDITIONS, never for a duration: a fixed wait is
+# a bet on machine speed and this repo has lost that bet four times.
+start_full() { # label roles...
+  local label=$1; shift
+  FULL_LOG="$WORK/$label.log"
+  FULL_PIDS=()
+  local role
+  for role in "$@"; do
+    "$BIN" --config "$WORK/full.yaml" "$role" >>"$FULL_LOG" 2>&1 &
+    FULL_PIDS+=($!)
+  done
+
+  local waited=0
+  while (( waited < 600 )); do
+    curl -sf --unix-socket "$SOCK" http://heyarr/readyz >/dev/null 2>&1 && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if (( waited >= 600 )); then
+    fail "$label: /readyz never became ready"; cat "$FULL_LOG"; stop_full; return 1
+  fi
+  return 0
+}
+
+wait_for_ingest() { # label expected
+  local label=$1 expected=$2 waited=0 done_count=0
+  while (( waited < 1800 )); do
+    done_count=$(grep -c '"msg":"ingested"' "$FULL_LOG" 2>/dev/null || true)
+    (( done_count >= expected )) && return 0
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  fail "$label: only $done_count of $expected files were ingested"
+  tail -40 "$FULL_LOG"
+  return 1
+}
+
+stop_full() {
+  local p waited=0
+  for p in "${FULL_PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done
+  while (( waited < 200 )); do
+    local alive=0
+    for p in "${FULL_PIDS[@]:-}"; do kill -0 "$p" 2>/dev/null && alive=1; done
+    (( alive == 0 )) && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  for p in "${FULL_PIDS[@]:-}"; do kill -KILL "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done
+}
+
+assert_eq() { # got want description
+  if [[ "$1" == "$2" ]]; then pass "$3"; else fail "$3 — got '$1', want '$2'"; fi
+}
+
+full_library_demo() {
+  "$GEN" -out "$FULLLIB" -manifest "$MANIFEST" -large-size "$LARGE" >/dev/null
+
+  local files blobs largest_path largest_size dup_hash
+  files=$(jq -r '.ingestable_files' "$MANIFEST")
+  blobs=$(jq -r '.ingestable_blobs' "$MANIFEST")
+  largest_path=$(jq -r '.largest_path' "$MANIFEST")
+  largest_size=$(jq -r '.largest_size' "$MANIFEST")
+  dup_hash=$(jq -r '.duplicate_hash' "$MANIFEST")
+  echo "       fixture library: $(jq -r '.files|length' "$MANIFEST") files, $files ingestable, streaming fixture $(( LARGE / 1048576 )) MiB"
+
+  # Every assertion below compares a count from the API against a count from
+  # the manifest. If the manifest were empty or unreadable, both sides would be
+  # zero and the whole section would pass having tested nothing.
+  if (( files < 5 )) || (( blobs < 4 )) || [[ -z "$dup_hash" || "$dup_hash" == "null" ]]; then
+    fail "the fixture manifest describes $files ingestable files and $blobs blobs — too few to assert on"
+    return 1
+  fi
+
+  cat > "$WORK/full.yaml" <<YAML
+data_dir: $FULLDATA
+peer:
+  name: acceptance-full
+  site: test
+log:
+  level: info
+  format: json
+# The socket is the whole transport here. Binding a fixed TCP port would make
+# two runs on one machine collide, and a leaked server from an interrupted run
+# would break every later run with a bind error that says nothing about why —
+# which is exactly what happened while this section was being written.
+http:
+  addr: ""
+libraries:
+  - name: films
+    content_type: movie
+    roots: ["$FULLLIB/movies"]
+  - name: shows
+    content_type: series
+    roots: ["$FULLLIB/tv"]
+  - name: albums
+    content_type: music
+    roots: ["$FULLLIB/music"]
+  - name: shelf
+    content_type: book
+    roots: ["$FULLLIB/books"]
+YAML
+
+  # Mint the token BEFORE anything starts. It migrates the database itself, so
+  # this also proves the administrative path works against a database no server
+  # has ever opened — the only order an operator can actually use, since the API
+  # cannot be called before a token exists (ADR-0011).
+  TOKEN=$("$BIN" --config "$WORK/full.yaml" token create acceptance --scopes admin --json | jq -r .token)
+  if [[ -n "$TOKEN" && "$TOKEN" != "null" ]]; then
+    pass "a token is mintable before the server has ever run"
+  else
+    fail "could not mint a token"; return 1
+  fi
+
+  start_full full all || return 1
+  wait_for_ingest full "$files" || { stop_full; return 1; }
+
+  note "  catalog"
+  local got_works got_assets got_blobs
+  got_works=$(api_all /api/v1/works '.items[].id' | sort -u | wc -l | tr -d ' ')
+  if (( got_works > 0 )); then
+    pass "the scan produced $got_works works"
+  else
+    fail "the catalog has no works at all"
+  fi
+  got_assets=$(api_all /api/v1/assets '.items[].id' | sort -u | wc -l | tr -d ' ')
+  got_blobs=$(find "$FULLDATA/cas/blobs" -type f 2>/dev/null | wc -l | tr -d ' ')
+  assert_eq "$got_assets" "$files" "every ingestable file became an asset"
+  assert_eq "$got_blobs" "$blobs" "identical bytes at two paths produced one blob"
+
+  # The file the scanner must decline, asserted as an absence rather than
+  # inferred from a count that happens to match.
+  local skipped
+  skipped=$(jq -r '.files[] | select(.ingestable | not) | .path' "$MANIFEST" | head -1)
+  if [[ -n "$skipped" ]]; then
+    if api_all /api/v1/assets '.items[].source_path' | grep -qF "$skipped"; then
+      fail "the scanner ingested $skipped, whose extension it does not recognise"
+    else
+      pass "an unrecognised extension is declined, not ingested"
+    fi
+  fi
+
+  # §13: two assets, one blob. Asserted on the duplicate hash specifically, so
+  # a coincidence in the totals cannot stand in for it.
+  local dup_assets
+  dup_assets=$(api_all /api/v1/assets '.items[] | select(.blob_hash == "'"$dup_hash"'") | .id' | wc -l | tr -d ' ')
+  assert_eq "$dup_assets" "2" "the duplicate pair is two assets sharing one blob"
+
+  # Non-primary roles survive identification: a subtitle beside an episode must
+  # not have become an episode.
+  local subs
+  subs=$(api_all /api/v1/assets '.items[] | select(.role == "subtitle") | .id' | wc -l | tr -d ' ')
+  if (( subs >= 1 )); then
+    pass "a subtitle beside its episode is an asset with the subtitle role"
+  else
+    fail "no subtitle asset was created"
+  fi
+
+  note "  range serving (ADR-0013)"
+  local big_hash big_size
+  big_hash=$(jq -r --arg p "$largest_path" '.files[] | select(.path == $p) | .hash' "$MANIFEST")
+  big_size=$largest_size
+
+  # HEAD is how a prober asks "can I range this, and how big is it" without
+  # moving a byte. §29's remote ffprobe is one of the four consumers this
+  # endpoint has, and it is the one that would notice first.
+  local head_out
+  # `--head`, not `-X HEAD`: -X only changes the method, so curl still waits
+  # for a body that a HEAD response will never send, and the script hangs until
+  # a timeout instead of failing.
+  head_out=$(api "/api/v1/blobs/$big_hash/content" --head)
+  if grep -qi '^accept-ranges: bytes' <<<"$head_out"; then
+    pass "HEAD advertises byte ranges"
+  else
+    fail "HEAD did not advertise Accept-Ranges"; echo "$head_out"
+  fi
+  assert_eq "$(grep -i '^content-length:' <<<"$head_out" | tr -d '\r' | awk '{print $2}')" \
+    "$big_size" "HEAD reports the blob's length without transferring it"
+  if grep -qi "^etag: \"blake3-" <<<"$head_out"; then
+    pass "the ETag is derived from the content digest"
+  else
+    fail "no blake3 ETag"; echo "$head_out"
+  fi
+
+  # The canonical range request from the issue.
+  local range_body range_code range_hdrs
+  range_body="$WORK/range0.bin"
+  range_hdrs=$(api "/api/v1/blobs/$big_hash/content" -H 'Range: bytes=0-1048575' -D - -o "$range_body" -w '%{http_code}')
+  range_code=$(tail -1 <<<"$range_hdrs")
+  assert_eq "$range_code" "206" "a byte range returns 206 Partial Content"
+  assert_eq "$(wc -c <"$range_body" | tr -d ' ')" "1048576" "the range is exactly 1 MiB"
+  if grep -qi "^content-range: bytes 0-1048575/$big_size" <<<"$range_hdrs"; then
+    pass "Content-Range names the span and the total size"
+  else
+    fail "wrong Content-Range"; grep -i '^content-range' <<<"$range_hdrs"
+  fi
+
+  # The assertion that actually proves the endpoint: N disjoint ranges,
+  # concatenated in order, must hash to the blob's own digest. Uneven spans on
+  # purpose — equal spans hide an error that is a constant offset.
+  local part1 part2 part3 reassembled tail_start
+  part1="$WORK/p1.bin"; part2="$WORK/p2.bin"; part3="$WORK/p3.bin"
+  reassembled="$WORK/reassembled.bin"
+  tail_start=$(( 1048576 + 65537 ))
+  api "/api/v1/blobs/$big_hash/content" -H "Range: bytes=0-1048575" -o "$part1"
+  api "/api/v1/blobs/$big_hash/content" -H "Range: bytes=1048576-$(( tail_start - 1 ))" -o "$part2"
+  api "/api/v1/blobs/$big_hash/content" -H "Range: bytes=$tail_start-" -o "$part3"
+  cat "$part1" "$part2" "$part3" > "$reassembled"
+  assert_eq "$(wc -c <"$reassembled" | tr -d ' ')" "$big_size" "three disjoint ranges cover the whole blob"
+  assert_eq "$("$GEN" -hash "$reassembled")" "$big_hash" \
+    "three disjoint ranges, concatenated, hash to the blob's own digest"
+
+  # An unsatisfiable range is a 416 naming the size, not a 200 with the whole
+  # body — a replication client that got the body would silently restart.
+  assert_eq "$(api "/api/v1/blobs/$big_hash/content" -H "Range: bytes=$(( big_size + 4096 ))-" -o /dev/null -w '%{http_code}')" \
+    "416" "a range past the end is 416, not a silent full body"
+
+  # A stale If-Range must fall back to the whole object rather than splicing a
+  # range from different bytes onto a half-finished file.
+  assert_eq "$(api "/api/v1/blobs/$big_hash/content" -H 'Range: bytes=0-1023' -H 'If-Range: "blake3-0000"' -o /dev/null -w '%{http_code}')" \
+    "200" "a stale If-Range returns the full body"
+  assert_eq "$(api "/api/v1/blobs/$big_hash/content" -H 'Range: bytes=0-1023' -H "If-Range: \"blake3-${big_hash#blake3:}\"" -o /dev/null -w '%{http_code}')" \
+    "206" "a matching If-Range serves the range"
+
+  # 404 and 400 are different mistakes: one means "ask another peer", the other
+  # means "retrying anywhere will not help".
+  assert_eq "$(api "/api/v1/blobs/blake3:$(printf '0%.0s' {1..64})/content" -o /dev/null -w '%{http_code}')" \
+    "404" "an absent blob is 404"
+  assert_eq "$(api "/api/v1/blobs/not-a-hash/content" -o /dev/null -w '%{http_code}')" \
+    "400" "a malformed digest is 400, not 404"
+
+  note "  the event log (§76)"
+  # Every state transition emits an event, with no exceptions — retrofitting is
+  # what makes it expensive (ADR-0009). Replaying from 0 must show the ingest
+  # story in causal order.
+  local events_out
+  # SSE never ends by design, so the read is bounded here rather than waited on.
+  events_out=$(api "/api/v1/events?after=0" --max-time 5 --no-buffer 2>/dev/null || true)
+  local ev
+  for ev in blob.created content.asset.created replica.present ingest.completed system.scan.progress; do
+    if grep -q "$ev" <<<"$events_out"; then
+      pass "the log replays $ev"
+    else
+      fail "no $ev in a replay from seq 0"
+    fi
+  done
+  # A consumer replaying in seq order must never meet an asset before its blob.
+  local first_blob first_asset
+  first_blob=$(grep -n 'blob.created' <<<"$events_out" | head -1 | cut -d: -f1)
+  first_asset=$(grep -n 'content.asset.created' <<<"$events_out" | head -1 | cut -d: -f1)
+  if [[ -n "$first_blob" && -n "$first_asset" ]] && (( first_blob < first_asset )); then
+    pass "the log orders a blob before the asset that names it"
+  else
+    fail "content.asset.created appeared before blob.created in the replay"
+  fi
+
+  note "  replicas"
+  # ADR-0010: exactly one peer, and it is this node. Every blob must be present
+  # on it, or the catalog is claiming bytes nobody holds.
+  local self_peer present
+  self_peer=$(api /api/v1/peers | jq -r '.items[] | select(.is_self) | .id')
+  present=$(api_all "/api/v1/replicas?state=present" '.items[] | select(.peer_id == "'"$self_peer"'") | .blob_hash' | sort -u | wc -l | tr -d ' ')
+  assert_eq "$present" "$blobs" "every blob has a present replica on the self peer"
+
+  local jobs_before
+  jobs_before=$(api_all /api/v1/jobs '.items[].id' | sort -u | wc -l | tr -d ' ')
+
+  note "  durability and idempotency"
+  # SIGTERM, restart, and everything must still be there. §50 replicates
+  # controller backups to peers, so a database that needed the process to stay
+  # up would not be a database anyone could back up.
+  stop_full
+
+  # After shutdown the file must stand alone: a populated -wal beside a copied
+  # database is a silently stale backup.
+  if [[ -s "$FULLDATA/heyarr.db-wal" ]]; then
+    fail "a populated WAL survived shutdown ($(wc -c <"$FULLDATA/heyarr.db-wal") bytes)"
+  else
+    pass "the database is self-contained after shutdown"
+  fi
+
+  start_full full-restart all || return 1
+
+  local works_after assets_after blobs_after jobs_after
+  works_after=$(api_all /api/v1/works '.items[].id' | sort -u | wc -l | tr -d ' ')
+  assets_after=$(api_all /api/v1/assets '.items[].id' | sort -u | wc -l | tr -d ' ')
+  jobs_after=$(api_all /api/v1/jobs '.items[].id' | sort -u | wc -l | tr -d ' ')
+  assert_eq "$works_after" "$got_works" "the catalog survives a restart"
+  assert_eq "$assets_after" "$got_assets" "every asset survives a restart"
+  if (( jobs_after >= jobs_before )); then
+    pass "job history survives a restart ($jobs_before before, $jobs_after after)"
+  else
+    fail "job history shrank across a restart: $jobs_before then $jobs_after"
+  fi
+
+  # The controller re-enqueues a scan per root at every start, so a restart IS
+  # the rescan. Nothing new may come of it: same bytes, same paths, same rows.
+  local rescans=0 waited=0
+  while (( waited < 900 )); do
+    rescans=$(grep -c '"msg":"scan completed"' "$FULL_LOG" 2>/dev/null || true)
+    (( rescans >= 4 )) && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if (( rescans < 4 )); then
+    fail "only $rescans of 4 roots rescanned after the restart"
+  else
+    local reingested
+    reingested=$(grep -c '"msg":"ingested"' "$FULL_LOG" 2>/dev/null || true)
+    assert_eq "$reingested" "0" "a rescan of an unchanged library ingests nothing"
+    blobs_after=$(find "$FULLDATA/cas/blobs" -type f 2>/dev/null | wc -l | tr -d ' ')
+    assert_eq "$blobs_after" "$blobs" "a rescan adds no blobs"
+    assets_after=$(api_all /api/v1/assets '.items[].id' | sort -u | wc -l | tr -d ' ')
+    assert_eq "$assets_after" "$got_assets" "a rescan adds no assets"
+  fi
+
+  note "  integrity (ADR-0018)"
+  stop_full
+
+  # Corrupt exactly one blob, and check that fsck names THAT blob rather than
+  # reporting that something somewhere is wrong.
+  local victim victim_hash
+  victim=$(find "$FULLDATA/cas/blobs" -type f | sort | head -1)
+  victim_hash="blake3:$(basename "$victim")"
+  chmod u+w "$victim" && printf 'truncated' > "$victim"
+
+  local fsck_out fsck_code=0
+  fsck_out=$("$BIN" --config "$WORK/full.yaml" fsck --deep --json 2>&1) || fsck_code=$?
+  if (( fsck_code != 0 )); then
+    pass "fsck exits non-zero when it finds damage"
+  else
+    fail "fsck --deep exited 0 having found a corrupt blob"
+  fi
+  if grep -qF "$victim_hash" <<<"$fsck_out"; then
+    pass "fsck --deep names the corrupt blob exactly"
+  else
+    fail "fsck did not name $victim_hash"; echo "$fsck_out" | head -20
+  fi
+  # Corrupt bytes are evidence, not rubbish: on a hardlink-ingested library the
+  # "corruption" may be the original that legitimately changed (ADR-0018).
+  if [[ -f "$victim" ]]; then
+    fail "the corrupt blob is still addressable at its own digest"
+  elif find "$FULLDATA/cas/quarantine" -type f 2>/dev/null | grep -q .; then
+    pass "the corrupt blob is quarantined, not deleted"
+  else
+    fail "the corrupt blob was deleted rather than quarantined"
+  fi
+
+  # gc with no flags must change nothing at all. A garbage collector whose
+  # default is destructive is one nobody can safely run to find out what it
+  # would do.
+  local before_gc after_gc
+  before_gc=$(find "$FULLDATA/cas" -type f | wc -l | tr -d ' ')
+  "$BIN" --config "$WORK/full.yaml" gc >/dev/null 2>&1 || true
+  after_gc=$(find "$FULLDATA/cas" -type f | wc -l | tr -d ' ')
+  assert_eq "$after_gc" "$before_gc" "gc without flags changes nothing"
+}
+
+# ADR-0002: the roles must be independently runnable as OS processes, and the
+# only way that stays true is running the real checks in both configurations.
+# Otherwise one of the two is never exercised and the split is decorative.
+split_process_demo() {
+  local root="$WORK/split-full"
+  local lib="$root/library" data="$root/data"
+  SOCK="$data/heyarr.sock"
+  MANIFEST="$root/manifest.json"
+  mkdir -p "$root"
+  "$GEN" -out "$lib" -manifest "$MANIFEST" -large-size 1048576 >/dev/null
+
+  local files blobs
+  files=$(jq -r '.ingestable_files' "$MANIFEST")
+  blobs=$(jq -r '.ingestable_blobs' "$MANIFEST")
+
+  cat > "$WORK/split-full.yaml" <<YAML
+data_dir: $data
+peer:
+  name: acceptance-split
+  site: test
+log:
+  level: info
+  format: json
+# The socket is the whole transport here. Binding a fixed TCP port would make
+# two runs on one machine collide, and a leaked server from an interrupted run
+# would break every later run with a bind error that says nothing about why —
+# which is exactly what happened while this section was being written.
+http:
+  addr: ""
+libraries:
+  - name: films
+    content_type: movie
+    roots: ["$lib/movies"]
+  - name: shows
+    content_type: series
+    roots: ["$lib/tv"]
+  - name: albums
+    content_type: music
+    roots: ["$lib/music"]
+  - name: shelf
+    content_type: book
+    roots: ["$lib/books"]
+YAML
+
+  TOKEN=$("$BIN" --config "$WORK/split-full.yaml" token create acceptance --scopes admin --json | jq -r .token)
+
+  FULL_LOG="$WORK/split-full.log"
+  FULL_PIDS=()
+  local role
+  for role in controller worker peer; do
+    "$BIN" --config "$WORK/split-full.yaml" "$role" >>"$FULL_LOG" 2>&1 &
+    FULL_PIDS+=($!)
+  done
+
+  local waited=0
+  while (( waited < 600 )); do
+    curl -sf --unix-socket "$SOCK" http://heyarr/readyz >/dev/null 2>&1 && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if (( waited >= 600 )); then
+    fail "split-process: /readyz never became ready"; tail -30 "$FULL_LOG"; stop_full; return 1
+  fi
+  pass "three separate processes serve a ready API"
+
+  wait_for_ingest split-full "$files" || { stop_full; return 1; }
+
+  local a b
+  a=$(api_all /api/v1/assets '.items[].id' | sort -u | wc -l | tr -d ' ')
+  b=$(find "$data/cas/blobs" -type f 2>/dev/null | wc -l | tr -d ' ')
+  assert_eq "$a" "$files" "split-process mode ingests the same assets"
+  assert_eq "$b" "$blobs" "split-process mode deduplicates the same blobs"
+
+  local big_hash
+  big_hash=$(jq -r --arg p "$(jq -r .largest_path "$MANIFEST")" '.files[] | select(.path == $p) | .hash' "$MANIFEST")
+  assert_eq "$(api "/api/v1/blobs/$big_hash/content" -H 'Range: bytes=0-1023' -o /dev/null -w '%{http_code}')" \
+    "206" "split-process mode range-serves bytes"
+  stop_full
+}
+
+if ! command -v jq >/dev/null 2>&1; then
+  fail "jq is not installed — the API assertions in this demo need it"
+elif [[ ! -x "$GEN" ]]; then
+  fail "no fixture generator at $GEN — run 'make fixtures', or set GEN to a prebuilt one"
+else
+  full_library_demo
+  stop_full
+  note "split-process mode, end to end (ADR-0002)"
+  split_process_demo
+  stop_full
+fi
 
 if (( FAILED )); then
   printf '\n\033[31macceptance: FAILED\033[0m\n'; exit 1

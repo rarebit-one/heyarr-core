@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
+	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
 	"github.com/rarebit-one/heyarr-core/internal/hashing"
 )
 
@@ -244,6 +245,55 @@ func TestTheStreamingFixtureIsTheContainerItsExtensionClaims(t *testing.T) {
 	// caller asking for a specific size quietly gets a different one.
 	if info.Size() != 3<<20 {
 		t.Errorf("asked for %d bytes, got %d", 3<<20, info.Size())
+	}
+}
+
+// The demo's expected counts hang off these, and they are derived from the same
+// table the scanner consults rather than restated — so this checks the
+// derivation, not a second copy of the list.
+func TestTheManifestSaysWhichFilesAScanWillActuallyPickUp(t *testing.T) {
+	_, m := smallLibrary(t)
+
+	var wantFiles int
+	wantBlobs := map[string]struct{}{}
+	var skipped []string
+	for _, f := range m.Files {
+		ext := ingest.Ext(ingest.Base(f.Path))
+		known := ingest.MIMEForExtension(ext) != ""
+		if f.Ingestable != known {
+			t.Errorf("%s: Ingestable = %v, but MIMEForExtension(%q) = %q",
+				f.Path, f.Ingestable, ext, ingest.MIMEForExtension(ext))
+		}
+		if !known {
+			skipped = append(skipped, f.Path)
+			continue
+		}
+		wantFiles++
+		wantBlobs[f.Hash] = struct{}{}
+	}
+
+	if m.IngestableFiles != wantFiles {
+		t.Errorf("IngestableFiles = %d, want %d", m.IngestableFiles, wantFiles)
+	}
+	if m.IngestableBlobs != len(wantBlobs) {
+		t.Errorf("IngestableBlobs = %d, want %d", m.IngestableBlobs, len(wantBlobs))
+	}
+
+	// The tree must keep containing a file the scanner declines, or "the
+	// scanner leaves junk alone" stops being asserted by the demo.
+	if len(skipped) == 0 {
+		t.Fatal("every fixture is ingestable — the scanner's extension filter is no longer exercised")
+	}
+	// ...and it must still be a minority, or the demo is mostly asserting that
+	// nothing happened.
+	if m.IngestableFiles <= len(skipped) {
+		t.Errorf("%d ingestable files against %d skipped (%v) — the tree has tipped into mostly noise",
+			m.IngestableFiles, len(skipped), skipped)
+	}
+	if m.IngestableBlobs >= m.DistinctBlobs {
+		t.Errorf("IngestableBlobs %d is not less than DistinctBlobs %d, so the skipped file shares "+
+			"a blob with an ingestable one and the counts no longer distinguish anything",
+			m.IngestableBlobs, m.DistinctBlobs)
 	}
 }
 
