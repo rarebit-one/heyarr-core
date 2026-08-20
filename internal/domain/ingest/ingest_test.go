@@ -1,21 +1,77 @@
 package ingest
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
+	"github.com/rarebit-one/heyarr-core/internal/domain/publication"
 )
+
+// lastRecording is what the pipeline handed the catalog.
+func lastRecording(t *testing.T, cat *fakeCatalog) Recording {
+	t.Helper()
+	if len(cat.recorded) == 0 {
+		t.Fatal("nothing was recorded")
+	}
+	return cat.recorded[len(cat.recorded)-1]
+}
+
+// comicArchive builds a CBZ inline rather than using internal/testutil/fixtures,
+// which imports this package — a test that reached for it would be an import
+// cycle. It is a few lines because a comic archive is a few lines: a ZIP of
+// numbered images is the whole of the format.
+func comicArchive(t *testing.T, pages int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for i := 1; i <= pages; i++ {
+		f, err := w.Create(fmt.Sprintf("page-%03d.jpg", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write([]byte{0xFF, 0xD8, 0xFF, 0xD9}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
 
 type fakeStore struct {
 	blob  Blob
 	err   error
 	calls []string
 	trace *[]string
+	// body, when set, is what OpenBlob serves — a publication container for
+	// the tests that examine one.
+	body []byte
+	// openErr makes OpenBlob fail, which must not fail the ingest.
+	openErr error
 }
+
+func (f *fakeStore) OpenBlob(_ context.Context, hash string) (ReaderAtCloser, int64, error) {
+	f.calls = append(f.calls, "open|"+hash)
+	if f.trace != nil {
+		*f.trace = append(*f.trace, "store.OpenBlob")
+	}
+	if f.openErr != nil {
+		return nil, 0, f.openErr
+	}
+	return nopCloser{bytes.NewReader(f.body)}, int64(len(f.body)), nil
+}
+
+type nopCloser struct{ *bytes.Reader }
+
+func (nopCloser) Close() error { return nil }
 
 func (f *fakeStore) Link(_ context.Context, sourcePath string, mode Materialisation) (Blob, error) {
 	f.calls = append(f.calls, sourcePath+"|"+string(mode))
@@ -353,5 +409,119 @@ func TestNewRequiresItsPorts(t *testing.T) {
 		if _, err := New(opts); err == nil {
 			t.Errorf("%s: New accepted an incomplete configuration", name)
 		}
+	}
+}
+
+// §66 puts examination inside the pipeline. These assert the two halves that
+// matter: a readable container contributes its own numbers, and an unreadable
+// one costs nothing.
+
+func TestIngestExaminesAPublicationContainer(t *testing.T) {
+	body := comicArchive(t, 8)
+	store := &fakeStore{blob: Blob{Hash: "blake3:" + strings.Repeat("e", 64), Size: int64(len(body))}, body: body}
+	cat := &fakeCatalog{root: Root{LibraryID: "lib", Mode: Reflink, Enabled: true}, result: Result{AssetID: "a1"}}
+	p := newPipeline(t, store, cat, identification.Default())
+
+	if _, err := p.Ingest(t.Context(), Request{
+		RootID: "r1", SourcePath: "/srv/books/x.cbz", RelPath: "Ada Prentice/The Long Survey 001.cbz",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := lastRecording(t, cat).Publication
+	if got == nil {
+		t.Fatal("a .cbz ingested with no publication metadata")
+	}
+	if got.Format != publication.FormatCBZ {
+		t.Errorf("format = %q", got.Format)
+	}
+	if got.PageCount == nil || *got.PageCount != 8 {
+		t.Errorf("pages = %v, want 8", got.PageCount)
+	}
+}
+
+// The refusal §69 is built on: a recognised format Heyarr deliberately does not
+// index is still recorded AS that format. "We know what this is and did not
+// count it" is a different and more useful answer than silence.
+func TestAnUnindexedPublicationIsStillRecordedAsOne(t *testing.T) {
+	store := &fakeStore{blob: Blob{Hash: "blake3:" + strings.Repeat("f", 64)}}
+	cat := &fakeCatalog{root: Root{LibraryID: "lib", Mode: Reflink, Enabled: true}, result: Result{AssetID: "a1"}}
+	p := newPipeline(t, store, cat, identification.Default())
+
+	if _, err := p.Ingest(t.Context(), Request{
+		RootID: "r1", SourcePath: "/srv/books/x.pdf", RelPath: "Ada Prentice/Survey.pdf",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := lastRecording(t, cat).Publication
+	if got == nil || got.Format != publication.FormatPDF {
+		t.Fatalf("publication = %+v, want a pdf", got)
+	}
+	if got.PageCount != nil || got.ChapterCount != nil {
+		t.Errorf("a pdf reported counts: %+v", got)
+	}
+	// And the bytes were never opened: not indexing means not reading.
+	for _, c := range store.calls {
+		if strings.HasPrefix(c, "open|") {
+			t.Error("a pdf was opened for examination")
+		}
+	}
+}
+
+// Heyarr stores bytes it cannot interpret. Losing a whole asset over a page
+// count would be the wrong trade by a wide margin.
+func TestAnUnreadableContainerDoesNotFailTheIngest(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		store *fakeStore
+	}{
+		{"the blob cannot be opened", &fakeStore{
+			blob:    Blob{Hash: "blake3:" + strings.Repeat("1", 64)},
+			openErr: errors.New("disk went away"),
+		}},
+		{"the archive is corrupt", &fakeStore{
+			blob: Blob{Hash: "blake3:" + strings.Repeat("2", 64), Size: 12},
+			body: []byte("not an archive"),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cat := &fakeCatalog{root: Root{LibraryID: "lib", Mode: Reflink, Enabled: true}, result: Result{AssetID: "a1"}}
+			p := newPipeline(t, tc.store, cat, identification.Default())
+
+			res, err := p.Ingest(t.Context(), Request{
+				RootID: "r1", SourcePath: "/srv/books/x.cbz", RelPath: "Ada Prentice/Broken 001.cbz",
+			})
+			if err != nil {
+				t.Fatalf("ingest failed over an unreadable container: %v", err)
+			}
+			if res.AssetID == "" {
+				t.Error("no asset was recorded")
+			}
+			got := lastRecording(t, cat).Publication
+			if got == nil || got.Format != publication.FormatCBZ {
+				t.Fatalf("publication = %+v, want the format to survive", got)
+			}
+			if got.PageCount != nil {
+				t.Errorf("an unreadable archive produced a page count of %d", *got.PageCount)
+			}
+		})
+	}
+}
+
+// A file that is not one of §69's four containers gets no publication row at
+// all — distinct from a publication with nothing to report.
+func TestANonPublicationGetsNoPublicationMetadata(t *testing.T) {
+	store := &fakeStore{blob: Blob{Hash: "blake3:" + strings.Repeat("3", 64)}}
+	cat := &fakeCatalog{root: Root{LibraryID: "lib", Mode: Reflink, Enabled: true}, result: Result{AssetID: "a1"}}
+	p := newPipeline(t, store, cat, identification.Default())
+
+	if _, err := p.Ingest(t.Context(), Request{
+		RootID: "r1", SourcePath: "/srv/films/x.mkv", RelPath: "Blue Harvest (2019)/Blue Harvest (2019).mkv",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := lastRecording(t, cat).Publication; got != nil {
+		t.Errorf("an mkv produced publication metadata: %+v", got)
 	}
 }

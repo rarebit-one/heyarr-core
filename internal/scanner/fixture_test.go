@@ -14,6 +14,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
@@ -386,6 +387,33 @@ func (a *casAdapter) Link(ctx context.Context, sourcePath string, mode ingest.Ma
 		Deduplicated: desc.Deduplicated,
 	}, nil
 }
+
+// OpenBlob gives the pipeline random access to stored bytes, for reading a
+// publication container's own index (§69). The scanner's fixtures include an
+// EPUB and a CBZ, so this path is genuinely exercised here rather than merely
+// satisfying the interface.
+func (a *casAdapter) OpenBlob(ctx context.Context, hash string) (ingest.ReaderAtCloser, int64, error) {
+	h, err := hashing.Parse(hash)
+	if err != nil {
+		return nil, 0, err
+	}
+	rc, desc, err := a.store.Open(ctx, h)
+	if err != nil {
+		return nil, 0, err
+	}
+	return seekReaderAt{rc}, desc.Size, nil
+}
+
+type seekReaderAt struct{ rs cas.ReadSeekCloser }
+
+func (r seekReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if _, err := r.rs.Seek(off, io.SeekStart); err != nil {
+		return 0, err
+	}
+	return io.ReadFull(r.rs, p)
+}
+
+func (r seekReaderAt) Close() error { return r.rs.Close() }
 
 // count runs a scalar count query.
 func (f *fixture) count(query string, args ...any) int {

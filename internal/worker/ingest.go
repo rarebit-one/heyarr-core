@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
+	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
@@ -39,6 +41,38 @@ func (a *CASByteStore) Link(ctx context.Context, sourcePath string, mode ingest.
 		Deduplicated: desc.Deduplicated,
 	}, nil
 }
+
+// OpenBlob gives the pipeline random access to stored bytes, for reading a
+// publication container's own index (§69).
+func (a *CASByteStore) OpenBlob(ctx context.Context, hash string) (ingest.ReaderAtCloser, int64, error) {
+	h, err := hashing.Parse(hash)
+	if err != nil {
+		return nil, 0, err
+	}
+	rc, desc, err := a.store.Open(ctx, h)
+	if err != nil {
+		return nil, 0, err
+	}
+	return readerAt{rc}, desc.Size, nil
+}
+
+// readerAt adapts the CAS's seekable reader to io.ReaderAt.
+//
+// It is here rather than in the CAS because ReaderAt's contract — concurrent
+// calls, no shared seek position — is stricter than ReadSeeker's, and this
+// adapter is explicitly single-goroutine: one ingest examines one archive.
+// Promising the stronger contract from the store would be promising something
+// its callers do not need and its implementation does not provide.
+type readerAt struct{ rs cas.ReadSeekCloser }
+
+func (r readerAt) ReadAt(p []byte, off int64) (int, error) {
+	if _, err := r.rs.Seek(off, io.SeekStart); err != nil {
+		return 0, err
+	}
+	return io.ReadFull(r.rs, p)
+}
+
+func (r readerAt) Close() error { return r.rs.Close() }
 
 // IngestHandler runs the ingest pipeline for one ingest_artifact job.
 //

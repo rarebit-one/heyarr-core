@@ -624,6 +624,70 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/v1/publications:
+    get:
+      tags: [content]
+      operationId: listPublications
+      summary: Page publications — EPUB, PDF, CBZ and CBR.
+      description: |
+        Heyarr **stores and serves** publications; it does not render them
+        (§69). Clients render.
+
+        This is the catalog view: enough to tell an EPUB from a CBZ, and how
+        long it is, without downloading it first. The bytes come from
+        `/api/v1/blobs/{hash}/content` like everything else — ADR-0013 makes
+        that one endpoint with several consumers, and a reader is another one,
+        not another endpoint.
+      parameters:
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [epub, pdf, cbz, cbr]
+      responses:
+        "200":
+          description: A page of publications.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/Publication" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/publications/{id}:
+    get:
+      tags: [content]
+      operationId: getPublication
+      summary: One publication, by ASSET id.
+      description: |
+        Keyed by asset rather than blob. The metadata is stored against the
+        blob because it describes the bytes, but a client holds an asset: one
+        blob can be two assets with two filenames in two libraries, and "which
+        publication" is a question about a *use* of the bytes.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The publication.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Publication" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/consumption/sessions:
     get:
       tags: [playback]
@@ -1379,6 +1443,41 @@ components:
           description: |
             Why an unavailable tool is unavailable, in a few words — "not found
             on PATH", "did not report a version". Absent when available.
+
+    Publication:
+      type: object
+      description: |
+        An asset that is one of §69's four containers, with what its own
+        manifest declared.
+      properties:
+        asset_id: { type: string }
+        edition_id: { type: string }
+        work_id: { type: string }
+        title: { type: string }
+        blob_hash: { type: string }
+        filename: { type: string }
+        size: { type: integer, format: int64 }
+        format:
+          type: string
+          enum: [epub, pdf, cbz, cbr]
+        page_count:
+          type: integer
+          description: |
+            Page images in a comic archive. **Absent when unread**, which is not
+            the same as zero: an empty comic is a zero-page comic, and a PDF is
+            a publication whose length Heyarr has not counted. Reading a PDF's
+            page tree needs a PDF parser, and §69 says Heyarr does not render.
+        chapter_count:
+          type: integer
+          description: |
+            Spine items in an EPUB — its reading order, which is the closest
+            thing an EPUB has to a length and is deliberately not called a page
+            count. Absent when unread.
+        content_url:
+          type: string
+          description: |
+            The ordinary blob endpoint. Named here so the single-endpoint
+            contract is visible in the response rather than only in ADR-0013.
 
     ConsumptionSession:
       type: object

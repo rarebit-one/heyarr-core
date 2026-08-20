@@ -50,6 +50,8 @@ func TestResponseShapes(t *testing.T) {
 		{"peers", "/api/v1/peers", "peers_list.json"},
 		{"replicas", "/api/v1/replicas", "replicas_list.json"},
 		{"corrupt replicas", "/api/v1/replicas?state=corrupt", "replicas_corrupt.json"},
+		{"publications", "/api/v1/publications", "publications_list.json"},
+		{"publications by format", "/api/v1/publications?format=epub", "publications_epub.json"},
 		{"consumption sessions", "/api/v1/consumption/sessions", "sessions_list.json"},
 		{"resumable sessions", "/api/v1/consumption/sessions?state=resumable", "sessions_resumable.json"},
 		{"one session", "/api/v1/consumption/sessions/" + session1ID, "session.json"},
