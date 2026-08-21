@@ -12,6 +12,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
+	"github.com/rarebit-one/heyarr-core/internal/api/mcp"
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
@@ -310,7 +311,28 @@ func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Stor
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}
-	return []httpapi.MountFunc{api.Mount, blobHandler.Mount}, nil
+
+	// MCP mounts on the SAME authenticated router (§71, ADR-0019), so it
+	// inherits the middleware chain, the request correlation and the `read`
+	// scope floor rather than standing up a second server that would have to
+	// re-earn all three. Its per-tool scope check turns that floor into a
+	// contract.
+	//
+	// It is handed the resource API rather than the database for the write
+	// intents: wanting content is one intent with two front doors, and two
+	// implementations of it would drift silently.
+	mcpServer, err := mcp.New(mcp.Options{
+		DB:        db,
+		Resources: api,
+		Jobs:      queue,
+		Logger:    c.log,
+		Version:   buildinfo.Get().Version,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+
+	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, mcpServer.Mount}, nil
 }
 
 // mediaInfo renders a resolved toolchain for GET /api/v1/system.

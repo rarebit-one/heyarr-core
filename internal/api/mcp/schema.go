@@ -1,0 +1,174 @@
+package mcp
+
+// The tool input schemas, hand-written.
+//
+// # Why these are authored rather than reflected
+//
+// A tool schema is an interface contract with the same permanence as an
+// endpoint — more, because an agent was built against the field names and
+// there is no deprecation header an agent reads. ADR-0015 gives the same
+// reasoning for a hand-written OpenAPI document: a schema generated from a
+// struct changes silently when the struct does, and the change reaches every
+// consumer before anyone has decided it should.
+//
+// They are also DOCUMENTATION for a reader who is not a person. The
+// descriptions here are the only thing standing between an agent and guessing,
+// so they say what a field means and when to use it rather than restating its
+// name.
+
+// obj is a small helper so the schemas read as shapes rather than as maps.
+func obj(props map[string]any, required ...string) map[string]any {
+	out := map[string]any{
+		"type":       "object",
+		"properties": props,
+		// Unknown fields are refused at decode time, so declaring it here
+		// keeps the schema honest about what will actually happen rather than
+		// letting an agent believe an extra field is merely ignored.
+		"additionalProperties": false,
+	}
+	if len(required) > 0 {
+		out["required"] = required
+	}
+	return out
+}
+
+// schemaNoArgs is for tools that take nothing.
+var schemaNoArgs = obj(map[string]any{
+	"limit": map[string]any{
+		"type":        "integer",
+		"minimum":     1,
+		"maximum":     maxRows,
+		"description": "How many rows at most. Defaults to the maximum.",
+	},
+})
+
+var schemaSearchContent = obj(map[string]any{
+	"query": map[string]any{
+		"type": "string",
+		"description": "Part of a title. Matched against the normalised form the " +
+			"scanner records, so case and leading articles do not matter.",
+	},
+	"content_type": map[string]any{
+		"type":        "string",
+		"description": "Narrow to one kind: movie, series, music, book.",
+	},
+	"limit": map[string]any{
+		"type": "integer", "minimum": 1, "maximum": maxRows,
+		"description": "How many works at most. Defaults to the maximum.",
+	},
+})
+
+var schemaWantContent = obj(map[string]any{
+	"work_id": map[string]any{
+		"type": "string",
+		"description": "An existing work, from search_content. Exact — prefer this " +
+			"when the library already has the content.",
+	},
+	"title": map[string]any{
+		"type": "string",
+		"description": "The title, for content the library has never seen. The work " +
+			"is created from it, using the same normalisation a scan would, so wanting " +
+			"something and later scanning it converge on one work. Give either this or " +
+			"work_id, never both.",
+	},
+	"content_type": map[string]any{
+		"type":        "string",
+		"description": "Required with title: movie, series, music, book.",
+	},
+	"year": map[string]any{
+		"type": "integer",
+		"description": "Part of the identity when known. A year inside the title is " +
+			"understood too; an explicit one wins.",
+	},
+	"quality_profile": map[string]any{
+		"type": "string",
+		"description": "The standard this want is measured against, named as a person " +
+			"would: \"living-room\", \"everyday\", \"archival\". Required — \"this should " +
+			"exist\" with no statement of what would count as existing cannot be evaluated.",
+	},
+	"monitor": map[string]any{
+		"type": "boolean",
+		"description": "Keep looking for something better after it is satisfied. " +
+			"Defaults to true.",
+	},
+	"reason": map[string]any{
+		"type":        "string",
+		"description": "A note for whoever reads this in six months. Never interpreted.",
+	},
+}, "quality_profile")
+
+var schemaMonitorContent = obj(map[string]any{
+	"desired_item_id": map[string]any{
+		"type":        "string",
+		"description": "The want, from get_missing_content or want_content.",
+	},
+	"monitor": map[string]any{
+		"type": "boolean",
+		"description": "True to keep looking for something better, false to stop once " +
+			"it is satisfied. Required — there is no safe default for a change nobody " +
+			"asked for.",
+	},
+}, "desired_item_id", "monitor")
+
+var schemaDesiredItemID = obj(map[string]any{
+	"desired_item_id": map[string]any{
+		"type":        "string",
+		"description": "The want to explain.",
+	},
+}, "desired_item_id")
+
+var schemaBlobHash = obj(map[string]any{
+	"blob_hash": map[string]any{
+		"type":        "string",
+		"description": "The canonical blob digest, `blake3:` followed by 64 hex characters.",
+	},
+}, "blob_hash")
+
+var schemaExplainRelease = obj(map[string]any{
+	"quality_profile": map[string]any{
+		"type":        "string",
+		"description": "The profile to score against, by name.",
+	},
+	"releases": map[string]any{
+		"type":     "array",
+		"minItems": 1,
+		"maxItems": maxRows,
+		"items": obj(map[string]any{
+			"id": map[string]any{
+				"type": "string",
+				"description": "Your identifier for this release. Used to break ties, so " +
+					"supplying one makes the ranking independent of the order you sent them in.",
+			},
+			"title": map[string]any{
+				"type": "string",
+				"description": "What the release is called. Never parsed — put what you " +
+					"know into attributes instead.",
+			},
+			"attributes": map[string]any{
+				"type": "object",
+				"description": "What you know about the release. LEAVE A KEY OUT when you " +
+					"cannot tell: an absent attribute is reported as `undetermined`, which " +
+					"is a different answer from a wrong one and sends a person somewhere " +
+					"different. Guessing a value produces a confident wrong verdict.",
+				"properties": map[string]any{
+					"resolution": map[string]any{
+						"type": "integer",
+						"description": "Vertical lines: 480, 720, 1080, 2160. Not a label — " +
+							"\"4K\", \"2160p\" and \"UHD\" are three spellings of one number.",
+					},
+					"source": map[string]any{
+						"type":        "string",
+						"description": "remux, bluray, web-dl, webrip, hdtv, dvd, cam.",
+					},
+					"video_codec":    map[string]any{"type": "string"},
+					"audio_codec":    map[string]any{"type": "string"},
+					"audio_channels": map[string]any{"type": "integer"},
+					"hdr":            map[string]any{"type": "boolean"},
+					"size_bytes":     map[string]any{"type": "integer"},
+					"language":       map[string]any{"type": "string"},
+				},
+				"additionalProperties": false,
+			},
+		}),
+	},
+}, "quality_profile", "releases")

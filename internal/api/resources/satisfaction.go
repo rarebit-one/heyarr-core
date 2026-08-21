@@ -1,6 +1,8 @@
 package resources
 
 import (
+	"context"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -91,23 +93,27 @@ type PlacementSatisfaction struct {
 	Unproven bool `json:"unproven"`
 }
 
-// getSatisfaction is GET /api/v1/desired/{id}/satisfaction.
+// Satisfaction explains one want: both of §56's axes, plus whether it could be
+// better (§60).
 //
-// It RECONCILES rather than reading a cached answer, for the same reason the
-// evaluation endpoint scores rather than replaying: an explanation that might
-// be five minutes stale is one nobody can trust when they are staring at a
-// file they can see on disk.
-func (a *API) getSatisfaction(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if _, err := desiredByID(r.Context(), a.reader, id); err != nil {
-		a.fail(w, r, "desired item", err)
-		return
+// Exported for the same reason as WantContent — MCP's get_content_satisfaction
+// asks exactly this question, and a second implementation would eventually
+// answer it differently. It reconciles rather than reading a cached answer,
+// because an explanation that might be minutes stale is one nobody can trust
+// while looking at a file they can see on disk.
+func (a *API) Satisfaction(ctx context.Context, id string) (SatisfactionResponse, error) {
+	if a.catalog == nil {
+		return SatisfactionResponse{}, errors.New("resources: no catalog is wired, so " +
+			"satisfaction cannot be evaluated")
+	}
+	want, err := desiredByID(ctx, a.reader, id)
+	if err != nil {
+		return SatisfactionResponse{}, err
 	}
 
-	result, err := a.catalog.ReconcileDesired(r.Context(), id)
+	result, err := a.catalog.ReconcileDesired(ctx, id)
 	if err != nil {
-		a.fail(w, r, "desired item", err)
-		return
+		return SatisfactionResponse{}, err
 	}
 
 	out := SatisfactionResponse{
@@ -144,26 +150,24 @@ func (a *API) getSatisfaction(w http.ResponseWriter, r *http.Request) {
 	// just produced. Re-scoring the incumbent here would be a second opinion
 	// about the same bytes under the same profile, which is exactly the drift
 	// §60 warns about.
-	want, err := desiredByID(r.Context(), a.reader, id)
+	satisfied := result.Content.Satisfaction == acquisition.SatisfactionSatisfied
+	verdict := acquisition.UpgradableVerdict(want.Monitor, satisfied, incumbent)
+	out.Upgrade = UpgradeEligibility{
+		Eligible: acquisition.Eligible(want.Monitor, satisfied, incumbent),
+		Status:   string(verdict.Status),
+		Detail:   verdict.Detail,
+	}
+	return out, nil
+}
+
+// getSatisfaction is GET /api/v1/desired/{id}/satisfaction — a shell over
+// Satisfaction.
+func (a *API) getSatisfaction(w http.ResponseWriter, r *http.Request) {
+	out, err := a.Satisfaction(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		a.fail(w, r, "desired item", err)
 		return
 	}
-	verdict := acquisition.UpgradableVerdict(
-		want.Monitor,
-		result.Content.Satisfaction == acquisition.SatisfactionSatisfied,
-		incumbent,
-	)
-	out.Upgrade = UpgradeEligibility{
-		Eligible: acquisition.Eligible(
-			want.Monitor,
-			result.Content.Satisfaction == acquisition.SatisfactionSatisfied,
-			incumbent,
-		),
-		Status: string(verdict.Status),
-		Detail: verdict.Detail,
-	}
-
 	a.write(w, r, http.StatusOK, out)
 }
 

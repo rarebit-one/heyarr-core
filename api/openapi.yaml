@@ -55,6 +55,8 @@ tags:
     description: What should exist, whether or not it does yet (§55).
   - name: providers
     description: The centralised registry of external services — indexers, download clients (§59).
+  - name: mcp
+    description: Semantic actions for agents, over JSON-RPC (§71, ADR-0019).
 
 paths:
   /healthz:
@@ -1427,6 +1429,70 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/v1/mcp:
+    post:
+      tags: [mcp]
+      operationId: mcpRPC
+      summary: MCP, as JSON-RPC 2.0 over a single endpoint.
+      description: |
+        Model Context Protocol (§71, ADR-0019). One route, because MCP
+        multiplexes over JSON-RPC methods rather than over paths.
+
+        Mounted here rather than on a server of its own so it inherits this
+        API's middleware chain, request correlation and `read` scope floor. The
+        **per-tool scope check** turns that floor into a contract: an MCP
+        session is not a new trust domain, and a `read` token calling
+        `want_content` is refused with JSON-RPC code `-32001`.
+
+        ### Methods
+
+        | method | does |
+        |---|---|
+        | `initialize` | handshake; returns protocol version, server info and instructions |
+        | `tools/list` | the tool surface, each with its hand-written input schema and required scope |
+        | `tools/call` | invoke one tool |
+        | `ping` | keepalive |
+
+        A request with no `id` is a notification and is answered with `202` and
+        an empty body, per JSON-RPC — some clients treat a reply to one as a
+        protocol violation.
+
+        ### What is deliberately absent
+
+        MCP's value is **semantic actions over desired state, not a second read
+        API** (ADR-0019). There are no `resources` or `prompts` capabilities and
+        no `list_works`-style tools: an agent that wants to browse should use
+        this document's own endpoints.
+
+        Five verbs §71 names are **absent rather than stubbed** —
+        `search_releases`, `acquire_release`, `sync_peer`, `play_content` and
+        `transfer_playback`. Asking for one returns `-32601` with the milestone
+        that brings it, so an agent learns to wait rather than to retry. A tool
+        answering "not implemented" would be a published vocabulary with a hole
+        in it, which is exactly what ADR-0019 waited to avoid.
+
+        ### §72
+
+        Controller-side MCP holds no key for encrypted personal state.
+        Playlists, ratings, reading positions and history are **not reachable
+        here** and no tool exposes them — asserted by enumerating the
+        registered surface, not by review.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/JSONRPCRequest" }
+      responses:
+        "200":
+          description: The JSON-RPC response. Tool failures are errors INSIDE this envelope, not HTTP statuses.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JSONRPCResponse" }
+        "202": { description: A notification was accepted. No body. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /api/v1/quality-profiles:
     get:
       tags: [policy]
@@ -2570,6 +2636,68 @@ components:
             because a caveat the reader of the response never sees is a caveat
             that does not work. A client must not read `satisfied` here as
             evidence that replication works.
+
+    JSONRPCRequest:
+      type: object
+      required: [jsonrpc, method]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        id:
+          description: |
+            Absent makes this a notification, which is answered with `202` and
+            no body rather than a result.
+          oneOf:
+            - type: string
+            - type: integer
+        method:
+          type: string
+          enum: [initialize, tools/list, tools/call, ping]
+        params:
+          type: object
+          description: |
+            For `tools/call`: `{ "name": "...", "arguments": { ... } }`. The
+            argument shape for each tool is its `inputSchema` from `tools/list`,
+            and unknown fields are refused rather than ignored — an agent that
+            misspelled one finds out instead of getting a cheerful empty result.
+
+    JSONRPCResponse:
+      type: object
+      required: [jsonrpc]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        id:
+          oneOf:
+            - type: string
+            - type: integer
+        result:
+          type: object
+          description: |
+            For `tools/call`, MCP's content envelope: a `content` array with a
+            text block every client can render, plus `structuredContent`
+            carrying the same value as JSON. Both, so an agent gets prose it can
+            quote **and** a shape it can branch on rather than having to parse
+            the prose.
+        error: { $ref: "#/components/schemas/JSONRPCError" }
+
+    JSONRPCError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: integer
+          description: |
+            JSON-RPC 2.0 codes, plus one. `-32700` parse error, `-32600` invalid
+            request, `-32601` method or tool not found, `-32602` invalid params,
+            `-32603` internal error, and **`-32001` forbidden** — outside the
+            reserved range because a refused scope is not a malformed request,
+            and an agent that cannot tell "you may not do this" from "you asked
+            wrongly" will retry the wrong one forever.
+        message: { type: string }
+        data:
+          type: object
+          description: |
+            The actionable half. A refused scope names the tool and the scope it
+            needs; a deferred §71 verb names the milestone that brings it.
 
     EvaluateRequest:
       type: object

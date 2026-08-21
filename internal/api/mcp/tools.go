@@ -1,0 +1,235 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+
+	"github.com/rarebit-one/heyarr-core/internal/api/resources"
+	"github.com/rarebit-one/heyarr-core/internal/auth"
+)
+
+// The tool surface (§71).
+//
+// Nine verbs, each one §71 names. Five more that §71 names are ABSENT and
+// recorded in deferred.go with the milestone that brings them — see the
+// package doc for why absent beats stubbed.
+//
+// The split between this file and the handlers is deliberate: this is the
+// VOCABULARY, readable in one screen, and reviewing the authorisation surface
+// means reading the Scope column here rather than opening nine handlers.
+
+func (s *Server) registerTools() {
+	s.tools.register(Tool{
+		Name:     "search_content",
+		Title:    "Search the library",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "Find works already in the library by title. Use this to resolve " +
+			"what someone means before wanting it — a work found here can be wanted by " +
+			"id, which is exact, rather than by description, which may create a second " +
+			"work if it does not match what a scan would have produced.",
+		InputSchema: schemaSearchContent,
+		Handler:     s.searchContent,
+	})
+
+	s.tools.register(Tool{
+		Name:     "want_content",
+		Title:    "Want content",
+		Scope:    auth.ScopeWrite,
+		ReadOnly: false,
+		Description: "Declare that content SHOULD exist under a quality profile, whether " +
+			"or not it does. This is the central action: it works for content the library " +
+			"has never seen, creating the work from a description. Name the profile the " +
+			"way a person would — \"living-room\" — not by id.",
+		InputSchema: schemaWantContent,
+		Handler:     s.wantContent,
+	})
+
+	s.tools.register(Tool{
+		Name:     "monitor_content",
+		Title:    "Keep looking, or stop",
+		Scope:    auth.ScopeWrite,
+		ReadOnly: false,
+		Description: "Turn monitoring on or off for a want. Monitoring is NOT the same as " +
+			"wanting: an unmonitored want that is satisfied is finished, while a monitored " +
+			"one keeps looking for something better. Turn it off when someone says \"this " +
+			"copy is fine, stop\".",
+		InputSchema: schemaMonitorContent,
+		Handler:     s.monitorContent,
+	})
+
+	s.tools.register(Tool{
+		Name:     "get_missing_content",
+		Title:    "What is not satisfied",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "List wants whose content is not satisfied — either nothing is held, " +
+			"or what is held does not meet the profile. Use get_content_satisfaction on " +
+			"one of them to find out which, and why.",
+		InputSchema: schemaNoArgs,
+		Handler:     s.getMissingContent,
+	})
+
+	s.tools.register(Tool{
+		Name:     "get_upgrade_candidates",
+		Title:    "What could be better",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "List wants that are satisfied and could still be improved — " +
+			"monitored, holding acceptable content, and not yet at the profile's terminal " +
+			"condition. A want being here does not mean a better release exists, only " +
+			"that nothing about its state rules one out.",
+		InputSchema: schemaNoArgs,
+		Handler:     s.getUpgradeCandidates,
+	})
+
+	s.tools.register(Tool{
+		Name:     "get_content_satisfaction",
+		Title:    "Why a want is or is not met",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "Explain one want: whether the library holds bytes the profile " +
+			"accepts, whether those bytes are on every peer that should hold them, and " +
+			"WHICH RULE rejected each asset that did not qualify. This is the tool to " +
+			"reach for when someone says \"I have this, why does Heyarr say it is missing\".",
+		InputSchema: schemaDesiredItemID,
+		Handler:     s.getContentSatisfaction,
+	})
+
+	s.tools.register(Tool{
+		Name:     "explain_release",
+		Title:    "Explain a release against a profile",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "Score one or more releases against a quality profile and return the " +
+			"reasons — every rule considered, whether it passed, failed, scored, missed or " +
+			"could not be determined. Writes nothing, so it is safe to use for answering " +
+			"\"would this be accepted?\" before anything is acquired. An attribute left out " +
+			"is reported as undetermined rather than as a failure, which is a different " +
+			"thing and sends you to a different place.",
+		InputSchema: schemaExplainRelease,
+		Handler:     s.explainRelease,
+	})
+
+	s.tools.register(Tool{
+		Name:     "get_peer_status",
+		Title:    "Peer status",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "List the peers this instance knows about and what each is for. " +
+			"Note there is exactly one peer by design in this milestone, so this reporting " +
+			"a single peer is correct rather than a symptom.",
+		InputSchema: schemaNoArgs,
+		Handler:     s.getPeerStatus,
+	})
+
+	s.tools.register(Tool{
+		Name:     "get_replica_status",
+		Title:    "Where bytes are",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "Report which peers hold a blob and whether their copy is verified. " +
+			"A copy that is pending or corrupt is NOT a copy for placement purposes.",
+		InputSchema: schemaBlobHash,
+		Handler:     s.getReplicaStatus,
+	})
+
+	s.tools.register(Tool{
+		Name:     "verify_blob",
+		Title:    "Re-verify stored bytes",
+		Scope:    auth.ScopeWrite,
+		ReadOnly: false,
+		Description: "Queue a re-read of a blob's bytes to confirm they still hash to " +
+			"what the catalog recorded. Queues work rather than doing it — the answer " +
+			"arrives on the job, not in this reply — because re-hashing a large file is " +
+			"not something to hold a request open for.",
+		InputSchema: schemaBlobHash,
+		Handler:     s.verifyBlob,
+	})
+}
+
+// decodeArgs unmarshals a tool's arguments, rejecting unknown fields.
+//
+// An agent that sent {"titel": "..."} and got a cheerful empty result would
+// have no way to learn it had misspelled anything. Refusing is how it finds
+// out, and an agent is far better than a human at correcting once told.
+func decodeArgs(raw json.RawMessage, into any) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(into); err != nil {
+		return invalidParams("the arguments are not valid: %s", err.Error())
+	}
+	return nil
+}
+
+// wantContent is the write intent, shared with POST /api/v1/desired.
+//
+// The whole body of this function is the argument shape and the delegation.
+// That is the point: the intent lives in resources.WantContent, and both doors
+// call it, so the acquisition row, the two events and the immediate
+// reconciliation cannot happen through one door and not the other.
+func (s *Server) wantContent(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args struct {
+		WorkID         string `json:"work_id"`
+		Title          string `json:"title"`
+		ContentType    string `json:"content_type"`
+		Year           int    `json:"year"`
+		QualityProfile string `json:"quality_profile"`
+		Monitor        *bool  `json:"monitor"`
+		Reason         string `json:"reason"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+
+	req := resources.WantContentRequest{
+		WorkID:         args.WorkID,
+		QualityProfile: args.QualityProfile,
+		Monitor:        args.Monitor,
+		Reason:         args.Reason,
+	}
+	if args.Title != "" {
+		req.Work = &resources.WorkDescriptor{
+			ContentType: args.ContentType,
+			Title:       args.Title,
+			Year:        args.Year,
+		}
+	}
+
+	item, err := s.resources.WantContent(ctx, req)
+	if err != nil {
+		return nil, classify(err)
+	}
+	return item, nil
+}
+
+// monitorContent is the other write intent, shared with PATCH /desired/{id}.
+func (s *Server) monitorContent(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args struct {
+		DesiredItemID string `json:"desired_item_id"`
+		Monitor       *bool  `json:"monitor"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if args.DesiredItemID == "" {
+		return nil, invalidParams("desired_item_id is required")
+	}
+	if args.Monitor == nil {
+		// Required rather than defaulted. "monitor_content" with no value is
+		// ambiguous between on and off, and guessing either way is a change
+		// nobody asked for.
+		return nil, invalidParams("monitor is required — true to keep looking, false to stop")
+	}
+
+	item, err := s.resources.UpdateDesired(ctx, args.DesiredItemID,
+		resources.UpdateDesiredRequest{Monitor: args.Monitor})
+	if err != nil {
+		return nil, classify(err)
+	}
+	return item, nil
+}

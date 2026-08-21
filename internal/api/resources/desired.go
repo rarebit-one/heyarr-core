@@ -98,17 +98,18 @@ type AcquisitionView struct {
 // It is reachable per want at GET /api/v1/desired/{id}/satisfaction, which is
 // the same shape §63's evaluation endpoint takes for candidates.
 
-// createDesiredRequest is the POST body.
+// WantContentRequest is the intent behind POST /desired and MCP's
+// want_content: make this content exist under these conditions.
 //
 // Exactly one of WorkID and Work is required. The descriptor exists so that
 // wanting something absent does not require cataloguing it first.
-type createDesiredRequest struct {
+type WantContentRequest struct {
 	Scope     string `json:"scope"`
 	WorkID    string `json:"work_id"`
 	EditionID string `json:"edition_id"`
 	// Work names content that may not exist yet. Resolved through the same
 	// get-or-create as the scanner, so a want and a later scan converge.
-	Work *workDescriptor `json:"work"`
+	Work *WorkDescriptor `json:"work"`
 
 	QualityProfileID string `json:"quality_profile_id"`
 	// QualityProfile names a profile by NAME rather than id. A person writing
@@ -122,16 +123,17 @@ type createDesiredRequest struct {
 	Reason  string `json:"reason"`
 }
 
-// workDescriptor names content semantically, whether or not it exists.
-type workDescriptor struct {
+// WorkDescriptor names content semantically, whether or not it exists.
+type WorkDescriptor struct {
 	ContentType string `json:"content_type"`
 	Title       string `json:"title"`
 	Year        int    `json:"year"`
 }
 
-// updateDesiredRequest is the PATCH body. Every field is a pointer: absent
-// means "leave it alone", which is what makes a PATCH a PATCH.
-type updateDesiredRequest struct {
+// UpdateDesiredRequest changes a want. Every field is a pointer: absent means
+// "leave it alone", which is what makes a PATCH a PATCH — and what lets MCP's
+// monitor_content set one field without restating the rest.
+type UpdateDesiredRequest struct {
 	QualityProfileID *string `json:"quality_profile_id"`
 	QualityProfile   *string `json:"quality_profile"`
 	Monitor          *bool   `json:"monitor"`
@@ -329,33 +331,44 @@ func scanAcquisitionView(
 	}
 }
 
-// createDesired is POST /api/v1/desired.
-func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
-	var body createDesiredRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
-		return
+// WantContent creates a desired item from an intent (§55).
+//
+// # Why this is exported, and why the handler is a shell around it
+//
+// Milestone 3 gives Heyarr a second front door: MCP (§71, ADR-0019). Wanting
+// something is not "POST /desired with a different envelope" — it is an
+// INTENT, and both doors express the same one. If each implemented it, the two
+// would drift, and the drift would be silent: one door would emit the
+// acquisition event and the other would not, or one would resolve a work
+// descriptor with the scanner's normalisation and the other would not.
+//
+// That is not hypothetical in this package. The API once wrote an acquisition
+// row directly while the catalog's own StartAcquisition emitted, and an
+// acceptance assertion — not review — found that the two paths had silently
+// diverged. One implementation, two callers, is the answer.
+//
+// It returns raw errors rather than problem documents. Mapping an error onto a
+// status code is the HTTP layer's business, and MCP has to map the same errors
+// onto JSON-RPC codes; a shared implementation that returned HTTP problems
+// would have made the MCP door translate out of a vocabulary it does not speak.
+func (a *API) WantContent(ctx context.Context, req WantContentRequest) (DesiredItem, error) {
+	if req.WorkID != "" && req.Work != nil {
+		return DesiredItem{}, &badRequest{errors.New(
+			"name the work with either work_id or work, not both")}
 	}
-	if body.WorkID != "" && body.Work != nil {
-		httpapi.Fail(w, r, problem.BadRequest(
-			"name the work with either work_id or work, not both"))
-		return
+	if req.WorkID == "" && req.Work == nil {
+		return DesiredItem{}, &badRequest{errors.New(
+			"a desired item must name a work — by work_id, or by a work descriptor " +
+				"if it does not exist yet")}
 	}
-	if body.WorkID == "" && body.Work == nil {
-		httpapi.Fail(w, r, problem.BadRequest(
-			"a desired item must name a work — by work_id, or by a work descriptor "+
-				"if it does not exist yet"))
-		return
-	}
-	if body.QualityProfileID != "" && body.QualityProfile != "" {
-		httpapi.Fail(w, r, problem.BadRequest(
-			"name the quality profile with either quality_profile_id or quality_profile, not both"))
-		return
+	if req.QualityProfileID != "" && req.QualityProfile != "" {
+		return DesiredItem{}, &badRequest{errors.New(
+			"name the quality profile with either quality_profile_id or quality_profile, not both")}
 	}
 
 	monitor := true
-	if body.Monitor != nil {
-		monitor = *body.Monitor
+	if req.Monitor != nil {
+		monitor = *req.Monitor
 	}
 
 	var (
@@ -364,14 +377,14 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 		out     DesiredItem
 		created bool
 	)
-	err := a.db.InTx(r.Context(), func(tx *sql.Tx) error {
-		profileID, err := a.resolveProfile(r.Context(), tx, body.QualityProfileID, body.QualityProfile)
+	err := a.db.InTx(ctx, func(tx *sql.Tx) error {
+		profileID, err := a.resolveProfile(ctx, tx, req.QualityProfileID, req.QualityProfile)
 		if err != nil {
 			return err
 		}
-		workID := body.WorkID
-		if body.Work != nil {
-			workID, err = a.resolveWorkDescriptor(r.Context(), tx, *body.Work)
+		workID := req.WorkID
+		if req.Work != nil {
+			workID, err = a.resolveWorkDescriptor(ctx, tx, *req.Work)
 			if err != nil {
 				return err
 			}
@@ -379,12 +392,12 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 
 		item := desired.Item{
 			ID:               a.newID(),
-			Scope:            desired.Scope(body.Scope),
+			Scope:            desired.Scope(req.Scope),
 			WorkID:           workID,
-			EditionID:        body.EditionID,
+			EditionID:        req.EditionID,
 			QualityProfileID: profileID,
 			Monitor:          monitor,
-			Reason:           body.Reason,
+			Reason:           req.Reason,
 		}
 		if err := item.Validate(); err != nil {
 			return &badRequest{err}
@@ -397,7 +410,7 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 			Monitor: item.Monitor, Reason: item.Reason,
 			CreatedAt: now, UpdatedAt: now,
 		}
-		if err := insertDesired(r.Context(), tx, out); err != nil {
+		if err := insertDesired(ctx, tx, out); err != nil {
 			return err
 		}
 		// A want and its acquisition state are created together, in one
@@ -406,7 +419,7 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 		// would simply sit there, wanted and never searched for, which is the
 		// quietest possible failure this feature has.
 		initial := acquisition.Initial()
-		if err := insertAcquisition(r.Context(), tx, out.ID, initial, now); err != nil {
+		if err := insertAcquisition(ctx, tx, out.ID, initial, now); err != nil {
 			return err
 		}
 		// And it emits, in the same transaction (invariant 7).
@@ -421,7 +434,7 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 		// This was found by an acceptance assertion, not by review: the API
 		// wrote the row directly while the catalog's own StartAcquisition
 		// emitted, and the two paths had silently diverged.
-		acqEvent, err := a.events.EmitTx(r.Context(), tx, events.TypeAcquisitionPhaseChanged,
+		acqEvent, err := a.events.EmitTx(ctx, tx, events.TypeAcquisitionPhaseChanged,
 			"desired_item", out.ID, map[string]any{
 				"desired_item_id": out.ID,
 				"transition":      "created",
@@ -444,7 +457,7 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 
 		kind, target := item.Target()
 		var emitErr error
-		ev, emitErr = a.events.EmitTx(r.Context(), tx, events.TypeDesiredCreated,
+		ev, emitErr = a.events.EmitTx(ctx, tx, events.TypeDesiredCreated,
 			"desired_item", out.ID, map[string]any{
 				"desired_item_id":    out.ID,
 				"scope":              out.Scope,
@@ -456,8 +469,7 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 		return emitErr
 	})
 	if err != nil {
-		a.failDesiredWrite(w, r, err)
-		return
+		return DesiredItem{}, err
 	}
 	if created {
 		a.events.Publish(ev)
@@ -473,10 +485,10 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 	// this" makes a working system look broken. Scoped to the one want, so
 	// wanting five things queues five quick jobs rather than five full sweeps.
 	//
-	// After the response is committed, and failure is not fatal: the beat will
-	// pick this want up regardless, so a queue that is briefly unavailable
-	// costs latency rather than correctness.
-	if _, err := a.jobs.Enqueue(r.Context(), jobs.EnqueueOptions{
+	// After the row is committed, and failure is not fatal: the beat will pick
+	// this want up regardless, so a queue that is briefly unavailable costs
+	// latency rather than correctness.
+	if _, err := a.jobs.Enqueue(ctx, jobs.EnqueueOptions{
 		Type:      acquisition.ReconcileJobType,
 		Payload:   acquisition.ReconcilePayload{DesiredItemID: out.ID},
 		DedupeKey: acquisition.ReconcileDedupeKey + ":" + out.ID,
@@ -484,7 +496,21 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 		a.log.Warn("could not enqueue reconciliation for a new want",
 			"desired_item_id", out.ID, "error", err)
 	}
+	return out, nil
+}
 
+// createDesired is POST /api/v1/desired — a shell over WantContent.
+func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
+	var body WantContentRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	out, err := a.WantContent(r.Context(), body)
+	if err != nil {
+		a.failDesiredWrite(w, r, err)
+		return
+	}
 	w.Header().Set("Location", httpapi.APIPrefix+"/desired/"+out.ID)
 	a.write(w, r, http.StatusCreated, out)
 }
@@ -522,7 +548,7 @@ func (a *API) resolveProfile(ctx context.Context, tx *sql.Tx, id, name string) (
 // (M1-11), so wanting a film and later scanning it produce ONE Work. Using a
 // different key here would be the quiet kind of bug: everything works, and the
 // library slowly fills with pairs of works that are the same thing.
-func (a *API) resolveWorkDescriptor(ctx context.Context, tx *sql.Tx, d workDescriptor) (string, error) {
+func (a *API) resolveWorkDescriptor(ctx context.Context, tx *sql.Tx, d WorkDescriptor) (string, error) {
 	contentType := strings.ToLower(strings.TrimSpace(d.ContentType))
 	title := strings.TrimSpace(d.Title)
 	if contentType == "" {
@@ -577,50 +603,49 @@ func (a *API) resolveWorkDescriptor(ctx context.Context, tx *sql.Tx, d workDescr
 	return id, nil
 }
 
-// updateDesired is PATCH /api/v1/desired/{id}.
+// UpdateDesired changes the conditions, the monitoring or the note on a want.
 //
-// The target is deliberately NOT changeable. Repointing a want at different
-// content is not an edit, it is a different want, and allowing it would make
-// the acquisition history attached to this row describe something else.
-func (a *API) updateDesired(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	var body updateDesiredRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
-		return
-	}
-
+// Exported for the same reason as WantContent: MCP's monitor_content is the
+// same intent as PATCH /desired/{id}, narrowed to one field. Two
+// implementations of "stop looking for something better" would eventually
+// disagree about whether that emits.
+//
+// The TARGET is deliberately not changeable through either door. Repointing a
+// want at different content is not an edit, it is a different want, and
+// allowing it would make the acquisition history attached to that row describe
+// something else.
+func (a *API) UpdateDesired(ctx context.Context, id string, req UpdateDesiredRequest) (DesiredItem, error) {
 	var (
 		ev      events.Event
 		emitted bool
 		out     DesiredItem
 	)
-	err := a.db.InTx(r.Context(), func(tx *sql.Tx) error {
-		existing, err := desiredByID(r.Context(), tx, id)
+	err := a.db.InTx(ctx, func(tx *sql.Tx) error {
+		existing, err := desiredByID(ctx, tx, id)
 		if err != nil {
 			return err
 		}
 		out = existing
 
-		if body.QualityProfileID != nil || body.QualityProfile != nil {
+		if req.QualityProfileID != nil || req.QualityProfile != nil {
 			var wantID, wantName string
-			if body.QualityProfileID != nil {
-				wantID = *body.QualityProfileID
+			if req.QualityProfileID != nil {
+				wantID = *req.QualityProfileID
 			}
-			if body.QualityProfile != nil {
-				wantName = *body.QualityProfile
+			if req.QualityProfile != nil {
+				wantName = *req.QualityProfile
 			}
-			profileID, err := a.resolveProfile(r.Context(), tx, wantID, wantName)
+			profileID, err := a.resolveProfile(ctx, tx, wantID, wantName)
 			if err != nil {
 				return err
 			}
 			out.QualityProfileID = profileID
 		}
-		if body.Monitor != nil {
-			out.Monitor = *body.Monitor
+		if req.Monitor != nil {
+			out.Monitor = *req.Monitor
 		}
-		if body.Reason != nil {
-			out.Reason = *body.Reason
+		if req.Reason != nil {
+			out.Reason = *req.Reason
 		}
 
 		item := out.domainItem()
@@ -630,16 +655,16 @@ func (a *API) updateDesired(w http.ResponseWriter, r *http.Request) {
 		out.Reason = item.Reason
 
 		if sameDesired(existing, out) {
-			// Not a transition. A PATCH that changes nothing must not emit.
+			// Not a transition. A change that changes nothing must not emit.
 			out = existing
 			return nil
 		}
 		out.UpdatedAt = a.now().UTC()
-		if err := updateDesiredRow(r.Context(), tx, out); err != nil {
+		if err := updateDesiredRow(ctx, tx, out); err != nil {
 			return err
 		}
 		var emitErr error
-		ev, emitErr = a.events.EmitTx(r.Context(), tx, events.TypeDesiredUpdated,
+		ev, emitErr = a.events.EmitTx(ctx, tx, events.TypeDesiredUpdated,
 			"desired_item", out.ID, map[string]any{
 				"desired_item_id":    out.ID,
 				"quality_profile_id": out.QualityProfileID,
@@ -649,11 +674,26 @@ func (a *API) updateDesired(w http.ResponseWriter, r *http.Request) {
 		return emitErr
 	})
 	if err != nil {
-		a.failDesiredWrite(w, r, err)
-		return
+		return DesiredItem{}, err
 	}
 	if emitted {
 		a.events.Publish(ev)
+	}
+	return out, nil
+}
+
+// updateDesired is PATCH /api/v1/desired/{id} — a shell over UpdateDesired.
+func (a *API) updateDesired(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body UpdateDesiredRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	out, err := a.UpdateDesired(r.Context(), id, body)
+	if err != nil {
+		a.failDesiredWrite(w, r, err)
+		return
 	}
 	a.write(w, r, http.StatusOK, out)
 }
@@ -700,8 +740,40 @@ func (a *API) deleteDesired(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// failDesiredWrite maps the write failures that are the client's fault onto
-// the right status, so an ordinary operator mistake is not a 500.
+// ClientFault reports whether an error from a write intent is the CALLER's
+// fault, and returns a message safe to hand back.
+//
+// It exists because there are now two front doors and they speak different
+// error vocabularies: HTTP answers with problem documents and status codes,
+// MCP with JSON-RPC codes. Both need the same classification — "you asked
+// wrongly" versus "we broke" — and duplicating that judgement would mean one
+// door eventually reporting a duplicate want as an internal error while the
+// other reports a conflict.
+//
+// An unclassified error is OURS. Neither door may hand its detail to a caller:
+// it is not useful to them and it is free reconnaissance for anyone else.
+func ClientFault(err error) (string, bool) {
+	var bad *badRequest
+	switch {
+	case errors.As(err, &bad):
+		return bad.err.Error(), true
+	case isUniqueViolation(err):
+		// §61: two wants over one target with DIFFERENT profiles are legal and
+		// are the point. This is the same target AND the same profile, which
+		// is one want written twice.
+		return "that content is already wanted under that quality profile — " +
+			"to want a second copy, use a different profile", true
+	case isForeignKeyViolation(err):
+		return "the work, edition or quality profile named does not exist", true
+	case errors.Is(err, sql.ErrNoRows):
+		return "nothing here matches that identifier", true
+	}
+	return "", false
+}
+
+// failDesiredWrite renders a write failure as a problem document, using
+// ClientFault's judgement so the HTTP door and the MCP door agree about whose
+// fault an error is.
 func (a *API) failDesiredWrite(w http.ResponseWriter, r *http.Request, err error) {
 	var bad *badRequest
 	switch {
