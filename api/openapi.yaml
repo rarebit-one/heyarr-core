@@ -1131,6 +1131,24 @@ paths:
         - name: quality_profile_id
           in: query
           schema: { type: string }
+        - name: upgradable
+          in: query
+          description: |
+            Which wants are in a state where an upgrade **could** happen — the
+            listing question §71's `get_upgrade_candidates` asks.
+
+            Answered from **state alone**: monitored, content satisfied, and
+            holding bytes. It deliberately does not score anything, because
+            whether a want has reached its profile's *terminal* condition needs
+            the incumbent re-evaluated against the profile — a join and a
+            scorer per row, which would run the evaluator hundreds of times to
+            render one page.
+
+            So this filter is the **cheap half** of eligibility and is a
+            superset: a want that is monitored and satisfied but already
+            terminal appears here. `GET /desired/{id}/satisfaction` reports the
+            terminal test per want, and the `upgrade_scan` job applies it.
+          schema: { type: string, enum: ["true", "false"] }
       responses:
         "200":
           description: A page of desired items.
@@ -2391,6 +2409,49 @@ components:
           description: §64's derived name, so this response stands alone.
         content: { $ref: "#/components/schemas/ContentSatisfaction" }
         placement: { $ref: "#/components/schemas/PlacementSatisfaction" }
+        upgrade: { $ref: "#/components/schemas/UpgradeEligibility" }
+
+    UpgradeEligibility:
+      type: object
+      description: |
+        Whether this want could be **improved** (§60) — a different question
+        from either satisfaction axis. A want can be fully satisfied and still
+        improvable, and that gap is the whole upgrade workflow:
+
+        | state | meaning |
+        |---|---|
+        | not accepted | `MISSING`, keep searching — an *acquisition*, not an upgrade |
+        | accepted, not terminal | satisfied **and** still improvable |
+        | terminal | done; there is nothing left to want |
+      required: [eligible, status, detail]
+      properties:
+        eligible:
+          type: boolean
+          description: Nothing about this want's state rules an upgrade out.
+        status:
+          type: string
+          enum:
+            [
+              available,
+              not_monitored,
+              not_satisfied,
+              terminal,
+              no_better_candidate,
+            ]
+          description: |
+            **Why** — an enumerated reason rather than a bare boolean, because
+            "no upgrade" has four completely different meanings and an operator
+            asking "why is this not upgrading" needs to know which.
+
+            `not_monitored` outranks `terminal`: a want that is both reports
+            the operator's decision, because "you told me to stop" is the more
+            useful answer than "it happens to be perfect".
+
+            `no_better_candidate` is the **normal** answer for a healthy
+            library — eligible, with nothing better found. It is what an
+            eligible want reports when nothing is on offer.
+        detail:
+          type: string
 
     ContentSatisfaction:
       type: object

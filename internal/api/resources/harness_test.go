@@ -24,6 +24,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
@@ -128,14 +129,25 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	}
 
 	ids := &idSequence{}
+	// The catalog answers §56's satisfaction questions and §60's upgrade
+	// question. Without it the satisfaction routes are not mounted at all —
+	// which is how they went untested at this layer when M3-05 added them.
+	cat, err := catalog.New(catalog.Options{
+		DB: db, Events: eventLog, PeerName: "test", PeerSite: "test-site", Clock: clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	api, err := resources.New(resources.Options{
-		DB:     db,
-		Jobs:   queue,
-		Events: eventLog,
-		Tokens: store,
-		Logger: slog.New(slog.DiscardHandler),
-		Now:    clock.Now,
-		NewID:  ids.next,
+		DB:      db,
+		Jobs:    queue,
+		Events:  eventLog,
+		Tokens:  store,
+		Catalog: cat,
+		Logger:  slog.New(slog.DiscardHandler),
+		Now:     clock.Now,
+		NewID:   ids.next,
 		// Short enough that an idle stream heartbeats within a test's patience,
 		// long enough that it is not the thing under test.
 		StreamHeartbeat: 50 * time.Millisecond,

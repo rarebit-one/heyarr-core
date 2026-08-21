@@ -166,6 +166,7 @@ func (c *Controller) Run(ctx context.Context) error {
 		return fmt.Errorf("controller: opening the job queue for reconciliation: %w", err)
 	}
 	startReconciliation(ctx, reconcileQueue, c.log)
+	startUpgradeScan(ctx, reconcileQueue, c.log)
 
 	// "started" is logged only after every listener is bound. A start line
 	// printed before the socket exists is a lie that costs someone an

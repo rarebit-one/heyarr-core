@@ -86,6 +86,26 @@ const (
 	TypeAcquisitionPhaseChanged = "acquisition.phase_changed"
 	TypeAcquisitionSatisfaction = "acquisition.satisfaction_changed"
 
+	// The upgrade workflow (§60, M3-06).
+	//
+	// TypeUpgradeFound is a strictly better release being available for
+	// something already satisfied. It is emitted when the upgrade is DECIDED,
+	// not when the scan notices eligibility — a beat that re-announced the
+	// same available upgrade every five minutes would be a heartbeat rather
+	// than an event stream.
+	//
+	// TypeUpgradeSuperseded is the incumbent being logically deleted once the
+	// replacement is under management (ADR-0018). Its payload says
+	// bytes_removed explicitly, because that is the whole point of ADR-0018
+	// and the first question anyone reading the log will have.
+	//
+	// There is no "upgrade.completed": an upgrade completing IS the
+	// replacement reaching AVAILABLE, which acquisition.phase_changed already
+	// reports, followed by the supersession below. A third event would say a
+	// third time what two already said.
+	TypeUpgradeFound      = "acquisition.upgrade_found"
+	TypeUpgradeSuperseded = "acquisition.upgrade_superseded"
+
 	TypeDesiredCreated   = "desired.created"
 	TypeDesiredUpdated   = "desired.updated"
 	TypeDesiredRemoved   = "desired.removed"
