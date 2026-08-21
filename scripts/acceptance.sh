@@ -744,6 +744,45 @@ providers:
               resolution: 480
               source: cam
               video_codec: h264
+      # M3-15's full arc. A title the fixture library does NOT hold, so the
+      # want begins with nothing at all — which is the case the milestone's
+      # headline claim is about, and the one every fixture-shaped test quietly
+      # avoids because every fixture has assets.
+      - title: Nightfall Sonata
+        candidates:
+          - id: ns-2160-remux
+            title: Nightfall Sonata 2160p remux
+            attributes:
+              resolution: 2160
+              source: remux
+              video_codec: hevc
+              hdr: true
+              audio_channels: 6
+      # M3-15's refusal arc. EVERY candidate fails the gate, so the demo has a
+      # want that searched, found things, and correctly acquired none of them —
+      # with a durable explanation for each. §63's rejection reasons are as
+      # much the deliverable as the acceptances, and a constraint nobody has
+      # watched reject anything is decoration.
+      - title: Static Bloom
+        candidates:
+          - id: sb-480-cam
+            title: Static Bloom 480p cam
+            attributes:
+              resolution: 480
+              source: cam
+              video_codec: h264
+          - id: sb-576-ts
+            title: Static Bloom 576p telesync
+            attributes:
+              resolution: 576
+              source: telesync
+              video_codec: h264
+          - id: sb-720-web
+            title: Static Bloom 720p web-dl
+            attributes:
+              resolution: 720
+              source: web-dl
+              video_codec: h264
       # A title the indexer has nothing for, so the empty-search edge is
       # reachable without reconfiguring anything. It is a work the fixture
       # library already holds, so wanting it creates nothing.
@@ -2502,6 +2541,278 @@ YAML
 
   api "/api/v1/desired/$ing_want" -X DELETE -o /dev/null
 
+  note "  THE MILESTONE ARC: decides, explains, acquires (M3-15)"
+  # This is the milestone gate, and it is the only section that runs the WHOLE
+  # arc as one continuous story rather than proving one link of it.
+  #
+  # Every earlier M3 section asserts its own issue's claim against a library
+  # that already contains things. This one starts from nothing: a want for
+  # content the fixture library does not hold, no asset, no blob, no bytes
+  # anywhere — which is the case the milestone is actually about and the one
+  # every fixture-shaped test quietly avoids, because every fixture has assets.
+  #
+  # AND IT DOES IT WITH NO REAL INDEXER. That is not a limitation being worked
+  # around; it is the claim (§84, ADR-0026). A real indexer proxies real
+  # trackers with real credentials and can never run in CI, so a milestone that
+  # could only be demonstrated with one would be a milestone nobody could
+  # verify.
+  #
+  # It sits below every catalog count with the other M3 sections: wanting
+  # unknown content creates a Work, and ingesting creates an asset.
+  local arc_want arc_state arc_file arc_work arc_sat
+
+  # 1. WANT SOMETHING THAT DOES NOT EXIST.
+  arc_want=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d '{"work":{"content_type":"movie","title":"Nightfall Sonata","year":2019},
+         "quality_profile":"living-room","reason":"the milestone arc"}' | jq -r '.id')
+  assert_contains "$arc_want" "-" "a want can be created for content that exists nowhere"
+  arc_work=$(api "/api/v1/desired/$arc_want" | jq -r '.work_id')
+  assert_eq "$(api "/api/v1/desired/$arc_want" | jq -r '.acquisition.managed')" "false" \
+    "and it begins holding nothing at all"
+  assert_eq "$(api "/api/v1/desired/$arc_want" | jq -r '.acquisition.state')" "MISSING" \
+    "which §64 presents as MISSING"
+
+  # 2. SEARCH. A job, claimed by a worker, against a provider through the
+  #    registry — the same path a real indexer would take.
+  api "/api/v1/desired/$arc_want/search" -X POST -o /dev/null
+  waited=0
+  while (( waited < 600 )); do
+    arc_state=$(api "/api/v1/desired/$arc_want" | jq -r '.acquisition.state')
+    [[ "$arc_state" == "SELECTED" ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  assert_eq "$arc_state" "SELECTED" \
+    "a search finds a release and the evaluator selects one"
+
+  # 3. AND IT EXPLAINS ITSELF. §61 lists opaque scoring among the things Heyarr
+  #    avoids; a score with no reasons is exactly that.
+  local arc_reasons
+  arc_reasons=$(api "/api/v1/desired/$arc_want/candidates")
+  assert_eq "$(jq -r '[.candidates[] | select(.selected)] | length' <<<"$arc_reasons")" "1" \
+    "exactly one candidate is recorded as selected"
+  assert_eq "$(jq -r '[.candidates[] | select(.selected)] | .[0].accepted' <<<"$arc_reasons")" "true" \
+    "the selected candidate passed every gate"
+  assert_contains "$(jq -r '[.candidates[] | select(.selected)] | .[0].reasons[0].rule' <<<"$arc_reasons")" "." \
+    "and the decision carries the rules it was made on, durably"
+
+  # 4. ACQUIRE AND INGEST. The bytes arrive somewhere the scanner never walks,
+  #    which is what a download directory is.
+  arc_file=$WORK/downloads/Nightfall.Sonata.2019.2160p.mkv
+  mkdir -p "$WORK/downloads"
+  head -c 262144 /dev/urandom > "$arc_file"
+  api "/api/v1/desired/$arc_want/acquisitions" -X POST -H 'Content-Type: application/json' \
+    -d "{\"provider\":\"acceptance-downloader\",\"external_id\":\"arc-infohash\",
+         \"external_name\":\"Nightfall.Sonata.2019.2160p.mkv\",\"local_path\":\"$arc_file\"}" \
+    -o /dev/null
+
+  waited=0
+  while (( waited < 600 )); do
+    [[ "$(api "/api/v1/desired/$arc_want" | jq -r '.acquisition.managed')" == "true" ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  assert_eq "$(api "/api/v1/desired/$arc_want" | jq -r '.acquisition.managed')" "true" \
+    "the acquisition is verified and brought under management"
+
+  # 5. AND IT IS SATISFIED — reconciled ON DEMAND rather than waiting for the
+  #    beat, so this is deterministic. Asserting a satisfaction axis against a
+  #    timer is what made an earlier section flake on half of runs.
+  arc_sat=$(api "/api/v1/desired/$arc_want/satisfaction")
+  assert_eq "$(jq -r '.content.assets | length' <<<"$arc_sat")" "1" \
+    "and the acquired asset is the one considered for satisfaction"
+
+  # WHY THIS ENDS AT AVAILABLE RATHER THAN CONTENT_SATISFIED, always.
+  #
+  # The artifact above is 262144 random bytes standing in for a completed
+  # download. It is not media, so NOTHING can measure it — the profile gates on
+  # resolution, resolution comes from a probe, and there is no resolution in
+  # random bytes whether or not this machine has ffprobe.
+  #
+  # My first version branched on `command -v ffprobe` and asserted `satisfied`
+  # when a toolchain was present. That conflated "a toolchain exists" with
+  # "these bytes can be measured" — it passed on a machine with no toolchain and
+  # failed on the runner that HAS one, which is the branch a bare machine cannot
+  # execute. The distinction is the entire subject of §63's `undetermined`
+  # result, and flattening it in the section that exists to demonstrate it was
+  # the wrong place to be careless.
+  #
+  # So the assertion is unconditional, and it is the RIGHT answer rather than a
+  # weaker one: a gate that cannot be SHOWN to hold must not pass, and the
+  # reason says the attribute could not be determined rather than claiming the
+  # file is too small. Measurement against real media is proven by the
+  # satisfaction section, which runs over the scanned fixture library.
+  #
+  # This arc proves the PIPELINE — a want with nothing behind it reaching bytes
+  # under management, having explained every step. Whether those particular
+  # bytes are good enough is a different claim, tested elsewhere.
+  assert_eq "$(jq -r '.content.satisfaction' <<<"$arc_sat")" "not_satisfied" \
+    "unmeasurable bytes cannot be SHOWN to meet the profile"
+  assert_eq "$(jq -r '[.content.assets[0].reasons[] | select(.rule == "resolution.gte")] | .[0].result' \
+    <<<"$arc_sat")" "undetermined" \
+    "and it says the attribute could not be determined, not that the file is too small"
+  assert_eq "$(jq -r '.state' <<<"$arc_sat")" "AVAILABLE" \
+    "so the want is AVAILABLE — bytes held, not known to be good enough"
+
+  # THE WHOLE CLAIM, IN ONE LINE. No indexer, no download client, and on this
+  # machine no toolchain either — and a want went from nothing at all to bytes
+  # under management, having explained every step.
+  pass "content that existed nowhere is now under management, with no real indexer present"
+
+  note "  THE REFUSAL ARC: found things, acquired none, and said why"
+  # The other half of §63, and the half that is easier to leave untested. A
+  # want that searched, found three releases, and correctly took none of them
+  # must leave three durable explanations behind — not a silence.
+  local ref_want ref_cands
+  ref_want=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d '{"work":{"content_type":"movie","title":"Static Bloom","year":2021},
+         "quality_profile":"living-room"}' | jq -r '.id')
+  api "/api/v1/desired/$ref_want/search" -X POST -o /dev/null
+
+  waited=0
+  while (( waited < 600 )); do
+    [[ "$(api "/api/v1/desired/$ref_want/candidates" | jq -r '.candidates | length')" -ge 3 ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  ref_cands=$(api "/api/v1/desired/$ref_want/candidates")
+
+  assert_eq "$(jq -r '.candidates | length' <<<"$ref_cands")" "3" \
+    "every candidate the search found is recorded, not only the acceptable ones"
+  assert_eq "$(jq -r '[.candidates[] | select(.accepted)] | length' <<<"$ref_cands")" "0" \
+    "none of them was acceptable"
+  assert_eq "$(jq -r '[.candidates[] | select(.selected)] | length' <<<"$ref_cands")" "0" \
+    "so nothing was selected — the least bad is not good enough"
+  assert_eq "$(jq -r '[.candidates[] | select((.rejected_by | length) > 0)] | length' <<<"$ref_cands")" "3" \
+    "and all three carry the rule that rejected them"
+  # The pipeline is at rest and holding nothing: a fruitless search leaves the
+  # want exactly as unmet as before.
+  assert_eq "$(api "/api/v1/desired/$ref_want" | jq -r '.acquisition.phase')" "idle" \
+    "a want that found nothing acceptable returns to rest"
+  assert_eq "$(api "/api/v1/desired/$ref_want" | jq -r '.acquisition.managed')" "false" \
+    "still holding nothing"
+
+  api "/api/v1/desired/$ref_want" -X DELETE -o /dev/null
+  api "/api/v1/desired/$arc_want" -X DELETE -o /dev/null
+
+  note "  THE FULLY DEGRADED NODE (ADR-0023, ADR-0025)"
+  # No toolchain, no indexer, no download client — all three absent at once.
+  #
+  # Every one of those degradations is asserted somewhere already, and each is
+  # asserted ALONE. This is the configuration nobody tests: an operator who has
+  # copied a single static binary onto a NAS and started it, with nothing else
+  # installed and nothing configured. It is also the FIRST configuration Heyarr
+  # is ever in, so if it does not work the second one never happens.
+  #
+  # ADR-0023 made the toolchain optional and ADR-0025 extended that to external
+  # services. Neither ADR claims the combination, and a combination that has
+  # never run is a combination nobody should assume.
+  local bare_dir bare_log bare_pid bare_sock
+  bare_dir=$WORK/bare
+  bare_log=$WORK/bare-node.log
+  bare_sock=$bare_dir/heyarr.sock
+  mkdir -p "$bare_dir"
+
+  cat > "$WORK/bare.yaml" <<YAML
+data_dir: $bare_dir
+peer:
+  name: acceptance-bare
+  site: test
+log:
+  level: info
+  format: json
+http:
+  addr: ""
+  unix_socket: $bare_sock
+  auth:
+    enabled: false
+libraries:
+  - name: films
+    content_type: movie
+    roots: ["$FULLLIB/movies"]
+YAML
+
+  # env -i, and a PATH pointing at a directory that exists and holds nothing.
+  # An honest simulation of a machine that never had a toolchain, rather than
+  # one where it happens to be missing today.
+  mkdir -p "$WORK/empty-bin"
+  env -i PATH="$WORK/empty-bin" HOME="$HOME" \
+    "$PWD/$BIN" --config "$WORK/bare.yaml" all >"$bare_log" 2>&1 &
+  bare_pid=$!
+
+  waited=0
+  while (( waited < 600 )); do
+    curl -sf --unix-socket "$bare_sock" http://heyarr/readyz >/dev/null 2>&1 && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+
+  bare_api() { curl -sS --unix-socket "$bare_sock" "$@" "http://heyarr$1"; }
+
+  if curl -sf --unix-socket "$bare_sock" http://heyarr/readyz >/dev/null 2>&1; then
+    pass "a node with no toolchain, no indexer and no download client becomes ready"
+  else
+    fail "the fully degraded node never became ready"
+  fi
+
+  # It says what it cannot do, rather than leaving an operator to infer it from
+  # things not happening. "Why is nothing probing" should be answerable from
+  # one request.
+  local bare_system
+  bare_system=$(curl -sS --unix-socket "$bare_sock" http://heyarr/api/v1/system)
+  assert_eq "$(jq -r '[.media[] | select(.available)] | length' <<<"$bare_system")" "0" \
+    "and reports that it resolved no media toolchain"
+  assert_eq "$(jq -r '.media | length' <<<"$bare_system")" "2" \
+    "naming both tools rather than omitting them, so the degradation is legible"
+  assert_eq "$(curl -sS --unix-socket "$bare_sock" http://heyarr/api/v1/providers \
+    | jq -r '.items | length')" "0" \
+    "and that it has no providers configured at all"
+
+  # THE POINT: everything that does not need an external thing still works.
+  # ADR-0023's claim is that a node without the toolchain "scans, ingests,
+  # catalogues, verifies, garbage-collects and serves byte ranges exactly as
+  # before" — asserted here on a real node rather than reasoned about.
+  waited=0
+  while (( waited < 900 )); do
+    [[ "$(curl -sS --unix-socket "$bare_sock" http://heyarr/api/v1/assets \
+      | jq -r '.items | length')" -gt 0 ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  local bare_assets bare_blob
+  bare_assets=$(curl -sS --unix-socket "$bare_sock" http://heyarr/api/v1/assets | jq -r '.items | length')
+  if (( bare_assets > 0 )); then
+    pass "it scans and ingests a library with no toolchain present ($bare_assets assets)"
+  else
+    fail "the degraded node ingested nothing"
+  fi
+
+  bare_blob=$(curl -sS --unix-socket "$bare_sock" http://heyarr/api/v1/assets \
+    | jq -r '[.items[] | select(.blob_hash != null)] | .[0].blob_hash')
+  assert_eq "$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket "$bare_sock" \
+    -H 'Range: bytes=0-1023' "http://heyarr/api/v1/blobs/$bare_blob/content")" "206" \
+    "and serves byte ranges from what it ingested (ADR-0013)"
+
+  # Wanting still works, because desired state needs no external service at
+  # all. What it CANNOT do is find anything — and the search stays PENDING
+  # rather than failing, which is ADR-0025's central claim.
+  local bare_want bare_job
+  bare_want=$(curl -sS --unix-socket "$bare_sock" -X POST -H 'Content-Type: application/json' \
+    -d '{"work":{"content_type":"movie","title":"Unfindable","year":2020},
+         "quality_profile":"living-room"}' \
+    http://heyarr/api/v1/desired | jq -r '.id')
+  assert_contains "$bare_want" "-" "a node with no indexer can still be told what should exist"
+
+  curl -sS --unix-socket "$bare_sock" -X POST -o /dev/null \
+    "http://heyarr/api/v1/desired/$bare_want/search"
+  # Give the worker a moment to NOT claim it. There is no positive edge to wait
+  # for here — the assertion is that nothing happens — so this is bounded by a
+  # short settle rather than by polling for an arrival.
+  sleep 2
+  bare_job=$(curl -sS --unix-socket "$bare_sock" "http://heyarr/api/v1/jobs?type=search_release")
+  assert_eq "$(jq -r '[.items[] | select(.state == "failed")] | length' <<<"$bare_job")" "0" \
+    "a search on a node with no indexer does NOT fail"
+  assert_eq "$(jq -r '[.items[] | select(.state == "pending")] | length' <<<"$bare_job")" "1" \
+    "it stays pending and visible, which is the whole of ADR-0025's degrade path"
+
+  kill "$bare_pid" 2>/dev/null || true
+  wait "$bare_pid" 2>/dev/null || true
+
   note "  a mixed fleet (§75, ADR-0023)"
   # The one claim in ADR-0023 with no evidence behind it until now.
   #
@@ -2809,6 +3120,48 @@ if (( DEMO_ELAPSED > DEMO_BUDGET_SECONDS )); then
 else
   pass "the demo finished in ${DEMO_ELAPSED}s, within its ${DEMO_BUDGET_SECONDS}s budget"
 fi
+
+# ---------------------------------------------------------------------------
+# What this demo proves, and what it does not (M3-15)
+# ---------------------------------------------------------------------------
+#
+# Printed rather than filed, because a limitation in a document is one nobody
+# reads at the moment it matters. Whoever runs this and sees it pass should see
+# the boundary of what passing means in the same breath.
+note "what this run proves, and what it does not"
+printf '       proven, on this machine, in this run:\n'
+printf '         a want for content that existed NOWHERE reached bytes under\n'
+printf '         management — searched, evaluated, explained, acquired, verified\n'
+printf '         and ingested — with NO REAL INDEXER present (§84, ADR-0026).\n'
+printf '         a want that found three releases and accepted none left three\n'
+printf '         durable explanations rather than a silence (§63).\n'
+printf '         a node with no toolchain, no indexer and no download client\n'
+printf '         starts, scans, ingests, serves ranges, and says which of those\n'
+printf '         it cannot do (ADR-0023, ADR-0025).\n'
+printf '\n'
+printf '       NOT proven, and not claimed:\n'
+printf '         PLACEMENT. One peer exists by design (ADR-0010), so placement is\n'
+printf '         satisfied the moment content is, and PLACEMENT_CONVERGING — the\n'
+printf '         state §56 draws this distinction for — is unreachable outside a\n'
+printf '         test with a synthetic peer set. Milestone 4 proves it.\n'
+printf '         A REAL INDEXER. No Torznab client has ever answered a search\n'
+printf '         here; every candidate above came from a fake. ADR-0026 says that\n'
+printf '         stays true in CI forever, and the client itself is still to come.\n'
+printf '         TRANSCODE. Milestone 2 ships remux only, and nothing in\n'
+printf '         Milestone 3 needed more: quality profiles select BETWEEN\n'
+printf '         releases rather than producing them.\n'
+printf '         LINKED ASSETS still have no blob (ADR-0020). Milestone 3 added a\n'
+printf '         fifth place that has to say so — placement, which reports\n'
+printf '         not_applicable rather than a vacuous satisfied.\n'
+printf '         METADATA. Identification is still Milestone 1'"'"'s path parser, and\n'
+printf '         HDR detection is still a substring match on a probe profile.\n'
+printf '         THE ARC ITSELF ends at AVAILABLE, not CONTENT_SATISFIED, and\n'
+printf '         always will: the artifact it acquires stands in for a completed\n'
+printf '         download and is not media, so no toolchain can measure it. That\n'
+printf '         is the right answer — a gate that cannot be shown to hold must\n'
+printf '         not pass — and measurement against real media is proven by the\n'
+printf '         satisfaction section instead.\n'
+printf '\n'
 
 if (( FAILED )); then
   printf '\n\033[31macceptance: FAILED\033[0m\n'; exit 1
