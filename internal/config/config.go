@@ -15,6 +15,8 @@ import (
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/providers/structs"
 	"github.com/knadh/koanf/v2"
+
+	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
 // EnvPrefix is the prefix for environment overrides. HEYARR_HTTP_ADDR maps to
@@ -35,6 +37,21 @@ type Config struct {
 	Log       Log       `koanf:"log"`
 	Media     Media     `koanf:"media"`
 	Libraries []Library `koanf:"libraries"`
+
+	// Providers configures the external services Heyarr talks to — indexers,
+	// download clients — through the centralised registry (§59, M3-07).
+	//
+	// It lives here, alongside `libraries:` and `peer:`, rather than in the
+	// database: a node's whole identity is then one reviewable document, and
+	// standing up a second machine is copying a file rather than replaying a
+	// sequence of API calls. It is also where the operator's other secrets
+	// already are.
+	//
+	// An empty list is a supported, tested configuration — a Heyarr with no
+	// providers still scans, ingests, catalogues, verifies, serves ranges and
+	// plays. Search and acquire jobs simply stay pending and visible
+	// (ADR-0025).
+	Providers []providers.Entry `koanf:"providers"`
 }
 
 // CAS configures the content-addressed store. Its on-disk layout is private to
@@ -263,6 +280,19 @@ func (c Config) Validate() error {
 					"which would serve the entire library unauthenticated; "+
 					"either set http.auth.enabled true or bind 127.0.0.1", c.HTTP.Addr)
 		}
+	}
+
+	// Providers are validated by the registry, which owns the rules — an
+	// endpoint that is not a URL, a required credential that is missing, a
+	// capability that does not exist. They are startup errors for ADR-0023's
+	// reason applied to configuration: somebody named this service, and
+	// silently using none is worse than not starting.
+	//
+	// Reachability is deliberately NOT checked here. That inverts the
+	// asymmetry and it is the whole of ADR-0025: a download client down at
+	// 03:00 must not stop Heyarr serving the library at 03:01.
+	if _, err := providers.Validate(c.Providers); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 
 	for i, lib := range c.Libraries {

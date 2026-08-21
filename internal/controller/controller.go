@@ -21,6 +21,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/media"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/providers"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
 
@@ -280,13 +281,27 @@ func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Stor
 	if err != nil {
 		return nil, fmt.Errorf("controller: opening the catalog: %w", err)
 	}
+	// The provider registry, from configuration. Validation already happened
+	// at config load — a malformed endpoint or a missing credential stopped
+	// this process before it opened a database — so this cannot fail for a
+	// reason an operator can act on.
+	resolvedProviders, err := providers.Validate(c.cfg.Providers)
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+	providerRegistry, err := providers.Build(resolvedProviders, c.log, nil)
+	if err != nil {
+		return nil, fmt.Errorf("controller: building the provider registry: %w", err)
+	}
+
 	api, err := resources.New(resources.Options{
-		DB:      db,
-		Jobs:    queue,
-		Events:  eventLog,
-		Tokens:  store,
-		Catalog: cat,
-		Logger:  c.log,
+		DB:        db,
+		Jobs:      queue,
+		Events:    eventLog,
+		Tokens:    store,
+		Catalog:   cat,
+		Providers: providerRegistry,
+		Logger:    c.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)

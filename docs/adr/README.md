@@ -32,4 +32,6 @@ An ADR that merely describes the code is not worth having.
 | [0022](0022-device-enrolment-and-key-recovery.md) | Device enrolment and key recovery | Proposed |
 | [0023](0023-the-external-media-toolchain-is-optional.md) | The external media toolchain is optional, capability-routed and pinned | Accepted |
 | [0024](0024-one-consumption-session-model.md) | One ConsumptionSession model for watching, listening and reading | Accepted |
+| [0025](0025-external-services-are-optional-and-capability-routed.md) | External network services are optional and capability-routed | Accepted |
+| [0026](0026-indexers-are-not-reproducible-so-fixtures-are-the-primary-test-strategy.md) | Indexers are not reproducible, so fixtures are the primary test strategy | Accepted |
 | [0027](0027-acquisition-state-is-four-facts-not-one-ordinal.md) | Acquisition state is four facts, not one ordinal | Accepted |

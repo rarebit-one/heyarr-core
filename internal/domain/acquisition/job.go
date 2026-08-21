@@ -64,3 +64,30 @@ type UpgradeScanPayload struct {
 	// want, which is the scheduled case.
 	DesiredItemID string `json:"desired_item_id,omitempty"`
 }
+
+// The search job's identity (§60, §63, invariant 4).
+//
+// Declared here alongside the reconciliation job, for the same reason: the
+// controller enqueues it and the worker runs it, and neither should have to
+// import the other.
+//
+// The HANDLER lands in M3-12. The type and its required capability land here
+// because ADR-0025's degrade path is only demonstrable against a real job:
+// "a search on a node with no indexer stays pending rather than failing" needs
+// a search that can be enqueued.
+const (
+	// SearchJobType looks for releases that would satisfy a want.
+	SearchJobType = "search_release"
+)
+
+// SearchDedupeKey is the queue's idempotency key for searching one want.
+//
+// Per want rather than one for everything: two wants should be searched
+// concurrently, and collapsing them would make a library of two hundred wants
+// take two hundred sequential searches to make one pass.
+func SearchDedupeKey(desiredItemID string) string { return "search:" + desiredItemID }
+
+// SearchPayload is what a search job carries.
+type SearchPayload struct {
+	DesiredItemID string `json:"desired_item_id"`
+}

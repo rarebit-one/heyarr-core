@@ -53,6 +53,8 @@ tags:
     description: Quality profiles — the standard desired state is measured against (§62).
   - name: desired
     description: What should exist, whether or not it does yet (§55).
+  - name: providers
+    description: The centralised registry of external services — indexers, download clients (§59).
 
 paths:
   /healthz:
@@ -1375,6 +1377,55 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/providers:
+    get:
+      tags: [providers]
+      operationId: listProviders
+      summary: What external services are configured, and whether they work.
+      description: |
+        §59 centralises provider configuration. Content types do not maintain
+        separate registries — a new provider kind is a new **capability** here,
+        never a second registry (§61, §83).
+
+        ### Why this endpoint exists
+
+        A node with no indexer and no download client is a **supported, tested
+        configuration** (ADR-0025): it scans, ingests, catalogues, verifies,
+        serves ranges and plays, and search and acquire jobs sit *pending and
+        visible* rather than failing. The cost of that design is that "why is
+        nothing being acquired?" has an entirely legitimate answer which is
+        invisible unless something reports it. This is that report.
+
+        ### No credential is ever returned
+
+        Not the API key, not an endpoint with credentials embedded in it, not a
+        length-preserving hint. What an operator needs is which provider, what
+        it can do, and whether it works.
+
+        ### Health is observed, not asserted
+
+        `healthy` is what the last check **found**, by exercising the provider
+        — a provider that reported itself healthy because it was configured
+        would be advertising something it might not deliver, and work would
+        route to it and then fail.
+
+        An **absent `checked_at` means never checked**, which is deliberately
+        distinct from `healthy: false`: "nobody has looked" and "we looked and
+        it is broken" lead to different actions. The same distinction §56's
+        satisfaction axes make.
+
+        Health is read from the database rather than from the answering
+        process's memory, because under ADR-0002 the worker that ran the check
+        may be another machine.
+      responses:
+        "200":
+          description: Every configured provider, and what this node can therefore do.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Providers" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   /api/v1/quality-profiles:
     get:
@@ -2841,6 +2892,78 @@ components:
         quality_profile: { type: string }
         monitor: { type: boolean }
         reason: { type: string }
+
+    Providers:
+      type: object
+      required: [providers, capabilities]
+      properties:
+        providers:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderStatus" }
+        capabilities:
+          type: array
+          items: { type: string, enum: [indexer, download, metadata] }
+          description: |
+            What this node can therefore do, as a set — and therefore which
+            jobs it can claim.
+
+            Stated rather than left for a client to derive, because deriving it
+            means knowing that a **disabled** provider contributes nothing, and
+            a dashboard that got that wrong would report "indexing available"
+            for a provider somebody switched off.
+
+            Empty is a legitimate answer, not an error: it is exactly what
+            ADR-0025 describes.
+
+    ProviderStatus:
+      type: object
+      required: [name, capabilities, healthy, detail]
+      properties:
+        name:
+          type: string
+          description: |
+            The operator's name for this provider, unique within an instance.
+            It is what appears in routing, in health, and in a release
+            candidate's `provider` field — so it is the operator's word rather
+            than a generated identifier.
+        capabilities:
+          type: array
+          items: { type: string, enum: [indexer, download, metadata] }
+          description: |
+            What this provider can do for us.
+
+            **Empty when the provider is disabled in configuration.** That is
+            how "configured and switched off" is distinguished from "not
+            configured at all": the first appears here with nothing it can do,
+            the second does not appear.
+
+            `metadata` is declared and nothing implements it in this milestone
+            — §84's list does not include metadata providers. It exists so that
+            the first one is a change to configuration rather than a change to
+            the registry.
+        healthy:
+          type: boolean
+          description: Whether the last check found the provider usable.
+        detail:
+          type: string
+          description: |
+            What was observed, in a few words. A status with no reason is one
+            nobody can act on, so this is always present.
+        version:
+          type: string
+          description: |
+            The API version the service reported.
+
+            This is what replaces version **pinning** for a service Heyarr does
+            not install (ADR-0026): not controlling the version does not mean
+            ignoring it. A version outside the supported range is reported
+            unhealthy naming both numbers, and is **never** a startup failure.
+        checked_at:
+          type: string
+          format: date-time
+          description: |
+            When the last check ran. **Absent means never checked**, which is
+            distinct from `healthy: false`.
 
     QualityProfile:
       type: object
