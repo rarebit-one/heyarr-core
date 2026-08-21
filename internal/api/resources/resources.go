@@ -255,6 +255,10 @@ func (a *API) Mount(r chi.Router) {
 		r.Get("/desired/{id}/candidates", a.listCandidates)
 		r.With(httpapi.RequireScope(auth.ScopeWrite)).
 			Post("/desired/{id}/search", a.searchDesired)
+
+		// Adopting a completed acquisition Heyarr did not poll for (§65).
+		r.With(httpapi.RequireScope(auth.ScopeWrite)).
+			Post("/desired/{id}/acquisitions", a.adoptAcquisition)
 		r.With(httpapi.RequireScope(auth.ScopeWrite)).
 			Post("/desired/{id}/select", a.selectCandidate)
 	}

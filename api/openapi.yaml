@@ -1455,6 +1455,89 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /api/v1/desired/{id}/acquisitions:
+    post:
+      tags: [desired]
+      operationId: adoptAcquisition
+      summary: Adopt bytes that have already arrived (§65).
+      description: |
+        "These bytes are here, they answer this want, take them."
+
+        §65 lists many ways bytes arrive, and a polled download client is only
+        the ordinary one. A client Heyarr does **not** poll is an ordinary
+        situation too: a transfer that finished before Heyarr knew about it,
+        something fetched by hand, or a client the registry has no integration
+        for.
+
+        The pipeline afterwards is **identical** to the polled path — the same
+        verification, the same ingest job, the same §64 edges. The only thing
+        that differs is who noticed the transfer had finished.
+
+        `local_path` is where the bytes are **in a namespace Heyarr can open**,
+        not the download client's. Path mapping is the poller's job and there
+        is no client here to map from.
+
+        This is deliberately **not an upload**: Heyarr is told where the bytes
+        already are rather than receiving them. An upload is a different §65
+        source with a different shape, and conflating them would put a
+        multi-gigabyte body on an endpoint whose whole job is a path.
+
+        Answers `202`: the hash and the ingest are a job, because hashing a
+        large file is real work and the worker that does it may be another
+        process (invariant 4).
+
+        Adopting the same transfer twice is harmless — the acquisition is keyed
+        on `(provider, external_id)` and the ingest job is deduped per want.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, external_id, local_path]
+              properties:
+                provider:
+                  type: string
+                  description: |
+                    What produced the bytes. Free text: this endpoint exists
+                    precisely for clients the registry does not know about.
+                external_id:
+                  type: string
+                  description: |
+                    That producer's identifier — an infohash, a job id. It is
+                    what makes adopting the same transfer twice idempotent
+                    rather than duplicative.
+                external_name: { type: string }
+                local_path:
+                  type: string
+                  description: Where the bytes are, in Heyarr's own namespace.
+      responses:
+        "202":
+          description: Queued for verification and ingest.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  desired_item_id: { type: string }
+                  job_id: { type: string }
+                  phase: { type: string }
+                  status: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: That want already has an acquisition in flight.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /api/v1/desired/{id}/satisfaction:
     get:
       tags: [desired]

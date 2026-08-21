@@ -288,11 +288,27 @@ func (w *Worker) Run(ctx context.Context) error {
 		w.log.Info("a download client is available",
 			"providers", strings.Join(downloadClientNames(providerRegistry), ", "))
 		registry.Register(downloads.PollJobType, Registration{
-			Handler:            PollDownloadsHandler(providerRegistry, cat, w.log),
+			Handler:            PollDownloadsHandler(providerRegistry, cat, queue, w.log),
 			MaxConcurrent:      1,
 			RequiredCapability: providers.CapabilityDownload.JobCapability(),
 		})
 	}
+
+	// Ingest of completed acquisitions (§65, M3-13).
+	//
+	// Registered UNCONDITIONALLY, unlike the poll above, and the asymmetry is
+	// deliberate. Polling needs a download client; hashing a file that is
+	// already on disk needs nothing but the disk. A node with no download
+	// client configured can still finish an acquisition another node started —
+	// which is what a compute peer is for (§6) — and refusing to register the
+	// handler would make that impossible for no reason.
+	//
+	// One at a time: hashing is I/O-bound on the same storage the CAS writes
+	// to, and running several against one disk is slower than running one.
+	registry.Register(acquisition.IngestJobType, Registration{
+		Handler:       IngestAcquisitionHandler(cat, cat, pipeline, queue, w.log),
+		MaxConcurrent: 1,
+	})
 
 	// The probe handler, registered only when this worker can actually run it.
 	//

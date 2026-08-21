@@ -700,6 +700,22 @@ providers:
     # only exercising the empty-search edge. The three shapes below are the
     # three §63 has to tell apart, and the demo asserts on each.
     offers:
+      # A title of its own for the ingest section (M3-13).
+      #
+      # NOT Blue Harvest — the search and upgrade sections assert on its
+      # candidate set. NOT Twice Told — that one is deliberately offered with
+      # NO candidates, and it is what the empty-search assertion depends on.
+      # Giving either of them a different answer would break a claim somewhere
+      # else, which is how a shared fixture turns into a puzzle.
+      - title: The Quiet Room
+        candidates:
+          - id: tqr-1080-web
+            title: The Quiet Room 1080p web-dl
+            attributes:
+              resolution: 1080
+              source: web-dl
+              video_codec: h264
+              hdr: false
       - title: Blue Harvest
         candidates:
           # Acceptable and terminal: passes the gate, meets every preference.
@@ -2386,6 +2402,105 @@ YAML
   # its purpose. The derivation is exhaustively table-tested in
   # internal/domain/acquisition; this section asserts the half that a running
   # system can actually reach.
+
+  note "  ingest of completed acquisitions (§65, §66, M3-13)"
+  # PLACED HERE DELIBERATELY, AND THE ANCHOR IN THE BRIEF WAS WRONG.
+  #
+  # The instruction was to anchor before `note "  the CLI (M1-17)"`. That
+  # section CONTAINS the catalog counts — cli_works and cli_assets are asserted
+  # a few lines into it — so anchoring above it puts this section above them.
+  #
+  # That matters more here than for any earlier M3 section: ingest ADDS AN
+  # ASSET, which is exactly what cli_assets counts. Remux was the only section
+  # that mutated the library; the search section became the second; this is the
+  # third, and the only one that changes an asset count. So it sits below the
+  # counts, with the other M3 sections.
+  #
+  # It also wants a work the fixture library already holds, so no Work is
+  # created either.
+  #
+  # THE WANT IS SEARCHED FOR FIRST, and that is not ceremony.
+  #
+  # §64 has no edge from idle to queued: acquisition begins with a search, and
+  # the machine refuses to skip it. That is correct — a want that arrived at
+  # VERIFYING without passing through SELECTED has a history that does not
+  # describe what happened — and it means adopting externally-arrived bytes
+  # still requires the want to have chosen a release. Discovered here, by the
+  # machine refusing.
+  local ing_work ing_want ing_file ing_before_assets ing_state
+  ing_before_assets=$(api /api/v1/assets | jq -r '.items | length')
+
+  ing_work=$(api_all /api/v1/works '.items[] | select(.title == "The Quiet Room") | .id' | head -1)
+  ing_want=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d "{\"work_id\":\"$ing_work\",\"quality_profile\":\"living-room\"}" | jq -r '.id')
+  assert_contains "$ing_want" "-" "a want can be created for content to acquire"
+
+  api "/api/v1/desired/$ing_want/search" -X POST -o /dev/null
+  # Wait for SELECTED only. Breaking on idle as well would return instantly,
+  # because a fresh want STARTS idle — which is exactly what this loop did on
+  # its first outing, reporting "got idle, want selected" without ever having
+  # waited for the search.
+  waited=0
+  while (( waited < 600 )); do
+    ing_state=$(api "/api/v1/desired/$ing_want" | jq -r '.acquisition.phase')
+    [[ "$ing_state" == "selected" ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  assert_eq "$ing_state" "selected" \
+    "the fake indexer offers a release and the want selects one"
+
+  # A file standing in for a completed download, written OUTSIDE any library
+  # root — which is what a download directory actually is. The point of the
+  # exercise is that ingest brings bytes under management from somewhere the
+  # scanner never walks.
+  ing_file=$WORK/downloads/The.Quiet.Room.2001.1080p.mkv
+  mkdir -p "$WORK/downloads"
+  head -c 262144 /dev/urandom > "$ing_file"
+
+  api "/api/v1/desired/$ing_want/acquisitions" -X POST -H 'Content-Type: application/json' \
+    -d "{\"provider\":\"acceptance-downloader\",\"external_id\":\"acceptance-infohash\",
+         \"external_name\":\"The.Quiet.Room.2001.1080p.mkv\",\"local_path\":\"$ing_file\"}" \
+    -o /dev/null
+
+  waited=0
+  while (( waited < 600 )); do
+    ing_state=$(api "/api/v1/desired/$ing_want" | jq -r '.acquisition.phase')
+    [[ "$ing_state" == "idle" ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+
+  # ASSERT THE PHASE AND THE JOB, never a satisfaction axis. Satisfaction is
+  # owned by the reconciliation beat, and a timer is not part of this claim —
+  # the ~50% flake in the search section came from exactly that mistake.
+  assert_eq "$ing_state" "idle" \
+    "a completed acquisition drives the pipeline back to rest"
+  assert_eq "$(api "/api/v1/desired/$ing_want" | jq -r '.acquisition.managed')" "true" \
+    "and Heyarr now holds bytes for that want"
+
+  assert_eq "$(api /api/v1/assets | jq -r '.items | length')" "$(( ing_before_assets + 1 ))" \
+    "ingesting a completed acquisition adds exactly one asset"
+
+  # Nothing the download client still holds is deleted (§60, ADR-0018). It may
+  # still be seeding, and reaching outside the logical-delete stance for it is
+  # worse than leaving it.
+  if [[ -f "$ing_file" ]]; then
+    pass "the download client's copy is left alone"
+  else
+    fail "the download client's copy was deleted by ingest"
+  fi
+
+  # Re-running is harmless (invariant 9). Note this is the STATE MACHINE's
+  # guarantee rather than the job's: an ingest for a want that has left
+  # VERIFYING is refused by §64, so a re-queued job is a no-op by construction
+  # rather than by the handler remembering to check.
+  api "/api/v1/desired/$ing_want/acquisitions" -X POST -H 'Content-Type: application/json' \
+    -d "{\"provider\":\"acceptance-downloader\",\"external_id\":\"acceptance-infohash\",
+         \"external_name\":\"The.Quiet.Room.2001.1080p.mkv\",\"local_path\":\"$ing_file\"}" \
+    -o /dev/null
+  assert_eq "$(api /api/v1/assets | jq -r '.items | length')" "$(( ing_before_assets + 1 ))" \
+    "and re-ingesting the same completed download adds no second asset"
+
+  api "/api/v1/desired/$ing_want" -X DELETE -o /dev/null
 
   note "  a mixed fleet (§75, ADR-0023)"
   # The one claim in ADR-0023 with no evidence behind it until now.

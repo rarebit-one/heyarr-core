@@ -133,6 +133,17 @@ const (
 	// filtering every selection the machine made on its own.
 	TypeCandidateOverridden = "acquisition.candidate_overridden"
 
+	// TypeReleaseBlocked is a release a want will not choose again (M3-13).
+	//
+	// Under acquisition.* rather than desired.* because it is a fact about the
+	// PIPELINE — what it will and will not select — rather than about what the
+	// operator wants, which has not changed.
+	//
+	// It matters to a subscriber more than its size suggests: without it, a
+	// want that keeps failing and a want that has stopped choosing the thing
+	// that keeps failing look identical from outside.
+	TypeReleaseBlocked = "acquisition.release_blocked"
+
 	TypeDesiredCreated   = "desired.created"
 	TypeDesiredUpdated   = "desired.updated"
 	TypeDesiredRemoved   = "desired.removed"

@@ -152,8 +152,57 @@ func SearchHandler(
 			return nil
 		}
 
+		// Releases that already failed for this want are removed BEFORE the
+		// scorer sees them (M3-13).
+		//
+		// Before rather than after, because the scorer's job is "is this good
+		// enough" and a blocked release may well be excellent — it simply did
+		// not survive contact with reality last time. Letting it score and
+		// then discarding the winner would mean the recorded explanation names
+		// a release that was never in the running.
+		//
+		// This is what breaks the loop: without it a bad release is selected,
+		// fails, is blocked, and is selected again by the next search, because
+		// RecordSearch replaces the candidate set and a mark stored there
+		// would have gone with it.
+		blocked, err := cat.BlockedKeys(ctx, payload.DesiredItemID)
+		if err != nil {
+			return err
+		}
+		considered, skipped := excludeBlocked(result.Candidates, blocked)
+		if skipped > 0 {
+			log.Info("a search skipped releases that failed before",
+				"desired_item_id", payload.DesiredItemID, "skipped", skipped)
+		}
+		if len(considered) == 0 {
+			// Everything on offer has failed before. Distinct from finding
+			// nothing: the indexers answered, and every answer is one this
+			// want has already tried and been let down by.
+			if _, err := cat.RecordSearch(ctx, payload.DesiredItemID, nil); err != nil {
+				return err
+			}
+			// CANDIDATES_FOUND first, then REJECT_ALL — the same two edges the
+			// ordinary all-rejected path takes, because that is what happened:
+			// the indexers offered releases and every one was refused. Going
+			// straight to reject_all is illegal from SEARCHING, and rightly
+			// so: nothing can be rejected before candidates are found.
+			if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
+				acquisition.TransitionCandidatesFound,
+				fmt.Sprintf("%d candidate(s), all previously failed", skipped)); err != nil {
+				return err
+			}
+			if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
+				acquisition.TransitionRejectAll,
+				fmt.Sprintf("%d candidate(s), all previously failed", skipped)); err != nil {
+				return err
+			}
+			log.Info("a search found only releases that have already failed",
+				"desired_item_id", payload.DesiredItemID, "skipped", skipped)
+			return nil
+		}
+
 		// §63's scorer, and nothing else decides.
-		ranked := acquisition.EvaluateAll(result.Candidates, sc.Profile)
+		ranked := acquisition.EvaluateAll(considered, sc.Profile)
 
 		outcome, err := cat.RecordSearch(ctx, payload.DesiredItemID, ranked)
 		if err != nil {
@@ -189,4 +238,27 @@ func SearchHandler(
 			"candidates", outcome.Found, "acceptable", outcome.Acceptable)
 		return nil
 	}
+}
+
+// excludeBlocked removes releases this want has already been let down by.
+//
+// Returns what survived and how many were removed, so a search that skipped
+// everything can say so rather than looking like a search that found nothing —
+// two situations that need very different responses from an operator.
+func excludeBlocked(
+	candidates []acquisition.ReleaseCandidate, blocked map[string]catalog.BlockedRelease,
+) ([]acquisition.ReleaseCandidate, int) {
+	if len(blocked) == 0 {
+		return candidates, 0
+	}
+	out := make([]acquisition.ReleaseCandidate, 0, len(candidates))
+	var skipped int
+	for _, c := range candidates {
+		if _, isBlocked := blocked[c.Provider+"\x00"+c.ID]; isBlocked {
+			skipped++
+			continue
+		}
+		out = append(out, c)
+	}
+	return out, skipped
 }
