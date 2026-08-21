@@ -2620,38 +2620,37 @@ YAML
   assert_eq "$(jq -r '.content.assets | length' <<<"$arc_sat")" "1" \
     "and the acquired asset is the one considered for satisfaction"
 
-  # WHETHER IT SATISFIES DEPENDS ON THE TOOLCHAIN, and that is ADR-0023's
-  # degradation reaching all the way through to the milestone's headline arc.
+  # WHY THIS ENDS AT AVAILABLE RATHER THAN CONTENT_SATISFIED, always.
   #
-  # The profile gates on resolution. Resolution comes from a PROBE. A node with
-  # no ffprobe cannot measure the bytes it just acquired, so the gate cannot be
-  # SHOWN to hold and the want stays AVAILABLE — bytes held, not known to be
-  # good enough. That is not a failure of acquisition; it is the honest answer,
-  # and "I cannot tell whether this satisfies you" is a different problem from
-  # "this does not satisfy you".
+  # The artifact above is 262144 random bytes standing in for a completed
+  # download. It is not media, so NOTHING can measure it — the profile gates on
+  # resolution, resolution comes from a probe, and there is no resolution in
+  # random bytes whether or not this machine has ffprobe.
   #
-  # Asserting `satisfied` unconditionally would have been asserting the
-  # presence of a toolchain, which is precisely what ADR-0023 says not to
-  # require.
-  if command -v ffprobe >/dev/null 2>&1; then
-    assert_eq "$(jq -r '.content.satisfaction' <<<"$arc_sat")" "satisfied" \
-      "and the bytes satisfy the profile that was asked for (§56)"
-    assert_contains "$(jq -r '.content.satisfied_by' <<<"$arc_sat")" "-" \
-      "naming the asset that satisfies"
-    # CONTENT_SATISFIED or FULLY_SATISFIED — which one turns on placement, and
-    # with one peer (ADR-0010) placement is satisfied the moment content is.
-    # Both are correct; asserting one would be asserting the peer count.
-    assert_contains "$(jq -r '.state' <<<"$arc_sat")" "SATISFIED" \
-      "so §64 presents the want as satisfied"
-  else
-    assert_eq "$(jq -r '.content.satisfaction' <<<"$arc_sat")" "not_satisfied" \
-      "with no probe, the acquired bytes cannot be SHOWN to meet the profile"
-    assert_eq "$(jq -r '[.content.assets[0].reasons[] | select(.rule == "resolution.gte")] | .[0].result' \
-      <<<"$arc_sat")" "undetermined" \
-      "and it says the attribute could not be determined, not that the file is too small"
-    assert_eq "$(jq -r '.state' <<<"$arc_sat")" "AVAILABLE" \
-      "so the want is AVAILABLE — bytes held, not known to be good enough"
-  fi
+  # My first version branched on `command -v ffprobe` and asserted `satisfied`
+  # when a toolchain was present. That conflated "a toolchain exists" with
+  # "these bytes can be measured" — it passed on a machine with no toolchain and
+  # failed on the runner that HAS one, which is the branch a bare machine cannot
+  # execute. The distinction is the entire subject of §63's `undetermined`
+  # result, and flattening it in the section that exists to demonstrate it was
+  # the wrong place to be careless.
+  #
+  # So the assertion is unconditional, and it is the RIGHT answer rather than a
+  # weaker one: a gate that cannot be SHOWN to hold must not pass, and the
+  # reason says the attribute could not be determined rather than claiming the
+  # file is too small. Measurement against real media is proven by the
+  # satisfaction section, which runs over the scanned fixture library.
+  #
+  # This arc proves the PIPELINE — a want with nothing behind it reaching bytes
+  # under management, having explained every step. Whether those particular
+  # bytes are good enough is a different claim, tested elsewhere.
+  assert_eq "$(jq -r '.content.satisfaction' <<<"$arc_sat")" "not_satisfied" \
+    "unmeasurable bytes cannot be SHOWN to meet the profile"
+  assert_eq "$(jq -r '[.content.assets[0].reasons[] | select(.rule == "resolution.gte")] | .[0].result' \
+    <<<"$arc_sat")" "undetermined" \
+    "and it says the attribute could not be determined, not that the file is too small"
+  assert_eq "$(jq -r '.state' <<<"$arc_sat")" "AVAILABLE" \
+    "so the want is AVAILABLE — bytes held, not known to be good enough"
 
   # THE WHOLE CLAIM, IN ONE LINE. No indexer, no download client, and on this
   # machine no toolchain either — and a want went from nothing at all to bytes
@@ -3156,12 +3155,12 @@ printf '         fifth place that has to say so — placement, which reports\n'
 printf '         not_applicable rather than a vacuous satisfied.\n'
 printf '         METADATA. Identification is still Milestone 1'"'"'s path parser, and\n'
 printf '         HDR detection is still a substring match on a probe profile.\n'
-if ! command -v ffprobe >/dev/null 2>&1; then
-printf '         AND ON THIS RUN, no toolchain: every quality gate that needs a\n'
-printf '         probe reported "undetermined" rather than a measurement. The arc\n'
-printf '         above ended at AVAILABLE rather than CONTENT_SATISFIED for that\n'
-printf '         reason, which is the honest answer rather than a failure.\n'
-fi
+printf '         THE ARC ITSELF ends at AVAILABLE, not CONTENT_SATISFIED, and\n'
+printf '         always will: the artifact it acquires stands in for a completed\n'
+printf '         download and is not media, so no toolchain can measure it. That\n'
+printf '         is the right answer — a gate that cannot be shown to hold must\n'
+printf '         not pass — and measurement against real media is proven by the\n'
+printf '         satisfaction section instead.\n'
 printf '\n'
 
 if (( FAILED )); then
