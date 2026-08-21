@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,6 +23,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/media/probe"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/providers"
 	"github.com/rarebit-one/heyarr-core/internal/scanner"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
@@ -220,6 +222,47 @@ func (w *Worker) Run(ctx context.Context) error {
 		MaxConcurrent: 1,
 	})
 
+	// The provider registry, built from configuration (§59, M3-07).
+	//
+	// Validation already happened at config load, so a malformed endpoint or a
+	// missing credential stopped this process before it opened a database. What
+	// remains is construction, which cannot fail for a reason an operator can
+	// act on.
+	resolvedProviders, err := providers.Validate(w.cfg.Providers)
+	if err != nil {
+		return fmt.Errorf("worker: %w", err)
+	}
+	providerRegistry, err := providers.Build(resolvedProviders, w.log, nil)
+	if err != nil {
+		return fmt.Errorf("worker: building the provider registry: %w", err)
+	}
+
+	// The health pass. One at a time, and no RequiredCapability: a node with
+	// NO providers still runs it, finds nothing, and does nothing — which is
+	// cheaper than a capability check and means the job is never mysteriously
+	// pending on a node that simply has nothing to check.
+	registry.Register(providers.HealthJobType, Registration{
+		Handler:       ProviderHealthHandler(providerRegistry, cat, w.log),
+		MaxConcurrent: 1,
+	})
+
+	// Capability routing's second and third users, after the media toolchain
+	// (ADR-0023). A node with no indexer configured advertises no `indexer`
+	// capability, so a search job stays PENDING AND VISIBLE rather than being
+	// claimed and failed — which is ADR-0025's whole claim.
+	//
+	// The search handler itself is M3-12. Registering the type without a
+	// handler would panic on claim, so nothing is registered here: with no
+	// registration and no advertisement, the job simply waits, which is
+	// exactly the behaviour under test.
+	if providerRegistry.Has(providers.CapabilityIndexer) {
+		w.log.Info("indexing is available",
+			"providers", strings.Join(indexerNames(providerRegistry), ", "))
+	}
+	if providerRegistry.Has(providers.CapabilityDownload) {
+		w.log.Info("a download client is available")
+	}
+
 	// The probe handler, registered only when this worker can actually run it.
 	//
 	// Registering it unconditionally with RequiredCapability set would also
@@ -301,7 +344,12 @@ func (w *Worker) Run(ctx context.Context) error {
 		// What this worker can do, not what it would like to. A job requiring
 		// a capability nobody advertises stays pending and visible rather than
 		// failing (§75, ADR-0023).
-		Capabilities: toolchain.Capabilities(),
+		//
+		// Two vocabularies meet here and it is the only place they do: the
+		// media toolchain contributes what BINARIES resolved, the provider
+		// registry contributes what SERVICES are configured. Both answer "what
+		// can this node execute", which is what the job queue matches on.
+		Capabilities: append(toolchain.Capabilities(), providerRegistry.JobCapabilities()...),
 	}, queue, registry, w.log)
 	if err != nil {
 		return fmt.Errorf("worker: building the runtime: %w", err)

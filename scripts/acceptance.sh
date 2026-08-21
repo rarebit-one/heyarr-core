@@ -684,6 +684,22 @@ libraries:
   - name: shelf
     content_type: book
     roots: ["$FULLLIB/books"]
+# Providers (§59, M3-07). A FAKE indexer, because ADR-0026 says a real one can
+# never run here: the milestone's claim is that Heyarr decides what should exist
+# without a real indexer being present, and a fake exercises the same
+# registration, routing and health paths as production.
+#
+# The disabled entry is not padding. "Configured and switched off" and "not
+# configured at all" have to stay tellable apart, and the only way to prove the
+# distinction survives to the wire is to have one of each.
+providers:
+  - name: acceptance-indexer
+    type: fake
+    capabilities: [indexer]
+  - name: acceptance-disabled
+    type: fake
+    capabilities: [indexer]
+    enabled: false
 YAML
 
   # Mint the token BEFORE anything starts. It migrates the database itself, so
@@ -1240,6 +1256,69 @@ YAML
   api "/api/v1/quality-profiles/$qp_id" -X DELETE -o /dev/null
   assert_eq "$(api "/api/v1/quality-profiles/$qp_id" | jq -r '.status')" "404" \
     "a deleted profile is gone rather than hidden"
+
+  note "  the provider registry (§59, M3-07)"
+  # §59 centralises provider configuration, and this is the endpoint that makes
+  # ADR-0025's degrade path legible: a node with no indexer is a supported
+  # configuration, and the cost of that design is that "why is nothing being
+  # acquired" has an entirely legitimate answer which is invisible unless
+  # something reports it.
+  #
+  # Placed here, above the CLI section, because it reads state rather than
+  # writing any — no counts move, so its position is not load-bearing the way
+  # the desired-state and remux sections are.
+  local prov_json
+  prov_json=$(api /api/v1/providers)
+
+  assert_eq "$(jq -r '[.providers[] | select(.name == "acceptance-indexer")] | length' \
+    <<<"$prov_json")" "1" "a configured provider is reported"
+  assert_eq "$(jq -r '[.providers[] | select(.name == "acceptance-indexer")] | .[0].capabilities | join(",")' \
+    <<<"$prov_json")" "indexer" "and says what it can do"
+
+  # The node's own capability set. Stated rather than left for a client to
+  # derive, because deriving it means knowing a disabled provider contributes
+  # nothing.
+  assert_eq "$(jq -r '.capabilities | join(",")' <<<"$prov_json")" "indexer" \
+    "the node reports what it can therefore do"
+
+  # "Configured and switched off" is distinct from "not configured at all". A
+  # disabled provider is REPORTED, with no capabilities — otherwise "why is
+  # nothing searching" means re-reading the config file.
+  assert_eq "$(jq -r '[.providers[] | select(.name == "acceptance-disabled")] | length' \
+    <<<"$prov_json")" "1" "a disabled provider is still reported"
+  assert_eq "$(jq -r '[.providers[] | select(.name == "acceptance-disabled")] | .[0].capabilities | length' \
+    <<<"$prov_json")" "0" "and reports no capabilities, so it is never routed to"
+
+  # Health is OBSERVED, not asserted. Before a check has run, a provider is
+  # never-checked rather than unhealthy — "nobody has looked" and "we looked and
+  # it is broken" lead to different actions.
+  local prov_checked
+  prov_checked=$(jq -r '[.providers[] | select(.name == "acceptance-indexer")] | .[0].checked_at // "never"' \
+    <<<"$prov_json")
+  if [[ "$prov_checked" == "never" ]]; then
+    pass "an unchecked provider says so rather than claiming to be unhealthy"
+  else
+    # The health job may have run already, which is also correct — assert on
+    # the invariant rather than on the race.
+    assert_eq "$(jq -r '[.providers[] | select(.name == "acceptance-indexer")] | .[0].healthy' \
+      <<<"$prov_json")" "true" "a checked fake provider is healthy"
+  fi
+
+  # No credential reaches the response. Asserted by searching the BODY, not by
+  # reading the struct — this is a public repository and the git history is
+  # permanent.
+  assert_not_contains "$prov_json" "api_key" \
+    "no credential field reaches the providers response"
+
+  # ADR-0025's whole claim, on a running system: a node whose providers cannot
+  # do everything still serves its catalog.
+  assert_contains "$(api /api/v1/works | jq -r '.items | length > 0')" "true" \
+    "a node reports its providers and still serves its library"
+
+  # The two capability vocabularies meet at /api/v1/system, which already
+  # reports the media toolchain (ADR-0023). Both describe THIS node.
+  assert_contains "$(api /api/v1/system | jq -r 'has("media")')" "true" \
+    "the system endpoint still reports the media toolchain alongside providers"
 
   note "  the CLI (M1-17)"
   # The CLI is what a person actually uses, so the demo drives it rather than
@@ -1939,8 +2018,33 @@ YAML
       sleep 0.1; waited=$(( waited + 1 ))
     done
     assert_contains "$(cat "$bare_log")" "worker ready" "a worker with no toolchain starts and becomes ready"
-    assert_contains "$(cat "$bare_log")" '"capabilities":[]' \
-      "the bare worker advertises nothing"
+    # What this asserts changed shape in M3-07, and the reason is worth stating.
+    #
+    # It used to be '"capabilities":[]' — an empty set, as a PROXY for "this
+    # worker resolved no toolchain". That proxy was exact while capabilities had
+    # one source. They now have two independent ones: the media toolchain
+    # (ADR-0023) and the configured provider registry (ADR-0025). This bare
+    # worker shares the demo's config file, which declares a fake indexer, so it
+    # legitimately advertises `indexer` while advertising no toolchain at all.
+    #
+    # So the assertion is now about what it actually means: a worker with no
+    # FFmpeg advertises neither ffprobe nor ffmpeg, whatever else it can do.
+    # Asserting the empty set would have been asserting the proxy, and the proxy
+    # is the thing that stopped being true.
+    local bare_caps
+    bare_caps=$(grep -o '"capabilities":\[[^]]*\]' "$bare_log" | head -1)
+    # A guard on the guard. assert_not_contains passes vacuously against an
+    # empty string, so a grep that matched nothing — a renamed log field, say —
+    # would report two cheerful passes having checked nothing at all.
+    if [[ -z "$bare_caps" ]]; then
+      fail "could not find the bare worker's advertised capabilities in its log"
+    else
+      pass "the bare worker's capabilities are readable from its startup log"
+    fi
+    assert_not_contains "$bare_caps" "ffprobe" \
+      "the bare worker advertises no ffprobe"
+    assert_not_contains "$bare_caps" "ffmpeg" \
+      "the bare worker advertises no ffmpeg"
     # It did not register the handlers either, which is what makes the
     # degraded state readable in the log rather than only in behaviour.
     assert_not_contains "$(cat "$bare_log")" "probing is available" \

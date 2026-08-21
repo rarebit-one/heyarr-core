@@ -32,7 +32,21 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
+
+// registryOrEmpty makes a nil registry behave like an empty one.
+//
+// A node with no providers is a supported configuration (ADR-0025), so every
+// read path would otherwise need a nil check — and the one that forgot would
+// panic on the status endpoint, which is the endpoint an operator reaches for
+// precisely when things are already degraded.
+func registryOrEmpty(r *providers.Registry) *providers.Registry {
+	if r != nil {
+		return r
+	}
+	return providers.New(nil)
+}
 
 // Options configure the resource API.
 type Options struct {
@@ -52,7 +66,13 @@ type Options struct {
 	// test harnesses that predate M3-05 working unchanged rather than making
 	// every one of them construct a catalog to exercise an unrelated route.
 	Catalog *catalog.Catalog
-	Logger  *slog.Logger
+	// Providers is the centralised provider registry (§59). Optional: nil
+	// means this node has none configured, which is a supported state
+	// (ADR-0025) rather than a wiring mistake — so GET /api/v1/providers
+	// reports an empty set rather than not being mounted. An operator asking
+	// "what indexers do I have" deserves the answer "none" rather than a 404.
+	Providers *providers.Registry
+	Logger    *slog.Logger
 	// Now and NewID are injected so that a created resource's timestamp and
 	// identifier are fixed values in a test, which is what lets the response
 	// shapes be golden files rather than a regex (ADR-0017).
@@ -72,15 +92,16 @@ type Options struct {
 
 // API holds the handlers.
 type API struct {
-	db      *sqlite.DB
-	reader  *sql.DB
-	jobs    *jobs.Queue
-	events  *events.Log
-	tokens  *auth.Store
-	catalog *catalog.Catalog
-	log     *slog.Logger
-	now     func() time.Time
-	newID   func() string
+	db        *sqlite.DB
+	reader    *sql.DB
+	jobs      *jobs.Queue
+	events    *events.Log
+	tokens    *auth.Store
+	catalog   *catalog.Catalog
+	providers *providers.Registry
+	log       *slog.Logger
+	now       func() time.Time
+	newID     func() string
 
 	heartbeat  time.Duration
 	streamPoll time.Duration
@@ -146,6 +167,7 @@ func New(opts Options) (*API, error) {
 		events:     opts.Events,
 		tokens:     opts.Tokens,
 		catalog:    opts.Catalog,
+		providers:  registryOrEmpty(opts.Providers),
 		log:        log.With("component", "api"),
 		now:        now,
 		newID:      newID,
@@ -176,6 +198,7 @@ func (a *API) Mount(r chi.Router) {
 	r.Get("/replicas", a.listReplicas)
 	r.Get("/devices", a.listDevices)
 	r.Get("/devices/{id}", a.getDevice)
+	r.Get("/providers", a.listProviders)
 	r.Get("/quality-profiles", a.listQualityProfiles)
 	r.Get("/quality-profiles/{id}", a.getQualityProfile)
 	r.Get("/publications", a.listPublications)

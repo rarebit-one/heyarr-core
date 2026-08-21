@@ -26,6 +26,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
 // fixedClock is the injected clock (ADR-0017). Nothing in these tests reads
@@ -68,6 +69,16 @@ func (s *idSequence) next() string {
 type harnessConfig struct {
 	cfg          config.Config
 	streamBuffer int
+	// providers is the registry the API reports on. Nil means "this node has
+	// none configured", which is the supported degrade path (ADR-0025) and the
+	// default for every test that is not about providers.
+	providers *providers.Registry
+}
+
+// withProviders gives the harness a provider registry, for the tests that are
+// about what a configured node reports.
+func withProviders(reg *providers.Registry) harnessOption {
+	return func(hc *harnessConfig) { hc.providers = reg }
 }
 
 type harnessOption func(*harnessConfig)
@@ -140,14 +151,15 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	}
 
 	api, err := resources.New(resources.Options{
-		DB:      db,
-		Jobs:    queue,
-		Events:  eventLog,
-		Tokens:  store,
-		Catalog: cat,
-		Logger:  slog.New(slog.DiscardHandler),
-		Now:     clock.Now,
-		NewID:   ids.next,
+		DB:        db,
+		Jobs:      queue,
+		Events:    eventLog,
+		Tokens:    store,
+		Catalog:   cat,
+		Providers: hc.providers,
+		Logger:    slog.New(slog.DiscardHandler),
+		Now:       clock.Now,
+		NewID:     ids.next,
 		// Short enough that an idle stream heartbeats within a test's patience,
 		// long enough that it is not the thing under test.
 		StreamHeartbeat: 50 * time.Millisecond,
