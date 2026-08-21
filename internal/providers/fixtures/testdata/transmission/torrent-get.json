@@ -1,0 +1,21 @@
+{
+  "name": "torrent-get",
+  "provenance": {
+    "origin": "captured",
+    "service": "transmission",
+    "version": "4.1.3 (838877323f)",
+    "captured_at": "2026-08-21T05:57:50Z",
+    "procedure": "scripts/capture-fixtures.sh transmission <endpoint> <credentials>"
+  },
+  "request": {
+    "method": "POST",
+    "path": "/transmission/rpc"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"arguments\":{\"torrents\":[]},\"result\":\"success\"}"
+  }
+}
