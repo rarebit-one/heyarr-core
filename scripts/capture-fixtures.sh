@@ -201,10 +201,22 @@ capture_transmission() {
 
   body=$(curl_rpc -X POST -H "X-Transmission-Session-Id: $sid" \
     -H 'Content-Type: application/json' \
-    -d '{"method":"torrent-get","arguments":{"fields":["id","name","hashString","status","percentDone","downloadDir","labels","error","errorString"]}}' \
+    -d '{"method":"torrent-get","arguments":{"fields":["id","name","hashString","status","percentDone","downloadDir","labels","error","errorString","trackerStats","isFinished","eta","totalSize"]}}' \
     "$base/transmission/rpc")
   write_exchange transmission torrent-get POST "/transmission/rpc" 200 "$body" \
     '{"Content-Type":"application/json"}' "$version"
+
+  # WHY trackerStats IS IN THAT FIELD LIST, measured on a real instance:
+  #
+  # A torrent whose only tracker does not resolve reports
+  #     error = 0, errorString = ""
+  # at the TOP level, while trackerStats[].lastAnnounceResult says
+  #     "Could not connect to tracker".
+  #
+  # So a client that watches errorString — the obvious field, and the one its
+  # name promises — will never see a tracker failure. The transfer simply sits
+  # at 0% looking perfectly healthy, forever. Anything deciding "is this stuck"
+  # has to read trackerStats.
 
   cat <<'MSG'
 

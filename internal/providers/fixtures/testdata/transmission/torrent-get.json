@@ -4,8 +4,9 @@
     "origin": "captured",
     "service": "transmission",
     "version": "4.1.3 (838877323f)",
-    "captured_at": "2026-08-21T05:57:50Z",
-    "procedure": "scripts/capture-fixtures.sh transmission <endpoint> <credentials>"
+    "captured_at": "2026-08-21T06:22:30Z",
+    "procedure": "scripts/capture-fixtures.sh transmission <endpoint> <credentials>",
+    "note": "Two transfers, deliberately in different states. A completed one, seeding, with a tracker announce reporting Success \u2014 and a stalled one whose only tracker does not resolve. The stalled one reports error=0 and errorString=\"\" at the top level while trackerStats[].lastAnnounceResult says \"Could not connect to tracker\", which is why trackerStats is in the field list. Both were added for this capture and removed afterwards; the instance holds no torrents of its own."
   },
   "request": {
     "method": "POST",
@@ -16,6 +17,6 @@
     "headers": {
       "Content-Type": "application/json"
     },
-    "body": "{\"arguments\":{\"torrents\":[]},\"result\":\"success\"}"
+    "body": "{\"arguments\":{\"torrents\":[{\"downloadDir\":\"/downloads/complete\",\"error\":0,\"errorString\":\"\",\"eta\":-2,\"hashString\":\"481b6e3617be4c88f96cb25e47c9d8272130071e\",\"id\":1,\"isFinished\":false,\"labels\":[\"heyarr-fixture-capture\"],\"name\":\"debian-13.6.0-amd64-netinst.iso\",\"percentDone\":1.0,\"status\":6,\"totalSize\":791674880,\"trackerStats\":[{\"announce\":\"http://bttracker.debian.org:6969/announce\",\"announceState\":1,\"downloadCount\":5627,\"downloader_count\":-1,\"hasAnnounced\":true,\"hasScraped\":true,\"host\":\"bttracker.debian.org:6969\",\"id\":0,\"isBackup\":false,\"lastAnnouncePeerCount\":80,\"lastAnnounceResult\":\"Success\",\"lastAnnounceStartTime\":1787292978,\"lastAnnounceSucceeded\":true,\"lastAnnounceTime\":1787292979,\"lastAnnounceTimedOut\":false,\"lastScrapeResult\":\"\",\"lastScrapeStartTime\":1787292840,\"lastScrapeSucceeded\":true,\"lastScrapeTime\":1787292841,\"lastScrapeTimedOut\":false,\"leecherCount\":3,\"nextAnnounceTime\":1787293879,\"nextScrapeTime\":1787294650,\"scrape\":\"http://bttracker.debian.org:6969/scrape\",\"scrapeState\":1,\"seederCount\":1021,\"sitename\":\"debian\",\"tier\":0}]},{\"downloadDir\":\"/downloads/complete\",\"error\":0,\"errorString\":\"\",\"eta\":-2,\"hashString\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"id\":2,\"isFinished\":false,\"labels\":[\"heyarr-fixture-capture\"],\"name\":\"heyarr-error-fixture\",\"percentDone\":0.0,\"status\":4,\"totalSize\":0,\"trackerStats\":[{\"announce\":\"http://tracker.invalid:6969/announce\",\"announceState\":1,\"downloadCount\":-1,\"downloader_count\":-1,\"hasAnnounced\":true,\"hasScraped\":true,\"host\":\"tracker.invalid:6969\",\"id\":1,\"isBackup\":false,\"lastAnnouncePeerCount\":0,\"lastAnnounceResult\":\"Could not connect to tracker\",\"lastAnnounceStartTime\":0,\"lastAnnounceSucceeded\":false,\"lastAnnounceTime\":1787293023,\"lastAnnounceTimedOut\":false,\"lastScrapeResult\":\"Could not connect to tracker\",\"lastScrapeStartTime\":0,\"lastScrapeSucceeded\":false,\"lastScrapeTime\":1787293320,\"lastScrapeTimedOut\":false,\"leecherCount\":-1,\"nextAnnounceTime\":1787293937,\"nextScrapeTime\":1787295180,\"scrape\":\"http://tracker.invalid:6969/scrape\",\"scrapeState\":1,\"seederCount\":-1,\"sitename\":\"tracker\",\"tier\":0}]}]},\"result\":\"success\"}"
   }
 }

@@ -4,9 +4,8 @@
     "origin": "captured",
     "service": "transmission",
     "version": "4.1.3 (838877323f)",
-    "captured_at": "2026-08-21T05:57:50Z",
-    "procedure": "scripts/capture-fixtures.sh transmission <endpoint> <credentials>",
-    "note": "The version is backfilled from session-get. This exchange is the response that refuses to tell you anything until the session id is replayed, so it cannot carry a version of its own."
+    "captured_at": "2026-08-21T06:22:30Z",
+    "procedure": "scripts/capture-fixtures.sh transmission <endpoint> <credentials>"
   },
   "request": {
     "method": "POST",
