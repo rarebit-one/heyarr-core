@@ -106,6 +106,33 @@ const (
 	TypeUpgradeFound      = "acquisition.upgrade_found"
 	TypeUpgradeSuperseded = "acquisition.upgrade_superseded"
 
+	// The search job (§60, §63, M3-12).
+	//
+	// TypeSearchCompleted reports what a search FOUND and what was done with
+	// it — how many candidates, how many acceptable, and which was selected.
+	// It is one event per search rather than one per candidate: a search that
+	// found twelve releases would otherwise emit twelve times to say one
+	// thing, and the twelve explanations are durable in release_candidates,
+	// which is where something wanting the detail should look.
+	//
+	// It is emitted for an EMPTY search too. "We looked and found nothing" is
+	// the outcome an operator most needs to see — a want that goes quiet with
+	// no record is the failure mode §60 keeps rejection reasons to avoid — and
+	// it is the one case that leaves no candidate rows behind to explain
+	// itself.
+	TypeSearchCompleted = "acquisition.search_completed"
+
+	// TypeCandidateOverridden is a PERSON choosing a candidate against the
+	// scorer's ranking (§60's manual override).
+	//
+	// Its own type rather than a flag on the phase change, because it answers
+	// a different question. acquisition.phase_changed says the want reached
+	// SELECTED; this says a human disagreed with the deterministic scorer and
+	// what the scorer had said instead. Something auditing "where did we
+	// depart from policy" should be able to subscribe to exactly that, without
+	// filtering every selection the machine made on its own.
+	TypeCandidateOverridden = "acquisition.candidate_overridden"
+
 	TypeDesiredCreated   = "desired.created"
 	TypeDesiredUpdated   = "desired.updated"
 	TypeDesiredRemoved   = "desired.removed"

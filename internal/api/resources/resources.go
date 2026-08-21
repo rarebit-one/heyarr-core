@@ -248,6 +248,15 @@ func (a *API) Mount(r chi.Router) {
 		// Asking for a reconciliation is a write: it queues work.
 		r.With(httpapi.RequireScope(auth.ScopeWrite)).
 			Post("/desired/{id}/reconcile", a.reconcileDesired)
+
+		// Release candidates (§60, §63, M3-12). Listing is a read; running a
+		// search queues work, and choosing a release by hand changes what
+		// will be acquired — both writes.
+		r.Get("/desired/{id}/candidates", a.listCandidates)
+		r.With(httpapi.RequireScope(auth.ScopeWrite)).
+			Post("/desired/{id}/search", a.searchDesired)
+		r.With(httpapi.RequireScope(auth.ScopeWrite)).
+			Post("/desired/{id}/select", a.selectCandidate)
 	}
 	// Consumption is ordinary client traffic like device registration: a
 	// television reporting where it has reached needs a write token, not an

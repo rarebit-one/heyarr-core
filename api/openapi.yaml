@@ -1302,6 +1302,159 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/desired/{id}/candidates:
+    get:
+      tags: [desired]
+      operationId: listCandidates
+      summary: What the last search found, and why each release was judged so.
+      description: |
+        §63 says evaluation is deterministic and **inspectable**. This is the
+        inspectable half: an evaluation that lived in memory for two hundred
+        milliseconds is deterministic and cannot answer "why did it pick that
+        release, last Tuesday, at 3am".
+
+        The **rejections matter more than the acceptance**. A search that found
+        twelve releases and took none of them leaves twelve explained refusals
+        here, because a want that simply goes quiet is the failure mode §60
+        keeps explainable rejection reasons to avoid.
+
+        It reads what the last search **stored**, and deliberately does not
+        re-search or re-score. Re-running the scorer would answer a different
+        question — what would be decided *now* — and that substitution is
+        exactly what makes an audit trail worthless.
+
+        Ordered best first, by the same total order the scorer ranks by:
+        accepted above rejected, then score descending, then the provider's
+        candidate id. The listing and the selection therefore cannot disagree
+        about which is best.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The candidates, best first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Candidates" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/desired/{id}/search:
+    post:
+      tags: [desired]
+      operationId: searchDesired
+      summary: Look for releases that would satisfy this want, now.
+      description: |
+        §60's **manual search** — the same job the schedule runs, triggered by
+        a person, with the results visible whether or not anything was
+        acceptable.
+
+        **Enqueues** a job; it does not run one. A search is a job (invariant
+        4, ADR-0002) and the worker that runs it may be another process, so
+        this answers `202` rather than pretending to be the worker — and rather
+        than holding a request open across a provider round trip an indexer may
+        take thirty seconds to refuse.
+
+        Deduped per want, so asking repeatedly while one is queued yields one
+        job. Per want rather than globally: two wants should be searched
+        concurrently, and collapsing them would make a library of two hundred
+        wants take two hundred sequential searches to make one pass.
+
+        On a node with **no indexer** the job stays *pending and visible*
+        rather than failing (ADR-0025) — it is work waiting for a capability,
+        not work that went wrong.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "202":
+          description: Queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  desired_item_id: { type: string }
+                  job_id: { type: string }
+                  status: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/desired/{id}/select:
+    post:
+      tags: [desired]
+      operationId: selectCandidate
+      summary: Take this release, whatever the ranking says.
+      description: |
+        §60's **manual override**, and it is a different feature from manual
+        search: a search asks what is out there, an override says which one to
+        take.
+
+        It **records that it was an override**, and what the scorer had chosen
+        instead. An override that left no trace would look exactly like an
+        ordinary selection, and "why did it take that one" would then have no
+        answer — which is the property §60's deterministic scoring exists to
+        give.
+
+        ### It refuses a candidate the profile rejected
+
+        A `409`, deliberately. The gates in §62 are the operator's own
+        statement of what is acceptable, and an override that could ignore them
+        would quietly turn `accept` into a suggestion. Wanting something
+        outside the profile is perfectly expressible — by **changing the
+        profile**, which is visible and durable, rather than by a one-off that
+        leaves the profile saying something nobody means.
+
+        Naming the candidate the scorer already chose is a selection rather
+        than an override, and is not recorded as a disagreement: putting a
+        departure in the audit trail that never happened is its own kind of
+        wrong.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [candidate_id]
+              properties:
+                candidate_id:
+                  type: string
+                  description: |
+                    The **provider's** id for the release, as returned by
+                    `/candidates`.
+      responses:
+        "200":
+          description: The chosen candidate.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Candidate" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: |
+            No candidate with that id for this want — it may have been
+            superseded by a later search.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "409":
+          description: That candidate was rejected by the quality profile.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /api/v1/desired/{id}/satisfaction:
     get:
       tags: [desired]
@@ -2515,6 +2668,71 @@ components:
           allOf:
             - $ref: "#/components/schemas/SessionProgress"
           description: Recorded with the transition. Usually sent with `progress`.
+
+    Candidates:
+      type: object
+      required: [desired_item_id, candidates]
+      properties:
+        desired_item_id: { type: string }
+        search_id:
+          type: string
+          description: |
+            Groups these as the one search's answers they are. A different id
+            from a previous read means a search has happened in between and
+            this is a different set, not an update of the same one.
+        selected:
+          type: string
+          description: |
+            The provider's id for the chosen release. **Absent when nothing was
+            acceptable** — and note that is not simply the first of
+            `candidates`, which when everything was rejected is merely the
+            least bad.
+        candidates:
+          type: array
+          items: { $ref: "#/components/schemas/Candidate" }
+
+    Candidate:
+      type: object
+      required: [candidate_id, provider, accepted, score, terminal, selected, reasons]
+      properties:
+        candidate_id:
+          type: string
+          description: |
+            The **provider's** identity for the release, and what you name in a
+            `select`. The storage row's own id is deliberately not on the wire:
+            it identifies a row a re-search replaces, and a client holding one
+            would be holding a handle to something that vanishes.
+        provider: { type: string }
+        title: { type: string }
+        accepted:
+          type: boolean
+          description: Every gate held. A candidate that is not accepted is never acquired.
+        score:
+          type: integer
+          description: |
+            The sum of the preferences that landed. Meaningful only among
+            accepted candidates: a rejected one's score is a number about
+            something that will not be used.
+        terminal:
+          type: boolean
+          description: Meets every terminal condition, so the upgrade workflow would stop here (§62).
+        selected: { type: boolean }
+        overridden:
+          type: boolean
+          description: A person chose this against the ranking (§60's manual override).
+        override_detail:
+          type: string
+          description: What the scorer had chosen instead, and what each scored.
+        reasons:
+          type: array
+          description: |
+            Every rule that was considered, not only the ones that failed — a
+            rule that ran silently is a rule nobody can confirm ran.
+          items: { $ref: "#/components/schemas/EvaluationReason" }
+        rejected_by:
+          type: array
+          description: The gates that rejected this candidate. Absent when accepted.
+          items: { $ref: "#/components/schemas/EvaluationReason" }
 
     Satisfaction:
       type: object

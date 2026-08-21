@@ -1,10 +1,14 @@
 package providers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"sort"
 	"strings"
+
+	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 )
 
 // Kind is which PROTOCOL an entry speaks — not which product it is.
@@ -106,6 +110,30 @@ func needsEndpoint(k Kind) bool { return k != KindFake }
 // start would be Heyarr insisting on a policy the operator already declined.
 func needsCredential(k Kind) bool { return k == KindTorznab }
 
+// Offer is a canned answer a fake indexer gives to one search title.
+type Offer struct {
+	// Title is the work title this answers for, matched case-insensitively.
+	Title string `koanf:"title"`
+	// Candidates is what to return.
+	Candidates []OfferedCandidate `koanf:"candidates"`
+}
+
+// OfferedCandidate is one release a fake offers.
+type OfferedCandidate struct {
+	// ID is the provider's identity for the release. Required: it is the
+	// evaluator's tie-break, and a candidate without one cannot be ranked
+	// deterministically.
+	ID    string `koanf:"id"`
+	Title string `koanf:"title"`
+	// Attributes is what is known about it, keyed by §62's attribute names.
+	//
+	// A key that is ABSENT means "could not be determined", exactly as it does
+	// for a real provider — so a fake can exercise §63's `undetermined` path,
+	// which is most of how a degraded node behaves and is otherwise
+	// unreachable without a real indexer that omits a field.
+	Attributes map[string]any `koanf:"attributes"`
+}
+
 // Entry is one configured provider.
 //
 // The `koanf` tags mirror internal/config's convention so the block reads
@@ -141,6 +169,22 @@ type Entry struct {
 	// Empty means the client's default.
 	Label string `koanf:"label"`
 
+	// Offers is what a FAKE indexer answers with, and is meaningless for
+	// anything else.
+	//
+	// It exists because the milestone's central claim — Heyarr decides what
+	// should exist and explains its choice, with no real indexer present — is
+	// only demonstrable end to end if the fake can be given something to
+	// offer. A fake that always answers nothing proves the empty-search edge
+	// and nothing beyond it.
+	//
+	// It is configuration rather than a test fixture for the same reason Fake
+	// itself is production code: the acceptance demo drives the real binary
+	// over a real socket, so anything it needs has to be reachable from a
+	// config file. Validation refuses it on a non-fake, so it cannot quietly
+	// become a way to fabricate results from a real provider.
+	Offers []Offer `koanf:"offers"`
+
 	// Enabled allows an operator to keep a provider's configuration while
 	// taking it out of routing. Defaults to true, so the common case needs no
 	// key — and a disabled provider is still REPORTED, because "why is nothing
@@ -174,6 +218,9 @@ type Resolved struct {
 	PathMap      []PathMapping
 	Label        string
 	Enabled      bool
+	// Offers is a fake indexer's canned answers, already converted into domain
+	// candidates so nothing downstream has to parse configuration.
+	Offers map[string][]acquisition.ReleaseCandidate
 }
 
 // Validate checks a configured provider block and returns what it resolved to.
@@ -242,6 +289,11 @@ func Validate(entries []Entry) ([]Resolved, error) {
 			return nil, err
 		}
 
+		offers, err := resolveOffers(name, kind, e.Offers)
+		if err != nil {
+			return nil, err
+		}
+
 		out = append(out, Resolved{
 			Name:         name,
 			Kind:         kind,
@@ -251,7 +303,96 @@ func Validate(entries []Entry) ([]Resolved, error) {
 			PathMap:      e.PathMap,
 			Label:        strings.TrimSpace(e.Label),
 			Enabled:      enabled,
+			Offers:       offers,
 		})
+	}
+	return out, nil
+}
+
+// resolveOffers turns a fake's canned answers into domain candidates.
+//
+// It refuses `offers` on anything that is not a fake, which is the point of
+// validating it at all: without that, `offers` on a real Prowlarr entry would
+// be silently ignored, and an operator would be looking at a config file that
+// says something Heyarr does not do. Worse, it would read as a way to
+// fabricate results from a real provider.
+func resolveOffers(
+	name string, kind Kind, offers []Offer,
+) (map[string][]acquisition.ReleaseCandidate, error) {
+	if len(offers) == 0 {
+		return nil, nil
+	}
+	if kind != KindFake {
+		return nil, fmt.Errorf(
+			"provider %q: offers is only meaningful for a fake provider, not a %s — "+
+				"a real provider answers with what its service returned", name, kind)
+	}
+
+	out := make(map[string][]acquisition.ReleaseCandidate, len(offers))
+	for i, o := range offers {
+		title := strings.TrimSpace(o.Title)
+		if title == "" {
+			return nil, fmt.Errorf("provider %q: offers[%d] has no title to answer for", name, i)
+		}
+		key := strings.ToLower(title)
+		if _, dup := out[key]; dup {
+			return nil, fmt.Errorf("provider %q: offers %q twice", name, title)
+		}
+		candidates := make([]acquisition.ReleaseCandidate, 0, len(o.Candidates))
+		for j, c := range o.Candidates {
+			id := strings.TrimSpace(c.ID)
+			if id == "" {
+				// The evaluator's tie-break. A candidate without one cannot be
+				// ranked deterministically, and a fake that produced one would
+				// be teaching the demo a shape a real provider is refused for.
+				return nil, fmt.Errorf(
+					"provider %q: offers[%d].candidates[%d] has no id, which is the "+
+						"ranking's tie-break", name, i, j)
+			}
+			attrs, err := parseOfferedAttributes(c.Attributes)
+			if err != nil {
+				return nil, fmt.Errorf("provider %q: offers[%d].candidates[%d]: %w",
+					name, i, j, err)
+			}
+			candidates = append(candidates, acquisition.ReleaseCandidate{
+				ID: id, Title: strings.TrimSpace(c.Title), Provider: name, Attributes: attrs,
+			})
+		}
+		out[key] = candidates
+	}
+	return out, nil
+}
+
+// parseOfferedAttributes converts YAML scalars into policy values.
+//
+// It routes through JSON deliberately: policy.Value already infers its kind
+// from a JSON scalar, and that inference is what makes `"1080"` a caught typo
+// rather than a working rule. A second, YAML-shaped conversion here would be a
+// second place for the two to disagree.
+func parseOfferedAttributes(in map[string]any) (acquisition.Attributes, error) {
+	if len(in) == 0 {
+		return acquisition.Attributes{}, nil
+	}
+	out := make(acquisition.Attributes, len(in))
+	for rawName, rawValue := range in {
+		attr := policy.Attribute(strings.ToLower(strings.TrimSpace(rawName)))
+		kind, known := policy.KindOf(attr)
+		if !known {
+			return nil, fmt.Errorf("there is no attribute called %q", rawName)
+		}
+		encoded, err := json.Marshal(rawValue)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", rawName, err)
+		}
+		var v policy.Value
+		if err := json.Unmarshal(encoded, &v); err != nil {
+			return nil, fmt.Errorf("%s: %w", rawName, err)
+		}
+		if v.Kind != kind {
+			return nil, fmt.Errorf("%s is a %s attribute and was given %s",
+				rawName, kind, v.String())
+		}
+		out[attr] = v
 	}
 	return out, nil
 }
