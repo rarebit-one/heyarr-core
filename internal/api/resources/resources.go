@@ -194,6 +194,13 @@ func (a *API) Mount(r chi.Router) {
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/quality-profiles", a.createQualityProfile)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Put("/quality-profiles/{id}", a.updateQualityProfile)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Delete("/quality-profiles/{id}", a.deleteQualityProfile)
+	// Evaluating candidates writes NOTHING. It is a POST because the body
+	// carries the candidates, not because it changes anything — the same
+	// reasoning as /playback/plan — so `read` is enough, which the router
+	// already requires. §63 says evaluation is inspectable, and an endpoint
+	// that needed a write token would not be inspectable by anything holding a
+	// read-only credential.
+	r.Post("/quality-profiles/{id}/evaluate", a.evaluateCandidates)
 
 	// Desired state (§55). Wanting is ordinary operator traffic, not an admin
 	// action, so these need `write` rather than `admin`. Mounted as a group

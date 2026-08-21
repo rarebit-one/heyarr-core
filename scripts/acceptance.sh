@@ -1494,6 +1494,108 @@ YAML
   assert_eq "$(api "/api/v1/desired/$want_id" | jq -r '.status')" "404" \
     "a want that is removed is gone rather than hidden"
 
+  note "  release-candidate evaluation (§63, M3-04)"
+  # §63 says evaluation is deterministic and INSPECTABLE. This drives the
+  # scorer over a real socket against a real profile out of the database, and
+  # asserts the half §61 cares about: the REASONS, not just the number.
+  #
+  # It writes nothing, so it can sit anywhere; it is here to keep the M3
+  # sections together and below every catalog count.
+  local eval_profile eval_json eval_body
+  eval_profile=$(api /api/v1/quality-profiles | jq -r '.items[] | select(.name == "living-room") | .id')
+
+  eval_body='{"candidates":[
+    {"id":"remux","title":"2160p remux","attributes":
+      {"resolution":2160,"source":"remux","video_codec":"hevc","hdr":true}},
+    {"id":"web","title":"1080p web-dl","attributes":
+      {"resolution":1080,"source":"web-dl","video_codec":"h264","hdr":false}},
+    {"id":"cam","title":"480p cam","attributes":
+      {"resolution":480,"source":"cam","video_codec":"h264","hdr":false}},
+    {"id":"unmeasured","title":"resolution unknown","attributes":
+      {"source":"remux","video_codec":"hevc","hdr":true}}
+  ]}'
+  eval_json=$(api "/api/v1/quality-profiles/$eval_profile/evaluate" -X POST \
+    -H 'Content-Type: application/json' -d "$eval_body")
+
+  assert_eq "$(jq -r '.selected' <<<"$eval_json")" "remux" \
+    "the best acceptable candidate is selected"
+  assert_eq "$(jq -r '.ranked[0].score' <<<"$eval_json")" "30" \
+    "the score is the sum of the preferences that landed"
+  assert_eq "$(jq -r '.ranked[0].terminal' <<<"$eval_json")" "true" \
+    "a 2160p remux meets every terminal condition, so the upgrade loop can stop"
+
+  # Accepted and NOT terminal is the gap the upgrade workflow lives in.
+  assert_eq "$(jq -r '[.ranked[] | select(.id == "web")] | .[0] | "\(.accepted)/\(.terminal)"' \
+    <<<"$eval_json")" "true/false" \
+    "an acceptable release that is not as good as it gets stays upgradable"
+
+  # The reasons ARE the deliverable (§60, §61). A rejection with no explanation
+  # is exactly the opaque scoring §61 rejects.
+  assert_contains "$(jq -r '[.ranked[] | select(.id == "cam")] | .[0].rejected_by[0].rule' \
+    <<<"$eval_json")" "resolution" "a rejection names the gate that failed"
+  assert_contains "$(jq -r '[.ranked[] | select(.id == "cam")] | .[0].rejected_by[0].detail' \
+    <<<"$eval_json")" "which is not" "and explains it in prose, not just a code"
+  # Derived from the profile rather than hardcoded: the seeded living-room
+  # profile has eight rules today and the number is not the point — the
+  # invariant is that EVERY rule considered produces a reason, so a rule that
+  # ran silently fails this regardless of how many there are.
+  local eval_rules
+  eval_rules=$(api "/api/v1/quality-profiles/$eval_profile" \
+    | jq -r '(.accept | length) + (.prefer | length) + (.terminal | length)')
+  assert_eq "$(jq -r '[.ranked[] | select(.id == "cam")] | .[0].reasons | length' <<<"$eval_json")" \
+    "$eval_rules" "every rule considered produces a reason, not only the ones that failed"
+
+  # "Could not determine" is not "failed", and the difference decides whether an
+  # operator looks at the release or at the provider.
+  assert_eq "$(jq -r '[.ranked[] | select(.id == "unmeasured")] | .[0] |
+    [.reasons[] | select(.rule == "resolution.gte")] | .[0].result' <<<"$eval_json")" "undetermined" \
+    "an attribute the provider could not determine is reported as undetermined"
+  assert_eq "$(jq -r '[.ranked[] | select(.id == "unmeasured")] | .[0].accepted' <<<"$eval_json")" "false" \
+    "but a gate that cannot be shown to hold still rejects"
+
+  # A gate is a gate: maximal preferences cannot buy past one.
+  local eval_gate
+  eval_gate=$(api "/api/v1/quality-profiles/$eval_profile/evaluate" -X POST \
+    -H 'Content-Type: application/json' \
+    -d '{"candidates":[{"id":"brilliant","attributes":
+         {"resolution":480,"source":"bluray","video_codec":"hevc","hdr":true}}]}')
+  assert_eq "$(jq -r '.ranked[0].accepted' <<<"$eval_gate")" "false" \
+    "a failed gate rejects whatever the preferences scored"
+  assert_eq "$(jq -r '.ranked[0].score' <<<"$eval_gate")" "30" \
+    "the preferences are still scored, so the explanation is complete"
+  assert_eq "$(jq -r '.selected // "none"' <<<"$eval_gate")" "none" \
+    "nothing is selected when nothing is acceptable"
+
+  # Determinism, with the input order deliberately reversed between runs. A
+  # randomly-ordered tie looks exactly like a working system, which is why this
+  # is asserted rather than assumed.
+  local eval_a eval_b
+  eval_a=$(api "/api/v1/quality-profiles/$eval_profile/evaluate" -X POST \
+    -H 'Content-Type: application/json' \
+    -d '{"candidates":[
+          {"id":"aaa","attributes":{"resolution":2160,"source":"remux","video_codec":"hevc","hdr":true}},
+          {"id":"bbb","attributes":{"resolution":2160,"source":"remux","video_codec":"hevc","hdr":true}},
+          {"id":"ccc","attributes":{"resolution":2160,"source":"remux","video_codec":"hevc","hdr":true}}]}' \
+    | jq -r '[.ranked[].id] | join(",")')
+  eval_b=$(api "/api/v1/quality-profiles/$eval_profile/evaluate" -X POST \
+    -H 'Content-Type: application/json' \
+    -d '{"candidates":[
+          {"id":"ccc","attributes":{"resolution":2160,"source":"remux","video_codec":"hevc","hdr":true}},
+          {"id":"bbb","attributes":{"resolution":2160,"source":"remux","video_codec":"hevc","hdr":true}},
+          {"id":"aaa","attributes":{"resolution":2160,"source":"remux","video_codec":"hevc","hdr":true}}]}' \
+    | jq -r '[.ranked[].id] | join(",")')
+  assert_eq "$eval_b" "$eval_a" \
+    "reversing the input order does not change the ranking"
+  assert_eq "$eval_a" "aaa,bbb,ccc" \
+    "ties break on the candidate id, so the winner is predictable and not merely consistent"
+
+  # A typo in an attribute name is caught rather than silently scored against
+  # nothing.
+  assert_contains "$(api "/api/v1/quality-profiles/$eval_profile/evaluate" -X POST \
+    -H 'Content-Type: application/json' \
+    -d '{"candidates":[{"id":"x","attributes":{"bitrate":5000}}]}' | jq -r '.detail')" \
+    "no attribute called" "an unknown attribute is refused rather than ignored"
+
   note "  the acquisition state machine (§64, M3-03)"
   # Sits with the desired-state section above it and below every catalog count,
   # for the same reason: wanting unknown content creates a Work.
