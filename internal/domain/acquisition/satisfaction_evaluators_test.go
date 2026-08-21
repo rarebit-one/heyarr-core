@@ -150,48 +150,48 @@ func TestEvaluatePlacement(t *testing.T) {
 	}{
 		{
 			name: "every required peer holds it", blobHash: blob,
-			required: []string{"bartley", "cove"},
-			replicas: []PeerReplica{{"bartley", true}, {"cove", true}},
+			required: []string{"peer-a", "peer-b"},
+			replicas: []PeerReplica{{"peer-a", true}, {"peer-b", true}},
 			want:     SatisfactionSatisfied,
 		},
 		{
-			// §56's own example: content exists, Bartley yes, Cove no.
+			// §56's own example: content exists, Site A yes, Site B no.
 			name: "one of two peers holds it", blobHash: blob,
-			required:    []string{"bartley", "cove"},
-			replicas:    []PeerReplica{{"bartley", true}},
+			required:    []string{"peer-a", "peer-b"},
+			replicas:    []PeerReplica{{"peer-a", true}},
 			want:        SatisfactionConverging,
-			wantMissing: []string{"cove"},
+			wantMissing: []string{"peer-b"},
 			wantDetail:  "1 of 2",
 		},
 		{
 			// Nowhere at all is NOT converging — converging means replication
 			// is closing a gap, and a blob on no peer is not closing anything.
 			name: "no peer holds it", blobHash: blob,
-			required:    []string{"bartley", "cove"},
+			required:    []string{"peer-a", "peer-b"},
 			replicas:    nil,
 			want:        SatisfactionNot,
-			wantMissing: []string{"bartley", "cove"},
+			wantMissing: []string{"peer-a", "peer-b"},
 		},
 		{
 			// A pending or corrupt replica is not a replica for placement:
 			// §56 asks whether the content is replicated, and bytes that
 			// failed verification are not.
 			name: "an unverified replica does not count", blobHash: blob,
-			required:    []string{"bartley", "cove"},
-			replicas:    []PeerReplica{{"bartley", true}, {"cove", false}},
+			required:    []string{"peer-a", "peer-b"},
+			replicas:    []PeerReplica{{"peer-a", true}, {"peer-b", false}},
 			want:        SatisfactionConverging,
-			wantMissing: []string{"cove"},
+			wantMissing: []string{"peer-b"},
 		},
 		{
 			name: "the single-peer deployment", blobHash: blob,
-			required: []string{"bartley"},
-			replicas: []PeerReplica{{"bartley", true}},
+			required: []string{"peer-a"},
+			replicas: []PeerReplica{{"peer-a", true}},
 			want:     SatisfactionSatisfied,
 		},
 		{
 			// ADR-0020's fifth site.
 			name: "a linked asset has nothing to place", blobHash: "",
-			required:   []string{"bartley"},
+			required:   []string{"peer-a"},
 			want:       SatisfactionNotApplicable,
 			wantDetail: "ADR-0020",
 		},
@@ -200,14 +200,14 @@ func TestEvaluatePlacement(t *testing.T) {
 			// would hide the misconfiguration.
 			name: "no required peers is a misconfiguration", blobHash: blob,
 			required: nil,
-			replicas: []PeerReplica{{"bartley", true}},
+			replicas: []PeerReplica{{"peer-a", true}},
 			want:     SatisfactionNot,
 		},
 		{
 			// A peer holding it that was not required is not an error.
 			name: "an extra peer is harmless", blobHash: blob,
-			required: []string{"bartley"},
-			replicas: []PeerReplica{{"bartley", true}, {"somewhere-else", true}},
+			required: []string{"peer-a"},
+			replicas: []PeerReplica{{"peer-a", true}, {"somewhere-else", true}},
 			want:     SatisfactionSatisfied,
 		},
 	}
@@ -258,8 +258,8 @@ func TestTheAxesAreIndependent(t *testing.T) {
 		t.Fatal("setup")
 	}
 
-	placement := EvaluatePlacement("blake3:a1", []string{"bartley", "cove"},
-		[]PeerReplica{{"bartley", true}})
+	placement := EvaluatePlacement("blake3:a1", []string{"peer-a", "peer-b"},
+		[]PeerReplica{{"peer-a", true}})
 	if placement.Satisfaction != SatisfactionConverging {
 		t.Fatal("setup")
 	}
@@ -298,7 +298,7 @@ func TestALinkedAssetRestsAtContentSatisfied(t *testing.T) {
 			"to re-acquire something they already have is wrong")
 	}
 
-	placement := EvaluatePlacement(linked.BlobHash, []string{"bartley"}, nil)
+	placement := EvaluatePlacement(linked.BlobHash, []string{"peer-a"}, nil)
 	if placement.Satisfaction != SatisfactionNotApplicable {
 		t.Fatalf("placement = %s, want not_applicable", placement.Satisfaction)
 	}

@@ -85,7 +85,7 @@ integrity incident. A linked asset whose file is gone means someone moved it,
 which is ordinary. Reporting them through one signal makes that signal useless.
 
 **Linked assets exist on exactly one peer.** So the catalog must be able to say
-"available at Bartley, not at Cove" *by design* rather than as a replication
+"available at Site A, not at Site B" *by design* rather than as a replication
 failure. If Milestone 4's read routing (§32) is built assuming every asset is
 convergent, this is an expensive retrofit — which is why the discriminator lands
 in the Milestone 1 schema even though nothing reads it until later. Same

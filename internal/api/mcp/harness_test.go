@@ -148,7 +148,7 @@ const (
 func (h *harness) seed() {
 	h.t.Helper()
 	h.exec(`INSERT INTO peers (id, name, site, mode, is_self, created_at)
-		VALUES (?, 'bartley', 'site-a', 'full', 1, ?)`, peerID, stamp)
+		VALUES (?, 'peer-a', 'site-a', 'full', 1, ?)`, peerID, stamp)
 	h.exec(`INSERT INTO quality_profiles
 		(id, name, description, accept, prefer, terminal, seeded, created_at, updated_at)
 		VALUES (?, 'living-room', 'A television.',

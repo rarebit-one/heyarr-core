@@ -2,8 +2,8 @@
   "items": [
     {
       "id": "01990000-0000-7000-8000-000000000p01",
-      "name": "bartley",
-      "site": "bartley-ridge",
+      "name": "peer-a",
+      "site": "site-a",
       "mode": "full",
       "endpoint": "http://127.0.0.1:8385",
       "is_self": true,

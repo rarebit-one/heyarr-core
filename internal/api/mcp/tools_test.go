@@ -571,7 +571,7 @@ func TestResultsCarryTextAndStructure(t *testing.T) {
 		t.Fatal("no structuredContent")
 	}
 	// The two describe the same thing.
-	if !strings.Contains(envelope.Content[0].Text, "bartley") {
+	if !strings.Contains(envelope.Content[0].Text, "peer-a") {
 		t.Error("the text block does not carry the answer")
 	}
 }

@@ -75,10 +75,10 @@ func TestUnknownCommandIsAnError(t *testing.T) {
 func TestConfigPrintResolvesLayers(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "heyarr.yaml")
-	if err := os.WriteFile(path, []byte("data_dir: /srv/heyarr\npeer:\n  name: bartley\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("data_dir: /srv/heyarr\npeer:\n  name: peer-a\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HEYARR_PEER__SITE", "bartley-ridge")
+	t.Setenv("HEYARR_PEER__SITE", "site-a")
 
 	out, _, err := run(t, context.Background(), "--config", path, "config", "print")
 	if err != nil {
@@ -89,10 +89,10 @@ func TestConfigPrintResolvesLayers(t *testing.T) {
 		t.Fatalf("config print is not valid JSON: %v\n%s", err, out)
 	}
 	peer, _ := got["Peer"].(map[string]any)
-	if peer["Name"] != "bartley" {
+	if peer["Name"] != "peer-a" {
 		t.Errorf("peer.name = %v, want the file value", peer["Name"])
 	}
-	if peer["Site"] != "bartley-ridge" {
+	if peer["Site"] != "site-a" {
 		t.Errorf("peer.site = %v, want the environment value", peer["Site"])
 	}
 }

@@ -183,16 +183,16 @@ Example topology:
 
                            HEYARR LOGICAL INSTANCE
 
-                      Bartley Ridge             Cove
-                     ┌──────────────┐       ┌──────────────┐
-                     │   Full Peer     │◄─►│    Full Peer       │
-                     │                 │    │                   │
-                     │ Content CAS     │    │ Content CAS       │
-                     │ Private CT      │    │ Private CT        │
-                     │ Catalog         │    │ Catalog           │
+                          Site A                  Site B
+                     ┌──────────────┐        ┌──────────────┐
+                     │  Full Peer   │◄──────►│  Full Peer   │
+                     │              │        │              │
+                     │ Content CAS  │        │ Content CAS  │
+                     │ Private CT   │        │ Private CT   │
+                     │ Catalog      │        │ Catalog      │
 
-                    │ HTTP serving │        │ HTTP serving │
-                    └──────────────┘        └──────────────┘
+                     │ HTTP serving │        │ HTTP serving │
+                     └──────────────┘        └──────────────┘
 
 
 There is no primary location for content bytes.
@@ -571,11 +571,11 @@ Reconciliation compares:
   replication
 
 
-With Bartley Ridge and Cove configured as Full Peers:
+With Site A and Site B configured as Full Peers:
 
-  Blob A → Bartley ✓ Cove ✓
-  Blob B → Bartley ✓ Cove ✓
-  Blob C → Bartley ✓ Cove ✓
+  Blob A → Site A ✓ Site B ✓
+  Blob B → Site A ✓ Site B ✓
+  Blob C → Site A ✓ Site B ✓
 
 
 The system converges continuously toward that condition.
@@ -606,12 +606,12 @@ Peers should exchange only missing content where possible.
 21. Peer-to-Peer Replication
 Content transfers should happen directly:
 
-  Bartley ─────────────► Cove
+  Site A ─────────────► Site B
 
 
 rather than:
 
-  Bartley → Controller → Cove
+  Site A → Controller → Site B
 
 The controller authorizes and schedules the transfer.
 
@@ -643,15 +643,15 @@ When multiple Full Peers desire the same new Blob, Heyarr may acquire it coopera
 
 Instead of:
 
-  Internet → Bartley
-  Bartley → Cove
+  Internet → Site A
+  Site A → Site B
 
 
 use:
 
-                          external swarm
-                        ↙         ↘
-                       Bartley ◄──────► Cove
+                           external swarm
+                        ↙                  ↘
+                     Site A ◄──────────► Site B
 
 
 Both peers exchange completed pieces while also obtaining pieces from external sources.
@@ -675,8 +675,8 @@ Cooperative model:
 
   Desired Blob
         │
-        ├── Bartley acquisition
-        └── Cove acquisition
+        ├── Site A acquisition
+        └── Site B acquisition
                │
             cooperate
                │
@@ -738,9 +738,9 @@ Conceptually:
 
   Controller knows:
   Blob ABC available from:
-    Bartley
+    Site A
 
-    Cove
+    Site B
     Archive
 
 
@@ -822,8 +822,8 @@ Every healthy Full Peer can serve content.
 
 Normal behavior:
 
-  Bartley client → Bartley peer
-  Cove client          → Cove peer
+  Site A client → Site A peer
+  Site B client → Site B peer
 
 
 Cross-site streaming should be fallback behavior, not the norm.
@@ -857,13 +857,13 @@ For incomplete locally desired content:
    │
    │ HTTP/HLS
    ▼
-  Bartley Peer
+  Site A Peer
    │
    │ missing byte ranges
    ▼
   internal torrent transport
    │
-   ├── Cove
+   ├── Site B
    └── external peers
 
 The local peer may prioritize pieces near the playback window.
@@ -886,11 +886,11 @@ Example:
 But for a small multi-site deployment, configuration may simply declare:
 
   peers:
-    bartley:
+    peer-a:
       mode: full
 
-     cove:
-       mode: full
+    peer-b:
+      mode: full
 
 
 which implies full logical-library convergence.
@@ -901,8 +901,8 @@ Peers should advertise physical failure domains.
 
 Example:
 
-  Bartley Ridge → bartley-site
-  Cove              → cove-site
+  Site A → site-a
+  Site B → site-b
 
 
 Two complete peers at separate sites provide substantially stronger resilience than two copies inside one
@@ -914,16 +914,16 @@ Full-peer replication should not be confused with archival backup.
 
 For irreplaceable data, policy may still require:
 
-  Bartley replica
-  Cove replica
+  Site A replica
+  Site B replica
   +
   offline/versioned backup
 
 
 For replaceable media:
 
-  Bartley replica
-  Cove replica
+  Site A replica
+  Site B replica
 
 
 may itself be sufficient.
@@ -1016,11 +1016,11 @@ Private synchronized state should use client-side CRDT semantics.
   Phone encrypted CRDT changes
                    │
                  ▼
-            Bartley Peer
+              Site A Peer
                  │
             peer replication
                   ▼
-               Cove Peer
+              Site B Peer
                    │
                ▼
   Laptop downloads encrypted changes
@@ -1042,10 +1042,10 @@ partition.
 
 Example:
 
-  Bartley partition:
+  Site A partition:
     Phone writes encrypted change A
 
-  Cove partition:
+  Site B partition:
     Tablet writes encrypted change B
 
 
@@ -1111,7 +1111,7 @@ Conceptually:
   sync encrypted spaces
 
 
-Either Bartley Ridge or Cove can provide the user's ciphertext.
+Either Site A or Site B can provide the user's ciphertext.
 
 47. Shared Encrypted Spaces
 Shared playlists or other group artifacts use their own keys.
@@ -1172,7 +1172,7 @@ Conceptually:
                        backup stream
                        /
                      ▼                  ▼
-                Bartley Peer         Cove Peer
+                Site A Peer        Site B Peer
 
 
 This backup is different from the peer's local read-oriented catalog snapshot.
@@ -1183,7 +1183,7 @@ A surviving Full Peer should contain enough information to bootstrap recovery.
 
 Target command:
 
-  heyarr recover --from-peer cove
+  heyarr recover --from-peer peer-b
 
 
 Recovery inputs may include:
@@ -1290,8 +1290,8 @@ For content satisfying a DesiredItem:
      ↓
   Full Peer target set
       │
-      ├── Bartley
-      └── Cove
+      ├── Site A
+      └── Site B
 
 
 Satisfaction can be evaluated separately at two levels:
@@ -1304,8 +1304,8 @@ Satisfaction can be evaluated separately at two levels:
 Example:
 
   Content exists                ✓
-  Bartley replica               ✓
-  Cove replica                  ✗
+  Site A replica                ✓
+  Site B replica                ✗
 
   Overall state:
   available but placement incomplete
@@ -1878,7 +1878,7 @@ Likely entities:
 Encrypted CRDT content itself may live in the peer state store rather than relational application tables.
 
 80. Initial Two-Site Topology
-For Bartley Ridge and Cove:
+For Site A and Site B:
 
                                     CONTROLLER
                                      │
@@ -1888,7 +1888,7 @@ For Bartley Ridge and Cove:
                     │                                           │
                     ▼                                           ▼
 
-             BARTLEY RIDGE                                   COVE
+                 SITE A                                      SITE B
 
                 Full Peer                                Full Peer
                 ─────────                                ─────────
@@ -1926,8 +1926,8 @@ Content acquisition and policy operations depend on controller reachability.
 Encrypted personal state may continue independently and merge later.
 
 
-Bartley site failure
-Cove retains:
+Site A site failure
+Site B retains:
 
 
      • full content library
@@ -1936,8 +1936,8 @@ Cove retains:
      • read catalog snapshot
 
 
-Cove site failure
-Bartley provides the same.
+Site B site failure
+Site A provides the same.
 
 82. Recovery Target
 A surviving Full Peer should be sufficient to rebuild a viable Heyarr deployment.
@@ -2122,7 +2122,7 @@ Deliver:
                 ┌──────────────────┴──────────────────┐
                 │                                                │
 
-         BARTLEY FULL PEER                                 COVE FULL PEER
+         SITE A FULL PEER                                 SITE B FULL PEER
                 │                                                │
                 │                                                │
          Content CAS       ◄══════════════════════► Content CAS
