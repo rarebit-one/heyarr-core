@@ -91,3 +91,38 @@ func SearchDedupeKey(desiredItemID string) string { return "search:" + desiredIt
 type SearchPayload struct {
 	DesiredItemID string `json:"desired_item_id"`
 }
+
+// IngestJobType brings a completed acquisition under management (§65, M3-13).
+//
+// A separate job from poll_downloads, and deliberately so. Polling asks a
+// download client what it is doing and must stay quick — it runs on a beat
+// over every transfer. Ingesting hashes a file that may be 40 GB and then
+// materialises it. Doing that inside the poll would mean one large acquisition
+// stalls the progress reporting for every other one, and a lease sized for a
+// poll would expire in the middle of a hash.
+//
+// It is also the only shape in which invariant 1 is affordable. Heyarr hashes
+// what arrived rather than trusting the client's claim, and a hash is real work
+// on real bytes — the kind of work jobs exist for (§75).
+const IngestJobType = "ingest_acquisition"
+
+// IngestDedupeKey makes the job idempotent per want.
+//
+// Keyed on the WANT rather than on the transfer, because the thing that must
+// not happen twice is one want ingesting twice. Two transfers for one want is
+// already impossible — acquisitions is UNIQUE on desired_item_id (00016) — so
+// keying on the transfer would add a second identity for the same constraint
+// and let a re-queued transfer slip past the first.
+func IngestDedupeKey(desiredItemID string) string { return "ingest-acq:" + desiredItemID }
+
+// IngestPayload is what an ingest_acquisition job carries.
+type IngestPayload struct {
+	// DesiredItemID is the want whose acquisition completed. Everything else —
+	// the transfer, its path, the selected candidate — is read from the
+	// database at handling time rather than carried here.
+	//
+	// A payload that carried the path would be a payload that goes stale: the
+	// poll job may have re-resolved it since, and a job that ran against a
+	// path recorded five minutes ago is a job operating on a guess.
+	DesiredItemID string `json:"desired_item_id"`
+}

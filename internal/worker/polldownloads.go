@@ -36,7 +36,7 @@ import (
 // one from being polled, and would put the pass into a backoff that reports the
 // same thing more slowly.
 func PollDownloadsHandler(
-	reg *providers.Registry, cat *catalog.Catalog, log *slog.Logger,
+	reg *providers.Registry, cat *catalog.Catalog, ingests ProbeEnqueuer, log *slog.Logger,
 ) HandlerFunc {
 	return func(ctx context.Context, _ jobs.Job) error {
 		clients := reg.Downloaders()
@@ -64,7 +64,7 @@ func PollDownloadsHandler(
 			}
 
 			for _, t := range transfers {
-				n, err := reconcileTransfer(ctx, cat, client.Name(), t, log)
+				n, err := reconcileTransfer(ctx, cat, ingests, client.Name(), t, log)
 				if err != nil {
 					failed++
 					log.Warn("could not reconcile a transfer",
@@ -90,7 +90,7 @@ func PollDownloadsHandler(
 // Returns how many state transitions it caused, so the caller can log a pass
 // that did something and stay quiet about one that did not.
 func reconcileTransfer(
-	ctx context.Context, cat *catalog.Catalog, provider string,
+	ctx context.Context, cat *catalog.Catalog, ingests ProbeEnqueuer, provider string,
 	t providers.Transfer, log *slog.Logger,
 ) (int, error) {
 	existing, err := cat.AcquisitionByExternal(ctx, provider, t.ID)
@@ -123,7 +123,7 @@ func reconcileTransfer(
 		return 0, err
 	}
 
-	return advancePipeline(ctx, cat, existing.DesiredItemID, t, log)
+	return advancePipeline(ctx, cat, ingests, existing.DesiredItemID, t, log)
 }
 
 // advancePipeline applies the §64 transition this transfer's state implies.
@@ -133,8 +133,8 @@ func reconcileTransfer(
 // than exceptional: a poll pass sees the same completed transfer many times
 // and must move it exactly once.
 func advancePipeline(
-	ctx context.Context, cat *catalog.Catalog, desiredItemID string,
-	t providers.Transfer, log *slog.Logger,
+	ctx context.Context, cat *catalog.Catalog, ingests ProbeEnqueuer,
+	desiredItemID string, t providers.Transfer, log *slog.Logger,
 ) (int, error) {
 	state, err := cat.Acquisition(ctx, desiredItemID)
 	if err != nil {
@@ -172,7 +172,40 @@ func advancePipeline(
 	}
 	log.Info("a transfer advanced its acquisition",
 		"desired_item_id", desiredItemID, "transition", string(want), "detail", detail)
+
+	// Reaching VERIFYING is what schedules the hash (M3-13).
+	//
+	// A JOB rather than doing it here, because hashing a 40 GB file inside the
+	// poll would stall progress reporting for every other transfer, and a
+	// lease sized for a poll would expire in the middle of it. It is also how
+	// roles are allowed to talk at all (invariant 4).
+	//
+	// Enqueued only on the transition, not on every pass that sees a completed
+	// transfer — the dedupe key makes a repeat harmless, but queueing one per
+	// beat would fill the queue with work that is already done.
+	if want == acquisition.TransitionDownloaded && ingests != nil {
+		enqueueAcquisitionIngest(ctx, ingests, desiredItemID, log)
+	}
 	return 1, nil
+}
+
+// enqueueAcquisitionIngest queues the hash-and-ingest for a completed transfer.
+//
+// A failure to enqueue is logged and swallowed rather than failing the poll.
+// The transfer is complete and the state is recorded; losing the whole pass
+// because a follow-up could not be queued would trade every other transfer's
+// progress for this one's next step, and the next beat re-enqueues it anyway.
+func enqueueAcquisitionIngest(
+	ctx context.Context, ingests ProbeEnqueuer, desiredItemID string, log *slog.Logger,
+) {
+	if _, err := ingests.Enqueue(ctx, jobs.EnqueueOptions{
+		Type:      acquisition.IngestJobType,
+		Payload:   acquisition.IngestPayload{DesiredItemID: desiredItemID},
+		DedupeKey: acquisition.IngestDedupeKey(desiredItemID),
+	}); err != nil {
+		log.Warn("could not queue the ingest for a completed acquisition",
+			"desired_item_id", desiredItemID, "error", err)
+	}
 }
 
 // NewAcquisitionID mints an identifier for an acquisition row.
