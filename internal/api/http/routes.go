@@ -28,6 +28,9 @@ func (s *Server) routes(mounts []MountFunc) http.Handler {
 	r := chi.NewRouter()
 	r.Use(
 		requestIDMiddleware,
+		// nosniff early, so it is set even on a response written by the panic
+		// recovery — which is exactly the path least likely to have remembered.
+		nosniffMiddleware,
 		s.accessLogMiddleware,
 		s.recoveryMiddleware,
 		s.metricsMiddleware,

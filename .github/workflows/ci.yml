@@ -15,6 +15,7 @@ concurrency:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -42,6 +43,7 @@ jobs:
   generate-check:
     name: generated code is current
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -59,6 +61,7 @@ jobs:
   # serves. A unit test cannot make that claim about a whole process tree.
   test:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -109,6 +112,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
         include:
@@ -137,6 +141,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -159,9 +164,24 @@ jobs:
   # It is also the job that would catch the toolchain quietly becoming
   # mandatory — the failure mode ADR-0023 exists to prevent, and the one that
   # would otherwise be discovered by a user on a NAS.
+  # Every job here is bounded. GitHub's default is SIX HOURS, and a hung
+  # acceptance run therefore looks identical to a slow one for most of a
+  # working day — which is exactly what happened while this file was being
+  # written: `acceptance (no media toolchain)` sat in_progress for seventeen
+  # minutes against a job that normally takes eighty seconds, with fourteen
+  # sibling jobs already green and nothing to say it was stuck.
+  #
+  # scripts/acceptance.sh already applies this reasoning INSIDE itself —
+  # `assert_refuses` bounds every command it runs, because "a regressed refusal
+  # turns this script into a hang rather than a failure". The workflow around
+  # it had no such bound. These numbers are generous against observed
+  # durations, so they are a starvation guard rather than a service-level
+  # objective: if a job is genuinely wedged it still fails, and it fails for a
+  # reason that is true.
   acceptance-degraded:
     name: acceptance (no media toolchain)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -184,6 +204,7 @@ jobs:
     if: always()
     needs: [lint, generate-check, test, build, acceptance, acceptance-degraded]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: fail if any job failed
         run: |

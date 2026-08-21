@@ -48,6 +48,36 @@ func Fail(w http.ResponseWriter, r *http.Request, p *problem.Problem) {
 	problem.Write(w, r, p.WithRequestID(RequestIDFrom(r.Context())))
 }
 
+// nosniffMiddleware sets X-Content-Type-Options on every response.
+//
+// Every write path in this server already sets it — routes.go's writeJSON,
+// problem.Write and the resource API's write all do. That is three places
+// remembering the same thing, and the failure mode of "remembering" is one
+// handler that does not.
+//
+// Setting it centrally makes the guarantee structural instead of habitual: a
+// handler added tomorrow gets it whether or not its author knew to. The
+// per-writer calls are left in place deliberately — they are idempotent, they
+// document the intent where the content type is chosen, and a writer used
+// outside this middleware chain still carries its own protection.
+//
+// # What this is and is not
+//
+// It is defence in depth, not the primary control. The primary control is that
+// bodies are encoding/json output, which HTML-escapes by default: a payload of
+// <script> serialises as \u003cscript\u003e whatever the headers say. nosniff
+// stops a browser deciding for itself that an application/json response is
+// really HTML — which matters only if the escaping were ever bypassed.
+//
+// It is set in the middleware rather than at the recorder because a header
+// must be written before the status line, and the recorder only sees Write.
+func nosniffMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		next.ServeHTTP(w, r)
+	})
+}
+
 // maxInboundRequestID bounds what an inbound correlation id may be. Echoing an
 // unbounded client-supplied string into every log line is a log-injection and a
 // disk-fill primitive at once.
