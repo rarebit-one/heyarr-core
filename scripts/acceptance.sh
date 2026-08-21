@@ -1700,8 +1700,6 @@ YAML
   # the phase and the job, never a satisfaction axis, because a timer owns
   # those and a timer is not part of the claim.
   assert_eq "$(api "/api/v1/jobs?type=search_release&state=failed" | jq -r '.items | length')" "0" \
-    "and a fruitless search is a modelled edge rather than a failed job"
-  assert_eq "$(api "/api/v1/jobs?type=search_release&state=failed" | jq -r '.items | length')" "0" \
     "and does not fail the job, which would back off into an indexer hammering loop"
   assert_eq "$(api "/api/v1/desired/$search_empty/candidates" | jq -r '.candidates | length')" "0" \
     "with no candidates to explain"
