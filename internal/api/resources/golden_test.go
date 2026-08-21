@@ -57,6 +57,12 @@ func TestResponseShapes(t *testing.T) {
 		{"one session", "/api/v1/consumption/sessions/" + session1ID, "session.json"},
 		{"devices", "/api/v1/devices", "devices_list.json"},
 		{"one device", "/api/v1/devices/" + device1ID, "device.json"},
+		{"quality profiles", "/api/v1/quality-profiles", "quality_profiles_list.json"},
+		{"one quality profile", "/api/v1/quality-profiles/" + profile1ID, "quality_profile.json"},
+		{
+			"a profile that is never finished", "/api/v1/quality-profiles/" + profile2ID,
+			"quality_profile_open_ended.json",
+		},
 		{"jobs", "/api/v1/jobs", "jobs_list.json"},
 		{"one job", "/api/v1/jobs/" + job2ID, "job_dead.json"},
 	}

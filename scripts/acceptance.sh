@@ -1130,6 +1130,117 @@ YAML
       "." "an available ffprobe reports a version"
   fi
 
+  note "  quality profiles (§62, M3-01)"
+  # The first Milestone 3 section. It is placed HERE — after the playback and
+  # toolchain assertions, before the CLI — for one reason: it writes rows and
+  # emits events, and every count asserted above it is a count of something
+  # else. The remux section below is the only section that mutates the LIBRARY;
+  # this one must stay above it and below the event-log counts.
+  #
+  # What it proves that the unit tests cannot: that a real Heyarr, started from
+  # nothing, has usable profiles without anyone authoring JSON — and that the
+  # three sections of §62 are three different KINDS of statement all the way
+  # out to the wire, not three degrees of one.
+  local qp_json qp_count qp_open_ended
+  qp_json=$(api /api/v1/quality-profiles)
+  qp_count=$(jq -r '.items | length' <<<"$qp_json")
+
+  # Seeded on first start. A Heyarr with no profiles is one where the first
+  # interesting thing you can do requires reading a vocabulary you have not met.
+  if (( qp_count >= 3 )); then
+    pass "a fresh Heyarr seeds its quality profiles ($qp_count)"
+  else
+    fail "a fresh Heyarr should seed quality profiles, found $qp_count"
+  fi
+  assert_eq "$(jq -r '[.items[] | select(.seeded)] | length > 0' <<<"$qp_json")" "true" \
+    "the seeded profiles are marked as seeded, so an edited one is tellable apart"
+
+  # §62's three semantics, on a real response. `terminal` is the one that
+  # matters: a profile with NO terminal rules is legal and means "never stop
+  # looking", and it must not read back as null.
+  qp_open_ended=$(jq -r '[.items[] | select(.terminal | length == 0)] | length' <<<"$qp_json")
+  if (( qp_open_ended >= 1 )); then
+    pass "a seeded profile is open-ended — nothing stops the upgrade loop for it"
+  else
+    fail "no seeded profile is open-ended, so the never-terminal path is unexercised here"
+  fi
+  assert_not_contains "$qp_json" '"terminal":null' \
+    "an absent terminal section serialises as [] rather than null"
+
+  # A gate is not a score. This is the mistake the design most invites, and
+  # silently dropping the weight would leave an operator believing a gate is
+  # scoring. Refused at WRITE time, with a message that says where the rule
+  # belongs.
+  local qp_reject
+  qp_reject=$(api /api/v1/quality-profiles -X POST -H 'Content-Type: application/json' \
+    -d '{"name":"weighted-gate","accept":[{"attribute":"resolution","op":"gte","value":1080,"weight":20}]}')
+  assert_contains "$(jq -r '.status' <<<"$qp_reject")" "400" \
+    "a weight on an accept rule is refused"
+  assert_contains "$(jq -r '.detail' <<<"$qp_reject")" "GATE" \
+    "the refusal says an accept rule is a gate, and where a weight belongs"
+
+  # An attribute that does not exist is caught when the profile is written, not
+  # when a candidate is evaluated — so the mistake reaches the person who made
+  # it rather than becoming a rejection reason on every candidate for months.
+  local qp_typo
+  qp_typo=$(api /api/v1/quality-profiles -X POST -H 'Content-Type: application/json' \
+    -d '{"name":"typo","accept":[{"attribute":"minimum_resolution","op":"gte","value":1080}]}')
+  assert_contains "$(jq -r '.detail' <<<"$qp_typo")" "no such attribute" \
+    "an unknown attribute is refused at write time"
+  assert_contains "$(jq -r '.detail' <<<"$qp_typo")" "video_codec" \
+    "the refusal lists the attributes that do exist"
+
+  # A rule that would validate and then silently match nothing is the worst
+  # outcome of the three, because the profile appears to work.
+  local qp_silent
+  qp_silent=$(api /api/v1/quality-profiles -X POST -H 'Content-Type: application/json' \
+    -d '{"name":"silent","accept":[{"attribute":"source","op":"eq","value":["remux","bluray"]}]}')
+  assert_contains "$(jq -r '.detail' <<<"$qp_silent")" "in" \
+    "a list operand with an equality comparison is refused rather than silently never matching"
+
+  # A profile is authored deliberately, so a name collision is a conflict, not
+  # an upsert that discards what the profile said before.
+  local qp_created qp_dup qp_id
+  qp_created=$(api /api/v1/quality-profiles -X POST -H 'Content-Type: application/json' \
+    -d '{"name":"acceptance-profile","accept":[{"attribute":"resolution","op":"gte","value":720}],
+         "prefer":[{"attribute":"source","op":"eq","value":"remux","weight":25}]}')
+  qp_id=$(jq -r '.id' <<<"$qp_created")
+  assert_contains "$qp_id" "-" "a profile can be authored over the API"
+  qp_dup=$(api /api/v1/quality-profiles -X POST -H 'Content-Type: application/json' \
+    -d '{"name":"acceptance-profile","accept":[]}')
+  assert_contains "$(jq -r '.status' <<<"$qp_dup")" "409" \
+    "a duplicate profile name is a conflict rather than a silent overwrite"
+
+  # A penalty is a real thing to want. Without a negative weight, "prefer
+  # anything that is not a webrip" has to be written as a gate, which rejects
+  # rather than deprioritises.
+  local qp_penalty
+  qp_penalty=$(api /api/v1/quality-profiles -X POST -H 'Content-Type: application/json' \
+    -d '{"name":"acceptance-penalty","prefer":[{"attribute":"source","op":"eq","value":"webrip","weight":-30}]}')
+  assert_eq "$(jq -r '.prefer[0].weight' <<<"$qp_penalty")" "-30" \
+    "a negative weight is a penalty and survives the round trip"
+
+  # Omitted and cleared are different intentions. Collapsing them makes
+  # "clear the terminal rules" and "forget to send them" the same request.
+  local qp_put
+  qp_put=$(api "/api/v1/quality-profiles/$qp_id" -X PUT -H 'Content-Type: application/json' \
+    -d '{"terminal":[{"attribute":"resolution","op":"gte","value":2160}]}')
+  assert_eq "$(jq -r '.terminal | length' <<<"$qp_put")" "1" \
+    "a terminal condition can be added to a profile"
+  assert_eq "$(jq -r '.accept | length' <<<"$qp_put")" "1" \
+    "a section the request omits is left alone"
+  qp_put=$(api "/api/v1/quality-profiles/$qp_id" -X PUT -H 'Content-Type: application/json' \
+    -d '{"terminal":[]}')
+  assert_eq "$(jq -r '.terminal | length' <<<"$qp_put")" "0" \
+    "a section sent as [] is cleared — the profile is now never finished"
+
+  # Deletion is physical here, unlike content (ADR-0018): a profile is a page of
+  # configuration, and a soft-deleted one would have to be filtered out of every
+  # read path forever to stop an operator seeing something they deleted.
+  api "/api/v1/quality-profiles/$qp_id" -X DELETE -o /dev/null
+  assert_eq "$(api "/api/v1/quality-profiles/$qp_id" | jq -r '.status')" "404" \
+    "a deleted profile is gone rather than hidden"
+
   note "  the CLI (M1-17)"
   # The CLI is what a person actually uses, so the demo drives it rather than
   # only the API underneath it. Every count is cross-checked against the API's

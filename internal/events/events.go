@@ -58,6 +58,29 @@ const (
 	TypePeerRegistered   = "peer.registered"
 	TypeDesiredSatisfied = "desired.satisfied"
 
+	// Quality profiles are POLICY, and policy.* is a category §76 does not
+	// list (M3-01).
+	//
+	// §76 says "categories include", so the list is open, and none of the
+	// listed ones fits. A profile is not content, not a job, not playback, and
+	// not desire: it is the standard desire is measured against. The nearest
+	// candidate was desired.*, and overloading it would mean a subscriber
+	// filtering desired.* for "what does the operator want" also receives
+	// profile CRUD, which is a different question.
+	//
+	// It matters more than it looks: editing a profile can retroactively
+	// unsatisfy a DesiredItem that nothing else touched, so this is a
+	// transition an operator genuinely needs to see in the stream (§57).
+	//
+	// There is no "quality_profile.evaluated" event and there must not be. An
+	// evaluation happens per candidate per search, and recording each one
+	// would put thousands of events in the log to say that arithmetic
+	// happened. §63's inspectability is served by persisting the evaluation
+	// (M3-12), which is state, not by emitting it, which would be noise.
+	TypeQualityProfileCreated = "policy.quality_profile.created"
+	TypeQualityProfileUpdated = "policy.quality_profile.updated"
+	TypeQualityProfileDeleted = "policy.quality_profile.deleted"
+
 	// Device registration lives under playback.* rather than a namespace of
 	// its own: §76 enumerates the categories, a device is not content, and a
 	// device exists in this system for exactly one reason. A client following

@@ -166,6 +166,8 @@ func (a *API) Mount(r chi.Router) {
 	r.Get("/replicas", a.listReplicas)
 	r.Get("/devices", a.listDevices)
 	r.Get("/devices/{id}", a.getDevice)
+	r.Get("/quality-profiles", a.listQualityProfiles)
+	r.Get("/quality-profiles/{id}", a.getQualityProfile)
 	r.Get("/publications", a.listPublications)
 	r.Get("/publications/{id}", a.getPublication)
 	r.Get("/consumption/sessions", a.listSessions)
@@ -185,6 +187,13 @@ func (a *API) Mount(r chi.Router) {
 	// admin token for it would put an admin credential on every set-top box in
 	// the house.
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/devices", a.registerDevice)
+	// A quality profile is the standard desired state is measured against
+	// (§62). Authoring one is a write rather than an admin action: it is
+	// ordinary operator configuration, in the same class as creating a
+	// library, not a credential operation.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/quality-profiles", a.createQualityProfile)
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Put("/quality-profiles/{id}", a.updateQualityProfile)
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Delete("/quality-profiles/{id}", a.deleteQualityProfile)
 	// Consumption is ordinary client traffic like device registration: a
 	// television reporting where it has reached needs a write token, not an
 	// admin one.

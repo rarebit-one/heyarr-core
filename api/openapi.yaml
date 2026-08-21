@@ -49,6 +49,8 @@ tags:
     description: Peers and replicas.
   - name: operations
     description: Jobs, events, credentials and system state.
+  - name: policy
+    description: Quality profiles — the standard desired state is measured against (§62).
 
 paths:
   /healthz:
@@ -1103,6 +1105,160 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/quality-profiles:
+    get:
+      tags: [policy]
+      operationId: listQualityProfiles
+      summary: Page the quality profiles.
+      description: Ordered by `name`, which is unique.
+      parameters:
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+      responses:
+        "200":
+          description: A page of quality profiles.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/QualityProfile" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [policy]
+      operationId: createQualityProfile
+      summary: Author a quality profile.
+      description: |
+        A **create, not an upsert**. Device registration is an upsert because a
+        television announces itself on every launch and nobody chose to do it;
+        a profile is authored deliberately, and silently replacing one because
+        the name matched would discard whatever it said before. A name
+        collision is a `409`.
+
+        Rules are validated here, at write time — an attribute that does not
+        exist, an ordering comparison on a codec name, or a weight on a gate is
+        a `400` naming the section and the rule. That is deliberate: a mistake
+        in a profile should be reported to whoever wrote the profile, not
+        turned into a rejection reason attached to every candidate for the next
+        six months.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WriteQualityProfile" }
+      responses:
+        "201":
+          description: The profile.
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QualityProfile" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: A profile with that name already exists.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /api/v1/quality-profiles/{id}:
+    get:
+      tags: [policy]
+      operationId: getQualityProfile
+      summary: One quality profile.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QualityProfile" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [policy]
+      operationId: updateQualityProfile
+      summary: Replace a quality profile's rules.
+      description: |
+        A section the request **omits** is left alone; a section sent as `[]`
+        is **cleared**. Those are different intentions, and collapsing them
+        would make "clear this profile's terminal rules" and "forget to send
+        them" the same request.
+
+        A request that changes nothing emits no event. A client that re-sends
+        its whole configuration on every start would otherwise turn the event
+        stream into a heartbeat.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WriteQualityProfile" }
+      responses:
+        "200":
+          description: The profile as it now stands.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QualityProfile" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The new name is already taken.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+    delete:
+      tags: [policy]
+      operationId: deleteQualityProfile
+      summary: Delete a quality profile.
+      description: |
+        Physical, not logical — a deliberate departure from ADR-0018's stance
+        for *content*. ADR-0018 is about bytes: deleting an asset must not
+        unlink blobs inline because bytes are expensive, shared and
+        unrecoverable. A profile is a page of configuration, cheap to retype
+        and referenced by nothing but desired state, and a soft-deleted one
+        would have to be filtered out of every read path forever to avoid an
+        operator seeing a profile they deleted.
+
+        A profile still referenced by desired state is refused with `409`
+        rather than cascaded: deleting the standard by which desire is
+        measured, and leaving the desire, would make satisfaction unanswerable.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Still referenced by desired state.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /api/v1/jobs:
     get:
       tags: [operations]
@@ -1893,6 +2049,149 @@ components:
           allOf:
             - $ref: "#/components/schemas/SessionProgress"
           description: Recorded with the transition. Usually sent with `progress`.
+
+    QualityProfile:
+      type: object
+      description: |
+        A quality profile (§62). It says three different **kinds** of thing,
+        not three degrees of one:
+
+        | section | meaning |
+        |---|---|
+        | `accept` | a **gate**. Fail one and the candidate is rejected outright, whatever else it offers. |
+        | `prefer` | a **score**. Never a gate — a candidate meeting no preference at all is still acceptable, merely worse. |
+        | `terminal` | a **stop condition**. The point at which the upgrade workflow has nothing left to want. |
+
+        Collapsing any two produces the *arr behaviour §61 rejects: a
+        preference that silently rejects, or an upgrade loop with no ceiling
+        that never terminates because "better" is unbounded.
+
+        An **empty `terminal` and an absent one are the same thing** — "there
+        is no condition under which this profile is finished", which is legal
+        and means *never stop looking*. The seeded `archival` profile is
+        exactly that.
+      required: [id, name, accept, prefer, terminal]
+      properties:
+        id: { type: string }
+        name:
+          type: string
+          description: Unique. This is what a DesiredItem names (§55).
+        description: { type: string }
+        accept:
+          type: array
+          description: Gates. Every one must pass.
+          items: { $ref: "#/components/schemas/QualityRule" }
+        prefer:
+          type: array
+          description: Scored. None is required; each contributes its weight.
+          items: { $ref: "#/components/schemas/QualityRule" }
+        terminal:
+          type: array
+          description: |
+            Stop conditions. **All** must hold for a candidate to be terminal.
+            Empty means this profile is never finished.
+          items: { $ref: "#/components/schemas/QualityRule" }
+        seeded:
+          type: boolean
+          description: |
+            Came from Heyarr's defaults rather than from an operator. Seeding
+            converges on the name and never overwrites, so an edited default
+            stays edited — this is how you can tell you are looking at one.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    WriteQualityProfile:
+      type: object
+      description: |
+        On `POST`, an omitted section is empty. On `PUT`, an omitted section is
+        **left alone** and a section sent as `[]` is **cleared**.
+      required: [name]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        accept:
+          type: array
+          items: { $ref: "#/components/schemas/QualityRule" }
+        prefer:
+          type: array
+          items: { $ref: "#/components/schemas/QualityRule" }
+        terminal:
+          type: array
+          items: { $ref: "#/components/schemas/QualityRule" }
+
+    QualityRule:
+      type: object
+      description: |
+        One assertion about a release: an attribute, a comparison and an
+        operand. The same shape serves all three sections — what differs is
+        what a failure *means*, and that belongs to the section rather than to
+        the rule. One rule type is what lets §63 report all three the same way.
+
+        The attribute vocabulary is **closed**, so a rule can be validated when
+        it is written rather than when it is evaluated. Adding an attribute is
+        a code change, which is correct: something has to know how to extract
+        it from a release, and an attribute nothing populates is a rule that
+        silently never matches.
+      required: [attribute, op, value]
+      properties:
+        attribute:
+          type: string
+          enum:
+            [
+              audio_channels,
+              audio_codec,
+              hdr,
+              language,
+              resolution,
+              size_bytes,
+              source,
+              video_codec,
+            ]
+          description: |
+            `resolution` is vertical lines (480, 720, 1080, 2160) rather than a
+            label, because "4K", "2160p" and "UHD" are three spellings of one
+            number.
+
+            `source` is **not ordered**, even though there is an obvious
+            quality ordering among `remux`, `bluray`, `web-dl` and the rest. An
+            ordering here would be a second scoring system living outside
+            `prefer`, invisible to §63's reasons — the opaque scoring §61
+            rejects. Say "bluray beats webrip" with two preferences instead,
+            and it appears in the explanation.
+        op:
+          type: string
+          enum: [eq, neq, gte, lte, in, nin]
+          description: |
+            `gte` and `lte` are numbers only; `in` and `nin` are names only. A
+            comparison that does not apply to the attribute's type is a `400`,
+            as is a list operand with `eq` — which would otherwise validate and
+            then silently match nothing.
+        value:
+          description: |
+            A bare JSON value whose shape follows the attribute: a whole number,
+            a name, a list of names (for `in`/`nin`), or a boolean. The kind is
+            read from the JSON and then checked against the attribute, never
+            coerced — so `"1080"` against `resolution` is a caught typo rather
+            than a working rule.
+          oneOf:
+            - type: integer
+            - type: string
+            - type: boolean
+            - type: array
+              items: { type: string }
+        weight:
+          type: integer
+          description: |
+            The score contribution, meaningful **only** in `prefer`. May be
+            negative — a penalty is a real thing to want. May not be zero: a
+            preference that cannot affect the score is indistinguishable from
+            an absent one, and keeping it means an operator believes something
+            is being preferred when nothing is.
+
+            A weight on an `accept` or `terminal` rule is a `400`, not an
+            ignored field. It is the mistake this design most invites, and
+            silently dropping it would leave an operator believing a gate is
+            scoring.
 
     Device:
       type: object

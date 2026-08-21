@@ -102,6 +102,17 @@ func (c *Controller) Run(ctx context.Context) error {
 		return err
 	}
 
+	// Quality profiles are seeded before anything else can want them (§62,
+	// M3-01). A Heyarr with no profiles is one where the first interesting
+	// thing you can do — want something — requires authoring JSON against a
+	// vocabulary you have not read.
+	//
+	// It converges on the profile name and never overwrites, so an operator
+	// who tunes a default keeps their tuning across every restart.
+	if err := seedQualityProfiles(startupCtx, db, c.cfg, c.log); err != nil {
+		return err
+	}
+
 	// Shutdown may have been requested while the schema work ran. That is a
 	// clean stop, not a failure — report it as one.
 	if ctx.Err() != nil {
