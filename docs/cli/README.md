@@ -17,6 +17,11 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr config print`](heyarr_config_print.md) | Print the fully resolved configuration |
 | [`heyarr config`](heyarr_config.md) | Inspect configuration |
 | [`heyarr controller`](heyarr_controller.md) | Own coordinated mutable state: catalog, policy, jobs, API |
+| [`heyarr desired add`](heyarr_desired_add.md) | Want something |
+| [`heyarr desired list`](heyarr_desired_list.md) | List what should exist |
+| [`heyarr desired rm`](heyarr_desired_rm.md) | Stop wanting something |
+| [`heyarr desired set`](heyarr_desired_set.md) | Change the conditions, the monitoring or the note |
+| [`heyarr desired`](heyarr_desired.md) | Say what should exist, whether or not it does yet |
 | [`heyarr events tail`](heyarr_events_tail.md) | Print events as they happen |
 | [`heyarr events`](heyarr_events.md) | Follow the event log |
 | [`heyarr fsck`](heyarr_fsck.md) | Check stored bytes against the catalog (§57, ADR-0018) |
@@ -31,6 +36,8 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr peer`](heyarr_peer.md) | Serve and replicate bytes |
 | [`heyarr peers list`](heyarr_peers_list.md) | List peers |
 | [`heyarr peers`](heyarr_peers.md) | Inspect the peers of this instance |
+| [`heyarr quality-profile list`](heyarr_quality-profile_list.md) | List the quality profiles |
+| [`heyarr quality-profile`](heyarr_quality-profile.md) | Inspect the quality profiles a want is measured against |
 | [`heyarr scan`](heyarr_scan.md) | Scan a library's roots, optionally waiting for the scan to finish |
 | [`heyarr token create`](heyarr_token_create.md) | Mint an API token |
 | [`heyarr token list`](heyarr_token_list.md) | List API tokens |

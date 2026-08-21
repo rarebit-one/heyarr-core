@@ -23,6 +23,7 @@ One logical library, multiple complete sovereign peers.
 * [heyarr blobs](heyarr_blobs.md)	 - Inspect and read stored bytes
 * [heyarr config](heyarr_config.md)	 - Inspect configuration
 * [heyarr controller](heyarr_controller.md)	 - Own coordinated mutable state: catalog, policy, jobs, API
+* [heyarr desired](heyarr_desired.md)	 - Say what should exist, whether or not it does yet
 * [heyarr events](heyarr_events.md)	 - Follow the event log
 * [heyarr fsck](heyarr_fsck.md)	 - Check stored bytes against the catalog (§57, ADR-0018)
 * [heyarr gc](heyarr_gc.md)	 - Reclaim bytes nothing references (ADR-0018)
@@ -30,6 +31,7 @@ One logical library, multiple complete sovereign peers.
 * [heyarr library](heyarr_library.md)	 - Manage libraries and their roots
 * [heyarr peer](heyarr_peer.md)	 - Serve and replicate bytes
 * [heyarr peers](heyarr_peers.md)	 - Inspect the peers of this instance
+* [heyarr quality-profile](heyarr_quality-profile.md)	 - Inspect the quality profiles a want is measured against
 * [heyarr scan](heyarr_scan.md)	 - Scan a library's roots, optionally waiting for the scan to finish
 * [heyarr token](heyarr_token.md)	 - Manage API tokens (ADR-0011)
 * [heyarr version](heyarr_version.md)	 - Print build information

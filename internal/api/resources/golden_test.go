@@ -57,6 +57,9 @@ func TestResponseShapes(t *testing.T) {
 		{"one session", "/api/v1/consumption/sessions/" + session1ID, "session.json"},
 		{"devices", "/api/v1/devices", "devices_list.json"},
 		{"one device", "/api/v1/devices/" + device1ID, "device.json"},
+		{"desired items", "/api/v1/desired", "desired_list.json"},
+		{"one desired item", "/api/v1/desired/" + desired1ID, "desired.json"},
+		{"unmonitored wants", "/api/v1/desired?monitor=false", "desired_unmonitored.json"},
 		{"quality profiles", "/api/v1/quality-profiles", "quality_profiles_list.json"},
 		{"one quality profile", "/api/v1/quality-profiles/" + profile1ID, "quality_profile.json"},
 		{

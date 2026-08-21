@@ -194,6 +194,13 @@ func (a *API) Mount(r chi.Router) {
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/quality-profiles", a.createQualityProfile)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Put("/quality-profiles/{id}", a.updateQualityProfile)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Delete("/quality-profiles/{id}", a.deleteQualityProfile)
+
+	// Desired state (§55). Wanting is ordinary operator traffic, not an admin
+	// action, so these need `write` rather than `admin`. Mounted as a group
+	// because reads and writes belong to one resource and splitting them
+	// across this file's two halves would make the scope contract harder to
+	// read off, not easier.
+	a.mountDesired(r)
 	// Consumption is ordinary client traffic like device registration: a
 	// television reporting where it has reached needs a write token, not an
 	// admin one.

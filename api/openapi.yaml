@@ -51,6 +51,8 @@ tags:
     description: Jobs, events, credentials and system state.
   - name: policy
     description: Quality profiles — the standard desired state is measured against (§62).
+  - name: desired
+    description: What should exist, whether or not it does yet (§55).
 
 paths:
   /healthz:
@@ -1105,6 +1107,179 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/desired:
+    get:
+      tags: [desired]
+      operationId: listDesired
+      summary: Page what should exist.
+      description: |
+        Ordered by `(created_at, id)`. A want has no name to sort by, and the
+        interesting order is the order things were asked for.
+      parameters:
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+        - name: scope
+          in: query
+          schema: { type: string, enum: [work, edition] }
+        - name: monitor
+          in: query
+          description: Only monitored, or only unmonitored, wants.
+          schema: { type: string, enum: ["true", "false"] }
+        - name: work_id
+          in: query
+          schema: { type: string }
+        - name: quality_profile_id
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: A page of desired items.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/DesiredItem" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [desired]
+      operationId: createDesired
+      summary: Want something.
+      description: |
+        **A want must work when you have nothing.** That is the whole point of
+        this endpoint and the requirement most easily lost: every fixture in
+        this repository has assets, so a design that only works once something
+        exists passes every test and fails the first real use.
+
+        Name the work either by `work_id`, or — when it does not exist yet — by
+        a `work` descriptor of content type, title and year. The descriptor
+        resolves through the **same** `(content_type, work_key)` get-or-create
+        the scanner uses, so wanting a film and later scanning it converge on
+        one Work rather than producing two.
+
+        Name the quality profile by `quality_profile_id` or by
+        `quality_profile` (its name) — a person writing this by hand knows
+        `living-room`, not a UUID. A profile is **required**: "this should
+        exist", with no statement of what would count as existing, cannot be
+        evaluated (§56).
+
+        `monitor` defaults to **true**. Wanting something and then silently
+        never looking for anything better is the surprising default.
+
+        Two wants over the same target with **different** profiles are legal
+        and are the point (§61 — never one version per title): the living-room
+        copy and the phone-sized copy are two wants. The same target with the
+        same profile is one want written twice, and is a `409`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateDesired" }
+      responses:
+        "201":
+          description: The want.
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DesiredItem" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: That content is already wanted under that profile.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /api/v1/desired/{id}:
+    get:
+      tags: [desired]
+      operationId: getDesired
+      summary: One desired item.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The want.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DesiredItem" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [desired]
+      operationId: updateDesired
+      summary: Change the conditions, the monitoring or the note.
+      description: |
+        An omitted field is left alone.
+
+        **The target cannot be changed.** Repointing a want at different
+        content is not an edit, it is a different want, and allowing it would
+        make the acquisition history attached to this row describe something
+        else. Delete it and want the other thing.
+
+        A request that changes nothing emits no event.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateDesired" }
+      responses:
+        "200":
+          description: The want as it now stands.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DesiredItem" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The new profile would duplicate an existing want.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+    delete:
+      tags: [desired]
+      operationId: deleteDesired
+      summary: Stop wanting something.
+      description: |
+        Physical, matching quality profiles and for the same reason: a want is
+        a statement of intent, not bytes. ADR-0018's logical-delete stance
+        exists to stop shared, expensive, unrecoverable bytes being unlinked
+        inline, and none of that applies here — an operator who says they no
+        longer want something should find it gone.
+
+        The `desired.removed` event carries the target, not only the row id, so
+        the log still says what was wanted after the row is gone.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204": { description: No longer wanted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/quality-profiles:
     get:
       tags: [policy]
@@ -2049,6 +2224,117 @@ components:
           allOf:
             - $ref: "#/components/schemas/SessionProgress"
           description: Recorded with the transition. Usually sent with `progress`.
+
+    DesiredItem:
+      type: object
+      description: |
+        "This content should exist under these conditions" (§55) — the row that
+        makes Heyarr more than a catalogue.
+
+        It anchors to a **Work**, the semantic entity (§11), which exists
+        whether or not any bytes do. Never to an Asset: an Asset is a file that
+        exists by definition, and wanting a file you already have is not a
+        coherent thing to say.
+      required: [id, scope, work_id, quality_profile_id, monitor]
+      properties:
+        id: { type: string }
+        scope:
+          type: string
+          enum: [work, edition]
+          description: |
+            How much of the work is wanted — the whole thing, or one edition of
+            it (a season, a particular release, a language).
+
+            **There is no `episode` scope, and that is a limitation rather than
+            an omission.** §11 makes the *series* the Work and an edition the
+            season, so an episode is an Asset — a file that exists — and there
+            is no entity anywhere for an episode nobody has yet. Knowing which
+            episodes *should* exist is what a metadata provider is for, and
+            that is deferred out of Milestone 3.
+
+            What this costs today, stated rather than papered over: with no
+            metadata provider, content satisfaction for a series-scoped want is
+            "an acceptable asset exists", **not** "every episode exists". A
+            want for a series is not a completeness guarantee in this
+            milestone.
+        work_id:
+          type: string
+          description: Always set, even at edition scope.
+        edition_id:
+          type: string
+          description: Present only at edition scope — absent, not null, at work scope.
+        quality_profile_id: { type: string }
+        monitor:
+          type: boolean
+          description: |
+            "Keep looking for something better", which is **not** the same as
+            wanting (§60 keeps both words). An unmonitored want that is
+            satisfied is finished, terminal profile or not: the operator said
+            "get me this", not "keep improving this". Running the upgrade
+            workflow over unmonitored items is how *arr installations
+            re-download libraries nobody asked them to touch.
+        reason:
+          type: string
+          description: |
+            Free text, never interpreted. It exists because a library
+            accumulates wants and six months later nobody remembers why one is
+            there.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreateDesired:
+      type: object
+      description: |
+        Name the work by `work_id` **or** `work`, and the profile by
+        `quality_profile_id` **or** `quality_profile`. Supplying both of a pair
+        is a `400` rather than a silent precedence rule.
+      properties:
+        scope:
+          type: string
+          enum: [work, edition]
+          default: work
+        work_id: { type: string }
+        edition_id:
+          type: string
+          description: Required at edition scope, refused at work scope.
+        work:
+          $ref: "#/components/schemas/WorkDescriptor"
+        quality_profile_id: { type: string }
+        quality_profile:
+          type: string
+          description: The profile's name, for when a person is typing this.
+        monitor:
+          type: boolean
+          default: true
+        reason: { type: string }
+
+    WorkDescriptor:
+      type: object
+      description: |
+        Content named semantically, whether or not it exists. Resolved through
+        the same `(content_type, work_key)` get-or-create the scanner uses, so
+        wanting something and later scanning it converge on one Work.
+      required: [content_type, title]
+      properties:
+        content_type:
+          type: string
+          description: "`movie`, `series`, `music`, `book`, … (§12)."
+        title: { type: string }
+        year:
+          type: integer
+          description: |
+            Optional, and part of the identity when present. A year in the
+            title (`"Blade Runner (1982)"`) is understood too; an explicit year
+            wins, because the caller said so.
+
+    UpdateDesired:
+      type: object
+      description: An omitted field is left alone. The target cannot be changed.
+      properties:
+        quality_profile_id: { type: string }
+        quality_profile: { type: string }
+        monitor: { type: boolean }
+        reason: { type: string }
 
     QualityProfile:
       type: object

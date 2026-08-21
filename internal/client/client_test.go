@@ -420,6 +420,10 @@ func TestWireTypesMatchTheServer(t *testing.T) {
 		{"jobs_list.json", func() any { return &Page[Job]{} }},
 		{"job_dead.json", func() any { return &Job{} }},
 		{"scan_accepted.json", func() any { return &ScanResponse{} }},
+		{"desired_list.json", func() any { return &Page[DesiredItem]{} }},
+		{"desired.json", func() any { return &DesiredItem{} }},
+		{"quality_profiles_list.json", func() any { return &Page[QualityProfile]{} }},
+		{"quality_profile.json", func() any { return &QualityProfile{} }},
 	}
 
 	for _, tt := range tests {

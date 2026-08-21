@@ -76,6 +76,8 @@ One logical library, multiple complete sovereign peers.`,
 		// that has to work before a credential exists or when the controller
 		// will not start.
 		newLibraryCommand(opts, &configPath),
+		newDesiredCommand(opts, &configPath),
+		newQualityProfileCommand(opts, &configPath),
 		newScanCommand(opts, &configPath),
 		newWorksCommand(opts, &configPath),
 		newAssetsCommand(opts, &configPath),

@@ -39,23 +39,39 @@ const (
 	// under blob.* rather than content.* because a probe describes BYTES —
 	// two assets sharing a blob share one probe, and there is no asset in the
 	// subject at all.
-	TypeBlobProbed       = "blob.probed"
-	TypeIngestCompleted  = "ingest.completed"
-	TypeAssetCreated     = "content.asset.created"
+	TypeBlobProbed      = "blob.probed"
+	TypeIngestCompleted = "ingest.completed"
+	TypeAssetCreated    = "content.asset.created"
+	// TypeWorkCreated is a Work appearing in the catalog, however it got there
+	// — scanned, or created because somebody wanted it (M3-02). It is under
+	// content.* rather than desired.* deliberately: a Work appearing is a fact
+	// about the catalog, and a subscriber watching the catalog grow should see
+	// it whichever path created it. The payload says which.
+	TypeWorkCreated      = "content.work.created"
 	TypeLibraryCreated   = "content.library.created"
 	TypeLibraryRootAdded = "content.library_root.added"
 	TypeAssetMissing     = "content.asset.missing"
 	TypeAssetDeleted     = "content.asset.deleted"
 	// #nosec G101 -- an event type name, not a credential
-	TypeTokenCreated     = "system.token.created"
-	TypeTokenRevoked     = "system.token.revoked"
-	TypeJobEnqueued      = "job.enqueued"
-	TypeJobSucceeded     = "job.succeeded"
-	TypeJobFailed        = "job.failed"
-	TypeScanProgress     = "system.scan.progress"
-	TypeSystemStarted    = "system.started"
-	TypeSystemStopped    = "system.stopped"
-	TypePeerRegistered   = "peer.registered"
+	TypeTokenCreated   = "system.token.created"
+	TypeTokenRevoked   = "system.token.revoked"
+	TypeJobEnqueued    = "job.enqueued"
+	TypeJobSucceeded   = "job.succeeded"
+	TypeJobFailed      = "job.failed"
+	TypeScanProgress   = "system.scan.progress"
+	TypeSystemStarted  = "system.started"
+	TypeSystemStopped  = "system.stopped"
+	TypePeerRegistered = "peer.registered"
+
+	// desired.* is §76's own category for wanting (M3-02).
+	//
+	// TypeDesiredSatisfied predates them: it was declared in Milestone 1 and
+	// emitted by NOTHING until now. It stays reserved here rather than being
+	// emitted by this issue, because being wanted and being satisfied are
+	// different transitions and M3-05 owns the second one.
+	TypeDesiredCreated   = "desired.created"
+	TypeDesiredUpdated   = "desired.updated"
+	TypeDesiredRemoved   = "desired.removed"
 	TypeDesiredSatisfied = "desired.satisfied"
 
 	// Quality profiles are POLICY, and policy.* is a category §76 does not
