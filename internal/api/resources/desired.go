@@ -222,6 +222,31 @@ func (a *API) listDesired(w http.ResponseWriter, r *http.Request) {
 		where = append(where, "d.quality_profile_id = ?")
 		args = append(args, profile)
 	}
+	// upgradable is the listing question §71's get_upgrade_candidates asks:
+	// which wants are in a state where an upgrade COULD happen.
+	//
+	// It is answered from STATE alone — monitored, satisfied, and holding
+	// bytes — and deliberately not by scoring anything. Whether a want has
+	// actually reached its profile's terminal condition needs the incumbent
+	// re-evaluated against the profile, which is a join and a scorer per row;
+	// doing that here would make paging a library run the evaluator hundreds
+	// of times to render one screen.
+	//
+	// So this filter is the CHEAP half of eligibility, and it is a superset:
+	// a want that is monitored and satisfied but already terminal appears
+	// here. The upgrade scan (M3-06) applies the terminal test, and
+	// GET /desired/{id}/satisfaction reports it per want. That is stated in
+	// the OpenAPI rather than left for a client to discover.
+	if v, err := oneOf(r, "upgradable", "true", "false"); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	} else if v == "true" {
+		where = append(where,
+			"d.monitor = 1", "a.content = 'satisfied'", "a.managed = 1")
+	} else if v == "false" {
+		where = append(where,
+			"(d.monitor = 0 OR a.content IS NULL OR a.content <> 'satisfied' OR a.managed = 0)")
+	}
 	if q.cursor != nil {
 		where = append(where, "(d.created_at, d.id) > (?, ?)")
 		args = append(args, q.cursor[0], q.cursor[1])

@@ -28,6 +28,25 @@ type SatisfactionResponse struct {
 
 	Content   ContentSatisfaction   `json:"content"`
 	Placement PlacementSatisfaction `json:"placement"`
+	// Upgrade answers "could this be better" (§60), which is a different
+	// question from either axis: a want can be fully satisfied and still
+	// improvable, and that gap is the whole upgrade workflow.
+	Upgrade UpgradeEligibility `json:"upgrade"`
+}
+
+// UpgradeEligibility is whether a want could be improved, and why not when it
+// could not (§60, M3-06).
+type UpgradeEligibility struct {
+	// Eligible is whether nothing about this want's state rules an upgrade
+	// out: monitored, satisfied, and not yet terminal.
+	Eligible bool `json:"eligible"`
+	// Status is WHY, and it is an enumerated reason rather than a bare
+	// boolean because "no upgrade" has four completely different meanings —
+	// not monitored, not satisfied, already terminal, or simply nothing
+	// better on offer. An operator asking "why is this not upgrading" needs
+	// to know which.
+	Status string `json:"status"`
+	Detail string `json:"detail"`
 }
 
 // ContentSatisfaction is "do we hold bytes the profile accepts", and why.
@@ -106,6 +125,7 @@ func (a *API) getSatisfaction(w http.ResponseWriter, r *http.Request) {
 			Unproven:     true,
 		},
 	}
+	var incumbent acquisition.Evaluation
 	for _, e := range result.Content.Evaluations {
 		out.Content.Assets = append(out.Content.Assets, AssetSatisfaction{
 			AssetID:    e.AssetID,
@@ -115,7 +135,35 @@ func (a *API) getSatisfaction(w http.ResponseWriter, r *http.Request) {
 			Reasons:    e.Evaluation.Reasons,
 			RejectedBy: e.Evaluation.RejectedBy(),
 		})
+		if e.AssetID == result.Content.SatisfiedBy {
+			incumbent = e.Evaluation
+		}
 	}
+
+	// The upgrade question, answered from the SAME evaluation reconciliation
+	// just produced. Re-scoring the incumbent here would be a second opinion
+	// about the same bytes under the same profile, which is exactly the drift
+	// §60 warns about.
+	want, err := desiredByID(r.Context(), a.reader, id)
+	if err != nil {
+		a.fail(w, r, "desired item", err)
+		return
+	}
+	verdict := acquisition.UpgradableVerdict(
+		want.Monitor,
+		result.Content.Satisfaction == acquisition.SatisfactionSatisfied,
+		incumbent,
+	)
+	out.Upgrade = UpgradeEligibility{
+		Eligible: acquisition.Eligible(
+			want.Monitor,
+			result.Content.Satisfaction == acquisition.SatisfactionSatisfied,
+			incumbent,
+		),
+		Status: string(verdict.Status),
+		Detail: verdict.Detail,
+	}
+
 	a.write(w, r, http.StatusOK, out)
 }
 

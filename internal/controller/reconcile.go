@@ -29,11 +29,15 @@ import (
 // thing that does.
 //
 // It is deliberately NOT a general scheduler. The controller's package doc has
-// promised one since Milestone 1 and this is not it: one beat, one job type,
-// no cron expressions, no registry. When the upgrade scan and the search job
-// need beats of their own they will show what the shape should be, and
-// generalising before three users exist is how a scheduler ends up with
-// features nobody asked for.
+// promised one since Milestone 1 and this is not it: two beats, two job types,
+// no cron expressions, no registry.
+//
+// M3-05 wrote that generalising before three users exist is how a scheduler
+// grows features nobody asked for. M3-06 is the second user and it did not
+// change that judgement — the second beat is nine lines and differs from the
+// first only in its interval and its job type. When the search job (M3-12)
+// arrives as the third, the shape will be obvious from three examples rather
+// than guessed from one.
 
 // reconcileInterval is how often the whole library is re-examined.
 //
@@ -47,6 +51,23 @@ import (
 // operator would want a different number, and a knob that exists only because
 // it was easy to add is a knob somebody eventually sets to something harmful.
 const reconcileInterval = 5 * time.Minute
+
+// upgradeScanInterval is how often the library is examined for wants that
+// could be improved (§60, M3-06).
+//
+// Six hours, against reconciliation's five minutes, and the gap is the point.
+// The two questions have very different costs and very different urgencies:
+//
+//   - "is this still satisfied" is a read, and getting it wrong means an
+//     operator sees a stale answer on a status page.
+//   - "could this be better" leads to a provider round trip and then to moving
+//     gigabytes, and getting it wrong means bandwidth.
+//
+// Nobody needs the second considered every five minutes. A release that
+// appears at noon being noticed by evening is not a degraded experience, it is
+// the normal one — and an upgrade scan on a tight loop is how a homelab
+// discovers its transfer cap.
+const upgradeScanInterval = 6 * time.Hour
 
 // startReconciliation enqueues a sweep now and then on the beat.
 //
@@ -78,6 +99,51 @@ func startReconciliation(ctx context.Context, queue *jobs.Queue, log *slog.Logge
 		}
 	}()
 	log.Info("reconciliation beat started", "interval", reconcileInterval)
+}
+
+// startUpgradeScan enqueues an upgrade sweep on its own, much slower beat
+// (§60, M3-06).
+//
+// Deliberately NOT enqueued at startup, unlike reconciliation. A restart is a
+// reason to re-check what is satisfied — the library may have changed while
+// Heyarr was not looking — but it is not a reason to go looking for better
+// copies of things that are already fine. A node that restarts six times
+// during a debugging session should not launch six upgrade sweeps.
+func startUpgradeScan(ctx context.Context, queue *jobs.Queue, log *slog.Logger) {
+	go func() {
+		ticker := time.NewTicker(upgradeScanInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := enqueueUpgradeScan(ctx, queue, ""); err != nil {
+					// Never fatal, for the same reason reconciliation is not:
+					// this is how Heyarr notices things, not how it works.
+					log.Warn("could not enqueue an upgrade scan", "error", err)
+				}
+			}
+		}
+	}()
+	log.Info("upgrade scan beat started", "interval", upgradeScanInterval)
+}
+
+// enqueueUpgradeScan queues a sweep, or one want's scan.
+func enqueueUpgradeScan(ctx context.Context, queue *jobs.Queue, desiredItemID string) error {
+	dedupe := acquisition.UpgradeScanDedupeKey
+	if desiredItemID != "" {
+		dedupe = acquisition.UpgradeScanDedupeKey + ":" + desiredItemID
+	}
+	_, err := queue.Enqueue(ctx, jobs.EnqueueOptions{
+		Type:      acquisition.UpgradeScanJobType,
+		Payload:   acquisition.UpgradeScanPayload{DesiredItemID: desiredItemID},
+		DedupeKey: dedupe,
+	})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("controller: enqueueing an upgrade scan: %w", err)
+	}
+	return nil
 }
 
 // enqueueReconcile queues a sweep, or one want's reconciliation.

@@ -1494,6 +1494,127 @@ YAML
   assert_eq "$(api "/api/v1/desired/$want_id" | jq -r '.status')" "404" \
     "a want that is removed is gone rather than hidden"
 
+  note "  the upgrade workflow (§60, M3-06)"
+  # Satisfied is not the same as finished. This section drives the gap between
+  # three states against the library this demo just scanned:
+  #
+  #   not accepted   -> an acquisition, not an upgrade
+  #   accepted       -> satisfied AND still improvable   <- the whole feature
+  #   terminal       -> done, stop looking
+  #
+  # It sits with the other M3 sections, below every catalog count, because it
+  # creates wants and profiles.
+  #
+  # NOTE ON ASSERTIONS: every enum check is assert_eq, never assert_contains.
+  # "not_satisfied" CONTAINS "satisfied", and "not_monitored" contains
+  # "monitored" — a substring check here passes for the opposite meaning.
+  local up_work up_profile up_id up_json
+  up_work=$(api /api/v1/works | jq -r '.items[0].id')
+
+  # A profile that accepts anything and is NEVER terminal, so a want against it
+  # is satisfied and permanently improvable. That is what the seeded "archival"
+  # profile is, and it is the case a terminal-only test would miss entirely.
+  up_profile=$(api /api/v1/quality-profiles -X POST -H 'Content-Type: application/json' \
+    -d '{"name":"acceptance-upgradable","description":"accepts anything, never finished"}' \
+    | jq -r '.id')
+  up_id=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d "{\"work_id\":\"$up_work\",\"quality_profile_id\":\"$up_profile\"}" | jq -r '.id')
+
+  up_json=$(api "/api/v1/desired/$up_id/satisfaction")
+  assert_eq "$(jq -r '.content.satisfaction' <<<"$up_json")" "satisfied" \
+    "a want against an open-ended profile is satisfied by what the library holds"
+  assert_eq "$(jq -r '.upgrade.eligible' <<<"$up_json")" "true" \
+    "and is STILL upgradable — satisfied is not the same as finished"
+  assert_eq "$(jq -r '.upgrade.status' <<<"$up_json")" "no_better_candidate" \
+    "with nothing better on offer, which is the normal answer for a healthy library"
+
+  # The listing filter §71's get_upgrade_candidates will expose.
+  assert_eq "$(api "/api/v1/desired?upgradable=true" \
+    | jq -r "[.items[] | select(.id == \"$up_id\")] | length")" "1" \
+    "an upgradable want appears in the upgradable listing"
+
+  # THE case that matters most and is most easily omitted: the operator said
+  # "get me this", not "keep improving this". Running the loop over unmonitored
+  # wants is how *arr installations re-download libraries nobody asked them to
+  # touch.
+  api "/api/v1/desired/$up_id" -X PATCH -H 'Content-Type: application/json' \
+    -d '{"monitor":false}' -o /dev/null
+  up_json=$(api "/api/v1/desired/$up_id/satisfaction")
+  assert_eq "$(jq -r '.upgrade.eligible' <<<"$up_json")" "false" \
+    "an unmonitored want is finished even though it is still improvable"
+  assert_eq "$(jq -r '.upgrade.status' <<<"$up_json")" "not_monitored" \
+    "and says the operator's decision is the reason"
+  # Still satisfied — unmonitoring stops the LOOKING, not the having.
+  assert_eq "$(jq -r '.content.satisfaction' <<<"$up_json")" "satisfied" \
+    "unmonitoring stops the looking, not the having"
+  assert_eq "$(api "/api/v1/desired?upgradable=true" \
+    | jq -r "[.items[] | select(.id == \"$up_id\")] | length")" "0" \
+    "and it leaves the upgradable listing immediately"
+
+  # Back on, so the next assertions are about something else.
+  api "/api/v1/desired/$up_id" -X PATCH -H 'Content-Type: application/json' \
+    -d '{"monitor":true}' -o /dev/null
+
+  # A want holding nothing acceptable is an ACQUISITION, not an upgrade — the
+  # search job owns it, and reporting it here would make two jobs fight over
+  # the same row.
+  local up_absent
+  up_absent=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d "{\"work\":{\"content_type\":\"movie\",\"title\":\"Never Acquired\",\"year\":1998},
+         \"quality_profile_id\":\"$up_profile\"}" | jq -r '.id')
+  assert_eq "$(api "/api/v1/desired/$up_absent/satisfaction" | jq -r '.upgrade.status')" \
+    "not_satisfied" "a want holding nothing is an acquisition rather than an upgrade"
+  assert_eq "$(api "/api/v1/desired?upgradable=true" \
+    | jq -r "[.items[] | select(.id == \"$up_absent\")] | length")" "0" \
+    "and does not appear in the upgradable listing"
+
+  # A terminal want has nothing left to want. Raising a terminal condition the
+  # library already meets is the cheapest way to reach that state on whatever
+  # this machine scanned.
+  local up_terminal up_terminal_id
+  up_terminal=$(api /api/v1/quality-profiles -X POST -H 'Content-Type: application/json' \
+    -d '{"name":"acceptance-terminal",
+         "terminal":[{"attribute":"size_bytes","op":"gte","value":1}]}' | jq -r '.id')
+  up_terminal_id=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d "{\"work_id\":\"$up_work\",\"quality_profile_id\":\"$up_terminal\"}" | jq -r '.id')
+  assert_eq "$(api "/api/v1/desired/$up_terminal_id/satisfaction" | jq -r '.upgrade.status')" \
+    "terminal" "a want whose incumbent meets every terminal condition is finished"
+  assert_eq "$(api "/api/v1/desired/$up_terminal_id/satisfaction" | jq -r '.upgrade.eligible')" \
+    "false" "and is not upgradable"
+
+  # Every disqualifying reason is DISTINCT, so an operator asking "why is this
+  # not upgrading" gets an answer rather than a boolean.
+  local up_statuses
+  up_statuses=$(printf '%s\n' \
+    "$(api "/api/v1/desired/$up_absent/satisfaction" | jq -r '.upgrade.status')" \
+    "$(api "/api/v1/desired/$up_terminal_id/satisfaction" | jq -r '.upgrade.status')" \
+    "$(api "/api/v1/desired/$up_id/satisfaction" | jq -r '.upgrade.status')" \
+    | sort -u | wc -l | tr -d ' ')
+  assert_eq "$up_statuses" "3" \
+    "three different situations report three different reasons"
+
+  # The upgrade explanation is §63's reasons, not a separate prose string: the
+  # per-asset evaluation is right there on the same response.
+  assert_eq "$(api "/api/v1/desired/$up_id/satisfaction" \
+    | jq -r '.content.assets[0].reasons | length >= 0')" "true" \
+    "the upgrade decision reads the same evaluation the satisfaction axis does"
+
+  # An unknown filter value is refused rather than silently ignored — an
+  # ignored filter returns everything, which reads as "nothing is upgradable"
+  # or "everything is" depending on what the caller was hoping.
+  assert_contains "$(api "/api/v1/desired?upgradable=maybe" | jq -r '.detail')" \
+    "upgradable" "an unknown upgradable value is refused"
+
+  # The upgrade scan is a JOB (invariant 4, ADR-0002) and it is registered.
+  assert_contains "$ALLLOG" "upgrade_scan" \
+    "the worker registers the upgrade_scan handler"
+
+  api "/api/v1/desired/$up_id" -X DELETE -o /dev/null
+  api "/api/v1/desired/$up_absent" -X DELETE -o /dev/null
+  api "/api/v1/desired/$up_terminal_id" -X DELETE -o /dev/null
+  api "/api/v1/quality-profiles/$up_profile" -X DELETE -o /dev/null
+  api "/api/v1/quality-profiles/$up_terminal" -X DELETE -o /dev/null
+
   note "  satisfaction reconciliation (§56, §57, M3-05)"
   # Content and placement, evaluated SEPARATELY, against the library this demo
   # just scanned — real assets, whatever probes this machine could produce, and

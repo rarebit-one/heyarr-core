@@ -207,6 +207,18 @@ func (w *Worker) Run(ctx context.Context) error {
 		Handler:       ReconcileHandler(cat, w.log),
 		MaxConcurrent: 1,
 	})
+	// The upgrade scan (§60, M3-06). One at a time, for the same reason
+	// reconciliation is: two concurrent scans would each read the library
+	// while the other concluded.
+	//
+	// No RequiredCapability. It reads the database and decides; it needs no
+	// toolchain, no indexer and no download client — and a node that cannot
+	// acquire anything can still tell an operator what could be better, which
+	// is exactly the node whose operator most wants to know.
+	registry.Register(acquisition.UpgradeScanJobType, Registration{
+		Handler:       UpgradeScanHandler(cat, w.log),
+		MaxConcurrent: 1,
+	})
 
 	// The probe handler, registered only when this worker can actually run it.
 	//

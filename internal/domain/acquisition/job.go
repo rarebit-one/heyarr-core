@@ -34,3 +34,33 @@ type ReconcilePayload struct {
 	// immediately rather than in five minutes.
 	DesiredItemID string `json:"desired_item_id,omitempty"`
 }
+
+// The upgrade scan's identity (§60, M3-06).
+//
+// A separate job type from reconciliation, not a flag on it, because the two
+// answer different questions on different schedules. Reconciliation asks "is
+// this still satisfied" and must run often enough that a profile edit is
+// noticed quickly. The upgrade scan asks "could this be better", which is a
+// question worth asking far less often — it leads to a provider round trip and
+// then to moving gigabytes, and nobody needs that considered every five
+// minutes.
+//
+// Fusing them would tie the cheap frequent question to the expensive rare one,
+// and the only way out would be a flag that made half of each run a no-op.
+
+// UpgradeScanJobType is the job that looks for wants that could be improved.
+const UpgradeScanJobType = "upgrade_scan"
+
+// UpgradeScanDedupeKey is the queue's idempotency key.
+//
+// One key for the whole sweep, like reconciliation: two concurrent scans would
+// each read the library while the other concluded, and the loser would spend
+// the pass acting on answers that were already stale.
+const UpgradeScanDedupeKey = "upgrade:scan"
+
+// UpgradeScanPayload is what an upgrade scan carries.
+type UpgradeScanPayload struct {
+	// DesiredItemID scopes the scan to one want. Empty means every monitored
+	// want, which is the scheduled case.
+	DesiredItemID string `json:"desired_item_id,omitempty"`
+}
