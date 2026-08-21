@@ -325,6 +325,52 @@ func TestListenerConstructionRefusesAnUnauthenticatedPublicBind(t *testing.T) {
 // Authentication and authorisation
 // ---------------------------------------------------------------------------
 
+// Every response carries X-Content-Type-Options, whether or not the handler
+// that produced it remembered to set it.
+//
+// Three writers set it individually today — routes.go's writeJSON,
+// problem.Write and the resource API's write — and the failure mode of three
+// places remembering the same thing is a fourth that does not. This asserts
+// the guarantee is structural rather than habitual: `/probe` sets no headers
+// at all, and the panic on `/boom` never reaches a writer that could.
+//
+// It is defence in depth and not the primary control. The primary control is
+// that bodies are encoding/json output, which HTML-escapes by default. nosniff
+// stops a browser deciding for itself that an application/json response is
+// really HTML, which matters only if the escaping were ever bypassed.
+func TestEveryResponseIsNosniff(t *testing.T) {
+	h := newHarness(t, withAuthDisabled).start(t)
+
+	for _, tc := range []struct {
+		name, method, path string
+	}{
+		{"a health probe", http.MethodGet, "/healthz"},
+		{"a readiness probe", http.MethodGet, "/readyz"},
+		// A handler that sets no headers of its own.
+		{"a bare handler", http.MethodGet, "/api/v1/probe"},
+		// A problem document from the NotFound handler.
+		{"an unmatched route", http.MethodGet, "/api/v1/there-is-no-such-route"},
+		// A problem document from MethodNotAllowed.
+		{"a disallowed method", http.MethodPatch, "/api/v1/probe"},
+		// The path least likely to have remembered: nothing wrote a header
+		// before the panic, and recovery writes the response.
+		{"a panicking handler", http.MethodGet, "/api/v1/boom"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := h.do(t, tc.method, tc.path, "")
+			if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Errorf("X-Content-Type-Options = %q, want nosniff (status %d)",
+					got, resp.StatusCode)
+			}
+			// And nothing in this server answers as HTML, which is the other
+			// half of why the JSON bodies are safe.
+			if ct := resp.Header.Get("Content-Type"); strings.Contains(ct, "text/html") {
+				t.Errorf("Content-Type = %q; this API never answers as HTML", ct)
+			}
+		})
+	}
+}
+
 func TestScopeEnforcement(t *testing.T) {
 	h := newHarness(t).start(t)
 	readOnly := h.mint(t, "reader", auth.ScopeRead)
