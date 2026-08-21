@@ -558,3 +558,116 @@ func seedDesiredFixtures(t *testing.T, db *DB) {
 		(id, work_id, label, edition_type, language, attributes, created_at)
 		VALUES ('e1', 'w1', '2160p', 'remux', 'en', '{}', ?)`, ts)
 }
+
+// Acquisition state (M3-03). The floor under the domain's Validate: the
+// validator runs in a process, and a migration or a repair script does not go
+// through it.
+func TestAcquisitionStateConstraints(t *testing.T) {
+	db := openTestDB(t)
+	seedDesiredFixtures(t, db)
+	mustExec(t, db, `INSERT INTO desired_items
+		(id, scope, work_id, edition_id, quality_profile_id, monitor, reason, created_at, updated_at)
+		VALUES ('d1', 'work', 'w1', NULL, 'q1', 1, '', ?, ?)`, ts, ts)
+
+	insert := func(id, phase string, managed int, content, placement string) error {
+		mustExec(t, db, `INSERT OR IGNORE INTO desired_items
+			(id, scope, work_id, edition_id, quality_profile_id, monitor, reason, created_at, updated_at)
+			VALUES (?, 'work', 'w1', NULL, 'q2', 1, '', ?, ?)`, id, ts, ts)
+		return exec(t, db, `INSERT INTO acquisition_state
+			(desired_item_id, phase, managed, content, placement, detail,
+			 phase_entered_at, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, '', ?, ?, ?)`,
+			id, phase, managed, content, placement, ts, ts, ts)
+	}
+
+	if err := insert("d1", "idle", 1, "satisfied", "converging"); err != nil {
+		t.Fatalf("a valid acquisition state was rejected: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name                      string
+		phase                     string
+		managed                   int
+		content, placement, extra string
+	}{
+		// §56's forbidden combination.
+		{
+			name: "placed but not obtained", phase: "idle", managed: 1,
+			content: "not_satisfied", placement: "satisfied",
+		},
+		{
+			name: "converging but not obtained", phase: "idle", managed: 1,
+			content: "unknown", placement: "converging",
+		},
+		// Content satisfaction is a statement about bytes Heyarr HOLDS.
+		{
+			name: "satisfied while holding nothing", phase: "idle", managed: 0,
+			content: "satisfied", placement: "unknown",
+		},
+		// The two §64 names that are NOT phases here.
+		{
+			name: "a missing phase", phase: "missing", managed: 0,
+			content: "unknown", placement: "unknown",
+		},
+		{
+			name: "an available phase", phase: "available", managed: 1,
+			content: "unknown", placement: "unknown",
+		},
+		// Value sets differ per axis, and the difference is enforced.
+		{
+			name: "converging content", phase: "idle", managed: 1,
+			content: "converging", placement: "unknown",
+		},
+		{
+			name: "content not applicable", phase: "idle", managed: 1,
+			content: "not_applicable", placement: "unknown",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := insert("bad-"+tc.name, tc.phase, tc.managed, tc.content, tc.placement); err == nil {
+				t.Error("the database accepted it")
+			}
+		})
+	}
+}
+
+// The combination that must stay legal, and is the one an upgrade search
+// produces: searching for something better while already holding a satisfying
+// copy. Refusing this is the bug the domain's own upgrade test found.
+func TestAnUpgradeSearchIsALegalState(t *testing.T) {
+	db := openTestDB(t)
+	seedDesiredFixtures(t, db)
+	mustExec(t, db, `INSERT INTO desired_items
+		(id, scope, work_id, edition_id, quality_profile_id, monitor, reason, created_at, updated_at)
+		VALUES ('d1', 'work', 'w1', NULL, 'q1', 1, '', ?, ?)`, ts, ts)
+
+	if err := exec(t, db, `INSERT INTO acquisition_state
+		(desired_item_id, phase, managed, content, placement, detail,
+		 phase_entered_at, created_at, updated_at)
+		VALUES ('d1', 'searching', 1, 'satisfied', 'satisfied', '', ?, ?, ?)`, ts, ts, ts); err != nil {
+		t.Fatalf("a monitored want searching for an upgrade while already satisfied is "+
+			"the normal case for a good library, not an error: %v", err)
+	}
+}
+
+// A want's acquisition state does not outlive it.
+func TestAcquisitionStateCascadesFromTheWant(t *testing.T) {
+	db := openTestDB(t)
+	seedDesiredFixtures(t, db)
+	mustExec(t, db, `INSERT INTO desired_items
+		(id, scope, work_id, edition_id, quality_profile_id, monitor, reason, created_at, updated_at)
+		VALUES ('d1', 'work', 'w1', NULL, 'q1', 1, '', ?, ?)`, ts, ts)
+	mustExec(t, db, `INSERT INTO acquisition_state
+		(desired_item_id, phase, managed, content, placement, detail,
+		 phase_entered_at, created_at, updated_at)
+		VALUES ('d1', 'idle', 0, 'unknown', 'unknown', '', ?, ?, ?)`, ts, ts, ts)
+
+	mustExec(t, db, `DELETE FROM desired_items WHERE id = 'd1'`)
+	var n int
+	if err := db.Reader().QueryRow(`SELECT count(*) FROM acquisition_state`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("%d acquisition row(s) outlived their want", n)
+	}
+}

@@ -157,14 +157,21 @@ func newDesiredListCommand(_ Options, configPath *string) *cobra.Command {
 				if flags.asJSON {
 					return emitJSON(cmd.OutOrStdout(), items)
 				}
-				t := newTable("ID", "SCOPE", "TARGET", "PROFILE", "MONITOR", "REASON")
+				t := newTable("ID", "SCOPE", "TARGET", "PROFILE", "MONITOR", "STATE")
 				for _, d := range items {
 					target := d.WorkID
 					if d.Scope == "edition" {
 						target = d.EditionID
 					}
+					// §64's name rather than the reason: "where has this got
+					// to" is the question someone runs this command to answer,
+					// and the reason is already in --json for whoever wants it.
+					state := "—"
+					if d.Acquisition != nil {
+						state = d.Acquisition.State
+					}
 					t.add(d.ID, d.Scope, target, d.QualityProfileID,
-						strconv.FormatBool(d.Monitor), d.Reason)
+						strconv.FormatBool(d.Monitor), state)
 				}
 				return t.render(cmd.OutOrStdout(),
 					"nothing is wanted — try `heyarr desired add \"A Title\" --content-type movie --quality-profile living-room`")

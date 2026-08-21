@@ -32,3 +32,4 @@ An ADR that merely describes the code is not worth having.
 | [0022](0022-device-enrolment-and-key-recovery.md) | Device enrolment and key recovery | Proposed |
 | [0023](0023-the-external-media-toolchain-is-optional.md) | The external media toolchain is optional, capability-routed and pinned | Accepted |
 | [0024](0024-one-consumption-session-model.md) | One ConsumptionSession model for watching, listening and reading | Accepted |
+| [0027](0027-acquisition-state-is-four-facts-not-one-ordinal.md) | Acquisition state is four facts, not one ordinal | Accepted |

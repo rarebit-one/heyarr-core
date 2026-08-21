@@ -333,8 +333,13 @@ func TestDesiredEventsFireForChangesAndOnlyForChanges(t *testing.T) {
 		t.Fatalf("status = %d: %s", resp.StatusCode, h.body(resp))
 	}
 	id, _ := decodeDesired(t, h, resp)["id"].(string)
-	if got := h.eventCount(t); got != before+1 {
-		t.Fatalf("creating a want should emit one event, got %d", got-before)
+	// Two: desired.created, and acquisition.phase_changed for the state
+	// created alongside it. The second is not redundant — something following
+	// only acquisition.* to build a pipeline view would otherwise never see
+	// the acquisition appear.
+	if got := h.eventCount(t); got != before+2 {
+		t.Fatalf("creating a want should emit the want and its acquisition state, got %d",
+			got-before)
 	}
 
 	// A no-op patch emits nothing.
@@ -382,9 +387,10 @@ func TestWantingUnknownContentEmitsAWorkCreatedEvent(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d: %s", resp.StatusCode, h.body(resp))
 	}
-	// One for the work, one for the want.
-	if got := h.eventCount(t); got != before+2 {
-		t.Errorf("wanting unknown content should emit a work and a want, got %d", got-before)
+	// Three: the work, the want, and the want's acquisition state.
+	if got := h.eventCount(t); got != before+3 {
+		t.Errorf("wanting unknown content should emit a work, a want and its "+
+			"acquisition state, got %d", got-before)
 	}
 
 	// Wanting a work that already exists creates no second work.
@@ -393,8 +399,9 @@ func TestWantingUnknownContentEmitsAWorkCreatedEvent(t *testing.T) {
 		work2ID)); r.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d: %s", r.StatusCode, h.body(r))
 	}
-	if got := h.eventCount(t); got != before+1 {
-		t.Errorf("wanting an existing work should emit only the want, got %d", got-before)
+	if got := h.eventCount(t); got != before+2 {
+		t.Errorf("wanting an existing work should emit the want and its acquisition "+
+			"state, and no second work, got %d", got-before)
 	}
 }
 

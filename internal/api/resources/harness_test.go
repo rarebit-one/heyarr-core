@@ -321,6 +321,15 @@ func (h *harness) exec(query string, args ...any) {
 	}
 }
 
+// execErr runs a statement that is EXPECTED to be refused, returning the
+// error rather than failing the test. exec is for seeding; this is for
+// asserting that the database says no.
+func (h *harness) execErr(query string, args ...any) error {
+	h.t.Helper()
+	_, err := h.db.Writer().ExecContext(context.Background(), query, args...)
+	return err
+}
+
 func decodeProblem(t *testing.T, resp *http.Response, raw []byte) problem.Problem {
 	t.Helper()
 	if got := resp.Header.Get("Content-Type"); got != problem.MediaType {
@@ -445,6 +454,18 @@ func (h *harness) seed() *harness {
 		(?, 'work', ?, NULL, ?, 0, '', ?, ?)`,
 		desired1ID, work1ID, profile1ID, seedTime, seedTime,
 		desired2ID, work1ID, profile2ID, seedTime, seedTime)
+
+	// Acquisition state for the two seeded wants, spanning the distinction
+	// §64's last three boxes turn on: one holds bytes that satisfy and is
+	// waiting on placement, one holds nothing at all. A fixture where both were
+	// in the same state would leave the derivation untested by the API.
+	h.exec(`INSERT INTO acquisition_state
+		(desired_item_id, phase, managed, content, placement, detail,
+		 phase_entered_at, created_at, updated_at) VALUES
+		(?, 'idle', 1, 'satisfied', 'converging', '', ?, ?, ?),
+		(?, 'searching', 0, 'unknown', 'unknown', '', ?, ?, ?)`,
+		desired1ID, seedTime, seedTime, seedTime,
+		desired2ID, seedTime, seedTime, seedTime)
 
 	h.exec(`INSERT INTO blobs (hash, size, mime, chunked, first_seen_at) VALUES
 		(?, 42949672960, 'video/x-matroska', 0, ?), (?, 8589934592, 'video/mp4', 0, ?)`,

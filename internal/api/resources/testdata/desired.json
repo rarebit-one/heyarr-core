@@ -5,6 +5,13 @@
   "quality_profile_id": "01990000-0000-7000-8000-0000000000q1",
   "monitor": true,
   "reason": "the good copy",
+  "acquisition": {
+    "state": "PLACEMENT_CONVERGING",
+    "phase": "idle",
+    "managed": true,
+    "content": "satisfied",
+    "placement": "converging"
+  },
   "created_at": "2026-08-01T00:00:00Z",
   "updated_at": "2026-08-01T00:00:00Z"
 }

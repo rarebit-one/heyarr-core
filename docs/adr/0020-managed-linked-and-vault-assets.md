@@ -52,6 +52,24 @@ surprise.
 
 ## Consequences
 
+**A linked asset is now the special case in five places, and this is a pattern
+rather than five incidents.** It cannot be probed (M2-04), cannot carry
+publication metadata (M2-08), cannot be planned against (M2-07), cannot be
+verified (M1-16) — and as of Milestone 3 it cannot have its PLACEMENT evaluated
+either, because placement is a question about blobs and there is no blob.
+
+The fifth one is recorded here rather than solved because the honest answer is
+a value: acquisition state carries `placement = not_applicable` for such an
+asset, so it rests at `CONTENT_SATISFIED` permanently and can never reach
+`FULLY_SATISFIED` (ADR-0027). Calling it satisfied instead — zero required
+blobs are all present, which is vacuously true — would make `FULLY_SATISFIED`
+mean "one copy, on one disk, with no integrity guarantee", which is the
+opposite of what the name promises.
+
+Milestone 5 owns the underlying question. What matters until then is that each
+new subsystem notices the gap and expresses it, rather than quietly assuming a
+blob and producing a wrong answer.
+
 **Two read paths with opposite caching.** ADR-0013's `Cache-Control: immutable`
 is correct for a hash-addressed Blob and wrong for a mutable path. Linked assets
 need weak validators and revalidation. This is the easiest part of the feature
