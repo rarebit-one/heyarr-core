@@ -16,6 +16,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
+	"github.com/rarebit-one/heyarr-core/internal/downloads"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
@@ -232,7 +233,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("worker: %w", err)
 	}
-	providerRegistry, err := providers.Build(resolvedProviders, w.log, nil)
+	providerRegistry, err := providers.BuildWith(resolvedProviders, w.log, nil, downloads.Constructor)
 	if err != nil {
 		return fmt.Errorf("worker: building the provider registry: %w", err)
 	}
@@ -259,8 +260,23 @@ func (w *Worker) Run(ctx context.Context) error {
 		w.log.Info("indexing is available",
 			"providers", strings.Join(indexerNames(providerRegistry), ", "))
 	}
+	// The poll handler, registered only when this worker has a download client
+	// — the same reasoning as the probe handler below. Not registering it at
+	// all makes the degraded state visible in the startup log, which lists the
+	// types this worker will claim, and "why is nothing being acquired" should
+	// be answerable from that log.
+	//
+	// One at a time: two concurrent passes would each read a client's queue
+	// while the other wrote its conclusions, and the loser would record
+	// progress that was already stale.
 	if providerRegistry.Has(providers.CapabilityDownload) {
-		w.log.Info("a download client is available")
+		w.log.Info("a download client is available",
+			"providers", strings.Join(downloadClientNames(providerRegistry), ", "))
+		registry.Register(downloads.PollJobType, Registration{
+			Handler:            PollDownloadsHandler(providerRegistry, cat, w.log),
+			MaxConcurrent:      1,
+			RequiredCapability: providers.CapabilityDownload.JobCapability(),
+		})
 	}
 
 	// The probe handler, registered only when this worker can actually run it.

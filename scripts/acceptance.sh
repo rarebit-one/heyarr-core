@@ -700,6 +700,20 @@ providers:
     type: fake
     capabilities: [indexer]
     enabled: false
+  # A download client that is CONFIGURED and NOT LISTENING. Port 9 is discard,
+  # which is reserved and refuses connections everywhere — so this exercises
+  # ADR-0025's central claim on a real node: a download client that is down must
+  # not stop Heyarr from starting, serving or playing.
+  #
+  # It also gives the path map somewhere real to be validated: a sibling of the
+  # library rather than inside it, which is the layout the whole ADR-0014
+  # section exists to encourage.
+  - name: acceptance-downloads
+    type: transmission
+    endpoint: http://127.0.0.1:9
+    path_map:
+      - remote: /downloads/complete
+        local: $FULLDATA/downloads
 YAML
 
   # Mint the token BEFORE anything starts. It migrates the database itself, so
@@ -1278,8 +1292,19 @@ YAML
   # The node's own capability set. Stated rather than left for a client to
   # derive, because deriving it means knowing a disabled provider contributes
   # nothing.
-  assert_eq "$(jq -r '.capabilities | join(",")' <<<"$prov_json")" "indexer" \
-    "the node reports what it can therefore do"
+  #
+  # Asserted by MEMBERSHIP rather than as the whole joined set. The set grows
+  # whenever a capability is added — M3-10 added `download` and this assertion
+  # broke, having been pinned to "indexer" as a proxy for "the enabled indexer
+  # contributed and the disabled one did not". That proxy was exact while there
+  # was one provider kind; it is not a claim about the set's LENGTH, and
+  # writing it as one made an unrelated addition look like a regression.
+  assert_eq "$(jq -r '[.capabilities[] | select(. == "indexer")] | length' <<<"$prov_json")" "1" \
+    "the node reports the indexer it can therefore use"
+  # And the disabled provider contributed nothing — which is the half that was
+  # actually being tested.
+  assert_eq "$(jq -r '[.capabilities[] | select(. == "metadata")] | length' <<<"$prov_json")" "0" \
+    "and nothing it was not configured for"
 
   # "Configured and switched off" is distinct from "not configured at all". A
   # disabled provider is REPORTED, with no capabilities — otherwise "why is
@@ -1433,6 +1458,66 @@ YAML
     "a change made through MCP is visible through the JSON API — one implementation, two doors"
 
   api "/api/v1/desired/$mcp_want_id" -X DELETE -o /dev/null
+
+  note "  the download client (§58, M3-10)"
+  # A configured Transmission that is NOT LISTENING, which is the whole of
+  # ADR-0025's claim: presence is checked at startup, reachability is checked
+  # continuously and is a job, and a download client that is down at 03:00 must
+  # not stop Heyarr serving the library at 03:01.
+  #
+  # Placed above the CLI section because it reads state rather than writing any
+  # — no counts move, so its position is not load-bearing the way the
+  # desired-state and remux sections are.
+  local dl_json dl_entry
+  dl_json=$(api /api/v1/providers)
+  dl_entry=$(jq -c '[.providers[] | select(.name == "acceptance-downloads")] | .[0]' <<<"$dl_json")
+
+  assert_eq "$(jq -r '. != null' <<<"$dl_entry")" "true" \
+    "a configured download client is reported"
+  assert_eq "$(jq -r '.capabilities | join(",")' <<<"$dl_entry")" "download" \
+    "and advertises the download capability"
+
+  # The node's capability set now carries both, which is what routes a poll job
+  # here and a search job there.
+  assert_eq "$(jq -r '[.capabilities[] | select(. == "download")] | length' <<<"$dl_json")" "1" \
+    "the node advertises download, so poll jobs can be claimed"
+
+  # THE ADR-0025 ASSERTION. The endpoint refuses connections, and the node is
+  # serving this very request.
+  assert_eq "$(api /healthz | jq -r '.status')" "ok" \
+    "a node whose download client is unreachable still serves"
+  assert_eq "$(api /api/v1/works | jq -r '.items | length > 0')" "true" \
+    "and still answers for its library"
+
+  # Health is OBSERVED. Whether the check has run yet depends on the worker's
+  # timing, so both states are legitimate — what must NOT happen is a healthy
+  # report for something that is not listening.
+  local dl_health
+  dl_health=$(jq -r '.healthy' <<<"$dl_entry")
+  if [[ "$dl_health" == "true" ]]; then
+    fail "an unreachable download client reported itself healthy"
+  else
+    pass "an unreachable download client is not reported as healthy"
+  fi
+
+  # A refusal that names the credential rather than the network, and vice
+  # versa, is the difference between an operator looking at a password and
+  # looking at a firewall. Only asserted once a check has actually run.
+  local dl_checked
+  dl_checked=$(jq -r '.checked_at // "never"' <<<"$dl_entry")
+  if [[ "$dl_checked" == "never" ]]; then
+    pass "an unchecked download client says so rather than claiming to be unhealthy"
+  else
+    assert_not_contains "$(jq -r '.detail' <<<"$dl_entry")" "credential" \
+      "an unreachable client is not reported as a credential problem"
+  fi
+
+  # No credential field reaches the response, for a download client as for an
+  # indexer. Asserted on the whole document rather than one entry, because the
+  # leak this guards against would not be fussy about which provider it came
+  # from.
+  assert_not_contains "$dl_json" "api_key" "no credential field reaches the providers response"
+  assert_not_contains "$dl_json" "password" "and no password field either"
 
   note "  the CLI (M1-17)"
   # The CLI is what a person actually uses, so the demo drives it rather than

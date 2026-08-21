@@ -112,12 +112,39 @@ type Entry struct {
 	APIKey Secret `koanf:"api_key"`
 	// Capabilities overrides the kind's defaults. Empty means the defaults.
 	Capabilities []string `koanf:"capabilities"`
+	// PathMap translates the download client's filesystem namespace into
+	// Heyarr's. Meaningful only for a download provider.
+	//
+	// It lives on the PROVIDER rather than in a global table keyed by host,
+	// which is where the *arr stack puts it. Keying by host breaks the moment
+	// a client is reachable by two names, and putting it on a different
+	// settings page from the client it describes means the two drift. §59
+	// centralises provider configuration precisely to stop that: the mapping
+	// is part of how you reach this provider.
+	PathMap []PathMapping `koanf:"path_map"`
+
+	// Label tags this instance's transfers in a shared download client, so
+	// Heyarr can tell its own from the operator's — and from a second Heyarr's.
+	// Empty means the client's default.
+	Label string `koanf:"label"`
+
 	// Enabled allows an operator to keep a provider's configuration while
 	// taking it out of routing. Defaults to true, so the common case needs no
 	// key — and a disabled provider is still REPORTED, because "why is nothing
 	// searching" should be answerable from GET /api/v1/providers rather than by
 	// re-reading the config file.
 	Enabled *bool `koanf:"enabled"`
+}
+
+// PathMapping is one prefix substitution, as configuration writes it.
+//
+// Declared here rather than imported from internal/downloads because
+// internal/downloads imports THIS package for the Provider contract, and the
+// other direction would be a cycle. The download client converts it into its
+// own ordered form.
+type PathMapping struct {
+	Remote string `koanf:"remote"`
+	Local  string `koanf:"local"`
 }
 
 // Resolved is an Entry that has been validated.
@@ -131,6 +158,8 @@ type Resolved struct {
 	Endpoint     *url.URL
 	APIKey       Secret
 	Capabilities []Capability
+	PathMap      []PathMapping
+	Label        string
 	Enabled      bool
 }
 
@@ -196,12 +225,18 @@ func Validate(entries []Entry) ([]Resolved, error) {
 			enabled = *e.Enabled
 		}
 
+		if err := validatePathMap(name, e.PathMap); err != nil {
+			return nil, err
+		}
+
 		out = append(out, Resolved{
 			Name:         name,
 			Kind:         kind,
 			Endpoint:     endpoint,
 			APIKey:       e.APIKey,
 			Capabilities: caps,
+			PathMap:      e.PathMap,
+			Label:        strings.TrimSpace(e.Label),
 			Enabled:      enabled,
 		})
 	}
@@ -275,6 +310,40 @@ func resolveEndpoint(name string, kind Kind, raw string) (*url.URL, error) {
 				"put them in api_key, where they are kept out of logs and responses", name)
 	}
 	return u, nil
+}
+
+// validatePathMap refuses a mapping that cannot work.
+//
+// Shape only — the ordering and the resolution live in internal/downloads,
+// which owns what a mapping MEANS. What is checked here is what configuration
+// can be wrong about: an empty side, or a relative path where an absolute one
+// is required. Every one of those would otherwise surface as "ingest cannot
+// find the file" hours later, looking like an ingest fault.
+func validatePathMap(name string, maps []PathMapping) error {
+	seen := map[string]bool{}
+	for i, m := range maps {
+		remote := strings.TrimSpace(m.Remote)
+		local := strings.TrimSpace(m.Local)
+		switch {
+		case remote == "":
+			return fmt.Errorf("provider %q: path_map[%d] has no remote prefix", name, i)
+		case local == "":
+			return fmt.Errorf("provider %q: path_map[%d] has no local prefix", name, i)
+		case !strings.HasPrefix(remote, "/"):
+			return fmt.Errorf(
+				"provider %q: path_map[%d] remote %q must be absolute — it is a prefix "+
+					"of what the download client reports, and that is absolute", name, i, remote)
+		case !strings.HasPrefix(local, "/"):
+			return fmt.Errorf(
+				"provider %q: path_map[%d] local %q must be absolute", name, i, local)
+		case seen[remote]:
+			// One of them would never apply, and which is an accident of
+			// ordering.
+			return fmt.Errorf("provider %q: path_map maps %q twice", name, remote)
+		}
+		seen[remote] = true
+	}
+	return nil
 }
 
 // Sorted returns entries by name, for rendering.

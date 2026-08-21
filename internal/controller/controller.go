@@ -17,6 +17,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/downloads"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
@@ -290,7 +291,13 @@ func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Stor
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}
-	providerRegistry, err := providers.Build(resolvedProviders, c.log, nil)
+	// ADR-0014, at the other end of the ladder. Checked before the registry is
+	// built so a refusal names the configuration rather than arriving after a
+	// provider has been registered and reported.
+	if err := checkDownloadPaths(c.cfg, resolvedProviders, c.log); err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+	providerRegistry, err := providers.BuildWith(resolvedProviders, c.log, nil, downloads.Constructor)
 	if err != nil {
 		return nil, fmt.Errorf("controller: building the provider registry: %w", err)
 	}

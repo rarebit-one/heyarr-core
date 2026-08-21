@@ -26,14 +26,39 @@ const (
 	HealthDedupeKey = "provider-health"
 )
 
+// Constructor builds a client for a kind this package cannot import.
+//
+// # Why this indirection exists
+//
+// internal/downloads imports THIS package, for the Provider and Downloader
+// contracts. So this package cannot import it back to construct a Transmission
+// client, and the cycle is not an accident of layering — it is the interface
+// boundary working. A registry that reached into every integration would be a
+// registry every integration had to be linked into, including in a test that
+// wanted none of them.
+//
+// So the wiring is injected by whoever owns both: the worker and the
+// controller. Returning `handled=false` means "not mine", so several
+// constructors compose and an unrecognised kind still falls through to the
+// honest not-implemented report.
+type Constructor func(r Resolved, now func() time.Time) (p Provider, handled bool, err error)
+
 // Build turns validated configuration into a registry.
+//
+// See BuildWith for the constructor hook; this is the no-integrations form,
+// used where only the registry's own behaviour matters.
+func Build(resolved []Resolved, log *slog.Logger, now func() time.Time) (*Registry, error) {
+	return BuildWith(resolved, log, now, nil)
+}
+
+// BuildWith turns validated configuration into a registry, using ctor for the
+// kinds this package cannot construct itself.
 //
 // # Only the kinds that exist
 //
-// Milestone 3's registry ships no Prowlarr and no Transmission client — those
-// are M3-09 and M3-10. Configuring one here is not an error: the entry is
-// validated, recorded, reported on GET /api/v1/providers, and marked unhealthy
-// with a detail saying the client is not built yet.
+// A configured provider whose client is not wired here is not an error: the
+// entry is validated, recorded, reported on GET /api/v1/providers, and marked
+// unhealthy with a detail saying the client is not built yet.
 //
 // That is deliberate and it is the honest behaviour. Refusing to start would
 // punish an operator for configuring something the roadmap says is coming;
@@ -47,7 +72,9 @@ const (
 // "Why is nothing searching" must be answerable from one request rather than by
 // re-reading the config file, and a provider that vanished when disabled would
 // make disabled and absent indistinguishable.
-func Build(resolved []Resolved, log *slog.Logger, now func() time.Time) (*Registry, error) {
+func BuildWith(
+	resolved []Resolved, log *slog.Logger, now func() time.Time, ctor Constructor,
+) (*Registry, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
@@ -66,7 +93,7 @@ func Build(resolved []Resolved, log *slog.Logger, now func() time.Time) (*Regist
 			continue
 		}
 
-		p, err := construct(r, now)
+		p, err := construct(r, now, ctor)
 		if err != nil {
 			return nil, err
 		}
@@ -91,7 +118,19 @@ func endpointFor(r Resolved) string {
 	return r.Endpoint.String()
 }
 
-func construct(r Resolved, now func() time.Time) (Provider, error) {
+func construct(r Resolved, now func() time.Time, ctor Constructor) (Provider, error) {
+	// An injected constructor gets first refusal. It is what turns a
+	// "configured, not implemented" entry into a working client once the
+	// integration exists, without this package learning about the integration.
+	if ctor != nil {
+		p, handled, err := ctor(r, now)
+		if err != nil {
+			return nil, err
+		}
+		if handled {
+			return p, nil
+		}
+	}
 	switch r.Kind {
 	case KindFake:
 		f := NewFake(r.Name, r.Capabilities...)
@@ -100,8 +139,10 @@ func construct(r Resolved, now func() time.Time) (Provider, error) {
 		}
 		return f, nil
 	case KindProwlarr, KindTransmission:
-		// The client lands in M3-09 / M3-10. Until then this is a real
-		// registry entry with real capabilities that reports honestly.
+		// No constructor claimed it. Prowlarr's client lands in M3-09;
+		// Transmission's exists but is only wired where something owns both
+		// packages. Either way this is a real registry entry with real
+		// capabilities that reports honestly rather than pretending.
 		return newUnimplemented(r, now), nil
 	default:
 		// Unreachable: ParseKind refuses anything else. Kept because a kind
