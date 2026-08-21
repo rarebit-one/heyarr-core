@@ -7,19 +7,32 @@ import (
 	"strings"
 )
 
-// Kind is which service an entry configures.
+// Kind is which PROTOCOL an entry speaks — not which product it is.
 //
-// Separate from Capability because they answer different questions. A KIND is
-// what software this is — the thing that decides which client code runs. A
-// CAPABILITY is what it does for us — the thing routing matches on. Prowlarr
-// is one kind with one capability today; a service that both indexed and
-// downloaded would be one kind with two, and merging the two concepts would
-// make that unrepresentable.
+// Separate from Capability because they answer different questions. A KIND
+// decides which client code runs. A CAPABILITY is what it does for us, and is
+// what routing matches on. A service that both indexed and downloaded would be
+// one kind with two capabilities, and merging the concepts would make that
+// unrepresentable.
+//
+// # Protocols, not products (ADR-0028)
+//
+// `torznab`, not `prowlarr`. Heyarr binds to the documented interface, so
+// Prowlarr is one implementation of it and Jackett is another — and a tracker
+// exposing Torznab natively needs no integration at all.
+//
+// A product name here would look harmless and would be wrong in a way that
+// compounds: it puts a vendor in the configuration an operator writes, in the
+// fixture corpus directory, and in the client package name, and undoing it
+// later means a migration plus every deployment's config. `transmission` is
+// the honest exception — the RPC it speaks has no name of its own and no
+// second implementation.
 type Kind string
 
 const (
-	// KindProwlarr is the initial indexer (§59). Implemented in M3-09.
-	KindProwlarr Kind = "prowlarr"
+	// KindTorznab is an indexer speaking Torznab (§59, ADR-0028). Prowlarr and
+	// Jackett both serve it; so do some trackers directly.
+	KindTorznab Kind = "torznab"
 	// KindTransmission is the initial acquisition transport (§58).
 	// Implemented in M3-10.
 	KindTransmission Kind = "transmission"
@@ -39,7 +52,7 @@ const (
 )
 
 // Kinds lists every kind, in a stable order.
-func Kinds() []Kind { return []Kind{KindProwlarr, KindTransmission, KindFake} }
+func Kinds() []Kind { return []Kind{KindTorznab, KindTransmission, KindFake} }
 
 // ParseKind validates a kind from configuration.
 func ParseKind(s string) (Kind, error) {
@@ -65,7 +78,7 @@ func ParseKind(s string) (Kind, error) {
 // that Prowlarr is an indexer is ceremony that teaches nothing.
 func DefaultCapabilities(k Kind) []Capability {
 	switch k {
-	case KindProwlarr:
+	case KindTorznab:
 		return []Capability{CapabilityIndexer}
 	case KindTransmission:
 		return []Capability{CapabilityDownload}
@@ -91,7 +104,7 @@ func needsEndpoint(k Kind) bool { return k != KindFake }
 // Transmission does NOT: an operator running it on a trusted network with
 // authentication off is an ordinary, supported deployment, and refusing to
 // start would be Heyarr insisting on a policy the operator already declined.
-func needsCredential(k Kind) bool { return k == KindProwlarr }
+func needsCredential(k Kind) bool { return k == KindTorznab }
 
 // Entry is one configured provider.
 //

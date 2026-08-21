@@ -15,10 +15,10 @@ import (
 func validProvenance() Provenance {
 	return Provenance{
 		Origin:     OriginCaptured,
-		Service:    "prowlarr",
+		Service:    "torznab",
 		Version:    "1.21.2",
 		CapturedAt: time.Now().UTC().Format(time.RFC3339),
-		Procedure:  "scripts/capture-fixtures.sh prowlarr <endpoint> <key>",
+		Procedure:  "scripts/capture-fixtures.sh torznab <endpoint> <key>",
 	}
 }
 
@@ -76,7 +76,7 @@ func TestProvenanceRefusesWhatCannotBeActedOn(t *testing.T) {
 // every test as passing.
 func TestLoadRefusesRatherThanSkips(t *testing.T) {
 	dir := t.TempDir()
-	service := filepath.Join(dir, "prowlarr")
+	service := filepath.Join(dir, "torznab")
 	if err := os.MkdirAll(service, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestLoadRefusesRatherThanSkips(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Load(dir, "prowlarr"); err == nil {
+	if _, err := Load(dir, "torznab"); err == nil {
 		t.Fatal("a fixture with unusable provenance must fail the load, not be skipped")
 	}
 }
@@ -105,7 +105,7 @@ func TestLoadRefusesAMisfiledFixture(t *testing.T) {
 	if err := os.MkdirAll(service, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	p := validProvenance() // says prowlarr
+	p := validProvenance() // says torznab
 	writeExchange(t, filepath.Join(service, "x.json"), Exchange{
 		Name: "x", Provenance: p,
 		Request:  Request{Method: http.MethodPost, Path: "/transmission/rpc"},
@@ -121,15 +121,15 @@ func TestLoadRefusesAMisfiledFixture(t *testing.T) {
 // actions — one is a person with an instance running a script, the other is a
 // bug — so they must be distinguishable.
 func TestAnAbsentCorpusIsTyped(t *testing.T) {
-	if _, err := Load(t.TempDir(), "prowlarr"); !errors.Is(err, ErrNoCorpus) {
+	if _, err := Load(t.TempDir(), "torznab"); !errors.Is(err, ErrNoCorpus) {
 		t.Errorf("expected ErrNoCorpus, got %v", err)
 	}
 	// An empty directory is also "no corpus", not an empty success.
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "prowlarr"), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "torznab"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(dir, "prowlarr"); !errors.Is(err, ErrNoCorpus) {
+	if _, err := Load(dir, "torznab"); !errors.Is(err, ErrNoCorpus) {
 		t.Errorf("an empty service directory is no corpus, got %v", err)
 	}
 }
@@ -138,7 +138,7 @@ func TestAnAbsentCorpusIsTyped(t *testing.T) {
 // harness that hands parsed values to a test proves the harness works.
 func TestTheServerSpeaksHTTPToARealClient(t *testing.T) {
 	dir := t.TempDir()
-	service := filepath.Join(dir, "prowlarr")
+	service := filepath.Join(dir, "torznab")
 	if err := os.MkdirAll(service, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestTheServerSpeaksHTTPToARealClient(t *testing.T) {
 		},
 	})
 
-	corpus, err := Load(dir, "prowlarr")
+	corpus, err := Load(dir, "torznab")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestTheServerSpeaksHTTPToARealClient(t *testing.T) {
 // fiction.
 func TestAnUnmatchedRequestIsNotAStatusAnyClientHandles(t *testing.T) {
 	dir := t.TempDir()
-	service := filepath.Join(dir, "prowlarr")
+	service := filepath.Join(dir, "torznab")
 	if err := os.MkdirAll(service, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestAnUnmatchedRequestIsNotAStatusAnyClientHandles(t *testing.T) {
 		Request:  Request{Method: http.MethodGet, Path: "/api/v1/search?query=x"},
 		Response: Response{Status: 200, Body: `[]`},
 	})
-	corpus, err := Load(dir, "prowlarr")
+	corpus, err := Load(dir, "torznab")
 	if err != nil {
 		t.Fatal(err)
 	}

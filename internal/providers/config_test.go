@@ -28,42 +28,42 @@ func TestValidateRefusals(t *testing.T) {
 	}{
 		{
 			name:    "no name",
-			entries: []Entry{{Type: "prowlarr", Endpoint: "https://x.invalid", APIKey: "k"}},
+			entries: []Entry{{Type: "torznab", Endpoint: "https://x.invalid", APIKey: "k"}},
 			wantErr: []string{"providers[0]", "no name"},
 		},
 		{
 			name: "the same name twice",
 			entries: []Entry{
-				{Name: "dup", Type: "prowlarr", Endpoint: "https://a.invalid", APIKey: "k"},
-				{Name: "dup", Type: "prowlarr", Endpoint: "https://b.invalid", APIKey: "k"},
+				{Name: "dup", Type: "torznab", Endpoint: "https://a.invalid", APIKey: "k"},
+				{Name: "dup", Type: "torznab", Endpoint: "https://b.invalid", APIKey: "k"},
 			},
 			wantErr: []string{"dup", "configured twice"},
 		},
 		{
 			name:    "a type that does not exist",
 			entries: []Entry{{Name: "p", Type: "sonarr", Endpoint: "https://x.invalid"}},
-			wantErr: []string{"p", "type", "not a provider type", "prowlarr"},
+			wantErr: []string{"p", "type", "not a provider type", "torznab"},
 		},
 		{
 			name:    "no endpoint",
-			entries: []Entry{{Name: "p", Type: "prowlarr", APIKey: "k"}},
+			entries: []Entry{{Name: "p", Type: "torznab", APIKey: "k"}},
 			wantErr: []string{"p", "endpoint is required"},
 		},
 		{
 			// The single most common way to write this wrong: it parses fine
 			// and yields scheme "localhost", then dials nothing.
 			name:    "a bare host and port",
-			entries: []Entry{{Name: "p", Type: "prowlarr", Endpoint: "localhost:9696", APIKey: "k"}},
+			entries: []Entry{{Name: "p", Type: "torznab", Endpoint: "localhost:9696", APIKey: "k"}},
 			wantErr: []string{"p", "endpoint", "http://"},
 		},
 		{
 			name:    "a scheme that is not http",
-			entries: []Entry{{Name: "p", Type: "prowlarr", Endpoint: "ftp://x.invalid", APIKey: "k"}},
+			entries: []Entry{{Name: "p", Type: "torznab", Endpoint: "ftp://x.invalid", APIKey: "k"}},
 			wantErr: []string{"p", "must start with http"},
 		},
 		{
 			name:    "a URL with no host",
-			entries: []Entry{{Name: "p", Type: "prowlarr", Endpoint: "http://", APIKey: "k"}},
+			entries: []Entry{{Name: "p", Type: "torznab", Endpoint: "http://", APIKey: "k"}},
 			wantErr: []string{"p", "names no host"},
 		},
 		{
@@ -71,7 +71,7 @@ func TestValidateRefusals(t *testing.T) {
 			// listings, and would bypass the whole redaction story.
 			name: "credentials embedded in the endpoint",
 			entries: []Entry{
-				{Name: "p", Type: "prowlarr", Endpoint: "https://user:pw@x.invalid", APIKey: "k"},
+				{Name: "p", Type: "torznab", Endpoint: "https://user:pw@x.invalid", APIKey: "k"},
 			},
 			wantErr: []string{"p", "must not contain credentials", "api_key"},
 		},
@@ -79,13 +79,13 @@ func TestValidateRefusals(t *testing.T) {
 			// A Prowlarr with no key 401s on its first search — an hour later,
 			// looking like an indexer fault.
 			name:    "a required credential that is missing",
-			entries: []Entry{{Name: "p", Type: "prowlarr", Endpoint: "https://x.invalid"}},
+			entries: []Entry{{Name: "p", Type: "torznab", Endpoint: "https://x.invalid"}},
 			wantErr: []string{"p", "api_key is required"},
 		},
 		{
 			name: "a capability that does not exist",
 			entries: []Entry{{
-				Name: "p", Type: "prowlarr", Endpoint: "https://x.invalid", APIKey: "k",
+				Name: "p", Type: "torznab", Endpoint: "https://x.invalid", APIKey: "k",
 				Capabilities: []string{"indexr"},
 			}},
 			wantErr: []string{"p", "capabilities", "not a capability", "indexer"},
@@ -122,7 +122,7 @@ func TestValidateAccepts(t *testing.T) {
 	}{
 		{
 			name:  "an indexer with its defaults",
-			entry: Entry{Name: "an-indexer", Type: "prowlarr", Endpoint: "https://x.invalid", APIKey: "k"},
+			entry: Entry{Name: "an-indexer", Type: "torznab", Endpoint: "https://x.invalid", APIKey: "k"},
 			check: func(t *testing.T, r Resolved) {
 				if len(r.Capabilities) != 1 || r.Capabilities[0] != CapabilityIndexer {
 					t.Errorf("capabilities = %v", r.Capabilities)
@@ -164,7 +164,7 @@ func TestValidateAccepts(t *testing.T) {
 		{
 			name: "a disabled provider still resolves",
 			entry: Entry{
-				Name: "off", Type: "prowlarr", Endpoint: "https://x.invalid",
+				Name: "off", Type: "torznab", Endpoint: "https://x.invalid",
 				APIKey: "k", Enabled: ptr(false),
 			},
 			check: func(t *testing.T, r Resolved) {
@@ -227,7 +227,7 @@ func TestUnreachableIsNotAStartupError(t *testing.T) {
 	} {
 		t.Run(endpoint, func(t *testing.T) {
 			got, err := Validate([]Entry{{
-				Name: "an-indexer", Type: "prowlarr", Endpoint: endpoint, APIKey: "k",
+				Name: "an-indexer", Type: "torznab", Endpoint: endpoint, APIKey: "k",
 			}})
 			if err != nil {
 				t.Fatalf("an unreachable provider must start: %v", err)
@@ -252,7 +252,7 @@ func TestNoProvidersIsValid(t *testing.T) {
 
 func TestBuildReportsUnimplementedKindsHonestly(t *testing.T) {
 	resolved, err := Validate([]Entry{
-		{Name: "an-indexer", Type: "prowlarr", Endpoint: "https://x.invalid", APIKey: "k"},
+		{Name: "an-indexer", Type: "torznab", Endpoint: "https://x.invalid", APIKey: "k"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -286,7 +286,7 @@ func TestBuildReportsUnimplementedKindsHonestly(t *testing.T) {
 // switched off" and "not configured at all" stay tellable apart.
 func TestADisabledProviderIsReportedAndNotRouted(t *testing.T) {
 	resolved, err := Validate([]Entry{{
-		Name: "off", Type: "prowlarr", Endpoint: "https://x.invalid",
+		Name: "off", Type: "torznab", Endpoint: "https://x.invalid",
 		APIKey: "k", Enabled: ptr(false),
 	}})
 	if err != nil {
@@ -321,9 +321,9 @@ func TestParseCapabilityAndKindNormalise(t *testing.T) {
 			t.Errorf("ParseCapability(%q) = (%v, %v)", raw, got, err)
 		}
 	}
-	for _, raw := range []string{"PROWLARR", " prowlarr "} {
+	for _, raw := range []string{"TORZNAB", " torznab "} {
 		got, err := ParseKind(raw)
-		if err != nil || got != KindProwlarr {
+		if err != nil || got != KindTorznab {
 			t.Errorf("ParseKind(%q) = (%v, %v)", raw, got, err)
 		}
 	}

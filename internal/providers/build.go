@@ -138,8 +138,8 @@ func construct(r Resolved, now func() time.Time, ctor Constructor) (Provider, er
 			f.now = now
 		}
 		return f, nil
-	case KindProwlarr, KindTransmission:
-		// No constructor claimed it. Prowlarr's client lands in M3-09;
+	case KindTorznab, KindTransmission:
+		// No constructor claimed it. The Torznab client lands in M3-09;
 		// Transmission's exists but is only wired where something owns both
 		// packages. Either way this is a real registry entry with real
 		// capabilities that reports honestly rather than pretending.

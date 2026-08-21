@@ -1,7 +1,12 @@
 # The provider fixture corpus
 
-Recorded request/response pairs from **real** Prowlarr and Transmission
-instances, replayed against the real client code (ADR-0026).
+Recorded request/response pairs from a **real** Torznab endpoint and a **real**
+Transmission instance, replayed against the real client code (ADR-0026).
+
+Torznab rather than Prowlarr, per ADR-0028: Heyarr binds to the protocol, so
+the corpus stays valid across product versions — which matters more here than
+anywhere else, because for an indexer these fixtures are the only test that
+will ever run.
 
 ## Why this directory is empty
 
@@ -24,7 +29,7 @@ So this directory stays empty until somebody with an instance runs the capture.
 ## Capturing
 
 ```sh
-scripts/capture-fixtures.sh prowlarr     http://host:9696 <api-key>
+scripts/capture-fixtures.sh torznab      http://host:9696/1/api <api-key>
 scripts/capture-fixtures.sh transmission http://host:9091 <user> <pass>
 ```
 
@@ -56,7 +61,8 @@ One directory per service, one file per exchange:
 
 ```
 testdata/
-├── prowlarr/
+├── torznab/
+│   ├── caps.json
 │   ├── search-with-results.json
 │   ├── search-empty.json
 │   └── unauthorised.json
@@ -83,7 +89,8 @@ Beyond the happy path, which is the easy half:
 | case | why it matters |
 |---|---|
 | a search with **zero** results | a normal outcome that must not fail a job into backoff, or an unavailable release becomes an indexer hammering loop |
-| `401` | decides whether a bad key is reported as a configuration problem or retried forever |
+| a bad key | Torznab signals it as an `<error code="100">` **document, usually with HTTP 200** — so a client checking only the status code reads an error as a successful empty search and reports "no releases found" forever |
+| `t=caps` | the capability handshake: which content types the indexer can actually search |
 | `429` | rate limiting is normal operation, not an error to propagate |
 | a malformed body | the error must name what failed to parse |
 | a non-JSON error page | what a reverse proxy in front of the service actually returns |

@@ -22,7 +22,7 @@
 # private tracker, and rotating it afterwards does not remove it from history.
 #
 # Usage:
-#   scripts/capture-fixtures.sh prowlarr     http://host:9696 <api-key>
+#   scripts/capture-fixtures.sh torznab      http://host:9696/1/api <api-key>
 #   scripts/capture-fixtures.sh transmission http://host:9091 <user> <pass>
 #
 # Nothing here is committed automatically. Read what it wrote, then commit it.
@@ -88,59 +88,98 @@ write_exchange() {
   ok "$service/$name.json"
 }
 
-capture_prowlarr() {
+# Torznab, not Prowlarr's own API (ADR-0028).
+#
+# Heyarr binds to the PROTOCOL, so this captures what any Torznab endpoint
+# serves — Prowlarr's, Jackett's, or a tracker exposing one natively. The
+# corpus then stays valid across product versions, which matters more here than
+# anywhere else: for an indexer these fixtures are the only test that will ever
+# run, and a corpus pinned to one product's current JSON API needs recapturing
+# from an instance nobody may still have.
+#
+# Prowlarr exposes a Torznab endpoint per indexer at
+#   /<n>/api?apikey=…            (n is the indexer id)
+# and an all-indexers endpoint at
+#   /api/v1/indexer/…            (product-specific — deliberately NOT used)
+#
+# Jackett's is /api/v2.0/indexers/<id>/results/torznab/api.
+capture_torznab() {
   local base=$1 key=$2
-  [[ -n "$key" ]] || die "prowlarr needs an api key"
+  [[ -n "$key" ]] || die "torznab needs an api key"
 
-  note "prowlarr — $base"
+  note "torznab — $base"
 
+  # t=caps FIRST, and it is not a formality.
+  #
+  # It is the capability handshake ADR-0025's pattern asks for, one level up
+  # from a version string: the indexer states which content types it can search
+  # and which parameters it accepts. An indexer that cannot serve what is being
+  # wanted should be reported as such rather than queried and found wanting.
+  local caps status
+  caps=$(curl -sS "$base?t=caps&apikey=$key") || die "could not reach the torznab endpoint"
+  status=$(curl -sS -o /dev/null -w '%{http_code}' "$base?t=caps&apikey=$key")
+  [[ "$status" == "200" ]] || die "t=caps answered $status; is the key right?"
+
+  # Torznab is XML, so the version comes out of the caps document rather than a
+  # JSON field. Missing is not fatal — some servers omit it — but it is
+  # recorded when present, because provenance without a version is a capture
+  # nobody can regenerate.
   local version
-  version=$(curl -sS -H "X-Api-Key: $key" "$base/api/v1/system/status" \
-    | jq -r '.version // "unknown"') || die "could not reach prowlarr"
-  [[ "$version" != "unknown" ]] || die "prowlarr did not report a version; is the key right?"
-  note "  version $version"
+  version=$(printf '%s' "$caps" | sed -n 's/.*<server[^>]*version="\([^"]*\)".*/\1/p' | head -1)
+  [[ -n "$version" ]] || version="unreported"
+  note "  server version $version"
 
-  # A search WITH results. The query is deliberately something an indexer will
-  # answer for — pass QUERY=... to choose your own.
+  write_exchange torznab caps GET "?t=caps" "$status" "$caps" \
+    '{"Content-Type":"application/xml"}' "$version"
+
+  # A search WITH results. Pass QUERY=… to choose your own.
   local q=${QUERY:-ubuntu}
-  local path="/api/v1/search?query=$q&type=search"
-  local body status
-  body=$(curl -sS -H "X-Api-Key: $key" "$base$path")
-  status=$(curl -sS -o /dev/null -w '%{http_code}' -H "X-Api-Key: $key" "$base$path")
-  write_exchange prowlarr search-with-results GET "$path" "$status" "$body" \
-    '{"Content-Type":"application/json"}' "$version"
+  local path="?t=search&q=$q&apikey=$key"
+  local body
+  body=$(curl -sS "$base$path")
+  status=$(curl -sS -o /dev/null -w '%{http_code}' "$base$path")
+  # The apikey is in the path and redact() strips it before writing.
+  write_exchange torznab search-with-results GET "$path" "$status" "$body" \
+    '{"Content-Type":"application/xml"}' "$version"
 
   # A search with ZERO results. §63 can only report an empty candidate set if
-  # something ever returns one.
-  local empty="/api/v1/search?query=zzzzzzzz-no-such-release-zzzzzzzz&type=search"
-  body=$(curl -sS -H "X-Api-Key: $key" "$base$empty")
-  write_exchange prowlarr search-empty GET "$empty" 200 "$body" \
-    '{"Content-Type":"application/json"}' "$version"
+  # something ever returns one — and Torznab answers this with a valid feed
+  # containing no items rather than an error, which is a shape a client must
+  # not mistake for a failure.
+  local empty="?t=search&q=zzzzzzzz-no-such-release-zzzzzzzz&apikey=$key"
+  body=$(curl -sS "$base$empty")
+  write_exchange torznab search-empty GET "$empty" 200 "$body" \
+    '{"Content-Type":"application/xml"}' "$version"
 
-  # A 401. Provoked deliberately rather than waited for: this is the response
-  # that decides whether a bad key is reported as a configuration problem or
-  # retried forever.
-  body=$(curl -sS -H "X-Api-Key: definitely-not-a-valid-key" "$base$path" || true)
-  status=$(curl -sS -o /dev/null -w '%{http_code}' \
-    -H "X-Api-Key: definitely-not-a-valid-key" "$base$path" || true)
-  write_exchange prowlarr unauthorised GET "$path" "${status:-401}" "$body" \
-    '{"Content-Type":"application/json"}' "$version"
+  # A bad key. Provoked deliberately rather than waited for: this response
+  # decides whether a wrong credential is reported as a configuration problem
+  # or retried forever.
+  #
+  # Torznab signals it as an <error code="100"> DOCUMENT, usually with HTTP
+  # 200 — so a client checking only the status code will read an error as a
+  # successful empty search and report "no releases found" forever.
+  local badkey="?t=search&q=$q&apikey=definitely-not-a-valid-key"
+  body=$(curl -sS "$base$badkey" || true)
+  status=$(curl -sS -o /dev/null -w '%{http_code}' "$base$badkey" || true)
+  write_exchange torznab unauthorised GET "$badkey" "${status:-200}" "$body" \
+    '{"Content-Type":"application/xml"}' "$version"
 
   cat <<'MSG'
 
-  Still missing, and worth adding by hand if your instance will produce them:
-    rate-limited   a 429 with Retry-After
-    malformed      a truncated or non-JSON body
+  Still missing, and worth adding by hand if your endpoint will produce them:
+    rate-limited   a 429, or a torznab <error> saying so
+    malformed      a truncated or non-XML body
     proxy-error    an HTML error page from a reverse proxy
 
   Those are the responses that actually occur at 03:00. A fixture written by
   hand for one of these is legitimate — set origin to "synthesised" and say in
   the note why a real one could not be obtained.
 
-  ALSO WORTH CAPTURING: a search whose results OMIT a field the client reads
-  — no resolution, no source. Attribute extraction happens inside the provider,
-  so §63 can only report "undetermined" for something it never received, and
-  that path is unreachable without a fixture that leaves the field out.
+  ALSO WORTH CAPTURING: a search whose results OMIT attributes the client reads
+  — no <torznab:attr name="resolution">, no seeders, no size. Attribute
+  extraction happens inside the provider, so §63 can only report "undetermined"
+  for something it never received, and that path is unreachable without a
+  fixture that genuinely leaves the attribute out.
 MSG
 }
 
@@ -247,9 +286,9 @@ fi
 
 service=${1:-}
 case "$service" in
-  prowlarr)     shift; capture_prowlarr "$@" ;;
+  torznab)      shift; capture_torznab "$@" ;;
   transmission) shift; capture_transmission "$@" ;;
-  *) die "usage: $0 {prowlarr|transmission} <endpoint> <credentials...>" ;;
+  *) die "usage: $0 {torznab|transmission} <endpoint> <credentials...>" ;;
 esac
 
 note ""
