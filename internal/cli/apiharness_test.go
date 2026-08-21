@@ -418,7 +418,7 @@ func (h *apiHarness) seed() *apiHarness {
 	h.t.Helper()
 
 	h.exec(`INSERT INTO peers (id, name, site, mode, endpoint, is_self, created_at)
-		VALUES (?, 'bartley', 'bartley-ridge', 'full', 'http://127.0.0.1:7777', 1, ?)`, peerID, seedTime)
+		VALUES (?, 'peer-a', 'site-a', 'full', 'http://127.0.0.1:7777', 1, ?)`, peerID, seedTime)
 
 	h.exec(`INSERT INTO libraries (id, name, content_type, enabled, created_at) VALUES
 		(?, 'films', 'movie', 1, ?), (?, 'books', 'book', 1, ?)`,

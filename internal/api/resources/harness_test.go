@@ -441,7 +441,7 @@ func (h *harness) seed() *harness {
 	h.t.Helper()
 
 	h.exec(`INSERT INTO peers (id, name, site, mode, endpoint, is_self, created_at)
-		VALUES (?, 'bartley', 'bartley-ridge', 'full', 'http://127.0.0.1:8385', 1, ?)`, peerID, seedTime)
+		VALUES (?, 'peer-a', 'site-a', 'full', 'http://127.0.0.1:8385', 1, ?)`, peerID, seedTime)
 
 	// Two devices spanning what the planner will have to distinguish: one that
 	// takes almost everything, and one deliberately limited so that the

@@ -29,7 +29,7 @@ const ts = "2026-08-20T00:00:00Z"
 func seedPeer(t *testing.T, db *DB) {
 	t.Helper()
 	mustExec(t, db, `INSERT INTO peers (id, name, site, is_self, created_at)
-		VALUES ('p1', 'bartley', 'bartley-ridge', 1, ?)`, ts)
+		VALUES ('p1', 'peer-a', 'site-a', 1, ?)`, ts)
 }
 
 func seedWorkEdition(t *testing.T, db *DB) {
@@ -52,12 +52,12 @@ const validHash = "blake3:0123456789abcdef0123456789abcdef0123456789abcdef012345
 func TestOnlyOnePeerCanBeSelf(t *testing.T) {
 	db := openTestDB(t)
 	seedPeer(t, db)
-	err := exec(t, db, `INSERT INTO peers (id, name, is_self, created_at) VALUES ('p2', 'cove', 1, ?)`, ts)
+	err := exec(t, db, `INSERT INTO peers (id, name, is_self, created_at) VALUES ('p2', 'peer-b', 1, ?)`, ts)
 	if err == nil {
 		t.Fatal("a second peer was allowed to claim is_self")
 	}
 	// A non-self second peer is fine — that is Milestone 4.
-	mustExec(t, db, `INSERT INTO peers (id, name, is_self, created_at) VALUES ('p2', 'cove', 0, ?)`, ts)
+	mustExec(t, db, `INSERT INTO peers (id, name, is_self, created_at) VALUES ('p2', 'peer-b', 0, ?)`, ts)
 }
 
 // ADR-0005: the blob primary key is the canonical byte identity, so a malformed

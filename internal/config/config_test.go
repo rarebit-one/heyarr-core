@@ -64,15 +64,15 @@ func TestExplicitPathBeatsDerivedDefault(t *testing.T) {
 
 func TestEnvironmentOverridesFile(t *testing.T) {
 	t.Setenv("HEYARR_LOG_LEVEL", "debug")
-	t.Setenv("HEYARR_PEER_NAME", "cove")
-	cfg, err := Load(writeConfig(t, "data_dir: /srv/heyarr\nlog:\n  level: info\npeer:\n  name: bartley\n"))
+	t.Setenv("HEYARR_PEER_NAME", "peer-b")
+	cfg, err := Load(writeConfig(t, "data_dir: /srv/heyarr\nlog:\n  level: info\npeer:\n  name: peer-a\n"))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if cfg.Log.Level != "debug" {
 		t.Errorf("log.level = %q, want the environment to win over the file", cfg.Log.Level)
 	}
-	if cfg.Peer.Name != "cove" {
+	if cfg.Peer.Name != "peer-b" {
 		t.Errorf("peer.name = %q, want the environment to win over the file", cfg.Peer.Name)
 	}
 }
