@@ -1280,6 +1280,84 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/desired/{id}/satisfaction:
+    get:
+      tags: [desired]
+      operationId: getSatisfaction
+      summary: Why a want is, or is not, satisfied.
+      description: |
+        The acquisition state on a `DesiredItem` says **what** the answer is.
+        This says **why** — and it is what makes "I have this film, why does
+        Heyarr say it is missing" answerable, which is the question this axis
+        gets asked most often.
+
+        It **reconciles** rather than reading a cached answer, for the same
+        reason the evaluation endpoint scores rather than replays: an
+        explanation that might be minutes stale is one nobody can trust while
+        they are looking at a file they can see on disk.
+
+        Per want rather than inlined on the listing, because a page of fifty
+        wants would carry fifty evaluations of several rules each.
+
+        ### The two axes are evaluated separately (§56)
+
+        Content asks "do we hold bytes the quality profile accepts?" — and
+        **existing is not satisfying**: a 480p rip under a 1080p-minimum
+        profile is content *present* and content *not satisfied*. Conflating
+        them makes the upgrade workflow unreachable.
+
+        Placement asks "are those bytes on every Full Peer that should hold
+        them?", and it is asked only of **the bytes that satisfy** — asking it
+        of a rejected copy would report a want as fully satisfied because the
+        wrong file is well replicated.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Both axes, with reasons.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Satisfaction" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/desired/{id}/reconcile:
+    post:
+      tags: [desired]
+      operationId: reconcileDesired
+      summary: Ask for this want to be re-examined.
+      description: |
+        **Enqueues** a job; it does not run one. Reconciliation is a job
+        (invariant 4, ADR-0002) and the worker that runs it may be another
+        process, so this answers `202` rather than pretending to be the worker.
+
+        Deduped per want, so asking repeatedly while one is queued yields one
+        job. Reconciliation also runs on a beat and when a want is created, so
+        this is for impatience rather than for correctness.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "202":
+          description: Queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  desired_item_id: { type: string }
+                  job_id: { type: string }
+                  status: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/quality-profiles:
     get:
       tags: [policy]
@@ -2302,6 +2380,84 @@ components:
           allOf:
             - $ref: "#/components/schemas/SessionProgress"
           description: Recorded with the transition. Usually sent with `progress`.
+
+    Satisfaction:
+      type: object
+      required: [desired_item_id, state, content, placement]
+      properties:
+        desired_item_id: { type: string }
+        state:
+          type: string
+          description: §64's derived name, so this response stands alone.
+        content: { $ref: "#/components/schemas/ContentSatisfaction" }
+        placement: { $ref: "#/components/schemas/PlacementSatisfaction" }
+
+    ContentSatisfaction:
+      type: object
+      required: [satisfaction, assets]
+      properties:
+        satisfaction:
+          type: string
+          enum: [unknown, not_satisfied, satisfied]
+        satisfied_by:
+          type: string
+          description: |
+            The asset that satisfies — the **best** one, by the same ranking
+            the search uses, so "what am I watching" and "what would I have
+            acquired" cannot disagree.
+        assets:
+          type: array
+          description: |
+            Every asset considered, with its full §63 reasons. An asset that
+            exists and was rejected appears here **with the rule that rejected
+            it**, which is the whole point of this endpoint.
+          items: { $ref: "#/components/schemas/AssetSatisfaction" }
+
+    AssetSatisfaction:
+      type: object
+      required: [asset_id, accepted, score, terminal, reasons]
+      properties:
+        asset_id: { type: string }
+        accepted: { type: boolean }
+        score: { type: integer }
+        terminal: { type: boolean }
+        reasons:
+          type: array
+          items: { $ref: "#/components/schemas/EvaluationReason" }
+        rejected_by:
+          type: array
+          items: { $ref: "#/components/schemas/EvaluationReason" }
+
+    PlacementSatisfaction:
+      type: object
+      required: [satisfaction, detail, unproven]
+      properties:
+        satisfaction:
+          type: string
+          enum: [unknown, not_satisfied, converging, satisfied, not_applicable]
+          description: |
+            `not_applicable` is for ADR-0020's `linked` assets, which have no
+            blob and therefore nothing to replicate. Calling that `satisfied`
+            would be vacuously true and a lie by construction.
+        missing:
+          type: array
+          items: { type: string }
+          description: |
+            The peers that should hold the bytes and do not. `converging` with
+            no list of what is missing is a status nobody can act on.
+        detail: { type: string }
+        unproven:
+          type: boolean
+          description: |
+            **Always `true` in this milestone.** Nothing has ever run against a
+            second peer (ADR-0010), so with a target set of one this axis is
+            satisfied the moment content is, and `converging` is unreachable
+            outside a test with a synthetic peer set.
+
+            It is a response field rather than only a note in this document
+            because a caveat the reader of the response never sees is a caveat
+            that does not work. A client must not read `satisfied` here as
+            evidence that replication works.
 
     EvaluateRequest:
       type: object

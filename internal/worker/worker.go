@@ -12,6 +12,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
 	"github.com/rarebit-one/heyarr-core/internal/events"
@@ -189,6 +190,21 @@ func (w *Worker) Run(ctx context.Context) error {
 	// pass reporting the winner's deletions as missing blobs.
 	registry.Register(integrity.GCJobType, Registration{
 		Handler:       GCHandler(collector, w.log),
+		MaxConcurrent: 1,
+	})
+	// Reconciliation answers §56's two questions for every want (§57, M3-05).
+	//
+	// One at a time, for the same reason as garbage collection: two concurrent
+	// sweeps would each read the library while the other wrote its
+	// conclusions, and the loser would spend the pass recording answers that
+	// were already stale.
+	//
+	// No RequiredCapability. It needs nothing but the database — no toolchain,
+	// no indexer, no download client — so a fully degraded node still knows
+	// what it is missing, which is exactly the node whose operator most needs
+	// to be told.
+	registry.Register(acquisition.ReconcileJobType, Registration{
+		Handler:       ReconcileHandler(cat, w.log),
 		MaxConcurrent: 1,
 	})
 
