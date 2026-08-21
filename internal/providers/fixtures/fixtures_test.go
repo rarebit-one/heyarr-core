@@ -229,3 +229,67 @@ func writeExchange(t *testing.T, path string, e Exchange) {
 		t.Fatal(err)
 	}
 }
+
+// The committed Transmission corpus loads, and carries the exchanges a client
+// cannot be written without.
+//
+// It asserts on the CORPUS rather than on a client, because no Transmission
+// client exists yet — that is #102. What this pins is that the capture is
+// usable: present, well-formed, and containing the two shapes that decide
+// whether a client works against a real instance or only against a fixture
+// somebody invented.
+func TestTheCommittedTransmissionCorpusIsUsable(t *testing.T) {
+	corpus, err := Load(corpusDir(), "transmission")
+	if errors.Is(err, ErrNoCorpus) {
+		t.Skip("no Transmission corpus committed yet")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// THE handshake. Transmission answers the first RPC call with 409 and a
+	// session id that must be replayed. A client treating 409 as an error
+	// works against every hand-written fixture and fails against every real
+	// instance — so a corpus without this one is a corpus that cannot catch
+	// the mistake it most needs to catch.
+	handshake, ok := corpus.Find("session-handshake-409")
+	if !ok {
+		t.Fatal("no session-handshake-409 — the 409/session-id dance is the one " +
+			"exchange a client cannot be written without")
+	}
+	if handshake.Response.Status != 409 {
+		t.Errorf("the handshake recorded status %d, want 409", handshake.Response.Status)
+	}
+	if handshake.Response.Headers["X-Transmission-Session-Id"] == "" {
+		t.Error("the handshake carries no session id header, which is the whole point of it")
+	}
+
+	// incomplete-dir is the other gotcha, and this instance HAS it enabled —
+	// so a client resolving downloadDir + name mid-transfer gets a path that
+	// does not exist. That case is real here rather than theoretical.
+	session, ok := corpus.Find("session-get")
+	if !ok {
+		t.Fatal("no session-get — it carries download-dir and incomplete-dir")
+	}
+	var decoded struct {
+		Arguments map[string]any `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(session.Response.Body), &decoded); err != nil {
+		t.Fatalf("session-get body is not JSON: %v", err)
+	}
+	for _, field := range []string{
+		"download-dir", "incomplete-dir", "incomplete-dir-enabled", "rpc-version",
+	} {
+		if _, present := decoded.Arguments[field]; !present {
+			t.Errorf("session-get does not carry %q, which a client needs to resolve a path", field)
+		}
+	}
+
+	// Every capture says which version answered. A corpus that cannot say what
+	// produced it is one nobody can trust the day it starts failing.
+	for _, e := range corpus.Exchanges {
+		if e.Provenance.Version == "unknown" || e.Provenance.Version == "" {
+			t.Errorf("%s has no recorded version", e.Name)
+		}
+	}
+}

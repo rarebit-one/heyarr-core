@@ -1,0 +1,22 @@
+{
+  "name": "session-handshake-409",
+  "provenance": {
+    "origin": "captured",
+    "service": "transmission",
+    "version": "4.1.3 (838877323f)",
+    "captured_at": "2026-08-21T05:57:50Z",
+    "procedure": "scripts/capture-fixtures.sh transmission <endpoint> <credentials>",
+    "note": "The version is backfilled from session-get. This exchange is the response that refuses to tell you anything until the session id is replayed, so it cannot carry a version of its own."
+  },
+  "request": {
+    "method": "POST",
+    "path": "/transmission/rpc"
+  },
+  "response": {
+    "status": 409,
+    "headers": {
+      "X-Transmission-Session-Id": "REDACTED"
+    },
+    "body": ""
+  }
+}

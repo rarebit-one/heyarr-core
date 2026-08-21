@@ -148,15 +148,26 @@ capture_transmission() {
   local base=$1 user=${2:-} pass=${3:-}
   note "transmission — $base"
 
+  # An empty array under `set -u` is an ERROR in bash 3.2, which is what macOS
+  # ships — and the no-auth case is not an edge case here: Transmission's RPC
+  # is commonly left unauthenticated behind a whitelist, so this is the FIRST
+  # configuration the script meets. Guarding every expansion with
+  # ${auth[@]+"${auth[@]}"} would work and would have to be right in five
+  # places; one variable that is either empty or a complete flag pair cannot be
+  # got wrong in only four of them.
   local auth=()
-  [[ -n "$user" ]] && auth=(-u "$user:$pass")
+  if [[ -n "$user" ]]; then
+    auth=(-u "$user:$pass")
+  fi
+  # curl_rpc wraps the repetition, so the auth expansion exists once.
+  curl_rpc() { curl -sS ${auth[@]+"${auth[@]}"} "$@"; }
 
   # THE handshake. Transmission answers the first RPC call with 409 and a
   # session id that must be replayed. A client that treats 409 as an error
   # works against every hand-written fixture and fails against every real
   # instance — so this is the single most important exchange in the corpus.
   local headers status
-  headers=$(curl -sS -D - -o /dev/null "${auth[@]}" -X POST \
+  headers=$(curl_rpc -D - -o /dev/null -X POST \
     -H 'Content-Type: application/json' \
     -d '{"method":"session-get"}' "$base/transmission/rpc" || true)
   status=$(printf '%s' "$headers" | head -1 | awk '{print $2}')
@@ -165,11 +176,14 @@ capture_transmission() {
     | tr -d '\r' | awk '{print $2}')
   [[ -n "$sid" ]] || die "transmission did not issue a session id; is it reachable?"
 
-  write_exchange transmission session-handshake-409 POST "/transmission/rpc" \
-    "${status:-409}" "" "$(jq -n --arg s "$sid" '{"X-Transmission-Session-Id":$s}')" "unknown"
+  # Held back until the version is known. This exchange is the response that
+  # refuses to tell you anything until the session id is replayed, so it cannot
+  # carry a version of its own — and writing "unknown" into provenance would
+  # make the one required fact a placeholder.
+  local handshake_status=$status handshake_sid=$sid
 
   local version body
-  body=$(curl -sS "${auth[@]}" -X POST -H "X-Transmission-Session-Id: $sid" \
+  body=$(curl_rpc -X POST -H "X-Transmission-Session-Id: $sid" \
     -H 'Content-Type: application/json' \
     -d '{"method":"session-get"}' "$base/transmission/rpc")
   version=$(printf '%s' "$body" | jq -r '.arguments.version // "unknown"')
@@ -180,7 +194,12 @@ capture_transmission() {
   write_exchange transmission session-get POST "/transmission/rpc" 200 "$body" \
     '{"Content-Type":"application/json"}' "$version"
 
-  body=$(curl -sS "${auth[@]}" -X POST -H "X-Transmission-Session-Id: $sid" \
+  # Now that the version is known, the handshake can be written with it.
+  write_exchange transmission session-handshake-409 POST "/transmission/rpc" \
+    "${handshake_status:-409}" "" \
+    "$(jq -n --arg s "$handshake_sid" '{"X-Transmission-Session-Id":$s}')" "$version"
+
+  body=$(curl_rpc -X POST -H "X-Transmission-Session-Id: $sid" \
     -H 'Content-Type: application/json' \
     -d '{"method":"torrent-get","arguments":{"fields":["id","name","hashString","status","percentDone","downloadDir","labels","error","errorString"]}}' \
     "$base/transmission/rpc")
