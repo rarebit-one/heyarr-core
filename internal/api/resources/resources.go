@@ -30,6 +30,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
@@ -44,7 +45,14 @@ type Options struct {
 	Events *events.Log
 	// Tokens backs the credential endpoints.
 	Tokens *auth.Store
-	Logger *slog.Logger
+	// Catalog answers §56's two satisfaction questions.
+	//
+	// Optional: the resource API is useful without it, and a nil catalog
+	// simply means the satisfaction endpoints are not mounted. That keeps the
+	// test harnesses that predate M3-05 working unchanged rather than making
+	// every one of them construct a catalog to exercise an unrelated route.
+	Catalog *catalog.Catalog
+	Logger  *slog.Logger
 	// Now and NewID are injected so that a created resource's timestamp and
 	// identifier are fixed values in a test, which is what lets the response
 	// shapes be golden files rather than a regex (ADR-0017).
@@ -64,14 +72,15 @@ type Options struct {
 
 // API holds the handlers.
 type API struct {
-	db     *sqlite.DB
-	reader *sql.DB
-	jobs   *jobs.Queue
-	events *events.Log
-	tokens *auth.Store
-	log    *slog.Logger
-	now    func() time.Time
-	newID  func() string
+	db      *sqlite.DB
+	reader  *sql.DB
+	jobs    *jobs.Queue
+	events  *events.Log
+	tokens  *auth.Store
+	catalog *catalog.Catalog
+	log     *slog.Logger
+	now     func() time.Time
+	newID   func() string
 
 	heartbeat  time.Duration
 	streamPoll time.Duration
@@ -136,6 +145,7 @@ func New(opts Options) (*API, error) {
 		jobs:       opts.Jobs,
 		events:     opts.Events,
 		tokens:     opts.Tokens,
+		catalog:    opts.Catalog,
 		log:        log.With("component", "api"),
 		now:        now,
 		newID:      newID,
@@ -208,6 +218,14 @@ func (a *API) Mount(r chi.Router) {
 	// across this file's two halves would make the scope contract harder to
 	// read off, not easier.
 	a.mountDesired(r)
+	// Satisfaction explains §56's two axes for one want. Mounted only when a
+	// catalog was supplied — see Options.Catalog.
+	if a.catalog != nil {
+		r.Get("/desired/{id}/satisfaction", a.getSatisfaction)
+		// Asking for a reconciliation is a write: it queues work.
+		r.With(httpapi.RequireScope(auth.ScopeWrite)).
+			Post("/desired/{id}/reconcile", a.reconcileDesired)
+	}
 	// Consumption is ordinary client traffic like device registration: a
 	// television reporting where it has reached needs a write token, not an
 	// admin one.

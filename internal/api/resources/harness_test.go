@@ -321,6 +321,31 @@ func (h *harness) exec(query string, args ...any) {
 	}
 }
 
+// eventsOfType counts the events of the given types.
+//
+// Counting EVERY event makes an assertion about one feature sensitive to every
+// other feature that happens to emit — creating a want now also enqueues a
+// reconciliation, and a raw count would move with a change that has nothing to
+// do with what the test is checking. Naming the types says what the test means.
+func (h *harness) eventsOfType(t *testing.T, types ...string) int {
+	t.Helper()
+	evs, err := h.events.Since(context.Background(), 0, nil, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{}
+	for _, ty := range types {
+		want[ty] = true
+	}
+	var n int
+	for _, e := range evs {
+		if want[e.Type] {
+			n++
+		}
+	}
+	return n
+}
+
 // execErr runs a statement that is EXPECTED to be refused, returning the
 // error rather than failing the test. exec is for seeding; this is for
 // asserting that the database says no.

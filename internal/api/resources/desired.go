@@ -18,6 +18,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/desired"
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/jobs"
 )
 
 // Desired items (§55) — the endpoint that makes Heyarr more than a catalogue.
@@ -87,6 +88,15 @@ type AcquisitionView struct {
 	// Detail is why the last pipeline move happened, when it was a failure.
 	Detail string `json:"detail,omitempty"`
 }
+
+// AcquisitionView carries only the STATE. The reasons behind the content axis —
+// which assets were considered and why each was or was not good enough — are
+// deliberately not inlined here: a listing of fifty wants would carry fifty
+// evaluations of several rules each, and the answer to "why is this not
+// satisfied" is wanted for one want at a time.
+//
+// It is reachable per want at GET /api/v1/desired/{id}/satisfaction, which is
+// the same shape §63's evaluation endpoint takes for candidates.
 
 // createDesiredRequest is the POST body.
 //
@@ -429,6 +439,25 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 		for _, e := range pending {
 			a.events.Publish(e)
 		}
+	}
+
+	// Reconcile this want now rather than waiting for the beat (§57, M3-05).
+	//
+	// An operator who wants something they already own should see that
+	// immediately; waiting up to a full sweep interval to be told "you have
+	// this" makes a working system look broken. Scoped to the one want, so
+	// wanting five things queues five quick jobs rather than five full sweeps.
+	//
+	// After the response is committed, and failure is not fatal: the beat will
+	// pick this want up regardless, so a queue that is briefly unavailable
+	// costs latency rather than correctness.
+	if _, err := a.jobs.Enqueue(r.Context(), jobs.EnqueueOptions{
+		Type:      acquisition.ReconcileJobType,
+		Payload:   acquisition.ReconcilePayload{DesiredItemID: out.ID},
+		DedupeKey: acquisition.ReconcileDedupeKey + ":" + out.ID,
+	}); err != nil {
+		a.log.Warn("could not enqueue reconciliation for a new want",
+			"desired_item_id", out.ID, "error", err)
 	}
 
 	w.Header().Set("Location", httpapi.APIPrefix+"/desired/"+out.ID)

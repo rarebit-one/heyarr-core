@@ -1494,6 +1494,121 @@ YAML
   assert_eq "$(api "/api/v1/desired/$want_id" | jq -r '.status')" "404" \
     "a want that is removed is gone rather than hidden"
 
+  note "  satisfaction reconciliation (§56, §57, M3-05)"
+  # Content and placement, evaluated SEPARATELY, against the library this demo
+  # just scanned — real assets, whatever probes this machine could produce, and
+  # an answer that is not a fixture.
+  #
+  # NOTE ON ASSERTIONS HERE: every enum check is assert_eq, never
+  # assert_contains. "not_satisfied" CONTAINS "satisfied", so a substring check
+  # passes for the opposite meaning — which it did, on the first run of this
+  # section, and reported a green "content is satisfied" against a want that
+  # was not.
+  local sat_work sat_anything sat_id sat_json
+  sat_work=$(api /api/v1/works | jq -r '.items[0].id')
+
+  # A profile with NO gates, so what is being tested is the reconciliation and
+  # not this machine's ability to measure a file.
+  sat_anything=$(api /api/v1/quality-profiles -X POST -H 'Content-Type: application/json' \
+    -d '{"name":"acceptance-anything","description":"accepts whatever exists"}' | jq -r '.id')
+  sat_id=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d "{\"work_id\":\"$sat_work\",\"quality_profile_id\":\"$sat_anything\"}" | jq -r '.id')
+
+  # The satisfaction endpoint reconciles rather than reading a cached answer,
+  # so this is deterministic without waiting for the beat.
+  sat_json=$(api "/api/v1/desired/$sat_id/satisfaction")
+  assert_eq "$(jq -r '.content.satisfaction' <<<"$sat_json")" "satisfied" \
+    "content the library holds satisfies a profile that accepts it"
+  assert_contains "$(jq -r '.content.satisfied_by // "none"' <<<"$sat_json")" "-" \
+    "and the answer names WHICH asset satisfies"
+  assert_eq "$(jq -r '.content.assets | length > 0' <<<"$sat_json")" "true" \
+    "every asset considered is reported, with its reasons"
+
+  # §56's two axes are separate answers, and both reach the wire.
+  assert_contains "$(jq -r '. | keys | join(",")' <<<"$sat_json")" "placement" \
+    "placement is answered separately from content (§56)"
+  assert_eq "$(jq -r '.placement.unproven' <<<"$sat_json")" "true" \
+    "and it says plainly that it has never run against a second peer (ADR-0010)"
+
+  # The §64 name is DERIVED from the axes, never stored (ADR-0027). With one
+  # peer holding the only replica, placement is satisfied the moment content is
+  # — which is the single-peer case, not evidence that replication works.
+  assert_eq "$(jq -r '.state' <<<"$sat_json")" "FULLY_SATISFIED" \
+    "the §64 name is derived from both axes"
+
+  # ADR-0023's degradation, reaching all the way through to satisfaction.
+  #
+  # This is the honest state of a node with no media toolchain: with no probe,
+  # a gate on resolution cannot be SHOWN to hold, so it rejects — and the
+  # reason says "could not determine" rather than claiming the file is too
+  # small. "I cannot tell whether this satisfies you" and "this does not
+  # satisfy you" are different problems and send an operator to different
+  # places.
+  local sat_gated sat_gated_id sat_gated_json
+  sat_gated=$(api /api/v1/quality-profiles -X POST -H 'Content-Type: application/json' \
+    -d '{"name":"acceptance-gated","accept":[{"attribute":"resolution","op":"gte","value":1080}]}' \
+    | jq -r '.id')
+  sat_gated_id=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d "{\"work_id\":\"$sat_work\",\"quality_profile_id\":\"$sat_gated\"}" | jq -r '.id')
+  sat_gated_json=$(api "/api/v1/desired/$sat_gated_id/satisfaction")
+
+  if command -v ffprobe >/dev/null 2>&1; then
+    # With a probe, the resolution is a fact and the gate decides on it.
+    assert_contains "$(jq -r '[.content.assets[0].reasons[] | select(.rule == "resolution.gte")] | .[0].result' \
+      <<<"$sat_gated_json")" "" "a probed asset is measured against the gate"
+  else
+    assert_eq "$(jq -r '.content.satisfaction' <<<"$sat_gated_json")" "not_satisfied" \
+      "with no probe, a gate that cannot be shown to hold rejects"
+    assert_eq "$(jq -r '[.content.assets[0].reasons[] | select(.rule == "resolution.gte")] | .[0].result' \
+      <<<"$sat_gated_json")" "undetermined" \
+      "and says the attribute could not be determined, rather than claiming the file is too small"
+    # AVAILABLE, not MISSING: the bytes are held, they simply cannot be shown
+    # to be good enough. Conflating those makes the upgrade workflow
+    # unreachable.
+    assert_eq "$(jq -r '.state' <<<"$sat_gated_json")" "AVAILABLE" \
+      "the bytes are still held, so the state is AVAILABLE rather than MISSING"
+  fi
+
+  # §57's point, and the reason a beat exists at all: satisfaction can change
+  # when NOTHING about the want or the library changed.
+  local sat_after
+  api "/api/v1/quality-profiles/$sat_anything" -X PUT -H 'Content-Type: application/json' \
+    -d '{"accept":[{"attribute":"size_bytes","op":"gte","value":1099511627776}]}' -o /dev/null
+  sat_after=$(api "/api/v1/desired/$sat_id/satisfaction")
+  assert_eq "$(jq -r '.content.satisfaction' <<<"$sat_after")" "not_satisfied" \
+    "raising the profile unsatisfies a want nothing else touched (§57)"
+  assert_eq "$(jq -r '.state' <<<"$sat_after")" "AVAILABLE" \
+    "and the bytes are still there, so it is AVAILABLE rather than MISSING"
+  # A blob's size is known even with no toolchain, so this gate genuinely
+  # FAILS rather than being undetermined — which is what makes it a usable
+  # assertion on a bare node.
+  assert_eq "$(jq -r '[.content.assets[0].rejected_by[] | select(.rule == "size_bytes.gte")] | .[0].result' \
+    <<<"$sat_after")" "fail" \
+    "and names the gate that now rejects what the library holds"
+
+  # Reconciliation is a JOB (invariant 4, ADR-0002) — the API asks, a worker
+  # runs it, and the two may be different processes.
+  local sat_job
+  sat_job=$(api "/api/v1/desired/$sat_id/reconcile" -X POST)
+  assert_contains "$(jq -r '.job_id' <<<"$sat_job")" "-" \
+    "asking for a reconciliation queues a job rather than doing the work inline"
+
+  # A want for content the library does NOT hold.
+  local sat_absent
+  sat_absent=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d "{\"work\":{\"content_type\":\"movie\",\"title\":\"Nothing We Have\",\"year\":1999},
+         \"quality_profile_id\":\"$sat_gated\"}" | jq -r '.id')
+  assert_eq "$(api "/api/v1/desired/$sat_absent/satisfaction" | jq -r '.state')" "MISSING" \
+    "a want for content nothing holds reconciles to MISSING"
+  assert_eq "$(api "/api/v1/desired/$sat_absent/satisfaction" | jq -r '.content.assets | length')" "0" \
+    "with no assets to explain"
+
+  api "/api/v1/desired/$sat_id" -X DELETE -o /dev/null
+  api "/api/v1/desired/$sat_gated_id" -X DELETE -o /dev/null
+  api "/api/v1/desired/$sat_absent" -X DELETE -o /dev/null
+  api "/api/v1/quality-profiles/$sat_anything" -X DELETE -o /dev/null
+  api "/api/v1/quality-profiles/$sat_gated" -X DELETE -o /dev/null
+
   note "  release-candidate evaluation (§63, M3-04)"
   # §63 says evaluation is deterministic and INSPECTABLE. This drives the
   # scorer over a real socket against a real profile out of the database, and

@@ -327,7 +327,17 @@ func TestPatchChangesProfileMonitorAndReason(t *testing.T) {
 func TestDesiredEventsFireForChangesAndOnlyForChanges(t *testing.T) {
 	h := newHarness(t).seed()
 
-	before := h.eventCount(t)
+	const (
+		wantCreated = "desired.created"
+		wantUpdated = "desired.updated"
+		wantRemoved = "desired.removed"
+		acqCreated  = "acquisition.phase_changed"
+	)
+	desiredEvents := func() int {
+		return h.eventsOfType(t, wantCreated, wantUpdated, wantRemoved, acqCreated)
+	}
+
+	before := desiredEvents()
 	resp := postDesired(t, h, fmt.Sprintf(`{"work_id": %q, "quality_profile":"living-room"}`, work2ID))
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d: %s", resp.StatusCode, h.body(resp))
@@ -337,18 +347,18 @@ func TestDesiredEventsFireForChangesAndOnlyForChanges(t *testing.T) {
 	// created alongside it. The second is not redundant — something following
 	// only acquisition.* to build a pipeline view would otherwise never see
 	// the acquisition appear.
-	if got := h.eventCount(t); got != before+2 {
+	if got := desiredEvents(); got != before+2 {
 		t.Fatalf("creating a want should emit the want and its acquisition state, got %d",
 			got-before)
 	}
 
 	// A no-op patch emits nothing.
-	afterCreate := h.eventCount(t)
+	afterCreate := desiredEvents()
 	if p := h.doStable(http.MethodPatch, "/api/v1/desired/"+id,
 		strings.NewReader(`{"monitor":true}`)); p.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", p.StatusCode)
 	}
-	if got := h.eventCount(t); got != afterCreate {
+	if got := desiredEvents(); got != afterCreate {
 		t.Errorf("a patch that changes nothing emitted %d event(s)", got-afterCreate)
 	}
 
@@ -357,17 +367,17 @@ func TestDesiredEventsFireForChangesAndOnlyForChanges(t *testing.T) {
 		strings.NewReader(`{"monitor":false}`)); p.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", p.StatusCode)
 	}
-	if got := h.eventCount(t); got != afterCreate+1 {
+	if got := desiredEvents(); got != afterCreate+1 {
 		t.Errorf("a real change should emit one event, got %d", got-afterCreate)
 	}
 
 	// Deleting emits, and the event carries the target so the log still says
 	// what was wanted after the row is gone.
-	afterPatch := h.eventCount(t)
+	afterPatch := desiredEvents()
 	if d := h.doStable(http.MethodDelete, "/api/v1/desired/"+id, nil); d.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d", d.StatusCode)
 	}
-	if got := h.eventCount(t); got != afterPatch+1 {
+	if got := desiredEvents(); got != afterPatch+1 {
 		t.Errorf("deleting should emit one event, got %d", got-afterPatch)
 	}
 	if got := h.get("/api/v1/desired/" + id); got.StatusCode != http.StatusNotFound {
@@ -379,7 +389,12 @@ func TestDesiredEventsFireForChangesAndOnlyForChanges(t *testing.T) {
 // subscriber watching the catalog grow should see it however it was created.
 func TestWantingUnknownContentEmitsAWorkCreatedEvent(t *testing.T) {
 	h := newHarness(t).seed()
-	before := h.eventCount(t)
+	const (
+		workCreated = "content.work.created"
+		wantCreated = "desired.created"
+		acqCreated  = "acquisition.phase_changed"
+	)
+	before := h.eventsOfType(t, workCreated, wantCreated, acqCreated)
 
 	resp := postDesired(t, h, `{
 		"work": {"content_type":"movie","title":"Wings of Desire","year":1987},
@@ -388,18 +403,21 @@ func TestWantingUnknownContentEmitsAWorkCreatedEvent(t *testing.T) {
 		t.Fatalf("status = %d: %s", resp.StatusCode, h.body(resp))
 	}
 	// Three: the work, the want, and the want's acquisition state.
-	if got := h.eventCount(t); got != before+3 {
+	if got := h.eventsOfType(t, workCreated, wantCreated, acqCreated); got != before+3 {
 		t.Errorf("wanting unknown content should emit a work, a want and its "+
 			"acquisition state, got %d", got-before)
 	}
+	if got := h.eventsOfType(t, workCreated); got != 1 {
+		t.Errorf("%d works created", got)
+	}
 
 	// Wanting a work that already exists creates no second work.
-	before = h.eventCount(t)
+	before = h.eventsOfType(t, workCreated, wantCreated, acqCreated)
 	if r := postDesired(t, h, fmt.Sprintf(`{"work_id": %q, "quality_profile":"archival"}`,
 		work2ID)); r.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d: %s", r.StatusCode, h.body(r))
 	}
-	if got := h.eventCount(t); got != before+2 {
+	if got := h.eventsOfType(t, workCreated, wantCreated, acqCreated); got != before+2 {
 		t.Errorf("wanting an existing work should emit the want and its acquisition "+
 			"state, and no second work, got %d", got-before)
 	}

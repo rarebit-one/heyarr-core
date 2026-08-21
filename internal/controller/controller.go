@@ -19,6 +19,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
@@ -149,6 +150,23 @@ func (c *Controller) Run(ctx context.Context) error {
 		return fmt.Errorf("controller: %w", err)
 	}
 
+	// Reconciliation runs on the SERVING context, not the startup one: it is
+	// ongoing work rather than schema-shaped setup, and it must stop when the
+	// controller does.
+	reconcileEvents, err := events.New(events.Options{
+		Writer: db.Writer(), Reader: db.Reader(), Logger: c.log,
+	})
+	if err != nil {
+		return fmt.Errorf("controller: opening the event log for reconciliation: %w", err)
+	}
+	reconcileQueue, err := jobs.New(jobs.Options{
+		Writer: db.Writer(), Reader: db.Reader(), Events: reconcileEvents,
+	})
+	if err != nil {
+		return fmt.Errorf("controller: opening the job queue for reconciliation: %w", err)
+	}
+	startReconciliation(ctx, reconcileQueue, c.log)
+
 	// "started" is logged only after every listener is bound. A start line
 	// printed before the socket exists is a lie that costs someone an
 	// afternoon: the supervisor, the acceptance script and an operator tailing
@@ -251,12 +269,23 @@ func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Stor
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}
+	// The catalog answers §56's satisfaction questions for the API. It is the
+	// same construction reconcileLibraries and the worker use — one catalog
+	// per process would be tidier, and is a refactor rather than this issue.
+	cat, err := catalog.New(catalog.Options{
+		DB: db, Events: eventLog,
+		PeerName: c.cfg.Peer.Name, PeerSite: c.cfg.Peer.Site, Logger: c.log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("controller: opening the catalog: %w", err)
+	}
 	api, err := resources.New(resources.Options{
-		DB:     db,
-		Jobs:   queue,
-		Events: eventLog,
-		Tokens: store,
-		Logger: c.log,
+		DB:      db,
+		Jobs:    queue,
+		Events:  eventLog,
+		Tokens:  store,
+		Catalog: cat,
+		Logger:  c.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
