@@ -1434,6 +1434,84 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /api/v1/quality-profiles/{id}/evaluate:
+    post:
+      tags: [policy]
+      operationId: evaluateCandidates
+      summary: Score release candidates against a profile, and explain every answer.
+      description: |
+        §63: evaluation is **deterministic and inspectable**. This endpoint is
+        what makes the second half true — an evaluation you can only reach
+        through a background job is not inspectable, because "why did it pick
+        that release, last Tuesday, at 3am" cannot be answered by re-running
+        something that has since moved on.
+
+        It **writes nothing**. A `POST` because the body carries the
+        candidates, not because it changes anything — the same reasoning as
+        `/playback/plan` — and it needs only `read`.
+
+        Hand it candidates and it answers with the same values the search job
+        will get, which makes a profile testable *before* it is used in anger.
+
+        ### The reasons are the deliverable
+
+        Every rule that was considered produces a reason, not only the ones
+        that failed — a rule that ran silently is a rule nobody can confirm
+        ran. §61 lists opaque scoring among the things Heyarr avoids, and a
+        score with no reasons is exactly that.
+
+        | result | meaning |
+        |---|---|
+        | `pass` | an `accept` or `terminal` rule held |
+        | `fail` | an `accept` rule did not hold — **this gate rejected the candidate**, and nothing else uses this word |
+        | `bonus` / `penalty` | a `prefer` rule landed, contributing its (possibly negative) weight |
+        | `miss` | a `prefer` rule did not land, or a `terminal` condition was not reached. **Not** a rejection |
+        | `undetermined` | the provider could not determine the attribute |
+
+        `undetermined` is deliberately not `fail`. "This release is 720p and
+        you wanted 1080p" and "nobody could tell what resolution this is" are
+        different situations, and an operator seeing the second knows to look
+        at the provider rather than at the release. An undetermined **gate**
+        still rejects — a gate that cannot be shown to hold must not pass, or a
+        profile saying "1080p minimum" quietly accepts a release nobody could
+        measure.
+
+        ### The ranking is a total order
+
+        Accepted candidates rank above rejected ones (a rejected candidate's
+        score is a number about something that will not be used); then by score
+        descending; then by **candidate id ascending**, which is a stable key
+        that does not depend on the order the candidates were supplied in.
+
+        Without that last tie-break two equally good releases swap places
+        between runs and the upgrade workflow churns between them forever — a
+        bug that presents as bandwidth.
+
+        `selected` is a separate field rather than "the first of `ranked`"
+        because the first element is not necessarily acceptable: when
+        everything was rejected it is merely the least bad, and acquiring it
+        would be exactly what §62's gates exist to prevent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EvaluateRequest" }
+      responses:
+        "200":
+          description: Every candidate, ranked and explained.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Evaluation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/jobs:
     get:
       tags: [operations]
@@ -2224,6 +2302,128 @@ components:
           allOf:
             - $ref: "#/components/schemas/SessionProgress"
           description: Recorded with the transition. Usually sent with `progress`.
+
+    EvaluateRequest:
+      type: object
+      required: [candidates]
+      properties:
+        candidates:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/ReleaseCandidate" }
+
+    ReleaseCandidate:
+      type: object
+      description: One release a provider offered.
+      required: [id]
+      properties:
+        id:
+          type: string
+          description: |
+            Stable for a given release from a given provider, and the ranking's
+            tie-break — so it must not be a position in a response. Two
+            candidates sharing an id is a `400`, because it would make the
+            ranking depend on the order they were sent in.
+        title:
+          type: string
+          description: |
+            What the indexer called it. **Never parsed** — attributes are
+            extracted by the provider, and re-deriving them from the title at
+            scoring time would be a second, invisible extraction.
+        provider: { type: string }
+        attributes:
+          type: object
+          description: |
+            What could be determined about the release, keyed by attribute
+            name. A key that is **absent** (or explicitly `null`) means "could
+            not be determined", which is different from a zero value and is
+            reported as `undetermined` rather than as a failure.
+
+            A provider that cannot tell must leave the attribute out. HDR
+            detection in Milestone 2 is a substring match on the ffprobe
+            profile and is a recorded weakness; a release *title* is worse
+            evidence, not better.
+          additionalProperties:
+            oneOf:
+              - type: integer
+              - type: string
+              - type: boolean
+              - type: "null"
+
+    Evaluation:
+      type: object
+      required: [quality_profile_id, ranked]
+      properties:
+        quality_profile_id: { type: string }
+        ranked:
+          type: array
+          description: Every candidate, best first.
+          items: { $ref: "#/components/schemas/RankedCandidate" }
+        selected:
+          type: string
+          description: |
+            The candidate that would be acquired. **Absent when none was
+            acceptable** — and note this is not simply the first of `ranked`,
+            which when everything was rejected is merely the least bad.
+
+    RankedCandidate:
+      type: object
+      required: [id, accepted, score, terminal, reasons]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        provider: { type: string }
+        accepted:
+          type: boolean
+          description: |
+            Whether every gate held. A candidate that is not accepted is never
+            acquired, whatever it scored.
+        score:
+          type: integer
+          description: |
+            The sum of the preferences that landed. Meaningful only among
+            accepted candidates: a rejected one's score is not a near miss, it
+            is a number about something that will not be used.
+        terminal:
+          type: boolean
+          description: |
+            This candidate meets **every** terminal condition, so the upgrade
+            workflow has nothing left to want (§62).
+
+            A profile with no terminal rules is **never** terminal — vacuous
+            truth over an empty set would turn "never stop looking" into "stop
+            immediately". A rejected candidate is never terminal either.
+        reasons:
+          type: array
+          description: Every rule that was considered, in the profile's own order.
+          items: { $ref: "#/components/schemas/EvaluationReason" }
+        rejected_by:
+          type: array
+          description: The gates that rejected this candidate. Absent when accepted.
+          items: { $ref: "#/components/schemas/EvaluationReason" }
+
+    EvaluationReason:
+      type: object
+      required: [rule, section, result, detail]
+      properties:
+        rule:
+          type: string
+          description: |
+            The rule's machine-readable identity, `<attribute>.<op>`. Clients
+            branch on this; a client branching on prose is one that breaks when
+            the prose improves.
+        section:
+          type: string
+          enum: [accept, prefer, terminal]
+        result:
+          type: string
+          enum: [pass, fail, bonus, penalty, miss, undetermined]
+        score:
+          type: integer
+          description: The contribution, present only for preferences that landed.
+        detail:
+          type: string
+          description: The prose half, for a human.
 
     DesiredItem:
       type: object
