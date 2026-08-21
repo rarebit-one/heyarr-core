@@ -252,13 +252,28 @@ func (w *Worker) Run(ctx context.Context) error {
 	// capability, so a search job stays PENDING AND VISIBLE rather than being
 	// claimed and failed — which is ADR-0025's whole claim.
 	//
-	// The search handler itself is M3-12. Registering the type without a
-	// handler would panic on claim, so nothing is registered here: with no
-	// registration and no advertisement, the job simply waits, which is
-	// exactly the behaviour under test.
+	// The search handler, registered only when this worker has an indexer —
+	// the same reasoning as the probe and poll handlers. Not registering it at
+	// all makes the degraded state visible in the startup log, which lists the
+	// types this worker will claim, and "why is nothing being searched for"
+	// should be answerable from that log.
+	//
+	// On a node with no indexer the job stays PENDING AND VISIBLE rather than
+	// being claimed and failed, which is ADR-0025's whole claim: a search that
+	// cannot run is work waiting for a capability, not work that went wrong.
+	//
+	// MaxConcurrent is deliberately NOT 1. Unlike reconciliation and the
+	// upgrade scan, each search is scoped to one want and writes only that
+	// want's rows, so two running at once contend over nothing — and a library
+	// of two hundred wants would otherwise take two hundred sequential
+	// provider round trips to make one pass.
 	if providerRegistry.Has(providers.CapabilityIndexer) {
 		w.log.Info("indexing is available",
 			"providers", strings.Join(indexerNames(providerRegistry), ", "))
+		registry.Register(acquisition.SearchJobType, Registration{
+			Handler:            SearchHandler(providerRegistry, cat, w.log),
+			RequiredCapability: providers.CapabilityIndexer.JobCapability(),
+		})
 	}
 	// The poll handler, registered only when this worker has a download client
 	// — the same reasoning as the probe handler below. Not registering it at

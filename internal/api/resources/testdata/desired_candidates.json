@@ -1,0 +1,66 @@
+{
+  "desired_item_id": "01990000-0000-7000-8000-0000000000i1",
+  "search_id": "search-1",
+  "selected": "good",
+  "candidates": [
+    {
+      "candidate_id": "good",
+      "provider": "fake-indexer",
+      "title": "Arrival 2160p remux",
+      "accepted": true,
+      "score": 30,
+      "terminal": true,
+      "selected": true,
+      "reasons": [
+        {
+          "rule": "resolution.gte",
+          "section": "accept",
+          "result": "pass",
+          "detail": "resolution 2160, which is at least 1080"
+        }
+      ]
+    },
+    {
+      "candidate_id": "plain",
+      "provider": "fake-indexer",
+      "title": "Arrival 1080p web",
+      "accepted": true,
+      "score": 0,
+      "terminal": false,
+      "selected": false,
+      "reasons": [
+        {
+          "rule": "resolution.gte",
+          "section": "accept",
+          "result": "pass",
+          "detail": "resolution 1080, which is at least 1080"
+        }
+      ]
+    },
+    {
+      "candidate_id": "tiny",
+      "provider": "fake-indexer",
+      "title": "Arrival 480p cam",
+      "accepted": false,
+      "score": 0,
+      "terminal": false,
+      "selected": false,
+      "reasons": [
+        {
+          "rule": "resolution.gte",
+          "section": "accept",
+          "result": "fail",
+          "detail": "resolution 480, which is not at least 1080"
+        }
+      ],
+      "rejected_by": [
+        {
+          "rule": "resolution.gte",
+          "section": "accept",
+          "result": "fail",
+          "detail": "resolution 480, which is not at least 1080"
+        }
+      ]
+    }
+  ]
+}

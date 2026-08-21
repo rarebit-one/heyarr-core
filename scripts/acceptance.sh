@@ -696,6 +696,43 @@ providers:
   - name: acceptance-indexer
     type: fake
     capabilities: [indexer]
+    # Canned answers, so a search can actually SELECT something rather than
+    # only exercising the empty-search edge. The three shapes below are the
+    # three §63 has to tell apart, and the demo asserts on each.
+    offers:
+      - title: Blue Harvest
+        candidates:
+          # Acceptable and terminal: passes the gate, meets every preference.
+          - id: bh-2160-remux
+            title: Blue Harvest 2160p remux
+            attributes:
+              resolution: 2160
+              source: remux
+              video_codec: hevc
+              hdr: true
+              audio_channels: 6
+          # Acceptable and NOT as good as it gets — the gap the upgrade
+          # workflow lives in.
+          - id: bh-1080-web
+            title: Blue Harvest 1080p web-dl
+            attributes:
+              resolution: 1080
+              source: web-dl
+              video_codec: h264
+              hdr: false
+          # Rejected by the gate, so the demo has a real rejection to read a
+          # reason off rather than asserting on an absence.
+          - id: bh-480-cam
+            title: Blue Harvest 480p cam
+            attributes:
+              resolution: 480
+              source: cam
+              video_codec: h264
+      # A title the indexer has nothing for, so the empty-search edge is
+      # reachable without reconfiguring anything. It is a work the fixture
+      # library already holds, so wanting it creates nothing.
+      - title: Twice Told
+        candidates: []
   - name: acceptance-disabled
     type: fake
     capabilities: [indexer]
@@ -1518,6 +1555,172 @@ YAML
   # from.
   assert_not_contains "$dl_json" "api_key" "no credential field reaches the providers response"
   assert_not_contains "$dl_json" "password" "and no password field either"
+
+  note "  the search job (§60, §63, M3-12)"
+  # THE MILESTONE'S CENTRAL CLAIM, made executable:
+  #
+  #   Heyarr decides what should exist, explains why it chose one release over
+  #   another, and does it with NO REAL INDEXER PRESENT.
+  #
+  # Everything here runs against the fake configured at the top of this file.
+  # If the search job could not be driven by a fake, ADR-0026's
+  # values-in-values-out interface would have failed at its one job — a fake, a
+  # fixture replayer and a real client are supposed to be indistinguishable to
+  # every caller, and this is the caller that matters most.
+  #
+  # It sits below every catalog count because wanting content Heyarr has never
+  # seen CREATES A WORK, which shifts them. That has bitten three times.
+  #
+  # It wants works the library ALREADY HOLDS rather than inventing any. Wanting
+  # unknown content creates a Work, which shifts every catalog count below —
+  # and the CLI section immediately after this one asserts on exactly those.
+  # That is the fourth time the ordering hazard has bitten, and the first where
+  # the fix was to want something existing rather than to move the section.
+  local search_work search_want search_id search_state search_cands
+  search_work=$(api_all /api/v1/works '.items[] | select(.title == "Blue Harvest") | .id' | head -1)
+  if [[ -z "$search_work" ]]; then
+    fail "the fixture library has no 'Blue Harvest' work for the search demo to want"
+    return 1
+  fi
+  search_want=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d "{\"work_id\":\"$search_work\",\"quality_profile\":\"living-room\"}")
+  search_id=$(jq -r '.id' <<<"$search_want")
+  assert_eq "$(jq -r '.acquisition.state' <<<"$search_want")" "MISSING" \
+    "a fresh want starts MISSING"
+
+  # A search is a JOB (invariant 4, ADR-0002) — the API asks, a worker runs it.
+  local search_job
+  search_job=$(api "/api/v1/desired/$search_id/search" -X POST)
+  assert_contains "$(jq -r '.job_id' <<<"$search_job")" "-" \
+    "asking for a search queues a job rather than doing the work inline"
+
+  # Wait for the machine to arrive, rather than sleeping a fixed duration and
+  # hoping — a fixed sleep here is a test that passes on a fast machine and
+  # flakes on a loaded one.
+  waited=0
+  while (( waited < 300 )); do
+    search_state=$(api "/api/v1/desired/$search_id" | jq -r '.acquisition.state')
+    [[ "$search_state" == "SELECTED" ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  assert_eq "$search_state" "SELECTED" \
+    "a want reaches SELECTED with no real indexer anywhere (§64, ADR-0026)"
+
+  # §63's answer, durable and readable after the fact. An evaluation that lived
+  # in memory for two hundred milliseconds is deterministic and is not
+  # inspectable.
+  search_cands=$(api "/api/v1/desired/$search_id/candidates")
+  assert_eq "$(jq -r '.candidates | length' <<<"$search_cands")" "3" \
+    "every candidate the indexer offered is persisted, accepted and rejected alike"
+  assert_eq "$(jq -r '.selected' <<<"$search_cands")" "bh-2160-remux" \
+    "the best acceptable candidate was selected"
+  assert_eq "$(jq -r '.candidates[0].terminal' <<<"$search_cands")" "true" \
+    "and it is terminal, so the upgrade workflow has nothing left to want"
+
+  # THE REJECTION REASONS ARE THE DELIVERABLE (§60, §61). A rejection with no
+  # explanation is exactly the opaque scoring §61 rejects.
+  assert_eq "$(jq -r '[.candidates[] | select(.candidate_id == "bh-480-cam")] | .[0].accepted' \
+    <<<"$search_cands")" "false" "the 480p release was rejected"
+  assert_contains "$(jq -r '[.candidates[] | select(.candidate_id == "bh-480-cam")] | .[0].rejected_by[0].rule' \
+    <<<"$search_cands")" "resolution" "and the rejection names the gate that failed"
+  assert_contains "$(jq -r '[.candidates[] | select(.candidate_id == "bh-480-cam")] | .[0].rejected_by[0].detail' \
+    <<<"$search_cands")" "which is not" "and explains it in prose, not just a code"
+
+  # Accepted and NOT terminal is the gap the upgrade workflow lives in.
+  assert_eq "$(jq -r '[.candidates[] | select(.candidate_id == "bh-1080-web")] | .[0] |
+    "\(.accepted)/\(.terminal)"' <<<"$search_cands")" "true/false" \
+    "an acceptable release that is not as good as it gets stays upgradable"
+
+  # §60's manual override: a person takes a different acceptable release, and
+  # the disagreement is RECORDED. An override that left no trace would look
+  # exactly like an ordinary selection.
+  local search_override
+  search_override=$(api "/api/v1/desired/$search_id/select" -X POST \
+    -H 'Content-Type: application/json' -d '{"candidate_id":"bh-1080-web"}')
+  assert_eq "$(jq -r '.overridden' <<<"$search_override")" "true" \
+    "choosing a release by hand is recorded as an override"
+  assert_contains "$(jq -r '.override_detail' <<<"$search_override")" "bh-2160-remux" \
+    "and the record names what the scorer had chosen instead"
+
+  # The gates in §62 are the operator's own statement of what is acceptable. An
+  # override that could ignore them would turn `accept` into a suggestion.
+  local search_refused
+  search_refused=$(api "/api/v1/desired/$search_id/select" -X POST \
+    -H 'Content-Type: application/json' -d '{"candidate_id":"bh-480-cam"}')
+  assert_eq "$(jq -r '.status' <<<"$search_refused")" "409" \
+    "an override cannot take a release the profile rejected"
+  assert_contains "$(jq -r '.detail' <<<"$search_refused")" "change the profile" \
+    "and the refusal says what to do instead"
+
+  # A search that finds nothing is a MODELLED EDGE, not a failure. If it failed
+  # the job it would back off, and an unavailable release would become an
+  # indexer hammering loop.
+  local search_empty search_empty_state search_empty_work
+  search_empty_work=$(api_all /api/v1/works '.items[] | select(.title == "Twice Told") | .id' | head -1)
+  search_empty=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d "{\"work_id\":\"$search_empty_work\",\"quality_profile\":\"archival\"}" | jq -r '.id')
+  api "/api/v1/desired/$search_empty/search" -X POST -o /dev/null
+
+  waited=0
+  while (( waited < 300 )); do
+    # The phase returns to where it started, so the arrival condition is the
+    # SEARCH JOB finishing rather than the state changing.
+    if [[ "$(api "/api/v1/jobs?type=search_release&state=succeeded" | jq -r '.items | length')" -ge 2 ]]; then
+      break
+    fi
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  # ASSERT THE PHASE, NOT THE DERIVED NAME — and the reason is ADR-0027's whole
+  # argument, which this assertion originally got wrong and flaked on ~50% of
+  # runs because of it.
+  #
+  # "Returns to rest" is a claim about the PIPELINE: nothing is in flight any
+  # more. The §64 name is a presentation of four facts, and one of them is
+  # `managed` — whether Heyarr holds bytes. This want is over a work that HAS
+  # assets, so once the reconciliation beat has run the very same resting state
+  # presents as AVAILABLE rather than MISSING. Both are correct; which one you
+  # see depends on whether a timer fired.
+  #
+  # Asserting the name here conflated "nothing in flight" with "do we hold
+  # bytes", which is exactly the collapse ADR-0027 exists to prevent. The
+  # acceptance suite reproduced the confusion the ADR was written about, and
+  # the flake is what exposed it.
+  search_empty_state=$(api "/api/v1/desired/$search_empty" | jq -r '.acquisition.phase')
+  assert_eq "$search_empty_state" "idle" \
+    "a search that finds nothing returns the want to rest"
+  # And it is a modelled edge rather than a failure: the job SUCCEEDED. If it
+  # had failed, the queue would back off and an unavailable release would
+  # become an indexer hammering loop.
+  #
+  # ASSERT WHAT THE SEARCH CONTROLS. My first attempt at this second assertion
+  # checked that `content` was still "unknown" — and flaked for the same reason
+  # the original did, one layer down: content is RECONCILIATION's answer, and
+  # it legitimately becomes not_satisfied the moment the beat runs. Twice in
+  # one assertion block is enough to state the rule: in this section, assert
+  # the phase and the job, never a satisfaction axis, because a timer owns
+  # those and a timer is not part of the claim.
+  assert_eq "$(api "/api/v1/jobs?type=search_release&state=failed" | jq -r '.items | length')" "0" \
+    "and does not fail the job, which would back off into an indexer hammering loop"
+  assert_eq "$(api "/api/v1/desired/$search_empty/candidates" | jq -r '.candidates | length')" "0" \
+    "with no candidates to explain"
+
+  # Every search emits, including the empty one — it leaves no rows behind, so
+  # the event is the only trace it happened.
+  local search_events
+  search_events=$(api "/api/v1/events?after=0" --max-time 5 --no-buffer 2>/dev/null || true)
+  if grep -q 'acquisition.search_completed' <<<"$search_events"; then
+    pass "a completed search reaches the event log"
+  else
+    fail "no acquisition.search_completed in a replay from seq 0"
+  fi
+  if grep -q 'acquisition.candidate_overridden' <<<"$search_events"; then
+    pass "an override is its own event, so a policy audit can subscribe to exactly that"
+  else
+    fail "no acquisition.candidate_overridden in a replay from seq 0"
+  fi
+
+  api "/api/v1/desired/$search_id" -X DELETE -o /dev/null
+  api "/api/v1/desired/$search_empty" -X DELETE -o /dev/null
 
   note "  the CLI (M1-17)"
   # The CLI is what a person actually uses, so the demo drives it rather than

@@ -339,3 +339,102 @@ func TestJobCapabilitySpellingMatches(t *testing.T) {
 		}
 	}
 }
+
+// Offers exist so the acceptance demo can drive a search that actually selects
+// something (M3-12). They are validated rather than trusted, because a fake
+// that produced a shape a real provider is refused for would teach the demo a
+// fiction.
+func TestOffersAreOnlyMeaningfulForAFake(t *testing.T) {
+	_, err := Validate([]Entry{{
+		Name: "real", Type: string(KindTorznab), Endpoint: "http://indexer.invalid:9696",
+		APIKey: Secret("k"),
+		Offers: []Offer{{Title: "Arrival", Candidates: []OfferedCandidate{
+			{ID: "x", Attributes: map[string]any{"resolution": 2160}},
+		}}},
+	}})
+	if err == nil {
+		t.Fatal("offers on a real provider must be refused, not silently ignored — " +
+			"an ignored key is a config file that says something Heyarr does not do")
+	}
+	if !strings.Contains(err.Error(), "only meaningful for a fake") {
+		t.Errorf("the refusal should say why; got: %v", err)
+	}
+	// The kind is the CONSTANT rather than a literal. When `prowlarr` became
+	// `torznab` (ADR-0028) this test carried on passing locally and failed on
+	// CI, because a literal made it assert ParseKind's refusal instead of the
+	// one it exists for. A constant makes the next rename a compile error.
+}
+
+func TestOfferedCandidatesAreValidated(t *testing.T) {
+	cases := []struct {
+		name  string
+		offer Offer
+		want  string
+	}{
+		{
+			"no title to answer for",
+			Offer{Candidates: []OfferedCandidate{{ID: "x"}}},
+			"no title to answer for",
+		},
+		{
+			// The evaluator's tie-break. A fake producing one would be teaching
+			// the demo a shape a real provider is refused for.
+			"a candidate with no id",
+			Offer{Title: "Arrival", Candidates: []OfferedCandidate{{}}},
+			"no id",
+		},
+		{
+			"an attribute that does not exist",
+			Offer{Title: "Arrival", Candidates: []OfferedCandidate{
+				{ID: "x", Attributes: map[string]any{"bitrate": 5000}},
+			}},
+			"no attribute called",
+		},
+		{
+			"an attribute of the wrong kind",
+			Offer{Title: "Arrival", Candidates: []OfferedCandidate{
+				{ID: "x", Attributes: map[string]any{"resolution": "2160p"}},
+			}},
+			"is a int attribute",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Validate([]Entry{{
+				Name: "fake", Type: "fake", Capabilities: []string{"indexer"},
+				Offers: []Offer{tc.offer},
+			}})
+			if err == nil {
+				t.Fatal("expected a refusal")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the refusal should mention %q; got: %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// An attribute left OUT stays out, so §63 reports it as undetermined rather
+// than as a zero. That path is most of how a degraded node behaves and is
+// otherwise unreachable without a real indexer that omits a field.
+func TestAnOmittedAttributeStaysOmitted(t *testing.T) {
+	resolved, err := Validate([]Entry{{
+		Name: "fake", Type: "fake", Capabilities: []string{"indexer"},
+		Offers: []Offer{{Title: "Arrival", Candidates: []OfferedCandidate{
+			{ID: "x", Attributes: map[string]any{"resolution": 2160}},
+		}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := resolved[0].Offers["arrival"]
+	if len(got) != 1 {
+		t.Fatalf("%d candidates", len(got))
+	}
+	if _, present := got[0].Attributes["video_codec"]; present {
+		t.Error("an attribute nobody supplied must be absent, not defaulted")
+	}
+	if got[0].Provider != "fake" {
+		t.Errorf("provider = %q; a candidate must say which provider offered it", got[0].Provider)
+	}
+}

@@ -137,6 +137,12 @@ func construct(r Resolved, now func() time.Time, ctor Constructor) (Provider, er
 		if now != nil {
 			f.now = now
 		}
+		// Canned answers from configuration, so the acceptance demo can drive
+		// a search that actually selects something. Validation has already
+		// refused these on a non-fake.
+		for title, candidates := range r.Offers {
+			f.Offer(title, candidates...)
+		}
 		return f, nil
 	case KindTorznab, KindTransmission:
 		// No constructor claimed it. The Torznab client lands in M3-09;
