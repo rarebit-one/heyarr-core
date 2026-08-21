@@ -8,23 +8,41 @@ the corpus stays valid across product versions — which matters more here than
 anywhere else, because for an indexer these fixtures are the only test that
 will ever run.
 
-## Why this directory is empty
+## What is in here, and what it cost to get
 
-Because nobody has captured yet, and inventing the contents would defeat the
-point.
+The Torznab corpus holds captures from **two different servers speaking one
+protocol** — Jackett and Prowlarr, both configured against the same public
+tracker. That is not redundancy. ADR-0028's claim is that this client is bound
+to the protocol rather than shaped to one product, and a single corpus cannot
+demonstrate it: the client would be shaped to whichever server it saw first
+while looking exactly as though it were not.
 
-A real indexer proxies real trackers with real credentials. It is not
-reproducible, it is not ours, and it can never run in CI. ADR-0026 therefore
-makes recorded fixtures the **primary** test strategy for indexers rather than
-a stand-in for one — and that raises the stakes on what goes in here
-considerably.
+The two disagree about the most important response in the protocol:
 
-For a media file, a hand-written fixture is merely unrealistic. For an indexer,
-a hand-written fixture is *the only thing the test will ever see*. It does not
-approximate reality; it replaces it. A corpus that was invented rather than
-captured tests that the client agrees with whoever invented it.
+| | invalid API key | unsupported function |
+|---|---|---|
+| Jackett | HTTP **200** with `<error code="100">` | HTTP **200**, code 201 |
+| Prowlarr | HTTP **401** with an **empty body** | HTTP **400**, code 202 |
 
-So this directory stays empty until somebody with an instance runs the capture.
+So an error document arrives with 200 *and* with 400, and an error also arrives
+with no document at all. Neither the status nor the body can be trusted alone.
+
+### The tracker is Linux ISOs, and that has a cost worth naming
+
+Captures are taken against a tracker that indexes **nothing but Linux
+distributions**, so every release name committed permanently to this public
+repository is of the form `ubuntu budgie 26 10 snapshot1 desktop amd64 iso`.
+
+The cost: a Linux ISO asserts no resolution, no codec, no audio layout and no
+HDR. **No real capture in this corpus contains a quality attribute**, and
+against these two indexers the provider determines a release's SIZE and nothing
+else — every quality rule in a §62 profile evaluates to `undetermined`.
+
+That absence is genuinely useful, because it is the `undetermined` path made
+reachable with real data. But it means the positive cases live in
+`torznab/synthesised/`, clearly labelled, and one indexer's habits are **not**
+coverage of Torznab's real attribute variance. Claiming otherwise would be the
+false confidence ADR-0026 exists to prevent.
 
 ## Capturing
 
@@ -61,19 +79,34 @@ One directory per service, one file per exchange:
 
 ```
 testdata/
-├── torznab/
-│   ├── caps.json
-│   ├── search-with-results.json
-│   ├── search-empty.json
-│   └── unauthorised.json
+├── torznab/                 the PROTOCOL
+│   ├── jackett/             one server that speaks it
+│   │   ├── caps.json
+│   │   ├── search-with-results.json
+│   │   ├── search-empty.json
+│   │   ├── unauthorised.json          200 + <error code="100">
+│   │   ├── unsupported-function.json
+│   │   └── indexer-not-found.json     a JSON body on a Torznab path
+│   ├── prowlarr/            another, disagreeing
+│   │   └── … the same six, answered differently
+│   └── synthesised/         NOT captured; see each file's note
 └── transmission/
     ├── session-handshake-409.json
     ├── session-get.json
     └── torrent-get.json
 ```
 
-Every file carries provenance — origin, service, version, when, and the exact
-procedure — and `Load` **refuses** one that does not. A capture nobody can
+A server whose name IS its protocol gets no subdirectory — `transmission` is
+one protocol with one implementation, and `transmission/transmission` would be
+a directory saying nothing twice. Torznab has several, and there the
+subdirectory is the only thing stopping two captures of `caps` from
+overwriting each other.
+
+
+Every file carries provenance — origin, service, **which server answered**,
+version, when, and the exact procedure — and `Load` **refuses** one that does
+not. `server` is required for a capture specifically: the corpus's central
+claim is unreadable if a fixture cannot say which implementation produced it. A capture nobody can
 regenerate is one nobody can trust the day it starts failing, which is the same
 reasoning that puts a version, a digest and a URL in `scripts/toolchain.lock`
 rather than just a URL.
@@ -95,7 +128,7 @@ Beyond the happy path, which is the easy half:
 | a malformed body | the error must name what failed to parse |
 | a non-JSON error page | what a reverse proxy in front of the service actually returns |
 | Transmission's `409` handshake | a client treating it as an error works against every hand-written fixture and fails against every real instance |
-| **results with fields OMITTED** | see below |
+| **results with fields OMITTED** | see below — and in this corpus the real captures are ALL of this shape, for quality attributes |
 
 That last one is easy to overlook and is the one this corpus most needs.
 `Indexer.Search` returns `[]acquisition.ReleaseCandidate` directly, so attribute

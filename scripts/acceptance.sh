@@ -800,6 +800,23 @@ providers:
   # It also gives the path map somewhere real to be validated: a sibling of the
   # library rather than inside it, which is the layout the whole ADR-0014
   # section exists to encourage.
+  # A REAL TORZNAB INDEXER, configured and pointing at nothing (M3-09).
+  #
+  # Port 9 is discard: reserved, and refusing connections everywhere. Every
+  # other indexer in this file is a fake, which is what ADR-0026 requires —
+  # a real indexer proxies real trackers with real credentials and can never
+  # run here.
+  #
+  # So what this entry proves is narrow and worth having: that the registry now
+  # constructs a REAL client for the torznab kind. Before M3-09 this same entry
+  # reported "the torznab client is not implemented yet"; now it reports what
+  # happened when something actually tried to reach the endpoint. That is the
+  # difference between a registry with a placeholder in it and a registry with
+  # a client in it, and it is assertable without an indexer being present.
+  - name: acceptance-torznab
+    type: torznab
+    endpoint: http://127.0.0.1:9/api
+    api_key: not-a-real-key-and-nothing-will-read-it
   - name: acceptance-downloads
     type: transmission
     endpoint: http://127.0.0.1:9
@@ -1610,6 +1627,50 @@ YAML
   # from.
   assert_not_contains "$dl_json" "api_key" "no credential field reaches the providers response"
   assert_not_contains "$dl_json" "password" "and no password field either"
+
+  note "  Torznab, a real indexer client (§59, ADR-0028, M3-09)"
+  # Placed here with the download client's assertions because this section
+  # READS state and writes none — no catalog count moves, so its position is
+  # not load-bearing the way the desired-state sections are.
+  local tz_entry
+  tz_entry=$(jq -c '[.providers[] | select(.name == "acceptance-torznab")] | .[0]' <<<"$dl_json")
+
+  assert_eq "$(jq -r '. != null' <<<"$tz_entry")" "true" \
+    "a configured torznab indexer is reported"
+  # Membership, not a rendering of the set: asserting the joined string is how
+  # two proxy assertions rotted earlier in this milestone.
+  assert_eq "$(jq -r '[.capabilities[] | select(. == "indexer")] | length' <<<"$tz_entry")" "1" \
+    "and advertises the indexer capability"
+
+  # THE ASSERTION THIS ISSUE EXISTS FOR.
+  #
+  # The registry holds a real client rather than a placeholder. Until M3-09 a
+  # configured torznab provider was registered, routed and reported — and
+  # answered every health check with "the torznab client is not implemented
+  # yet". That was the honest report at the time and it must not still be the
+  # report now.
+  assert_not_contains "$(jq -r '.detail' <<<"$tz_entry")" "not implemented" \
+    "the torznab kind is no longer a placeholder in the registry"
+
+  # ADR-0025 again, for an indexer this time: the endpoint refuses connections
+  # and the node is answering this request.
+  assert_eq "$(api /healthz | jq -r '.status')" "ok" \
+    "a node whose indexer is unreachable still serves"
+
+  # Health is OBSERVED. What must NOT happen is a healthy report for something
+  # that is not listening — that is the report that sends work to a provider
+  # which then fails, which ADR-0025 says is worse than advertising nothing.
+  if [[ "$(jq -r '.healthy' <<<"$tz_entry")" == "true" ]]; then
+    fail "an unreachable indexer reported itself healthy"
+  else
+    pass "an unreachable indexer is not reported as healthy"
+  fi
+
+  # The API key is in the config file three lines above. It must not be in the
+  # response, and the assertion is on the VALUE rather than the field name so
+  # it is a claim about the credential rather than about the schema.
+  assert_not_contains "$dl_json" "not-a-real-key" \
+    "an indexer credential does not reach the providers response"
 
   note "  the search job (§60, §63, M3-12)"
   # THE MILESTONE'S CENTRAL CLAIM, made executable:
@@ -3145,8 +3206,15 @@ printf '         satisfied the moment content is, and PLACEMENT_CONVERGING — t
 printf '         state §56 draws this distinction for — is unreachable outside a\n'
 printf '         test with a synthetic peer set. Milestone 4 proves it.\n'
 printf '         A REAL INDEXER. No Torznab client has ever answered a search\n'
-printf '         here; every candidate above came from a fake. ADR-0026 says that\n'
-printf '         stays true in CI forever, and the client itself is still to come.\n'
+printf '         here; every candidate above came from a fake, and ADR-0026 says\n'
+printf '         that stays true in CI forever. The client now EXISTS — it is\n'
+printf '         tested against a corpus captured from two different Torznab\n'
+printf '         servers — but no assertion above was answered by one.\n'
+printf '         What those two servers do not cover is quality attributes: the\n'
+printf '         only tracker safe to capture from into a public repository\n'
+printf '         indexes Linux distributions, which assert no resolution, codec\n'
+printf '         or audio. Against a real indexer today, this system determines\n'
+printf '         a release SIZE and reports every quality rule undetermined.\n'
 printf '         TRANSCODE. Milestone 2 ships remux only, and nothing in\n'
 printf '         Milestone 3 needed more: quality profiles select BETWEEN\n'
 printf '         releases rather than producing them.\n'

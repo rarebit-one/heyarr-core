@@ -1,0 +1,22 @@
+{
+  "name": "search-with-quality-attributes",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "torznab",
+    "version": "n/a — not captured from a server",
+    "captured_at": "2026-08-21T14:40:00Z",
+    "procedure": "written by hand from the Torznab specification; see note",
+    "note": "SYNTHESISED, and here is exactly what that costs. Every attribute in policy's vocabulary except size_bytes is unreachable from a capture this repository may hold: the only tracker safe to capture from in a public AGPL repo indexes Linux distributions, and a Linux ISO asserts no resolution, codec, audio or language. Both real captures in this corpus (torznab/jackett, torznab/prowlarr) therefore omit those attributes entirely — which is itself the fixture behind the `undetermined` path, and is real. This file is the opposite case and it is NOT real: the attribute SHAPES are taken from the Torznab specification, not observed on a server. It exists so that the extraction branches for resolution, video, audio and language are not branches nothing has ever driven. Treat a disagreement between this file and a real server as this file being wrong. It also carries three cases that are about extraction rather than transport, and those ARE modelled on measured behaviour: 'resolution' spelled both 1080p and 2160 (both spellings occur in the wild), an attribute present with an EMPTY value (measured — Prowlarr emits name=\"genre\" value=\"\" on every item, and it must count as absent, not as a determined empty string), and a value that cannot be read at all ('hd'), which must be left out rather than coerced to a number."
+  },
+  "request": {
+    "method": "GET",
+    "path": "?t=search&q=example&apikey=REDACTED"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/xml"
+    },
+    "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rss version=\"2.0\" xmlns:atom=\"http://www.w3.org/2005/Atom\" xmlns:torznab=\"http://torznab.com/schemas/2015/feed\">\n  <channel>\n    <title>A synthesised feed</title>\n    <item>\n      <title>example distribution 1 0 amd64 iso</title>\n      <guid>a1b2c3d4e5f60718293a4b5c6d7e8f9012345678</guid>\n      <size>4294967296</size>\n      <torznab:attr name=\"infohash\" value=\"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678\" />\n      <torznab:attr name=\"seeders\" value=\"12\" />\n      <torznab:attr name=\"resolution\" value=\"1080p\" />\n      <torznab:attr name=\"video\" value=\"hevc\" />\n      <torznab:attr name=\"audio\" value=\"eac3\" />\n      <torznab:attr name=\"language\" value=\"english\" />\n    </item>\n    <item>\n      <title>example distribution 2 0 amd64 iso</title>\n      <guid>b2c3d4e5f60718293a4b5c6d7e8f901234567890</guid>\n      <size>2147483648</size>\n      <torznab:attr name=\"infohash\" value=\"b2c3d4e5f60718293a4b5c6d7e8f901234567890\" />\n      <torznab:attr name=\"resolution\" value=\"2160\" />\n      <torznab:attr name=\"language\" value=\"\" />\n      <torznab:attr name=\"video\" value=\"   \" />\n    </item>\n    <item>\n      <title>example distribution 3 0 amd64 iso</title>\n      <guid>c3d4e5f60718293a4b5c6d7e8f90123456789012</guid>\n      <size>1073741824</size>\n      <torznab:attr name=\"infohash\" value=\"c3d4e5f60718293a4b5c6d7e8f90123456789012\" />\n      <torznab:attr name=\"resolution\" value=\"hd\" />\n      <torznab:attr name=\"audio\" value=\"flac\" />\n    </item>\n  </channel>\n</rss>\n"
+  }
+}

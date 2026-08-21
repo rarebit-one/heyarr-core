@@ -3,10 +3,11 @@
   "provenance": {
     "origin": "captured",
     "service": "transmission",
+    "server": "Transmission",
     "version": "4.1.3 (838877323f)",
     "captured_at": "2026-08-21T06:22:30Z",
     "procedure": "scripts/capture-fixtures.sh transmission <endpoint> <credentials>",
-    "note": "Two transfers, deliberately in different states. A completed one, seeding, with a tracker announce reporting Success \u2014 and a stalled one whose only tracker does not resolve. The stalled one reports error=0 and errorString=\"\" at the top level while trackerStats[].lastAnnounceResult says \"Could not connect to tracker\", which is why trackerStats is in the field list. Both were added for this capture and removed afterwards; the instance holds no torrents of its own."
+    "note": "Two transfers, deliberately in different states. A completed one, seeding, with a tracker announce reporting Success — and a stalled one whose only tracker does not resolve. The stalled one reports error=0 and errorString=\"\" at the top level while trackerStats[].lastAnnounceResult says \"Could not connect to tracker\", which is why trackerStats is in the field list. Both were added for this capture and removed afterwards; the instance holds no torrents of its own."
   },
   "request": {
     "method": "POST",

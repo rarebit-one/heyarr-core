@@ -1,0 +1,22 @@
+{
+  "name": "indexer-not-found",
+  "provenance": {
+    "origin": "captured",
+    "service": "torznab",
+    "server": "Prowlarr",
+    "version": "unreported",
+    "captured_at": "2026-08-21T14:37:35Z",
+    "procedure": "scripts/capture-fixtures.sh torznab <endpoint> <credentials>"
+  },
+  "request": {
+    "method": "GET",
+    "path": "<an indexer id that does not exist>"
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\n  \"message\": \"IndexerDefinition with ID 999 does not exist\",\n  \"description\": \"NzbDrone.Core.Datastore.ModelNotFoundException: IndexerDefinition with ID 999 does not exist\\n   at NzbDrone.Core.Datastore.BasicRepository\\u00601.Get(Int32 id) in ./NzbDrone.Core/Datastore/BasicRepository.cs:line 128\\n   at NzbDrone.Core.ThingiProvider.ProviderFactory\\u00602.Get(Int32 id) in ./NzbDrone.Core/ThingiProvider/ProviderFactory.cs:line 101\\n   at NzbDrone.Core.Indexers.IndexerFactory.Get(Int32 id) in ./NzbDrone.Core/Indexers/IndexerFactory.cs:line 73\\n   at NzbDrone.Api.V1.Indexers.NewznabController.GetNewznabResponse(Int32 id, NewznabRequest request) in ./Prowlarr.Api.V1/Indexers/NewznabController.cs:line 135\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ActionMethodExecutor.TaskOfIActionResultExecutor.Execute(ActionContext actionContext, IActionResultTypeMapper mapper, ObjectMethodExecutor executor, Object controller, Object[] arguments)\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.\\u003CInvokeActionMethodAsync\\u003Eg__Awaited|12_0(ControllerActionInvoker invoker, ValueTask\\u00601 actionResultValueTask)\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.\\u003CInvokeNextActionFilterAsync\\u003Eg__Awaited|10_0(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Rethrow(ActionExecutedContextSealed context)\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Next(State\\u0026 next, Scope\\u0026 scope, Object\\u0026 state, Boolean\\u0026 isCompleted)\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.InvokeInnerFilterAsync()\\n--- End of stack trace from previous location ---\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.\\u003CInvokeFilterPipelineAsync\\u003Eg__Awaited|20_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.\\u003CInvokeAsync\\u003Eg__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.\\u003CInvokeAsync\\u003Eg__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)\\n   at Prowlarr.Http.Middleware.BufferingMiddleware.InvokeAsync(HttpContext context) in ./Prowlarr.Http/Middleware/BufferingMiddleware.cs:line 27\\n   at Prowlarr.Http.Middleware.IfModifiedMiddleware.InvokeAsync(HttpContext context) in ./Prowlarr.Http/Middleware/IfModifiedMiddleware.cs:line 40\\n   at Prowlarr.Http.Middleware.CacheHeaderMiddleware.InvokeAsync(HttpContext context) in ./Prowlarr.Http/Middleware/CacheHeaderMiddleware.cs:line 32\\n   at Prowlarr.Http.Middleware.StartingUpMiddleware.InvokeAsync(HttpContext context) in ./Prowlarr.Http/Middleware/StartingUpMiddleware.cs:line 37\\n   at Prowlarr.Http.Middleware.UrlBaseMiddleware.InvokeAsync(HttpContext context) in ./Prowlarr.Http/Middleware/UrlBaseMiddleware.cs:line 28\\n   at Prowlarr.Http.Middleware.VersionMiddleware.InvokeAsync(HttpContext context) in ./Prowlarr.Http/Middleware/VersionMiddleware.cs:line 28\\n   at Microsoft.AspNetCore.Authorization.AuthorizationMiddleware.Invoke(HttpContext context)\\n   at Microsoft.AspNetCore.Authentication.AuthenticationMiddleware.Invoke(HttpContext context)\\n   at Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddlewareImpl.\\u003CInvoke\\u003Eg__Awaited|10_0(ExceptionHandlerMiddlewareImpl middleware, HttpContext context, Task task)\"\n}"
+  }
+}

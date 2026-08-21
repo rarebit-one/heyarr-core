@@ -75,6 +75,43 @@ would be a second application managing the same state.
 The alternative is a product-shaped JSON API, and a stable schema in an
 unfashionable format is worth more than a moving one in a familiar one.
 
+## What the client actually met, once it was built
+
+This decision was made before anything spoke the protocol. The client landed
+against a corpus captured from **two** servers — Jackett and Prowlarr, both
+fronting the same public tracker — and the two disagree in ways that decide
+whether it works. Recorded here because the argument above was a prediction,
+and these are the measurements.
+
+| | invalid API key | unsupported function | rss version |
+|---|---|---|---|
+| Jackett | HTTP **200**, `<error code="100">` | HTTP **200**, `<error code="201">` | 2.0 |
+| Prowlarr | HTTP **401**, **empty body** | HTTP **400**, `<error code="202">` | 1.0 |
+
+An error document therefore arrives with 200 *and* with 400, and an error also
+arrives with no document at all. A client that gates parsing on a 2xx misses
+the first; one that trusts the status line misses the second. The consequence
+of getting it wrong is not a crash — it is a wrong API key reported forever as
+"no releases found".
+
+They also differ in attribute vocabulary: Prowlarr emits `tag`, `genre` and
+`grabs` where Jackett emits `magneturl`, and Prowlarr emits
+`genre` with an **empty value** on every item, which must count as absent
+rather than as a determined empty string.
+
+**A single corpus would not have shown any of this**, and the client would have
+been shaped to whichever server it saw first while appearing to be
+protocol-bound. That is the concrete form of this ADR's claim, and it is the
+reason the corpus is organised by server under one protocol.
+
+The same lesson arrived in the tooling rather than the client, which is worth
+recording because it was nearly expensive: the capture script's redactor
+matched an API key as `[0-9a-fA-F]{32}`, the *arr stack's shape. Jackett issues
+a 32-character *alphanumeric* key, and a live one survived redaction intact in
+a measured test — as it did the corpus scanner, which had the same assumption.
+Both were fixed before any capture was committed. A guard shaped to one
+product is not a guard.
+
 ## What would make us revisit
 
 A Torznab successor with real adoption. The protocol is old and its Newznab

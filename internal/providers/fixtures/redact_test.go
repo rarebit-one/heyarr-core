@@ -1,6 +1,7 @@
 package fixtures
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -80,6 +81,30 @@ func TestTheCaptureScriptRedactsEveryShape(t *testing.T) {
 			`{"headers":{"Authorization":"Bearer sk-abcdefghijklmnopqrstuvwx"}}`,
 			"sk-abcdefghijklmnopqrstuvwx",
 		},
+		{
+			// The one that got through. Every case above this line is
+			// hex-shaped, which is how the redactor and its test came to
+			// share an assumption and neither caught it: the *arr stack
+			// issues a hex key, so a hex pattern passed every test anyone
+			// wrote.
+			//
+			// This value is the shape a real Jackett instance issues —
+			// 32 characters, lower-case alphanumeric, not hex — and it
+			// survived the merged redactor intact when measured against a
+			// live capture.
+			"an api key that is not hex, which is what Jackett issues",
+			`{"path":"?t=search&apikey=w2dgeuyey1vf7dg9d1kjkicwrfnmzyht"}`,
+			"w2dgeuyey1vf7dg9d1kjkicwrfnmzyht",
+		},
+		{
+			// The parameter name a Torznab feed actually emits, inside every
+			// coverurl attribute. The underscore is the point: a rule
+			// anchored on a word boundary before `apikey` does not match
+			// `jackett_apikey`, because `_` is a word character.
+			"an api key under a vendor-prefixed parameter name",
+			`{"body":"<torznab:attr name=\"coverurl\" value=\"https://x/img/?jackett_apikey=w2dgeuyey1vf7dg9d1kjkicwrfnmzyht&amp;file=poster\" />"}`,
+			"w2dgeuyey1vf7dg9d1kjkicwrfnmzyht",
+		},
 	}
 
 	for _, tc := range cases {
@@ -136,5 +161,58 @@ func TestWhatTheRedactorProducesIsCleanToTheScanner(t *testing.T) {
 	if findings := scanBytes("dirty.json", dirty); len(findings) == 0 {
 		t.Fatal("the scanner did not flag the unredacted input, so the assertion " +
 			"above is vacuous")
+	}
+}
+
+// runRedactFromHost pipes input through the redactor as a capture from host
+// would, which is the only way the endpoint substitution is reachable.
+func runRedactFromHost(t *testing.T, host, input string) string {
+	t.Helper()
+	script, err := filepath.Abs(filepath.Join("..", "..", "..", "scripts", "capture-fixtures.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", "source "+script+" && redact")
+	cmd.Env = append(os.Environ(), "CAPTURE_HOST="+host)
+	cmd.Stdin = strings.NewReader(input)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sourcing the capture script failed: %v\n%s", err, out)
+	}
+	return string(out)
+}
+
+// The endpoint is not a credential and it is still the thing this repository
+// must not contain (§ the repo is public and AGPL).
+//
+// A Torznab feed echoes the server it was served from, so this is not a
+// hypothetical: <atom:link href> carries it once and every coverurl carries it
+// again, in a corpus that is committed permanently.
+func TestTheCaptureScriptRedactsTheEndpointItself(t *testing.T) {
+	const host = "some-host.internal.example:9117"
+	input := `{"body":"<atom:link href=\"http://` + host + `/\" />` +
+		`<torznab:attr name=\"coverurl\" value=\"http://` + host + `/img/x\" />"}`
+
+	got := runRedactFromHost(t, host, input)
+	if strings.Contains(got, "some-host") {
+		t.Fatalf("the capture host survived redaction:\n%s", got)
+	}
+	if !strings.Contains(got, "indexer.invalid") {
+		t.Errorf("the host was removed but not replaced by the placeholder:\n%s", got)
+	}
+	// Twice in the input, so a substitution that stopped at the first
+	// occurrence would pass a laxer assertion than this one.
+	if n := strings.Count(got, "indexer.invalid"); n != 2 {
+		t.Errorf("want both occurrences replaced, got %d:\n%s", n, got)
+	}
+}
+
+// With no host passed the redactor must be a clean pass-through rather than a
+// no-op that swallows its input — the transmission corpus was captured before
+// CAPTURE_HOST existed and recapturing it is not free.
+func TestTheHostRedactorIsAPassThroughWhenNoHostIsKnown(t *testing.T) {
+	const body = `{"body":"nothing sensitive here","n":1}`
+	if got := runRedact(t, body); strings.TrimSpace(got) != body {
+		t.Errorf("pass-through altered its input:\nwant %s\ngot  %s", body, got)
 	}
 }

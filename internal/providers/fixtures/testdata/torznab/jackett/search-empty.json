@@ -1,0 +1,22 @@
+{
+  "name": "search-empty",
+  "provenance": {
+    "origin": "captured",
+    "service": "torznab",
+    "server": "Jackett",
+    "version": "unreported",
+    "captured_at": "2026-08-21T14:37:25Z",
+    "procedure": "scripts/capture-fixtures.sh torznab <endpoint> <credentials>"
+  },
+  "request": {
+    "method": "GET",
+    "path": "?t=search&q=zzzzzzzz-no-such-release-zzzzzzzz&apikey=REDACTED"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/xml"
+    },
+    "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rss version=\"2.0\" xmlns:atom=\"http://www.w3.org/2005/Atom\" xmlns:torznab=\"http://torznab.com/schemas/2015/feed\">\n  <channel>\n    <atom:link href=\"http://indexer.invalid/\" rel=\"self\" type=\"application/rss+xml\" />\n    <title>LinuxTracker</title>\n    <description>LinuxTracker is a Public Linux ISO Torrent Repository</description>\n    <link>https://linuxtracker.org/</link>\n    <language>en-US</language>\n    <category>search</category>\n  </channel>\n</rss>"
+  }
+}
