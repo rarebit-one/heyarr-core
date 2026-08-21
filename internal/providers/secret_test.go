@@ -70,7 +70,7 @@ func TestSecretSurvivesLoggingAWholeStruct(t *testing.T) {
 
 	entry := Entry{
 		Name:     "an-indexer",
-		Type:     string(KindProwlarr),
+		Type:     string(KindTorznab),
 		Endpoint: "https://indexer.invalid",
 		APIKey:   Secret(theSecret),
 	}
@@ -126,7 +126,7 @@ func TestBuildDoesNotLogCredentials(t *testing.T) {
 
 	resolved, err := Validate([]Entry{{
 		Name:     "an-indexer",
-		Type:     string(KindProwlarr),
+		Type:     string(KindTorznab),
 		Endpoint: "https://indexer.invalid",
 		APIKey:   Secret(theSecret),
 	}})
@@ -152,7 +152,7 @@ func TestBuildDoesNotLogCredentials(t *testing.T) {
 func TestValidationErrorsDoNotQuoteTheCredential(t *testing.T) {
 	_, err := Validate([]Entry{{
 		Name:     "an-indexer",
-		Type:     string(KindProwlarr),
+		Type:     string(KindTorznab),
 		Endpoint: "not a url at all",
 		APIKey:   Secret(theSecret),
 	}})

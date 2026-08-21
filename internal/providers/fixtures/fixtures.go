@@ -43,7 +43,7 @@ const (
 // changed.
 type Provenance struct {
 	Origin Origin `json:"origin"`
-	// Service is "prowlarr", "transmission" — the thing that answered.
+	// Service is "torznab", "transmission" — the thing that answered.
 	Service string `json:"service"`
 	// Version is what that service reported about itself. Not optional: "it
 	// worked against some Prowlarr once" is not a fact anyone can act on.

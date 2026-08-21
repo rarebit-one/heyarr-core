@@ -188,7 +188,7 @@ func TestTheScannerReadsEveryFileNotOnlyJSON(t *testing.T) {
 // Nested directories, because the corpus is per-service subdirectories.
 func TestTheScannerRecurses(t *testing.T) {
 	dir := t.TempDir()
-	nested := filepath.Join(dir, "prowlarr", "deep")
+	nested := filepath.Join(dir, "torznab", "deep")
 	if err := os.MkdirAll(nested, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestTheScannerRecurses(t *testing.T) {
 	if len(found) != 1 {
 		t.Fatalf("expected one finding in a nested directory, got %d", len(found))
 	}
-	if !strings.HasPrefix(found[0].Path, "prowlarr") {
+	if !strings.HasPrefix(found[0].Path, "torznab") {
 		t.Errorf("the path should be relative to the corpus root, got %q", found[0].Path)
 	}
 }

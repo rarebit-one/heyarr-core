@@ -123,9 +123,9 @@ func TestNeverCheckedIsDistinctFromUnhealthy(t *testing.T) {
 // "why is nothing searching" means re-reading the config file.
 func TestADisabledProviderIsReportedWithNoCapabilities(t *testing.T) {
 	resolved, err := providers.Validate([]providers.Entry{
-		{Name: "an-indexer", Type: "prowlarr", Endpoint: "https://x.invalid", APIKey: "k"},
+		{Name: "an-indexer", Type: "torznab", Endpoint: "https://x.invalid", APIKey: "k"},
 		{
-			Name: "switched-off", Type: "prowlarr", Endpoint: "https://y.invalid",
+			Name: "switched-off", Type: "torznab", Endpoint: "https://y.invalid",
 			APIKey: "k", Enabled: boolPtr(false),
 		},
 	})
@@ -164,7 +164,7 @@ func TestADisabledProviderIsReportedWithNoCapabilities(t *testing.T) {
 func TestNoCredentialReachesTheResponse(t *testing.T) {
 	const secret = "sk-live-DO-NOT-LEAK-8e91c4"
 	resolved, err := providers.Validate([]providers.Entry{{
-		Name: "an-indexer", Type: "prowlarr",
+		Name: "an-indexer", Type: "torznab",
 		Endpoint: "https://indexer.invalid", APIKey: providers.Secret(secret),
 	}})
 	if err != nil {

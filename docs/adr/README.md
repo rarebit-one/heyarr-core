@@ -35,3 +35,4 @@ An ADR that merely describes the code is not worth having.
 | [0025](0025-external-services-are-optional-and-capability-routed.md) | External network services are optional and capability-routed | Accepted |
 | [0026](0026-indexers-are-not-reproducible-so-fixtures-are-the-primary-test-strategy.md) | Indexers are not reproducible, so fixtures are the primary test strategy | Accepted |
 | [0027](0027-acquisition-state-is-four-facts-not-one-ordinal.md) | Acquisition state is four facts, not one ordinal | Accepted |
+| [0028](0028-discovery-binds-to-torznab-not-prowlarr.md) | Discovery binds to Torznab, the protocol, not Prowlarr, the product | Accepted |
