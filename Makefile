@@ -23,6 +23,9 @@ fixtures:                     ## build the acceptance fixture generator (dev onl
 test:                         ## run tests with the race detector
 	go test -race -count=1 ./...
 
+scan-fixtures:                ## check the provider fixture corpus for leaked credentials
+	go test ./internal/providers/fixtures/ -run TestTheCommittedCorpusIsClean -v
+
 lint:                         ## vet + golangci-lint
 	go vet ./...
 	golangci-lint run
