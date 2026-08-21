@@ -346,7 +346,7 @@ func TestJobCapabilitySpellingMatches(t *testing.T) {
 // fiction.
 func TestOffersAreOnlyMeaningfulForAFake(t *testing.T) {
 	_, err := Validate([]Entry{{
-		Name: "real", Type: "prowlarr", Endpoint: "http://indexer.invalid:9696",
+		Name: "real", Type: string(KindTorznab), Endpoint: "http://indexer.invalid:9696",
 		APIKey: Secret("k"),
 		Offers: []Offer{{Title: "Arrival", Candidates: []OfferedCandidate{
 			{ID: "x", Attributes: map[string]any{"resolution": 2160}},
@@ -359,6 +359,10 @@ func TestOffersAreOnlyMeaningfulForAFake(t *testing.T) {
 	if !strings.Contains(err.Error(), "only meaningful for a fake") {
 		t.Errorf("the refusal should say why; got: %v", err)
 	}
+	// The kind is the CONSTANT rather than a literal. When `prowlarr` became
+	// `torznab` (ADR-0028) this test carried on passing locally and failed on
+	// CI, because a literal made it assert ParseKind's refusal instead of the
+	// one it exists for. A constant makes the next rename a compile error.
 }
 
 func TestOfferedCandidatesAreValidated(t *testing.T) {

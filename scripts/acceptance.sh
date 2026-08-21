@@ -1663,16 +1663,44 @@ YAML
 
   waited=0
   while (( waited < 300 )); do
-    # The want returns to MISSING, which is where it started — so the arrival
-    # condition is the SEARCH JOB finishing, not the state changing.
+    # The phase returns to where it started, so the arrival condition is the
+    # SEARCH JOB finishing rather than the state changing.
     if [[ "$(api "/api/v1/jobs?type=search_release&state=succeeded" | jq -r '.items | length')" -ge 2 ]]; then
       break
     fi
     sleep 0.1; waited=$(( waited + 1 ))
   done
-  search_empty_state=$(api "/api/v1/desired/$search_empty" | jq -r '.acquisition.state')
-  assert_eq "$search_empty_state" "MISSING" \
+  # ASSERT THE PHASE, NOT THE DERIVED NAME — and the reason is ADR-0027's whole
+  # argument, which this assertion originally got wrong and flaked on ~50% of
+  # runs because of it.
+  #
+  # "Returns to rest" is a claim about the PIPELINE: nothing is in flight any
+  # more. The §64 name is a presentation of four facts, and one of them is
+  # `managed` — whether Heyarr holds bytes. This want is over a work that HAS
+  # assets, so once the reconciliation beat has run the very same resting state
+  # presents as AVAILABLE rather than MISSING. Both are correct; which one you
+  # see depends on whether a timer fired.
+  #
+  # Asserting the name here conflated "nothing in flight" with "do we hold
+  # bytes", which is exactly the collapse ADR-0027 exists to prevent. The
+  # acceptance suite reproduced the confusion the ADR was written about, and
+  # the flake is what exposed it.
+  search_empty_state=$(api "/api/v1/desired/$search_empty" | jq -r '.acquisition.phase')
+  assert_eq "$search_empty_state" "idle" \
     "a search that finds nothing returns the want to rest"
+  # And it is a modelled edge rather than a failure: the job SUCCEEDED. If it
+  # had failed, the queue would back off and an unavailable release would
+  # become an indexer hammering loop.
+  #
+  # ASSERT WHAT THE SEARCH CONTROLS. My first attempt at this second assertion
+  # checked that `content` was still "unknown" — and flaked for the same reason
+  # the original did, one layer down: content is RECONCILIATION's answer, and
+  # it legitimately becomes not_satisfied the moment the beat runs. Twice in
+  # one assertion block is enough to state the rule: in this section, assert
+  # the phase and the job, never a satisfaction axis, because a timer owns
+  # those and a timer is not part of the claim.
+  assert_eq "$(api "/api/v1/jobs?type=search_release&state=failed" | jq -r '.items | length')" "0" \
+    "and a fruitless search is a modelled edge rather than a failed job"
   assert_eq "$(api "/api/v1/jobs?type=search_release&state=failed" | jq -r '.items | length')" "0" \
     "and does not fail the job, which would back off into an indexer hammering loop"
   assert_eq "$(api "/api/v1/desired/$search_empty/candidates" | jq -r '.candidates | length')" "0" \
