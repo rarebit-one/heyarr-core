@@ -293,3 +293,77 @@ func TestTheCommittedTransmissionCorpusIsUsable(t *testing.T) {
 		}
 	}
 }
+
+// The finding that only a real capture could produce: a tracker failure is
+// INVISIBLE at the top level.
+//
+// A transfer whose only tracker does not resolve reports error = 0 and
+// errorString = "" — the obvious field, and the one its name promises — while
+// trackerStats[].lastAnnounceResult says "Could not connect to tracker". So a
+// client watching errorString sees a transfer sitting at 0% and looking
+// perfectly healthy, forever.
+//
+// This is pinned as a test rather than left as a comment because it is a claim
+// about what the corpus CONTAINS, and a future recapture that lost the stalled
+// transfer would quietly remove the only evidence for it.
+func TestTheCorpusProvesATrackerFailureIsInvisibleAtTheTopLevel(t *testing.T) {
+	corpus, err := Load(corpusDir(), "transmission")
+	if errors.Is(err, ErrNoCorpus) {
+		t.Skip("no Transmission corpus committed yet")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, ok := corpus.Find("torrent-get")
+	if !ok {
+		t.Fatal("no torrent-get")
+	}
+
+	var decoded struct {
+		Arguments struct {
+			Torrents []struct {
+				Name         string  `json:"name"`
+				Status       int     `json:"status"`
+				PercentDone  float64 `json:"percentDone"`
+				Error        int     `json:"error"`
+				ErrorString  string  `json:"errorString"`
+				TrackerStats []struct {
+					LastAnnounceResult string `json:"lastAnnounceResult"`
+				} `json:"trackerStats"`
+			} `json:"torrents"`
+		} `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(e.Response.Body), &decoded); err != nil {
+		t.Fatalf("torrent-get body is not JSON: %v", err)
+	}
+	torrents := decoded.Arguments.Torrents
+	if len(torrents) < 2 {
+		t.Fatalf("the corpus holds %d transfer(s); it needs a completed one AND a "+
+			"stalled one for the two paths a poller has to tell apart", len(torrents))
+	}
+
+	var sawCompleted, sawSilentlyStalled bool
+	for _, tr := range torrents {
+		if tr.PercentDone == 1 {
+			sawCompleted = true
+		}
+		var trackerFailed bool
+		for _, ts := range tr.TrackerStats {
+			if ts.LastAnnounceResult != "" && ts.LastAnnounceResult != "Success" {
+				trackerFailed = true
+			}
+		}
+		// The whole point: the tracker failed and the top level says nothing.
+		if trackerFailed && tr.Error == 0 && tr.ErrorString == "" {
+			sawSilentlyStalled = true
+		}
+	}
+	if !sawCompleted {
+		t.Error("no completed transfer — the ingest path has nothing to trigger on")
+	}
+	if !sawSilentlyStalled {
+		t.Error("no transfer whose tracker failed while error/errorString stayed empty — " +
+			"that case is the reason trackerStats is captured at all, and without it " +
+			"a client watching errorString would pass every test and miss every stall")
+	}
+}
