@@ -2279,8 +2279,97 @@ components:
             Free text, never interpreted. It exists because a library
             accumulates wants and six months later nobody remembers why one is
             there.
+        acquisition:
+          $ref: "#/components/schemas/AcquisitionState"
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    AcquisitionState:
+      type: object
+      description: |
+        Where a want has got to (§64).
+
+        §64 draws twelve boxes in a single column — `MISSING`, `SEARCHING`,
+        `CANDIDATES_FOUND`, `SELECTED`, `QUEUED`, `DOWNLOADING`, `VERIFYING`,
+        `INGESTING`, `AVAILABLE`, `CONTENT_SATISFIED`, `PLACEMENT_CONVERGING`,
+        `FULLY_SATISFIED` — but they are **not twelve steps along one road**.
+        They are a presentation of four independent facts, and this object
+        carries all four alongside the name.
+
+        Showing only `state` would reintroduce at the edge exactly the collapse
+        the storage model exists to prevent: a client that can see
+        `CONTENT_SATISFIED` but not which of §56's two questions was answered
+        cannot tell "we have it" from "we have it everywhere".
+      required: [state, phase, managed, content, placement]
+      properties:
+        state:
+          type: string
+          enum:
+            [
+              MISSING,
+              SEARCHING,
+              CANDIDATES_FOUND,
+              SELECTED,
+              QUEUED,
+              DOWNLOADING,
+              VERIFYING,
+              INGESTING,
+              AVAILABLE,
+              CONTENT_SATISFIED,
+              PLACEMENT_CONVERGING,
+              FULLY_SATISFIED,
+            ]
+          description: §64's name, **derived** from the fields below and never stored.
+        phase:
+          type: string
+          enum:
+            [idle, searching, candidates_found, selected, queued, downloading, verifying, ingesting]
+          description: |
+            Where the acquisition pipeline is.
+
+            There is deliberately **no `missing` or `available` phase**. Both of
+            §64's names mean "nothing in flight" and differ only in whether
+            Heyarr holds bytes — so with them as phases, a fruitless upgrade
+            search returns to `MISSING` and reports a perfectly good library as
+            empty.
+        managed:
+          type: boolean
+          description: |
+            Whether Heyarr holds bytes for this want. Independent of `phase`,
+            because a want can be acquiring an **upgrade** while already
+            holding a good copy.
+        content:
+          type: string
+          enum: [unknown, not_satisfied, satisfied]
+          description: |
+            "Do we hold bytes the quality profile accepts?" (§56)
+
+            `unknown` is distinct from `not_satisfied`: "nobody has looked" and
+            "we looked and the answer is no" lead to different actions, and
+            collapsing them makes a fresh want indistinguishable from one just
+            found wanting.
+
+            There is no `converging` here — no partial file half-satisfies a
+            profile.
+        placement:
+          type: string
+          enum: [unknown, not_satisfied, converging, satisfied, not_applicable]
+          description: |
+            "Are those bytes on every Full Peer that should hold them?" (§56)
+
+            `not_applicable` is for ADR-0020's `linked` assets, which have no
+            blob and therefore nothing to replicate. Calling that `satisfied`
+            would be vacuously true and a lie by construction: `FULLY_SATISFIED`
+            would then mean "one copy, on one disk, with no integrity
+            guarantee".
+
+            **UNPROVEN.** Nothing has ever run against a second peer
+            (ADR-0010), so with a target set of one this axis is satisfied the
+            moment content is, and `converging` is unreachable outside a test
+            with a synthetic peer set. Milestone 4 proves it.
+        detail:
+          type: string
+          description: Why the last pipeline move happened, when it was a failure.
 
     CreateDesired:
       type: object

@@ -14,6 +14,7 @@ import (
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/desired"
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/events"
@@ -49,8 +50,42 @@ type DesiredItem struct {
 	Monitor          bool   `json:"monitor"`
 	Reason           string `json:"reason,omitempty"`
 
+	// Acquisition is where this want has got to (§64).
+	//
+	// It carries the derived §64 NAME and both of §56's axes. Showing only the
+	// name would reintroduce at the edge exactly the collapse the storage
+	// model exists to prevent: a client that can see CONTENT_SATISFIED but not
+	// which of the two questions was answered cannot tell "we have it" from
+	// "we have it everywhere".
+	Acquisition *AcquisitionView `json:"acquisition,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// AcquisitionView is §64's state, presented as the four facts it is made of
+// plus the name the spec gives their combination.
+type AcquisitionView struct {
+	// State is §64's name — derived, never stored (ADR-0027).
+	State string `json:"state"`
+	// Phase is the pipeline position. There is no "missing" or "available"
+	// phase: both mean "nothing in flight" and differ only in `managed`.
+	Phase string `json:"phase"`
+	// Managed is whether Heyarr holds bytes for this want.
+	Managed bool `json:"managed"`
+	// Content answers "do we hold bytes the profile accepts?" (§56)
+	Content string `json:"content"`
+	// Placement answers "are those bytes on every peer that should hold them?"
+	//
+	// ## UNPROVEN
+	//
+	// Nothing has ever run against a second peer (ADR-0010), so with a target
+	// set of one this axis is satisfied the moment content is, and
+	// `converging` is unreachable outside a test with a synthetic peer set.
+	// Milestone 4 proves it.
+	Placement string `json:"placement"`
+	// Detail is why the last pipeline move happened, when it was a failure.
+	Detail string `json:"detail,omitempty"`
 }
 
 // createDesiredRequest is the POST body.
@@ -93,18 +128,32 @@ type updateDesiredRequest struct {
 	Reason           *string `json:"reason"`
 }
 
-const desiredColumns = `id, scope, work_id, edition_id, quality_profile_id, monitor,
-	reason, created_at, updated_at`
+// desiredColumns selects a want and its acquisition state in one go.
+//
+// A LEFT JOIN rather than a per-item lookup: a page of fifty wants would
+// otherwise be fifty-one queries, and that N+1 would arrive silently the first
+// time somebody paged a real library. LEFT rather than INNER because a want
+// whose acquisition row is missing must still be readable — the API says
+// nothing about its state rather than hiding the want.
+const desiredColumns = `d.id, d.scope, d.work_id, d.edition_id, d.quality_profile_id,
+	d.monitor, d.reason, d.created_at, d.updated_at, ` + acquisitionSelect
+
+const desiredFrom = ` FROM desired_items d
+	LEFT JOIN acquisition_state a ON a.desired_item_id = d.id`
 
 func scanDesiredItem(row interface{ Scan(...any) error }) (DesiredItem, error) {
 	var d DesiredItem
 	var edition sql.NullString
 	var monitor int
 	var created, updated string
+	var phase, content, placement, detail sql.NullString
+	var managed sql.NullInt64
 	if err := row.Scan(&d.ID, &d.Scope, &d.WorkID, &edition, &d.QualityProfileID,
-		&monitor, &d.Reason, &created, &updated); err != nil {
+		&monitor, &d.Reason, &created, &updated,
+		&phase, &managed, &content, &placement, &detail); err != nil {
 		return DesiredItem{}, err
 	}
+	d.Acquisition = scanAcquisitionView(phase, managed, content, placement, detail)
 	if edition.Valid {
 		d.EditionID = edition.String
 	}
@@ -145,33 +194,33 @@ func (a *API) listDesired(w http.ResponseWriter, r *http.Request) {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	} else if v != "" {
-		where = append(where, "scope = ?")
+		where = append(where, "d.scope = ?")
 		args = append(args, v)
 	}
 	if v, err := oneOf(r, "monitor", "true", "false"); err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	} else if v != "" {
-		where = append(where, "monitor = ?")
+		where = append(where, "d.monitor = ?")
 		args = append(args, map[string]int{"true": 1, "false": 0}[v])
 	}
 	if workID := r.URL.Query().Get("work_id"); workID != "" {
-		where = append(where, "work_id = ?")
+		where = append(where, "d.work_id = ?")
 		args = append(args, workID)
 	}
 	if profile := r.URL.Query().Get("quality_profile_id"); profile != "" {
-		where = append(where, "quality_profile_id = ?")
+		where = append(where, "d.quality_profile_id = ?")
 		args = append(args, profile)
 	}
 	if q.cursor != nil {
-		where = append(where, "(created_at, id) > (?, ?)")
+		where = append(where, "(d.created_at, d.id) > (?, ?)")
 		args = append(args, q.cursor[0], q.cursor[1])
 	}
 	args = append(args, q.limit+1)
 
 	//nolint:gosec // assembled only from the literal fragments above; every value is bound
-	stmt := `SELECT ` + desiredColumns + ` FROM desired_items WHERE ` +
-		strings.Join(where, " AND ") + ` ORDER BY created_at ASC, id ASC LIMIT ?`
+	stmt := `SELECT ` + desiredColumns + desiredFrom + ` WHERE ` +
+		strings.Join(where, " AND ") + ` ORDER BY d.created_at ASC, d.id ASC LIMIT ?`
 
 	rows, err := a.reader.QueryContext(r.Context(), stmt, args...)
 	if err != nil {
@@ -210,7 +259,39 @@ func (a *API) getDesired(w http.ResponseWriter, r *http.Request) {
 
 func desiredByID(ctx context.Context, q rowQuerier, id string) (DesiredItem, error) {
 	return scanDesiredItem(q.QueryRowContext(ctx,
-		`SELECT `+desiredColumns+` FROM desired_items WHERE id = ?`, id))
+		`SELECT `+desiredColumns+desiredFrom+` WHERE d.id = ?`, id))
+}
+
+// acquisitionColumns is the acquisition half of a want's row, joined in rather
+// than fetched per item: a list of fifty wants would otherwise be fifty-one
+// queries, and the N+1 would arrive silently the first time somebody paged a
+// real library.
+const acquisitionSelect = `a.phase, a.managed, a.content, a.placement, a.detail`
+
+func scanAcquisitionView(
+	phase sql.NullString, managed sql.NullInt64,
+	content, placement, detail sql.NullString,
+) *AcquisitionView {
+	if !phase.Valid {
+		// No acquisition row. Possible only for a want created before this
+		// migration, or one whose row was removed by hand; the API says
+		// nothing rather than inventing a state.
+		return nil
+	}
+	state := acquisition.State{
+		Phase:     acquisition.Phase(phase.String),
+		Managed:   managed.Int64 == 1,
+		Content:   acquisition.Satisfaction(content.String),
+		Placement: acquisition.Satisfaction(placement.String),
+	}
+	return &AcquisitionView{
+		State:     state.Name(),
+		Phase:     phase.String,
+		Managed:   state.Managed,
+		Content:   content.String,
+		Placement: placement.String,
+		Detail:    detail.String,
+	}
 }
 
 // createDesired is POST /api/v1/desired.
@@ -244,6 +325,7 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 
 	var (
 		ev      events.Event
+		pending []events.Event
 		out     DesiredItem
 		created bool
 	)
@@ -283,6 +365,46 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 		if err := insertDesired(r.Context(), tx, out); err != nil {
 			return err
 		}
+		// A want and its acquisition state are created together, in one
+		// transaction. A want with no acquisition row is a want the
+		// reconciliation sweep cannot advance and nothing would notice — it
+		// would simply sit there, wanted and never searched for, which is the
+		// quietest possible failure this feature has.
+		initial := acquisition.Initial()
+		if err := insertAcquisition(r.Context(), tx, out.ID, initial, now); err != nil {
+			return err
+		}
+		// And it emits, in the same transaction (invariant 7).
+		//
+		// Two events on one create looks redundant next to desired.created —
+		// a fresh want can only start MISSING, so the state is implied. It is
+		// not redundant for the subscriber this event exists for: something
+		// following only acquisition.* to build a pipeline view would never
+		// see the acquisition appear, and its table would be missing rows
+		// forever with nothing to indicate why.
+		//
+		// This was found by an acceptance assertion, not by review: the API
+		// wrote the row directly while the catalog's own StartAcquisition
+		// emitted, and the two paths had silently diverged.
+		acqEvent, err := a.events.EmitTx(r.Context(), tx, events.TypeAcquisitionPhaseChanged,
+			"desired_item", out.ID, map[string]any{
+				"desired_item_id": out.ID,
+				"transition":      "created",
+				"from":            "",
+				"to":              string(initial.Phase),
+				"state":           initial.Name(),
+			})
+		if err != nil {
+			return err
+		}
+		pending = append(pending, acqEvent)
+		out.Acquisition = &AcquisitionView{
+			State:     initial.Name(),
+			Phase:     string(initial.Phase),
+			Managed:   initial.Managed,
+			Content:   string(initial.Content),
+			Placement: string(initial.Placement),
+		}
 		created = true
 
 		kind, target := item.Target()
@@ -304,6 +426,9 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 	}
 	if created {
 		a.events.Publish(ev)
+		for _, e := range pending {
+			a.events.Publish(e)
+		}
 	}
 
 	w.Header().Set("Location", httpapi.APIPrefix+"/desired/"+out.ID)
@@ -566,6 +691,25 @@ func insertDesired(ctx context.Context, tx *sql.Tx, d DesiredItem) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.ID, d.Scope, d.WorkID, edition, d.QualityProfileID, monitor, d.Reason,
 		d.CreatedAt.Format(time.RFC3339Nano), d.UpdatedAt.Format(time.RFC3339Nano))
+	return err
+}
+
+func insertAcquisition(
+	ctx context.Context, tx *sql.Tx, desiredItemID string,
+	s acquisition.State, now time.Time,
+) error {
+	stamp := now.Format(time.RFC3339Nano)
+	managed := 0
+	if s.Managed {
+		managed = 1
+	}
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO acquisition_state
+			(desired_item_id, phase, managed, content, placement, detail,
+			 phase_entered_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, '', ?, ?, ?)`,
+		desiredItemID, string(s.Phase), managed, string(s.Content), string(s.Placement),
+		stamp, stamp, stamp)
 	return err
 }
 

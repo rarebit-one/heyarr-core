@@ -191,12 +191,32 @@ type DesiredItem struct {
 	Scope  string `json:"scope"`
 	WorkID string `json:"work_id"`
 	// EditionID is absent at work scope rather than null.
-	EditionID        string    `json:"edition_id,omitempty"`
-	QualityProfileID string    `json:"quality_profile_id"`
-	Monitor          bool      `json:"monitor"`
-	Reason           string    `json:"reason,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	EditionID        string `json:"edition_id,omitempty"`
+	QualityProfileID string `json:"quality_profile_id"`
+	Monitor          bool   `json:"monitor"`
+	Reason           string `json:"reason,omitempty"`
+	// Acquisition is where this want has got to (§64). Absent when the want
+	// has no acquisition state — possible only for a row created before the
+	// state machine existed.
+	Acquisition *AcquisitionState `json:"acquisition,omitempty"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+}
+
+// AcquisitionState is §64's state: the derived name, plus the four independent
+// facts it is a presentation of.
+//
+// Both of §56's axes are here alongside State on purpose. A client that reads
+// only State cannot tell "we have it" from "we have it everywhere", which is
+// the distinction the whole model exists to keep.
+type AcquisitionState struct {
+	State   string `json:"state"`
+	Phase   string `json:"phase"`
+	Managed bool   `json:"managed"`
+	Content string `json:"content"`
+	// Placement is UNPROVEN against a real second peer — see ADR-0010.
+	Placement string `json:"placement"`
+	Detail    string `json:"detail,omitempty"`
 }
 
 // WorkDescriptor names content semantically, for wanting something that does

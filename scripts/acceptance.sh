@@ -1494,6 +1494,80 @@ YAML
   assert_eq "$(api "/api/v1/desired/$want_id" | jq -r '.status')" "404" \
     "a want that is removed is gone rather than hidden"
 
+  note "  the acquisition state machine (§64, M3-03)"
+  # Sits with the desired-state section above it and below every catalog count,
+  # for the same reason: wanting unknown content creates a Work.
+  #
+  # What this proves that the unit tests cannot: that §64's names survive the
+  # round trip through a real database, a real socket and a real client — and
+  # that BOTH of §56's axes reach the wire, which is what stops
+  # CONTENT_SATISFIED and FULLY_SATISFIED collapsing at the edge.
+  local acq_id acq_json acq_keys
+  acq_json=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d '{"work":{"content_type":"movie","title":"Stalker","year":1979},
+         "quality_profile":"living-room"}')
+  acq_id=$(jq -r '.id' <<<"$acq_json")
+
+  # A want and its acquisition state are created together, in one transaction.
+  # A want with no acquisition row is one the reconciliation sweep cannot
+  # advance, and nothing would ever notice: it would sit there, wanted and
+  # never searched for.
+  assert_eq "$(jq -r '.acquisition.state' <<<"$acq_json")" "MISSING" \
+    "a fresh want starts MISSING"
+  assert_eq "$(jq -r '.acquisition.phase' <<<"$acq_json")" "idle" \
+    "there is no 'missing' phase — MISSING is idle while holding nothing"
+  assert_eq "$(jq -r '.acquisition.managed' <<<"$acq_json")" "false" \
+    "a fresh want holds no bytes"
+  # Unknown, not not_satisfied: nobody has looked yet, and the two lead to
+  # different actions.
+  assert_eq "$(jq -r '.acquisition.content' <<<"$acq_json")" "unknown" \
+    "a fresh want has been evaluated by nothing"
+
+  # ADR-0027 over HTTP: the derived name AND both axes. A client that reads the
+  # name but not the axes cannot tell "we have it" from "we have it everywhere".
+  acq_keys=$(api "/api/v1/desired/$acq_id" | jq -r '.acquisition | keys | sort | join(",")')
+  assert_contains "$acq_keys" "content" "§56's content axis is on the wire"
+  assert_contains "$acq_keys" "placement" "§56's placement axis is on the wire"
+  assert_contains "$acq_keys" "managed" "whether bytes are held is on the wire, separately from the phase"
+  assert_contains "$acq_keys" "state" "and the derived §64 name alongside them"
+
+  # Every acquisition transition emits (invariant 7). Creating the state is the
+  # first one, and it must be in the log rather than only in the row.
+  local acq_events
+  acq_events=$(api "/api/v1/events?after=0" --max-time 5 --no-buffer 2>/dev/null || true)
+  if grep -q 'acquisition.phase_changed' <<<"$acq_events"; then
+    pass "the acquisition state machine emits to the event log"
+  else
+    fail "no acquisition.phase_changed in a replay from seq 0"
+  fi
+
+  # The state survives the round trip, and the listing carries it too — a page
+  # of wants must not need a query each to say where they got to.
+  assert_eq "$(api "/api/v1/desired/$acq_id" | jq -r '.acquisition.state')" "MISSING" \
+    "the acquisition state survives the round trip through the database"
+  assert_eq "$(api /api/v1/desired | jq -r '[.items[] | select(.acquisition == null)] | length')" "0" \
+    "every want in a listing carries its acquisition state"
+
+  # The CLI shows where a want got to, because "where has this got to" is the
+  # question someone runs the command to answer.
+  assert_contains "$("$BIN" --config "$WORK/full.yaml" --token "$TOKEN" desired list --json \
+    | jq -r '[.[] | select(.id == "'"$acq_id"'") | .acquisition.state] | join(",")')" \
+    "MISSING" "the CLI reports the acquisition state"
+
+  # Deleting the want takes its acquisition state with it.
+  api "/api/v1/desired/$acq_id" -X DELETE -o /dev/null
+  assert_eq "$(api "/api/v1/desired/$acq_id" | jq -r '.status')" "404" \
+    "removing a want removes its acquisition state too"
+
+  # NOT asserted here, deliberately: the walk from AVAILABLE through
+  # CONTENT_SATISFIED and PLACEMENT_CONVERGING to FULLY_SATISFIED. Nothing can
+  # drive those axes over the API yet — reconciliation is M3-05 and the search
+  # job is M3-12 — and the only way to assert it today would be a debug
+  # endpoint that writes state directly, which is a backdoor that would outlive
+  # its purpose. The derivation is exhaustively table-tested in
+  # internal/domain/acquisition; this section asserts the half that a running
+  # system can actually reach.
+
   note "  a mixed fleet (§75, ADR-0023)"
   # The one claim in ADR-0023 with no evidence behind it until now.
   #

@@ -69,6 +69,23 @@ const (
 	// emitted by NOTHING until now. It stays reserved here rather than being
 	// emitted by this issue, because being wanted and being satisfied are
 	// different transitions and M3-05 owns the second one.
+	// acquisition.* is §76's own category, and every edge of §64's machine
+	// emits one (invariant 7, M3-03).
+	//
+	// There is ONE event type for a phase change rather than one per edge. The
+	// payload carries the transition, the phase before and the phase after, so
+	// a subscriber can filter on any of them — and thirteen event types would
+	// be thirteen places to forget to emit, which is exactly what invariant 7
+	// exists to prevent.
+	//
+	// The satisfaction axes get their own type because they move on a
+	// different schedule and for a different reason: reconciliation, not the
+	// pipeline. A quality profile edit can unsatisfy a want that nothing else
+	// touched (§57), and a subscriber watching "what changed about what I
+	// have" should not have to filter that out of the pipeline stream.
+	TypeAcquisitionPhaseChanged = "acquisition.phase_changed"
+	TypeAcquisitionSatisfaction = "acquisition.satisfaction_changed"
+
 	TypeDesiredCreated   = "desired.created"
 	TypeDesiredUpdated   = "desired.updated"
 	TypeDesiredRemoved   = "desired.removed"
