@@ -30,6 +30,27 @@ func TestTheScannerCatchesEachShapeOfLeak(t *testing.T) {
 			rule:    "arr-api-key",
 		},
 		{
+			// Not hex, and it is a real key shape rather than an invented
+			// one: this is what a live Jackett instance issues. The rule was
+			// written as [0-9a-f]{32} against the *arr stack, and a measured
+			// scan of a fixture containing this value returned ZERO findings.
+			//
+			// One protocol, two servers, two key charsets — ADR-0028's
+			// argument, reaching the guard rather than the client.
+			name:    "an API key that is not hex, which is what Jackett issues",
+			content: `{"path":"?t=search&apikey=w2dgeuyey1vf7dg9d1kjkicwrfnmzyht"}`,
+			rule:    "arr-api-key",
+		},
+		{
+			// The parameter name a Torznab coverurl actually carries. A word
+			// boundary before `apikey` does not match `jackett_apikey`,
+			// because `_` is a word character — so the old rule looked past
+			// the single most common place a key appears in this corpus.
+			name:    "an API key under a vendor-prefixed parameter name",
+			content: `{"body":"value=\"https://x/img/?jackett_apikey=w2dgeuyey1vf7dg9d1kjkicwrfnmzyht\""}`,
+			rule:    "arr-api-key",
+		},
+		{
 			name:    "a Transmission session id",
 			content: `{"X-Transmission-Session-Id":"AbCd1234EfGh5678IjKl9012MnOp"}`,
 			rule:    "transmission-session-id",

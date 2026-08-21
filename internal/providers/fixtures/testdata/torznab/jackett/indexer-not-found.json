@@ -1,0 +1,22 @@
+{
+  "name": "indexer-not-found",
+  "provenance": {
+    "origin": "captured",
+    "service": "torznab",
+    "server": "Jackett",
+    "version": "unreported",
+    "captured_at": "2026-08-21T14:37:26Z",
+    "procedure": "scripts/capture-fixtures.sh torznab <endpoint> <credentials>"
+  },
+  "request": {
+    "method": "GET",
+    "path": "<an indexer id that does not exist>"
+  },
+  "response": {
+    "status": 500,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\n  \"result\": \"error\",\n  \"error\": \"Unknown indexer: nosuchindexer\",\n  \"stacktrace\": \"   at Jackett.Common.Services.IndexerManagerService.GetWebIndexer(String name) in ./Jackett.Common/Services/IndexerManagerService.cs:line 328\\n   at Jackett.Common.Services.IndexerManagerService.GetIndexer(String name) in ./Jackett.Common/Services/IndexerManagerService.cs:line 301\\n   at Jackett.Server.Controllers.RequiresConfiguredIndexer.OnActionExecuting(ActionExecutingContext context) in ./Jackett.Server/Controllers/ResultsController.cs:line 85\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.InvokeNextActionFilterAsync()\\n--- End of stack trace from previous location ---\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Rethrow(ActionExecutedContextSealed context)\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.InvokeInnerFilterAsync()\\n--- End of stack trace from previous location ---\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeFilterPipelineAsync>g__Awaited|20_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)\\n   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)\\n   at Microsoft.AspNetCore.Authentication.AuthenticationMiddleware.Invoke(HttpContext context)\\n   at Jackett.Server.Middleware.CustomExceptionHandler.Invoke(HttpContext httpContext) in ./Jackett.Server/Middleware/CustomExceptionHandler.cs:line 26\"\n}"
+  }
+}

@@ -43,8 +43,25 @@ const (
 // changed.
 type Provenance struct {
 	Origin Origin `json:"origin"`
-	// Service is "torznab", "transmission" — the thing that answered.
+	// Service is the PROTOCOL that answered — "torznab", "transmission" —
+	// not the product that spoke it.
+	//
+	// The distinction is ADR-0028's, and keeping it here is what lets one
+	// corpus hold captures from two servers speaking the same protocol
+	// without either of them claiming to be the protocol.
 	Service string `json:"service"`
+	// Server is the PRODUCT that answered — "Jackett", "Prowlarr" — and it is
+	// required for a captured fixture.
+	//
+	// Required because the corpus's central claim is that this client is
+	// bound to a protocol rather than shaped to one implementation, and that
+	// claim is unreadable if a fixture cannot say which implementation
+	// produced it. It stopped being pedantry the moment the two servers were
+	// measured disagreeing about how to signal a bad key: Jackett answers
+	// HTTP 200 with an <error> document, Prowlarr answers 401 with an empty
+	// body. A reader looking at one fixture needs to know which of those they
+	// are holding.
+	Server string `json:"server,omitempty"`
 	// Version is what that service reported about itself. Not optional: "it
 	// worked against some Prowlarr once" is not a fact anyone can act on.
 	Version string `json:"version"`
@@ -69,12 +86,19 @@ func (p Provenance) Validate() error {
 	default:
 		return fmt.Errorf("%q is not an origin", p.Origin)
 	}
-	for _, f := range []struct{ name, value string }{
+	required := []struct{ name, value string }{
 		{"service", p.Service},
 		{"version", p.Version},
 		{"captured_at", p.CapturedAt},
 		{"procedure", p.Procedure},
-	} {
+	}
+	if p.Origin == OriginCaptured {
+		// Only for a capture: a synthesised fixture has no server, and
+		// demanding one would invite a plausible-looking lie in the field
+		// that exists to prevent exactly that.
+		required = append(required, struct{ name, value string }{"server", p.Server})
+	}
+	for _, f := range required {
 		if strings.TrimSpace(f.value) == "" {
 			return fmt.Errorf("provenance has no %s — a capture nobody can regenerate "+
 				"is one nobody can trust the day it starts failing", f.name)
@@ -163,8 +187,16 @@ var ErrNoCorpus = errors.New("fixtures: no corpus for that service")
 // corpus that silently drops the files it cannot understand is one that shrinks
 // without anybody noticing, and a shrinking corpus still reports every test as
 // passing.
+// Load reads one service's corpus.
+//
+// service may name a protocol ("transmission") or a protocol and the server
+// that spoke it ("torznab/jackett"). The nested form exists because two
+// servers speaking one protocol produce two corpora whose exchange names
+// collide — both have a "caps" and an "unauthorised" — and flattening them
+// into one directory would mean one server silently overwriting the other's
+// capture at the next re-capture.
 func Load(dir, service string) (Corpus, error) {
-	root := filepath.Join(dir, service)
+	root := filepath.Join(dir, filepath.FromSlash(service))
 	entries, err := os.ReadDir(root)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -195,7 +227,12 @@ func Load(dir, service string) (Corpus, error) {
 		if err := e.Provenance.Validate(); err != nil {
 			return Corpus{}, fmt.Errorf("fixtures: %s: %w", path, err)
 		}
-		if e.Provenance.Service != service {
+		// Compared against the PROTOCOL segment, not the whole path: a
+		// fixture under torznab/jackett says its service is "torznab",
+		// because that is what answered. Saying "torznab/jackett" would make
+		// the provenance a restatement of the directory rather than a fact
+		// about the exchange.
+		if e.Provenance.Service != protocolOf(service) {
 			return Corpus{}, fmt.Errorf("fixtures: %s says it came from %q but lives under %q",
 				path, e.Provenance.Service, service)
 		}
@@ -268,4 +305,13 @@ func (e Exchange) ServeOne() *httptest.Server {
 		w.WriteHeader(e.Response.Status)
 		_, _ = w.Write([]byte(e.Response.Body))
 	}))
+}
+
+// protocolOf is the protocol segment of a service path: the whole string for
+// "transmission", and "torznab" for "torznab/jackett".
+func protocolOf(service string) string {
+	if i := strings.Index(service, "/"); i >= 0 {
+		return service[:i]
+	}
+	return service
 }

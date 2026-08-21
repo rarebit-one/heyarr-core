@@ -19,6 +19,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/downloads"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/indexers"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
@@ -297,7 +298,8 @@ func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Stor
 	if err := checkDownloadPaths(c.cfg, resolvedProviders, c.log); err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}
-	providerRegistry, err := providers.BuildWith(resolvedProviders, c.log, nil, downloads.Constructor)
+	providerRegistry, err := providers.BuildWith(resolvedProviders, c.log, nil,
+		providers.Chain(indexers.Constructor, downloads.Constructor))
 	if err != nil {
 		return nil, fmt.Errorf("controller: building the provider registry: %w", err)
 	}

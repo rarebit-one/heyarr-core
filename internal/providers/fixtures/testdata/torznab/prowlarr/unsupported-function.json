@@ -1,0 +1,22 @@
+{
+  "name": "unsupported-function",
+  "provenance": {
+    "origin": "captured",
+    "service": "torznab",
+    "server": "Prowlarr",
+    "version": "unreported",
+    "captured_at": "2026-08-21T14:37:35Z",
+    "procedure": "scripts/capture-fixtures.sh torznab <endpoint> <credentials>"
+  },
+  "request": {
+    "method": "GET",
+    "path": "?t=nosuchfunction&apikey=REDACTED"
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "Content-Type": "application/xml"
+    },
+    "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<error code=\"202\" description=\"No such function (nosuchfunction)\" />"
+  }
+}

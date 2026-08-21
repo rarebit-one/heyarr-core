@@ -31,6 +31,10 @@ set -euo pipefail
 
 CORPUS=${CORPUS:-internal/providers/fixtures/testdata}
 REDACTED=REDACTED
+# The placeholder a redacted endpoint becomes. A resolvable-looking but
+# reserved name (RFC 2606), so a fixture reads naturally and nothing in it can
+# ever be dialled by accident.
+REDACTED_HOST=indexer.invalid
 
 die() { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
 note() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -44,26 +48,101 @@ command -v jq   >/dev/null || die "jq is required"
 # Applied to the whole recorded exchange — path, headers and body alike —
 # because a key travels in all three and a redactor that only cleaned the body
 # would be the most dangerous kind of half-working.
+#
+# ---------------------------------------------------------------------------
+# THE API-KEY CHARSET IS NOT HEX, AND ASSUMING IT WAS LET A LIVE KEY THROUGH
+# ---------------------------------------------------------------------------
+#
+# The first version of this matched [0-9a-fA-F]{8,} — a 32-character lower-case
+# hex key, which is what the *arr stack issues. Jackett issues a 32-character
+# lower-case ALPHANUMERIC key, and `w2dgeuyey1vf7dg9d1kjkicwrfnmzyht` is not
+# hex. Measured against a real instance: the key survived redaction intact, and
+# the scanner's matching rule missed it for the same reason.
+#
+# That is ADR-0028's argument arriving in the safety layer rather than the
+# client. The redactor had been shaped, accidentally, to the one server it was
+# written against — which is the precise failure the ADR says binding to a
+# protocol rather than a product is supposed to prevent. Two servers speak
+# Torznab; only one of them has hex keys.
+#
+# So the charset is now permissive. A false redaction costs a fixture that
+# says REDACTED where it could have said something harmless; a false miss
+# costs a live credential in a permanent public record. Those are not
+# comparable, and the pattern is chosen accordingly.
+#
+# ---------------------------------------------------------------------------
+# THE ENDPOINT ITSELF IS SENSITIVE HERE, AND IT IS NOT A CREDENTIAL
+# ---------------------------------------------------------------------------
+#
+# This repository is public. A Torznab feed echoes the server it was served
+# from — in <atom:link href>, in every coverurl — so a capture carries a host
+# name, a port, and by implication a network topology into a permanent public
+# record. None of that is secret in the credential sense and all of it is
+# exactly what this repo must not contain.
+#
+# CAPTURE_HOST is set from the endpoint by each capture function, so the
+# substitution names one host rather than guessing at what a host looks like.
 redact() {
+  local host=${CAPTURE_HOST:-}
   sed -E \
-    -e "s/(api[_-]?key=)[0-9a-fA-F]{8,}/\1$REDACTED/gI" \
+    -e "s/(api[_-]?key=)[0-9a-zA-Z._-]{8,}/\1$REDACTED/gI" \
     -e "s/(\"X-Api-Key\"[[:space:]]*:[[:space:]]*\")[^\"]+/\1$REDACTED/gI" \
     -e "s/(\"X-Transmission-Session-Id\"[[:space:]]*:[[:space:]]*\")[^\"]+/\1$REDACTED/gI" \
     -e "s|([a-zA-Z][a-zA-Z0-9+.-]*://)[^/[:space:]\"']*:[^/[:space:]\"'@]+@|\1$REDACTED:$REDACTED@|g" \
     -e "s|(/announce[^\"' ]*[?\&](passkey\|pid\|torrent_pass\|authkey)=)[0-9a-zA-Z]+|\1$REDACTED|gI" \
     -e "s|(/announce/)[0-9a-zA-Z]{16,}|\1$REDACTED|gI" \
-    -e "s/(\"Authorization\"[[:space:]]*:[[:space:]]*\")[^\"]+/\1$REDACTED/gI"
+    -e "s/(\"Authorization\"[[:space:]]*:[[:space:]]*\")[^\"]+/\1$REDACTED/gI" \
+  | redact_host "$host"
+}
+
+# redact_host replaces the captured endpoint's host with a placeholder.
+#
+# Separate from the credential pass because it is a different KIND of rule: it
+# is driven by what the operator typed rather than by a shape, and it is a
+# no-op when nothing was passed. Folding it into the sed above would mean
+# building that pipeline conditionally, which is how one of seven expressions
+# ends up quietly dropped.
+redact_host() {
+  local host=$1
+  if [[ -z "$host" ]]; then
+    cat
+    return 0
+  fi
+  # The host is escaped before it reaches a regex: it is user input containing
+  # dots at minimum, and an unescaped dot matching any character is how a
+  # redactor removes more than it was asked to and nobody notices.
+  local escaped
+  escaped=$(printf '%s' "$host" | sed -E 's/[][\.^$*+?(){}|/\\]/\\&/g')
+  sed -E -e "s/$escaped/$REDACTED_HOST/gI"
 }
 
 # write_exchange records one request/response pair with its provenance.
 write_exchange() {
   local service=$1 name=$2 method=$3 path=$4 status=$5 body=$6 headers=$7 version=$8
+  # SERVER is the product that answered, and it decides the subdirectory.
+  #
+  # Two servers speaking one protocol produce two corpora whose exchange names
+  # collide — both have a caps and an unauthorised — so a flat directory would
+  # mean the second capture silently overwriting the first.
+  local server=${SERVER:-}
+  local slug
+  slug=$(printf '%s' "$server" | tr '[:upper:]' '[:lower:]')
   local dir="$CORPUS/$service"
+  # A server whose name IS the protocol gets no subdirectory.
+  #
+  # Transmission RPC is one protocol with one implementation, so
+  # transmission/transmission would be a directory saying nothing twice.
+  # Torznab is one protocol with several, and there the subdirectory is the
+  # only thing keeping two captures of "caps" from overwriting each other.
+  if [[ -n "$slug" && "$slug" != "$service" ]]; then
+    dir="$CORPUS/$service/$slug"
+  fi
   mkdir -p "$dir"
 
   jq -n \
     --arg name "$name" \
     --arg service "$service" \
+    --arg server "$server" \
     --arg version "$version" \
     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg proc "scripts/capture-fixtures.sh $service <endpoint> <credentials>" \
@@ -77,6 +156,7 @@ write_exchange() {
       provenance: {
         origin: "captured",
         service: $service,
+        server: $server,
         version: $version,
         captured_at: $at,
         procedure: $proc
@@ -85,7 +165,10 @@ write_exchange() {
       response: { status: $status, headers: $headers, body: $body }
     }' | redact > "$dir/$name.json"
 
-  ok "$service/$name.json"
+  # The path actually written, not a reconstruction of it — the two diverged
+  # the moment captures gained a per-server subdirectory, and a capture script
+  # that reports a path nothing is at is how the wrong file gets committed.
+  ok "${dir#"$CORPUS"/}/$name.json"
 }
 
 # Torznab, not Prowlarr's own API (ADR-0028).
@@ -107,7 +190,17 @@ capture_torznab() {
   local base=$1 key=$2
   [[ -n "$key" ]] || die "torznab needs an api key"
 
-  note "torznab — $base"
+  # The endpoint's host, so redact() can take it out of every recorded body.
+  #
+  # A Torznab feed ECHOES the server it came from — <atom:link href>, every
+  # coverurl — so this is not belt-and-braces. Without it a capture writes a
+  # host name and a port into a public repository.
+  CAPTURE_HOST=$(printf '%s' "$base" | sed -E 's|^[a-zA-Z][a-zA-Z0-9+.-]*://||; s|[/?].*$||')
+  export CAPTURE_HOST
+
+  # Deliberately NOT echoing $base — this runs in terminals that get pasted
+  # into issues. The host is what we are about to redact out of the corpus.
+  note "torznab — capturing from the configured endpoint"
 
   # t=caps FIRST, and it is not a formality.
   #
@@ -127,7 +220,19 @@ capture_torznab() {
   local version
   version=$(printf '%s' "$caps" | sed -n 's/.*<server[^>]*version="\([^"]*\)".*/\1/p' | head -1)
   [[ -n "$version" ]] || version="unreported"
-  note "  server version $version"
+
+  # WHICH server this is, taken from the caps document rather than asked for.
+  #
+  # <server title="Jackett"/> and <server title="Prowlarr"/> — the one field
+  # that says which implementation of the protocol answered. Reading it here
+  # rather than making the operator type it means the corpus cannot be filed
+  # under the wrong server by a typo, and ADR-0028's claim rests on that
+  # filing being right.
+  SERVER=${SERVER:-$(printf '%s' "$caps" \
+    | sed -n 's/.*<server[^>]*title="\([^"]*\)".*/\1/p' | head -1)}
+  [[ -n "$SERVER" ]] || SERVER=unknown
+  export SERVER
+  note "  $SERVER, version $version"
 
   write_exchange torznab caps GET "?t=caps" "$status" "$caps" \
     '{"Content-Type":"application/xml"}' "$version"
@@ -164,6 +269,35 @@ capture_torznab() {
   write_exchange torznab unauthorised GET "$badkey" "${status:-200}" "$body" \
     '{"Content-Type":"application/xml"}' "$version"
 
+  # An <error> DOCUMENT WITH A NON-200 STATUS.
+  #
+  # This is the trap's other half, and it is why the client must not gate
+  # parsing on the status code in EITHER direction. A bad key is an error
+  # document with HTTP 200; an unsupported function is an error document with
+  # HTTP 400. A client that parses the body only on 200 misses this one, and a
+  # client that trusts the status only misses the other.
+  local badfn="?t=nosuchfunction&apikey=$key"
+  body=$(curl -sS "$base$badfn" || true)
+  status=$(curl -sS -o /dev/null -w '%{http_code}' "$base$badfn" || true)
+  write_exchange torznab unsupported-function GET "$badfn" "${status:-400}" "$body" \
+    '{"Content-Type":"application/xml"}' "$version"
+
+  # A body that is NOT XML at all, from an endpoint that is supposed to serve
+  # it.
+  #
+  # Both servers answer a request for an indexer that does not exist with
+  # JSON — a 404 from one, a 500 with a stack trace from the other — on the
+  # same path shape that otherwise serves Torznab. This is the misconfiguration
+  # an operator actually produces: an indexer id that was right until the
+  # indexer was removed. The client has to name what failed to parse rather
+  # than reporting "no releases found".
+  if [[ -n "${MISSING_INDEXER_URL:-}" ]]; then
+    body=$(curl -sS "$MISSING_INDEXER_URL" || true)
+    status=$(curl -sS -o /dev/null -w '%{http_code}' "$MISSING_INDEXER_URL" || true)
+    write_exchange torznab indexer-not-found GET "<an indexer id that does not exist>" \
+      "${status:-404}" "$body" '{"Content-Type":"application/json"}' "$version"
+  fi
+
   cat <<'MSG'
 
   Still missing, and worth adding by hand if your endpoint will produce them:
@@ -185,7 +319,11 @@ MSG
 
 capture_transmission() {
   local base=$1 user=${2:-} pass=${3:-}
-  note "transmission — $base"
+  SERVER=${SERVER:-Transmission}
+  export SERVER
+  CAPTURE_HOST=$(printf '%s' "$base" | sed -E 's|^[a-zA-Z][a-zA-Z0-9+.-]*://||; s|[/?].*$||')
+  export CAPTURE_HOST
+  note "transmission — capturing from the configured endpoint"
 
   # An empty array under `set -u` is an ERROR in bash 3.2, which is what macOS
   # ships — and the no-auth case is not an edge case here: Transmission's RPC

@@ -43,6 +43,34 @@ const (
 // honest not-implemented report.
 type Constructor func(r Resolved, now func() time.Time) (p Provider, handled bool, err error)
 
+// Chain composes constructors, giving each first refusal in order.
+//
+// The composition the Constructor contract's handled flag was designed for,
+// written down once rather than as a closure at each call site. There are two
+// integrations now — an indexer and a download client, in packages that
+// cannot import each other — and both the controller and the worker must wire
+// exactly the same set. Two call sites building that set by hand is two
+// places for it to drift, and the symptom of drift is a provider that works
+// on one role and reports "not implemented" on the other.
+//
+// The first constructor to claim a kind wins, and an error from a claiming
+// constructor stops the chain: it has said the entry is its and invalid,
+// which is a different thing from not recognising it.
+func Chain(ctors ...Constructor) Constructor {
+	return func(r Resolved, now func() time.Time) (Provider, bool, error) {
+		for _, ctor := range ctors {
+			if ctor == nil {
+				continue
+			}
+			p, handled, err := ctor(r, now)
+			if handled || err != nil {
+				return p, handled, err
+			}
+		}
+		return nil, false, nil
+	}
+}
+
 // Build turns validated configuration into a registry.
 //
 // See BuildWith for the constructor hook; this is the no-integrations form,
@@ -145,9 +173,16 @@ func construct(r Resolved, now func() time.Time, ctor Constructor) (Provider, er
 		}
 		return f, nil
 	case KindTorznab, KindTransmission:
-		// No constructor claimed it. The Torznab client lands in M3-09;
-		// Transmission's exists but is only wired where something owns both
-		// packages. Either way this is a real registry entry with real
+		// No constructor claimed it. BOTH clients exist now — internal/indexers
+		// and internal/downloads — but neither can be constructed from here,
+		// because both import this package for the Provider contract and a
+		// registry that reached into every integration would be one every
+		// integration had to be linked into.
+		//
+		// So reaching this branch means the caller built a registry without
+		// Chain(indexers.Constructor, downloads.Constructor). That is
+		// legitimate — a test wanting only the registry's own behaviour does
+		// it deliberately — and it is a real registry entry with real
 		// capabilities that reports honestly rather than pretending.
 		return newUnimplemented(r, now), nil
 	default:

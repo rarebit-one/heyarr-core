@@ -16,9 +16,22 @@ func validProvenance() Provenance {
 	return Provenance{
 		Origin:     OriginCaptured,
 		Service:    "torznab",
+		Server:     "Jackett",
 		Version:    "1.21.2",
 		CapturedAt: time.Now().UTC().Format(time.RFC3339),
 		Procedure:  "scripts/capture-fixtures.sh torznab <endpoint> <key>",
+	}
+}
+
+// A synthesised fixture has no server, and demanding one would invite a
+// plausible-looking lie in the field that exists to prevent exactly that.
+func TestASynthesisedFixtureNeedsNoServer(t *testing.T) {
+	p := validProvenance()
+	p.Origin = OriginSynthesised
+	p.Server = ""
+	p.Note = "written by hand; the shape is from the specification"
+	if err := p.Validate(); err != nil {
+		t.Fatalf("a synthesised fixture was required to name a server: %v", err)
 	}
 }
 
@@ -34,6 +47,15 @@ func TestProvenanceRefusesWhatCannotBeActedOn(t *testing.T) {
 		{"no origin", func(p *Provenance) { p.Origin = "" }, "does not say whether"},
 		{"an unknown origin", func(p *Provenance) { p.Origin = "borrowed" }, "not an origin"},
 		{"no service", func(p *Provenance) { p.Service = "" }, "no service"},
+		{
+			// Required for a CAPTURE only. The corpus holds two servers
+			// speaking one protocol, and its central claim — that this client
+			// is bound to the protocol rather than shaped to one product — is
+			// unreadable if a fixture cannot say which product answered.
+			"a capture that does not say which server answered",
+			func(p *Provenance) { p.Server = "" },
+			"no server",
+		},
 		{"no version", func(p *Provenance) { p.Version = "" }, "no version"},
 		{"no capture time", func(p *Provenance) { p.CapturedAt = "" }, "no captured_at"},
 		{"no procedure", func(p *Provenance) { p.Procedure = "" }, "no procedure"},

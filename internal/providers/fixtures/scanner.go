@@ -69,11 +69,25 @@ type rule struct {
 // would flag every infohash in every fixture and be turned off within a day.
 var rules = []rule{
 	{
-		// Prowlarr and the *arr stack use a 32-character lower-case hex API
-		// key, passed as ?apikey= or an X-Api-Key header. The redacted form is
-		// the literal REDACTED, so anything hex-shaped here is a real one.
+		// An indexer API key, passed as ?apikey=, ?jackett_apikey= or an
+		// X-Api-Key header.
+		//
+		// THE CHARSET IS NOT HEX. This rule was written as [0-9a-f]{32} —
+		// the *arr stack's key shape — and a real Jackett key
+		// (`w2dgeuyey1vf7dg9d1kjkicwrfnmzyht`, 32 chars, lower-case
+		// ALPHANUMERIC) walked straight past it in a measured test, as it did
+		// past the capture script's redactor for the same reason.
+		//
+		// One protocol, two servers, two key shapes: the same lesson
+		// ADR-0028 draws about the client, arriving in the guard. A rule
+		// shaped to the one product we happened to test against is not a
+		// guard, it is a coincidence.
+		//
+		// The word boundary is gone too: the parameter Jackett actually
+		// emits is `jackett_apikey=`, where `\bapikey` does not match
+		// because `_` is a word character.
 		name: "arr-api-key",
-		re:   regexp.MustCompile(`(?i)\b(?:api[_-]?key|apikey)\b["'\s:=]+([0-9a-f]{32})`),
+		re:   regexp.MustCompile(`(?i)(?:api[_-]?key)["'\s:=]+([0-9a-z]{16,})`),
 	},
 	{
 		// A Transmission RPC session id, which is not a long-lived credential

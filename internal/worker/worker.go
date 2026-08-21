@@ -18,6 +18,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
 	"github.com/rarebit-one/heyarr-core/internal/downloads"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/indexers"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
 	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
@@ -233,7 +234,8 @@ func (w *Worker) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("worker: %w", err)
 	}
-	providerRegistry, err := providers.BuildWith(resolvedProviders, w.log, nil, downloads.Constructor)
+	providerRegistry, err := providers.BuildWith(resolvedProviders, w.log, nil,
+		providers.Chain(indexers.Constructor, downloads.Constructor))
 	if err != nil {
 		return fmt.Errorf("worker: building the provider registry: %w", err)
 	}
