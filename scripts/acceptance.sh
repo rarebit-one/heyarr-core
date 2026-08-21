@@ -1407,6 +1407,93 @@ YAML
 
 
 
+  note "  desired state (§55, M3-02)"
+  # ORDERING IS LOAD-BEARING HERE, and it bit on the first run.
+  #
+  # Wanting content Heyarr has never seen CREATES A WORK — that is the whole
+  # feature — so this section mutates the catalog. It first sat above the CLI
+  # section, and the CLI's work-count assertion immediately went from 8 to 9.
+  # Until Milestone 3 the remux section was the only one that mutated anything;
+  # it is now the second, and this must stay BELOW every catalog count.
+  #
+  # It does not add assets or blobs, so the rescan and durability counts above
+  # are unaffected — but that is a fact about this section, not a licence to
+  # move it.
+  #
+  # What this proves that the unit tests cannot: that a real Heyarr can be told
+  # to want a film it has never seen — no asset, no blob, no bytes, nothing
+  # scanned — and that the Work it invents converges with the one a scan would
+  # produce. Every fixture in the test suite has assets, so this is the only
+  # place the empty case meets a real database and a real socket.
+  local want_json want_id want_work want_again
+  want_json=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d '{"work":{"content_type":"movie","title":"The Conversation","year":1974},
+         "quality_profile":"living-room","reason":"acceptance"}')
+  want_id=$(jq -r '.id' <<<"$want_json")
+  want_work=$(jq -r '.work_id' <<<"$want_json")
+  assert_contains "$want_id" "-" "content that does not exist anywhere can be wanted"
+  assert_contains "$want_work" "-" "wanting unknown content creates the work to hang it on"
+  assert_eq "$(jq -r '.monitor' <<<"$want_json")" "true" \
+    "monitoring is on by default — wanting something and never looking again is the surprising default"
+
+  # The work it created has nothing behind it. If this came back non-zero the
+  # assertion above passed for the wrong reason.
+  assert_eq "$(api "/api/v1/works/$want_work" | jq -r '.title')" "The Conversation" \
+    "the invented work is readable and titled"
+
+  # Convergence. A different spelling, with the year inside the title, must
+  # resolve to the SAME work — otherwise wanting a film and later scanning it
+  # produce two works that are the same thing, and nothing ever notices.
+  want_again=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d '{"work":{"content_type":"movie","title":"the conversation (1974)"},
+         "quality_profile":"archival"}')
+  assert_eq "$(jq -r '.work_id' <<<"$want_again")" "$want_work" \
+    "two spellings of one film converge on one work"
+
+  # §61: never one version per title. Two profiles over one work are two wants
+  # and both exist; the same profile twice is one want written twice.
+  assert_eq "$(api "/api/v1/desired?work_id=$want_work" | jq -r '.items | length')" "2" \
+    "two profiles over one work are two wants (§61)"
+  local want_dup
+  want_dup=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d "{\"work_id\":\"$want_work\",\"quality_profile\":\"living-room\"}")
+  assert_eq "$(jq -r '.status' <<<"$want_dup")" "409" \
+    "the same work under the same profile twice is refused"
+
+  # A want with no standard cannot be evaluated (§56), so it is refused.
+  assert_contains "$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d '{"work":{"content_type":"movie","title":"Nostalghia"}}' | jq -r '.detail')" \
+    "quality profile" "a want with no quality profile is refused"
+
+  # Monitored and wanted are two axes (§60 keeps both words).
+  assert_eq "$(api "/api/v1/desired/$want_id" -X PATCH -H 'Content-Type: application/json' \
+    -d '{"monitor":false}' | jq -r '.monitor')" "false" \
+    "monitoring can be turned off without un-wanting"
+  assert_eq "$(api "/api/v1/desired?monitor=false" | jq -r '[.items[] | select(.id == "'"$want_id"'")] | length')" "1" \
+    "the unmonitored want is selectable — the upgrade workflow has to skip it"
+
+  # The target is not editable: repointing a want at different content is a
+  # different want, not an edit.
+  assert_contains "$(api "/api/v1/desired/$want_id" -X PATCH -H 'Content-Type: application/json' \
+    -d '{"work_id":"something-else"}' | jq -r '.status')" "400" \
+    "a want cannot be repointed at different content"
+
+  # The standard cannot be deleted while something is measured against it.
+  local qp_inuse
+  qp_inuse=$(api /api/v1/quality-profiles | jq -r '.items[] | select(.name == "living-room") | .id')
+  assert_contains "$(api "/api/v1/quality-profiles/$qp_inuse" -X DELETE -w '%{http_code}' -o /dev/null)" \
+    "409" "a quality profile still measuring a want cannot be deleted"
+
+  # The CLI reaches the same rows over the same socket.
+  assert_contains "$("$BIN" --config "$WORK/full.yaml" --token "$TOKEN" desired list --json | jq -r '[.[] | select(.id == "'"$want_id"'")] | length')" \
+    "1" "the CLI lists what the API wanted"
+  assert_contains "$("$BIN" --config "$WORK/full.yaml" --token "$TOKEN" quality-profile list --json | jq -r '[.[] | select(.name == "archival")] | length')" \
+    "1" "the CLI lists the quality profiles"
+
+  api "/api/v1/desired/$want_id" -X DELETE -o /dev/null
+  assert_eq "$(api "/api/v1/desired/$want_id" | jq -r '.status')" "404" \
+    "a want that is removed is gone rather than hidden"
+
   note "  a mixed fleet (§75, ADR-0023)"
   # The one claim in ADR-0023 with no evidence behind it until now.
   #

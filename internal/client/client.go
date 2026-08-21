@@ -346,6 +346,31 @@ func (c *Client) Post(ctx context.Context, path string, body, out any) error {
 	return c.roundTrip(req, out)
 }
 
+// Patch sends a partial JSON body and decodes the response into out.
+//
+// It is separate from Post rather than a method parameter because the two mean
+// different things to a caller: a Post creates, and a Patch changes only the
+// fields it names. Collapsing them into one helper with a method string is how
+// a caller ends up sending a partial body to a create endpoint.
+func (c *Client) Patch(ctx context.Context, path string, body, out any) error {
+	var reader io.Reader
+	if body != nil {
+		buf, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reader = bytes.NewReader(buf)
+	}
+	req, err := c.newRequest(ctx, http.MethodPatch, path, nil, reader)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return c.roundTrip(req, out)
+}
+
 // Delete issues a DELETE. The API answers 204, so there is nothing to decode.
 func (c *Client) Delete(ctx context.Context, path string) error {
 	req, err := c.newRequest(ctx, http.MethodDelete, path, nil, nil)

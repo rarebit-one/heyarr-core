@@ -181,3 +181,72 @@ type CreateRootRequest struct {
 	IngestMode string `json:"ingest_mode,omitempty"`
 	Enabled    *bool  `json:"enabled,omitempty"`
 }
+
+// DesiredItem is content that should exist, whether or not it does (§55).
+//
+// It anchors to a Work — the semantic entity, which exists whether or not any
+// bytes do — and never to an Asset, which is a file that exists by definition.
+type DesiredItem struct {
+	ID     string `json:"id"`
+	Scope  string `json:"scope"`
+	WorkID string `json:"work_id"`
+	// EditionID is absent at work scope rather than null.
+	EditionID        string    `json:"edition_id,omitempty"`
+	QualityProfileID string    `json:"quality_profile_id"`
+	Monitor          bool      `json:"monitor"`
+	Reason           string    `json:"reason,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// WorkDescriptor names content semantically, for wanting something that does
+// not exist yet.
+type WorkDescriptor struct {
+	ContentType string `json:"content_type"`
+	Title       string `json:"title"`
+	Year        int    `json:"year,omitempty"`
+}
+
+// CreateDesiredRequest is the POST /desired body.
+//
+// Name the work by WorkID or Work, and the profile by QualityProfileID or
+// QualityProfile — one of each pair, never both.
+type CreateDesiredRequest struct {
+	Scope     string          `json:"scope,omitempty"`
+	WorkID    string          `json:"work_id,omitempty"`
+	EditionID string          `json:"edition_id,omitempty"`
+	Work      *WorkDescriptor `json:"work,omitempty"`
+
+	QualityProfileID string `json:"quality_profile_id,omitempty"`
+	QualityProfile   string `json:"quality_profile,omitempty"`
+
+	// Monitor is a pointer because absent means "the server's default", which
+	// is true. A plain bool could not express "leave it alone".
+	Monitor *bool  `json:"monitor,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// UpdateDesiredRequest is the PATCH /desired/{id} body. Every field is a
+// pointer: absent means "leave it alone", which is what makes a PATCH a PATCH.
+type UpdateDesiredRequest struct {
+	QualityProfileID *string `json:"quality_profile_id,omitempty"`
+	QualityProfile   *string `json:"quality_profile,omitempty"`
+	Monitor          *bool   `json:"monitor,omitempty"`
+	Reason           *string `json:"reason,omitempty"`
+}
+
+// QualityProfile is the standard a DesiredItem is measured against (§62).
+//
+// The three sections are three different kinds of statement: Accept is a gate,
+// Prefer is a score, Terminal is a stop condition.
+type QualityProfile struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Accept      json.RawMessage `json:"accept"`
+	Prefer      json.RawMessage `json:"prefer"`
+	Terminal    json.RawMessage `json:"terminal"`
+	Seeded      bool            `json:"seeded"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+}

@@ -298,6 +298,22 @@ func (h *harness) mint(name string, scopes ...auth.Scope) auth.CreatedToken {
 	return created
 }
 
+// countRows asserts against the database directly.
+//
+// It exists because asserting a count through the API is only sound when the
+// API supports the filter being used: an unsupported query parameter is
+// ignored rather than refused, so the assertion silently becomes a count of
+// everything. That happened once while this file was being written and the
+// test passed at three.
+func (h *harness) countRows(t *testing.T, query string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := h.db.Reader().QueryRow(query, args...).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 func (h *harness) exec(query string, args ...any) {
 	h.t.Helper()
 	if _, err := h.db.Writer().ExecContext(context.Background(), query, args...); err != nil {
@@ -348,6 +364,12 @@ const (
 	// anything the HTTP layer sees.
 	profile1ID = "01990000-0000-7000-8000-0000000000q1"
 	profile2ID = "01990000-0000-7000-8000-0000000000q2"
+
+	// Two wants over ONE work under DIFFERENT profiles — the §61 rule the
+	// schema exists to permit, present in the fixture so the list shape shows
+	// it rather than only a unit test asserting it.
+	desired1ID = "01990000-0000-7000-8000-0000000000i1"
+	desired2ID = "01990000-0000-7000-8000-0000000000i2"
 
 	blob1Hash = "blake3:1111111111111111111111111111111111111111111111111111111111111111"
 	blob2Hash = "blake3:2222222222222222222222222222222222222222222222222222222222222222"
@@ -408,6 +430,21 @@ func (h *harness) seed() *harness {
 		(?, ?, '1080p', 'web', 'en', '{}', ?),
 		(?, ?, 'first', 'print', NULL, '{}', ?)`,
 		edition1ID, work1ID, seedTime, edition2ID, work2ID, seedTime, edition3ID, work3ID, seedTime)
+
+	// Two wants over ONE work under DIFFERENT profiles. §61 says never one
+	// version per title, and this is that rule present in the fixture rather
+	// than only asserted in a unit test: the living-room copy and the archival
+	// copy of Arrival are two wants, and the list shape has to show both.
+	//
+	// The second is unmonitored, so the monitor filter has something real to
+	// select and the upgrade workflow (M3-06) has a row it must skip.
+	h.exec(`INSERT INTO desired_items
+		(id, scope, work_id, edition_id, quality_profile_id, monitor, reason,
+		 created_at, updated_at) VALUES
+		(?, 'work', ?, NULL, ?, 1, 'the good copy', ?, ?),
+		(?, 'work', ?, NULL, ?, 0, '', ?, ?)`,
+		desired1ID, work1ID, profile1ID, seedTime, seedTime,
+		desired2ID, work1ID, profile2ID, seedTime, seedTime)
 
 	h.exec(`INSERT INTO blobs (hash, size, mime, chunked, first_seen_at) VALUES
 		(?, 42949672960, 'video/x-matroska', 0, ?), (?, 8589934592, 'video/mp4', 0, ?)`,

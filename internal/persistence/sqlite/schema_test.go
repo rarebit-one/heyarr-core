@@ -439,3 +439,122 @@ func seedSessionPrerequisites(t *testing.T, db *DB) {
 		VALUES ('a1', 'e1', 'managed',
 		 'blake3:1111111111111111111111111111111111111111111111111111111111111111', ?, ?)`, ts, ts)
 }
+
+// Desired items (M3-02). Like the consumption session constraints above, these
+// are the floor under the domain's validation rather than a duplicate of it:
+// the validator runs in a process, and a migration or a repair script does not
+// go through it.
+//
+// They exist as tests because of a sabotage that PASSED. Removing the
+// scope/edition CHECK broke nothing, because every API path goes through
+// desired.Item.Validate() first and the constraint could never fire. A
+// constraint nobody has watched refuse anything is decoration, and the
+// migration's own comment claims "the database is the one enforcing it" —
+// which was not true until something reached past the validator to check.
+func TestDesiredItemConstraints(t *testing.T) {
+	db := openTestDB(t)
+	seedDesiredFixtures(t, db)
+
+	insert := func(id, scope string, edition any, profile string) error {
+		return exec(t, db, `INSERT INTO desired_items
+			(id, scope, work_id, edition_id, quality_profile_id, monitor, reason,
+			 created_at, updated_at)
+			VALUES (?, ?, 'w1', ?, ?, 1, '', ?, ?)`, id, scope, edition, profile, ts, ts)
+	}
+
+	if err := insert("d1", "work", nil, "q1"); err != nil {
+		t.Fatalf("a valid work-scoped want was rejected: %v", err)
+	}
+	if err := insert("d2", "edition", "e1", "q1"); err != nil {
+		t.Fatalf("a valid edition-scoped want was rejected: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		scope   string
+		edition any
+	}{
+		// The pair the CHECK exists for. An edition id sitting unused on a
+		// work-scoped row is exactly the kind of field something later reads
+		// without checking the scope.
+		{"a work scope carrying an edition", "work", "e1"},
+		{"an edition scope with no edition", "edition", nil},
+		{"a scope that is not a scope", "episode", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := insert("bad-"+tc.name, tc.scope, tc.edition, "q2"); err == nil {
+				t.Error("the database accepted it")
+			}
+		})
+	}
+}
+
+// §61: never one version per title. Two wants over one work under DIFFERENT
+// profiles are two wants and must both exist; the same profile twice is one
+// want written twice.
+//
+// The index is over coalesce(edition_id, ”) rather than the bare column
+// because NULL <> NULL in SQL: a naive unique index would let every
+// work-scoped duplicate straight through, which is the single most likely
+// defect in this migration.
+func TestDesiredItemUniquenessIsPerTargetAndProfile(t *testing.T) {
+	db := openTestDB(t)
+	seedDesiredFixtures(t, db)
+
+	stmt := `INSERT INTO desired_items
+		(id, scope, work_id, edition_id, quality_profile_id, monitor, reason, created_at, updated_at)
+		VALUES (?, 'work', 'w1', NULL, ?, 1, '', ?, ?)`
+
+	mustExec(t, db, stmt, "d1", "q1", ts, ts)
+
+	// A second profile over the same work is a second want — the point of §61.
+	if err := exec(t, db, stmt, "d2", "q2", ts, ts); err != nil {
+		t.Fatalf("two profiles over one work must both exist (§61): %v", err)
+	}
+
+	// The same profile again is one want written twice. This is the assertion
+	// that fails if the index forgets that NULL is not equal to itself.
+	if err := exec(t, db, stmt, "d3", "q1", ts, ts); err == nil {
+		t.Error("a duplicate want was accepted; the uniqueness index is not covering " +
+			"work-scoped rows, whose edition_id is NULL")
+	}
+}
+
+// A want for a work that no longer exists is a dangling reference every read
+// path would have to special-case. The profile is the opposite: deleting the
+// standard while leaving the desire makes satisfaction unanswerable (§56).
+func TestDesiredItemReferentialBehaviour(t *testing.T) {
+	db := openTestDB(t)
+	seedDesiredFixtures(t, db)
+	mustExec(t, db, `INSERT INTO desired_items
+		(id, scope, work_id, edition_id, quality_profile_id, monitor, reason, created_at, updated_at)
+		VALUES ('d1', 'work', 'w1', NULL, 'q1', 1, '', ?, ?)`, ts, ts)
+
+	if err := exec(t, db, `DELETE FROM quality_profiles WHERE id = 'q1'`); err == nil {
+		t.Error("a quality profile still measuring a want was deleted; §56 now has " +
+			"nothing to evaluate that want against")
+	}
+
+	mustExec(t, db, `DELETE FROM works WHERE id = 'w1'`)
+	var n int
+	if err := db.Reader().QueryRow(`SELECT count(*) FROM desired_items`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("deleting a work left %d want(s) pointing at nothing", n)
+	}
+}
+
+func seedDesiredFixtures(t *testing.T, db *DB) {
+	t.Helper()
+	mustExec(t, db, `INSERT INTO quality_profiles
+		(id, name, description, accept, prefer, terminal, seeded, created_at, updated_at) VALUES
+		('q1', 'living-room', '', '[]', '[]', '[]', 1, ?, ?),
+		('q2', 'archival', '', '[]', '[]', '[]', 1, ?, ?)`, ts, ts, ts, ts)
+	mustExec(t, db, `INSERT INTO works
+		(id, content_type, work_key, title, sort_title, year, attributes, created_at, updated_at)
+		VALUES ('w1', 'movie', 'movie:arrival:2016', 'Arrival', 'arrival', 2016, '{}', ?, ?)`, ts, ts)
+	mustExec(t, db, `INSERT INTO editions
+		(id, work_id, label, edition_type, language, attributes, created_at)
+		VALUES ('e1', 'w1', '2160p', 'remux', 'en', '{}', ?)`, ts)
+}

@@ -194,3 +194,46 @@ func yearKey(year int) string {
 	}
 	return strconv.Itoa(year)
 }
+
+// Describe turns a semantic description of content — a content type, a title
+// and a year — into the same WorkKey and SortTitle a scanned path would
+// produce for it.
+//
+// It exists because Milestone 3 lets an operator want content that does not
+// exist yet (§55, M3-02), which means creating a Work from a description
+// rather than from a file. If that used a different normalisation from the one
+// the scanner uses, everything would appear to work and the library would
+// slowly fill with pairs of Works that are the same thing — wanting "The
+// Conversation (1974)" and later scanning it would converge on nothing.
+//
+// So there is exactly one implementation of "what is this thing's key", it
+// lives here with the rules that produce it, and both callers go through it.
+// The alternative — exporting normKey and workKey separately and asking each
+// caller to combine them correctly — is the same bug with more steps.
+func Describe(contentType, title string, year int) (key, sortTitle string) {
+	name := parseName(title)
+	// parseName pulls a trailing year out of the title, so "Blade Runner
+	// (1982)" and ("Blade Runner", 1982) agree. An explicit year wins: the
+	// caller said so.
+	if year <= 0 {
+		year = name.Year
+	}
+	norm := normKey(name.Title)
+	if norm == "" {
+		// Nothing survived normalisation — a title of punctuation. Fall back
+		// to the raw input so the key is at least stable and distinct, rather
+		// than collapsing every such title onto one Work.
+		norm = strings.ToLower(strings.TrimSpace(title))
+	}
+	return workKey(contentType, norm, yearKey(year)), norm
+}
+
+// DisplayTitle renders a raw title the way the scanner would record it, so a
+// wanted Work and a scanned one read the same in a listing.
+func DisplayTitle(title string) string {
+	toks := parseName(title).Title
+	if len(toks) == 0 {
+		return strings.TrimSpace(title)
+	}
+	return displayTitle(toks)
+}
