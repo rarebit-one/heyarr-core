@@ -342,6 +342,13 @@ const (
 	session1ID = "01990000-0000-7000-8000-0000000000s1"
 	session2ID = "01990000-0000-7000-8000-0000000000s2"
 
+	// Two quality profiles spanning the distinction §62 turns on: one that can
+	// be finished, and one that never can. A seed set where every profile
+	// terminates would leave the "never stop looking" path unexercised by
+	// anything the HTTP layer sees.
+	profile1ID = "01990000-0000-7000-8000-0000000000q1"
+	profile2ID = "01990000-0000-7000-8000-0000000000q2"
+
 	blob1Hash = "blake3:1111111111111111111111111111111111111111111111111111111111111111"
 	blob2Hash = "blake3:2222222222222222222222222222222222222222222222222222222222222222"
 
@@ -368,6 +375,21 @@ func (h *harness) seed() *harness {
 		 '["mp3","flac"]', '[]', '["mp3","flac"]', ?, ?, ?)`,
 		device1ID, seedTime, seedTime, seedTime,
 		device2ID, seedTime, seedTime, seedTime)
+
+	h.exec(`INSERT INTO quality_profiles
+		(id, name, description, accept, prefer, terminal, seeded, created_at, updated_at) VALUES
+		(?, 'living-room', 'A television.',
+		 '[{"attribute":"resolution","op":"gte","value":1080}]',
+		 '[{"attribute":"video_codec","op":"eq","value":"hevc","weight":20},'||
+		 '{"attribute":"hdr","op":"eq","value":true,"weight":10}]',
+		 '[{"attribute":"resolution","op":"gte","value":2160},'||
+		 '{"attribute":"source","op":"eq","value":"remux"}]', 1, ?, ?),
+		(?, 'archival', 'Never finished.',
+		 '[]',
+		 '[{"attribute":"source","op":"eq","value":"remux","weight":40}]',
+		 '[]', 0, ?, ?)`,
+		profile1ID, seedTime, seedTime,
+		profile2ID, seedTime, seedTime)
 
 	h.exec(`INSERT INTO libraries (id, name, content_type, enabled, created_at) VALUES
 		(?, 'films', 'movie', 1, ?), (?, 'books', 'book', 1, ?)`,
