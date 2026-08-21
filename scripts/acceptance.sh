@@ -2018,8 +2018,33 @@ YAML
       sleep 0.1; waited=$(( waited + 1 ))
     done
     assert_contains "$(cat "$bare_log")" "worker ready" "a worker with no toolchain starts and becomes ready"
-    assert_contains "$(cat "$bare_log")" '"capabilities":[]' \
-      "the bare worker advertises nothing"
+    # What this asserts changed shape in M3-07, and the reason is worth stating.
+    #
+    # It used to be '"capabilities":[]' — an empty set, as a PROXY for "this
+    # worker resolved no toolchain". That proxy was exact while capabilities had
+    # one source. They now have two independent ones: the media toolchain
+    # (ADR-0023) and the configured provider registry (ADR-0025). This bare
+    # worker shares the demo's config file, which declares a fake indexer, so it
+    # legitimately advertises `indexer` while advertising no toolchain at all.
+    #
+    # So the assertion is now about what it actually means: a worker with no
+    # FFmpeg advertises neither ffprobe nor ffmpeg, whatever else it can do.
+    # Asserting the empty set would have been asserting the proxy, and the proxy
+    # is the thing that stopped being true.
+    local bare_caps
+    bare_caps=$(grep -o '"capabilities":\[[^]]*\]' "$bare_log" | head -1)
+    # A guard on the guard. assert_not_contains passes vacuously against an
+    # empty string, so a grep that matched nothing — a renamed log field, say —
+    # would report two cheerful passes having checked nothing at all.
+    if [[ -z "$bare_caps" ]]; then
+      fail "could not find the bare worker's advertised capabilities in its log"
+    else
+      pass "the bare worker's capabilities are readable from its startup log"
+    fi
+    assert_not_contains "$bare_caps" "ffprobe" \
+      "the bare worker advertises no ffprobe"
+    assert_not_contains "$bare_caps" "ffmpeg" \
+      "the bare worker advertises no ffmpeg"
     # It did not register the handlers either, which is what makes the
     # degraded state readable in the log rather than only in behaviour.
     assert_not_contains "$(cat "$bare_log")" "probing is available" \
