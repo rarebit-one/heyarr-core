@@ -1,0 +1,42 @@
+[
+  {
+    "verb": "acquire_release",
+    "data": {
+      "deferred": true,
+      "milestone": "M3-12 / M3-13",
+      "reason": "candidates are not persisted and no download client is wired, so there is no release to acquire and nowhere to acquire it to"
+    }
+  },
+  {
+    "verb": "play_content",
+    "data": {
+      "deferred": true,
+      "milestone": "M4+",
+      "reason": "playback is device-mediated: it returns a credentialed URL scoped to a registered device, and §71 pairs it with transfer_playback, which is not built. Shipping half of a device-control vocabulary is what ADR-0019 waited to avoid — and Milestone 2 refuses every plan that is not DIRECT, so the verb would mostly refuse"
+    }
+  },
+  {
+    "verb": "search_releases",
+    "data": {
+      "deferred": true,
+      "milestone": "M3-12",
+      "reason": "there is no search job yet — the provider registry exists but nothing drives it, so a search would have nothing to run"
+    }
+  },
+  {
+    "verb": "sync_peer",
+    "data": {
+      "deferred": true,
+      "milestone": "M4",
+      "reason": "the peer model holds exactly one peer by design (ADR-0010); there is nothing to synchronise with"
+    }
+  },
+  {
+    "verb": "transfer_playback",
+    "data": {
+      "deferred": true,
+      "milestone": "M4+",
+      "reason": "moving a playback between devices is not built"
+    }
+  }
+]

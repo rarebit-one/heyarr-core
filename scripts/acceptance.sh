@@ -1320,6 +1320,120 @@ YAML
   assert_contains "$(api /api/v1/system | jq -r 'has("media")')" "true" \
     "the system endpoint still reports the media toolchain alongside providers"
 
+  note "  MCP — semantic actions over desired state (§71, ADR-0019)"
+  # Below every catalog count, with the other M3 sections: want_content creates
+  # a Work, so this mutates the catalog.
+  #
+  # What this proves that the unit tests cannot: that a real agent, over a real
+  # socket, speaking JSON-RPC, can want something the library has never seen and
+  # be told WHY a release was or was not good enough — and that the scope
+  # boundary holds against a real token rather than a synthetic identity.
+  local mcp_rpc mcp_tools mcp_want mcp_want_id
+
+  # A tiny helper, because every call below is the same envelope.
+  mcp() { # method params-json
+    api /api/v1/mcp -X POST -H 'Content-Type: application/json' \
+      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$1\",\"params\":$2}"
+  }
+  mcp_call() { # tool args-json
+    mcp "tools/call" "{\"name\":\"$1\",\"arguments\":$2}"
+  }
+
+  # The handshake. Tools and nothing else — a `resources` capability would be
+  # the second read API ADR-0019 exists to prevent.
+  mcp_rpc=$(mcp "initialize" '{}')
+  assert_eq "$(jq -r '.result.serverInfo.name' <<<"$mcp_rpc")" "heyarr" \
+    "MCP answers the handshake"
+  assert_eq "$(jq -r '.result.capabilities | has("tools")' <<<"$mcp_rpc")" "true" \
+    "and advertises tools"
+  assert_eq "$(jq -r '.result.capabilities | has("resources")' <<<"$mcp_rpc")" "false" \
+    "and deliberately advertises no resources capability — this is not a second read API"
+  assert_contains "$(jq -r '.result.instructions' <<<"$mcp_rpc")" "personal state" \
+    "the instructions tell an agent what this server cannot see (§72)"
+
+  # The surface, with its schemas and its scopes.
+  mcp_tools=$(mcp "tools/list" '{}')
+  assert_eq "$(jq -r '[.result.tools[] | select(.inputSchema == null)] | length' <<<"$mcp_tools")" "0" \
+    "every tool publishes a hand-written input schema"
+  assert_eq "$(jq -r '[.result.tools[] | select(.annotations["heyarr/requiredScope"] == null)] | length' <<<"$mcp_tools")" "0" \
+    "and says what scope it needs, so an agent can tell \"no such verb\" from \"not with this token\""
+  # §72, enumerated rather than inspected.
+  assert_eq "$(jq -r '[.result.tools[] | select((.name + .description) | ascii_downcase | test("playlist|rating|reading position|watch history"))] | length' <<<"$mcp_tools")" "0" \
+    "no tool reaches for personal state (§72)"
+
+  # The central action, against a work the library already holds.
+  #
+  # NOT a work descriptor, deliberately, and the reason is placement. This
+  # section sits ABOVE the catalog counts — the anchor keeps it clear of a
+  # branch editing this file concurrently — and want_content with a title
+  # CREATES A WORK, which moved the work count from 8 to 9 and broke both the
+  # CLI count and the upgrade section, whose fixture picks works[0] and got a
+  # brand new asset-less work instead. Wanting an existing work mutates only
+  # desired_items, which this section cleans up after itself.
+  #
+  # The "want something that does not exist anywhere" claim is not lost: the
+  # M3-02 section asserts it below the counts, where creating a work is safe,
+  # and the MCP unit tests assert it through the same shared intent.
+  local mcp_work
+  mcp_work=$(api /api/v1/works | jq -r '.items[0].id')
+  mcp_want=$(mcp_call "want_content" "{\"work_id\":\"$mcp_work\",\"quality_profile\":\"archival\"}")
+  mcp_want_id=$(jq -r '.result.structuredContent.id' <<<"$mcp_want")
+  assert_contains "$mcp_want_id" "-" "an agent can create desired state through MCP"
+  assert_eq "$(jq -r '.result.structuredContent.acquisition.state' <<<"$mcp_want")" "MISSING" \
+    "and the acquisition state is created with it, through the same intent the HTTP door uses"
+  assert_eq "$(jq -r '.result.structuredContent.monitor' <<<"$mcp_want")" "true" \
+    "monitoring defaults to true"
+
+  # The flagship: reasons, not a verdict.
+  local mcp_explain
+  mcp_explain=$(mcp_call "explain_release" '{"quality_profile":"archival","releases":[
+    {"id":"remux","attributes":{"resolution":2160,"source":"remux"}},
+    {"id":"cam","attributes":{"source":"cam"}}]}')
+  assert_eq "$(jq -r '.result.structuredContent.selected' <<<"$mcp_explain")" "remux" \
+    "explain_release picks the best acceptable release"
+  assert_contains "$(jq -r '[.result.structuredContent.ranked[] | select(.id == "cam")] | .[0].rejected_by[0].rule' <<<"$mcp_explain")" \
+    "source" "and a rejection names the RULE that rejected it, with its stable code"
+  assert_eq "$(jq -r '[.result.structuredContent.ranked[] | select(.id == "cam")] | .[0].accepted' <<<"$mcp_explain")" "false" \
+    "a cam is refused by the archival profile's gate"
+
+  # Both halves of a result: prose an agent can quote, and a shape it can
+  # branch on.
+  assert_eq "$(jq -r '.result.content[0].type' <<<"$mcp_explain")" "text" \
+    "a result carries a text block every client can render"
+  assert_eq "$(jq -r '.result | has("structuredContent")' <<<"$mcp_explain")" "true" \
+    "and the same value as structure, so an agent need not parse the prose"
+
+  # What is deliberately absent, and why. A tool answering "not implemented"
+  # would be a published vocabulary with a hole in it.
+  local mcp_deferred
+  mcp_deferred=$(mcp_call "acquire_release" '{}')
+  assert_eq "$(jq -r '.error.code' <<<"$mcp_deferred")" "-32601" \
+    "a §71 verb this milestone does not carry is absent rather than stubbed"
+  assert_contains "$(jq -r '.error.data.milestone' <<<"$mcp_deferred")" "M3" \
+    "and names the milestone that brings it, so an agent waits rather than retrying"
+
+  # A typo is NOT reported as a deferred feature.
+  assert_eq "$(mcp_call "want_contnet" '{}' | jq -r '.error.data.milestone // "none"')" "none" \
+    "a mistyped tool is not reported as something that is coming"
+
+  # A tool failure is an error inside the envelope, not a transport failure —
+  # a client seeing a 4xx would reconnect instead of correcting itself.
+  assert_eq "$(api "/api/v1/mcp" -X POST -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"verify_blob","arguments":{}}}' \
+    -o /dev/null -w '%{http_code}')" "200" \
+    "a tool failure is a JSON-RPC error rather than an HTTP status"
+
+  # And it reaches desired state created through the OTHER door, which is the
+  # point of sharing one implementation.
+  assert_contains "$(mcp_call "get_missing_content" '{}' | jq -r '[.result.structuredContent.wants[] | select(.desired_item_id == "'"$mcp_want_id"'")] | length')" \
+    "1" "get_missing_content sees the want, and names its profile rather than an id"
+
+  mcp_call "monitor_content" "{\"desired_item_id\":\"$mcp_want_id\",\"monitor\":false}" >/dev/null
+  assert_eq "$(api "/api/v1/desired/$mcp_want_id" | jq -r '.monitor')" "false" \
+    "a change made through MCP is visible through the JSON API — one implementation, two doors"
+
+  api "/api/v1/desired/$mcp_want_id" -X DELETE -o /dev/null
+
   note "  the CLI (M1-17)"
   # The CLI is what a person actually uses, so the demo drives it rather than
   # only the API underneath it. Every count is cross-checked against the API's

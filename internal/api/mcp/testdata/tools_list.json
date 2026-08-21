@@ -1,0 +1,310 @@
+{
+  "tools": [
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "Score one or more releases against a quality profile and return the reasons — every rule considered, whether it passed, failed, scored, missed or could not be determined. Writes nothing, so it is safe to use for answering \"would this be accepted?\" before anything is acquired. An attribute left out is reported as undetermined rather than as a failure, which is a different thing and sends you to a different place.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "quality_profile": {
+            "description": "The profile to score against, by name.",
+            "type": "string"
+          },
+          "releases": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "attributes": {
+                  "additionalProperties": false,
+                  "description": "What you know about the release. LEAVE A KEY OUT when you cannot tell: an absent attribute is reported as `undetermined`, which is a different answer from a wrong one and sends a person somewhere different. Guessing a value produces a confident wrong verdict.",
+                  "properties": {
+                    "audio_channels": {
+                      "type": "integer"
+                    },
+                    "audio_codec": {
+                      "type": "string"
+                    },
+                    "hdr": {
+                      "type": "boolean"
+                    },
+                    "language": {
+                      "type": "string"
+                    },
+                    "resolution": {
+                      "description": "Vertical lines: 480, 720, 1080, 2160. Not a label — \"4K\", \"2160p\" and \"UHD\" are three spellings of one number.",
+                      "type": "integer"
+                    },
+                    "size_bytes": {
+                      "type": "integer"
+                    },
+                    "source": {
+                      "description": "remux, bluray, web-dl, webrip, hdtv, dvd, cam.",
+                      "type": "string"
+                    },
+                    "video_codec": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "id": {
+                  "description": "Your identifier for this release. Used to break ties, so supplying one makes the ranking independent of the order you sent them in.",
+                  "type": "string"
+                },
+                "title": {
+                  "description": "What the release is called. Never parsed — put what you know into attributes instead.",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "quality_profile",
+          "releases"
+        ],
+        "type": "object"
+      },
+      "name": "explain_release",
+      "title": "Explain a release against a profile"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "Explain one want: whether the library holds bytes the profile accepts, whether those bytes are on every peer that should hold them, and WHICH RULE rejected each asset that did not qualify. This is the tool to reach for when someone says \"I have this, why does Heyarr say it is missing\".",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "desired_item_id": {
+            "description": "The want to explain.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "desired_item_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_content_satisfaction",
+      "title": "Why a want is or is not met"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "List wants whose content is not satisfied — either nothing is held, or what is held does not meet the profile. Use get_content_satisfaction on one of them to find out which, and why.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "How many rows at most. Defaults to the maximum.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "get_missing_content",
+      "title": "What is not satisfied"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "List the peers this instance knows about and what each is for. Note there is exactly one peer by design in this milestone, so this reporting a single peer is correct rather than a symptom.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "How many rows at most. Defaults to the maximum.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "get_peer_status",
+      "title": "Peer status"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "Report which peers hold a blob and whether their copy is verified. A copy that is pending or corrupt is NOT a copy for placement purposes.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "blob_hash": {
+            "description": "The canonical blob digest, `blake3:` followed by 64 hex characters.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "blob_hash"
+        ],
+        "type": "object"
+      },
+      "name": "get_replica_status",
+      "title": "Where bytes are"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "List wants that are satisfied and could still be improved — monitored, holding acceptable content, and not yet at the profile's terminal condition. A want being here does not mean a better release exists, only that nothing about its state rules one out.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "How many rows at most. Defaults to the maximum.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "get_upgrade_candidates",
+      "title": "What could be better"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "write",
+        "readOnlyHint": false
+      },
+      "description": "Turn monitoring on or off for a want. Monitoring is NOT the same as wanting: an unmonitored want that is satisfied is finished, while a monitored one keeps looking for something better. Turn it off when someone says \"this copy is fine, stop\".",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "desired_item_id": {
+            "description": "The want, from get_missing_content or want_content.",
+            "type": "string"
+          },
+          "monitor": {
+            "description": "True to keep looking for something better, false to stop once it is satisfied. Required — there is no safe default for a change nobody asked for.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "desired_item_id",
+          "monitor"
+        ],
+        "type": "object"
+      },
+      "name": "monitor_content",
+      "title": "Keep looking, or stop"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "Find works already in the library by title. Use this to resolve what someone means before wanting it — a work found here can be wanted by id, which is exact, rather than by description, which may create a second work if it does not match what a scan would have produced.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "content_type": {
+            "description": "Narrow to one kind: movie, series, music, book.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "How many works at most. Defaults to the maximum.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "query": {
+            "description": "Part of a title. Matched against the normalised form the scanner records, so case and leading articles do not matter.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "search_content",
+      "title": "Search the library"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "write",
+        "readOnlyHint": false
+      },
+      "description": "Queue a re-read of a blob's bytes to confirm they still hash to what the catalog recorded. Queues work rather than doing it — the answer arrives on the job, not in this reply — because re-hashing a large file is not something to hold a request open for.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "blob_hash": {
+            "description": "The canonical blob digest, `blake3:` followed by 64 hex characters.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "blob_hash"
+        ],
+        "type": "object"
+      },
+      "name": "verify_blob",
+      "title": "Re-verify stored bytes"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "write",
+        "readOnlyHint": false
+      },
+      "description": "Declare that content SHOULD exist under a quality profile, whether or not it does. This is the central action: it works for content the library has never seen, creating the work from a description. Name the profile the way a person would — \"living-room\" — not by id.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "content_type": {
+            "description": "Required with title: movie, series, music, book.",
+            "type": "string"
+          },
+          "monitor": {
+            "description": "Keep looking for something better after it is satisfied. Defaults to true.",
+            "type": "boolean"
+          },
+          "quality_profile": {
+            "description": "The standard this want is measured against, named as a person would: \"living-room\", \"everyday\", \"archival\". Required — \"this should exist\" with no statement of what would count as existing cannot be evaluated.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "A note for whoever reads this in six months. Never interpreted.",
+            "type": "string"
+          },
+          "title": {
+            "description": "The title, for content the library has never seen. The work is created from it, using the same normalisation a scan would, so wanting something and later scanning it converge on one work. Give either this or work_id, never both.",
+            "type": "string"
+          },
+          "work_id": {
+            "description": "An existing work, from search_content. Exact — prefer this when the library already has the content.",
+            "type": "string"
+          },
+          "year": {
+            "description": "Part of the identity when known. A year inside the title is understood too; an explicit one wins.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "quality_profile"
+        ],
+        "type": "object"
+      },
+      "name": "want_content",
+      "title": "Want content"
+    }
+  ]
+}
