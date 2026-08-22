@@ -3,6 +3,7 @@ package integrity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -132,6 +133,50 @@ type Catalog interface {
 	// collector that deletes a referenced blob has destroyed user data with no
 	// way back, so it is worth being told twice.
 	Reclaim(ctx context.Context, h hashing.Hash, size int64, tracked bool, at time.Time) error
+
+	// Peers lists every peer other than this node (M4-12).
+	//
+	// The self row is excluded here rather than by every caller, because the
+	// question this port exists to answer is "is this blob somewhere ELSE",
+	// and a self row silently satisfying it is the exact failure ADR-0018
+	// describes. An empty result is therefore a real answer — this deployment
+	// has no elsewhere — and not an absence to be papered over.
+	Peers(ctx context.Context) ([]Peer, error)
+
+	// Replicas is what the catalog BELIEVES other peers hold of one blob,
+	// joined to the peers it names: who claims it, how that claim is doing,
+	// and how fresh it is (00023's reported_at).
+	//
+	// The interface had nothing peer-shaped in it until this method, which is
+	// why garbage collection could not answer ADR-0018's deferred question.
+	// Note what it returns: beliefs. Verifying them is Durability's job, and
+	// keeping those two things in different ports is what stops a future edit
+	// from quietly treating a row as an answer.
+	Replicas(ctx context.Context, h hashing.Hash) ([]Replica, error)
+
+	// MarkReplicaMissing corrects a row a peer contradicted — the catalog said
+	// present, the peer answered that it does not hold the bytes.
+	//
+	// The correction is not tidiness. An uncorrected lying row keeps offering
+	// the same false assurance to every later sweep, to read routing, and to
+	// replication, and each of them would have to rediscover it. It is the
+	// same transition an inventory report makes (§20), reached by a different
+	// road.
+	MarkReplicaMissing(ctx context.Context, h hashing.Hash, peerID string, at time.Time) error
+
+	// RecordDurability writes down why a blob was believed durable elsewhere,
+	// BEFORE the reclaim that relies on it.
+	//
+	// Before, because replicas.blob_hash is ON DELETE CASCADE: the transaction
+	// that deletes the blobs row destroys every record of who else held it, so
+	// evidence written afterwards would have nothing to say. Migration 00028
+	// keeps this table free of foreign keys for the same reason.
+	RecordDurability(ctx context.Context, e Evidence) error
+
+	// DurabilityEvidence reads the evidence back, by hash, for a blob whose
+	// row may well no longer exist. That it still answers after the reclaim is
+	// the property the whole table was added for.
+	DurabilityEvidence(ctx context.Context, h hashing.Hash) ([]Evidence, error)
 }
 
 // Store is the subset of the content-addressed store integrity uses.
@@ -158,6 +203,21 @@ type Options struct {
 	Catalog Catalog
 	Clock   Clock
 	Logger  *slog.Logger
+
+	// Durability is how another machine is asked whether it really holds a
+	// blob, and how the controller is reached (ADR-0018, M4-12).
+	//
+	// It may be nil, and a nil one REFUSES rather than permits: in a
+	// deployment with another peer, a collector with no way to check is a
+	// collector with no business unlinking anything. See durability.go. A
+	// single-peer deployment needs none, because there is nothing to ask.
+	Durability Durability
+
+	// Freshness is how recently another peer must have confirmed a replica for
+	// that claim to count. Zero means DefaultFreshness; negative is refused
+	// rather than read as "any age will do", which is the same argument the
+	// grace window makes about a negative value.
+	Freshness time.Duration
 }
 
 func (o Options) resolve() (Options, error) {
@@ -172,6 +232,14 @@ func (o Options) resolve() (Options, error) {
 	}
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.DiscardHandler)
+	}
+	switch {
+	case o.Freshness == 0:
+		o.Freshness = DefaultFreshness
+	case o.Freshness < 0:
+		return Options{}, fmt.Errorf("integrity: a negative freshness bound (%s) would accept a "+
+			"replica claim of any age as evidence, which is the failing-open shape ADR-0018's "+
+			"placement precondition exists to close", o.Freshness)
 	}
 	return o, nil
 }

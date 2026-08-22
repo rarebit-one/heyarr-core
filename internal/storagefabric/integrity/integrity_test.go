@@ -53,6 +53,16 @@ type fakeCatalog struct {
 	marked     int
 	cleared    int
 	forceKnown map[string]bool
+
+	// The peer-shaped state ADR-0018's placement precondition reads (M4-12).
+	peers    []integrity.Peer
+	replicas map[string][]integrity.Replica
+	evidence map[string][]integrity.Evidence
+	// corrected records "hash|peer" for every lying row moved to missing.
+	corrected []string
+	// order interleaves evidence writes and reclaims, so the test can assert
+	// that the evidence was durable BEFORE the delete rather than after it.
+	order []string
 }
 
 func newFakeCatalog() *fakeCatalog {
@@ -138,6 +148,7 @@ func (f *fakeCatalog) Reclaim(_ context.Context, h hashing.Hash, _ int64, tracke
 	if tracked {
 		delete(f.blobs, h.String())
 		f.reclaimed = append(f.reclaimed, h.String())
+		f.order = append(f.order, "reclaim:"+h.String())
 		return nil
 	}
 	f.untracked = append(f.untracked, h.String())
@@ -150,6 +161,12 @@ type fixture struct {
 	store *cas.FS
 	cat   *fakeCatalog
 	clock *clock
+
+	// claimAge is how long before the CURRENT clock each peer claim was last
+	// confirmed, re-applied whenever the clock moves — see fixture.claims in
+	// durability_test.go.
+	claimAge    map[string]time.Duration
+	everStamped map[string]bool
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -637,4 +654,46 @@ func TestReferencedBlobsAreNeverCandidates(t *testing.T) {
 	if f.cat.cleared != 1 {
 		t.Error("the stale mark was not cleared")
 	}
+}
+
+// The peer-shaped half of the fake catalog (M4-12).
+//
+// It is deliberately dumb: it stores what it is told and hands it back. Every
+// interesting decision in the durability precondition belongs to the collector,
+// and a fake that made any of those decisions itself would be the thing under
+// test.
+
+func (f *fakeCatalog) Peers(context.Context) ([]integrity.Peer, error) {
+	return f.peers, nil
+}
+
+func (f *fakeCatalog) Replicas(_ context.Context, h hashing.Hash) ([]integrity.Replica, error) {
+	return f.replicas[h.String()], nil
+}
+
+func (f *fakeCatalog) MarkReplicaMissing(_ context.Context, h hashing.Hash, peerID string, _ time.Time) error {
+	f.corrected = append(f.corrected, h.String()+"|"+peerID)
+	for i, r := range f.replicas[h.String()] {
+		if r.Peer.PeerID == peerID {
+			f.replicas[h.String()][i].State = "missing"
+		}
+	}
+	return nil
+}
+
+func (f *fakeCatalog) RecordDurability(_ context.Context, e integrity.Evidence) error {
+	if f.evidence == nil {
+		f.evidence = map[string][]integrity.Evidence{}
+	}
+	f.evidence[e.BlobHash.String()] = append(f.evidence[e.BlobHash.String()], e)
+	// Ordering is recorded because WHEN this happens is the point: the
+	// evidence must be durable before the reclaim that relies on it, since
+	// replicas.blob_hash is ON DELETE CASCADE in the real schema and the
+	// delete destroys the record of who else held the blob (migration 00028).
+	f.order = append(f.order, "evidence:"+e.BlobHash.String())
+	return nil
+}
+
+func (f *fakeCatalog) DurabilityEvidence(_ context.Context, h hashing.Hash) ([]integrity.Evidence, error) {
+	return f.evidence[h.String()], nil
 }
