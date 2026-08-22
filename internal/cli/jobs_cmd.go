@@ -169,6 +169,7 @@ prints here; move its endpoint later by registering the same key again.`,
 	cmd.AddCommand(newPeersAddCommand(opts, configPath))
 	cmd.AddCommand(newPeersRemoveCommand(opts, configPath))
 	cmd.AddCommand(newPeersShowCommand(opts, configPath))
+	cmd.AddCommand(newPeersPingCommand(opts, configPath))
 	return cmd
 }
 
