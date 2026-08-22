@@ -146,7 +146,32 @@ func peerMembershipGuard(store PeerMembership, liveness PeerLiveness, presented 
 						"request_id", RequestIDFrom(r.Context()), "error", err)
 				}
 			}
-			next.ServeHTTP(w, r)
+			// Marked, not admitted. The guard still only ever subtracts: this
+			// records that the caller reached the client API over a peer
+			// credential, and the only thing anything downstream does with
+			// that fact is refuse (ADR-0033 — a peer is not an admin). The
+			// bearer token (ADR-0011) is as mandatory as it was.
+			next.ServeHTTP(w, r.WithContext(markPeerConnection(r.Context())))
 		})
 	}
+}
+
+// markPeerConnection records that this request arrived over a connection that
+// presented a peer client certificate.
+func markPeerConnection(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKeyPeerConnection, true)
+}
+
+// PeerConnection reports whether a request reached the client API over a peer
+// certificate (ADR-0012, ADR-0033).
+//
+// It exists so the admin surface can refuse such a request in ONE place. A
+// peer certificate authenticates as that peer and authorises only the peer
+// surface; it is not, and can never become, an admin credential. Asking this
+// question route by route would work until the route somebody adds next month
+// forgets to ask it, which is the whole reason the check lives in
+// RequireScope rather than in six handlers.
+func PeerConnection(ctx context.Context) bool {
+	is, _ := ctx.Value(ctxKeyPeerConnection).(bool)
+	return is
 }
