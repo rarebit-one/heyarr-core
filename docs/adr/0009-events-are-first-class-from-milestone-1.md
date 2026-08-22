@@ -27,3 +27,9 @@ of it for free.
 
 A slow subscriber must never block a publisher: buffers are bounded and slow
 consumers are dropped with a warning, not backpressured.
+
+The corollary, which Milestone 4 makes load-bearing: "every state transition"
+is not "every blob". Replication reports cycles and transfers, never one event
+per blob — the reasoning, and the rule for anyone adding a replication beat, is
+recorded under "No per-blob events during replication" in the `internal/events`
+package doc.
