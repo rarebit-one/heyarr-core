@@ -118,7 +118,7 @@ func decode(args json.RawMessage, into any) error {
 	dec := json.NewDecoder(bytes.NewReader(args))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(into); err != nil {
-		return fmt.Errorf("device: the arguments are not valid for this tool: %w", err)
+		return fmt.Errorf("%w: %w", errInvalidArguments, err)
 	}
 	return nil
 }

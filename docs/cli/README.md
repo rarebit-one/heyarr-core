@@ -22,6 +22,12 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr desired rm`](heyarr_desired_rm.md) | Stop wanting something |
 | [`heyarr desired set`](heyarr_desired_set.md) | Change the conditions, the monitoring or the note |
 | [`heyarr desired`](heyarr_desired.md) | Say what should exist, whether or not it does yet |
+| [`heyarr device generate`](heyarr_device_generate.md) | Generate this machine's device key |
+| [`heyarr device list`](heyarr_device_list.md) | List this machine's device keys |
+| [`heyarr device mcp`](heyarr_device_mcp.md) | Run the Personal MCP for this machine's device key (§73) |
+| [`heyarr device remove`](heyarr_device_remove.md) | Remove a device key |
+| [`heyarr device show`](heyarr_device_show.md) | Show one device key |
+| [`heyarr device`](heyarr_device.md) | Manage this machine's device key (§40, ADR-0032) |
 | [`heyarr events tail`](heyarr_events_tail.md) | Print events as they happen |
 | [`heyarr events`](heyarr_events.md) | Follow the event log |
 | [`heyarr fsck`](heyarr_fsck.md) | Check stored bytes against the catalog (§57, ADR-0018) |

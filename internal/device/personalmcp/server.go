@@ -50,7 +50,13 @@ const (
 	reasonNoDevice       = "no_device"
 	reasonKeyPermissions = "key_permissions"
 	reasonMalformedKey   = "malformed_key"
+	reasonInvalidArgs    = "invalid_arguments"
 )
+
+// errInvalidArguments is a call this server could not decode. It is the agent's
+// mistake, not ours, and must not be reported as an internal error: an agent
+// told "the tool failed" will retry the same malformed call forever.
+var errInvalidArguments = errors.New("the arguments are not valid for this tool")
 
 type request struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -323,6 +329,7 @@ func (s *Server) toolFailure(req request, name string, err error) response {
 		{device.ErrNoDevice, reasonNoDevice},
 		{device.ErrKeyPermissions, reasonKeyPermissions},
 		{device.ErrMalformedKey, reasonMalformedKey},
+		{errInvalidArguments, reasonInvalidArgs},
 	} {
 		if errors.Is(err, m.sentinel) {
 			return newError(req.ID, codeInvalidParams, err.Error(),
