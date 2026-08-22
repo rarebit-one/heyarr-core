@@ -29,6 +29,18 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 		endpoint = r.Endpoint.String()
 	}
 
+	// Torznab's declared auth scheme is a single opaque token (ADR-0031), so
+	// Token() is the accessor that fits it — and it is the only one that will
+	// answer, which is what stops a basic credential's password being sent as
+	// an apikey query parameter.
+	//
+	// A provider validated as torznab always resolves to a token credential,
+	// so the false branch is unreachable through Constructor's kind check; an
+	// empty key is what a hand-built Resolved would deserve, and the request
+	// then fails with a 401 rather than with half of somebody else's password
+	// on the wire.
+	token, _ := r.Credential.Token()
+
 	// The credential is revealed exactly here, at the point it is handed to
 	// the thing that must send it. Reveal() greps cleanly, which is the whole
 	// argument for the Secret type: every place a credential leaves its
@@ -36,7 +48,7 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 	client, err := New(Options{
 		Name:         r.Name,
 		Endpoint:     endpoint,
-		APIKey:       r.APIKey.Reveal(),
+		APIKey:       token.Reveal(),
 		Capabilities: r.Capabilities,
 		Now:          now,
 	})

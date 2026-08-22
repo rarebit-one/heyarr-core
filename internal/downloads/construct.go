@@ -41,10 +41,8 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 		endpoint = r.Endpoint.String()
 	}
 
-	// The credential is revealed exactly here, at the point it is handed to
-	// the thing that must send it. Reveal() greps cleanly, which is the whole
-	// argument for the Secret type: every place a credential leaves its
-	// wrapper is one line somebody can find.
+	// The credential comes out of its wrapper in credentialFor, which is the
+	// one place in this package where it does.
 	user, pass := credentialFor(r)
 	client, err := New(Options{
 		Name:         r.Name,
@@ -62,36 +60,37 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 	return client, true, nil
 }
 
-// credentialFor splits the RPC credential.
+// credentialFor is where the RPC credential leaves its wrapper.
 //
-// Transmission's RPC uses HTTP basic auth, which needs a username as well as a
-// password — but a provider Entry has one credential field, because most
-// services take one. Rather than adding a second field that only one kind uses,
-// the username defaults to "transmission" and can be overridden by writing
-// "user:pass" in api_key.
+// # This used to be a parser, and that was the bug
 //
-// This is a small ugliness and it is written down rather than hidden: the
-// alternative is a config field that is empty for every provider but this one,
-// which teaches every operator about a detail only one of them needs.
+// Transmission's RPC is HTTP basic auth, so it needs a username as well as a
+// password. Before ADR-0031 a provider Entry carried one credential field, so
+// #102 packed both into it as "user:pass" with the username defaulting to
+// "transmission" — and split on the first colon to get them back out.
+//
+// A password containing a colon was therefore silently cut in half: Heyarr
+// authenticated as the wrong user with a truncated password, got a 401, and
+// reported an unreachable download client. The configuration was correct and
+// nothing said otherwise.
+//
+// The credential is now TYPED by the provider's declared auth scheme, so there
+// is nothing here to parse. Basic() either yields the pair the operator wrote,
+// byte for byte, or reports that this provider does not have a basic
+// credential at all.
 func credentialFor(r providers.Resolved) (user, pass string) {
-	secret := r.APIKey.Reveal()
-	if secret == "" {
-		// Authentication off, which is an ordinary supported deployment on a
-		// trusted network — providers.needsCredential says so.
+	username, password, ok := r.Credential.Basic()
+	if !ok {
+		// A Transmission entry always resolves to a basic credential, so this
+		// is unreachable through Constructor's kind check. It is not an error
+		// because a wrong-shaped credential is a configuration mistake that
+		// providers.Validate already refuses at startup; reaching here would
+		// mean something built a Resolved by hand, and the safe reading of a
+		// credential we cannot use is "there is none".
 		return "", ""
 	}
-	if u, p, found := splitCredential(secret); found {
-		return u, p
-	}
-	return "transmission", secret
-}
-
-// splitCredential separates "user:pass" when a credential carries both.
-func splitCredential(secret string) (user, pass string, found bool) {
-	for i := range len(secret) {
-		if secret[i] == ':' {
-			return secret[:i], secret[i+1:], true
-		}
-	}
-	return "", secret, false
+	// The credential is revealed exactly here, at the point it is handed to
+	// the thing that must send it. Reveal() greps cleanly, which is the whole
+	// argument for the Secret type.
+	return username, password.Reveal()
 }
