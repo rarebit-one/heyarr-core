@@ -1,6 +1,21 @@
 ## heyarr peers show
 
-Show one peer, by name or id
+Show one peer, by name or id, and how stale its catalog snapshot is
+
+### Synopsis
+
+Show one peer, including its materialised catalog snapshot (§52, M4-13).
+
+The snapshot is the read-only copy of the controller's catalogue a Full Peer
+keeps so that it has something to serve from when the controller is not
+reachable (§53). This is where its VERSION and its AGE are reported, because
+those are the two facts that decide whether it is worth anything: a snapshot
+whose version has not moved in a week is one whose refresh has been failing in
+silence.
+
+A peer that has never built one reports "none", not version 0. Those are
+different answers — "the library is empty" and "this peer cannot help you" —
+and Milestone 7's degraded read path depends on nobody having collapsed them.
 
 ```
 heyarr peers show <name-or-id> [flags]

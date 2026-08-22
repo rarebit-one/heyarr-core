@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
@@ -352,5 +353,60 @@ func TestTheAPICannotRegisterASecondSelf(t *testing.T) {
 	}
 	if selves != 1 {
 		t.Errorf("%d peers claim to be this node, want 1", selves)
+	}
+}
+
+// `heyarr peers show` reports the snapshot's version and age — and reports
+// ABSENT rather than empty for a peer that has never built one (§52, M4-13).
+//
+// The two halves are one test on purpose. Asserting only the populated case
+// would pass on an implementation that rendered a zero PeerSnapshot for every
+// peer, which is precisely the conflation Milestone 7 cannot survive.
+func TestPeerShowReportsTheSnapshotVersionAndAgeOrNoneAtAll(t *testing.T) {
+	h := newHarness(t).seedSelf()
+	h.exec(`INSERT INTO peers (id, name, site, mode, is_self, enrolled_at, created_at)
+		VALUES ('01990000-0000-7000-8000-0000000000b1', 'peer-b', 'site-b', 'full', 0, ?, ?)`,
+		seedTime, seedTime)
+
+	// A peer that has never had a snapshot issued.
+	resp := h.do(http.MethodGet, "/api/v1/peers/peer-b", "", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	peer := decodePeer(t, resp)
+	if peer.Snapshot != nil {
+		t.Fatalf("a peer that has never built a snapshot reported one: %+v", *peer.Snapshot)
+	}
+
+	// The same peer, an hour after a snapshot was issued.
+	generated := fixedTime.Add(-time.Hour).Format(time.RFC3339Nano)
+	h.exec(`INSERT INTO peer_snapshots
+			(peer_id, controller_id, version, generated_at, kind, watermark,
+			 row_count, content_digest, updated_at)
+		VALUES ('01990000-0000-7000-8000-0000000000b1', 'controller-a', 4, ?, 'incremental', ?,
+			42, 'sha256:deadbeef', ?)`, generated, generated, generated)
+
+	peer = decodePeer(t, h.do(http.MethodGet, "/api/v1/peers/peer-b", "", nil))
+	if peer.Snapshot == nil {
+		t.Fatal("a peer with a snapshot on record reported none")
+	}
+	if peer.Snapshot.Version != 4 {
+		t.Fatalf("version = %d, want 4", peer.Snapshot.Version)
+	}
+	if peer.Snapshot.ControllerID != "controller-a" {
+		t.Fatalf("controller = %q, want controller-a", peer.Snapshot.ControllerID)
+	}
+	if peer.Snapshot.AgeSeconds != 3600 {
+		t.Fatalf("age = %v seconds, want 3600", peer.Snapshot.AgeSeconds)
+	}
+	if peer.Snapshot.Kind != "incremental" || peer.Snapshot.Rows != 42 {
+		t.Fatalf("snapshot = %+v", *peer.Snapshot)
+	}
+
+	// The self peer, which has none, still reports none in the same response
+	// shape — so a client cannot learn "absent" from a missing key.
+	self := decodePeer(t, h.do(http.MethodGet, "/api/v1/peers/this-node", "", nil))
+	if self.Snapshot != nil {
+		t.Fatalf("the self peer reported a snapshot: %+v", *self.Snapshot)
 	}
 }
