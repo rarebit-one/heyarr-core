@@ -14,7 +14,7 @@ import (
 // Peers
 // ---------------------------------------------------------------------------
 
-const peerColumns = `id, name, site, mode, endpoint, public_key, is_self, created_at, enrolled_at`
+const peerColumns = `id, name, site, mode, endpoint, public_key, is_self, created_at, enrolled_at, health, last_seen_at`
 
 func scanPeer(row interface{ Scan(...any) error }) (Peer, error) {
 	var p Peer
@@ -23,10 +23,15 @@ func scanPeer(row interface{ Scan(...any) error }) (Peer, error) {
 	var isSelf int
 	var created string
 	var enrolled sql.NullString
+	var lastSeen sql.NullString
 	if err := row.Scan(&p.ID, &p.Name, &p.Site, &p.Mode, &endpoint, &publicKey, &isSelf,
-		&created, &enrolled); err != nil {
+		&created, &enrolled, &p.Health, &lastSeen); err != nil {
 		return Peer{}, err
 	}
+	// Reachability comes from the stored column rather than being re-derived
+	// here from last_seen_at: the API and a peer.health_changed event must not
+	// be able to disagree about the same peer (M4-10).
+	p.LastSeenAt = parseNullTime(lastSeen)
 	p.Endpoint = nullString(endpoint)
 	// Rendered, not raw. The column is a BLOB and JSON would base64 it into
 	// something an operator cannot compare by eye with what the other site

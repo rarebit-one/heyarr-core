@@ -37,6 +37,11 @@ func peerFromMember(m membership.Member) Peer {
 		IsSelf:     m.IsSelf,
 		CreatedAt:  m.CreatedAt,
 		EnrolledAt: m.EnrolledAt,
+		Health:     m.Health,
+	}
+	if !m.LastSeenAt.IsZero() {
+		lastSeen := m.LastSeenAt
+		p.LastSeenAt = &lastSeen
 	}
 	if m.Endpoint != "" {
 		endpoint := m.Endpoint

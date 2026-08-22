@@ -55,6 +55,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/peer/health"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
@@ -123,6 +124,18 @@ type Member struct {
 	IsSelf     bool
 	EnrolledAt time.Time
 	CreatedAt  time.Time
+	// Health and LastSeenAt are reachability, owned by internal/peer/health
+	// (M4-10). They are read here, never written here: membership answers "is
+	// this peer trusted", health answers "is it up", and the two decay
+	// differently — a peer that is off is still a member, and a peer that is
+	// revoked is not made trustworthy by answering.
+	//
+	// They are carried on the record anyway because every caller that renders
+	// a peer — the API, `heyarr peers list`, `peers show` — needs both, and a
+	// second query per peer to fetch them would be a join the database can do
+	// once.
+	Health     string
+	LastSeenAt time.Time
 }
 
 // Registration is what an operator asserts about another node.
@@ -180,7 +193,7 @@ const timestampFormat = time.RFC3339Nano
 
 // columns is the projection every read here shares, so a column added to one
 // scanner and not the other is a compile error rather than a wrong answer.
-const columns = `id, name, site, mode, endpoint, public_key, is_self, enrolled_at, created_at`
+const columns = `id, name, site, mode, endpoint, public_key, is_self, enrolled_at, created_at, health, last_seen_at`
 
 // New constructs a Store.
 func New(opts Options) (*Store, error) {
@@ -377,6 +390,12 @@ func (s *Store) Register(ctx context.Context, reg Registration) (Result, error) 
 			IsSelf:     reg.IsSelf,
 			EnrolledAt: now,
 			CreatedAt:  now,
+			// The column's default, spelled rather than left empty. A newly
+			// enrolled peer has not been heard from: nothing has probed it and
+			// nothing has talked to it, so it is 'unknown' and not 'reachable'
+			// (migration 00020, M4-10). Enrolment is an operator's assertion
+			// about trust, which is not evidence about reachability.
+			Health: string(health.StateUnknown),
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO peers (id, name, site, mode, endpoint, public_key, is_self, enrolled_at, created_at)
@@ -510,10 +529,14 @@ func scan(row interface{ Scan(...any) error }) (Member, error) {
 		pub        []byte
 		isSelf     int
 		createdAt  string
+		lastSeenAt sql.NullString
 	)
 	if err := row.Scan(&m.PeerID, &m.Name, &m.Site, &m.Mode, &endpoint, &pub, &isSelf,
-		&enrolledAt, &createdAt); err != nil {
+		&enrolledAt, &createdAt, &m.Health, &lastSeenAt); err != nil {
 		return Member{}, err
+	}
+	if lastSeenAt.Valid {
+		m.LastSeenAt = parseTime(lastSeenAt.String)
 	}
 	m.Endpoint = endpoint.String
 	if len(pub) > 0 {

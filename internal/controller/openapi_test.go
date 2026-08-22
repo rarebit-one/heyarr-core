@@ -78,7 +78,10 @@ func newTestHandler(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, _, err := c.newServer(db, blobStore, 4)
+	// No health tracker: this fixture asserts the OpenAPI surface, and
+	// liveness recording is a side effect on the request path rather than a
+	// route.
+	srv, _, err := c.newServer(db, blobStore, 4, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

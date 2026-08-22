@@ -142,3 +142,31 @@ func TestPeersJSONNeverCarriesPrivateKeyMaterial(t *testing.T) {
 		t.Errorf("the private key is %#o after running the peers commands, want 0600", perm)
 	}
 }
+
+// TestPeersListShowsHealthAndLastSeen (§31, M4-10).
+//
+// Both columns, in the plain table an operator actually reads — not only in
+// --json. "Unreachable" with no timestamp is a status nobody can act on: it
+// does not say whether to go and restart something or to wait twenty seconds.
+func TestPeersListShowsHealthAndLastSeen(t *testing.T) {
+	h := newAPIHarness(t).seed()
+	pub, _ := fixedKeypair(t, 0x07)
+	h.mustRun("peers", "add", "--name", "peer-b", "--site", "site-b",
+		"--endpoint", "https://b.example:8385", "--public-key", identity.FormatPublicKey(pub))
+	// One peer that has been heard from and one that has not, so the test
+	// covers both the value and its absence.
+	h.exec(`UPDATE peers SET health = 'unreachable', last_seen_at = ? WHERE name = 'peer-b'`,
+		"2026-08-01T09:30:00Z")
+
+	out := h.mustRun("peers", "list")
+	for _, want := range []string{"HEALTH", "LAST SEEN", "unreachable", "2026-08-01T09:30:00Z"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("`peers list` does not show %q:\n%s", want, out)
+		}
+	}
+	// The peer nothing has heard from: a state, and a dash where its timestamp
+	// would be, rather than a blank cell that reads as a rendering bug.
+	if !strings.Contains(out, "unknown") {
+		t.Errorf("`peers list` does not show the unknown peer's health:\n%s", out)
+	}
+}

@@ -97,6 +97,10 @@ type Options struct {
 	// weakens anything, because with nothing wired to present a peer identity
 	// the guard would pass every request through anyway.
 	PeerMembership PeerMembership
+	// PeerLiveness records that a peer was heard from, once the guard above
+	// has admitted its request (§31, M4-10). Nil disables the recording and
+	// changes nothing else: liveness still flows from the idle probe.
+	PeerLiveness PeerLiveness
 	// PresentedPeerKey extracts the peer identity a connection proved. Nil
 	// means TLSPresentedPeerKey, which is the only production extractor. It is
 	// injectable so the revocation behaviour can be driven by a test without
@@ -121,6 +125,7 @@ type Server struct {
 	now      func() time.Time
 
 	peers        PeerMembership
+	peerLiveness PeerLiveness
 	presentedKey PresentedPeerKey
 
 	registry *prometheus.Registry
@@ -183,16 +188,17 @@ func New(opts Options) (*Server, error) {
 		// Normalised so the JSON shape is stable: a nil slice marshals as
 		// null, and a client parsing `media` should not have to handle both
 		// null and [] for the same "nothing here".
-		media:    append([]ToolInfo{}, opts.Media...),
-		build:    opts.Build,
-		schema:   opts.SchemaVersion,
-		known:    opts.KnownSchemaVersion,
-		casRoot:  opts.CASRoot,
-		now:      now,
-		peers:    opts.PeerMembership,
-		registry: registry,
-		metrics:  m,
-		errc:     make(chan error, 1),
+		media:        append([]ToolInfo{}, opts.Media...),
+		build:        opts.Build,
+		schema:       opts.SchemaVersion,
+		known:        opts.KnownSchemaVersion,
+		casRoot:      opts.CASRoot,
+		now:          now,
+		peers:        opts.PeerMembership,
+		peerLiveness: opts.PeerLiveness,
+		registry:     registry,
+		metrics:      m,
+		errc:         make(chan error, 1),
 	}
 	s.presentedKey = opts.PresentedPeerKey
 	if s.presentedKey == nil {

@@ -2591,7 +2591,7 @@ components:
 
     Peer:
       type: object
-      required: [id, name, site, mode, is_self, created_at, enrolled_at]
+      required: [id, name, site, mode, is_self, created_at, enrolled_at, health, last_seen_at]
       properties:
         id: { type: string }
         name: { type: string }
@@ -2622,6 +2622,36 @@ components:
             a peer removed and re-enrolled comes back with a new `id` and a new
             `enrolled_at` — which is what makes this the answer to "has
             membership changed?" rather than a copy of `created_at`.
+        health:
+          type: string
+          enum: [unknown, reachable, unreachable]
+          description: |
+            Whether this peer is reachable (§31, §32, M4-10).
+
+            It is OBSERVED, not declared. A peer is `reachable` because it
+            answered something recently — an inventory report, a served range,
+            or a cheap probe when nothing else has happened — and there is no
+            endpoint through which a peer can assert its own health.
+
+            `unreachable` means SILENCE past the window, not a failed request.
+            A peer that answered a request with a 500 is `reachable`: a 500
+            proves a process is listening, and the question here is whether
+            anything is there. `unknown` is a peer nothing has ever heard from,
+            and it is deliberately not a synonym for reachable — an unprobed
+            peer has not been shown to be up.
+
+            Health is advisory for reads and does not affect membership: an
+            unreachable peer is skipped as a read source, and still accrues the
+            replication work it is owed.
+        last_seen_at:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            When this peer last answered anything, or null if it never has.
+
+            It ships beside `health` rather than instead of it because
+            "unreachable" on its own is a status nobody can act on: it does not
+            say whether to go and restart something or to wait twenty seconds.
 
     PeerIdentity:
       type: object
