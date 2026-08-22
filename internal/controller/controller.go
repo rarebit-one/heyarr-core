@@ -181,12 +181,24 @@ func (c *Controller) Run(ctx context.Context) error {
 		return fmt.Errorf("controller: %w", err)
 	}
 
-	srv, err := c.newServer(db, blobStore, version)
+	srv, members, err := c.newServer(db, blobStore, version)
 	if err != nil {
 		return err
 	}
 	if err := srv.Start(); err != nil {
 		return fmt.Errorf("controller: %w", err)
+	}
+
+	// The peer fabric's listener (§26, ADR-0012, M4-05). It is constructed
+	// unconditionally — which proves the identity on disk can still produce a
+	// certificate — and binds only when peer.listen is set. A single-node
+	// deployment needs no certificate configuration at all.
+	peerSrv, err := c.newPeerSurface(self, members)
+	if err != nil {
+		return err
+	}
+	if err := peerSrv.Start(); err != nil {
+		return err
 	}
 
 	// Reconciliation runs on the SERVING context, not the startup one: it is
@@ -221,12 +233,17 @@ func (c *Controller) Run(ctx context.Context) error {
 		"peer_public_key", self.PublicKeyString(),
 		"http_addr", srv.Addr(),
 		"unix_socket", srv.SocketPath(),
-		"auth_enabled", c.cfg.HTTP.Auth.Enabled)
+		"auth_enabled", c.cfg.HTTP.Auth.Enabled,
+		// Empty when this node serves no peer surface, which is a
+		// configuration rather than a failure.
+		"peer_addr", peerSrv.Addr())
 
 	var runErr error
 	select {
 	case <-ctx.Done():
 	case err := <-srv.Err():
+		runErr = err
+	case err := <-peerSrv.Err():
 		runErr = err
 	}
 
@@ -239,6 +256,9 @@ func (c *Controller) Run(ctx context.Context) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		c.log.Error("the http server did not shut down cleanly", "error", err)
 	}
+	if err := peerSrv.Shutdown(shutdownCtx); err != nil {
+		c.log.Error("the peer surface did not shut down cleanly", "error", err)
+	}
 
 	c.log.Info("controller stopped")
 	return runErr
@@ -247,14 +267,18 @@ func (c *Controller) Run(ctx context.Context) error {
 // newServer wires the HTTP API. Authentication is constructed even when it is
 // disabled, so the two configurations differ in one boolean rather than in
 // which objects exist.
-func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion int64) (*httpapi.Server, error) {
+// It returns the membership store alongside the server because the peer
+// surface (M4-05) must consult the SAME trust root the enrolment endpoints
+// write and the request guard reads. Two stores over one database would answer
+// identically today and would be exactly the seam a cache gets added behind.
+func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion int64) (*httpapi.Server, *membership.Store, error) {
 	store, err := auth.NewStore(auth.StoreOptions{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
-		return nil, fmt.Errorf("controller: %w", err)
+		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 	verifier, err := auth.NewVerifier(auth.VerifierOptions{Store: store})
 	if err != nil {
-		return nil, fmt.Errorf("controller: %w", err)
+		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 	// Resolved here so a misconfigured path stops startup rather than being
 	// discovered later, and so GET /api/v1/system can report what this node
@@ -265,7 +289,7 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 		Logger:      c.log,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("controller: %w", err)
+		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
 	// The log is built here rather than inside mounts because it now has two
@@ -276,7 +300,7 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 		Writer: db.Writer(), Reader: db.Reader(), Logger: c.log,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("controller: %w", err)
+		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 	// The peer fabric's trust root (§26, ADR-0012, M4-04). One store, shared
 	// between the enrolment endpoints that write it and the request guard that
@@ -286,11 +310,11 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 		DB: db, Events: eventLog, Logger: c.log,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("controller: opening peer membership: %w", err)
+		return nil, nil, fmt.Errorf("controller: opening peer membership: %w", err)
 	}
 	mounts, err := c.mounts(db, store, blobStore, eventLog, members)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// What this binary knows how to migrate to, as opposed to what the database
 	// is actually at. The two are compared on GET /api/v1/system (#150), and
@@ -298,7 +322,7 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 	// the other is on disk, and the whole point is to notice when they disagree.
 	knownSchema, err := sqlite.KnownSchemaVersion()
 	if err != nil {
-		return nil, fmt.Errorf("controller: %w", err)
+		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
 	srv, err := httpapi.New(httpapi.Options{
@@ -316,9 +340,9 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 		PeerMembership:     members,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("controller: %w", err)
+		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
-	return srv, nil
+	return srv, members, nil
 }
 
 // mounts is the API surface this controller serves.

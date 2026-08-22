@@ -93,6 +93,22 @@ type Peer struct {
 	// and a wildcard bind names no host at all.
 	Endpoint string `koanf:"endpoint"`
 
+	// Listen is the address the mTLS peer surface binds (§26, ADR-0012).
+	//
+	// Empty — the default — means this node serves no peer surface at all, and
+	// that is the correct state for a deployment with one peer: there is
+	// nothing to be a member of, and `heyarr all` on a laptop must not need a
+	// certificate to talk to itself. Nothing about this listener is
+	// configurable beyond the address, because there is nothing else to
+	// configure: the certificate is derived from this node's Ed25519 identity
+	// in memory, is regenerated before it expires, and is never written down.
+	//
+	// It is safe on a routable address, which http.addr is not (ADR-0011).
+	// That is the point of the split: this listener refuses every connection
+	// that does not present a client certificate whose public key a membership
+	// record pins, and it refuses it during the handshake.
+	Listen string `koanf:"listen"`
+
 	// Name is this peer's stable name within the instance.
 	Name string `koanf:"name"`
 	// Site is the physical failure domain (spec §35). Two peers sharing a site
@@ -263,6 +279,17 @@ func (c Config) Validate() error {
 	}
 	if c.Peer.Name == "" {
 		return errors.New("config: peer.name must be set")
+	}
+	// The peer surface's address is checked for shape only. There is
+	// deliberately no loopback rule here and no equivalent of ADR-0011's
+	// refusal: this listener is mutually authenticated and pinned to
+	// membership (ADR-0012), so binding it publicly is what it is FOR, and a
+	// rule that pushed operators towards a tunnel would contradict the ADR's
+	// "must not treat an existing site-to-site VPN as its security boundary".
+	if c.Peer.Listen != "" {
+		if _, _, err := net.SplitHostPort(c.Peer.Listen); err != nil {
+			return fmt.Errorf("config: peer.listen %q is not a valid listen address: %w", c.Peer.Listen, err)
+		}
 	}
 
 	// ADR-0011. Milestone 1 has no identity model, and this server range-serves
