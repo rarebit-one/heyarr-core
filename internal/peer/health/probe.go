@@ -57,10 +57,15 @@ func (p HTTPProber) Probe(ctx context.Context, peer Peer) error {
 	if timeout <= 0 {
 		timeout = DefaultProbeTimeout
 	}
-	client, target, err := p.clientFor(peer.Endpoint, timeout)
+	client, target, release, err := p.clientFor(peer.Endpoint, timeout)
 	if err != nil {
 		return err
 	}
+	// A transport this call created holds an idle connection afterwards, and
+	// there is no next probe on it to reuse one: the next probe is minutes
+	// away and builds its own. Releasing it keeps a peer that is probed all
+	// week from accumulating a socket per probe.
+	defer release()
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -90,7 +95,7 @@ func (p HTTPProber) Probe(ctx context.Context, peer Peer) error {
 // unix:// is handled because it is what a single-host deployment derives for
 // itself (config.PeerEndpoint), and a prober that could not speak it would
 // report the most common development topology as permanently unreachable.
-func (p HTTPProber) clientFor(endpoint string, timeout time.Duration) (*http.Client, string, error) {
+func (p HTTPProber) clientFor(endpoint string, timeout time.Duration) (*http.Client, string, func(), error) {
 	if socket, ok := strings.CutPrefix(endpoint, "unix://"); ok {
 		client := &http.Client{
 			Timeout: timeout,
@@ -103,19 +108,23 @@ func (p HTTPProber) clientFor(endpoint string, timeout time.Duration) (*http.Cli
 		}
 		// The host is a placeholder: the transport dials the socket and never
 		// resolves it.
-		return client, "http://heyarr/healthz", nil
+		return client, "http://heyarr/healthz", client.CloseIdleConnections, nil
 	}
 	u, err := url.Parse(endpoint)
 	if err != nil {
-		return nil, "", fmt.Errorf("health: peer endpoint %q is not a URL: %w", endpoint, err)
+		return nil, "", nil, fmt.Errorf("health: peer endpoint %q is not a URL: %w", endpoint, err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, "", fmt.Errorf("health: peer endpoint %q has scheme %q; probing speaks http, https and unix", endpoint, u.Scheme)
+		return nil, "", nil, fmt.Errorf("health: peer endpoint %q has scheme %q; probing speaks http, https and unix", endpoint, u.Scheme)
 	}
 	u.Path = strings.TrimSuffix(u.Path, "/") + "/healthz"
+	// An http:// endpoint goes through the shared default transport, whose
+	// idle connections are not this probe's to close — hence a no-op release
+	// rather than CloseIdleConnections, which would evict connections
+	// belonging to everything else in the process.
 	client := p.Client
 	if client == nil {
 		client = &http.Client{Timeout: timeout}
 	}
-	return client, u.String(), nil
+	return client, u.String(), func() {}, nil
 }
