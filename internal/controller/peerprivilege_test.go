@@ -136,9 +136,21 @@ func newPeerSurfaceHarness(t *testing.T, presented httpapi.PresentedPeerKey) *pe
 	return &peerSurfaceHarness{server: ts, tokens: tokens, router: router}
 }
 
-// probeClient bounds every probe. The discovery below walks EVERY registered
-// route, and some of them answer by streaming.
-var probeClient = &http.Client{Timeout: 3 * time.Second}
+// Two clients, because the two phases of this file want opposite things from a
+// timeout.
+//
+// Discovery walks EVERY registered route, and some of them answer by
+// streaming: it needs a short deadline so a stream is passed over rather than
+// hanging the test. The assertions afterwards run against routes that are
+// known to answer immediately, and they need a generous one — argon2id
+// verification is deliberately expensive (ADR-0011) and the first request on a
+// token pays for it, under -race, on a machine running the rest of the suite.
+// A three-second deadline there is how this file failed in CI while passing
+// alone.
+var (
+	probeClient  = &http.Client{Timeout: 5 * time.Second}
+	assertClient = &http.Client{Timeout: 60 * time.Second}
+)
 
 // allMembers admits every key. It is the most permissive trust root there is:
 // if a peer certificate could ever confer admin, this is the configuration in
@@ -156,7 +168,20 @@ func (h *peerSurfaceHarness) token(t *testing.T, name string, scope auth.Scope) 
 	return created.Secret
 }
 
+// do issues one request with the generous deadline. Everything that asserts
+// uses it.
 func (h *peerSurfaceHarness) do(t *testing.T, method, route, token string) (int, string) {
+	t.Helper()
+	return h.request(t, assertClient, method, route, token)
+}
+
+// probe issues one request with the short deadline, for the discovery walk.
+func (h *peerSurfaceHarness) probe(t *testing.T, method, route, token string) (int, string) {
+	t.Helper()
+	return h.request(t, probeClient, method, route, token)
+}
+
+func (h *peerSurfaceHarness) request(t *testing.T, c *http.Client, method, route, token string) (int, string) {
 	t.Helper()
 	url := h.server.URL + fillParams(route)
 	req, err := http.NewRequestWithContext(context.Background(), method, url, strings.NewReader("{}"))
@@ -167,7 +192,7 @@ func (h *peerSurfaceHarness) do(t *testing.T, method, route, token string) (int,
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := probeClient.Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		// A route that streams (the event stream, the MCP session) answers by
 		// holding the connection open, and a probe that waited for it would
@@ -209,13 +234,21 @@ func adminRoutes(t *testing.T, h *peerSurfaceHarness) []string {
 	t.Helper()
 	writeToken := h.token(t, "discovery", auth.ScopeWrite)
 
+	// Warm the token before the walk. Verification is memoised but the FIRST
+	// use of a credential pays argon2id in full, and paying it inside a probe
+	// with a short deadline would mis-read one route as "no response".
+	if status, body := h.do(t, http.MethodGet, httpapi.APIPrefix+"/system", writeToken); status != http.StatusOK {
+		t.Fatalf("the discovery token does not work at all (%d), so the walk below would find "+
+			"nothing\n%s", status, body)
+	}
+
 	var found []string
 	err := chi.Walk(h.router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		route = normalisePath(route)
 		if !strings.HasPrefix(route, httpapi.APIPrefix) {
 			return nil
 		}
-		status, body := h.do(t, method, route, writeToken)
+		status, body := h.probe(t, method, route, writeToken)
 		if status == http.StatusForbidden && strings.Contains(body, "does not carry the admin scope") {
 			found = append(found, method+" "+route)
 		}
