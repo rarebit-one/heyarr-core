@@ -83,36 +83,43 @@ func readSnapshotIDs(ctx context.Context, tx *sql.Tx) (map[string][]string, erro
 		if !ok {
 			return nil, fmt.Errorf("catalog: no controller table mirrors %s", table)
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT `+src.key+` FROM `+src.table) //nolint:gosec // names come from a fixed map, not from input
+		ids, err := allIDs(ctx, tx, src.table, src.key)
 		if err != nil {
-			return nil, fmt.Errorf("catalog: listing %s: %w", src.table, err)
-		}
-		// A table with no rows must map to an empty slice rather than a
-		// missing key: the peer refuses an absent id set, because absent and
-		// empty mean opposite things there (keep everything / keep nothing).
-		ids := []string{}
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf("catalog: listing %s: %w", src.table, err)
-			}
-			ids = append(ids, id)
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return nil, fmt.Errorf("catalog: listing %s: %w", src.table, err)
-		}
-		if err := rows.Close(); err != nil {
-			return nil, fmt.Errorf("catalog: listing %s: %w", src.table, err)
+			return nil, err
 		}
 		out[table] = ids
 	}
 	return out, nil
 }
 
+// allIDs lists every key in one controller table.
+//
+// A table with no rows maps to an EMPTY slice rather than nil-that-marshals-to-
+// null: the peer refuses an absent id set, because absent and empty mean
+// opposite things there (keep everything / keep nothing).
+func allIDs(ctx context.Context, tx *sql.Tx, table, key string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT `+key+` FROM `+table) //nolint:gosec // names come from a fixed map, not from input
+	if err != nil {
+		return nil, fmt.Errorf("catalog: listing %s: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("catalog: listing %s: %w", table, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: listing %s: %w", table, err)
+	}
+	return ids, nil
+}
+
 func sourceLibraries(ctx context.Context, tx *sql.Tx, snap *peercatalog.Snapshot, since time.Time, inc bool) error {
 	where, args := sinceClause(snapshotChangeColumn["snapshot_libraries"], since, inc)
+	//nolint:gosec // the only concatenated fragment is sinceClause's, built from a fixed column map; the watermark is bound
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id, name, content_type, enabled, created_at FROM libraries`+where+` ORDER BY id`, args...)
 	if err != nil {
@@ -139,6 +146,7 @@ func sourceLibraries(ctx context.Context, tx *sql.Tx, snap *peercatalog.Snapshot
 
 func sourceLibraryRoots(ctx context.Context, tx *sql.Tx, snap *peercatalog.Snapshot, since time.Time, inc bool) error {
 	where, args := sinceClause(snapshotChangeColumn["snapshot_library_roots"], since, inc)
+	//nolint:gosec // the only concatenated fragment is sinceClause's, built from a fixed column map; the watermark is bound
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id, library_id, path, ingest_mode, enabled, created_at FROM library_roots`+where+` ORDER BY id`, args...)
 	if err != nil {
@@ -165,6 +173,7 @@ func sourceLibraryRoots(ctx context.Context, tx *sql.Tx, snap *peercatalog.Snaps
 
 func sourceWorks(ctx context.Context, tx *sql.Tx, snap *peercatalog.Snapshot, since time.Time, inc bool) error {
 	where, args := sinceClause(snapshotChangeColumn["snapshot_works"], since, inc)
+	//nolint:gosec // the only concatenated fragment is sinceClause's, built from a fixed column map; the watermark is bound
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id, content_type, work_key, title, sort_title, year, attributes, created_at, updated_at
 		 FROM works`+where+` ORDER BY id`, args...)
@@ -199,6 +208,7 @@ func sourceWorks(ctx context.Context, tx *sql.Tx, snap *peercatalog.Snapshot, si
 
 func sourceEditions(ctx context.Context, tx *sql.Tx, snap *peercatalog.Snapshot, since time.Time, inc bool) error {
 	where, args := sinceClause(snapshotChangeColumn["snapshot_editions"], since, inc)
+	//nolint:gosec // the only concatenated fragment is sinceClause's, built from a fixed column map; the watermark is bound
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id, work_id, label, edition_type, language, attributes, created_at
 		 FROM editions`+where+` ORDER BY id`, args...)
@@ -230,6 +240,7 @@ func sourceEditions(ctx context.Context, tx *sql.Tx, snap *peercatalog.Snapshot,
 
 func sourceBlobs(ctx context.Context, tx *sql.Tx, snap *peercatalog.Snapshot, since time.Time, inc bool) error {
 	where, args := sinceClause(snapshotChangeColumn["snapshot_blobs"], since, inc)
+	//nolint:gosec // the only concatenated fragment is sinceClause's, built from a fixed column map; the watermark is bound
 	rows, err := tx.QueryContext(ctx,
 		`SELECT hash, size, mime, chunked, first_seen_at FROM blobs`+where+` ORDER BY hash`, args...)
 	if err != nil {
@@ -261,6 +272,7 @@ func sourceBlobs(ctx context.Context, tx *sql.Tx, snap *peercatalog.Snapshot, si
 
 func sourceAssets(ctx context.Context, tx *sql.Tx, snap *peercatalog.Snapshot, since time.Time, inc bool) error {
 	where, args := sinceClause(snapshotChangeColumn["snapshot_assets"], since, inc)
+	//nolint:gosec // the only concatenated fragment is sinceClause's, built from a fixed column map; the watermark is bound
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id, edition_id, library_id, source_class, blob_hash, source_path, fingerprint,
 		        role, filename, mime, identification_source, missing_since, created_at, updated_at

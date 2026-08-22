@@ -244,27 +244,15 @@ func prune(ctx context.Context, tx *sql.Tx, keep map[string][]string) error {
 		}
 
 		key := primaryKeyOf(table)
-		rows, err := tx.QueryContext(ctx, `SELECT `+key+` FROM `+table) //nolint:gosec // names come from Covered(), not from input
+		held, err := heldIDs(ctx, tx, table, key)
 		if err != nil {
-			return fmt.Errorf("catalog: listing %s: %w", table, err)
+			return err
 		}
 		var doomed []string
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				_ = rows.Close()
-				return fmt.Errorf("catalog: listing %s: %w", table, err)
-			}
+		for _, id := range held {
 			if _, keepIt := wanted[id]; !keepIt {
 				doomed = append(doomed, id)
 			}
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("catalog: listing %s: %w", table, err)
-		}
-		if err := rows.Close(); err != nil {
-			return fmt.Errorf("catalog: listing %s: %w", table, err)
 		}
 
 		for _, id := range doomed {
@@ -274,6 +262,27 @@ func prune(ctx context.Context, tx *sql.Tx, keep map[string][]string) error {
 		}
 	}
 	return nil
+}
+
+// heldIDs lists the primary keys currently in one covered table.
+func heldIDs(ctx context.Context, tx *sql.Tx, table, key string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT `+key+` FROM `+table) //nolint:gosec // names come from Covered(), not from input
+	if err != nil {
+		return nil, fmt.Errorf("catalog: listing %s: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("catalog: listing %s: %w", table, err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: listing %s: %w", table, err)
+	}
+	return out, nil
 }
 
 // writeMeta records what the store now holds.

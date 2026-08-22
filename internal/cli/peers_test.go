@@ -170,3 +170,34 @@ func TestPeersListShowsHealthAndLastSeen(t *testing.T) {
 		t.Errorf("`peers list` does not show the unknown peer's health:\n%s", out)
 	}
 }
+
+// `heyarr peers show` prints "none" — never version 0 — for a peer that has
+// never built a catalog snapshot (§52, §53, M4-13).
+//
+// It asserts the HUMAN output rather than only the JSON, because "none" is the
+// word an operator reads at three in the morning during an outage, and a table
+// that printed 0 there would be read as "the library is empty" rather than as
+// "this peer has never synced". The acceptance script asserts the same line.
+func TestPeersShowPrintsNoneForAPeerWithNoSnapshot(t *testing.T) {
+	h := newAPIHarness(t).seed()
+	pub, _ := fixedKeypair(t, 0x07)
+	h.mustRun("peers", "add", "--name", "peer-b", "--site", "site-b",
+		"--endpoint", "https://b.example:8385", "--public-key", identity.FormatPublicKey(pub))
+
+	out := h.mustRun("peers", "show", "peer-b")
+	var snapshotRow string
+	for _, line := range strings.Split(out, "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 && fields[0] == "none" {
+			snapshotRow = fields[0]
+		}
+		if strings.Contains(line, " 0 ") {
+			t.Errorf("the snapshot row printed a zero somewhere: %q", line)
+		}
+	}
+	if snapshotRow != "none" {
+		t.Fatalf("`peers show` did not print a snapshot row saying none:\n%s", out)
+	}
+	if !strings.Contains(out, "SNAPSHOT") {
+		t.Fatalf("`peers show` has no snapshot section at all:\n%s", out)
+	}
+}

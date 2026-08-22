@@ -103,11 +103,14 @@ func (c *Controller) newPeerSurface(
 	// A peer runs no control plane and cannot write control-plane rows
 	// directly (ADR-0029): it reports what its disk holds, and the
 	// controller's single writer records that. This is that writer — and it is
-	// also the reader the snapshot is built from, which is why one catalog
-	// serves both directions rather than two. It gets
-	// its own event log for the same reason every other construction in this
-	// file does — one log per process would be tidier and is a refactor
-	// rather than this issue.
+	// also the reader the snapshot is built from, which is why ONE catalog
+	// serves both directions rather than two: the inventory a peer reports and
+	// the snapshot it is issued are two views of the same state, and two
+	// catalogs would be two event logs recording halves of one conversation.
+	//
+	// It gets its own event log for the same reason every other construction
+	// in this file does — one log per process would be tidier and is a
+	// refactor rather than this issue.
 	peerEvents, err := events.New(events.Options{
 		Writer: db.Writer(), Reader: db.Reader(), Logger: c.log,
 	})
@@ -128,13 +131,8 @@ func (c *Controller) newPeerSurface(
 		Members:    peerLookup{store: members},
 		SelfPeerID: self.PeerID,
 		Inventory:  peerCatalog,
-		// The same catalog answers both peer-surface routes, and one
-		// construction is the point: the inventory a peer reports and the
-		// snapshot it is issued are two views of the state this controller
-		// owns, and two catalogs would be two event logs recording halves of
-		// the same conversation.
-		Snapshots: snapshotSource{cat: peerCatalog, self: self.PeerID},
-		Logger:    c.log,
+		Snapshots:  snapshotSource{cat: peerCatalog, self: self.PeerID},
+		Logger:     c.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)

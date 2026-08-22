@@ -55,7 +55,7 @@ func (s *Server) handleCatalogSnapshot(w http.ResponseWriter, r *http.Request) {
 		// than an internal error, which would send an operator looking for a
 		// bug in the controller they are not talking to.
 		httpapi.Fail(w, r, problem.New(http.StatusServiceUnavailable, problem.TypeInternal,
-			"No Catalog", "this node serves the peer fabric but holds no catalogue to snapshot; "+
+			"Service Unavailable", "this node serves the peer fabric but holds no catalogue to snapshot; "+
 				"a catalog snapshot comes from the controller a Full Peer is attached to (ADR-0029)"))
 		return
 	}
