@@ -43,7 +43,12 @@
 // POST /peer/v1/inventory is M4-07: a peer reporting what its disk actually
 // holds, which the controller folds into `replicas` — additions, and removals
 // as `missing` rather than deleted rows, so a peer that lost bytes is visible
-// rather than silently absent. Byte serving over this surface is M4-09.
+// rather than silently absent.
+//
+// GET|HEAD /peer/v1/blobs/{hash}/content is M4-09: the byte-carrying hop
+// itself. It is the SAME handler the client API serves, on a different trust
+// root — ADR-0013 called this out in advance — and it is the only route in
+// this repository over which a replica travels. See blobs.go.
 //
 // # A peer is not an admin
 //
@@ -107,7 +112,15 @@ type Options struct {
 	// optional keeps `heyarr all` and the peer-surface tests constructible
 	// without a database, which is the same reason Addr may be empty.
 	Inventory InventorySink
-	Logger    *slog.Logger
+	// Blobs serves blob content to a pinned peer (M4-09).
+	//
+	// Optional, for the same reason Inventory is: a peer surface with no
+	// content store still MOUNTS the route — the OpenAPI parity test walks
+	// this router and an unmounted route would be documented and unserved —
+	// and answers 503. That keeps this package constructible without a CAS,
+	// which is what the parity test's own fixture needs.
+	Blobs  BlobServer
+	Logger *slog.Logger
 	// Now is injected so certificate validity is testable (ADR-0017).
 	Now func() time.Time
 	// Snapshots builds catalog snapshots for attached Full Peers (§52,
@@ -134,6 +147,9 @@ type Server struct {
 	// M4-13). Nil for the same reason and with the same consequence: the route
 	// is mounted and refuses honestly.
 	snapshots SnapshotSource
+	// blobs serves bytes to a pinned peer. Nil on a node with no content store
+	// behind its peer surface.
+	blobs BlobServer
 
 	http     *http.Server
 	bound    string
@@ -182,6 +198,7 @@ func New(opts Options) (*Server, error) {
 
 		inventory: opts.Inventory,
 		snapshots: opts.Snapshots,
+		blobs:     opts.Blobs,
 	}
 	s.handler = s.routes()
 	s.http = &http.Server{
@@ -234,6 +251,16 @@ func (s *Server) routes() http.Handler {
 		// disk holds, here the controller tells the peer what the catalogue
 		// holds. Neither lets a peer write control state (ADR-0029).
 		r.Get("/catalog/snapshot", s.handleCatalogSnapshot)
+		// Byte serving (§21, ADR-0013, ADR-0030, M4-09). This is the hop
+		// replication actually travels: the destination opens this connection,
+		// reads these bytes and verifies them itself. The controller is not
+		// on it, and there is no route anywhere that would put it there — no
+		// redirect, no proxy, no "just for the first sync" path (§32).
+		//
+		// HEAD as well as GET, because ADR-0013's contract includes it and a
+		// caller asking only for the length must not be served a body.
+		r.Get("/blobs/{hash}/content", s.handleBlobContent)
+		r.Head("/blobs/{hash}/content", s.handleBlobContent)
 	})
 
 	// There is no admin route on this router and there is not going to be one.

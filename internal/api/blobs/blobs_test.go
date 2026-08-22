@@ -603,6 +603,10 @@ func (s synthStore) Put(context.Context, io.Reader) (cas.Descriptor, error) {
 	return cas.Descriptor{}, errReadOnly
 }
 
+func (s synthStore) PutExpecting(context.Context, io.Reader, hashing.Hash) (cas.Descriptor, error) {
+	return cas.Descriptor{}, errReadOnly
+}
+
 func (s synthStore) Link(context.Context, string, cas.Materialisation) (cas.Descriptor, error) {
 	return cas.Descriptor{}, errReadOnly
 }

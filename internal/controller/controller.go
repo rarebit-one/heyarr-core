@@ -212,7 +212,7 @@ func (c *Controller) Run(ctx context.Context) error {
 	// unconditionally — which proves the identity on disk can still produce a
 	// certificate — and binds only when peer.listen is set. A single-node
 	// deployment needs no certificate configuration at all.
-	peerSrv, err := c.newPeerSurface(db, self, members)
+	peerSrv, err := c.newPeerSurface(db, self, members, blobStore)
 	if err != nil {
 		return err
 	}

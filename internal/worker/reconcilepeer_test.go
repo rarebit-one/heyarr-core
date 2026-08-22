@@ -238,19 +238,23 @@ func (h *convergeHarness) cycleEvents(t *testing.T) []cycleSummary {
 	return out
 }
 
-// transfer is one replicate_blob job as the queue holds it.
-type transfer struct {
+// queuedTransfer is one replicate_blob job as the queue holds it.
+//
+// Named for the QUEUE rather than for the act: internal/peer/transfer is the
+// package that actually moves bytes (M4-09), and a test type sharing its name
+// would shadow the import for the whole package.
+type queuedTransfer struct {
 	BlobHash    string
 	Destination string
 	DedupeKey   string
 }
 
-func (t transfer) String() string {
+func (t queuedTransfer) String() string {
 	return fmt.Sprintf("%s → %s", t.BlobHash, t.Destination)
 }
 
 // transfers reads every replicate_blob job in the queue, in a stable order.
-func (h *convergeHarness) transfers(t *testing.T) []transfer {
+func (h *convergeHarness) transfers(t *testing.T) []queuedTransfer {
 	t.Helper()
 	rows, err := h.db.Reader().Query(
 		`SELECT payload, coalesce(dedupe_key, '') FROM jobs WHERE type = ? ORDER BY id`,
@@ -259,7 +263,7 @@ func (h *convergeHarness) transfers(t *testing.T) []transfer {
 		t.Fatal(err)
 	}
 	defer func() { _ = rows.Close() }()
-	var out []transfer
+	var out []queuedTransfer
 	for rows.Next() {
 		var raw, key string
 		if err := rows.Scan(&raw, &key); err != nil {
@@ -269,7 +273,7 @@ func (h *convergeHarness) transfers(t *testing.T) []transfer {
 		if err := json.Unmarshal([]byte(raw), &p); err != nil {
 			t.Fatal(err)
 		}
-		out = append(out, transfer{
+		out = append(out, queuedTransfer{
 			BlobHash: p.BlobHash, Destination: p.DestinationPeerID, DedupeKey: key,
 		})
 	}

@@ -80,8 +80,8 @@ func New(opts Options) (*Handler, error) {
 // requires. There is no write route: blobs arrive through ingest, and an object
 // whose name is its digest cannot be updated in place by definition (ADR-0005).
 func (h *Handler) Mount(r chi.Router) {
-	r.Method(http.MethodGet, "/blobs/{hash}/content", http.HandlerFunc(h.content))
-	r.Method(http.MethodHead, "/blobs/{hash}/content", http.HandlerFunc(h.content))
+	r.Method(http.MethodGet, "/blobs/{hash}/content", http.HandlerFunc(h.Content))
+	r.Method(http.MethodHead, "/blobs/{hash}/content", http.HandlerFunc(h.Content))
 }
 
 // immutableCacheControl is a year, the maximum RFC 9111 asks anyone to honour,
@@ -95,7 +95,15 @@ func (h *Handler) Mount(r chi.Router) {
 // URL.
 const immutableCacheControl = "public, max-age=31536000, immutable"
 
-// content serves a blob, or a range of one.
+// Content serves a blob, or a range of one.
+//
+// It is exported because ADR-0013's title is the whole of the reason: blob
+// serving is a CONTRACT, not an endpoint. The peer fabric mounts this same
+// function on its own listener under its own credential (M4-09), and a
+// replication-specific copy of it would be a second range implementation to
+// keep in step with this one — which is exactly what "the same endpoint that
+// Milestone 4 replication reads from" was written to prevent. One function,
+// two mount points, two trust roots.
 //
 // Range parsing is http.ServeContent's job, deliberately. Multi-range multipart
 // responses, If-Range, the 206 and 416 boundary conditions and the difference
@@ -103,7 +111,7 @@ const immutableCacheControl = "public, max-age=31536000, immutable"
 // the standard library, and every hand-rolled range parser rediscovers a subset
 // of them. What this function owns is identity, the headers, and the fact that
 // the reader is a seekable stream and never a buffer.
-func (h *Handler) content(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) Content(w http.ResponseWriter, r *http.Request) {
 	raw := chi.URLParam(r, "hash")
 	hash, err := hashing.Parse(raw)
 	if err != nil {
