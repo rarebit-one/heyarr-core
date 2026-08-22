@@ -1,0 +1,11 @@
+{
+  "id": "<uuid>",
+  "name": "laptop",
+  "algorithm": "ed25519",
+  "public_key": "ed25519:<hex>",
+  "created_at": "<timestamp>",
+  "key_path": "<config-dir>/device_ed25519.key",
+  "enrolment_status": "not_enrolled",
+  "unproven": true,
+  "authorises": "this key authorises nothing yet: it is not enrolled with any user identity, and every grant against a Heyarr controller remains an ADR-0011 bearer scope until Milestone 8"
+}

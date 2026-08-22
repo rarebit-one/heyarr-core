@@ -70,6 +70,11 @@ One logical library, multiple complete sovereign peers.`,
 		newConfigCommand(opts, &configPath),
 		newTokenCommand(opts, &configPath),
 		newFsckCommand(opts, &configPath),
+		// The device commands. Not a client of the controller and not host
+		// administration: they manage the key of the person at the keyboard,
+		// in that person's own config directory (§40, ADR-0032). They take no
+		// --config on purpose.
+		newDeviceCommand(opts),
 		newGCCommand(opts, &configPath),
 		// The client commands. Everything below this line talks to a running
 		// controller over /api/v1; everything above it is host administration
