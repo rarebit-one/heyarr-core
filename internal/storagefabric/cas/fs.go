@@ -9,6 +9,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -672,4 +674,91 @@ func (c *ctxReader) Read(p []byte) (int, error) {
 		return 0, err
 	}
 	return c.r.Read(p)
+}
+
+// Quarantined is a blob the store moved out of the addressable tree because
+// its bytes stopped matching their own name (ADR-0018).
+type Quarantined struct {
+	// Hash is the name the blob was stored under, which is the digest its
+	// bytes were expected to have. Identity is still the hash, even here
+	// (ADR-0005) — quarantine changes where the bytes are, not what they were
+	// claiming to be.
+	Hash hashing.Hash
+	// Name is the base name within quarantine/, never a path.
+	Name string
+	Size int64
+	// QuarantinedAt is when the store moved the bytes aside, taken from the
+	// nanosecond suffix quarantine() writes into the filename rather than from
+	// the file's mtime — a rename preserves mtime, so mtime is when the bytes
+	// were last WRITTEN, which for a blob corrupted in place is the moment
+	// somebody else damaged it.
+	QuarantinedAt time.Time
+}
+
+// QuarantinedBlobs lists what this store has quarantined.
+//
+// It is on *FS rather than on Store, like TempFiles above: it is a question
+// about local on-disk layout, and a store with no local layout has no honest
+// answer to it. The caller that needs it — a peer building the inventory it
+// reports to the controller (M4-07) — is a caller that already knows it is
+// looking at a local store.
+//
+// It exists because of what an inventory that could not answer it would say.
+// A quarantined blob is neither present nor absent: the peer HAS the bytes and
+// they are NOT servable. Omitting it would report the blob as gone and invite
+// a replacement transfer that overwrites the evidence; reporting it as present
+// would leave the controller believing in a copy that cannot be read. Both are
+// worse than the truth, which is `corrupt`.
+//
+// A blob quarantined more than once — corrupted, replaced, corrupted again —
+// has several files here. The most recent one wins, because that is the state
+// of the blob now.
+func (s *FS) QuarantinedBlobs() ([]Quarantined, error) {
+	dir := filepath.Join(s.root, quarantineDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("cas: reading %s: %w", dir, err)
+	}
+	latest := map[hashing.Hash]Quarantined{}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		hexPart, nanosPart, ok := strings.Cut(e.Name(), ".")
+		if !ok {
+			continue
+		}
+		h, parseErr := hashing.Parse(hashing.Algorithm + ":" + hexPart)
+		if parseErr != nil {
+			continue
+		}
+		nanos, convErr := strconv.ParseInt(nanosPart, 10, 64)
+		if convErr != nil {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			// Gone between the listing and the stat. Not a finding.
+			continue
+		}
+		q := Quarantined{
+			Hash:          h,
+			Name:          e.Name(),
+			Size:          info.Size(),
+			QuarantinedAt: time.Unix(0, nanos).UTC(),
+		}
+		if prev, seen := latest[h]; seen && prev.QuarantinedAt.After(q.QuarantinedAt) {
+			continue
+		}
+		latest[h] = q
+	}
+	out := make([]Quarantined, 0, len(latest))
+	for _, q := range latest {
+		out = append(out, q)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Hash.String() < out[j].Hash.String() })
+	return out, nil
 }
