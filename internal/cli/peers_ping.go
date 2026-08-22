@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -72,30 +73,65 @@ listening there.`,
 }
 
 func pingPeer(ctx context.Context, out io.Writer, c *client.Client, cfg config.Config, ref string, asJSON bool) error {
-	var target client.Peer
-	if err := c.Get(ctx, "/peers/"+url.PathEscape(ref), nil, &target); err != nil {
+	dial, err := peerDialer(ctx, c, cfg, ref)
+	if err != nil {
 		return err
 	}
+	var got peerapi.IdentityResponse
+	if err := dial.call(ctx, http.MethodGet, "/identity", nil, &got); err != nil {
+		return err
+	}
+
+	if asJSON {
+		return emitJSON(out, got)
+	}
+	t := newTable("PEER", "SEEN AS", "NAME", "PUBLIC KEY", "SERVED BY")
+	t.add(dial.target.Name, got.PeerID, got.Name, got.PublicKey, got.ServedBy)
+	return t.render(out, "no identity")
+}
+
+// peerConnection is a pinned mTLS client aimed at one enrolled peer.
+//
+// It is shared by `peers ping` and `peers attach` rather than copied, because
+// the copy is where a second pinning decision would appear — and the second
+// one is always the one that pins less.
+type peerConnection struct {
+	http   *http.Client
+	base   string
+	target client.Peer
+}
+
+// peerDialer builds the connection to one enrolled peer.
+//
+// It pins the record it just read. The controller has already told this
+// process which key that peer is; consulting a membership table the CLI does
+// not have would be strictly weaker, and accepting whatever answers at the
+// endpoint would be trust on first use with extra steps.
+func peerDialer(ctx context.Context, c *client.Client, cfg config.Config, ref string) (*peerConnection, error) {
+	var target client.Peer
+	if err := c.Get(ctx, "/peers/"+url.PathEscape(ref), nil, &target); err != nil {
+		return nil, err
+	}
 	if target.PublicKey == nil || *target.PublicKey == "" {
-		return fmt.Errorf("peer %q has no public key recorded, so there is nothing to pin — "+
+		return nil, fmt.Errorf("peer %q has no public key recorded, so there is nothing to pin — "+
 			"enrol it with `heyarr peers add --public-key` (ADR-0012)", ref)
 	}
 	if target.Endpoint == nil || *target.Endpoint == "" {
-		return fmt.Errorf("peer %q has no endpoint recorded, so there is nowhere to dial — "+
+		return nil, fmt.Errorf("peer %q has no endpoint recorded, so there is nowhere to dial — "+
 			"register it again with --endpoint; the endpoint is not its identity and may change freely", ref)
 	}
 	targetKey, err := identity.ParsePublicKey(*target.PublicKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	self, err := selfPeer(ctx, c)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	priv, err := identity.Signer(cfg.DataDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// The private key on disk must be the one the catalog records for this
 	// node. Refusing here rather than at the handshake means the operator is
@@ -104,17 +140,17 @@ func pingPeer(ctx context.Context, out io.Writer, c *client.Client, cfg config.C
 	if self.PublicKey != nil {
 		recorded, parseErr := identity.ParsePublicKey(*self.PublicKey)
 		if parseErr != nil {
-			return parseErr
+			return nil, parseErr
 		}
 		if !recorded.Equal(priv.Public()) {
-			return fmt.Errorf("%w: the key in %s does not match the public key this node records",
+			return nil, fmt.Errorf("%w: the key in %s does not match the public key this node records",
 				identity.ErrKeyMismatch, cfg.DataDir)
 		}
 	}
 
 	material, err := mtls.NewMaterial(mtls.MaterialOptions{PrivateKey: priv, PeerID: self.ID})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	httpClient, err := mtls.Client(mtls.Options{
 		Material: material,
@@ -123,15 +159,30 @@ func pingPeer(ctx context.Context, out io.Writer, c *client.Client, cfg config.C
 		}),
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
+	return &peerConnection{
+		http:   httpClient,
+		base:   strings.TrimSuffix(*target.Endpoint, "/") + peerapi.Prefix,
+		target: target,
+	}, nil
+}
 
-	endpoint := strings.TrimSuffix(*target.Endpoint, "/") + peerapi.Prefix + "/identity"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+// call makes one request on the peer surface and decodes the answer.
+func (p *peerConnection) call(ctx context.Context, method, path string, body []byte, out any) error {
+	endpoint := p.base + path
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
 	if err != nil {
 		return err
 	}
-	resp, err := httpClient.Do(req)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := p.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("the connection to %s was refused: %w.\n"+
 			"A refusal in this fabric is a failed handshake rather than an error status, so this is "+
@@ -139,24 +190,17 @@ func pingPeer(ctx context.Context, out io.Writer, c *client.Client, cfg config.C
 			"nothing listening at the endpoint", endpoint, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s answered %d: %s", endpoint, resp.StatusCode, strings.TrimSpace(string(body)))
+		return fmt.Errorf("%s answered %d: %s", endpoint, resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
-	var got peerapi.IdentityResponse
-	if err := json.Unmarshal(body, &got); err != nil {
-		return fmt.Errorf("%s answered something that is not a peer identity: %w", endpoint, err)
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("%s answered something this command cannot read: %w", endpoint, err)
 	}
-
-	if asJSON {
-		return emitJSON(out, got)
-	}
-	t := newTable("PEER", "SEEN AS", "NAME", "PUBLIC KEY", "SERVED BY")
-	t.add(target.Name, got.PeerID, got.Name, got.PublicKey, got.ServedBy)
-	return t.render(out, "no identity")
+	return nil
 }
 
 // selfPeer is this node's own membership record.

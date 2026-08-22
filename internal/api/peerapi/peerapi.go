@@ -27,12 +27,27 @@
 //
 // # What it serves
 //
-// One route today: GET /peer/v1/identity, which reports the peer identity this
-// node DERIVED FROM THE PRESENTED CERTIFICATE. It exists because "the request
-// returned 200" is not evidence that pinning happened — a server that
-// authenticated nobody would also return 200 — and the acceptance condition
-// M4-05 owes is that the id the server derived equals the id enrolment
-// returned. Byte serving over this surface is M4-07 and M4-09.
+// GET /peer/v1/identity reports the peer identity this node DERIVED FROM THE
+// PRESENTED CERTIFICATE. It exists because "the request returned 200" is not
+// evidence that pinning happened — a server that authenticated nobody would
+// also return 200 — and the acceptance condition M4-05 owes is that the id the
+// server derived equals the id enrolment returned.
+//
+// GET /peer/v1/attachment and POST /peer/v1/attach are the peer → controller
+// link (ADR-0029, ADR-0033): a controller-attached Full Peer confirms which
+// controller it is attached to and what that controller records it as. The
+// POST carries a DECLARED peer id, which is compared against the certificate
+// identity and refused on a mismatch — it is never read as the acting
+// identity. Byte serving over this surface is M4-07 and M4-09.
+//
+// # A peer is not an admin
+//
+// Everything mounted here authorises as the calling peer, acting on its own
+// resources. There is no route here that mints a token, enrols a peer or
+// changes policy, and there will not be: those are the admin surface, on the
+// other listener, behind an admin-scoped bearer token (ADR-0033). The
+// symmetric half of that rule lives in httpapi.RequireScope, which refuses an
+// admin route to a request arriving over a peer certificate.
 package peerapi
 
 import (
@@ -172,7 +187,18 @@ func (s *Server) routes() http.Handler {
 	r.Route(Prefix, func(r chi.Router) {
 		r.Use(s.requirePeerIdentity)
 		r.Get("/identity", s.handleIdentity)
+		// The controller-attachment pair (ADR-0029, ADR-0033). Both answer
+		// with the peer the CERTIFICATE proved; the POST additionally compares
+		// the declaration the peer sent and refuses a mismatch.
+		r.Get("/attachment", s.handleAttachment)
+		r.Post("/attach", s.handleAttach)
 	})
+
+	// There is no admin route on this router and there is not going to be one.
+	// A peer certificate authorises the peer surface, acting as that peer
+	// (ADR-0033); token management, peer enrolment and policy live on the
+	// client API behind an admin-scoped bearer token, on a listener that never
+	// asks for a client certificate.
 	return r
 }
 
@@ -268,8 +294,16 @@ func (s *Server) handleIdentity(w http.ResponseWriter, r *http.Request) {
 		PublicKey: identity.FormatPublicKey(peer.PublicKey),
 		ServedBy:  s.self,
 	}
+	s.writeJSON(w, r, body)
+}
+
+// writeJSON renders a successful peer response. Errors never come through here
+// — those are problem documents, written by httpapi.Fail.
+func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, body any) {
 	buf, err := json.Marshal(body)
 	if err != nil {
+		s.log.Error("encoding a peer response failed",
+			"request_id", httpapi.RequestIDFrom(r.Context()), "path", r.URL.Path, "error", err)
 		httpapi.Fail(w, r, problem.Internal())
 		return
 	}

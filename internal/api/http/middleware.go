@@ -23,6 +23,12 @@ const (
 	ctxKeyRequestID ctxKey = iota
 	ctxKeyIdentity
 	ctxKeyIdentitySlot
+	// ctxKeyPeerConnection marks a request that arrived over a connection
+	// presenting a peer client certificate (ADR-0012, ADR-0033). It is set by
+	// the membership guard and read by RequireScope, which is what makes "a
+	// peer is not an admin" a property of the whole admin surface rather than
+	// of the routes somebody remembered.
+	ctxKeyPeerConnection
 )
 
 // identitySlot lets the access log name the caller.

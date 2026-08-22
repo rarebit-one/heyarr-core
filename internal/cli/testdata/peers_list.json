@@ -8,6 +8,8 @@
     "public_key": null,
     "is_self": true,
     "created_at": "<timestamp>",
-    "enrolled_at": "<timestamp>"
+    "enrolled_at": "<timestamp>",
+    "health": "unknown",
+    "last_seen_at": null
   }
 ]

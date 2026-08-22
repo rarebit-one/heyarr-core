@@ -198,7 +198,21 @@ func TestRemovingAPeerSeversAConnectionThatWasReadingBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	node := newPeerNode(t, func(*http.Request) ([]byte, bool) { return peerPub, true })
+	// Every request on this server is a peer connection EXCEPT the operator's
+	// revoke, which announces itself with a header.
+	//
+	// The distinction is production's, not a convenience: the operator's
+	// DELETE arrives on the client listener, which asks for no client
+	// certificate, and a request that DID present a peer certificate is
+	// refused on an admin route (ADR-0033 — a peer is not an admin). Marking
+	// the whole test as one peer connection would be asking a peer to revoke a
+	// peer, which is the thing that must not work.
+	node := newPeerNode(t, func(r *http.Request) ([]byte, bool) {
+		if r.Header.Get("X-Test-Connection") == "operator" {
+			return nil, false
+		}
+		return peerPub, true
+	})
 
 	// Bytes for the peer to read.
 	const content = "the bytes a revoked peer must stop being able to read"
@@ -259,6 +273,10 @@ func TestRemovingAPeerSeversAConnectionThatWasReadingBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The operator's connection, not the peer's. It goes through the same
+	// client so that the pooled connection the reads are using stays warm and
+	// the read below is genuinely the one that was already open.
+	req.Header.Set("X-Test-Connection", "operator")
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
