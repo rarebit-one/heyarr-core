@@ -127,16 +127,29 @@ func newProber(t *testing.T, opts probe.Options) *probe.Prober {
 //	v2: "the bytes read barely move as the blob grows" — passed on darwin with
 //	    ffprobe 6.0 (2.45 MB → 2.90 MB) and failed on Linux CI with 7.0.2
 //	    (1.52 MB → 3.51 MB). "Roughly constant" was a fact about one build.
+//	v3: "the FRACTION falls as the blob grows" — failed on Linux CI reading
+//	    262 KB of 33 MB (0.782%) and then 3.09 MB of 268 MB (1.152%). Both are
+//	    far under the ceiling, so the bound held; it was the derived claim that
+//	    broke. Boundedness does NOT imply the fraction falls between two
+//	    particular sizes — only that it tends to zero. ffprobe reads what it
+//	    needs, and what it needs is not monotone in file size.
 //
-// What is true in both, and is what §29 is actually about:
+// What survives all three, and is what §29 is actually about:
 //
 //   - the bytes read are bounded by a CONSTANT — ffprobe reads up to its
-//     `probesize` (about 5 MB by default) while detecting streams, and stops;
-//   - so the FRACTION of the blob read falls as the blob grows.
+//     `probesize` (about 5 MB by default) while detecting streams, and stops.
 //
-// Neither depends on the version, the platform, or the padding. A 20 GB remux
-// costs the same few megabytes as a 30 MB one, which is the whole point of not
-// materialising it.
+// That single claim does not depend on the version, the platform, or the
+// padding, and it is enough on its own: a linear read of the large blob would
+// be 268 MB against a 16 MB ceiling. A 20 GB remux costs the same few
+// megabytes as a 30 MB one, which is the whole point of not materialising it.
+//
+// The lesson each version keeps re-teaching is the same one: assert the
+// property, not a consequence of it that happens to hold on the numbers in
+// front of you. "Bounded" implies the fraction tends to zero; it does not
+// imply anything about two particular sizes, and each time this test has
+// asserted the consequence instead of the property, it has failed on someone
+// else's machine.
 func TestProbingCostIsBoundedAndDoesNotScaleWithBlobSize(t *testing.T) {
 	container := fixtures.SampleMP4(1)
 	prober := newProber(t, probe.Options{})
@@ -185,17 +198,27 @@ func TestProbingCostIsBoundedAndDoesNotScaleWithBlobSize(t *testing.T) {
 		}
 	}
 
-	// And therefore a smaller share of a larger file. This is the assertion
-	// that would catch a genuinely linear read, which is what §29 forbids: a
-	// probe that materialised would show the fraction pinned at 100%.
-	if largeFraction >= smallFraction {
-		t.Errorf("the fraction read did not fall as the blob grew: %.3f%% of %d, then %.3f%% of %d — "+
-			"the cost is tracking the blob, which is what §29 exists to prevent",
-			100*smallFraction, smallSize, 100*largeFraction, largeSize)
+	// The ceiling above is the whole discriminator, and it is worth being
+	// explicit about why: a genuinely linear read of the large blob would be
+	// 268 MB, not 16, so it fails that assertion by a factor of sixteen. There
+	// is no need for a second, more delicate claim to catch it.
+	//
+	// What IS worth asserting separately is the shape of the failure §29
+	// actually fears — a probe that materialises reads the whole blob, so its
+	// fraction is pinned near 100%. Assert the large blob's fraction is nowhere
+	// near that. This is deliberately a loose bound: it is discriminating
+	// against materialising (100%) and says nothing about 0.8% versus 1.2%,
+	// because the difference between those two is ffprobe's business and has
+	// now broken this test twice.
+	const materialisingFraction = 0.10
+	if largeFraction >= materialisingFraction {
+		t.Errorf("probing a %d-byte blob read %.3f%% of it — at that share the Range path "+
+			"is no better than materialising, which is what §29 exists to prevent",
+			largeSize, 100*largeFraction)
 	}
-	t.Logf("blob grew %.1f×, bytes read grew %.1f×, fraction fell %.3f%% → %.3f%%",
+	t.Logf("blob grew %.1f×, bytes read grew %.1f×, fraction %.3f%% → %.3f%% (both bounded by %d bytes)",
 		float64(largeSize)/float64(smallSize), float64(large)/float64(small),
-		100*smallFraction, 100*largeFraction)
+		100*smallFraction, 100*largeFraction, int64(probeCeiling))
 }
 
 // The unflattering case, stated rather than omitted. An MP4 whose `moov` is at
