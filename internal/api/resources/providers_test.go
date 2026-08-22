@@ -210,4 +210,45 @@ func TestAMetadataProviderIsReported(t *testing.T) {
 	}
 }
 
+// Neither half of a BASIC credential reaches the response.
+//
+// The single-credential case is covered above; this one exists because a basic
+// credential has two fields and a redaction that covered only the password
+// would leak a username to every reader of GET /api/v1/providers. Asserted by
+// searching the body, not by reading the struct definition (ADR-0025).
+func TestNoHalfOfABasicCredentialReachesTheResponse(t *testing.T) {
+	const username = "heyarr-DO-NOT-LEAK-username"
+	const password = "hunter2:the-real-part-8e91c4"
+
+	resolved, err := providers.Validate([]providers.Entry{{
+		Name: "a-download-client", Type: "transmission",
+		Endpoint: "http://transmission.invalid:9091/transmission/rpc",
+		Credential: &providers.CredentialEntry{
+			Username: username, Password: providers.Secret(password),
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := providers.Build(resolved, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, withProviders(reg))
+
+	resp := h.get("/api/v1/providers")
+	body := string(h.body(resp))
+	if strings.Contains(body, password) {
+		t.Fatalf("the password reached the API response:\n%s", body)
+	}
+	if strings.Contains(body, username) {
+		t.Fatalf("the username reached the API response:\n%s", body)
+	}
+	// And the response is genuinely useful — a leak test that passed against an
+	// empty body would prove nothing.
+	if !strings.Contains(body, "a-download-client") {
+		t.Errorf("expected the provider to be reported at all:\n%s", body)
+	}
+}
+
 func boolPtr(b bool) *bool { return &b }

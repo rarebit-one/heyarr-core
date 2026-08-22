@@ -80,7 +80,10 @@ func TestValidateRefusals(t *testing.T) {
 			// looking like an indexer fault.
 			name:    "a required credential that is missing",
 			entries: []Entry{{Name: "p", Type: "torznab", Endpoint: "https://x.invalid"}},
-			wantErr: []string{"p", "api_key is required"},
+			// The message names BOTH spellings, because an operator who has
+			// only ever seen `api_key` and one who has only ever seen
+			// `credential:` are both entitled to a fix they can paste.
+			wantErr: []string{"p", "a credential is required", "api_key", "credential.token"},
 		},
 		{
 			name: "a capability that does not exist",

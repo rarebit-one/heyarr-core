@@ -145,12 +145,26 @@ type Entry struct {
 	Type string `koanf:"type"`
 	// Endpoint is where the service is. Required for everything but the fake.
 	Endpoint string `koanf:"endpoint"`
-	// APIKey is the credential, when the service takes one.
+	// APIKey is the SHORTHAND spelling of the credential, for a provider whose
+	// scheme has one field.
 	//
 	// It is a Secret, so it redacts in logs, errors and JSON. It arrives from
 	// configuration as a plain string, which is why Secret has an
 	// UnmarshalJSON — the redaction is on the way OUT, not the way in.
+	//
+	// For a token-scheme provider it IS the token, and it remains the right
+	// thing to write. For a basic-scheme provider it is the password alone,
+	// with the kind's default username — which is what every pre-#123
+	// Transmission configuration already meant. It may no longer carry
+	// "user:pass": see ADR-0031 and resolveCredential.
 	APIKey Secret `koanf:"api_key"`
+	// Credential is the TYPED spelling, shaped by the kind's declared auth
+	// scheme (ADR-0031). Mutually exclusive with APIKey.
+	//
+	// A pointer so that "no credential block" and "an empty one" are tellable
+	// apart — an operator who wrote `credential:` and nothing under it has
+	// made a mistake worth naming, not expressed a default.
+	Credential *CredentialEntry `koanf:"credential"`
 	// Capabilities overrides the kind's defaults. Empty means the defaults.
 	Capabilities []string `koanf:"capabilities"`
 	// PathMap translates the download client's filesystem namespace into
@@ -210,10 +224,15 @@ type PathMapping struct {
 // checked" are not the same value with a flag on it. Everything downstream
 // takes a Resolved, so there is no path that skips validation.
 type Resolved struct {
-	Name         string
-	Kind         Kind
-	Endpoint     *url.URL
-	APIKey       Secret
+	Name     string
+	Kind     Kind
+	Endpoint *url.URL
+	// Credential is typed by the kind's declared auth scheme (ADR-0031).
+	//
+	// It replaces a bare Secret so that a caller cannot read a token out of a
+	// basic credential, or a password out of a token one, and so that the
+	// shape a provider needs is declared rather than conventionally encoded.
+	Credential   Credential
 	Capabilities []Capability
 	PathMap      []PathMapping
 	Label        string
@@ -272,11 +291,16 @@ func Validate(entries []Entry) ([]Resolved, error) {
 			return nil, err
 		}
 
-		if needsCredential(kind) && e.APIKey.IsZero() {
+		credential, err := resolveCredential(name, kind, e)
+		if err != nil {
+			return nil, err
+		}
+		if needsCredential(kind) && credential.IsZero() {
 			return nil, fmt.Errorf(
-				"provider %q: api_key is required for a %s provider — "+
-					"without it every request is refused, which looks like an indexer "+
-					"fault hours later rather than a configuration one now",
+				"provider %q: a credential is required for a %s provider — "+
+					"write api_key, or credential.token — without it every request is "+
+					"refused, which looks like an indexer fault hours later rather than "+
+					"a configuration one now",
 				name, kind)
 		}
 
@@ -298,7 +322,7 @@ func Validate(entries []Entry) ([]Resolved, error) {
 			Name:         name,
 			Kind:         kind,
 			Endpoint:     endpoint,
-			APIKey:       e.APIKey,
+			Credential:   credential,
 			Capabilities: caps,
 			PathMap:      e.PathMap,
 			Label:        strings.TrimSpace(e.Label),
