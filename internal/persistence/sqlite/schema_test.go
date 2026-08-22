@@ -671,3 +671,69 @@ func TestAcquisitionStateCascadesFromTheWant(t *testing.T) {
 		t.Errorf("%d acquisition row(s) outlived their want", n)
 	}
 }
+
+// Inventory reports and replica freshness (00023, M4-07).
+//
+// The receipt log's value is in what it refuses. A report whose mode is a word
+// nobody defined, or whose counts are negative, is a report that would later be
+// read as a fact about a peer — and a table that accepts nonsense is worse than
+// one that rejects it.
+func TestInventoryReportConstraints(t *testing.T) {
+	db := openTestDB(t)
+	seedPeer(t, db)
+
+	mustExec(t, db, `INSERT INTO inventory_reports
+		(id, peer_id, mode, observed_at, received_at, entries, added, changed, removed, unknown)
+		VALUES ('r1', 'p1', 'full', ?, ?, 2, 2, 0, 0, 0)`, ts, ts)
+
+	if err := exec(t, db, `INSERT INTO inventory_reports
+		(id, peer_id, mode, observed_at, received_at)
+		VALUES ('r2', 'p1', 'sideways', ?, ?)`, ts, ts); err == nil {
+		t.Error("a report mode nobody defined was accepted")
+	}
+	if err := exec(t, db, `INSERT INTO inventory_reports
+		(id, peer_id, mode, observed_at, received_at, removed)
+		VALUES ('r3', 'p1', 'full', ?, ?, -1)`, ts, ts); err == nil {
+		t.Error("a negative removal count was accepted")
+	}
+	if err := exec(t, db, `INSERT INTO inventory_reports
+		(id, peer_id, mode, observed_at, received_at)
+		VALUES ('r4', 'nobody', 'full', ?, ?)`, ts, ts); err == nil {
+		t.Error("a report was accepted for a peer that does not exist")
+	}
+
+	// A peer's receipts do not outlive it. Revocation is deletion (ADR-0012),
+	// and reports about a peer nobody trusts any more are not evidence of
+	// anything.
+	mustExec(t, db, `DELETE FROM peers WHERE id = 'p1'`)
+	var n int
+	if err := db.Reader().QueryRow(`SELECT count(*) FROM inventory_reports`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("%d inventory report(s) outlived the peer they describe", n)
+	}
+}
+
+// reported_at is nullable and NOT backfilled, and that is the column's
+// meaning rather than an omission: NULL is exactly "no peer has ever confirmed
+// this row through an inventory report". A migration that invented a
+// confirmation time from verified_at or updated_at would manufacture the one
+// fact the column exists to make unfakeable.
+func TestReplicaFreshnessStartsUnconfirmed(t *testing.T) {
+	db := openTestDB(t)
+	seedPeer(t, db)
+	seedBlob(t, db, validHash)
+	mustExec(t, db, `INSERT INTO replicas (blob_hash, peer_id, state, verified_at, updated_at)
+		VALUES (?, 'p1', 'present', ?, ?)`, validHash, ts, ts)
+
+	var reported sql.NullString
+	if err := db.Reader().QueryRow(
+		`SELECT reported_at FROM replicas WHERE blob_hash = ? AND peer_id = 'p1'`, validHash).
+		Scan(&reported); err != nil {
+		t.Fatal(err)
+	}
+	if reported.Valid {
+		t.Errorf("a row written by a local path claims a peer confirmed it at %q", reported.String)
+	}
+}

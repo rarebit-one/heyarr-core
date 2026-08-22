@@ -260,7 +260,7 @@ func (s *Server) Start() error {
 			// http.unix_socket. It is a warning rather than silence because
 			// "my socket is not there" needs an answer in the log.
 			s.log.Warn("not listening on the unix socket: the path is too long for this platform",
-				"path", path, "length", len(path), "limit", maxUnixSocketPath(),
+				"path", path, "length", len(path), "limit", MaxUnixSocketPath(),
 				"remedy", "set http.unix_socket to a shorter path")
 		case err != nil:
 			return fail(err)
@@ -372,11 +372,18 @@ func bindsNonLoopback(addr string) (bool, error) {
 // sockaddr_un can hold.
 var errSocketPathTooLong = errors.New("httpapi: the unix socket path is too long")
 
-// maxUnixSocketPath is the platform's sun_path capacity, including the
+// MaxUnixSocketPath is the platform's sun_path capacity, including the
 // terminating NUL. It is a fixed-size array in a C struct, not a path limit —
 // which is why a perfectly ordinary data directory nested a few levels deep
 // produces "bind: invalid argument" and no clue as to why.
-func maxUnixSocketPath() int {
+//
+// It is exported because the CLI has to reach the same conclusion this server
+// did (#170): the server declines a socket it cannot bind and carries on over
+// TCP, and a client that kept dialling the socket anyway reported "is heyarr
+// running, and is this the right data directory?" when both were fine. There
+// must be exactly one number, in one place, or the two disagree on a platform
+// nobody tested.
+func MaxUnixSocketPath() int {
 	switch runtime.GOOS {
 	case "linux", "android":
 		return 108
@@ -390,10 +397,10 @@ func maxUnixSocketPath() int {
 // listenUnix binds the local socket, clearing a socket left behind by a crashed
 // process but never one something is still listening on.
 func (s *Server) listenUnix(path string) (net.Listener, error) {
-	if len(path) >= maxUnixSocketPath() {
+	if len(path) >= MaxUnixSocketPath() {
 		return nil, fmt.Errorf("%w: %s is %d bytes and the limit on this platform is %d — "+
 			"set http.unix_socket to a shorter path",
-			errSocketPathTooLong, path, len(path), maxUnixSocketPath())
+			errSocketPathTooLong, path, len(path), MaxUnixSocketPath())
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, fmt.Errorf("httpapi: creating the directory for %s: %w", path, err)

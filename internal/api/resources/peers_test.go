@@ -185,6 +185,33 @@ func TestEachEnrolmentRefusalGetsItsOwnStatus(t *testing.T) {
 			want: http.StatusBadRequest,
 			says: "registered by its public key",
 		},
+		// One case per malformed endpoint (#169). The API is reachable without
+		// the CLI, so the check cannot live only in the command that usually
+		// carries the value.
+		{
+			name: "an endpoint whose scheme the inter-peer path does not speak",
+			setup: func(t *testing.T, _ *harness) map[string]string {
+				return map[string]string{"name": "peer-b", "endpoint": "http://", "public_key": newKey(t)}
+			},
+			want: http.StatusBadRequest,
+			says: "https",
+		},
+		{
+			name: "an endpoint with a port and no host",
+			setup: func(t *testing.T, _ *harness) map[string]string {
+				return map[string]string{"name": "peer-b", "endpoint": ":8443", "public_key": newKey(t)}
+			},
+			want: http.StatusBadRequest,
+			says: "does not say which machine",
+		},
+		{
+			name: "an endpoint whose port is not a number",
+			setup: func(t *testing.T, _ *harness) map[string]string {
+				return map[string]string{"name": "peer-b", "endpoint": "host:notaport", "public_key": newKey(t)}
+			},
+			want: http.StatusBadRequest,
+			says: "notaport",
+		},
 		{
 			name: "a key already registered to another peer",
 			setup: func(t *testing.T, h *harness) map[string]string {
@@ -243,6 +270,45 @@ func TestEachEnrolmentRefusalGetsItsOwnStatus(t *testing.T) {
 				t.Errorf("the problem document does not say %q: %q", tc.says, detail)
 			}
 		})
+	}
+}
+
+// TestTheAPINormalisesABareHostPortEndpoint: the value an operator most often
+// has to hand is host:port, and the fabric speaks one scheme (#169). It is
+// stored normalised, so what `peers list` prints is what the next
+// re-registration can be given back unchanged.
+func TestTheAPINormalisesABareHostPortEndpoint(t *testing.T) {
+	h := newHarness(t).seedSelf()
+	pub := newKey(t)
+
+	created := decodePeer(t, h.postPeer(t, map[string]string{
+		"name": "peer-b", "endpoint": "192.168.1.50:8443", "public_key": pub,
+	}))
+	if created.Endpoint == nil || *created.Endpoint != "https://192.168.1.50:8443" {
+		t.Fatalf("endpoint = %v, want the normalised https:// form", created.Endpoint)
+	}
+
+	// And re-registering with the value that was returned is a no-op rather
+	// than an endless "endpoint changed" event.
+	again := decodePeer(t, h.postPeer(t, map[string]string{
+		"name": "peer-b", "endpoint": *created.Endpoint, "public_key": pub,
+	}))
+	if again.Endpoint == nil || *again.Endpoint != *created.Endpoint {
+		t.Errorf("endpoint = %v, want %q", again.Endpoint, *created.Endpoint)
+	}
+}
+
+// TestAnEndpointIsOptional: absent is legitimate — a peer may be enrolled by
+// its key before anyone knows where it will live. Only a value that was given
+// and cannot be dialled is refused.
+func TestAnEndpointIsOptional(t *testing.T) {
+	h := newHarness(t).seedSelf()
+	resp := h.postPeer(t, map[string]string{"name": "peer-b", "public_key": newKey(t)})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("POST /peers without an endpoint = %d, want 201", resp.StatusCode)
+	}
+	if got := decodePeer(t, resp); got.Endpoint != nil {
+		t.Errorf("endpoint = %v, want null", *got.Endpoint)
 	}
 }
 

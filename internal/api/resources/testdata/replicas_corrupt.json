@@ -6,6 +6,7 @@
       "state": "corrupt",
       "bytes_present": 0,
       "verified_at": null,
+      "reported_at": null,
       "updated_at": "2026-08-01T00:00:00Z"
     }
   ]

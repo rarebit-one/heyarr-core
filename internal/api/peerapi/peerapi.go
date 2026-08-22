@@ -38,7 +38,12 @@
 // controller it is attached to and what that controller records it as. The
 // POST carries a DECLARED peer id, which is compared against the certificate
 // identity and refused on a mismatch — it is never read as the acting
-// identity. Byte serving over this surface is M4-07 and M4-09.
+// identity.
+//
+// POST /peer/v1/inventory is M4-07: a peer reporting what its disk actually
+// holds, which the controller folds into `replicas` — additions, and removals
+// as `missing` rather than deleted rows, so a peer that lost bytes is visible
+// rather than silently absent. Byte serving over this surface is M4-09.
 //
 // # A peer is not an admin
 //
@@ -94,7 +99,15 @@ type Options struct {
 	// SelfPeerID is this node's own membership id, reported so a peer can tell
 	// which node answered.
 	SelfPeerID string
-	Logger     *slog.Logger
+	// Inventory records a peer's inventory report against the catalog (M4-07).
+	//
+	// Optional. A peer surface with no sink still MOUNTS the route — the
+	// OpenAPI parity test walks this router and an unmounted route would be
+	// documented and unserved — and refuses reports with 503. Making it
+	// optional keeps `heyarr all` and the peer-surface tests constructible
+	// without a database, which is the same reason Addr may be empty.
+	Inventory InventorySink
+	Logger    *slog.Logger
 	// Now is injected so certificate validity is testable (ADR-0017).
 	Now func() time.Time
 }
@@ -107,6 +120,10 @@ type Server struct {
 	members mtls.Membership
 	tls     *tls.Config
 	handler http.Handler
+
+	// inventory is the control plane's writer for peer-reported replicas. Nil
+	// on a node with no catalog behind its peer surface.
+	inventory InventorySink
 
 	http     *http.Server
 	bound    string
@@ -152,6 +169,8 @@ func New(opts Options) (*Server, error) {
 		members: opts.Members,
 		tls:     tlsCfg,
 		errc:    make(chan error, 1),
+
+		inventory: opts.Inventory,
 	}
 	s.handler = s.routes()
 	s.http = &http.Server{
@@ -192,6 +211,12 @@ func (s *Server) routes() http.Handler {
 		// the declaration the peer sent and refuses a mismatch.
 		r.Get("/attachment", s.handleAttachment)
 		r.Post("/attach", s.handleAttach)
+		// The inventory report (M4-07). A peer tells the controller what is
+		// on its disk; the controller records it against the peer the
+		// CERTIFICATE proved. This is the first surface on which a peer
+		// causes `replicas` rows to be written about a machine that is not
+		// this one.
+		r.Post("/inventory", s.handleInventory)
 	})
 
 	// There is no admin route on this router and there is not going to be one.

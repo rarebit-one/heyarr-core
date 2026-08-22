@@ -3,11 +3,13 @@ package resources
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
+	"github.com/rarebit-one/heyarr-core/internal/peer/endpoint"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 )
@@ -68,6 +70,13 @@ type createPeerRequest struct {
 	// Endpoint is where to reach the peer. It is not identity: posting the
 	// same public key with a different endpoint moves it, and the peer's id,
 	// its enrolment time and everything referring to it are unaffected.
+	//
+	// It is validated and normalised on the way in (#169): a bare host:port
+	// becomes https://host:port, because the inter-peer path is mutually
+	// authenticated TLS (ADR-0012). http:// is refused rather than upgraded;
+	// a unix:// socket is accepted for a peer on this host. Anything that
+	// could not be dialled is refused here rather than by whatever first
+	// tries to use it. Empty is legitimate and means "not known yet".
 	Endpoint string `json:"endpoint"`
 	// PublicKey is who the peer is, as "ed25519:<64 hex characters>" — the
 	// exact string the other site's `heyarr peers` prints.
@@ -93,6 +102,23 @@ func (a *API) createPeer(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
+	}
+	// The endpoint is checked HERE — at the boundary an operator writes
+	// through — rather than in the store or by whatever first dials it (#169).
+	// Registration is idempotent on the key, so a re-registration carrying a
+	// typo replaces a WORKING endpoint, and nothing dials a peer until
+	// replication does: the mistake would be met long after this request
+	// answered 201.
+	//
+	// Absent stays absent. A peer may be enrolled by its key before anyone
+	// knows where it will live, and `peers ping` says so plainly.
+	if raw := strings.TrimSpace(body.Endpoint); raw != "" {
+		normalised, epErr := endpoint.Normalise(raw)
+		if epErr != nil {
+			httpapi.Fail(w, r, problem.BadRequest(epErr.Error()))
+			return
+		}
+		body.Endpoint = normalised
 	}
 
 	result, err := a.membership.Register(r.Context(), membership.Registration{

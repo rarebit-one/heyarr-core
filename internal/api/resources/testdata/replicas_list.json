@@ -6,6 +6,7 @@
       "state": "present",
       "bytes_present": 42949672960,
       "verified_at": "2026-08-01T00:00:00Z",
+      "reported_at": "2026-08-01T00:00:00Z",
       "updated_at": "2026-08-01T00:00:00Z"
     },
     {
@@ -14,6 +15,7 @@
       "state": "corrupt",
       "bytes_present": 0,
       "verified_at": null,
+      "reported_at": null,
       "updated_at": "2026-08-01T00:00:00Z"
     }
   ]
