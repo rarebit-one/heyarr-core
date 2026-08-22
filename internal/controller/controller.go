@@ -281,17 +281,27 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 	if err != nil {
 		return nil, err
 	}
+	// What this binary knows how to migrate to, as opposed to what the database
+	// is actually at. The two are compared on GET /api/v1/system (#150), and
+	// they are read from two different places on purpose: one is compiled in,
+	// the other is on disk, and the whole point is to notice when they disagree.
+	knownSchema, err := sqlite.KnownSchemaVersion()
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+
 	srv, err := httpapi.New(httpapi.Options{
-		Config:        c.cfg,
-		Logger:        c.log,
-		DB:            db,
-		Verifier:      verifier,
-		Events:        eventLog,
-		Media:         mediaInfo(toolchain),
-		Build:         buildinfo.Get(),
-		SchemaVersion: schemaVersion,
-		CASRoot:       c.cfg.CAS.Root,
-		Mount:         mounts,
+		Config:             c.cfg,
+		Logger:             c.log,
+		DB:                 db,
+		Verifier:           verifier,
+		Events:             eventLog,
+		Media:              mediaInfo(toolchain),
+		Build:              buildinfo.Get(),
+		SchemaVersion:      schemaVersion,
+		KnownSchemaVersion: knownSchema,
+		CASRoot:            c.cfg.CAS.Root,
+		Mount:              mounts,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)

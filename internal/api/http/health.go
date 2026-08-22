@@ -4,9 +4,12 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
+	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
+	"github.com/rarebit-one/heyarr-core/internal/drift"
 )
 
 // probeTimeout bounds a readiness probe. A readiness endpoint that can hang is
@@ -109,6 +112,7 @@ type SystemInfo struct {
 	Build         buildinfo.Info `json:"build"`
 	Peer          PeerInfo       `json:"peer"`
 	SchemaVersion int64          `json:"schema_version"`
+	Drift         drift.Report   `json:"drift"`
 	Database      StorageInfo    `json:"database"`
 	CAS           StorageInfo    `json:"cas"`
 	Events        EventsInfo     `json:"events"`
@@ -190,9 +194,77 @@ type StorageInfo struct {
 	OK   bool   `json:"ok"`
 }
 
+// expectedSchemaParam names the query parameter that overrides the schema
+// version this node compares itself against.
+const (
+	expectedSchemaParam  = "expected_schema"
+	expectedVersionParam = "expected_version"
+	expectedCommitParam  = "expected_commit"
+)
+
+// driftReport answers "how far behind is this instance", for GET /api/v1/system.
+//
+// # Where the expectation comes from, and why the two halves differ
+//
+// The SCHEMA half needs nothing from the caller. This binary embeds its
+// migrations, so it already knows the highest version that exists; comparing
+// that against what is applied is a question the node can answer about itself,
+// and it is the half that catches the failure a version check misses entirely —
+// a current binary against a database seven migrations behind it.
+//
+// The BUILD half cannot be answered alone. A binary has no idea what release
+// was supposed to be deployed, and a node that decided for itself that it was
+// current would be the useless check. So the expectation is supplied by the
+// caller — `?expected_version=` and `?expected_commit=` — and without it the
+// build half reports "unknown", which is honest and is deliberately not
+// "current".
+//
+// # Why query parameters and not configuration
+//
+// The expectation belongs to whoever is doing the deploying, and it changes
+// every release. Putting it in the node's own configuration would mean the
+// answer to "are you the build we shipped?" came from a file on the same host
+// that is running the stale build — which is the tautology this check exists to
+// break. A caller passing it per request can ask the question from a machine
+// that actually knows the answer, and asks nothing of the network but this
+// instance.
+func (s *Server) driftReport(r *http.Request) (drift.Report, *problem.Problem) {
+	q := r.URL.Query()
+
+	expectedSchema := s.known
+	if raw := q.Get(expectedSchemaParam); raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || v < 0 {
+			// Rejected rather than ignored. A typo silently falling back to
+			// this binary's own version would answer a question nobody asked
+			// and report "current" for it.
+			return drift.Report{}, problem.BadRequest(
+				expectedSchemaParam + " must be a non-negative integer")
+		}
+		expectedSchema = v
+	}
+
+	return drift.Report{
+		Build: drift.CompareBuild(
+			drift.Identity{
+				Version: q.Get(expectedVersionParam),
+				Commit:  q.Get(expectedCommitParam),
+			},
+			drift.Identity{Version: s.build.Version, Commit: s.build.Commit},
+		),
+		Schema: drift.CompareSchema(expectedSchema, s.schema),
+	}, nil
+}
+
 func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
 	defer cancel()
+
+	report, bad := s.driftReport(r)
+	if bad != nil {
+		Fail(w, r, bad)
+		return
+	}
 
 	dbCheck := s.checkDatabase(ctx)
 	casCheck := s.checkCAS()
@@ -202,6 +274,7 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 		Build:         s.build,
 		Peer:          PeerInfo{Name: s.cfg.Peer.Name, Site: s.cfg.Peer.Site},
 		SchemaVersion: s.schema,
+		Drift:         report,
 		Database:      StorageInfo{Path: s.db.Path(), OK: dbCheck.OK},
 		CAS:           StorageInfo{Path: s.casRoot, OK: casCheck.OK},
 		Events:        eventsInfo,

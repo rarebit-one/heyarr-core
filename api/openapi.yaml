@@ -122,13 +122,55 @@ paths:
     get:
       tags: [operations]
       operationId: getSystem
-      summary: What this node is and what it is running.
+      summary: What this node is, what it is running, and how far that has drifted.
+      description: |
+        The `drift` object answers "how far behind is this instance", and it
+        answers with a distance rather than a boolean. A deployment once ran 36
+        commits and seven unapplied migrations behind `main`, across two whole
+        milestones, and nothing reported it — every input to the check already
+        existed and nothing compared them.
+
+        The SCHEMA half needs nothing from the caller: a binary embeds its own
+        migrations, so it already knows the highest version that exists and can
+        compare that against what is applied. Pass `expected_schema` to compare
+        against something else instead.
+
+        The BUILD half cannot be answered alone — a binary has no idea what
+        release was supposed to be deployed — so the expectation is supplied per
+        request. Without it the build half reports `unknown`, which is
+        deliberately not `current`: a check that has quietly stopped comparing
+        must not look like a fleet that never drifts.
+      parameters:
+        - name: expected_version
+          in: query
+          schema: { type: string }
+          description: |
+            The version this instance was expected to be running, e.g. `v1.4.0`.
+            Ordering is by semantic version when both sides carry one; otherwise
+            `expected_commit` decides whether the builds are the same build.
+        - name: expected_commit
+          in: query
+          schema: { type: string }
+          description: |
+            The commit this instance was expected to be built from. Matched by
+            prefix, with a floor of seven characters, so an abbreviated stamp
+            still matches its full form.
+        - name: expected_schema
+          in: query
+          schema: { type: integer, format: int64, minimum: 0 }
+          description: |
+            The schema version its database was expected to be at. Defaults to
+            the highest migration THIS binary embeds. A value that is not a
+            non-negative integer is rejected rather than ignored: falling back
+            to the default would answer a question nobody asked and report
+            `current` for it.
       responses:
         "200":
           description: System information.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SystemInfo" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
@@ -2444,6 +2486,8 @@ components:
             name: { type: string }
             site: { type: string }
         schema_version: { type: integer }
+        drift:
+          $ref: "#/components/schemas/DriftReport"
         database:
           $ref: "#/components/schemas/StorageInfo"
         cas:
@@ -2464,6 +2508,100 @@ components:
             other half of that picture.
           items: { $ref: "#/components/schemas/ToolInfo" }
         auth_enabled: { type: boolean }
+
+    DriftStatus:
+      type: string
+      enum: [unknown, current, behind, ahead, mismatch]
+      description: |
+        The outcome of one comparison.
+
+        `unknown` means the comparison could not be MADE — nothing to compare
+        against, or a version string that is not a version. It is distinct from
+        `current` on purpose, and nothing may treat the two as equivalent: "we
+        could not tell" reported as "fine" is the failure this object exists to
+        stop.
+
+        `ahead` is not good news. For the schema it is the state in which an
+        older binary writes plausible rows against constraints a newer schema
+        depends on (§49); for the build it usually means the expectation is the
+        stale half.
+
+        `mismatch` means the two builds are known to differ with no ordering
+        between them — the same version tag built from different source, or two
+        commits with no semantic version on either side. Different, distance
+        unknown; never `current`.
+
+    BuildIdentity:
+      type: object
+      description: A build — what it calls itself, and what it was built from.
+      properties:
+        version: { type: string }
+        commit: { type: string }
+
+    BuildDrift:
+      type: object
+      description: |
+        How far the running build is from the expected one.
+
+        At most one of the three distance fields is non-zero: the most
+        significant semantic version component that differs. A distance spread
+        across three numbers is one nobody can threshold, so `v1.4.2` expected
+        against `v1.0.9` running reports one minor version behind rather than
+        claiming to be four minors and minus seven patches behind. All three are
+        zero unless `status` is `behind`.
+      properties:
+        status: { $ref: "#/components/schemas/DriftStatus" }
+        expected: { $ref: "#/components/schemas/BuildIdentity" }
+        actual: { $ref: "#/components/schemas/BuildIdentity" }
+        major_behind: { type: integer }
+        minor_behind: { type: integer }
+        patch_behind: { type: integer }
+        detail:
+          type: string
+          description: |
+            Why a status is what it is, in a few words — chiefly why an
+            `unknown` could not compare. For a human; nothing should branch on
+            it.
+
+    SchemaDrift:
+      type: object
+      description: |
+        How many migrations separate this binary from its database.
+
+        A count rather than a flag, because seven unapplied migrations and one
+        are not the same operational problem: one is routine and the other wants
+        a backup taken before it runs. At most one of the two counts is
+        non-zero.
+      properties:
+        status: { $ref: "#/components/schemas/DriftStatus" }
+        expected:
+          type: integer
+          format: int64
+          description: The highest migration the comparison expects to exist.
+        applied:
+          type: integer
+          format: int64
+          description: |
+            The migration version actually applied to this database. Zero is
+            legitimate — a database that has never been migrated — and is
+            reported as behind by the full distance.
+        migrations_behind: { type: integer, format: int64 }
+        migrations_ahead: { type: integer, format: int64 }
+        detail: { type: string }
+
+    DriftReport:
+      type: object
+      description: |
+        Both drift checks, side by side and never merged.
+
+        They drift independently and they fail differently. A binary that is
+        current with its migrations unapplied is not a mild case of being behind
+        — it is a build running against a schema it was never tested on — and
+        reducing both to one "up to date" flag would let a current binary hide
+        an un-migrated database.
+      properties:
+        build: { $ref: "#/components/schemas/BuildDrift" }
+        schema: { $ref: "#/components/schemas/SchemaDrift" }
 
     EventsInfo:
       type: object

@@ -3028,6 +3028,151 @@ YAML
     pass "the demo passed with no ffmpeg, so nothing could be remuxed"
   fi
 
+  note "  version and schema drift (#150, #132)"
+  # PLACED HERE DELIBERATELY: THIS SECTION CREATES NOTHING.
+  #
+  # No Work, no asset, no library, no job. Read the comment at the ingest
+  # section above for why that matters — the catalogue counts asserted inside
+  # `note "  the CLI (M1-17)"` are order-sensitive, and anything that adds a row
+  # has to sit below them. This section needs no fixtures at all, so its only
+  # constraint is that the server is still running, which it is until the
+  # integrity section stops it.
+  #
+  # WHAT THIS PROVES, AND THE RULE IT ENCODES
+  #
+  # #132 found a deployment 36 commits and seven migrations behind main, across
+  # two entire milestones, that NOTHING would have reported. The startup line
+  # already carried the version and the commit; the schema version was already
+  # logged; nothing compared them to anything.
+  #
+  # It also found HOW that went unnoticed, which generalises further than the
+  # drift did: the verification procedure asked for the SILENCE of a warning,
+  # and the warning had landed AFTER the build running on that host. The binary
+  # contained zero occurrences of it. The silence was perfect and meant nothing,
+  # and asserting on it would have PASSED.
+  #
+  #   NEVER ASSERT ON AN ABSENCE WITHOUT FIRST PROVING THE MECHANISM EXISTS.
+  #
+  # So every "no drift" assertion below is preceded — same endpoint, same field,
+  # same running server — by one that watches the check FIRE. A silence only
+  # counts once the noise has been heard.
+  local drift_applied drift_version drift_commit
+  drift_applied=$(api /api/v1/system | jq -r '.schema_version')
+  drift_version=$("$BIN" version --json | jq -r '.version')
+  drift_commit=$("$BIN" version --json | jq -r '.commit')
+
+  # ---- SCHEMA DRIFT: fire first ------------------------------------------
+  #
+  # Seven, because seven is what #132 actually was: migrations 00012 to 00018
+  # had never been applied on that host. The assertion is the NUMBER, not that
+  # something was reported — "drifted: yes" is the answer that gets muted, and
+  # two patch releases behind and two milestones behind are the same boolean.
+  local drift_behind
+  drift_behind=$(api "/api/v1/system?expected_schema=$(( drift_applied + 7 ))")
+  assert_eq "$(jq -r '.drift.schema.status' <<<"$drift_behind")" "behind" \
+    "seven unapplied migrations are reported as schema drift"
+  assert_eq "$(jq -r '.drift.schema.migrations_behind' <<<"$drift_behind")" "7" \
+    "the schema drift says HOW FAR behind, not that it differs"
+  assert_eq "$(jq -r '.drift.schema.applied' <<<"$drift_behind")" "$drift_applied" \
+    "the schema drift names the version actually applied"
+
+  # ---- SCHEMA DRIFT: and only now, the silence ----------------------------
+  local drift_current
+  drift_current=$(api /api/v1/system)
+  assert_eq "$(jq -r '.drift.schema.status' <<<"$drift_current")" "current" \
+    "a fully migrated database reports no schema drift"
+  assert_eq "$(jq -r '.drift.schema.migrations_behind' <<<"$drift_current")" "0" \
+    "a current schema reports a distance of zero"
+
+  # The other direction. A database migrated by a NEWER build than the binary
+  # opening it is not a milder version of being behind: an old binary writes
+  # plausible rows against constraints the new schema depends on, and the damage
+  # predates every backup by the time anyone notices (§49).
+  local drift_ahead
+  drift_ahead=$(api "/api/v1/system?expected_schema=1")
+  assert_eq "$(jq -r '.drift.schema.status' <<<"$drift_ahead")" "ahead" \
+    "a database newer than expected is reported as ahead, not as current"
+  assert_eq "$(jq -r '.drift.schema.migrations_ahead' <<<"$drift_ahead")" "$(( drift_applied - 1 ))" \
+    "the ahead distance is a count of migrations too"
+
+  # ---- BUILD DRIFT: fire first -------------------------------------------
+  #
+  # A commit nothing was ever built from. The demo binary is stamped with `git
+  # describe`, which is not a semantic version, so there is no distance to
+  # report here — and "mismatch" says exactly that rather than the "current" a
+  # naive equality check would produce. The numeric semver distance is asserted
+  # in internal/drift, where both sides can be controlled.
+  local build_drifted
+  build_drifted=$(api "/api/v1/system?expected_commit=0000000000deadbeef")
+  assert_eq "$(jq -r '.drift.build.status' <<<"$build_drifted")" "mismatch" \
+    "a build from a commit nobody deployed is reported as drift"
+
+  # ---- BUILD DRIFT: and only now, the silence -----------------------------
+  local build_ok
+  build_ok=$(api "/api/v1/system?expected_version=${drift_version}&expected_commit=${drift_commit}")
+  assert_eq "$(jq -r '.drift.build.status' <<<"$build_ok")" "current" \
+    "the running build matches the expectation it was built from"
+
+  # An expectation that was never supplied must NOT read as "current". This is
+  # #132's failure mode in one field: a check that has quietly stopped comparing
+  # looks exactly like a fleet that never drifts.
+  assert_eq "$(jq -r '.drift.build.status' <<<"$drift_current")" "unknown" \
+    "an unmade build comparison reports unknown, never current"
+
+  # ---- THE TWO HALVES ARE INDEPENDENT ------------------------------------
+  #
+  # One request, both answers, and they disagree. A current binary with seven
+  # migrations unapplied is its own failure — a build running against a schema
+  # it was never tested on — and a single "up to date" flag would hide it.
+  local drift_both
+  drift_both=$(api "/api/v1/system?expected_version=${drift_version}&expected_commit=${drift_commit}&expected_schema=$(( drift_applied + 7 ))")
+  assert_eq "$(jq -r '.drift.build.status' <<<"$drift_both")" "current" \
+    "build drift is reported independently of schema drift"
+  assert_eq "$(jq -r '.drift.schema.status' <<<"$drift_both")" "behind" \
+    "schema drift is reported independently of build drift"
+  assert_eq "$(jq -r '.drift.schema.migrations_behind' <<<"$drift_both")" "7" \
+    "a current binary still reports its seven unapplied migrations"
+
+  # A typo in whatever is monitoring this must not fall back to the default and
+  # answer a question nobody asked.
+  assert_eq "$(api "/api/v1/system?expected_schema=eighteen" -o /dev/null -w '%{http_code}')" "400" \
+    "an unparseable expected_schema is refused rather than ignored"
+
+  # ---- THE CLI SAYS THE SAME THING, AND EXITS ON IT ----------------------
+  #
+  # Exposure where a MACHINE can read it, not only where a person can: the API
+  # above, and a command that exits non-zero. A checker wired into cron that
+  # reports a problem and then exits 0 has its output stop being read and its
+  # success start being trusted.
+  local drift_cli_out drift_cli_rc=0
+  drift_cli_out=$("$BIN" --config "$WORK/full.yaml" --token "$TOKEN" \
+    system drift --expected-schema "$(( drift_applied + 7 ))" --json 2>"$WORK/drift-cli.err") || drift_cli_rc=$?
+  if (( drift_cli_rc != 0 )); then
+    pass "system drift exits non-zero when the instance has drifted"
+  else
+    fail "system drift exited 0 with seven migrations unapplied"
+  fi
+  assert_eq "$(jq -r '.schema.migrations_behind' <<<"$drift_cli_out")" "7" \
+    "the CLI reports the same seven migrations the API does"
+  if grep -q "the schema is behind" "$WORK/drift-cli.err"; then
+    pass "the non-zero exit says which half drifted"
+  else
+    fail "system drift exited non-zero without saying why"; cat "$WORK/drift-cli.err"
+  fi
+
+  # And the silence, after the noise. No flags at all: the expectation defaults
+  # to THIS binary — its own version, its own commit, its own embedded
+  # migrations — which is the question somebody at a terminal actually has, and
+  # it reaches nothing but the instance itself.
+  drift_cli_rc=0
+  drift_cli_out=$("$BIN" --config "$WORK/full.yaml" --token "$TOKEN" \
+    system drift --json 2>"$WORK/drift-cli.err") || drift_cli_rc=$?
+  assert_eq "$drift_cli_rc" "0" "system drift exits 0 against the binary it is comparing"
+  assert_eq "$(jq -r '.build.status' <<<"$drift_cli_out")" "current" \
+    "the CLI defaults its build expectation to itself, and matches"
+  assert_eq "$(jq -r '.schema.status' <<<"$drift_cli_out")" "current" \
+    "the CLI defaults its schema expectation to the migrations it embeds"
+
   note "  integrity (ADR-0018)"
   stop_full
 

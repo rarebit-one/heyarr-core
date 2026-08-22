@@ -102,6 +102,18 @@ func SchemaVersion(ctx context.Context, db *DB) (int64, error) {
 	return goose.GetDBVersionContext(ctx, db.Writer())
 }
 
+// KnownSchemaVersion is the highest migration compiled into this binary.
+//
+// It is the "expected" side of the schema drift check (#150): a binary that
+// embeds migrations up to 18 running against a database at 11 is seven
+// migrations behind, and that is a number rather than a boolean because seven
+// unapplied migrations and one are not the same operational problem.
+//
+// Derived from the embedded filenames, so it cannot drift from what actually
+// ships — a hand-maintained constant would be wrong the first time somebody
+// adds a migration and forgets it.
+func KnownSchemaVersion() (int64, error) { return maxKnownVersion() }
+
 // maxKnownVersion is the highest migration compiled into this binary, derived
 // from the embedded filenames so it cannot drift from what actually ships.
 func maxKnownVersion() (int64, error) {

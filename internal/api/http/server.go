@@ -72,6 +72,15 @@ type Options struct {
 	Build buildinfo.Info
 	// SchemaVersion is the migration version the database is at.
 	SchemaVersion int64
+	// KnownSchemaVersion is the highest migration COMPILED INTO this binary —
+	// sqlite.KnownSchemaVersion(). It is what SchemaVersion is compared against
+	// to report schema drift (#150), and it is required rather than defaulted
+	// for the same reason Events is: a zero here would report "unknown" on
+	// every request, and a drift check that has quietly stopped comparing looks
+	// exactly like a fleet with no drift. The failure this endpoint exists to
+	// catch is precisely an absent mechanism reading as a clean bill of health,
+	// so it must not be possible to wire it up without it.
+	KnownSchemaVersion int64
 	// CASRoot is checked for presence and writability by GET /readyz. Empty
 	// disables the check.
 	CASRoot string
@@ -91,6 +100,7 @@ type Server struct {
 	media    []ToolInfo
 	build    buildinfo.Info
 	schema   int64
+	known    int64
 	casRoot  string
 	now      func() time.Time
 
@@ -125,6 +135,11 @@ func New(opts Options) (*Server, error) {
 	if opts.Events == nil {
 		return nil, errors.New("httpapi: an event log is required")
 	}
+	if opts.KnownSchemaVersion <= 0 {
+		return nil, errors.New("httpapi: the schema version this binary knows is required; " +
+			"without it the drift check reports \"unknown\" forever, which is indistinguishable " +
+			"from a fleet that has never drifted")
+	}
 	log := opts.Logger
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -152,6 +167,7 @@ func New(opts Options) (*Server, error) {
 		media:    append([]ToolInfo{}, opts.Media...),
 		build:    opts.Build,
 		schema:   opts.SchemaVersion,
+		known:    opts.KnownSchemaVersion,
 		casRoot:  opts.CASRoot,
 		now:      now,
 		registry: registry,

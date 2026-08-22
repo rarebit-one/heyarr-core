@@ -39,6 +39,9 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr quality-profile list`](heyarr_quality-profile_list.md) | List the quality profiles |
 | [`heyarr quality-profile`](heyarr_quality-profile.md) | Inspect the quality profiles a want is measured against |
 | [`heyarr scan`](heyarr_scan.md) | Scan a library's roots, optionally waiting for the scan to finish |
+| [`heyarr system drift`](heyarr_system_drift.md) | Report how far a running instance has drifted from what was expected |
+| [`heyarr system info`](heyarr_system_info.md) | Print what the instance is running |
+| [`heyarr system`](heyarr_system.md) | Report what a running instance is and how far behind it has drifted |
 | [`heyarr token create`](heyarr_token_create.md) | Mint an API token |
 | [`heyarr token list`](heyarr_token_list.md) | List API tokens |
 | [`heyarr token revoke`](heyarr_token_revoke.md) | Revoke an API token |

@@ -1,0 +1,23 @@
+{
+  "build": {
+    "status": "current",
+    "expected": {
+      "version": "test",
+      "commit": "abc123"
+    },
+    "actual": {
+      "version": "test",
+      "commit": "abc123"
+    },
+    "major_behind": 0,
+    "minor_behind": 0,
+    "patch_behind": 0
+  },
+  "schema": {
+    "status": "current",
+    "expected": 4,
+    "applied": 4,
+    "migrations_behind": 0,
+    "migrations_ahead": 0
+  }
+}
