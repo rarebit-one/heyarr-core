@@ -241,17 +241,18 @@ func (s *FS) blobPath(h hashing.Hash) string {
 
 // Put streams r into the store, hashing as it writes.
 //
-// The bytes go to a temporary file in the same directory tree, so the final
-// rename is atomic on the same filesystem. A process killed mid-Put therefore
-// leaves nothing addressable — only a reapable file under tmp/.
+// The bytes go to a temporary file in the same directory tree, so publishing
+// them is a single atomic link on the same filesystem. A process killed mid-Put
+// therefore leaves nothing addressable — only a reapable file under tmp/.
 func (s *FS) Put(ctx context.Context, r io.Reader) (Descriptor, error) {
 	tmp, err := os.CreateTemp(filepath.Join(s.root, tmpDir), "put-*.part")
 	if err != nil {
 		return Descriptor{}, fmt.Errorf("cas: creating temporary file: %w", err)
 	}
 	tmpName := tmp.Name()
-	// Best-effort cleanup: on the success path the file has already been
-	// renamed away and these are no-ops.
+	// Best-effort cleanup. commit publishes by linking rather than renaming,
+	// so on the success path this unlinks the temporary name and leaves the
+	// blob it now shares an inode with.
 	defer func() {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
@@ -284,9 +285,10 @@ func (s *FS) Put(ctx context.Context, r io.Reader) (Descriptor, error) {
 	return desc, nil
 }
 
-// commit moves a finished temporary file into its final location. It reports
-// whether the blob was already present, in which case the temporary file is
-// discarded — deduplication is a consequence of the layout, not a feature.
+// commit publishes a finished temporary file at its content address. It
+// reports whether the blob was already present — deduplication is a consequence
+// of the layout, not a feature — including when it discovers that only at the
+// moment of publishing, because another caller committed the same bytes first.
 func (s *FS) commit(tmpName string, h hashing.Hash) (deduplicated bool, err error) {
 	final := s.blobPath(h)
 	if err := os.MkdirAll(filepath.Dir(final), dirPerm); err != nil {
@@ -301,10 +303,24 @@ func (s *FS) commit(tmpName string, h hashing.Hash) (deduplicated bool, err erro
 	if err := os.Chmod(tmpName, blobPerm); err != nil {
 		return false, fmt.Errorf("cas: setting blob mode: %w", err)
 	}
-	if err := os.Rename(tmpName, final); err != nil {
+	// Publish with a link rather than a rename. os.Rename replaces its target
+	// silently, so two callers committing the same bytes at once would both be
+	// told they created the blob and the second would swap the inode out from
+	// under whoever held the first — invisible in the content, because the path
+	// is the digest of it (ADR-0005), but a wrong answer, and an inode swap
+	// under a hardlink-ingested blob (ADR-0014) or under fsck --deep. os.Link
+	// fails rather than replaces, so the loser of the race reports the
+	// duplicate it in fact found (#177, the Put-path twin of #176's Link fix).
+	//
+	// The temporary file stays where it is on both paths; Put's deferred
+	// cleanup unlinks it, leaving the published blob behind.
+	if err := os.Link(tmpName, final); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return true, nil
+		}
 		return false, fmt.Errorf("cas: publishing blob: %w", err)
 	}
-	// fsync the parent directory too. Without it the rename can be lost by a
+	// fsync the parent directory too. Without it the new link can be lost by a
 	// crash even though the file's own contents were synced, which would leave
 	// the catalog referencing a blob the filesystem never recorded.
 	if err := syncDir(filepath.Dir(final)); err != nil {
