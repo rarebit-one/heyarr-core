@@ -77,9 +77,26 @@ type Collection struct {
 	Waiting []Candidate `json:"waiting"`
 	// Reclaimed are blobs whose bytes were freed, or would have been.
 	Reclaimed []Candidate `json:"reclaimed"`
+	// Spared are blobs the durability precondition declined to reclaim, each
+	// with the reason it declined (ADR-0018, M4-12).
+	//
+	// It sits next to Reclaimed rather than in a log line because those two
+	// slices are the sweep's actual output: an operator who ran `gc --apply`
+	// and got nothing back needs to know whether that is a healthy library or
+	// a peer that has been down since Tuesday, and a refusal nobody can read
+	// is an outage nobody can diagnose.
+	Spared []Sparing `json:"spared"`
+	// Refusals are conditions that stopped the WHOLE sweep rather than one
+	// blob — a controller that could not be reached (§53), a collector with no
+	// way to ask a peer anything, a catalog too empty to be trusted against
+	// the store in front of it.
+	Refusals []SweepRefusal `json:"refusals"`
 	// Untracked are store files with no catalog row that were old enough to
 	// remove.
 	Untracked []Candidate `json:"untracked"`
+	// UntrackedSpared are untracked files the non-vacuity guard declined to
+	// unlink. They are reported per file for the same reason Spared is.
+	UntrackedSpared []Sparing `json:"untracked_spared"`
 	// UntrackedWaiting counts untracked files too recent to touch — most
 	// likely an ingest that has written its bytes and not yet committed.
 	UntrackedWaiting int           `json:"untracked_waiting"`
@@ -154,6 +171,7 @@ func (c *Collector) Collect(ctx context.Context, opts CollectOptions) (Collectio
 		DryRun: !opts.Apply, Grace: Window(grace), StartedAt: now,
 		Marked: []Candidate{}, Waiting: []Candidate{}, Reclaimed: []Candidate{},
 		Untracked: []Candidate{}, TempRemoved: []TempRemoval{},
+		Spared: []Sparing{}, Refusals: []SweepRefusal{}, UntrackedSpared: []Sparing{},
 	}
 	cutoff := now.Add(-grace)
 
@@ -196,11 +214,38 @@ func (c *Collector) Collect(ctx context.Context, opts CollectOptions) (Collectio
 		}
 	}
 
+	// ADR-0018's second precondition, evaluated between eligibility and the
+	// unlink (M4-12). Everything above this point decided that these bytes are
+	// garbage HERE; nothing above it knows whether they exist anywhere else,
+	// and a full peer that garbage-collects the only surviving copy has failed
+	// at the one thing it exists to do.
+	gate, err := c.gate(ctx)
+	if err != nil {
+		return Collection{}, err
+	}
+	out.Refusals = append(out.Refusals, gate.refusals...)
+
 	for _, b := range eligible {
 		if err := ctx.Err(); err != nil {
 			return Collection{}, err
 		}
+		ev, spared, err := c.establish(ctx, gate, b, now, opts.Apply)
+		if err != nil {
+			return Collection{}, err
+		}
+		if spared != nil {
+			out.Spared = append(out.Spared, *spared)
+			continue
+		}
 		if opts.Apply {
+			// Before the delete, not after. Catalog.Reclaim removes the
+			// `blobs` row and replicas.blob_hash is ON DELETE CASCADE, so the
+			// transaction that authorises this unlink also destroys the record
+			// of who else held the blob. Evidence written afterwards would
+			// have nothing left to describe (migration 00028).
+			if err := c.opts.Catalog.RecordDurability(ctx, ev); err != nil {
+				return Collection{}, err
+			}
 			if err := c.reclaim(ctx, b.Hash, b.Size, true, now); err != nil {
 				return Collection{}, err
 			}
@@ -209,7 +254,7 @@ func (c *Collector) Collect(ctx context.Context, opts CollectOptions) (Collectio
 		out.BytesReclaimed += b.Size
 	}
 
-	if err := c.collectUntracked(ctx, &out, known, cutoff, now, opts.Apply); err != nil {
+	if err := c.collectUntracked(ctx, &out, known, cutoff, now, opts.Apply, gate); err != nil {
 		return Collection{}, err
 	}
 	if err := c.collectTemp(&out, now.Add(-tempGrace), opts.Apply); err != nil {
@@ -221,7 +266,8 @@ func (c *Collector) Collect(ctx context.Context, opts CollectOptions) (Collectio
 		"dry_run", out.DryRun, "considered", out.Considered, "referenced", out.Referenced,
 		"marked", len(out.Marked), "waiting", len(out.Waiting), "reclaimed", len(out.Reclaimed),
 		"untracked", len(out.Untracked), "temp_removed", len(out.TempRemoved),
-		"bytes_reclaimed", out.BytesReclaimed)
+		"spared", len(out.Spared), "untracked_spared", len(out.UntrackedSpared),
+		"refusals", len(out.Refusals), "bytes_reclaimed", out.BytesReclaimed)
 	return out, nil
 }
 
@@ -259,10 +305,14 @@ func (c *Collector) reclaim(ctx context.Context, h hashing.Hash, size int64, tra
 // it require a commit inside the final round trip rather than anywhere in a
 // multi-minute sweep.
 func (c *Collector) collectUntracked(ctx context.Context, out *Collection,
-	known map[string]struct{}, cutoff, now time.Time, apply bool,
+	known map[string]struct{}, cutoff, now time.Time, apply bool, g gate,
 ) error {
-	var candidates []cas.Descriptor
+	var (
+		candidates []cas.Descriptor
+		walked     int
+	)
 	if err := c.opts.Store.Walk(ctx, func(d cas.Descriptor) error {
+		walked++
 		if _, ok := known[d.Hash.String()]; ok {
 			return nil
 		}
@@ -276,6 +326,22 @@ func (c *Collector) collectUntracked(ctx context.Context, out *Collection,
 		return err
 	}
 	if len(candidates) == 0 {
+		return nil
+	}
+
+	// The non-vacuity guard, and the sweep-wide refusals, both apply here
+	// before a single file is unlinked. Untracked collection is the more
+	// dangerous of the two paths, not the less: a tracked blob is protected by
+	// a refcount, a persisted mark, a grace window and ON DELETE RESTRICT,
+	// whereas an untracked one is protected by the absence of a row — and
+	// absence is what a wrong or empty database produces in bulk.
+	if refusal := c.vacuity(out, len(candidates), walked); refusal != nil {
+		out.Refusals = append(out.Refusals, *refusal)
+		spareAll(out, candidates, *refusal)
+		return nil
+	}
+	if len(g.refusals) > 0 {
+		spareAll(out, candidates, g.refusals[0])
 		return nil
 	}
 

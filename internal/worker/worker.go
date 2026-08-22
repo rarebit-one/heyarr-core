@@ -163,7 +163,14 @@ func (w *Worker) Run(ctx context.Context) error {
 		return fmt.Errorf("worker: opening the job queue: %w", err)
 	}
 
-	integrityOpts := integrity.Options{Store: store, Catalog: cat, Logger: w.log}
+	integrityOpts := integrity.Options{
+		Store: store, Catalog: cat, Logger: w.log,
+		// ADR-0018's second precondition. Without it the gc_blobs job would
+		// unlink bytes knowing nothing about whether they exist anywhere else
+		// (M4-12) — and a nil here is a REFUSAL in any deployment with another
+		// peer, never a pass.
+		Durability: newLazyDurability(w.cfg.DataDir, peerID, db.Writer(), w.log),
+	}
 	checker, err := integrity.NewChecker(integrityOpts)
 	if err != nil {
 		return fmt.Errorf("worker: building the integrity checker: %w", err)

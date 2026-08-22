@@ -372,6 +372,35 @@ func (c *Catalog) Reclaim(ctx context.Context, h hashing.Hash, size int64, track
 	var pending []events.Event
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
 		if tracked {
+			// Defence in depth for ADR-0018's SECOND precondition, mirroring
+			// what ON DELETE RESTRICT does for the first (M4-12).
+			//
+			// The collector evaluates the placement precondition and records
+			// what it established, before this call, into a table with no
+			// foreign key to `blobs` (00028). If no such row exists then
+			// nothing established that these bytes survive anywhere else, and
+			// this DELETE is the one that takes the last copy. The database
+			// cannot express that as a constraint — the evidence deliberately
+			// does not reference the row being deleted — so it is expressed
+			// here, at the same seam, for the same reason: a garbage collector
+			// that deletes the only copy has destroyed user data with no way
+			// back, and it is worth being told twice.
+			//
+			// Untracked bytes are exempt by construction: they have no `blobs`
+			// row, so they are nobody's replica and there is no placement
+			// policy for them to satisfy. Their guard is the non-vacuity check
+			// on the sweep instead.
+			ok, err := hasDurabilityEvidence(ctx, tx, hash)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("catalog: refusing to reclaim %s — nothing recorded that these "+
+					"bytes exist anywhere else, and a full peer that garbage-collects the only "+
+					"surviving copy has failed at the one thing it exists to do. The placement "+
+					"precondition is evaluated and its evidence written before this call "+
+					"(ADR-0018, migration 00028)", hash)
+			}
 			res, err := tx.ExecContext(ctx, `DELETE FROM blobs WHERE hash = ?`, hash)
 			if err != nil {
 				return fmt.Errorf("catalog: refusing to reclaim %s — the database rejected the "+

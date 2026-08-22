@@ -11,6 +11,9 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/peer/durability"
+	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
+	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
@@ -59,7 +62,46 @@ func withIntegrity(ctx context.Context, configPath string,
 	if err != nil {
 		return fmt.Errorf("opening the content store: %w", err)
 	}
-	return fn(ctx, integrity.Options{Store: store, Catalog: cat})
+	opts := integrity.Options{Store: store, Catalog: cat}
+	if v := durabilityFor(ctx, cfg.DataDir, cat, db); v != nil {
+		opts.Durability = v
+	}
+	return fn(ctx, opts)
+}
+
+// durabilityFor builds the placement precondition's remote half, or nothing.
+//
+// Nothing is the safe answer and it is not the convenient one: a collector with
+// no Durability REFUSES to unlink anything in a deployment that has another
+// peer (ADR-0018, M4-12), and reclaims normally in one that does not. So a
+// single-node install with no peer key on disk — the ordinary Milestone 1
+// through 3 shape — still collects, and a two-site install whose key is missing
+// or unreadable declines to delete and says why, rather than deleting because a
+// dependency was absent.
+//
+// That asymmetry is the whole reason this returns nil instead of an error: an
+// unavailable check must never be indistinguishable from a passed one.
+func durabilityFor(ctx context.Context, dataDir string, cat *catalog.Catalog, db *sqlite.DB) integrity.Durability {
+	self, err := cat.SelfPeer(ctx)
+	if err != nil {
+		return nil
+	}
+	priv, err := identity.Signer(dataDir)
+	if err != nil {
+		return nil
+	}
+	material, err := mtls.NewMaterial(mtls.MaterialOptions{PrivateKey: priv, PeerID: self})
+	if err != nil {
+		return nil
+	}
+	v, err := durability.New(durability.Options{
+		Material:   material,
+		Controller: durability.LocalControlPlane(db.Writer()),
+	})
+	if err != nil {
+		return nil
+	}
+	return v
 }
 
 // ErrDamage is returned when fsck finds content that is missing or corrupt.
@@ -259,7 +301,41 @@ func printCollection(w io.Writer, result integrity.Collection, asJSON bool) erro
 	fmt.Fprintf(w, "  reclaimed           %d\n", len(result.Reclaimed))
 	fmt.Fprintf(w, "  untracked files     %d\n", len(result.Untracked))
 	fmt.Fprintf(w, "  partial writes      %d\n", len(result.TempRemoved))
+	fmt.Fprintf(w, "  spared              %d\n", len(result.Spared)+len(result.UntrackedSpared))
 	fmt.Fprintf(w, "  bytes reclaimed     %d\n", result.BytesReclaimed)
+
+	// Why, not only how many. A sweep that reports "reclaimed 0" and stops
+	// there is indistinguishable from a healthy library, a peer that has been
+	// down since Tuesday and a collector that silently failed — and an
+	// operator who cannot tell those apart stops reading the output
+	// (ADR-0018, M4-12).
+	// Each explanation is printed ONCE, and after that the blobs it covers are
+	// listed by hash and reason alone. A sweep-wide refusal applies the same
+	// sentence to every file in the store, and repeating a paragraph ten
+	// thousand times turns the one thing an operator needed to read into the
+	// thing they scroll past.
+	said := map[string]bool{}
+	explain := func(prefix, detail string) {
+		if detail == "" || said[detail] {
+			return
+		}
+		said[detail] = true
+		fmt.Fprintf(w, "%s%s\n", prefix, detail)
+	}
+	if len(result.Refusals) > 0 {
+		fmt.Fprintln(w)
+		for _, r := range result.Refusals {
+			fmt.Fprintf(w, "  REFUSED  %s\n", r.Reason)
+			explain("           ", r.Detail)
+		}
+	}
+	if len(result.Spared) > 0 || len(result.UntrackedSpared) > 0 {
+		fmt.Fprintln(w)
+		for _, sp := range append(append([]integrity.Sparing{}, result.Spared...), result.UntrackedSpared...) {
+			fmt.Fprintf(w, "  spared        %s  %s\n", sp.Hash, sp.Reason)
+			explain("                ", sp.Detail)
+		}
+	}
 
 	if len(result.Reclaimed) > 0 || len(result.Untracked) > 0 {
 		fmt.Fprintln(w)
