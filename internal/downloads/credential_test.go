@@ -166,7 +166,13 @@ func TestConstructingAndProbingLogsNoCredential(t *testing.T) {
 	}
 
 	health := provider.Check(context.Background())
+	// Three shapes, deliberately: the raw config block, the resolved struct,
+	// and the credential ON ITS OWN. The third is not redundant — a struct
+	// reaches slog through encoding/json, and a Credential logged directly
+	// reaches it through LogValue, so a redaction removed from one of those
+	// would be invisible to a test that only used the other.
 	log.Info("probed", "config", entry, "resolved", resolved[0], "health", health)
+	log.Info("probed", slog.Any("credential", resolved[0].Credential))
 	log.Error("probe failed", "detail", health.Detail)
 
 	output := buf.String()
