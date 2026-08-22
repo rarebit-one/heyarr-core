@@ -39,3 +39,4 @@ An ADR that merely describes the code is not worth having.
 | [0029](0029-a-full-peer-is-controller-attached.md) | A Full Peer is controller-attached and runs no control plane | Accepted |
 | [0030](0030-replication-is-a-destination-pull.md) | Replication is a destination pull; the controller never carries bytes | Accepted |
 | [0031](0031-provider-credentials-are-typed-by-their-auth-scheme.md) | Provider credentials are typed by the provider's declared auth scheme | Accepted |
+| [0032](0032-the-personal-mcp-is-device-side-and-device-keys-land-before-they-authorise-anything.md) | The Personal MCP is device-side, and device keys land before they authorise anything | Accepted |

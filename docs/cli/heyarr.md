@@ -24,6 +24,7 @@ One logical library, multiple complete sovereign peers.
 * [heyarr config](heyarr_config.md)	 - Inspect configuration
 * [heyarr controller](heyarr_controller.md)	 - Own coordinated mutable state: catalog, policy, jobs, API
 * [heyarr desired](heyarr_desired.md)	 - Say what should exist, whether or not it does yet
+* [heyarr device](heyarr_device.md)	 - Manage this machine's device key (§40, ADR-0032)
 * [heyarr events](heyarr_events.md)	 - Follow the event log
 * [heyarr fsck](heyarr_fsck.md)	 - Check stored bytes against the catalog (§57, ADR-0018)
 * [heyarr gc](heyarr_gc.md)	 - Reclaim bytes nothing references (ADR-0018)
