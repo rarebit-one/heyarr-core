@@ -252,15 +252,20 @@ func equalSnapshots(a, b []string) bool {
 	return true
 }
 
-// TestNoDeviceCommandEverPrintsThePrivateKey scans everything the commands
-// wrote for the key material, rather than reading the code and concluding it
-// looks fine.
-func TestNoDeviceCommandEverPrintsThePrivateKey(t *testing.T) {
-	dir := deviceDir(t)
-	ctx := context.Background()
-	id := generateDevice(t, dir)
-
+// keyMaterial returns every spelling of the private key currently on disk, or
+// nothing if there is no key there right now.
+//
+// It is called after EVERY invocation rather than once at the start, because
+// `device generate --force` replaces the key: a scan whose needles came only
+// from the first key would look for a secret the command under test no longer
+// has, and would pass while printing the new one in full. That is exactly how
+// this test passed its own sabotage the first time it was written.
+func keyMaterial(t *testing.T, dir string) map[string]string {
+	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(dir, device.KeyFileName))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,6 +276,32 @@ func TestNoDeviceCommandEverPrintsThePrivateKey(t *testing.T) {
 		t.Fatalf("the key file is not the shape this test assumes: %v", err)
 	}
 	priv := ed25519.NewKeyFromSeed(seed)
+	return map[string]string{
+		"the seed in hex":        seedHex,
+		"the key file verbatim":  fileText,
+		"the private key in hex": hex.EncodeToString(priv),
+		"the seed as raw bytes":  string(seed),
+	}
+}
+
+// TestNoDeviceCommandEverPrintsThePrivateKey scans everything the commands
+// wrote for the key material, rather than reading the code and concluding it
+// looks fine.
+func TestNoDeviceCommandEverPrintsThePrivateKey(t *testing.T) {
+	dir := deviceDir(t)
+	ctx := context.Background()
+	id := generateDevice(t, dir)
+
+	needles := map[string]string{}
+	collect := func() {
+		for what, needle := range keyMaterial(t, dir) {
+			if needle == "" {
+				t.Fatalf("the %s needle is empty, so this assertion would prove nothing", what)
+			}
+			needles[what+" "+needle[:8]] = needle
+		}
+	}
+	collect()
 
 	var transcript strings.Builder
 	invocations := [][]string{
@@ -289,26 +320,25 @@ func TestNoDeviceCommandEverPrintsThePrivateKey(t *testing.T) {
 		if err != nil {
 			transcript.WriteString(err.Error())
 		}
+		// After, not only before: a command that REPLACED the key must be
+		// scanned for the key it left behind.
+		collect()
 	}
 	// And the MCP door, over its real transport.
 	transcript.WriteString(runMCP(t, dir,
 		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"device_list","arguments":{}}}`,
 	))
+	collect()
 
 	captured := transcript.String()
 	if strings.TrimSpace(captured) == "" {
 		t.Fatal("nothing was captured, so this scan proves nothing")
 	}
-	for what, needle := range map[string]string{
-		"the seed in hex":        seedHex,
-		"the key file verbatim":  fileText,
-		"the private key in hex": hex.EncodeToString(priv),
-		"the seed as raw bytes":  string(seed),
-	} {
-		if needle == "" {
-			t.Fatalf("the %s needle is empty, so this assertion proves nothing", what)
-		}
+	if len(needles) < 4 {
+		t.Fatalf("only %d needles were collected, so this scan proves little", len(needles))
+	}
+	for what, needle := range needles {
 		if strings.Contains(captured, needle) {
 			t.Errorf("%s appears in command output:\n%s", what, captured)
 		}

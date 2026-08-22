@@ -182,7 +182,9 @@ cp "$WORK/device-key.bak" "$DEV_KEY"
 
 # It still works after all that, or one of the refusals above left the store
 # broken and every later run would start from a corrupt directory.
-assert_eq "$("$BIN" device list --device-dir "$DEVDIR" --json | jq -r '.[0].public_key')" "$DEV_PUB" \
+# `|| true` because pipefail plus set -e would turn a REGRESSION here into a
+# silent early exit rather than a reported failure.
+assert_eq "$("$BIN" device list --device-dir "$DEVDIR" --json | jq -r '.[0].public_key' || true)" "$DEV_PUB" \
   "the device key survives the refusal cases intact"
 ```
 
