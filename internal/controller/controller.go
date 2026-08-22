@@ -219,6 +219,19 @@ func (c *Controller) Run(ctx context.Context) error {
 	startReconciliation(ctx, reconcileQueue, c.log)
 	startUpgradeScan(ctx, reconcileQueue, c.log)
 
+	// The search beat (#130). It needs a catalog as well as a queue — unlike
+	// the two sweeps above, it asks a per-want question before enqueueing
+	// anything — and it shares this event log so the job transitions it causes
+	// land in the same stream as everything else (§76, ADR-0009).
+	beatCatalog, err := catalog.New(catalog.Options{
+		DB: db, Events: reconcileEvents,
+		PeerName: c.cfg.Peer.Name, PeerSite: c.cfg.Peer.Site, Logger: c.log,
+	})
+	if err != nil {
+		return fmt.Errorf("controller: opening the catalog for the search beat: %w", err)
+	}
+	startSearchBeat(ctx, beatCatalog, reconcileQueue, c.log)
+
 	// "started" is logged only after every listener is bound. A start line
 	// printed before the socket exists is a lie that costs someone an
 	// afternoon: the supervisor, the acceptance script and an operator tailing
