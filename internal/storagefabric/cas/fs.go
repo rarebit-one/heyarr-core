@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/hashing"
@@ -340,31 +341,70 @@ func (s *FS) Link(ctx context.Context, srcPath string, mode Materialisation) (De
 		return Descriptor{}, err
 	}
 	final := s.blobPath(h)
-	if _, err := os.Stat(final); err == nil {
-		return Descriptor{Hash: h, Size: size, Materialised: mode, Deduplicated: true}, nil
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return Descriptor{}, fmt.Errorf("cas: checking for an existing blob: %w", err)
-	}
+	// Create the shard directory before looking inside it, the way commit
+	// already does. Link used to stat first and create afterwards, so the two
+	// writers into one shard disagreed about ordering (#151). A directory that
+	// then goes unused costs nothing: the shard is two levels of a fixed
+	// layout, not per-blob state.
 	if err := os.MkdirAll(filepath.Dir(final), dirPerm); err != nil {
 		return Descriptor{}, fmt.Errorf("cas: creating blob directory: %w", err)
 	}
+	if _, err := os.Stat(final); err == nil {
+		return Descriptor{Hash: h, Size: size, Materialised: mode, Deduplicated: true}, nil
+	} else if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, fs.ErrPermission) {
+		// A permission error is read as "not known to exist" rather than as
+		// fatal. The MkdirAll above means it should not happen; treating it as
+		// fatal is what would make a future reordering of these two lines a
+		// job-killing bug again rather than an extra syscall (#151).
+		return Descriptor{}, fmt.Errorf("cas: checking for an existing blob: %w", err)
+	}
+
+	// Materialise into a private staging path and publish with a link, rather
+	// than materialising straight onto the blob path. The blob path is shared
+	// between every worker ingesting these bytes, and a rung that wrote to it
+	// directly had to clean up after itself on failure — which meant deleting a
+	// path another worker could already have published to (#151). Staging keeps
+	// every failure private, and os.Link fails rather than replacing, so the
+	// loser of a race reports a duplicate instead of clobbering the winner.
+	staging := s.stagingPath()
+	defer func() { _ = os.Remove(staging) }()
 
 	for _, attempt := range ladder(mode) {
-		used, err := s.materialise(ctx, srcPath, final, attempt)
-		if err == nil {
-			if err := syncDir(filepath.Dir(final)); err != nil {
+		used, err := s.materialise(ctx, srcPath, staging, attempt)
+		if err != nil {
+			if !errors.Is(err, errDegrade) {
 				return Descriptor{}, err
 			}
-			return Descriptor{Hash: h, Size: size, Materialised: used}, nil
+			// Fall through to the next rung. A cross-filesystem source, a
+			// filesystem without cloning, or a hardlink limit are all ordinary
+			// and must degrade rather than fail (ADR-0014).
+			_ = os.Remove(staging)
+			continue
 		}
-		if !errors.Is(err, errDegrade) {
+		if err := os.Link(staging, final); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				return Descriptor{Hash: h, Size: size, Materialised: used, Deduplicated: true}, nil
+			}
+			return Descriptor{}, fmt.Errorf("cas: publishing blob: %w", err)
+		}
+		if err := syncDir(filepath.Dir(final)); err != nil {
 			return Descriptor{}, err
 		}
-		// Fall through to the next rung. A cross-filesystem source, a
-		// filesystem without cloning, or a hardlink limit are all ordinary and
-		// must degrade rather than fail (ADR-0014).
+		return Descriptor{Hash: h, Size: size, Materialised: used}, nil
 	}
 	return Descriptor{}, fmt.Errorf("cas: could not materialise %s into the store", srcPath)
+}
+
+// stagingSeq makes staging names unique within a process; the pid makes them
+// unique between processes sharing a CAS root.
+var stagingSeq atomic.Uint64
+
+// stagingPath is a private destination for one materialisation attempt. It
+// lives under tmp/ with the .part suffix so an interrupted ingest leaves
+// something ReapTemp will clean up rather than a stray file in the blob tree.
+func (s *FS) stagingPath() string {
+	return filepath.Join(s.root, tmpDir,
+		fmt.Sprintf("link-%d-%d.part", os.Getpid(), stagingSeq.Add(1)))
 }
 
 // errDegrade signals that this rung of the ladder is not available here.

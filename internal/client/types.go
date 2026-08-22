@@ -110,6 +110,24 @@ type Peer struct {
 	// LastSeenAt is when the peer last answered anything, or nil if it never
 	// has. Health without it is a status nobody can act on.
 	LastSeenAt *time.Time `json:"last_seen_at"`
+	// Snapshot is the peer's materialised catalog snapshot (§52, M4-13), or
+	// nil when the controller has never issued it one. Nil is "no snapshot",
+	// which is a different answer from a snapshot of an empty library.
+	Snapshot *PeerSnapshot `json:"snapshot"`
+}
+
+// PeerSnapshot is a peer's catalog snapshot: which controller, which version,
+// and how old (§52, §53).
+type PeerSnapshot struct {
+	ControllerID  string    `json:"controller_id"`
+	Version       int64     `json:"version"`
+	GeneratedAt   time.Time `json:"generated_at"`
+	Kind          string    `json:"kind"`
+	Rows          int64     `json:"rows"`
+	ContentDigest string    `json:"content_digest"`
+	// AgeSeconds is measured against the CONTROLLER's clock, which is the only
+	// clock that can say how stale its own catalogue read is.
+	AgeSeconds float64 `json:"age_seconds"`
 }
 
 // Replica is one peer's holding of one blob (§8).

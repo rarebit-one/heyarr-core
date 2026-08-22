@@ -110,6 +110,12 @@ type Options struct {
 	Logger    *slog.Logger
 	// Now is injected so certificate validity is testable (ADR-0017).
 	Now func() time.Time
+	// Snapshots builds catalog snapshots for attached Full Peers (§52,
+	// M4-13). Nil on a node with no catalogue — a peer rather than a
+	// controller (ADR-0029) — and the route then refuses honestly rather than
+	// disappearing, so "this node does not do that" and "this build does not
+	// have that route" stay distinguishable.
+	Snapshots SnapshotSource
 }
 
 // Server is the peer listener.
@@ -124,6 +130,10 @@ type Server struct {
 	// inventory is the control plane's writer for peer-reported replicas. Nil
 	// on a node with no catalog behind its peer surface.
 	inventory InventorySink
+	// snapshots builds the catalog snapshot a Full Peer materialises (§52,
+	// M4-13). Nil for the same reason and with the same consequence: the route
+	// is mounted and refuses honestly.
+	snapshots SnapshotSource
 
 	http     *http.Server
 	bound    string
@@ -171,6 +181,7 @@ func New(opts Options) (*Server, error) {
 		errc:    make(chan error, 1),
 
 		inventory: opts.Inventory,
+		snapshots: opts.Snapshots,
 	}
 	s.handler = s.routes()
 	s.http = &http.Server{
@@ -217,6 +228,12 @@ func (s *Server) routes() http.Handler {
 		// causes `replicas` rows to be written about a machine that is not
 		// this one.
 		r.Post("/inventory", s.handleInventory)
+		// The catalog snapshot a Full Peer materialises for degraded
+		// operation (§52, M4-13). It is a read, and the mirror image of the
+		// inventory report above: there a peer tells the controller what its
+		// disk holds, here the controller tells the peer what the catalogue
+		// holds. Neither lets a peer write control state (ADR-0029).
+		r.Get("/catalog/snapshot", s.handleCatalogSnapshot)
 	})
 
 	// There is no admin route on this router and there is not going to be one.

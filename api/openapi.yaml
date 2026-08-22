@@ -773,6 +773,50 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /api/v1/peers/{id}/reconcile:
+    post:
+      tags: [fabric]
+      operationId: reconcilePeer
+      summary: Ask for this peer's convergence to be re-examined.
+      description: |
+        §19, §57. **Enqueues** a `reconcile_peer` job; it does not run one.
+        Reconciliation is a job (invariant 4, ADR-0002) and the worker that
+        runs it may be another process, so this answers `202` rather than
+        pretending to be the worker.
+
+        The job diffs §19's desired blob set — for a Full Peer, the complete
+        canonical Blob set — against what this peer's inventory reports, and
+        enqueues `replicate_blob` for the difference. It emits the work and
+        stops there; moving the bytes is a separate job.
+
+        Deduped per peer, so asking repeatedly while a cycle is queued yields
+        one job. Convergence also runs fabric-wide on a beat, so this is for
+        impatience — a peer just enrolled, or just restored — rather than for
+        correctness.
+
+        `write` rather than `admin`, unlike enrolment and revocation: it
+        changes nothing about who is trusted.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: The peer's id or its name, as for `GET /api/v1/peers/{id}`.
+      responses:
+        "202":
+          description: Queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  peer_id: { type: string }
+                  job_id: { type: string }
+                  status: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/replicas:
     get:
       tags: [fabric]
@@ -2124,6 +2168,93 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /peer/v1/catalog/snapshot:
+    get:
+      tags: [peer]
+      operationId: getCatalogSnapshot
+      summary: Fetch this peer's materialised catalog snapshot.
+      description: |
+        A Full Peer keeps a local materialised read snapshot of the
+        controller's catalogue so that it has something trustworthy to serve
+        from when the controller is not reachable (§52, §53). This is where it
+        comes from.
+
+        **The peer is the certificate's, always.** There is no peer id in the
+        path, the query or a body. A snapshot is a complete description of the
+        library's organisation, and a route that let a caller name a different
+        peer would both hand that peer's snapshot to any member and advance
+        that peer's version — so the real peer's next incremental refresh would
+        skip everything in between (ADR-0033).
+
+        **What it contains:** libraries, library roots, works, editions, blobs
+        and assets. Artwork references and known device access leases are §52
+        "potential contents" and are not here: leases are §54 and Milestone 7,
+        and there is no lease model yet.
+
+        **What it is not:** independently writable control state. The peer
+        materialises this into a SEPARATE database file with one writer and
+        read handles that cannot write; nothing a peer sends here writes
+        control state, and nothing it holds locally is control state
+        (ADR-0029, Invariant 5).
+
+        **Staleness is reported, not implied.** Every snapshot carries the
+        controller it came from, a monotonic version and when the catalogue was
+        read. A stale answer presented as current is worse than an unavailable
+        one, which is the whole shape of §53's "conservative rather than
+        unavailable".
+      security:
+        - peerCertificate: []
+      parameters:
+        - name: holding
+          in: query
+          schema: { type: integer, format: int64, minimum: 0 }
+          description: |
+            The snapshot version this peer already has. Zero, or omitted, means
+            it has none — which is also what a peer whose snapshot store was
+            lost reports, and both correctly produce a full rebuild.
+
+            It is a CLAIM, not a credential. A peer claiming a version this
+            controller never issued gets a full rebuild rather than an
+            argument: the conservative answer to "we disagree about what you
+            have" is to send everything.
+        - name: full
+          in: query
+          schema: { type: string, enum: ["true"] }
+          description: |
+            Force the full rebuild even when an incremental refresh would be
+            legal. It is the drift corrector — the same escape hatch M4-07
+            gives inventory reporting — for when the snapshot and the catalogue
+            disagree and nobody can say why.
+      responses:
+        "200":
+          description: The snapshot.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogSnapshot" }
+        "400":
+          description: "`holding` is not a non-negative integer."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "401":
+          description: No client certificate was presented.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "403":
+          description: The presented key is not a member of this fabric.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503":
+          description: |
+            This node serves the peer fabric but holds no catalogue to
+            snapshot — it is a peer rather than a controller (ADR-0029). It is
+            not a 500: there is no bug to look for.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /api/v1/quality-profiles:
     get:
       tags: [policy]
@@ -2774,7 +2905,7 @@ components:
 
     Peer:
       type: object
-      required: [id, name, site, mode, is_self, created_at, enrolled_at, health, last_seen_at]
+      required: [id, name, site, mode, is_self, created_at, enrolled_at, health, last_seen_at, snapshot]
       properties:
         id: { type: string }
         name: { type: string }
@@ -2841,6 +2972,152 @@ components:
             It ships beside `health` rather than instead of it because
             "unreachable" on its own is a status nobody can act on: it does not
             say whether to go and restart something or to wait twenty seconds.
+        snapshot:
+          oneOf:
+            - $ref: "#/components/schemas/PeerSnapshot"
+            - type: "null"
+          description: |
+            The peer's materialised catalog snapshot (§52, M4-13), or `null`
+            when this controller has never issued it one.
+
+            Explicitly nullable rather than an omitted key, and never a zero
+            object. "This peer holds a snapshot of an empty library" and "this
+            peer holds no snapshot" are different answers — in Milestone 7 one
+            means the library is empty and the other means the peer cannot help
+            you — and a client that had to tell them apart by inspecting a row
+            count would eventually get it wrong during an outage, which is the
+            only time it matters.
+
+    PeerSnapshot:
+      type: object
+      required: [controller_id, version, generated_at, kind, rows, content_digest, age_seconds]
+      description: |
+        What a peer's catalog snapshot is a fact ABOUT: which controller, which
+        version, and how old (§52, §53).
+      properties:
+        controller_id:
+          type: string
+          description: |
+            The controller whose catalogue this is. Recorded even though there
+            is exactly one controller (ADR-0029), because a snapshot restored
+            from another deployment's backup (§51, §82) has to be recognisable
+            as somebody else's.
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+          description: |
+            Monotonic per peer, allocated by the controller — the single writer
+            is the only place monotonicity can actually be guaranteed
+            (ADR-0003). It starts at 1; there is no version 0, because absent
+            is the absence of a snapshot rather than a snapshot numbered zero.
+        generated_at:
+          type: string
+          format: date-time
+          description: |
+            When the controller READ the catalogue — not when the peer applied
+            it, and not when a row was last written.
+        kind:
+          type: string
+          enum: [full, incremental]
+          description: |
+            Which path produced this one. A full rebuild is the drift
+            corrector, and "when did this peer last take the slow, safe path?"
+            is an operational question that is unanswerable if the two are
+            indistinguishable after the fact.
+        rows:
+          type: integer
+          format: int64
+          minimum: 0
+          description: How many rows it carries, across every covered table.
+        content_digest:
+          type: string
+          description: |
+            A fingerprint of the CONTENTS, excluding the metadata — so an
+            incremental refresh and a full rebuild of the same catalogue state
+            can be shown to be identical, which they are.
+        age_seconds:
+          type: number
+          format: double
+          description: |
+            How old the snapshot is, measured against the CONTROLLER's clock,
+            which is the only clock that can say how stale its own catalogue
+            read is. It may be negative if the reader's clock is behind; that
+            is reported as measured rather than clamped, because an operator
+            who sees a negative age has learned something true.
+
+    CatalogSnapshot:
+      type: object
+      required: [meta, libraries, library_roots, works, editions, blobs, assets]
+      description: |
+        One snapshot payload: metadata, rows, and — for an incremental refresh
+        — the complete id set of each covered table.
+
+        **Why an incremental payload carries every id.** Deletion. A payload of
+        "rows that changed since T" says nothing about rows that stopped
+        existing, and a snapshot that silently keeps a deleted work forever is
+        not fresh, it is haunted. Shipping every id is cheaper than tombstones
+        in the control plane and has a property they do not: an incremental
+        refresh and a full rebuild of the same catalogue state converge on
+        identical contents.
+      properties:
+        meta:
+          $ref: "#/components/schemas/CatalogSnapshotMeta"
+        libraries:
+          type: array
+          items: { type: object }
+          description: Library organisation.
+        library_roots:
+          type: array
+          items: { type: object }
+        works:
+          type: array
+          items: { type: object }
+          description: The semantic content spine (§11).
+        editions:
+          type: array
+          items: { type: object }
+        blobs:
+          type: array
+          items: { type: object }
+          description: |
+            Byte identities and their shape (§13, ADR-0005) — never the bytes.
+            Those are the CAS's, and the peer already holds them in full (§80).
+        assets:
+          type: array
+          items: { type: object }
+          description: Assets and their blob mappings.
+        ids:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+          description: |
+            The complete id set per covered table, present only on an
+            incremental payload. A full payload does not need it: its rows ARE
+            the complete set.
+
+            An ABSENT set and an EMPTY one mean opposite things here — keep
+            everything, keep nothing — so the peer refuses an incremental
+            payload that omits a table rather than guessing.
+
+    CatalogSnapshotMeta:
+      type: object
+      required: [controller_id, version, generated_at, kind, watermark]
+      properties:
+        controller_id: { type: string }
+        version: { type: integer, format: int64, minimum: 1 }
+        generated_at: { type: string, format: date-time }
+        kind: { type: string, enum: [full, incremental] }
+        watermark:
+          type: string
+          format: date-time
+          description: |
+            The high-water mark the NEXT incremental refresh asks from. A
+            separate field from `generated_at` because the source selects rows
+            AT OR AFTER it: re-sending a row costs one redundant upsert, while
+            excluding one that changed in the same instant costs a snapshot
+            that is silently missing it.
 
     PeerIdentity:
       type: object

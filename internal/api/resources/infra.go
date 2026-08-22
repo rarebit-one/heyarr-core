@@ -104,6 +104,12 @@ func (a *API) listPeers(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, "peer", err)
 		return
 	}
+	// The snapshot state (§52, M4-13) is attached after the page is scanned,
+	// in one query rather than one per row.
+	if peers, err = a.attachSnapshots(r.Context(), peers); err != nil {
+		a.fail(w, r, "peer", err)
+		return
+	}
 	a.write(w, r, http.StatusOK, newPage(peers, q.limit,
 		func(x Peer) []string { return []string{x.Name} }, "peers"))
 }
