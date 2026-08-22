@@ -371,13 +371,23 @@ func (c *Client) Patch(ctx context.Context, path string, body, out any) error {
 	return c.roundTrip(req, out)
 }
 
-// Delete issues a DELETE. The API answers 204, so there is nothing to decode.
+// Delete issues a DELETE and discards the body.
 func (c *Client) Delete(ctx context.Context, path string) error {
+	return c.DeleteInto(ctx, path, nil)
+}
+
+// DeleteInto issues a DELETE and decodes the response into out.
+//
+// Not every deletion in this API is a 204. Removing a peer answers with the
+// membership record it revoked (M4-04), because "did I revoke the right peer?"
+// is a question a bare 204 makes the operator answer by re-reading the list
+// they just changed.
+func (c *Client) DeleteInto(ctx context.Context, path string, out any) error {
 	req, err := c.newRequest(ctx, http.MethodDelete, path, nil, nil)
 	if err != nil {
 		return err
 	}
-	return c.roundTrip(req, nil)
+	return c.roundTrip(req, out)
 }
 
 func (c *Client) roundTrip(req *http.Request, out any) error {

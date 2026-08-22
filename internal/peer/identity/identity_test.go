@@ -216,3 +216,52 @@ func TestFormatPublicKeyIsAlgorithmPrefixedHex(t *testing.T) {
 		t.Error("an absent key rendered as something other than the empty string")
 	}
 }
+
+// TestParsePublicKeyRefusesEachMalformedShape is one case per way a pasted key
+// can be wrong, because each of them is a different mistake by the operator
+// who pasted it and a single "invalid input is rejected" case would pass with
+// most of them deleted.
+func TestParsePublicKeyRefusesEachMalformedShape(t *testing.T) {
+	valid := identity.FormatPublicKey(make([]byte, ed25519.PublicKeySize))
+
+	cases := []struct {
+		name  string
+		input string
+		says  string
+	}{
+		{"empty", "", "empty"},
+		{"no algorithm prefix", strings.TrimPrefix(valid, "ed25519:"), "no algorithm prefix"},
+		{"another algorithm", "ed448:" + strings.Repeat("ab", 32), "ed448"},
+		{"uppercase hex", "ed25519:" + strings.ToUpper(strings.Repeat("ab", 32)), "lowercase"},
+		{"not hex at all", "ed25519:" + strings.Repeat("zz", 32), "not hex"},
+		{"too short", "ed25519:" + strings.Repeat("ab", 31), "31 bytes"},
+		{"too long", "ed25519:" + strings.Repeat("ab", 33), "33 bytes"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := identity.ParsePublicKey(tc.input)
+			if !errors.Is(err, identity.ErrMalformedPublicKey) {
+				t.Fatalf("error = %v, want ErrMalformedPublicKey", err)
+			}
+			if !strings.Contains(err.Error(), tc.says) {
+				t.Errorf("the refusal does not mention %q: %v", tc.says, err)
+			}
+		})
+	}
+}
+
+// TestParsePublicKeyRoundTripsFormat is the positive control the table above
+// needs: without it, a ParsePublicKey that refused everything would pass.
+func TestParsePublicKeyRoundTripsFormat(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := identity.ParsePublicKey(identity.FormatPublicKey(pub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(pub) {
+		t.Error("a key did not survive Format followed by Parse")
+	}
+}

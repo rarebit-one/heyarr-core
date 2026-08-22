@@ -23,6 +23,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
+	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -277,7 +278,17 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}
-	mounts, err := c.mounts(db, store, blobStore, eventLog)
+	// The peer fabric's trust root (§26, ADR-0012, M4-04). One store, shared
+	// between the enrolment endpoints that write it and the request guard that
+	// reads it, so that a peer removed through the API stops being trusted by
+	// the very next request rather than by the next restart.
+	members, err := membership.New(membership.Options{
+		DB: db, Events: eventLog, Logger: c.log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("controller: opening peer membership: %w", err)
+	}
+	mounts, err := c.mounts(db, store, blobStore, eventLog, members)
 	if err != nil {
 		return nil, err
 	}
@@ -302,6 +313,7 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 		KnownSchemaVersion: knownSchema,
 		CASRoot:            c.cfg.CAS.Root,
 		Mount:              mounts,
+		PeerMembership:     members,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
@@ -318,7 +330,7 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 // The event log is passed in rather than built here because the queue records
 // its own transitions through it (§76, ADR-0009) and GET /api/v1/system reports
 // its head — and those must be the same log.
-func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Store, eventLog *events.Log) ([]httpapi.MountFunc, error) {
+func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Store, eventLog *events.Log, members *membership.Store) ([]httpapi.MountFunc, error) {
 	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
@@ -354,13 +366,14 @@ func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Stor
 	}
 
 	api, err := resources.New(resources.Options{
-		DB:        db,
-		Jobs:      queue,
-		Events:    eventLog,
-		Tokens:    store,
-		Catalog:   cat,
-		Providers: providerRegistry,
-		Logger:    c.log,
+		DB:         db,
+		Jobs:       queue,
+		Events:     eventLog,
+		Tokens:     store,
+		Catalog:    cat,
+		Providers:  providerRegistry,
+		Membership: members,
+		Logger:     c.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)

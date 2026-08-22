@@ -30,7 +30,7 @@ One logical library, multiple complete sovereign peers.
 * [heyarr jobs](heyarr_jobs.md)	 - Inspect and retry durable work
 * [heyarr library](heyarr_library.md)	 - Manage libraries and their roots
 * [heyarr peer](heyarr_peer.md)	 - Serve and replicate bytes
-* [heyarr peers](heyarr_peers.md)	 - Inspect the peers of this instance
+* [heyarr peers](heyarr_peers.md)	 - Inspect and manage the peers of this instance
 * [heyarr quality-profile](heyarr_quality-profile.md)	 - Inspect the quality profiles a want is measured against
 * [heyarr scan](heyarr_scan.md)	 - Scan a library's roots, optionally waiting for the scan to finish
 * [heyarr system](heyarr_system.md)	 - Report what a running instance is and how far behind it has drifted

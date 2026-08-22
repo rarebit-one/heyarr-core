@@ -108,6 +108,13 @@ type Peer struct {
 	PublicKey *string   `json:"public_key"`
 	IsSelf    bool      `json:"is_self"`
 	CreatedAt time.Time `json:"created_at"`
+	// EnrolledAt is when this peer was admitted to the fabric (M4-04). For the
+	// self peer it equals CreatedAt; for anything else it is the moment an
+	// operator pinned its key. Revocation is deletion (ADR-0012), so a peer
+	// removed and re-enrolled has a NEW id and a new enrolled_at — which is
+	// what makes this field the answer to "has membership changed?" rather
+	// than a duplicate of created_at.
+	EnrolledAt time.Time `json:"enrolled_at"`
 }
 
 // Replica is one peer's holding of one blob (§8).

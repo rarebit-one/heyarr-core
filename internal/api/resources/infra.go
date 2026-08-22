@@ -14,7 +14,7 @@ import (
 // Peers
 // ---------------------------------------------------------------------------
 
-const peerColumns = `id, name, site, mode, endpoint, public_key, is_self, created_at`
+const peerColumns = `id, name, site, mode, endpoint, public_key, is_self, created_at, enrolled_at`
 
 func scanPeer(row interface{ Scan(...any) error }) (Peer, error) {
 	var p Peer
@@ -22,7 +22,9 @@ func scanPeer(row interface{ Scan(...any) error }) (Peer, error) {
 	var publicKey []byte
 	var isSelf int
 	var created string
-	if err := row.Scan(&p.ID, &p.Name, &p.Site, &p.Mode, &endpoint, &publicKey, &isSelf, &created); err != nil {
+	var enrolled sql.NullString
+	if err := row.Scan(&p.ID, &p.Name, &p.Site, &p.Mode, &endpoint, &publicKey, &isSelf,
+		&created, &enrolled); err != nil {
 		return Peer{}, err
 	}
 	p.Endpoint = nullString(endpoint)
@@ -35,6 +37,13 @@ func scanPeer(row interface{ Scan(...any) error }) (Peer, error) {
 	}
 	p.IsSelf = isSelf == 1
 	p.CreatedAt = parseTime(created)
+	// A row written before 00020 has no enrolment time of its own. Falling
+	// back to created_at is right rather than lenient: for a peer that predates
+	// the column, the row appearing IS when it was admitted.
+	p.EnrolledAt = p.CreatedAt
+	if enrolled.Valid {
+		p.EnrolledAt = parseTime(enrolled.String)
+	}
 	return p, nil
 }
 
