@@ -10,6 +10,8 @@ import (
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
+	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
+	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/peer/endpoint"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
@@ -251,6 +253,50 @@ func (a *API) deletePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.write(w, r, http.StatusOK, peerFromMember(m))
+}
+
+// reconcilePeer is POST /api/v1/peers/{id}/reconcile (§19, §57, M4-08).
+//
+// Enqueues the cycle rather than running it, exactly as
+// POST /desired/{id}/reconcile does and for the same reason: reconciling is a
+// job (invariant 4, ADR-0002), and the worker that runs it may be another
+// process. The endpoint says "please look at this peer" and answers 202 rather
+// than pretending to be the worker.
+//
+// It exists because a beat every five minutes is the wrong latency for the
+// moment an operator has just enrolled a peer, or restored one from backup and
+// wants to know what it is missing. §57 asks for reconciliation on a beat AND
+// on demand; this is the on-demand half.
+//
+// `write` rather than `admin`, unlike the two enrolment routes above. It
+// changes nothing about who is trusted — it asks the fabric to notice now what
+// it would notice five minutes later anyway.
+func (a *API) reconcilePeer(w http.ResponseWriter, r *http.Request) {
+	// Resolved through membership first, so an unknown peer is a 404 here
+	// rather than a job that runs, finds no such Full Peer and succeeds having
+	// done nothing. The scope goes into the payload as the RESOLVED id, never
+	// as the path parameter: getPeer accepts a name too, and a job carrying a
+	// name would diff against a peer set keyed by id and silently match
+	// nothing.
+	m, err := a.membership.Get(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		a.failMembership(w, r, err)
+		return
+	}
+	job, err := a.jobs.Enqueue(r.Context(), jobs.EnqueueOptions{
+		Type:      replication.ReconcilePeerJobType,
+		Payload:   replication.ReconcilePeerPayload{PeerID: m.PeerID},
+		DedupeKey: replication.ScopedReconcilePeerDedupeKey(m.PeerID),
+	})
+	if err != nil {
+		a.fail(w, r, "job", err)
+		return
+	}
+	a.write(w, r, http.StatusAccepted, map[string]string{
+		"peer_id": m.PeerID,
+		"job_id":  job.ID,
+		"status":  "queued",
+	})
 }
 
 // failMembership maps each refusal to the status that tells a client what to do

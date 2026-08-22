@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/peer/health"
 )
@@ -112,6 +113,30 @@ func startReconciliation(ctx context.Context, queue *jobs.Queue, peers *health.T
 				"reason", reason, "error", err)
 		}
 	}
+	// Peer convergence, riding this beat (§19, §57, M4-08).
+	//
+	// A THIRD thing on this timer rather than a fourth beat, and the shape
+	// says so: it is one enqueue on a fixed interval with one dedupe key,
+	// which is exactly the shape of the reconciliation enqueue beside it. The
+	// search beat's note explains why it is not that shape and therefore got
+	// its own timer; this one is, and does not.
+	//
+	// It runs on the SAME interval for a reason too. Convergence is a question
+	// about the fabric, and the fabric changes for the reasons a want's
+	// satisfaction changes — a peer enrolled, a peer gone, an inventory that
+	// found bytes missing — so noticing both on the same cadence is the honest
+	// coupling rather than a coincidence.
+	//
+	// Unlike the health sweep below it IS a job, and the distinction is the
+	// one this file already draws: a health probe answers a question about
+	// NOW and is worthless late, while a convergence cycle enqueues durable
+	// work that must survive a restart (invariant 9).
+	converge := func(reason string) {
+		if err := enqueuePeerReconcile(ctx, queue, ""); err != nil {
+			log.Warn("could not enqueue a peer convergence cycle",
+				"reason", reason, "error", err)
+		}
+	}
 	// The peer health sweep, riding this beat (M4-10). It is called directly
 	// rather than enqueued: see the note above on why this is not a job.
 	sweep := func() {
@@ -136,6 +161,11 @@ func startReconciliation(ctx context.Context, queue *jobs.Queue, peers *health.T
 	}
 
 	enqueue("startup")
+	// Converged at startup, for reconciliation's reason: a node that has just
+	// started may have been down while a peer lost a disk, and the diff is
+	// cheap on a fabric that is already converged — it reads two sets and
+	// enqueues nothing.
+	converge("startup")
 	// Swept at startup, unlike the upgrade scan below and for reconciliation's
 	// reason: a node that has just started knows nothing about who is up, and
 	// waiting a full interval to find out would make every restart a window in
@@ -151,6 +181,7 @@ func startReconciliation(ctx context.Context, queue *jobs.Queue, peers *health.T
 				return
 			case <-ticker.C:
 				enqueue("beat")
+				converge("beat")
 				sweep()
 			}
 		}
@@ -185,6 +216,25 @@ func startUpgradeScan(ctx context.Context, queue *jobs.Queue, log *slog.Logger) 
 		}
 	}()
 	log.Info("upgrade scan beat started", "interval", upgradeScanInterval)
+}
+
+// enqueuePeerReconcile queues a convergence cycle, or one peer's (§19, §57).
+//
+// The dedupe key is what makes the beat safe, exactly as it is for
+// reconciliation: a cycle already queued or running is the same cycle, so a
+// slow pass over a large fabric cannot pile up behind itself — which is the
+// failure mode a naive timer produces, and it produces it precisely when the
+// system is already struggling.
+func enqueuePeerReconcile(ctx context.Context, queue *jobs.Queue, peerID string) error {
+	_, err := queue.Enqueue(ctx, jobs.EnqueueOptions{
+		Type:      replication.ReconcilePeerJobType,
+		Payload:   replication.ReconcilePeerPayload{PeerID: peerID},
+		DedupeKey: replication.ScopedReconcilePeerDedupeKey(peerID),
+	})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("controller: enqueueing a peer convergence cycle: %w", err)
+	}
+	return nil
 }
 
 // enqueueUpgradeScan queues a sweep, or one want's scan.

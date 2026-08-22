@@ -773,6 +773,50 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /api/v1/peers/{id}/reconcile:
+    post:
+      tags: [fabric]
+      operationId: reconcilePeer
+      summary: Ask for this peer's convergence to be re-examined.
+      description: |
+        §19, §57. **Enqueues** a `reconcile_peer` job; it does not run one.
+        Reconciliation is a job (invariant 4, ADR-0002) and the worker that
+        runs it may be another process, so this answers `202` rather than
+        pretending to be the worker.
+
+        The job diffs §19's desired blob set — for a Full Peer, the complete
+        canonical Blob set — against what this peer's inventory reports, and
+        enqueues `replicate_blob` for the difference. It emits the work and
+        stops there; moving the bytes is a separate job.
+
+        Deduped per peer, so asking repeatedly while a cycle is queued yields
+        one job. Convergence also runs fabric-wide on a beat, so this is for
+        impatience — a peer just enrolled, or just restored — rather than for
+        correctness.
+
+        `write` rather than `admin`, unlike enrolment and revocation: it
+        changes nothing about who is trusted.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: The peer's id or its name, as for `GET /api/v1/peers/{id}`.
+      responses:
+        "202":
+          description: Queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  peer_id: { type: string }
+                  job_id: { type: string }
+                  status: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/replicas:
     get:
       tags: [fabric]
