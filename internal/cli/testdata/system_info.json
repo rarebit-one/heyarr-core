@@ -1,0 +1,48 @@
+{
+  "build": {
+    "version": "test",
+    "commit": "abc123",
+    "date": "<timestamp>",
+    "go_version": ""
+  },
+  "peer": {
+    "name": "local",
+    "site": ""
+  },
+  "schema_version": 4,
+  "drift": {
+    "build": {
+      "status": "unknown",
+      "expected": {},
+      "actual": {
+        "version": "test",
+        "commit": "abc123"
+      },
+      "major_behind": 0,
+      "minor_behind": 0,
+      "patch_behind": 0,
+      "detail": "no expected build was supplied, so nothing was compared"
+    },
+    "schema": {
+      "status": "current",
+      "expected": 4,
+      "applied": 4,
+      "migrations_behind": 0,
+      "migrations_ahead": 0
+    }
+  },
+  "database": {
+    "path": "<data_dir>/heyarr.db",
+    "ok": true
+  },
+  "cas": {
+    "path": "<data_dir>/cas",
+    "ok": true
+  },
+  "events": {
+    "head": 0,
+    "ok": true
+  },
+  "media": [],
+  "auth_enabled": false
+}

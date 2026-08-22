@@ -62,6 +62,12 @@ func (c *testClock) advance(d time.Duration) {
 	c.mu.Unlock()
 }
 
+// harnessKnownSchemaVersion is the highest migration the harness pretends this
+// binary embeds. It matches the applied version it reports, so the drift check
+// on GET /api/v1/system is quiet by default and the --json goldens do not move
+// every time a real migration lands.
+const harnessKnownSchemaVersion = 4
+
 // fixedTime is the instant everything created in these tests is stamped with.
 var fixedTime = time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 
@@ -183,8 +189,12 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 		Events:        eventLog,
 		Build:         buildinfo.Info{Version: "test", Commit: "abc123", Date: "2026-08-20T00:00:00Z"},
 		SchemaVersion: 4,
-		CASRoot:       store2.Root(),
-		Mount:         []httpapi.MountFunc{api.Mount, blobHandler.Mount},
+		// Equal to SchemaVersion, so the golden --json shapes do not change
+		// every time a migration is added. The drift tests set them apart
+		// deliberately.
+		KnownSchemaVersion: harnessKnownSchemaVersion,
+		CASRoot:            store2.Root(),
+		Mount:              []httpapi.MountFunc{api.Mount, blobHandler.Mount},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -95,15 +95,16 @@ func newHarness(t *testing.T, store cas.Store, opts ...harnessOption) *harness {
 	}
 
 	srv, err := httpapi.New(httpapi.Options{
-		Config:        cfg,
-		Logger:        slog.New(slog.DiscardHandler),
-		DB:            db,
-		Verifier:      verifier,
-		Events:        eventLog,
-		Build:         buildinfo.Info{Version: "test"},
-		SchemaVersion: 1,
-		CASRoot:       dir,
-		Mount:         []httpapi.MountFunc{handler.Mount},
+		Config:             cfg,
+		Logger:             slog.New(slog.DiscardHandler),
+		DB:                 db,
+		Verifier:           verifier,
+		Events:             eventLog,
+		Build:              buildinfo.Info{Version: "test"},
+		SchemaVersion:      1,
+		KnownSchemaVersion: 1,
+		CASRoot:            dir,
+		Mount:              []httpapi.MountFunc{handler.Mount},
 	})
 	if err != nil {
 		t.Fatal(err)

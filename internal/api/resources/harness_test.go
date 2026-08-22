@@ -170,14 +170,15 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	}
 
 	srv, err := httpapi.New(httpapi.Options{
-		Config:        cfg,
-		Logger:        slog.New(slog.DiscardHandler),
-		DB:            db,
-		Verifier:      verifier,
-		Events:        eventLog,
-		Build:         buildinfo.Info{Version: "test", Commit: "abc123", Date: "2026-08-20T00:00:00Z"},
-		SchemaVersion: 4,
-		Mount:         []httpapi.MountFunc{api.Mount},
+		Config:             cfg,
+		Logger:             slog.New(slog.DiscardHandler),
+		DB:                 db,
+		Verifier:           verifier,
+		Events:             eventLog,
+		Build:              buildinfo.Info{Version: "test", Commit: "abc123", Date: "2026-08-20T00:00:00Z"},
+		SchemaVersion:      4,
+		KnownSchemaVersion: 4,
+		Mount:              []httpapi.MountFunc{api.Mount},
 	})
 	if err != nil {
 		t.Fatal(err)

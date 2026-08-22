@@ -30,6 +30,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/drift"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
@@ -118,15 +119,16 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 
 	logs := &syncBuffer{}
 	srv, err := httpapi.New(httpapi.Options{
-		Config:        cfg,
-		Logger:        slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		DB:            db,
-		Verifier:      verifier,
-		Events:        eventLog,
-		Build:         buildinfo.Info{Version: "test", Commit: "abc123", Date: "2026-08-20T00:00:00Z"},
-		SchemaVersion: 4,
-		CASRoot:       casDir,
-		Mount:         []httpapi.MountFunc{testRoutes},
+		Config:             cfg,
+		Logger:             slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		DB:                 db,
+		Verifier:           verifier,
+		Events:             eventLog,
+		Build:              buildinfo.Info{Version: "test", Commit: "abc123", Date: "2026-08-20T00:00:00Z"},
+		SchemaVersion:      4,
+		KnownSchemaVersion: 4,
+		CASRoot:            casDir,
+		Mount:              []httpapi.MountFunc{testRoutes},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1047,7 +1049,7 @@ func TestSystemReportsAnUnreadableEventLogRatherThanZero(t *testing.T) {
 
 	srv, err := httpapi.New(httpapi.Options{
 		Config: cfg, DB: db, Events: failingEventHead{},
-		Logger: slog.New(slog.DiscardHandler),
+		Logger: slog.New(slog.DiscardHandler), KnownSchemaVersion: 4,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1218,7 +1220,7 @@ func systemWithMedia(t *testing.T, tools []httpapi.ToolInfo) ([]byte, httpapi.Sy
 
 	srv, err := httpapi.New(httpapi.Options{
 		Config: cfg, DB: db, Events: eventLog, Media: tools,
-		Logger: slog.New(slog.DiscardHandler),
+		Logger: slog.New(slog.DiscardHandler), KnownSchemaVersion: 4,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1244,4 +1246,258 @@ func systemWithMedia(t *testing.T, tools []httpapi.ToolInfo) ([]byte, httpapi.Sy
 		t.Fatal(err)
 	}
 	return raw, info
+}
+
+// ---------------------------------------------------------------------------
+// Drift (#150)
+// ---------------------------------------------------------------------------
+//
+// #132 found a deployment 36 commits and seven migrations behind main, across
+// two whole milestones, that nothing would have reported. It also found WHY
+// nobody caught it: the verification asked for the SILENCE of a warning, and
+// the warning did not exist in the build being verified. The silence was
+// perfect and meant nothing.
+//
+// So every "no drift" assertion below is preceded by the SAME assertion
+// watching drift fire on the same endpoint. The silence is only allowed to
+// count once the noise has been heard.
+
+// systemResponse builds a minimal server with a chosen build identity and
+// schema state, and reads GET /api/v1/system from it.
+func systemResponse(t *testing.T, build buildinfo.Info, applied, known int64, query string,
+) (int, []byte) {
+	t.Helper()
+	dir := t.TempDir()
+	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := sqlite.Migrate(t.Context(), db); err != nil {
+		t.Fatal(err)
+	}
+	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Defaults()
+	cfg.DataDir = dir
+	cfg.HTTP.Addr = "127.0.0.1:0"
+	cfg.HTTP.UnixSocket = ""
+	cfg.HTTP.Auth.Enabled = false
+
+	srv, err := httpapi.New(httpapi.Options{
+		Config: cfg, DB: db, Events: eventLog,
+		Logger:        slog.New(slog.DiscardHandler),
+		Build:         build,
+		SchemaVersion: applied, KnownSchemaVersion: known,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/system"+query, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, raw
+}
+
+// systemDrift reads the drift report from GET /api/v1/system, insisting on 200.
+func systemDrift(t *testing.T, build buildinfo.Info, applied, known int64, query string) drift.Report {
+	t.Helper()
+	status, raw := systemResponse(t, build, applied, known, query)
+	if status != http.StatusOK {
+		t.Fatalf("/api/v1/system%s = %d: %s", query, status, raw)
+	}
+	var info httpapi.SystemInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		t.Fatalf("decoding /api/v1/system: %v\n%s", err, raw)
+	}
+	return info.Drift
+}
+
+// The expected build for these tests. A real semantic version, so the distance
+// is a number rather than "different by an unknown amount".
+var (
+	deployedBuild = buildinfo.Info{Version: "v1.2.0", Commit: "324a0fc1e2d3a4b5"}
+	shippedBuild  = buildinfo.Info{Version: "v1.4.0", Commit: "950ec9d5f6a7b8c9"}
+)
+
+func expectation(b buildinfo.Info) string {
+	return "?expected_version=" + b.Version + "&expected_commit=" + b.Commit
+}
+
+// TestSystemReportsBuildDriftThenSilence is the A/B for the build half over
+// HTTP. It asserts the DISTANCE, not that something appeared.
+func TestSystemReportsBuildDriftThenSilence(t *testing.T) {
+	// A: a node running two minor versions behind what was shipped.
+	fired := systemDrift(t, deployedBuild, 4, 4, expectation(shippedBuild))
+	if fired.Build.Status != drift.StatusBehind {
+		t.Fatalf("build status = %q, want %q — the drift case did not fire, so the "+
+			"silence asserted below would prove nothing", fired.Build.Status, drift.StatusBehind)
+	}
+	if fired.Build.MinorBehind != 2 {
+		t.Fatalf("minor_behind = %d, want 2", fired.Build.MinorBehind)
+	}
+	if fired.Build.Actual.Version != deployedBuild.Version {
+		t.Errorf("the report does not say what is running: %+v", fired.Build)
+	}
+	if fired.Build.Expected.Version != shippedBuild.Version {
+		t.Errorf("the report does not say what was expected: %+v", fired.Build)
+	}
+
+	// B: the same request against a node at the shipped build.
+	quiet := systemDrift(t, shippedBuild, 4, 4, expectation(shippedBuild))
+	if quiet.Build.Status != drift.StatusCurrent {
+		t.Errorf("build status = %q, want %q", quiet.Build.Status, drift.StatusCurrent)
+	}
+	if quiet.Build.MajorBehind != 0 || quiet.Build.MinorBehind != 0 || quiet.Build.PatchBehind != 0 {
+		t.Errorf("a current node reports a distance: %+v", quiet.Build)
+	}
+}
+
+// TestSystemReportsSchemaDriftThenSilence is the A/B for the schema half, and
+// it is the one the deployment in #132 needed: the binary is irrelevant here,
+// only what has and has not been applied to the database.
+func TestSystemReportsSchemaDriftThenSilence(t *testing.T) {
+	// A: eleven applied, eighteen embedded — the seven migrations of #132.
+	fired := systemDrift(t, shippedBuild, 11, 18, "")
+	if fired.Schema.Status != drift.StatusBehind {
+		t.Fatalf("schema status = %q, want %q — the drift case did not fire",
+			fired.Schema.Status, drift.StatusBehind)
+	}
+	if fired.Schema.MigrationsBehind != 7 {
+		t.Fatalf("migrations_behind = %d, want 7", fired.Schema.MigrationsBehind)
+	}
+	if fired.Schema.Applied != 11 || fired.Schema.Expected != 18 {
+		t.Errorf("the report does not carry both versions: %+v", fired.Schema)
+	}
+
+	// B: and now the same endpoint with every migration applied.
+	quiet := systemDrift(t, shippedBuild, 18, 18, "")
+	if quiet.Schema.Status != drift.StatusCurrent {
+		t.Errorf("schema status = %q, want %q", quiet.Schema.Status, drift.StatusCurrent)
+	}
+	if quiet.Schema.MigrationsBehind != 0 || quiet.Schema.MigrationsAhead != 0 {
+		t.Errorf("a current schema reports a distance: %+v", quiet.Schema)
+	}
+}
+
+// TestSystemReportsTheTwoDriftsIndependently is why they are two fields.
+//
+// A current binary with unapplied migrations is not a mild version of being
+// behind — it is a build running against a schema it was never tested on — and
+// a stale binary against a fully migrated database is the other failure. One
+// combined flag would let either hide the other.
+func TestSystemReportsTheTwoDriftsIndependently(t *testing.T) {
+	t.Run("a current binary with seven migrations unapplied", func(t *testing.T) {
+		got := systemDrift(t, shippedBuild, 11, 18, expectation(shippedBuild))
+		if got.Build.Status != drift.StatusCurrent {
+			t.Errorf("build status = %q, want %q", got.Build.Status, drift.StatusCurrent)
+		}
+		if got.Schema.Status != drift.StatusBehind || got.Schema.MigrationsBehind != 7 {
+			t.Errorf("schema drift was hidden by a current build: %+v", got.Schema)
+		}
+	})
+
+	t.Run("a stale binary against a fully migrated database", func(t *testing.T) {
+		got := systemDrift(t, deployedBuild, 18, 18, expectation(shippedBuild))
+		if got.Schema.Status != drift.StatusCurrent {
+			t.Errorf("schema status = %q, want %q", got.Schema.Status, drift.StatusCurrent)
+		}
+		if got.Build.Status != drift.StatusBehind || got.Build.MinorBehind != 2 {
+			t.Errorf("build drift was hidden by a current schema: %+v", got.Build)
+		}
+	})
+
+	t.Run("a database migrated by a newer build than this one", func(t *testing.T) {
+		got := systemDrift(t, deployedBuild, 18, 11, expectation(deployedBuild))
+		if got.Schema.Status != drift.StatusAhead || got.Schema.MigrationsAhead != 7 {
+			t.Errorf("schema = %+v, want ahead by 7", got.Schema)
+		}
+		if got.Build.Status != drift.StatusCurrent {
+			t.Errorf("build status = %q, want %q", got.Build.Status, drift.StatusCurrent)
+		}
+	})
+}
+
+// A caller that supplies no expectation must be told the build comparison was
+// not made. "unknown" reported as "current" is the whole failure of #132 in one
+// field: a check that has stopped comparing looks exactly like a fleet that
+// never drifts.
+func TestSystemReportsUnknownBuildDriftRatherThanCurrent(t *testing.T) {
+	got := systemDrift(t, deployedBuild, 4, 4, "")
+	if got.Build.Status != drift.StatusUnknown {
+		t.Errorf("build status = %q, want %q", got.Build.Status, drift.StatusUnknown)
+	}
+	if got.Build.Detail == "" {
+		t.Error("an unknown build comparison says nothing about why")
+	}
+	// The schema half still answers, because it needs nothing from the caller.
+	if got.Schema.Status != drift.StatusCurrent {
+		t.Errorf("schema status = %q, want %q", got.Schema.Status, drift.StatusCurrent)
+	}
+}
+
+// An unparseable expected_schema is refused rather than ignored. Falling back
+// to this binary's own version would answer a question nobody asked and report
+// "current" for it — a typo in a monitoring config turning into a green light.
+func TestSystemRejectsAnUnparseableExpectedSchema(t *testing.T) {
+	for _, q := range []string{"?expected_schema=eighteen", "?expected_schema=-1", "?expected_schema=18.0"} {
+		status, raw := systemResponse(t, shippedBuild, 18, 18, q)
+		if status != http.StatusBadRequest {
+			t.Errorf("/api/v1/system%s = %d, want 400: %s", q, status, raw)
+		}
+	}
+	// And a valid one is honoured, so the rejection above is not the endpoint
+	// refusing the parameter outright.
+	got := systemDrift(t, shippedBuild, 18, 18, "?expected_schema=25")
+	if got.Schema.MigrationsBehind != 7 {
+		t.Errorf("migrations_behind = %d, want 7", got.Schema.MigrationsBehind)
+	}
+}
+
+// The drift check must be impossible to wire up without the thing it compares
+// against. A server built with no known schema version would report "unknown"
+// on every request forever, and an absent mechanism reading as a clean bill of
+// health is exactly the failure #150 exists to encode against.
+func TestNewRequiresTheSchemaVersionThisBinaryKnows(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := sqlite.Migrate(t.Context(), db); err != nil {
+		t.Fatal(err)
+	}
+	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Defaults()
+	cfg.DataDir = dir
+	cfg.HTTP.Addr = "127.0.0.1:0"
+	cfg.HTTP.UnixSocket = ""
+	cfg.HTTP.Auth.Enabled = false
+
+	if _, err := httpapi.New(httpapi.Options{
+		Config: cfg, DB: db, Events: eventLog, Logger: slog.New(slog.DiscardHandler),
+	}); err == nil {
+		t.Fatal("a server was built with no known schema version, so its drift check compares nothing")
+	}
 }
