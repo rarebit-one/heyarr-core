@@ -18,10 +18,14 @@ FAILED=0
 # next run fails to bind with an error that points at neither.
 cleanup() {
   local p
-  for p in "${FULL_PIDS[@]:-}"; do kill -KILL "$p" 2>/dev/null || true; done
+  for p in "${FULL_PIDS[@]:-}" "${PEER_PIDS[@]:-}"; do kill -KILL "$p" 2>/dev/null || true; done
   pkill -f "$WORK" 2>/dev/null || true
   rm -rf "$WORK"
 }
+# The second peer's processes, tracked separately from FULL_PIDS: the two-peer
+# section runs its own pair of nodes and must not be stopped by stop_full, which
+# every other section calls.
+PEER_PIDS=()
 trap cleanup EXIT INT TERM
 
 pass() { printf '  \033[32mok\033[0m   %s\n' "$1"; }
@@ -2482,8 +2486,13 @@ YAML
   # §56's two axes are separate answers, and both reach the wire.
   assert_contains "$(jq -r '. | keys | join(",")' <<<"$sat_json")" "placement" \
     "placement is answered separately from content (§56)"
+  # UPDATED, not deleted, by M4-11. The value is still `true` here and always
+  # will be: this node's Full Peer target set is itself alone. What changed is
+  # that the field is now COMPUTED from that target set rather than hard-coded,
+  # so `true` here is a fact about this deployment rather than a fact about the
+  # milestone. The two-peer section below asserts the same field as `false`.
   assert_eq "$(jq -r '.placement.unproven' <<<"$sat_json")" "true" \
-    "and it says plainly that it has never run against a second peer (ADR-0010)"
+    "and it says plainly that this fabric is one peer, so placement proves nothing (ADR-0027)"
 
   # The §64 name is DERIVED from the axes, never stored (ADR-0027). With one
   # peer holding the only replica, placement is satisfied the moment content is
@@ -3661,6 +3670,324 @@ YAML
   wait "$hb_ctrl" "$hb_worker" 2>/dev/null || true
 }
 
+# ---------------------------------------------------------------------------
+# THE SECOND PEER: placement, proven (§56, §64, M4-11, ADR-0010, ADR-0027)
+# ---------------------------------------------------------------------------
+#
+# This is the section the milestone exists for. Everything above it runs on ONE
+# peer, where placement is satisfied the moment content is because there is
+# nowhere else for bytes to be — and every claim about `converging` up to this
+# point was a claim about a table test with a synthetic peer set.
+#
+# Here there are two real nodes. Two data directories, two databases, two
+# content stores, two Ed25519 identities, and an mTLS peer surface between them
+# that each has enrolled the other's public key on. A blob is DELETED from one
+# of them, the gap is observed from the other node's API as `converging`, the
+# transfer runs, and the same API is asked again.
+#
+# # Why it is its own pair of nodes
+#
+# The same reason the health beat is: isolation. It configures its own two-file
+# library under $WORK, so it creates no Work, no asset and no blob in the demo
+# catalogue and cannot shift a count asserted anywhere else — the trap recorded
+# at `note "  the CLI (M1-17)"`. It also needs a node whose peer set it can
+# GROW, and the full demo node has been a fabric of one since before its first
+# API call.
+#
+# # Why the ports are :0
+#
+# The peer surface binds a real TCP port, and a fixed one makes two runs on one
+# machine collide — which is the same lesson `http.addr: ""` records above. It
+# binds :0 and logs the address it actually got; the helper below reads it back
+# out of the log, so nothing here guesses a port.
+#
+# # Every enum check is assert_eq
+#
+# "not_satisfied" CONTAINS "satisfied". A substring match on a satisfaction
+# value passes for the opposite meaning, and it has shipped in this file once
+# already.
+
+# peer_listen_addr reads the address a node's peer surface actually bound.
+peer_listen_addr() { # logfile
+  local waited=0 line
+  while (( waited < 600 )); do
+    line=$(grep '"msg":"peer surface listening"' "$1" 2>/dev/null | tail -1)
+    if [[ -n "$line" ]]; then jq -r '.addr' <<<"$line"; return 0; fi
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  return 1
+}
+
+# peer_holds counts a blob's copies in a node's content store.
+#
+# By digest, over the store's own fanout, rather than by reconstructing the
+# path: the layout is private to the storage fabric (ADR-0006) and a test that
+# hard-coded it would be asserting on an implementation detail it does not own.
+peer_holds() { # cas-root blob-hash
+  find "$1/blobs" -name "${2#blake3:}" -type f 2>/dev/null | wc -l | tr -d ' '
+}
+
+two_peer_demo() {
+  local root="$WORK/twopeer" lib
+  lib="$root/library"
+  mkdir -p "$lib/movies/Signal Fire (2021)" "$lib/movies/Static Field (2019)"
+
+  # Two small files, ingested by BOTH nodes from the same directory. That is
+  # what gives the two catalogues the same blob digests without either node
+  # having to be told about the other's contents — content addressing doing the
+  # job it exists for (invariant 1).
+  head -c 262144 /dev/urandom > "$lib/movies/Signal Fire (2021)/Signal.Fire.2021.1080p.mkv"
+  head -c 131072 /dev/urandom > "$lib/movies/Static Field (2019)/Static.Field.2019.1080p.mkv"
+
+  local n
+  for n in a b; do
+    mkdir -p "$root/$n"
+    cat > "$WORK/twopeer-$n.yaml" <<YAML
+data_dir: $root/$n/data
+peer:
+  name: site-$n
+  site: site-$n
+  # The mTLS peer surface (§26, ADR-0012). Port 0: the kernel chooses, the
+  # node logs what it got, and two concurrent runs cannot collide.
+  listen: 127.0.0.1:0
+log:
+  level: info
+  format: json
+http:
+  addr: ""
+libraries:
+  - name: films
+    content_type: movie
+    roots: ["$lib/movies"]
+YAML
+  done
+
+  local sock_a="$root/a/data/heyarr.sock" sock_b="$root/b/data/heyarr.sock"
+  local log_a="$root/a.log" log_b="$root/b.log"
+  local token_a token_b
+  token_a=$("$BIN" --config "$WORK/twopeer-a.yaml" token create acceptance --scopes admin --json | jq -r .token)
+  token_b=$("$BIN" --config "$WORK/twopeer-b.yaml" token create acceptance --scopes admin --json | jq -r .token)
+
+  "$BIN" --config "$WORK/twopeer-a.yaml" all >"$log_a" 2>&1 &
+  PEER_PIDS+=($!)
+  "$BIN" --config "$WORK/twopeer-b.yaml" all >"$log_b" 2>&1 &
+  PEER_PIDS+=($!)
+
+  # api_a / api_b are the two nodes' client APIs; cli_a / cli_b are the two
+  # operators. Both are needed: enrolment and inventory reporting are CLI verbs
+  # over the peer surface, and satisfaction is an HTTP question.
+  api_a() { curl -sS --unix-socket "$sock_a" -H "Authorization: Bearer $token_a" "${@:2}" "http://heyarr$1"; }
+  api_b() { curl -sS --unix-socket "$sock_b" -H "Authorization: Bearer $token_b" "${@:2}" "http://heyarr$1"; }
+  cli_a() { "$BIN" --config "$WORK/twopeer-a.yaml" --token "$token_a" "$@"; }
+  cli_b() { "$BIN" --config "$WORK/twopeer-b.yaml" --token "$token_b" "$@"; }
+
+  local s waited
+  for s in "$sock_a" "$sock_b"; do
+    waited=0
+    while (( waited < 600 )); do
+      curl -sf --unix-socket "$s" http://heyarr/readyz >/dev/null 2>&1 && break
+      sleep 0.1; waited=$(( waited + 1 ))
+    done
+    if (( waited >= 600 )); then
+      fail "two-peer: $s never became ready"; tail -20 "$log_a" "$log_b"; return 1
+    fi
+  done
+
+  local l
+  for l in "$log_a" "$log_b"; do
+    waited=0
+    while (( waited < 900 )); do
+      (( $(grep -c '"msg":"ingested"' "$l" 2>/dev/null || true) >= 2 )) && break
+      sleep 0.1; waited=$(( waited + 1 ))
+    done
+    if (( waited >= 900 )); then
+      fail "two-peer: $l never ingested both fixture files"; tail -20 "$l"; return 1
+    fi
+  done
+
+  local addr_a addr_b
+  addr_a=$(peer_listen_addr "$log_a") || { fail "two-peer: node A never bound a peer surface"; return 1; }
+  addr_b=$(peer_listen_addr "$log_b") || { fail "two-peer: node B never bound a peer surface"; return 1; }
+  assert_contains "$addr_a" "127.0.0.1:" "the mTLS peer surface binds an address of its own (§26, ADR-0012)"
+
+  # -------------------------------------------------------------------------
+  note "  one peer: placement is satisfied, and says why that proves nothing"
+  # -------------------------------------------------------------------------
+  #
+  # Node A is a fabric of one, which is what most Heyarr deployments will be
+  # forever. Asserted FIRST, before the second peer is enrolled, because it is
+  # the half of the `unproven` contract that a hard-coded `false` would break —
+  # and a suite that only checked the two-peer answer would never notice.
+  local tp_profile tp_work tp_want tp_json
+  tp_profile=$(api_a /api/v1/quality-profiles -X POST -H 'Content-Type: application/json' \
+    -d '{"name":"twopeer-anything","description":"accepts whatever exists"}' | jq -r '.id')
+  tp_work=$(api_a /api/v1/works | jq -r '.items[] | select(.title == "Signal Fire") | .id')
+  tp_want=$(api_a /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d "{\"work_id\":\"$tp_work\",\"quality_profile_id\":\"$tp_profile\"}" | jq -r '.id')
+
+  tp_json=$(api_a "/api/v1/desired/$tp_want/satisfaction")
+  assert_eq "$(jq -r '.content.satisfaction' <<<"$tp_json")" "satisfied" \
+    "node A holds bytes a profile that accepts anything accepts"
+  assert_eq "$(jq -r '.placement.satisfaction' <<<"$tp_json")" "satisfied" \
+    "with one peer, placement is satisfied the moment content is"
+  assert_eq "$(jq -r '.placement.unproven' <<<"$tp_json")" "true" \
+    "and it says so: unproven is TRUE when the target set is this node alone"
+  assert_eq "$(jq -r '.state' <<<"$tp_json")" "FULLY_SATISFIED" \
+    "so the §64 name goes straight to FULLY_SATISFIED — PLACEMENT_CONVERGING is unreachable here"
+
+  # -------------------------------------------------------------------------
+  note "  two peers, enrolled by public key in both directions (§26, ADR-0012)"
+  # -------------------------------------------------------------------------
+  #
+  # Operator-mediated and explicit: no discovery, no join token, no trust on
+  # first use. Two nodes, two commands, each carrying the other's key.
+  local key_a key_b peer_b_id
+  key_a=$(cli_a peers list --json | jq -r '.[] | select(.is_self) | .public_key')
+  key_b=$(cli_b peers list --json | jq -r '.[] | select(.is_self) | .public_key')
+  assert_contains "$key_a" "ed25519:" "each node has an Ed25519 identity of its own (M4-03)"
+
+  peer_b_id=$(cli_a peers add --name site-b --site site-b --mode full \
+    --public-key "$key_b" --endpoint "https://$addr_b" --json | jq -r '.id')
+  cli_b peers add --name site-a --site site-a --mode full \
+    --public-key "$key_a" --endpoint "https://$addr_a" --json >/dev/null
+  # Each node also records where IT can be reached, so it can report its own
+  # inventory through the same door every other peer uses. A self peer reports
+  # through the same mechanism as anyone else (M4-07); there is no privileged
+  # in-process shortcut, because a call that could not survive being a network
+  # hop is not allowed (invariant 4).
+  cli_a peers add --name site-a --public-key "$key_a" --endpoint "https://$addr_a" --json >/dev/null
+  cli_b peers add --name site-b --public-key "$key_b" --endpoint "https://$addr_b" --json >/dev/null
+
+  # The ping answers with what the OTHER node made of this one's certificate,
+  # which is the fact worth asserting: node B derived "site-a" from the key it
+  # was handed, so the enrolment on both sides describes the same two machines.
+  # Asserting on "site-b" here would only prove that the string this node typed
+  # into the command came back.
+  local tp_ping
+  tp_ping=$(cli_a peers ping site-b --json 2>&1)
+  assert_eq "$(jq -r '.name // "none"' <<<"$tp_ping")" "site-a" \
+    "node B recognises node A's certificate as the peer it enrolled (ADR-0012, ADR-0033)"
+  assert_contains "$tp_ping" "served_by" \
+    "over pinned mTLS, with no second credential anywhere (ADR-0033)"
+
+  # The field the milestone changed, answering differently on the SAME node it
+  # answered `true` on ninety seconds ago. Nothing about the code moved between
+  # these two assertions — a peer was enrolled.
+  tp_json=$(api_a "/api/v1/desired/$tp_want/satisfaction")
+  assert_eq "$(jq -r '.placement.unproven' <<<"$tp_json")" "false" \
+    "unproven is FALSE with two required peers: the axis is answering a real question"
+
+  # -------------------------------------------------------------------------
+  note "  the inventories, exchanged (§19, §20, M4-07)"
+  # -------------------------------------------------------------------------
+  #
+  # `replicas` on a controller is what the CONTROLLER believes; a peer's
+  # inventory is what is on its DISK. Until B says what it holds, A knows only
+  # that B is required to hold things — which is `converging`, correctly, and
+  # for a reason that is about missing information rather than missing bytes.
+  cli_a peers report-inventory site-b --json >/dev/null
+  cli_b peers report-inventory site-a --json >/dev/null
+
+  tp_json=$(api_a "/api/v1/desired/$tp_want/satisfaction")
+  assert_eq "$(jq -r '.placement.satisfaction' <<<"$tp_json")" "satisfied" \
+    "with both peers reporting the bytes, placement is satisfied on evidence"
+  assert_eq "$(jq -r '.state' <<<"$tp_json")" "FULLY_SATISFIED" \
+    "and the §64 name says so"
+  assert_eq "$(jq -r '.placement.unproven' <<<"$tp_json")" "false" \
+    "unproven does not come back when the answer is satisfied — it is about the target set"
+
+  # -------------------------------------------------------------------------
+  note "  PLACEMENT_CONVERGING, reached by a real gap in real bytes"
+  # -------------------------------------------------------------------------
+  #
+  # THE MILESTONE'S HEADLINE ASSERTION. The blob is deleted from node B's
+  # content store — really deleted, from a real disk — B reports what it now
+  # holds, and node A's API is asked the §56 question again.
+  local tp_blob tp_asset
+  tp_asset=$(jq -r '.content.satisfied_by' <<<"$tp_json")
+  tp_blob=$(api_a "/api/v1/assets/$tp_asset" | jq -r '.blob_hash')
+  assert_contains "$tp_blob" "blake3:" "the satisfying asset names the bytes placement is about"
+
+  assert_eq "$(peer_holds "$root/b/data/cas" "$tp_blob")" "1" "node B holds the bytes before the gap is made"
+  find "$root/b/data/cas/blobs" -name "${tp_blob#blake3:}" -type f -delete
+  assert_eq "$(peer_holds "$root/b/data/cas" "$tp_blob")" "0" "and does not hold them after"
+
+  cli_b peers report-inventory site-b --json >/dev/null
+  cli_b peers report-inventory site-a --json >/dev/null
+
+  tp_json=$(api_a "/api/v1/desired/$tp_want/satisfaction")
+  # assert_eq, not assert_contains. "not_satisfied" contains "satisfied" and
+  # this is the assertion the whole milestone is for.
+  assert_eq "$(jq -r '.placement.satisfaction' <<<"$tp_json")" "converging" \
+    "PLACEMENT_CONVERGING: one of two required peers holds the bytes (§56)"
+  assert_eq "$(jq -r '.placement.missing | join(",")' <<<"$tp_json")" "$peer_b_id" \
+    "and it names WHICH peer is missing them — converging with no list is unactionable"
+  assert_eq "$(jq -r '.state' <<<"$tp_json")" "PLACEMENT_CONVERGING" \
+    "the §64 state §56 draws this distinction for, reached by a running system"
+  assert_eq "$(jq -r '.content.satisfaction' <<<"$tp_json")" "satisfied" \
+    "content is still satisfied — the two axes are separate answers, and only one moved"
+
+  # -------------------------------------------------------------------------
+  note "  the transfer: the destination pulls, verifies, and then claims (M4-09)"
+  # -------------------------------------------------------------------------
+  api_b "/api/v1/peers/site-b/reconcile" -X POST -o /dev/null
+  waited=0
+  while (( waited < 900 )); do
+    (( $(peer_holds "$root/b/data/cas" "$tp_blob") == 1 )) && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  assert_eq "$(peer_holds "$root/b/data/cas" "$tp_blob")" "1" \
+    "the bytes crossed the wire and landed in node B's content store"
+  assert_eq "$(api_b "/api/v1/jobs?type=replicate_blob" | jq -r '[.items[] | select(.state == "succeeded")] | length > 0')" "true" \
+    "and a replicate_blob job succeeded rather than being retried into silence"
+  if grep -q '"msg":"replicated a blob"' "$log_b"; then
+    pass "node B recorded the transfer, naming the source it pulled from"
+  else
+    fail "node B holds the bytes but logged no transfer — they arrived by some other route"
+    tail -20 "$log_b"
+  fi
+
+  cli_b peers report-inventory site-a --json >/dev/null
+  tp_json=$(api_a "/api/v1/desired/$tp_want/satisfaction")
+  assert_eq "$(jq -r '.placement.satisfaction' <<<"$tp_json")" "satisfied" \
+    "FULLY_SATISFIED after the transfer: placement closed the gap it reported"
+  assert_eq "$(jq -r '.state' <<<"$tp_json")" "FULLY_SATISFIED" \
+    "and the §64 name completes the walk CONTENT_SATISFIED → PLACEMENT_CONVERGING → FULLY_SATISFIED"
+  assert_eq "$(jq -r '.placement.unproven' <<<"$tp_json")" "false" \
+    "on evidence, with unproven false throughout"
+
+  # -------------------------------------------------------------------------
+  note "  a blob on NEITHER peer is not_satisfied, not converging"
+  # -------------------------------------------------------------------------
+  #
+  # The distinction EvaluatePlacement draws, against real rows: converging
+  # means replication is closing a gap, and bytes on nobody are not converging
+  # on anything. Made by deleting the OTHER fixture's bytes from both stores.
+  local tp_work2 tp_want2 tp_asset2 tp_blob2 tp_json2
+  tp_work2=$(api_a /api/v1/works | jq -r '.items[] | select(.title == "Static Field") | .id')
+  tp_want2=$(api_a /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d "{\"work_id\":\"$tp_work2\",\"quality_profile_id\":\"$tp_profile\"}" | jq -r '.id')
+  tp_asset2=$(api_a "/api/v1/desired/$tp_want2/satisfaction" | jq -r '.content.satisfied_by')
+  tp_blob2=$(api_a "/api/v1/assets/$tp_asset2" | jq -r '.blob_hash')
+
+  find "$root/a/data/cas/blobs" -name "${tp_blob2#blake3:}" -type f -delete
+  find "$root/b/data/cas/blobs" -name "${tp_blob2#blake3:}" -type f -delete
+  cli_a peers report-inventory site-a --json >/dev/null
+  cli_b peers report-inventory site-b --json >/dev/null
+  cli_b peers report-inventory site-a --json >/dev/null
+
+  tp_json2=$(api_a "/api/v1/desired/$tp_want2/satisfaction")
+  assert_eq "$(jq -r '.placement.satisfaction' <<<"$tp_json2")" "not_satisfied" \
+    "bytes on no peer at all are not_satisfied — nowhere is not converging on anything"
+  assert_eq "$(jq -r '.placement.missing | length' <<<"$tp_json2")" "2" \
+    "and both required peers are named as missing them"
+
+  local p
+  for p in "${PEER_PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done
+  for p in "${PEER_PIDS[@]:-}"; do wait "$p" 2>/dev/null || true; done
+  PEER_PIDS=()
+}
+
 # ADR-0002: the roles must be independently runnable as OS processes, and the
 # only way that stays true is running the real checks in both configurations.
 # Otherwise one of the two is never exercised and the split is decorative.
@@ -3761,6 +4088,8 @@ else
   stop_full
   note "the provider health beat (#164)"
   provider_health_beat_demo
+  note "THE SECOND PEER: placement, proven (§56, §64, M4-11)"
+  two_peer_demo
   note "split-process mode, end to end (ADR-0002)"
   split_process_demo
   stop_full

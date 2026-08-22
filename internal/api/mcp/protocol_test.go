@@ -122,9 +122,12 @@ func TestDeferralsGolden(t *testing.T) {
 		Data json.RawMessage `json:"data"`
 	}
 	var entries []entry
+	// sync_peer is NOT here any more, and its absence is the point: it was
+	// deferred because the peer model held one peer, and Milestone 4 shipped
+	// it. Removing a name from this list is what shipping a verb looks like.
 	for _, verb := range []string{
 		"acquire_release", "play_content", "search_releases",
-		"sync_peer", "transfer_playback",
+		"transfer_playback",
 	} {
 		resp := h.call("", verb, "{}")
 		if resp.Body.Error == nil {

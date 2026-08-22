@@ -189,9 +189,9 @@ func TestEveryReasonIsReported(t *testing.T) {
 // §31: local replica use is strongly preferred; cross-site streaming is
 // fallback behaviour, not the norm.
 //
-// The remote branch is asserted here against SYNTHETIC replicas and is
-// unproven against reality — nothing has ever run against a second peer
-// (ADR-0010). See the note on Plan.Remote.
+// The replicas here are SYNTHETIC, and that is now a division of labour rather
+// than a caveat: this table owns the preference, and §32's routing exercises it
+// against a real second peer (M4-14). See the note on Plan.Remote.
 func TestLocalityPreference(t *testing.T) {
 	local := playback.Replica{PeerID: "local", Local: true}
 	remote := playback.Replica{PeerID: "remote"}

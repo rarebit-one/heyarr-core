@@ -123,7 +123,7 @@
         "heyarr/requiredScope": "read",
         "readOnlyHint": true
       },
-      "description": "List the peers this instance knows about and what each is for. Note there is exactly one peer by design in this milestone, so this reporting a single peer is correct rather than a symptom.",
+      "description": "List the peers this instance knows about and what each is for. A single peer is a supported deployment rather than a symptom — most Heyarr installations are one machine — so do not report a fabric of one as a replication fault. Ask get_content_satisfaction whether placement is answering a real question: it reports `unproven` when the target set is this node alone.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -237,6 +237,28 @@
       },
       "name": "search_content",
       "title": "Search the library"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "write",
+        "readOnlyHint": false
+      },
+      "description": "Ask this instance to reconcile the desired blob set against what a peer is known to hold, now, rather than waiting for the next scheduled cycle. Queues work rather than doing it: the diff enqueues a transfer per gap and the bytes move afterwards, so this reply says only that the cycle was accepted. It is the on-demand half of the reconciliation §57 asks for on a beat and on demand — useful straight after enrolling a peer or restoring one, and pointless to call in a loop.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "peer": {
+            "description": "The peer to reconcile against, by id or by name. It must be a peer other than this node: a node does not synchronise with itself.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "peer"
+        ],
+        "type": "object"
+      },
+      "name": "sync_peer",
+      "title": "Reconcile against a peer"
     },
     {
       "annotations": {

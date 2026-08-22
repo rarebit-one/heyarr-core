@@ -124,6 +124,14 @@ var schemaBlobHash = obj(map[string]any{
 	},
 }, "blob_hash")
 
+var schemaSyncPeer = obj(map[string]any{
+	"peer": map[string]any{
+		"type": "string",
+		"description": "The peer to reconcile against, by id or by name. It must be a " +
+			"peer other than this node: a node does not synchronise with itself.",
+	},
+}, "peer")
+
 var schemaExplainRelease = obj(map[string]any{
 	"quality_profile": map[string]any{
 		"type":        "string",

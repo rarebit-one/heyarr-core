@@ -62,5 +62,7 @@ about fifteen seconds.
   that wants to follow from "now" must replay from zero.
 - Linked and vault asset classes exist in the schema and are never written;
   Milestone 1 only ever creates managed assets.
-- Nothing has run against a second peer. The peer model is present with exactly
-  one peer by design.
+- Milestone 1 ran against exactly one peer, by design. A second Full Peer, real
+  transfers between the two, and a proven placement axis arrive in Milestone 4;
+  a deployment of one peer remains supported forever, and says so on the wire
+  through `placement.unproven`.

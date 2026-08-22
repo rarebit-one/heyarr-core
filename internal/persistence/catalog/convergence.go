@@ -61,7 +61,10 @@ type PeerConvergence struct {
 // than an error: a peer removed or demoted between enqueue and run is an
 // ordinary race, and failing the job would retry it five times to no purpose.
 func (c *Catalog) PlanPeerConvergence(ctx context.Context, scope string) (PeerConvergence, error) {
-	required, err := c.requiredPeers(ctx)
+	// The single-peer answer requiredPeers also returns is placement's to
+	// report, not convergence's: a fabric of one peer simply has nothing to
+	// converge, which the empty gap set below already says plainly.
+	required, _, err := c.requiredPeers(ctx)
 	if err != nil {
 		return PeerConvergence{}, err
 	}

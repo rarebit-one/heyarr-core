@@ -78,12 +78,18 @@ type AcquisitionView struct {
 	Content string `json:"content"`
 	// Placement answers "are those bytes on every peer that should hold them?"
 	//
-	// ## UNPROVEN
+	// ## PROVEN as of Milestone 4
 	//
-	// Nothing has ever run against a second peer (ADR-0010), so with a target
-	// set of one this axis is satisfied the moment content is, and
-	// `converging` is unreachable outside a test with a synthetic peer set.
-	// Milestone 4 proves it.
+	// `converging` was unreachable outside a test with a synthetic peer set for
+	// as long as one peer was the only deployment that existed (ADR-0010). A
+	// second Full Peer now exists and real bytes move between the two, so this
+	// value is observed as `converging` mid-transfer and `satisfied` after.
+	//
+	// On a deployment whose Full Peer target set is this node alone it is still
+	// `satisfied` the moment content is, because there is nowhere for bytes to
+	// converge to. That case is reported explicitly — GET
+	// /api/v1/desired/{id}/satisfaction answers `placement.unproven: true` for
+	// it — rather than being left for a reader of this listing to infer.
 	Placement string `json:"placement"`
 	// Detail is why the last pipeline move happened, when it was a failure.
 	Detail string `json:"detail,omitempty"`

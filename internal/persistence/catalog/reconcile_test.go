@@ -72,8 +72,9 @@ func TestReconcileFindsAnAssetThatSatisfies(t *testing.T) {
 	}
 	if got.State.Name() != "FULLY_SATISFIED" {
 		// With one peer holding the only replica, placement is satisfied the
-		// moment content is — which is the UNPROVEN single-peer case, not a
-		// demonstration that replication works.
+		// moment content is — the single-peer case, which the API reports as
+		// `unproven` rather than as a demonstration that replication works
+		// (ADR-0027).
 		t.Logf("state = %s (single peer, ADR-0010)", got.State.Name())
 	}
 	if !got.Changed {

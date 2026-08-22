@@ -32,6 +32,19 @@ type ReconcileResult struct {
 	DesiredItemID string
 	Content       acquisition.ContentVerdict
 	Placement     acquisition.PlacementVerdict
+	// PlacementUnproven reports that the placement answer is true by
+	// construction rather than by replication having worked: the Full Peer
+	// target set is this node alone, so placement is satisfied the moment
+	// content is and `converging` is unreachable (§56, ADR-0010, ADR-0027).
+	//
+	// It is a fact about the DEPLOYMENT rather than about this want, and it is
+	// carried on the result because the API reports it per response — see
+	// resources.PlacementSatisfaction.Unproven. It is computed on every pass,
+	// including passes where content is unsatisfied and placement is therefore
+	// unknown: the shape of the fabric is the same question either way, and a
+	// field that went quiet when the answer was unknown would be a caveat that
+	// disappears exactly when the reader has least to go on.
+	PlacementUnproven bool
 	// Changed reports whether anything actually moved. A pass over a steady
 	// library must change nothing and emit nothing.
 	Changed bool
@@ -60,6 +73,15 @@ func (c *Catalog) ReconcileDesired(ctx context.Context, desiredItemID string) (R
 	}
 	content := acquisition.EvaluateContent(assets, profile)
 
+	// The Full Peer target set is read whether or not placement is evaluated.
+	// "Is this deployment one peer talking to itself?" is a question about the
+	// fabric, and the answer travels back on every result so the API can say
+	// so even when the placement answer itself is unknown.
+	required, soleSelf, err := c.requiredPeers(ctx)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+
 	// Placement is a question about THE BYTES THAT SATISFY, not about every
 	// asset under the work. Asking it of a 480p rip that the profile rejected
 	// would report a want as fully satisfied because the wrong file is well
@@ -72,10 +94,6 @@ func (c *Catalog) ReconcileDesired(ctx context.Context, desiredItemID string) (R
 				satisfying = a
 				break
 			}
-		}
-		required, err := c.requiredPeers(ctx)
-		if err != nil {
-			return ReconcileResult{}, err
 		}
 		replicas, err := c.replicasOf(ctx, satisfying.BlobHash)
 		if err != nil {
@@ -102,11 +120,12 @@ func (c *Catalog) ReconcileDesired(ctx context.Context, desiredItemID string) (R
 	}
 
 	return ReconcileResult{
-		DesiredItemID: desiredItemID,
-		Content:       content,
-		Placement:     placement,
-		Changed:       after.State != before.State,
-		State:         after.State,
+		DesiredItemID:     desiredItemID,
+		Content:           content,
+		Placement:         placement,
+		PlacementUnproven: soleSelf,
+		Changed:           after.State != before.State,
+		State:             after.State,
 	}, nil
 }
 
@@ -325,32 +344,55 @@ func applyProbeAttributes(attrs acquisition.Attributes, streamsJSON string) {
 	}
 }
 
-// requiredPeers is §56's Full Peer target set.
+// requiredPeers is §56's Full Peer target set, and whether that set is this
+// node alone.
 //
-// Every peer in `full` mode, which is the whole of placement policy in
-// Milestone 3. §34's placement policies are a later milestone; until then
-// "every full peer holds everything" is the §19 full-replica default, and
-// saying so here is more honest than inventing a policy table nothing writes.
+// Every peer in `full` mode, which is the whole of placement policy until
+// §34's placement policies land. Until then "every full peer holds everything"
+// is the §19 full-replica default, and saying so here is more honest than
+// inventing a policy table nothing writes.
 //
-// ## UNPROVEN: this returns exactly one peer in every deployment that exists
-// (ADR-0010), so the multi-peer branch below has never run against reality.
-func (c *Catalog) requiredPeers(ctx context.Context) ([]string, error) {
+// ## The single-peer answer, and why it is read here
+//
+// This returned exactly one peer in every deployment that existed before
+// Milestone 4, and it still does in most of them: a Heyarr on one machine is a
+// supported, permanent configuration, not a stage on the way to something. In
+// that deployment placement is satisfied the moment content is and `converging`
+// is unreachable — not because replication worked, but because there is nowhere
+// for bytes to converge to.
+//
+// `soleSelf` is that condition, and it is the value the API's `unproven` field
+// is computed from (ADR-0027, M4-11). It is read from the same row set as the
+// target set, in the same query, because the two answers have to be about the
+// same fabric: computing them from separate reads would let a peer enrolled
+// between them make the pair disagree.
+func (c *Catalog) requiredPeers(ctx context.Context) (peers []string, soleSelf bool, err error) {
 	rows, err := c.db.Reader().QueryContext(ctx,
-		`SELECT id FROM peers WHERE mode = 'full' ORDER BY id`)
+		`SELECT id, is_self FROM peers WHERE mode = 'full' ORDER BY id`)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: reading the full peers: %w", err)
+		return nil, false, fmt.Errorf("catalog: reading the full peers: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	var out []string
+	var selves int
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+		var isSelf int
+		if err := rows.Scan(&id, &isSelf); err != nil {
+			return nil, false, err
 		}
 		out = append(out, id)
+		selves += isSelf
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	// One member, and it is this node. Both halves matter: a target set of one
+	// peer that is NOT this node is a real replication question with a real
+	// answer, and calling that unproven would be the same lie in the other
+	// direction.
+	return out, len(out) == 1 && selves == 1, nil
 }
 
 // replicasOf reports which peers hold verified bytes for a blob.
