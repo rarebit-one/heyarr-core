@@ -231,6 +231,50 @@ func (c CredentialEntry) isZero() bool {
 	return c.Username == "" && c.Password.IsZero() && c.Token.IsZero()
 }
 
+// The configuration block redacts as a WHOLE, username included.
+//
+// Secret already covers the password and the token, and that was not enough: a
+// log of the raw Entry printed `"username":"heyarr"` beside two redactions,
+// which is half of an RFC 7617 pair handed over for free. This was caught by
+// the log-scanning test rather than by review, which is the argument for
+// scanning output instead of reading code.
+//
+// Nothing here is dropped rather than redacted, for Secret's reason: "there is
+// a credential and you are not being shown it" and "there is no credential"
+// must stay tellable apart by an operator debugging a 401.
+
+// String redacts, covering %v and %+v on an Entry that holds one.
+func (c CredentialEntry) String() string { return Redacted }
+
+// LogValue redacts for slog, including slog.Any over a whole Entry.
+func (c CredentialEntry) LogValue() slog.Value { return slog.StringValue(Redacted) }
+
+// MarshalJSON redacts, so the block cannot reach an API response or a
+// JSON-handler log line.
+func (c CredentialEntry) MarshalJSON() ([]byte, error) { return json.Marshal(Redacted) }
+
+// UnmarshalJSON accepts the object form, so configuration and fixtures read
+// naturally despite MarshalJSON being asymmetric. The redaction is on the way
+// OUT, not the way in.
+func (c *CredentialEntry) UnmarshalJSON(b []byte) error {
+	var raw struct {
+		Username string `json:"username"`
+		Password Secret `json:"password"`
+		Token    Secret `json:"token"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	c.Username, c.Password, c.Token = raw.Username, raw.Password, raw.Token
+	return nil
+}
+
+var (
+	_ slog.LogValuer = CredentialEntry{}
+	_ json.Marshaler = CredentialEntry{}
+	_ fmt.Stringer   = CredentialEntry{}
+)
+
 // resolveCredential turns configuration into a typed credential, or refuses.
 //
 // Two spellings are accepted and they may not be mixed:
