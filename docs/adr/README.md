@@ -36,3 +36,5 @@ An ADR that merely describes the code is not worth having.
 | [0026](0026-indexers-are-not-reproducible-so-fixtures-are-the-primary-test-strategy.md) | Indexers are not reproducible, so fixtures are the primary test strategy | Accepted |
 | [0027](0027-acquisition-state-is-four-facts-not-one-ordinal.md) | Acquisition state is four facts, not one ordinal | Accepted |
 | [0028](0028-discovery-binds-to-torznab-not-prowlarr.md) | Discovery binds to Torznab, the protocol, not Prowlarr, the product | Accepted |
+| [0029](0029-a-full-peer-is-controller-attached.md) | A Full Peer is controller-attached and runs no control plane | Accepted |
+| [0030](0030-replication-is-a-destination-pull.md) | Replication is a destination pull; the controller never carries bytes | Accepted |

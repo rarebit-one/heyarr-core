@@ -26,6 +26,17 @@ than unavailable.
 once (ADR-0002). They talk through the job table and HTTP, never through shared
 memory — even in `heyarr all`.
 
+A **Full Peer is controller-attached** and runs no control plane of its own
+(ADR-0029). It owns and serves its CAS, and holds a read-only materialised
+catalog snapshot (§52) — and, from Milestone 7, a controller backup stream and
+cached access leases (§50, §54). None of that is control state: authorisation,
+scheduling, placement and read routing are controller decisions (§7, §21, §32).
+
+Equal custodianship is about **bytes**. Two Full Peers hold complete,
+independently serveable replicas and neither is a backup of the other (§85);
+that is fully compatible with one writer for control, because custody of bytes
+and authority over mutable decisions are different questions.
+
 ## The content model
 
 ```
