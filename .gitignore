@@ -6,3 +6,7 @@
 *.db-shm
 .DS_Store
 /.toolchain/
+# Handoff notes: acceptance-script sections written to a file when another
+# branch owns scripts/acceptance.sh. Read by whoever folds them in, then
+# discarded. Ignored because three reached main via `git add -A` in one day.
+/ACCEPTANCE-*.patch.md
