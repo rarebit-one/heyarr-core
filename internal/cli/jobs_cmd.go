@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/rarebit-one/heyarr-core/internal/client"
+	"github.com/rarebit-one/heyarr-core/internal/peer/endpoint"
 )
 
 func newJobsCommand(opts Options, configPath *string) *cobra.Command {
@@ -232,12 +233,12 @@ func peerRow(out io.Writer, p client.Peer) {
 
 func newPeersAddCommand(_ Options, configPath *string) *cobra.Command {
 	var (
-		flags     clientFlags
-		name      string
-		site      string
-		mode      string
-		endpoint  string
-		publicKey string
+		flags        clientFlags
+		name         string
+		site         string
+		mode         string
+		peerEndpoint string
+		publicKey    string
 	)
 	cmd := &cobra.Command{
 		Use:   "add",
@@ -255,16 +256,40 @@ change freely: run this again with the same --name and --public-key and a new
 --public-key is required, and there is no form of this command without it —
 registering a hostname and learning the key afterwards is trust on first use.
 
+The endpoint is checked HERE rather than when something first dials it. Give it
+as ` + "`https://host:port`" + `, or as a bare ` + "`host:port`" + `, which is read as https:
+the inter-peer path is mutually authenticated TLS (ADR-0012), so there is one
+scheme to guess and http is refused rather than upgraded. A ` + "`unix:///path`" + `
+socket is accepted for a peer on this host. Anything else is refused before a
+record exists, because registration is idempotent on the key: a typo would
+otherwise replace a working endpoint and leave the peer looking healthy in
+` + "`peers list`" + ` while being unreachable.
+
 Membership is the only trust root in the inter-peer path, and revocation is
 ` + "`heyarr peers remove`" + `. It is consulted on every request, so a removed
 peer loses access on the connection it is already holding open.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Checked here, before anything is sent, so the refusal names the
+			// flag that carried the value (#169). The API checks it too — it
+			// has to, since it is reachable without this CLI — but an operator
+			// who typed --endpoint should be told about --endpoint.
+			//
+			// Only when the flag was given: a peer may be enrolled by its key
+			// before anyone knows where it will live, and an omitted flag is
+			// not an empty value.
+			if cmd.Flags().Changed("endpoint") {
+				normalised, err := endpoint.Normalise(peerEndpoint)
+				if err != nil {
+					return fmt.Errorf("--endpoint: %w", err)
+				}
+				peerEndpoint = normalised
+			}
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
 				var p client.Peer
 				body := map[string]string{
 					"name": name, "site": site, "mode": mode,
-					"endpoint": endpoint, "public_key": publicKey,
+					"endpoint": peerEndpoint, "public_key": publicKey,
 				}
 				if err := c.Post(ctx, "/peers", body, &p); err != nil {
 					return err
@@ -280,7 +305,8 @@ peer loses access on the connection it is already holding open.`,
 	cmd.Flags().StringVar(&name, "name", "", "the peer's name, unique within this instance")
 	cmd.Flags().StringVar(&site, "site", "", "the peer's failure domain (§35)")
 	cmd.Flags().StringVar(&mode, "mode", "full", "full, partial, cache, archive or compute (§9)")
-	cmd.Flags().StringVar(&endpoint, "endpoint", "", "where to reach the peer; not its identity")
+	cmd.Flags().StringVar(&peerEndpoint, "endpoint", "",
+		"where to reach the peer, as "+endpoint.Example+", a bare host:port or unix:///path; not its identity")
 	cmd.Flags().StringVar(&publicKey, "public-key", "",
 		"the peer's Ed25519 public key as ed25519:<64 hex characters> — who it is (required)")
 	_ = cmd.MarkFlagRequired("name")

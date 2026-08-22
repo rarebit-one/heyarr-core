@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -88,9 +89,16 @@ func (s *idSequence) next() string {
 
 // apiHarness is a running Heyarr API the CLI can be pointed at.
 type apiHarness struct {
-	t          *testing.T
-	db         *sqlite.DB
-	server     *httptest.Server
+	t  *testing.T
+	db *sqlite.DB
+	// server is the httptest server, and nil when the harness bound real
+	// listeners instead.
+	server *httptest.Server
+	// httpServer is the real server, set only under withRealListeners. Its
+	// Addr() and SocketPath() are what it ACTUALLY bound, which is the whole
+	// point: SocketPath() is empty when it declined the socket.
+	httpServer *httpapi.Server
+	bound      bool
 	jobs       *jobs.Queue
 	events     *events.Log
 	tokens     *auth.Store
@@ -103,6 +111,18 @@ type apiHarness struct {
 type harnessOptions struct {
 	auth         bool
 	streamBuffer int
+	// dataDir overrides the temporary directory, for the tests that need a
+	// data directory of a particular LENGTH (#170).
+	dataDir string
+	// bind makes the harness bind real listeners — a TCP port and the unix
+	// socket the configuration implies — instead of an httptest server. It is
+	// what lets a test observe the server declining a socket and the CLI
+	// resolving where to go without being told by --addr.
+	bind bool
+	// clientAddr is what the config file records as http.addr. Empty means the
+	// address actually bound. A test sets it to somewhere nothing answers to
+	// prove a command went over the SOCKET rather than over TCP.
+	clientAddr string
 }
 
 type harnessOption func(*harnessOptions)
@@ -110,6 +130,22 @@ type harnessOption func(*harnessOptions)
 // withAPIAuth turns authentication on, which is what the credential-resolution
 // tests need.
 func withAPIAuth(o *harnessOptions) { o.auth = true }
+
+// withDataDir puts the harness in a directory the test chose.
+func withDataDir(dir string) harnessOption {
+	return func(o *harnessOptions) { o.dataDir = dir }
+}
+
+// withRealListeners binds a port and a unix socket rather than serving through
+// httptest, and stops args() passing --addr — so the CLI resolves the transport
+// itself, which is the thing under test in #170.
+func withRealListeners(o *harnessOptions) { o.bind = true }
+
+// withConfiguredAddr records a different http.addr in the config file than the
+// one the server bound.
+func withConfiguredAddr(addr string) harnessOption {
+	return func(o *harnessOptions) { o.clientAddr = addr }
+}
 
 func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 	t.Helper()
@@ -120,7 +156,10 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 		o(&ho)
 	}
 
-	dir := t.TempDir()
+	dir := ho.dataDir
+	if dir == "" {
+		dir = t.TempDir()
+	}
 	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
 	if err != nil {
 		t.Fatal(err)
@@ -192,6 +231,12 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 	cfg.HTTP.Addr = "127.0.0.1:0"
 	cfg.HTTP.UnixSocket = ""
 	cfg.HTTP.Auth.Enabled = ho.auth
+	if ho.bind {
+		// The socket the configuration implies, which is what the CLI will
+		// compute from data_dir too. Whether the server manages to bind it is
+		// the question.
+		cfg.HTTP.UnixSocket = filepath.Join(dir, "heyarr.sock")
+	}
 
 	srv, err := httpapi.New(httpapi.Options{
 		Config:        cfg,
@@ -211,24 +256,49 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
+	h := &apiHarness{
+		t: t, db: db, jobs: queue, events: eventLog, tokens: store,
+		cas: store2, clock: clock, dataDir: dir, bound: ho.bind,
+	}
 
 	configPath := filepath.Join(dir, "heyarr.yaml")
 	body := "data_dir: " + dir + "\npeer:\n  name: test\n"
+	if ho.bind {
+		if err := srv.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(ctx)
+		})
+		h.httpServer = srv
+		addr := ho.clientAddr
+		if addr == "" {
+			addr = srv.Addr()
+		}
+		body += "http:\n  addr: " + addr + "\n  auth:\n    enabled: " +
+			strconv.FormatBool(ho.auth) + "\n"
+	} else {
+		ts := httptest.NewServer(srv.Handler())
+		t.Cleanup(ts.Close)
+		h.server = ts
+	}
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	return &apiHarness{
-		t: t, db: db, server: ts, jobs: queue, events: eventLog, tokens: store,
-		cas: store2, clock: clock, configPath: configPath, dataDir: dir,
-	}
+	h.configPath = configPath
+	return h
 }
 
 // args prefixes a command line with the flags that point the CLI at this
 // harness.
 func (h *apiHarness) args(rest ...string) []string {
+	if h.bound {
+		// Deliberately no --addr: the CLI has to work out for itself where the
+		// API is, which is what #170 got wrong.
+		return append([]string{"--config", h.configPath}, rest...)
+	}
 	return append([]string{"--config", h.configPath, "--addr", h.server.URL}, rest...)
 }
 
