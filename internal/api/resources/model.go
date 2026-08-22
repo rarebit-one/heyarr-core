@@ -129,13 +129,26 @@ type Peer struct {
 }
 
 // Replica is one peer's holding of one blob (§8).
+//
+// It is what the CONTROLLER believes, cached from what the holding peer last
+// reported about its own disk (M4-07). ReportedAt is what makes that
+// distinction readable rather than implied.
 type Replica struct {
 	BlobHash     string     `json:"blob_hash"`
 	PeerID       string     `json:"peer_id"`
 	State        string     `json:"state"`
 	BytesPresent int64      `json:"bytes_present"`
 	VerifiedAt   *time.Time `json:"verified_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	// ReportedAt is when the holding peer last confirmed this row in an
+	// inventory report — null if no peer ever has.
+	//
+	// Distinct from VerifiedAt, which is when the bytes were last re-hashed. A
+	// peer can afford to confirm it still holds a blob far more often than it
+	// can afford to read it, so these decay at different rates, and a row
+	// nobody has confirmed recently is a fact about the past whatever its
+	// state column says.
+	ReportedAt *time.Time `json:"reported_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 // Job is one unit of durable work (§75).

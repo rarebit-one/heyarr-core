@@ -6,9 +6,12 @@ import (
 	"fmt"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
+	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
 // peerLookup adapts the membership store to the transport's trust root.
@@ -52,7 +55,9 @@ func (l peerLookup) Lookup(ctx context.Context, publicKey []byte) (mtls.Peer, er
 // needs no certificate configuration of any kind, which is a requirement
 // rather than a convenience: loopback must never have to authenticate itself
 // to itself.
-func (c *Controller) newPeerSurface(self identity.Identity, members *membership.Store) (*peerapi.Server, error) {
+func (c *Controller) newPeerSurface(
+	db *sqlite.DB, self identity.Identity, members *membership.Store,
+) (*peerapi.Server, error) {
 	// The private half, read here and nowhere else in the controller. It never
 	// reaches Identity, a log field or a response body — it exists to sign one
 	// certificate that is regenerated in memory and never written down.
@@ -67,11 +72,34 @@ func (c *Controller) newPeerSurface(self identity.Identity, members *membership.
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}
+	// The catalog behind the peer surface's inventory route (M4-07).
+	//
+	// A peer runs no control plane and cannot write control-plane rows
+	// directly (ADR-0029): it reports what its disk holds, and the
+	// controller's single writer records that. This is that writer. It gets
+	// its own event log for the same reason every other construction in this
+	// file does — one log per process would be tidier and is a refactor
+	// rather than this issue.
+	peerEvents, err := events.New(events.Options{
+		Writer: db.Writer(), Reader: db.Reader(), Logger: c.log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("controller: opening the event log for the peer surface: %w", err)
+	}
+	peerCatalog, err := catalog.New(catalog.Options{
+		DB: db, Events: peerEvents,
+		PeerName: c.cfg.Peer.Name, PeerSite: c.cfg.Peer.Site, Logger: c.log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("controller: opening the catalog for the peer surface: %w", err)
+	}
+
 	srv, err := peerapi.New(peerapi.Options{
 		Addr:       c.cfg.Peer.Listen,
 		Material:   material,
 		Members:    peerLookup{store: members},
 		SelfPeerID: self.PeerID,
+		Inventory:  peerCatalog,
 		Logger:     c.log,
 	})
 	if err != nil {

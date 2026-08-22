@@ -119,7 +119,11 @@ type Replica struct {
 	State        string     `json:"state"`
 	BytesPresent int64      `json:"bytes_present"`
 	VerifiedAt   *time.Time `json:"verified_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	// ReportedAt is when the holding peer last confirmed this row in an
+	// inventory report — null if no peer ever has. Distinct from VerifiedAt,
+	// which is when the bytes were last re-hashed (M4-07).
+	ReportedAt *time.Time `json:"reported_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 // JobState is where a job is in its life. The two that end a wait are

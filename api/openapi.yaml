@@ -693,7 +693,15 @@ paths:
         "400":
           description: |
             The public key is missing, or malformed — the wrong algorithm
-            prefix, not lowercase hex, or not 32 bytes.
+            prefix, not lowercase hex, or not 32 bytes. Or the `endpoint` was
+            given and cannot be dialled: a scheme other than `https` or
+            `unix`, no host, a port that is not a number, or a path where an
+            origin belongs.
+
+            The endpoint is refused HERE rather than by whatever first tries to
+            use it, because registration is idempotent on the key: a typo
+            replaces a working endpoint, and the peer stays enrolled and looks
+            healthy while being unreachable.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -2031,6 +2039,91 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /peer/v1/inventory:
+    post:
+      tags: [peer]
+      operationId: reportPeerInventory
+      summary: Report what this peer's content store actually holds.
+      description: |
+        `replicas` is what the CONTROLLER believes. A peer's inventory is what
+        is on its DISK. Until a second Full Peer exists those two cannot
+        disagree — every writer of `replicas` resolves the self peer first, so
+        no row has ever described another machine — and this route is where
+        they get the chance to.
+
+        Disk reality wins (§21). The controller folds the report into
+        `replicas` as a cache of peer-reported reality: additions, changes,
+        and — the half that gets discovered late — **removals as `missing`,
+        never as deleted rows**. An inventory that could only add replicas
+        converges on a table that never shrinks and always claims the library
+        is safer than it is, and that table is what garbage collection consults
+        before deleting what it believes is a surplus copy.
+
+        The acting peer is derived from the client certificate. `peer_id` in
+        the body is a DECLARATION: it is compared against the certificate and a
+        mismatch is refused with 403 (ADR-0033). A peer reports its own
+        inventory and only its own.
+
+        ### full vs incremental
+
+        The two differ in what they assert about a blob they do NOT mention:
+
+        * a **full** report names everything the peer holds, so an unmentioned
+          blob is positively asserted absent — the row becomes `missing` and
+          its `reported_at` advances, because the peer confirmed that blob by
+          excluding it. This is the drift corrector: it is the only shape that
+          can say "and nothing else".
+        * an **incremental** report asserts nothing about an unmentioned blob.
+          The row is untouched and its `reported_at` does not advance. A loss
+          is communicated with an explicit `missing` entry.
+
+        Both shapes of the same reality produce the same `replicas` state.
+
+        Reporting is idempotent (invariant 9): two identical consecutive
+        reports change nothing and emit no events.
+      security:
+        - peerCertificate: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InventoryReport" }
+      responses:
+        "200":
+          description: What folding the report into `replicas` did.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InventoryOutcome" }
+        "400":
+          description: |
+            The body is not an inventory report, carries no `peer_id`, names an
+            unparseable blob hash or an unreportable state, or lists one blob
+            twice.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "401":
+          description: No client certificate was presented.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "403":
+          description: |
+            The presented key is not a member, the declared `peer_id` is not
+            the peer this connection authenticated as, or the authenticated
+            peer has no catalog row to hang replicas from.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503":
+          description: |
+            This node has no catalog to record reports in. It answers rather
+            than accepting silently: a 200 would tell the peer its inventory
+            landed when nothing happened at all.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /api/v1/quality-profiles:
     get:
       tags: [policy]
@@ -2687,7 +2780,13 @@ components:
         name: { type: string }
         site: { type: string, description: The failure domain this peer is in. }
         mode: { type: string, enum: [full, partial, cache, archive, compute] }
-        endpoint: { type: [string, "null"] }
+        endpoint:
+          type: [string, "null"]
+          description: |
+            Where to reach the peer — an `https` origin, or a `unix://`
+            socket path — or null when no endpoint is recorded. A
+            bare `host:port` given at registration is stored as
+            `https://host:port`. Not its identity.
         public_key:
           type: [string, "null"]
           description: |
@@ -2823,6 +2922,118 @@ components:
             a peer reading `admin` here would have found a privilege
             escalation (ADR-0033).
 
+    InventoryEntry:
+      type: object
+      required: [blob_hash, state]
+      description: One blob, as the reporting peer's disk has it.
+      properties:
+        blob_hash:
+          type: string
+          description: The canonical digest. Identity is the hash and nothing else (ADR-0005).
+        state:
+          type: string
+          enum: [present, corrupt, missing]
+          description: |
+            A subset of `replicas.state` on purpose. `pending` is a
+            controller-side fact — a transfer it scheduled and is waiting for —
+            and a peer reporting it would be asserting something about the
+            controller's plans rather than about its own disk.
+
+            `corrupt` is a quarantined blob: bytes the peer still HAS and
+            cannot serve (ADR-0018). It is reported rather than omitted,
+            because omitting it reports the blob as gone and invites a
+            replacement transfer over the evidence, while reporting it present
+            leaves the controller believing in a copy nothing can read.
+        bytes_present:
+          type: integer
+          format: int64
+          default: 0
+          description: How many bytes the peer holds. 0 for anything not `present`.
+        verified_at:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            When this peer last confirmed the bytes hash to their own name, if
+            it ever has. Absent rather than "now" when the peer has no
+            verification record: collecting an inventory reads a directory, it
+            does not re-hash a library, and stamping the collection time here
+            would manufacture verification evidence out of a directory listing.
+
+            A report that carries no `verified_at` never CLEARS the one the
+            controller already holds.
+      additionalProperties: false
+
+    InventoryReport:
+      type: object
+      required: [peer_id, mode, observed_at]
+      description: What a peer sends the controller about its own store.
+      properties:
+        peer_id:
+          type: string
+          description: |
+            A DECLARATION, not a credential. The controller derives the acting
+            peer from the client certificate, compares this against it, and
+            refuses a mismatch (ADR-0033).
+        mode:
+          type: string
+          enum: [full, incremental]
+          description: |
+            What this report asserts about a blob it does not mention: a full
+            report asserts absence, an incremental report asserts nothing.
+        observed_at:
+          type: string
+          format: date-time
+          description: |
+            When the PEER looked at its disk, on the peer's clock. The gap
+            between this and the controller's receipt is how stale the report
+            already was when it arrived.
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/InventoryEntry" }
+          description: |
+            The inventory. A full report with no entries is a peer that holds
+            nothing — a legitimate and important thing to be able to say, and
+            an implementation that read the empty set as "nothing to report"
+            would let a wiped peer keep its replicas forever.
+      additionalProperties: false
+
+    InventoryOutcome:
+      type: object
+      required: [report_id, peer_id, mode, entries, added, changed, removed, unknown, observed_at, received_at]
+      description: |
+        What folding one report into `replicas` did. Counts, not rows: the
+        per-blob facts are durable in `replicas`, which is where anything
+        wanting the detail must look.
+      properties:
+        report_id: { type: string, description: The receipt row this report was recorded as. }
+        peer_id:
+          type: string
+          description: |
+            The peer the CONTROLLER acted on, derived from the certificate. A
+            peer comparing it against what it sent is asserting that its report
+            landed under its own identity.
+        mode: { type: string, enum: [full, incremental] }
+        entries: { type: integer, description: How many the report carried. }
+        added: { type: integer, description: Replica rows this report created. }
+        changed:
+          type: integer
+          description: Existing rows whose state or byte count changed, excluding those moved to `missing`.
+        removed:
+          type: integer
+          description: |
+            Rows this report moved to `missing`, by an explicit `missing` entry
+            or by absence from a full report. Counted apart from `changed`
+            because it is the only direction that makes the library less safe.
+        unknown:
+          type: integer
+          description: |
+            Entries naming a blob this controller has no row for. Not an error:
+            a peer restored from a newer catalog legitimately holds bytes this
+            controller has not learned about, and there is no `blobs` row to
+            reference.
+        observed_at: { type: string, format: date-time }
+        received_at: { type: string, format: date-time }
+
     PeerRegistration:
       type: object
       required: [name, public_key]
@@ -2849,6 +3060,20 @@ components:
             `public_key` with a different endpoint moves the peer, and its
             `id`, its `enrolled_at` and everything referring to it are
             unaffected.
+
+            Given as an origin — `https://host:port` — or as a bare
+            `host:port`, which is normalised to `https://host:port`: the
+            inter-peer path is mutually authenticated TLS (ADR-0012), so there
+            is exactly one scheme to guess, and `http://` is refused rather
+            than upgraded. A `unix:///path/to.sock` socket is accepted for a
+            peer on this host. Anything nothing could dial — no host, a port
+            that is not a port, an unknown scheme, a path where an origin
+            belongs — is a `400`, refused here rather than by whatever first
+            tries to dial it. The stored value is the normalised one: what
+            `GET /api/v1/peers` returns can be posted straight back.
+
+            Omitted or empty is legitimate and means "not known yet": a peer
+            may be enrolled by its key before anyone knows where it will live.
         public_key:
           type: string
           pattern: "^ed25519:[0-9a-f]{64}$"
@@ -2860,12 +3085,32 @@ components:
     Replica:
       type: object
       required: [blob_hash, peer_id, state, bytes_present, updated_at]
+      description: |
+        One peer's holding of one blob (§8) — what the CONTROLLER believes,
+        cached from what the holding peer last reported about its own disk
+        (M4-07).
       properties:
         blob_hash: { type: string }
         peer_id: { type: string }
         state: { type: string, enum: [present, pending, corrupt, missing] }
         bytes_present: { type: integer, format: int64 }
-        verified_at: { type: [string, "null"], format: date-time }
+        verified_at:
+          type: [string, "null"]
+          format: date-time
+          description: When these bytes were last re-hashed and matched their own name.
+        reported_at:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            When the holding peer last confirmed this row in an inventory
+            report — null if no peer ever has.
+
+            Distinct from `verified_at`, and the difference is the point: a
+            peer can afford to confirm it still holds a blob far more often
+            than it can afford to read it, so the two decay at different rates.
+            A row nobody has confirmed recently is a fact about the past
+            whatever its `state` says, and garbage collection reads this before
+            deleting what it believes is a surplus copy.
         updated_at: { type: string, format: date-time }
 
     Job:

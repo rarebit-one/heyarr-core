@@ -112,17 +112,18 @@ func (a *API) listPeers(w http.ResponseWriter, r *http.Request) {
 // Replicas
 // ---------------------------------------------------------------------------
 
-const replicaColumns = `blob_hash, peer_id, state, bytes_present, verified_at, updated_at`
+const replicaColumns = `blob_hash, peer_id, state, bytes_present, verified_at, reported_at, updated_at`
 
 func scanReplica(row interface{ Scan(...any) error }) (Replica, error) {
 	var rep Replica
-	var verified sql.NullString
+	var verified, reported sql.NullString
 	var updated string
 	if err := row.Scan(&rep.BlobHash, &rep.PeerID, &rep.State, &rep.BytesPresent,
-		&verified, &updated); err != nil {
+		&verified, &reported, &updated); err != nil {
 		return Replica{}, err
 	}
 	rep.VerifiedAt = parseNullTime(verified)
+	rep.ReportedAt = parseNullTime(reported)
 	rep.UpdatedAt = parseTime(updated)
 	return rep, nil
 }

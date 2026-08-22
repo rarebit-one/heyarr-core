@@ -398,6 +398,43 @@ func TestAnEndpointMovesWithoutTouchingIdentity(t *testing.T) {
 	}
 }
 
+// TestTheStoreStoresTheEndpointItIsGiven is the deliberate NON-rule (#169).
+//
+// What an operator may type is checked at the boundary that reads what they
+// typed — `peers add` and POST /api/v1/peers — not in the single writer. Moving
+// it in here would make every internal caller satisfy a rule about operator
+// input: the health prober's tests (§31) construct membership around httptest
+// servers, which are plain HTTP by construction, and would have to grow
+// certificates to say anything about liveness.
+func TestTheStoreStoresTheEndpointItIsGiven(t *testing.T) {
+	f := newFixture(t)
+	// The shape the health package builds: a plain-HTTP httptest address.
+	got := f.register("peer-b", key(t), "http://127.0.0.1:44471")
+	if got.Member.Endpoint != "http://127.0.0.1:44471" {
+		t.Fatalf("endpoint = %q, want it stored verbatim", got.Member.Endpoint)
+	}
+}
+
+// TestTheStoreTrimsButDoesNotRewrite: whitespace is not a value, and a
+// re-registration with the same endpoint is not a move.
+func TestTheStoreTrimsButDoesNotRewrite(t *testing.T) {
+	f := newFixture(t)
+	pub := key(t)
+	got := f.register("peer-b", pub, "  https://b.example:8385  ")
+	if got.Member.Endpoint != "https://b.example:8385" {
+		t.Fatalf("endpoint = %q, want it trimmed", got.Member.Endpoint)
+	}
+	again, err := f.store.Register(context.Background(), membership.Registration{
+		Name: "peer-b", Site: "site-b", Endpoint: "https://b.example:8385", PublicKey: pub,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Transition != membership.TransitionUnchanged {
+		t.Errorf("transition = %q, want %q", again.Transition, membership.TransitionUnchanged)
+	}
+}
+
 // TestRemoveIsRevocation asserts the ADR-0012 sentence at the store level:
 // membership is the record, so deleting the record withdraws the trust. The
 // end-to-end version — a peer that was reading bytes and then cannot — is in
