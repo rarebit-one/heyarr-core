@@ -16,6 +16,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/peer/endpoint"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 )
@@ -120,9 +121,32 @@ func peerDialer(ctx context.Context, c *client.Client, cfg config.Config, ref st
 		return nil, fmt.Errorf("peer %q has no endpoint recorded, so there is nowhere to dial — "+
 			"register it again with --endpoint; the endpoint is not its identity and may change freely", ref)
 	}
-	targetKey, err := identity.ParsePublicKey(*target.PublicKey)
+	// The recorded endpoint is normalised on the way OUT as well as on the way
+	// in (#169), because a row written before that check exists can hold a
+	// value `peers add` would refuse today — and what an operator got for one
+	// was `parse "192.168.x.x:8443/peer/v1/identity": first path segment in URL
+	// cannot contain colon`, a net/url message about a path nobody typed.
+	//
+	// It happens HERE, in the shared dialler, rather than in either command:
+	// `ping` and `attach` reach the same peer over the same pinned connection,
+	// and an endpoint one of them could dial and the other could not would be
+	// the same bug wearing a different command's name.
+	dialTo, err := endpoint.Normalise(*target.Endpoint)
+	if err == nil && !strings.HasPrefix(dialTo, endpoint.Scheme+"://") {
+		// A unix:// endpoint is a legitimate peer endpoint and a legitimate
+		// probe target (§31), and it is not something this connection can
+		// present a certificate over.
+		err = fmt.Errorf("%w: %q is not an %s origin, and the peer surface is mutually "+
+			"authenticated TLS (ADR-0012)", endpoint.ErrMalformed, *target.Endpoint, endpoint.Scheme)
+	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("peer %q is registered at an endpoint this node cannot dial: %w.\n"+
+			"Re-register it with `heyarr peers add --name %s --public-key <key> --endpoint <address>`; "+
+			"the endpoint is not its identity and may change freely", ref, err, target.Name)
+	}
+	targetKey, keyErr := identity.ParsePublicKey(*target.PublicKey)
+	if keyErr != nil {
+		return nil, keyErr
 	}
 
 	self, err := selfPeer(ctx, c)
@@ -162,20 +186,25 @@ func peerDialer(ctx context.Context, c *client.Client, cfg config.Config, ref st
 		return nil, err
 	}
 	return &peerConnection{
-		http:   httpClient,
-		base:   strings.TrimSuffix(*target.Endpoint, "/") + peerapi.Prefix,
+		http: httpClient,
+		// The normalised origin, not the recorded string: everything this
+		// connection dials is built from one value that was checked once.
+		base:   dialTo + peerapi.Prefix,
 		target: target,
 	}, nil
 }
 
 // call makes one request on the peer surface and decodes the answer.
 func (p *peerConnection) call(ctx context.Context, method, path string, body []byte, out any) error {
-	endpoint := p.base + path
+	// Named dialURL rather than endpoint: the package that decides what an
+	// endpoint may be is imported here now, and a local shadowing it is how
+	// the next reader ends up looking at the wrong thing.
+	dialURL := p.base + path
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
+	req, err := http.NewRequestWithContext(ctx, method, dialURL, reader)
 	if err != nil {
 		return err
 	}
@@ -187,7 +216,7 @@ func (p *peerConnection) call(ctx context.Context, method, path string, body []b
 		return fmt.Errorf("the connection to %s was refused: %w.\n"+
 			"A refusal in this fabric is a failed handshake rather than an error status, so this is "+
 			"either that peer refusing this node's key, this node refusing that peer's key, or "+
-			"nothing listening at the endpoint", endpoint, err)
+			"nothing listening at the endpoint", dialURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -195,10 +224,10 @@ func (p *peerConnection) call(ctx context.Context, method, path string, body []b
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s answered %d: %s", endpoint, resp.StatusCode, strings.TrimSpace(string(raw)))
+		return fmt.Errorf("%s answered %d: %s", dialURL, resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("%s answered something this command cannot read: %w", endpoint, err)
+		return fmt.Errorf("%s answered something this command cannot read: %w", dialURL, err)
 	}
 	return nil
 }

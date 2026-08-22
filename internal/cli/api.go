@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/config"
@@ -106,13 +108,88 @@ func (f *clientFlags) newClient(configPath string) (*client.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	addr, err := f.apiAddr(cfg)
+	if err != nil {
+		return nil, err
+	}
 	return client.New(client.Options{
-		Addr:       f.addr,
+		Addr:       addr,
 		UnixSocket: cfg.HTTP.UnixSocket,
 		Token:      token,
 		Timeout:    f.timeout,
 		UserAgent:  "heyarr-cli/" + buildinfo.Get().Version,
 	})
+}
+
+// apiAddr resolves where to talk to the API, and is the client half of #170.
+//
+// The server declines a unix socket whose path is longer than this platform's
+// sockaddr_un can hold, warns, and serves over TCP instead — which is the right
+// call, because refusing to start over a path length would be worse. The client
+// reads the same configuration, so it can reach the same conclusion rather than
+// dialling a socket that was never bound and then blaming the operator's data
+// directory.
+//
+// An empty result means "the unix socket", which stays the default transport:
+// this falls back only when the socket cannot be there and the configuration
+// declares somewhere else to go.
+func (f *clientFlags) apiAddr(cfg config.Config) (string, error) {
+	if f.addr != "" {
+		return f.addr, nil
+	}
+	if usableSocket(cfg.HTTP.UnixSocket) {
+		return "", nil
+	}
+	if cfg.HTTP.Addr != "" {
+		return dialable(cfg.HTTP.Addr), nil
+	}
+	// Nothing to fall back to. Say what is actually wrong rather than letting
+	// the dial fail with "invalid argument" and a message about whether heyarr
+	// is running — the failure this whole path exists to stop being silent.
+	if socketTooLong(cfg.HTTP.UnixSocket) {
+		return "", fmt.Errorf(
+			"the unix socket %s is %d bytes and the limit on this platform is %d, so the server "+
+				"cannot have bound it, and http.addr is not set either — "+
+				"set http.unix_socket to a shorter path, set http.addr, or pass --addr",
+			cfg.HTTP.UnixSocket, len(cfg.HTTP.UnixSocket), httpapi.MaxUnixSocketPath())
+	}
+	return "", nil
+}
+
+// dialable turns a listen address into one a client can connect to. A server
+// bound to a wildcard is reachable at loopback, and dialling 0.0.0.0 is a trick
+// that works on some platforms and not others.
+func dialable(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		return net.JoinHostPort("127.0.0.1", port)
+	}
+	return addr
+}
+
+// usableSocket reports whether this socket path could be the one the server is
+// serving on: short enough for the platform to bind, and present.
+//
+// Absence is enough on its own — a socket the server has not created is a
+// socket nothing can be reached through — but the length is checked separately
+// so the message above can name the reason rather than guessing at it.
+func usableSocket(path string) bool {
+	if path == "" || socketTooLong(path) {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// socketTooLong asks the server package rather than knowing the answer. The
+// limit differs by platform, and a second copy of it here is a copy that goes
+// out of date on whichever platform nobody runs the tests on.
+func socketTooLong(path string) bool {
+	return path != "" && len(path) >= httpapi.MaxUnixSocketPath()
 }
 
 func (f *clientFlags) resolveToken(cfg config.Config) (string, error) {

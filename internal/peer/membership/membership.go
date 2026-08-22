@@ -339,6 +339,21 @@ func (s *Store) Register(ctx context.Context, reg Registration) (Result, error) 
 			"full, partial, cache, archive, compute (§9)", reg.Mode)
 	}
 
+	// The endpoint is NOT validated here, deliberately. It is checked at the
+	// operator boundary — `peers add` and POST /api/v1/peers, through
+	// internal/peer/endpoint — because #169's argument is that the value must
+	// be refused where it is WRITTEN, the way config.Peer.Listen is refused at
+	// startup. A rule about what an operator may type, enforced in the single
+	// writer, becomes a rule every internal caller has to satisfy: the health
+	// prober's tests (§31) construct membership around httptest servers, which
+	// are plain HTTP by construction, and would have to grow certificates to
+	// say something about liveness.
+	//
+	// So this stores what it is given. What arrives from the boundary is
+	// already normalised, which is what makes a re-registration with the value
+	// `peers list` printed a no-op rather than an endless move.
+	reg.Endpoint = strings.TrimSpace(reg.Endpoint)
+
 	now := s.clock.Now().UTC()
 	var (
 		result Result
@@ -478,18 +493,21 @@ func (s *Store) reregister(ctx context.Context, tx *sql.Tx, existing Member, nam
 			"A peer is its key, not its name — remove %q first if it really is being renamed",
 			ErrKeyRegistered, existing.PeerID, existing.Name, name, existing.Name)
 	}
-	endpoint := strings.TrimSpace(reg.Endpoint)
+	// Already normalised by Register, which is the only caller: a moved
+	// endpoint goes through the same check as a new one, because the move is
+	// the dangerous one.
+	moved := reg.Endpoint
 	site := strings.TrimSpace(reg.Site)
-	if endpoint == existing.Endpoint && site == existing.Site && mode == existing.Mode {
+	if moved == existing.Endpoint && site == existing.Site && mode == existing.Mode {
 		return Result{Member: existing, Transition: TransitionUnchanged}, events.Event{}, nil
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE peers SET endpoint = ?, site = ?, mode = ? WHERE id = ?`,
-		nullable(endpoint), site, mode, existing.PeerID); err != nil {
+		nullable(moved), site, mode, existing.PeerID); err != nil {
 		return Result{}, events.Event{}, fmt.Errorf("membership: updating peer %s: %w", existing.PeerID, err)
 	}
 	updated := existing
-	updated.Endpoint = endpoint
+	updated.Endpoint = moved
 	updated.Site = site
 	updated.Mode = mode
 	ev, err := s.events.EmitTx(ctx, tx, events.TypePeerRegistered, "peer", updated.PeerID,

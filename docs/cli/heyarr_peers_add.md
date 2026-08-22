@@ -17,6 +17,15 @@ change freely: run this again with the same --name and --public-key and a new
 --public-key is required, and there is no form of this command without it —
 registering a hostname and learning the key afterwards is trust on first use.
 
+The endpoint is checked HERE rather than when something first dials it. Give it
+as `https://host:port`, or as a bare `host:port`, which is read as https:
+the inter-peer path is mutually authenticated TLS (ADR-0012), so there is one
+scheme to guess and http is refused rather than upgraded. A `unix:///path`
+socket is accepted for a peer on this host. Anything else is refused before a
+record exists, because registration is idempotent on the key: a typo would
+otherwise replace a working endpoint and leave the peer looking healthy in
+`peers list` while being unreachable.
+
 Membership is the only trust root in the inter-peer path, and revocation is
 `heyarr peers remove`. It is consulted on every request, so a removed
 peer loses access on the connection it is already holding open.
@@ -29,7 +38,7 @@ heyarr peers add [flags]
 
 ```
       --addr string         where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
-      --endpoint string     where to reach the peer; not its identity
+      --endpoint string     where to reach the peer, as https://192.168.1.10:8443, a bare host:port or unix:///path; not its identity
       --json                emit machine-readable JSON
       --mode string         full, partial, cache, archive or compute (§9) (default "full")
       --name string         the peer's name, unique within this instance

@@ -693,7 +693,15 @@ paths:
         "400":
           description: |
             The public key is missing, or malformed — the wrong algorithm
-            prefix, not lowercase hex, or not 32 bytes.
+            prefix, not lowercase hex, or not 32 bytes. Or the `endpoint` was
+            given and cannot be dialled: a scheme other than `https` or
+            `unix`, no host, a port that is not a number, or a path where an
+            origin belongs.
+
+            The endpoint is refused HERE rather than by whatever first tries to
+            use it, because registration is idempotent on the key: a typo
+            replaces a working endpoint, and the peer stays enrolled and looks
+            healthy while being unreachable.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -2772,7 +2780,13 @@ components:
         name: { type: string }
         site: { type: string, description: The failure domain this peer is in. }
         mode: { type: string, enum: [full, partial, cache, archive, compute] }
-        endpoint: { type: [string, "null"] }
+        endpoint:
+          type: [string, "null"]
+          description: |
+            Where to reach the peer — an `https` origin, or a `unix://`
+            socket path — or null when no endpoint is recorded. A
+            bare `host:port` given at registration is stored as
+            `https://host:port`. Not its identity.
         public_key:
           type: [string, "null"]
           description: |
@@ -3046,6 +3060,20 @@ components:
             `public_key` with a different endpoint moves the peer, and its
             `id`, its `enrolled_at` and everything referring to it are
             unaffected.
+
+            Given as an origin — `https://host:port` — or as a bare
+            `host:port`, which is normalised to `https://host:port`: the
+            inter-peer path is mutually authenticated TLS (ADR-0012), so there
+            is exactly one scheme to guess, and `http://` is refused rather
+            than upgraded. A `unix:///path/to.sock` socket is accepted for a
+            peer on this host. Anything nothing could dial — no host, a port
+            that is not a port, an unknown scheme, a path where an origin
+            belongs — is a `400`, refused here rather than by whatever first
+            tries to dial it. The stored value is the normalised one: what
+            `GET /api/v1/peers` returns can be posted straight back.
+
+            Omitted or empty is legitimate and means "not known yet": a peer
+            may be enrolled by its key before anyone knows where it will live.
         public_key:
           type: string
           pattern: "^ed25519:[0-9a-f]{64}$"
