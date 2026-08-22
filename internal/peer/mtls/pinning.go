@@ -58,7 +58,7 @@ func ServerConfig(opts Options) (*tls.Config, error) {
 			return p.material.Certificate()
 		},
 	}
-	return pinned(cfg, p.verify)
+	return pinned(cfg, p.verifyPeerCertificate, p.verifyConnection)
 }
 
 // ClientConfig is the TLS configuration a peer dialler uses.
@@ -87,7 +87,7 @@ func ClientConfig(opts Options) (*tls.Config, error) {
 		// refuses to return a configuration without one.
 		InsecureSkipVerify: true, // #nosec G402 -- pinning replaces chain verification; see AssertPinned
 	}
-	return pinned(cfg, p.verify)
+	return pinned(cfg, p.verifyPeerCertificate, p.verifyConnection)
 }
 
 // pinned is the ONLY place a peer TLS configuration is finished, and the only
@@ -99,11 +99,26 @@ func ClientConfig(opts Options) (*tls.Config, error) {
 // writes by default. Routing both constructors through one function that
 // refuses a nil callback turns that edit from a silent bypass into a
 // construction error at startup.
-func pinned(cfg *tls.Config, verify func([][]byte, [][]*x509.Certificate) error) (*tls.Config, error) {
-	if verify == nil {
+func pinned(
+	cfg *tls.Config,
+	verifyCert func([][]byte, [][]*x509.Certificate) error,
+	verifyConn func(tls.ConnectionState) error,
+) (*tls.Config, error) {
+	if verifyCert == nil || verifyConn == nil {
 		return nil, ErrNoPinning
 	}
-	cfg.VerifyPeerCertificate = verify
+	cfg.VerifyPeerCertificate = verifyCert
+	// VerifyConnection is not belt and braces. VerifyPeerCertificate is called
+	// during a FULL handshake; a session resumed from a ticket does not run
+	// one, so a peer that was pinned an hour ago can come back on a resumed
+	// session and never be looked at again — which is a revocation window with
+	// the length of a session ticket's lifetime, in a design whose whole
+	// revocation mechanism is the freshness of a lookup (ADR-0012).
+	//
+	// VerifyConnection runs on every connection, resumed or not. Resumption is
+	// kept rather than disabled precisely because this check makes it safe:
+	// membership is consulted again either way.
+	cfg.VerifyConnection = verifyConn
 	if err := AssertPinned(cfg); err != nil {
 		return nil, err
 	}
@@ -124,6 +139,12 @@ func AssertPinned(cfg *tls.Config) error {
 		return fmt.Errorf("%w: InsecureSkipVerify=%t, ClientAuth=%v — with no callback this "+
 			"configuration authenticates every key that connects (ADR-0012)",
 			ErrNoPinning, cfg.InsecureSkipVerify, cfg.ClientAuth)
+	}
+	if cfg.VerifyConnection == nil {
+		return fmt.Errorf("%w: VerifyPeerCertificate is set and VerifyConnection is not. A resumed "+
+			"session runs no handshake and therefore never reaches VerifyPeerCertificate, so a peer "+
+			"pinned once would keep its access for the lifetime of a session ticket — a revocation "+
+			"window nobody chose, in a design with no CRL to fall back on (ADR-0012)", ErrNoPinning)
 	}
 	if cfg.MinVersion < tls.VersionTLS13 {
 		return fmt.Errorf("%w: the peer path requires TLS 1.3; ADR-0012 says this must be safe "+
@@ -185,8 +206,29 @@ func newPinning(opts Options, role string) (pinning, error) {
 	return pinning{material: opts.Material, members: opts.Members, now: now, log: log.With("component", "mtls"), role: role}, nil
 }
 
-// verify is the callback both configurations hang on.
-func (p pinning) verify(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+// verifyPeerCertificate is the full-handshake callback.
+func (p pinning) verifyPeerCertificate(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+	return p.decide(rawCerts)
+}
+
+// verifyConnection runs on every connection, including one resumed from a
+// ticket, where no certificate message was exchanged and
+// VerifyPeerCertificate is never called.
+//
+// It re-derives the raw certificates from the connection state, which carries
+// the peer's certificates for a resumed session as well as a fresh one, and
+// asks membership again. That second question is the whole point: a session
+// ticket outlives a revocation, and nothing else in this design would notice.
+func (p pinning) verifyConnection(cs tls.ConnectionState) error {
+	raw := make([][]byte, 0, len(cs.PeerCertificates))
+	for _, cert := range cs.PeerCertificates {
+		raw = append(raw, cert.Raw)
+	}
+	return p.decide(raw)
+}
+
+// decide is the shared body of both callbacks.
+func (p pinning) decide(rawCerts [][]byte) error {
 	peer, err := p.check(context.Background(), rawCerts)
 	if err != nil {
 		// Logged here, at the point of refusal, because this is the only place
