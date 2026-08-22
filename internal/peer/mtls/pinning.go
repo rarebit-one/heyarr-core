@@ -85,6 +85,15 @@ func ClientConfig(opts Options) (*tls.Config, error) {
 		// has nothing to do and is turned off. Everything that decides whether
 		// to continue is the callback pinned() attaches below, and pinned()
 		// refuses to return a configuration without one.
+		//
+		// Both scanners are told, by name and once, rather than by a repo-wide
+		// exclusion: go/disabled-certificate-check and G402 are worth keeping
+		// on for every other line in this tree, and this is the only line in it
+		// that is allowed to answer them. The compensating control is not a
+		// promise in a comment — it is AssertPinned, which refuses to return
+		// this configuration unless a pinning callback is attached to it, and
+		// the test that fails if this field ever appears anywhere else.
+		// codeql[go/disabled-certificate-check]
 		InsecureSkipVerify: true, // #nosec G402 -- pinning replaces chain verification; see AssertPinned
 	}
 	return pinned(cfg, p.verifyPeerCertificate, p.verifyConnection)
