@@ -160,6 +160,13 @@ func (c *Catalog) createSelfPeer(ctx context.Context) (string, error) {
 
 	var ev events.Event
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		// enrolled_at is deliberately NOT written here, even though 00020 adds
+		// it. This statement runs in the worker and the peer as well as the
+		// controller, and those roles start against the LOWEST schema they can
+		// work at rather than the newest — so a column from the newest
+		// migration is a column that may not exist yet when this runs. Readers
+		// treat a NULL enrolled_at as created_at, which for the self peer is
+		// the same instant: the row appearing IS when this node joined.
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO peers (id, name, site, mode, is_self, created_at)
 			VALUES (?, ?, ?, 'full', 1, ?)
@@ -179,8 +186,23 @@ func (c *Catalog) createSelfPeer(ctx context.Context) (string, error) {
 			return fmt.Errorf("catalog: a peer named %q already exists and is not this node — "+
 				"peer.name must be unique within an instance", c.peerName)
 		}
+		// The same payload shape peer enrolment emits (M4-04). This is the
+		// self peer, but a subscriber asking "what peers does this system know
+		// about" watches one type and must not have to parse two shapes of it
+		// depending on which code path wrote the row. public_key is empty
+		// here by construction: the row exists before the keypair does, which
+		// is why peer.identity_established is a separate transition.
 		ev, err = c.events.EmitTx(ctx, tx, events.TypePeerRegistered, "peer", id,
-			map[string]any{"name": c.peerName, "site": c.peerSite, "is_self": true})
+			map[string]any{
+				"transition": events.PeerTransitionEnrolled,
+				"peer_id":    id,
+				"name":       c.peerName,
+				"site":       c.peerSite,
+				"mode":       "full",
+				"endpoint":   "",
+				"public_key": "",
+				"is_self":    true,
+			})
 		return err
 	})
 	if err != nil {

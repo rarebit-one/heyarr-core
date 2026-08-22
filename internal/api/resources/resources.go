@@ -30,6 +30,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -72,7 +73,16 @@ type Options struct {
 	// reports an empty set rather than not being mounted. An operator asking
 	// "what indexers do I have" deserves the answer "none" rather than a 404.
 	Providers *providers.Registry
-	Logger    *slog.Logger
+	// Membership is the peer fabric's trust root (ADR-0012, M4-04). It backs
+	// enrolment and revocation.
+	//
+	// Optional in the same sense Catalog is: a nil store leaves the two
+	// membership-changing routes unmounted rather than mounted and broken. A
+	// deployment that cannot enrol a peer is a deployment with one peer, which
+	// is the state ADR-0010 has shipped for three milestones — and an endpoint
+	// that exists and 500s is worse than one that is not there.
+	Membership *membership.Store
+	Logger     *slog.Logger
 	// Now and NewID are injected so that a created resource's timestamp and
 	// identifier are fixed values in a test, which is what lets the response
 	// shapes be golden files rather than a regex (ADR-0017).
@@ -92,16 +102,17 @@ type Options struct {
 
 // API holds the handlers.
 type API struct {
-	db        *sqlite.DB
-	reader    *sql.DB
-	jobs      *jobs.Queue
-	events    *events.Log
-	tokens    *auth.Store
-	catalog   *catalog.Catalog
-	providers *providers.Registry
-	log       *slog.Logger
-	now       func() time.Time
-	newID     func() string
+	db         *sqlite.DB
+	reader     *sql.DB
+	jobs       *jobs.Queue
+	events     *events.Log
+	tokens     *auth.Store
+	catalog    *catalog.Catalog
+	membership *membership.Store
+	providers  *providers.Registry
+	log        *slog.Logger
+	now        func() time.Time
+	newID      func() string
 
 	heartbeat  time.Duration
 	streamPoll time.Duration
@@ -166,6 +177,7 @@ func New(opts Options) (*API, error) {
 		jobs:       opts.Jobs,
 		events:     opts.Events,
 		tokens:     opts.Tokens,
+		membership: opts.Membership,
 		catalog:    opts.Catalog,
 		providers:  registryOrEmpty(opts.Providers),
 		log:        log.With("component", "api"),
@@ -284,6 +296,18 @@ func (a *API) Mount(r chi.Router) {
 	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/tokens", a.createToken)
 	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Get("/tokens/{id}", a.getToken)
 	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Delete("/tokens/{id}", a.revokeToken)
+
+	// Peer membership is admin in both directions, and for a stronger reason
+	// than tokens are (§26, ADR-0012, M4-04). Membership is the ONLY trust
+	// root in the inter-peer path: a credential that could enrol a peer could
+	// hand a complete replica of the library to a machine of its choosing, and
+	// one that could remove a peer could sever a site. Reading the list stays
+	// `read` — it is what an operator copies a public key out of.
+	if a.membership != nil {
+		r.Get("/peers/{id}", a.getPeer)
+		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/peers", a.createPeer)
+		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Delete("/peers/{id}", a.deletePeer)
+	}
 }
 
 // write renders a successful JSON response.

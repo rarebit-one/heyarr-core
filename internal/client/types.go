@@ -101,6 +101,8 @@ type Peer struct {
 	PublicKey *string   `json:"public_key"`
 	IsSelf    bool      `json:"is_self"`
 	CreatedAt time.Time `json:"created_at"`
+	// EnrolledAt is when this peer was admitted to the fabric (M4-04).
+	EnrolledAt time.Time `json:"enrolled_at"`
 }
 
 // Replica is one peer's holding of one blob (§8).

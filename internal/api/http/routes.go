@@ -77,6 +77,18 @@ func (s *Server) routes(mounts []MountFunc) http.Handler {
 		// wide open — the failure mode of the opposite default is silent.
 		r.Use(s.authenticate, RequireScope(auth.ScopeRead))
 
+		// Membership, after the bearer credential and before every route.
+		//
+		// It is here rather than inside the handlers that serve bytes because
+		// ADR-0012 makes membership the ONLY trust root in the inter-peer
+		// path: a peer whose record was removed must lose the whole API, on
+		// the connection it is already holding open, not just the endpoint
+		// somebody remembered to guard. Mounted centrally, a route added
+		// tomorrow inherits it.
+		if s.peers != nil {
+			r.Use(peerMembershipGuard(s.peers, s.presentedKey, s.log))
+		}
+
 		r.Get("/system", s.handleSystem)
 
 		for _, mount := range mounts {

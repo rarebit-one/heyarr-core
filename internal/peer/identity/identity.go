@@ -135,6 +135,54 @@ func FormatPublicKey(pub []byte) string {
 	return Algorithm + ":" + hex.EncodeToString(pub)
 }
 
+// ErrMalformedPublicKey is a public key that is not one: the wrong algorithm
+// prefix, not hex, or not the length an Ed25519 public key has.
+//
+// It is exported because enrolment refuses on it (M4-04) and the refusal has
+// to be distinguishable from "this key belongs to somebody else" — an operator
+// who mistyped a character and an operator who pasted the wrong site's key
+// need to do different things next.
+var ErrMalformedPublicKey = errors.New("identity: not an ed25519 public key")
+
+// ParsePublicKey is FormatPublicKey's inverse, and it lives beside it so the
+// two cannot drift.
+//
+// It accepts the rendered form, "ed25519:<64 lowercase hex>", and nothing
+// else. Bare hex is deliberately refused: a value with no algorithm beside it
+// is a bag of bytes whose meaning lives in whoever pasted it, and enrolment is
+// the one place in this system where accepting a slightly wrong shape is
+// indistinguishable from pinning the wrong identity.
+func ParsePublicKey(s string) (ed25519.PublicKey, error) {
+	text := strings.TrimSpace(s)
+	if text == "" {
+		return nil, fmt.Errorf("%w: the public key is empty", ErrMalformedPublicKey)
+	}
+	algo, hexed, ok := strings.Cut(text, ":")
+	if !ok {
+		return nil, fmt.Errorf("%w: %q has no algorithm prefix, expected %q",
+			ErrMalformedPublicKey, text, Algorithm+":<64 hex characters>")
+	}
+	if algo != Algorithm {
+		return nil, fmt.Errorf("%w: %q names algorithm %q, and this deployment pins %q (ADR-0012)",
+			ErrMalformedPublicKey, text, algo, Algorithm)
+	}
+	if hexed != strings.ToLower(hexed) {
+		// Rejected rather than lowercased: two renderings of one key would
+		// compare unequal as strings and equal as bytes, and the unique index
+		// that makes a key an identity is on the bytes.
+		return nil, fmt.Errorf("%w: %q is not lowercase hex", ErrMalformedPublicKey, text)
+	}
+	raw, err := hex.DecodeString(hexed)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %q is not hex: %w", ErrMalformedPublicKey, text, err)
+	}
+	if len(raw) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("%w: %q decodes to %d bytes, and an ed25519 public key is %d",
+			ErrMalformedPublicKey, text, len(raw), ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(raw), nil
+}
+
 // Options configure Ensure.
 type Options struct {
 	// DataDir is where the private key lives. Not the CAS root: the CAS is the

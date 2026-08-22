@@ -86,6 +86,22 @@ type Options struct {
 	CASRoot string
 	// Mount registers additional API routes. See MountFunc.
 	Mount []MountFunc
+	// PeerMembership is the peer fabric's trust root (ADR-0012, M4-04). When
+	// it is set, every request that presents a peer identity is checked
+	// against it — on every request, which is what makes removing a membership
+	// record an actual revocation rather than a revocation at the next
+	// restart.
+	//
+	// Nil disables the check, which is the correct state for a deployment with
+	// one peer: there is nothing to be a member of. It is not a default that
+	// weakens anything, because with nothing wired to present a peer identity
+	// the guard would pass every request through anyway.
+	PeerMembership PeerMembership
+	// PresentedPeerKey extracts the peer identity a connection proved. Nil
+	// means TLSPresentedPeerKey, which is the only production extractor. It is
+	// injectable so the revocation behaviour can be driven by a test without
+	// standing up mTLS, which M4-05 owns.
+	PresentedPeerKey PresentedPeerKey
 	// Now is injected so expiry and durations are testable.
 	Now func() time.Time
 }
@@ -103,6 +119,9 @@ type Server struct {
 	known    int64
 	casRoot  string
 	now      func() time.Time
+
+	peers        PeerMembership
+	presentedKey PresentedPeerKey
 
 	registry *prometheus.Registry
 	metrics  *metrics
@@ -170,9 +189,14 @@ func New(opts Options) (*Server, error) {
 		known:    opts.KnownSchemaVersion,
 		casRoot:  opts.CASRoot,
 		now:      now,
+		peers:    opts.PeerMembership,
 		registry: registry,
 		metrics:  m,
 		errc:     make(chan error, 1),
+	}
+	s.presentedKey = opts.PresentedPeerKey
+	if s.presentedKey == nil {
+		s.presentedKey = TLSPresentedPeerKey
 	}
 	s.handler = s.routes(opts.Mount)
 	s.http = &http.Server{

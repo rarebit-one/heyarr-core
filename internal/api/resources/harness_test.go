@@ -24,6 +24,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -149,17 +150,28 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The peer fabric's trust root (ADR-0012, M4-04). Wired here rather than
+	// in the enrolment tests alone, because a route that is only mounted in
+	// the test that needs it is a route no other test can catch breaking.
+	members, err := membership.New(membership.Options{
+		DB: db, Events: eventLog, Clock: clock, NewID: ids.next,
+		Logger: slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	api, err := resources.New(resources.Options{
-		DB:        db,
-		Jobs:      queue,
-		Events:    eventLog,
-		Tokens:    store,
-		Catalog:   cat,
-		Providers: hc.providers,
-		Logger:    slog.New(slog.DiscardHandler),
-		Now:       clock.Now,
-		NewID:     ids.next,
+		DB:         db,
+		Jobs:       queue,
+		Events:     eventLog,
+		Tokens:     store,
+		Catalog:    cat,
+		Providers:  hc.providers,
+		Membership: members,
+		Logger:     slog.New(slog.DiscardHandler),
+		Now:        clock.Now,
+		NewID:      ids.next,
 		// Short enough that an idle stream heartbeats within a test's patience,
 		// long enough that it is not the thing under test.
 		StreamHeartbeat: 50 * time.Millisecond,

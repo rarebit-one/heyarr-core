@@ -640,6 +640,125 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+    post:
+      tags: [fabric]
+      operationId: createPeer
+      summary: Enrol a peer, or move an existing member's endpoint.
+      description: |
+        Peer enrolment is operator-mediated and explicit (§26, ADR-0012). There
+        is no discovery, no join token and no trust on first use: an operator
+        reads the other node's public key out of `GET /api/v1/peers` at that
+        site and posts it here, and the operator at the other site does the
+        same in the other direction.
+
+        The public key decides what this does. A key nobody holds is an
+        enrolment and answers `201` with a `Location`. A key this instance
+        already pins is the same peer, and the request may move its `endpoint`,
+        `site` or `mode` — that answers `200`, because nothing was created and
+        a client treating `201` as "a peer joined" would count it twice. A key
+        already pinned to a peer with a DIFFERENT name is refused: a peer is
+        its key, not its name.
+
+        Admin, not write, and for a stronger reason than the token endpoints:
+        membership is the only trust root in the inter-peer path, so a
+        credential that could enrol a peer could hand a complete replica of the
+        library to a machine of its choosing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PeerRegistration" }
+      responses:
+        "201":
+          description: The peer was enrolled.
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Peer" }
+        "200":
+          description: |
+            The key was already a member. Its endpoint, site or mode may have
+            moved; its identity did not.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Peer" }
+        "400":
+          description: |
+            The public key is missing, or malformed — the wrong algorithm
+            prefix, not lowercase hex, or not 32 bytes.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: |
+            The key is registered to another peer, the name is taken by a peer
+            with a different key, or the registration claimed to be this node
+            and this node already exists.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /api/v1/peers/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+        description: |
+          The peer's id or its name. Both, because an operator holds whichever
+          of the two they were shown, and a lookup that accepted only the id
+          would send them to the list first — which is the step that gets
+          skipped when the thing being looked up is about to be removed.
+    get:
+      tags: [fabric]
+      operationId: getPeer
+      summary: Show one peer.
+      responses:
+        "200":
+          description: The peer.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Peer" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [fabric]
+      operationId: deletePeer
+      summary: Revoke a peer's membership.
+      description: |
+        ADR-0012: "Revocation is removing a membership record." There is no
+        revocation list and no certificate to expire — the record IS the trust,
+        so deleting it withdraws the trust.
+
+        Membership is consulted on every request rather than at process start,
+        so a removed peer stops being able to read bytes immediately, on the
+        connection it is already holding open. The peer's `replicas` rows go
+        with it: a peer this instance will not talk to is not a peer whose copy
+        counts towards placement.
+
+        It answers with the record it removed rather than `204`, so that "did I
+        revoke the right peer?" is not a question answered by re-reading the
+        list you just changed. This node cannot remove itself.
+      responses:
+        "200":
+          description: The membership record that was revoked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Peer" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The peer is this node, which cannot revoke itself.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /api/v1/replicas:
     get:
       tags: [fabric]
@@ -2402,7 +2521,7 @@ components:
 
     Peer:
       type: object
-      required: [id, name, site, mode, is_self, created_at]
+      required: [id, name, site, mode, is_self, created_at, enrolled_at]
       properties:
         id: { type: string }
         name: { type: string }
@@ -2424,6 +2543,49 @@ components:
           pattern: "^ed25519:[0-9a-f]{64}$"
         is_self: { type: boolean }
         created_at: { type: string, format: date-time }
+        enrolled_at:
+          type: string
+          format: date-time
+          description: |
+            When this peer was admitted to the fabric (M4-04). For the self
+            peer it equals `created_at`. Revocation is deletion (ADR-0012), so
+            a peer removed and re-enrolled comes back with a new `id` and a new
+            `enrolled_at` — which is what makes this the answer to "has
+            membership changed?" rather than a copy of `created_at`.
+
+    PeerRegistration:
+      type: object
+      required: [name, public_key]
+      description: |
+        What an operator asserts about another node.
+
+        There is deliberately no variant of this shape without `public_key`. A
+        registration carrying only a name and an endpoint would be a request to
+        trust whatever answers at that address — trust on first use — and
+        ADR-0012 pins keys rather than addresses.
+      properties:
+        name:
+          type: string
+          description: Unique within this instance.
+        site: { type: string, description: The peer's failure domain (§35). }
+        mode:
+          type: string
+          enum: [full, partial, cache, archive, compute]
+          default: full
+        endpoint:
+          type: string
+          description: |
+            Where to reach the peer. NOT its identity: posting the same
+            `public_key` with a different endpoint moves the peer, and its
+            `id`, its `enrolled_at` and everything referring to it are
+            unaffected.
+        public_key:
+          type: string
+          pattern: "^ed25519:[0-9a-f]{64}$"
+          description: |
+            Who the peer is — the exact string the other site's
+            `heyarr peers list` prints. This is the pin ADR-0012 describes, and
+            it is the only trust root in the inter-peer path.
 
     Replica:
       type: object

@@ -273,6 +273,29 @@ const (
 	// a hundred thousand events recording that nothing happened.
 	TypePeerHealthChanged = "peer.health_changed"
 
+	// The transitions a peer.registered payload may carry (M4-04).
+	//
+	// They live here, beside the type whose payload carries them, rather than
+	// in the package that emits them. Two emitters already exist — the self
+	// peer this node creates at startup (ADR-0010) and the operator enrolling
+	// another site — and a vocabulary defined next to one of them is a
+	// vocabulary the other one spells slightly differently. A subscriber
+	// filtering on "enrolled" should not have to know which code path wrote
+	// the row.
+	//
+	// One type with a transition rather than peer.registered plus
+	// peer.endpoint_changed, for the reason acquisition.phase_changed gives
+	// above: N types are N places to forget to emit, and a subscriber
+	// reconciling "who is in this fabric and where" would have to watch all of
+	// them to learn one fact.
+	PeerTransitionEnrolled = "enrolled"
+	// PeerTransitionEndpointChanged is a member reachable somewhere else. Its
+	// identity is unchanged: a peer is its public key, not its address
+	// (ADR-0012).
+	PeerTransitionEndpointChanged = "endpoint_changed"
+	// PeerTransitionRemoved is membership revoked, carried in peer.removed.
+	PeerTransitionRemoved = "removed"
+
 	// TypeReplicationTransferChanged is one blob transfer between two peers
 	// moving through its lifecycle: started, succeeded or failed, with the
 	// transition and both peers in the payload (M4-09).

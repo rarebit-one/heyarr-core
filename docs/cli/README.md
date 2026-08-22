@@ -34,8 +34,11 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr library list`](heyarr_library_list.md) | List libraries and their roots |
 | [`heyarr library`](heyarr_library.md) | Manage libraries and their roots |
 | [`heyarr peer`](heyarr_peer.md) | Serve and replicate bytes |
+| [`heyarr peers add`](heyarr_peers_add.md) | Enrol another peer by its public key |
 | [`heyarr peers list`](heyarr_peers_list.md) | List peers |
-| [`heyarr peers`](heyarr_peers.md) | Inspect the peers of this instance |
+| [`heyarr peers remove`](heyarr_peers_remove.md) | Revoke a peer's membership |
+| [`heyarr peers show`](heyarr_peers_show.md) | Show one peer, by name or id |
+| [`heyarr peers`](heyarr_peers.md) | Inspect and manage the peers of this instance |
 | [`heyarr quality-profile list`](heyarr_quality-profile_list.md) | List the quality profiles |
 | [`heyarr quality-profile`](heyarr_quality-profile.md) | Inspect the quality profiles a want is measured against |
 | [`heyarr scan`](heyarr_scan.md) | Scan a library's roots, optionally waiting for the scan to finish |

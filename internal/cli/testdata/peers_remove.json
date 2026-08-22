@@ -1,0 +1,11 @@
+{
+  "id": "01990000-0000-7000-8000-00000000new1",
+  "name": "peer-b",
+  "site": "site-b",
+  "mode": "full",
+  "endpoint": "https://b.example:8385",
+  "public_key": "ed25519:ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+  "is_self": false,
+  "created_at": "<timestamp>",
+  "enrolled_at": "<timestamp>"
+}

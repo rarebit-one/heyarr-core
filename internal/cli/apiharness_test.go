@@ -26,6 +26,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
@@ -156,11 +157,22 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 		t.Fatal(err)
 	}
 
+	// The peer fabric's trust root (ADR-0012, M4-04), so `heyarr peers add`,
+	// `show` and `remove` have something real behind them.
+	members, err := membership.New(membership.Options{
+		DB: db, Events: eventLog, Clock: clock, NewID: (&idSequence{}).next,
+		Logger: slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	api, err := resources.New(resources.Options{
 		DB:              db,
 		Jobs:            queue,
 		Events:          eventLog,
 		Tokens:          store,
+		Membership:      members,
 		Logger:          slog.New(slog.DiscardHandler),
 		Now:             clock.Now,
 		NewID:           (&idSequence{}).next,
