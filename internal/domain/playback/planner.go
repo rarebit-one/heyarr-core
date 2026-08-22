@@ -130,14 +130,25 @@ type Plan struct {
 	PeerID string `json:"peer_id,omitempty"`
 	// Remote reports that the chosen replica is at another site.
 	//
-	// ## UNPROVEN
+	// ## PROVEN, as of M4-14
 	//
-	// Nothing has ever run against a second peer. The peer model exists with
-	// exactly one peer by design (ADR-0010), so the local-vs-remote
-	// distinction that §31 and §68 both turn on has never been exercised
-	// against reality. The preference below is unit-tested against synthetic
-	// replicas and nothing more; treat this field as untested until Milestone
-	// 4 stands a second peer up.
+	// This carried an UNPROVEN block for three milestones: with exactly one
+	// peer (ADR-0010) the local-versus-remote distinction §31 and §68 both turn
+	// on had never been exercised, and the preference below was unit-tested
+	// against synthetic replicas and nothing more.
+	//
+	// It now runs against a second peer. internal/domain/routing implements
+	// §32's source selection and internal/api/resources/routing.go wires it to
+	// real peers, real replica states and M4-10's health verdict; the same
+	// client with and without a local replica is routed two different ways,
+	// and the cross-site answer records that it fell back.
+	//
+	// One thing to keep straight when reading the preference below: it is no
+	// longer where the API's locality decision is made. §32 chooses the source
+	// and hands this planner the one it chose, so Choose sees a single-element
+	// list on that path. chooseReplica remains the answer for a caller with no
+	// routing information — an offline planner, and §53's degraded peer, which
+	// has a catalog snapshot and no controller to ask.
 	Remote bool `json:"remote"`
 }
 
