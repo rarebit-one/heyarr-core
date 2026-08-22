@@ -1941,6 +1941,96 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /peer/v1/attachment:
+    get:
+      tags: [peer]
+      operationId: getPeerAttachment
+      summary: Report this peer's attachment to the controller.
+      description: |
+        A Full Peer is controller-attached: it runs no control plane and gets
+        its scheduling, authorisation and read routing from the controller
+        (ADR-0029). This is how it confirms which controller it is attached to
+        and what that controller records it as.
+
+        Every field is derived from the client certificate and the membership
+        record pinning its key (ADR-0033). There is no request body and no path
+        parameter, so nothing here can be influenced by the caller.
+      security:
+        - peerCertificate: []
+      responses:
+        "200":
+          description: The caller's attachment, as this controller records it.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PeerAttachment" }
+        "401":
+          description: |
+            No client certificate was presented. Behind the real listener this
+            is unreachable — the handshake is refused before a request exists.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "403":
+          description: The presented key is not a member.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /peer/v1/attach:
+    post:
+      tags: [peer]
+      operationId: attachPeer
+      summary: Attach to the controller, declaring which peer this node believes it is.
+      description: |
+        The body carries a DECLARED `peer_id`. It is not a credential and it is
+        never the acting identity: the controller derives the acting peer from
+        the client certificate, compares the declaration against it, and
+        refuses a mismatch with 403 (ADR-0033).
+
+        The declaration is worth sending anyway. A peer restored from another
+        site's configuration, or pointed at the wrong data directory, finds out
+        on its first request rather than after an inventory report has landed
+        under somebody else's id.
+
+        It writes nothing. Attaching is a peer confirming what the controller
+        already holds; enrolment is an operator action on the admin surface,
+        and no peer credential can reach it.
+      security:
+        - peerCertificate: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PeerAttachRequest" }
+      responses:
+        "200":
+          description: The caller's attachment, as this controller records it.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PeerAttachment" }
+        "400":
+          description: |
+            The body is not a JSON object, or carries no `peer_id`. The
+            declaration is required and is never defaulted to the certificate's
+            identity: a body that may be omitted is a body that stops being
+            compared.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "401":
+          description: No client certificate was presented.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "403":
+          description: |
+            The presented key is not a member, or the declared `peer_id` is not
+            the peer this connection authenticated as. Peer A cannot act as
+            peer B.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /api/v1/quality-profiles:
     get:
       tags: [policy]
@@ -2680,6 +2770,58 @@ components:
         served_by:
           type: string
           description: The answering node's own peer id.
+
+    PeerAttachRequest:
+      type: object
+      required: [peer_id]
+      description: |
+        What a Full Peer declares when it attaches. `peer_id` is a declaration,
+        not a credential: the controller compares it against the identity the
+        certificate proved and refuses a mismatch (ADR-0033).
+      properties:
+        peer_id:
+          type: string
+          description: The membership id this peer believes it holds.
+      additionalProperties: false
+
+    PeerAttachment:
+      type: object
+      required: [peer_id, name, public_key, controller, control_plane, principal]
+      description: |
+        A peer's attachment to a controller, as the controller records it.
+
+        Every field is the controller's conclusion, derived from the client
+        certificate. Nothing a caller sent is echoed back — including the
+        declared `peer_id`, which is compared and then discarded.
+      properties:
+        peer_id:
+          type: string
+          description: The acting peer, derived from the certificate.
+        name:
+          type: string
+          description: The acting peer's name in the controller's membership records.
+        public_key:
+          type: string
+          pattern: "^ed25519:[0-9a-f]{64}$"
+          description: The pinned key, as the controller holds it.
+        controller:
+          type: string
+          description: The answering controller's own peer id.
+        control_plane:
+          type: string
+          enum: [controller-attached]
+          description: |
+            A Full Peer runs no control plane of its own (ADR-0029). Stated in
+            the response so a peer that ever receives something else fails
+            loudly rather than assuming.
+        principal:
+          type: string
+          enum: [peer]
+          description: |
+            The kind of credential that was accepted. Never `admin`: a peer
+            certificate authorises the peer surface, acting as that peer, and
+            a peer reading `admin` here would have found a privilege
+            escalation (ADR-0033).
 
     PeerRegistration:
       type: object

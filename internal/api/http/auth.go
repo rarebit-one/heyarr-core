@@ -135,6 +135,27 @@ func RequireScope(want auth.Scope) func(http.Handler) http.Handler {
 				Fail(w, r, problem.Unauthorized("this endpoint requires a bearer token"))
 				return
 			}
+			// A peer is not an admin (ADR-0033).
+			//
+			// A peer certificate authenticates as that peer and authorises the
+			// peer surface — reporting inventory, fetching a snapshot, reading
+			// its jobs. Creating tokens, enrolling peers and changing policy
+			// are the admin surface, and no peer credential may reach them: a
+			// peer that could enrol a peer could enrol itself a second
+			// identity, and one that could mint a token could stop being a
+			// peer altogether.
+			//
+			// The refusal is here rather than in the admin handlers because
+			// the handler that forgets is the one that matters, and here every
+			// admin route inherits it — including the one added after this was
+			// written.
+			if want == auth.ScopeAdmin && PeerConnection(r.Context()) {
+				Fail(w, r, problem.Forbidden(
+					"a peer certificate is not an admin credential. It authenticates as that peer and "+
+						"authorises the peer surface only (ADR-0033); the admin surface is reached with "+
+						"an admin-scoped bearer token on a connection that is not a peer's"))
+				return
+			}
 			if !id.Allows(want) {
 				Fail(w, r, problem.Forbidden("this token does not carry the "+string(want)+" scope"))
 				return
