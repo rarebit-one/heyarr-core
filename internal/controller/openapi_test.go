@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,7 +16,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	yaml "go.yaml.in/yaml/v3"
 
+	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
@@ -74,11 +78,57 @@ func newTestHandler(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := c.newServer(db, blobStore, 4)
+	srv, _, err := c.newServer(db, blobStore, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return srv.Handler()
+}
+
+// noMembers is a trust root that admits nobody. The peer surface's routes are
+// registered whether or not anyone is enrolled, and this test is about the
+// route table rather than about who may reach it.
+type noMembers struct{}
+
+func (noMembers) Lookup(context.Context, []byte) (mtls.Peer, error) {
+	return mtls.Peer{}, mtls.ErrNotAMember
+}
+
+// newTestPeerHandler builds the mTLS peer surface's router (M4-05).
+//
+// It is enumerated by the parity test alongside the client API because
+// ADR-0015's rule is about routes Heyarr serves, not about routes that happen
+// to be mounted on one particular listener. A second listener that the parity
+// test did not walk would be a surface where an undocumented route is free —
+// which is precisely the gap the whole mechanism exists to close.
+func newTestPeerHandler(t *testing.T) http.Handler {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, err := mtls.NewMaterial(mtls.MaterialOptions{PrivateKey: priv, PeerID: "peer-under-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := peerapi.New(peerapi.Options{
+		Material: material, Members: noMembers{}, SelfPeerID: "peer-under-test",
+		Logger: slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv.Handler()
+}
+
+// allRoutes is every route this binary serves, on either listener.
+func allRoutes(t *testing.T) map[string]bool {
+	t.Helper()
+	out := routeSet(t, newTestHandler(t))
+	for route := range routeSet(t, newTestPeerHandler(t)) {
+		out[route] = true
+	}
+	return out
 }
 
 // routeSet enumerates every registered route as "METHOD /path".
@@ -140,7 +190,7 @@ func specSet(t *testing.T) map[string]bool {
 }
 
 func TestEveryRegisteredRouteIsDocumented(t *testing.T) {
-	routes := routeSet(t, newTestHandler(t))
+	routes := allRoutes(t)
 	documented := specSet(t)
 
 	var undocumented []string
@@ -158,7 +208,7 @@ func TestEveryRegisteredRouteIsDocumented(t *testing.T) {
 }
 
 func TestEveryDocumentedPathIsRegistered(t *testing.T) {
-	routes := routeSet(t, newTestHandler(t))
+	routes := allRoutes(t)
 	documented := specSet(t)
 
 	var missing []string
@@ -179,7 +229,7 @@ func TestEveryDocumentedPathIsRegistered(t *testing.T) {
 // then running `go test -run TestRouteInventory -v ./internal/controller` tells
 // you exactly what to write in the specification.
 func TestRouteInventory(t *testing.T) {
-	routes := routeSet(t, newTestHandler(t))
+	routes := allRoutes(t)
 	list := make([]string, 0, len(routes))
 	for r := range routes {
 		list = append(list, r)

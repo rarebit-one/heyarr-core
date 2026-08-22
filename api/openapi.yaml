@@ -57,6 +57,12 @@ tags:
     description: The centralised registry of external services — indexers, download clients (§59).
   - name: mcp
     description: Semantic actions for agents, over JSON-RPC (§71, ADR-0019).
+  - name: peer
+    description: |
+      The inter-peer surface. A SEPARATE listener with a separate credential:
+      mutual TLS pinned to peer membership (§26, ADR-0012). No bearer token is
+      accepted here and no peer certificate authenticates anything under
+      /api/v1.
 
 paths:
   /healthz:
@@ -1890,6 +1896,51 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /peer/v1/identity:
+    get:
+      tags: [peer]
+      operationId: getPeerIdentity
+      summary: Report the peer identity this node derived from the client certificate.
+      description: |
+        The peer the SERVER worked out, from the certificate presented on this
+        connection and the membership record pinning its key. Nothing in the
+        request asserts an identity and nothing is echoed back.
+
+        That is the whole reason the route exists. "The request returned 200"
+        is not evidence that pinning happened — a server that authenticated
+        nobody would also return 200 — so an acceptance assertion needs a value
+        it can compare against the id enrolment returned. This is that value.
+
+        It is served on the peer listener (`peer.listen`), which is off by
+        default: a deployment with one peer has no fabric to serve and needs no
+        certificate configuration of any kind.
+      security:
+        - peerCertificate: []
+      responses:
+        "200":
+          description: The caller's membership record, as this node resolved it.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PeerIdentity" }
+        "401":
+          description: |
+            No client certificate was presented. Behind the real listener this
+            is unreachable — the handshake is refused before a request exists —
+            and it is documented because the router refuses independently of
+            the listener it is mounted on.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "403":
+          description: |
+            The presented key is not a member. It is the same answer for a key
+            that was never enrolled and a key that was revoked a moment ago:
+            after removal there is nothing left to tell them apart, which is
+            what "revocation is removing a membership record" means.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /api/v1/quality-profiles:
     get:
       tags: [policy]
@@ -2349,6 +2400,25 @@ components:
         Scopes are ordered — `admin` implies `write` implies `read`. Every
         route under /api/v1 requires at least `read`.
 
+    peerCertificate:
+      type: mutualTLS
+      description: |
+        A self-signed X.509 certificate carrying this peer's Ed25519 public
+        key, pinned against the controller-issued membership record
+        (ADR-0012). There is no CA and no PKI: the certificate proves
+        possession of a key, and membership decides whether that key may
+        speak. Both ends pin, so the dialler authenticates the listener by
+        exactly the same rule.
+
+        It is checked twice — during the handshake, and again on every request
+        the connection carries. Revocation is deleting the membership record,
+        and there is no revocation list to fall back on, so the freshness of
+        that second lookup is the mechanism.
+
+        This credential is accepted ONLY on /peer/v1, and a bearer token is
+        never accepted there. A connection presenting no client certificate is
+        refused during the handshake, not with a status code.
+
   parameters:
     id:
       name: id
@@ -2552,6 +2622,34 @@ components:
             a peer removed and re-enrolled comes back with a new `id` and a new
             `enrolled_at` — which is what makes this the answer to "has
             membership changed?" rather than a copy of `created_at`.
+
+    PeerIdentity:
+      type: object
+      required: [peer_id, name, public_key, served_by]
+      description: |
+        The identity the answering node derived from the client certificate on
+        the connection, plus which node answered.
+
+        Every field here is the SERVER's conclusion. A caller cannot influence
+        any of it, which is the property that makes this endpoint worth having:
+        comparing `peer_id` against the id enrolment returned is an assertion
+        that pinning happened, and a 200 alone is not.
+      properties:
+        peer_id:
+          type: string
+          description: The caller's membership id, as this node resolved it.
+        name:
+          type: string
+          description: The caller's name in this node's membership records.
+        public_key:
+          type: string
+          pattern: "^ed25519:[0-9a-f]{64}$"
+          description: |
+            The pinned key, so a caller can compare it against the one it
+            enrolled. The public half, as everywhere else in this API.
+        served_by:
+          type: string
+          description: The answering node's own peer id.
 
     PeerRegistration:
       type: object
