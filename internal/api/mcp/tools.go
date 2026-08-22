@@ -118,8 +118,11 @@ func (s *Server) registerTools() {
 		Scope:    auth.ScopeRead,
 		ReadOnly: true,
 		Description: "List the peers this instance knows about and what each is for. " +
-			"Note there is exactly one peer by design in this milestone, so this reporting " +
-			"a single peer is correct rather than a symptom.",
+			"A single peer is a supported deployment rather than a symptom — most " +
+			"Heyarr installations are one machine — so do not report a fabric of one " +
+			"as a replication fault. Ask get_content_satisfaction whether placement " +
+			"is answering a real question: it reports `unproven` when the target set " +
+			"is this node alone.",
 		InputSchema: schemaNoArgs,
 		Handler:     s.getPeerStatus,
 	})
@@ -133,6 +136,22 @@ func (s *Server) registerTools() {
 			"A copy that is pending or corrupt is NOT a copy for placement purposes.",
 		InputSchema: schemaBlobHash,
 		Handler:     s.getReplicaStatus,
+	})
+
+	s.tools.register(Tool{
+		Name:     "sync_peer",
+		Title:    "Reconcile against a peer",
+		Scope:    auth.ScopeWrite,
+		ReadOnly: false,
+		Description: "Ask this instance to reconcile the desired blob set against what " +
+			"a peer is known to hold, now, rather than waiting for the next scheduled " +
+			"cycle. Queues work rather than doing it: the diff enqueues a transfer per " +
+			"gap and the bytes move afterwards, so this reply says only that the cycle " +
+			"was accepted. It is the on-demand half of the reconciliation §57 asks for " +
+			"on a beat and on demand — useful straight after enrolling a peer or " +
+			"restoring one, and pointless to call in a loop.",
+		InputSchema: schemaSyncPeer,
+		Handler:     s.syncPeer,
 	})
 
 	s.tools.register(Tool{

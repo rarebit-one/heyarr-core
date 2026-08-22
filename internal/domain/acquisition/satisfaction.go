@@ -132,18 +132,27 @@ type PlacementVerdict struct {
 // EvaluatePlacement answers "are those bytes on every Full Peer that should
 // hold them?" (§56)
 //
-// ## UNPROVEN
+// ## PROVEN, and what the proof was
 //
-// Nothing has ever run against a second peer. ADR-0010 puts exactly one peer in
-// the model by design, so in every deployment that exists today `required` has
-// one member, that member is this node, and the answer is satisfied the moment
-// content is. SatisfactionConverging — the state this entire distinction exists
-// to express — is unreachable outside a test with a synthetic peer set.
+// This carried an UNPROVEN block from Milestone 1 to Milestone 4: nothing had
+// ever run against a second peer, so `required` had one member, that member was
+// this node, and SatisfactionConverging — the state this entire distinction
+// exists to express — was unreachable outside a test with a synthetic peer set.
 //
-// The logic below is correct as far as anything can tell and no further.
-// Milestone 4 stands up the second peer and proves it. This caveat is repeated
-// on the API field and in the ADR because a caveat that lives only in the
-// domain is one the edge will forget.
+// It is reachable now. Milestone 4 stood up a second Full Peer and moved real
+// bytes to it (M4-09), and `make demo` observes this function return
+// SatisfactionConverging mid-transfer, from the API, on a blob that one of two
+// required peers holds — then SatisfactionSatisfied once the transfer lands.
+// The logic below did not change to earn that; what was missing was never the
+// logic, it was a second peer.
+//
+// What is still true, and is now said on the wire rather than here: a
+// deployment whose target set is this node alone gets `satisfied` the moment
+// content is, and that is not evidence that replication works. That condition
+// is reported per response as `unproven` (ADR-0027, resources.
+// PlacementSatisfaction.Unproven) instead of being asserted as a blanket
+// caveat, because it is a fact about a deployment and no longer a fact about
+// this code.
 func EvaluatePlacement(blobHash string, required []string, replicas []PeerReplica) PlacementVerdict {
 	// ADR-0020: a linked asset has no blob, so there is nothing to replicate
 	// and placement is not a question that can be answered about it.

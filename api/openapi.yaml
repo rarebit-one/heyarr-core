@@ -1919,12 +1919,16 @@ paths:
         no `list_works`-style tools: an agent that wants to browse should use
         this document's own endpoints.
 
-        Five verbs §71 names are **absent rather than stubbed** —
-        `search_releases`, `acquire_release`, `sync_peer`, `play_content` and
+        Four verbs §71 names are **absent rather than stubbed** —
+        `search_releases`, `acquire_release`, `play_content` and
         `transfer_playback`. Asking for one returns `-32601` with the milestone
         that brings it, so an agent learns to wait rather than to retry. A tool
         answering "not implemented" would be a published vocabulary with a hole
         in it, which is exactly what ADR-0019 waited to avoid.
+
+        `sync_peer` was the fifth. It was deferred because the peer model held
+        exactly one peer and there was nothing to synchronise with; Milestone 4
+        stood up a second Full Peer, so it ships.
 
         ### §72
 
@@ -3908,9 +3912,15 @@ components:
             an instance where this is usually true is one where replication is
             not working.
 
-            **Unproven:** nothing has ever run against a second peer
-            (ADR-0010), so this path is unit-tested against synthetic replicas
-            and nothing more until Milestone 4.
+            **The unproven note this carried is retired (M4-11, M4-14).** It
+            said nothing had ever run against a second peer; one exists now, and
+            §32's source selection routes against it — the same client with and
+            without a local replica is routed two different ways, and the
+            cross-site answer records that it fell back.
+
+            Read `routing` rather than this flag when you want to know why. This
+            is the planner's own summary of the source it was handed; `routing`
+            is the decision, with the peers it rejected and the reason for each.
         content_url:
           type: string
           description: |
@@ -4257,15 +4267,26 @@ components:
         unproven:
           type: boolean
           description: |
-            **Always `true` in this milestone.** Nothing has ever run against a
-            second peer (ADR-0010), so with a target set of one this axis is
-            satisfied the moment content is, and `converging` is unreachable
-            outside a test with a synthetic peer set.
+            **Whether this answer is true by construction rather than by
+            replication having worked.** Computed per response from the Full
+            Peer target set: `true` when that set is this node alone, `false`
+            when it names two or more peers.
+
+            On a single-peer deployment placement is satisfied the moment
+            content is, because there is nowhere for bytes to converge to, and
+            `converging` is unreachable — so a client must not read `satisfied`
+            there as evidence that replication works. On a two-peer deployment
+            the axis is answering a real question and this is `false`.
+
+            It was hard-coded `true` while one peer was the only deployment
+            that existed. It did not become `false` when the second peer
+            arrived: a Heyarr on one machine is a supported configuration
+            forever, and a constant `false` would be a lie on every one of
+            them.
 
             It is a response field rather than only a note in this document
             because a caveat the reader of the response never sees is a caveat
-            that does not work. A client must not read `satisfied` here as
-            evidence that replication works.
+            that does not work.
 
     JSONRPCRequest:
       type: object
@@ -4589,10 +4610,16 @@ components:
             would then mean "one copy, on one disk, with no integrity
             guarantee".
 
-            **UNPROVEN.** Nothing has ever run against a second peer
-            (ADR-0010), so with a target set of one this axis is satisfied the
-            moment content is, and `converging` is unreachable outside a test
-            with a synthetic peer set. Milestone 4 proves it.
+            `converging` is reachable and observed as of Milestone 4: a
+            two-peer deployment moving real bytes reports it mid-transfer and
+            `satisfied` once the transfer lands.
+
+            On a deployment whose Full Peer target set is this node alone it is
+            still `satisfied` the moment content is — there is nowhere for bytes
+            to converge to. `GET /api/v1/desired/{id}/satisfaction` reports that
+            case as `placement.unproven: true`; this listing does not, so read
+            the satisfaction endpoint before treating `satisfied` here as
+            evidence that replication works.
         detail:
           type: string
           description: Why the last pipeline move happened, when it was a failure.

@@ -2,13 +2,16 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
+	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
 )
@@ -468,14 +471,19 @@ func (s *Server) getPeerStatus(ctx context.Context, raw json.RawMessage) (any, e
 	out := struct {
 		truncatable
 		Peers []peer `json:"peers"`
-		// Note says plainly that one peer is the design rather than a fault.
-		// An agent seeing a single peer would otherwise reasonably report a
-		// replication problem that does not exist.
+		// Note says plainly that a fabric of one peer is a supported
+		// deployment rather than a fault. An agent seeing a single peer would
+		// otherwise reasonably report a replication problem that does not
+		// exist — and that stayed true when the second peer arrived, because
+		// most Heyarr installations are one machine and always will be.
 		Note string `json:"note"`
 	}{
 		Peers: []peer{},
-		Note: "The peer model holds exactly one peer by design in this milestone " +
-			"(ADR-0010). A single peer here is correct, not a symptom.",
+		Note: "More than one peer is supported and proven (M4), and so is exactly " +
+			"one: a single peer here is a deployment choice, not a symptom. With one " +
+			"peer there is nowhere for bytes to converge to, so placement is satisfied " +
+			"the moment content is — get_content_satisfaction reports that case as " +
+			"`unproven` rather than leaving it to be inferred from this list.",
 	}
 	for rows.Next() {
 		var p peer
@@ -588,6 +596,70 @@ func (s *Server) verifyBlob(ctx context.Context, raw json.RawMessage) (any, erro
 		"status":    "queued",
 		"note": "The verification runs as a job. Watch the job or the event stream " +
 			"for the outcome; this reply only says it was accepted.",
+	}, nil
+}
+
+// syncPeer queues a reconciliation cycle against one peer.
+//
+// The same intent as POST /api/v1/peers/{id}/reconcile, and for the same
+// reason it queues rather than runs: reconciling is a job (invariant 4,
+// ADR-0002), the worker that runs it may be another process, and the transfers
+// the diff enqueues take as long as bytes take.
+//
+// This verb was DEFERRED from Milestone 3 because the peer model held exactly
+// one peer and there was nothing to synchronise with. There is now.
+func (s *Server) syncPeer(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args struct {
+		Peer string `json:"peer"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if args.Peer == "" {
+		return nil, invalidParams("peer is required")
+	}
+
+	// Resolved to an id before queueing. A job carrying a NAME would diff
+	// against a peer set keyed by id, match nothing, and succeed having done
+	// nothing — the same trap POST /peers/{id}/reconcile resolves for.
+	var (
+		peerID string
+		isSelf int
+	)
+	err := s.reader.QueryRowContext(ctx,
+		`SELECT id, is_self FROM peers WHERE id = ? OR name = ?`,
+		args.Peer, args.Peer).Scan(&peerID, &isSelf)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, invalidParams("there is no peer called %q", args.Peer)
+	case err != nil:
+		return nil, err
+	case isSelf == 1:
+		// Refused rather than quietly accepted. A cycle scoped to this node
+		// diffs the desired set against what this node already holds and
+		// enqueues nothing, so accepting it would report success for a
+		// misunderstanding an agent would then repeat.
+		return nil, invalidParams("%q is this node — synchronising is something a node "+
+			"does with another peer, and a cycle scoped to itself would find nothing to do",
+			args.Peer)
+	}
+
+	job, err := s.jobs.Enqueue(ctx, jobs.EnqueueOptions{
+		Type:      replication.ReconcilePeerJobType,
+		Payload:   replication.ReconcilePeerPayload{PeerID: peerID},
+		DedupeKey: replication.ScopedReconcilePeerDedupeKey(peerID),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"peer_id": peerID,
+		"job_id":  job.ID,
+		"status":  "queued",
+		"note": "The cycle runs as a job, and the transfers it decides on are further " +
+			"jobs after that. Watch the job or the event stream; this reply only says " +
+			"the cycle was accepted. get_content_satisfaction reports the placement " +
+			"axis reaching `converging` and then `satisfied` as the bytes land.",
 	}, nil
 }
 

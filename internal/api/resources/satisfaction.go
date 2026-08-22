@@ -82,14 +82,25 @@ type PlacementSatisfaction struct {
 	// on.
 	Missing []string `json:"missing,omitempty"`
 	Detail  string   `json:"detail"`
-	// Unproven says plainly that this axis has never run against a second
-	// peer (ADR-0010).
+	// Unproven says plainly that this answer is true by construction rather
+	// than by replication having worked.
+	//
+	// It is COMPUTED per response, from the Full Peer target set: true when
+	// that set is this node alone, false when it names two or more peers
+	// (ADR-0010, ADR-0027, M4-11). On a single-peer deployment placement is
+	// satisfied the moment content is and `converging` is unreachable, because
+	// there is nowhere for bytes to converge to — so a client must not read
+	// `satisfied` there as evidence that replication works. On a two-peer
+	// deployment the axis is answering a real question and this is false.
+	//
+	// It was a hard-coded `true` for as long as one peer was the only
+	// deployment that existed. It did not become `false` when the second peer
+	// arrived: most deployments will be one machine forever, and a constant
+	// `false` would be a lie on every one of them. It became a statement about
+	// the target set, which is what the field always described.
 	//
 	// It is a field rather than only a doc comment because a caveat that lives
 	// in the OpenAPI is a caveat the person reading the response does not see.
-	// With one peer in the target set, placement is satisfied the moment
-	// content is, and `converging` is unreachable — so a client must not read
-	// `satisfied` here as evidence that replication works.
 	Unproven bool `json:"unproven"`
 }
 
@@ -128,7 +139,12 @@ func (a *API) Satisfaction(ctx context.Context, id string) (SatisfactionResponse
 			Satisfaction: string(result.Placement.Satisfaction),
 			Missing:      result.Placement.Missing,
 			Detail:       result.Placement.Detail,
-			Unproven:     true,
+			// Computed by the reconciliation that just ran, from the peer set
+			// it read. Not re-derived here: a second read of the peers table
+			// could disagree with the one the verdict was made against, and
+			// the caveat would then be about a different fabric than the
+			// answer it qualifies.
+			Unproven: result.PlacementUnproven,
 		},
 	}
 	var incumbent acquisition.Evaluation

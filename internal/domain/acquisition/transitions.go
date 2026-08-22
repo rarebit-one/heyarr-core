@@ -223,14 +223,24 @@ func (s State) WithContent(v Satisfaction) (State, error) {
 
 // WithPlacement records an answer on the placement axis (§56).
 //
-// ## UNPROVEN
+// ## PROVEN
 //
-// Nothing has ever run against a second peer. ADR-0010 puts exactly one peer
-// in the model by design, so with a target set of one this axis is satisfied
-// the moment content is, and PLACEMENT_CONVERGING — the state this whole
-// distinction exists to express — is unreachable outside a test with a
-// synthetic peer set. The transitions here are correct as far as anything can
-// tell and no further; Milestone 4 stands up the second peer and proves it.
+// This carried an UNPROVEN block until Milestone 4: with a target set of one,
+// this axis was satisfied the moment content was, and PLACEMENT_CONVERGING —
+// the state this whole distinction exists to express — was unreachable outside
+// a test with a synthetic peer set.
+//
+// A second Full Peer now exists and real bytes move between the two (M4-09), so
+// this method is called with SatisfactionConverging by a running system rather
+// than only by a table test: `make demo` drives a want through
+// CONTENT_SATISFIED, PLACEMENT_CONVERGING and FULLY_SATISFIED in that order,
+// against a transfer that really happened. The transitions did not change to
+// earn that.
+//
+// A deployment of one peer still reaches FULLY_SATISFIED the moment content is
+// satisfied, and still must not be read as evidence that replication works.
+// That is reported per response as `unproven` (ADR-0027) rather than asserted
+// here, because it is a property of the fabric and not of this transition.
 func (s State) WithPlacement(v Satisfaction) (State, error) {
 	out := s
 	out.Placement = v

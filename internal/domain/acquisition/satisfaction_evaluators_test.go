@@ -133,9 +133,11 @@ func TestContentUsesTheSameScorerAsTheSearch(t *testing.T) {
 	}
 }
 
-// Placement (§56). Every case below is UNPROVEN against a real second peer —
-// ADR-0010 puts exactly one in the model — so these are synthetic peer sets
-// and nothing more.
+// Placement (§56). The peer sets below are synthetic, and that is now a
+// division of labour rather than a limitation: this table owns the edges — an
+// empty target set, a blob-less asset, nowhere-at-all — and the assertion that
+// `converging` is reached by a REAL transfer between two processes lives in
+// scripts/acceptance.sh, where a running system can make it (M4-11).
 func TestEvaluatePlacement(t *testing.T) {
 	const blob = "blake3:aaaa"
 

@@ -38,11 +38,6 @@ var deferredTools = map[string]deferral{
 		Reason: "candidates are not persisted and no download client is wired, so there " +
 			"is no release to acquire and nowhere to acquire it to",
 	},
-	"sync_peer": {
-		Milestone: "M4",
-		Reason: "the peer model holds exactly one peer by design (ADR-0010); there is " +
-			"nothing to synchronise with",
-	},
 	"play_content": {
 		Milestone: "M4+",
 		Reason: "playback is device-mediated: it returns a credentialed URL scoped to a " +

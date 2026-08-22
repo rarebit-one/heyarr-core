@@ -226,7 +226,6 @@ func deferredNames() map[string]bool {
 	return map[string]bool{
 		"search_releases":   true,
 		"acquire_release":   true,
-		"sync_peer":         true,
 		"play_content":      true,
 		"transfer_playback": true,
 	}

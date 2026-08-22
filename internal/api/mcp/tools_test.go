@@ -449,10 +449,13 @@ func TestGetContentSatisfaction(t *testing.T) {
 	if out.Content.Satisfaction != "not_satisfied" {
 		t.Errorf("content = %q", out.Content.Satisfaction)
 	}
-	// §56's two axes are both answered, and the placement one says plainly it
-	// has never run against a second peer.
+	// §56's two axes are both answered, and the placement one says plainly
+	// that this harness is a fabric of one peer — where placement is satisfied
+	// the moment content is, and `converging` is unreachable. See
+	// TestSatisfactionUnprovenIsComputedFromTheTargetSet for the other half:
+	// the same field is false once a second Full Peer exists.
 	if !out.Placement.Unproven {
-		t.Error("placement should declare itself unproven (ADR-0010)")
+		t.Error("a single-peer harness should report placement unproven (ADR-0027)")
 	}
 	// §60's question is a third one: a want can be satisfied and still
 	// improvable.
@@ -477,9 +480,10 @@ func TestGetPeerStatus(t *testing.T) {
 		t.Fatalf("peers = %+v", out)
 	}
 	// An agent seeing one peer would otherwise reasonably report a replication
-	// problem that does not exist.
-	if !strings.Contains(out.Note, "by design") {
-		t.Error("the reply should say that one peer is the design, not a symptom")
+	// problem that does not exist — which stayed true after Milestone 4, since
+	// most deployments are one machine.
+	if !strings.Contains(out.Note, "not a symptom") {
+		t.Error("the reply should say that a single peer is a deployment choice, not a symptom")
 	}
 }
 

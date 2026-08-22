@@ -248,7 +248,10 @@ type AcquisitionState struct {
 	Phase   string `json:"phase"`
 	Managed bool   `json:"managed"`
 	Content string `json:"content"`
-	// Placement is UNPROVEN against a real second peer — see ADR-0010.
+	// Placement is proven against a real second peer as of Milestone 4:
+	// `converging` is reachable and observed. On a deployment of one peer it
+	// is still satisfied the moment Content is, which
+	// /desired/{id}/satisfaction reports as `placement.unproven` (ADR-0027).
 	Placement string `json:"placement"`
 	Detail    string `json:"detail,omitempty"`
 }

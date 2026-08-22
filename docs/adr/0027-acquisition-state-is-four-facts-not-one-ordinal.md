@@ -93,12 +93,26 @@ no way to verify it", which is the opposite of what the name promises. So a
 linked asset rests at `CONTENT_SATISFIED` permanently, which is honest and
 needs no new name.
 
-**Placement is UNPROVEN.** ADR-0010 puts exactly one peer in the model by
-design, so with a target set of one this axis is satisfied the moment content
-is, and `PLACEMENT_CONVERGING` — the state this entire distinction exists to
-express — is unreachable outside a test with a synthetic peer set. It is
-modelled fully, unit-tested, and labelled unproven in the code, the OpenAPI and
-the tests. Milestone 4 stands up the second peer and proves it.
+**Placement was UNPROVEN, and Milestone 4 proved it.** This paragraph used to
+say that ADR-0010 put exactly one peer in the model by design, so with a target
+set of one the axis was satisfied the moment content was and
+`PLACEMENT_CONVERGING` — the state this entire distinction exists to express —
+was unreachable outside a test with a synthetic peer set. That caveat was
+written to be found, and this is it being kept: M4-11 observes
+`PLACEMENT_CONVERGING` from the API, mid-transfer, on a two-peer deployment
+moving real bytes, and `FULLY_SATISFIED` after the transfer lands. No evaluation
+logic changed to earn it. What was missing was never the logic; it was a second
+peer.
+
+**`unproven` stayed, and became computed.** A deployment of one peer is not a
+stage on the way to something — it is most deployments, forever — and there
+placement is still satisfied the moment content is, because there is nowhere for
+bytes to converge to. So the field is neither removed (breaking, since it is
+`required` in the OpenAPI) nor flipped to a constant `false` (a lie on every
+single-peer node). It is evaluated per response, from the Full Peer target set:
+`true` when that set is this node alone, `false` when it names two or more
+peers. It says the same thing it always said and now says it about the
+deployment being asked rather than about the milestone doing the asking.
 
 **The name has to be computed everywhere it is shown**, including in the API,
 the CLI and any future MCP tool. That is a small ongoing cost, paid to keep the
@@ -114,6 +128,9 @@ Evidence that clients want to filter by the §64 name in a query, which a
 derived value cannot index. The answer would be a generated column rather than
 a stored one, but it would be worth writing down.
 
-A second peer actually running (Milestone 4), which turns the placement axis
-from modelled to proven and may show that `converging` needs more structure —
-how many peers, which ones — than a single enum value carries.
+A second peer actually running turned the placement axis from modelled to
+proven in Milestone 4, and `converging` held: the peers still missing are
+already carried alongside the enum, which is the structure that question needed.
+What would revisit it now is a third peer and §34's placement policies, where
+"converging" may need to distinguish "one of three, on purpose" from "one of
+three, and falling behind".

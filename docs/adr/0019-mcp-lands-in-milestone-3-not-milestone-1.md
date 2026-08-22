@@ -32,10 +32,16 @@ MCP (§73).
 
 ## What shipping it actually looked like (M3-14)
 
-Nine of §71's fourteen verbs shipped. Five are **absent rather than stubbed**:
+Nine of §71's fourteen verbs shipped. Five were **absent rather than stubbed**:
 `search_releases` and `acquire_release` (no search job or download client yet),
 `sync_peer` (one peer by design, ADR-0010), and `play_content` /
 `transfer_playback`.
+
+`sync_peer` shipped in Milestone 4 (M4-11), and its deferral is the one this
+mechanism was for: the reason recorded against it was a missing CAPABILITY, so
+when the second Full Peer arrived it was obvious what the deferral had been
+waiting on and that the wait was over. A deferral phrased as "unfinished" would
+have given nobody that signal.
 
 The last pair is the interesting one, because the capability for `play_content`
 arguably exists — Milestone 2 ships DIRECT playback. It is deferred anyway, and
