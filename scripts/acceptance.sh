@@ -281,7 +281,12 @@ assert_eq "$MARKER_PEER" "$PEER1" "the CAS root marker names the same peer as th
 KEYFILE="$WORK/data/peer_ed25519.key"
 if [[ -f "$KEYFILE" ]]; then pass "the private key is in the data directory"; else fail "no private key at $KEYFILE"; fi
 # %Lp on BSD/macOS stat, %a on GNU stat. Neither is portable, both are here.
-KEYMODE=$(stat -f '%Lp' "$KEYFILE" 2>/dev/null || stat -c '%a' "$KEYFILE")
+# GNU stat first, BSD second, and the order is load-bearing: on Linux `stat -f`
+# is a VALID flag meaning "filesystem status", so it SUCCEEDS and the `||` never
+# fires — capturing a block of filesystem info instead of a mode. BSD stat has
+# no `-c`, so it fails cleanly and falls through. Tried the other way round and
+# CI caught it.
+KEYMODE=$(stat -c '%a' "$KEYFILE" 2>/dev/null || stat -f '%Lp' "$KEYFILE")
 assert_eq "$KEYMODE" "600" "the private key is 0600"
 if [[ -e "$WORK/data/cas/peer_ed25519.key" ]]; then
   fail "the private key is inside the CAS root, which travels between hosts"
