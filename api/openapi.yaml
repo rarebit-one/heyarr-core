@@ -3707,7 +3707,20 @@ components:
         plan: { $ref: "#/components/schemas/PlaybackPlan" }
         content_url:
           type: string
-          description: The ordinary blob endpoint (ADR-0013).
+          description: |
+            The ordinary blob endpoint (ADR-0013), on the peer routing selected
+            (§32) — **never the controller**, which stays out of the content
+            data path. Absolute when the source is another peer, so the client
+            connects to that peer directly; relative when the source is this
+            node, which is the origin the client is already talking to
+            (ADR-0029).
+
+            Bounded by the credential below, which expires. It is deliberately
+            NOT scoped to one blob: per-blob scoping is a grant (§77) and §54's
+            lease shape is the real answer, arriving in M7 alongside degraded
+            authorisation. Revisit when the first peer class arrives whose
+            access is a strict subset of the canonical set (§6, §19) — the same
+            trigger ADR-0030 records.
         token:
           type: string
           description: |
@@ -3759,10 +3772,79 @@ components:
         content_url:
           type: string
           description: |
-            Where the bytes are, for a DIRECT plan. **Absent otherwise** — a
-            REMUX or TRANSCODE plan has no bytes to point at yet, and offering
-            the original would invite the client to play exactly what the plan
-            just said it cannot.
+            Where the bytes are, for a DIRECT plan — on the peer `routing`
+            selected, not on the controller. **Absent otherwise** — a REMUX or
+            TRANSCODE plan has no bytes to point at yet, and offering the
+            original would invite the client to play exactly what the plan just
+            said it cannot.
+        routing:
+          allOf: [{ $ref: "#/components/schemas/RoutingDecision" }]
+          description: |
+            Which peer this read was routed to, and why not the others (§32).
+            Present on every plan **including a refusal** — especially on a
+            refusal. "Unavailable" with nothing after it cannot tell a peer that
+            is down from a peer that never had the bytes, and those have
+            different fixes.
+
+    RoutingDecision:
+      type: object
+      description: |
+        The controller's source selection (§31, §32).
+
+        §32 lists six inputs. Three are implemented — site locality,
+        availability, health — and three are not: latency and bandwidth need
+        measurement infrastructure that does not exist, and transcode
+        capability is #112's unbuilt fleet advertisement. So this is an
+        **ordered preference that reports its reasons**, not a score with three
+        terms stubbed: same-site first, then this node, with latency appending
+        an element when it arrives rather than forcing every coefficient to be
+        re-decided at once.
+      properties:
+        peer_id:
+          type: string
+          description: The selected source. **Absent when routing refused.**
+        reason:
+          allOf: [{ $ref: "#/components/schemas/RoutingReason" }]
+          description: Why that peer won. Absent when routing refused.
+        rejected:
+          type: array
+          description: |
+            Every peer considered and not selected, each with **every** reason
+            it was not. A peer that is both unreachable and holds a corrupt
+            replica has two problems, and naming one of them produces a second
+            question after the first fix does not help.
+          items: { $ref: "#/components/schemas/RoutingRejection" }
+
+    RoutingRejection:
+      type: object
+      properties:
+        peer_id: { type: string }
+        name: { type: string }
+        site: { type: string }
+        reasons:
+          type: array
+          items: { $ref: "#/components/schemas/RoutingReason" }
+
+    RoutingReason:
+      type: object
+      properties:
+        code:
+          type: string
+          enum:
+            [site_local, cross_site_fallback,
+             no_replica, replica_not_usable, peer_unhealthy,
+             peer_has_no_endpoint, site_local_preferred, another_source_chosen]
+          description: |
+            Stable. An operator's runbook and a client's branch both key on it.
+
+            `site_local` and `cross_site_fallback` are selections; the rest are
+            rejections. `site_local_preferred` and `another_source_chosen` are
+            rejections **with no fault in them** — the peer was eligible and
+            lost the ordered preference, which is how an operator sees that the
+            fallback existed before it was needed.
+        detail:
+          type: string
+          description: Prose for a human. May change.
 
     PlanReason:
       type: object

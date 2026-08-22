@@ -9,8 +9,8 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/domain/playback"
+	"github.com/rarebit-one/heyarr-core/internal/domain/routing"
 	"github.com/rarebit-one/heyarr-core/internal/events"
-	"github.com/rarebit-one/heyarr-core/internal/media/probe"
 )
 
 // Direct playback (§68, §32).
@@ -96,14 +96,15 @@ func (a *API) startPlayback(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, "asset", err)
 		return
 	}
-	replicas, err := a.replicasFor(r, blobHash)
+	// Where the bytes come from (§32) before what to do with them (§68).
+	route, err := a.routeBlob(r, blobHash)
 	if err != nil {
 		a.fail(w, r, "replica", err)
 		return
 	}
 
-	plan := playback.Choose(media, device, replicas)
-	rendered := renderPlan(body.AssetID, body.DeviceID, plan, blobHash)
+	plan := playback.Choose(media, device, replicasOf(route))
+	rendered := renderPlan(body.AssetID, body.DeviceID, plan, route, blobHash)
 
 	// Everything that is not DIRECT is a refusal, and the refusal is as much
 	// the deliverable as the success.
@@ -118,7 +119,7 @@ func (a *API) startPlayback(w http.ResponseWriter, r *http.Request) {
 	// state that will never be cleaned up, and it would show up in "continue
 	// watching" for something nobody ever watched.
 	if !plan.Direct() {
-		httpapi.Fail(w, r, playbackRefusal(plan, rendered))
+		httpapi.Fail(w, r, playbackRefusal(plan, rendered, route))
 		return
 	}
 
@@ -178,7 +179,7 @@ func (a *API) startPlayback(w http.ResponseWriter, r *http.Request) {
 	a.write(w, r, http.StatusCreated, StartPlaybackResponse{
 		SessionID:  session.ID,
 		Plan:       rendered,
-		ContentURL: probe.BlobURL("", blobHash),
+		ContentURL: contentURLFor(route, blobHash),
 		Token:      token.Secret,
 		ExpiresAt:  expires,
 	})
@@ -197,10 +198,17 @@ func (a *API) startPlayback(w http.ResponseWriter, r *http.Request) {
 // would mean growing the shared Problem type and a custom marshaller so that
 // one endpoint could inline a structure another endpoint already returns. The
 // plan endpoint exists for exactly this answer.
-func playbackRefusal(plan playback.Plan, rendered PlanResponse) *problem.Problem {
+func playbackRefusal(plan playback.Plan, rendered PlanResponse, route routing.Decision) *problem.Problem {
 	if plan.Decision == playback.DecisionUnplayable {
-		return problem.Conflict("nothing holds these bytes; " +
-			"POST /api/v1/playback/plan for the full rationale")
+		// The routing refusal is inlined rather than pointed at, which is the
+		// one place this endpoint departs from "the plan endpoint has the full
+		// rationale" — deliberately. A codec refusal names a fact about the
+		// client's own device and the client can act on the summary; a routing
+		// refusal names facts about MACHINES, and the person who needs them is
+		// an operator reading a support ticket that quotes one error string.
+		// "Unavailable" and nothing else is the outage that takes three hours.
+		return problem.Conflict(route.Refusal() +
+			"; POST /api/v1/playback/plan for the full rationale")
 	}
 	detail := "this asset needs " + string(plan.Decision) +
 		" on this device, which Milestone 2 cannot serve"

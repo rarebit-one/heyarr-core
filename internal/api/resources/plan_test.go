@@ -15,11 +15,12 @@ type planReason struct {
 }
 
 type plan struct {
-	Decision   string       `json:"decision"`
-	Reasons    []planReason `json:"reasons"`
-	PeerID     string       `json:"peer_id"`
-	Remote     bool         `json:"remote"`
-	ContentURL string       `json:"content_url"`
+	Decision   string        `json:"decision"`
+	Reasons    []planReason  `json:"reasons"`
+	PeerID     string        `json:"peer_id"`
+	Remote     bool          `json:"remote"`
+	ContentURL string        `json:"content_url"`
+	Routing    *routingBlock `json:"routing"`
 }
 
 func (p plan) has(code string) bool {

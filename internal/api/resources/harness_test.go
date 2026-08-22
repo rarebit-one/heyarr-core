@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,7 +56,23 @@ type harness struct {
 	clock  *fixedClock
 	// ids hands out deterministic identifiers for created resources.
 	ids *idSequence
+	// requests counts every request the CONTROLLER served.
+	//
+	// It exists for one assertion that cannot be made any other way: §32 says
+	// the controller stays out of the content data path, and the only proof of
+	// that is that fetching the URL it handed back did not touch it. Asserting
+	// on the URL's shape proves what the controller SAID; this proves what
+	// happened. A test that asserted only the shape would pass on a build where
+	// nothing was measured.
+	requests *atomic.Int64
 }
+
+// controllerRequests is how many requests the controller has served.
+func (h *harness) controllerRequests() int64 { return h.requests.Load() }
+
+// resetControllerRequests zeroes the counter, so an assertion can be about one
+// fetch rather than about everything a test did before it.
+func (h *harness) resetControllerRequests() { h.requests.Store(0) }
 
 // idSequence produces stable, sortable identifiers so that a POST response can
 // be a golden file. Real ones are UUIDv7 (ADR-0017); these are the same shape.
@@ -196,12 +213,17 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		t.Fatal(err)
 	}
 
-	ts := httptest.NewServer(srv.Handler())
+	var requests atomic.Int64
+	handler := srv.Handler()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		handler.ServeHTTP(w, r)
+	}))
 	t.Cleanup(ts.Close)
 
 	return &harness{
 		t: t, db: db, server: srv, http: ts, store: store,
-		jobs: queue, events: eventLog, clock: clock, ids: ids,
+		jobs: queue, events: eventLog, clock: clock, ids: ids, requests: &requests,
 	}
 }
 

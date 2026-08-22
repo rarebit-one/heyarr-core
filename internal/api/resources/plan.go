@@ -10,7 +10,7 @@ import (
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/domain/playback"
-	"github.com/rarebit-one/heyarr-core/internal/media/probe"
+	"github.com/rarebit-one/heyarr-core/internal/domain/routing"
 )
 
 // The playback planner's API surface (§68).
@@ -42,6 +42,33 @@ type PlanResponse struct {
 	// original would be inviting the client to play what the plan just said it
 	// cannot.
 	ContentURL string `json:"content_url,omitempty"`
+	// Routing is why this peer, and why not the others (§32, M4-14).
+	//
+	// Present on every plan, including a refusal — especially on a refusal.
+	// "Unavailable" with nothing after it is the outage that takes three hours
+	// to diagnose, because it cannot tell a peer that is down from a peer that
+	// never had the bytes, and those have different fixes.
+	Routing *RoutingResponse `json:"routing,omitempty"`
+}
+
+// RoutingResponse is the source selection, rendered (§32).
+type RoutingResponse struct {
+	// PeerID is the selected source. Empty when routing refused.
+	PeerID string `json:"peer_id,omitempty"`
+	// Reason is why that peer won: site_local, or cross_site_fallback with the
+	// fallback recorded as one (§31).
+	Reason *PlanReason `json:"reason,omitempty"`
+	// Rejected is every peer considered and not selected, each with every
+	// reason it was not.
+	Rejected []RoutingRejection `json:"rejected"`
+}
+
+// RoutingRejection is one peer that was considered and passed over.
+type RoutingRejection struct {
+	PeerID  string       `json:"peer_id"`
+	Name    string       `json:"name"`
+	Site    string       `json:"site"`
+	Reasons []PlanReason `json:"reasons"`
 }
 
 // PlanReason is one contribution to a decision.
@@ -75,30 +102,56 @@ func (a *API) planPlayback(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, "asset", err)
 		return
 	}
-	replicas, err := a.replicasFor(r, blobHash)
+	route, err := a.routeBlob(r, blobHash)
 	if err != nil {
 		a.fail(w, r, "replica", err)
 		return
 	}
 
-	plan := playback.Choose(media, device, replicas)
-	a.write(w, r, http.StatusOK, renderPlan(body.AssetID, body.DeviceID, plan, blobHash))
+	plan := playback.Choose(media, device, replicasOf(route))
+	a.write(w, r, http.StatusOK, renderPlan(body.AssetID, body.DeviceID, plan, route, blobHash))
 }
 
 // renderPlan maps the domain's plan onto the wire type. It is shared with
 // POST /playback so the two endpoints cannot drift into describing one
 // decision two ways.
-func renderPlan(assetID, deviceID string, plan playback.Plan, blobHash string) PlanResponse {
+func renderPlan(assetID, deviceID string, plan playback.Plan, route routing.Decision, blobHash string) PlanResponse {
 	out := PlanResponse{
 		AssetID: assetID, DeviceID: deviceID,
 		Decision: string(plan.Decision), PeerID: plan.PeerID, Remote: plan.Remote,
 		Reasons: make([]PlanReason, 0, len(plan.Reasons)),
+		Routing: renderRouting(route),
 	}
 	for _, reason := range plan.Reasons {
 		out.Reasons = append(out.Reasons, PlanReason{Code: reason.Code, Detail: reason.Detail})
 	}
-	if plan.Direct() && blobHash != "" {
-		out.ContentURL = probe.BlobURL("", blobHash)
+	if plan.Direct() {
+		out.ContentURL = contentURLFor(route, blobHash)
+	}
+	return out
+}
+
+// renderRouting maps the routing decision onto the wire.
+//
+// Rejected is never nil, so a client that iterates it does not have to
+// distinguish "no peers were rejected" from "the field is missing" — the same
+// reason Reasons is made rather than declared.
+func renderRouting(route routing.Decision) *RoutingResponse {
+	out := &RoutingResponse{Rejected: make([]RoutingRejection, 0, len(route.Rejected))}
+	if route.Found {
+		out.PeerID = route.Source.PeerID
+		out.Reason = &PlanReason{Code: route.Reason.Code, Detail: route.Reason.Detail}
+	}
+	for _, r := range route.Rejected {
+		rejection := RoutingRejection{
+			PeerID: r.PeerID, Name: r.Name, Site: r.Site,
+			Reasons: make([]PlanReason, 0, len(r.Reasons)),
+		}
+		for _, reason := range r.Reasons {
+			rejection.Reasons = append(rejection.Reasons,
+				PlanReason{Code: reason.Code, Detail: reason.Detail})
+		}
+		out.Rejected = append(out.Rejected, rejection)
 	}
 	return out
 }
@@ -202,10 +255,11 @@ func (a *API) mediaProfile(r *http.Request, assetID string) (playback.MediaProfi
 
 // replicasFor lists the peers holding a blob, marking which are local.
 //
-// "Local" is same-site, per §31. With exactly one peer (ADR-0010) that is
-// always this node, so the remote branch is expressible and untested against
-// reality until Milestone 4 — which is stated on playback.Plan.Remote too,
-// because a caveat only in the domain is a caveat the API layer will forget.
+// "Local" is same-site, per §31. It answers only "do usable bytes exist", which
+// is the question a LOCAL job asks: POST /playback/remux enqueues work against
+// this node's own CAS and does not route anywhere, so it needs existence and
+// not a source. Read routing is routeBlob, which applies §32's health and
+// locality preference and reports why every other peer lost.
 func (a *API) replicasFor(r *http.Request, blobHash string) ([]playback.Replica, error) {
 	if blobHash == "" {
 		return nil, nil
