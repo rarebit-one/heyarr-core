@@ -307,6 +307,11 @@ func (a *API) Mount(r chi.Router) {
 		r.Get("/peers/{id}", a.getPeer)
 		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/peers", a.createPeer)
 		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Delete("/peers/{id}", a.deletePeer)
+		// Convergence on demand (§19, §57, M4-08). `write`, not `admin`: it
+		// changes nothing about who is trusted, it only asks the fabric to
+		// notice now what the beat would notice within five minutes.
+		r.With(httpapi.RequireScope(auth.ScopeWrite)).
+			Post("/peers/{id}/reconcile", a.reconcilePeer)
 	}
 }
 

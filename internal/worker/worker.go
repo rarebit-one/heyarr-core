@@ -16,6 +16,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
+	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
 	"github.com/rarebit-one/heyarr-core/internal/downloads"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/indexers"
@@ -223,6 +224,24 @@ func (w *Worker) Run(ctx context.Context) error {
 		Handler:       UpgradeScanHandler(cat, w.log),
 		MaxConcurrent: 1,
 	})
+	// Peer convergence (§19, §57, M4-08). §19's desired blob set against what
+	// the peers report holding, emitting replicate_blob for the difference.
+	//
+	// One at a time, for the reason the two sweeps above are: two concurrent
+	// cycles would each read the fabric while the other enqueued against it,
+	// and the loser would spend the pass deciding against a picture that had
+	// already moved. The dedupe key keeps the RESULT correct either way — it
+	// is a unique index, not a convention — but the second cycle would still
+	// be wasted work whose counts described a fabric nobody saw.
+	//
+	// No RequiredCapability, following the precedent above. It needs nothing
+	// but the database: no toolchain, no indexer, no download client, and not
+	// even a reachable peer — the diff is against the last inventory a peer
+	// reported, not against a live probe. A fully degraded node still knows
+	// what it is missing, which is exactly the node whose operator most needs
+	// to be told.
+	registry.Register(replication.ReconcilePeerJobType,
+		ReconcilePeerRegistration(cat, queue, w.log))
 
 	// The provider registry, built from configuration (§59, M3-07).
 	//

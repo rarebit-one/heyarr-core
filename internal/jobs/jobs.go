@@ -290,6 +290,49 @@ func (q *Queue) Enqueue(ctx context.Context, opts EnqueueOptions) (Job, error) {
 	return job, nil
 }
 
+// LiveDedupeKeys returns the dedupe keys of every live — pending or leased —
+// job of one type.
+//
+// # Why a reader needs this at all, when the unique index already exists
+//
+// It does not need it for correctness. The partial-unique index over live
+// states (ADR-0008) is what makes a re-enqueue harmless, and that stays the
+// guarantee: a caller that skipped this and simply enqueued again would create
+// nothing.
+//
+// It needs it for BOOKKEEPING, and specifically for BOUNDED work. A producer
+// that emits at most N jobs per cycle has to know which of its candidates are
+// already in flight, or it re-offers the same first N every cycle and the
+// remainder is never reached — the bound would turn a converging system into
+// one that makes progress only up to its own limit. Counting a dedupe hit as
+// "enqueued" has the same effect and is harder to see.
+//
+// Live only. A succeeded job's key is free by design — that is what lets the
+// same work be requested again once it is done, and it is why the index is
+// partial rather than total.
+func (q *Queue) LiveDedupeKeys(ctx context.Context, jobType string) (map[string]struct{}, error) {
+	rows, err := q.reader.QueryContext(ctx,
+		`SELECT dedupe_key FROM jobs
+		  WHERE type = ? AND dedupe_key IS NOT NULL AND state IN ('pending','leased')`, jobType)
+	if err != nil {
+		return nil, fmt.Errorf("jobs: reading the live %s keys: %w", jobType, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("jobs: reading the live %s keys: %w", jobType, err)
+		}
+		out[key] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("jobs: reading the live %s keys: %w", jobType, err)
+	}
+	return out, nil
+}
+
 func (q *Queue) findLiveByDedupeKey(ctx context.Context, key string) (Job, error) {
 	row := q.reader.QueryRowContext(ctx, `SELECT `+claimableSelectCols+`
 		FROM jobs WHERE dedupe_key = ? AND state IN ('pending','leased')`, key)
