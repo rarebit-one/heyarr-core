@@ -116,6 +116,26 @@ type Store interface {
 	// resulting descriptor. Interrupting it must leave nothing addressable.
 	Put(ctx context.Context, r io.Reader) (Descriptor, error)
 
+	// PutExpecting streams r into the store, verifying as it goes that the
+	// bytes hash to expected, and publishes them only if they do.
+	//
+	// It is Put with the digest known in advance, and the difference is the
+	// whole of invariant 1 on the receiving side. Put hashes what it is given
+	// and names the result; a destination pulling a replica already knows what
+	// it asked for, and the only question is whether what arrived is it. A
+	// destination that called Put and compared afterwards would have published
+	// the bytes before it looked (§21, ADR-0030).
+	//
+	// Verification is streaming: memory stays flat in blob size, because a
+	// 20 GB remux is a normal case (ADR-0013).
+	//
+	// Bytes that do not match are moved to quarantine/ and reported as
+	// *Corruption, never discarded — a source that sent wrong bytes is
+	// evidence worth keeping (ADR-0018). Nothing addressable is left behind
+	// either way: a transfer that stops half-way leaves a reapable staging
+	// file and no blob.
+	PutExpecting(ctx context.Context, r io.Reader, expected hashing.Hash) (Descriptor, error)
+
 	// Link materialises the file at srcPath into the store using mode,
 	// degrading down the ladder when the filesystem cannot oblige.
 	Link(ctx context.Context, srcPath string, mode Materialisation) (Descriptor, error)

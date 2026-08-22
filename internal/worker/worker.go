@@ -242,6 +242,32 @@ func (w *Worker) Run(ctx context.Context) error {
 	// to be told.
 	registry.Register(replication.ReconcilePeerJobType,
 		ReconcilePeerRegistration(cat, queue, w.log))
+	// The transfer itself (§21, §32, ADR-0030, M4-09). The destination pulls:
+	// this node opens a pinned mTLS connection to a peer that holds the bytes,
+	// reads the ordinary blob endpoint, and hashes what arrives against what it
+	// asked for. The controller is not on that hop and there is no code path
+	// here that would put it there.
+	//
+	// # Why the puller is built lazily
+	//
+	// It needs this node's PRIVATE key, and the roles start concurrently
+	// (ADR-0002): a worker started before any controller has ever run is
+	// legitimately alive on a data directory that has no key in it yet. Building
+	// it at startup would turn that ordinary state into a startup failure, and
+	// building it once per job would sign a fresh certificate for every
+	// transfer. So it is built on first use and kept — and a node that still has
+	// no identity fails the JOB, with a message that names the missing key,
+	// rather than refusing to start at all.
+	//
+	// MaxConcurrent lives in the registration, where its argument can be read
+	// next to the number.
+	transferPuller := lazyPuller(w.cfg.DataDir, peerID, store, w.log)
+	registry.Register(replication.ReplicateBlobJobType, ReplicateBlobRegistration(TransferDeps{
+		Catalog: cat,
+		Store:   store,
+		Puller:  transferPuller,
+		Logger:  w.log,
+	}))
 
 	// The provider registry, built from configuration (§59, M3-07).
 	//
