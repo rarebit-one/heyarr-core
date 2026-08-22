@@ -344,6 +344,10 @@ func TestASecondCycleWithNothingChangedCreatesNoSecondJob(t *testing.T) {
 	h.reports(t, h.self, blobOne)
 
 	first := h.cycle(t, "", 0)
+	if first.Peers != 2 {
+		t.Fatalf("the cycle considered %d peers, want 2; a fabric with one peer would make "+
+			"everything below true for the wrong reason", first.Peers)
+	}
 	if first.Enqueued == 0 {
 		t.Fatal("the FIRST cycle enqueued nothing; a reconciler that never emits work " +
 			"would pass the second-cycle assertion below trivially")
@@ -389,9 +393,20 @@ func TestConvergenceIsMonotonicAcrossCycles(t *testing.T) {
 	h.managed(t, blobTwo)
 	h.reports(t, h.self, blobOne, blobTwo)
 
-	var work []int
+	// TWO series, because the diff shrinking is not on its own evidence of
+	// convergence. A reconciler that re-enqueued the same transfer every cycle
+	// would still see its DIFF fall as inventories reported the bytes landing
+	// — the diff is computed from the fabric, not from what was enqueued — so
+	// a test watching only that passes on a reconciler that loops. The queue
+	// depth is what catches it: a converging reconciler stops adding rows.
+	var work, queued []int
 	first := h.cycle(t, "", 0)
+	if first.Peers != 2 {
+		t.Fatalf("the cycle considered %d peers, want 2; the series below is about two "+
+			"Full Peers converging on each other", first.Peers)
+	}
 	work = append(work, first.UnderReplicated)
+	queued = append(queued, len(h.transfers(t)))
 	if first.UnderReplicated == 0 || first.Enqueued == 0 {
 		t.Fatalf("the first cycle found %d gaps and enqueued %d; the series below "+
 			"proves nothing unless it starts non-zero", first.UnderReplicated, first.Enqueued)
@@ -400,17 +415,27 @@ func TestConvergenceIsMonotonicAcrossCycles(t *testing.T) {
 	// The second peer takes one of the two blobs and re-reports its disk.
 	h.reports(t, h.other, blobOne)
 	work = append(work, h.cycle(t, "", 0).UnderReplicated)
+	queued = append(queued, len(h.transfers(t)))
 
 	// Then the other.
 	h.reports(t, h.other, blobOne, blobTwo)
 	last := h.cycle(t, "", 0)
 	work = append(work, last.UnderReplicated)
+	queued = append(queued, len(h.transfers(t)))
 
 	for i := 1; i < len(work); i++ {
 		if work[i] > work[i-1] {
 			t.Fatalf("the work count rose across cycles: %v — a reconciler whose backlog "+
 				"grows as transfers land is diverging", work)
 		}
+		if queued[i] > queued[i-1] {
+			t.Fatalf("the queue grew across cycles: %v (gaps were %v) — the transfers were "+
+				"already queued, so a reconciler still adding rows is looping, not converging",
+				queued, work)
+		}
+	}
+	if queued[0] == 0 {
+		t.Fatalf("the first cycle queued nothing; the queue-depth series %v proves nothing", queued)
 	}
 	if work[0] <= 0 {
 		t.Fatalf("the work count series %v does not start from a non-zero value", work)
