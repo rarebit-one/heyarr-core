@@ -586,6 +586,26 @@ api_all() { # path jq-filter
   done
 }
 
+# Waits until the provider health beat (#164) has recorded an observation for a
+# named provider, and prints that provider's entry.
+#
+# Every assertion about provider health downstream of this is an assertion
+# about something that WAS ACTUALLY OBSERVED. Before the beat existed, nothing
+# ever wrote checked_at, so those assertions held unfalsifiably — which is
+# worse than failing, because they read as coverage. Waiting here is what makes
+# them mean something; the wait itself is bounded, and a beat that never fires
+# fails the caller rather than hanging this script.
+wait_for_health_check() { # provider-name
+  local name=$1 waited=0 entry
+  while (( waited < 300 )); do
+    entry=$(jq -c --arg n "$name" '[.providers[] | select(.name == $n)] | .[0]' \
+      <<<"$(api /api/v1/providers)")
+    [[ "$(jq -r '.checked_at // "never"' <<<"$entry")" != "never" ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  printf '%s' "$entry"
+}
+
 # Starts heyarr, waits for readiness and for the scan to finish ingesting, and
 # leaves it running. Waits for CONDITIONS, never for a duration: a fixed wait is
 # a bet on machine speed and this repo has lost that bet four times.
@@ -1423,19 +1443,25 @@ YAML
   assert_eq "$(jq -r '[.providers[] | select(.name == "acceptance-disabled")] | .[0].capabilities | length' \
     <<<"$prov_json")" "0" "and reports no capabilities, so it is never routed to"
 
-  # Health is OBSERVED, not asserted. Before a check has run, a provider is
-  # never-checked rather than unhealthy — "nobody has looked" and "we looked and
-  # it is broken" lead to different actions.
-  local prov_checked
-  prov_checked=$(jq -r '[.providers[] | select(.name == "acceptance-indexer")] | .[0].checked_at // "never"' \
-    <<<"$prov_json")
-  if [[ "$prov_checked" == "never" ]]; then
-    pass "an unchecked provider says so rather than claiming to be unhealthy"
+  # Health is OBSERVED, and since #164 there is a beat that produces the
+  # observation, so this WAITS for one rather than branching on whether the
+  # race was won. The branch it replaces read "if a check has run, assert;
+  # otherwise pass" — which passed on both outcomes, and passed for the whole
+  # of M3 on the outcome where no check could ever run.
+  #
+  # The never-checked rendering is still asserted, deterministically, in the
+  # provider health beat section: there a controller is started with no worker
+  # in existence, so nothing can claim the pass.
+  local prov_indexer
+  prov_indexer=$(wait_for_health_check acceptance-indexer)
+  if [[ "$(jq -r '.checked_at // "never"' <<<"$prov_indexer")" == "never" ]]; then
+    fail "no health check ran on the full node — nothing is enqueueing the pass"
   else
-    # The health job may have run already, which is also correct — assert on
-    # the invariant rather than on the race.
-    assert_eq "$(jq -r '[.providers[] | select(.name == "acceptance-indexer")] | .[0].healthy' \
-      <<<"$prov_json")" "true" "a checked fake provider is healthy"
+    pass "the health beat checked the configured providers on a running node"
+    assert_eq "$(jq -r '.healthy' <<<"$prov_indexer")" "true" \
+      "a checked fake provider is healthy"
+    assert_eq "$(jq -r '.version' <<<"$prov_indexer")" "fake" \
+      "and reports the version its check obtained, rather than nothing at all"
   fi
 
   # No credential reaches the response. Asserted by searching the BODY, not by
@@ -1579,7 +1605,10 @@ YAML
   # desired-state and remux sections are.
   local dl_json dl_entry
   dl_json=$(api /api/v1/providers)
-  dl_entry=$(jq -c '[.providers[] | select(.name == "acceptance-downloads")] | .[0]' <<<"$dl_json")
+  # Waited for, not sampled: since #164 a beat produces the observation, and an
+  # assertion about health made before any check has run is an assertion about
+  # a value nothing has written. See wait_for_health_check.
+  dl_entry=$(wait_for_health_check acceptance-downloads)
 
   assert_eq "$(jq -r '. != null' <<<"$dl_entry")" "true" \
     "a configured download client is reported"
@@ -1598,28 +1627,23 @@ YAML
   assert_eq "$(api /api/v1/works | jq -r '.items | length > 0')" "true" \
     "and still answers for its library"
 
-  # Health is OBSERVED. Whether the check has run yet depends on the worker's
-  # timing, so both states are legitimate — what must NOT happen is a healthy
-  # report for something that is not listening.
-  local dl_health
-  dl_health=$(jq -r '.healthy' <<<"$dl_entry")
-  if [[ "$dl_health" == "true" ]]; then
-    fail "an unreachable download client reported itself healthy"
+  # Health is OBSERVED, and the observation has now been waited for — so this
+  # is a claim about what a check found rather than about a field nothing
+  # wrote. What must NOT happen is a healthy report for something that is not
+  # listening.
+  if [[ "$(jq -r '.checked_at // "never"' <<<"$dl_entry")" == "never" ]]; then
+    fail "no health check ever ran on the download client — nothing enqueues the pass"
   else
-    pass "an unreachable download client is not reported as healthy"
+    pass "the health beat checked the download client too"
   fi
+  assert_eq "$(jq -r '.healthy' <<<"$dl_entry")" "false" \
+    "an unreachable download client is not reported as healthy"
 
   # A refusal that names the credential rather than the network, and vice
   # versa, is the difference between an operator looking at a password and
-  # looking at a firewall. Only asserted once a check has actually run.
-  local dl_checked
-  dl_checked=$(jq -r '.checked_at // "never"' <<<"$dl_entry")
-  if [[ "$dl_checked" == "never" ]]; then
-    pass "an unchecked download client says so rather than claiming to be unhealthy"
-  else
-    assert_not_contains "$(jq -r '.detail' <<<"$dl_entry")" "credential" \
-      "an unreachable client is not reported as a credential problem"
-  fi
+  # looking at a firewall.
+  assert_not_contains "$(jq -r '.detail' <<<"$dl_entry")" "credential" \
+    "an unreachable client is not reported as a credential problem"
 
   # No credential field reaches the response, for a download client as for an
   # indexer. Asserted on the whole document rather than one entry, because the
@@ -1633,7 +1657,7 @@ YAML
   # READS state and writes none — no catalog count moves, so its position is
   # not load-bearing the way the desired-state sections are.
   local tz_entry
-  tz_entry=$(jq -c '[.providers[] | select(.name == "acceptance-torznab")] | .[0]' <<<"$dl_json")
+  tz_entry=$(wait_for_health_check acceptance-torznab)
 
   assert_eq "$(jq -r '. != null' <<<"$tz_entry")" "true" \
     "a configured torznab indexer is reported"
@@ -1660,11 +1684,18 @@ YAML
   # Health is OBSERVED. What must NOT happen is a healthy report for something
   # that is not listening — that is the report that sends work to a provider
   # which then fails, which ADR-0025 says is worse than advertising nothing.
-  if [[ "$(jq -r '.healthy' <<<"$tz_entry")" == "true" ]]; then
-    fail "an unreachable indexer reported itself healthy"
+  #
+  # This assertion predates #164 and was VACUOUS for the whole of M3: nothing
+  # enqueued the health pass, so `healthy` was the never-checked default and no
+  # change to the indexer client could have broken it. checked_at is asserted
+  # first, so it cannot go back to being vacuous silently.
+  if [[ "$(jq -r '.checked_at // "never"' <<<"$tz_entry")" == "never" ]]; then
+    fail "no health check ever ran on the torznab indexer — nothing enqueues the pass"
   else
-    pass "an unreachable indexer is not reported as healthy"
+    pass "the health beat checked the torznab indexer"
   fi
+  assert_eq "$(jq -r '.healthy' <<<"$tz_entry")" "false" \
+    "an unreachable indexer is not reported as healthy"
 
   # The API key is in the config file three lines above. It must not be in the
   # response, and the assertion is on the VALUE rather than the field name so
@@ -2821,8 +2852,11 @@ YAML
     "and reports that it resolved no media toolchain"
   assert_eq "$(jq -r '.media | length' <<<"$bare_system")" "2" \
     "naming both tools rather than omitting them, so the degradation is legible"
+  # `.providers`, not `.items`. This response has no `items` field, so
+  # `null | length` was 0 and the assertion passed for ANY number of configured
+  # providers — the same class of vacuity #164 is about, found next door to it.
   assert_eq "$(curl -sS --unix-socket "$bare_sock" http://heyarr/api/v1/providers \
-    | jq -r '.items | length')" "0" \
+    | jq -r '.providers | length')" "0" \
     "and that it has no providers configured at all"
 
   # THE POINT: everything that does not need an external thing still works.
@@ -3215,6 +3249,212 @@ YAML
   assert_eq "$after_gc" "$before_gc" "gc without flags changes nothing"
 }
 
+# The provider health beat (#164) — the assertions that were vacuous until it
+# existed.
+#
+# # Why this is its own node
+#
+# The claim being made is EMPTY, THEN POPULATED, and the emptiness half has to
+# be deterministic or it asserts nothing. On the full demo node the health beat
+# has been running since before the first API call, so "checked_at is absent"
+# there is a race that is already lost. Here the node is started as a
+# CONTROLLER ALONE first: the controller enqueues the pass and there is no
+# worker in existence to claim it, so "never checked" is a fact about the
+# system rather than a fact about how fast the machine is.
+#
+# It configures no fixture library and wants nothing, so it creates no Work, no
+# asset and no blob — nothing here can shift a catalogue count asserted
+# elsewhere. It costs three short process starts.
+#
+# # What was wrong before
+#
+# providers.HealthJobType was declared and its handler was registered at
+# internal/worker/worker.go and NOTHING ENQUEUED IT. Every assertion anywhere
+# that read provider health was therefore reading a value nothing ever wrote —
+# unfalsifiable, and reading as coverage. It was found by a sabotage to the
+# indexer client's error path failing to fire.
+provider_health_beat_demo() {
+  local root="$WORK/healthbeat" data lib sock
+  data="$root/data"; lib="$root/library"; sock="$data/heyarr.sock"
+  mkdir -p "$data" "$lib"
+
+  cat > "$WORK/healthbeat.yaml" <<YAML
+data_dir: $data
+peer:
+  name: acceptance-health
+  site: test
+log:
+  level: info
+  format: json
+# Loopback socket, no auth, for the same reason the bare node above does it:
+# this section is about a beat, not about tokens, and a fixed TCP port would
+# make two runs on one machine collide.
+http:
+  addr: ""
+  unix_socket: $sock
+  auth:
+    enabled: false
+libraries:
+  - name: films
+    content_type: movie
+    roots: ["$lib"]
+providers:
+  # A fake that answers, so "checked and healthy" is reachable, and a REAL
+  # torznab client pointed at port 9 — discard, reserved, refusing connections
+  # everywhere — so "checked and unreachable" is reachable too. ADR-0026: a
+  # real indexer can never run here.
+  - name: health-indexer
+    type: fake
+    capabilities: [indexer]
+  - name: health-torznab
+    type: torznab
+    endpoint: http://127.0.0.1:9/api
+    api_key: not-a-real-key-and-nothing-will-read-it
+YAML
+
+  hb_api() { curl -sS --unix-socket "$sock" "http://heyarr$1"; }
+  hb_jobs() { "$BIN" --config "$WORK/healthbeat.yaml" jobs list --type provider_health --json; }
+  hb_entry() { jq -c --arg n "$1" '[.providers[] | select(.name == $n)] | .[0]' <<<"$(hb_api /api/v1/providers)"; }
+  hb_wait_ready() {
+    local waited=0
+    while (( waited < 600 )); do
+      curl -sf --unix-socket "$sock" http://heyarr/readyz >/dev/null 2>&1 && return 0
+      sleep 0.1; waited=$(( waited + 1 ))
+    done
+    return 1
+  }
+
+  # ---- 1. A controller alone: the pass is SCHEDULED and nothing has run it --
+  local hb_ctrl hb_worker
+  "$BIN" --config "$WORK/healthbeat.yaml" controller >"$root/controller.log" 2>&1 &
+  hb_ctrl=$!
+  if ! hb_wait_ready; then
+    fail "the health-beat node never became ready"; kill -KILL "$hb_ctrl" 2>/dev/null || true; return 1
+  fi
+
+  # THE EMPTY HALF, and it is deterministic: no worker process exists.
+  assert_eq "$(jq -r '.checked_at // "never"' <<<"$(hb_entry health-torznab)")" "never" \
+    "before any worker has run, an indexer is never-checked rather than unhealthy"
+  assert_eq "$(jq -r '.checked_at // "never"' <<<"$(hb_entry health-indexer)")" "never" \
+    "and so is one that would answer"
+
+  # THE ASSERTION #164 EXISTS FOR. A job, pending, of the right type — the row
+  # that did not exist on any node for the whole of M3. Asserted through the
+  # operator's own view of the queue rather than by reading SQLite, because
+  # that is the view somebody debugging "why is nothing being checked" has.
+  assert_eq "$(hb_jobs | jq 'length')" "1" \
+    "a controller enqueues exactly one provider health pass at startup"
+  assert_eq "$(hb_jobs | jq -r '.[0].state')" "pending" \
+    "and it is pending, waiting for a worker rather than already spent"
+
+  # ---- 2. A worker arrives: the pass runs and checked_at is populated -------
+  "$BIN" --config "$WORK/healthbeat.yaml" worker >"$root/worker.log" 2>&1 &
+  hb_worker=$!
+
+  # Waited for on a CONDITION. This poll is not dead time: the thing it waits
+  # for now arrives, which is the whole of this issue.
+  local waited=0 hb_tz hb_fake
+  while (( waited < 300 )); do
+    hb_tz=$(hb_entry health-torznab)
+    [[ "$(jq -r '.checked_at // "never"' <<<"$hb_tz")" != "never" ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if [[ "$(jq -r '.checked_at // "never"' <<<"$hb_tz")" == "never" ]]; then
+    fail "checked_at never became populated — the health pass was enqueued and never ran"
+    kill -KILL "$hb_ctrl" "$hb_worker" 2>/dev/null || true; return 1
+  fi
+  pass "a worker claims the beat's job and checked_at becomes populated"
+
+  hb_fake=$(hb_entry health-indexer)
+  assert_eq "$(jq -r '.healthy' <<<"$hb_fake")" "true" \
+    "a provider that answers is reported healthy, having actually been asked"
+  assert_eq "$(jq -r '.version' <<<"$hb_fake")" "fake" \
+    "and reports the version its handshake returned"
+
+  # VACUOUS ASSERTION 1, now falsifiable: it is made against a check that has
+  # demonstrably run, on this node, in this run.
+  assert_eq "$(jq -r '.healthy' <<<"$hb_tz")" "false" \
+    "an unreachable indexer is not reported as healthy"
+  # ...and the refusal names the network rather than the credential. The API
+  # key three lines up in this file is real-looking and wrong; saying "the key
+  # was rejected" for a connection that was never made is the report that
+  # sends an operator to the wrong page.
+  assert_eq "$(jq -r '.detail' <<<"$hb_tz")" "unreachable" \
+    "and says so as a network failure rather than a credential one"
+  assert_not_contains "$(jq -r '.detail' <<<"$hb_tz")" "not implemented" \
+    "the torznab kind is a real client rather than a placeholder"
+
+  # VACUOUS ASSERTION 2 (#131), now falsifiable: THE CACHE MUST NOT
+  # MANUFACTURE AN OBSERVATION. Check() refreshes the capabilities cache and a
+  # capabilities document is where the reported version comes from. This
+  # endpoint refuses connections and has never produced one, so a version
+  # appearing here would mean a remembered document passed off as something
+  # just observed.
+  #
+  # assert_eq on "absent", not assert_contains: version is enum-like, and a
+  # substring match on an absent field matches nothing and passes.
+  assert_eq "$(jq -r '.version // "absent"' <<<"$hb_tz")" "absent" \
+    "an indexer that has never handshaked reports no version"
+
+  # ---- 3. A second pass, from the beat, on a restart -----------------------
+  #
+  # Procured by restarting the CONTROLLER rather than by waiting out the beat
+  # interval: the interval is a minute (see internal/controller/healthbeat.go
+  # for why a minute) and this script has a budget. A restart is a real beat
+  # enqueue on the real path — startProviderHealth enqueues at startup — and it
+  # asserts the thing a fixed sleep could not: that the dedupe key which makes
+  # two roles produce one check has not quietly turned the beat into a
+  # one-shot.
+  local hb_first
+  hb_first=$(jq -r '.checked_at' <<<"$hb_tz")
+  kill -TERM "$hb_ctrl" 2>/dev/null || true; wait "$hb_ctrl" 2>/dev/null || true
+  "$BIN" --config "$WORK/healthbeat.yaml" controller >"$root/controller2.log" 2>&1 &
+  hb_ctrl=$!
+  if ! hb_wait_ready; then
+    fail "the health-beat node did not come back"; kill -KILL "$hb_ctrl" "$hb_worker" 2>/dev/null || true; return 1
+  fi
+
+  # The two halves are asserted SEPARATELY and in this order, because they
+  # fail for completely different reasons and a single assertion over both
+  # would report whichever one it noticed. "A second job exists" is a claim
+  # about the beat; "the observation moved" is a claim about the check.
+  waited=0
+  while (( waited < 300 )); do
+    [[ "$(hb_jobs | jq 'length')" == "2" ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  assert_eq "$(hb_jobs | jq 'length')" "2" \
+    "the beat enqueues a second pass on a later start, rather than being a one-shot"
+
+  waited=0
+  local hb_second
+  while (( waited < 300 )); do
+    hb_second=$(hb_entry health-torznab)
+    [[ "$(jq -r '.checked_at' <<<"$hb_second")" != "$hb_first" ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if [[ "$(jq -r '.checked_at' <<<"$hb_second")" == "$hb_first" ]]; then
+    fail "the second pass reported the first pass's observation — a replay, not a check"
+    kill -KILL "$hb_ctrl" "$hb_worker" 2>/dev/null || true; return 1
+  fi
+  pass "and the second pass records a new observation rather than the first one again"
+
+  # VACUOUS ASSERTION 3 (#131), now falsifiable: A SECOND CHECK IS A SECOND
+  # OBSERVATION, NOT A REPLAY OF THE FIRST. Decision 3 in
+  # internal/indexers/client.go makes the health check WRITE the capabilities
+  # cache and never read it. If that inverted, an indexer that answered once
+  # would stay healthy for the TTL after it stopped answering — and here,
+  # where it has never answered at all, the report must be false on every pass
+  # rather than only on the first.
+  assert_eq "$(jq -r '.healthy' <<<"$hb_second")" "false" \
+    "a second health pass observes the indexer again rather than replaying the first"
+  assert_eq "$(jq -r '.version // "absent"' <<<"$hb_second")" "absent" \
+    "and still reports no version on the second pass"
+
+  kill -TERM "$hb_ctrl" "$hb_worker" 2>/dev/null || true
+  wait "$hb_ctrl" "$hb_worker" 2>/dev/null || true
+}
+
 # ADR-0002: the roles must be independently runnable as OS processes, and the
 # only way that stays true is running the real checks in both configurations.
 # Otherwise one of the two is never exercised and the split is decorative.
@@ -3313,6 +3553,8 @@ elif [[ ! -x "$GEN" ]]; then
 else
   full_library_demo
   stop_full
+  note "the provider health beat (#164)"
+  provider_health_beat_demo
   note "split-process mode, end to end (ADR-0002)"
   split_process_demo
   stop_full

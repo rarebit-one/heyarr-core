@@ -218,6 +218,11 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 	startReconciliation(ctx, reconcileQueue, c.log)
 	startUpgradeScan(ctx, reconcileQueue, c.log)
+	// The provider health beat (#164). Same queue and the same serving
+	// context: it is ongoing work and it must stop when the controller does.
+	// See healthbeat.go for why a minute, why it runs on a degraded node, and
+	// why its interval is also the capabilities cache's refresh rate.
+	startProviderHealth(ctx, reconcileQueue, c.log)
 
 	// "started" is logged only after every listener is bound. A start line
 	// printed before the socket exists is a lie that costs someone an
