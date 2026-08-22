@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
@@ -43,6 +44,29 @@ const baseBackoff = 2 * time.Second
 // misdirected endpoint streaming something unbounded, not a limit any real
 // response should approach.
 const maxBodyBytes = 32 << 20
+
+// ---------------------------------------------------------------------------
+// The capabilities cache (#131). Four decisions, recorded here because every
+// one of them is the difference between a saved round trip and an indexer
+// that is wrong for a quarter of an hour.
+// ---------------------------------------------------------------------------
+
+// capsTTL is how long a capabilities document is believed without asking again.
+//
+// DECISION 1 — TEN MINUTES, and the unit is the whole argument. An indexer's
+// capabilities change by HUMAN ACTION: somebody ticks "movie search" in a web
+// UI, adds a tracker, or swaps Jackett for Prowlarr. Nothing changes them on a
+// timescale of seconds, so seconds would spend requests to observe nothing;
+// and nothing leaves them changed for a day without a person knowing they
+// changed something, so hours would mean an operator who has just fixed their
+// indexer watching Heyarr refuse for the rest of the afternoon.
+//
+// Ten minutes is the longest an operator should have to wonder, and it is a
+// BACKSTOP rather than the primary freshness mechanism: the health job runs
+// continuously and refreshes this cache every time it checks (see Check), so
+// on a running node the entry is almost always fresher than the TTL requires.
+// The TTL is what covers a node whose health job has not come round yet.
+const capsTTL = 10 * time.Minute
 
 // Options configure a Torznab client.
 type Options struct {
@@ -81,6 +105,36 @@ type Client struct {
 	http     *http.Client
 	now      func() time.Time
 	sleep    func(context.Context, time.Duration) error
+
+	// capsMu guards the cached handshake below.
+	//
+	// A mutex rather than an atomic value because the document and the time it
+	// was obtained are ONE fact and must be read as one: a reader that saw a
+	// new document with an old timestamp would refresh something that had just
+	// been refreshed, and one that saw an old document with a new timestamp
+	// would trust it for another full TTL.
+	//
+	// It is NOT held across the HTTP call. Two searches starting together may
+	// therefore both handshake once — which costs one extra request in a rare
+	// race, where holding the lock would make every search on this indexer
+	// queue behind whichever one is currently waiting on a slow tracker.
+	capsMu sync.Mutex
+	// capsDoc is the last capabilities document this client obtained, and
+	// capsAt is when it obtained it. Nil means nothing has ever handshaked.
+	//
+	// DECISION 2 — THE CACHE LIVES PER CLIENT, IN MEMORY, AND NOWHERE ELSE.
+	// Said here rather than left for the next reader to work out from the
+	// absence of anything else: a Client is built per configured provider per
+	// process, so the controller and the worker each hold their own, and
+	// `heyarr all` holds two of them. That is deliberate rather than tolerated
+	// — sharing it would mean a cache in the database, which is a row two
+	// roles write and neither owns, to save one small request against a
+	// service that is already proxying trackers. The visible consequence is
+	// that the two roles can briefly disagree about what an indexer can do,
+	// bounded by capsTTL, and every use of that disagreement is a search that
+	// is refused rather than a search that is wrong.
+	capsDoc *caps
+	capsAt  time.Time
 }
 
 // Compile-time proof that this satisfies the registry's contracts.
@@ -148,7 +202,10 @@ func (c *Client) Check(ctx context.Context) providers.Health {
 	// every unreachable provider, and would smooth over exactly the flapping
 	// an operator is asking about when they read this endpoint. "It answered
 	// when asked" is the observation; a search is where persistence belongs.
-	doc, err := c.capabilities(ctx, 1)
+	//
+	// It also REFRESHES THE CAPABILITIES CACHE, which is decision 3 below and
+	// is the reason this reads refreshCapabilities rather than capabilities.
+	doc, err := c.refreshCapabilities(ctx, 1)
 	if err != nil {
 		return providers.Unhealthy(c.detailFor(err), c.now())
 	}
@@ -212,6 +269,93 @@ func (c *Client) capabilities(ctx context.Context, attempts int) (*caps, error) 
 	return got, nil
 }
 
+// cachedCapabilities is the handshake's answer, asking the indexer only when
+// what it already holds is too old to be trusted.
+//
+// The handshake itself is NOT optional and is not made optional here. ADR-0028
+// makes it the thing that turns a silent empty result into an honest refusal:
+// an indexer that cannot search the wanted content type is REPORTED as unable
+// to rather than queried and found wanting. What is cached is its ANSWER; the
+// answer still decides every search, from the cache exactly as from the wire.
+func (c *Client) cachedCapabilities(ctx context.Context, attempts int) (*caps, error) {
+	if doc, at, ok := c.peekCapabilities(); ok && c.now().Sub(at) < capsTTL {
+		return doc, nil
+	}
+
+	doc, err := c.refreshCapabilities(ctx, attempts)
+	if err == nil {
+		return doc, nil
+	}
+
+	// DECISION 4 — A STALE ENTRY IS SERVED WHEN THE REFRESH FAILED FOR A
+	// REASON THAT MAY NOT STILL BE TRUE, AND ONLY THEN.
+	//
+	// The two halves are both load-bearing.
+	//
+	// Served during a blip: an indexer restarting, rate limiting, or behind a
+	// proxy that returned a 502 is a service whose CAPABILITIES have not
+	// changed — nobody reconfigured anything, it just did not answer this
+	// second. Refusing the search there would turn a momentary handshake
+	// failure into a failed search, when the search itself might well
+	// succeed. If it does not, it fails on its own merits with its own error,
+	// which is the better message anyway.
+	//
+	// NOT served when the failure will still be true next time: a rejected API
+	// key, an endpoint that is not Torznab, an indexer declining the function.
+	// Those are configuration, they do not clear on their own, and proceeding
+	// on a remembered document would spend a second request to arrive at the
+	// same refusal with a worse explanation. The test for "may not still be
+	// true" is `retryable`, which is already this file's word for exactly that
+	// distinction — it decides whether `call` tries again — so the cache and
+	// the retry loop cannot drift into disagreeing about what transient means.
+	//
+	// A stale entry is deliberately NOT evicted on a failed refresh. The
+	// failure is the case the stale entry exists for, and discarding it would
+	// leave the next search with nothing at precisely the moment it is needed.
+	if stale, _, ok := c.peekCapabilities(); ok && retryable(err) {
+		return stale, nil
+	}
+	return nil, err
+}
+
+// refreshCapabilities performs the handshake and replaces what is cached.
+//
+// DECISION 3 — THE HEALTH CHECK IS THE INVALIDATION.
+//
+// Check already exercises `t=caps` (#99), so having it write the cache costs
+// nothing and buys two things. The two can never be inconsistent: what an
+// operator reads from GET /api/v1/providers is the same document the next
+// search will use, rather than a second observation of an indexer that agrees
+// with the first only by luck. And an operator who has just reconfigured their
+// indexer has a FORCE-REFRESH PATH that already exists and is already
+// documented — run the health check — instead of waiting out a TTL or
+// restarting the process, which is the workaround this issue was written to
+// avoid.
+//
+// The cache is written only on SUCCESS. A failed check leaves what is there
+// alone, for the reason recorded in cachedCapabilities.
+func (c *Client) refreshCapabilities(ctx context.Context, attempts int) (*caps, error) {
+	doc, err := c.capabilities(ctx, attempts)
+	if err != nil {
+		return nil, err
+	}
+	c.capsMu.Lock()
+	defer c.capsMu.Unlock()
+	c.capsDoc = doc
+	c.capsAt = c.now()
+	return doc, nil
+}
+
+// peekCapabilities reads what is cached without asking the indexer anything.
+func (c *Client) peekCapabilities() (*caps, time.Time, bool) {
+	c.capsMu.Lock()
+	defer c.capsMu.Unlock()
+	if c.capsDoc == nil {
+		return nil, time.Time{}, false
+	}
+	return c.capsDoc, c.capsAt, true
+}
+
 // ErrUnsupportedContentType is an indexer that cannot search for what is
 // wanted.
 //
@@ -230,12 +374,13 @@ func (c *Client) Search(ctx context.Context, q providers.Query) ([]acquisition.R
 
 	// The handshake first, and its answer decides the request.
 	//
-	// It costs a round trip per search and buys the difference between an
-	// honest refusal and a silent empty result. A cache belongs here
-	// eventually; it is not in this change because a cache with no expiry
-	// story is how an indexer that has been reconfigured stays "incapable"
-	// until a restart.
-	doc, err := c.capabilities(ctx, maxAttempts)
+	// It buys the difference between an honest refusal and a silent empty
+	// result, so it happens on every search — from the cache when one is
+	// fresh, from the indexer when it is not. What is saved is the round
+	// trip, never the check: functionFor below reads a cached document
+	// exactly as it reads a freshly-fetched one, and refuses on it just the
+	// same. See capsTTL for how long "fresh" is and why.
+	doc, err := c.cachedCapabilities(ctx, maxAttempts)
 	if err != nil {
 		return nil, err
 	}
