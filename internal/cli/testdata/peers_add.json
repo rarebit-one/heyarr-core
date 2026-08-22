@@ -9,5 +9,6 @@
   "created_at": "<timestamp>",
   "enrolled_at": "<timestamp>",
   "health": "unknown",
-  "last_seen_at": null
+  "last_seen_at": null,
+  "snapshot": null
 }

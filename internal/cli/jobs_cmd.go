@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -355,8 +356,20 @@ func newPeersShowCommand(_ Options, configPath *string) *cobra.Command {
 	var flags clientFlags
 	cmd := &cobra.Command{
 		Use:   "show <name-or-id>",
-		Short: "Show one peer, by name or id",
-		Args:  cobra.ExactArgs(1),
+		Short: "Show one peer, by name or id, and how stale its catalog snapshot is",
+		Long: `Show one peer, including its materialised catalog snapshot (§52, M4-13).
+
+The snapshot is the read-only copy of the controller's catalogue a Full Peer
+keeps so that it has something to serve from when the controller is not
+reachable (§53). This is where its VERSION and its AGE are reported, because
+those are the two facts that decide whether it is worth anything: a snapshot
+whose version has not moved in a week is one whose refresh has been failing in
+silence.
+
+A peer that has never built one reports "none", not version 0. Those are
+different answers — "the library is empty" and "this peer cannot help you" —
+and Milestone 7's degraded read path depends on nobody having collapsed them.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
 				var p client.Peer
@@ -367,10 +380,41 @@ func newPeersShowCommand(_ Options, configPath *string) *cobra.Command {
 					return emitJSON(cmd.OutOrStdout(), p)
 				}
 				peerRow(cmd.OutOrStdout(), p)
+				peerSnapshotRow(cmd.OutOrStdout(), p.Snapshot)
 				return nil
 			})
 		},
 	}
 	flags.register(cmd)
 	return cmd
+}
+
+// peerSnapshotRow prints the peer's catalog snapshot, or says there is none.
+//
+// It is a second table rather than more columns on the first, because the
+// first is the value an operator COPIES — the public key they paste at the
+// other site — and widening it past a terminal is how that stops being
+// copyable.
+func peerSnapshotRow(out io.Writer, s *client.PeerSnapshot) {
+	t := newTable("SNAPSHOT", "VERSION", "AGE", "KIND", "ROWS", "CONTROLLER")
+	if s == nil {
+		// "none", never "0". A peer that has never built a snapshot has not
+		// built an empty one, and an operator reading version 0 would conclude
+		// the library is empty rather than that the refresh has never run.
+		t.add("none", "-", "-", "-", "-", "-")
+		_ = t.render(out, "no snapshot")
+		return
+	}
+	t.add("present", strconv.FormatInt(s.Version, 10),
+		formatSnapshotAge(s.AgeSeconds), s.Kind, strconv.FormatInt(s.Rows, 10), s.ControllerID)
+	_ = t.render(out, "no snapshot")
+}
+
+// formatSnapshotAge renders staleness for a human.
+//
+// A negative age is printed as measured rather than clamped: it means the
+// controller's clock is ahead of this one, which is a real thing an operator
+// should see rather than a zero that hides it.
+func formatSnapshotAge(seconds float64) string {
+	return time.Duration(seconds * float64(time.Second)).Round(time.Second).String()
 }

@@ -126,6 +126,43 @@ type Peer struct {
 	// whether to go and reboot something or to wait twenty seconds. Same
 	// argument as PlacementVerdict.Missing.
 	LastSeenAt *time.Time `json:"last_seen_at"`
+	// Snapshot is the peer's materialised catalog snapshot (§52, M4-13), or
+	// null when this controller has never issued it one.
+	//
+	// Explicitly null rather than an omitted key, and explicitly null rather
+	// than a zero object. "This peer holds a snapshot of an empty library" and
+	// "this peer holds no snapshot" are different answers — in Milestone 7 one
+	// means the library is empty and the other means the peer cannot help you
+	// — and a client that had to distinguish them by inspecting a row count
+	// would eventually get it wrong during an outage, which is the only time
+	// it matters.
+	Snapshot *PeerSnapshot `json:"snapshot"`
+}
+
+// PeerSnapshot is what a peer's catalog snapshot is a fact ABOUT: which
+// controller, which version, and how old (§52, §53).
+//
+// Age ships computed rather than left to the client. A client subtracting
+// generated_at from its own clock is a client reporting staleness against a
+// clock that is not the controller's — and §53's "conservative rather than
+// unavailable" turns on that number being right.
+type PeerSnapshot struct {
+	// ControllerID is the controller whose catalogue this snapshot is of.
+	ControllerID string `json:"controller_id"`
+	// Version increases monotonically for this peer.
+	Version int64 `json:"version"`
+	// GeneratedAt is when the controller read the catalogue.
+	GeneratedAt time.Time `json:"generated_at"`
+	// Kind is "full" or "incremental" — which path produced this one.
+	Kind string `json:"kind"`
+	// Rows is how many rows it carries, across every covered table.
+	Rows int64 `json:"rows"`
+	// ContentDigest fingerprints the contents, so two snapshots can be
+	// compared without shipping either.
+	ContentDigest string `json:"content_digest"`
+	// AgeSeconds is how old the snapshot is, measured against the
+	// controller's clock.
+	AgeSeconds float64 `json:"age_seconds"`
 }
 
 // Replica is one peer's holding of one blob (§8).

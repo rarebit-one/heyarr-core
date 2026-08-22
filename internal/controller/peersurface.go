@@ -7,12 +7,37 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	peercatalog "github.com/rarebit-one/heyarr-core/internal/peer/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
+
+// snapshotSource adapts the catalog to the peer surface's contract (§52,
+// M4-13).
+//
+// The controller id is bound HERE, once, rather than travelling in from the
+// request. A snapshot names the controller it came from so that one restored
+// from another deployment's backup (§51, §82) is recognisable as somebody
+// else's — which it would not be if the value could be supplied by whoever
+// asked for the snapshot.
+type snapshotSource struct {
+	cat  *catalog.Catalog
+	self string
+}
+
+func (s snapshotSource) BuildSnapshot(
+	ctx context.Context, peerID string, holding int64, full bool,
+) (*peercatalog.Snapshot, error) {
+	return s.cat.BuildSnapshot(ctx, catalog.SnapshotRequest{
+		PeerID:       peerID,
+		ControllerID: s.self,
+		Holding:      holding,
+		Full:         full,
+	})
+}
 
 // peerLookup adapts the membership store to the transport's trust root.
 //
@@ -72,11 +97,14 @@ func (c *Controller) newPeerSurface(
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}
-	// The catalog behind the peer surface's inventory route (M4-07).
+	// The catalog behind the peer surface's inventory route (M4-07) and its
+	// catalog-snapshot route (§52, M4-13).
 	//
 	// A peer runs no control plane and cannot write control-plane rows
 	// directly (ADR-0029): it reports what its disk holds, and the
-	// controller's single writer records that. This is that writer. It gets
+	// controller's single writer records that. This is that writer — and it is
+	// also the reader the snapshot is built from, which is why one catalog
+	// serves both directions rather than two. It gets
 	// its own event log for the same reason every other construction in this
 	// file does — one log per process would be tidier and is a refactor
 	// rather than this issue.
@@ -100,7 +128,13 @@ func (c *Controller) newPeerSurface(
 		Members:    peerLookup{store: members},
 		SelfPeerID: self.PeerID,
 		Inventory:  peerCatalog,
-		Logger:     c.log,
+		// The same catalog answers both peer-surface routes, and one
+		// construction is the point: the inventory a peer reports and the
+		// snapshot it is issued are two views of the state this controller
+		// owns, and two catalogs would be two event logs recording halves of
+		// the same conversation.
+		Snapshots: snapshotSource{cat: peerCatalog, self: self.PeerID},
+		Logger:    c.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
