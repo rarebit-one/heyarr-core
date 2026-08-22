@@ -9,7 +9,17 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/peer/health"
 )
+
+// healthWindow renders the sweep's window for the beat's start line, or "off"
+// when there is no tracker — which is only ever the case in a test.
+func healthWindow(peers *health.Tracker) string {
+	if peers == nil {
+		return "off"
+	}
+	return peers.Window().String()
+}
 
 // The reconciliation beat (§57, M3-05).
 //
@@ -38,6 +48,24 @@ import (
 // first only in its interval and its job type. When the search job (M3-12)
 // arrives as the third, the shape will be obvious from three examples rather
 // than guessed from one.
+//
+// # Why the peer health sweep rides this beat rather than becoming a job
+//
+// M4-10 needs something to run every few minutes: probe the peers nothing has
+// talked to lately, and move the ones that have gone quiet past their window
+// (§31, §32). That is a timer, and there is already a timer here.
+//
+// It is deliberately NOT a job type. A job would mean a row per sweep in a
+// durable queue, a lease, a retry policy and a dead-letter state — all of it
+// for work that is worthless the moment it is late, because a probe answers a
+// question about NOW. Jobs are durable because their work must survive a
+// restart (invariant 9); a health probe that missed its beat should be
+// forgotten, not replayed against a five-minute-old question. It also does not
+// belong on a worker: the sweep writes the peers table and emits transitions,
+// and coordinated mutable state is the controller's (§7).
+//
+// So it runs inline on the beat that already exists, and stays out of both the
+// job table and the scheduler this package keeps declining to write.
 
 // reconcileInterval is how often the whole library is re-examined.
 //
@@ -74,7 +102,7 @@ const upgradeScanInterval = 6 * time.Hour
 // The immediate one matters: a Heyarr that has just started may have missed
 // hours of change, and waiting a full interval to notice would make a restart
 // look like a period of blindness.
-func startReconciliation(ctx context.Context, queue *jobs.Queue, log *slog.Logger) {
+func startReconciliation(ctx context.Context, queue *jobs.Queue, peers *health.Tracker, log *slog.Logger) {
 	enqueue := func(reason string) {
 		if err := enqueueReconcile(ctx, queue, ""); err != nil {
 			// Never fatal. Reconciliation is how Heyarr notices things, not
@@ -84,7 +112,35 @@ func startReconciliation(ctx context.Context, queue *jobs.Queue, log *slog.Logge
 				"reason", reason, "error", err)
 		}
 	}
+	// The peer health sweep, riding this beat (M4-10). It is called directly
+	// rather than enqueued: see the note above on why this is not a job.
+	sweep := func() {
+		if peers == nil {
+			return
+		}
+		summary, err := peers.Sweep(ctx)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			// Never fatal, for the same reason reconciliation is not. A node
+			// that cannot sweep still serves — it just routes reads on a
+			// staler view of who is up, which is what the last_seen_at beside
+			// every health value exists to make visible.
+			log.Warn("could not sweep peer health", "error", err)
+			return
+		}
+		if summary.BecameReachable > 0 || summary.BecameUnreachable > 0 {
+			log.Info("peer health swept",
+				"peers", summary.Swept, "probed", summary.Probed,
+				"became_reachable", summary.BecameReachable,
+				"became_unreachable", summary.BecameUnreachable)
+		}
+	}
+
 	enqueue("startup")
+	// Swept at startup, unlike the upgrade scan below and for reconciliation's
+	// reason: a node that has just started knows nothing about who is up, and
+	// waiting a full interval to find out would make every restart a window in
+	// which reads are routed on stale reachability.
+	sweep()
 
 	go func() {
 		ticker := time.NewTicker(reconcileInterval)
@@ -95,10 +151,12 @@ func startReconciliation(ctx context.Context, queue *jobs.Queue, log *slog.Logge
 				return
 			case <-ticker.C:
 				enqueue("beat")
+				sweep()
 			}
 		}
 	}()
-	log.Info("reconciliation beat started", "interval", reconcileInterval)
+	log.Info("reconciliation beat started", "interval", reconcileInterval,
+		"peer_health_window", healthWindow(peers))
 }
 
 // startUpgradeScan enqueues an upgrade sweep on its own, much slower beat

@@ -41,6 +41,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr library`](heyarr_library.md) | Manage libraries and their roots |
 | [`heyarr peer`](heyarr_peer.md) | Serve and replicate bytes |
 | [`heyarr peers add`](heyarr_peers_add.md) | Enrol another peer by its public key |
+| [`heyarr peers attach`](heyarr_peers_attach.md) | Attach to a controller over mTLS and report what it records this node as |
 | [`heyarr peers list`](heyarr_peers_list.md) | List peers |
 | [`heyarr peers ping`](heyarr_peers_ping.md) | Open a mutually authenticated connection to a peer and report who it says you are |
 | [`heyarr peers remove`](heyarr_peers_remove.md) | Revoke a peer's membership |

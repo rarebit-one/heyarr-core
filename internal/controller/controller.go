@@ -22,6 +22,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/indexers"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
+	"github.com/rarebit-one/heyarr-core/internal/peer/health"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
@@ -181,7 +182,25 @@ func (c *Controller) Run(ctx context.Context) error {
 		return fmt.Errorf("controller: %w", err)
 	}
 
-	srv, members, err := c.newServer(db, blobStore, version)
+	// Peer reachability (§31, §32, M4-10).
+	//
+	// Constructed BEFORE the server, because the server's peer guard records
+	// liveness through it: an inbound request from a peer is the best evidence
+	// that peer is up, and it is evidence that arrives on the request path.
+	// The idle probe speaks to peer endpoints over plain HTTP /healthz — the
+	// cheapest thing a peer serves, and unauthenticated, so a probe cannot
+	// start failing because a token rotated and report that as an outage.
+	peerHealth, err := health.New(health.Options{
+		DB:     db,
+		Events: identityEvents,
+		Prober: health.HTTPProber{},
+		Logger: c.log,
+	})
+	if err != nil {
+		return fmt.Errorf("controller: opening peer health: %w", err)
+	}
+
+	srv, members, err := c.newServer(db, blobStore, version, peerHealth)
 	if err != nil {
 		return err
 	}
@@ -216,8 +235,21 @@ func (c *Controller) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("controller: opening the job queue for reconciliation: %w", err)
 	}
-	startReconciliation(ctx, reconcileQueue, c.log)
+	startReconciliation(ctx, reconcileQueue, peerHealth, c.log)
 	startUpgradeScan(ctx, reconcileQueue, c.log)
+
+	// The search beat (#130). It needs a catalog as well as a queue — unlike
+	// the two sweeps above, it asks a per-want question before enqueueing
+	// anything — and it shares this event log so the job transitions it causes
+	// land in the same stream as everything else (§76, ADR-0009).
+	beatCatalog, err := catalog.New(catalog.Options{
+		DB: db, Events: reconcileEvents,
+		PeerName: c.cfg.Peer.Name, PeerSite: c.cfg.Peer.Site, Logger: c.log,
+	})
+	if err != nil {
+		return fmt.Errorf("controller: opening the catalog for the search beat: %w", err)
+	}
+	startSearchBeat(ctx, beatCatalog, reconcileQueue, c.log)
 
 	// "started" is logged only after every listener is bound. A start line
 	// printed before the socket exists is a lie that costs someone an
@@ -271,7 +303,11 @@ func (c *Controller) Run(ctx context.Context) error {
 // surface (M4-05) must consult the SAME trust root the enrolment endpoints
 // write and the request guard reads. Two stores over one database would answer
 // identically today and would be exactly the seam a cache gets added behind.
-func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion int64) (*httpapi.Server, *membership.Store, error) {
+// The health tracker is passed IN rather than built here for the mirror-image
+// reason: it is constructed before the server so that the peer guard mounted
+// on this router can record liveness through the same tracker the idle probe
+// and the reconciler read.
+func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion int64, peerHealth *health.Tracker) (*httpapi.Server, *membership.Store, error) {
 	store, err := auth.NewStore(auth.StoreOptions{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
@@ -338,6 +374,7 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 		CASRoot:            c.cfg.CAS.Root,
 		Mount:              mounts,
 		PeerMembership:     members,
+		PeerLiveness:       liveness(peerHealth),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
@@ -428,6 +465,21 @@ func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Stor
 	}
 
 	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, mcpServer.Mount}, nil
+}
+
+// liveness converts a possibly-absent tracker into the interface the HTTP
+// foundation takes.
+//
+// It exists because a typed nil pointer stored in an interface is not a nil
+// interface: assigning a nil *health.Tracker straight to the field would give
+// the guard something that reads as present and panics on first use. The
+// conversion is one line and the bug is a nil dereference on the request path,
+// so it is one line worth having.
+func liveness(t *health.Tracker) httpapi.PeerLiveness {
+	if t == nil {
+		return nil
+	}
+	return t
 }
 
 // mediaInfo renders a resolved toolchain for GET /api/v1/system.

@@ -86,7 +86,7 @@ func (s *Server) routes(mounts []MountFunc) http.Handler {
 		// somebody remembered to guard. Mounted centrally, a route added
 		// tomorrow inherits it.
 		if s.peers != nil {
-			r.Use(peerMembershipGuard(s.peers, s.presentedKey, s.log))
+			r.Use(peerMembershipGuard(s.peers, s.peerLiveness, s.presentedKey, s.log))
 		}
 
 		r.Get("/system", s.handleSystem)

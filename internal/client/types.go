@@ -103,6 +103,13 @@ type Peer struct {
 	CreatedAt time.Time `json:"created_at"`
 	// EnrolledAt is when this peer was admitted to the fabric (M4-04).
 	EnrolledAt time.Time `json:"enrolled_at"`
+	// Health is reachability — unknown, reachable or unreachable (§31, M4-10).
+	// It is observed from interactions rather than declared by the peer, and
+	// unreachable means silence past the window rather than a failed request.
+	Health string `json:"health"`
+	// LastSeenAt is when the peer last answered anything, or nil if it never
+	// has. Health without it is a status nobody can act on.
+	LastSeenAt *time.Time `json:"last_seen_at"`
 }
 
 // Replica is one peer's holding of one blob (§8).

@@ -30,6 +30,23 @@ type PeerMembership interface {
 	IsMember(ctx context.Context, publicKey []byte) (bool, error)
 }
 
+// PeerLiveness records that a peer was heard from (§31, M4-10).
+//
+// It is a second, optional interface rather than a method on PeerMembership
+// because the two answer questions that must not be confused. Membership is
+// trust and is consulted on every request without exception — its freshness IS
+// the revocation mechanism. Liveness is an observation, it may be throttled,
+// and it may fail without consequence. Collapsing them into one interface is
+// how somebody eventually adds a cache to "the peer interface" and caches the
+// half that must never be cached.
+//
+// internal/peer/health.Tracker satisfies it.
+type PeerLiveness interface {
+	// Seen records that this public key's peer made a request. It must never
+	// affect the outcome of that request.
+	Seen(ctx context.Context, publicKey []byte) error
+}
+
 // PresentedPeerKey reports the peer public key a connection proved, and
 // whether this is a peer connection at all.
 //
@@ -84,7 +101,7 @@ func TLSPresentedPeerKey(r *http.Request) ([]byte, bool) {
 // rather than a check inside the blob handler. A check that lives next to the
 // bytes gets duplicated for the next route that serves bytes, and the copy is
 // the one that caches.
-func peerMembershipGuard(store PeerMembership, presented PresentedPeerKey, log interface {
+func peerMembershipGuard(store PeerMembership, liveness PeerLiveness, presented PresentedPeerKey, log interface {
 	Error(string, ...any)
 },
 ) func(http.Handler) http.Handler {
@@ -113,7 +130,48 @@ func peerMembershipGuard(store PeerMembership, presented PresentedPeerKey, log i
 						"a removed peer loses access on the connection it is already using"))
 				return
 			}
-			next.ServeHTTP(w, r)
+			// The peer is a member and is talking to us, which is the best
+			// evidence of liveness there is: a request it opened, as a side
+			// effect of work it was doing anyway (§31, M4-10). Liveness is
+			// OBSERVED, and this is the observation.
+			//
+			// It runs on a context detached from the request's, because the
+			// fact is true whether or not the client stays to hear the answer
+			// — a peer that disconnects mid-response was still up when it
+			// asked. And a failure here is logged, never surfaced: recording
+			// that somebody is alive must not be able to fail their request.
+			if liveness != nil {
+				if err := liveness.Seen(context.WithoutCancel(r.Context()), pub); err != nil {
+					log.Error("recording that a peer was seen failed",
+						"request_id", RequestIDFrom(r.Context()), "error", err)
+				}
+			}
+			// Marked, not admitted. The guard still only ever subtracts: this
+			// records that the caller reached the client API over a peer
+			// credential, and the only thing anything downstream does with
+			// that fact is refuse (ADR-0033 — a peer is not an admin). The
+			// bearer token (ADR-0011) is as mandatory as it was.
+			next.ServeHTTP(w, r.WithContext(markPeerConnection(r.Context())))
 		})
 	}
+}
+
+// markPeerConnection records that this request arrived over a connection that
+// presented a peer client certificate.
+func markPeerConnection(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKeyPeerConnection, true)
+}
+
+// PeerConnection reports whether a request reached the client API over a peer
+// certificate (ADR-0012, ADR-0033).
+//
+// It exists so the admin surface can refuse such a request in ONE place. A
+// peer certificate authenticates as that peer and authorises only the peer
+// surface; it is not, and can never become, an admin credential. Asking this
+// question route by route would work until the route somebody adds next month
+// forgets to ask it, which is the whole reason the check lives in
+// RequireScope rather than in six handlers.
+func PeerConnection(ctx context.Context) bool {
+	is, _ := ctx.Value(ctxKeyPeerConnection).(bool)
+	return is
 }
