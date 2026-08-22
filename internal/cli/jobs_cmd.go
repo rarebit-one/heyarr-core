@@ -197,9 +197,17 @@ func newPeersListCommand(_ Options, configPath *string) *cobra.Command {
 				// to copy, and telling them to read it out of SQLite is not an
 				// answer (ADR-0012). It is the PUBLIC half — the private key is
 				// a 0600 file the CLI never opens.
-				t := newTable("ID", "NAME", "SITE", "MODE", "SELF", "ENDPOINT", "PUBLIC KEY")
+				//
+				// HEALTH and LAST SEEN are two columns rather than one for the
+				// reason PlacementVerdict.Missing gives (M4-10): "unreachable"
+				// on its own is a status nobody can act on. Seeing that the
+				// peer was last heard from forty seconds ago and seeing that it
+				// was last heard from on Tuesday call for very different
+				// afternoons.
+				t := newTable("ID", "NAME", "SITE", "MODE", "SELF", "HEALTH", "LAST SEEN", "ENDPOINT", "PUBLIC KEY")
 				for _, p := range peers {
-					t.add(p.ID, p.Name, p.Site, p.Mode, strconv.FormatBool(p.IsSelf), dash(p.Endpoint), dash(p.PublicKey))
+					t.add(p.ID, p.Name, p.Site, p.Mode, strconv.FormatBool(p.IsSelf),
+						p.Health, stampPtr(p.LastSeenAt), dash(p.Endpoint), dash(p.PublicKey))
 				}
 				return t.render(cmd.OutOrStdout(), "no peers")
 			})
@@ -214,8 +222,9 @@ func newPeersListCommand(_ Options, configPath *string) *cobra.Command {
 // the value an operator copies out of one is the value they paste into the
 // other.
 func peerRow(out io.Writer, p client.Peer) {
-	t := newTable("ID", "NAME", "SITE", "MODE", "SELF", "ENDPOINT", "PUBLIC KEY")
-	t.add(p.ID, p.Name, p.Site, p.Mode, strconv.FormatBool(p.IsSelf), dash(p.Endpoint), dash(p.PublicKey))
+	t := newTable("ID", "NAME", "SITE", "MODE", "SELF", "HEALTH", "LAST SEEN", "ENDPOINT", "PUBLIC KEY")
+	t.add(p.ID, p.Name, p.Site, p.Mode, strconv.FormatBool(p.IsSelf),
+		p.Health, stampPtr(p.LastSeenAt), dash(p.Endpoint), dash(p.PublicKey))
 	_ = t.render(out, "no peer")
 }
 

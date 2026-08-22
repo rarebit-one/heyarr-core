@@ -115,6 +115,17 @@ type Peer struct {
 	// what makes this field the answer to "has membership changed?" rather
 	// than a duplicate of created_at.
 	EnrolledAt time.Time `json:"enrolled_at"`
+	// Health is reachability: unknown, reachable or unreachable (§31, §32,
+	// M4-10). It is observed rather than declared — a peer is reachable
+	// because it answered something recently, not because it said so — and
+	// unreachable means silence past the window rather than a failed request.
+	Health string `json:"health"`
+	// LastSeenAt is when this peer last answered anything, or null if it never
+	// has. It ships beside Health rather than instead of it because
+	// "unreachable" alone is a status nobody can act on: it does not say
+	// whether to go and reboot something or to wait twenty seconds. Same
+	// argument as PlacementVerdict.Missing.
+	LastSeenAt *time.Time `json:"last_seen_at"`
 }
 
 // Replica is one peer's holding of one blob (§8).

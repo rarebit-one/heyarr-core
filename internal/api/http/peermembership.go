@@ -30,6 +30,23 @@ type PeerMembership interface {
 	IsMember(ctx context.Context, publicKey []byte) (bool, error)
 }
 
+// PeerLiveness records that a peer was heard from (§31, M4-10).
+//
+// It is a second, optional interface rather than a method on PeerMembership
+// because the two answer questions that must not be confused. Membership is
+// trust and is consulted on every request without exception — its freshness IS
+// the revocation mechanism. Liveness is an observation, it may be throttled,
+// and it may fail without consequence. Collapsing them into one interface is
+// how somebody eventually adds a cache to "the peer interface" and caches the
+// half that must never be cached.
+//
+// internal/peer/health.Tracker satisfies it.
+type PeerLiveness interface {
+	// Seen records that this public key's peer made a request. It must never
+	// affect the outcome of that request.
+	Seen(ctx context.Context, publicKey []byte) error
+}
+
 // PresentedPeerKey reports the peer public key a connection proved, and
 // whether this is a peer connection at all.
 //
@@ -84,7 +101,7 @@ func TLSPresentedPeerKey(r *http.Request) ([]byte, bool) {
 // rather than a check inside the blob handler. A check that lives next to the
 // bytes gets duplicated for the next route that serves bytes, and the copy is
 // the one that caches.
-func peerMembershipGuard(store PeerMembership, presented PresentedPeerKey, log interface {
+func peerMembershipGuard(store PeerMembership, liveness PeerLiveness, presented PresentedPeerKey, log interface {
 	Error(string, ...any)
 },
 ) func(http.Handler) http.Handler {
@@ -112,6 +129,22 @@ func peerMembershipGuard(store PeerMembership, presented PresentedPeerKey, log i
 						"in the inter-peer path (ADR-0012), and it is consulted on every request — "+
 						"a removed peer loses access on the connection it is already using"))
 				return
+			}
+			// The peer is a member and is talking to us, which is the best
+			// evidence of liveness there is: a request it opened, as a side
+			// effect of work it was doing anyway (§31, M4-10). Liveness is
+			// OBSERVED, and this is the observation.
+			//
+			// It runs on a context detached from the request's, because the
+			// fact is true whether or not the client stays to hear the answer
+			// — a peer that disconnects mid-response was still up when it
+			// asked. And a failure here is logged, never surfaced: recording
+			// that somebody is alive must not be able to fail their request.
+			if liveness != nil {
+				if err := liveness.Seen(context.WithoutCancel(r.Context()), pub); err != nil {
+					log.Error("recording that a peer was seen failed",
+						"request_id", RequestIDFrom(r.Context()), "error", err)
+				}
 			}
 			next.ServeHTTP(w, r)
 		})
