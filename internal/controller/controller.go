@@ -22,6 +22,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/indexers"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
+	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -146,6 +147,39 @@ func (c *Controller) Run(ctx context.Context) error {
 		return fmt.Errorf("controller: opening the CAS at %s: %w", c.cfg.CAS.Root, err)
 	}
 
+	// The peer identity, and ADR-0010's refusal.
+	//
+	// This runs BEFORE the server is constructed, let alone started. A node
+	// that binds a listener and then discovers its identity is contested has
+	// already served reads under it, and "the read was served by peer X" is a
+	// claim that cannot be withdrawn once another machine has made it too.
+	//
+	// It is also before the reconcilers and the job queue: a job leased under
+	// a contested identity is worse again, because the lease outlives the
+	// process that took it.
+	identityEvents, err := events.New(events.Options{
+		Writer: db.Writer(), Reader: db.Reader(), Logger: c.log,
+	})
+	if err != nil {
+		return fmt.Errorf("controller: opening the event log for the peer identity: %w", err)
+	}
+	identityCatalog, err := catalog.New(catalog.Options{
+		DB: db, Events: identityEvents,
+		PeerName: c.cfg.Peer.Name, PeerSite: c.cfg.Peer.Site, Logger: c.log,
+	})
+	if err != nil {
+		return fmt.Errorf("controller: opening the catalog for the peer identity: %w", err)
+	}
+	self, err := identity.Ensure(startupCtx, identity.Options{
+		DataDir: c.cfg.DataDir,
+		Peers:   identityCatalog,
+		CAS:     blobStore,
+		Logger:  c.log,
+	})
+	if err != nil {
+		return fmt.Errorf("controller: %w", err)
+	}
+
 	srv, err := c.newServer(db, blobStore, version)
 	if err != nil {
 		return err
@@ -179,6 +213,11 @@ func (c *Controller) Run(ctx context.Context) error {
 	c.log.Info("controller started",
 		"database", c.cfg.Database.Path,
 		"schema_version", version,
+		"peer_id", self.PeerID,
+		// The PUBLIC key. It is what another site needs in order to enrol this
+		// node (ADR-0012), and it is safe in a log by construction — the
+		// private half is a file this process never reads into a log field.
+		"peer_public_key", self.PublicKeyString(),
 		"http_addr", srv.Addr(),
 		"unix_socket", srv.SocketPath(),
 		"auth_enabled", c.cfg.HTTP.Auth.Enabled)

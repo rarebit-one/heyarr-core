@@ -7,23 +7,32 @@ import (
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
+	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 )
 
 // ---------------------------------------------------------------------------
 // Peers
 // ---------------------------------------------------------------------------
 
-const peerColumns = `id, name, site, mode, endpoint, is_self, created_at`
+const peerColumns = `id, name, site, mode, endpoint, public_key, is_self, created_at`
 
 func scanPeer(row interface{ Scan(...any) error }) (Peer, error) {
 	var p Peer
 	var endpoint sql.NullString
+	var publicKey []byte
 	var isSelf int
 	var created string
-	if err := row.Scan(&p.ID, &p.Name, &p.Site, &p.Mode, &endpoint, &isSelf, &created); err != nil {
+	if err := row.Scan(&p.ID, &p.Name, &p.Site, &p.Mode, &endpoint, &publicKey, &isSelf, &created); err != nil {
 		return Peer{}, err
 	}
 	p.Endpoint = nullString(endpoint)
+	// Rendered, not raw. The column is a BLOB and JSON would base64 it into
+	// something an operator cannot compare by eye with what the other site
+	// shows them; the prefix says which algorithm produced it (ADR-0012).
+	if len(publicKey) > 0 {
+		rendered := identity.FormatPublicKey(publicKey)
+		p.PublicKey = &rendered
+	}
 	p.IsSelf = isSelf == 1
 	p.CreatedAt = parseTime(created)
 	return p, nil

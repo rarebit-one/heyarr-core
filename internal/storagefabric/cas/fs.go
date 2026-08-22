@@ -88,36 +88,128 @@ func OpenFS(root string) (*FS, error) {
 }
 
 func (s *FS) ensureMarker() error {
-	path := filepath.Join(s.root, MarkerName)
+	_, err := s.readMarker()
+	if errors.Is(err, fs.ErrNotExist) {
+		return s.writeMarker(Marker{
+			Version: LayoutVersion,
+			Algo:    hashing.Algorithm,
+			Fanout:  []int{fanoutWidth, fanoutWidth},
+		})
+	}
+	return err
+}
+
+// MarkerPath is the file that identifies this directory as a CAS root.
+//
+// It is exported because the identity check reports it by name: an operator
+// told two identities disagree needs to be told where the second one is
+// written, not left to find it (ADR-0010).
+func (s *FS) MarkerPath() string { return filepath.Join(s.root, MarkerName) }
+
+// readMarker loads and validates the marker.
+//
+// Validation lives here rather than at each call site because a marker that is
+// wrong is wrong for every reader: a root written by a future layout must be
+// refused rather than misread, on the same reasoning as the schema downgrade
+// guard (ADR-0003).
+func (s *FS) readMarker() (Marker, error) {
+	path := s.MarkerPath()
 	data, err := os.ReadFile(path) // #nosec G304 -- path is derived from the configured root
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		marker := Marker{Version: LayoutVersion, Algo: hashing.Algorithm, Fanout: []int{fanoutWidth, fanoutWidth}}
-		encoded, err := json.MarshalIndent(marker, "", "  ")
-		if err != nil {
-			return fmt.Errorf("cas: encoding marker: %w", err)
-		}
-		if err := os.WriteFile(path, append(encoded, '\n'), 0o600); err != nil {
-			return fmt.Errorf("cas: writing marker: %w", err)
-		}
-		return nil
+		return Marker{}, err
 	case err != nil:
-		return fmt.Errorf("cas: reading marker: %w", err)
+		return Marker{}, fmt.Errorf("cas: reading marker: %w", err)
 	}
 
 	var marker Marker
 	if err := json.Unmarshal(data, &marker); err != nil {
-		return fmt.Errorf("cas: %s is not a valid marker: %w", path, err)
+		return Marker{}, fmt.Errorf("cas: %s is not a valid marker: %w", path, err)
 	}
 	if marker.Version > LayoutVersion {
-		return fmt.Errorf("cas: %s was written with layout version %d, this binary understands %d — "+
+		return Marker{}, fmt.Errorf("cas: %s was written with layout version %d, this binary understands %d — "+
 			"upgrade rather than downgrade", s.root, marker.Version, LayoutVersion)
 	}
 	if marker.Algo != "" && marker.Algo != hashing.Algorithm {
-		return fmt.Errorf("cas: %s uses hash algorithm %q, this binary uses %q",
+		return Marker{}, fmt.Errorf("cas: %s uses hash algorithm %q, this binary uses %q",
 			s.root, marker.Algo, hashing.Algorithm)
 	}
-	return nil
+	return marker, nil
+}
+
+// writeMarker replaces the marker atomically.
+//
+// Through a temporary file in the root and a rename, so that a process killed
+// mid-write leaves the previous marker rather than a truncated one. A CAS root
+// whose marker is half-written is a root nothing can identify, and the identity
+// check would read that as a disagreement.
+func (s *FS) writeMarker(marker Marker) error {
+	encoded, err := json.MarshalIndent(marker, "", "  ")
+	if err != nil {
+		return fmt.Errorf("cas: encoding marker: %w", err)
+	}
+	tmp, err := os.CreateTemp(s.root, ".marker-*.tmp")
+	if err != nil {
+		return fmt.Errorf("cas: writing marker: %w", err)
+	}
+	name := tmp.Name()
+	defer func() { _ = os.Remove(name) }()
+	if _, err := tmp.Write(append(encoded, '\n')); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("cas: writing marker: %w", err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("cas: writing marker: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("cas: writing marker: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("cas: writing marker: %w", err)
+	}
+	if err := os.Rename(name, s.MarkerPath()); err != nil {
+		return fmt.Errorf("cas: writing marker: %w", err)
+	}
+	return syncDir(s.root)
+}
+
+// MarkerPeerID reports the peer this CAS root is bound to, or "" if it is not
+// bound yet.
+//
+// This is one half of the two-places peer identity (ADR-0010); the database is
+// the other. The store deliberately does NOT compare them — it cannot see the
+// database, and a comparison implemented in two packages is a comparison that
+// gets removed from one of them.
+func (s *FS) MarkerPeerID() (string, error) {
+	marker, err := s.readMarker()
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return marker.PeerID, nil
+}
+
+// BindPeer records the peer that owns this CAS root.
+//
+// It writes what it is given, unconditionally. Deciding whether writing is the
+// right thing to do requires knowing what the database says, which is the
+// caller's job — see internal/peer/identity.
+func (s *FS) BindPeer(peerID string) error {
+	if peerID == "" {
+		return errors.New("cas: refusing to bind the root to an empty peer id")
+	}
+	marker, err := s.readMarker()
+	if errors.Is(err, fs.ErrNotExist) {
+		marker = Marker{Version: LayoutVersion, Algo: hashing.Algorithm, Fanout: []int{fanoutWidth, fanoutWidth}}
+	} else if err != nil {
+		return err
+	}
+	marker.PeerID = peerID
+	return s.writeMarker(marker)
 }
 
 // Root is the directory this store occupies.

@@ -11,8 +11,10 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -191,6 +193,95 @@ func (c *Catalog) createSelfPeer(ctx context.Context) (string, error) {
 	c.events.Publish(ev)
 	c.log.Info("registered this peer", "peer_id", id, "name", c.peerName, "site", c.peerSite)
 	return id, nil
+}
+
+// SelfIdentity reports the self peer's id and the public key recorded for it,
+// creating the peer row on first use.
+//
+// The public key is nil when this node has not generated a keypair yet, which
+// is every database migrated before 00019 and every fresh one before the
+// controller's first identity check (M4-03).
+func (c *Catalog) SelfIdentity(ctx context.Context) (string, []byte, error) {
+	id, err := c.SelfPeer(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	var pub []byte
+	err = c.db.Reader().QueryRowContext(ctx,
+		`SELECT public_key FROM peers WHERE id = ?`, id).Scan(&pub)
+	if err != nil {
+		return "", nil, fmt.Errorf("catalog: reading this peer's public key: %w", err)
+	}
+	return id, pub, nil
+}
+
+// RecordSelfPublicKey stores this node's public key, once.
+//
+// It writes only where no key is recorded yet, and re-reads on a no-op write:
+// two roles racing to establish the same identity must converge rather than
+// one of them silently replacing the other's key. A stored key that differs
+// from the one offered is not a race, it is the failure ADR-0010 is about, and
+// it is refused here rather than overwritten — the private key on disk is the
+// only thing that can prove which of the two is real, and overwriting the
+// public key destroys the evidence.
+//
+// The private key is never passed to this method and never enters the
+// database: backups stream to peers, and a restored backup carrying a private
+// key produces two machines able to authenticate as one peer.
+func (c *Catalog) RecordSelfPublicKey(ctx context.Context, algo string, pub []byte) error {
+	if algo == "" {
+		return errors.New("catalog: a key algorithm is required")
+	}
+	if len(pub) == 0 {
+		return errors.New("catalog: refusing to record an empty public key")
+	}
+	id, err := c.SelfPeer(ctx)
+	if err != nil {
+		return err
+	}
+	now := c.clock.Now()
+
+	var (
+		ev      events.Event
+		emitted bool
+	)
+	err = c.db.InTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE peers SET public_key = ?, key_algo = ?, key_generated_at = ?
+			WHERE id = ? AND public_key IS NULL`,
+			pub, algo, now.Format(timestampFormat), id)
+		if err != nil {
+			return fmt.Errorf("catalog: recording this peer's public key: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("catalog: recording this peer's public key: %w", err)
+		}
+		if n == 0 {
+			var existing []byte
+			if err := tx.QueryRowContext(ctx, `SELECT public_key FROM peers WHERE id = ?`, id).
+				Scan(&existing); err != nil {
+				return fmt.Errorf("catalog: recording this peer's public key: %w", err)
+			}
+			if !bytes.Equal(existing, pub) {
+				return fmt.Errorf("catalog: peer %s already has a different public key recorded — "+
+					"refusing to overwrite it", id)
+			}
+			return nil
+		}
+		emitted = true
+		ev, err = c.events.EmitTx(ctx, tx, events.TypePeerIdentityEstablished, "peer", id,
+			map[string]any{"algo": algo, "public_key": hex.EncodeToString(pub)})
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if emitted {
+		c.events.Publish(ev)
+		c.log.Info("established this peer's identity", "peer_id", id, "algo", algo)
+	}
+	return nil
 }
 
 // Root returns a library root's ingest configuration.

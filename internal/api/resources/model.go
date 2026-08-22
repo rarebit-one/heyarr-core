@@ -88,15 +88,24 @@ type LibraryRoot struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-// Peer is a node in the instance. The public key is deliberately not exposed
-// yet: it is reserved for Milestone 4 (ADR-0012) and publishing a field before
-// it means anything invites clients to depend on its absence.
+// Peer is a node in the instance.
+//
+// PublicKey is the peer's Ed25519 identity, rendered as "ed25519:<hex>" — the
+// same algorithm-prefixed shape as a blob digest, so the two are not mistaken
+// for each other in a terminal. It is null for a peer that has not established
+// an identity yet (M4-03).
+//
+// It is a PUBLIC key and is safe here by construction: the private half lives
+// in a 0600 file in the data directory and is never read by the API layer at
+// all. An operator enrolling this node at another site needs a value to copy,
+// and "read it out of SQLite" is not an answer.
 type Peer struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Site      string    `json:"site"`
 	Mode      string    `json:"mode"`
 	Endpoint  *string   `json:"endpoint"`
+	PublicKey *string   `json:"public_key"`
 	IsSelf    bool      `json:"is_self"`
 	CreatedAt time.Time `json:"created_at"`
 }

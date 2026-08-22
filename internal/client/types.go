@@ -91,11 +91,14 @@ type LibraryRoot struct {
 
 // Peer is a node in the instance (ADR-0010).
 type Peer struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Site      string    `json:"site"`
-	Mode      string    `json:"mode"`
-	Endpoint  *string   `json:"endpoint"`
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Site     string  `json:"site"`
+	Mode     string  `json:"mode"`
+	Endpoint *string `json:"endpoint"`
+	// PublicKey is the peer's Ed25519 identity as "ed25519:<hex>", or nil for
+	// a peer that has not established one yet (ADR-0012, M4-03).
+	PublicKey *string   `json:"public_key"`
 	IsSelf    bool      `json:"is_self"`
 	CreatedAt time.Time `json:"created_at"`
 }
