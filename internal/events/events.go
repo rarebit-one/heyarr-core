@@ -4,6 +4,39 @@
 // only integration model" as an *arr failure, but the practical argument is
 // narrower: retrofitting events means auditing every mutation site, and that
 // audit gets more expensive with every milestone.
+//
+// # No per-blob events during replication
+//
+// Invariant 7 says every state transition emits an event. It does not say every
+// blob emits an event, and in the peer plane the difference decides whether the
+// log is readable at all.
+//
+// A first full sync with a peer holding a hundred thousand blobs moves through
+// inventory exchange, reconciliation and transfer. If each of those emitted per
+// blob, one ordinary onboarding would write hundreds of thousands of events —
+// events no operator reads, which bury the handful of transitions anyone
+// actually watches for, and which a slow SSE subscriber is then dropped for
+// failing to keep up with (ADR-0009). The same argument already keeps
+// blob.verified and quality_profile.evaluated out of this package: a fact that
+// is true of every item is state, and state belongs in a table.
+//
+// So the peer plane draws the line at work, not at items:
+//
+//   - Inventory reporting emits once per report CYCLE, with counts
+//     (sync.inventory_reported). The per-blob facts live in the replicas table.
+//   - Reconciliation emits once per reconciliation CYCLE, with counts
+//     (sync.reconciled) — not once per job it enqueued, which job.enqueued
+//     already reports.
+//   - Transfers emit per transfer (replication.transfer_changed), because a
+//     transfer is a discrete unit of work with a start and a terminal outcome.
+//     That is the only per-blob event in the peer plane, and it is bounded by
+//     the transfer queue an operator throttles rather than by the size of the
+//     library.
+//
+// Before adding a replication event, ask whether it fires once per cycle or
+// once per blob. If it is once per blob and it is not a transfer, the fact
+// belongs in a table and the transition belongs in the payload of a cycle
+// event that already exists.
 package events
 
 import (
@@ -184,6 +217,105 @@ const (
 	TypeDeviceRegistered  = "playback.device.registered"
 	TypeDeviceUpdated     = "playback.device.updated"
 	TypePrivateStateHeads = "private_state.heads"
+
+	// The peer plane (§76, Milestone 4). Reserved in one change, before the
+	// emitters land, because six issues need event types at once and six
+	// independent additions to this block would be six conflicting edits and
+	// six naming conventions. Each type below is claimed by the issue named in
+	// its comment; nothing here is emitted yet.
+	//
+	// peer.registered already exists above. Milestone 4 extends it rather than
+	// replacing it: it is emitted today only for the self-peer that ADR-0010
+	// creates at startup, and M4-04 gives it a second, non-self subject. A
+	// separate "peer.joined" would mean a subscriber asking "what peers does
+	// this system know about" had to watch two types to learn the same fact.
+	//
+	// replica.present, replica.corrupt and replica.missing also already exist,
+	// and Milestone 4 adds no replica type. What changes is the SUBJECT: until
+	// now every replica event described this peer's own copy, and M4-07/M4-09
+	// emit them for a remote peer's copy for the first time. The transition
+	// being reported is identical, so the type is identical and the payload
+	// says which peer.
+
+	// TypePeerRemoved is membership revoked — a peer this system will no
+	// longer talk to, replicate to, or count as holding a replica (M4-04).
+	//
+	// Its own type rather than a peer.health_changed transition to some
+	// "removed" state, because they answer different questions and decay
+	// differently. Health is a fact about reachability that flaps; removal is
+	// a fact about membership that a human decided and that does not flap. A
+	// subscriber reconciling "who is in this fabric" wants exactly this, not
+	// the health stream with one terminal value filtered out of it.
+	TypePeerRemoved = "peer.removed"
+
+	// TypePeerHealthChanged is a peer crossing between reachable and
+	// unreachable, edge-triggered, with the transition in the payload (M4-10).
+	//
+	// There is deliberately no peer.up / peer.down pair. Two types for two
+	// edges of one machine is the shape invariant 7 keeps failing on: it is
+	// two places to forget to emit, and it forces a subscriber that cares
+	// about reachability at all to subscribe to both and reassemble the
+	// machine itself. The payload carries the state before and after, so
+	// filtering for "went down" stays possible without a second type.
+	//
+	// Edge-triggered is the load-bearing word: it is emitted when health
+	// CHANGES, never on each successful probe. A health check that ran every
+	// thirty seconds and emitted each time would be a heartbeat, and a
+	// heartbeat in the event log is the same mistake as blob.verified above —
+	// a hundred thousand events recording that nothing happened.
+	TypePeerHealthChanged = "peer.health_changed"
+
+	// TypeReplicationTransferChanged is one blob transfer between two peers
+	// moving through its lifecycle: started, succeeded or failed, with the
+	// transition and both peers in the payload (M4-09).
+	//
+	// ONE type for the whole machine, not one per edge, for the reason
+	// acquisition.phase_changed gives above: N event types would be N places
+	// to forget to emit. A subscriber wanting only failures filters the
+	// payload, which it must be able to do anyway.
+	//
+	// This is the one type in this namespace that is per-blob, and it is the
+	// boundary the rule below is drawn around: a transfer is work actually
+	// being done to a specific blob, on a queue an operator throttles and
+	// watches. Nothing else in replication may be per-blob — see "No per-blob
+	// events during replication" in the package doc.
+	TypeReplicationTransferChanged = "replication.transfer_changed"
+
+	// TypeSyncInventoryReported is a peer having reported what it holds — one
+	// event per report CYCLE, carrying counts and the peer, not one per blob
+	// in the inventory (M4-07).
+	//
+	// A first inventory exchange with a peer holding a hundred thousand blobs
+	// would otherwise put a hundred thousand events in the log to say one
+	// thing: "we now know what that peer has". The per-blob facts are durable
+	// in the replicas table, which is state and is where anything wanting the
+	// detail should look — exactly the argument that keeps blob.verified and
+	// quality_profile.evaluated out of this file.
+	TypeSyncInventoryReported = "sync.inventory_reported"
+
+	// TypeSyncReconciled is one reconciliation cycle finishing, carrying what
+	// it decided: how many blobs were under-replicated, how many transfers it
+	// enqueued, how many it could not place (M4-08).
+	//
+	// Not one event per enqueued job — job.enqueued already reports that, per
+	// job, and repeating it here would say the same thing twice in two
+	// vocabularies. This type exists for the fact job.enqueued cannot express:
+	// that a full pass ran, and what the fabric looked like when it did. A
+	// cycle that decided to do NOTHING still emits, because "we looked and
+	// everything is sufficiently replicated" is the outcome an operator most
+	// needs and the one that leaves no job rows behind to prove it happened.
+	TypeSyncReconciled = "sync.reconciled"
+
+	// TypeCatalogSnapshotBuilt is one catalog snapshot being built for
+	// transfer to a peer (M4-13) — one event per build.
+	//
+	// There is no matching catalog.snapshot_applied here: applying a snapshot
+	// changes the catalog, and those changes already emit content.* events on
+	// the receiving peer. A subscriber watching the catalog grow should not
+	// have to know whether a Work arrived by scan, by want, or by snapshot;
+	// content.work.created says so in its payload, as its comment above
+	// promises.
+	TypeCatalogSnapshotBuilt = "catalog.snapshot_built"
 )
 
 const timeFormat = time.RFC3339Nano
