@@ -95,6 +95,14 @@ const (
 	TypeSystemStarted  = "system.started"
 	TypeSystemStopped  = "system.stopped"
 	TypePeerRegistered = "peer.registered"
+	// TypePeerIdentityEstablished is this node's Ed25519 keypair being
+	// generated and recorded for the first time (§26, ADR-0012). It is a
+	// distinct transition from peer.registered: the row can exist for a while
+	// before it has an identity, and "when did this peer become able to
+	// authenticate?" is the question asked when two peers turn out to claim
+	// one identity. Emitted once per peer, ever — a second one means a key was
+	// regenerated, which is a re-enrolment and should be loud.
+	TypePeerIdentityEstablished = "peer.identity_established"
 
 	// desired.* is §76's own category for wanting (M3-02).
 	//

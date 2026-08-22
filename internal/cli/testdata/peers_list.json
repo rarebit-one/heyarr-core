@@ -5,6 +5,7 @@
     "site": "site-a",
     "mode": "full",
     "endpoint": "http://127.0.0.1:7777",
+    "public_key": null,
     "is_self": true,
     "created_at": "<timestamp>"
   }

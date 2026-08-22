@@ -2367,6 +2367,19 @@ components:
         site: { type: string, description: The failure domain this peer is in. }
         mode: { type: string, enum: [full, partial, cache, archive, compute] }
         endpoint: { type: [string, "null"] }
+        public_key:
+          type: [string, "null"]
+          description: |
+            The peer's Ed25519 identity as `ed25519:<64 lowercase hex>` — the
+            same algorithm-prefixed shape as a blob digest, so the two are not
+            confused in a terminal. Null for a peer that has not established an
+            identity yet (ADR-0012).
+
+            This is the PUBLIC half, and it is what another site needs in order
+            to enrol this peer. The private key is never exposed here or
+            anywhere else in the API: it is a 0600 file in the data directory
+            that the API layer does not read.
+          pattern: "^ed25519:[0-9a-f]{64}$"
         is_self: { type: boolean }
         created_at: { type: string, format: date-time }
 

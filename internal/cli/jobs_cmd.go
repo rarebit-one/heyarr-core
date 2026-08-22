@@ -184,9 +184,14 @@ func newPeersListCommand(_ Options, configPath *string) *cobra.Command {
 				if flags.asJSON {
 					return emitJSON(cmd.OutOrStdout(), peers)
 				}
-				t := newTable("ID", "NAME", "SITE", "MODE", "SELF", "ENDPOINT")
+				// The public key is a column rather than a detail view: an
+				// operator enrolling this node at the other site needs a value
+				// to copy, and telling them to read it out of SQLite is not an
+				// answer (ADR-0012). It is the PUBLIC half — the private key is
+				// a 0600 file the CLI never opens.
+				t := newTable("ID", "NAME", "SITE", "MODE", "SELF", "ENDPOINT", "PUBLIC KEY")
 				for _, p := range peers {
-					t.add(p.ID, p.Name, p.Site, p.Mode, strconv.FormatBool(p.IsSelf), dash(p.Endpoint))
+					t.add(p.ID, p.Name, p.Site, p.Mode, strconv.FormatBool(p.IsSelf), dash(p.Endpoint), dash(p.PublicKey))
 				}
 				return t.render(cmd.OutOrStdout(), "no peers")
 			})
