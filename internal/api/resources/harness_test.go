@@ -560,9 +560,13 @@ func (h *harness) seed() *harness {
 		(?, 'epub', NULL, 12, ?), (?, 'pdf', NULL, NULL, ?)`,
 		blob1Hash, seedTime, blob2Hash, seedTime)
 
-	h.exec(`INSERT INTO replicas (blob_hash, peer_id, state, bytes_present, verified_at, updated_at) VALUES
-		(?, ?, 'present', 42949672960, ?, ?), (?, ?, 'corrupt', 0, NULL, ?)`,
-		blob1Hash, peerID, seedTime, seedTime, blob2Hash, peerID, seedTime)
+	// One row confirmed by an inventory report and one never confirmed, so the
+	// golden shows both faces of freshness (M4-07). A NULL reported_at means
+	// exactly "no peer has ever confirmed this row", and rendering it is the
+	// only way the shape asserts that null is reachable.
+	h.exec(`INSERT INTO replicas (blob_hash, peer_id, state, bytes_present, verified_at, reported_at, updated_at) VALUES
+		(?, ?, 'present', 42949672960, ?, ?, ?), (?, ?, 'corrupt', 0, NULL, NULL, ?)`,
+		blob1Hash, peerID, seedTime, seedTime, seedTime, blob2Hash, peerID, seedTime)
 
 	h.exec(`INSERT INTO jobs (id, type, payload, state, priority, dedupe_key, required_capability,
 			run_after, attempts, max_attempts, last_error, created_at, updated_at, finished_at) VALUES

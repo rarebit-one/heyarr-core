@@ -27,4 +27,5 @@ prints here; move its endpoint later by registering the same key again.
 * [heyarr peers list](heyarr_peers_list.md)	 - List peers
 * [heyarr peers ping](heyarr_peers_ping.md)	 - Open a mutually authenticated connection to a peer and report who it says you are
 * [heyarr peers remove](heyarr_peers_remove.md)	 - Revoke a peer's membership
+* [heyarr peers report-inventory](heyarr_peers_report-inventory.md)	 - Tell a controller what this node's content store actually holds
 * [heyarr peers show](heyarr_peers_show.md)	 - Show one peer, by name or id
