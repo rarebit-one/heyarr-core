@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	peercatalog "github.com/rarebit-one/heyarr-core/internal/peer/catalog"
@@ -13,6 +14,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
 
 // snapshotSource adapts the catalog to the peer surface's contract (§52,
@@ -81,7 +83,7 @@ func (l peerLookup) Lookup(ctx context.Context, publicKey []byte) (mtls.Peer, er
 // rather than a convenience: loopback must never have to authenticate itself
 // to itself.
 func (c *Controller) newPeerSurface(
-	db *sqlite.DB, self identity.Identity, members *membership.Store,
+	db *sqlite.DB, self identity.Identity, members *membership.Store, blobStore cas.Store,
 ) (*peerapi.Server, error) {
 	// The private half, read here and nowhere else in the controller. It never
 	// reaches Identity, a log field or a response body — it exists to sign one
@@ -125,6 +127,19 @@ func (c *Controller) newPeerSurface(
 		return nil, fmt.Errorf("controller: opening the catalog for the peer surface: %w", err)
 	}
 
+	// Byte serving on the peer fabric (M4-09). The SAME handler the client API
+	// mounts, over the same store, differing only in the credential that
+	// reaches it — ADR-0013's "a contract, not an endpoint" is the reason there
+	// is one handler here rather than a replication-shaped second one.
+	//
+	// This is the only place in the process where a replica's bytes leave the
+	// machine, and the controller's own API is not on that path: a destination
+	// dials this listener directly (ADR-0030, §32).
+	blobHandler, err := blobs.New(blobs.Options{Store: blobStore, Logger: c.log})
+	if err != nil {
+		return nil, fmt.Errorf("controller: building the peer surface's blob handler: %w", err)
+	}
+
 	srv, err := peerapi.New(peerapi.Options{
 		Addr:       c.cfg.Peer.Listen,
 		Material:   material,
@@ -132,6 +147,7 @@ func (c *Controller) newPeerSurface(
 		SelfPeerID: self.PeerID,
 		Inventory:  peerCatalog,
 		Snapshots:  snapshotSource{cat: peerCatalog, self: self.PeerID},
+		Blobs:      blobHandler,
 		Logger:     c.log,
 	})
 	if err != nil {

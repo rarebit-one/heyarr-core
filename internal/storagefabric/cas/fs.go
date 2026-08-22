@@ -329,6 +329,130 @@ func (s *FS) commit(tmpName string, h hashing.Hash) (deduplicated bool, err erro
 	return false, nil
 }
 
+// PutExpecting streams r into the store, verifying against expected as it
+// writes, and publishes the bytes only once they have been shown to be the
+// bytes that were asked for (§21, invariant 1, M4-09).
+//
+// # Why this is not Put followed by a comparison
+//
+// Put hashes what it is handed and names the result, which is right for
+// ingest: the bytes define their own identity. A destination pulling a replica
+// is in the opposite position — it already knows the digest it asked for, and
+// the only open question is whether what arrived is it. Calling Put and
+// comparing afterwards would answer that question a moment too late, with the
+// bytes already published under a name derived from themselves. Whatever a
+// dishonest source sent would be a perfectly valid blob of something else.
+//
+// # The expectation comes from the CALLER, never from the wire
+//
+// This function is handed a hash and a stream and has no way to learn the
+// expectation from the stream, which is deliberate: a signature taking only a
+// reader would invite the caller to read the digest out of a response header,
+// and verifying against what the source claimed is trusting the source with
+// extra steps (ADR-0005, ADR-0030).
+//
+// # What is left behind on each outcome
+//
+//   - matched: a published, addressable blob, and no staging file.
+//   - mismatched: nothing addressable, a file under quarantine/, and a
+//     *Corruption naming both digests and where the evidence went (ADR-0018).
+//   - interrupted: nothing addressable, and a reapable .part under tmp/. There
+//     is no resumption here and there must not be until §84 says so — a failed
+//     transfer is retried whole, which is what makes the job idempotent.
+func (s *FS) PutExpecting(ctx context.Context, r io.Reader, expected hashing.Hash) (Descriptor, error) {
+	if expected.IsZero() {
+		return Descriptor{}, errors.New("cas: refusing to receive bytes with no expected digest — " +
+			"a destination verifies against what it asked for (§21, ADR-0005)")
+	}
+
+	// Staged privately, exactly as Link stages (#151, #176). The blob path is
+	// shared with every other writer of these bytes, and a receive that wrote
+	// to it directly would have to clean up after a failure — deleting a path
+	// another worker could already have published to.
+	staging := s.stagingPath()
+	f, err := os.OpenFile(staging, os.O_CREATE|os.O_EXCL|os.O_WRONLY, tempPerm) // #nosec G304 -- the name is generated within the configured root
+	if err != nil {
+		return Descriptor{}, fmt.Errorf("cas: creating a staging file: %w", err)
+	}
+	staged := true
+	defer func() {
+		_ = f.Close()
+		if staged {
+			// Best effort. On the published path the file has been linked away
+			// and removing the staging name is the tidy-up; on the quarantined
+			// path it has been renamed and this is a no-op.
+			_ = os.Remove(staging)
+		}
+	}()
+
+	// Hashed as it is written, so verification costs no second pass and memory
+	// stays flat in the blob's size. Reading the transfer into a buffer to hash
+	// it would turn ADR-0013's normal case — a 20 GB remux — into 20 GB of heap.
+	verifier := hashing.NewVerifyingReader(&ctxReader{ctx: ctx, r: r}, expected)
+	buf := make([]byte, 1<<20)
+	written, err := io.CopyBuffer(f, verifier, buf)
+	if err != nil {
+		return Descriptor{}, fmt.Errorf("cas: receiving %s: %w", expected, err)
+	}
+	if err := f.Sync(); err != nil {
+		return Descriptor{}, fmt.Errorf("cas: syncing %s: %w", expected, err)
+	}
+	if err := f.Close(); err != nil {
+		return Descriptor{}, fmt.Errorf("cas: closing %s: %w", expected, err)
+	}
+
+	// The verdict, before anything is publishable. Check refuses to answer at
+	// all unless the reader reached EOF, so a truncated transfer cannot be
+	// mistaken for a matching one.
+	if err := verifier.Check(); err != nil {
+		var mismatch *hashing.ErrMismatch
+		if !errors.As(err, &mismatch) {
+			return Descriptor{}, fmt.Errorf("cas: verifying %s: %w", expected, err)
+		}
+		corrupt := &Corruption{Hash: expected, Actual: mismatch.Got, Size: mismatch.Size}
+		dst, qErr := s.quarantineFile(staging, expected)
+		if qErr != nil {
+			return Descriptor{}, errors.Join(corrupt, qErr)
+		}
+		staged = false
+		corrupt.Path = dst
+		return Descriptor{}, corrupt
+	}
+
+	deduped, err := s.publish(staging, expected)
+	if err != nil {
+		return Descriptor{}, err
+	}
+	return Descriptor{Hash: expected, Size: written, Materialised: Copy, Deduplicated: deduped}, nil
+}
+
+// publish links a verified staging file into its final location.
+//
+// os.Link rather than os.Rename, following what Link already does: a link
+// fails when the destination exists rather than replacing it, so the loser of
+// a race between two workers receiving the same blob reports a duplicate
+// instead of swapping the bytes under a reader that already has the winner's
+// file open.
+func (s *FS) publish(staging string, h hashing.Hash) (deduplicated bool, err error) {
+	final := s.blobPath(h)
+	if err := os.MkdirAll(filepath.Dir(final), dirPerm); err != nil {
+		return false, fmt.Errorf("cas: creating blob directory: %w", err)
+	}
+	if err := os.Chmod(staging, blobPerm); err != nil {
+		return false, fmt.Errorf("cas: setting blob mode: %w", err)
+	}
+	if err := os.Link(staging, final); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return true, nil
+		}
+		return false, fmt.Errorf("cas: publishing blob: %w", err)
+	}
+	if err := syncDir(filepath.Dir(final)); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
 // Link materialises srcPath into the store, degrading down the ladder when the
 // filesystem cannot oblige (ADR-0014).
 //
@@ -562,12 +686,32 @@ func (s *FS) Verify(ctx context.Context, h hashing.Hash) error {
 // file (#43). Deleting would destroy the only copy of something that was never
 // Heyarr's to delete.
 func (s *FS) quarantine(h hashing.Hash) (string, error) {
+	return s.quarantineFile(s.blobPath(h), h)
+}
+
+// quarantineFile moves any file this store owns aside under the name the bytes
+// were CLAIMING to have, and reports where it went.
+//
+// It is shared by Verify, which preserves a stored blob that stopped matching
+// its own name, and by PutExpecting, which preserves bytes that never earned
+// one. Both are the same fact — these bytes were offered as h and are not h —
+// and both are evidence: in the first case of a library damaged underneath us,
+// in the second of a peer that served the wrong thing. Neither is ever
+// deleted (ADR-0018).
+//
+// The quarantined name is the EXPECTED digest, not the actual one. That is
+// what makes the file findable by an operator who was told blob h is corrupt,
+// and it is the same convention QuarantinedBlobs parses back out.
+func (s *FS) quarantineFile(src string, h hashing.Hash) (string, error) {
 	dst := filepath.Join(s.root, quarantineDir,
 		fmt.Sprintf("%s.%d", h.Hex(), time.Now().UTC().UnixNano()))
-	if err := os.Chmod(s.blobPath(h), tempPerm); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
+		return "", fmt.Errorf("cas: creating the quarantine directory: %w", err)
+	}
+	if err := os.Chmod(src, tempPerm); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return "", fmt.Errorf("cas: preparing to quarantine %s: %w", h, err)
 	}
-	if err := os.Rename(s.blobPath(h), dst); err != nil {
+	if err := os.Rename(src, dst); err != nil {
 		return "", fmt.Errorf("cas: quarantining %s: %w", h, err)
 	}
 	return dst, nil
