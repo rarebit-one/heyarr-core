@@ -887,3 +887,132 @@ func mustHash(t *testing.T, n int) hashing.Hash {
 	}
 	return h
 }
+
+// chunkings reads every chunk_blob job in the queue, in a stable order.
+func (h *convergeHarness) chunkings(t *testing.T) []string {
+	t.Helper()
+	rows, err := h.db.Reader().Query(
+		`SELECT payload, coalesce(dedupe_key, '') FROM jobs WHERE type = ? ORDER BY id`,
+		manifests.ChunkBlobJobType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var raw, key string
+		if err := rows.Scan(&raw, &key); err != nil {
+			t.Fatal(err)
+		}
+		var p manifests.ChunkBlobPayload
+		if err := json.Unmarshal([]byte(raw), &p); err != nil {
+			t.Fatal(err)
+		}
+		if want := manifests.ChunkBlobDedupeKey(p.BlobHash); key != want {
+			t.Errorf("chunk_blob for %s carries dedupe key %q, want %q — without it every cycle "+
+				"queues another full read of the same blob", p.BlobHash, key, want)
+		}
+		out = append(out, p.BlobHash)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// §16's trigger, and the enqueuer M5-04 gives chunk_blob: the cycle that
+// decided these bytes must cross a network is the thing that decided a manifest
+// would be worth having.
+//
+// The negative half is the more important one and it is asserted first: a
+// fabric with nothing to move chunks NOTHING. §16's whole argument is that the
+// work is deferred until something needs it, and a background sweep over the
+// store would read every byte in the library for manifests nobody asked for.
+func TestAConvergenceCycleEnqueuesTheChunkingOfWhatItIsAboutToMove(t *testing.T) {
+	h := newConvergeHarness(t)
+	h.managed(t, blobOne)
+	h.managed(t, blobTwo)
+
+	// Both peers already hold everything: no gaps, therefore no transfers and
+	// — the assertion — no chunking either.
+	h.reports(t, h.self, blobOne, blobTwo)
+	h.reports(t, h.other, blobOne, blobTwo)
+	if summary := h.cycle(t, "", 0); summary.UnderReplicated != 0 {
+		t.Fatalf("the converged fabric had %d gaps; the assertion below would prove nothing",
+			summary.UnderReplicated)
+	}
+	if got := h.chunkings(t); len(got) != 0 {
+		t.Errorf("a cycle with nothing to move enqueued %d chunking(s): %v — that is a sweep, and "+
+			"§16 exists to say the work waits until something needs it", len(got), got)
+	}
+
+	// Now the other peer loses one blob. One transfer, and one chunking for
+	// the blob that is about to move — and NONE for the blob that is not.
+	h.exec(t, `DELETE FROM replicas WHERE peer_id = ? AND blob_hash = ?`, h.other, blobTwo)
+	if summary := h.cycle(t, "", 0); summary.Enqueued != 1 {
+		t.Fatalf("the cycle enqueued %d transfer(s), want 1", summary.Enqueued)
+	}
+	got := h.chunkings(t)
+	if len(got) != 1 || got[0] != blobTwo {
+		t.Fatalf("chunkings = %v, want exactly [%s]: the blob that is about to move, and only it",
+			got, blobTwo)
+	}
+
+	// A second cycle over an unchanged fabric adds nothing. The dedupe key is
+	// what enforces it; a cycle that re-offered the same chunking every five
+	// minutes would queue another full read of the same blob each time.
+	h.cycle(t, "", 0)
+	if again := h.chunkings(t); len(again) != 1 {
+		t.Errorf("a second cycle brought the chunkings to %d, want 1: %v", len(again), again)
+	}
+}
+
+// A blob that already has a manifest is not chunked again, and the cycle
+// decides that by READING the state — which generates nothing (ADR-0034).
+func TestAConvergenceCycleDoesNotChunkWhatIsAlreadyChunked(t *testing.T) {
+	h := newConvergeHarness(t)
+	h.managed(t, blobOne)
+	h.managed(t, blobTwo)
+
+	blob, err := hashing.Parse(blobOne)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := manifests.Build(blob, chunking.DefaultConfig(), []chunking.Chunk{
+		{Offset: 0, Length: 600, Digest: mustHash(t, 7)},
+		{Offset: 600, Length: 424, Digest: mustHash(t, 3)},
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cat.SaveChunkManifest(t.Context(), m); err != nil {
+		t.Fatal(err)
+	}
+
+	h.reports(t, h.self, blobOne, blobTwo)
+	if summary := h.cycle(t, "", 0); summary.Enqueued != 2 {
+		t.Fatalf("the cycle enqueued %d transfer(s), want 2 — both blobs are missing from the "+
+			"other peer", summary.Enqueued)
+	}
+
+	got := h.chunkings(t)
+	if len(got) != 1 || got[0] != blobTwo {
+		t.Fatalf("chunkings = %v, want exactly [%s]: the blob with a manifest is not re-read",
+			got, blobTwo)
+	}
+	// And deciding did not produce one: the blob the cycle enqueued work for is
+	// still undecided until that job runs. Compared by equality — none of the
+	// three state names is a substring of another and they are kept that way.
+	other, err := hashing.Parse(blobTwo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := h.cat.ChunkManifestState(t.Context(), other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != manifests.StateUndecided {
+		t.Errorf("after a cycle enqueued its chunking, %s is %q, want %q — enqueueing the work is "+
+			"not doing it, and asking must never generate", blobTwo, state, manifests.StateUndecided)
+	}
+}
