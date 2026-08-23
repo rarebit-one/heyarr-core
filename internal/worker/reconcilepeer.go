@@ -153,9 +153,16 @@ func reconcilePeerHandler(
 		// (ADR-0034) — one query for the whole catalog, and only `undecided`
 		// produces a job. The dedupe key would collapse the duplicates anyway;
 		// this keeps the cycle from offering work that is already answered.
-		chunkStates, err := cat.ChunkManifestStates(ctx)
-		if err != nil {
-			return err
+		//
+		// Read only when there is something to decide about: a converged
+		// fabric takes no gaps, and a cycle that changes nothing should not
+		// scan the catalogue to discover that.
+		chunkStates := map[string]manifests.State{}
+		if len(taken) > 0 {
+			chunkStates, err = cat.ChunkManifestStates(ctx)
+			if err != nil {
+				return err
+			}
 		}
 		chunkAsked := make(map[string]struct{}, len(taken))
 

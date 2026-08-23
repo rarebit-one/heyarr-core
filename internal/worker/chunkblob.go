@@ -10,6 +10,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/chunking"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
@@ -182,6 +183,14 @@ func ChunkBlobHandler(deps ChunkDeps) HandlerFunc {
 		}
 
 		state, err := deps.Manifests.StateOf(ctx, hash)
+		if errors.Is(err, catalog.ErrManifestBlobUnknown) {
+			// Enqueued before a sweep reclaimed the blob. Stale rather than
+			// wrong, and the same answer verify_blob gives: there is nothing
+			// to chunk and nothing has gone wrong, so failing the job four
+			// more times would only bury that in a queue error (ADR-0008).
+			log.Info("chunk_blob skipped a blob the catalog no longer has", "blob_hash", hash.String())
+			return nil
+		}
 		if err != nil {
 			return err
 		}

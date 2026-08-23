@@ -801,3 +801,22 @@ func (f *chunkFixture) damage(hash hashing.Hash, at int64) {
 			"this test is meant to need the whole-object hash", info.Size(), after.Size())
 	}
 }
+
+// A job for a blob the catalog no longer has is stale, not wrong. It can be
+// enqueued and then have its blob reclaimed underneath it, and failing would
+// bury an ordinary race in a queue error four retries later (ADR-0008).
+func TestChunkBlobSkipsABlobTheCatalogNoLongerHas(t *testing.T) {
+	f := newChunkFixture(t)
+	hash := f.seedBlob(pseudoRandom(chunkableSize, 31))
+	if _, err := f.db.Writer().ExecContext(f.t.Context(),
+		`DELETE FROM blobs WHERE hash = ?`, hash.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.run(hash); err != nil {
+		t.Fatalf("chunking a reclaimed blob: %v", err)
+	}
+	if got := f.count("chunk_manifests"); got != 0 {
+		t.Errorf("chunk_manifests = %d, want 0", got)
+	}
+}
