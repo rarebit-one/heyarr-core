@@ -10,8 +10,10 @@
 //   - Milestone 2's remote ffprobe (§29), which reads the first, metadata and
 //     footer ranges of a container rather than materialising 20 GB to answer
 //     "what codec is this";
-//   - Milestone 4's replication, which resumes an interrupted copy from a byte
-//     offset;
+//   - Milestone 5's replication, which reads one CHUNK BOUNDARY at a time out
+//     of a manifest the destination verified itself, to resume an interrupted
+//     copy or to skip chunks it already holds (ADR-0035 — never "from the
+//     offset I got to", which is the shape that record refuses);
 //   - Milestone 6's HTTP web-seed (§27), which serves BitTorrent piece
 //     boundaries to a swarm that also has peers.
 //

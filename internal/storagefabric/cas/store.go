@@ -136,6 +136,18 @@ type Store interface {
 	// file and no blob.
 	PutExpecting(ctx context.Context, r io.Reader, expected hashing.Hash) (Descriptor, error)
 
+	// OpenPartial opens a resumable staging file for a blob this store is
+	// receiving, creating it on the first attempt and finding what an
+	// interrupted attempt left on any later one.
+	//
+	// It is on the Store rather than being a detail of one implementation
+	// because §84's resumable replication needs somewhere to put bytes that
+	// survive a crash, and ADR-0035 says where: the store's private staging
+	// area, never a database row. What comes back is bytes and a length, and
+	// the caller is required to re-verify every byte of it against a digest it
+	// holds independently before believing any of it — see [Partial].
+	OpenPartial(ctx context.Context, expected hashing.Hash) (Partial, error)
+
 	// Link materialises the file at srcPath into the store using mode,
 	// degrading down the ladder when the filesystem cannot oblige.
 	Link(ctx context.Context, srcPath string, mode Materialisation) (Descriptor, error)

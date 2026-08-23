@@ -40,14 +40,44 @@
 // with no manifest is a 404 and an answer — the caller pulls whole, which is
 // what this file already does.
 //
-// # There is no resumption here
+// # There IS resumption here now, and what it is allowed to trust
 //
-// §84 puts resumable replication in Milestone 5. A failed transfer is retried
-// WHOLE by the job queue, which is what makes the handler idempotent under
-// invariant 9: there is no partial state to be right about, because a receive
-// that did not finish left nothing. Nothing in this package may learn to send
-// a Range header for a resume; the blob endpoint supports ranges for other
-// consumers, and using them here would smuggle in a milestone.
+// Until Milestone 5 this paragraph said the opposite, and it said it as a
+// warning: "Nothing in this package may learn to send a Range header for a
+// resume." That prohibition is lifted, deliberately, by ADR-0035 — and the
+// condition it is lifted under is stricter than the prohibition was, so it is
+// rewritten here rather than deleted. A caveat that vanishes silently reads,
+// to the next person, as one nobody thought about.
+//
+// [Puller.Pull] is unchanged: one unranged read, verified as it streams,
+// published by cas.PutExpecting, and retried WHOLE on failure. It is still
+// what every blob with no chunk manifest gets, which is §16's lazy chunking
+// doing its job (see resume.go's [ModeWhole]).
+//
+// [Puller.PullChunked] is the resumable path, and it may send a Range header
+// under exactly one condition: **the range is a chunk boundary out of a
+// manifest this node fetched and verified itself, and what arrives is hashed
+// against that manifest's digest for that chunk before it counts as
+// received.** The forbidden shape — "I have 4 GB, send me from 4 GB" — is
+// still forbidden and is not computable here: the loop's only input is the
+// manifest, and a resumed transfer re-hashes the prefix it kept rather than
+// trusting its length. ADR-0035 sets out why the offset resume cannot be made
+// safe: the only ways to make it work are persisting BLAKE3 hasher state
+// (an unverified serialised intermediate, which is exactly what invariant 1
+// exists to have none of), re-reading the prefix anyway, or skipping the
+// whole-object verification.
+//
+// So the destination still verifies the assembled whole-object digest itself,
+// on this path as on every other, before anything is published (ADR-0034).
+// Partial bytes live in the store's private staging area, are addressable by
+// nothing, are a replica of nothing, and are reaped by age.
+//
+// # Idempotence under invariant 9, restated
+//
+// The handler used to be idempotent because a receive that did not finish left
+// nothing to be right about. It is now idempotent in a stronger sense: a re-run
+// may find work already done and RE-VERIFIES it rather than trusting it, so
+// the outcome of one run and of ten interrupted runs is byte-identical.
 package transfer
 
 import (
@@ -97,12 +127,22 @@ var (
 
 // Store is the half of a content store a transfer needs.
 //
-// Narrow on purpose. PutExpecting is the only write it may make, which is what
-// keeps "verify then publish" from being two steps a caller could reorder, and
-// Has is what makes the handler idempotent without a second full read.
+// Narrow on purpose, and the two writes it may make are the two that verify
+// before they publish: PutExpecting for a whole pull, and OpenPartial's
+// [cas.Partial.Publish] for a chunked one. There is no third, which is what
+// keeps "verify then publish" from being two steps a caller could reorder.
+//
+// Open and Verify are reads, and they are here for chunk reuse (M5-07): Open
+// supplies a chunk this node already holds out of the blob that holds it, and
+// Verify is what a mismatch on such a chunk points at the donor blob, so that
+// a damaged blob reaches quarantine on the path that already exists for it and
+// a merely stale index entry does not (ADR-0018).
 type Store interface {
 	Has(ctx context.Context, h hashing.Hash) (bool, error)
 	PutExpecting(ctx context.Context, r io.Reader, expected hashing.Hash) (cas.Descriptor, error)
+	OpenPartial(ctx context.Context, expected hashing.Hash) (cas.Partial, error)
+	Open(ctx context.Context, h hashing.Hash) (cas.ReadSeekCloser, cas.Descriptor, error)
+	Verify(ctx context.Context, h hashing.Hash) error
 }
 
 // Options configure a Puller.
@@ -112,6 +152,14 @@ type Options struct {
 	Material *mtls.Material
 	// Store is where verified bytes land. Required.
 	Store Store
+	// Index is this node's local chunk index, consulted to decide which chunks
+	// of a transfer it can supply from blobs it already holds (M5-07).
+	//
+	// Optional, and a Puller without one is M5-06 without M5-07: it resumes
+	// and it never reuses. That is a legitimate configuration rather than a
+	// degraded one — a node with no index answers "I hold none of these
+	// chunks", which is the same answer an empty index gives.
+	Index Index
 	// Logger records what was pulled from where. Optional.
 	Logger *slog.Logger
 }
@@ -120,6 +168,7 @@ type Options struct {
 type Puller struct {
 	material *mtls.Material
 	store    Store
+	index    Index
 	log      *slog.Logger
 }
 
@@ -137,19 +186,53 @@ func New(opts Options) (*Puller, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Puller{material: opts.Material, store: opts.Store, log: log.With("component", "transfer")}, nil
+	return &Puller{
+		material: opts.Material, store: opts.Store, index: opts.Index,
+		log: log.With("component", "transfer"),
+	}, nil
 }
 
 // Outcome is what one completed pull did.
+//
+// The chunk and byte counters are the number M5-07 exists to produce: an
+// operator who cannot see how much a transfer reused cannot tell whether reuse
+// is working, because a transfer that reused everything and one that reused
+// nothing both end in a published blob and a log line saying so.
 type Outcome struct {
 	// SourcePeerID is the peer the bytes actually came from.
 	SourcePeerID string
-	// Bytes is how many arrived and verified.
+	// Mode is which path moved the bytes — whole or chunked. An enum, because
+	// the thing worth asserting is which path RAN, and "it succeeded" is
+	// satisfied by either.
+	Mode Mode
+	// Bytes is how many the published blob has, verified whole.
 	Bytes int64
 	// Deduplicated reports that the store already held these bytes by the time
 	// they landed — a concurrent transfer or an ingest won the race. It is
 	// success, not a conflict: the blob is present and it is the right blob.
 	Deduplicated bool
+
+	// ChunksKept and BytesKept are what a previous attempt left on disk and
+	// this one re-hashed against the manifest and believed. Zero on a first
+	// attempt and on the whole path.
+	ChunksKept int
+	BytesKept  int64
+	// ChunksReused and BytesReused are what this node supplied out of blobs it
+	// already held, each re-verified against the manifest before use.
+	ChunksReused int
+	BytesReused  int64
+	// ChunksFetched and BytesFetched are what came off the wire. This is the
+	// number the saving is measured against — though the honest measurement is
+	// the SOURCE's served bytes, because this one is the destination's own
+	// claim about itself.
+	ChunksFetched int
+	BytesFetched  int64
+	// ChunksIndexStale counts chunks the local index claimed and the bytes did
+	// not support, which were fetched instead. It is not an error count: an
+	// index entry going stale is ordinary. It is a zero that should stay zero,
+	// and a number that says the re-verification is doing something when it
+	// does not.
+	ChunksIndexStale int
 }
 
 // Pull fetches one blob from one source and verifies it against expected.
@@ -191,9 +274,11 @@ func (p *Puller) Pull(
 		return Outcome{}, fmt.Errorf("transfer: building the read of %s from peer %s: %w",
 			expected, src.PeerID, err)
 	}
-	// No Range header, deliberately. Resumption is Milestone 5 (§84) and a
-	// partial pull is retried whole — which is the property that makes the job
-	// idempotent rather than merely re-runnable.
+	// No Range header on THIS path, deliberately, and it is not an oversight
+	// left over from M4: a whole pull is what a blob with no chunk manifest
+	// gets, and it has nothing to resume against. Ranged reads live in
+	// resume.go, where every one of them is a chunk boundary from a verified
+	// manifest (ADR-0035).
 	resp, err := client.Do(req)
 	if err != nil {
 		if errors.Is(err, ErrRedirected) {
@@ -233,7 +318,10 @@ func (p *Puller) Pull(
 	p.log.Info("pulled a blob from a peer",
 		"blob_hash", expected.String(), "source_peer_id", src.PeerID,
 		"source_peer_name", src.Name, "bytes", desc.Size, "deduplicated", desc.Deduplicated)
-	return Outcome{SourcePeerID: src.PeerID, Bytes: desc.Size, Deduplicated: desc.Deduplicated}, nil
+	return Outcome{
+		SourcePeerID: src.PeerID, Mode: ModeWhole,
+		Bytes: desc.Size, Deduplicated: desc.Deduplicated,
+	}, nil
 }
 
 // clientFor builds a client pinned to exactly one peer's key.
