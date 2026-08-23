@@ -41,3 +41,6 @@ An ADR that merely describes the code is not worth having.
 | [0031](0031-provider-credentials-are-typed-by-their-auth-scheme.md) | Provider credentials are typed by the provider's declared auth scheme | Accepted |
 | [0032](0032-the-personal-mcp-is-device-side-and-device-keys-land-before-they-authorise-anything.md) | The Personal MCP is device-side, and device keys land before they authorise anything | Accepted |
 | [0033](0033-a-full-peer-authenticates-to-the-controller-with-its-peer-identity.md) | A Full Peer authenticates to the controller with its ADR-0012 identity | Accepted |
+| [0034](0034-a-chunk-manifest-is-an-optimisation-not-an-identity.md) | A chunk manifest is an optimisation, and a blob is never addressed by its chunks | Accepted |
+| [0035](0035-a-resumed-transfer-trusts-nothing-it-has-not-re-verified.md) | A resumed transfer trusts nothing it has not re-verified itself | Accepted |
+| [0036](0036-integrity-repair-stages-a-whole-replacement.md) | Integrity repair stages a whole replacement; a blob is never edited in place | Accepted |
