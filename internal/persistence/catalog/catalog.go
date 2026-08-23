@@ -447,8 +447,8 @@ func (c *Catalog) injectFault(stage string) error {
 // lookup the handler could forget to do.
 func (c *Catalog) recordBlob(ctx context.Context, tx *sql.Tx, rec ingest.Recording, now string) (bool, error) {
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO blobs (hash, size, mime, chunked, first_seen_at)
-		VALUES (?, ?, ?, 0, ?)
+		INSERT INTO blobs (hash, size, mime, first_seen_at)
+		VALUES (?, ?, ?, ?)
 		ON CONFLICT (hash) DO NOTHING`,
 		rec.Blob.Hash, rec.Blob.Size, nullString(rec.MIME), now)
 	if err != nil {

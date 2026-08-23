@@ -52,8 +52,8 @@ func (c *Catalog) RecordDerived(
 
 		stamp := now.Format(timestampFormat)
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO blobs (hash, size, mime, chunked, first_seen_at)
-			VALUES (?, ?, ?, 0, ?)
+			INSERT INTO blobs (hash, size, mime, first_seen_at)
+			VALUES (?, ?, ?, ?)
 			ON CONFLICT (hash) DO NOTHING`,
 			blobHash, size, mimeForContainer(container), stamp); err != nil {
 			return err

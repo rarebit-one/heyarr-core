@@ -3015,14 +3015,35 @@ components:
 
     Blob:
       type: object
-      required: [hash, size, chunked, first_seen_at]
+      required: [hash, size, chunked, chunk_manifest, first_seen_at]
       properties:
         hash:
           type: string
           description: "`blake3:<64 hex>` — the canonical byte identity (ADR-0005)."
         size: { type: integer, format: int64 }
         mime: { type: [string, "null"] }
-        chunked: { type: boolean }
+        chunked:
+          type: boolean
+          description: >-
+            Compatibility only: true exactly when `chunk_manifest` is
+            `present`. It was a stored column from Milestone 1 until migration
+            00029 and was `false` on every row in every deployment, because
+            nothing ever wrote it. It is now computed, and it is kept rather
+            than removed because it is a required field and dropping it would
+            break every client that reads it. It cannot express the third state
+            §16 needs, so do not branch on it — read `chunk_manifest`.
+          deprecated: true
+        chunk_manifest:
+          type: string
+          enum: [present, not_required, undecided]
+          description: >-
+            Whether these bytes have a chunk manifest (§15, §16, ADR-0034).
+            `present` — one exists. `not_required` — a decision was recorded
+            that these bytes will never need one; §16 allows that small blobs
+            never do. `undecided` — nobody has decided yet. The last two are
+            what a single boolean could not tell apart, and they are the two a
+            replication decision branches on. Reading this field never causes a
+            manifest to be generated.
         first_seen_at: { type: string, format: date-time }
 
     Library:

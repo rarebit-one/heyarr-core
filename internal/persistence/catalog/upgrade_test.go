@@ -43,8 +43,8 @@ const terminal2160 = `[{"attribute":"resolution","op":"gte","value":2160}]`
 // distinct key.
 func (h *harness) seedAsset(t *testing.T, hash, editionKey, editionType string, height int64) string {
 	t.Helper()
-	h.exec(t, `INSERT INTO blobs (hash, size, mime, chunked, first_seen_at)
-		VALUES (?, 8589934592, 'video/x-matroska', 0, ?)`, hash, stamp)
+	h.exec(t, `INSERT INTO blobs (hash, size, mime, first_seen_at)
+		VALUES (?, 8589934592, 'video/x-matroska', ?)`, hash, stamp)
 	h.exec(t, `INSERT INTO editions
 			(id, work_id, label, edition_key, edition_type, language, attributes, created_at)
 		VALUES (?, 'w1', ?, ?, ?, 'en', '{}', ?)`,

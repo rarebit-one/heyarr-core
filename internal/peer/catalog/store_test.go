@@ -2,13 +2,17 @@ package catalog_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	_ "modernc.org/sqlite"
+
 	"github.com/rarebit-one/heyarr-core/internal/peer/catalog"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
 // M4-13's acceptance for the store itself (§52).
@@ -305,5 +309,78 @@ func TestTheBuilderRefusesAControlDatabase(t *testing.T) {
 func TestAnInMemorySnapshotStoreIsRefused(t *testing.T) {
 	if _, err := catalog.Open(context.Background(), catalog.Options{Path: ":memory:"}); err == nil {
 		t.Fatal("an in-memory snapshot store was accepted")
+	}
+}
+
+// A snapshot store built before M5-03 is discarded, not migrated (M5-03).
+//
+// schemaSQL is CREATE TABLE IF NOT EXISTS, so an existing snapshot_blobs with
+// the old `chunked` column would survive the CREATE and then fail on the first
+// INSERT against a column that is not there — a peer that opens fine and
+// cannot refresh, which is the worst of the available failures because nothing
+// is red until the next snapshot arrives.
+func TestASnapshotStoreFromBeforeTheManifestStateIsRebuilt(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "catalog-snapshot.db")
+
+	// Stand up a store as an older build left it.
+	old, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.ExecContext(ctx, `
+		CREATE TABLE snapshot_meta (
+			id INTEGER PRIMARY KEY CHECK (id = 1), controller_id TEXT NOT NULL,
+			version INTEGER NOT NULL CHECK (version > 0), generated_at TEXT NOT NULL,
+			kind TEXT NOT NULL CHECK (kind IN ('full', 'incremental')),
+			watermark TEXT NOT NULL, applied_at TEXT NOT NULL, content_digest TEXT NOT NULL
+		) STRICT;
+		CREATE TABLE snapshot_blobs (
+			hash TEXT PRIMARY KEY, size INTEGER NOT NULL, mime TEXT,
+			chunked INTEGER NOT NULL CHECK (chunked IN (0, 1)),
+			first_seen_at TEXT NOT NULL
+		) STRICT;
+		INSERT INTO snapshot_meta VALUES (1, 'c', 7, 'x', 'full', 'x', 'x', 'x');
+		INSERT INTO snapshot_blobs VALUES ('blake3:a', 1, NULL, 0, 'x');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := catalog.Open(ctx, catalog.Options{Path: path})
+	if err != nil {
+		t.Fatalf("opening a store from an older build: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	// The stale snapshot is gone, so the next Refresh asks for a full payload
+	// rather than believing it holds version 7.
+	if _, err := store.Metadata(ctx); !errors.Is(err, catalog.ErrNoSnapshot) {
+		t.Errorf("metadata of a rebuilt store = %v, want ErrNoSnapshot", err)
+	}
+
+	// And the rebuilt store takes a payload in the NEW shape, which is the
+	// half that would have failed silently: the old table survives a CREATE
+	// TABLE IF NOT EXISTS and then refuses an INSERT naming chunk_manifest.
+	rebuilt := &catalog.Snapshot{
+		Meta: catalog.Meta{
+			ControllerID: "c", Version: 1, Kind: catalog.KindFull,
+			GeneratedAt: time.Now().UTC(), Watermark: time.Now().UTC(),
+		},
+		Blobs: []catalog.Blob{{
+			Hash: "blake3:" + strings.Repeat("a", 64), Size: 1,
+			ChunkManifest: manifests.StateNotRequired, FirstSeenAt: time.Now().UTC(),
+		}},
+	}
+	if err := store.Apply(ctx, rebuilt); err != nil {
+		t.Fatalf("applying a snapshot to a rebuilt store: %v", err)
+	}
+	contents, err := store.Contents(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(contents.Blobs) != 1 || contents.Blobs[0].ChunkManifest != manifests.StateNotRequired {
+		t.Errorf("the rebuilt store holds %+v", contents.Blobs)
 	}
 }

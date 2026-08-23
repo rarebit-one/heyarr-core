@@ -92,7 +92,12 @@ CREATE TABLE IF NOT EXISTS snapshot_blobs (
     hash          TEXT PRIMARY KEY,
     size          INTEGER NOT NULL CHECK (size >= 0),
     mime          TEXT,
-    chunked       INTEGER NOT NULL CHECK (chunked IN (0, 1)),
+    -- §16's three-way answer, not a boolean (M5-03, ADR-0034). The controller
+    -- column this replaced was 0 on every row that ever existed, so a snapshot
+    -- carrying it forward described a fabric one state poorer than the one it
+    -- came from.
+    chunk_manifest TEXT NOT NULL
+                   CHECK (chunk_manifest IN ('present', 'not_required', 'undecided')),
     first_seen_at TEXT NOT NULL
 ) STRICT;
 

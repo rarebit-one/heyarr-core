@@ -121,11 +121,76 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := s.discardStaleSchema(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("catalog: preparing the snapshot schema: %w", err)
 	}
 	return s, nil
+}
+
+// discardStaleSchema throws away a snapshot built against an older schema.
+//
+// schemaSQL is CREATE TABLE IF NOT EXISTS, which is exactly right for a store
+// that is definitionally reproducible and exactly wrong when a column changes:
+// the old table survives the CREATE and the first INSERT fails on a column
+// that is not there. M5-03 replaced snapshot_blobs.chunked (a boolean that was
+// 0 on every row ever written) with chunk_manifest (§16's three-way answer),
+// which is that case.
+//
+// So a store carrying the old shape is DELETED rather than migrated. That is
+// the stance this package already documents: a snapshot is a materialised view
+// of somebody else's catalogue, the correct response to one at an unexpected
+// schema is to rebuild it from the controller, and migrating it would be
+// carefully preserving data that is reproducible by definition — while putting
+// a second migration lineage on a peer that ADR-0029 says runs no control
+// plane at all. Dropping snapshot_meta with it is what makes the next Refresh
+// report ErrNoSnapshot and ask for a full payload.
+func (s *Store) discardStaleSchema(ctx context.Context) error {
+	var legacy int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count(*) FROM pragma_table_info('snapshot_blobs') WHERE name = 'chunked'`).
+		Scan(&legacy); err != nil {
+		return fmt.Errorf("catalog: inspecting the snapshot schema: %w", err)
+	}
+	if legacy == 0 {
+		return nil
+	}
+	tables, err := s.staleSnapshotTables(ctx)
+	if err != nil {
+		return err
+	}
+	for _, name := range tables {
+		// The names come from sqlite_master and match 'snapshot_%', so there
+		// is no caller-supplied text in this statement.
+		//nolint:gosec // table names read from sqlite_master, not from input
+		if _, err := s.db.ExecContext(ctx, `DROP TABLE IF EXISTS "`+name+`"`); err != nil {
+			return fmt.Errorf("catalog: discarding the stale snapshot store: %w", err)
+		}
+	}
+	return nil
+}
+
+// staleSnapshotTables lists the snapshot tables to drop.
+func (s *Store) staleSnapshotTables(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'snapshot_%'`)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: inspecting the snapshot schema: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		tables = append(tables, name)
+	}
+	return tables, rows.Err()
 }
 
 // OpenReadOnly opens an existing snapshot for reading, and only for reading.
