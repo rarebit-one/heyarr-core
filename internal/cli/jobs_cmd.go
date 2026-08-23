@@ -12,6 +12,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/peer/endpoint"
+	"github.com/rarebit-one/heyarr-core/internal/peer/reachability"
 )
 
 func newJobsCommand(opts Options, configPath *string) *cobra.Command {
@@ -268,7 +269,23 @@ otherwise replace a working endpoint and leave the peer looking healthy in
 
 Membership is the only trust root in the inter-peer path, and revocation is
 ` + "`heyarr peers remove`" + `. It is consulted on every request, so a removed
-peer loses access on the connection it is already holding open.`,
+peer loses access on the connection it is already holding open.
+
+REACHABILITY MUST BE MUTUAL, and it is checked here (#186, ADR-0037). Heyarr
+does not support a one-way pairing, because the two flows replication needs run
+in opposite directions: a peer PUSHES its inventory to the controller, and a
+destination PULLS bytes from the source. A link that carries only one direction
+deadlocks whichever node is the destination, and it deadlocks SILENTLY — the
+controller is never told the far node holds a blob, so reconciliation correctly
+emits no work and nothing is reported as wrong.
+
+So when --endpoint is given, this command dials the peer and then asks that
+peer whether it can reach back, and REPORTS what it found. Nothing is refused.
+Each peer is authoritative for its own site (ADR-0038): a peer that can be
+reached but cannot reach back fetches what it lacks from the peer it can reach,
+and both sites keep serving everything already on their own disks either way.
+A one-way pairing is an ordinary participant, and a peer that cannot be reached
+at all is usually a machine that is not up yet.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Checked here, before anything is sent, so the refusal names the
@@ -287,6 +304,24 @@ peer loses access on the connection it is already holding open.`,
 				peerEndpoint = normalised
 			}
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				// Both directions, before anything is enrolled (#186,
+				// ADR-0037). Only when an endpoint was given: a peer enrolled
+				// by key alone has no address to check, and a pairing with
+				// nowhere to dial is not one this can say anything about.
+				// Both directions, reported and never refused (#186,
+				// ADR-0037, ADR-0038). Only when an endpoint was given: a peer
+				// enrolled by key alone has no address to check, and a pairing
+				// with nowhere to dial is not one this can say anything about.
+				//
+				// Checked BEFORE the enrolment and printed AFTER it, so the
+				// operator is told about a network as it was at the moment they
+				// ran the command, but reads it as the fact it is rather than
+				// as a condition on whether the peer was added. It was.
+				var pairing reachability.Pairing
+				checked := cmd.Flags().Changed("endpoint")
+				if checked {
+					pairing = checkPairing(ctx, c, *configPath, name, peerEndpoint, publicKey)
+				}
 				var p client.Peer
 				body := map[string]string{
 					"name": name, "site": site, "mode": mode,
@@ -294,6 +329,9 @@ peer loses access on the connection it is already holding open.`,
 				}
 				if err := c.Post(ctx, "/peers", body, &p); err != nil {
 					return err
+				}
+				if checked {
+					reportPairing(cmd.ErrOrStderr(), pairing)
 				}
 				if flags.asJSON {
 					return emitJSON(cmd.OutOrStdout(), p)

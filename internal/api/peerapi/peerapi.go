@@ -45,6 +45,13 @@
 // as `missing` rather than deleted rows, so a peer that lost bytes is visible
 // rather than silently absent.
 //
+// GET /peer/v1/reachback is #186: whether this node can reach the peer that is
+// asking. Replication needs traffic in both directions — inventory is pushed
+// peer → controller and bytes are pulled destination → source — and a node
+// cannot observe the return direction for itself, so it asks. `peers add`
+// consults it to refuse a one-way pairing at enrolment rather than leaving it
+// to surface as a silent reconciliation (ADR-0037).
+//
 // GET|HEAD /peer/v1/blobs/{hash}/content is M4-09: the byte-carrying hop
 // itself. It is the SAME handler the client API serves, on a different trust
 // root — ADR-0013 called this out in advance — and it is the only route in
@@ -136,6 +143,11 @@ type Options struct {
 	// but a deployment that leaves it nil in production has a peer fabric
 	// whose health can never move: see [Liveness].
 	Liveness Liveness
+	// ReturnPath probes whether this node can reach the peer that is asking
+	// (#186, ADR-0037). Nil on a node with no membership table behind its
+	// peer surface, and the route then answers `unknown` rather than
+	// disappearing — see reachback.go for why that is not a 503.
+	ReturnPath ReturnPathProber
 	// Snapshots builds catalog snapshots for attached Full Peers (§52,
 	// M4-13). Nil on a node with no catalogue — a peer rather than a
 	// controller (ADR-0029) — and the route then refuses honestly rather than
@@ -166,6 +178,9 @@ type Server struct {
 	// liveness is where an authenticated inbound peer request is recorded as
 	// evidence that the caller is up (#184).
 	liveness Liveness
+	// returnPath probes the caller's own address, for the enrolment-time
+	// reachability check (#186, ADR-0037).
+	returnPath ReturnPathProber
 
 	http     *http.Server
 	bound    string
@@ -212,10 +227,11 @@ func New(opts Options) (*Server, error) {
 		tls:     tlsCfg,
 		errc:    make(chan error, 1),
 
-		inventory: opts.Inventory,
-		snapshots: opts.Snapshots,
-		blobs:     opts.Blobs,
-		liveness:  opts.Liveness,
+		inventory:  opts.Inventory,
+		snapshots:  opts.Snapshots,
+		blobs:      opts.Blobs,
+		liveness:   opts.Liveness,
+		returnPath: opts.ReturnPath,
 	}
 	s.handler = s.routes()
 	s.http = &http.Server{
@@ -276,6 +292,11 @@ func (s *Server) routes() http.Handler {
 		//
 		// HEAD as well as GET, because ADR-0013's contract includes it and a
 		// caller asking only for the length must not be served a body.
+		// The return leg of a pairing (#186, ADR-0037). Every other route
+		// here answers a question about the CALLER; this one answers a
+		// question about the network BETWEEN the two, and it is the only
+		// question a node cannot answer for itself. See reachback.go.
+		r.Get("/reachback", s.handleReachback)
 		r.Get("/blobs/{hash}/content", s.handleBlobContent)
 		r.Head("/blobs/{hash}/content", s.handleBlobContent)
 	})
