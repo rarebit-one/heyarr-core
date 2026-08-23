@@ -240,6 +240,7 @@ func newPeersAddCommand(_ Options, configPath *string) *cobra.Command {
 		mode         string
 		peerEndpoint string
 		publicKey    string
+		skipCheck    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "add",
@@ -268,7 +269,22 @@ otherwise replace a working endpoint and leave the peer looking healthy in
 
 Membership is the only trust root in the inter-peer path, and revocation is
 ` + "`heyarr peers remove`" + `. It is consulted on every request, so a removed
-peer loses access on the connection it is already holding open.`,
+peer loses access on the connection it is already holding open.
+
+REACHABILITY MUST BE MUTUAL, and it is checked here (#186, ADR-0037). Heyarr
+does not support a one-way pairing, because the two flows replication needs run
+in opposite directions: a peer PUSHES its inventory to the controller, and a
+destination PULLS bytes from the source. A link that carries only one direction
+deadlocks whichever node is the destination, and it deadlocks SILENTLY — the
+controller is never told the far node holds a blob, so reconciliation correctly
+emits no work and nothing is reported as wrong.
+
+So when --endpoint is given, this command dials the peer and then asks that
+peer whether it can reach back. A pairing observed to work in one direction
+only is REFUSED, and nothing is enrolled. A peer that cannot be reached at all
+is NOT refused — it is far more likely to be a machine that is not up yet — and
+the outcome is reported instead. ` + "`--skip-reachability-check`" + ` enrols
+without asking.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Checked here, before anything is sent, so the refusal names the
@@ -287,6 +303,17 @@ peer loses access on the connection it is already holding open.`,
 				peerEndpoint = normalised
 			}
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				// Both directions, before anything is enrolled (#186,
+				// ADR-0037). Only when an endpoint was given: a peer enrolled
+				// by key alone has no address to check, and a pairing with
+				// nowhere to dial is not one this can say anything about.
+				if cmd.Flags().Changed("endpoint") && !skipCheck {
+					pairing := checkPairing(ctx, c, *configPath, name, peerEndpoint, publicKey)
+					if err := pairing.Refusal(); err != nil {
+						return err
+					}
+					reportPairing(cmd.ErrOrStderr(), pairing)
+				}
 				var p client.Peer
 				body := map[string]string{
 					"name": name, "site": site, "mode": mode,
@@ -310,6 +337,8 @@ peer loses access on the connection it is already holding open.`,
 		"where to reach the peer, as "+endpoint.Example+", a bare host:port or unix:///path; not its identity")
 	cmd.Flags().StringVar(&publicKey, "public-key", "",
 		"the peer's Ed25519 public key as ed25519:<64 hex characters> — who it is (required)")
+	cmd.Flags().BoolVar(&skipCheck, "skip-reachability-check", false,
+		"enrol without checking that the peer can reach back; a one-way pairing cannot replicate (#186)")
 	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.MarkFlagRequired("public-key")
 	flags.register(cmd)

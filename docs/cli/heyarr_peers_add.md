@@ -30,6 +30,21 @@ Membership is the only trust root in the inter-peer path, and revocation is
 `heyarr peers remove`. It is consulted on every request, so a removed
 peer loses access on the connection it is already holding open.
 
+REACHABILITY MUST BE MUTUAL, and it is checked here (#186, ADR-0037). Heyarr
+does not support a one-way pairing, because the two flows replication needs run
+in opposite directions: a peer PUSHES its inventory to the controller, and a
+destination PULLS bytes from the source. A link that carries only one direction
+deadlocks whichever node is the destination, and it deadlocks SILENTLY — the
+controller is never told the far node holds a blob, so reconciliation correctly
+emits no work and nothing is reported as wrong.
+
+So when --endpoint is given, this command dials the peer and then asks that
+peer whether it can reach back. A pairing observed to work in one direction
+only is REFUSED, and nothing is enrolled. A peer that cannot be reached at all
+is NOT refused — it is far more likely to be a machine that is not up yet — and
+the outcome is reported instead. `--skip-reachability-check` enrols
+without asking.
+
 ```
 heyarr peers add [flags]
 ```
@@ -37,16 +52,17 @@ heyarr peers add [flags]
 ### Options
 
 ```
-      --addr string         where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
-      --endpoint string     where to reach the peer, as https://192.168.1.10:8443, a bare host:port or unix:///path; not its identity
-      --json                emit machine-readable JSON
-      --mode string         full, partial, cache, archive or compute (§9) (default "full")
-      --name string         the peer's name, unique within this instance
-      --public-key string   the peer's Ed25519 public key as ed25519:<64 hex characters> — who it is (required)
-      --site string         the peer's failure domain (§35)
-      --timeout duration    how long one request may take; streaming reads and the event stream are exempt (default 30s)
-      --token string        bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
-      --token-file string   read the bearer token from this file (default: <data_dir>/cli.token when it exists)
+      --addr string               where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
+      --endpoint string           where to reach the peer, as https://192.168.1.10:8443, a bare host:port or unix:///path; not its identity
+      --json                      emit machine-readable JSON
+      --mode string               full, partial, cache, archive or compute (§9) (default "full")
+      --name string               the peer's name, unique within this instance
+      --public-key string         the peer's Ed25519 public key as ed25519:<64 hex characters> — who it is (required)
+      --site string               the peer's failure domain (§35)
+      --skip-reachability-check   enrol without checking that the peer can reach back; a one-way pairing cannot replicate (#186)
+      --timeout duration          how long one request may take; streaming reads and the event stream are exempt (default 30s)
+      --token string              bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
+      --token-file string         read the bearer token from this file (default: <data_dir>/cli.token when it exists)
 ```
 
 ### Options inherited from parent commands
