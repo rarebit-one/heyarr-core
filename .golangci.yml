@@ -23,6 +23,14 @@ linters:
         # performance hint about code we do not own, not a correctness finding.
         - inline
 
+    misspell:
+      # "Devialet" is a loudspeaker manufacturer, and misspell reads it as a
+      # misspelling of "deviate". The word appears wherever a real renderer is
+      # named — fixture names, test cases, package documentation.
+      ignore-rules:
+        - Devialet
+        - devialet
+
     errcheck:
       # Writes to an already-open stdout/stderr: there is no useful recovery, and
       # checking each one buries the usage text in error handling. Every other
