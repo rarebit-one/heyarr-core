@@ -1,4 +1,4 @@
-# 0037. Worker capability advertisement is durable, proven by execution, and expires
+# 0039. Worker capability advertisement is durable, proven by execution, and expires
 
 **Status:** Accepted
 **Date:** 2026-08-23

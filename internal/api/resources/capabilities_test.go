@@ -13,7 +13,7 @@ import (
 )
 
 // GET /api/v1/capabilities — the fleet-wide read path ADR-0023 said was missing
-// (§6, §75, ADR-0037, M5-112).
+// (§6, §75, ADR-0039, M5-112).
 //
 // Advertisements are seeded straight into the table rather than through a
 // worker, because the two properties being asserted here are properties of the

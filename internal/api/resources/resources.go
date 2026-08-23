@@ -211,7 +211,7 @@ func (a *API) Mount(r chi.Router) {
 	r.Get("/devices", a.listDevices)
 	r.Get("/devices/{id}", a.getDevice)
 	r.Get("/providers", a.listProviders)
-	// The fleet capability view (ADR-0037). Under the `read` scope floor like
+	// The fleet capability view (ADR-0039). Under the `read` scope floor like
 	// every other collection: it names worker ids and peer names, which is more
 	// than an unauthenticated caller needs.
 	r.Get("/capabilities", a.listCapabilities)

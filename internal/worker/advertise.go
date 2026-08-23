@@ -10,7 +10,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/media/capability"
 )
 
-// The capability advertisement beat (§6, §75, ADR-0037, M5-112).
+// The capability advertisement beat (§6, §75, ADR-0039, M5-112).
 //
 // # Why this is NOT a job, when the provider health pass next door is
 //
@@ -80,7 +80,7 @@ type AdvertiserOptions struct {
 	PeerName string
 	// Binary is what the startup toolchain resolved (ADR-0023). It is a VALUE
 	// captured at startup and is never re-resolved here; that asymmetry with
-	// the hardware half is the decision ADR-0037 records.
+	// the hardware half is the decision ADR-0039 records.
 	Binary []capability.Held
 	// Runner exercises hardware candidates. Nil means this node has no ffmpeg,
 	// so there is nothing to exercise and the advertisement is the binary half

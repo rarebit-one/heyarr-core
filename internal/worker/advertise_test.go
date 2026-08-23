@@ -12,7 +12,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/worker"
 )
 
-// The capability beat (§6, §75, ADR-0037, M5-112).
+// The capability beat (§6, §75, ADR-0039, M5-112).
 //
 // # What this file asserts and what it deliberately does not
 //
@@ -194,7 +194,7 @@ func TestTheAdvertisementNarrowsWhenAProbeStopsPassing(t *testing.T) {
 	}
 }
 
-// The asymmetry, in the direction ADR-0023 fixed and ADR-0037 keeps: the binary
+// The asymmetry, in the direction ADR-0023 fixed and ADR-0039 keeps: the binary
 // half is a captured startup value and survives a hardware collapse.
 func TestTheBinaryHalfSurvivesAHardwareCollapse(t *testing.T) {
 	hw := newFlakyHardware("hevc_qsv", "av1_qsv")

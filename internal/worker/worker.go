@@ -459,7 +459,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		return fmt.Errorf("worker: building the runtime: %w", err)
 	}
 
-	// The capability advertisement beat (ADR-0037, M5-112).
+	// The capability advertisement beat (ADR-0039, M5-112).
 	//
 	// It runs even on a node with no toolchain and no providers, and that is
 	// deliberate: an advertisement of NOTHING is the answer to "why is nothing

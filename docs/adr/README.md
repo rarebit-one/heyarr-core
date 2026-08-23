@@ -45,3 +45,4 @@ An ADR that merely describes the code is not worth having.
 | [0035](0035-a-resumed-transfer-trusts-nothing-it-has-not-re-verified.md) | A resumed transfer trusts nothing it has not re-verified itself | Accepted |
 | [0036](0036-integrity-repair-stages-a-whole-replacement.md) | Integrity repair stages a whole replacement; a blob is never edited in place | Accepted |
 | [0038](0038-there-is-no-central-authority-peers-are-repositories.md) | Each peer is authoritative for its own site | Proposed |
+| [0039](0039-worker-capability-advertisement-is-durable-proven-by-execution-and-expires.md) | Worker capability advertisement is durable, proven by execution, and expires | Accepted |

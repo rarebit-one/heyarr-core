@@ -14,7 +14,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
-// M5-112 against a real database (§6, §75, ADR-0037).
+// M5-112 against a real database (§6, §75, ADR-0039).
 //
 // Three properties, and each one is a way this feature silently stops meaning
 // anything:
@@ -181,7 +181,7 @@ func TestAnAdvertisementMayNarrowToNothing(t *testing.T) {
 }
 
 // Binary presence and hardware capability are re-verified on DIFFERENT rules,
-// and the asymmetry is tested in both directions (ADR-0023, ADR-0037).
+// and the asymmetry is tested in both directions (ADR-0023, ADR-0039).
 //
 // Direction one: the hardware goes, the binary stays. `ffmpeg` survives — it
 // was resolved at startup and is not re-resolved — while the encoder that

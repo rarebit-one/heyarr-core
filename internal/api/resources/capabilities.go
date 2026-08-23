@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// The fleet capability view over HTTP (§6, §75, ADR-0037, M5-112).
+// The fleet capability view over HTTP (§6, §75, ADR-0039, M5-112).
 //
 // # The question this endpoint exists to answer
 //

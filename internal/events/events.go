@@ -93,7 +93,7 @@ const (
 	TypeJobFailed    = "job.failed"
 	TypeScanProgress = "system.scan.progress"
 	// TypeWorkerCapabilitiesChanged is a worker's advertisement of what it can
-	// do having become different from what it advertised last time (ADR-0037,
+	// do having become different from what it advertised last time (ADR-0039,
 	// M5-112). It is under system.* because it describes a NODE's abilities
 	// rather than any content, and it names the CHANGE rather than either
 	// direction: there is deliberately no capability.gained and no

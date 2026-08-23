@@ -1,5 +1,5 @@
 // Package capability decides what a worker may advertise, by EXERCISING each
-// candidate rather than by reading a list (§6, §75, ADR-0023, ADR-0037).
+// candidate rather than by reading a list (§6, §75, ADR-0023, ADR-0039).
 //
 // # The measurement this package exists because of
 //
@@ -190,7 +190,7 @@ func Probe(ctx context.Context, r Runner, candidates []Candidate, now func() tim
 		// THE line this package exists for. What follows must depend on the
 		// process having exited successfully, not on c.Encoder having appeared
 		// in `listed` above. Deleting this call and advertising the listed set
-		// is the sabotage ADR-0037 records, and it is caught by a fixture that
+		// is the sabotage ADR-0039 records, and it is caught by a fixture that
 		// lists an encoder it refuses to run.
 		if err := r.Exercise(ctx, c); err != nil {
 			log.Debug("an encoder is listed but did not encode",

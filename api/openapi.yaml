@@ -1890,7 +1890,7 @@ paths:
       operationId: listCapabilities
       summary: Which nodes in the fleet can do what, proven by execution.
       description: |
-        The fleet-wide capability view (§6, §75, ADR-0037).
+        The fleet-wide capability view (§6, §75, ADR-0039).
 
         ### Why this is not `/api/v1/system`
 

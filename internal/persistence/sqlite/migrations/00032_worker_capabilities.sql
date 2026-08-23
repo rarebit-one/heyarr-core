@@ -1,6 +1,6 @@
 -- +goose Up
 -- What each worker in the fleet has PROVEN it can do, and until when (§6, §75,
--- ADR-0023, ADR-0037, M5-112).
+-- ADR-0023, ADR-0039, M5-112).
 --
 -- # Why a table at all
 --
@@ -40,7 +40,7 @@
 --            Heyarr is not a supported flow.
 --   probe    the capability was EXERCISED — a real encode of a handful of
 --            frames to a null sink — and the process exited successfully.
---            ADR-0037's whole point: ffmpeg will LIST a hardware encoder the
+--            ADR-0039's whole point: ffmpeg will LIST a hardware encoder the
 --            silicon cannot run, and nothing it prints distinguishes the two.
 --   service  an external network service reported itself healthy (ADR-0025).
 --

@@ -11,7 +11,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/media/capability"
 )
 
-// Worker capability advertisement, persisted (§6, §75, ADR-0037, M5-112).
+// Worker capability advertisement, persisted (§6, §75, ADR-0039, M5-112).
 //
 // # Why this is stored rather than held in memory
 //
@@ -104,7 +104,7 @@ func (c *Catalog) AdvertiseCapabilities(
 		// eventually gets wrong in the direction of keeping too much.
 		//
 		// Deleting this statement leaves the upsert below, which can only ever
-		// add and update. That is the grow-only advertisement ADR-0037 says
+		// add and update. That is the grow-only advertisement ADR-0039 says
 		// lies after the first driver update, and it is a sabotage the tests
 		// are required to catch.
 		keep := make([]any, 0, len(want)+1)
