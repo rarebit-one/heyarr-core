@@ -89,7 +89,7 @@ type Options struct {
 	// MountPublic registers routes OUTSIDE the authenticated /api/v1 group,
 	// on the bare router, reached with no bearer credential at all.
 	//
-	// It exists for exactly one caller — the renderer route of ADR-0037, where
+	// It exists for exactly one caller — the renderer route of ADR-0039, where
 	// an unguessable capability in the path is the whole authority — and the
 	// name is blunt on purpose. Anything mounted here is world-reachable on
 	// whatever address the server binds, so a route that belongs under Mount

@@ -15,7 +15,7 @@ import (
 const APIPrefix = "/api/v1"
 
 // RenderPrefix is where capability-addressed content is mounted
-// (ADR-0037). It is deliberately NOT under APIPrefix: everything there
+// (ADR-0039). It is deliberately NOT under APIPrefix: everything there
 // requires a bearer credential, and the whole point of this route is
 // serving a device that has none to give.
 //
@@ -81,7 +81,7 @@ func (s *Server) routes(mounts []MountFunc) http.Handler {
 		}))
 	})
 
-	// Capability-addressed content (ADR-0037), before the authenticated group
+	// Capability-addressed content (ADR-0039), before the authenticated group
 	// and deliberately outside it.
 	//
 	// A renderer cannot present a credential, so the unguessable, expiring,

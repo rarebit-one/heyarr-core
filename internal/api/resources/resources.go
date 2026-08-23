@@ -90,7 +90,7 @@ type Options struct {
 	Now   func() time.Time
 	NewID func() string
 	// RenderSecret signs the capability URLs a dumb renderer fetches
-	// (ADR-0037). Empty disables them: POST /playback still answers, and the
+	// (ADR-0039). Empty disables them: POST /playback still answers, and the
 	// response simply carries no renderer URL. That is a legitimate
 	// deployment — a node whose only clients send Authorization headers needs
 	// no capability route — and it keeps every harness that predates this
@@ -103,7 +103,7 @@ type Options struct {
 	RenderBaseURL string
 	// SelfPeerID identifies this node, so playback can tell whether the routed
 	// replica is one this node can actually mint for. A capability is only
-	// valid at the peer that signed it (ADR-0037).
+	// valid at the peer that signed it (ADR-0039).
 	SelfPeerID string
 	// StreamHeartbeat is how often the SSE stream writes a keep-alive comment.
 	// Zero means the default.

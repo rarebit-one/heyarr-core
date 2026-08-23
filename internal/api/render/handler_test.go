@@ -60,7 +60,7 @@ func token(t *testing.T, hash hashing.Hash, mime string) string {
 	}, testSecret)
 }
 
-// TestServesBytesToACredentiallessClient is the whole point of ADR-0037: a GET
+// TestServesBytesToACredentiallessClient is the whole point of ADR-0039: a GET
 // with no Authorization header, which is all a television can manage.
 func TestServesBytesToACredentiallessClient(t *testing.T) {
 	t.Parallel()

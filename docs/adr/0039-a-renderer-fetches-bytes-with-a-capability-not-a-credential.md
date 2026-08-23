@@ -1,4 +1,4 @@
-# 0037. A renderer fetches bytes with a capability, not a credential
+# 0039. A renderer fetches bytes with a capability, not a credential
 
 **Status:** Accepted
 **Date:** 2026-08-24

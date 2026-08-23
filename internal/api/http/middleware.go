@@ -229,7 +229,7 @@ func (s *Server) accessLogMiddleware(next http.Handler) http.Handler {
 
 // logPath renders a request path with any secret in it removed.
 //
-// Almost every path here is safe to log. The renderer route is not: ADR-0037
+// Almost every path here is safe to log. The renderer route is not: ADR-0039
 // puts a capability — an unguessable, blob-scoped bearer secret — in the path
 // itself, and an access log is precisely where auth.go refuses to let a
 // credential reach. Both the access log and the panic log go through this, and

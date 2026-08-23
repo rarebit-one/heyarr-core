@@ -13,7 +13,7 @@ import (
 // It sits beside the peer's Ed25519 key rather than in the database because it
 // belongs to the node that serves bytes, not to the catalog: a peer restored
 // from a controller backup should not inherit another node's signing key
-// (ADR-0037 scopes a capability to the peer that minted it).
+// (ADR-0039 scopes a capability to the peer that minted it).
 const SecretFile = "render_secret"
 
 // EnsureSecret loads the signing secret, generating it on first use.

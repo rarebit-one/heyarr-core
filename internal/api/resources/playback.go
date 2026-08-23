@@ -73,7 +73,7 @@ type StartPlaybackResponse struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
 	// RenderURL is an absolute, capability-addressed URL that a device with no
-	// notion of credentials can simply fetch (ADR-0037).
+	// notion of credentials can simply fetch (ADR-0039).
 	//
 	// It is what a television, a speaker or a projector is given. Empty when
 	// this node cannot mint one — see renderURL — and a client that finds it
@@ -92,7 +92,7 @@ type StartPlaybackResponse struct {
 // Shorter than the playback token, and deliberately so: the token is held by a
 // client that can keep a secret in a header, while a capability travels in a
 // URL through a television's logs and whatever a renderer chooses to do with
-// it. There is no revocation before expiry (ADR-0037), so the expiry is the
+// it. There is no revocation before expiry (ADR-0039), so the expiry is the
 // only control there is. Long enough for a film and a pause; short enough that
 // a leaked one is worthless by the time anyone finds it in a log.
 const renderCapabilityTTL = 6 * time.Hour
@@ -252,7 +252,7 @@ func (a *API) startPlayback(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// renderURL mints the capability URL a dumb renderer can fetch (ADR-0037).
+// renderURL mints the capability URL a dumb renderer can fetch (ADR-0039).
 //
 // It returns a URL or a reason, never neither and never both. Every path that
 // declines says why, in the same idiom as the rest of §68: a client that

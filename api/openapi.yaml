@@ -584,7 +584,7 @@ paths:
         '409':
           description: >-
             Nothing to play from — most often a replica on another peer, since
-            a capability is only valid at the peer that signed it (ADR-0037).
+            a capability is only valid at the peer that signed it (ADR-0039).
         '502':
           description: >-
             The renderer refused, with its own UPnP error. `714 Illegal
@@ -679,7 +679,7 @@ paths:
       security: []
       summary: Serve one blob to a device that cannot present a credential.
       description: >-
-        The renderer route of ADR-0037, and the only unauthenticated content
+        The renderer route of ADR-0039, and the only unauthenticated content
         path in Heyarr. It exists because a television, a speaker or a
         projector is handed a URL and told to fetch it: it cannot send an
         `Authorization` header, and `/api/v1/blobs/{hash}/content` therefore
@@ -2367,7 +2367,7 @@ paths:
       operationId: getPeerReachback
       summary: Report whether this node can reach the peer that is asking.
       description: |
-        The RETURN leg of a pairing (#186, ADR-0037).
+        The RETURN leg of a pairing (#186, ADR-0039).
 
         Replication needs traffic in both directions and the two flows run
         opposite ways: a peer PUSHES its inventory to the controller, and a
@@ -3944,7 +3944,7 @@ components:
       type: object
       required: [result, target, detail]
       description: |
-        Whether the answering node can reach the caller (#186, ADR-0037).
+        Whether the answering node can reach the caller (#186, ADR-0039).
       properties:
         result:
           type: string
