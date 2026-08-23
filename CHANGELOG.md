@@ -129,6 +129,17 @@ separate role processes (ADR-0002).
   peers that chunk one blob differently deduplicate nothing and nothing goes red
   to say so. Chunks are not identity; a blob is still its whole-object BLAKE3
   digest (ADR-0005).
+- **Chunk manifests, and the third state `chunked` could not express** — a
+  manifest is stored under the blob's whole-object digest, with the chunker
+  parameters it was produced under, an ordered chunk sequence and a digest of
+  the manifest itself; alongside it a local chunk index answers "where do I
+  already hold these bytes" in one query. `blobs.chunked` was a boolean that had
+  been `0` on every row in every deployment since Milestone 1, because nothing
+  ever wrote it, and §16 needs three answers — a manifest is present, a decision
+  was recorded that these bytes never need one, or nobody has decided. The API
+  keeps `chunked` (computed honestly, deprecated) and gains `chunk_manifest`,
+  which can say all three. Asking a blob's state never generates a manifest, and
+  deleting every manifest in the store costs speed and nothing else (ADR-0034).
 
 ### Known limitations
 - **Everything Milestone 4 proves, it proves on one machine.** The two peers in

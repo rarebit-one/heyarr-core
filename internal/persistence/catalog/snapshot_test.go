@@ -10,8 +10,11 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	peercatalog "github.com/rarebit-one/heyarr-core/internal/peer/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/chunking"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
 // M4-13's acceptance against a REAL controller database (§52).
@@ -467,4 +470,111 @@ func containsWork(snap *peercatalog.Snapshot, id string) bool {
 		}
 	}
 	return false
+}
+
+// The three chunk-manifest states survive the trip to a peer's snapshot
+// (M5-03, §16).
+//
+// The peer snapshot used to carry `chunked`, a boolean that was false on every
+// row of every snapshot ever built. Carrying it forward would have left a peer
+// describing a fabric one state poorer than the one it came from: it could not
+// have told "these bytes never need a manifest" from "nobody has looked", and
+// those are the two a replication decision branches on.
+//
+// Asserted with equality on the state value, on all three at once, and through
+// BOTH refresh paths — a full rebuild and an incremental — because the two
+// build the blob rows with different WHERE clauses and only one of them was
+// exercised while this was being written.
+func TestTheChunkManifestStateReachesTheSnapshot(t *testing.T) {
+	h := newSnapshotHarness(t)
+	ctx := context.Background()
+
+	manifested := "blake3:" + repeat("a", 64)
+	exempt := "blake3:" + repeat("b", 64)
+	undecided := "blake3:" + repeat("c", 64)
+	for _, hash := range []string{manifested, exempt, undecided} {
+		h.exec(t, `INSERT INTO blobs (hash, size, mime, first_seen_at)
+			VALUES (?, 1000, 'video/x-matroska', ?)`, hash, stamp)
+	}
+	blob, err := hashing.Parse(manifested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := manifests.Build(blob, chunking.DefaultConfig(), []chunking.Chunk{
+		{Offset: 0, Length: 1000, Digest: hashing.MustParse("blake3:" + repeat("d", 64))},
+	}, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cat.SaveChunkManifest(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	exemptHash, err := hashing.Parse(exempt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cat.RecordChunkingNotRequired(ctx, exemptHash, "smaller than one chunk"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, full := range []bool{true, false} {
+		name := "incremental"
+		if full {
+			name = "full rebuild"
+		}
+		t.Run(name, func(t *testing.T) {
+			snap := h.build(t, 0, full)
+			got := make(map[string]manifests.State, len(snap.Blobs))
+			for _, b := range snap.Blobs {
+				got[b.Hash] = b.ChunkManifest
+			}
+			for _, tc := range []struct {
+				hash string
+				want manifests.State
+			}{
+				{manifested, manifests.StatePresent},
+				{exempt, manifests.StateNotRequired},
+				{undecided, manifests.StateUndecided},
+			} {
+				if got[tc.hash] != tc.want {
+					t.Errorf("snapshot state for %s = %q, want %q", tc.hash, got[tc.hash], tc.want)
+				}
+			}
+			if got[exempt] == got[undecided] {
+				t.Error("the snapshot collapsed 'never needs one' and 'not yet decided' into " +
+					"one state — that is the boolean again, on the wire")
+			}
+		})
+	}
+
+	// And through the peer store, which is where a peer actually reads it.
+	h.refresh(t, true)
+	contents, err := h.store.Contents(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := make(map[string]manifests.State, len(contents.Blobs))
+	for _, b := range contents.Blobs {
+		stored[b.Hash] = b.ChunkManifest
+	}
+	if stored[manifested] != manifests.StatePresent ||
+		stored[exempt] != manifests.StateNotRequired ||
+		stored[undecided] != manifests.StateUndecided {
+		t.Errorf("the materialised snapshot holds %v", stored)
+	}
+}
+
+// The snapshot's content digest covers the state, so two snapshots that differ
+// only in a blob's chunk-manifest state are not reported as the same snapshot.
+func TestTheSnapshotDigestCoversTheChunkManifestState(t *testing.T) {
+	a := peercatalog.Snapshot{Blobs: []peercatalog.Blob{
+		{Hash: "blake3:" + repeat("a", 64), Size: 1, ChunkManifest: manifests.StateUndecided},
+	}}
+	b := peercatalog.Snapshot{Blobs: []peercatalog.Blob{
+		{Hash: "blake3:" + repeat("a", 64), Size: 1, ChunkManifest: manifests.StateNotRequired},
+	}}
+	if a.ContentDigest() == b.ContentDigest() {
+		t.Error("two snapshots differing only in a blob's chunk-manifest state produced " +
+			"the same content digest")
+	}
 }

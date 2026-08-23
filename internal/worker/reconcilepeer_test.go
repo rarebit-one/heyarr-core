@@ -5,16 +5,20 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/peer/inventory"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/chunking"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
 // Peer convergence, against a real database and a real queue (§19, §57, M4-08).
@@ -747,4 +751,139 @@ func TestReconciliationEmitsWorkAndMovesNothing(t *testing.T) {
 				state, jobs.Pending)
 		}
 	}
+}
+
+// 🔴 ADR-0034's own falsification test: deleting every manifest breaks nothing
+// but speed.
+//
+// This is the sharpest assertion M5-03 makes, because it is the operational
+// test of the whole record. ADR-0034: "if deleting every manifest in the store
+// breaks anything other than efficiency, the line has been crossed." §16
+// already assumes it by making chunking lazy and noting that small blobs may
+// never require manifests — a design in which manifests are load-bearing
+// cannot also make them optional.
+//
+// So the convergence series is run TWICE over identical fabrics: once with a
+// manifest and a local chunk index on every blob, once after every manifest
+// row has been dropped. The two must produce the same series, cycle for cycle.
+// A weaker version of this — "convergence still reaches zero without
+// manifests" — would pass on a reconciler that had started quietly skipping
+// the blobs whose manifests were gone.
+func TestDeletingEveryManifestChangesNothingButSpeed(t *testing.T) {
+	// series runs the whole convergence sequence and returns what it did.
+	series := func(t *testing.T, withManifests, thenDeleteThem bool) ([]int, []int) {
+		t.Helper()
+		h := newConvergeHarness(t)
+		h.managed(t, blobOne)
+		h.managed(t, blobTwo)
+
+		if withManifests {
+			for _, hash := range []string{blobOne, blobTwo} {
+				blob, err := hashing.Parse(hash)
+				if err != nil {
+					t.Fatal(err)
+				}
+				chunks := []chunking.Chunk{
+					{Offset: 0, Length: 600, Digest: mustHash(t, 1)},
+					{Offset: 600, Length: 424, Digest: mustHash(t, 2)},
+				}
+				m, err := manifests.Build(blob, chunking.DefaultConfig(), chunks, time.Now().UTC())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := h.cat.SaveChunkManifest(t.Context(), m); err != nil {
+					t.Fatal(err)
+				}
+				local := make([]manifests.LocalChunk, 0, len(chunks))
+				for _, c := range chunks {
+					local = append(local, manifests.LocalChunk{
+						Digest: c.Digest, BlobHash: blob, Offset: c.Offset, Length: c.Length,
+					})
+				}
+				if err := h.cat.RecordLocal(t.Context(), blob, local); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The fixture is only evidence if the manifests were actually there.
+			var n int
+			if err := h.db.Reader().QueryRow(`SELECT count(*) FROM chunk_manifests`).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			if n != 2 {
+				t.Fatalf("setup: %d manifests, want 2", n)
+			}
+		}
+		if thenDeleteThem {
+			// The recovery action, exactly as an operator would take it.
+			h.exec(t, `DELETE FROM chunk_manifests`)
+			var manifestRows, chunkRows int
+			if err := h.db.Reader().QueryRow(
+				`SELECT count(*) FROM chunk_manifests`).Scan(&manifestRows); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.db.Reader().QueryRow(
+				`SELECT count(*) FROM manifest_chunks`).Scan(&chunkRows); err != nil {
+				t.Fatal(err)
+			}
+			if manifestRows != 0 || chunkRows != 0 {
+				t.Fatalf("the delete left %d manifests and %d chunk rows", manifestRows, chunkRows)
+			}
+		}
+
+		h.reports(t, h.self, blobOne, blobTwo)
+		var work, queued []int
+		first := h.cycle(t, "", 0)
+		work = append(work, first.UnderReplicated)
+		queued = append(queued, len(h.transfers(t)))
+
+		h.reports(t, h.other, blobOne)
+		work = append(work, h.cycle(t, "", 0).UnderReplicated)
+		queued = append(queued, len(h.transfers(t)))
+
+		h.reports(t, h.other, blobOne, blobTwo)
+		work = append(work, h.cycle(t, "", 0).UnderReplicated)
+		queued = append(queued, len(h.transfers(t)))
+		return work, queued
+	}
+
+	withWork, withQueued := series(t, true, false)
+	if withWork[0] == 0 || withQueued[0] == 0 {
+		t.Fatalf("the manifested run found no work (%v/%v); the comparison below proves nothing",
+			withWork, withQueued)
+	}
+	if withWork[len(withWork)-1] != 0 {
+		t.Fatalf("the manifested run never converged: %v", withWork)
+	}
+
+	withoutWork, withoutQueued := series(t, true, true)
+
+	if !slices.Equal(withWork, withoutWork) {
+		t.Errorf("work series with manifests %v, after deleting every manifest %v — "+
+			"deleting manifests changed what replication believes there is to do, and "+
+			"ADR-0034 says it may cost only speed", withWork, withoutWork)
+	}
+	if !slices.Equal(withQueued, withoutQueued) {
+		t.Errorf("queue depth with manifests %v, without %v", withQueued, withoutQueued)
+	}
+	if withoutWork[len(withoutWork)-1] != 0 {
+		t.Errorf("with every manifest deleted, replication never converged: %v", withoutWork)
+	}
+
+	// And a run that never had a manifest at all behaves the same, so the
+	// equality above is not two identically-broken paths agreeing.
+	neverWork, neverQueued := series(t, false, false)
+	if !slices.Equal(withWork, neverWork) || !slices.Equal(withQueued, neverQueued) {
+		t.Errorf("a fabric that never had manifests converged differently: %v/%v vs %v/%v",
+			neverWork, neverQueued, withWork, withQueued)
+	}
+}
+
+// mustHash builds a distinct, non-zero chunk digest.
+func mustHash(t *testing.T, n int) hashing.Hash {
+	t.Helper()
+	h, err := hashing.Parse(fmt.Sprintf("blake3:%064x", n))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
 }
