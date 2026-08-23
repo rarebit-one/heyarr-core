@@ -182,18 +182,33 @@ func (c *Controller) Run(ctx context.Context) error {
 		return fmt.Errorf("controller: %w", err)
 	}
 
-	// Peer reachability (§31, §32, M4-10).
+	// This node's certificate material, derived once and used twice: the peer
+	// listener presents it, and the health probe dials with it (#184). It is
+	// built here, before either, so that an identity that cannot produce a
+	// certificate is a startup failure rather than a probe that quietly never
+	// works.
+	material, err := c.peerMaterial(self)
+	if err != nil {
+		return err
+	}
+
+	// Peer reachability (§31, §32, M4-10, #184).
 	//
-	// Constructed BEFORE the server, because the server's peer guard records
-	// liveness through it: an inbound request from a peer is the best evidence
-	// that peer is up, and it is evidence that arrives on the request path.
-	// The idle probe speaks to peer endpoints over plain HTTP /healthz — the
-	// cheapest thing a peer serves, and unauthenticated, so a probe cannot
-	// start failing because a token rotated and report that as an outage.
+	// Constructed BEFORE both servers, because both record liveness through
+	// it: an inbound request from a peer is the best evidence that peer is up,
+	// and it is evidence that arrives on the request path — on the client API
+	// for anything holding a bearer token, and on the PEER surface for a
+	// remote peer, which holds none.
+	//
+	// The idle probe dials the peer fabric itself, pinned, with this node's
+	// certificate. It used to speak plain HTTPS to /healthz, which an mTLS
+	// listener will not complete a handshake with — so in the topology this
+	// milestone actually builds, the probe could not answer either, and a
+	// remote peer's health never left `unknown` (#184).
 	peerHealth, err := health.New(health.Options{
 		DB:     db,
 		Events: identityEvents,
-		Prober: health.HTTPProber{},
+		Prober: health.MTLSProber{Material: material, Logger: c.log},
 		Logger: c.log,
 	})
 	if err != nil {
@@ -212,7 +227,7 @@ func (c *Controller) Run(ctx context.Context) error {
 	// unconditionally — which proves the identity on disk can still produce a
 	// certificate — and binds only when peer.listen is set. A single-node
 	// deployment needs no certificate configuration at all.
-	peerSrv, err := c.newPeerSurface(db, self, members, blobStore)
+	peerSrv, err := c.newPeerSurface(db, self, members, blobStore, material, peerHealth)
 	if err != nil {
 		return err
 	}

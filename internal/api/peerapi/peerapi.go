@@ -70,6 +70,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -86,6 +87,12 @@ import (
 // credentials, and a shared prefix would invite a future route onto whichever
 // one it was mounted on by accident.
 const Prefix = "/peer/v1"
+
+// IdentityPath is where a peer asks another peer who it thinks it is talking
+// to. It is exported because it is also the cheapest thing on this surface,
+// and therefore what the health probe dials (#184) — a path spelled out a
+// second time in another package is a path that goes stale in one of them.
+const IdentityPath = Prefix + "/identity"
 
 // readHeaderTimeout bounds how long a peer may take to send its headers.
 const readHeaderTimeout = 20 * time.Second
@@ -123,6 +130,12 @@ type Options struct {
 	Logger *slog.Logger
 	// Now is injected so certificate validity is testable (ADR-0017).
 	Now func() time.Time
+	// Liveness records that a peer was heard from (§31, M4-10, #184).
+	//
+	// Optional, and nil on a peer surface with no control plane behind it —
+	// but a deployment that leaves it nil in production has a peer fabric
+	// whose health can never move: see [Liveness].
+	Liveness Liveness
 	// Snapshots builds catalog snapshots for attached Full Peers (§52,
 	// M4-13). Nil on a node with no catalogue — a peer rather than a
 	// controller (ADR-0029) — and the route then refuses honestly rather than
@@ -150,6 +163,9 @@ type Server struct {
 	// blobs serves bytes to a pinned peer. Nil on a node with no content store
 	// behind its peer surface.
 	blobs BlobServer
+	// liveness is where an authenticated inbound peer request is recorded as
+	// evidence that the caller is up (#184).
+	liveness Liveness
 
 	http     *http.Server
 	bound    string
@@ -199,6 +215,7 @@ func New(opts Options) (*Server, error) {
 		inventory: opts.Inventory,
 		snapshots: opts.Snapshots,
 		blobs:     opts.Blobs,
+		liveness:  opts.Liveness,
 	}
 	s.handler = s.routes()
 	s.http = &http.Server{
@@ -233,7 +250,7 @@ func (s *Server) routes() http.Handler {
 	})
 	r.Route(Prefix, func(r chi.Router) {
 		r.Use(s.requirePeerIdentity)
-		r.Get("/identity", s.handleIdentity)
+		r.Get(strings.TrimPrefix(IdentityPath, Prefix), s.handleIdentity)
 		// The controller-attachment pair (ADR-0029, ADR-0033). Both answer
 		// with the peer the CERTIFICATE proved; the POST additionally compares
 		// the declaration the peer sent and refuses a mismatch.
@@ -269,6 +286,33 @@ func (s *Server) routes() http.Handler {
 	// client API behind an admin-scoped bearer token, on a listener that never
 	// asks for a client certificate.
 	return r
+}
+
+// Liveness records that a peer was heard from (§31, M4-10, #184).
+//
+// # Why the peer surface records it at all
+//
+// internal/peer/health makes liveness OBSERVED rather than declared: it is
+// derived from interactions that were going to happen anyway, and there is no
+// "I am healthy" endpoint for a peer to assert into. The client API's
+// membership guard has recorded it since M4-10.
+//
+// That left a hole the size of the whole fabric. A remote peer talks to THIS
+// surface — it reports an inventory, it pulls a snapshot, it drags a blob
+// across the wire — and it holds no bearer token, so it never touches the
+// client API's guard at all. In the topology M4 actually builds, nothing
+// observed the interaction that actually happens, and a remote peer's stored
+// health never left `unknown` (#184). This is that observation, made on the
+// surface where the conversation happens.
+//
+// It is a small interface declared here rather than an import of the health
+// tracker, for the reason the client API's PeerLiveness is one: this package
+// authenticates peers and must not acquire the control plane's storage in
+// order to do it. internal/peer/health.Tracker satisfies it.
+type Liveness interface {
+	// Seen records that this public key's peer made a request. It must never
+	// affect the outcome of that request.
+	Seen(ctx context.Context, publicKey []byte) error
 }
 
 // peerContextKey carries the member a request's certificate proved.
@@ -324,6 +368,27 @@ func (s *Server) requirePeerIdentity(next http.Handler) http.Handler {
 			httpapi.Fail(w, r, problem.Forbidden(
 				"the membership record returned does not pin the key this connection presented"))
 			return
+		}
+		// Admitted — and the admission is itself the evidence. A peer that
+		// opened this connection, presented a certificate this node pinned and
+		// is still a member is a peer that is up, observed as a side effect of
+		// work it was doing anyway (§31, M4-10, #184).
+		//
+		// Deliberately AFTER the membership check, exactly as the client API's
+		// guard does it: a key that is not a member is not a peer whose
+		// liveness this system has any business recording.
+		//
+		// It runs on a context detached from the request's, because the fact is
+		// true whether or not the caller stays to hear the answer — a peer that
+		// disconnects mid-response was still up when it asked. A failure here
+		// is logged and never surfaced: recording that somebody is alive must
+		// not be able to fail their request.
+		if s.liveness != nil {
+			if err := s.liveness.Seen(context.WithoutCancel(r.Context()), pub); err != nil {
+				s.log.Error("recording that a peer was seen failed",
+					"request_id", httpapi.RequestIDFrom(r.Context()),
+					"peer_id", peer.PeerID, "path", r.URL.Path, "error", err)
+			}
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), peerContextKey{}, peer)))
 	})
