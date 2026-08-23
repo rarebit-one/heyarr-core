@@ -1884,6 +1884,70 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/v1/capabilities:
+    get:
+      tags: [providers]
+      operationId: listCapabilities
+      summary: Which nodes in the fleet can do what, proven by execution.
+      description: |
+        The fleet-wide capability view (§6, §75, ADR-0039).
+
+        ### Why this is not `/api/v1/system`
+
+        `/api/v1/system` describes **the node answering the request**. The
+        toolchain that decides whether a transcode runs is the one on the
+        *worker* that claims the job, and in a split-process deployment
+        (ADR-0002) that is another machine. ADR-0023 named this gap in its own
+        consequences and deferred it; this closes it.
+
+        ### A capability here was PROVEN, never parsed
+
+        `ffmpeg -encoders` will happily **list** a hardware AV1 encoder on
+        silicon that cannot encode AV1, then fail at runtime with `No capable
+        devices found` — while the same device decodes AV1 fine. Encode and
+        decode support are asymmetric per hardware generation and the asymmetry
+        is not derivable from anything FFmpeg prints.
+
+        So a `probe` capability means a worker really encoded a handful of
+        frames from a synthetic source to a null sink with that encoder, and the
+        process exited successfully. Nothing else produces one.
+
+        ### Advertisements NARROW, and they expire
+
+        A capability that stops passing stops being advertised — without the
+        binary changing and without a restart, because a device can be claimed
+        by another process or broken by a kernel update. An advertisement that
+        could only grow would lie after the first driver update.
+
+        Every advertisement carries an `expires_at` and is filtered out once it
+        passes: a worker that dies cannot tidy up after itself, and a power cut
+        is exactly the death that skips a shutdown hook.
+
+        ### `?capability=` is an EXACT match
+
+        `ffmpeg` is a prefix of `ffmpeg.encoder.hevc`. A prefix match would
+        answer "which nodes can encode AV1" with every node that merely has
+        FFmpeg installed, which is the failure this whole mechanism exists to
+        prevent.
+      parameters:
+        - name: capability
+          in: query
+          required: false
+          schema: { type: string }
+          description: |
+            Return only workers holding exactly this capability string. The
+            vocabulary is dotted and hierarchical — `ffmpeg`,
+            `ffmpeg.encoder.hevc`, `ffmpeg.encoder.av1.vaapi` — and the match is
+            equality on the whole string, never a prefix.
+      responses:
+        "200":
+          description: Every live advertisement, and the union across the fleet.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capabilities" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /api/v1/mcp:
     post:
       tags: [mcp]
@@ -1993,6 +2057,53 @@ paths:
             that was never enrolled and a key that was revoked a moment ago:
             after removal there is nothing left to tell them apart, which is
             what "revocation is removing a membership record" means.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /peer/v1/reachback:
+    get:
+      tags: [peer]
+      operationId: getPeerReachback
+      summary: Report whether this node can reach the peer that is asking.
+      description: |
+        The RETURN leg of a pairing (#186, ADR-0037).
+
+        Replication needs traffic in both directions and the two flows run
+        opposite ways: a peer PUSHES its inventory to the controller, and a
+        destination PULLS bytes from a source (ADR-0030). On a one-way network
+        exactly one of them runs the wrong way, whichever node is the
+        destination, and replication deadlocks silently — a controller that was
+        never told a peer holds a blob correctly emits no work for it.
+
+        A node cannot observe the return direction for itself: an attempt that
+        never leaves the other machine leaves no trace here. So it asks, and
+        `heyarr peers add` consults this route to refuse a one-way pairing at
+        enrolment rather than leaving it to surface weeks later.
+
+        The request carries NOTHING. The address dialled is the answering
+        node's own membership record for the caller — never a target the caller
+        supplied, which would make every member a blind port scanner — and it
+        is also the address the return flows would really use.
+      security:
+        - peerCertificate: []
+      responses:
+        "200":
+          description: |
+            What the answering node observed. `unknown` is an ordinary answer,
+            not a failure: a node with no endpoint recorded for the caller has
+            nowhere to dial back to, and the caller must draw no conclusion
+            from it.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PeerReachback" }
+        "401":
+          description: No client certificate was presented.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "403":
+          description: The presented key is not a member.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -3313,6 +3424,32 @@ components:
         served_by:
           type: string
           description: The answering node's own peer id.
+
+    PeerReachback:
+      type: object
+      required: [result, target, detail]
+      description: |
+        Whether the answering node can reach the caller (#186, ADR-0037).
+      properties:
+        result:
+          type: string
+          enum: [reachable, unreachable, unknown]
+          description: |
+            `reachable` — something answered at `target`, whatever it answered.
+            `unreachable` — an attempt was made and nothing answered.
+            `unknown` — no attempt was made, because this node holds no
+            endpoint for the caller or serves no prober. A caller must not read
+            `unknown` as a fault: it is the absence of evidence, and refusing
+            an enrolment on it would refuse every peer that is simply off.
+        target:
+          type: string
+          description: |
+            The address this node tried, read out of its own membership record
+            for the caller. Empty when no attempt was made. A caller learns
+            from it whether the address recorded for it here is still its own.
+        detail:
+          type: string
+          description: A human-readable explanation, empty when reachable.
 
     PeerAttachRequest:
       type: object
@@ -4720,6 +4857,100 @@ components:
 
             Empty is a legitimate answer, not an error: it is exactly what
             ADR-0025 describes.
+
+    Capabilities:
+      type: object
+      required: [holders, available]
+      properties:
+        capability:
+          type: string
+          description: |
+            Echoes the `?capability=` filter, so a client holding a response
+            knows which question it answers.
+        holders:
+          type: array
+          items: { $ref: "#/components/schemas/CapabilityHolder" }
+          description: |
+            Every **live** advertisement, one entry per worker. An expired one
+            is absent rather than present-and-stale: showing it with a "last
+            seen" column would invite an operator to route work to a machine
+            that is switched off.
+
+            Empty is a legitimate answer. A fleet where nothing has advertised
+            yet, and a fleet whose workers can do nothing anybody routes on, are
+            both supported configurations (ADR-0023).
+        available:
+          type: array
+          items: { type: string }
+          description: |
+            The union across the fleet: every capability at least one live
+            worker holds, sorted.
+
+            Stated rather than left for a client to derive, because deriving it
+            means knowing that an expired holder contributes nothing — and a
+            dashboard that got that wrong would offer a transcode nothing can
+            run.
+
+    CapabilityHolder:
+      type: object
+      required: [worker_id, capabilities, expires_at]
+      properties:
+        worker_id:
+          type: string
+          description: |
+            The advertising worker. It is the same string that appears as a
+            job's lease owner, so a stuck job and a fleet entry name the same
+            thing. Unique per process: a restarted worker advertises under a new
+            id and its predecessor's advertisement expires.
+        peer_id:
+          type: string
+          description: The node this worker runs on, which is the unit the question is asked about.
+        peer_name:
+          type: string
+        capabilities:
+          type: array
+          items: { $ref: "#/components/schemas/HeldCapability" }
+        expires_at:
+          type: string
+          format: date-time
+          description: |
+            When this advertisement stops being honoured unless the worker
+            renews it. Present so an operator can tell a worker that is about to
+            fall out of the fleet from one that has just arrived.
+
+    HeldCapability:
+      type: object
+      required: [name, source, proved_at]
+      properties:
+        name:
+          type: string
+          description: |
+            The exact string a job's `required_capability` is matched against.
+            Dotted and hierarchical — `ffmpeg`, `ffmpeg.encoder.hevc`,
+            `ffmpeg.encoder.av1.vaapi` — and matched by equality, never by
+            prefix.
+        source:
+          type: string
+          enum: [binary, probe, service]
+          description: |
+            How this was established, which is what says whether it is
+            re-verified.
+
+            | source | means | re-verified |
+            |---|---|---|
+            | `binary` | a tool resolved at startup (ADR-0023) | no — installing ffmpeg under a running Heyarr is not a supported flow |
+            | `probe` | the capability was **exercised**: a real encode of a handful of frames to a null sink | yes, on a beat, and the advertisement narrows when it stops passing |
+            | `service` | an external network service is configured (ADR-0025) | no; its reachability is `/api/v1/providers`' answer |
+        detail:
+          type: string
+          description: A few words for an operator — which encoder proved it.
+        proved_at:
+          type: string
+          format: date-time
+          description: |
+            When the proof was taken, **not** when the row was written. The
+            difference matters: a re-advertisement that reused a cached proof
+            would otherwise look freshly verified.
 
     ProviderStatus:
       type: object

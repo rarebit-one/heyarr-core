@@ -4,15 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	peercatalog "github.com/rarebit-one/heyarr-core/internal/peer/catalog"
+	"github.com/rarebit-one/heyarr-core/internal/peer/endpoint"
 	"github.com/rarebit-one/heyarr-core/internal/peer/health"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
+	"github.com/rarebit-one/heyarr-core/internal/peer/reachability"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
@@ -71,6 +76,101 @@ func (l peerLookup) Lookup(ctx context.Context, publicKey []byte) (mtls.Peer, er
 		return mtls.Peer{}, err
 	}
 	return mtls.Peer{PeerID: m.PeerID, Name: m.Name, PublicKey: m.PublicKey}, nil
+}
+
+// returnPathProber answers the peer surface's reachback route (#186,
+// ADR-0037): can this node reach the peer that is asking?
+//
+// The address it dials is THIS node's own membership record for that peer, and
+// never anything the caller supplied — see peerapi.ReturnPathProber for why.
+//
+// # Why it is a transport dial and not a request
+//
+// The obvious implementation asks the peer's own surface for its identity,
+// exactly as the outbound leg does. It cannot be that, and the reason is
+// ORDERING. Enrolment is two operators running two commands, and between the
+// first and the second the far node has not enrolled this one yet: a
+// credentialled probe would be refused at the handshake, be read as an
+// unreachable return path, and refuse the very enrolment that would have made
+// it work. The check would then be impossible to satisfy in the order the
+// documentation prescribes.
+//
+// So the question asked here is the one the pairing actually turns on: do
+// packets get through in this direction. A completed TCP connection to the
+// address recorded for that peer answers it, needs no credential on either
+// end, and is unaffected by which half of the enrolment has happened. It is
+// not evidence that the far end is well, and it is not meant to be — identity
+// is already settled by the connection this probe was requested over.
+//
+// /healthz is deliberately not used, though internal/peer/health probes it for
+// read routing. A peer's recorded endpoint is its mTLS peer surface, which
+// answers no plaintext HTTP at all; probing it that way reports every real
+// peer as unreachable, which is exactly what this route must not do.
+type returnPathProber struct {
+	store   *membership.Store
+	timeout time.Duration
+}
+
+// returnPathTimeout bounds one dial. The caller is waiting on this inside its
+// own enrolment, so it is short: an address that has not completed a TCP
+// handshake in five seconds is not one the return flows will be using.
+const returnPathTimeout = 5 * time.Second
+
+func (p returnPathProber) ProbeReturnPath(
+	ctx context.Context, peerID string,
+) (reachability.Result, string, error) {
+	member, err := p.store.Get(ctx, peerID)
+	switch {
+	case errors.Is(err, membership.ErrUnknownPeer):
+		// Authenticated by certificate and pinned by the trust root, yet not
+		// a row here. That is an operator problem rather than a network one,
+		// and reporting it as unreachable would refuse an enrolment for the
+		// wrong reason.
+		return reachability.ResultUnknown, "", nil
+	case err != nil:
+		return reachability.ResultUnknown, "", err
+	}
+	if member.Endpoint == "" {
+		return reachability.ResultUnknown, "", nil
+	}
+	address, ok := dialAddress(member.Endpoint)
+	if !ok {
+		// A unix:// endpoint, or something no normalisation rescues. A peer on
+		// this host has no return path to prove, and a malformed row is a
+		// configuration fault rather than a network one. Neither is evidence.
+		return reachability.ResultUnknown, member.Endpoint, nil
+	}
+
+	timeout := p.timeout
+	if timeout <= 0 {
+		timeout = returnPathTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return reachability.ResultUnreachable, member.Endpoint, nil
+	}
+	_ = conn.Close()
+	return reachability.ResultReachable, member.Endpoint, nil
+}
+
+// dialAddress reduces a recorded endpoint to the host:port a probe dials, or
+// reports that there is nothing dialable in it.
+func dialAddress(recorded string) (string, bool) {
+	normalised, err := endpoint.Normalise(recorded)
+	if err != nil {
+		return "", false
+	}
+	u, err := url.Parse(normalised)
+	if err != nil || u.Scheme != endpoint.Scheme || u.Host == "" {
+		return "", false
+	}
+	if u.Port() == "" {
+		return net.JoinHostPort(u.Hostname(), "443"), true
+	}
+	return u.Host, true
 }
 
 // newPeerSurface builds this node's mTLS peer listener (§26, ADR-0012, M4-05).
@@ -135,6 +235,7 @@ func (c *Controller) newPeerSurface(
 		SelfPeerID: self.PeerID,
 		Inventory:  peerCatalog,
 		Snapshots:  snapshotSource{cat: peerCatalog, self: self.PeerID},
+		ReturnPath: returnPathProber{store: members},
 		Blobs:      blobHandler,
 		// The peer surface's own liveness observation (#184). Without it a
 		// remote peer — which holds no bearer token and so never reaches the
