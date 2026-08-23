@@ -125,8 +125,8 @@ func (h *convergeHarness) exec(t *testing.T, query string, args ...any) {
 // therefore expected to converge on.
 func (h *convergeHarness) managed(t *testing.T, hash string) {
 	t.Helper()
-	h.exec(t, `INSERT INTO blobs (hash, size, mime, chunked, first_seen_at)
-		VALUES (?, 1024, 'video/x-matroska', 0, ?)`, hash, h.stamp)
+	h.exec(t, `INSERT INTO blobs (hash, size, mime, first_seen_at)
+		VALUES (?, 1024, 'video/x-matroska', ?)`, hash, h.stamp)
 	h.exec(t, `INSERT INTO editions
 		(id, work_id, label, edition_type, edition_key, language, attributes, created_at)
 		VALUES (?, 'w1', '1080p', 'bluray', ?, 'en', '{}', ?)`, "e-"+hash, hash, h.stamp)
@@ -538,8 +538,8 @@ func TestALinkedAssetProducesNoReplicationWork(t *testing.T) {
 // so a sweep can delete it at both ends is work with a negative return.
 func TestAnUnreferencedBlobIsNotReplicated(t *testing.T) {
 	h := newConvergeHarness(t)
-	h.exec(t, `INSERT INTO blobs (hash, size, mime, chunked, first_seen_at)
-		VALUES (?, 1024, 'video/x-matroska', 0, ?)`, blobTwo, h.stamp)
+	h.exec(t, `INSERT INTO blobs (hash, size, mime, first_seen_at)
+		VALUES (?, 1024, 'video/x-matroska', ?)`, blobTwo, h.stamp)
 
 	summary := h.cycle(t, "", 0)
 	if summary.Desired != 0 {

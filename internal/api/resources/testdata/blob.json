@@ -3,5 +3,6 @@
   "size": 42949672960,
   "mime": "video/x-matroska",
   "chunked": false,
+  "chunk_manifest": "undecided",
   "first_seen_at": "2026-08-01T00:00:00Z"
 }

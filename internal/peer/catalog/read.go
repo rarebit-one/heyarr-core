@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
 // querier is the shared shape of *sql.DB and *sql.Tx, so the contents can be
@@ -171,23 +173,25 @@ func readEditions(ctx context.Context, q querier, snap *Snapshot) error {
 
 func readBlobs(ctx context.Context, q querier, snap *Snapshot) error {
 	rows, err := q.QueryContext(ctx,
-		`SELECT hash, size, mime, chunked, first_seen_at FROM snapshot_blobs ORDER BY hash`)
+		`SELECT hash, size, mime, chunk_manifest, first_seen_at FROM snapshot_blobs ORDER BY hash`)
 	if err != nil {
 		return fmt.Errorf("catalog: reading snapshot blobs: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var (
-			b       Blob
-			mime    sql.NullString
-			chunked int64
-			seen    string
+			b     Blob
+			mime  sql.NullString
+			state string
+			seen  string
 		)
-		if err := rows.Scan(&b.Hash, &b.Size, &mime, &chunked, &seen); err != nil {
+		if err := rows.Scan(&b.Hash, &b.Size, &mime, &state, &seen); err != nil {
 			return fmt.Errorf("catalog: reading snapshot blobs: %w", err)
 		}
 		b.MIME = nullString(mime)
-		b.Chunked = chunked == 1
+		if b.ChunkManifest, err = manifests.ParseState(state); err != nil {
+			return fmt.Errorf("catalog: reading snapshot blobs: %w", err)
+		}
 		if b.FirstSeenAt, err = parseStamp(seen); err != nil {
 			return err
 		}

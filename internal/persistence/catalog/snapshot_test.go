@@ -171,8 +171,8 @@ func TestASnapshotHoldsTheControllersCatalogueRowForRow(t *testing.T) {
 	ctx := context.Background()
 	h.addWork(t, "w-arrival", "Arrival", stamp)
 	h.addWork(t, "w-dune", "Dune", stamp)
-	h.exec(t, `INSERT INTO blobs (hash, size, mime, chunked, first_seen_at)
-		VALUES (?, 100, 'video/x-matroska', 0, ?)`, "blake3:"+repeat("a", 64), stamp)
+	h.exec(t, `INSERT INTO blobs (hash, size, mime, first_seen_at)
+		VALUES (?, 100, 'video/x-matroska', ?)`, "blake3:"+repeat("a", 64), stamp)
 	h.exec(t, `INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash,
 			source_path, role, filename, mime, identification_source, created_at, updated_at)
 		VALUES ('as-1', 'ed-w-arrival', 'lib-1', 'managed', ?, '/srv/films/a.mkv', 'primary',

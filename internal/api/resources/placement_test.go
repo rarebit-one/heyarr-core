@@ -189,8 +189,8 @@ func TestPlacementAgainstATargetSetOfTwo(t *testing.T) {
 		// A managed asset whose bytes no peer has ever reported holding. The
 		// distinction EvaluatePlacement draws — nowhere at all is not
 		// converging on anything — has to survive contact with real rows.
-		h.exec(`INSERT INTO blobs (hash, size, mime, chunked, first_seen_at)
-			VALUES (?, 1048576, 'video/mp4', 0, ?)`, blob3Hash, seedTime)
+		h.exec(`INSERT INTO blobs (hash, size, mime, first_seen_at)
+			VALUES (?, 1048576, 'video/mp4', ?)`, blob3Hash, seedTime)
 		h.exec(`INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash,
 				source_path, role, filename, mime, identification_source, missing_since,
 				created_at, updated_at)

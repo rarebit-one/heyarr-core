@@ -501,7 +501,7 @@ func TestRemovingAPeerTakesItsReplicasWithIt(t *testing.T) {
 
 	const hash = "blake3:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	ctx := context.Background()
-	mustExec(t, f.db.Writer(), `INSERT INTO blobs (hash, size, chunked, first_seen_at) VALUES (?, 7, 0, ?)`,
+	mustExec(t, f.db.Writer(), `INSERT INTO blobs (hash, size, first_seen_at) VALUES (?, 7, ?)`,
 		hash, fixedTime.Format(time.RFC3339Nano))
 	mustExec(t, f.db.Writer(), `INSERT INTO replicas (blob_hash, peer_id, state, bytes_present, updated_at)
 		VALUES (?, ?, 'present', 7, ?)`, hash, enrolled.Member.PeerID, fixedTime.Format(time.RFC3339Nano))

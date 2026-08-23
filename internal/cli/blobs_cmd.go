@@ -51,7 +51,11 @@ func newBlobsStatCommand(_ Options, configPath *string) *cobra.Command {
 				fmt.Fprintf(out, "  hash        %s\n", blob.Hash)
 				fmt.Fprintf(out, "  size        %d\n", blob.Size)
 				fmt.Fprintf(out, "  mime        %s\n", dash(blob.MIME))
-				fmt.Fprintf(out, "  chunked     %t\n", blob.Chunked)
+				// The three-way answer, not the boolean. `chunked false`
+				// meant both "these bytes never need a manifest" and "nobody
+				// has looked", and an operator deciding whether to chunk
+				// something needs to know which (§16, ADR-0034).
+				fmt.Fprintf(out, "  manifest    %s\n", blob.ChunkManifest)
 				fmt.Fprintf(out, "  first seen  %s\n", stamp(blob.FirstSeenAt))
 				return nil
 			})
