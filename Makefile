@@ -8,7 +8,7 @@ LDFLAGS := -s -w \
   -X $(PKG)/internal/buildinfo.Commit=$(COMMIT) \
   -X $(PKG)/internal/buildinfo.Date=$(DATE)
 
-.PHONY: all build fixtures test race lint fmt gen tidy demo clean help
+.PHONY: all build fixtures test test-skips race lint fmt gen tidy demo clean help
 
 all: lint test build          ## lint, test and build
 
@@ -22,6 +22,9 @@ fixtures:                     ## build the acceptance fixture generator (dev onl
 
 test:                         ## run tests with the race detector
 	go test -race -count=1 ./...
+
+test-skips:                   ## report which tests SKIPPED, and why (a package-level `ok` hides them)
+	./scripts/skipped-tests.sh
 
 scan-fixtures:                ## check the provider fixture corpus for leaked credentials
 	go test ./internal/providers/fixtures/ -run TestTheCommittedCorpusIsClean -v

@@ -23,7 +23,17 @@ make test           # go test -race ./...
 make lint           # go vet + golangci-lint
 make gen            # regenerate committed generated code; CI asserts no drift
 make demo           # scripts/acceptance.sh — the milestone gate
+make test-skips     # which tests SKIPPED, and why — a package-level `ok` hides them
 ```
+
+An assertion whose subject is absent does not fail and does not skip: it
+quietly passes and reads as coverage. `scripts/acceptance.sh` therefore lets an
+assertion declare what it needs — `require_capability <cap>` **fails** the run
+when the capability is missing, and `unexercised_without` / `not_exercised`
+record a block that had an honest degraded alternative so the verdict line and
+the epilogue can say a green run on a bare machine is not a green run on a full
+one (#187). Reach for `require_capability` first; skipping is the wrong
+default.
 
 ## Invariants — these are not style preferences
 
