@@ -270,7 +270,12 @@ func (w *Worker) Run(ctx context.Context) error {
 	//
 	// MaxConcurrent lives in the registration, where its argument can be read
 	// next to the number.
-	transferPuller := lazyPuller(w.cfg.DataDir, peerID, store, w.log)
+	// The catalog is handed in as the chunk index (M5-07): a transfer that can
+	// see what this node already holds fetches only what it does not. It is a
+	// CLAIM about this disk and the transfer re-verifies every chunk it
+	// supplies against the manifest, so a stale entry costs a refetch rather
+	// than a wrong file.
+	transferPuller := lazyPuller(w.cfg.DataDir, peerID, store, cat, w.log)
 	registry.Register(replication.ReplicateBlobJobType, ReplicateBlobRegistration(TransferDeps{
 		Catalog: cat,
 		Store:   store,
