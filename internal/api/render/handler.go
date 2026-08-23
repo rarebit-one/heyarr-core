@@ -87,6 +87,50 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The DLNA response headers, without which a renderer downloads the whole
+	// file and then refuses to render it.
+	//
+	// MEASURED, against a Samsung QN85B on 2026-08-24. Without these, with a
+	// correct Content-Type and everything else in place, the television
+	// fetched all 4,999,379 bytes in ONE request, went TRANSITIONING, settled
+	// on STOPPED, and showed nothing. No error, no SOAP fault, nothing in any
+	// log at either end.
+	//
+	// With them, the same television switched to RANGED requests and played.
+	// That change in fetch shape — one whole-file GET becoming a series of
+	// 206s — is the observable signal that a renderer has understood the
+	// offer, and it is worth knowing about when the next device silently does
+	// nothing.
+	//
+	// DLNA.ORG_PN is deliberately omitted. It names an exact profile —
+	// AVC_MP4_MP_HD_AAC_MULT5 and several hundred others — and a WRONG one is
+	// worse than none: the device believes the claim and fails on content that
+	// does not match it. Absent, a renderer probes the stream instead, which
+	// is what it does for anything it did not recognise anyway.
+	//
+	// DLNA.ORG_OP=01 advertises range seeking, which is true here and is what
+	// lets someone scrub. DLNA.ORG_CI=0 says the bytes are not transcoded.
+	//
+	// Assigned into the header map directly rather than through Set, which
+	// would canonicalise the names to "Contentfeatures.dlna.org". HTTP field
+	// names are case-insensitive and THE SAMSUNG ACCEPTED THE CANONICAL FORM
+	// — it played — so this is hardening, not a fix, and is recorded that way
+	// rather than as a measured requirement. The DLNA specification writes
+	// both names in mixed case and other renderers are reported to match them
+	// literally; preserving the spelling costs nothing and removes a variable
+	// from the next device that does not work.
+	w.Header()["contentFeatures.dlna.org"] = []string{
+		"DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000",
+	}
+	// Echoed when asked for, because a renderer that requested Background or
+	// Interactive and is told Streaming may decline. Streaming is the default
+	// for the audio and video this route exists to serve.
+	mode := r.Header.Get("transferMode.dlna.org")
+	if mode == "" {
+		mode = "Streaming"
+	}
+	w.Header()["transferMode.dlna.org"] = []string{mode}
+
 	// The blob handler reads its subject from the route, so the verified hash
 	// is put where it looks. Doing it this way rather than reaching into the
 	// CAS keeps one implementation of ranges, ETags and conditional requests.
