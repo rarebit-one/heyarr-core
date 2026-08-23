@@ -165,6 +165,10 @@ func reconcilePeerHandler(
 			}
 		}
 		chunkAsked := make(map[string]struct{}, len(taken))
+		self, err := cat.SelfPeer(ctx)
+		if err != nil {
+			return err
+		}
 
 		for _, gap := range taken {
 			if err := ctx.Err(); err != nil {
@@ -205,6 +209,15 @@ func reconcilePeerHandler(
 			// three peers is three transfers and one manifest. The dedupe key
 			// enforces that across cycles; this map is what stops the same
 			// cycle asking three times.
+			if gap.PeerID == self {
+				// A gap whose destination is THIS node is a blob this node
+				// does not hold, and chunking is a local read of local bytes.
+				// The handler would Stat it and skip, which is cheap but not
+				// free: a destination's first sync with a hundred-thousand-blob
+				// peer would otherwise queue a hundred thousand jobs to do
+				// nothing. It is the SOURCE that has bytes to chunk.
+				continue
+			}
 			if _, asked := chunkAsked[gap.BlobHash]; asked {
 				continue
 			}

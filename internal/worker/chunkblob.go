@@ -302,6 +302,14 @@ func ChunkBlobHandler(deps ChunkDeps) HandlerFunc {
 func (d ChunkDeps) reportCorruption(
 	ctx context.Context, log *slog.Logger, hash hashing.Hash, mismatch *manifests.WholeObjectMismatch,
 ) error {
+	if d.Checker == nil {
+		// Nothing to report through, so the finding must not be lost: fail the
+		// job loudly with the mismatch attached rather than panicking, and
+		// still write no manifest. A node wired without a corruption path is a
+		// misconfiguration, and this is the one moment it matters.
+		return fmt.Errorf("worker: chunking %s read bytes hashing to %s, and this handler has no "+
+			"corruption path wired to report it on: %w", hash, mismatch.Actual, mismatch)
+	}
 	finding, err := d.Checker.VerifyBlob(ctx, hash)
 	if err != nil {
 		return errors.Join(mismatch, err)

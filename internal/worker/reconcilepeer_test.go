@@ -1043,3 +1043,31 @@ func TestAConvergenceCycleDoesNotChunkWhatIsAlreadyChunked(t *testing.T) {
 			"not doing it, and asking must never generate", blobTwo, state, manifests.StateUndecided)
 	}
 }
+
+// A gap whose destination is THIS node produces a transfer and NO chunking.
+//
+// The node is the one that does not hold the bytes — that is what the gap says
+// — and chunking is a local read of local bytes. The handler would skip it, at
+// the cost of a job and a Stat each; a destination's first sync with a peer
+// holding a hundred thousand blobs would queue a hundred thousand of those.
+func TestAGapThisNodeMustCloseItselfIsNotChunkingWork(t *testing.T) {
+	h := newConvergeHarness(t)
+	h.managed(t, blobOne)
+
+	// Only the OTHER peer holds it, so the gap is this node's own.
+	h.reports(t, h.other, blobOne)
+
+	summary := h.cycle(t, "", 0)
+	if summary.Enqueued != 1 {
+		t.Fatalf("the cycle enqueued %d transfer(s), want 1 — the assertion below would prove nothing",
+			summary.Enqueued)
+	}
+	transfers := h.transfers(t)
+	if len(transfers) != 1 || transfers[0].Destination != h.self {
+		t.Fatalf("transfers = %v, want one destined for this node", transfers)
+	}
+	if got := h.chunkings(t); len(got) != 0 {
+		t.Errorf("a gap this node must close for itself enqueued %d chunking(s): %v — the bytes are "+
+			"not here to read", len(got), got)
+	}
+}
