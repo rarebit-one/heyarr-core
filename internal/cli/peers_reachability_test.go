@@ -3,11 +3,13 @@ package cli
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
+	"github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/peer/reachability"
@@ -177,4 +179,45 @@ func TestEnrolmentCanBeForcedPastTheCheck(t *testing.T) {
 	if _, _, err := h.run("peers", "show", "peer-b"); err != nil {
 		t.Errorf("--skip-reachability-check did not enrol the peer: %v", err)
 	}
+}
+
+// TestEnrolmentDoesNotCheckThisNodesOwnRecord: giving this node the address
+// other peers reach it at is not a pairing. There is no return path to prove —
+// the row a probe would read is the row being written — and reporting it as
+// unverified every time would train an operator to ignore the note that
+// matters. The endpoint here refuses connections (port 9 is discard), so a
+// pairing check would certainly have said something.
+func TestEnrolmentDoesNotCheckThisNodesOwnRecord(t *testing.T) {
+	h := newAPIHarness(t).seed()
+	plantSelfIdentity(t, h)
+	selfPub, _ := fixedKeypair(t, 0x11)
+
+	var self client.Peer
+	for _, p := range decodePeers(t, h.mustRun("peers", "list", "--json")) {
+		if p.IsSelf {
+			self = p
+		}
+	}
+	if self.Name == "" {
+		t.Fatal("the harness has no self peer")
+	}
+
+	_, stderr, err := h.run("peers", "add", "--name", self.Name,
+		"--public-key", identity.FormatPublicKey(selfPub), "--endpoint", "https://127.0.0.1:9")
+	if err != nil {
+		t.Fatalf("registering this node's own endpoint failed: %v\n%s", err, stderr)
+	}
+	if strings.Contains(stderr, "not verified") {
+		t.Errorf("this node's own record was checked as a pairing:\n%s", stderr)
+	}
+}
+
+// decodePeers reads `peers list --json`.
+func decodePeers(t *testing.T, out string) []client.Peer {
+	t.Helper()
+	var peers []client.Peer
+	if err := json.Unmarshal([]byte(out), &peers); err != nil {
+		t.Fatalf("`peers list --json` is not a peer list: %v\n%s", err, out)
+	}
+	return peers
 }

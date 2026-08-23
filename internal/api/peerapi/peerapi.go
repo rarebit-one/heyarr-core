@@ -231,9 +231,6 @@ func New(opts Options) (*Server, error) {
 		snapshots:  opts.Snapshots,
 		blobs:      opts.Blobs,
 		liveness:   opts.Liveness,
-		inventory:  opts.Inventory,
-		snapshots:  opts.Snapshots,
-		blobs:      opts.Blobs,
 		returnPath: opts.ReturnPath,
 	}
 	s.handler = s.routes()

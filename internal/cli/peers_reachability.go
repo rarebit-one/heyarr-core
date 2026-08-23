@@ -59,6 +59,15 @@ func checkPairing(
 		pairing.Detail = "this node's configuration could not be read: " + err.Error()
 		return pairing
 	}
+	// Registering THIS node — the self peer, giving it the address other peers
+	// reach it at — is not a pairing and has no return path to prove. Checking
+	// it would report `unknown` every time, because the row being written is
+	// the very row a probe would read.
+	if self, err := selfPeer(ctx, c); err == nil && self.PublicKey != nil && *self.PublicKey == publicKey {
+		pairing.Detail = "this is this node's own record of itself, which has no return path to check"
+		return pairing
+	}
+
 	target := client.Peer{Name: name, Endpoint: &endpoint, PublicKey: &publicKey}
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
@@ -122,7 +131,10 @@ func checkPairing(
 // look the same — that confusion is how an operator concludes a pairing was
 // verified when it was not.
 func reportPairing(out io.Writer, p reachability.Pairing) {
-	if p.Verdict() != reachability.VerdictUnproven {
+	if p.Verdict() != reachability.VerdictUnproven || p.Outbound == reachability.ResultUnknown {
+		// Unknown in the OUTBOUND direction means no check was attempted at
+		// all — this node's own record, a data directory with no identity in
+		// it. There is nothing to report about a network nobody touched.
 		return
 	}
 	detail := ""
