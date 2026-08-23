@@ -1,6 +1,6 @@
 # 0029. A second Full Peer is controller-attached and runs no control plane
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-0038](0038-there-is-no-central-authority-peers-are-repositories.md)
 **Date:** 2026-08-22
 
 ## Context
@@ -60,6 +60,23 @@ API and is written there, by the single writer.
 There is exactly one authoritative controller, so "which peer is right" is never
 a question that has to be answered about control state. It is still a question
 about bytes, and content addressing answers that one.
+
+## Superseded
+
+ADR-0038 replaces this. The reading below was faithful to §80 and §85 — but the
+hub topology it describes was never run, and could not be: a worker claims jobs
+against local SQLite, and no HTTP surface lets a remote peer claim, lease or
+complete one.
+
+Milestone 4 built every fabric primitive peer-to-peer instead, between two
+independent instances, and the spec hedged twice about the leader being an
+initial arrangement (§48, §85). ADR-0038 ratifies what was built: each peer is a
+repository with its own control plane, and there is no node whose loss is
+special.
+
+What this record got right and ADR-0038 keeps: equal custody of bytes is about
+bytes, and a single-writer database per peer is the strongest form of
+Invariant 5, not a violation of it.
 
 ## Revisit if
 

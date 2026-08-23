@@ -36,7 +36,7 @@ An ADR that merely describes the code is not worth having.
 | [0026](0026-indexers-are-not-reproducible-so-fixtures-are-the-primary-test-strategy.md) | Indexers are not reproducible, so fixtures are the primary test strategy | Accepted |
 | [0027](0027-acquisition-state-is-four-facts-not-one-ordinal.md) | Acquisition state is four facts, not one ordinal | Accepted |
 | [0028](0028-discovery-binds-to-torznab-not-prowlarr.md) | Discovery binds to Torznab, the protocol, not Prowlarr, the product | Accepted |
-| [0029](0029-a-full-peer-is-controller-attached.md) | A Full Peer is controller-attached and runs no control plane | Accepted |
+| [0029](0029-a-full-peer-is-controller-attached.md) | A Full Peer is controller-attached and runs no control plane | Superseded by 0038 |
 | [0030](0030-replication-is-a-destination-pull.md) | Replication is a destination pull; the controller never carries bytes | Accepted |
 | [0031](0031-provider-credentials-are-typed-by-their-auth-scheme.md) | Provider credentials are typed by the provider's declared auth scheme | Accepted |
 | [0032](0032-the-personal-mcp-is-device-side-and-device-keys-land-before-they-authorise-anything.md) | The Personal MCP is device-side, and device keys land before they authorise anything | Accepted |
@@ -44,3 +44,4 @@ An ADR that merely describes the code is not worth having.
 | [0034](0034-a-chunk-manifest-is-an-optimisation-not-an-identity.md) | A chunk manifest is an optimisation, and a blob is never addressed by its chunks | Accepted |
 | [0035](0035-a-resumed-transfer-trusts-nothing-it-has-not-re-verified.md) | A resumed transfer trusts nothing it has not re-verified itself | Accepted |
 | [0036](0036-integrity-repair-stages-a-whole-replacement.md) | Integrity repair stages a whole replacement; a blob is never edited in place | Accepted |
+| [0038](0038-there-is-no-central-authority-peers-are-repositories.md) | Each peer is authoritative for its own site | Proposed |
