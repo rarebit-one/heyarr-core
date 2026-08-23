@@ -44,4 +44,4 @@ An ADR that merely describes the code is not worth having.
 | [0034](0034-a-chunk-manifest-is-an-optimisation-not-an-identity.md) | A chunk manifest is an optimisation, and a blob is never addressed by its chunks | Accepted |
 | [0035](0035-a-resumed-transfer-trusts-nothing-it-has-not-re-verified.md) | A resumed transfer trusts nothing it has not re-verified itself | Accepted |
 | [0036](0036-integrity-repair-stages-a-whole-replacement.md) | Integrity repair stages a whole replacement; a blob is never edited in place | Accepted |
-| [0038](0038-there-is-no-central-authority-peers-are-repositories.md) | There is no central authority; peers are repositories | Proposed |
+| [0038](0038-there-is-no-central-authority-peers-are-repositories.md) | Each peer is authoritative for its own site | Proposed |

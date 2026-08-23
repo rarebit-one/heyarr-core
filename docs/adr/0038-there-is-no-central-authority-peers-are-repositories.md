@@ -1,4 +1,4 @@
-# 0038. There is no central authority; peers are repositories
+# 0038. Each peer is authoritative for its own site
 
 **Status:** Proposed
 **Date:** 2026-08-23
@@ -36,12 +36,28 @@ Two further observations pushed the question:
 
 ## Decision
 
-**A peer is a repository.** Each holds a complete control plane of its own —
-catalogue, desired state, policy, jobs, membership — in its own single-writer
-SQLite database. There is no controller above them and no node whose loss is
-special.
+**Each peer is authoritative for its own site, syncs with the peers it can
+reach, and does not mind when that fails.**
 
-Peers exchange with each other the way git repositories do:
+Each holds a complete control plane of its own — catalogue, desired state,
+policy, jobs, membership — in its own single-writer SQLite database. There is no
+controller above them and no node whose loss is special.
+
+The three clauses are the whole decision, and each carries weight:
+
+**Authoritative for its own site.** Not "no authority" — authority that is local
+and total. A peer is the truth about what its site holds, wants and trusts.
+Nothing overrides it and it overrides nothing.
+
+**Syncs with the peers it can reach.** Reachability is a property of a pair, not
+of the deployment. A peer that can be reached but cannot reach back is an
+ordinary participant.
+
+**Does not mind when sync fails.** A failed sync is not a fault condition. It is
+not an alarm, not a degraded mode, and not a state to recover from — it is
+Tuesday. A peer that has not heard from another in a week is working correctly.
+
+Peers exchange the way git repositories do:
 
 - **Objects are immutable and content-addressed.** The BLAKE3 whole-object digest
   remains the only identity (ADR-0005, Invariant 1). Blobs converge without
@@ -51,8 +67,9 @@ Peers exchange with each other the way git repositories do:
   reached but cannot reach back is an ordinary participant, not a broken one.
 - **Trust is per-repository.** Membership is what *this* peer will talk to.
   Enrolment and revocation are local decisions with local effect.
-- **Divergence is normal and must be representable.** Two peers may want
-  different things and be right.
+- **Divergence is not conflict.** Two peers wanting different things are two
+  sites with different policies, and both are correct. There is nothing to
+  merge because there was never one answer.
 
 ### This satisfies Invariant 5 rather than violating it
 
@@ -76,21 +93,51 @@ backup to peers (§49, §50) and `heyarr recover --from-peer` (§51) are still
 useful, but as *convenience over a fetch*, not as the difference between working
 and not.
 
-**Three things get harder, and they are the ones git never had to solve, because
-git has no runtime authorisation.**
+**Two things that look like problems are not, once authority is local.**
 
-1. **Revocation is per-repository.** Removing a membership record at peer A does
-   not remove it at peer B. "Revoked" stops meaning "revoked everywhere", and an
-   operator revoking a compromised key must do it at every peer that holds it.
-   This must be said where the operator meets it, not only here.
-2. **Grants and capabilities (M8, M9) inherit that.** A capability honoured on
-   one peer and revoked on another is a security surprise rather than a
-   convergence detail. M8 must decide whether grants are per-repository facts or
-   whether delegations carry something that makes revocation propagate.
-3. **Desired state can conflict.** Two peers wanting different quality profiles
-   for one work is a genuine disagreement. Either a merge model, or an explicit
-   stance that desired state is per-repository and does not merge — but not
-   silence.
+**Per-site revocation is the design.** Removing a membership record at peer A
+does not remove it at peer B, and that is correct: each site decides who it will
+talk to. What it costs is an operator expectation — "revoked" means "revoked
+here" — and that must be said where the operator meets it, in `peers remove`,
+not only in this record.
+
+**Divergent desired state is not a conflict.** One site wanting 1080p and
+another wanting 4K for the same work are two policies, both authoritative where
+they live. No merge model is needed, and building one would impose an agreement
+the model does not require.
+
+**One thing is genuinely hard, and it is the one git never had to solve.**
+
+**Grants and capabilities spanning sites (M8, M9).** A *user* is not a site. When
+one identity authorises many devices across many peers, a capability revoked at
+one site and honoured at another is a security surprise rather than a policy
+difference — the distinction that makes divergent desired state fine is exactly
+the distinction that does not apply here. M8 must decide whether a grant is a
+per-site fact or whether delegations carry expiry that bounds the window. Signed,
+expiring grants are the likely answer, because they make staleness self-limiting
+without requiring anyone to be reachable.
+
+**"Degraded" mostly stops being a state.** §53 models what a peer can do while
+the controller is unreachable. With no controller, and with a failed sync not
+being a fault, there is no undegraded state to fall from — a partitioned peer is
+simply a peer. What survives of §53 is a narrower and more honest question: what
+can a peer do while it cannot reach its peers? Browse, search, stream and read
+its own library, all of which it could always do. What it cannot do is *prove*
+anything about elsewhere.
+
+**And that is exactly why GC's durability precondition matters more, not less.**
+ADR-0018's second precondition (M4-12) refuses to unlink unless it can
+affirmatively establish the bytes survive elsewhere. Under this model a peer will
+routinely be unable to establish that — and it must keep refusing, silently and
+without alarm. A GC that treats "cannot reach my peer" as a fault would be
+noisy; one that treats it as permission to delete would be catastrophic. It
+already behaves correctly: it fails closed, and `peer_unreachable` is a recorded
+reason rather than an error.
+
+**Peer health means something narrower.** An unreachable peer is not unhealthy —
+it is unreachable, which is unremarkable. #184's liveness work should record
+reachability as a fact with a timestamp, not as a health verdict, and nothing
+should page anyone about it.
 
 **Acquisition may be duplicated.** Two peers independently wanting the same
 missing content will each go and get it. That is wasteful rather than wrong, and
