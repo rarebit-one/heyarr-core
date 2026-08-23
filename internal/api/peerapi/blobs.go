@@ -1,8 +1,11 @@
 package peerapi
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
@@ -50,7 +53,8 @@ type BlobServer interface {
 // there is nothing here to try again for. Collapsing them would have a
 // destination hunting for a blob on a node that has no store.
 func (s *Server) handleBlobContent(w http.ResponseWriter, r *http.Request) {
-	if _, ok := PeerFrom(r.Context()); !ok {
+	peer, ok := PeerFrom(r.Context())
+	if !ok {
 		// The identity middleware is the only path here, so this is a wiring
 		// failure rather than a request failure.
 		httpapi.Fail(w, r, problem.Internal())
@@ -63,6 +67,37 @@ func (s *Server) handleBlobContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.blobs.Content(w, r)
+
+	// Who read which bytes off this node, and over which surface.
+	//
+	// A Full Peer had no record of this at all. Everything else in the fabric
+	// is written from the READER's side — the destination logs what it pulled,
+	// the catalog records the replica it claimed — so a source being drained by
+	// a peer, or serving a blob it did not expect to be asked for, was visible
+	// nowhere on the machine actually sending the bytes. For a system whose
+	// premise is that beliefs and bytes diverge, "what left here" is not an
+	// optional line.
+	//
+	// It is also the only thing that tells the two surfaces apart from outside.
+	// The client API's blob route and this one share a handler by design
+	// (ADR-0013), and its metrics label them identically, so a read that
+	// arrived on a bearer token and a read that arrived on a pinned certificate
+	// are indistinguishable in every other record this node keeps — which makes
+	// "the controller carried no bytes" unmeasurable rather than merely
+	// unmeasured.
+	//
+	// GET is logged at info and HEAD at debug, because the volume should track
+	// the bytes. A GET is a transfer and there is one per blob replicated; a
+	// HEAD is the durability precondition asking whether a blob is here
+	// (ADR-0018), which happens once per candidate blob per sweep and carries
+	// no body at all.
+	level := slog.LevelInfo
+	if r.Method == http.MethodHead {
+		level = slog.LevelDebug
+	}
+	s.log.Log(r.Context(), level, "served blob content to a peer",
+		"blob_hash", chi.URLParam(r, "hash"), "method", r.Method,
+		"peer_id", peer.PeerID, "peer_name", peer.Name)
 }
 
 // BlobContentPath is where a peer reads another peer's bytes.

@@ -56,13 +56,86 @@ about fifteen seconds.
 - Repository scaffold: the package tree from spec §78, build and lint tooling,
   CI, and the initial architecture decision records.
 
+**Milestone 4 — Second Full Peer.** A blob that existed on one peer exists,
+verified, on two — and the system refuses to delete the last copy when it cannot
+prove otherwise. `make demo` stands two peer processes up and drives the whole
+arc twice: once with each node as `heyarr all`, once with each node as three
+separate role processes (ADR-0002).
+
+- **Peer identity and enrolment** — an Ed25519 identity per node, and mutually
+  authenticated TLS between peers with no CA and no PKI anywhere in the path.
+  Both ends pin: a peer is refused unless the certificate it presents carries the
+  key the local membership record holds. Enrolment is operator-mediated and
+  explicit — no discovery, no join token, no trust on first use — and revocation
+  is deletion of the membership row, which closes the whole API on the connection
+  already open rather than one endpoint somebody remembered to guard.
+- **The peer surface** — a second listener with its own trust root, carrying
+  identity, controller attachment, inventory reports, catalog snapshots and blob
+  content. The client API's bearer token is not accepted there and a peer is
+  never issued one.
+- **Inventory exchange** — what a peer's disk holds, reported through the same
+  door every other peer uses and recorded against the peer its certificate
+  proved. `replicas` stays what the controller BELIEVES; an inventory is what was
+  observed; the time a claim was last confirmed is stored beside it, because the
+  difference between a fact and a fact about the past is what later decisions
+  turn on.
+- **Replication** — the destination pulls, verifies the bytes against their
+  digest itself, and only then claims a replica. The controller is not on the
+  byte path and there is no route that would put it there.
+- **The peer surface records what it serves** — a node now logs which peer read
+  which blob off it, and by which method. A Full Peer had no record of this at
+  all: everything else in the fabric is written from the reader's side, so a
+  source being drained by a peer was visible nowhere on the machine sending the
+  bytes. It is also the only thing that tells the two surfaces apart from
+  outside — the client API's blob route and the peer fabric's share a handler by
+  design and its metrics label them identically, which made "the controller
+  carried no bytes" unmeasurable rather than merely unmeasured. GET is logged at
+  info and HEAD at debug, so the volume tracks the bytes.
+- **Placement** — `PLACEMENT_CONVERGING` is reachable by a running system for the
+  first time. Satisfaction names which peers are missing a blob, and distinguishes
+  a gap replication is closing from bytes that are on nobody at all.
+  `placement.unproven` is computed rather than assumed, and answers `false` the
+  moment a second peer is required.
+- **Peer health** — reachability observed from interactions rather than declared,
+  edge-triggered, with `unknown` deliberately not a synonym for reachable.
+- **Read routing** — a client's own site is preferred, and the reasons the other
+  candidates lost are reported rather than left to be inferred.
+- **Garbage collection confirms placement before unlinking** — ADR-0018's
+  deferred precondition. A blob's last local copy is not removed unless another
+  peer can be shown, affirmatively and recently, to hold it. An unreachable peer,
+  a stale claim, a `replicas` row the peer contradicts (corrected to `missing` on
+  the way past), a collector with no way to ask, and a controller that cannot be
+  reached (§53) each spare the blob and say so by name, in `gc --json` and in the
+  plain output. A catalog that does not describe the store in front of it refuses
+  the untracked sweep outright — an empty database against a populated store used
+  to unlink the library. A single-peer deployment still collects, recording
+  `sole_peer` as the basis: refusing there would mean no single-node Heyarr could
+  ever reclaim a byte.
+- **Acceptance** — the milestone arc asserted step by step against two running
+  nodes under both process models, including the controller serving no blob bytes
+  during a transfer (against an instrument first proven to fire) and garbage
+  collection sparing the last copy with the remote peer stopped.
+
 ### Known limitations
+- **Everything Milestone 4 proves, it proves on one machine.** The two peers in
+  `make demo` are two processes on one host: they share a kernel, a disk, a clock
+  and a loopback interface. That establishes the protocol, the pinning, the
+  verification, the refusals and the data path. It establishes nothing about a
+  real network — partitions, latency, MTU, packet loss, a link that is up but
+  lossy — and a green run must not be read as saying the fabric is deployable.
+  Peer-to-peer mTLS, pinning, revocation and re-enrolment were exercised between
+  two physical machines by hand during the milestone; no automated check does it.
+- Peer liveness is recorded on the client API and not on the peer surface, so
+  where peers only ever meet over the peer surface a remote peer's stored health
+  stays `unknown` until the health beat probes it — and the beat's prober speaks
+  plain HTTPS, which an mTLS listener will not complete. Garbage collection is
+  correct but conservative under that condition: it spares rather than unlinks,
+  which is the safe direction, but the refusals that depend on a peer actually
+  answering are proven by the Go tests rather than by `make demo`.
 - The event stream's `job.succeeded` / `job.failed` events and its live tail
   work across roles, but `/api/v1/system` exposes no head sequence, so a client
   that wants to follow from "now" must replay from zero.
-- Linked and vault asset classes exist in the schema and are never written;
-  Milestone 1 only ever creates managed assets.
-- Milestone 1 ran against exactly one peer, by design. A second Full Peer, real
-  transfers between the two, and a proven placement axis arrive in Milestone 4;
-  a deployment of one peer remains supported forever, and says so on the wire
-  through `placement.unproven`.
+- Linked and vault asset classes exist in the schema and are never written; only
+  managed assets are created.
+- A deployment of exactly one peer remains supported forever, and says so on the
+  wire through `placement.unproven`.

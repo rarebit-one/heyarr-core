@@ -3462,6 +3462,92 @@ YAML
   "$BIN" --config "$WORK/full.yaml" gc >/dev/null 2>&1 || true
   after_gc=$(find "$FULLDATA/cas" -type f | wc -l | tr -d ' ')
   assert_eq "$after_gc" "$before_gc" "gc without flags changes nothing"
+
+  # ---------------------------------------------------------------------------
+  # Garbage collection confirms placement before unlinking (ADR-0018, M4-12)
+  # ---------------------------------------------------------------------------
+  #
+  # ADR-0018 deferred a second precondition to this milestone: GC "must confirm
+  # the placement policy is satisfied elsewhere before unlinking". The refusals
+  # are the deliverable; the happy path was always the easy part.
+  #
+  # Handed over from M4-12, which owned the collector while this file was being
+  # rewritten by the placement issue. The three PEER refusals need a second node
+  # with its own CAS and its own listener, and the one an operator most needs to
+  # have seen work — the last copy, spared because the other peer is down — is
+  # asserted against two running nodes in the two-peer section below.
+  note "  garbage collection preconditions (ADR-0018, M4-12)"
+
+  local gc_json
+  gc_json=$("$BIN" --config "$WORK/full.yaml" gc --json 2>/dev/null)
+
+  # The reasons are REPORTED, not merely logged. Both fields exist as arrays in
+  # the --json shape, so a script can act on them and a human can read them.
+  assert_eq "$(jq -r '.spared | type' <<<"$gc_json")" "array" \
+    "gc --json reports which blobs were spared"
+  assert_eq "$(jq -r '.refusals | type' <<<"$gc_json")" "array" \
+    "gc --json reports the conditions that stopped the sweep"
+  assert_eq "$(jq -r '.untracked_spared | type' <<<"$gc_json")" "array" \
+    "gc --json names the untracked files a guard protected rather than counting them"
+
+  # This node has exactly one peer (ADR-0010), so there is no elsewhere for a
+  # placement policy to be satisfied at and the four original preconditions are
+  # the whole gate. It must therefore NOT be refusing: a precondition that
+  # refuses everywhere is indistinguishable from a broken collector, and every
+  # refusal asserted below would pass against one.
+  assert_eq "$(jq -r '.refusals | length' <<<"$gc_json")" "0" \
+    "a sole-peer deployment is not refused by the placement precondition"
+
+  # An empty catalog against a populated store sweeps NOTHING.
+  #
+  # A fresh data directory, a fresh empty database, and the demo node's real
+  # CAS — every blob in it untracked, every one of them older than the window,
+  # and a --grace small enough that age cannot be what saves them. Before
+  # M4-12 that combination unlinked the library, which is the shape a restored
+  # backup, a wrong --config, or a peer's catalog snapshot mistaken for a
+  # catalog produces.
+  local vac_dir vac_cas vac_before vac_after vac_blobs vac_json
+  vac_dir="$WORK/gc-vacuity"
+  mkdir -p "$vac_dir/data"
+  vac_cas="$vac_dir/cas"
+  cp -R "$FULLDATA/cas" "$vac_cas"
+  # Age every file well past any window, the way a month of sitting there does.
+  find "$vac_cas" -type f -exec touch -t 202601010000 {} +
+  cat >"$vac_dir/gc.yaml" <<YAML
+data_dir: $vac_dir/data
+database:
+  path: $vac_dir/data/heyarr.db
+cas:
+  root: $vac_cas
+YAML
+  vac_before=$(find "$vac_cas" -type f | wc -l | tr -d ' ')
+  # Blob files only, excluding the HEYARR_CAS marker, because that is what the
+  # sweep would have unlinked and therefore what the guard has to have spared.
+  vac_blobs=$(find "$vac_cas/blobs" -type f | wc -l | tr -d ' ')
+  vac_json=$("$BIN" --config "$vac_dir/gc.yaml" gc --apply --grace 1ns --json 2>/dev/null)
+  vac_after=$(find "$vac_cas" -type f | wc -l | tr -d ' ')
+
+  assert_eq "$(jq -r '.considered' <<<"$vac_json")" "0" \
+    "the fixture is an empty catalog, so the sweep considered no blobs"
+  assert_eq "$vac_after" "$vac_before" \
+    "an empty catalog against a populated CAS unlinks nothing"
+  assert_eq "$(jq -r '.untracked | length' <<<"$vac_json")" "0" \
+    "an empty catalog reclaims no untracked bytes"
+  assert_eq "$(jq -r '.refusals[0].reason' <<<"$vac_json")" "catalog_vacuous" \
+    "gc says why it refused: the catalog does not describe this store"
+  # And it NAMES them. "removed nothing" without a reason per file is a result
+  # an operator cannot act on.
+  assert_eq "$(jq -r '.untracked_spared | length' <<<"$vac_json")" "$vac_blobs" \
+    "every file the guard protected is named in the report"
+  assert_eq "$(jq -r '[.untracked_spared[].reason] | unique | join(",")' <<<"$vac_json")" \
+    "catalog_vacuous" "every spared file carries the reason it was spared"
+
+  # The human-readable output says it too — the --json shape is for scripts and
+  # the operator reading a terminal must not be the one left guessing.
+  local vac_text
+  vac_text=$("$BIN" --config "$vac_dir/gc.yaml" gc --apply --grace 1ns 2>/dev/null)
+  assert_eq "$(grep -cF 'REFUSED  catalog_vacuous' <<<"$vac_text" | tr -d ' ')" "1" \
+    "gc's plain output names the refusal"
 }
 
 # The provider health beat (#164) — the assertions that were vacuous until it
@@ -3705,7 +3791,18 @@ YAML
 #
 # "not_satisfied" CONTAINS "satisfied". A substring match on a satisfaction
 # value passes for the opposite meaning, and it has shipped in this file once
-# already.
+# already. The same applies to the garbage-collection refusals at the end:
+# "no_other_peer" contains "other_peer".
+#
+# # Why it runs twice (M4-16)
+#
+# Once with each node as `heyarr all`, and once with each node as three separate
+# role processes. ADR-0002 says the roles must be independently runnable as OS
+# processes, and the split-process section below has kept that honest for the
+# single-node path since Milestone 1. Everything this milestone added — the peer
+# surface, enrolment, inventory exchange, the transfer, the collector's
+# placement precondition — is new surface that the split has never been run
+# against, and a split nothing exercises is decorative.
 
 # peer_listen_addr reads the address a node's peer surface actually bound.
 peer_listen_addr() { # logfile
@@ -3727,22 +3824,128 @@ peer_holds() { # cas-root blob-hash
   find "$1/blobs" -name "${2#blake3:}" -type f 2>/dev/null | wc -l | tr -d ' '
 }
 
-two_peer_demo() {
-  local root="$WORK/twopeer" lib
-  lib="$root/library"
-  mkdir -p "$lib/movies/Signal Fire (2021)" "$lib/movies/Static Field (2019)"
+# start_peer_node starts one two-peer node in the mode this pass is exercising,
+# and reports the PIDs it started in NODE_PIDS.
+#
+# `all` and three role processes are the same node from every angle this section
+# asserts from. That is ADR-0002's claim, and the only thing that keeps it true
+# is running the milestone's arc under both rather than asserting it once under
+# one and trusting the split — which is how a role that stopped being
+# independently runnable would go unnoticed until somebody deployed it.
+start_peer_node() { # config logfile mode
+  local cfg=$1 log=$2 mode=$3 role
+  NODE_PIDS=()
+  if [[ "$mode" == "all" ]]; then
+    "$BIN" --config "$cfg" all >>"$log" 2>&1 &
+    NODE_PIDS+=($!)
+  else
+    for role in controller worker peer; do
+      "$BIN" --config "$cfg" "$role" >>"$log" 2>&1 &
+      NODE_PIDS+=($!)
+    done
+  fi
+  PEER_PIDS+=("${NODE_PIDS[@]}")
+}
 
-  # Two small files, ingested by BOTH nodes from the same directory. That is
+# stop_peer_node stops one node and WAITS for it, so that "the peer is down" is
+# a fact rather than a signal that has been sent. A refusal asserted against a
+# peer that is still finishing its last request proves nothing.
+stop_peer_node() { # pid...
+  local p
+  for p in "$@"; do kill -TERM "$p" 2>/dev/null || true; done
+  for p in "$@"; do wait "$p" 2>/dev/null || true; done
+}
+
+# ctrl_blob_bytes counts blob-content reads served by a node's CLIENT API,
+# from the chi route pattern on its own /metrics.
+#
+# It is used to prove an instrument is LIVE, and never on its own to prove a
+# negative. See peer_blob_reads for why that distinction is the whole point of
+# this pair of helpers.
+#
+# The label is matched with `grep -F`, not a regex. The route pattern contains
+# `{hash}`, and a brace in a regex is an interval operator on some awks and a
+# literal on others — the same class of portability trap as `stat -f`, which is
+# a valid GNU flag meaning something else entirely. A fixed-string match means
+# the same thing on darwin and on the Linux runner.
+ctrl_blob_bytes() { # metrics-text
+  local rows
+  rows=$(grep '^heyarr_http_requests_total{' <<<"$1" |
+    grep -F 'route="/api/v1/blobs/{hash}/content"') || true
+  awk '{ s += $NF } END { printf "%d", s + 0 }' <<<"$rows"
+}
+
+# peer_blob_reads prints the peer names a node SERVED a blob to on its peer
+# surface, one line per read.
+#
+# # Why this is not the client API's counter
+#
+# The first version of the "controller carried no bytes" assertion counted
+# ctrl_blob_bytes across the transfer and required it not to move. That is
+# wrong, and it is wrong in the most dangerous way available: it passed here,
+# five runs in a row, and failed in CI.
+#
+# The two surfaces SHARE the blob handler, deliberately (ADR-0013) — one
+# implementation of ranges, validators and flat memory use rather than two that
+# drift silently. What they do not share is the credential. But the client API's
+# metrics label a request by its chi route pattern, and
+# `/api/v1/blobs/{hash}/content` is the pattern for reads that arrived on a
+# bearer token AND the string a reader would assume covers the peer fabric too.
+# So that counter cannot answer "which listener served these bytes", which is
+# the only question the assertion was asking.
+#
+# What actually moved it in CI was PROBING. internal/media/probe fetches blob
+# bytes from its own node over HTTP Range to hand them to ffprobe, and those
+# reads land on the client API's blob route like any other. The jobs are
+# enqueued by ingest and run whenever the worker reaches them, so the count
+# drifts by an amount that tracks load and elapsed time. This machine has no
+# ffprobe; the probe job carries a RequiredCapability, is never claimed, and the
+# reads never happen. The assertion was measuring a mechanism that was absent
+# locally — the same shape as three other things caught the same day.
+#
+# So the claim is made POSITIVELY instead, from the sending side, on the surface
+# that actually carried the bytes: node A recording that it served this blob, by
+# GET, to a peer that presented a pinned certificate. Probing cannot reach that
+# record, because probing has no certificate and never touches this listener.
+peer_blob_reads() { # logfile method blob-hash
+  grep -F '"msg":"served blob content to a peer"' "$1" 2>/dev/null |
+    jq -r --arg m "$2" --arg h "$3" 'select(.method == $m and .blob_hash == $h) | .peer_name' || true
+}
+
+# peer_blob_read_count counts those reads.
+#
+# `grep -c .` rather than `wc -l`, because a here-string of "" is one empty line
+# to wc and would report a surface that served nothing as having served once.
+peer_blob_read_count() { # logfile method blob-hash
+  peer_blob_reads "$1" "$2" "$3" | grep -c . || true
+}
+
+two_peer_demo() { # mode
+  local mode=$1
+  local root="$WORK/twopeer-$mode" lib
+  lib="$root/library"
+  mkdir -p "$lib/movies/Signal Fire (2021)" "$lib/movies/Static Field (2019)" \
+    "$lib/movies/Cold Harbour (2018)"
+
+  # Three small files, ingested by BOTH nodes from the same directory. That is
   # what gives the two catalogues the same blob digests without either node
   # having to be told about the other's contents — content addressing doing the
   # job it exists for (invariant 1).
+  #
+  # Three rather than two because the garbage-collection arc needs two blobs it
+  # can make unreferenced: one to unlink while this node is still a fabric of
+  # one, and one to spare once a second peer exists and has gone away. A refusal
+  # with no matching permission beside it is indistinguishable from a collector
+  # that refuses everything, so the permission has to be shown too.
   head -c 262144 /dev/urandom > "$lib/movies/Signal Fire (2021)/Signal.Fire.2021.1080p.mkv"
   head -c 131072 /dev/urandom > "$lib/movies/Static Field (2019)/Static.Field.2019.1080p.mkv"
+  head -c 196608 /dev/urandom > "$lib/movies/Cold Harbour (2018)/Cold.Harbour.2018.1080p.mkv"
 
+  local cfg_a="$WORK/twopeer-$mode-a.yaml" cfg_b="$WORK/twopeer-$mode-b.yaml"
   local n
   for n in a b; do
     mkdir -p "$root/$n"
-    cat > "$WORK/twopeer-$n.yaml" <<YAML
+    cat > "$WORK/twopeer-$mode-$n.yaml" <<YAML
 data_dir: $root/$n/data
 peer:
   name: site-$n
@@ -3765,21 +3968,23 @@ YAML
   local sock_a="$root/a/data/heyarr.sock" sock_b="$root/b/data/heyarr.sock"
   local log_a="$root/a.log" log_b="$root/b.log"
   local token_a token_b
-  token_a=$("$BIN" --config "$WORK/twopeer-a.yaml" token create acceptance --scopes admin --json | jq -r .token)
-  token_b=$("$BIN" --config "$WORK/twopeer-b.yaml" token create acceptance --scopes admin --json | jq -r .token)
+  token_a=$("$BIN" --config "$cfg_a" token create acceptance --scopes admin --json | jq -r .token)
+  token_b=$("$BIN" --config "$cfg_b" token create acceptance --scopes admin --json | jq -r .token)
 
-  "$BIN" --config "$WORK/twopeer-a.yaml" all >"$log_a" 2>&1 &
-  PEER_PIDS+=($!)
-  "$BIN" --config "$WORK/twopeer-b.yaml" all >"$log_b" 2>&1 &
-  PEER_PIDS+=($!)
+  # Only node B's PIDs are kept: it is the one this section stops on purpose,
+  # to make a peer go away. Node A runs to the end and is stopped with
+  # everything else through PEER_PIDS.
+  local pids_b=()
+  start_peer_node "$cfg_a" "$log_a" "$mode"
+  start_peer_node "$cfg_b" "$log_b" "$mode"; pids_b=("${NODE_PIDS[@]}")
 
   # api_a / api_b are the two nodes' client APIs; cli_a / cli_b are the two
   # operators. Both are needed: enrolment and inventory reporting are CLI verbs
   # over the peer surface, and satisfaction is an HTTP question.
   api_a() { curl -sS --unix-socket "$sock_a" -H "Authorization: Bearer $token_a" "${@:2}" "http://heyarr$1"; }
   api_b() { curl -sS --unix-socket "$sock_b" -H "Authorization: Bearer $token_b" "${@:2}" "http://heyarr$1"; }
-  cli_a() { "$BIN" --config "$WORK/twopeer-a.yaml" --token "$token_a" "$@"; }
-  cli_b() { "$BIN" --config "$WORK/twopeer-b.yaml" --token "$token_b" "$@"; }
+  cli_a() { "$BIN" --config "$cfg_a" --token "$token_a" "$@"; }
+  cli_b() { "$BIN" --config "$cfg_b" --token "$token_b" "$@"; }
 
   local s waited
   for s in "$sock_a" "$sock_b"; do
@@ -3797,11 +4002,11 @@ YAML
   for l in "$log_a" "$log_b"; do
     waited=0
     while (( waited < 900 )); do
-      (( $(grep -c '"msg":"ingested"' "$l" 2>/dev/null || true) >= 2 )) && break
+      (( $(grep -c '"msg":"ingested"' "$l" 2>/dev/null || true) >= 3 )) && break
       sleep 0.1; waited=$(( waited + 1 ))
     done
     if (( waited >= 900 )); then
-      fail "two-peer: $l never ingested both fixture files"; tail -20 "$l"; return 1
+      fail "two-peer: $l never ingested all three fixture files"; tail -20 "$l"; return 1
     fi
   done
 
@@ -3834,6 +4039,56 @@ YAML
     "and it says so: unproven is TRUE when the target set is this node alone"
   assert_eq "$(jq -r '.state' <<<"$tp_json")" "FULLY_SATISFIED" \
     "so the §64 name goes straight to FULLY_SATISFIED — PLACEMENT_CONVERGING is unreachable here"
+
+  # -------------------------------------------------------------------------
+  note "  and garbage collection lets go of bytes, while this is still a fabric of one"
+  # -------------------------------------------------------------------------
+  #
+  # THE POSITIVE CONTROL for the refusal at the end of this section, and it has
+  # to come first, on this node, while it still has no other peer.
+  #
+  # The refusal below is the milestone's other headline. It is also the
+  # assertion that a collector which refuses EVERYTHING passes perfectly, and a
+  # precondition that never lets go is a different way of losing a library —
+  # slowly, to a full disk. So the same binary, on the same node, with the same
+  # collector, is made to unlink a blob HERE. Between this assertion and the
+  # refusal a hundred lines below, nothing about the code changes; a second peer
+  # is enrolled.
+  #
+  # It uses the third fixture, whose bytes node B also holds and which nothing
+  # after this point asserts on.
+  local sole_blob sole_assets sole_pass1 sole_pass2 aid
+  sole_blob=$(api_a /api/v1/assets |
+    jq -r '.items[] | select(.source_path != null and (.source_path | contains("Cold.Harbour"))) | .blob_hash' |
+    head -1)
+  assert_contains "$sole_blob" "blake3:" "the third fixture names bytes this node ingested"
+  assert_eq "$(peer_holds "$root/a/data/cas" "$sole_blob")" "1" "and node A holds them"
+
+  # Unreference them: DELETE /assets removes the catalog row and never touches a
+  # byte, which is precisely the garbage a sweep exists to find (ADR-0018).
+  sole_assets=$(api_a /api/v1/assets | jq -r --arg h "$sole_blob" '.items[] | select(.blob_hash == $h) | .id')
+  for aid in $sole_assets; do api_a "/api/v1/assets/$aid" -X DELETE -o /dev/null; done
+  assert_eq "$(api_a /api/v1/assets | jq -r --arg h "$sole_blob" '[.items[] | select(.blob_hash == $h)] | length')" "0" \
+    "nothing in the catalogue references those bytes any more"
+
+  # Two passes, because a blob is never reclaimed by the pass that marks it. The
+  # grace window is a window and not a flag, and a single-pass reclaim would
+  # mean a bad scan and a `gc --apply` in the same minute took the library.
+  sole_pass1=$("$BIN" --config "$cfg_a" gc --apply --grace 1ns --json 2>/dev/null)
+  assert_eq "$(jq -r --arg h "$sole_blob" '[.marked[].hash] | index($h) != null' <<<"$sole_pass1")" "true" \
+    "the first pass starts the grace window"
+  assert_eq "$(jq -r '.reclaimed | length' <<<"$sole_pass1")" "0" \
+    "and reclaims nothing at all on the pass that marked it"
+  assert_eq "$(peer_holds "$root/a/data/cas" "$sole_blob")" "1" "so the bytes are still there afterwards"
+
+  sole_pass2=$("$BIN" --config "$cfg_a" gc --apply --grace 1ns --json 2>/dev/null)
+  assert_eq "$(jq -r --arg h "$sole_blob" '[.reclaimed[].hash] | index($h) != null' <<<"$sole_pass2")" "true" \
+    "the second pass reclaims them: one peer means no elsewhere to satisfy, so the window is the whole gate"
+  assert_eq "$(jq -r '.spared | length' <<<"$sole_pass2")" "0" \
+    "nothing was spared — this collector is a gate, not a refusal to ever delete"
+  assert_eq "$(jq -r '.refusals | length' <<<"$sole_pass2")" "0" \
+    "and nothing stopped the sweep as a whole"
+  assert_eq "$(peer_holds "$root/a/data/cas" "$sole_blob")" "0" "node A let the bytes go"
 
   # -------------------------------------------------------------------------
   note "  two peers, enrolled by public key in both directions (§26, ADR-0012)"
@@ -3908,6 +4163,39 @@ YAML
   tp_blob=$(api_a "/api/v1/assets/$tp_asset" | jq -r '.blob_hash')
   assert_contains "$tp_blob" "blake3:" "the satisfying asset names the bytes placement is about"
 
+  # -------------------------------------------------------------------------
+  note "  arming the observation: WHICH SURFACE serves the bytes (§21, §32, ADR-0030)"
+  # -------------------------------------------------------------------------
+  #
+  # ADR-0030 puts the byte-carrying hop on the PEER SURFACE: the destination
+  # pulls from the source's mTLS listener, and the client API — the controller's
+  # door, the one that authenticates a bearer token — is not in the data path at
+  # all. The claim after the transfer is that the bytes went peer to peer.
+  #
+  # It is asserted POSITIVELY, from the node that sent them. A negative
+  # assertion — "this counter did not move" — is the weakest evidence in this
+  # file: it passes against a metric that was never registered, a label that was
+  # renamed, and, as this section learned in CI, against a perfectly live
+  # counter that simply had a second, unrelated writer. See peer_blob_reads.
+  #
+  # Two controls arm it, and they point in opposite directions on purpose.
+  local ctrl_a_before
+  assert_eq "$(peer_blob_read_count "$log_a" GET "$tp_blob")" "0" \
+    "node A has served these bytes to no peer yet: the record starts empty"
+
+  # A genuine blob read on the CLIENT API, for the same blob, on a bearer token.
+  # It must be visible to the client API's counter — that instrument is live —
+  # and invisible to the peer surface's record. If a bearer-token read showed up
+  # as a peer read, the two surfaces would not be distinguishable and every
+  # assertion below would be measuring one number twice.
+  ctrl_a_before=$(ctrl_blob_bytes "$(api_a /metrics)")
+  assert_eq "$(api_a "/api/v1/blobs/$tp_blob/content" -H 'Range: bytes=0-1023' -o /dev/null -w '%{http_code}')" \
+    "206" "node A's client API serves blob bytes to a bearer token, as it always has"
+  assert_eq "$(( $(ctrl_blob_bytes "$(api_a /metrics)") - ctrl_a_before ))" "1" \
+    "the client API's counter saw that read: it is a live instrument, not one that never existed"
+  assert_eq "$(peer_blob_read_count "$log_a" GET "$tp_blob")" "0" \
+    "and the peer surface recorded NOTHING for it — a bearer-token read is not a peer read"
+
   assert_eq "$(peer_holds "$root/b/data/cas" "$tp_blob")" "1" "node B holds the bytes before the gap is made"
   find "$root/b/data/cas/blobs" -name "${tp_blob#blake3:}" -type f -delete
   assert_eq "$(peer_holds "$root/b/data/cas" "$tp_blob")" "0" "and does not hold them after"
@@ -3940,12 +4228,44 @@ YAML
     "the bytes crossed the wire and landed in node B's content store"
   assert_eq "$(api_b "/api/v1/jobs?type=replicate_blob" | jq -r '[.items[] | select(.state == "succeeded")] | length > 0')" "true" \
     "and a replicate_blob job succeeded rather than being retried into silence"
-  if grep -q '"msg":"replicated a blob"' "$log_b"; then
-    pass "node B recorded the transfer, naming the source it pulled from"
-  else
-    fail "node B holds the bytes but logged no transfer — they arrived by some other route"
-    tail -20 "$log_b"
-  fi
+  # The destination's account of the transfer, by field rather than by the
+  # presence of a log line: which blob, how many bytes, and that they were
+  # actually pulled rather than found already present.
+  local tp_rep tp_size
+  tp_size=$(api_a "/api/v1/blobs/$tp_blob" | jq -r '.size')
+  tp_rep=$(grep -F '"msg":"replicated a blob"' "$log_b" 2>/dev/null |
+    jq -s --arg h "$tp_blob" '[.[] | select(.blob_hash == $h)] | last // {}')
+  # `| tostring`, never `// "absent"`. jq's alternative operator fires on false
+  # as well as on null, so `.deduplicated // "absent"` reports a successful
+  # non-deduplicated transfer as a missing field — which is exactly what it did
+  # the first time this ran. An absent field comes back as "null" and fails
+  # loudly instead.
+  assert_eq "$(jq -r '.blob_hash | tostring' <<<"$tp_rep")" "$tp_blob" \
+    "node B recorded the transfer of exactly these bytes"
+  assert_eq "$(jq -r '.bytes | tostring' <<<"$tp_rep")" "$tp_size" \
+    "and the whole blob crossed — the byte count matches what the catalogue says it is"
+  assert_eq "$(jq -r '.deduplicated | tostring' <<<"$tp_rep")" "false" \
+    "pulled over the wire, not found already present: a dedupe would prove nothing about a transfer"
+
+  # -------------------------------------------------------------------------
+  # And now the surface, from the node that SENT the bytes.
+  # -------------------------------------------------------------------------
+  #
+  # THE CONTROLLER CARRIED NO BYTES, asserted as the positive it actually is:
+  # node A served this blob on its PEER SURFACE, by GET, to the peer whose
+  # pinned certificate opened the connection. The whole blob is accounted for by
+  # that read — node B pulled tp_size bytes and re-hashed them itself — so there
+  # is nothing left over for the client API to have carried.
+  #
+  # This is the assertion CI corrected. It used to count the client API's route
+  # label and require it not to move, which is a fact about ffprobe's absence on
+  # a laptop rather than a fact about the data path. See peer_blob_reads.
+  local tp_served
+  tp_served=$(peer_blob_reads "$log_a" GET "$tp_blob" | sort -u | tr '\n' ',' | sed 's/,$//')
+  assert_eq "$(( $(peer_blob_read_count "$log_a" GET "$tp_blob") >= 1 ))" "1" \
+    "node A served these bytes on its peer surface — the record that was empty a moment ago is not now"
+  assert_eq "$tp_served" "site-b" \
+    "and to site-b alone: the only listener in the data path is the one a bearer token cannot open"
 
   cli_b peers report-inventory site-a --json >/dev/null
   tp_json=$(api_a "/api/v1/desired/$tp_want/satisfaction")
@@ -3981,6 +4301,64 @@ YAML
     "bytes on no peer at all are not_satisfied — nowhere is not converging on anything"
   assert_eq "$(jq -r '.placement.missing | length' <<<"$tp_json2")" "2" \
     "and both required peers are named as missing them"
+
+  # -------------------------------------------------------------------------
+  note "  garbage collection REFUSES to delete the last copy (ADR-0018, §53, M4-12)"
+  # -------------------------------------------------------------------------
+  #
+  # THE MILESTONE'S OTHER HEADLINE, and the one an operator most needs to have
+  # seen work.
+  #
+  # Node B is STOPPED first, and waited for, so that "the peer is gone" is a
+  # fact rather than a signal that has been sent. Then the blob that just
+  # crossed the wire is unreferenced on node A, which makes it garbage by every
+  # LOCAL measure the first three milestones had: nothing points at it, and the
+  # grace window is set to a nanosecond so age cannot be what saves it.
+  #
+  # Before this milestone that combination unlinked the bytes. The fabric's last
+  # copy of a blob and an orphan from a rolled-back ingest look identical from
+  # inside one node's catalog, and ADR-0018 deferred the difference to here.
+  #
+  # The contrast that makes this mean something is a hundred lines above: the
+  # SAME collector, on the SAME node, unlinked a blob when this was a fabric of
+  # one. Nothing in between changed the code. A peer was enrolled, and then it
+  # went away.
+  local gc_before gc_after gc_assets gc_refuse gc_text
+  stop_peer_node "${pids_b[@]}"
+  pids_b=()
+
+  gc_assets=$(api_a /api/v1/assets | jq -r --arg h "$tp_blob" '.items[] | select(.blob_hash == $h) | .id')
+  for aid in $gc_assets; do api_a "/api/v1/assets/$aid" -X DELETE -o /dev/null; done
+  assert_eq "$(api_a /api/v1/assets | jq -r --arg h "$tp_blob" '[.items[] | select(.blob_hash == $h)] | length')" "0" \
+    "the transferred blob is unreferenced on node A, and eligible by every LOCAL measure"
+
+  gc_before=$(find "$root/a/data/cas" -type f | wc -l | tr -d ' ')
+  # Marking pass, then the pass that would reclaim.
+  "$BIN" --config "$cfg_a" gc --apply --grace 1ns --json >/dev/null 2>&1
+  gc_refuse=$("$BIN" --config "$cfg_a" gc --apply --grace 1ns --json 2>/dev/null)
+  gc_after=$(find "$root/a/data/cas" -type f | wc -l | tr -d ' ')
+
+  assert_eq "$(jq -r '.reclaimed | length' <<<"$gc_refuse")" "0" "nothing was reclaimed"
+  assert_eq "$gc_after" "$gc_before" "and nothing left the store: the file count is unchanged"
+  assert_eq "$(peer_holds "$root/a/data/cas" "$tp_blob")" "1" \
+    "THE LAST COPY IS STILL THERE — this is the assertion the milestone is for"
+  assert_eq "$(jq -r '.spared | length' <<<"$gc_refuse")" "1" \
+    "exactly one blob was spared, so this is a refusal about a blob and not a sweep that did nothing"
+  # assert_eq, never assert_contains: "no_other_peer" CONTAINS "other_peer",
+  # and a substring match on an enum-like value has shipped here once already.
+  assert_eq "$(jq -r '.spared[0].hash' <<<"$gc_refuse")" "$tp_blob" \
+    "and it is the blob whose last local copy was at stake"
+  assert_eq "$(jq -r '.spared[0].reason' <<<"$gc_refuse")" "peer_unreachable" \
+    "the reason is that nothing about where these bytes are could be established"
+  assert_eq "$(jq -r '.spared[0].peer_name' <<<"$gc_refuse")" "site-b" \
+    "and it names WHICH peer could not be established against — a refusal nobody can diagnose is an outage"
+
+  # The operator at a terminal must not be the one left guessing either. The
+  # --json shape is for scripts; a person reading the output gets the hash and
+  # the reason on one line, and the sentence underneath it.
+  gc_text=$("$BIN" --config "$cfg_a" gc --apply --grace 1ns 2>/dev/null)
+  assert_eq "$(grep -cF "spared        $tp_blob  peer_unreachable" <<<"$gc_text" | tr -d ' ')" "1" \
+    "gc's plain output names the blob it spared and why"
 
   local p
   for p in "${PEER_PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done
@@ -4088,8 +4466,10 @@ else
   stop_full
   note "the provider health beat (#164)"
   provider_health_beat_demo
-  note "THE SECOND PEER: placement, proven (§56, §64, M4-11)"
-  two_peer_demo
+  note "THE SECOND PEER: placement, proven (§56, §64, M4-11) — heyarr all"
+  two_peer_demo all
+  note "THE SECOND PEER, again, as separate role processes (ADR-0002, M4-16)"
+  two_peer_demo split
   note "split-process mode, end to end (ADR-0002)"
   split_process_demo
   stop_full
@@ -4121,12 +4501,65 @@ printf '         durable explanations rather than a silence (§63).\n'
 printf '         a node with no toolchain, no indexer and no download client\n'
 printf '         starts, scans, ingests, serves ranges, and says which of those\n'
 printf '         it cannot do (ADR-0023, ADR-0025).\n'
+printf '         PLACEMENT, by two peer processes with two data directories, two\n'
+printf '         databases, two content stores and two Ed25519 identities, each\n'
+printf '         enrolled on the other'"'"'s public key and talking over mutually\n'
+printf '         authenticated TLS with no CA anywhere (§26, ADR-0012). A blob\n'
+printf '         was deleted from one store — really deleted, from a real disk —\n'
+printf '         the OTHER node'"'"'s API reported PLACEMENT_CONVERGING and named the\n'
+printf '         peer missing it, the destination pulled the bytes, verified them\n'
+printf '         itself and only then claimed the replica, and the same API\n'
+printf '         answered FULLY_SATISFIED. Bytes on NEITHER peer answered\n'
+printf '         not_satisfied rather than converging, which is the distinction\n'
+printf '         §56 draws the state for. The whole arc ran twice: once with each\n'
+printf '         node as `heyarr all`, once with each node as three separate role\n'
+printf '         processes (ADR-0002).\n'
+printf '         THE CONTROLLER CARRIED NO BYTES, asserted from the node that\n'
+printf '         SENT them rather than from a counter that stayed still. Node A\n'
+printf '         recorded serving this blob on its PEER SURFACE, by GET, to the\n'
+printf '         peer whose pinned certificate opened the connection; node B\n'
+printf '         pulled the whole blob and re-hashed it itself (§21, §32,\n'
+printf '         ADR-0030). Two listeners, two trust roots, and every byte\n'
+printf '         accounted for by the one a bearer token cannot open. A\n'
+printf '         client-API read of the same blob moments earlier moved the\n'
+printf '         client API'"'"'s counter and left the peer surface'"'"'s record empty,\n'
+printf '         so the two are known to be distinguishable rather than assumed\n'
+printf '         to be.\n'
+printf '         GARBAGE COLLECTION REFUSED TO DELETE THE LAST COPY. With the\n'
+printf '         second peer stopped and waited for, a blob nothing referenced\n'
+printf '         and a one-nanosecond grace window — garbage by every measure the\n'
+printf '         first three milestones had — was kept, and reported as spared,\n'
+printf '         by hash, naming the peer nothing could be established about\n'
+printf '         (ADR-0018). The same collector on the same node unlinked a blob\n'
+printf '         minutes earlier, while that node was still a fabric of one, so\n'
+printf '         this is a gate and not a collector that refuses everything.\n'
 printf '\n'
 printf '       NOT proven, and not claimed:\n'
-printf '         PLACEMENT. One peer exists by design (ADR-0010), so placement is\n'
-printf '         satisfied the moment content is, and PLACEMENT_CONVERGING — the\n'
-printf '         state §56 draws this distinction for — is unreachable outside a\n'
-printf '         test with a synthetic peer set. Milestone 4 proves it.\n'
+printf '         A REAL NETWORK. The two peers above are two PROCESSES ON ONE\n'
+printf '         MACHINE. They share a kernel, a disk, a clock and a loopback\n'
+printf '         interface. That is enough for the protocol, the pinning, the\n'
+printf '         verification, the refusals and the data path, and it is the\n'
+printf '         whole of what was shown: nothing in this run has met a\n'
+printf '         partition, a slow link, an MTU, packet loss, a reordered or\n'
+printf '         half-open connection, or two clocks that disagree. A green run\n'
+printf '         here says the fabric is correct, not that it is deployable.\n'
+printf '         A SECOND PHYSICAL MACHINE, and by extension any deployment\n'
+printf '         host. Nothing above left this one. Peer-to-peer mTLS, pinning,\n'
+printf '         revocation and re-enrolment WERE exercised between two real\n'
+printf '         machines during this milestone — by a person, at two keyboards,\n'
+printf '         once. That is recorded here so its absence from this run is not\n'
+printf '         mistaken for its absence altogether, and it is not an assertion\n'
+printf '         in this file. This paragraph describes the run.\n'
+printf '         THE DIALLED HALF OF THE DURABILITY CHECK. The refusal above is\n'
+printf '         reached from what this node has HEARD from the other, which in\n'
+printf '         a two-process topology is nothing: liveness is recorded on the\n'
+printf '         client API, the peer surface records none, so a remote peer'"'"'s\n'
+printf '         stored health never leaves `unknown` here. The refusals that\n'
+printf '         come from ASKING a peer and being answered — a stale claim, a\n'
+printf '         `replicas` row that is a lie and is corrected on the way past,\n'
+printf '         §53'"'"'s controller outage — are proven in the integrity and\n'
+printf '         peerapi packages, against a peer that answers, and not by this\n'
+printf '         script.\n'
 printf '         A REAL INDEXER. No Torznab client has ever answered a search\n'
 printf '         here; every candidate above came from a fake, and ADR-0026 says\n'
 printf '         that stays true in CI forever. The client now EXISTS — it is\n'
@@ -4138,8 +4571,9 @@ printf '         indexes Linux distributions, which assert no resolution, codec\
 printf '         or audio. Against a real indexer today, this system determines\n'
 printf '         a release SIZE and reports every quality rule undetermined.\n'
 printf '         TRANSCODE. Milestone 2 ships remux only, and nothing in\n'
-printf '         Milestone 3 needed more: quality profiles select BETWEEN\n'
-printf '         releases rather than producing them.\n'
+printf '         Milestone 3 or Milestone 4 needed more: quality profiles select\n'
+printf '         BETWEEN releases rather than producing them, and replication\n'
+printf '         moves bytes without looking inside them.\n'
 printf '         LINKED ASSETS still have no blob (ADR-0020). Milestone 3 added a\n'
 printf '         fifth place that has to say so — placement, which reports\n'
 printf '         not_applicable rather than a vacuous satisfied.\n'
