@@ -2379,11 +2379,6 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
-        "503":
-          description: |
-            This node serves the peer fabric but holds no catalogue to
-            snapshot — it is a peer rather than a controller (ADR-0029). It is
-            not a 500: there is no bug to look for.
         "404":
           description: |
             This peer holds no such blob. Distinct from 503: a destination
@@ -2444,6 +2439,110 @@ paths:
               schema: { $ref: "#/components/schemas/Problem" }
         "503":
           description: This node has no content store behind its peer surface.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /peer/v1/blobs/{hash}/manifest:
+    parameters:
+      - name: hash
+        in: path
+        required: true
+        description: >-
+          The BLAKE3 digest that names the BLOB, as `blake3:<64 lowercase hex
+          characters>`. A manifest is looked up by the identity of the bytes it
+          describes and is never itself an address, so there is deliberately no
+          route anywhere that names a manifest by its own digest (ADR-0034).
+        schema:
+          type: string
+          pattern: '^blake3:[0-9a-f]{64}$'
+    get:
+      tags: [peer]
+      operationId: getPeerBlobManifest
+      summary: Describe a blob's chunk sequence to a pinned peer.
+      description: |
+        **A description, not a negotiation.** The destination fetches what the
+        source stored and decides for itself what to do about it (§20, §21,
+        ADR-0030). This route is never told what the destination holds, is
+        never asked what it should send, and computes no difference: there is
+        no request body, no query parameter, and no response field that varies
+        with the caller, so two peers asking about one blob get byte-identical
+        answers. Anything else would make the source a participant in a
+        decision it cannot verify, and would put the destination's inventory on
+        the wire for no reason.
+
+        **Asking never generates.** There is no manifest-on-demand here and
+        there will not be. A `GET` that chunked a blob to answer would be a
+        remote denial of service with a polite name — one request naming a
+        20 GB blob, and the source reads 20 GB off its disks. §16 makes
+        chunking lazy and ADR-0034 makes a manifest discardable at any moment,
+        so "there is no manifest" is a legitimate, permanent state and the
+        `404` below is the **answer**. A destination that receives it pulls the
+        blob whole from `/peer/v1/blobs/{hash}/content`, which is exactly
+        Milestone 4's behaviour and is always correct.
+
+        **The credential is the same one.** Mounted beside the content route,
+        on the same mTLS trust root (ADR-0012), with no new credential and no
+        per-blob capability: a pinned member may already read the bytes this
+        manifest describes, so refusing it the description would be theatre.
+
+        **The digest names the manifest.** `digest` is the manifest's own
+        content address, so a destination can check it received the manifest
+        the source has. It is not an alias for the blob, nothing resolves it to
+        bytes, and the destination still verifies the whole-object digest
+        itself on any transfer that follows (ADR-0034).
+
+        **`chunks` is a sequence, not a set.** The order is the data: a set of
+        individually valid chunks assembled in the wrong order is a set of
+        valid chunks and the wrong file. `digest` covers the chunk digests in
+        index order for exactly that reason, so a shuffled array produces a
+        response the destination rejects rather than one it reassembles
+        wrongly.
+      security:
+        - peerCertificate: []
+      responses:
+        "200":
+          description: The stored manifest, its chunks in index order.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PeerBlobManifest" }
+        "400":
+          description: The path is not a `blake3:<64 hex>` digest.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "401":
+          description: No client certificate was presented.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "403":
+          description: The presented key is not a member of this fabric.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404":
+          description: |
+            Two distinct answers, told apart by the problem document's `type`
+            URI — never by its prose, which is expected to be reworded — and
+            the destination takes a different action on each.
+
+            `.../problems/no-chunk-manifest`: this node **holds** the blob and
+            has no chunk manifest for it. Asking does not produce one. Pull
+            these bytes whole from this same source.
+
+            `.../problems/not-found`: this node holds no such blob at all.
+            There is nothing to read here whole or in chunks; try another
+            source.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503":
+          description: |
+            This node has no content store behind its peer surface, so it is
+            not serving bytes at all and has no manifests to describe them
+            with. Matches the content route: distinct from 404 because there is
+            nothing here to try again for.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -3260,6 +3359,122 @@ components:
             is reported as measured rather than clamped, because an operator
             who sees a negative age has learned something true.
 
+    PeerBlobManifest:
+      type: object
+      description: |
+        One blob's chunk sequence, as a source describes it to a pinned peer
+        (§15, §16, ADR-0034).
+
+        It is an optimisation and never an identity. It is keyed by
+        `blob_hash`, the ADR-0005 whole-object digest of the bytes it
+        describes, and it is never the key of anything: nothing resolves
+        `digest` to bytes, and two blobs with identical chunk sequences are
+        still two blobs.
+      required:
+        - blob_hash
+        - digest
+        - algorithm
+        - params
+        - covered_size
+        - chunk_count
+        - generated_at
+        - chunks
+        - served_by
+      properties:
+        blob_hash:
+          type: string
+          pattern: '^blake3:[0-9a-f]{64}$'
+          description: The whole-object digest of the blob this manifest describes.
+        digest:
+          type: string
+          pattern: '^blake3:[0-9a-f]{64}$'
+          description: |
+            The manifest's OWN content address, so a destination can verify it
+            received the manifest the source has. It names the manifest. It is
+            not an alias for the blob, it does not appear in `blobs`, and
+            nothing may resolve it to bytes (ADR-0034).
+
+            It covers the blob hash, the chunker parameters and the chunk
+            digests **in index order**, which is what makes it detect a
+            reordered manifest at all.
+        algorithm:
+          type: string
+          description: >-
+            The chunker that produced it, e.g. `fastcdc`. Stored rather than
+            assumed: a manifest computed under another algorithm describes the
+            same bytes and shares none of the same boundaries.
+        params:
+          type: object
+          description: >-
+            The chunker settings, on the wire for the same reason `algorithm`
+            is. A destination whose defaults have moved has to be able to tell
+            that what it was handed is not comparable with what it would
+            compute.
+          required: [min, avg, max]
+          properties:
+            min: { type: integer, description: Minimum chunk size in bytes. }
+            avg: { type: integer, description: Target average chunk size in bytes; a power of two. }
+            max: { type: integer, description: Maximum chunk size in bytes. }
+        covered_size:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            The end offset of the last chunk. A manifest is internally
+            consistent without being complete for a given blob; comparing this
+            against the blob's size is the caller's question to ask.
+        chunk_count:
+          type: integer
+          minimum: 0
+          description: >-
+            How many chunks `chunks` carries. A destination that receives a
+            different number has a truncated response rather than a tampered
+            manifest, and the two are reported differently.
+        generated_at:
+          type: string
+          format: date-time
+          description: When the source produced this manifest, in UTC.
+        chunks:
+          type: array
+          description: |
+            The chunk **sequence**, in index order. Not a set: the order is the
+            data, because a set of individually valid chunks assembled in the
+            wrong order is a set of valid chunks and the wrong file, and the
+            per-chunk digests cannot see it.
+
+            An empty array is valid and is what an empty blob has.
+          items:
+            type: object
+            required: [offset, length, digest]
+            properties:
+              offset:
+                type: integer
+                format: int64
+                minimum: 0
+                description: >-
+                  Where this chunk starts in the blob. Carried even though it
+                  is derivable from the preceding lengths, because a receiver
+                  that recomputed it could not see a gap — it would have just
+                  filled it in.
+              length:
+                type: integer
+                format: int64
+                minimum: 1
+                description: How many bytes this chunk covers. Never zero.
+              digest:
+                type: string
+                pattern: '^blake3:[0-9a-f]{64}$'
+                description: >-
+                  The BLAKE3 digest of this chunk's bytes. It is a place to
+                  fetch bytes from, never an identity for a blob.
+        served_by:
+          type: string
+          description: >-
+            The answering node's own peer id, so a destination can tell which
+            end of the fabric replied. It is the only field about anything
+            other than the manifest, and it is about the SOURCE — there is no
+            field describing the caller, because the source formed no opinion
+            about the caller.
     CatalogSnapshot:
       type: object
       required: [meta, libraries, library_roots, works, editions, blobs, assets]

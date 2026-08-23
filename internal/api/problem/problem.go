@@ -33,8 +33,16 @@ const (
 	TypeUnauthorized = TypeBase + "unauthorized"
 	TypeForbidden    = TypeBase + "forbidden"
 	TypeNotFound     = TypeBase + "not-found"
-	TypeConflict     = TypeBase + "conflict"
-	TypeInternal     = TypeBase + "internal"
+	// TypeNoChunkManifest is a 404 that is NOT "no such thing": the node holds
+	// the blob and has no chunk manifest for it, and asking does not produce
+	// one (§16, ADR-0034, M5-05). It has its own URI because a destination
+	// takes a different action on each — no manifest means pull these bytes
+	// whole from this source, absent blob means try another source — and the
+	// `type` URI is the only machine-readable discriminator a problem document
+	// has.
+	TypeNoChunkManifest = TypeBase + "no-chunk-manifest"
+	TypeConflict        = TypeBase + "conflict"
+	TypeInternal        = TypeBase + "internal"
 )
 
 // Problem is an RFC 9457 problem document.

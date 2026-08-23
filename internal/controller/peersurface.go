@@ -11,6 +11,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	peercatalog "github.com/rarebit-one/heyarr-core/internal/peer/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/peer/endpoint"
 	"github.com/rarebit-one/heyarr-core/internal/peer/health"
@@ -21,6 +22,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
 // snapshotSource adapts the catalog to the peer surface's contract (§52,
@@ -45,6 +47,61 @@ func (s snapshotSource) BuildSnapshot(
 		Holding:      holding,
 		Full:         full,
 	})
+}
+
+// peerManifests adapts the catalog to the peer surface's manifest route
+// (§20, ADR-0034, M5-05).
+//
+// # Two reads, and neither of them writes
+//
+// It asks the catalogue for §16's three-state answer and, only when that
+// answer is "present", for the manifest itself. Both are SELECTs on the reader
+// pool. There is no branch here that produces a manifest, records a decision
+// or enqueues a chunk_blob job, and there must never be: this adapter sits
+// behind a route any pinned member can call, so a generate-on-demand path here
+// would let one request make this node read a 20 GB blob off its disks
+// (ADR-0034).
+//
+// The reason the state is read FIRST rather than inferring it from a missing
+// manifest is the whole of §16: "no manifest" and "these bytes were decided
+// never to need one" are different facts, and the log line the handler writes
+// says which — which is the difference between an operator seeing a chunker
+// that never ran and one seeing a policy working as intended.
+type peerManifests struct{ cat *catalog.Catalog }
+
+var _ peerapi.ManifestSource = peerManifests{}
+
+// ChunkManifest satisfies [peerapi.ManifestSource].
+func (p peerManifests) ChunkManifest(
+	ctx context.Context, blob hashing.Hash,
+) (manifests.Manifest, manifests.State, error) {
+	state, err := p.cat.ChunkManifestState(ctx, blob)
+	switch {
+	case errors.Is(err, catalog.ErrManifestBlobUnknown):
+		// The catalogue has never heard of these bytes. Translated into the
+		// peer surface's own sentinel, because the route answers it
+		// differently from "no manifest" and the destination acts on the
+		// difference.
+		return manifests.Manifest{}, "", fmt.Errorf("%w: %w", peerapi.ErrNoSuchBlob, err)
+	case err != nil:
+		return manifests.Manifest{}, "", err
+	}
+	if state != manifests.StatePresent {
+		// The answer, not a condition to resolve.
+		return manifests.Manifest{}, state, nil
+	}
+	m, found, err := p.cat.ChunkManifest(ctx, blob)
+	if err != nil {
+		return manifests.Manifest{}, "", err
+	}
+	if !found {
+		// A manifest discarded between the two reads. ADR-0034 makes that a
+		// supported operation at any moment, so it is reported as the state it
+		// now genuinely is rather than as an error — and certainly not by
+		// regenerating what somebody just deleted.
+		return manifests.Manifest{}, manifests.StateUndecided, nil
+	}
+	return m, manifests.StatePresent, nil
 }
 
 // peerLookup adapts the membership store to the transport's trust root.
@@ -242,7 +299,12 @@ func (c *Controller) newPeerSurface(
 		// client API's guard — could talk to this node all day without its
 		// stored health ever leaving `unknown`.
 		Liveness: peerLiveness(peerHealth),
-		Logger:   c.log,
+		// The description of those same bytes (M5-05). The SAME catalogue the
+		// inventory and snapshot routes use, read-only — one store of record,
+		// and a manifest route reading a second one would be a second opinion
+		// about what this node holds.
+		Manifests: peerManifests{cat: peerCatalog},
+		Logger:    c.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
