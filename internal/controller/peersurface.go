@@ -9,6 +9,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	peercatalog "github.com/rarebit-one/heyarr-core/internal/peer/catalog"
+	"github.com/rarebit-one/heyarr-core/internal/peer/health"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
@@ -84,21 +85,8 @@ func (l peerLookup) Lookup(ctx context.Context, publicKey []byte) (mtls.Peer, er
 // to itself.
 func (c *Controller) newPeerSurface(
 	db *sqlite.DB, self identity.Identity, members *membership.Store, blobStore cas.Store,
+	material *mtls.Material, peerHealth *health.Tracker,
 ) (*peerapi.Server, error) {
-	// The private half, read here and nowhere else in the controller. It never
-	// reaches Identity, a log field or a response body — it exists to sign one
-	// certificate that is regenerated in memory and never written down.
-	priv, err := identity.Signer(c.cfg.DataDir)
-	if err != nil {
-		return nil, fmt.Errorf("controller: loading this peer's private key: %w", err)
-	}
-	material, err := mtls.NewMaterial(mtls.MaterialOptions{
-		PrivateKey: priv,
-		PeerID:     self.PeerID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("controller: %w", err)
-	}
 	// The catalog behind the peer surface's inventory route (M4-07) and its
 	// catalog-snapshot route (§52, M4-13).
 	//
@@ -148,10 +136,51 @@ func (c *Controller) newPeerSurface(
 		Inventory:  peerCatalog,
 		Snapshots:  snapshotSource{cat: peerCatalog, self: self.PeerID},
 		Blobs:      blobHandler,
-		Logger:     c.log,
+		// The peer surface's own liveness observation (#184). Without it a
+		// remote peer — which holds no bearer token and so never reaches the
+		// client API's guard — could talk to this node all day without its
+		// stored health ever leaving `unknown`.
+		Liveness: peerLiveness(peerHealth),
+		Logger:   c.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}
 	return srv, nil
+}
+
+// peerMaterial builds this node's certificate material.
+//
+// It is separate from newPeerSurface because two things need it and one of
+// them is built first: the peer LISTENER presents it, and the health probe
+// DIALS with it (#184). Deriving it twice would be two certificates for one
+// identity, which is not wrong so much as it is two places to get a lifetime
+// wrong.
+func (c *Controller) peerMaterial(self identity.Identity) (*mtls.Material, error) {
+	// The private half, read here and nowhere else in the controller. It never
+	// reaches Identity, a log field or a response body — it exists to sign one
+	// certificate that is regenerated in memory and never written down.
+	priv, err := identity.Signer(c.cfg.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("controller: loading this peer's private key: %w", err)
+	}
+	material, err := mtls.NewMaterial(mtls.MaterialOptions{
+		PrivateKey: priv,
+		PeerID:     self.PeerID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+	return material, nil
+}
+
+// peerLiveness converts a possibly-absent tracker into the interface the peer
+// surface takes, for the reason liveness() does it for the client API: a typed
+// nil pointer in an interface is not a nil interface, and the guard would read
+// it as present and panic on the first peer request.
+func peerLiveness(t *health.Tracker) peerapi.Liveness {
+	if t == nil {
+		return nil
+	}
+	return t
 }

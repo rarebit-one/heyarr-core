@@ -141,6 +141,18 @@ separate role processes (ADR-0002).
   which can say all three. Asking a blob's state never generates a manifest, and
   deleting every manifest in the store costs speed and nothing else (ADR-0034).
 
+### Fixed
+
+- **Peer liveness reaches a remote peer** (#184). Health is observed rather than
+  declared, and in the topology Milestone 4 builds nothing observed it: a remote
+  peer holds no bearer token, so it never reached the client API's membership
+  guard — the only writer — and the idle probe spoke plain HTTPS, which an mTLS
+  listener will not complete a handshake with. A remote peer's stored health
+  could not leave `unknown`, which left read routing's health filter and garbage
+  collection's durability check running on an input that could not move. The
+  peer surface now records liveness on an authenticated inbound request, and the
+  probe dials the peer fabric itself, pinned, with this node's certificate.
+
 ### Known limitations
 - **Everything Milestone 4 proves, it proves on one machine.** The two peers in
   `make demo` are two processes on one host: they share a kernel, a disk, a clock
@@ -150,13 +162,11 @@ separate role processes (ADR-0002).
   lossy — and a green run must not be read as saying the fabric is deployable.
   Peer-to-peer mTLS, pinning, revocation and re-enrolment were exercised between
   two physical machines by hand during the milestone; no automated check does it.
-- Peer liveness is recorded on the client API and not on the peer surface, so
-  where peers only ever meet over the peer surface a remote peer's stored health
-  stays `unknown` until the health beat probes it — and the beat's prober speaks
-  plain HTTPS, which an mTLS listener will not complete. Garbage collection is
-  correct but conservative under that condition: it spares rather than unlinks,
-  which is the safe direction, but the refusals that depend on a peer actually
-  answering are proven by the Go tests rather than by `make demo`.
+- The garbage-collection refusals that depend on a peer actually ANSWERING —
+  Refusal 3, the row that claims `present` against a peer that denies holding
+  the bytes — are proven by the Go tests rather than by `make demo`. Peer
+  liveness now moves in a peer-surface-only topology (#184), so the demo can
+  reach that path; the acceptance section that asserts it is not folded in yet.
 - The event stream's `job.succeeded` / `job.failed` events and its live tail
   work across roles, but `/api/v1/system` exposes no head sequence, so a client
   that wants to follow from "now" must replay from zero.
