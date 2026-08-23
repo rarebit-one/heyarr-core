@@ -4190,7 +4190,12 @@ two_peer_demo() { # mode
   # one, and one to spare once a second peer exists and has gone away. A refusal
   # with no matching permission beside it is indistinguishable from a collector
   # that refuses everything, so the permission has to be shown too.
-  head -c 262144 /dev/urandom > "$lib/movies/Signal Fire (2021)/Signal.Fire.2021.1080p.mkv"
+  # Signal Fire is the file the transfer arc moves, and it is deliberately the
+  # only one ABOVE §16's chunking threshold (manifests.ThresholdBytes, 4 MiB).
+  # The lazy-chunking section at the end of this arc needs a blob on each side
+  # of that number, and making the one that already crosses the wire the large
+  # one costs a five-megabyte loopback transfer and no new fixture.
+  head -c 5242880 /dev/urandom > "$lib/movies/Signal Fire (2021)/Signal.Fire.2021.1080p.mkv"
   head -c 131072 /dev/urandom > "$lib/movies/Static Field (2019)/Static.Field.2019.1080p.mkv"
   head -c 196608 /dev/urandom > "$lib/movies/Cold Harbour (2018)/Cold.Harbour.2018.1080p.mkv"
 
@@ -4554,6 +4559,163 @@ YAML
     "bytes on no peer at all are not_satisfied — nowhere is not converging on anything"
   assert_eq "$(jq -r '.placement.missing | length' <<<"$tp_json2")" "2" \
     "and both required peers are named as missing them"
+
+  # -------------------------------------------------------------------------
+  # -------------------------------------------------------------------------
+  note "  lazy chunking: a manifest is a job's product, never a lookup's (§16, §75, M5-04)"
+  # -------------------------------------------------------------------------
+  #
+  # §16 makes chunking lazy and §75 has listed `chunk_blob` since Milestone 1
+  # with nothing behind it. This is the handler, on a running fabric.
+  #
+  # # Placement
+  #
+  # Inside the two-peer arc, at the end of it, and ABOVE the garbage-collection
+  # refusal only because that section stops node B. It ingests one small file,
+  # so it DOES create a Work, an asset and a blob — but in this arc's own
+  # isolated library, below every count this arc asserts, and nowhere near the
+  # demo catalogue the CLI section counts. That is the trap recorded at
+  # `note "  the CLI (M1-17)"`, and this is the side of it that is safe.
+  #
+  # # Why the assertions are all on node A
+  #
+  # Node A holds every byte and its convergence cycle is triggered here
+  # explicitly. Node B's own cycle also enqueues chunking, for blobs that are
+  # arriving as it runs, and asserting the result of that race would be
+  # asserting a timing rather than a rule.
+  # A SMALL blob is needed and there is not one left. The section above
+  # deliberately deleted the second fixture's bytes from BOTH stores, and the
+  # fabric-of-one collector reclaimed the third, so the only blob node A still
+  # holds is the five-megabyte one that just crossed the wire. One is therefore
+  # ingested here, through a real scan, which also means the ingest assertions
+  # below are made against a file that arrived after this node started rather
+  # than against fixtures the run has been carrying since the beginning.
+  local lc_small lc_large
+  lc_large=$tp_blob
+  mkdir -p "$lib/movies/Short Cut (2020)"
+  head -c 32768 /dev/urandom > "$lib/movies/Short Cut (2020)/Short.Cut.2020.1080p.mkv"
+  #
+  # `scan --wait` waits for the SCAN jobs, which enqueue the ingests; the asset
+  # appears when the ingest lands, so the wait is on the asset rather than on
+  # the command returning. That distinction is the same one wait_for_ingest
+  # makes in the single-node demo, and getting it wrong here cost a run.
+  cli_a scan films --wait --json >/dev/null 2>&1 || true
+  waited=0
+  while (( waited < 900 )); do
+    lc_small=$(api_a /api/v1/assets |
+      jq -r '.items[] | select(.source_path != null and (.source_path | contains("Short.Cut"))) | .blob_hash' |
+      head -1)
+    [[ -n "$lc_small" ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  assert_contains "$lc_small" "blake3:" "the small fixture names bytes node A ingested"
+  assert_eq "$(api_a "/api/v1/blobs/$lc_small" | jq -r '.size')" "32768" \
+    "and it is a small blob: well under the 4 MiB threshold, unlike the one that just crossed the wire"
+  assert_eq "$(( $(api_a "/api/v1/blobs/$lc_large" | jq -r '.size') > 4194304 ))" "1" \
+    "while the transferred blob is above it — the two sides of the threshold, on one node"
+
+  # THE ABSENCE FIRST, and it is measured before anything is asked to produce
+  # one. Ingest is `file → BLAKE3 → blob available` and nothing else: no
+  # manifest, and not even a job to make one.
+  #
+  # assert_eq on the state, never assert_contains. The three §16 answers were
+  # chosen so that none is a substring of another, and a containment match here
+  # would accept the opposite meaning.
+  assert_eq "$(cli_a blobs stat "$lc_large" --json | jq -r '.chunk_manifest')" "undecided" \
+    "ingest left the large blob UNDECIDED — chunking it eagerly would be a second full read of "\
+"every byte ingested, for a manifest that may never be used (§16)"
+  assert_eq "$(cli_a blobs stat "$lc_small" --json | jq -r '.chunk_manifest')" "undecided" \
+    "and the small one too: 'never needs one' is a decision, not something ingest guesses"
+  assert_eq "$(api_a "/api/v1/jobs?type=chunk_blob" | jq -r '.items | length')" "0" \
+    "and no chunk_blob job exists at all — not even one waiting to run"
+
+  # Asking must never generate (ADR-0034). Five reads of the state, and the
+  # answer is still the one that means nobody has decided.
+  local lc_ask
+  for lc_ask in 1 2 3 4 5; do
+    api_a "/api/v1/blobs/$lc_large" >/dev/null
+    cli_a blobs stat "$lc_large" --json >/dev/null
+  done
+  assert_eq "$(cli_a blobs stat "$lc_large" --json | jq -r '.chunk_manifest')" "undecided" \
+    "ten reads of 'does this blob have a manifest' produced none: asking is a READ (ADR-0034)"
+  assert_eq "$(api_a "/api/v1/jobs?type=chunk_blob" | jq -r '.items | length')" "0" \
+    "and enqueued nothing — a question that produces the answer it was asked cannot be asked"
+
+  # Now something decides it wants one: a convergence cycle that has just
+  # worked out these bytes must cross a network. That is §16's own trigger —
+  # "when replication or deduplication requires it" — and it is the only thing
+  # that enqueues this job. There is no sweep.
+  #
+  # The same cycle also queues the TRANSFERS that close those gaps, with node B
+  # as the destination, and node A refuses to run those — a destination pulls
+  # its own bytes (ADR-0030). That is not something this section introduces:
+  # every node's own five-minute beat computes the same gaps for every peer,
+  # and it is why the chunking half is keyed on the blob alone rather than on
+  # the transfer.
+  # Only the large blob has to be taken away: node B has never seen the small
+  # one — it was ingested into this library a moment ago and node A is the only
+  # node that has scanned it — so it is already a gap, and one this section did
+  # not have to manufacture.
+  find "$root/b/data/cas/blobs" -name "${lc_large#blake3:}" -type f -delete
+  # Node B walks its own store first and only then tells node A, which is the
+  # order the gap arc above uses: a peer's inventory is what is on its DISK,
+  # and reporting to A without re-reading B's own would forward a belief B has
+  # not itself re-checked.
+  cli_b peers report-inventory site-b --json >/dev/null
+  cli_b peers report-inventory site-a --json >/dev/null
+  api_a "/api/v1/peers/site-b/reconcile" -X POST -o /dev/null
+
+  # Waited on the CONDITION rather than on a job count: the claim is that both
+  # blobs stop being undecided, and a count of succeeded jobs can be satisfied
+  # by jobs about other blobs entirely.
+  waited=0
+  while (( waited < 900 )); do
+    [[ "$(cli_a blobs stat "$lc_large" --json | jq -r '.chunk_manifest')" != "undecided" &&
+       "$(cli_a blobs stat "$lc_small" --json | jq -r '.chunk_manifest')" != "undecided" ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  assert_eq "$(( $(api_a "/api/v1/jobs?type=chunk_blob" | jq -r '[.items[] | select(.state == "succeeded")] | length') >= 2 ))" "1" \
+    "the cycle that decided the bytes must move enqueued the chunking, and it ran"
+  assert_eq "$(api_a "/api/v1/jobs?type=chunk_blob" | jq -r '[.items[] | select(.state == "failed")] | length')" "0" \
+    "and no chunking failed — a job that gives up is a manifest nobody will make"
+
+  # The two sides of the threshold, on the same node, in the same pass.
+  assert_eq "$(cli_a blobs stat "$lc_large" --json | jq -r '.chunk_manifest')" "present" \
+    "the large blob has a manifest, generated on demand by a job (§16)"
+  assert_eq "$(cli_a blobs stat "$lc_small" --json | jq -r '.chunk_manifest')" "not_required" \
+    "and the small one is recorded as NEVER NEEDING one, rather than left undecided — "\
+"below the threshold the manifest costs the same full read as the transfer it would optimise"
+  assert_eq "$(api_a "/api/v1/blobs/$lc_small" | jq -r '.chunked')" "false" \
+    "the compatibility boolean says false for it, which is exactly the conflation §16 needed a third state for"
+  assert_eq "$(api_a "/api/v1/blobs/$lc_large" | jq -r '.chunked')" "true" \
+    "and true for the blob that actually has one"
+
+  # Idempotent (invariant 9). A second cycle over the same fabric enqueues
+  # nothing new, and nothing about the recorded answers moves.
+  api_a "/api/v1/peers/site-b/reconcile" -X POST -o /dev/null
+  sleep 0.5
+  assert_eq "$(cli_a blobs stat "$lc_large" --json | jq -r '.chunk_manifest')" "present" \
+    "a second cycle left the manifest alone"
+  assert_eq "$(cli_a blobs stat "$lc_small" --json | jq -r '.chunk_manifest')" "not_required" \
+    "and left the recorded exemption alone — a re-run that changes nothing must also SAY nothing"
+
+  # Put the fabric back the way this section found it. The gap above was made
+  # by deleting bytes from node B, and the garbage-collection refusal below
+  # turns on node A believing node B holds them — a peer that is UNREACHABLE is
+  # a different refusal from a peer that has reported not having the bytes, and
+  # leaving this section's gap in place would quietly change which one is being
+  # asserted. It is closed by the real mechanism rather than by copying files
+  # about: node B reconciles, pulls, and reports what it now holds.
+  api_b "/api/v1/peers/site-b/reconcile" -X POST -o /dev/null
+  waited=0
+  while (( waited < 900 )); do
+    (( $(peer_holds "$root/b/data/cas" "$lc_large") == 1 )) && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  cli_b peers report-inventory site-b --json >/dev/null
+  cli_b peers report-inventory site-a --json >/dev/null
+  assert_eq "$(peer_holds "$root/b/data/cas" "$lc_large")" "1" \
+    "and the fabric is converged again, on the same transfer path, before the refusal below is asked for"
 
   # -------------------------------------------------------------------------
   note "  garbage collection REFUSES to delete the last copy (ADR-0018, §53, M4-12)"
