@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -48,12 +50,23 @@ func (h *harness) seedBlob(t *testing.T, hash hashing.Hash, size int64) {
 // of identical chunks would round-trip through any permutation.
 func chunkSeq(t *testing.T, lengths ...int64) []chunking.Chunk {
 	t.Helper()
+	// The digests are DELIBERATELY not monotonic in the index.
+	//
+	// The first version of this helper numbered them 1, 2, 3..., which made
+	// index order and digest order the same sequence — so a read ordered by
+	// the wrong column produced the right answer and the ordering sabotage
+	// passed. A fixture whose every plausible ordering agrees is a fixture
+	// that cannot fail an ordering test.
+	scramble := []int{9, 3, 14, 1, 12, 5, 8, 2, 15, 6, 11, 4, 13, 7, 10, 16}
 	var out []chunking.Chunk
 	var off int64
 	for i, n := range lengths {
+		if i >= len(scramble) {
+			t.Fatalf("chunkSeq handles up to %d chunks", len(scramble))
+		}
 		// Distinct per index, and never the all-zero digest — a zero digest is
 		// "no digest", which the manifest refuses for its own reasons.
-		d, err := hashing.Parse(fmt.Sprintf("blake3:%064x", i+1))
+		d, err := hashing.Parse(fmt.Sprintf("blake3:%064x", scramble[i]))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,9 +86,11 @@ func mustBuild(t *testing.T, blob hashing.Hash, chunks []chunking.Chunk) manifes
 }
 
 // digests is the chunk digest SEQUENCE, as a comparable value.
-func digests(m manifests.Manifest) []string {
-	out := make([]string, 0, len(m.Chunks))
-	for _, c := range m.Chunks {
+func digests(m manifests.Manifest) []string { return digestsOf(m.Chunks) }
+
+func digestsOf(chunks []chunking.Chunk) []string {
+	out := make([]string, 0, len(chunks))
+	for _, c := range chunks {
 		out = append(out, c.Digest.String())
 	}
 	return out
@@ -137,6 +152,17 @@ func TestAManifestRoundTripsInOrder(t *testing.T) {
 		size += c.Length
 	}
 	h.seedBlob(t, blob, size)
+
+	// The fixture has to be able to fail. If the chunk digests happened to
+	// sort into index order, a read ordered by digest — or by nothing, or by
+	// rowid — would produce the right sequence by accident and the ordering
+	// assertion below would be decorative.
+	sorted := append([]string(nil), digestsOf(chunks)...)
+	sort.Strings(sorted)
+	if slices.Equal(sorted, digestsOf(chunks)) {
+		t.Fatal("the fixture's chunk digests are already in index order, so no ordering " +
+			"fault could make this test fail")
+	}
 
 	want := mustBuild(t, blob, chunks)
 	if err := h.cat.SaveChunkManifest(ctx, want); err != nil {
