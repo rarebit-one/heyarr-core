@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"time"
+
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
 // The wire types.
@@ -61,11 +63,22 @@ type Asset struct {
 // Blob is byte identity and nothing else (ADR-0005). The bytes themselves are
 // served by /blobs/{hash}/content, which is a separate contract (ADR-0013).
 type Blob struct {
-	Hash        string    `json:"hash"`
-	Size        int64     `json:"size"`
-	MIME        *string   `json:"mime"`
-	Chunked     bool      `json:"chunked"`
-	FirstSeenAt time.Time `json:"first_seen_at"`
+	Hash string  `json:"hash"`
+	Size int64   `json:"size"`
+	MIME *string `json:"mime"`
+	// Chunked is retained because it is `required` in the OpenAPI and removing
+	// it would break every client that reads it. It is now COMPUTED — true
+	// only when ChunkManifest is "present" — rather than read from a column
+	// that nothing ever wrote.
+	//
+	// It cannot express §16's third state and callers should not branch on it.
+	// Read ChunkManifest.
+	Chunked bool `json:"chunked"`
+	// ChunkManifest is the honest field: "present", "not_required" or
+	// "undecided" (§16, ADR-0034). `false` used to mean both of the last two,
+	// and they are the two a replication decision has to tell apart.
+	ChunkManifest manifests.State `json:"chunk_manifest"`
+	FirstSeenAt   time.Time       `json:"first_seen_at"`
 }
 
 // Library is a configured collection of roots.

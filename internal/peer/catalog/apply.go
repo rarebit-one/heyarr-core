@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
 // Apply materialises one snapshot payload. It is the ONLY writer.
@@ -172,13 +174,26 @@ func upsertAll(ctx context.Context, tx *sql.Tx, snap *Snapshot) error {
 		}
 	}
 	for _, b := range snap.Blobs {
+		// A snapshot from a controller that predates M5-03 carries no state at
+		// all. That is 'undecided' — which is the truth about it — and never
+		// 'not_required', because inventing a recorded decision nobody took is
+		// precisely how the third state gets collapsed again.
+		state := b.ChunkManifest
+		if state == "" {
+			state = manifests.StateUndecided
+		}
+		if !state.Valid() {
+			return fmt.Errorf("catalog: applying blob %s: %q is not a chunk-manifest state",
+				b.Hash, state)
+		}
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO snapshot_blobs (hash, size, mime, chunked, first_seen_at)
+			INSERT INTO snapshot_blobs (hash, size, mime, chunk_manifest, first_seen_at)
 			VALUES (?, ?, ?, ?, ?)
 			ON CONFLICT (hash) DO UPDATE SET
 				size = excluded.size, mime = excluded.mime,
-				chunked = excluded.chunked, first_seen_at = excluded.first_seen_at`,
-			b.Hash, b.Size, b.MIME, boolToInt(b.Chunked), formatStamp(b.FirstSeenAt))
+				chunk_manifest = excluded.chunk_manifest,
+				first_seen_at = excluded.first_seen_at`,
+			b.Hash, b.Size, b.MIME, string(state), formatStamp(b.FirstSeenAt))
 		if err != nil {
 			return fmt.Errorf("catalog: applying blob %s: %w", b.Hash, err)
 		}

@@ -123,9 +123,16 @@ const DefaultWindow = 15 * time.Minute
 // twenty seconds. It is the same argument PlacementVerdict.Missing was built
 // on — the actionable half of a verdict is what it names, not the verdict.
 type Peer struct {
-	PeerID     string
-	Name       string
-	Endpoint   string
+	PeerID   string
+	Name     string
+	Endpoint string
+	// PublicKey is the peer's pinned Ed25519 key, and it travels with the row
+	// because the probe needs it: the peer fabric is mutually authenticated
+	// TLS with no CA in it, so the only thing that makes a dial to that
+	// endpoint mean anything is the key membership pins (ADR-0012, #184). A
+	// peer with no key here is one a probe must refuse to dial rather than
+	// trust on first use.
+	PublicKey  []byte
 	IsSelf     bool
 	State      State
 	LastSeenAt time.Time
@@ -188,7 +195,7 @@ const timestampFormat = time.RFC3339Nano
 
 // columns is the projection both reads share, so a column added to one scanner
 // and not the other is a compile error rather than a wrong answer.
-const columns = `id, name, endpoint, is_self, health, last_seen_at`
+const columns = `id, name, endpoint, public_key, is_self, health, last_seen_at`
 
 // New constructs a Tracker.
 func New(opts Options) (*Tracker, error) {
@@ -554,14 +561,16 @@ func scan(row interface{ Scan(...any) error }) (Peer, error) {
 	var (
 		p        Peer
 		endpoint sql.NullString
+		pub      []byte
 		isSelf   int
 		state    string
 		lastSeen sql.NullString
 	)
-	if err := row.Scan(&p.PeerID, &p.Name, &endpoint, &isSelf, &state, &lastSeen); err != nil {
+	if err := row.Scan(&p.PeerID, &p.Name, &endpoint, &pub, &isSelf, &state, &lastSeen); err != nil {
 		return Peer{}, err
 	}
 	p.Endpoint = endpoint.String
+	p.PublicKey = pub
 	p.IsSelf = isSelf == 1
 	p.State = State(state)
 	if lastSeen.Valid {

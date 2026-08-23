@@ -333,8 +333,8 @@ func (h *apiHarness) putBlob(content string) cas.Descriptor {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	h.exec(`INSERT INTO blobs (hash, size, mime, chunked, first_seen_at)
-		VALUES (?, ?, 'application/octet-stream', 0, ?)`,
+	h.exec(`INSERT INTO blobs (hash, size, mime, first_seen_at)
+		VALUES (?, ?, 'application/octet-stream', ?)`,
 		desc.Hash.String(), desc.Size, seedTime)
 	return desc
 }
@@ -530,8 +530,8 @@ func (h *apiHarness) seed() *apiHarness {
 		(?, ?, 'first', 'print', NULL, '{}', ?)`,
 		edition1ID, work1ID, seedTime, edition2ID, work2ID, seedTime, edition3ID, work3ID, seedTime)
 
-	h.exec(`INSERT INTO blobs (hash, size, mime, chunked, first_seen_at) VALUES
-		(?, 42949672960, 'video/x-matroska', 0, ?), (?, 8589934592, 'video/mp4', 0, ?)`,
+	h.exec(`INSERT INTO blobs (hash, size, mime, first_seen_at) VALUES
+		(?, 42949672960, 'video/x-matroska', ?), (?, 8589934592, 'video/mp4', ?)`,
 		blob1Hash, seedTime, blob2Hash, seedTime)
 
 	h.exec(`INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash, source_path,

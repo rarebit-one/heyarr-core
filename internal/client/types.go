@@ -3,6 +3,8 @@ package client
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
 // The wire types, from the client's side.
@@ -62,11 +64,15 @@ type Asset struct {
 
 // Blob is byte identity and nothing else (ADR-0005).
 type Blob struct {
-	Hash        string    `json:"hash"`
-	Size        int64     `json:"size"`
-	MIME        *string   `json:"mime"`
-	Chunked     bool      `json:"chunked"`
-	FirstSeenAt time.Time `json:"first_seen_at"`
+	Hash string  `json:"hash"`
+	Size int64   `json:"size"`
+	MIME *string `json:"mime"`
+	// Chunked is the compatibility field: true only when a manifest is
+	// present. It cannot express §16's third state — read ChunkManifest.
+	Chunked bool `json:"chunked"`
+	// ChunkManifest is "present", "not_required" or "undecided" (ADR-0034).
+	ChunkManifest manifests.State `json:"chunk_manifest"`
+	FirstSeenAt   time.Time       `json:"first_seen_at"`
 }
 
 // Library is a configured collection of roots.

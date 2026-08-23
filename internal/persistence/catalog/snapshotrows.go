@@ -7,6 +7,7 @@ import (
 	"time"
 
 	peercatalog "github.com/rarebit-one/heyarr-core/internal/peer/catalog"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
 // The covered tables, and how each one says it changed.
@@ -241,27 +242,42 @@ func sourceEditions(ctx context.Context, tx *sql.Tx, snap *peercatalog.Snapshot,
 func sourceBlobs(ctx context.Context, tx *sql.Tx, snap *peercatalog.Snapshot, since time.Time, inc bool) error {
 	where, args := sinceClause(snapshotChangeColumn["snapshot_blobs"], since, inc)
 	//nolint:gosec // the only concatenated fragment is sinceClause's, built from a fixed column map; the watermark is bound
+	// The chunk-manifest state travels with the row, computed the same way
+	// ChunkManifestState computes it (M5-03, §16). A snapshot that carried the
+	// old `chunked` boolean would describe a fabric one state poorer than the
+	// one it came from: a peer reading it could not tell "these bytes will
+	// never need a manifest" from "nobody has looked", which is the distinction
+	// the whole of M5-03 exists to preserve.
 	rows, err := tx.QueryContext(ctx,
-		`SELECT hash, size, mime, chunked, first_seen_at FROM blobs`+where+` ORDER BY hash`, args...)
+		`SELECT b.hash, b.size, b.mime, b.first_seen_at,
+		        CASE
+		            WHEN m.blob_hash IS NOT NULL              THEN 'present'
+		            WHEN b.chunking_exempt_reason IS NOT NULL THEN 'not_required'
+		            ELSE 'undecided'
+		        END
+		 FROM blobs b
+		 LEFT JOIN chunk_manifests m ON m.blob_hash = b.hash`+where+` ORDER BY b.hash`, args...)
 	if err != nil {
 		return fmt.Errorf("catalog: reading blobs for the snapshot: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var (
-			b       peercatalog.Blob
-			mime    sql.NullString
-			chunked int64
-			seen    string
+			b     peercatalog.Blob
+			mime  sql.NullString
+			seen  string
+			state string
 		)
-		if err := rows.Scan(&b.Hash, &b.Size, &mime, &chunked, &seen); err != nil {
+		if err := rows.Scan(&b.Hash, &b.Size, &mime, &seen, &state); err != nil {
 			return fmt.Errorf("catalog: reading blobs for the snapshot: %w", err)
 		}
 		if mime.Valid {
 			v := mime.String
 			b.MIME = &v
 		}
-		b.Chunked = chunked == 1
+		if b.ChunkManifest, err = manifests.ParseState(state); err != nil {
+			return fmt.Errorf("catalog: reading blobs for the snapshot: %w", err)
+		}
 		if b.FirstSeenAt, err = parseSnapshotStamp(seen); err != nil {
 			return err
 		}

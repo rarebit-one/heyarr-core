@@ -161,8 +161,8 @@ func (h *harness) seed() {
 		(id, content_type, work_key, title, sort_title, year, attributes, created_at, updated_at)
 		VALUES (?, 'movie', 'movie:arrival:2016', 'Arrival', 'arrival', 2016, '{}', ?, ?)`,
 		workID, stamp, stamp)
-	h.exec(`INSERT INTO blobs (hash, size, mime, chunked, first_seen_at)
-		VALUES (?, 8589934592, 'video/x-matroska', 0, ?)`, blobHash, stamp)
+	h.exec(`INSERT INTO blobs (hash, size, mime, first_seen_at)
+		VALUES (?, 8589934592, 'video/x-matroska', ?)`, blobHash, stamp)
 	h.exec(`INSERT INTO replicas (blob_hash, peer_id, state, bytes_present, verified_at, updated_at)
 		VALUES (?, ?, 'present', 8589934592, ?, ?)`, blobHash, peerID, stamp, stamp)
 }

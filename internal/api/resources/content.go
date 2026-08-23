@@ -13,6 +13,7 @@ import (
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
 // ---------------------------------------------------------------------------
@@ -307,11 +308,24 @@ func (a *API) getBlob(w http.ResponseWriter, r *http.Request) {
 	hash := chi.URLParam(r, "hash")
 	var b Blob
 	var mime sql.NullString
-	var chunked int
+	var state string
 	var firstSeen string
-	err := a.reader.QueryRowContext(r.Context(),
-		`SELECT hash, size, mime, chunked, first_seen_at FROM blobs WHERE hash = ?`, hash).
-		Scan(&b.Hash, &b.Size, &mime, &chunked, &firstSeen)
+	// §16's three-way answer, derived in the same read that fetches the blob
+	// (M5-03). It is a SELECT and nothing else: asking whether a blob has a
+	// chunk manifest must never produce one, and a GET that generated a
+	// manifest as a side effect would be the most convenient possible place to
+	// break that rule (ADR-0034).
+	err := a.reader.QueryRowContext(r.Context(), `
+		SELECT b.hash, b.size, b.mime, b.first_seen_at,
+		       CASE
+		           WHEN m.blob_hash IS NOT NULL              THEN 'present'
+		           WHEN b.chunking_exempt_reason IS NOT NULL THEN 'not_required'
+		           ELSE 'undecided'
+		       END
+		FROM blobs b
+		LEFT JOIN chunk_manifests m ON m.blob_hash = b.hash
+		WHERE b.hash = ?`, hash).
+		Scan(&b.Hash, &b.Size, &mime, &firstSeen, &state)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// The 404 says which hash so an operator can tell "I typed it
@@ -324,7 +338,11 @@ func (a *API) getBlob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b.MIME = nullString(mime)
-	b.Chunked = chunked == 1
+	if b.ChunkManifest, err = manifests.ParseState(state); err != nil {
+		a.fail(w, r, "blob", err)
+		return
+	}
+	b.Chunked = b.ChunkManifest.HasManifest()
 	b.FirstSeenAt = parseTime(firstSeen)
 	a.write(w, r, http.StatusOK, b)
 }

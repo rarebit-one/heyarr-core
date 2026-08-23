@@ -18,6 +18,14 @@ FAILED=0
 # next run fails to bind with an error that points at neither.
 cleanup() {
   local p
+  # FIRST, before the kills: a run that stopped at a missing capability must say
+  # so even though it never reached the verdict line — otherwise the loudest
+  # failure in this file is the one with the least explanation attached. It
+  # prints ahead of the kills because bash reports SIGKILLed jobs
+  # asynchronously, and those lines land in the middle of the explanation.
+  # Guarded on the function existing: this trap is installed above the helper,
+  # so a failure between the two would otherwise die inside the trap (#187).
+  if declare -F capability_exit_note >/dev/null 2>&1; then capability_exit_note; fi
   for p in "${FULL_PIDS[@]:-}" "${PEER_PIDS[@]:-}"; do kill -KILL "$p" 2>/dev/null || true; done
   pkill -f "$WORK" 2>/dev/null || true
   rm -rf "$WORK"
@@ -28,8 +36,11 @@ cleanup() {
 PEER_PIDS=()
 trap cleanup EXIT INT TERM
 
-pass() { printf '  \033[32mok\033[0m   %s\n' "$1"; }
-fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILED=1; }
+# ASSERTIONS counts everything pass/fail printed, so the verdict line can say
+# how much was actually exercised rather than leaving a reader to count `ok`s.
+ASSERTIONS=0
+pass() { ASSERTIONS=$(( ASSERTIONS + 1 )); printf '  \033[32mok\033[0m   %s\n' "$1"; }
+fail() { ASSERTIONS=$(( ASSERTIONS + 1 )); printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILED=1; }
 note() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 assert_contains() { # haystack needle description
@@ -93,6 +104,175 @@ assert_refuses() { # description needle command...
   esac
 }
 
+# ---------------------------------------------------------------------------
+# Capabilities: an assertion may declare what it needs to mean anything (#187)
+# ---------------------------------------------------------------------------
+#
+# The failure this exists to prevent: an assertion whose SUBJECT is absent does
+# not fail and does not skip — it quietly passes, and reads as coverage. It bit
+# three times in M4. The clearest case is the probe-traffic confound (#149): the
+# data-path assertion counted requests on the client API's blob route and
+# required the count not to move. `ffprobe` is absent on the development
+# machines, so probe jobs are never claimed, that route is never touched, and
+# the counter could not have moved for reasons having nothing to do with the
+# data path. Five green local runs were measuring the absence of ffprobe. CI,
+# which installs the pinned toolchain, failed it on the first try.
+#
+# `assert_eq` on a counter that never moves is indistinguishable from `assert_eq`
+# on a counter that correctly stayed still. Both print `ok`. So the assertion has
+# to say what it needs.
+#
+# Two helpers, and the DEFAULT IS THE LOUD ONE:
+#
+#   require_capability <cap> <what would be vacuous>
+#       The block cannot be written honestly without <cap>. Absent → FAIL the
+#       run, naming the capability and what it would have made meaningless.
+#       NOT a skip. A skip is exactly how this became invisible: the developer
+#       machine skips, CI runs, and the two disagree silently for weeks.
+#
+#   unexercised_without <cap> <what was not exercised>
+#       For a block that has a REAL alternative branch — assertions that are
+#       meaningful on a bare machine and different from, not weaker than, the
+#       equipped ones. ADR-0023's degrade path is the whole point of this
+#       script's `if command -v ffprobe` sites, so calling them failures would
+#       be wrong. It does not fail. It records, so the verdict line and the
+#       epilogue can say a green run here is not a green run on a full machine.
+#
+# Reach for `require_capability` first. `unexercised_without` is only correct
+# when the else-branch asserts something a reader would accept as coverage on
+# its own; if the else-branch is empty, or is a weaker restatement, the block
+# wanted require_capability.
+#
+# A capability is a name. It resolves through `capability_probe_<name>` if such
+# a function exists, so a capability need not be a binary — a large-blob
+# fixture, a filesystem that reflinks, a second physical machine are all things
+# an M5 assertion may depend on. With no such function it falls back to
+# `command -v <name>`, which covers ffprobe, ffmpeg and jq.
+
+CAPS_RESOLVED=()       # "name=yes" / "name=no", memoised: probing is not free
+CAPS_UNEXERCISED=()    # "cap<TAB>description" for blocks this machine could not run
+CAPS_UNEXERCISED_N=0   # its length, counted rather than measured: macOS CI runs
+                       # bash 3.2, where ${#arr[@]} on an empty array under
+                       # `set -u` is an unbound-variable error rather than 0
+CAPS_MISSING=()        # capabilities a require_capability asked for and did not get
+CAPS_MISSING_N=0
+
+# capability_available <name> — 0 if present, 1 if absent. Memoised.
+capability_available() {
+  local name=$1 entry answer
+  for entry in "${CAPS_RESOLVED[@]:-}"; do
+    case "$entry" in
+      "$name="*) [[ "${entry#*=}" == yes ]] && return 0 || return 1 ;;
+    esac
+  done
+  if declare -F "capability_probe_$name" >/dev/null 2>&1; then
+    if "capability_probe_$name"; then answer=yes; else answer=no; fi
+  elif command -v "$name" >/dev/null 2>&1; then
+    answer=yes
+  else
+    answer=no
+  fi
+  CAPS_RESOLVED+=("$name=$answer")
+  [[ "$answer" == yes ]]
+}
+
+# require_capability <name> <description> — present: 0. Absent: FAIL, then 1.
+#
+# Two call forms, and both are loud:
+#
+#   require_capability ffprobe "..." || skip_the_now_vacuous_assertions
+#       the run CONTINUES and finishes, so one pass reports EVERY capability it
+#       was short of rather than the first — nobody wants to discover a second
+#       missing toolchain on the next run — and the verdict line names them all.
+#
+#   require_capability ffprobe "..."
+#       a bare call returns 1 under `set -e`, so the run stops right there. That
+#       is a legitimate choice when nothing below the block is meaningful
+#       without the capability. The EXIT trap prints the reason (see
+#       capability_exit_note), because a run that dies at line 4000 without a
+#       verdict line is otherwise indistinguishable from a crash.
+#
+# What it must never be is a skip. A skip is how this became invisible: the
+# developer machine skips, CI runs, and the two disagree silently.
+require_capability() { # name description
+  local name=$1 desc=$2
+  if capability_available "$name"; then
+    return 0
+  fi
+  CAPS_MISSING+=("$name"); CAPS_MISSING_N=$(( CAPS_MISSING_N + 1 ))
+  fail "REQUIRES CAPABILITY '$name', which this machine does not have"
+  printf '       these assertions would be vacuous without it, not skipped:\n'
+  printf '         %s\n' "$desc"
+  printf '       a run that cannot exercise an assertion must say so, and this\n'
+  printf '       is where it says so — not silently, in the middle of 500 oks (#187).\n'
+  return 1
+}
+
+# capability_exit_note explains an aborted run, from the EXIT trap. Silent when
+# the run reached its verdict line, and silent when nothing was missing: this
+# speaks only for the run that stopped early.
+VERDICT_REACHED=0
+capability_exit_note() {
+  # Explicit ifs, not `(( x )) && return`: a `&&` list whose left side is false
+  # is a non-zero statement, and `set -e` kills the script on it — inside an
+  # EXIT trap that turns a tidy abort into a second, unrelated failure.
+  if (( ${VERDICT_REACHED:-0} )); then return 0; fi
+  if (( ${CAPS_MISSING_N:-0} == 0 )); then return 0; fi
+  printf '\n\033[31macceptance: STOPPED — a required capability is missing\033[0m\n'
+  printf '  missing: %s\n' "$(printf '%s\n' "${CAPS_MISSING[@]:-}" | sort -u | tr '\n' ' ')"
+  printf '  an assertion block declared it, this machine does not have it, and the\n'
+  printf '  assertions it guards would have been vacuous rather than skipped. This\n'
+  printf '  run proved LESS than the assertions above it appear to claim.\n'
+  printf '  Install what it needs — scripts/toolchain.sh for the media toolchain —\n'
+  printf '  and run it again (#187).\n'
+}
+
+# not_exercised <name> <description> — record and carry on, for use INSIDE the
+# else-branch of a block that already has an honest alternative. Always 0, so it
+# can sit in the middle of a branch under `set -e` without a `|| true` that a
+# reader would have to think about.
+not_exercised() { # name description
+  CAPS_UNEXERCISED+=("$1	$2")
+  CAPS_UNEXERCISED_N=$(( CAPS_UNEXERCISED_N + 1 ))
+}
+
+# capability_names prints the distinct capabilities the ledger mentions.
+capability_names() {
+  local entry
+  for entry in "${CAPS_UNEXERCISED[@]:-}"; do
+    [[ -n "$entry" ]] && printf '%s\n' "${entry%%	*}"
+  done | sort -u
+}
+
+# capability_ledger prints the unexercised blocks, grouped by capability and
+# indented to sit inside the epilogue. Nothing at all when the machine was fully
+# equipped — a complete run should not be noisier than an incomplete one.
+capability_ledger() { # indent
+  local indent=$1 cap entry n
+  for cap in $(capability_names); do
+    n=0
+    for entry in "${CAPS_UNEXERCISED[@]:-}"; do
+      [[ "$entry" == "$cap	"* ]] && n=$(( n + 1 ))
+    done
+    printf '%sabsent capability: %s — %d assertion block(s) not exercised\n' "$indent" "$cap" "$n"
+    for entry in "${CAPS_UNEXERCISED[@]:-}"; do
+      [[ "$entry" == "$cap	"* ]] || continue
+      printf '%s  - %s\n' "$indent" "${entry#*	}"
+    done
+  done
+}
+
+# unexercised_without <name> <description> — the guard form: 0 (present, run the
+# block) or 1 (absent: recorded for the verdict line and the epilogue, no
+# failure).
+unexercised_without() { # name description
+  if capability_available "$1"; then
+    return 0
+  fi
+  not_exercised "$1" "$2"
+  return 1
+}
+
 [[ -x "$BIN" ]] || { echo "acceptance: $BIN not built — run 'make build'"; exit 1; }
 
 cat > "$WORK/heyarr.yaml" <<YAML
@@ -110,6 +290,71 @@ log:
 http:
   addr: ""
 YAML
+
+# ---------------------------------------------------------------------------
+note "the capability guard itself (M5-10, #187)"
+# ---------------------------------------------------------------------------
+#
+# The guard is the one assertion in this file that CANNOT be checked by reading
+# it, because its whole subject is what happens when something is absent. So it
+# is exercised here, on every run, against two synthetic capabilities whose
+# presence this section controls. Without this the guard would be exactly the
+# thing it exists to prevent: a mechanism nobody has watched fire.
+capability_probe_acceptance_present() { true; }
+capability_probe_acceptance_absent()  { false; }
+
+assert_eq "$(capability_available acceptance_present && echo yes || echo no)" "yes" \
+  "a capability with a probe that resolves is reported present"
+assert_eq "$(capability_available acceptance_absent && echo yes || echo no)" "no" \
+  "and one whose probe does not resolve is reported absent"
+
+# The answer must be about THIS machine, not about a constant. ffprobe is the
+# capability that caused #149, and the acceptance matrix runs both ways: the
+# equipped Linux job has it, the degraded Linux job and macOS do not.
+CAP_FFPROBE_REAL=no
+command -v ffprobe >/dev/null 2>&1 && CAP_FFPROBE_REAL=yes
+assert_eq "$(capability_available ffprobe && echo yes || echo no)" "$CAP_FFPROBE_REAL" \
+  "the guard's answer for ffprobe matches this machine (currently: $CAP_FFPROBE_REAL)"
+
+# THE POINT. A missing capability FAILS, and it fails saying which assertions it
+# just made meaningless. Run in a subshell so its FAILED=1 stays there.
+GUARD_RC=0
+GUARD_OUT=$( require_capability acceptance_absent "the vacuous assertion #187 describes" 2>&1 ) || GUARD_RC=$?
+assert_eq "$GUARD_RC" "1" "require_capability returns non-zero when the capability is absent"
+assert_contains "$GUARD_OUT" "FAIL" "and it FAILS the run rather than skipping — skipping is how this became invisible"
+assert_contains "$GUARD_OUT" "acceptance_absent" "and names the capability it needed"
+assert_contains "$GUARD_OUT" "the vacuous assertion #187 describes" \
+  "and names the assertions that would have been vacuous"
+
+GUARD_RC=0
+GUARD_OUT=$( require_capability acceptance_present "nothing, this one is present" 2>&1 ) || GUARD_RC=$?
+assert_eq "$GUARD_RC" "0" "and it is silent and returns 0 when the capability is present"
+assert_eq "$GUARD_OUT" "" "printing nothing, so a fully equipped run is not noisier for it"
+
+# And the abort note, which only ever prints on a run that died before its
+# verdict line — the one path a reader can never see working.
+EXITNOTE=$( CAPS_MISSING_N=1; CAPS_MISSING=(ffprobe); VERDICT_REACHED=0; capability_exit_note 2>&1 )
+assert_contains "$EXITNOTE" "STOPPED" "an aborted run says it stopped rather than dying without a verdict"
+assert_contains "$EXITNOTE" "ffprobe" "and names the capability that stopped it"
+EXITNOTE=$( CAPS_MISSING_N=1; CAPS_MISSING=(ffprobe); VERDICT_REACHED=1; capability_exit_note 2>&1 )
+assert_eq "$EXITNOTE" "" "and it is silent once the run has reached its verdict line"
+
+# The other half: a block with a genuine alternative branch records rather than
+# fails, and the record is what the verdict line and the epilogue read.
+unexercised_without acceptance_absent "a self-test entry, proving the ledger is written" && \
+  fail "unexercised_without returned success for an absent capability" || \
+  pass "unexercised_without defers a block whose capability is absent"
+unexercised_without acceptance_present "never recorded" && \
+  pass "and runs the block when the capability is present" || \
+  fail "unexercised_without deferred a block whose capability is present"
+assert_contains "${CAPS_UNEXERCISED[*]:-}" "a self-test entry, proving the ledger is written" \
+  "the deferred block is recorded, so the verdict line can report it"
+assert_not_contains "${CAPS_UNEXERCISED[*]:-}" "never recorded" \
+  "and an exercised block is not"
+# Remove the self-test entry: the epilogue reports what this RUN could not
+# prove about Heyarr, and this entry is about the guard.
+CAPS_UNEXERCISED=()
+CAPS_UNEXERCISED_N=0
 
 note "build identity"
 V=$("$BIN" version --json)
@@ -413,6 +658,7 @@ else
   # reading because probing is not happening.
   assert_contains "$ALLLOG" '"capabilities":[]' \
     "a worker with no toolchain claims with nothing rather than defaulting"
+  not_exercised ffprobe "a worker with a toolchain claims with it (the advertisement itself is unproven here)"
 fi
 
 # ADR-0010: the peer model exists from milestone 1 with exactly one peer, and
@@ -1308,6 +1554,7 @@ YAML
     # claim: a node with no ffprobe still plays its library.
     assert_eq "$refuse_code" "201" \
       "with nothing probed, playback still succeeds rather than refusing everything"
+    not_exercised ffprobe "a device that cannot take the codec is refused, and the refusal opens no session"
   fi
 
   note "  the playback planner (§68)"
@@ -1359,6 +1606,7 @@ YAML
       "unprobed media plans DIRECT rather than making the library unplayable"
     assert_contains "$(jq -r '[.reasons[].code] | join(",")' <<<"$plan_json")" "no_probe" \
       "the plan declares that it is a guess"
+    not_exercised ffprobe "the planner deciding on measured streams: DIRECT with no reasons, TRANSCODE naming the codec it refused, and no content_url on a refusal"
   fi
 
   # §31: with exactly one peer (ADR-0010) every replica is local, which is the
@@ -1399,6 +1647,7 @@ YAML
     assert_eq "$(api "/api/v1/blobs/$probe_hash/probe" -o /dev/null -w '%{http_code}')" "404" \
       "an unprobed blob is a 404, not an empty result"
     pass "the whole demo passed with every probe job unclaimed"
+    not_exercised ffprobe "a probe job actually RUNNING: succeeded jobs, a queryable probe result, and §29's range-read rather than a materialised blob"
   fi
 
   note "  the media toolchain (ADR-0023)"
@@ -1426,6 +1675,7 @@ YAML
     assert_eq "$(api /api/v1/system | jq -r '.media[] | select(.name == "ffprobe") | .detail')" \
       "not found on PATH" "a node without ffprobe says why"
     pass "the whole demo passed on a node with no media toolchain"
+    not_exercised ffprobe "an available ffprobe reporting a version through /api/v1/system"
   else
     assert_contains "$(api /api/v1/system | jq -r '.media[] | select(.name == "ffprobe") | .version')" \
       "." "an available ffprobe reports a version"
@@ -2531,6 +2781,7 @@ YAML
     # unreachable.
     assert_eq "$(jq -r '.state' <<<"$sat_gated_json")" "AVAILABLE" \
       "the bytes are still held, so the state is AVAILABLE rather than MISSING"
+    not_exercised ffprobe "a probed asset being MEASURED against a resolution gate, rather than the gate reporting undetermined"
   fi
 
   # §57's point, and the reason a beat exists at all: satisfaction can change
@@ -3208,6 +3459,7 @@ YAML
     wait "$bare_pid" 2>/dev/null || true
   else
     pass "no toolchain here, so there is no mixed fleet to make"
+    not_exercised ffprobe "capability routing in a MIXED fleet — a bare worker declining a probe job an equipped one then claims (ADR-0023)"
   fi
 
   note "  remuxing (§10, §75)"
@@ -3275,6 +3527,7 @@ YAML
     # works. A remux job queued here would sit pending, which is the whole
     # degrade contract.
     pass "the demo passed with no ffmpeg, so nothing could be remuxed"
+    not_exercised ffmpeg "a real REMUX end to end: the job queued, claimed and run, a NEW derived asset on the same edition, and a DIRECT plan refusing to queue pointless work"
   fi
 
   note "  version and schema drift (#150, #132)"
@@ -4585,9 +4838,57 @@ printf '         download and is not media, so no toolchain can measure it. That
 printf '         is the right answer — a gate that cannot be shown to hold must\n'
 printf '         not pass — and measurement against real media is proven by the\n'
 printf '         satisfaction section instead.\n'
+
+# The part of "NOT proven" that is a property of THIS MACHINE rather than of
+# this milestone (M5-10, #187).
+#
+# Everything above is a limitation of the system and reads the same on every
+# runner. This is different: it is what this particular machine was not equipped
+# to ask, and it is the difference between a green run here and a green run on
+# the equipped CI runner. Without it the two are indistinguishable, which is how
+# five green local runs measured the absence of ffprobe.
+if (( CAPS_UNEXERCISED_N > 0 )); then
+  printf '         WHAT THIS MACHINE COULD NOT ASK. %d assertion block(s)\n' "$CAPS_UNEXERCISED_N"
+  printf '         declared a capability this machine does not have. Their\n'
+  printf '         subject was ABSENT, so they were not run — they are neither\n'
+  printf '         failures nor coverage, and the branch that ran in their place\n'
+  printf '         asserts the degraded behaviour instead (ADR-0023, ADR-0025):\n'
+  capability_ledger '           '
+  printf '         A green run here is NOT a green run on a fully equipped\n'
+  printf '         machine. Install the pinned toolchain with scripts/toolchain.sh\n'
+  printf '         to close the gap, or read CI, which runs it both ways.\n'
+else
+  printf '         NOTHING WAS LEFT UNASKED for want of a capability: every\n'
+  printf '         assertion block in this file found what it declared it needed,\n'
+  printf '         so this run is the complete one (#187).\n'
+fi
 printf '\n'
 
-if (( FAILED )); then
-  printf '\n\033[31macceptance: FAILED\033[0m\n'; exit 1
+# The verdict line. It carries the capability gap, because the verdict line is
+# what a person actually reads and what a CI log gets scrolled to — a limitation
+# reported only in the middle of 400 `ok`s is one nobody sees at the moment it
+# matters (#187).
+CAPS_VERDICT=""
+if (( CAPS_UNEXERCISED_N > 0 )); then
+  CAPS_VERDICT=$(capability_names | tr '\n' ' ' | sed 's/ $//; s/ /, /g')
 fi
-printf '\n\033[32macceptance: all checks passed\033[0m\n'
+
+VERDICT_REACHED=1
+if (( FAILED )); then
+  printf '\n\033[31macceptance: FAILED\033[0m — %d assertions\n' "$ASSERTIONS"
+  if (( CAPS_MISSING_N > 0 )); then
+    printf '  %d of those failures are MISSING CAPABILITIES: an assertion declared\n' "$CAPS_MISSING_N"
+    printf '  something this machine does not have, so it could not be exercised.\n'
+    printf '  That is a failed run, deliberately — see #187.\n'
+  fi
+  exit 1
+fi
+if (( CAPS_UNEXERCISED_N > 0 )); then
+  printf '\n\033[32macceptance: all checks passed\033[0m — %d assertions, ' "$ASSERTIONS"
+  printf '\033[33m%d block(s) NOT exercised\033[0m (absent: %s)\n' \
+    "$CAPS_UNEXERCISED_N" "$CAPS_VERDICT"
+  printf '  a green run here is not a green run on a machine that has them (#187)\n'
+else
+  printf '\n\033[32macceptance: all checks passed\033[0m — %d assertions, every declared capability present\n' \
+    "$ASSERTIONS"
+fi

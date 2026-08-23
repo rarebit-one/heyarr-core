@@ -551,8 +551,8 @@ func (h *harness) seed() *harness {
 		desired1ID, seedTime, seedTime, seedTime,
 		desired2ID, seedTime, seedTime, seedTime)
 
-	h.exec(`INSERT INTO blobs (hash, size, mime, chunked, first_seen_at) VALUES
-		(?, 42949672960, 'video/x-matroska', 0, ?), (?, 8589934592, 'video/mp4', 0, ?)`,
+	h.exec(`INSERT INTO blobs (hash, size, mime, first_seen_at) VALUES
+		(?, 42949672960, 'video/x-matroska', ?), (?, 8589934592, 'video/mp4', ?)`,
 		blob1Hash, seedTime, blob2Hash, seedTime)
 
 	h.exec(`INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash, source_path,

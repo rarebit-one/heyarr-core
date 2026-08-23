@@ -17,8 +17,8 @@ import (
 // seedSatisfying gives the harness's want an asset that meets the profile.
 func (h *harness) seedSatisfying(t *testing.T, hash string, height int64, editionType string) {
 	t.Helper()
-	h.exec(t, `INSERT INTO blobs (hash, size, mime, chunked, first_seen_at)
-		VALUES (?, 8589934592, 'video/x-matroska', 0, ?)`, hash, stamp)
+	h.exec(t, `INSERT INTO blobs (hash, size, mime, first_seen_at)
+		VALUES (?, 8589934592, 'video/x-matroska', ?)`, hash, stamp)
 	h.exec(t, `INSERT INTO editions (id, work_id, label, edition_type, language, attributes, created_at)
 		VALUES (?, 'w1', '1080p', ?, 'en', '{}', ?)`, "e-"+hash, editionType, stamp)
 	h.exec(t, `INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash,
@@ -288,8 +288,8 @@ func TestWithNoProbeTheAttributesAreUndetermined(t *testing.T) {
 	h.setProfile(t, gate1080)
 
 	hash := "blake3:" + repeat("9", 64)
-	h.exec(t, `INSERT INTO blobs (hash, size, mime, chunked, first_seen_at)
-		VALUES (?, 8589934592, 'video/x-matroska', 0, ?)`, hash, stamp)
+	h.exec(t, `INSERT INTO blobs (hash, size, mime, first_seen_at)
+		VALUES (?, 8589934592, 'video/x-matroska', ?)`, hash, stamp)
 	h.exec(t, `INSERT INTO editions (id, work_id, label, edition_type, language, attributes, created_at)
 		VALUES ('e-noprobe', 'w1', '', 'web-dl', 'en', '{}', ?)`, stamp)
 	h.exec(t, `INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash,

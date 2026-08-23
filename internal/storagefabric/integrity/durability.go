@@ -165,6 +165,31 @@ type Peer struct {
 // Unknown is not reachable. A peer nothing has ever heard from has not been
 // shown to be up, and treating the default as a pass is the failure the
 // `unknown` state exists to make impossible.
+//
+// # Why this is still consulted BEFORE the dial (#184)
+//
+// The obvious alternative is to dial anyway when the column says `unknown` and
+// let the answer decide — a peer that would have answered is then never spared
+// on a stale belief. It was considered and refused, and the reason is that it
+// is the wrong repair for the problem.
+//
+// The problem was that `unknown` was STRUCTURAL: nothing observed the peer
+// surface and the probe could not speak to it, so a remote peer's health could
+// not move whatever it did. That is fixed at the two writers — the peer surface
+// records liveness on an authenticated inbound request, and the probe dials the
+// peer fabric pinned — so `unknown` is now what it was always meant to be: a
+// peer nothing has heard from YET, for at most one sweep of the beat.
+//
+// Weakening this line instead would have traded a temporary conservatism for a
+// permanent one-way risk. Deletion is the one irreversible operation in Heyarr;
+// sparing costs disk until the next sweep. So the safe default stays, and the
+// thing that was actually broken was repaired.
+//
+// What would make us revisit it: a deployment where the peer surface is
+// genuinely never spoken to and the probe genuinely cannot reach it — a peer
+// behind a one-way NAT that only ever dials out. There, `unknown` is durable
+// again and this line would spare forever. The fix then is still not to dial on
+// `unknown`, but to give that topology an observation it can make.
 func (p Peer) Reachable() bool { return p.Health == "reachable" }
 
 // Replica is what the catalog BELIEVES another peer holds — one `replicas`

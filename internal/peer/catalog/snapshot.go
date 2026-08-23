@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
 // Kind names how a snapshot payload was produced.
@@ -131,11 +133,21 @@ type Edition struct {
 // and the shape of the bytes, never the bytes: those are the CAS's, which the
 // peer already holds in full (§80).
 type Blob struct {
-	Hash        string    `json:"hash"`
-	Size        int64     `json:"size"`
-	MIME        *string   `json:"mime"`
-	Chunked     bool      `json:"chunked"`
-	FirstSeenAt time.Time `json:"first_seen_at"`
+	Hash string  `json:"hash"`
+	Size int64   `json:"size"`
+	MIME *string `json:"mime"`
+	// ChunkManifest is §16's three-way answer: a manifest is present, a
+	// decision was recorded that these bytes never need one, or nobody has
+	// decided (M5-03, ADR-0034).
+	//
+	// It replaced a `chunked` boolean that was false on every row of every
+	// snapshot ever built, because the controller column it came from was
+	// never written. Carrying the boolean forward would have made a peer's
+	// snapshot describe a fabric one state poorer than the one it came from —
+	// the peer could not have told "never needs one" from "not yet looked",
+	// and the second is the case a replication decision branches on.
+	ChunkManifest manifests.State `json:"chunk_manifest"`
+	FirstSeenAt   time.Time       `json:"first_seen_at"`
 }
 
 // Asset is one asset and its blob mapping.
@@ -331,7 +343,7 @@ func (s *Snapshot) ContentDigest() string {
 		d.str(b.Hash)
 		d.num(b.Size)
 		d.ptr(b.MIME)
-		d.boolean(b.Chunked)
+		d.str(string(b.ChunkManifest))
 		d.stamp(b.FirstSeenAt)
 	}
 
