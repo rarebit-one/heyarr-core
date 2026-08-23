@@ -3,10 +3,12 @@ package resources
 import (
 	"database/sql"
 	"net/http"
+	"strings"
 	"time"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
+	"github.com/rarebit-one/heyarr-core/internal/api/render"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/domain/playback"
 	"github.com/rarebit-one/heyarr-core/internal/domain/routing"
@@ -69,7 +71,30 @@ type StartPlaybackResponse struct {
 	// to one blob — see the note at the top of this file.
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
+	// RenderURL is an absolute, capability-addressed URL that a device with no
+	// notion of credentials can simply fetch (ADR-0037).
+	//
+	// It is what a television, a speaker or a projector is given. Empty when
+	// this node cannot mint one — see renderURL — and a client that finds it
+	// empty still has ContentURL and Token, which is everything a client that
+	// CAN send a header needs.
+	RenderURL string `json:"render_url,omitempty"`
+	// RenderUnavailable says why RenderURL is empty, when it is empty for a
+	// reason worth acting on. A client handed neither a URL nor an
+	// explanation cannot tell "your peer does not do this" from "something
+	// broke", and will retry the wrong one.
+	RenderUnavailable string `json:"render_unavailable,omitempty"`
 }
+
+// renderCapabilityTTL is how long a capability URL lives.
+//
+// Shorter than the playback token, and deliberately so: the token is held by a
+// client that can keep a secret in a header, while a capability travels in a
+// URL through a television's logs and whatever a renderer chooses to do with
+// it. There is no revocation before expiry (ADR-0037), so the expiry is the
+// only control there is. Long enough for a film and a pause; short enough that
+// a leaked one is worthless by the time anyone finds it in a log.
+const renderCapabilityTTL = 6 * time.Hour
 
 func (a *API) startPlayback(w http.ResponseWriter, r *http.Request) {
 	var body StartPlaybackRequest
@@ -175,14 +200,92 @@ func (a *API) startPlayback(w http.ResponseWriter, r *http.Request) {
 	}
 	a.events.Publish(event)
 
+	renderURL, unavailable := a.renderURL(r, route, blobHash, body.AssetID, now)
+
 	w.Header().Set("Location", httpapi.APIPrefix+"/consumption/sessions/"+session.ID)
 	a.write(w, r, http.StatusCreated, StartPlaybackResponse{
-		SessionID:  session.ID,
-		Plan:       rendered,
-		ContentURL: contentURLFor(route, blobHash),
-		Token:      token.Secret,
-		ExpiresAt:  expires,
+		SessionID:         session.ID,
+		Plan:              rendered,
+		ContentURL:        contentURLFor(route, blobHash),
+		Token:             token.Secret,
+		ExpiresAt:         expires,
+		RenderURL:         renderURL,
+		RenderUnavailable: unavailable,
 	})
+}
+
+// renderURL mints the capability URL a dumb renderer can fetch (ADR-0037).
+//
+// It returns a URL or a reason, never neither and never both. Every path that
+// declines says why, in the same idiom as the rest of §68: a client that
+// cannot tell "this peer does not mint these" from "something failed" retries
+// the wrong one forever.
+func (a *API) renderURL(r *http.Request, route routing.Decision, blobHash, assetID string, now time.Time) (url, unavailable string) {
+	if len(a.renderSecret) == 0 || a.renderBaseURL == "" {
+		// Not configured, and not a fault. A node whose clients all send
+		// Authorization headers has no use for this route.
+		return "", ""
+	}
+	if blobHash == "" {
+		return "", "this asset has no bytes on any peer"
+	}
+	// A capability is signed by the node that serves the bytes and is valid
+	// nowhere else, so this node cannot mint one for a replica it does not
+	// hold. Saying so is the deliverable: the operator's next question is
+	// "then how do I play it in the living room", and the answer is to
+	// replicate it here, which §31 wanted anyway.
+	if route.Found && a.selfPeerID != "" && route.Source.PeerID != a.selfPeerID {
+		return "", "the replica is on another peer, and a capability is only valid at the peer that signed it"
+	}
+
+	// The Asset's declared type, not a guess about the bytes. A renderer
+	// refuses application/octet-stream, and the blob endpoint is right to
+	// serve nothing else (ADR-0006) — so the type is carried in the
+	// capability, fixed here where an Asset is in hand.
+	var mime sql.NullString
+	if err := a.reader.QueryRowContext(r.Context(),
+		`SELECT mime FROM assets WHERE id = ?`, assetID).Scan(&mime); err != nil {
+		a.log.Warn("reading an asset's mime for a render capability",
+			"request_id", httpapi.RequestIDFrom(r.Context()), "asset_id", assetID, "error", err)
+		return "", "this asset's media type could not be read"
+	}
+	if !mime.Valid || mime.String == "" {
+		// Refused rather than defaulted. Handing a renderer the wrong type is
+		// a device that fails with something unhelpful on screen; handing it
+		// none at all is the octet-stream refusal this whole route exists to
+		// avoid. Neither is better than an explanation.
+		return "", "this asset has no media type recorded, and a renderer will not accept bytes without one"
+	}
+
+	token, err := render.Capability{
+		BlobHash:  blobHash,
+		ExpiresAt: now.Add(renderCapabilityTTL),
+		MIME:      mime.String,
+	}.Sign(a.renderSecret)
+	if err != nil {
+		a.log.Error("signing a render capability",
+			"request_id", httpapi.RequestIDFrom(r.Context()), "error", err)
+		return "", "this peer could not sign a capability for these bytes"
+	}
+	// The trailing name is cosmetic and unsigned: some renderers will not
+	// issue a GET for a URL whose last segment looks like nothing they
+	// recognise. It decides nothing — the type and the bytes both come from
+	// the capability.
+	return a.renderBaseURL + render.Path(token) + "/" + renderFilename(mime.String), ""
+}
+
+// renderFilename is a plausible last path segment for a renderer that sniffs
+// one. It is not the asset's filename: that can contain anything, and this
+// value is going into a URL that a television will parse with its own rules.
+func renderFilename(mime string) string {
+	switch {
+	case strings.HasPrefix(mime, "video/"):
+		return "stream.mp4"
+	case strings.HasPrefix(mime, "audio/"):
+		return "stream.mp3"
+	default:
+		return "stream"
+	}
 }
 
 // playbackRefusal turns a non-DIRECT plan into a problem document.

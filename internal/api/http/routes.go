@@ -14,6 +14,16 @@ import (
 // APIPrefix is where the JSON API is mounted (spec §77).
 const APIPrefix = "/api/v1"
 
+// RenderPrefix is where capability-addressed content is mounted
+// (ADR-0037). It is deliberately NOT under APIPrefix: everything there
+// requires a bearer credential, and the whole point of this route is
+// serving a device that has none to give.
+//
+// The capability is in the PATH, so the access log redacts it — see
+// logPath. A secret in a URL is the thing auth.go objects to, and the
+// mitigation it names for query strings has to apply here too.
+const RenderPrefix = "/render"
+
 // routes builds the whole handler.
 //
 // The middleware order is the design, not an accident:
@@ -70,6 +80,17 @@ func (s *Server) routes(mounts []MountFunc) http.Handler {
 			EnableOpenMetrics: true,
 		}))
 	})
+
+	// Capability-addressed content (ADR-0037), before the authenticated group
+	// and deliberately outside it.
+	//
+	// A renderer cannot present a credential, so the unguessable, expiring,
+	// single-blob capability in the path is the authority. Mounting it here
+	// rather than under APIPrefix is the whole design: inside that group the
+	// route would 401 every television it exists to serve.
+	for _, mount := range s.publicMounts {
+		mount(r)
+	}
 
 	r.Route(APIPrefix, func(r chi.Router) {
 		// Deny by default. Every route under /api/v1 needs at least `read`, so

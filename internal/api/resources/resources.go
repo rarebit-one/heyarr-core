@@ -20,6 +20,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -88,6 +89,22 @@ type Options struct {
 	// shapes be golden files rather than a regex (ADR-0017).
 	Now   func() time.Time
 	NewID func() string
+	// RenderSecret signs the capability URLs a dumb renderer fetches
+	// (ADR-0037). Empty disables them: POST /playback still answers, and the
+	// response simply carries no renderer URL. That is a legitimate
+	// deployment — a node whose only clients send Authorization headers needs
+	// no capability route — and it keeps every harness that predates this
+	// working unchanged rather than making each one mint a secret.
+	RenderSecret []byte
+	// RenderBaseURL is the absolute origin a renderer should fetch from,
+	// normally the peer endpoint. A relative URL is useless to a television:
+	// it has no notion of "the host you got the plan from" because it never
+	// spoke to the controller at all.
+	RenderBaseURL string
+	// SelfPeerID identifies this node, so playback can tell whether the routed
+	// replica is one this node can actually mint for. A capability is only
+	// valid at the peer that signed it (ADR-0037).
+	SelfPeerID string
 	// StreamHeartbeat is how often the SSE stream writes a keep-alive comment.
 	// Zero means the default.
 	StreamHeartbeat time.Duration
@@ -113,6 +130,10 @@ type API struct {
 	log        *slog.Logger
 	now        func() time.Time
 	newID      func() string
+
+	renderSecret  []byte
+	renderBaseURL string
+	selfPeerID    string
 
 	heartbeat  time.Duration
 	streamPoll time.Duration
@@ -183,9 +204,13 @@ func New(opts Options) (*API, error) {
 		log:        log.With("component", "api"),
 		now:        now,
 		newID:      newID,
-		heartbeat:  heartbeat,
-		streamPoll: streamPoll,
-		buffer:     buffer,
+
+		renderSecret:  opts.RenderSecret,
+		renderBaseURL: strings.TrimRight(opts.RenderBaseURL, "/"),
+		selfPeerID:    opts.SelfPeerID,
+		heartbeat:     heartbeat,
+		streamPoll:    streamPoll,
+		buffer:        buffer,
 	}, nil
 }
 

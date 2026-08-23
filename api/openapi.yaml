@@ -498,6 +498,142 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /render/{capability}:
+    parameters:
+      - name: capability
+        in: path
+        required: true
+        description: >-
+          A signed, expiring, single-blob capability minted by
+          `POST /api/v1/playback`. It IS the authority for this request — there
+          is no other credential — so treat it as a secret.
+        schema:
+          type: string
+    get:
+      tags: [bytes]
+      operationId: getRenderContent
+      security: []
+      summary: Serve one blob to a device that cannot present a credential.
+      description: >-
+        The renderer route of ADR-0037, and the only unauthenticated content
+        path in Heyarr. It exists because a television, a speaker or a
+        projector is handed a URL and told to fetch it: it cannot send an
+        `Authorization` header, and `/api/v1/blobs/{hash}/content` therefore
+        answers every such device with 401.
+
+
+        This is NOT a second way to read the library. The capability in the
+        path names ONE blob and expires, so a leaked URL discloses one title
+        for one window rather than everything. It is mounted outside
+        `/api/v1` deliberately — inside it, the bearer requirement would 401
+        the very devices it exists for.
+
+
+        Bytes, ranges and validators are identical to the blob endpoint: this
+        route wraps that handler rather than reimplementing it. The one
+        difference is `Content-Type`, which is the Asset's declared media type
+        rather than `application/octet-stream`, because a DLNA renderer
+        refuses the latter. The type is signed into the capability, so it
+        cannot be altered in transit.
+
+
+        A capability is only valid at the peer that signed it.
+      responses:
+        '200':
+          description: The whole blob, typed as the Asset says.
+          headers:
+            Accept-Ranges:
+              schema: { type: string, const: bytes }
+            ETag:
+              schema: { type: string }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '206':
+          description: The requested range.
+          headers:
+            Content-Range:
+              schema: { type: string }
+            Accept-Ranges:
+              schema: { type: string, const: bytes }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+            multipart/byteranges:
+              schema: { type: string, format: binary }
+        '404':
+          description: >-
+            No content is available at this address. Every refusal is this
+            response, byte for byte: an expired capability, one signed by
+            another peer, a malformed one and a blob this peer does not hold
+            are deliberately indistinguishable, so the route cannot be used as
+            an oracle. The `instance` is a constant for the same reason — it
+            would otherwise echo the capability back.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        '416':
+          description: The requested range lies outside the blob.
+    head:
+      tags: [bytes]
+      operationId: headRenderContent
+      security: []
+      summary: Report size and range support to a renderer before it fetches.
+      description: >-
+        Identical to `get` in every header, with no body. Renderers routinely
+        HEAD before they GET, and one that receives a 405 gives up without
+        playing anything.
+      responses:
+        '200':
+          description: The blob exists; `Content-Length` is its size.
+          headers:
+            Accept-Ranges:
+              schema: { type: string, const: bytes }
+        '404':
+          description: See `get`.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+  /render/{capability}/{name}:
+    parameters:
+      - name: capability
+        in: path
+        required: true
+        description: As above.
+        schema:
+          type: string
+      - name: name
+        in: path
+        required: true
+        description: >-
+          A cosmetic trailing filename, ignored entirely. Some renderers will
+          not issue a GET for a URL whose last segment looks like nothing they
+          recognise. It is outside the signature because it decides nothing:
+          both the media type and the bytes come from the capability.
+        schema:
+          type: string
+    get:
+      tags: [bytes]
+      operationId: getRenderContentNamed
+      security: []
+      summary: As `/render/{capability}`, with a filename a renderer will accept.
+      responses:
+        '200':
+          description: The whole blob.
+        '206':
+          description: The requested range.
+        '404':
+          description: See `/render/{capability}`.
+    head:
+      tags: [bytes]
+      operationId: headRenderContentNamed
+      security: []
+      summary: As `/render/{capability}`, with a filename a renderer will accept.
+      responses:
+        '200':
+          description: The blob exists.
+        '404':
+          description: See `/render/{capability}`.
   /api/v1/blobs/{hash}/content:
     parameters:
       - name: hash

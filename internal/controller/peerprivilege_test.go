@@ -100,7 +100,7 @@ func newPeerSurfaceHarness(t *testing.T, presented httpapi.PresentedPeerKey) *pe
 	if err != nil {
 		t.Fatal(err)
 	}
-	mounts, err := c.mounts(db, tokens, blobStore, eventLog, members)
+	mounts, publicMounts, err := c.mounts(db, tokens, blobStore, eventLog, members, "peer-under-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +120,7 @@ func newPeerSurfaceHarness(t *testing.T, presented httpapi.PresentedPeerKey) *pe
 		Events: eventLog, Build: buildinfo.Info{Version: "test"},
 		SchemaVersion: known, KnownSchemaVersion: known,
 		Mount:            mounts,
+		MountPublic:      publicMounts,
 		PeerMembership:   allMembers{},
 		PresentedPeerKey: presented,
 	})
