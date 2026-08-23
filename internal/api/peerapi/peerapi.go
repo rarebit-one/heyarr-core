@@ -51,7 +51,7 @@
 // cannot observe the return direction for itself, so it asks. `peers add`
 // consults it to refuse a one-way pairing at enrolment rather than leaving it
 // to surface as a silent reconciliation (ADR-0037).
-
+//
 // GET /peer/v1/blobs/{hash}/manifest is M5-05: the chunk manifest for those
 // same bytes, on the same trust root and with no new credential. It is a
 // description the destination acts on, never a negotiation the source takes

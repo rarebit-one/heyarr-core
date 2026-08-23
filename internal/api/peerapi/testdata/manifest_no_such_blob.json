@@ -1,0 +1,7 @@
+{
+  "type": "https://heyarr.dev/problems/not-found",
+  "title": "Not Found",
+  "status": 404,
+  "detail": "this node holds no blob with digest blake3:5555555555555555555555555555555555555555555555555555555555555555. This is not the same as holding it with no manifest: there is nothing to read from this source at all, so a destination should try another one",
+  "instance": "/peer/v1/blobs/blake3:5555555555555555555555555555555555555555555555555555555555555555/manifest"
+}
