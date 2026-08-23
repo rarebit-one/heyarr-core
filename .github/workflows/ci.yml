@@ -110,6 +110,34 @@ jobs:
             exit 1
           fi
 
+  # Chunk boundaries must be identical on every platform, and this is the only
+  # job that can say so.
+  #
+  # Two peers that cut one blob into different chunks compute different
+  # manifests for it. Nothing fails: transfers simply stop deduplicating and
+  # repair stops reusing, quietly, forever. The `test` matrix above runs Linux
+  # and macOS, so Windows — the platform most likely to differ, and the one
+  # nobody here develops on — would otherwise be asserted by nothing.
+  chunking-determinism:
+    name: chunk boundaries are identical across platforms
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, flags: -race }
+          - { os: macos-latest, flags: -race }
+          # windows/amd64 needs a C toolchain for the race detector, and the
+          # assertion here is determinism, which the detector has nothing to say
+          # about. The two rows above run this package under -race.
+          - { os: windows-latest, flags: "" }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: stable, cache: true }
+      - run: go test -count=1 -v ${{ matrix.flags }} ./internal/storagefabric/chunking/...
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -202,7 +230,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [lint, generate-check, test, build, acceptance, acceptance-degraded]
+    needs: [lint, generate-check, test, chunking-determinism, build, acceptance, acceptance-degraded]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
