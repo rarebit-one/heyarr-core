@@ -100,7 +100,7 @@ func newPeerSurfaceHarness(t *testing.T, presented httpapi.PresentedPeerKey) *pe
 	if err != nil {
 		t.Fatal(err)
 	}
-	mounts, publicMounts, err := c.mounts(db, tokens, blobStore, eventLog, members, "peer-under-test")
+	mounts, publicMounts, err := c.mounts(t.Context(), db, tokens, blobStore, eventLog, members, "peer-under-test")
 	if err != nil {
 		t.Fatal(err)
 	}
