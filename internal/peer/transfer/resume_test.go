@@ -460,3 +460,66 @@ func appendBytes(t *testing.T, path string, b []byte) {
 		t.Fatal(err)
 	}
 }
+
+// A verified prefix was verified against a MANIFEST, not against a peer, so a
+// transfer interrupted against one source resumes against another.
+//
+// The design allows it because nothing in the staging area records where its
+// bytes came from — there is nothing to record, since none of it is trusted
+// for having come from anywhere. The second source is asked for chunk
+// boundaries out of a manifest the destination fetched and verified from IT,
+// and the result is hashed whole either way.
+func TestAnInterruptedTransferResumesAgainstADifferentSource(t *testing.T) {
+	first := newNode(t, "peer-source-a", "source-a")
+	second := newNode(t, "peer-source-b", "source-b")
+	dst := newNode(t, "peer-destination", "destination")
+	root := newTrustRoot(first.member(), second.member(), dst.member())
+
+	content := deterministicContent(71, 512<<10)
+	sourceA := startChunkedSource(t, first, root, content)
+	sourceB := startChunkedSource(t, second, root, content)
+	blob, m := manifestOf(t, content)
+	sourceA.mans.store(m)
+	sourceB.mans.store(m)
+	dest := newChunkedDestination(t, dst)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	sourceA.counting.interruptAfter(int64(len(content))/2, cancel)
+	if _, err := dest.puller.PullChunked(ctx, sourceA.source(), blob, m); err == nil {
+		t.Fatal("the interrupted attempt against source A reported success")
+	}
+	if dest.partialSize(t, blob) == 0 {
+		t.Fatal("source A left nothing staged")
+	}
+
+	// Source B's own manifest, fetched and verified from source B. The
+	// destination does not reuse A's — a manifest is a description and this is
+	// a different conversation.
+	fromB, err := dest.puller.FetchManifest(t.Context(), sourceB.source(), blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := dest.puller.PullChunked(t.Context(), sourceB.source(), blob, fromB)
+	if err != nil {
+		t.Fatalf("resuming against a different source: %v", err)
+	}
+
+	if out.ChunksKept == 0 {
+		t.Error("the resume against source B kept nothing, so the prefix was treated as belonging " +
+			"to the peer that sent it")
+	}
+	servedB, _, _ := sourceB.counting.stats()
+	if servedB >= int64(len(content)) {
+		t.Errorf("source B served %d bytes of a %d byte blob, so nothing was resumed",
+			servedB, len(content))
+	}
+	if got := readBlob(t, dest.store, blob); !bytes.Equal(got, content) {
+		t.Error("the blob resumed across two sources is not the content")
+	}
+	if err := dest.store.Verify(t.Context(), blob); err != nil {
+		t.Errorf("the blob resumed across two sources does not verify: %v", err)
+	}
+	t.Logf("cross-source resume: kept %d/%d chunks; source B served %d of %d bytes",
+		out.ChunksKept, len(m.Chunks), servedB, len(content))
+}

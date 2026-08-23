@@ -349,7 +349,7 @@ func TestACorruptDonorIsNotReusedAndIsQuarantined(t *testing.T) {
 	donor := dest.hold(t, original)
 
 	// The bytes under the donor's name are replaced — an external tool
-	// rewriting a hardlinked original is the case ADR-0018 exists for, and it
+	// rewriting a hard-linked original is the case ADR-0018 exists for, and it
 	// looks exactly like this from here.
 	path, err := dest.store.LocalPath(t.Context(), donor)
 	if err != nil {
