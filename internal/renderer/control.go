@@ -33,6 +33,7 @@ import (
 // the job is to report faithfully what the device said.
 type TransportState string
 
+// The transport states a renderer reports.
 const (
 	StatePlaying        TransportState = "PLAYING"
 	StatePausedPlayback TransportState = "PAUSED_PLAYBACK"

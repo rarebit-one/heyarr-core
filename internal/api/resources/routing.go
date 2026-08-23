@@ -1,8 +1,8 @@
 package resources
 
 import (
+	"context"
 	"database/sql"
-	"net/http"
 	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/playback"
@@ -50,8 +50,8 @@ import (
 // difference between "peer-b was rejected because it does not have the bytes"
 // and a refusal that never mentions peer-b at all — and the second is the
 // three-hour outage the reasons exist to prevent.
-func (a *API) candidatesFor(r *http.Request, blobHash string) ([]routing.Candidate, error) {
-	rows, err := a.reader.QueryContext(r.Context(), `
+func (a *API) candidatesFor(ctx context.Context, blobHash string) ([]routing.Candidate, error) {
+	rows, err := a.reader.QueryContext(ctx, `
 		SELECT p.id, p.name, p.site, COALESCE(p.endpoint, ''), p.is_self, p.health,
 		       COALESCE(r.state, ''),
 		       (SELECT site FROM peers WHERE is_self = 1)
@@ -126,11 +126,11 @@ func (a *API) candidatesFor(r *http.Request, blobHash string) ([]routing.Candida
 // A blob-less asset (linked, ADR-0020) routes to nothing and is not a database
 // error: there is nothing to hold a replica of, and the planner's no_replica
 // answer is the honest one.
-func (a *API) routeBlob(r *http.Request, blobHash string) (routing.Decision, error) {
+func (a *API) routeBlob(ctx context.Context, blobHash string) (routing.Decision, error) {
 	if blobHash == "" {
 		return routing.Decision{}, nil
 	}
-	candidates, err := a.candidatesFor(r, blobHash)
+	candidates, err := a.candidatesFor(ctx, blobHash)
 	if err != nil {
 		return routing.Decision{}, err
 	}

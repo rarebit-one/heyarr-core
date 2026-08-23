@@ -2,6 +2,34 @@
   "tools": [
     {
       "annotations": {
+        "heyarr/requiredScope": "write",
+        "readOnlyHint": false
+      },
+      "description": "Pause, resume or stop what a renderer is playing. Resume continues from where it was paused. Stop ends it and releases the content — use pause when someone is coming back.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "description": "What to do.",
+            "enum": [
+              "pause",
+              "resume",
+              "stop"
+            ],
+            "type": "string"
+          },
+          "renderer": {
+            "description": "Which device, by name or id.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "control_playback",
+      "title": "Pause, resume or stop"
+    },
+    {
+      "annotations": {
         "heyarr/requiredScope": "read",
         "readOnlyHint": true
       },
@@ -184,6 +212,25 @@
     },
     {
       "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "List the televisions, speakers and projectors on the network that Heyarr can play to. Use this to resolve what someone means by \"the living room\" before playing anything. A device that is switched off will not be listed — that is not the same as it not existing, so do not tell someone they have no television because a screen was asleep.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "refresh": {
+            "description": "Search the network again rather than reusing the last result. Use this when someone has just switched a device on, and not otherwise — a search takes several seconds.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_renderers",
+      "title": "What can I play on"
+    },
+    {
+      "annotations": {
         "heyarr/requiredScope": "write",
         "readOnlyHint": false
       },
@@ -208,6 +255,48 @@
       },
       "name": "monitor_content",
       "title": "Keep looking, or stop"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "write",
+        "readOnlyHint": false
+      },
+      "description": "Play an asset on a renderer. Name the renderer the way a person would — \"living room\" — rather than by id; the name is matched against what the device calls itself. This plans the playback, checks the file against what that device says it can decode, and starts it. If the device cannot play the file, the refusal explains which codec or container it refused, which is the answer someone actually wants.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "description": "The asset to play. Resolve it with search_content first.",
+            "type": "string"
+          },
+          "renderer": {
+            "description": "Which device, by name or id. A partial name is matched against what each device calls itself, so \"living\" finds \"Samsung QN85BA 55\" only if that is what it is called — prefer list_renderers when unsure.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "play_here",
+      "title": "Play something on a screen or speaker"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "Report what a renderer is doing and how far into it. A device that reports no position is not broken: some report none until they have parsed enough of the stream, and some never report one at all.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "renderer": {
+            "description": "Which device, by name or id.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "playback_status",
+      "title": "What is playing"
     },
     {
       "annotations": {

@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"context"
 	"database/sql"
 	"net/http"
 	"strings"
@@ -96,6 +97,128 @@ type StartPlaybackResponse struct {
 // a leaked one is worthless by the time anyone finds it in a log.
 const renderCapabilityTTL = 6 * time.Hour
 
+// playbackStart is everything one begun playback produced.
+//
+// It exists so that POST /playback and POST /renderers/{udn}/play share ONE
+// implementation of "plan it, refuse it or open a session for it". They differ
+// only in what they do with the result — one returns it, the other pushes it
+// at a television — and two copies of the session-opening path would be two
+// places for "continue watching" to diverge.
+type playbackStart struct {
+	SessionID         string
+	Plan              PlanResponse
+	ContentURL        string
+	Token             string
+	ExpiresAt         time.Time
+	RenderURL         string
+	RenderUnavailable string
+	// Decision is the plan's verdict, carried out for a caller that wants to
+	// report it without walking into Plan.
+	Decision string
+}
+
+// beginPlayback plans, refuses or opens a session.
+//
+// A refusal comes back as a *problem.Problem rather than an error, because a
+// non-DIRECT plan is an ANSWER — the same reasoning the planner gives for
+// DecisionUnplayable being a decision rather than an error — and the caller
+// should hand it to the client unchanged rather than deciding a status itself.
+func (a *API) beginPlayback(ctx context.Context, assetID, deviceID, wantVerb string) (playbackStart, *problem.Problem) {
+	device, err := a.deviceProfile(ctx, deviceID)
+	if err != nil {
+		return playbackStart{}, a.problemFor("device", err)
+	}
+	media, blobHash, err := a.mediaProfile(ctx, assetID)
+	if err != nil {
+		return playbackStart{}, a.problemFor("asset", err)
+	}
+	// Where the bytes come from (§32) before what to do with them (§68).
+	route, err := a.routeBlob(ctx, blobHash)
+	if err != nil {
+		return playbackStart{}, a.problemFor("replica", err)
+	}
+
+	plan := playback.Choose(media, device, replicasOf(route))
+	rendered := renderPlan(assetID, deviceID, plan, route, blobHash)
+
+	// Everything that is not DIRECT is a refusal, and the refusal is as much
+	// the deliverable as the success.
+	//
+	// M2-10 makes REMUX real and TRANSCODE is beyond this milestone, so those
+	// plans cannot be served yet. The client is told WHY — "your device does
+	// not declare this codec" — rather than being handed a 501, because a
+	// client that cannot distinguish "not supported for you" from "the server
+	// is broken" retries the wrong one forever.
+	//
+	// No session is opened. A session for a playback that cannot happen is
+	// state that will never be cleaned up, and it would show up in "continue
+	// watching" for something nobody ever watched.
+	if !plan.Direct() {
+		return playbackStart{}, playbackRefusal(plan, rendered, route)
+	}
+
+	verb, err := resolveVerb(wantVerb, media)
+	if err != nil {
+		return playbackStart{}, problem.BadRequest(err.Error())
+	}
+
+	now := a.now().UTC()
+	session := playback.Session{
+		ID: a.newID(), AssetID: assetID, DeviceID: deviceID,
+		Verb: verb, State: playback.StateCreated, CreatedAt: now, UpdatedAt: now,
+	}
+
+	expires := now.Add(playbackTokenTTL)
+	token, err := a.tokens.Create(ctx,
+		"playback "+session.ID, []auth.Scope{auth.ScopeRead}, &expires)
+	if err != nil {
+		return playbackStart{}, a.problemFor("playback", err)
+	}
+
+	var event events.Event
+	err = a.db.InTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO consumption_sessions
+				(id, asset_id, device_id, verb, state, progress_locator, progress_unit,
+				 created_at, updated_at, started_at, ended_at)
+			VALUES (?, ?, ?, ?, ?, '', '', ?, ?, NULL, NULL)`,
+			session.ID, session.AssetID, session.DeviceID,
+			string(session.Verb), string(session.State),
+			now.Format(timeFormat), now.Format(timeFormat)); err != nil {
+			return err
+		}
+		event, err = a.events.EmitTx(ctx, tx, eventSessionCreated,
+			"consumption_session", session.ID,
+			map[string]any{
+				"session_id": session.ID, "asset_id": session.AssetID,
+				"device_id": session.DeviceID, "verb": string(session.Verb),
+				"decision": string(plan.Decision),
+			})
+		return err
+	})
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return playbackStart{}, problem.BadRequest(
+				"asset_id and device_id must both name something that exists")
+		}
+		return playbackStart{}, a.problemFor("playback", err)
+	}
+	a.events.Publish(event)
+
+	renderURL, unavailable := a.renderURL(ctx, route, blobHash, assetID, now)
+
+	return playbackStart{
+		SessionID:         session.ID,
+		Plan:              rendered,
+		ContentURL:        contentURLFor(route, blobHash),
+		Token:             token.Secret,
+		ExpiresAt:         expires,
+		RenderURL:         renderURL,
+		RenderUnavailable: unavailable,
+		Decision:          string(plan.Decision),
+	}, nil
+}
+
 func (a *API) startPlayback(w http.ResponseWriter, r *http.Request) {
 	var body StartPlaybackRequest
 	if err := decodeJSON(w, r, &body); err != nil {
@@ -111,106 +234,21 @@ func (a *API) startPlayback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	device, err := a.deviceProfile(r, body.DeviceID)
-	if err != nil {
-		a.fail(w, r, "device", err)
-		return
-	}
-	media, blobHash, err := a.mediaProfile(r, body.AssetID)
-	if err != nil {
-		a.fail(w, r, "asset", err)
-		return
-	}
-	// Where the bytes come from (§32) before what to do with them (§68).
-	route, err := a.routeBlob(r, blobHash)
-	if err != nil {
-		a.fail(w, r, "replica", err)
+	started, prob := a.beginPlayback(r.Context(), body.AssetID, body.DeviceID, body.Verb)
+	if prob != nil {
+		httpapi.Fail(w, r, prob)
 		return
 	}
 
-	plan := playback.Choose(media, device, replicasOf(route))
-	rendered := renderPlan(body.AssetID, body.DeviceID, plan, route, blobHash)
-
-	// Everything that is not DIRECT is a refusal, and the refusal is as much
-	// the deliverable as the success.
-	//
-	// M2-10 makes REMUX real and TRANSCODE is beyond this milestone, so those
-	// plans cannot be served yet. The client is told WHY — "your device does
-	// not declare this codec" — rather than being handed a 501, because a
-	// client that cannot distinguish "not supported for you" from "the server
-	// is broken" retries the wrong one forever.
-	//
-	// No session is opened. A session for a playback that cannot happen is
-	// state that will never be cleaned up, and it would show up in "continue
-	// watching" for something nobody ever watched.
-	if !plan.Direct() {
-		httpapi.Fail(w, r, playbackRefusal(plan, rendered, route))
-		return
-	}
-
-	verb, err := resolveVerb(body.Verb, media)
-	if err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
-		return
-	}
-
-	now := a.now().UTC()
-	session := playback.Session{
-		ID: a.newID(), AssetID: body.AssetID, DeviceID: body.DeviceID,
-		Verb: verb, State: playback.StateCreated, CreatedAt: now, UpdatedAt: now,
-	}
-
-	expires := now.Add(playbackTokenTTL)
-	token, err := a.tokens.Create(r.Context(),
-		"playback "+session.ID, []auth.Scope{auth.ScopeRead}, &expires)
-	if err != nil {
-		a.fail(w, r, "playback", err)
-		return
-	}
-
-	var event events.Event
-	err = a.db.InTx(r.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(r.Context(), `
-			INSERT INTO consumption_sessions
-				(id, asset_id, device_id, verb, state, progress_locator, progress_unit,
-				 created_at, updated_at, started_at, ended_at)
-			VALUES (?, ?, ?, ?, ?, '', '', ?, ?, NULL, NULL)`,
-			session.ID, session.AssetID, session.DeviceID,
-			string(session.Verb), string(session.State),
-			now.Format(timeFormat), now.Format(timeFormat)); err != nil {
-			return err
-		}
-		event, err = a.events.EmitTx(r.Context(), tx, eventSessionCreated,
-			"consumption_session", session.ID,
-			map[string]any{
-				"session_id": session.ID, "asset_id": session.AssetID,
-				"device_id": session.DeviceID, "verb": string(session.Verb),
-				"decision": string(plan.Decision),
-			})
-		return err
-	})
-	if err != nil {
-		if isForeignKeyViolation(err) {
-			httpapi.Fail(w, r, problem.BadRequest(
-				"asset_id and device_id must both name something that exists"))
-			return
-		}
-		a.fail(w, r, "playback", err)
-		return
-	}
-	a.events.Publish(event)
-
-	renderURL, unavailable := a.renderURL(r, route, blobHash, body.AssetID, now)
-
-	w.Header().Set("Location", httpapi.APIPrefix+"/consumption/sessions/"+session.ID)
+	w.Header().Set("Location", httpapi.APIPrefix+"/consumption/sessions/"+started.SessionID)
 	a.write(w, r, http.StatusCreated, StartPlaybackResponse{
-		SessionID:         session.ID,
-		Plan:              rendered,
-		ContentURL:        contentURLFor(route, blobHash),
-		Token:             token.Secret,
-		ExpiresAt:         expires,
-		RenderURL:         renderURL,
-		RenderUnavailable: unavailable,
+		SessionID:         started.SessionID,
+		Plan:              started.Plan,
+		ContentURL:        started.ContentURL,
+		Token:             started.Token,
+		ExpiresAt:         started.ExpiresAt,
+		RenderURL:         started.RenderURL,
+		RenderUnavailable: started.RenderUnavailable,
 	})
 }
 
@@ -220,7 +258,7 @@ func (a *API) startPlayback(w http.ResponseWriter, r *http.Request) {
 // declines says why, in the same idiom as the rest of §68: a client that
 // cannot tell "this peer does not mint these" from "something failed" retries
 // the wrong one forever.
-func (a *API) renderURL(r *http.Request, route routing.Decision, blobHash, assetID string, now time.Time) (url, unavailable string) {
+func (a *API) renderURL(ctx context.Context, route routing.Decision, blobHash, assetID string, now time.Time) (url, unavailable string) {
 	if len(a.renderSecret) == 0 || a.renderBaseURL == "" {
 		// Not configured, and not a fault. A node whose clients all send
 		// Authorization headers has no use for this route.
@@ -243,10 +281,10 @@ func (a *API) renderURL(r *http.Request, route routing.Decision, blobHash, asset
 	// serve nothing else (ADR-0006) — so the type is carried in the
 	// capability, fixed here where an Asset is in hand.
 	var mime sql.NullString
-	if err := a.reader.QueryRowContext(r.Context(),
+	if err := a.reader.QueryRowContext(ctx,
 		`SELECT mime FROM assets WHERE id = ?`, assetID).Scan(&mime); err != nil {
 		a.log.Warn("reading an asset's mime for a render capability",
-			"request_id", httpapi.RequestIDFrom(r.Context()), "asset_id", assetID, "error", err)
+			"request_id", httpapi.RequestIDFrom(ctx), "asset_id", assetID, "error", err)
 		return "", "this asset's media type could not be read"
 	}
 	if !mime.Valid || mime.String == "" {
@@ -264,7 +302,7 @@ func (a *API) renderURL(r *http.Request, route routing.Decision, blobHash, asset
 	}.Sign(a.renderSecret)
 	if err != nil {
 		a.log.Error("signing a render capability",
-			"request_id", httpapi.RequestIDFrom(r.Context()), "error", err)
+			"request_id", httpapi.RequestIDFrom(ctx), "error", err)
 		return "", "this peer could not sign a capability for these bytes"
 	}
 	// The trailing name is cosmetic and unsigned: some renderers will not

@@ -498,6 +498,170 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/renderers:
+    get:
+      tags: [playback]
+      operationId: listRenderers
+      summary: List the renderers on this node's network (§68).
+      description: >-
+        Televisions, speakers and projectors that Heyarr can play to, found by
+        SSDP on the local segment.
+
+
+        An empty list means nothing ANSWERED, not that nothing is there. A
+        screen in standby closes every listener and on some models leaves the
+        network entirely, so a device that is switched off is indistinguishable
+        from one that does not exist. Discovery is also multicast, so it does
+        not cross a routed link: a controller on the far side of a VPN finds
+        nothing at all.
+      parameters:
+        - name: refresh
+          in: query
+          required: false
+          description: >-
+            `true` searches again instead of reusing the cached sweep. A search
+            takes several seconds, so this is for "I just switched it on".
+          schema: { type: string }
+      responses:
+        '200':
+          description: What answered.
+        '401': { $ref: "#/components/responses/Unauthorized" }
+  /api/v1/renderers/{udn}/status:
+    parameters:
+      - name: udn
+        in: path
+        required: true
+        description: The renderer's UPnP UDN, from `GET /api/v1/renderers`.
+        schema: { type: string }
+    get:
+      tags: [playback]
+      operationId: getRendererStatus
+      summary: Report what a renderer is doing.
+      description: >-
+        Transport state and, when the device reports one, position. A renderer
+        that answers no position is not broken — `NOT_IMPLEMENTED` is a legal
+        answer and some devices give it forever.
+      responses:
+        '200':
+          description: The renderer's state.
+        '404':
+          description: No renderer with that id answered.
+        '502':
+          description: The renderer did not answer.
+  /api/v1/renderers/{udn}/play:
+    parameters:
+      - name: udn
+        in: path
+        required: true
+        description: The renderer's UPnP UDN, from `GET /api/v1/renderers`.
+        schema: { type: string }
+    post:
+      tags: [playback]
+      operationId: playOnRenderer
+      summary: Plan a playback, mint a capability URL and push it to a renderer.
+      description: >-
+        One call, deliberately. Plan, mint and push always happen together, and
+        a client made to orchestrate them is a client that can get the order
+        wrong, hold a capability it never uses, or open a session for a
+        playback it never started.
+
+
+        The renderer's own `GetProtocolInfo` answer becomes the Device profile
+        the planner decides against, so the file is judged on what that
+        television said about itself rather than on what somebody typed in.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [asset_id]
+              properties:
+                asset_id: { type: string }
+      responses:
+        '200':
+          description: Playing.
+        '409':
+          description: >-
+            Nothing to play from — most often a replica on another peer, since
+            a capability is only valid at the peer that signed it (ADR-0037).
+        '502':
+          description: >-
+            The renderer refused, with its own UPnP error. `714 Illegal
+            MIME-type` and `701 Transition not available` are different
+            problems and need different fixes, so the device's answer is
+            passed through rather than flattened.
+  /api/v1/renderers/{udn}/pause:
+    parameters:
+      - name: udn
+        in: path
+        required: true
+        description: The renderer's UPnP UDN, from `GET /api/v1/renderers`.
+        schema: { type: string }
+    post:
+      tags: [playback]
+      operationId: pauseRenderer
+      summary: Hold position.
+      responses:
+        '200': { description: The renderer's state after pausing. }
+        '502': { description: The renderer refused. }
+  /api/v1/renderers/{udn}/resume:
+    parameters:
+      - name: udn
+        in: path
+        required: true
+        description: The renderer's UPnP UDN, from `GET /api/v1/renderers`.
+        schema: { type: string }
+    post:
+      tags: [playback]
+      operationId: resumeRenderer
+      summary: Continue from where it was paused.
+      description: >-
+        This is UPnP's Play. There is no separate resume verb: Play from
+        PAUSED_PLAYBACK continues, and Play from STOPPED restarts.
+      responses:
+        '200': { description: The renderer's state after resuming. }
+        '502': { description: The renderer refused. }
+  /api/v1/renderers/{udn}/stop:
+    parameters:
+      - name: udn
+        in: path
+        required: true
+        description: The renderer's UPnP UDN, from `GET /api/v1/renderers`.
+        schema: { type: string }
+    post:
+      tags: [playback]
+      operationId: stopRenderer
+      summary: End playback and release the content.
+      responses:
+        '200': { description: The renderer's state after stopping. }
+        '502': { description: The renderer refused. }
+  /api/v1/renderers/{udn}/seek:
+    parameters:
+      - name: udn
+        in: path
+        required: true
+        description: The renderer's UPnP UDN, from `GET /api/v1/renderers`.
+        schema: { type: string }
+    post:
+      tags: [playback]
+      operationId: seekRenderer
+      summary: Jump to a position.
+      description: >-
+        `seconds` is an ABSOLUTE offset from the start, not a delta. It maps to
+        UPnP's REL_TIME, which means the same thing despite its name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [seconds]
+              properties:
+                seconds: { type: number, minimum: 0 }
+      responses:
+        '200': { description: The renderer's state after seeking. }
+        '502': { description: The renderer refused. }
   /render/{capability}:
     parameters:
       - name: capability
