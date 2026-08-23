@@ -82,10 +82,26 @@ type countingBlobServer struct {
 	redirectTo string
 	// body is the honest content, used by the truncating path.
 	body []byte
+	// rangedRequests counts requests carrying a Range header, which is how a
+	// test observes that the CHUNKED path ran rather than inferring it from a
+	// transfer that succeeded (M5-06).
+	rangedRequests atomic.Int64
+	// failRangesAfter, when positive, refuses ranged reads once that many have
+	// been served. It is how a chunked transfer is interrupted part-way with a
+	// real partial left on the destination's disk — a source going away
+	// mid-transfer, which is the case resumption exists for.
+	failRangesAfter atomic.Int64
 }
 
 func (c *countingBlobServer) Content(w http.ResponseWriter, r *http.Request) {
 	c.requests.Add(1)
+	if r.Header.Get("Range") != "" {
+		served := c.rangedRequests.Add(1)
+		if limit := c.failRangesAfter.Load(); limit > 0 && served > limit {
+			http.Error(w, "this source has gone away mid-transfer", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	switch {
 	case c.redirectTo != "":
 		http.Redirect(w, r, c.redirectTo, http.StatusFound)
@@ -131,6 +147,7 @@ type transferFabric struct {
 	sourceStore *cas.FS
 	sourceSrv   *peerapi.Server
 	sourceBlobs *countingBlobServer
+	sourceMans  *fabricManifests
 
 	// The controller: a plain client-API blob route, standing in for the node
 	// that schedules. It holds the same bytes so that a data-path mistake would
@@ -208,6 +225,7 @@ func newTransferFabric(t *testing.T) *transferFabric {
 		t.Fatal(err)
 	}
 	f.sourceBlobs = &countingBlobServer{inner: sourceHandler}
+	f.sourceMans = newFabricManifests()
 	srcMaterial, err := mtls.NewMaterial(mtls.MaterialOptions{PrivateKey: srcPriv, PeerID: f.sourceID})
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +240,11 @@ func newTransferFabric(t *testing.T) *transferFabric {
 		}),
 		SelfPeerID: f.sourceID,
 		Blobs:      f.sourceBlobs,
-		Logger:     slog.New(slog.DiscardHandler),
+		// A manifest route, so a test can put the source into either of §16's
+		// two answerable states: it holds a manifest for these bytes, or it
+		// holds none and the blob is pulled whole (M5-05, M5-06).
+		Manifests: f.sourceMans,
+		Logger:    slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -317,6 +339,13 @@ func (f *transferFabric) seedBlob(content []byte) hashing.Hash {
 		VALUES (?, ?, 'present', ?, ?)`, desc.Hash.String(), f.sourceID, desc.Size, f.stamp)
 	// The truncating path needs the honest bytes to send half of.
 	f.sourceBlobs.body = content
+	// The source HOLDS these bytes and has decided nothing about chunking
+	// them, which is §16's third state and the state that means "pull whole".
+	// A test wanting the chunked path publishes a manifest over the top; a
+	// source that answered 404 for the manifest of a blob it holds would be
+	// claiming not to have it, which is a different answer and a different
+	// action (M5-05).
+	f.sourceMans.hold(desc.Hash)
 	return desc.Hash
 }
 
