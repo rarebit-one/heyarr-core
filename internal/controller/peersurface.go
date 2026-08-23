@@ -13,6 +13,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
+	"github.com/rarebit-one/heyarr-core/internal/peer/reachability"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
@@ -71,6 +72,47 @@ func (l peerLookup) Lookup(ctx context.Context, publicKey []byte) (mtls.Peer, er
 		return mtls.Peer{}, err
 	}
 	return mtls.Peer{PeerID: m.PeerID, Name: m.Name, PublicKey: m.PublicKey}, nil
+}
+
+// returnPathProber answers the peer surface's reachback route (#186,
+// ADR-0037): can this node reach the peer that is asking?
+//
+// The address it dials is THIS node's own membership record for that peer, and
+// never anything the caller supplied — see ReturnPathProber for why. It uses
+// the same prober read routing uses, against the same /healthz, so "the return
+// path works" here means the same thing it means everywhere else in this
+// repository.
+type returnPathProber struct {
+	store  *membership.Store
+	prober health.HTTPProber
+}
+
+func (p returnPathProber) ProbeReturnPath(
+	ctx context.Context, peerID string,
+) (reachability.Result, string, error) {
+	member, err := p.store.Get(ctx, peerID)
+	switch {
+	case errors.Is(err, membership.ErrUnknownPeer):
+		// Authenticated by certificate and pinned by the trust root, yet not
+		// a row here. That is an operator problem rather than a network one,
+		// and reporting it as unreachable would refuse an enrolment for the
+		// wrong reason.
+		return reachability.ResultUnknown, "", nil
+	case err != nil:
+		return reachability.ResultUnknown, "", err
+	}
+	if member.Endpoint == "" {
+		return reachability.ResultUnknown, "", nil
+	}
+	if err := p.prober.Probe(ctx, health.Peer{
+		PeerID: member.PeerID, Name: member.Name, Endpoint: member.Endpoint,
+	}); err != nil {
+		// Silence, a refused connection, a name that does not resolve. Every
+		// one of them means the same thing to a pairing, and none of them is
+		// this node failing — hence a result rather than an error.
+		return reachability.ResultUnreachable, member.Endpoint, nil
+	}
+	return reachability.ResultReachable, member.Endpoint, nil
 }
 
 // newPeerSurface builds this node's mTLS peer listener (§26, ADR-0012, M4-05).
@@ -135,6 +177,7 @@ func (c *Controller) newPeerSurface(
 		SelfPeerID: self.PeerID,
 		Inventory:  peerCatalog,
 		Snapshots:  snapshotSource{cat: peerCatalog, self: self.PeerID},
+		ReturnPath: returnPathProber{store: members},
 		Blobs:      blobHandler,
 		// The peer surface's own liveness observation (#184). Without it a
 		// remote peer — which holds no bearer token and so never reaches the

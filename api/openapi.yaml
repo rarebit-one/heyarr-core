@@ -1997,6 +1997,53 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /peer/v1/reachback:
+    get:
+      tags: [peer]
+      operationId: getPeerReachback
+      summary: Report whether this node can reach the peer that is asking.
+      description: |
+        The RETURN leg of a pairing (#186, ADR-0037).
+
+        Replication needs traffic in both directions and the two flows run
+        opposite ways: a peer PUSHES its inventory to the controller, and a
+        destination PULLS bytes from a source (ADR-0030). On a one-way network
+        exactly one of them runs the wrong way, whichever node is the
+        destination, and replication deadlocks silently — a controller that was
+        never told a peer holds a blob correctly emits no work for it.
+
+        A node cannot observe the return direction for itself: an attempt that
+        never leaves the other machine leaves no trace here. So it asks, and
+        `heyarr peers add` consults this route to refuse a one-way pairing at
+        enrolment rather than leaving it to surface weeks later.
+
+        The request carries NOTHING. The address dialled is the answering
+        node's own membership record for the caller — never a target the caller
+        supplied, which would make every member a blind port scanner — and it
+        is also the address the return flows would really use.
+      security:
+        - peerCertificate: []
+      responses:
+        "200":
+          description: |
+            What the answering node observed. `unknown` is an ordinary answer,
+            not a failure: a node with no endpoint recorded for the caller has
+            nowhere to dial back to, and the caller must draw no conclusion
+            from it.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PeerReachback" }
+        "401":
+          description: No client certificate was presented.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "403":
+          description: The presented key is not a member.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /peer/v1/attachment:
     get:
       tags: [peer]
@@ -3313,6 +3360,32 @@ components:
         served_by:
           type: string
           description: The answering node's own peer id.
+
+    PeerReachback:
+      type: object
+      required: [result, target, detail]
+      description: |
+        Whether the answering node can reach the caller (#186, ADR-0037).
+      properties:
+        result:
+          type: string
+          enum: [reachable, unreachable, unknown]
+          description: |
+            `reachable` — something answered at `target`, whatever it answered.
+            `unreachable` — an attempt was made and nothing answered.
+            `unknown` — no attempt was made, because this node holds no
+            endpoint for the caller or serves no prober. A caller must not read
+            `unknown` as a fault: it is the absence of evidence, and refusing
+            an enrolment on it would refuse every peer that is simply off.
+        target:
+          type: string
+          description: |
+            The address this node tried, read out of its own membership record
+            for the caller. Empty when no attempt was made. A caller learns
+            from it whether the address recorded for it here is still its own.
+        detail:
+          type: string
+          description: A human-readable explanation, empty when reachable.
 
     PeerAttachRequest:
       type: object
