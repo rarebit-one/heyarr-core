@@ -64,6 +64,34 @@ linters:
             - pkg: github.com/rarebit-one/heyarr-core/internal/api
               desc: "the Storage Fabric must stay extractable — it may not depend on Heyarr's API layer (spec §18, ADR-0007)"
 
+        # Chunking is arithmetic over a byte stream and nothing else (spec §15,
+        # ADR-0005). It is the one package in the fabric that can be verified as
+        # mathematics rather than as a system, and only because it reaches
+        # nowhere: no disk, no database, no catalog, no peer. Purity is not a
+        # style preference here, it is what makes the golden boundaries, the
+        # measured shift property and the flat-memory assertion mean anything —
+        # and a boundary enforced by review is not enforced.
+        chunking-is-pure:
+          files:
+            - "**/internal/storagefabric/chunking/**"
+          deny:
+            - pkg: os
+              desc: "chunking is a pure function from a byte stream to cut points — it takes an io.Reader, it does not open files (spec §15)"
+            - pkg: path/filepath
+              desc: "chunking never sees a path; a chunk is an offset, a length and a digest and nothing else (spec §15)"
+            - pkg: database/sql
+              desc: "chunking does not persist anything — manifests are M5-03's job, in another package"
+            - pkg: github.com/rarebit-one/heyarr-core/internal/persistence
+              desc: "chunking does not persist anything — manifests are M5-03's job, in another package"
+            - pkg: github.com/rarebit-one/heyarr-core/internal/storagefabric/cas
+              desc: "chunking does not read or write blobs; the caller hands it a reader (spec §15, ADR-0006)"
+            - pkg: github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests
+              desc: "chunking produces chunks, it does not know what a manifest is — the dependency runs the other way"
+            - pkg: github.com/rarebit-one/heyarr-core/internal/domain
+              desc: "chunking must not know Heyarr's content domain (spec §18, ADR-0007)"
+            - pkg: github.com/rarebit-one/heyarr-core/internal/api
+              desc: "chunking must not know Heyarr's API layer (spec §18, ADR-0007)"
+
     revive:
       rules:
         - name: package-comments

@@ -116,6 +116,20 @@ separate role processes (ADR-0002).
   during a transfer (against an instrument first proven to fire) and garbage
   collection sparing the last copy with the remote peer stopped.
 
+**Milestone 5 — Efficient Replication.** In progress.
+
+- **Content-defined chunking** — FastCDC in `internal/storagefabric/chunking`,
+  streaming and pure: no filesystem, no database, no CAS, no domain, and a
+  memory footprint of one buffer whatever the input size. Chunk boundaries come
+  from a rolling hash of the content, so inserting a byte at the front of a file
+  moves the boundaries around the insertion and leaves the rest of the stream
+  cutting where it did — measured at 99.9% of chunk digests surviving a one-byte
+  shift, against 0% for a fixed-size chunker over the same bytes. Boundaries are
+  pinned by golden fixtures asserted on Linux, macOS and Windows, because two
+  peers that chunk one blob differently deduplicate nothing and nothing goes red
+  to say so. Chunks are not identity; a blob is still its whole-object BLAKE3
+  digest (ADR-0005).
+
 ### Known limitations
 - **Everything Milestone 4 proves, it proves on one machine.** The two peers in
   `make demo` are two processes on one host: they share a kernel, a disk, a clock
