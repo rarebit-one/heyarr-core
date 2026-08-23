@@ -10,6 +10,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
 // replicateBatch bounds how many replicate_blob jobs one cycle may create.
@@ -135,6 +136,29 @@ func reconcilePeerHandler(
 		taken, deferred := replication.Bound(outstanding, limit)
 		summary.Deferred = deferred
 
+		// §16's trigger, read literally: "when replication or deduplication
+		// requires it". This cycle has just decided that these blobs are about
+		// to cross a network, which is the one thing that makes a manifest
+		// worth the read it costs (M5-04) — a resumed transfer re-fetches a
+		// chunk instead of a 20 GB remux, and a destination that already holds
+		// some of those chunks fetches fewer still (ADR-0035, ADR-0036).
+		//
+		// This is NOT a sweep, and the difference is the whole of §16. Nothing
+		// here walks the store: the work is bounded by the same batch the
+		// transfers are bounded by, and a library nobody is replicating is a
+		// library that never gets chunked at all. A blob under the size
+		// threshold costs a Stat and a recorded exemption, not a read.
+		//
+		// The STATE is read to decide, and reading it generates nothing
+		// (ADR-0034) — one query for the whole catalog, and only `undecided`
+		// produces a job. The dedupe key would collapse the duplicates anyway;
+		// this keeps the cycle from offering work that is already answered.
+		chunkStates, err := cat.ChunkManifestStates(ctx)
+		if err != nil {
+			return err
+		}
+		chunkAsked := make(map[string]struct{}, len(taken))
+
 		for _, gap := range taken {
 			if err := ctx.Err(); err != nil {
 				// An ordinary shutdown mid-cycle. What was enqueued stays
@@ -169,6 +193,34 @@ func reconcilePeerHandler(
 				continue
 			}
 			summary.Enqueued++
+
+			// One chunk_blob per blob, not per gap: the same blob missing from
+			// three peers is three transfers and one manifest. The dedupe key
+			// enforces that across cycles; this map is what stops the same
+			// cycle asking three times.
+			if _, asked := chunkAsked[gap.BlobHash]; asked {
+				continue
+			}
+			chunkAsked[gap.BlobHash] = struct{}{}
+			if chunkStates[gap.BlobHash] != manifests.StateUndecided {
+				continue
+			}
+			if _, err := queue.Enqueue(ctx, jobs.EnqueueOptions{
+				Type:      manifests.ChunkBlobJobType,
+				Payload:   manifests.ChunkBlobPayload{BlobHash: gap.BlobHash},
+				DedupeKey: manifests.ChunkBlobDedupeKey(gap.BlobHash),
+			}); err != nil {
+				if errors.Is(err, context.Canceled) {
+					break
+				}
+				// A manifest is an optimisation and never a precondition
+				// (ADR-0034): a transfer with no manifest is a transfer that
+				// moves the whole blob, which is what happens today. So this
+				// failing must not fail the cycle, and must not hold up the
+				// replication it accompanies.
+				log.Warn("could not enqueue a chunking",
+					"blob_hash", gap.BlobHash, "error", err)
+			}
 		}
 
 		if summary.Deferred > 0 {

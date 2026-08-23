@@ -30,6 +30,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/scanner"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
 // Worker is the compute role.
@@ -274,6 +275,29 @@ func (w *Worker) Run(ctx context.Context) error {
 		Store:   store,
 		Puller:  transferPuller,
 		Logger:  w.log,
+	}))
+
+	// Lazy chunking (§16, §75, ADR-0034, M5-04). §75 has listed chunk_blob
+	// since Milestone 1 and nothing has ever handled it, which was the honest
+	// state: §16 defers the work until something needs it, and until peer
+	// convergence existed nothing did.
+	//
+	// It is registered UNCONDITIONALLY and with no RequiredCapability, for the
+	// reason acquisition ingest is: reading a file that is already on this disk
+	// and hashing it needs nothing but the disk. MaxConcurrent lives in the
+	// registration, where its argument can be read next to the number.
+	//
+	// There is deliberately NO scheduled beat behind it. A sweep that chunked
+	// the whole library would read every byte in the store for manifests
+	// nothing asked for, which is the I/O storm §16 exists to avoid; the work
+	// is enqueued by the reconciliation that decided the bytes are about to
+	// move (see reconcilePeerHandler).
+	registry.Register(manifests.ChunkBlobJobType, ChunkBlobRegistration(ChunkDeps{
+		Store:     store,
+		Manifests: cat,
+		Index:     cat,
+		Checker:   checker,
+		Logger:    w.log,
 	}))
 
 	// The provider registry, built from configuration (§59, M3-07).
