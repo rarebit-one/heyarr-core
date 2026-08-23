@@ -908,7 +908,13 @@ func (h *convergeHarness) chunkings(t *testing.T) []string {
 		if err := json.Unmarshal([]byte(raw), &p); err != nil {
 			t.Fatal(err)
 		}
-		if want := manifests.ChunkBlobDedupeKey(p.BlobHash); key != want {
+		// The expectation is spelled out rather than computed from
+		// ChunkBlobDedupeKey. Deriving it from the function under test makes
+		// the comparison tautological: emptying that function makes both sides
+		// "" and this assertion passes while every cycle re-queues a full read
+		// of the same blob. Caught by sabotaging the key and watching only a
+		// DIFFERENT test fail.
+		if want := "chunk:" + p.BlobHash; key != want {
 			t.Errorf("chunk_blob for %s carries dedupe key %q, want %q — without it every cycle "+
 				"queues another full read of the same blob", p.BlobHash, key, want)
 		}
