@@ -958,12 +958,39 @@ func TestAConvergenceCycleEnqueuesTheChunkingOfWhatItIsAboutToMove(t *testing.T)
 			got, blobTwo)
 	}
 
-	// A second cycle over an unchanged fabric adds nothing. The dedupe key is
-	// what enforces it; a cycle that re-offered the same chunking every five
-	// minutes would queue another full read of the same blob each time.
+	// A second cycle over an unchanged fabric adds nothing.
 	h.cycle(t, "", 0)
 	if again := h.chunkings(t); len(again) != 1 {
 		t.Errorf("a second cycle brought the chunkings to %d, want 1: %v", len(again), again)
+	}
+
+	// # And now the case where the CHUNK key is the only thing holding
+	//
+	// The assertion above is satisfied by the transfer's dedupe key: the gap is
+	// still in flight, so the cycle skips it before it reaches the chunking at
+	// all. That means it passes with no chunk key whatsoever, which is exactly
+	// what the remove-the-dedupe-key sabotage showed.
+	//
+	// So the transfer is COMPLETED — as it would be by a worker that has
+	// finished pulling — while the peer has not yet reported the inventory that
+	// closes the gap. The next cycle re-offers the transfer, reaches the
+	// chunking again, and the chunk_blob job it would create is a second full
+	// read of a blob already queued for one. Only the chunk key stops it.
+	claimed, err := h.queue.Claim(t.Context(), jobs.ClaimOptions{
+		Owner: "test-worker", Types: []string{replication.ReplicateBlobJobType},
+	})
+	if err != nil {
+		t.Fatalf("claiming the transfer: %v", err)
+	}
+	if err := h.queue.Complete(t.Context(), claimed.ID, "test-worker"); err != nil {
+		t.Fatalf("completing the transfer: %v", err)
+	}
+
+	h.cycle(t, "", 0)
+	if again := h.chunkings(t); len(again) != 1 {
+		t.Errorf("with the transfer key free and the gap still open, the cycle brought the "+
+			"chunkings to %d, want 1: %v — every cycle would queue another full read of the "+
+			"same blob", len(again), again)
 	}
 }
 

@@ -228,6 +228,45 @@ func TestChunkBlobGeneratesOnceAndIsByteIdenticalOnASecondRun(t *testing.T) {
 	if got := f.count("chunk_manifests"); got != 1 {
 		t.Errorf("chunk_manifests = %d after two runs, want 1", got)
 	}
+
+	// # And now the half that the two runs above cannot show
+	//
+	// The second run short-circuits on `present` — that is the idempotence
+	// property, and it means the digest comparison above is evidence that
+	// NOTHING RAN, not that generation is deterministic. A generator that
+	// varied its parameters per run would pass everything above, because the
+	// only manifest ever produced was the first one. (It did: the
+	// vary-a-parameter sabotage passed against exactly that test.)
+	//
+	// So the manifest is DISCARDED — ADR-0034 makes that a supported recovery
+	// action, and this is the cheapest possible use of it — and generated
+	// again from the bytes. Same bytes, same node, same parameters, a clock
+	// that has moved on: the digest has to come back identical.
+	if err := f.catalog.DiscardChunkManifest(f.t.Context(), hash); err != nil {
+		t.Fatal(err)
+	}
+	assertState(t, f.state(hash), manifests.StateUndecided,
+		"after discarding the manifest — the state is derived, so it goes back to undecided")
+	if err := f.run(hash); err != nil {
+		t.Fatalf("regenerating after a discard: %v", err)
+	}
+	regenerated, found := f.manifest(hash)
+	if !found {
+		t.Fatal("the manifest was not regenerated after a discard")
+	}
+	if !first.Digest.Equal(regenerated.Digest) {
+		t.Errorf("regenerated from the same bytes, the manifest digest is %s, was %s — generation "+
+			"is not deterministic, and two peers comparing manifests of the same blob would find "+
+			"nothing in common", regenerated.Digest, first.Digest)
+	}
+	if regenerated.ChunkCount() != first.ChunkCount() {
+		t.Errorf("regeneration produced %d chunks, the first pass produced %d",
+			regenerated.ChunkCount(), first.ChunkCount())
+	}
+	if regenerated.GeneratedAt.Equal(first.GeneratedAt) {
+		t.Error("the regenerated manifest carries the same generated_at as the first, so the clock " +
+			"in this fixture is not moving and the digest comparison above proves less than it looks")
+	}
 }
 
 // Ingest generates no manifest (§16), and the assertion is known to be
