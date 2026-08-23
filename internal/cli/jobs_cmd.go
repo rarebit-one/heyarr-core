@@ -12,6 +12,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/peer/endpoint"
+	"github.com/rarebit-one/heyarr-core/internal/peer/reachability"
 )
 
 func newJobsCommand(opts Options, configPath *string) *cobra.Command {
@@ -240,7 +241,6 @@ func newPeersAddCommand(_ Options, configPath *string) *cobra.Command {
 		mode         string
 		peerEndpoint string
 		publicKey    string
-		skipCheck    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "add",
@@ -280,11 +280,12 @@ controller is never told the far node holds a blob, so reconciliation correctly
 emits no work and nothing is reported as wrong.
 
 So when --endpoint is given, this command dials the peer and then asks that
-peer whether it can reach back. A pairing observed to work in one direction
-only is REFUSED, and nothing is enrolled. A peer that cannot be reached at all
-is NOT refused — it is far more likely to be a machine that is not up yet — and
-the outcome is reported instead. ` + "`--skip-reachability-check`" + ` enrols
-without asking.`,
+peer whether it can reach back, and REPORTS what it found. Nothing is refused.
+Each peer is authoritative for its own site (ADR-0038): a peer that can be
+reached but cannot reach back fetches what it lacks from the peer it can reach,
+and both sites keep serving everything already on their own disks either way.
+A one-way pairing is an ordinary participant, and a peer that cannot be reached
+at all is usually a machine that is not up yet.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Checked here, before anything is sent, so the refusal names the
@@ -307,12 +308,19 @@ without asking.`,
 				// ADR-0037). Only when an endpoint was given: a peer enrolled
 				// by key alone has no address to check, and a pairing with
 				// nowhere to dial is not one this can say anything about.
-				if cmd.Flags().Changed("endpoint") && !skipCheck {
-					pairing := checkPairing(ctx, c, *configPath, name, peerEndpoint, publicKey)
-					if err := pairing.Refusal(); err != nil {
-						return err
-					}
-					reportPairing(cmd.ErrOrStderr(), pairing)
+				// Both directions, reported and never refused (#186,
+				// ADR-0037, ADR-0038). Only when an endpoint was given: a peer
+				// enrolled by key alone has no address to check, and a pairing
+				// with nowhere to dial is not one this can say anything about.
+				//
+				// Checked BEFORE the enrolment and printed AFTER it, so the
+				// operator is told about a network as it was at the moment they
+				// ran the command, but reads it as the fact it is rather than
+				// as a condition on whether the peer was added. It was.
+				var pairing reachability.Pairing
+				checked := cmd.Flags().Changed("endpoint")
+				if checked {
+					pairing = checkPairing(ctx, c, *configPath, name, peerEndpoint, publicKey)
 				}
 				var p client.Peer
 				body := map[string]string{
@@ -321,6 +329,9 @@ without asking.`,
 				}
 				if err := c.Post(ctx, "/peers", body, &p); err != nil {
 					return err
+				}
+				if checked {
+					reportPairing(cmd.ErrOrStderr(), pairing)
 				}
 				if flags.asJSON {
 					return emitJSON(cmd.OutOrStdout(), p)
@@ -337,8 +348,6 @@ without asking.`,
 		"where to reach the peer, as "+endpoint.Example+", a bare host:port or unix:///path; not its identity")
 	cmd.Flags().StringVar(&publicKey, "public-key", "",
 		"the peer's Ed25519 public key as ed25519:<64 hex characters> — who it is (required)")
-	cmd.Flags().BoolVar(&skipCheck, "skip-reachability-check", false,
-		"enrol without checking that the peer can reach back; a one-way pairing cannot replicate (#186)")
 	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.MarkFlagRequired("public-key")
 	flags.register(cmd)

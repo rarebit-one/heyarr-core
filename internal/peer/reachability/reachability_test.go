@@ -47,49 +47,60 @@ func TestDecide(t *testing.T) {
 			if got != want {
 				t.Errorf("Decide(%s, %s) = %s, want %s", outbound, ret, got, want)
 			}
-			if refuses := got.Refuses(); refuses != (want == reachability.VerdictReturnPathUnreachable) {
-				t.Errorf("Decide(%s, %s).Refuses() = %v", outbound, ret, refuses)
+			if rep := got.Reportable(); rep != (want == reachability.VerdictReturnPathUnreachable) {
+				t.Errorf("Decide(%s, %s).Reportable() = %v", outbound, ret, rep)
 			}
 		}
 	}
 }
 
-// Only one verdict refuses, and it is the one that was actually observed.
-func TestOnlyTheObservedOneWayPairingRefuses(t *testing.T) {
-	refusing := reachability.Pairing{
+// Only one verdict is reported, and it is the one that was actually observed.
+//
+// Nothing here refuses an enrolment any more: ADR-0038 makes a one-way peer an
+// ordinary participant, so the observation is information rather than a fault
+// (ADR-0037).
+func TestOnlyTheObservedOneWayPairingIsReported(t *testing.T) {
+	oneWay := reachability.Pairing{
 		PeerName: "peer-b", Endpoint: "https://peer-b.invalid:8385",
 		Outbound: reachability.ResultReachable, Return: reachability.ResultUnreachable,
 		ReturnTarget: "https://peer-a.invalid:8385", Detail: "connection refused",
 	}
-	if got := refusing.Verdict(); got != reachability.VerdictReturnPathUnreachable {
+	if got := oneWay.Verdict(); got != reachability.VerdictReturnPathUnreachable {
 		t.Fatalf("verdict = %s, want %s", got, reachability.VerdictReturnPathUnreachable)
 	}
-	if got := refusing.Failed(); got != reachability.DirectionReturn {
+	if got := oneWay.Failed(); got != reachability.DirectionReturn {
 		t.Fatalf("failed direction = %s, want %s", got, reachability.DirectionReturn)
 	}
-	err := refusing.Refusal()
-	if err == nil {
-		t.Fatal("a return-path-unreachable pairing produced no refusal")
+	advisory := oneWay.Advisory()
+	if advisory == "" {
+		t.Fatal("a return-path-unreachable pairing produced no advisory")
 	}
-	// The refusal has to be actionable on its own: the direction, both
-	// addresses, and the escape hatch.
+	// The advisory has to be actionable on its own: the direction, both
+	// addresses, and what it does NOT mean.
 	for _, want := range []string{
-		string(reachability.DirectionReturn), "peer-b",
-		"https://peer-b.invalid:8385", "https://peer-a.invalid:8385",
-		"connection refused", "--skip-reachability-check",
+		"peer-b", "https://peer-b.invalid:8385", "https://peer-a.invalid:8385",
+		"connection refused", "was enrolled", "not a fault",
 	} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not mention %q:\n%v", want, err)
+		if !strings.Contains(advisory, want) {
+			t.Errorf("the advisory does not mention %q:\n%s", want, advisory)
+		}
+	}
+	// 🔴 It must not read as a refusal. The whole point of ADR-0037's rewrite
+	// is that this pairing WORKS, so language implying otherwise would send an
+	// operator to fix a network that does not need fixing.
+	for _, forbidden := range []string{"was not enrolled", "cannot replicate", "--skip-"} {
+		if strings.Contains(advisory, forbidden) {
+			t.Errorf("the advisory still reads as a refusal — it contains %q:\n%s", forbidden, advisory)
 		}
 	}
 
-	// And the two verdicts that must never refuse.
+	// And the two verdicts that must say nothing at all.
 	for _, p := range []reachability.Pairing{
 		{Outbound: reachability.ResultReachable, Return: reachability.ResultReachable},
 		{Outbound: reachability.ResultUnreachable, Return: reachability.ResultUnknown},
 	} {
-		if err := p.Refusal(); err != nil {
-			t.Errorf("a %s pairing refused an enrolment: %v", p.Verdict(), err)
+		if got := p.Advisory(); got != "" {
+			t.Errorf("a %s pairing produced an advisory: %v", p.Verdict(), got)
 		}
 		if got := p.Failed(); got != "" {
 			t.Errorf("a %s pairing named %q as the failed direction", p.Verdict(), got)

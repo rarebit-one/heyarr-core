@@ -131,10 +131,18 @@ func checkPairing(
 // look the same — that confusion is how an operator concludes a pairing was
 // verified when it was not.
 func reportPairing(out io.Writer, p reachability.Pairing) {
-	if p.Verdict() != reachability.VerdictUnproven || p.Outbound == reachability.ResultUnknown {
-		// Unknown in the OUTBOUND direction means no check was attempted at
-		// all — this node's own record, a data directory with no identity in
-		// it. There is nothing to report about a network nobody touched.
+	if p.Outbound == reachability.ResultUnknown {
+		// No check was attempted at all — this node's own record, or a data
+		// directory with no identity in it. There is nothing to report about a
+		// network nobody touched.
+		return
+	}
+	// A one-way pairing: enrolled, and worth saying so (ADR-0037, ADR-0038).
+	if advisory := p.Advisory(); advisory != "" {
+		fmt.Fprintln(out, "note: "+advisory)
+		return
+	}
+	if p.Verdict() != reachability.VerdictUnproven {
 		return
 	}
 	detail := ""
@@ -143,9 +151,8 @@ func reportPairing(out io.Writer, p reachability.Pairing) {
 	}
 	fmt.Fprintf(out, "note: this pairing was not verified in both directions (%s → %s is %s, "+
 		"the return path is %s).%s\n"+
-		"  Replication needs both directions: a peer pushes its inventory to the controller and a "+
-		"destination pulls bytes from the source (#186, ADR-0037).\n"+
-		"  Enrolling anyway — an unreachable peer is usually one that is not up yet. "+
-		"Re-run `heyarr peers add` with the same key once it is, to have the pairing checked.\n",
+		"  That is not a fault — a peer that cannot be reached is usually one that is not up yet, "+
+		"and each peer is authoritative for its own site regardless (ADR-0038).\n"+
+		"  Re-run `heyarr peers add` with the same key once it is up, to have the pairing checked.\n",
 		"this node", p.PeerName, p.Outbound, p.Return, detail)
 }

@@ -106,8 +106,14 @@ func Decide(outbound, ret Result) Verdict {
 	}
 }
 
-// Refuses reports whether this verdict blocks an enrolment.
-func (v Verdict) Refuses() bool { return v == VerdictReturnPathUnreachable }
+// Reportable reports whether this verdict is worth telling the operator about.
+//
+// It is deliberately NOT named Refuses, and it blocks nothing. ADR-0038 makes
+// each peer authoritative for its own site: a peer that can be reached but
+// cannot reach back fetches what it lacks from the peer it CAN reach, and
+// serves everything already on its own disk regardless. Refusing to enrol it
+// would block a working configuration for being unusual (ADR-0037).
+func (v Verdict) Reportable() bool { return v == VerdictReturnPathUnreachable }
 
 // Pairing is one checked pairing, and what was observed about each leg.
 type Pairing struct {
@@ -139,15 +145,16 @@ func (p Pairing) Failed() Direction {
 	return ""
 }
 
-// Refusal is the error an enrolment fails with, or nil.
+// Advisory is what the operator is told about this pairing, or the empty
+// string when there is nothing to say.
 //
-// It names the direction, both addresses, and the two flows that need it, in
-// that order — an operator meeting this has to be able to act on it without
-// reading an ADR, and "reachability check failed" is not something anyone can
-// act on.
-func (p Pairing) Refusal() error {
-	if !p.Verdict().Refuses() {
-		return nil
+// It names the direction and both addresses, in that order — an operator
+// meeting this has to be able to act on it without reading an ADR. It is
+// information, not a fault: enrolment has already succeeded by the time this
+// is printed, and the deployment works either way (ADR-0037, ADR-0038).
+func (p Pairing) Advisory() string {
+	if !p.Verdict().Reportable() {
+		return ""
 	}
 	target := p.ReturnTarget
 	if target == "" {
@@ -157,16 +164,14 @@ func (p Pairing) Refusal() error {
 	if p.Detail != "" {
 		detail = "\nIt reported: " + p.Detail
 	}
-	return fmt.Errorf(
-		"this pairing cannot replicate, so %s was not enrolled.\n"+
-			"This node reached %s at %s, and %s could not reach back to %s: the %s direction is dead.%s\n"+
-			"Replication needs both. A peer's inventory report travels peer → controller, and that is "+
-			"how a controller learns the peer holds a blob at all; the bytes then travel destination → "+
-			"source (ADR-0030). One direction carries one of them, and the other flow deadlocks — "+
-			"silently, as a reconciliation that correctly emits nothing (#186, ADR-0037).\n"+
-			"Fix the return path — a firewall rule, a NAT forward, an endpoint recorded there that is "+
-			"no longer this node's address — and run this again. "+
-			"If the return path exists but cannot be demonstrated from here, "+
-			"`--skip-reachability-check` enrols the peer anyway",
-		p.PeerName, p.PeerName, p.Endpoint, p.PeerName, target, DirectionReturn, detail)
+	return fmt.Sprintf(
+		"%s was enrolled, and the return path did not answer.\n"+
+			"This node reached %s at %s, and %s could not reach back to %s.%s\n"+
+			"That is not a fault. Each peer is authoritative for its own site (ADR-0038): this node "+
+			"fetches what it lacks from %s, and both sites keep serving everything already on their "+
+			"own disks whether or not the link works in both directions.\n"+
+			"What it costs is convergence in the other direction. If that matters, the usual causes "+
+			"are a firewall rule, a missing NAT forward, or an endpoint recorded there that is no "+
+			"longer this node's address.",
+		p.PeerName, p.PeerName, p.Endpoint, p.PeerName, target, detail, p.PeerName)
 }

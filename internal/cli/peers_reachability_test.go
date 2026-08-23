@@ -96,7 +96,7 @@ func farSite(t *testing.T, returnPath peerapi.ReturnPathProber) (endpoint, publi
 // TestEnrolmentRefusesAOneWayPairing is the acceptance condition of #186: a
 // deliberate one-way pairing is refused, at ENROLMENT, naming the direction
 // that failed.
-func TestEnrolmentRefusesAOneWayPairing(t *testing.T) {
+func TestEnrolmentEnrolsAndReportsAOneWayPairing(t *testing.T) {
 	h := newAPIHarness(t).seed()
 	plantSelfIdentity(t, h)
 	endpoint, key := farSite(t, fixedReturnPath{
@@ -106,24 +106,30 @@ func TestEnrolmentRefusesAOneWayPairing(t *testing.T) {
 
 	_, stderr, err := h.run("peers", "add", "--name", "peer-b", "--site", "site-b",
 		"--endpoint", endpoint, "--public-key", key)
-	if err == nil {
-		t.Fatalf("the one-way pairing was enrolled:\n%s", stderr)
+	if err != nil {
+		t.Fatalf("the one-way pairing was refused, and ADR-0038 makes it an ordinary "+
+			"participant: %v\n%s", err, stderr)
 	}
-	// The direction, by name. This is the sentence an operator acts on.
+	// 🔴 The peer IS enrolled. This is the assertion the rewrite turns on: a
+	// peer that can be reached but cannot reach back fetches what it lacks
+	// from the peer it can reach, and refusing it would block a working site.
+	if _, _, err := h.run("peers", "show", "peer-b"); err != nil {
+		t.Fatalf("the one-way peer was not enrolled: %v", err)
+	}
+	// And the operator was told, by direction and by address, on stderr.
 	for _, want := range []string{
-		string(reachability.DirectionReturn),
-		"peer-b", endpoint, "https://peer-a.invalid:8385",
+		"peer-b", endpoint, "https://peer-a.invalid:8385", "not a fault",
 	} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not name %q:\n%v", want, err)
+		if !strings.Contains(stderr, want) {
+			t.Errorf("the advisory does not name %q:\n%s", want, stderr)
 		}
 	}
-
-	// Refused at ADD time: nothing was enrolled. Same assertion #169's
-	// endpoint tests make, and for the same reason — a peer that exists here
-	// is one `peers list` would show as healthy right up until a transfer.
-	if _, _, err := h.run("peers", "show", "peer-b"); err == nil {
-		t.Error("the peer was enrolled anyway, so the pairing was refused later rather than at enrolment")
+	// It must not read as a failure. An operator who reads this as an error
+	// goes and "fixes" a network that is working as designed.
+	for _, forbidden := range []string{"was not enrolled", "--skip-"} {
+		if strings.Contains(stderr, forbidden) {
+			t.Errorf("the advisory still reads as a refusal — it contains %q:\n%s", forbidden, stderr)
+		}
 	}
 }
 
@@ -162,22 +168,6 @@ func TestEnrolmentAcceptsAnUnprovenPairing(t *testing.T) {
 		"--endpoint", endpoint, "--public-key", key)
 	if !strings.Contains(out, "peer-b") {
 		t.Fatalf("an unproven pairing was refused:\n%s", out)
-	}
-}
-
-// TestEnrolmentCanBeForcedPastTheCheck: the check is a probe, and a probe can
-// be wrong — a return path that opens later, a firewall changing this
-// afternoon. The escape hatch exists so that an operator who knows better is
-// not stuck, and it is named in the refusal itself.
-func TestEnrolmentCanBeForcedPastTheCheck(t *testing.T) {
-	h := newAPIHarness(t).seed()
-	plantSelfIdentity(t, h)
-	endpoint, key := farSite(t, fixedReturnPath{result: reachability.ResultUnreachable})
-
-	h.mustRun("peers", "add", "--name", "peer-b", "--site", "site-b",
-		"--endpoint", endpoint, "--public-key", key, "--skip-reachability-check")
-	if _, _, err := h.run("peers", "show", "peer-b"); err != nil {
-		t.Errorf("--skip-reachability-check did not enrol the peer: %v", err)
 	}
 }
 
