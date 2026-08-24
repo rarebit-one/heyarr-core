@@ -30,6 +30,22 @@ Membership is the only trust root in the inter-peer path, and revocation is
 `heyarr peers remove`. It is consulted on every request, so a removed
 peer loses access on the connection it is already holding open.
 
+REACHABILITY MUST BE MUTUAL, and it is checked here (#186, ADR-0037). Heyarr
+does not support a one-way pairing, because the two flows replication needs run
+in opposite directions: a peer PUSHES its inventory to the controller, and a
+destination PULLS bytes from the source. A link that carries only one direction
+deadlocks whichever node is the destination, and it deadlocks SILENTLY — the
+controller is never told the far node holds a blob, so reconciliation correctly
+emits no work and nothing is reported as wrong.
+
+So when --endpoint is given, this command dials the peer and then asks that
+peer whether it can reach back, and REPORTS what it found. Nothing is refused.
+Each peer is authoritative for its own site (ADR-0038): a peer that can be
+reached but cannot reach back fetches what it lacks from the peer it can reach,
+and both sites keep serving everything already on their own disks either way.
+A one-way pairing is an ordinary participant, and a peer that cannot be reached
+at all is usually a machine that is not up yet.
+
 ```
 heyarr peers add [flags]
 ```

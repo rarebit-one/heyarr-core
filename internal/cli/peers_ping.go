@@ -144,6 +144,21 @@ func peerDialer(ctx context.Context, c *client.Client, cfg config.Config, ref st
 			"Re-register it with `heyarr peers add --name %s --public-key <key> --endpoint <address>`; "+
 			"the endpoint is not its identity and may change freely", ref, err, target.Name)
 	}
+	return pinnedConnection(ctx, c, cfg, target, dialTo)
+}
+
+// pinnedConnection builds the mTLS client for one peer, given the peer record
+// and the origin to dial.
+//
+// It is separate from peerDialer because `peers add` needs it for a peer that
+// is not enrolled yet (#186): the enrolment-time reachability check dials the
+// candidate with the key the operator just typed, and there is no row to read
+// it out of. Everything below this line is identical either way, which is the
+// point — a second copy of it is where a second, weaker pinning decision would
+// appear.
+func pinnedConnection(
+	ctx context.Context, c *client.Client, cfg config.Config, target client.Peer, dialTo string,
+) (*peerConnection, error) {
 	targetKey, keyErr := identity.ParsePublicKey(*target.PublicKey)
 	if keyErr != nil {
 		return nil, keyErr

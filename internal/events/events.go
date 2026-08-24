@@ -86,15 +86,29 @@ const (
 	TypeAssetMissing     = "content.asset.missing"
 	TypeAssetDeleted     = "content.asset.deleted"
 	// #nosec G101 -- an event type name, not a credential
-	TypeTokenCreated   = "system.token.created"
-	TypeTokenRevoked   = "system.token.revoked"
-	TypeJobEnqueued    = "job.enqueued"
-	TypeJobSucceeded   = "job.succeeded"
-	TypeJobFailed      = "job.failed"
-	TypeScanProgress   = "system.scan.progress"
-	TypeSystemStarted  = "system.started"
-	TypeSystemStopped  = "system.stopped"
-	TypePeerRegistered = "peer.registered"
+	TypeTokenCreated = "system.token.created"
+	TypeTokenRevoked = "system.token.revoked"
+	TypeJobEnqueued  = "job.enqueued"
+	TypeJobSucceeded = "job.succeeded"
+	TypeJobFailed    = "job.failed"
+	TypeScanProgress = "system.scan.progress"
+	// TypeWorkerCapabilitiesChanged is a worker's advertisement of what it can
+	// do having become different from what it advertised last time (ADR-0039,
+	// M5-112). It is under system.* because it describes a NODE's abilities
+	// rather than any content, and it names the CHANGE rather than either
+	// direction: there is deliberately no capability.gained and no
+	// capability.lost, because two types would be two places to forget to emit
+	// and the interesting half — losing a hardware encoder without the binary
+	// changing and without a restart — is the half that would get forgotten.
+	// The payload carries `gained` and `lost`, so a subscriber can filter on
+	// either. Emitted once per advertisement that CHANGED something, never per
+	// capability and never on a beat that found the world unaltered; a fleet
+	// re-verifying every few minutes would otherwise write a steady stream of
+	// events saying nothing happened.
+	TypeWorkerCapabilitiesChanged = "system.worker.capabilities_changed"
+	TypeSystemStarted             = "system.started"
+	TypeSystemStopped             = "system.stopped"
+	TypePeerRegistered            = "peer.registered"
 	// TypePeerIdentityEstablished is this node's Ed25519 keypair being
 	// generated and recorded for the first time (§26, ADR-0012). It is a
 	// distinct transition from peer.registered: the row can exist for a while

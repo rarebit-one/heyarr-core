@@ -22,6 +22,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/indexers"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
+	"github.com/rarebit-one/heyarr-core/internal/media/capability"
 	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
 	"github.com/rarebit-one/heyarr-core/internal/media/probe"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
@@ -30,6 +31,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/scanner"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
 // Worker is the compute role.
@@ -276,6 +278,29 @@ func (w *Worker) Run(ctx context.Context) error {
 		Logger:  w.log,
 	}))
 
+	// Lazy chunking (§16, §75, ADR-0034, M5-04). §75 has listed chunk_blob
+	// since Milestone 1 and nothing has ever handled it, which was the honest
+	// state: §16 defers the work until something needs it, and until peer
+	// convergence existed nothing did.
+	//
+	// It is registered UNCONDITIONALLY and with no RequiredCapability, for the
+	// reason acquisition ingest is: reading a file that is already on this disk
+	// and hashing it needs nothing but the disk. MaxConcurrent lives in the
+	// registration, where its argument can be read next to the number.
+	//
+	// There is deliberately NO scheduled beat behind it. A sweep that chunked
+	// the whole library would read every byte in the store for manifests
+	// nothing asked for, which is the I/O storm §16 exists to avoid; the work
+	// is enqueued by the reconciliation that decided the bytes are about to
+	// move (see reconcilePeerHandler).
+	registry.Register(manifests.ChunkBlobJobType, ChunkBlobRegistration(ChunkDeps{
+		Store:     store,
+		Manifests: cat,
+		Index:     cat,
+		Checker:   checker,
+		Logger:    w.log,
+	}))
+
 	// The provider registry, built from configuration (§59, M3-07).
 	//
 	// Validation already happened at config load, so a malformed endpoint or a
@@ -440,8 +465,10 @@ func (w *Worker) Run(ctx context.Context) error {
 		w.log.Info("remuxing is available", "ffmpeg", toolchain.FFmpeg.Version)
 	}
 
+	workerID := owner()
+	startedAt := time.Now().UTC()
 	runtime, err := NewRuntime(Config{
-		Owner: owner(),
+		Owner: workerID,
 		// What this worker can do, not what it would like to. A job requiring
 		// a capability nobody advertises stays pending and visible rather than
 		// failing (§75, ADR-0023).
@@ -456,10 +483,52 @@ func (w *Worker) Run(ctx context.Context) error {
 		return fmt.Errorf("worker: building the runtime: %w", err)
 	}
 
+	// The capability advertisement beat (ADR-0039, M5-112).
+	//
+	// It runs even on a node with no toolchain and no providers, and that is
+	// deliberate: an advertisement of NOTHING is the answer to "why is nothing
+	// transcoding", and a worker that stayed silent because it had nothing to
+	// say would be indistinguishable from one that had died. It is also the
+	// only thing that renews this worker's row, so a beat that stood down would
+	// let a healthy worker expire.
+	//
+	// The hardware runner exists only where there is a binary to run: ADR-0023
+	// resolves it at startup and does not re-resolve it, so a node without
+	// ffmpeg has nothing to exercise for as long as this process lives.
+	var runner capability.Runner
+	if toolchain.FFmpeg.Available {
+		r, err := capability.NewExecRunner(toolchain.FFmpeg.Path)
+		if err != nil {
+			return fmt.Errorf("worker: building the capability prober: %w", err)
+		}
+		runner = r
+	}
+	beat, err := NewCapabilityBeat(AdvertiserOptions{
+		WorkerID: workerID,
+		PeerID:   peerID,
+		PeerName: w.cfg.Peer.Name,
+		// The binary and service halves, captured. Both are startup facts by
+		// ADR-0023 and ADR-0025, and neither is re-resolved by the beat — which
+		// is the asymmetry with the hardware probe below.
+		Binary: capability.Merge(
+			BinaryCapabilities(toolchain.Capabilities(), startedAt),
+			ServiceCapabilities(providerRegistry.JobCapabilities(), startedAt),
+		),
+		Runner:     runner,
+		Candidates: capability.DefaultCandidates(),
+		Recorder:   cat,
+		Logger:     w.log,
+	})
+	if err != nil {
+		return fmt.Errorf("worker: building the capability beat: %w", err)
+	}
+
 	if ctx.Err() != nil {
 		w.log.Info("worker stopped during startup")
 		return nil
 	}
+
+	go beat.Run(ctx)
 
 	w.log.Info("worker ready", "cas_root", store.Root(), "peer_id", peerID)
 	// Runtime.Run logs its slots, capabilities and registered job types, and
