@@ -126,7 +126,13 @@ func TestRolesStartAndStopCleanly(t *testing.T) {
 		t.Run(role, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "heyarr.yaml")
-			body := "data_dir: " + filepath.Join(dir, "data") + "\npeer:\n  name: test\nlog:\n  format: json\n"
+			// http.addr is pinned to port ZERO. Without it this inherits
+			// config.Defaults()' real listen address and contends for the port
+			// a RUNNING heyarr holds, so the suite fails on any machine that
+			// is also serving (#220). peer.listen is left empty, which
+			// disables that listener and needs no port at all.
+			body := "data_dir: " + filepath.Join(dir, "data") +
+				"\nhttp:\n  addr: 127.0.0.1:0\npeer:\n  name: test\nlog:\n  format: json\n"
 			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -141,9 +147,16 @@ func TestRolesStartAndStopCleanly(t *testing.T) {
 			done := make(chan error, 1)
 			go func() { done <- cmd.ExecuteContext(ctx) }()
 
-			// Wait until every role this command runs has reported itself up.
+			// Wait until every role this command runs has reported itself up
+			// — or until the command exits, whichever happens first.
+			//
+			// Watching `done` here is the difference between "the role failed
+			// to start, and here is its error" and "never saw 'controller
+			// started' in the logs", which is a true statement that sends the
+			// reader looking for a missing log line rather than a failed bind
+			// (#220).
 			for _, want := range startupLines(role) {
-				waitForLog(t, errb, want)
+				waitForLog(t, errb, want, done)
 			}
 			cancel()
 
@@ -177,12 +190,29 @@ func startupLines(role string) []string {
 	return []string{role + " started"}
 }
 
-func waitForLog(t *testing.T, b *syncBuffer, want string) {
+// waitForLog waits for a line, and notices the process dying while it waits.
+//
+// The second half is the point. Without it, a role that failed to START —
+// losing a port race, most obviously — reported as "never saw 'controller
+// started' in the logs": true, and a sentence that sends the reader looking
+// for a missing log line rather than a failed bind (#220).
+//
+// The `done` parameter is not optional and there is no variant without it. A
+// first attempt added this as a sibling on the assumption that other callers
+// had no exit channel to pass; there were no other callers, and a helper that
+// can silently wait out a dead process is not worth keeping around for one.
+func waitForLog(t *testing.T, b *syncBuffer, want string, done <-chan error) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if strings.Contains(b.String(), want) {
 			return
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("the command exited before logging %q: %v\n--- logs ---\n%s",
+				want, err, b.String())
+		default:
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
