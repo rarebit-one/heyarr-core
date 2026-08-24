@@ -54,6 +54,31 @@ const (
 	TransitionFail Transition = "fail"
 	// TransitionCancel is a person stopping something in flight.
 	TransitionCancel Transition = "cancel"
+	// TransitionAdopt is bytes arriving from OUTSIDE the pipeline: a transfer
+	// that finished before Heyarr knew about it, a client the registry has no
+	// integration for, or something a person fetched by hand (§65).
+	//
+	// # Why it is its own edge rather than a walk through the ordinary ones
+	//
+	// A want that never selected anything rests in idle, and the only forward
+	// edge from idle is `search`. Walking a hand-fetched file to VERIFYING
+	// through search → candidates_found → select → queue → start_download →
+	// downloaded would record six things that did not happen — a search nobody
+	// ran, candidates nobody found, a choice nobody made.
+	//
+	// That is the same objection the adoption endpoint already makes to
+	// jumping straight to VERIFYING: "a want that arrived at VERIFYING without
+	// passing through QUEUED has a history that does not describe what
+	// happened". Fabricating the history is not better than skipping it.
+	//
+	// So adoption is modelled as what it is. It goes to VERIFYING and not to
+	// INGESTING because bytes somebody else fetched are exactly the bytes
+	// invariant 1 is about: Heyarr hashes them itself, and a claim by a third
+	// party is not evidence.
+	//
+	// Legal only from idle. A want with a transfer in flight adopts through
+	// the ordinary edges, because for that want they are true (#240).
+	TransitionAdopt Transition = "adopt"
 	// TransitionLost is managed bytes going away: the asset was deleted, or a
 	// scan found the file gone. It is the edge that makes this machine a loop
 	// rather than a funnel.
@@ -66,7 +91,8 @@ func Transitions() []Transition {
 		TransitionSearch, TransitionCandidatesFound, TransitionNoCandidates,
 		TransitionSelect, TransitionRejectAll, TransitionQueue,
 		TransitionStartDownload, TransitionDownloaded, TransitionVerified,
-		TransitionIngested, TransitionFail, TransitionCancel, TransitionLost,
+		TransitionIngested, TransitionAdopt, TransitionFail, TransitionCancel,
+		TransitionLost,
 	}
 }
 
@@ -101,6 +127,8 @@ func ParseTransition(s string) (Transition, error) {
 var table = map[Phase]map[Transition]Phase{
 	PhaseIdle: {
 		TransitionSearch: PhaseSearching,
+		// Bytes from outside the pipeline (§65). See TransitionAdopt.
+		TransitionAdopt: PhaseVerifying,
 		// The bytes went away — a deleted asset, or a scan finding the file
 		// gone. Legal from idle only: while a pipeline is in flight there are
 		// no managed bytes to lose that this machine is responsible for.

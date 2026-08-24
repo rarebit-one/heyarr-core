@@ -19,7 +19,11 @@ import (
 var legalEdges = map[Phase]map[Transition]Phase{
 	PhaseIdle: {
 		TransitionSearch: PhaseSearching,
-		TransitionLost:   PhaseIdle,
+		// Bytes from outside the pipeline (§65, #240). Legal ONLY here: a want
+		// with a transfer in flight adopts through the ordinary edges, because
+		// for that want they describe what actually happened.
+		TransitionAdopt: PhaseVerifying,
+		TransitionLost:  PhaseIdle,
 	},
 	PhaseSearching: {
 		TransitionCandidatesFound: PhaseCandidatesFound,
@@ -61,7 +65,7 @@ var legalEdges = map[Phase]map[Transition]Phase{
 }
 
 // Every (phase, transition) pair, legal and illegal. This is the whole space —
-// 9 phases × 13 transitions = 117 cells — and every one of them is asserted.
+// 9 phases × 14 transitions = 126 cells — and every one of them is asserted.
 func TestTheWholeTransitionSpace(t *testing.T) {
 	var legal, illegal int
 	for _, phase := range Phases() {
