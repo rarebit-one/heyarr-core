@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -355,5 +356,96 @@ func TestAnUndecodablePayloadFails(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "needs a desired item") {
 		t.Fatalf("expected a refusal naming the missing field, got %v", err)
+	}
+}
+
+// detailOf is the want's durable explanation — what an operator reads days
+// later, as opposed to the log line, which is gone.
+func (h *searchHarness) detailOf(t *testing.T) string {
+	t.Helper()
+	rec, err := h.cat.Acquisition(t.Context(), h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rec.Detail
+}
+
+// "Nothing was found" and "we could not look" must not read the same.
+//
+// One indexer answered with nothing; the other could not be reached at all. The
+// want used to record "2 indexer(s) had nothing", because Consulted counts
+// every indexer that was ASKED, including the ones that failed — so a want
+// whose only healthy indexer came up empty was indistinguishable from a want
+// where two looked properly and the content genuinely is not out there.
+//
+// The two lead to opposite actions: wait, or go fix the indexer.
+func TestAWantSaysWhenAnIndexerCouldNotBeReached(t *testing.T) {
+	h := newSearchHarness(t)
+	// The healthy one answers with nothing; it has no offer for this title.
+	down := providers.NewFake("down-indexer", providers.CapabilityIndexer).
+		FailWith(errors.New("context deadline exceeded"))
+	if err := h.reg.Register(down); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.run(t); err != nil {
+		t.Fatal(err)
+	}
+
+	detail := h.detailOf(t)
+	if !strings.Contains(detail, "could not be reached") {
+		t.Errorf("the want records %q, which reads as a definitive negative "+
+			"answer when one indexer never answered at all", detail)
+	}
+	// And it still says what the working one found, or the operator cannot
+	// tell this from a total outage.
+	if !strings.Contains(detail, "1 of 2") {
+		t.Errorf("the want records %q, which does not say how many actually looked", detail)
+	}
+}
+
+// A search where every indexer answered still reads the way it always did.
+//
+// The control: without it, a fix that always mentioned failures would pass the
+// test above while making the ordinary case wrong.
+func TestAWantWithHealthyIndexersRecordsAPlainEmptySearch(t *testing.T) {
+	h := newSearchHarness(t)
+
+	if err := h.run(t); err != nil {
+		t.Fatal(err)
+	}
+
+	detail := h.detailOf(t)
+	if strings.Contains(detail, "could not be reached") {
+		t.Errorf("the want records %q, but every indexer answered", detail)
+	}
+	if !strings.Contains(detail, "had nothing") {
+		t.Errorf("the want records %q, want a plain empty-search detail", detail)
+	}
+}
+
+// A search where NO indexer could be reached is not a search that found
+// nothing.
+//
+// Recording TransitionNoCandidates there advances the want's search schedule on
+// the strength of a look nobody took, so a want whose indexers are all down
+// waits out the full `missing` cadence having learned nothing (#130).
+func TestASearchThatReachedNobodyIsNotAnEmptySearch(t *testing.T) {
+	h := newSearchHarness(t)
+	h.fake.FailWith(errors.New("context deadline exceeded"))
+
+	err := h.run(t)
+	if err == nil {
+		t.Fatal("a search that reached no indexer reported success, so the job " +
+			"will not retry and the want waits out its full cadence")
+	}
+
+	detail := h.detailOf(t)
+	if !strings.Contains(detail, "no indexer could be reached") {
+		t.Errorf("the want records %q, want it to say nobody was reached", detail)
+	}
+	// It must still LEAVE searching, or it sticks there forever.
+	if got := h.state(t).Phase; got == acquisition.PhaseSearching {
+		t.Error("the want is stuck in SEARCHING")
 	}
 }
