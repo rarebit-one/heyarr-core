@@ -36,10 +36,15 @@ const (
 type Attribute string
 
 const (
-	// AttrResolution is vertical lines: 480, 720, 1080, 2160. Height rather
-	// than a label, because "4K" and "2160p" and "UHD" are three spellings of
-	// one number and a profile should not have to know which one an indexer
-	// used.
+	// AttrResolution is the resolution CLASS in vertical lines: 480, 720,
+	// 1080, 2160. A number rather than a label, because "4K" and "2160p" and
+	// "UHD" are three spellings of one number and a profile should not have to
+	// know which one an indexer used.
+	//
+	// The class, and NOT the frame's pixel height. They coincide only at 16:9,
+	// and a 2.35:1 1080p master is 1920x816 — taking the height rejected it as
+	// sub-1080 (#231). See ResolutionClass for how the two relate and why
+	// standard definition is the one range that keeps its height.
 	AttrResolution Attribute = "resolution"
 	// AttrSource is where the release came from: remux, bluray, web-dl,
 	// webrip, hdtv, dvd, cam. §62's example uses it as a terminal condition.
