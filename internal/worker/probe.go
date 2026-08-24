@@ -20,6 +20,21 @@ type ProbeRecorder interface {
 	RecordProbe(ctx context.Context, blobHash string, result probe.Result, stats probe.Stats, now time.Time) error
 }
 
+// BlobProber describes a blob's media, over ranges or whole (§29).
+//
+// An interface for the same reason ProbeRecorder is one, and stated in the same
+// words: so the handler can be tested without the real thing in the way. The
+// interesting behaviour here is the token, the URL and THE FAILURE
+// CLASSIFICATION — and the last of those cannot be reached at all with a
+// concrete *probe.Prober, because provoking "these bytes are not media"
+// genuinely requires ffprobe and a machine that has one.
+//
+// That is why the classification went untested until #232: the branch that
+// decides whether to retry was unreachable from a test.
+type BlobProber interface {
+	Probe(ctx context.Context, target probe.Target) (probe.Result, probe.Stats, error)
+}
+
 // ProbeMinter issues the short-lived credential a probe uses.
 type ProbeMinter interface {
 	Create(ctx context.Context, name string, scopes []auth.Scope, expiresAt *time.Time) (auth.CreatedToken, error)
@@ -36,7 +51,7 @@ const probeTokenTTL = 30 * time.Minute
 
 // ProbeHandlerOptions configure the probe_blob handler.
 type ProbeHandlerOptions struct {
-	Prober   *probe.Prober
+	Prober   BlobProber
 	Recorder ProbeRecorder
 	Tokens   ProbeMinter
 	// BaseURL is this node's API base, already resolved from the peer endpoint.
@@ -94,6 +109,27 @@ func ProbeHandler(opts ProbeHandlerOptions) HandlerFunc {
 			Size:  payload.Size,
 		})
 		if err != nil {
+			// ffprobe READ the bytes and reported that they are not a format it
+			// knows. That is a property of the bytes, and the bytes are
+			// immutable (invariant 1) — so the second attempt cannot succeed
+			// and neither can the fifth.
+			//
+			// Each attempt costs more than a retry sounds like: the range probe
+			// gives up past §29's threshold and then materialises the WHOLE
+			// blob. Five attempts is five whole-blob materialisations to
+			// relearn a fact established the first time (#232).
+			//
+			// Everything else here — ffprobe missing, a lost lease, a store
+			// briefly unavailable, an I/O error — is a property of the moment
+			// and is left to retry, which is what the backoff is for. The
+			// distinction is exactly the one ErrProbeFailed was typed to carry:
+			// "this is not media Heyarr can read" as against "the network went
+			// away". It was typed for this and nothing consumed it.
+			if errors.Is(err, probe.ErrProbeFailed) {
+				log.Warn("a blob is not media ffprobe can read; not retrying",
+					"blob", payload.BlobHash, "bytes_read", stats.BytesRead, "error", err)
+				return fmt.Errorf("%w: %w", jobs.ErrPermanent, err)
+			}
 			log.Warn("a blob could not be probed",
 				"blob", payload.BlobHash, "bytes_read", stats.BytesRead, "error", err)
 			return err
