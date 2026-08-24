@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -435,7 +436,8 @@ func (p *Puller) reportDonor(ctx context.Context, blob hashing.Hash) {
 	}
 }
 
-// fetchChunk reads one chunk's byte range from the source and appends it.
+// fetchChunk reads one chunk's byte range from the source and appends it to
+// the partial, leaving the partial exactly as it found it if anything is wrong.
 //
 // This is the Range header the M4 package doc forbade, and it is here under
 // the condition that made it forbidden: the range is a CHUNK BOUNDARY out of a
@@ -449,6 +451,73 @@ func (p *Puller) fetchChunk(
 	blob hashing.Hash, c chunking.Chunk,
 ) error {
 	before := partial.Size()
+	err := p.readChunk(ctx, client, origin, blob, c, func(r io.Reader) (int64, error) {
+		return partial.Append(ctx, r)
+	})
+	if err == nil {
+		return nil
+	}
+	// Rewound on EVERY failure rather than on the ones that obviously wrote
+	// something. A partial is the next attempt's verified prefix, and a prefix
+	// carrying half a chunk nobody checked is worse than no prefix at all.
+	if tErr := partial.Truncate(before); tErr != nil {
+		return tErr
+	}
+	return err
+}
+
+// FetchChunk returns the bytes of one chunk of blob, verified against the
+// digest the manifest gives for it.
+//
+// # Why this exists beside fetchChunk rather than instead of it
+//
+// Replication streams a chunk straight into the partial it is assembling and
+// never holds one whole; repair needs the bytes in hand, because it is
+// reconstructing a blob out of intact local chunks interleaved with fetched
+// replacements (ADR-0036). Both are the same request, the same 206 handling
+// and the same verification, which is why they share [Puller.readChunk] rather
+// than each spelling out a ranged read. A path spelled twice is a path that
+// can be spelled differently.
+//
+// The buffer is one chunk, never one blob: chunking's parameters bound a chunk
+// to a small multiple of its target size, so this is flat in blob size the way
+// everything else on this path is.
+//
+// It is the implementation the integrity package's ChunkSource asks for, and
+// it deliberately does not know that: the interface is declared by its
+// consumer and this package does not import it.
+func (p *Puller) FetchChunk(
+	ctx context.Context, src replication.Source, blob hashing.Hash, c chunking.Chunk,
+) ([]byte, error) {
+	origin, err := p.originFor(src)
+	if err != nil {
+		return nil, err
+	}
+	client, err := p.clientFor(src)
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 0, c.Length)
+	w := bytes.NewBuffer(buf)
+	if err := p.readChunk(ctx, client, origin, blob, c, func(r io.Reader) (int64, error) {
+		return w.ReadFrom(r)
+	}); err != nil {
+		return nil, err
+	}
+	return w.Bytes(), nil
+}
+
+// readChunk performs one ranged read and hands the verified body to consume.
+//
+// consume is given a reader that is limited to the chunk's length and that
+// hashes as it is read; readChunk checks that hash, and the byte count, before
+// it returns nil. A consumer that keeps what it read must therefore treat a
+// non-nil error as "everything I just accepted is void" — which is why
+// fetchChunk rewinds its partial and FetchChunk discards its buffer.
+func (p *Puller) readChunk(
+	ctx context.Context, client *http.Client, origin string,
+	blob hashing.Hash, c chunking.Chunk, consume func(io.Reader) (int64, error),
+) error {
 	url := origin + peerapi.BlobContentPath(blob.String())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -477,24 +546,18 @@ func (p *Puller) fetchChunk(
 
 	// Limited to the chunk's length regardless of what the source sends, and
 	// verified against the manifest's digest for THIS chunk. A source that
-	// answered 206 and then streamed something else gets its bytes truncated
-	// away rather than assembled.
+	// answered 206 and then streamed something else gets its bytes rejected
+	// rather than assembled.
 	verifier := hashing.NewVerifyingReader(io.LimitReader(resp.Body, c.Length), c.Digest)
-	n, err := partial.Append(ctx, verifier)
+	n, err := consume(verifier)
 	if err != nil {
 		return err
 	}
 	if n != c.Length {
-		if tErr := partial.Truncate(before); tErr != nil {
-			return tErr
-		}
 		return fmt.Errorf("%w: %s served %d bytes for a chunk of %d at offset %d",
 			ErrChunkCorrupt, blob, n, c.Length, c.Offset)
 	}
 	if err := verifier.Check(); err != nil {
-		if tErr := partial.Truncate(before); tErr != nil {
-			return tErr
-		}
 		return fmt.Errorf("%w: %s, chunk at %d: %w", ErrChunkCorrupt, blob, c.Offset, err)
 	}
 
@@ -516,9 +579,6 @@ func (p *Puller) fetchChunk(
 	// source answering a question it was not asked, and the extra bytes are
 	// exactly what the next chunk's offset would otherwise land on.
 	if extra, _ := io.Copy(io.Discard, io.LimitReader(resp.Body, 1)); extra > 0 {
-		if tErr := partial.Truncate(before); tErr != nil {
-			return tErr
-		}
 		return fmt.Errorf("%w: %s sent more than the %d bytes at offset %d that it was asked for",
 			ErrChunkCorrupt, blob, c.Length, c.Offset)
 	}

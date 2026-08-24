@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -15,6 +16,8 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/durability"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
+	"github.com/rarebit-one/heyarr-core/internal/peer/repairsource"
+	"github.com/rarebit-one/heyarr-core/internal/peer/transfer"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
@@ -31,7 +34,7 @@ import (
 // It migrates, because a schema one version behind would otherwise present as
 // "no such column: unreferenced_since" — a puzzle rather than an error.
 func withIntegrity(ctx context.Context, configPath string,
-	fn func(context.Context, integrity.Options, *cas.FS, *catalog.Catalog) error,
+	fn func(context.Context, integrity.Options, *cas.FS, *catalog.Catalog, string) error,
 ) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -67,7 +70,7 @@ func withIntegrity(ctx context.Context, configPath string,
 	if v := durabilityFor(ctx, cfg.DataDir, cat, db); v != nil {
 		opts.Durability = v
 	}
-	return fn(ctx, opts, store, cat)
+	return fn(ctx, opts, store, cat, cfg.DataDir)
 }
 
 // durabilityFor builds the placement precondition's remote half, or nothing.
@@ -148,6 +151,7 @@ says which of those it was.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withIntegrity(cmd.Context(), *configPath, func(
 				ctx context.Context, opts integrity.Options, store *cas.FS, cat *catalog.Catalog,
+				dataDir string,
 			) error {
 				checker, err := integrity.NewChecker(opts)
 				if err != nil {
@@ -168,7 +172,7 @@ says which of those it was.`,
 					return nil
 				}
 
-				results, err := repairDamage(ctx, opts, store, cat, report)
+				results, err := repairDamage(ctx, opts, store, cat, dataDir, report)
 				if err != nil {
 					return err
 				}
@@ -198,17 +202,18 @@ says which of those it was.`,
 // to rebuild something nothing references.
 func repairDamage(
 	ctx context.Context, opts integrity.Options, store *cas.FS, cat *catalog.Catalog,
-	report integrity.Report,
+	dataDir string, report integrity.Report,
 ) ([]integrity.RepairResult, error) {
 	repairer, err := integrity.NewRepairer(integrity.RepairOptions{
 		Store:     store,
 		Manifests: cat,
 		Catalog:   cat,
-		// Source is deliberately nil until the M5-06/M5-07 ranged fetch is
-		// wired in. A nil source refuses rather than permits: every damaged
-		// blob is reported as unreachable, with the reason, instead of the
-		// command appearing to have tried.
-		Source: nil,
+		// May still be nil, and a nil one REFUSES rather than permits: every
+		// damaged blob is reported as unreachable, with the reason, instead of
+		// the command appearing to have tried. That is now the answer for a
+		// node with no peer identity on disk rather than the answer for every
+		// node.
+		Source: chunkSourceFor(ctx, dataDir, store, cat, opts.Logger),
 		Clock:  opts.Clock,
 		Logger: opts.Logger,
 	})
@@ -231,6 +236,60 @@ func repairDamage(
 		results = append(results, result)
 	}
 	return results, nil
+}
+
+// chunkSourceFor builds the peer-backed replacement-chunk source, or nothing.
+//
+// The same shape as durabilityFor, and for the same reason: NOTHING is the
+// safe answer and it is not the convenient one. A repairer with no source
+// reports every damaged blob as unreachable and says why, which is honest on a
+// single-node install that has no peers to ask; a repairer that silently got a
+// half-built source would report a fault that is really a missing key.
+//
+// It is built from the same three things replication uses — this node's
+// identity, its mTLS material and the catalog's view of which peers report
+// holding the bytes — so a repair fetches over exactly the path a transfer
+// does, from exactly the peers a transfer would use. There is no second
+// notion of "where bytes come from" (ADR-0030).
+//
+// The chunk index is deliberately NOT wired in. It is what lets a transfer
+// reuse chunks this node already holds, and a repair has no use for it: the
+// chunks this node holds for THIS blob are the ones it just verified locally,
+// and repair has already read them. Handing it an index would invite it to
+// source a replacement from another blob, which is a storage-level decision
+// nobody has taken (#194's stance, and ADR-0034 does not reach it).
+func chunkSourceFor(
+	ctx context.Context, dataDir string, store *cas.FS, cat *catalog.Catalog, log *slog.Logger,
+) integrity.ChunkSource {
+	self, err := cat.SelfPeer(ctx)
+	if err != nil {
+		return nil
+	}
+	priv, err := identity.Signer(dataDir)
+	if err != nil {
+		return nil
+	}
+	material, err := mtls.NewMaterial(mtls.MaterialOptions{PrivateKey: priv, PeerID: self})
+	if err != nil {
+		return nil
+	}
+	puller, err := transfer.New(transfer.Options{
+		Material: material,
+		Store:    store,
+		Logger:   log,
+	})
+	if err != nil {
+		return nil
+	}
+	src, err := repairsource.New(repairsource.Options{
+		Sources: cat,
+		Fetcher: puller,
+		Logger:  log,
+	})
+	if err != nil {
+		return nil
+	}
+	return src
 }
 
 func repairedCount(results []integrity.RepairResult) int {
@@ -389,7 +448,7 @@ window rather than a partly spent one.`,
 					"to reclaim without waiting", integrity.DefaultGrace)
 			}
 			return withIntegrity(cmd.Context(), *configPath, func(
-				ctx context.Context, opts integrity.Options, _ *cas.FS, _ *catalog.Catalog,
+				ctx context.Context, opts integrity.Options, _ *cas.FS, _ *catalog.Catalog, _ string,
 			) error {
 				collector, err := integrity.NewCollector(opts)
 				if err != nil {
