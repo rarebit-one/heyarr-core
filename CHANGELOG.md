@@ -154,6 +154,22 @@ separate role processes (ADR-0002).
   has just decided the bytes must cross a network, which is §16's own trigger.
   It is idempotent, keyed on the blob, and emits no event — a manifest existing
   is state, the same argument that keeps `blob.verified` out of the event log.
+- **Integrity repair, which never edits a blob in place** — a damaged blob is
+  located chunk by chunk against its manifest, a whole replacement is
+  reconstructed in the store's private staging area from the intact local
+  chunks plus replacements fetched from a peer, the assembled whole-object
+  digest is verified, the damaged original is moved to quarantine, and only
+  then is the replacement published by the same atomic link every other write
+  uses. There is no interval in which a partly assembled file answers to the
+  blob's digest: during a repair the addressable blob is the original,
+  unchanged, and afterwards it is the repaired one. Quarantine happens *before*
+  publication so a crash between them loses the repair rather than the
+  evidence. The saving is in the network — the fetch is proportional to the
+  damage, the local read and write stay proportional to the blob. A repair that
+  cannot complete (no manifest, no reachable peer, a peer whose copy is damaged
+  too, an assembly that does not hash to the blob) changes nothing at all and
+  says which it was; `heyarr fsck --repair` prints what was repaired, how many
+  chunks moved, and why not (ADR-0036, ADR-0018).
 
 ### Fixed
 

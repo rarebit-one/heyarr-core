@@ -20,6 +20,14 @@ original (ADR-0018).
 Bytes with no catalog row and partial writes are reported too, but they are
 waste rather than damage. fsck exits non-zero only for damage.
 
+--repair attempts to rebuild each damaged blob from the chunks that are still
+intact plus replacements fetched from a peer. Nothing is written in place: the
+replacement is assembled in the store's private staging area, verified against
+the blob's own digest, and published only after the damaged original has been
+moved to quarantine (ADR-0036). A repair that cannot complete — no manifest, no
+reachable peer, a peer whose copy is damaged too — changes nothing at all and
+says which of those it was.
+
 ```
 heyarr fsck [flags]
 ```
@@ -27,8 +35,9 @@ heyarr fsck [flags]
 ### Options
 
 ```
-      --deep   re-hash every blob instead of checking existence and length
-      --json   emit machine-readable JSON
+      --deep     re-hash every blob instead of checking existence and length
+      --json     emit machine-readable JSON
+      --repair   rebuild damaged blobs from intact chunks plus replacements from a peer (ADR-0036)
 ```
 
 ### Options inherited from parent commands
