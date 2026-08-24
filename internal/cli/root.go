@@ -79,7 +79,7 @@ One logical library, multiple complete sovereign peers.`,
 		// on the local segment and needs neither a controller nor a
 		// credential. An operator standing in the living room can run it
 		// before Heyarr is configured at all.
-		newRenderersCommand(opts),
+		newRenderersCommand(opts, &configPath),
 		newGCCommand(opts, &configPath),
 		// The client commands. Everything below this line talks to a running
 		// controller over /api/v1; everything above it is host administration
@@ -91,6 +91,7 @@ One logical library, multiple complete sovereign peers.`,
 		newScanCommand(opts, &configPath),
 		newWorksCommand(opts, &configPath),
 		newAssetsCommand(opts, &configPath),
+		newPlayCommand(opts, &configPath),
 		newBlobsCommand(opts, &configPath),
 		newJobsCommand(opts, &configPath),
 		newPeersCommand(opts, &configPath),

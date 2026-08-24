@@ -24,3 +24,8 @@ network as the screen you are looking for.
 
 * [heyarr](heyarr.md)	 - Self-hosted content lifecycle, replication and consumption
 * [heyarr renderers discover](heyarr_renderers_discover.md)	 - Search the local network for media renderers
+* [heyarr renderers pause](heyarr_renderers_pause.md)	 - Hold position on a renderer
+* [heyarr renderers resume](heyarr_renderers_resume.md)	 - Continue a paused renderer
+* [heyarr renderers seek](heyarr_renderers_seek.md)	 - Jump to a position
+* [heyarr renderers status](heyarr_renderers_status.md)	 - Report what a renderer is playing and how far in
+* [heyarr renderers stop](heyarr_renderers_stop.md)	 - Stop a renderer and release the content
