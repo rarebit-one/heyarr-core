@@ -2146,11 +2146,18 @@ YAML
 
   # What is deliberately absent, and why. A tool answering "not implemented"
   # would be a published vocabulary with a hole in it.
+  #
+  # THE VERB PROBED HERE MUST STILL BE IN internal/api/mcp/deferred.go. This
+  # asked for `acquire_release` until M6 shipped it, at which point the call
+  # started answering -32602 (the verb exists, the arguments were wrong) instead
+  # of -32601 (no such verb) — which is the assertion below failing for the best
+  # possible reason. When the last deferred verb ships, this block goes rather
+  # than being pointed at something arbitrary.
   local mcp_deferred
-  mcp_deferred=$(mcp_call "acquire_release" '{}')
+  mcp_deferred=$(mcp_call "transfer_playback" '{}')
   assert_eq "$(jq -r '.error.code' <<<"$mcp_deferred")" "-32601" \
     "a §71 verb this milestone does not carry is absent rather than stubbed"
-  assert_contains "$(jq -r '.error.data.milestone' <<<"$mcp_deferred")" "M3" \
+  assert_contains "$(jq -r '.error.data.milestone' <<<"$mcp_deferred")" "M4" \
     "and names the milestone that brings it, so an agent waits rather than retrying"
 
   # A typo is NOT reported as a deferred feature.
