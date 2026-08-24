@@ -2911,6 +2911,98 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /peer/v1/blobs/{hash}/pieces:
+    parameters:
+      - name: hash
+        in: path
+        required: true
+        description: >-
+          The BLAKE3 digest that names the blob, as `blake3:<64 lowercase hex
+          characters>`. Pieces are not addressable and never will be: a piece
+          is a transport detail with a session's lifetime, not a name for bytes
+          (ADR-0041), so there is deliberately no route that names one.
+        schema:
+          type: string
+          pattern: '^blake3:[0-9a-f]{64}$'
+    get:
+      tags: [peer]
+      operationId: getPeerBlobPieces
+      summary: Report which pieces of a blob this node holds.
+      description: |
+        **The question replication could never ask.** Every other route here
+        answers about a blob held WHOLE — the inventory lists them, the content
+        route serves them, the manifest describes them. A peer holding part of
+        a blob was indistinguishable from one holding none of it, so two peers
+        both still fetching the same blob had nothing to say to each other and
+        the only available shape was `Internet → A`, then `A → B` (§23).
+
+        This is the third answer: *I have some of it, and here is which.*
+
+        **Asking never computes.** The piece geometry is derived from the
+        blob's SIZE, which this node already knows, so answering never reads a
+        byte of content. That is what makes the route safe behind a credential
+        any pinned member holds — the same reasoning ADR-0034 applies to
+        refusing manifest-on-demand, arriving at the opposite conclusion
+        because the cost here is genuinely zero.
+
+        **The answer is a claim, not evidence.** A peer saying it holds a piece
+        is a peer saying so. The destination verifies every piece it receives
+        against that piece's hash, and the whole object against its BLAKE3
+        digest before it becomes a blob (invariant 1). A peer that overstates
+        wastes one request and is walked past, exactly as a source that serves
+        bytes it cannot back is walked past by repair (ADR-0036).
+
+        **The credential is the same one.** Mounted beside the content and
+        manifest routes on the same mTLS trust root (ADR-0012), with no new
+        credential and no per-blob capability: a pinned member may already read
+        these bytes, and telling it which of them are here reveals nothing it
+        could not discover by asking for them.
+      responses:
+        "200":
+          description: |
+            What this node holds of the blob. `available` carries its own piece
+            count so that a peer computing a different geometry is refused
+            rather than half-believed — a bitset's width alone cannot tell 20
+            pieces from 21, and two peers requesting pieces whose boundaries
+            they do not share produce bytes that fail verification for a reason
+            nobody could diagnose (ADR-0043).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PeerBlobPieces" }
+        "400":
+          description: The path is not a `blake3:<64 hex>` digest.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "401":
+          description: No client certificate was presented.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "403":
+          description: The presented key is not a member of this fabric.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404":
+          description: |
+            This node holds no part of the blob and has no transfer of it in
+            progress. Distinct from a `200` carrying an empty `available`,
+            which would mean a transfer that has landed nothing yet — the
+            difference between *never heard of it* and *fetching, nothing yet*,
+            which are different things to a session choosing sources.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503":
+          description: |
+            This node has no content store behind its peer surface, so it holds
+            no pieces to report. Matches the content and manifest routes:
+            distinct from 404 because there is nothing here to try again for.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /api/v1/quality-profiles:
     get:
       tags: [policy]
@@ -3722,6 +3814,43 @@ components:
             read is. It may be negative if the reader's clock is behind; that
             is reported as measured rather than clamped, because an operator
             who sees a negative age has learned something true.
+
+    PeerBlobPieces:
+      type: object
+      description: |
+        What one node holds of a blob, whole or in part (§23, ADR-0042,
+        ADR-0043).
+
+        It is a CLAIM and never evidence. Every piece a destination receives is
+        verified against that piece's hash, and the whole object against its
+        BLAKE3 digest before it becomes a blob (invariant 1), so a node that
+        overstates costs one wasted request and cannot cause a wrong blob.
+      required:
+        - blob_hash
+        - available
+      properties:
+        blob_hash:
+          type: string
+          pattern: '^blake3:[0-9a-f]{64}$'
+          description: >-
+            The blob asked about, echoed so a response cannot be mistaken for
+            one about a different blob if it is logged or cached.
+        available:
+          type: string
+          description: |
+            The availability, as `<piece count>:<lowercase hex bitset>`, one
+            bit per piece in index order.
+
+            The count is on the wire rather than implied by the bitset's width,
+            and that is not redundancy: a bitset for 20 pieces and one for 21
+            are both three bytes, so an implied length cannot tell them apart
+            and a peer describing a geometry this node did not compute would be
+            half-believed (ADR-0043).
+
+            An empty string means this node holds none of it yet — a transfer
+            in progress that has landed nothing. A node that knows nothing
+            about the blob answers `404` instead.
+          example: "12:ff0f"
 
     PeerBlobManifest:
       type: object

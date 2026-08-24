@@ -23,6 +23,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/pieces"
 )
 
 // snapshotSource adapts the catalog to the peer surface's contract (§52,
@@ -304,7 +305,11 @@ func (c *Controller) newPeerSurface(
 		// and a manifest route reading a second one would be a second opinion
 		// about what this node holds.
 		Manifests: peerManifests{cat: peerCatalog},
-		Logger:    c.log,
+		// What this node holds of a blob, whole or in part (M6, ADR-0042).
+		// The same store the content route serves from, so availability and
+		// bytes cannot disagree about what is here.
+		Pieces: peerPieces{store: blobStore},
+		Logger: c.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
@@ -346,4 +351,98 @@ func peerLiveness(t *health.Tracker) peerapi.Liveness {
 		return nil
 	}
 	return t
+}
+
+// peerPieces reports what this node holds of a blob, whole or in part — the
+// question that makes a swarm possible (§23, ADR-0042, ADR-0043).
+//
+// # Two sources of truth, and they answer different halves
+//
+// A blob this node holds COMPLETELY is in the store, and its availability is
+// every piece. A blob this node is still FETCHING has a sparsely written
+// partial and a bitset beside it recording which pieces landed. There is no
+// third case: a blob is held, being fetched, or unknown here.
+//
+// The store is asked first, because a complete blob's answer does not depend on
+// any record having survived. A crash between the last piece landing and the
+// bitset being written leaves a complete blob and a stale bitset, and asking
+// the bitset first would report that blob as incomplete — which would have a
+// peer fetch pieces of something this node could have served whole.
+//
+// # It computes nothing
+//
+// The geometry comes from the blob's SIZE, which the store already knows, so
+// answering never reads a byte of content. That is what makes this safe behind
+// a route any pinned member can call: a GET that had to read a 20 GB blob to
+// answer would be a remote denial of service, exactly as ADR-0034 says of
+// generating a manifest on demand.
+type peerPieces struct{ store cas.Store }
+
+// pieceProgressReader is the half of the store this adapter needs that
+// cas.Store does not declare.
+//
+// A narrow interface asserted at the call site rather than a method added to
+// cas.Store, because piece progress is M6's business and every other
+// implementation of Store — and every test double — would otherwise have to
+// grow a method it will never use. A store that does not offer it simply has no
+// in-flight transfers to report, which is the honest answer for one that cannot
+// stage them.
+type pieceProgressReader interface {
+	LoadPieceProgress(blob hashing.Hash) (string, error)
+}
+
+var _ peerapi.PieceSource = peerPieces{}
+
+// PieceAvailability satisfies [peerapi.PieceSource].
+func (p peerPieces) PieceAvailability(
+	ctx context.Context, blob hashing.Hash,
+) (string, bool, error) {
+	if p.store == nil {
+		return "", false, nil
+	}
+
+	// Held whole? Then every piece, derived from the size.
+	desc, err := p.store.Stat(ctx, blob)
+	switch {
+	case err == nil:
+		g, gerr := pieces.For(desc.Size)
+		if gerr != nil {
+			// A zero-length blob has no pieces. Reported as "nothing to
+			// exchange" rather than as an error: it is a real blob and a
+			// session that wanted it should fetch it whole.
+			return "", false, nil //nolint:nilerr // an empty blob is not a fault
+		}
+		have := pieces.NewAvailability(g.Count())
+		for i := range g.Count() {
+			have.Add(i)
+		}
+		return have.Encode(), true, nil
+	case errors.Is(err, cas.ErrNotFound):
+		// Fall through to the in-flight case.
+	default:
+		return "", false, err
+	}
+
+	// Being fetched? Then whatever the bitset says, which is a HINT and is
+	// carried verbatim — this adapter does not parse it, because ADR-0041
+	// keeps a piece a transport detail and the control plane does not learn
+	// what one is.
+	reader, ok := p.store.(pieceProgressReader)
+	if !ok {
+		// No staging, so nothing in flight to report.
+		return "", false, nil
+	}
+	progress, err := reader.LoadPieceProgress(blob)
+	if err != nil {
+		return "", false, err
+	}
+	if progress == "" {
+		// Neither held nor in flight, or in flight with nothing landed yet.
+		// The route answers 404 for the first; this collapses the second into
+		// it, and that is a deliberate simplification — a peer with nothing
+		// yet has nothing to offer either way, and distinguishing them would
+		// mean keeping a record of transfers that have produced nothing.
+		return "", false, nil
+	}
+	return progress, true, nil
 }
