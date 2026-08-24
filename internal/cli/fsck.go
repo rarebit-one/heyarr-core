@@ -11,6 +11,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/peer/durability"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
@@ -30,7 +31,7 @@ import (
 // It migrates, because a schema one version behind would otherwise present as
 // "no such column: unreferenced_since" — a puzzle rather than an error.
 func withIntegrity(ctx context.Context, configPath string,
-	fn func(context.Context, integrity.Options) error,
+	fn func(context.Context, integrity.Options, *cas.FS, *catalog.Catalog) error,
 ) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -66,7 +67,7 @@ func withIntegrity(ctx context.Context, configPath string,
 	if v := durabilityFor(ctx, cfg.DataDir, cat, db); v != nil {
 		opts.Durability = v
 	}
-	return fn(ctx, opts)
+	return fn(ctx, opts, store, cat)
 }
 
 // durabilityFor builds the placement precondition's remote half, or nothing.
@@ -115,6 +116,7 @@ func newFsckCommand(_ Options, configPath *string) *cobra.Command {
 	var (
 		deep   bool
 		asJSON bool
+		repair bool
 	)
 	cmd := &cobra.Command{
 		Use:   "fsck",
@@ -133,10 +135,20 @@ never deleted, because on such a library the "corruption" may be the operator's
 original (ADR-0018).
 
 Bytes with no catalog row and partial writes are reported too, but they are
-waste rather than damage. fsck exits non-zero only for damage.`,
+waste rather than damage. fsck exits non-zero only for damage.
+
+--repair attempts to rebuild each damaged blob from the chunks that are still
+intact plus replacements fetched from a peer. Nothing is written in place: the
+replacement is assembled in the store's private staging area, verified against
+the blob's own digest, and published only after the damaged original has been
+moved to quarantine (ADR-0036). A repair that cannot complete — no manifest, no
+reachable peer, a peer whose copy is damaged too — changes nothing at all and
+says which of those it was.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return withIntegrity(cmd.Context(), *configPath, func(ctx context.Context, opts integrity.Options) error {
+			return withIntegrity(cmd.Context(), *configPath, func(
+				ctx context.Context, opts integrity.Options, store *cas.FS, cat *catalog.Catalog,
+			) error {
 				checker, err := integrity.NewChecker(opts)
 				if err != nil {
 					return err
@@ -145,12 +157,28 @@ waste rather than damage. fsck exits non-zero only for damage.`,
 				if err != nil {
 					return err
 				}
-				if err := printReport(cmd.OutOrStdout(), report, asJSON); err != nil {
+				if !repair {
+					if err := printReport(cmd.OutOrStdout(), report, asJSON); err != nil {
+						return err
+					}
+					if report.Damage() > 0 {
+						return fmt.Errorf("%w: %d of %d blobs checked are missing or corrupt",
+							ErrDamage, report.Damage(), report.BlobsChecked)
+					}
+					return nil
+				}
+
+				results, err := repairDamage(ctx, opts, store, cat, report)
+				if err != nil {
 					return err
 				}
-				if report.Damage() > 0 {
-					return fmt.Errorf("%w: %d of %d blobs checked are missing or corrupt",
-						ErrDamage, report.Damage(), report.BlobsChecked)
+				if err := printRepairedReport(cmd.OutOrStdout(), report, results, asJSON); err != nil {
+					return err
+				}
+				remaining := report.Damage() - repairedCount(results)
+				if remaining > 0 {
+					return fmt.Errorf("%w: %d of %d damaged blobs are still damaged after the "+
+						"repair pass", ErrDamage, remaining, report.Damage())
 				}
 				return nil
 			})
@@ -158,7 +186,113 @@ waste rather than damage. fsck exits non-zero only for damage.`,
 	}
 	cmd.Flags().BoolVar(&deep, "deep", false, "re-hash every blob instead of checking existence and length")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
+	cmd.Flags().BoolVar(&repair, "repair", false,
+		"rebuild damaged blobs from intact chunks plus replacements from a peer (ADR-0036)")
 	return cmd
+}
+
+// repairDamage runs a repair for every blob the check found damaged.
+//
+// Only for damage. Untracked bytes and partial writes are waste, and garbage
+// collection reclaims them; running a repair over them would fetch from a peer
+// to rebuild something nothing references.
+func repairDamage(
+	ctx context.Context, opts integrity.Options, store *cas.FS, cat *catalog.Catalog,
+	report integrity.Report,
+) ([]integrity.RepairResult, error) {
+	repairer, err := integrity.NewRepairer(integrity.RepairOptions{
+		Store:     store,
+		Manifests: cat,
+		Catalog:   cat,
+		// Source is deliberately nil until the M5-06/M5-07 ranged fetch is
+		// wired in. A nil source refuses rather than permits: every damaged
+		// blob is reported as unreachable, with the reason, instead of the
+		// command appearing to have tried.
+		Source: nil,
+		Clock:  opts.Clock,
+		Logger: opts.Logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var results []integrity.RepairResult
+	for _, f := range report.Findings {
+		if !f.Kind.Damage() || f.Hash == "" {
+			continue
+		}
+		h, err := hashing.Parse(f.Hash)
+		if err != nil {
+			return nil, err
+		}
+		result, err := repairer.Repair(ctx, h)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+func repairedCount(results []integrity.RepairResult) int {
+	var n int
+	for _, r := range results {
+		if r.Outcome.Repaired() {
+			n++
+		}
+	}
+	return n
+}
+
+// printRepairedReport prints the check and then what the repair pass did.
+//
+// What was repaired, how many chunks moved, and — for every blob that was not
+// repaired — WHY. A refusal nobody can read is an outage nobody can diagnose
+// (M4-12).
+func printRepairedReport(
+	w io.Writer, report integrity.Report, results []integrity.RepairResult, asJSON bool,
+) error {
+	if asJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		if results == nil {
+			results = []integrity.RepairResult{}
+		}
+		return enc.Encode(struct {
+			Check   integrity.Report         `json:"check"`
+			Repairs []integrity.RepairResult `json:"repairs"`
+		}{Check: report, Repairs: results})
+	}
+	if err := printReport(w, report, false); err != nil {
+		return err
+	}
+	return printRepairs(w, results)
+}
+
+func printRepairs(w io.Writer, results []integrity.RepairResult) error {
+	fmt.Fprintf(w, "\nrepair\n\n")
+	if len(results) == 0 {
+		fmt.Fprintln(w, "  nothing damaged to repair")
+		return nil
+	}
+	fmt.Fprintf(w, "  blobs attempted   %d\n", len(results))
+	fmt.Fprintf(w, "  repaired          %d\n\n", repairedCount(results))
+	for _, r := range results {
+		verdict := "NOT REPAIRED"
+		if r.Outcome.Repaired() {
+			verdict = "REPAIRED"
+		}
+		fmt.Fprintf(w, "%-13s %-18s %s\n", verdict, r.Outcome, r.Hash)
+		fmt.Fprintf(w, "              %d of %d chunks damaged, %d fetched from a peer (%d bytes "+
+			"of a %d byte blob)\n",
+			r.ChunksDamaged, r.ChunksTotal, r.ChunksFetched, r.BytesFetched, r.BlobSize)
+		if r.Detail != "" {
+			fmt.Fprintf(w, "              %s\n", r.Detail)
+		}
+		if r.QuarantinePath != "" {
+			fmt.Fprintf(w, "              the damaged original is at %s\n", r.QuarantinePath)
+		}
+	}
+	return nil
 }
 
 func printReport(w io.Writer, report integrity.Report, asJSON bool) error {
@@ -254,7 +388,9 @@ window rather than a partly spent one.`,
 					"\"use the default\" (%s). Pass a small non-zero duration such as 1ns "+
 					"to reclaim without waiting", integrity.DefaultGrace)
 			}
-			return withIntegrity(cmd.Context(), *configPath, func(ctx context.Context, opts integrity.Options) error {
+			return withIntegrity(cmd.Context(), *configPath, func(
+				ctx context.Context, opts integrity.Options, _ *cas.FS, _ *catalog.Catalog,
+			) error {
 				collector, err := integrity.NewCollector(opts)
 				if err != nil {
 					return err

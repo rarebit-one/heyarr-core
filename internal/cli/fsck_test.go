@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
 	"github.com/rarebit-one/heyarr-core/internal/testutil"
 )
 
@@ -376,5 +378,90 @@ func TestIntegrityCommandsMigrateAnUntouchedDataDir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.dir, "heyarr.db")); err != nil {
 		t.Errorf("no database was created: %v", err)
+	}
+}
+
+// --- repair -----------------------------------------------------------------
+
+// `fsck --repair` must say what it could not do and why. The ranged fetch this
+// would pull replacement chunks over is M5-06/M5-07's, and until it is wired
+// in the source is nil — which REFUSES rather than permits, so every damaged
+// blob is reported unrepaired with the reason rather than quietly skipped.
+func TestFsckRepairSaysWhyItCouldNotRepair(t *testing.T) {
+	f := newIntegrityFixture(t)
+	hash := f.seed("bytes an external tool rewrote under a shared inode", true)
+	f.truncate(hash, 5)
+
+	out, _, err := run(t, context.Background(), "--config", f.configPath, "fsck", "--deep", "--repair")
+	if err == nil {
+		t.Fatalf("fsck --repair exited 0 with the damage still there:\n%s", out)
+	}
+	if !errors.Is(err, ErrDamage) {
+		t.Errorf("error = %v, want ErrDamage", err)
+	}
+	if !strings.Contains(out, "NOT REPAIRED") {
+		t.Errorf("the repair pass did not report a failure:\n%s", out)
+	}
+	if !strings.Contains(out, "still damaged after the repair pass") &&
+		!strings.Contains(err.Error(), "still damaged after the repair pass") {
+		t.Errorf("the exit reason does not say the damage survived: %v\n%s", err, out)
+	}
+	// The WHY, not just the verdict. This blob has no chunk manifest, which is
+	// the honest reason a chunk-scoped repair cannot touch it.
+	if !strings.Contains(out, "no chunk manifest") {
+		t.Errorf("the report does not say why the repair could not run:\n%s", out)
+	}
+}
+
+// A healthy store is not "repaired", and the command says so rather than
+// printing an empty section.
+func TestFsckRepairOnAHealthyStoreRepairsNothing(t *testing.T) {
+	f := newIntegrityFixture(t)
+	f.seed("bytes that are exactly what they claim to be", true)
+
+	out, _, err := run(t, context.Background(), "--config", f.configPath, "fsck", "--deep", "--repair")
+	if err != nil {
+		t.Fatalf("fsck --repair on a healthy store failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "nothing damaged to repair") {
+		t.Errorf("the repair section is not there:\n%s", out)
+	}
+}
+
+// What a successful repair prints. Driven straight at the printer with
+// synthetic results, because the fetch it takes to produce a real one is not
+// wired up yet — the numbers an operator reads are asserted here, and the
+// repair itself is asserted in internal/storagefabric/integrity.
+func TestPrintRepairsNamesWhatMovedAndWhy(t *testing.T) {
+	var buf bytes.Buffer
+	err := printRepairs(&buf, []integrity.RepairResult{
+		{
+			Hash: "blake3:aa", Outcome: integrity.OutcomeRepaired,
+			ChunksTotal: 40, ChunksDamaged: 2, ChunksFetched: 2,
+			BytesFetched: 2048, BlobSize: 65536,
+			QuarantinePath: "/var/lib/heyarr/cas/quarantine/aa.1",
+			Detail:         "replaced 2 of 40 chunks",
+		},
+		{
+			Hash: "blake3:bb", Outcome: integrity.OutcomeUnreachable,
+			ChunksTotal: 10, ChunksDamaged: 1,
+			Detail: "no reachable peer holds these bytes",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"repaired          1",
+		"REPAIRED",
+		"2 of 40 chunks damaged, 2 fetched from a peer (2048 bytes of a 65536 byte blob)",
+		"the damaged original is at /var/lib/heyarr/cas/quarantine/aa.1",
+		"NOT REPAIRED",
+		"no reachable peer holds these bytes",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the repair report does not say %q:\n%s", want, out)
+		}
 	}
 }
