@@ -25,11 +25,23 @@
 // reach or of absence collapses to [integrity.ErrNoSource].
 //
 // A peer that answered and served bytes that do not match the manifest is a
-// different thing entirely, and it does NOT collapse: it is returned as
-// itself, so repair reports a fault rather than a quiet "nobody had it". A
-// source serving bytes it cannot back up is the failure mode most worth
-// hearing about, and it is the one most easily lost by a loop that treats
-// every error as "try the next one".
+// different thing entirely. It is a peer that cannot back its own inventory,
+// and it is the failure mode most easily lost by a loop that treats every
+// error as "try the next one".
+//
+// # The walk continues past it, and it is REPORTED — both, not either
+//
+// The first version of this stopped the walk and returned the fault, on the
+// argument that routing around a lying peer silently leaves the lie in place.
+// That was half right. It made a repairable blob stay damaged because ONE peer
+// lied, when a good peer was next in the list — availability sacrificed for
+// observability, and the two are not actually in tension here.
+//
+// So: the walk continues, and every fault is handed to [Options.OnFault] on
+// the way past. The repair succeeds from the next peer that can supply the
+// bytes, AND the operator is told which peer served what it could not back —
+// on the command's own output and in its exit status, not only in a log line
+// somebody has to go looking for. See internal/cli's fsck.
 package repairsource
 
 import (
@@ -64,10 +76,46 @@ type Fetcher interface {
 		blob hashing.Hash, c chunking.Chunk) ([]byte, error)
 }
 
+// A SourceFault is one peer failing to back its own inventory: it answered,
+// it served bytes, and the bytes are not what the manifest names.
+//
+// It is not an error value, because it does not stop anything. It is a report
+// about a peer, produced on the way past it, and the repair it happened during
+// may well have succeeded from somebody else.
+type SourceFault struct {
+	// PeerID and PeerName are the peer that served the bytes.
+	PeerID   string
+	PeerName string
+	// Blob is what was being fetched, and Offset which chunk of it.
+	Blob   string
+	Offset int64
+	// Err is what was wrong, carrying transfer's sentinel so a caller can tell
+	// corrupt bytes from a redirect out of the fabric.
+	Err error
+}
+
+func (f SourceFault) Error() string {
+	name := f.PeerName
+	if name == "" {
+		name = f.PeerID
+	}
+	return fmt.Sprintf("peer %s served bytes at offset %d of %s that are not what the manifest "+
+		"names: %v", name, f.Offset, f.Blob, f.Err)
+}
+
 // Options are a Source's dependencies.
 type Options struct {
 	Sources Sources
 	Fetcher Fetcher
+	// OnFault is called for every peer that serves bytes it cannot back,
+	// whether or not the fetch then succeeds from somebody else. Optional, and
+	// a Source without one still logs — but a log line is not an operator
+	// telling you something went wrong, it is an operator having to go and
+	// look.
+	//
+	// It is called from the fetching goroutine, so an implementation that
+	// wants to accumulate must do its own locking.
+	OnFault func(SourceFault)
 	Logger  *slog.Logger
 }
 
@@ -75,6 +123,7 @@ type Options struct {
 type Source struct {
 	sources Sources
 	fetcher Fetcher
+	onFault func(SourceFault)
 	log     *slog.Logger
 }
 
@@ -92,7 +141,7 @@ func New(opts Options) (*Source, error) {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Source{
-		sources: opts.Sources, fetcher: opts.Fetcher,
+		sources: opts.Sources, fetcher: opts.Fetcher, onFault: opts.OnFault,
 		log: log.With("component", "repairsource"),
 	}, nil
 }
@@ -139,15 +188,24 @@ func (s *Source) FetchChunk(
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		// A peer that served the WRONG BYTES is reported as itself rather
-		// than folded into "nobody had it". Reach and absence are ordinary;
-		// a source that cannot back its own inventory is a fault, and the
-		// operator needs to be told which peer it was.
+		// A peer that served the WRONG BYTES is REPORTED and then walked past.
+		// Reach and absence are ordinary; a source that cannot back its own
+		// inventory is a fault, and the operator has to be told which peer it
+		// was — but not at the cost of leaving a blob damaged that the next
+		// candidate could have repaired.
 		if errors.Is(err, transfer.ErrChunkCorrupt) || errors.Is(err, transfer.ErrRedirected) {
+			fault := SourceFault{
+				PeerID: src.PeerID, PeerName: src.Name,
+				Blob: blob.String(), Offset: c.Offset, Err: err,
+			}
 			s.log.Warn("a peer served bytes that are not what the manifest names",
 				"blob_hash", blob.String(), "offset", c.Offset,
 				"source_peer_id", src.PeerID, "source_peer_name", src.Name, "error", err)
-			return nil, fmt.Errorf("repairsource: peer %s serving %s: %w", src.PeerID, blob, err)
+			if s.onFault != nil {
+				s.onFault(fault)
+			}
+			tried = append(tried, fault)
+			continue
 		}
 		tried = append(tried, fmt.Errorf("peer %s: %w", src.PeerID, err))
 	}

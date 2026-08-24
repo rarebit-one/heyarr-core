@@ -219,6 +219,18 @@ record independently agreeing on the bytes.
   on the source, because a destination's account of what it fetched is a claim
   about itself.
 
+- **A peer that serves bytes it cannot back is routed around AND named** (#196
+  follow-up). Repair walks the peers whose inventory says they hold a blob, and
+  the first version of that walk STOPPED at a peer whose bytes did not match the
+  manifest — on the argument that routing around a lie silently leaves the lie
+  in place. That was half right: it also left a blob damaged that the next
+  candidate could have repaired. It now continues, so the repair completes from
+  whoever can supply the bytes, and every fault is reported on the way past — on
+  `fsck --repair`'s own output, in its `--json` under `source_faults`, and in its
+  exit status, rather than only in a log line somebody has to go looking for. A
+  run that repaired everything and met a lying peer still exits non-zero, for the
+  same reason `fsck` exits non-zero on damage at all.
+
 ### Fixed
 
 - **Binding the local socket no longer poisons the content-addressed store**
