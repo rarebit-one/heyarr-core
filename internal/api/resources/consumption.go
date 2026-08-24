@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -187,6 +188,67 @@ type transitionRequest struct {
 // machine is one thing: six endpoints would each need to know the table, and
 // the first one to disagree with it would be a session in a state the domain
 // says is impossible.
+// applySessionTransition moves one session and emits its event.
+//
+// Extracted so the HTTP handler and the renderer progress poller
+// (renderer_progress.go) drive the state machine through ONE path. A poller
+// with its own copy of this would be a second writer of session state, free to
+// disagree about what "completed" means — and the disagreement would surface
+// as a "continue watching" row nobody can explain.
+func (a *API) applySessionTransition(ctx context.Context, id string, transition playback.Transition, progress *playback.Progress) (playback.Session, error) {
+	var (
+		updated playback.Session
+		event   events.Event
+	)
+	err := a.db.InTx(ctx, func(tx *sql.Tx) error {
+		// SELECT inside the transaction, so two clients transitioning one
+		// session cannot both read "playing" and both act on it. The control
+		// plane is single-writer (ADR-0003), so this is a short serialised
+		// read-modify-write rather than a lock anyone waits on.
+		current, err := scanSessionRow(tx.QueryRowContext(ctx,
+			`SELECT `+sessionColumns+` FROM consumption_sessions WHERE id = ?`, id))
+		if err != nil {
+			return err
+		}
+
+		next, err := current.Apply(transition, a.now().UTC(), progress)
+		if err != nil {
+			return err
+		}
+		updated = next
+
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE consumption_sessions
+			SET state = ?, progress_locator = ?, progress_unit = ?,
+				updated_at = ?, started_at = ?, ended_at = ?
+			WHERE id = ?`,
+			string(next.State), next.Progress.Locator, string(next.Progress.Unit),
+			next.UpdatedAt.Format(timeFormat),
+			nullableTime(next.StartedAt), nullableTime(next.EndedAt), next.ID); err != nil {
+			return err
+		}
+
+		// Invariant 7, inside the transaction that made the change. Emitting
+		// outside it would allow an event for a transition that rolled back,
+		// or a committed transition with no event at all — and the second is
+		// invisible, which is the failure mode that makes retrofitting events
+		// expensive (ADR-0009).
+		event, err = a.events.EmitTx(ctx, tx, playback.EventType(transition),
+			"consumption_session", next.ID,
+			map[string]any{
+				"session_id": next.ID, "asset_id": next.AssetID, "device_id": next.DeviceID,
+				"verb": string(next.Verb), "state": string(next.State),
+				"transition": string(transition),
+			})
+		return err
+	})
+	if err != nil {
+		return playback.Session{}, err
+	}
+	a.events.Publish(event)
+	return updated, nil
+}
+
 func (a *API) applyTransition(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
@@ -208,52 +270,7 @@ func (a *API) applyTransition(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var (
-		updated playback.Session
-		event   events.Event
-	)
-	err = a.db.InTx(r.Context(), func(tx *sql.Tx) error {
-		// SELECT inside the transaction, so two clients transitioning one
-		// session cannot both read "playing" and both act on it. The control
-		// plane is single-writer (ADR-0003), so this is a short serialised
-		// read-modify-write rather than a lock anyone waits on.
-		current, err := scanSessionRow(tx.QueryRowContext(r.Context(),
-			`SELECT `+sessionColumns+` FROM consumption_sessions WHERE id = ?`, id))
-		if err != nil {
-			return err
-		}
-
-		next, err := current.Apply(transition, a.now().UTC(), progress)
-		if err != nil {
-			return err
-		}
-		updated = next
-
-		if _, err := tx.ExecContext(r.Context(), `
-			UPDATE consumption_sessions
-			SET state = ?, progress_locator = ?, progress_unit = ?,
-				updated_at = ?, started_at = ?, ended_at = ?
-			WHERE id = ?`,
-			string(next.State), next.Progress.Locator, string(next.Progress.Unit),
-			next.UpdatedAt.Format(timeFormat),
-			nullableTime(next.StartedAt), nullableTime(next.EndedAt), next.ID); err != nil {
-			return err
-		}
-
-		// Invariant 7, inside the transaction that made the change. Emitting
-		// outside it would allow an event for a transition that rolled back,
-		// or a committed transition with no event at all — and the second is
-		// invisible, which is the failure mode that makes retrofitting events
-		// expensive (ADR-0009).
-		event, err = a.events.EmitTx(r.Context(), tx, playback.EventType(transition),
-			"consumption_session", next.ID,
-			map[string]any{
-				"session_id": next.ID, "asset_id": next.AssetID, "device_id": next.DeviceID,
-				"verb": string(next.Verb), "state": string(next.State),
-				"transition": string(transition),
-			})
-		return err
-	})
+	updated, err := a.applySessionTransition(r.Context(), id, transition, progress)
 	switch {
 	case errors.Is(err, playback.ErrIllegalTransition):
 		// 409, not 400: the request is well-formed and would be legal against
@@ -272,7 +289,6 @@ func (a *API) applyTransition(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, "consumption session", err)
 		return
 	}
-	a.events.Publish(event)
 
 	a.write(w, r, http.StatusOK, renderSession(updated))
 }

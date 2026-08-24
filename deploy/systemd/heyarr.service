@@ -42,7 +42,7 @@ SupplementaryGroups=media
 # is the second layer, not a substitute for the first.
 #
 # Every one of these was verified with `systemd-analyze security heyarr`; the
-# recorded score is in docs/deploy/hyperion-1.md. Removing any of them raises
+# recorded score is in docs/deploy/reference-linux-host.md. Removing any of them raises
 # the exposure score, which is the point of recording it.
 # ---------------------------------------------------------------------------
 NoNewPrivileges=yes

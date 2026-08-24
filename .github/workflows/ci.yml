@@ -40,6 +40,22 @@ jobs:
         with:
           args: -color
 
+  # This repo is public. A real host name, a real premises name or a real home
+  # directory in a public AGPL repo is a permanent disclosure — git history
+  # keeps it after the file is fixed. #147 and #211 were both found by accident
+  # during unrelated work; this job is so the next one fails a PR instead.
+  hygiene:
+    name: no real host, site or personal names
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      # No setup step: the guard needs only git and python3, both present on
+      # the runner image. It refuses to pass if python3 is missing rather than
+      # skipping, because a hygiene check that silently no-ops is worse than
+      # not having one.
+      - run: ./scripts/hygiene.sh
+
   generate-check:
     name: generated code is current
     runs-on: ubuntu-latest
@@ -230,7 +246,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [lint, generate-check, test, chunking-determinism, build, acceptance, acceptance-degraded]
+    needs: [lint, hygiene, generate-check, test, chunking-determinism, build, acceptance, acceptance-degraded]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -102,7 +102,7 @@ func TestAssetSourceClassInvariant(t *testing.T) {
 
 	t.Run("linked with a blob is rejected", func(t *testing.T) {
 		err := exec(t, db, `INSERT INTO assets (id, edition_id, source_class, blob_hash, source_path, created_at, updated_at)
-			VALUES ('a2', 'e1', 'linked', ?, '/home/j/Photos/x.heic', ?, ?)`, validHash, ts, ts)
+			VALUES ('a2', 'e1', 'linked', ?, '/srv/media/photos/x.heic', ?, ?)`, validHash, ts, ts)
 		if err == nil {
 			t.Error("a linked asset was allowed to carry a blob — that would reintroduce mutable blobs")
 		}
@@ -128,7 +128,7 @@ func TestAssetSourceClassInvariant(t *testing.T) {
 		mustExec(t, db, `INSERT INTO assets (id, edition_id, source_class, blob_hash, created_at, updated_at)
 			VALUES ('ok1', 'e1', 'managed', ?, ?, ?)`, validHash, ts, ts)
 		mustExec(t, db, `INSERT INTO assets (id, edition_id, source_class, source_path, created_at, updated_at)
-			VALUES ('ok2', 'e1', 'linked', '/home/j/Photos/y.heic', ?, ?)`, ts, ts)
+			VALUES ('ok2', 'e1', 'linked', '/srv/media/photos/y.heic', ?, ?)`, ts, ts)
 		mustExec(t, db, `INSERT INTO assets (id, edition_id, source_class, blob_hash, created_at, updated_at)
 			VALUES ('ok3', 'e1', 'vault', ?, ?, ?)`, validHash, ts, ts)
 	})
@@ -141,10 +141,10 @@ func TestLinkedAssetsAreUniquePerPath(t *testing.T) {
 	seedWorkEdition(t, db)
 	mustExec(t, db, `INSERT INTO libraries (id, name, content_type, created_at) VALUES ('l1', 'photos', 'photo', ?)`, ts)
 	mustExec(t, db, `INSERT INTO assets (id, edition_id, library_id, source_class, source_path, created_at, updated_at)
-		VALUES ('a1', 'e1', 'l1', 'linked', '/home/j/Photos/x.heic', ?, ?)`, ts, ts)
+		VALUES ('a1', 'e1', 'l1', 'linked', '/srv/media/photos/x.heic', ?, ?)`, ts, ts)
 
 	err := exec(t, db, `INSERT INTO assets (id, edition_id, library_id, source_class, source_path, created_at, updated_at)
-		VALUES ('a2', 'e1', 'l1', 'linked', '/home/j/Photos/x.heic', ?, ?)`, ts, ts)
+		VALUES ('a2', 'e1', 'l1', 'linked', '/srv/media/photos/x.heic', ?, ?)`, ts, ts)
 	if err == nil {
 		t.Error("the same path was linked twice in one library")
 	}

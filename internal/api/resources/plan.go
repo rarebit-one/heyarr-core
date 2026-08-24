@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -92,17 +93,17 @@ func (a *API) planPlayback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	device, err := a.deviceProfile(r, body.DeviceID)
+	device, err := a.deviceProfile(r.Context(), body.DeviceID)
 	if err != nil {
 		a.fail(w, r, "device", err)
 		return
 	}
-	media, blobHash, err := a.mediaProfile(r, body.AssetID)
+	media, blobHash, err := a.mediaProfile(r.Context(), body.AssetID)
 	if err != nil {
 		a.fail(w, r, "asset", err)
 		return
 	}
-	route, err := a.routeBlob(r, blobHash)
+	route, err := a.routeBlob(r.Context(), blobHash)
 	if err != nil {
 		a.fail(w, r, "replica", err)
 		return
@@ -157,13 +158,13 @@ func renderRouting(route routing.Decision) *RoutingResponse {
 }
 
 // deviceProfile loads what a device declared (M2-05).
-func (a *API) deviceProfile(r *http.Request, id string) (playback.DeviceProfile, error) {
+func (a *API) deviceProfile(ctx context.Context, id string) (playback.DeviceProfile, error) {
 	var (
 		p                        playback.DeviceProfile
 		containers, video, audio string
 		hdr                      int
 	)
-	if err := a.reader.QueryRowContext(r.Context(), `
+	if err := a.reader.QueryRowContext(ctx, `
 		SELECT containers, video_codecs, audio_codecs,
 		       max_width, max_height, max_bitrate_bps, supports_hdr
 		FROM devices WHERE id = ?`, id).
@@ -191,9 +192,9 @@ func (a *API) deviceProfile(r *http.Request, id string) (playback.DeviceProfile,
 // case rather than an edge one: it is the state of every blob on a node with
 // no ffprobe (ADR-0023), and the planner's answer for it is deliberate rather
 // than incidental.
-func (a *API) mediaProfile(r *http.Request, assetID string) (playback.MediaProfile, string, error) {
+func (a *API) mediaProfile(ctx context.Context, assetID string) (playback.MediaProfile, string, error) {
 	var blobHash sql.NullString
-	if err := a.reader.QueryRowContext(r.Context(),
+	if err := a.reader.QueryRowContext(ctx,
 		`SELECT blob_hash FROM assets WHERE id = ?`, assetID).Scan(&blobHash); err != nil {
 		return playback.MediaProfile{}, "", err
 	}
@@ -209,7 +210,7 @@ func (a *API) mediaProfile(r *http.Request, assetID string) (playback.MediaProfi
 		bitrate   sql.NullInt64
 		streams   string
 	)
-	err := a.reader.QueryRowContext(r.Context(), `
+	err := a.reader.QueryRowContext(ctx, `
 		SELECT container, duration_seconds, bitrate_bps, streams
 		FROM blob_probes WHERE blob_hash = ?`, blobHash.String).
 		Scan(&container, &duration, &bitrate, &streams)
@@ -260,11 +261,11 @@ func (a *API) mediaProfile(r *http.Request, assetID string) (playback.MediaProfi
 // this node's own CAS and does not route anywhere, so it needs existence and
 // not a source. Read routing is routeBlob, which applies §32's health and
 // locality preference and reports why every other peer lost.
-func (a *API) replicasFor(r *http.Request, blobHash string) ([]playback.Replica, error) {
+func (a *API) replicasFor(ctx context.Context, blobHash string) ([]playback.Replica, error) {
 	if blobHash == "" {
 		return nil, nil
 	}
-	rows, err := a.reader.QueryContext(r.Context(), `
+	rows, err := a.reader.QueryContext(ctx, `
 		SELECT r.peer_id, p.site, (SELECT site FROM peers WHERE is_self = 1)
 		FROM replicas r JOIN peers p ON p.id = r.peer_id
 		WHERE r.blob_hash = ? AND r.state = 'present'

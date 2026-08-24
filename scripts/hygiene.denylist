@@ -1,0 +1,83 @@
+# Repo hygiene — CLASS patterns. Plain text on purpose.
+#
+# This repo is public and AGPL-3.0. Naming the machines, networks, premises or
+# people the software actually runs on discloses where the authors live and
+# work, and git history is permanent: a leak is not undone by a later commit.
+# #147 scrubbed two real premises out of the spec, an ADR and eleven test
+# files; #211 scrubbed a real host name and a real home directory that the same
+# reasoning had already condemned. This guard exists so the third one fails a
+# PR instead of being found by accident during unrelated work.
+#
+# THIS FILE HOLDS ONLY SHAPES, NEVER NAMES.
+#
+# Every pattern here describes the FORM of a disclosure — a home directory, a
+# routable address, a LAN suffix — and so discloses nothing itself. It is also
+# the half that catches the NEXT leak, which will be a name nobody has thought
+# to add to a list yet. Retired proper nouns live in scripts/hygiene.digests as
+# hashes instead, because writing them here in plain text would put back into
+# the public tree exactly what #211 took out of it. See that file before
+# "helpfully" merging the two.
+#
+# WHAT BELONGS HERE
+#   - Personal path shapes: home directories on any platform.
+#   - Routable addresses and subnets, and MAC addresses.
+#   - Private-network naming suffixes: tailnet, LAN and mDNS domains.
+#   - Any other shape that identifies a specific machine or person.
+#
+# WHAT DOES NOT
+#   - Proper nouns. They go in scripts/hygiene.digests, hashed.
+#   - Secrets. Credentials are a different class with a different response
+#     (rotate, don't just delete); the provider-fixture credential scanner
+#     (`make scan-fixtures`) owns those.
+#   - Anything reserved for documentation and therefore SAFE to write down:
+#     example.com/.org/.invalid, 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24,
+#     localhost, 127.0.0.1, 0.0.0.0. The patterns below already exclude these.
+#
+# FORMAT
+#   One regular expression per line (Python `re` syntax — a superset of POSIX
+#   ERE; the IPv4 rule below needs a negative lookahead to spell "routable but
+#   not a documentation range", which ERE cannot express). Matched
+#   case-insensitively against tracked files. Blank lines and `#` lines are
+#   ignored.
+#   Adding a pattern is cheap; prefer a slightly broad one — a false positive
+#   costs a placeholder rename, a false negative costs a permanent public
+#   disclosure.
+
+# --- personal paths: a home directory names its owner (#211) ---
+# Placeholder library paths in tests and docs use /srv/media instead.
+/home/[a-z0-9]
+/users/[a-z0-9]
+
+# --- private-network naming: these name a specific network, not a shape ---
+# The suffix is matched case-SENSITIVELY via (?-i:...), because a lowercase
+# `.internal` is a DNS suffix while `problem.Internal()` is ordinary Go and
+# appears about thirty times in this repo. Real configuration writes the
+# lowercase form; matching prose that capitalises it is not worth the noise.
+#
+# The trailing (?!\.) requires the suffix to END the hostname. Without it the
+# rule fires on `some-host.internal.example`, where `internal` is a middle
+# label of a name deliberately parked in a RESERVED domain — the correct thing
+# for a fixture to do, and not a finding.
+\.ts\.net
+\b[a-z0-9][a-z0-9-]*(?-i:\.(lan|localdomain|home|internal))\b(?!\.)
+
+# --- MAC addresses ---
+# 00:00:5e:xx:xx:xx is IANA-reserved for documentation (RFC 7042 §2.1), the
+# same reasoning that exempts 192.0.2.0/24 above: a value reserved so it can
+# be written down is safe to write down, and a fixture needs SOME address of
+# the right shape to stay parseable.
+\b(?!00:00:5e:)([0-9a-f]{2}:){5}[0-9a-f]{2}\b
+
+# --- PUBLIC IPv4 only.
+#
+# The exclusions are not laziness. A private address discloses essentially
+# nothing — every homelab on earth is 192.168.x.x, and this repo uses exactly
+# such addresses as its canonical endpoint examples in the CLI docs, the config
+# tests and peer/endpoint. A PUBLIC address is the leak: it identifies the
+# author's actual internet connection, and geolocates it.
+#
+# Excluded: RFC 1918 private, loopback, link-local, "this network", broadcast,
+# multicast, the RFC 5737 documentation ranges and the RFC 2544 benchmark
+# range. Octets are range-checked 0-255 so version strings are not mistaken
+# for addresses.
+\b(?!(?:10|127|0|255)\.|169\.254\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.|192\.0\.2\.|198\.51\.100\.|198\.1[89]\.|203\.0\.113\.|(?:22[4-9]|23[0-9])\.)(?:(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\b

@@ -498,6 +498,306 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/renderers:
+    get:
+      tags: [playback]
+      operationId: listRenderers
+      summary: List the renderers on this node's network (§68).
+      description: >-
+        Televisions, speakers and projectors that Heyarr can play to, found by
+        SSDP on the local segment.
+
+
+        An empty list means nothing ANSWERED, not that nothing is there. A
+        screen in standby closes every listener and on some models leaves the
+        network entirely, so a device that is switched off is indistinguishable
+        from one that does not exist. Discovery is also multicast, so it does
+        not cross a routed link: a controller on the far side of a VPN finds
+        nothing at all.
+      parameters:
+        - name: refresh
+          in: query
+          required: false
+          description: >-
+            `true` searches again instead of reusing the cached sweep. A search
+            takes several seconds, so this is for "I just switched it on".
+          schema: { type: string }
+      responses:
+        '200':
+          description: What answered.
+        '401': { $ref: "#/components/responses/Unauthorized" }
+  /api/v1/renderers/{udn}/status:
+    parameters:
+      - name: udn
+        in: path
+        required: true
+        description: The renderer's UPnP UDN, from `GET /api/v1/renderers`.
+        schema: { type: string }
+    get:
+      tags: [playback]
+      operationId: getRendererStatus
+      summary: Report what a renderer is doing.
+      description: >-
+        Transport state and, when the device reports one, position. A renderer
+        that answers no position is not broken — `NOT_IMPLEMENTED` is a legal
+        answer and some devices give it forever.
+      responses:
+        '200':
+          description: The renderer's state.
+        '404':
+          description: No renderer with that id answered.
+        '502':
+          description: The renderer did not answer.
+  /api/v1/renderers/{udn}/play:
+    parameters:
+      - name: udn
+        in: path
+        required: true
+        description: The renderer's UPnP UDN, from `GET /api/v1/renderers`.
+        schema: { type: string }
+    post:
+      tags: [playback]
+      operationId: playOnRenderer
+      summary: Plan a playback, mint a capability URL and push it to a renderer.
+      description: >-
+        One call, deliberately. Plan, mint and push always happen together, and
+        a client made to orchestrate them is a client that can get the order
+        wrong, hold a capability it never uses, or open a session for a
+        playback it never started.
+
+
+        The renderer's own `GetProtocolInfo` answer becomes the Device profile
+        the planner decides against, so the file is judged on what that
+        television said about itself rather than on what somebody typed in.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [asset_id]
+              properties:
+                asset_id: { type: string }
+      responses:
+        '200':
+          description: Playing.
+        '409':
+          description: >-
+            Nothing to play from — most often a replica on another peer, since
+            a capability is only valid at the peer that signed it (ADR-0040).
+        '502':
+          description: >-
+            The renderer refused, with its own UPnP error. `714 Illegal
+            MIME-type` and `701 Transition not available` are different
+            problems and need different fixes, so the device's answer is
+            passed through rather than flattened.
+  /api/v1/renderers/{udn}/pause:
+    parameters:
+      - name: udn
+        in: path
+        required: true
+        description: The renderer's UPnP UDN, from `GET /api/v1/renderers`.
+        schema: { type: string }
+    post:
+      tags: [playback]
+      operationId: pauseRenderer
+      summary: Hold position.
+      responses:
+        '200': { description: The renderer's state after pausing. }
+        '502': { description: The renderer refused. }
+  /api/v1/renderers/{udn}/resume:
+    parameters:
+      - name: udn
+        in: path
+        required: true
+        description: The renderer's UPnP UDN, from `GET /api/v1/renderers`.
+        schema: { type: string }
+    post:
+      tags: [playback]
+      operationId: resumeRenderer
+      summary: Continue from where it was paused.
+      description: >-
+        This is UPnP's Play. There is no separate resume verb: Play from
+        PAUSED_PLAYBACK continues, and Play from STOPPED restarts.
+      responses:
+        '200': { description: The renderer's state after resuming. }
+        '502': { description: The renderer refused. }
+  /api/v1/renderers/{udn}/stop:
+    parameters:
+      - name: udn
+        in: path
+        required: true
+        description: The renderer's UPnP UDN, from `GET /api/v1/renderers`.
+        schema: { type: string }
+    post:
+      tags: [playback]
+      operationId: stopRenderer
+      summary: End playback and release the content.
+      responses:
+        '200': { description: The renderer's state after stopping. }
+        '502': { description: The renderer refused. }
+  /api/v1/renderers/{udn}/seek:
+    parameters:
+      - name: udn
+        in: path
+        required: true
+        description: The renderer's UPnP UDN, from `GET /api/v1/renderers`.
+        schema: { type: string }
+    post:
+      tags: [playback]
+      operationId: seekRenderer
+      summary: Jump to a position.
+      description: >-
+        `seconds` is an ABSOLUTE offset from the start, not a delta. It maps to
+        UPnP's REL_TIME, which means the same thing despite its name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [seconds]
+              properties:
+                seconds: { type: number, minimum: 0 }
+      responses:
+        '200': { description: The renderer's state after seeking. }
+        '502': { description: The renderer refused. }
+  /render/{capability}:
+    parameters:
+      - name: capability
+        in: path
+        required: true
+        description: >-
+          A signed, expiring, single-blob capability minted by
+          `POST /api/v1/playback`. It IS the authority for this request — there
+          is no other credential — so treat it as a secret.
+        schema:
+          type: string
+    get:
+      tags: [bytes]
+      operationId: getRenderContent
+      security: []
+      summary: Serve one blob to a device that cannot present a credential.
+      description: >-
+        The renderer route of ADR-0040, and the only unauthenticated content
+        path in Heyarr. It exists because a television, a speaker or a
+        projector is handed a URL and told to fetch it: it cannot send an
+        `Authorization` header, and `/api/v1/blobs/{hash}/content` therefore
+        answers every such device with 401.
+
+
+        This is NOT a second way to read the library. The capability in the
+        path names ONE blob and expires, so a leaked URL discloses one title
+        for one window rather than everything. It is mounted outside
+        `/api/v1` deliberately — inside it, the bearer requirement would 401
+        the very devices it exists for.
+
+
+        Bytes, ranges and validators are identical to the blob endpoint: this
+        route wraps that handler rather than reimplementing it. The one
+        difference is `Content-Type`, which is the Asset's declared media type
+        rather than `application/octet-stream`, because a DLNA renderer
+        refuses the latter. The type is signed into the capability, so it
+        cannot be altered in transit.
+
+
+        A capability is only valid at the peer that signed it.
+      responses:
+        '200':
+          description: The whole blob, typed as the Asset says.
+          headers:
+            Accept-Ranges:
+              schema: { type: string, const: bytes }
+            ETag:
+              schema: { type: string }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '206':
+          description: The requested range.
+          headers:
+            Content-Range:
+              schema: { type: string }
+            Accept-Ranges:
+              schema: { type: string, const: bytes }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+            multipart/byteranges:
+              schema: { type: string, format: binary }
+        '404':
+          description: >-
+            No content is available at this address. Every refusal is this
+            response, byte for byte: an expired capability, one signed by
+            another peer, a malformed one and a blob this peer does not hold
+            are deliberately indistinguishable, so the route cannot be used as
+            an oracle. The `instance` is a constant for the same reason — it
+            would otherwise echo the capability back.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        '416':
+          description: The requested range lies outside the blob.
+    head:
+      tags: [bytes]
+      operationId: headRenderContent
+      security: []
+      summary: Report size and range support to a renderer before it fetches.
+      description: >-
+        Identical to `get` in every header, with no body. Renderers routinely
+        HEAD before they GET, and one that receives a 405 gives up without
+        playing anything.
+      responses:
+        '200':
+          description: The blob exists; `Content-Length` is its size.
+          headers:
+            Accept-Ranges:
+              schema: { type: string, const: bytes }
+        '404':
+          description: See `get`.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+  /render/{capability}/{name}:
+    parameters:
+      - name: capability
+        in: path
+        required: true
+        description: As above.
+        schema:
+          type: string
+      - name: name
+        in: path
+        required: true
+        description: >-
+          A cosmetic trailing filename, ignored entirely. Some renderers will
+          not issue a GET for a URL whose last segment looks like nothing they
+          recognise. It is outside the signature because it decides nothing:
+          both the media type and the bytes come from the capability.
+        schema:
+          type: string
+    get:
+      tags: [bytes]
+      operationId: getRenderContentNamed
+      security: []
+      summary: As `/render/{capability}`, with a filename a renderer will accept.
+      responses:
+        '200':
+          description: The whole blob.
+        '206':
+          description: The requested range.
+        '404':
+          description: See `/render/{capability}`.
+    head:
+      tags: [bytes]
+      operationId: headRenderContentNamed
+      security: []
+      summary: As `/render/{capability}`, with a filename a renderer will accept.
+      responses:
+        '200':
+          description: The blob exists.
+        '404':
+          description: See `/render/{capability}`.
   /api/v1/blobs/{hash}/content:
     parameters:
       - name: hash
@@ -1890,7 +2190,7 @@ paths:
       operationId: listCapabilities
       summary: Which nodes in the fleet can do what, proven by execution.
       description: |
-        The fleet-wide capability view (§6, §75, ADR-0039).
+        The fleet-wide capability view (§6, §75, ADR-0040).
 
         ### Why this is not `/api/v1/system`
 
@@ -2067,7 +2367,7 @@ paths:
       operationId: getPeerReachback
       summary: Report whether this node can reach the peer that is asking.
       description: |
-        The RETURN leg of a pairing (#186, ADR-0037).
+        The RETURN leg of a pairing (#186, ADR-0040).
 
         Replication needs traffic in both directions and the two flows run
         opposite ways: a peer PUSHES its inventory to the controller, and a
@@ -3644,7 +3944,7 @@ components:
       type: object
       required: [result, target, detail]
       description: |
-        Whether the answering node can reach the caller (#186, ADR-0037).
+        Whether the answering node can reach the caller (#186, ADR-0040).
       properties:
         result:
           type: string

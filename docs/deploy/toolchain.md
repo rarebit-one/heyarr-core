@@ -16,10 +16,10 @@ is a hard failure: it means either a corrupt download or a replaced release
 asset, and those need different responses from a human, so the script refuses
 to guess.
 
-## `hyperion-1`
+## The reference deployment host
 
-The deployment host has no Go toolchain and no CI, which is why the installer
-is a shell script with no build step rather than a Go program. Run it in the
+That host has no Go toolchain and no CI, which is why the installer is a shell
+script with no build step rather than a Go program. Run it in the
 checkout, or copy `.toolchain/bin/{ffmpeg,ffprobe}` alongside the `heyarr`
 binary and point at them explicitly:
 
