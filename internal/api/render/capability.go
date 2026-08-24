@@ -178,57 +178,97 @@ func sign(secret []byte, payload string) []byte {
 	return mac.Sum(nil)
 }
 
-// PlayableMIME reports whether a media type may be served by this route.
+// CanonicalMIME maps a media type onto the CONSTANT this route will serve for
+// it, or reports that there is none.
 //
-// # This is a security boundary, not a tidiness check
+// # This is a security boundary, and the shape of it is the point
 //
 // internal/api/blobs serves application/octet-stream deliberately, so that a
 // peer never "invites a browser to render content the catalog has not
 // classified" — its words. This route exists to override that, which hands
 // back exactly the risk that decision avoided: an asset whose sniffed type is
-// text/html, served as text/html from the peer's own origin, is stored XSS on
-// every other page that origin serves.
+// text/html, served as text/html from the peer's own origin, is stored XSS
+// against every other page that origin serves.
 //
-// And the type is not as trustworthy as its signature suggests. Signing proves
-// nobody altered it in transit; it says nothing about where it came from,
-// which is a scanner looking at a file somebody put in a library. A torrent
-// can contain an .html file.
+// The signature on a capability is not the protection it appears to be. It
+// proves nobody altered the type in transit; it says nothing about where the
+// type came from, which is a scanner looking at whatever a file turned out to
+// be. A torrent can contain an .html file.
 //
-// So only the types a renderer could ever play are allowed. Deliberately NOT
-// image/*: SVG is scriptable, and distinguishing the scriptable image formats
-// from the inert ones is a subtler job than this route needs to take on.
-func PlayableMIME(mime string) bool {
-	// A parameter is refused rather than stripped. "video/mp4; charset=utf-8"
-	// is not a type a renderer asked for, and permitting parameters means
-	// parsing them, which means a parser between an attacker and a response
-	// header.
-	if mime == "" || strings.ContainsAny(mime, ";\r\n \t\"") {
-		return false
-	}
-	kind, sub, ok := strings.Cut(mime, "/")
-	if !ok || sub == "" {
-		return false
-	}
-	switch strings.ToLower(kind) {
-	case "audio", "video":
-		return isTokenValue(sub)
-	default:
-		return false
-	}
+// # Why a table of constants rather than a validator
+//
+// The first version of this checked the type and passed the caller's own
+// string through. That is correct and it is not PROVABLY correct: the value
+// written into the response header is still the value that arrived in the
+// URL, and neither a reader nor CodeQL can see the difference between a
+// validator and a validator with a hole in it. CodeQL said so
+// (go/reflected-xss, high) and declined to accept the check as a sanitiser.
+//
+// Returning a constant from a lookup ends the argument. Nothing a caller sends
+// can reach a response header: either the type is one of these, and a literal
+// from this file is written, or nothing is written at all.
+//
+// Image types are absent deliberately. SVG is scriptable, and separating the
+// inert image formats from the live ones is a subtler job than this route
+// needs to take on — a renderer plays audio and video.
+func CanonicalMIME(mime string) (string, bool) {
+	canonical, ok := servableMIME[strings.ToLower(strings.TrimSpace(mime))]
+	return canonical, ok
 }
 
-// isTokenValue keeps anything that is not an ordinary subtype out of a
-// response header.
-func isTokenValue(s string) bool {
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '.', r == '-', r == '+', r == '_':
-		default:
-			return false
-		}
-	}
-	return true
+// servableMIME is every media type this route will name in a response.
+//
+// The keys are what an Asset might carry, which is whatever the scanner
+// decided; the values are literals. Adding a row is a deliberate act, which is
+// the intended cost — an unknown type is served as octet-stream and plays on
+// fewer devices, which is a bad afternoon, where the alternative failure is
+// scripted content on the peer's origin.
+var servableMIME = map[string]string{
+	// Video.
+	"video/mp4":               "video/mp4",
+	"video/x-m4v":             "video/x-m4v",
+	"video/quicktime":         "video/quicktime",
+	"video/x-matroska":        "video/x-matroska",
+	"video/x-mkv":             "video/x-mkv",
+	"video/webm":              "video/webm",
+	"video/avi":               "video/avi",
+	"video/x-msvideo":         "video/x-msvideo",
+	"video/mpeg":              "video/mpeg",
+	"video/mp2t":              "video/mp2t",
+	"video/vnd.dlna.mpeg-tts": "video/vnd.dlna.mpeg-tts",
+	"video/x-ms-wmv":          "video/x-ms-wmv",
+	"video/x-flv":             "video/x-flv",
+	"video/3gpp":              "video/3gpp",
+	"video/ogg":               "video/ogg",
+
+	// Audio.
+	"audio/mpeg":             "audio/mpeg",
+	"audio/mp4":              "audio/mp4",
+	"audio/x-m4a":            "audio/x-m4a",
+	"audio/aac":              "audio/aac",
+	"audio/flac":             "audio/flac",
+	"audio/x-flac":           "audio/x-flac",
+	"audio/ogg":              "audio/ogg",
+	"audio/opus":             "audio/opus",
+	"audio/wav":              "audio/wav",
+	"audio/x-wav":            "audio/x-wav",
+	"audio/aiff":             "audio/aiff",
+	"audio/x-aiff":           "audio/x-aiff",
+	"audio/x-ms-wma":         "audio/x-ms-wma",
+	"audio/x-ac3":            "audio/x-ac3",
+	"audio/vnd.dolby.dd-raw": "audio/vnd.dolby.dd-raw",
+	"audio/vnd.dlna.adts":    "audio/vnd.dlna.adts",
+	"audio/x-monkeys-audio":  "audio/x-monkeys-audio",
+	"audio/3gpp":             "audio/3gpp",
+}
+
+// PlayableMIME reports whether this route will name a type in a response.
+//
+// A thin reading of CanonicalMIME, for the mint-time check, which wants the
+// question rather than the answer.
+func PlayableMIME(mime string) bool {
+	_, ok := CanonicalMIME(mime)
+	return ok
 }
 
 func encode(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }

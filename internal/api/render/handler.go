@@ -200,9 +200,18 @@ func (w *retyped) WriteHeader(status int) {
 		// serving are separated by an expiry window and by whatever the
 		// catalog did in between; a token minted before this rule existed
 		// must not be honoured by a binary that has it.
-		if w.mime != "" && PlayableMIME(w.mime) &&
+		// The value written is a CONSTANT from servableMIME, never the
+		// caller's own string, so nothing that arrived in the URL can reach a
+		// response header. See CanonicalMIME for why that shape rather than a
+		// validator.
+		//
+		// Re-checked here, at the point the header is written, and not only
+		// where the capability was minted: the two are separated by a six-hour
+		// expiry, and a token minted before this rule existed must not be
+		// honoured by a binary that has it.
+		if canonical, ok := CanonicalMIME(w.mime); ok &&
 			w.Header().Get("Content-Type") == "application/octet-stream" {
-			w.Header().Set("Content-Type", w.mime)
+			w.Header().Set("Content-Type", canonical)
 		}
 	}
 	w.ResponseWriter.WriteHeader(status)

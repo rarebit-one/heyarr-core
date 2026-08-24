@@ -307,3 +307,29 @@ func TestARefusedTypeIsNotServed(t *testing.T) {
 		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
 	}
 }
+
+// TestCanonicalMIMEReturnsAConstant is the property that makes the boundary
+// provable rather than merely correct: what goes into the response header is a
+// literal from this package, never the caller's own bytes.
+func TestCanonicalMIMEReturnsAConstant(t *testing.T) {
+	t.Parallel()
+
+	// Same type, different spelling. A validator that passed the caller's
+	// string through would echo the input; a table returns its own value.
+	got, ok := CanonicalMIME("  VIDEO/MP4  ")
+	if !ok {
+		t.Fatal("video/mp4 must be servable")
+	}
+	if got != "video/mp4" {
+		t.Errorf("got %q, want the canonical literal video/mp4", got)
+	}
+	for _, hostile := range []string{
+		"video/mp4\r\nX-Evil: 1",
+		"video/mp4; charset=utf-8",
+		`video/"mp4"`,
+	} {
+		if _, ok := CanonicalMIME(hostile); ok {
+			t.Errorf("CanonicalMIME(%q) was accepted", hostile)
+		}
+	}
+}
