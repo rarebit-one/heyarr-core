@@ -26,6 +26,15 @@ func testConfig(t *testing.T) config.Config {
 	cfg.DataDir = dir
 	cfg.Database.Path = filepath.Join(dir, "heyarr.db")
 	cfg.CAS.Root = filepath.Join(dir, "cas")
+	// Port ZERO, and this line is why the suite is hermetic.
+	//
+	// config.Defaults() carries the real listen address, 127.0.0.1:7777. A
+	// test that overrode only the data directory therefore contended for the
+	// port a RUNNING heyarr holds, so `go test ./...` on a machine that is
+	// also serving would fail — reproducibly, at low load, on both a branch
+	// and its merge base (#220). CI never saw it because hosted runners are
+	// clean, which is the worst way for a test to be wrong.
+	cfg.HTTP.Addr = "127.0.0.1:0"
 	return cfg
 }
 
