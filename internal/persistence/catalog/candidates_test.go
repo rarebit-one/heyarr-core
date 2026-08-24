@@ -70,7 +70,7 @@ func TestTheStoredEvaluationIsByteIdenticalToTheEvaluators(t *testing.T) {
 	}
 
 	ranked := rankThree()
-	if _, err := h.cat.RecordSearch(ctx, h.want, ranked); err != nil {
+	if _, err := h.cat.RecordSearch(ctx, h.want, ranked, acquisition.Incumbent{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -134,7 +134,7 @@ func TestTwelveRejectionsArePersisted(t *testing.T) {
 	}
 	ranked := acquisition.EvaluateAll(offered, candidateProfile())
 
-	outcome, err := h.cat.RecordSearch(ctx, h.want, ranked)
+	outcome, err := h.cat.RecordSearch(ctx, h.want, ranked, acquisition.Incumbent{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestTheBestAcceptableCandidateIsSelected(t *testing.T) {
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
 		t.Fatal(err)
 	}
-	outcome, err := h.cat.RecordSearch(ctx, h.want, rankThree())
+	outcome, err := h.cat.RecordSearch(ctx, h.want, rankThree(), acquisition.Incumbent{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,13 +229,14 @@ func TestASearchReplacesThePreviousSet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first, err := h.cat.RecordSearch(ctx, h.want, rankThree())
+	first, err := h.cat.RecordSearch(ctx, h.want, rankThree(), acquisition.Incumbent{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	second, err := h.cat.RecordSearch(ctx, h.want, acquisition.EvaluateAll(
-		[]acquisition.ReleaseCandidate{release("later", 2160, "hevc")}, candidateProfile()))
+		[]acquisition.ReleaseCandidate{release("later", 2160, "hevc")}, candidateProfile()),
+		acquisition.Incumbent{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +266,7 @@ func TestRecordingTheSameSearchTwiceDoesNotDuplicate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 3 {
-		if _, err := h.cat.RecordSearch(ctx, h.want, rankThree()); err != nil {
+		if _, err := h.cat.RecordSearch(ctx, h.want, rankThree(), acquisition.Incumbent{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -289,7 +290,7 @@ func TestAnEmptySearchStillEmits(t *testing.T) {
 	}
 	before := h.eventCount(t)
 
-	outcome, err := h.cat.RecordSearch(ctx, h.want, nil)
+	outcome, err := h.cat.RecordSearch(ctx, h.want, nil, acquisition.Incumbent{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +312,7 @@ func TestOverrideRecordsTheDisagreement(t *testing.T) {
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.cat.RecordSearch(ctx, h.want, rankThree()); err != nil {
+	if _, err := h.cat.RecordSearch(ctx, h.want, rankThree(), acquisition.Incumbent{}); err != nil {
 		t.Fatal(err)
 	}
 	before := h.eventCount(t)
@@ -360,7 +361,7 @@ func TestReSelectingTheScorersChoiceIsNotAnOverride(t *testing.T) {
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.cat.RecordSearch(ctx, h.want, rankThree()); err != nil {
+	if _, err := h.cat.RecordSearch(ctx, h.want, rankThree(), acquisition.Incumbent{}); err != nil {
 		t.Fatal(err)
 	}
 	before := h.eventCount(t)
@@ -386,7 +387,7 @@ func TestOverrideRefusesARejectedCandidate(t *testing.T) {
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.cat.RecordSearch(ctx, h.want, rankThree()); err != nil {
+	if _, err := h.cat.RecordSearch(ctx, h.want, rankThree(), acquisition.Incumbent{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -410,7 +411,7 @@ func TestOverridingAnUnknownCandidateIsTyped(t *testing.T) {
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.cat.RecordSearch(ctx, h.want, rankThree()); err != nil {
+	if _, err := h.cat.RecordSearch(ctx, h.want, rankThree(), acquisition.Incumbent{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.cat.OverrideSelection(ctx, h.want, "never-offered"); !errors.Is(err, catalog.ErrNoCandidate) {
@@ -427,7 +428,7 @@ func TestPruneSparesTheSelectedCandidate(t *testing.T) {
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.cat.RecordSearch(ctx, h.want, rankThree()); err != nil {
+	if _, err := h.cat.RecordSearch(ctx, h.want, rankThree(), acquisition.Incumbent{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -458,7 +459,7 @@ func TestPruneLeavesRecentCandidates(t *testing.T) {
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.cat.RecordSearch(ctx, h.want, rankThree()); err != nil {
+	if _, err := h.cat.RecordSearch(ctx, h.want, rankThree(), acquisition.Incumbent{}); err != nil {
 		t.Fatal(err)
 	}
 	n, err := h.cat.PruneCandidates(ctx, time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -477,7 +478,7 @@ func TestCandidatesCascadeFromTheWant(t *testing.T) {
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.cat.RecordSearch(ctx, h.want, rankThree()); err != nil {
+	if _, err := h.cat.RecordSearch(ctx, h.want, rankThree(), acquisition.Incumbent{}); err != nil {
 		t.Fatal(err)
 	}
 	h.exec(t, `DELETE FROM desired_items WHERE id = ?`, h.want)
@@ -544,7 +545,7 @@ func TestTheListingBreaksTiesOnTheEvaluatorsKeyAndNoOther(t *testing.T) {
 		}},
 	}
 	ranked := acquisition.EvaluateAll(tied, candidateProfile())
-	if _, err := h.cat.RecordSearch(ctx, h.want, ranked); err != nil {
+	if _, err := h.cat.RecordSearch(ctx, h.want, ranked, acquisition.Incumbent{}); err != nil {
 		t.Fatal(err)
 	}
 
