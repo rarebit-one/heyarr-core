@@ -208,7 +208,7 @@ func (s *Server) accessLogMiddleware(next http.Handler) http.Handler {
 			attrs := []any{
 				"request_id", RequestIDFrom(r.Context()),
 				"method", r.Method,
-				"path", r.URL.Path,
+				"path", logPath(r),
 				"route", routePattern(r),
 				"status", rec.status,
 				"bytes", rec.written,
@@ -225,6 +225,21 @@ func (s *Server) accessLogMiddleware(next http.Handler) http.Handler {
 		}()
 		next.ServeHTTP(rec, r)
 	})
+}
+
+// logPath renders a request path with any secret in it removed.
+//
+// Almost every path here is safe to log. The renderer route is not: ADR-0040
+// puts a capability — an unguessable, blob-scoped bearer secret — in the path
+// itself, and an access log is precisely where auth.go refuses to let a
+// credential reach. Both the access log and the panic log go through this, and
+// the route pattern is logged alongside, so an operator can still see which
+// endpoint was hit and how it answered.
+func logPath(r *http.Request) string {
+	if strings.HasPrefix(r.URL.Path, RenderPrefix+"/") {
+		return RenderPrefix + "/[redacted]"
+	}
+	return r.URL.Path
 }
 
 // queryKeys renders the parameter names of a query string and never a value.
@@ -279,7 +294,7 @@ func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
 			s.log.Error("handler panicked",
 				"request_id", RequestIDFrom(r.Context()),
 				"method", r.Method,
-				"path", r.URL.Path,
+				"path", logPath(r),
 				"route", routePattern(r),
 				"panic", p,
 				"stack", string(debug.Stack()))

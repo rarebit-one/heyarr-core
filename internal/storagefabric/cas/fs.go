@@ -687,7 +687,7 @@ func (s *FS) Verify(ctx context.Context, h hashing.Hash) error {
 // Moving rather than deleting is ADR-0018 and it is load-bearing rather than
 // cautious: a blob materialised as a hardlink shares its inode with the file
 // it was adopted from, so "these bytes changed" frequently means an external tool rewrote the
-// operator's original — and on hyperion-1 hardlink is the outcome for every
+// operator's original — and on the reference host hardlink is the outcome for every
 // file (#43). Deleting would destroy the only copy of something that was never
 // Heyarr's to delete.
 func (s *FS) quarantine(h hashing.Hash) (string, error) {

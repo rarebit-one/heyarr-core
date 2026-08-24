@@ -8,7 +8,7 @@ LDFLAGS := -s -w \
   -X $(PKG)/internal/buildinfo.Commit=$(COMMIT) \
   -X $(PKG)/internal/buildinfo.Date=$(DATE)
 
-.PHONY: all build fixtures test test-skips race lint fmt gen tidy demo clean help
+.PHONY: all build fixtures test test-skips race lint hygiene fmt gen tidy demo clean help
 
 all: lint test build          ## lint, test and build
 
@@ -32,6 +32,9 @@ scan-fixtures:                ## check the provider fixture corpus for leaked cr
 lint:                         ## vet + golangci-lint
 	go vet ./...
 	golangci-lint run
+
+hygiene:                      ## fail if a tracked file names a real host, site, person or path
+	./scripts/hygiene.sh
 
 fmt:                          ## format
 	gofumpt -w . 2>/dev/null || go fmt ./...

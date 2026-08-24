@@ -112,6 +112,38 @@ const immutableCacheControl = "public, max-age=31536000, immutable"
 // of them. What this function owns is identity, the headers, and the fact that
 // the reader is a seekable stream and never a buffer.
 func (h *Handler) Content(w http.ResponseWriter, r *http.Request) {
+	h.ContentAs(w, r, OctetStream)
+}
+
+// OctetStream is what the blob endpoint declares, and the reason is in the
+// Content-Type note below: bytes have no type, and this endpoint has no Asset
+// to ask.
+const OctetStream = "application/octet-stream"
+
+// ContentAs serves a blob under a caller-declared media type.
+//
+// # This is not a hole in ADR-0013
+//
+// That ADR is about the blob ENDPOINT: one route, several consumers, not tuned
+// for a player. The endpoint is unchanged — Content still declares
+// OctetStream, unconditionally, for every caller it has. This is an internal
+// entry point for the one consumer that holds an Asset and therefore knows
+// something the CAS cannot: what the bytes are.
+//
+// It exists so that the renderer route (ADR-0040) does not have to wrap the
+// ResponseWriter to correct a header afterwards. That wrapper worked and read
+// badly — a header rewritten in one method, for a body written in another —
+// and it put a second io.Writer in the response path for no reason but to
+// change a string. Declaring the type up front is what the caller meant.
+//
+// The mime is a constant at every call site by construction: Content passes a
+// literal, and the renderer route passes a value from its own table of
+// literals (render.CanonicalMIME). Nothing a client sends reaches this
+// parameter.
+func (h *Handler) ContentAs(w http.ResponseWriter, r *http.Request, mime string) {
+	if mime == "" {
+		mime = OctetStream
+	}
 	raw := chi.URLParam(r, "hash")
 	hash, err := hashing.Parse(raw)
 	if err != nil {
@@ -156,13 +188,17 @@ func (h *Handler) Content(w http.ResponseWriter, r *http.Request) {
 	// silently withdrawn.
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	// application/octet-stream is the honest answer and also the deliberate
-	// one. The CAS knows the digest and the length and nothing else; sniffing
-	// would make the type depend on the first 512 bytes, so the same blob could
-	// be typed differently by two peers, and a peer that guessed "video/mp4"
-	// would be inviting a browser to render content the catalog has not
-	// classified. Setting it explicitly also stops ServeContent from sniffing.
-	w.Header().Set("Content-Type", "application/octet-stream")
+	// Declared, never sniffed. Sniffing would make the type depend on the
+	// first 512 bytes, so the same blob could be typed differently by two
+	// peers, and a peer that guessed "video/mp4" would be inviting a browser
+	// to render content the catalog has not classified. Setting it explicitly
+	// also stops ServeContent from sniffing.
+	//
+	// For the endpoint this is always OctetStream, which is the honest answer
+	// there: the CAS knows the digest and the length and nothing else. A
+	// caller that passes something else is one holding an Asset, which knows
+	// what the CAS cannot — see ContentAs.
+	w.Header().Set("Content-Type", mime)
 	if wantsDownload(r) {
 		// The blob has no filename — a filename is a property of an asset, not
 		// of the bytes. The digest is the only name that is always correct, and

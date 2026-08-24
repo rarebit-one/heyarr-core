@@ -1,0 +1,49 @@
+# Repo hygiene deny-list — strings that must never appear in a public repo.
+#
+# This repo is public and AGPL-3.0. Naming the machines, networks, premises or
+# people the software actually runs on discloses where the authors live and
+# work, and git history is permanent: a leak is not undone by a later commit.
+# #147 scrubbed two real premises out of the spec, an ADR and eleven test
+# files; #211 scrubbed a real host name and a real home directory that the same
+# reasoning had already condemned. This file exists so the third one fails a
+# PR instead of being found by accident during unrelated work.
+#
+# WHAT BELONGS HERE
+#   - Real host names, tailnet/LAN names and machine names.
+#   - Real premises, estate, street or building names.
+#   - Real people's names, usernames and home directories.
+#   - Real deployment paths that identify a specific machine's disk layout.
+#   - Real personal email addresses, and real routable addresses/subnets.
+#
+# WHAT DOES NOT
+#   - Secrets. Credentials are a different class with a different response
+#     (rotate, don't just delete); the provider-fixture credential scanner
+#     (`make scan-fixtures`) owns those.
+#   - Anything reserved for documentation and therefore SAFE to write down:
+#     example.com/.org/.invalid, 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24,
+#     localhost, 127.0.0.1.
+#
+# FORMAT
+#   One POSIX extended regular expression per line. Blank lines and lines
+#   starting with `#` are ignored. Matching is case-insensitive, so write the
+#   plain form. Adding a pattern is cheap; prefer a slightly broad one — a
+#   false positive costs a placeholder rename, a false negative costs a
+#   permanent public disclosure.
+#
+#   scripts/hygiene.sh and this file are excluded from the scan, because the
+#   patterns are themselves literal matches for what they forbid.
+
+# --- host and machine names (#211) ---
+hyperion
+
+# --- premises and site names (#147) ---
+bartley
+skyparc
+
+# --- personal paths: a home directory names its owner (#211) ---
+# Placeholder library paths in tests and docs use /srv/media instead.
+/home/[a-z0-9]
+/users/[a-z0-9]
+
+# --- personal usernames ---
+jaryl

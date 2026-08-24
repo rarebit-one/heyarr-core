@@ -86,6 +86,16 @@ type Options struct {
 	CASRoot string
 	// Mount registers additional API routes. See MountFunc.
 	Mount []MountFunc
+	// MountPublic registers routes OUTSIDE the authenticated /api/v1 group,
+	// on the bare router, reached with no bearer credential at all.
+	//
+	// It exists for exactly one caller — the renderer route of ADR-0040, where
+	// an unguessable capability in the path is the whole authority — and the
+	// name is blunt on purpose. Anything mounted here is world-reachable on
+	// whatever address the server binds, so a route that belongs under Mount
+	// and lands here instead is a library handed to the network. Adding a
+	// second user of this field is a decision that wants an ADR.
+	MountPublic []MountFunc
 	// PeerMembership is the peer fabric's trust root (ADR-0012, M4-04). When
 	// it is set, every request that presents a peer identity is checked
 	// against it — on every request, which is what makes removing a membership
@@ -127,6 +137,8 @@ type Server struct {
 	peers        PeerMembership
 	peerLiveness PeerLiveness
 	presentedKey PresentedPeerKey
+
+	publicMounts []MountFunc
 
 	registry *prometheus.Registry
 	metrics  *metrics
@@ -204,6 +216,7 @@ func New(opts Options) (*Server, error) {
 	if s.presentedKey == nil {
 		s.presentedKey = TLSPresentedPeerKey
 	}
+	s.publicMounts = opts.MountPublic
 	s.handler = s.routes(opts.Mount)
 	s.http = &http.Server{
 		Handler:           s.handler,
