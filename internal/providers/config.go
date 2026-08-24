@@ -133,19 +133,31 @@ type OfferedCandidate struct {
 	// which is most of how a degraded node behaves and is otherwise
 	// unreachable without a real indexer that omits a field.
 	Attributes map[string]any `koanf:"attributes"`
-	// Source is what a download client would be handed to fetch this release.
+	// Fetch is what a download client would be handed to fetch this release —
+	// a magnet URI, or the URL of a .torrent or .nzb.
+	//
+	// # Why it is not called `source`
+	//
+	// Because `source` is already taken, one nesting level down and meaning
+	// something entirely different: §62's `attributes.source` is the release's
+	// provenance — `web-dl`, `remux`, `webrip` — and it is what a quality
+	// profile gates on. Two keys spelled the same, adjacent in the same block,
+	// carrying unrelated meanings is a configuration file that reads correctly
+	// and is understood wrongly.
+	//
+	// The Go field on ReleaseCandidate stays `Source` because there it sits
+	// beside an Attributes MAP rather than beside a sibling key, so the two
+	// cannot be confused by eye.
 	//
 	// Optional, and the omission is meaningful rather than lazy: a candidate
-	// with no source is one an indexer listed and offered no way to fetch, and
-	// leaving it out is how the demo exercises that path. A real indexer
-	// produces both shapes.
+	// with no fetchable link is one an indexer listed and offered no way to
+	// get — a real shape, which the grab refuses rather than retrying.
 	//
-	// It is NOT a secret.Value here even though it becomes one. A fake's
-	// configured source is written in a config file by the person reading it,
-	// so redacting it in that file's own error messages would hide the value
-	// they just typed — and there is no credential to protect, because a fake
-	// talks to nothing.
-	Source string `koanf:"source"`
+	// It is NOT a secret.Value here even though it becomes one. A fake's link
+	// is written in a config file by the person reading it, so redacting it in
+	// that file's own error messages would hide the value they just typed —
+	// and there is no credential to protect, because a fake talks to nothing.
+	Fetch string `koanf:"fetch"`
 }
 
 // Entry is one configured provider.
@@ -394,7 +406,7 @@ func resolveOffers(
 			}
 			candidates = append(candidates, acquisition.ReleaseCandidate{
 				ID: id, Title: strings.TrimSpace(c.Title), Provider: name, Attributes: attrs,
-				Source: secret.Value(strings.TrimSpace(c.Source)),
+				Source: secret.Value(strings.TrimSpace(c.Fetch)),
 			})
 		}
 		out[key] = candidates
