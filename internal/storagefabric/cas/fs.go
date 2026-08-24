@@ -482,7 +482,10 @@ func (s *FS) Link(ctx context.Context, srcPath string, mode Materialisation) (De
 		return Descriptor{}, s.permissionFault("creating blob directory", filepath.Dir(final), err)
 	}
 	if _, err := os.Stat(final); err == nil {
-		return Descriptor{Hash: h, Size: size, Materialised: mode, Deduplicated: true}, nil
+		// None, not `mode`: nothing was materialised, so reporting the rung
+		// that was requested would assert an outcome no operation reached
+		// (#223).
+		return Descriptor{Hash: h, Size: size, Materialised: None, Deduplicated: true}, nil
 	} else if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, fs.ErrPermission) {
 		// A permission error is read as "not known to exist" rather than as
 		// fatal. The MkdirAll above means it should not happen; treating it as
@@ -515,7 +518,11 @@ func (s *FS) Link(ctx context.Context, srcPath string, mode Materialisation) (De
 		}
 		if err := os.Link(staging, final); err != nil {
 			if errors.Is(err, fs.ErrExist) {
-				return Descriptor{Hash: h, Size: size, Materialised: used, Deduplicated: true}, nil
+				// Lost the publish race. The staged bytes are discarded and
+				// the blob in the store is the winner's, so `used` describes
+				// work that was thrown away rather than how these bytes
+				// arrived (#223).
+				return Descriptor{Hash: h, Size: size, Materialised: None, Deduplicated: true}, nil
 			}
 			return Descriptor{}, fmt.Errorf("cas: publishing blob: %w", err)
 		}
