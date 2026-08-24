@@ -10,9 +10,9 @@ media with ffprobe. Milestone 2 is the first time Heyarr depends on a binary it
 does not ship.
 
 There is no `ffmpeg` or `ffprobe` on the development machines, on the CI
-runners, or on `hyperion-1` — all three checked. `hyperion-1` additionally has
-no Go toolchain; Milestone 1 shipped there by cross-compiling and copying a
-static binary onto it.
+runners, or on the reference deployment host — all three checked. That host
+additionally has no Go toolchain; Milestone 1 shipped there by cross-compiling
+and copying a static binary onto it.
 
 So the question is not "which version do we require" but whether requiring one
 at all is compatible with what Heyarr is: a single static Go binary someone

@@ -31,7 +31,7 @@ CREATE INDEX blobs_unreferenced ON blobs (unreferenced_since)
 -- ADR-0018 says a blob that fails verification is moved to quarantine/ and
 -- never deleted, because it is evidence: on a hardlink-ingested library the
 -- "corruption" may be the ORIGINAL file that legitimately changed under an
--- external tool, and on hyperion-1 hardlink is the default ingest outcome for
+-- external tool, and on the reference host hardlink is the default ingest outcome for
 -- every file (#43). Preserving the bytes without recording what was expected,
 -- what was found and when is only half of that: a quarantined blob nobody can
 -- explain later is barely better than a deleted one.

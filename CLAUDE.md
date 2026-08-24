@@ -75,6 +75,11 @@ default.
   instead of `time.Sleep`, `-race` always.
 - Conventional Commits, and every commit signed off (`git commit -s`) — this repo
   takes contributions under DCO.
+- **Nothing in this repo names a real machine, site or person.** It is public:
+  refer to hosts, premises and paths by their shape (`the reference host`,
+  `<host>`, `Site A` / `peer-a`, `/srv/media/...`), never by their identity.
+  `make hygiene` (`scripts/hygiene.sh` + `scripts/hygiene.denylist`) is the CI
+  guard; add to the deny-list when a new class of name shows up.
 - An architectural stance change needs an ADR. Keep it to a page; record the
   decision and what would make us revisit it, not a description of the code.
 

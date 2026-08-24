@@ -8,7 +8,7 @@
 //     own name is moved to quarantine and recorded, because it is evidence. On
 //     a hardlink-ingested library the CAS and the operator's original file
 //     share an inode, so a mismatch frequently means an external tool rewrote
-//     that original — and on hyperion-1 hardlink is the outcome for every
+//     that original — and on the reference host hardlink is the outcome for every
 //     ingested file rather than an edge case (#43).
 //   - Garbage collection is dry-run by default at every level: the CLI, the job
 //     payload's zero value and the CollectOptions zero value all mean "report,
