@@ -355,7 +355,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		w.log.Info("indexing is available",
 			"providers", strings.Join(indexerNames(providerRegistry), ", "))
 		registry.Register(acquisition.SearchJobType, Registration{
-			Handler:            SearchHandler(providerRegistry, cat, w.log),
+			Handler:            SearchHandler(providerRegistry, cat, queue, w.log),
 			RequiredCapability: providers.CapabilityIndexer.JobCapability(),
 		})
 	}
@@ -374,6 +374,22 @@ func (w *Worker) Run(ctx context.Context) error {
 		registry.Register(downloads.PollJobType, Registration{
 			Handler:            PollDownloadsHandler(providerRegistry, cat, queue, w.log),
 			MaxConcurrent:      1,
+			RequiredCapability: providers.CapabilityDownload.JobCapability(),
+		})
+		// The grab — §64's SELECTED → QUEUED edge (#225). Registered under the
+		// same condition as the poll and for the same reason: a node with no
+		// download client cannot start a transfer, and ADR-0025 says work that
+		// needs an absent capability stays PENDING AND VISIBLE rather than
+		// being claimed and failed.
+		//
+		// MaxConcurrent is deliberately NOT 1, unlike the poll. A poll reads a
+		// whole client's queue and two passes would conclude over each other;
+		// a grab is scoped to one want, writes only that want's rows, and
+		// contends with another grab over nothing. Serialising them would make
+		// a library that just became satisfiable start its transfers one
+		// provider round trip at a time.
+		registry.Register(acquisition.GrabJobType, Registration{
+			Handler:            GrabReleaseHandler(providerRegistry, cat, w.log),
 			RequiredCapability: providers.CapabilityDownload.JobCapability(),
 		})
 	}

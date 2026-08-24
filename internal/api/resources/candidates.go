@@ -11,6 +11,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
+	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
 // Release candidates over HTTP (§60, §63, M3-12).
@@ -205,5 +206,29 @@ func (a *API) selectCandidate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// And queue the grab, exactly as the search beat does (#225).
+	//
+	// Both routes to SELECTED enqueue this, because a want chosen by hand is
+	// no more able to fetch itself than one chosen by the scorer — and wiring
+	// only the automatic route would have left §60's manual override as the
+	// one path that still dead-ends, which is the harder half to notice.
+	//
+	// Enqueue failure is logged into the response's shape by NOT failing the
+	// request: the override itself is durable and is what the caller asked
+	// for. The want stays SELECTED and the next search re-enqueues.
+	if _, err := a.jobs.Enqueue(r.Context(), jobs.EnqueueOptions{
+		Type: acquisition.GrabJobType,
+		Payload: acquisition.GrabPayload{
+			DesiredItemID: id,
+			CandidateID:   chosen.CandidateID,
+		},
+		DedupeKey:          acquisition.GrabDedupeKey(id),
+		RequiredCapability: providers.CapabilityDownload.JobCapability(),
+	}); err != nil {
+		a.log.Warn("could not queue the grab for a hand-selected release",
+			"desired_item_id", id, "candidate", chosen.CandidateID, "error", err)
+	}
+
 	a.write(w, r, http.StatusOK, candidateView(chosen))
 }

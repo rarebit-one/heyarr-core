@@ -15,6 +15,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
+	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
@@ -32,11 +33,16 @@ import (
 // caller that matters most.
 
 type searchHarness struct {
-	db   *sqlite.DB
-	cat  *catalog.Catalog
-	reg  *providers.Registry
-	fake *providers.Fake
-	want string
+	db *sqlite.DB
+	// queue is REAL rather than a stub, so that "the search enqueued a grab"
+	// is asserted against the same table the worker claims from. A stub would
+	// prove the handler called something, which is a claim about the handler
+	// rather than about the pipeline (#225).
+	queue *jobs.Queue
+	cat   *catalog.Catalog
+	reg   *providers.Registry
+	fake  *providers.Fake
+	want  string
 }
 
 func newSearchHarness(t *testing.T) *searchHarness {
@@ -61,7 +67,16 @@ func newSearchHarness(t *testing.T) *searchHarness {
 		t.Fatal(err)
 	}
 
-	h := &searchHarness{db: db, cat: cat, want: uuid.Must(uuid.NewV7()).String()}
+	queue, err := jobs.New(jobs.Options{
+		Writer: db.Writer(), Reader: db.Reader(), Events: eventLog,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := &searchHarness{
+		db: db, queue: queue, cat: cat, want: uuid.Must(uuid.NewV7()).String(),
+	}
 	stamp := time.Now().UTC().Format(time.RFC3339Nano)
 
 	profile := policy.Profile{
@@ -116,7 +131,7 @@ func (h *searchHarness) run(t *testing.T) error {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := SearchHandler(h.reg, h.cat, slog.New(slog.DiscardHandler))
+	handler := SearchHandler(h.reg, h.cat, h.queue, slog.New(slog.DiscardHandler))
 	return handler(t.Context(), jobs.Job{Type: acquisition.SearchJobType, Payload: payload})
 }
 
@@ -130,6 +145,19 @@ func (h *searchHarness) state(t *testing.T) acquisition.State {
 }
 
 func offer(id string, resolution int64, codec string) acquisition.ReleaseCandidate {
+	c := offerWithoutSource(id, resolution, codec)
+	// Every ordinary candidate carries a source, because every real one does:
+	// an indexer that lists a release also says where to get it. The
+	// sourceless case is a real but exceptional shape and has its own helper,
+	// so that a test needing it has to ask for it rather than getting it by
+	// forgetting a field (#225).
+	c.Source = secret.Value("magnet:?xt=urn:btih:" + id)
+	return c
+}
+
+// offerWithoutSource is a candidate the indexer listed and offered no way to
+// fetch — a catalogue entry rather than a download.
+func offerWithoutSource(id string, resolution int64, codec string) acquisition.ReleaseCandidate {
 	return acquisition.ReleaseCandidate{
 		ID: id, Title: "Arrival " + id, Provider: "fake-indexer",
 		Attributes: acquisition.Attributes{
@@ -343,7 +371,7 @@ func TestTheJobStoresTheEvaluatorsOwnAnswer(t *testing.T) {
 // searching for nothing.
 func TestAnUndecodablePayloadFails(t *testing.T) {
 	h := newSearchHarness(t)
-	handler := SearchHandler(h.reg, h.cat, slog.New(slog.DiscardHandler))
+	handler := SearchHandler(h.reg, h.cat, h.queue, slog.New(slog.DiscardHandler))
 	err := handler(t.Context(), jobs.Job{
 		Type: acquisition.SearchJobType, Payload: []byte(`{"desired_item_id":`),
 	})

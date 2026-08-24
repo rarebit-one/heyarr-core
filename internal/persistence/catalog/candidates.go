@@ -12,6 +12,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
+	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 )
 
@@ -164,14 +165,14 @@ func (c *Catalog) RecordSearch(
 				INSERT INTO release_candidates
 					(id, desired_item_id, search_id, provider, candidate_id, title,
 					 attributes, evaluation, accepted, score, terminal, selected,
-					 overridden, override_detail, searched_at, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?)`,
+					 overridden, override_detail, searched_at, created_at, source)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, ?)`,
 				uuid.Must(uuid.NewV7()).String(), desiredItemID, searchID,
 				r.Candidate.Provider, r.Candidate.ID, r.Candidate.Title,
 				string(attrs), string(eval),
 				boolToInt(r.Evaluation.Accepted), r.Evaluation.Score,
 				boolToInt(r.Evaluation.Terminal), selected,
-				stamp, stamp); err != nil {
+				stamp, stamp, r.Candidate.Source.Reveal()); err != nil {
 				return fmt.Errorf("catalog: recording candidate %s: %w", r.Candidate.ID, err)
 			}
 		}
@@ -459,4 +460,49 @@ func (c *Catalog) WorkForDesired(ctx context.Context, desiredItemID string) (Des
 	}
 	out.Year = int(year.Int64)
 	return out, nil
+}
+
+// ErrNoSelection is returned when a want has no selected candidate.
+//
+// Distinct from ErrNoCandidate — which is "you named one that is not there" —
+// because this one is an ordinary race rather than a mistake: a grab job is
+// durable and re-runnable (invariant 9), and by the time it runs the search
+// that selected the release may have been superseded by another that selected
+// nothing. The grab treats it as work that no longer applies, not as a failure.
+var ErrNoSelection = errors.New("catalog: this want has no selected candidate")
+
+// SelectedSource is where the want's chosen release is fetched from.
+//
+// # Why this is its own read and not a column on Candidate
+//
+// The value is a credential — on a private tracker the magnet carries a
+// passkey — and Candidate is what the API returns and what §63's explanations
+// are built from. Adding a field there would put the credential one accidental
+// serialisation away from every candidate listing, and the redaction would be
+// the only thing standing between it and a response body.
+//
+// So `source` is deliberately absent from candidateCols, and the ONE caller
+// that needs it asks for it by name. That makes `grep -rn SelectedSource` the
+// complete list of places this value is read, which is the same property
+// secret.Value's Reveal gives inside the process.
+//
+// Returns the candidate id alongside it so the caller can record WHICH release
+// it grabbed without a second query — and so a grab can tell that the selection
+// changed under it rather than silently fetching a different release than the
+// one whose id it was enqueued with.
+func (c *Catalog) SelectedSource(ctx context.Context, desiredItemID string) (
+	candidateID string, source secret.Value, err error,
+) {
+	var raw string
+	err = c.db.Reader().QueryRowContext(ctx,
+		`SELECT candidate_id, source FROM release_candidates
+		 WHERE desired_item_id = ? AND selected = 1`, desiredItemID).
+		Scan(&candidateID, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", fmt.Errorf("%w: %s", ErrNoSelection, desiredItemID)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return candidateID, secret.Value(raw), nil
 }

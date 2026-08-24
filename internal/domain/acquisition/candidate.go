@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
+	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 )
 
 // Release-candidate evaluation (§63).
@@ -70,6 +71,26 @@ type ReleaseCandidate struct {
 	Provider string
 	// Attributes is what could be determined about the release.
 	Attributes Attributes
+	// Source is what to hand a download client to actually fetch this release
+	// — a magnet URI, or the URL of a .torrent or .nzb.
+	//
+	// # Why it is a credential and not a plain string
+	//
+	// On a private tracker the magnet or enclosure URL carries a passkey that
+	// identifies a person. ID is deliberately a HASH of the guid for exactly
+	// that reason (see indexers.candidateID), which is right — the id goes
+	// into API responses and into §63's stored explanations, and a credential
+	// must not follow it there.
+	//
+	// But hashing it left nothing that could be handed to Downloader.Add, so a
+	// want could be decided and never fetched (#225). This field is the
+	// unhashed value, typed so that fmt, slog and encoding/json all redact it
+	// and Reveal() is the short, greppable list of places it leaves.
+	//
+	// Empty is legitimate and means the indexer offered no way to fetch the
+	// release. That is a candidate which can be explained and cannot be
+	// acquired, and the grab says so rather than failing obscurely.
+	Source secret.Value
 }
 
 // Result is what happened to one rule.
