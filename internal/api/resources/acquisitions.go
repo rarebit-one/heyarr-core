@@ -107,11 +107,25 @@ func (a *API) adoptAcquisition(w http.ResponseWriter, r *http.Request) {
 	//
 	// A want already past these is left where it is — adopting the same
 	// transfer twice is the normal case for a retried request.
-	for _, tr := range []acquisition.Transition{
+	//
+	// A want that never STARTED, though, cannot walk them: the only forward
+	// edge from idle is `search`, so every one of these is refused and the
+	// want stays exactly where it was — while the request answered 202 and the
+	// ingest job went on to succeed having done nothing (#240).
+	//
+	// That is the case this endpoint documents itself as existing for:
+	// "something fetched by hand" is precisely a want nobody searched. So it
+	// adopts, on the edge that models bytes arriving from outside the pipeline
+	// rather than on a fabricated history of a search that never ran.
+	walk := []acquisition.Transition{
 		acquisition.TransitionQueue,
 		acquisition.TransitionStartDownload,
 		acquisition.TransitionDownloaded,
-	} {
+	}
+	if _, err := state.State.Apply(acquisition.TransitionAdopt); err == nil {
+		walk = []acquisition.Transition{acquisition.TransitionAdopt}
+	}
+	for _, tr := range walk {
 		if _, err := state.State.Apply(tr); err != nil {
 			continue
 		}
