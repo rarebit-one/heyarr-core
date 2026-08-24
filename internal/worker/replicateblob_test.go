@@ -700,8 +700,14 @@ func TestReplicateBlobInterruptedLeavesNoReplicaAndRetries(t *testing.T) {
 		t.Fatalf("Open after an interrupted transfer = %v, want ErrNotFound", err)
 	}
 
-	// Retried whole. Resumption is Milestone 5 (§84); this is what makes the
-	// handler idempotent rather than merely re-runnable.
+	// Retried WHOLE, and that is now a statement about this fixture rather than
+	// about the roadmap. This source publishes no manifest, so §16's third
+	// state is the answer and the whole retry is the right one — a small blob's
+	// whole retry costs less than producing a manifest would. The resumable
+	// path is exercised where a source HAS a manifest
+	// (TestAKilledProcessResumesFromWhatIsOnDisk, and the chunked fabric
+	// above). Either way it is what makes the handler idempotent rather than
+	// merely re-runnable.
 	if err := f.run(hash); err != nil {
 		t.Fatalf("the retry after an interrupted transfer: %v", err)
 	}
