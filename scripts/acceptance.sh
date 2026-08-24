@@ -5608,6 +5608,16 @@ $ctl_moved of $ctl_size bytes, measured on the SOURCE's serving side"
   rp_orig=$(dd if="$rp_file" bs=1 skip="$rp_off" count=1 2>/dev/null | od -An -tu1 | tr -d ' ')
   printf "$(printf '\\%03o' "$(( rp_orig ^ 255 ))")" \
     | dd of="$rp_file" bs=1 seek="$rp_off" count=1 conv=notrunc 2>/dev/null
+  # And CHECK the damage landed, before asserting anything about repair.
+  #
+  # The write's stderr is discarded — it is noisy — so a write that did not
+  # happen at all would look exactly like a write that changed nothing, and the
+  # section would fail three assertions later complaining about repair. This
+  # reads the byte back and fails HERE, naming the step that did not work.
+  rp_now=$(dd if="$rp_file" bs=1 skip="$rp_off" count=1 2>/dev/null | od -An -tu1 | tr -d ' ')
+  if [[ "$rp_now" == "$rp_orig" ]]; then
+    fail "the damage did not land: byte $rp_off of the blob is still $rp_orig, so nothing below measures a repair"
+  fi
   assert_eq "$(cli_a blobs verify "$lc_large" --json 2>/dev/null | jq -r '.verified | tostring')" "false" \
     "the blob is damaged on node A: it no longer hashes to its own name"
 
