@@ -252,3 +252,49 @@ func Eligible(monitor, satisfied bool, incumbent Evaluation) bool {
 	// answer: every disqualifying reason has its own status.
 	return v.Status == UpgradeNoBetterCandidate || v.Status == UpgradeAvailable
 }
+
+// BestOver is the candidate a want should acquire, GIVEN what it already holds.
+//
+// # Why selection needs to know about the incumbent at all
+//
+// For a want holding nothing this is exactly Best: the highest-scoring
+// acceptable release, which is the acquisition case.
+//
+// For a SATISFIED want it is not, and treating it as though it were is #229. A
+// satisfied want's search is an UPGRADE search (§60), and an upgrade has to be
+// strictly better than what is held. Selecting an equally-scoring release — or,
+// in the case that found this, the byte-identical one already in the store — is
+// work that can only ever be a no-op, and it drags the want out of
+// CONTENT_SATISFIED into SELECTED to do it.
+//
+// # Why this lives here rather than in the handler
+//
+// Because the SELECTION is what has to be suppressed, not merely the state
+// transition. A handler that let the selection be recorded and then declined to
+// advance the phase would leave release_candidates.selected pointing at a
+// release the want is not acquiring — and that column's whole meaning is "what
+// this want is currently acquiring". The row and the phase have to agree, so
+// one function decides both.
+//
+// A tie leaves the incumbent alone, matching ConsiderUpgrade: otherwise two
+// equivalent releases replace each other forever.
+func BestOver(ranked []Ranked, incumbent Incumbent) (Ranked, bool) {
+	best, ok := Best(ranked)
+	if !ok {
+		return Ranked{}, false
+	}
+	if incumbent.AssetID == "" {
+		// Nothing acceptable is held: this is an acquisition, and any
+		// acceptable release is an improvement on having none.
+		return best, true
+	}
+	if incumbent.Evaluation.Terminal {
+		// What is held meets every terminal condition, so there is nothing
+		// left to want (§62) whatever this candidate scored.
+		return Ranked{}, false
+	}
+	if best.Evaluation.Score <= incumbent.Evaluation.Score {
+		return Ranked{}, false
+	}
+	return best, true
+}
