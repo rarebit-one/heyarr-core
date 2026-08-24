@@ -196,34 +196,143 @@ func TestNoPeerHoldingTheBlobIsErrNoSource(t *testing.T) {
 	}
 }
 
-// A peer that served the WRONG BYTES is a fault, and must not be folded into
-// "nobody had it" — the two lead to different outcomes and different actions.
-func TestAPeerServingCorruptBytesIsAFaultRatherThanAnAbsence(t *testing.T) {
+// A peer that served the WRONG BYTES is reported AND walked past.
+//
+// Both halves matter and the first version of this had only one of them. It
+// stopped the walk, which made a repairable blob stay damaged because one peer
+// lied while a good peer was next in the list. Availability and observability
+// are not actually in tension here — the fault is reported on the way past.
+func TestAPeerServingCorruptBytesIsReportedAndWalkedPast(t *testing.T) {
+	want := []byte("the bytes a peer would serve for one chunk")
+	// The liar is deliberately SECOND. With it first, a fault that reported
+	// whichever peer happened to be at the head of the list would be
+	// indistinguishable from one that reported the peer it actually asked —
+	// and a sabotage doing exactly that passed against the first version of
+	// this test.
+	peers := &peerList{peers: []replication.Source{
+		usable("peer-gone"), usable("peer-liar"), usable("peer-good"),
+	}}
+	fetcher := &scriptedFetcher{answers: map[string]answer{
+		"peer-gone": {err: transfer.ErrSourceLacksBlob},
+		"peer-liar": {err: transfer.ErrChunkCorrupt},
+		"peer-good": {bytes: want},
+	}}
+	var faults []repairsource.SourceFault
+	src, err := repairsource.New(repairsource.Options{
+		Sources: peers, Fetcher: fetcher,
+		OnFault: func(f repairsource.SourceFault) { faults = append(faults, f) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob := fixtureBlob(t)
+	chunk := fixtureChunk(t)
+	chunk.Offset = 4096 // non-zero, so a fault reporting 0 cannot pass by default
+
+	got, err := src.FetchChunk(t.Context(), blob, chunk)
+	// THE REPAIR STILL HAPPENS.
+	if err != nil {
+		t.Fatalf("FetchChunk = %v, want the good peer's bytes — one lying peer must not cost a "+
+			"repair that another peer could complete", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("FetchChunk returned %q, want the second peer's bytes", got)
+	}
+	if strings.Join(fetcher.tried, ",") != "peer-gone,peer-liar,peer-good" {
+		t.Errorf("the peers tried were %v, want peer-gone then peer-liar then peer-good",
+			fetcher.tried)
+	}
+
+	// AND THE FAULT IS REPORTED. Spelled out field by field rather than
+	// counted: a report that arrives with the wrong peer in it is worse than
+	// no report, because it sends an operator to the wrong machine.
+	// Exactly one: peer-gone simply does not hold the bytes, which ADR-0038
+	// makes an ordinary day and not a fault about anybody.
+	if len(faults) != 1 {
+		t.Fatalf("OnFault was called %d times, want exactly once — a repair that routed around a "+
+			"lying peer and said nothing leaves the lie in place and nobody looking for it, and a "+
+			"peer that simply does not hold the bytes is not a fault at all", len(faults))
+	}
+	f := faults[0]
+	if f.PeerID != "peer-liar" {
+		t.Errorf("the fault names peer %q, want peer-liar", f.PeerID)
+	}
+	if f.Blob != blob.String() {
+		t.Errorf("the fault names blob %q, want %s", f.Blob, blob)
+	}
+	if f.Offset != 4096 {
+		t.Errorf("the fault reports offset %d, want 4096", f.Offset)
+	}
+	if !errors.Is(f.Err, transfer.ErrChunkCorrupt) {
+		t.Errorf("the fault carries %v, want transfer.ErrChunkCorrupt — a caller has to be able "+
+			"to tell corrupt bytes from a redirect out of the fabric", f.Err)
+	}
+	if !strings.Contains(f.Error(), "peer-liar") {
+		t.Errorf("the fault reads %q and does not name the peer", f.Error())
+	}
+}
+
+// A Source with no OnFault still works, and still walks past.
+//
+// The sink is optional, and the failure this guards is a nil-func panic on the
+// one path nobody exercises by hand.
+func TestAFaultWithNoSinkIsStillWalkedPast(t *testing.T) {
+	want := []byte("the bytes a peer would serve for one chunk")
 	peers := &peerList{peers: []replication.Source{usable("peer-liar"), usable("peer-good")}}
 	fetcher := &scriptedFetcher{answers: map[string]answer{
 		"peer-liar": {err: transfer.ErrChunkCorrupt},
-		"peer-good": {bytes: []byte("the bytes a peer would serve for one chunk")},
+		"peer-good": {bytes: want},
 	}}
+	got, err := newSource(t, peers, fetcher).FetchChunk(t.Context(), fixtureBlob(t), fixtureChunk(t))
+	if err != nil {
+		t.Fatalf("FetchChunk with no OnFault: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("FetchChunk returned %q, want the good peer's bytes", got)
+	}
+}
 
-	_, err := newSource(t, peers, fetcher).FetchChunk(t.Context(), fixtureBlob(t), fixtureChunk(t))
-	if err == nil {
-		t.Fatal("a peer serving bytes that do not match the manifest was accepted")
+// Every peer lying is still ErrNoSource, and every one of them is reported.
+//
+// This is the case the two halves have to agree about: nothing could supply
+// the bytes, so repair leaves the blob alone — but that is NOT an ordinary
+// unreachable day, and the peers that lied are named rather than folded into
+// the silence.
+func TestWhenEveryPeerLiesTheFaultsAreStillReported(t *testing.T) {
+	peers := &peerList{peers: []replication.Source{usable("peer-a"), usable("peer-b")}}
+	fetcher := &scriptedFetcher{answers: map[string]answer{
+		"peer-a": {err: transfer.ErrChunkCorrupt},
+		"peer-b": {err: transfer.ErrRedirected},
+	}}
+	var faults []repairsource.SourceFault
+	src, err := repairsource.New(repairsource.Options{
+		Sources: peers, Fetcher: fetcher,
+		OnFault: func(f repairsource.SourceFault) { faults = append(faults, f) },
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if errors.Is(err, integrity.ErrNoSource) {
-		t.Errorf("a peer serving corrupt bytes reported as ErrNoSource (%v) — that reads as an "+
-			"ordinary unreachable day, and this is a peer that cannot back its own inventory", err)
+	if _, err := src.FetchChunk(t.Context(), fixtureBlob(t), fixtureChunk(t)); !errors.Is(
+		err, integrity.ErrNoSource) {
+		t.Fatalf("FetchChunk = %v, want ErrNoSource: nothing could supply the bytes", err)
 	}
-	if !errors.Is(err, transfer.ErrChunkCorrupt) {
-		t.Errorf("error = %v, want it to carry transfer.ErrChunkCorrupt", err)
+	if len(faults) != 2 {
+		t.Fatalf("OnFault was called %d times, want 2 — one per lying peer", len(faults))
 	}
-	if !strings.Contains(err.Error(), "peer-liar") {
-		t.Errorf("error = %q, and it does not name the peer that served the bytes", err)
+	// Each fault names the peer it is ABOUT. Asserted per fault rather than as
+	// a set, because the failure worth catching is the two being attributed to
+	// the same peer — which is what an operator would act on, and which a
+	// count cannot see.
+	if faults[0].PeerID != "peer-a" || faults[1].PeerID != "peer-b" {
+		t.Errorf("the faults name %q and %q, want peer-a then peer-b — a report that sends an "+
+			"operator to the wrong machine is worse than no report",
+			faults[0].PeerID, faults[1].PeerID)
 	}
-	// It stops rather than quietly succeeding from the next peer. A repair
-	// that silently routed around a lying peer is a repair that leaves the lie
-	// in place and nobody looking for it.
-	if strings.Join(fetcher.tried, ",") != "peer-liar" {
-		t.Errorf("the peers tried were %v, want the walk to stop at peer-liar", fetcher.tried)
+	// A redirect out of the fabric is a fault too, and a different one.
+	if !errors.Is(faults[0].Err, transfer.ErrChunkCorrupt) ||
+		!errors.Is(faults[1].Err, transfer.ErrRedirected) {
+		t.Errorf("the faults carry %v and %v, want ErrChunkCorrupt then ErrRedirected",
+			faults[0].Err, faults[1].Err)
 	}
 }
 

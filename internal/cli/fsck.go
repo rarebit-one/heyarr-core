@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -115,6 +116,17 @@ func durabilityFor(ctx context.Context, dataDir string, cat *catalog.Catalog, db
 // a cron job, its output will stop being read, and its silence will be trusted.
 var ErrDamage = fmt.Errorf("fsck: integrity damage found")
 
+// ErrSourceFault is returned when a PEER served bytes it could not back, even
+// if the repair then succeeded from somebody else.
+//
+// Separate from ErrDamage because it is a different fact about a different
+// machine: the local store is fine, and another node's is not — or another
+// node is lying about what it holds. It is non-zero for exactly ErrDamage's
+// reason. A repair that quietly routed around a peer serving corrupt bytes,
+// reported success, and exited 0 would leave the only evidence in a log line
+// nobody reads, and the lie in place on a peer nobody is looking at.
+var ErrSourceFault = fmt.Errorf("fsck: a peer served bytes it could not back")
+
 func newFsckCommand(_ Options, configPath *string) *cobra.Command {
 	var (
 		deep   bool
@@ -172,17 +184,30 @@ says which of those it was.`,
 					return nil
 				}
 
-				results, err := repairDamage(ctx, opts, store, cat, dataDir, report)
+				results, faults, err := repairDamage(ctx, opts, store, cat, dataDir, report)
 				if err != nil {
 					return err
 				}
-				if err := printRepairedReport(cmd.OutOrStdout(), report, results, asJSON); err != nil {
+				if err := printRepairedReport(
+					cmd.OutOrStdout(), report, results, faults, asJSON); err != nil {
 					return err
 				}
 				remaining := report.Damage() - repairedCount(results)
 				if remaining > 0 {
 					return fmt.Errorf("%w: %d of %d damaged blobs are still damaged after the "+
 						"repair pass", ErrDamage, remaining, report.Damage())
+				}
+				// Checked AFTER local damage, because unrepaired bytes on THIS
+				// disk are the more urgent of the two and should be the error an
+				// operator sees first. A peer fault on a run that repaired
+				// everything still exits non-zero: a repair that quietly routed
+				// around a peer serving bytes it could not back, reported
+				// success and exited 0 would leave the only evidence in a log
+				// line nobody reads.
+				if len(faults) > 0 {
+					return fmt.Errorf("%w: %d response(s) from %d peer(s) did not match the "+
+						"manifest; the repair completed from elsewhere and those peers are "+
+						"named above", ErrSourceFault, len(faults), distinctPeers(faults))
 				}
 				return nil
 			})
@@ -203,7 +228,20 @@ says which of those it was.`,
 func repairDamage(
 	ctx context.Context, opts integrity.Options, store *cas.FS, cat *catalog.Catalog,
 	dataDir string, report integrity.Report,
-) ([]integrity.RepairResult, error) {
+) ([]integrity.RepairResult, []repairsource.SourceFault, error) {
+	// Collected rather than returned by the repairer, and deliberately: a peer
+	// that served bad bytes during a repair that then SUCCEEDED from another
+	// peer is not a property of that repair. It is a fact about the fabric,
+	// and it belongs beside the repair report rather than inside one of them.
+	var (
+		faultMu sync.Mutex
+		faults  []repairsource.SourceFault
+	)
+	collect := func(f repairsource.SourceFault) {
+		faultMu.Lock()
+		defer faultMu.Unlock()
+		faults = append(faults, f)
+	}
 	repairer, err := integrity.NewRepairer(integrity.RepairOptions{
 		Store:     store,
 		Manifests: cat,
@@ -213,12 +251,12 @@ func repairDamage(
 		// the command appearing to have tried. That is now the answer for a
 		// node with no peer identity on disk rather than the answer for every
 		// node.
-		Source: chunkSourceFor(ctx, dataDir, store, cat, opts.Logger),
+		Source: chunkSourceFor(ctx, dataDir, store, cat, opts.Logger, collect),
 		Clock:  opts.Clock,
 		Logger: opts.Logger,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var results []integrity.RepairResult
 	for _, f := range report.Findings {
@@ -227,15 +265,17 @@ func repairDamage(
 		}
 		h, err := hashing.Parse(f.Hash)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		result, err := repairer.Repair(ctx, h)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		results = append(results, result)
 	}
-	return results, nil
+	faultMu.Lock()
+	defer faultMu.Unlock()
+	return results, faults, nil
 }
 
 // chunkSourceFor builds the peer-backed replacement-chunk source, or nothing.
@@ -260,6 +300,7 @@ func repairDamage(
 // nobody has taken (#194's stance, and ADR-0034 does not reach it).
 func chunkSourceFor(
 	ctx context.Context, dataDir string, store *cas.FS, cat *catalog.Catalog, log *slog.Logger,
+	onFault func(repairsource.SourceFault),
 ) integrity.ChunkSource {
 	self, err := cat.SelfPeer(ctx)
 	if err != nil {
@@ -284,6 +325,7 @@ func chunkSourceFor(
 	src, err := repairsource.New(repairsource.Options{
 		Sources: cat,
 		Fetcher: puller,
+		OnFault: onFault,
 		Logger:  log,
 	})
 	if err != nil {
@@ -307,8 +349,45 @@ func repairedCount(results []integrity.RepairResult) int {
 // What was repaired, how many chunks moved, and — for every blob that was not
 // repaired — WHY. A refusal nobody can read is an outage nobody can diagnose
 // (M4-12).
+// sourceFaultJSON is a peer fault in the --json shape.
+//
+// A struct of its own rather than marshalling repairsource.SourceFault, whose
+// Err field is an error and would marshal to `{}`. The wire contract wants a
+// sentence, and a sentence is what the CLI is for.
+type sourceFaultJSON struct {
+	PeerID   string `json:"peer_id"`
+	PeerName string `json:"peer_name"`
+	Blob     string `json:"blob_hash"`
+	Offset   int64  `json:"offset"`
+	Detail   string `json:"detail"`
+}
+
+func sourceFaultsJSON(faults []repairsource.SourceFault) []sourceFaultJSON {
+	out := make([]sourceFaultJSON, 0, len(faults))
+	for _, f := range faults {
+		out = append(out, sourceFaultJSON{
+			PeerID: f.PeerID, PeerName: f.PeerName, Blob: f.Blob,
+			Offset: f.Offset, Detail: f.Err.Error(),
+		})
+	}
+	return out
+}
+
+// distinctPeers is how many different peers are implicated, which is the
+// number an operator acts on: one bad peer serving twenty chunks is one
+// machine to go and look at, and twenty peers serving one chunk each is a
+// different and much worse morning.
+func distinctPeers(faults []repairsource.SourceFault) int {
+	seen := make(map[string]struct{}, len(faults))
+	for _, f := range faults {
+		seen[f.PeerID] = struct{}{}
+	}
+	return len(seen)
+}
+
 func printRepairedReport(
-	w io.Writer, report integrity.Report, results []integrity.RepairResult, asJSON bool,
+	w io.Writer, report integrity.Report, results []integrity.RepairResult,
+	faults []repairsource.SourceFault, asJSON bool,
 ) error {
 	if asJSON {
 		enc := json.NewEncoder(w)
@@ -317,14 +396,45 @@ func printRepairedReport(
 			results = []integrity.RepairResult{}
 		}
 		return enc.Encode(struct {
-			Check   integrity.Report         `json:"check"`
-			Repairs []integrity.RepairResult `json:"repairs"`
-		}{Check: report, Repairs: results})
+			Check        integrity.Report         `json:"check"`
+			Repairs      []integrity.RepairResult `json:"repairs"`
+			SourceFaults []sourceFaultJSON        `json:"source_faults"`
+		}{Check: report, Repairs: results, SourceFaults: sourceFaultsJSON(faults)})
 	}
 	if err := printReport(w, report, false); err != nil {
 		return err
 	}
-	return printRepairs(w, results)
+	if err := printRepairs(w, results); err != nil {
+		return err
+	}
+	return printSourceFaults(w, faults)
+}
+
+// printSourceFaults names the peers that served bytes they could not back.
+//
+// Printed even when every repair succeeded, and that is the whole point: this
+// section exists for the run where the local outcome is entirely good and
+// another machine in the fabric is not.
+func printSourceFaults(w io.Writer, faults []repairsource.SourceFault) error {
+	if len(faults) == 0 {
+		return nil
+	}
+	fmt.Fprintf(w, "\npeers that served bytes they could not back\n\n")
+	fmt.Fprintf(w, "  responses         %d\n", len(faults))
+	fmt.Fprintf(w, "  peers             %d\n\n", distinctPeers(faults))
+	for _, f := range faults {
+		name := f.PeerName
+		if name == "" {
+			name = f.PeerID
+		}
+		fmt.Fprintf(w, "BAD SOURCE    %-18s %s\n", name, f.Blob)
+		fmt.Fprintf(w, "              at offset %d: %v\n", f.Offset, f.Err)
+	}
+	fmt.Fprintf(w, "\n  The repair above did not depend on these responses — it completed from\n")
+	fmt.Fprintf(w, "  another peer, or it would be reported as unrepaired. What they mean is\n")
+	fmt.Fprintf(w, "  that a peer's inventory says it holds bytes it cannot serve. Run fsck\n")
+	fmt.Fprintf(w, "  --deep on the named peer; its own store is the thing to check.\n")
+	return nil
 }
 
 func printRepairs(w io.Writer, results []integrity.RepairResult) error {
