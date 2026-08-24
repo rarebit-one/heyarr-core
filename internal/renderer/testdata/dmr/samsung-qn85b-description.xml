@@ -71,7 +71,7 @@
         <SCPDURL>/AVTransport_1.xml</SCPDURL>
       </service>
     </serviceList>
-    <sec:ProductCap>Tizen,Y2022,WebURIPlayable,NavigateInPause,ScreenMirroringP2PMAC=00:00:5e:00:53:01,UHD_SCREEN,SerialNumber=REDACTEDSERIAL01,vdProductType=TV,OCF=1</sec:ProductCap>
+    <sec:ProductCap>Tizen,Y2022,WebURIPlayable,NavigateInPause,ScreenMirroringP2PMAC=00:00:5e:00:53:00,UHD_SCREEN,SerialNumber=REDACTEDSERIAL01,vdProductType=TV,OCF=1</sec:ProductCap>
     <pnpx:X_hardwareId>VEN_0105&amp;DEV_VD0001</pnpx:X_hardwareId>
   </device>
 </root>

@@ -1,0 +1,51 @@
+# Repo hygiene — retired proper nouns, as SHA-256 digests. Never plain text.
+#
+# READ THIS BEFORE "FIXING" THIS FILE.
+#
+# These are hashes and not names on purpose, and converting them back to plain
+# text would undo the change that created this file.
+#
+# #211 removed a real host name from eight files in this public repo. A
+# deny-list that spells the string it forbids puts it straight back: after such
+# a change `git grep -i <name>` on the public tree still returns a hit, and
+# "it is only in the linter" is a distinction that reads fine to us and not at
+# all to someone scraping public repos for infrastructure names. The guard has
+# to recognise the name without disclosing it, and a digest does exactly that.
+#
+# So: scripts/hygiene.denylist holds SHAPES in plain text, because a shape
+# discloses nothing. This file holds NAMES as digests, because a name does.
+# The two lists differ for that reason and should not be merged.
+#
+# HOW IT MATCHES
+#   scripts/hygiene.py splits every tracked file into candidate word tokens
+#   (also splitting camelCase and letter/digit boundaries, so a name embedded
+#   in an identifier is still seen), lowercases each one, and compares its
+#   SHA-256 against this list. Matching is therefore on whole tokens: a name is
+#   caught inside a path, a URL, a hostname or an identifier, but an unrelated
+#   word that merely CONTAINS one is not. That is what lets a premises name
+#   scrubbed by #147 live here even though `covered` and `Covenant` appear in
+#   LICENSE and CODE_OF_CONDUCT.md — #147 had to exclude those two files by
+#   name, and this no longer does.
+#
+# HOW TO ADD ONE
+#   printf '%s' "$(printf '%s' 'TheName' | tr 'A-Z' 'a-z')" | shasum -a 256
+#   Add the digest and a label that describes the CLASS of the name, never the
+#   name. Do not commit the plaintext anywhere — not in the label, not in the
+#   commit message, not in the PR.
+#
+# WHAT IS DELIBERATELY ABSENT
+#   Tokens too generic to hash safely: a name whose parts are ordinary words
+#   ("nas", "seed", "mac", "mini", "ridge") would match legitimate prose on
+#   every run, and a guard that cries wolf gets disabled. Those are covered by
+#   the path and address shapes in scripts/hygiene.denylist instead, which is
+#   where such a name actually shows up — inside a path, a URL or an ssh
+#   command.
+#
+# FORMAT
+#   <sha256 of the lowercased token>  <label describing the class, not the name>
+
+d6f12e4e2cb4b9fb9d3c4a498a2ea0f5456e4a187a15632b2c368dc40c86de96  retired reference host name (#211)
+5463f6e63b69781c30c7ea693229e4446e1f5623bbe4e66fd7ac64d9e0e3f0cd  premises name, scrubbed by #147
+6a259d3299684d8a1f5693be49dde21e5e22195158487a86c3d73d07c36a5cfc  premises name, scrubbed by #147
+7a3a052ab6bfe076f489545c904aa4584d595b4ddbe8fee8a3671412f1e2d9f9  private network name, legacy (#147 family)
+fb7134a5a2dfa59b14f9cc71fdbe52847c661018a69d65d02aacfc47d43b987a  author username (#211)
