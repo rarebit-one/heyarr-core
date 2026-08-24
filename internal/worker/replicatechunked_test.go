@@ -188,21 +188,20 @@ func TestAPartialChunkedTransferIsNotAReplicaByAnyRoute(t *testing.T) {
 		t.Fatal("a transfer whose source went away part-way reported success")
 	}
 
+	// The staging file's size is read for the messages below, but nothing here
+	// is gated on it. An implementation that published the partial and removed
+	// the staging file is the fault this test exists to catch, and a fixture
+	// precondition checked first would report it as a missing fixture instead.
 	staged := filepath.Join(f.store.Root(), "tmp", cas.PartialName(hash))
-	info, err := os.Stat(staged)
-	if err != nil {
-		t.Fatalf("the interrupted transfer left no staging file, so there is no partial to be "+
-			"wrong about: %v", err)
-	}
-	if info.Size() == 0 || info.Size() >= int64(len(content)) {
-		t.Fatalf("the staging file is %d bytes of a %d byte blob, which is not a partial",
-			info.Size(), len(content))
+	var stagedBytes int64
+	if info, err := os.Stat(staged); err == nil {
+		stagedBytes = info.Size()
 	}
 
 	// 1. The store does not have it.
 	if held, err := f.store.Has(t.Context(), hash); err != nil || held {
-		t.Errorf("Has = %v (err %v) for a blob that is %d/%d received",
-			held, err, info.Size(), len(content))
+		t.Errorf("Has = %v (err %v) for a blob whose transfer did not finish (%d/%d bytes staged)",
+			held, err, stagedBytes, len(content))
 	}
 
 	// 2. It is not in this node's inventory report. The report is collected
@@ -227,7 +226,8 @@ func TestAPartialChunkedTransferIsNotAReplicaByAnyRoute(t *testing.T) {
 		t.Fatal("no replica row at all, so the state assertion below asserts nothing")
 	}
 	if state == "present" {
-		t.Errorf("replica state = %q for a blob that is %d/%d received", state, info.Size(), len(content))
+		t.Errorf("replica state = %q for a blob whose transfer did not finish (%d/%d bytes staged)",
+			state, stagedBytes, len(content))
 	}
 	// `missing` is what the handler records for an attempt that did not
 	// deliver, and it is the honest state: a transfer was in flight, it is not
@@ -252,7 +252,7 @@ func TestAPartialChunkedTransferIsNotAReplicaByAnyRoute(t *testing.T) {
 	for _, r := range replicas {
 		if r.Peer.PeerID == f.self {
 			t.Errorf("this node appears as a durability witness for a blob it holds %d/%d bytes of",
-				info.Size(), len(content))
+				stagedBytes, len(content))
 		}
 	}
 	evidence, err := f.cat.DurabilityEvidence(t.Context(), hash)
@@ -263,6 +263,13 @@ func TestAPartialChunkedTransferIsNotAReplicaByAnyRoute(t *testing.T) {
 		if e.PeerID == f.self {
 			t.Errorf("this node recorded durability evidence for a partial: %+v", e)
 		}
+	}
+
+	// And the fixture really was a partial, so the four assertions above were
+	// asked of a transfer that had genuinely received some of the blob.
+	if stagedBytes == 0 || stagedBytes >= int64(len(content)) {
+		t.Fatalf("the staging file is %d bytes of a %d byte blob, which is not a partial",
+			stagedBytes, len(content))
 	}
 }
 

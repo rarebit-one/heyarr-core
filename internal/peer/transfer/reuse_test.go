@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/peer/transfer"
@@ -161,14 +162,19 @@ func TestTheSameTransferToAPeerHoldingNothingFetchesEverything(t *testing.T) {
 // whole-object digest and nothing else, so two blobs that share every chunk
 // are two blobs — both present, both readable, each verifying to its own
 // digest, neither disturbed by the other.
+//
+// The two manifests are built BY HAND from the same two pieces rather than by
+// running the chunker over two concatenations, and that is the whole fixture.
+// FastCDC over X+Y and over Y+X produces boundaries that differ at the join,
+// so those two blobs share MOST of their chunks and not all of them — which
+// leaves the case this test is about untested and lets an implementation that
+// keys on the chunk set pass. Here the two chunk sets are identical, element
+// for element, and only the order and the whole-object digest differ.
 func TestTwoBlobsWithIdenticalChunkSetsStayTwoBlobs(t *testing.T) {
 	src := newNode(t, "peer-source", "source")
 	dst := newNode(t, "peer-destination", "destination")
 	root := newTrustRoot(src.member(), dst.member())
 
-	// Two different blobs built from the SAME pieces in different orders. Same
-	// chunk set, different whole-object digests, and only the whole-object
-	// hash can tell them apart.
 	partA := deterministicContent(21, 300<<10)
 	partB := deterministicContent(22, 300<<10)
 	first := append(append([]byte(nil), partA...), partB...)
@@ -178,26 +184,47 @@ func TestTwoBlobsWithIdenticalChunkSetsStayTwoBlobs(t *testing.T) {
 	}
 
 	source := startChunkedSource(t, src, root, nil)
-	firstBlob, firstManifest := source.addBlob(t, first)
-	secondBlob, secondManifest := source.addBlob(t, second)
+	firstBlob := putBlob(t, source.store, first)
+	secondBlob := putBlob(t, source.store, second)
 	if firstBlob.Equal(secondBlob) {
 		t.Fatal("the fixture's two blobs have the same digest")
+	}
+	firstManifest := manifestOfPieces(t, firstBlob, partA, partB)
+	secondManifest := manifestOfPieces(t, secondBlob, partB, partA)
+	source.mans.store(firstManifest)
+	source.mans.store(secondManifest)
+
+	// The two chunk SETS are identical, asserted rather than assumed — a
+	// fixture that only mostly overlapped would leave the prohibition untested.
+	if !sameChunkSet(firstManifest, secondManifest) {
+		t.Fatal("the fixture's two manifests do not have identical chunk sets, so the case this " +
+			"test exists for is not reached")
+	}
+	if firstManifest.Chunks[0].Digest.Equal(secondManifest.Chunks[0].Digest) {
+		t.Fatal("the fixture's two manifests are in the same order, so only the order differing " +
+			"is not being tested")
 	}
 
 	dest := newChunkedDestination(t, dst)
 	if _, err := dest.puller.PullChunked(t.Context(), source.source(), firstBlob, firstManifest); err != nil {
 		t.Fatalf("the first blob: %v", err)
 	}
-	// The first blob is now held and indexed, so the second is mostly reuse —
-	// which is exactly the situation in which a store might be tempted to
-	// decide they are the same thing.
-	dest.index.record(firstBlob, chunkAll(t, first, testChunking()))
+	// The first blob is now held, and its chunks are indexed where they
+	// actually are — so every chunk of the SECOND blob is available locally.
+	// This is exactly the situation in which a store might be tempted to
+	// decide the two are the same thing.
+	dest.index.record(firstBlob, firstManifest.Chunks)
+
 	out, err := dest.puller.PullChunked(t.Context(), source.source(), secondBlob, secondManifest)
 	if err != nil {
 		t.Fatalf("the second blob: %v", err)
 	}
-	if out.ChunksReused == 0 {
-		t.Error("the second blob reused nothing, so this test never reached the case it is about")
+	if out.ChunksReused != len(secondManifest.Chunks) {
+		t.Errorf("the second blob reused %d of %d chunks — every one of them is on this disk",
+			out.ChunksReused, len(secondManifest.Chunks))
+	}
+	if out.ChunksFetched != 0 {
+		t.Errorf("the second blob fetched %d chunks it already held", out.ChunksFetched)
 	}
 
 	for name, want := range map[string]struct {
@@ -231,6 +258,69 @@ func TestTwoBlobsWithIdenticalChunkSetsStayTwoBlobs(t *testing.T) {
 	if blobs != 2 {
 		t.Errorf("the store holds %d blobs after receiving two that share every chunk, want 2", blobs)
 	}
+}
+
+// putBlob puts content into a store and returns its digest.
+func putBlob(t *testing.T, store *cas.FS, content []byte) hashing.Hash {
+	t.Helper()
+	desc, err := store.Put(t.Context(), bytes.NewReader(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return desc.Hash
+}
+
+// manifestOfPieces builds a manifest whose chunks are exactly the pieces
+// given, in the order given.
+//
+// A manifest is a description (ADR-0034), so one that was not produced by the
+// chunker is still a legitimate description of a blob as long as it covers it
+// contiguously — which is what makes this fixture possible at all, and what
+// lets two blobs be described by identical chunk sets in different orders.
+func manifestOfPieces(t *testing.T, blob hashing.Hash, pieces ...[]byte) manifests.Manifest {
+	t.Helper()
+	var (
+		chunks []chunking.Chunk
+		off    int64
+	)
+	for _, piece := range pieces {
+		h := hashing.New()
+		if _, err := h.Write(piece); err != nil {
+			t.Fatal(err)
+		}
+		chunks = append(chunks, chunking.Chunk{Offset: off, Length: int64(len(piece)), Digest: h.Sum()})
+		off += int64(len(piece))
+	}
+	m, err := manifests.Build(blob, testChunking(), chunks,
+		time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// sameChunkSet reports whether two manifests describe the same multiset of
+// chunk digests, ignoring order.
+func sameChunkSet(a, b manifests.Manifest) bool {
+	if len(a.Chunks) != len(b.Chunks) {
+		return false
+	}
+	counts := map[hashing.Hash]int{}
+	for _, c := range a.Chunks {
+		counts[c.Digest]++
+	}
+	for _, c := range b.Chunks {
+		counts[c.Digest]--
+		if counts[c.Digest] < 0 {
+			return false
+		}
+	}
+	for _, n := range counts {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // ---------------------------------------------------------------------------

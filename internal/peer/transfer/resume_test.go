@@ -105,16 +105,15 @@ func TestAPartialTransferIsNotPresentInTheStore(t *testing.T) {
 		t.Fatal("an interrupted transfer reported success")
 	}
 
+	// The addressability assertions come FIRST, before the precondition that
+	// there is a partial at all. A test that checked the staging file first
+	// would fatal out on an implementation that published the partial and
+	// removed the staging file — which is precisely the fault being looked
+	// for, reported as a missing fixture.
 	staged := dest.partialSize(t, blob)
-	if staged == 0 {
-		t.Fatal("the interrupted transfer staged nothing, so there is no partial to be wrong about")
-	}
-	if staged >= int64(len(content)) {
-		t.Fatalf("the interrupted transfer staged %d bytes of a %d byte blob, which is not partial",
-			staged, len(content))
-	}
 	if held, err := dest.store.Has(t.Context(), blob); err != nil || held {
-		t.Errorf("Has = %v (err %v) for a blob that is %d/%d received", held, err, staged, len(content))
+		t.Errorf("Has = %v (err %v) for a blob whose transfer did not finish (%d/%d bytes staged)",
+			held, err, staged, len(content))
 	}
 	if _, _, err := dest.store.Open(t.Context(), blob); !errors.Is(err, cas.ErrNotFound) {
 		t.Errorf("Open of a partially received blob returned %v, want ErrNotFound", err)
@@ -125,6 +124,16 @@ func TestAPartialTransferIsNotPresentInTheStore(t *testing.T) {
 	}
 	if walked != 0 {
 		t.Errorf("Walk visited %d blobs and the only bytes here are a partial transfer", walked)
+	}
+
+	// And the fixture really was a partial, so the four assertions above were
+	// asked of a transfer that had genuinely received some of the blob.
+	if staged == 0 {
+		t.Fatal("the interrupted transfer staged nothing, so there was no partial to be wrong about")
+	}
+	if staged >= int64(len(content)) {
+		t.Fatalf("the interrupted transfer staged %d bytes of a %d byte blob, which is not partial",
+			staged, len(content))
 	}
 }
 
