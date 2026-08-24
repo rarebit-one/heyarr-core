@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -140,20 +141,39 @@ func (a *API) searchDesired(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, "desired item", err)
 		return
 	}
-	job, err := a.jobs.Enqueue(r.Context(), jobs.EnqueueOptions{
+	out, err := a.SearchReleases(r.Context(), id)
+	if err != nil {
+		a.fail(w, r, "job", err)
+		return
+	}
+	a.write(w, r, http.StatusAccepted, out)
+}
+
+// SearchReleases queues a search for one want and says so.
+//
+// Exported because MCP's search_releases is the same action asked for by an
+// agent instead of by HTTP, and §71's vocabulary should not be a second
+// implementation of it — a second one is how the two come to disagree about
+// what a search does. The HTTP handler above is now a thin wrapper.
+//
+// It ENQUEUES. A search is a job (invariant 4, ADR-0002), the worker that runs
+// it may be another process, and an indexer may take thirty seconds to refuse
+// — so the answer is "queued", not the candidates. A caller that wants the
+// result reads the want's candidates afterwards.
+func (a *API) SearchReleases(ctx context.Context, id string) (map[string]string, error) {
+	job, err := a.jobs.Enqueue(ctx, jobs.EnqueueOptions{
 		Type:      acquisition.SearchJobType,
 		Payload:   acquisition.SearchPayload{DesiredItemID: id},
 		DedupeKey: acquisition.SearchDedupeKey(id),
 	})
 	if err != nil {
-		a.fail(w, r, "job", err)
-		return
+		return nil, err
 	}
-	a.write(w, r, http.StatusAccepted, map[string]string{
+	return map[string]string{
 		"desired_item_id": id,
 		"job_id":          job.ID,
 		"status":          "queued",
-	})
+	}, nil
 }
 
 // selectCandidate is POST /api/v1/desired/{id}/select — §60's manual override.
@@ -180,7 +200,7 @@ func (a *API) selectCandidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chosen, err := a.catalog.OverrideSelection(r.Context(), id, body.CandidateID)
+	chosen, err := a.AcquireRelease(r.Context(), id, body.CandidateID)
 	switch {
 	case errors.Is(err, catalog.ErrNoCandidate):
 		httpapi.Fail(w, r, problem.NotFound(
@@ -195,15 +215,37 @@ func (a *API) selectCandidate(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, "candidate", err)
 		return
 	}
+	a.write(w, r, http.StatusOK, candidateView(chosen))
+}
+
+// AcquireRelease selects one candidate for a want and arranges for it to be
+// fetched — §60's manual override, and MCP's acquire_release.
+//
+// Exported for the same reason SearchReleases is: the agent vocabulary and the
+// HTTP surface are the same ACTION reached two ways, and two implementations
+// would eventually disagree about whether selecting also grabs.
+//
+// It refuses a candidate the profile rejected, and that refusal is the point.
+// §62's gates are the operator's own statement of what is acceptable; an
+// override that could ignore them would quietly turn "accept" into a
+// suggestion. Wanting something outside the profile is expressible by changing
+// the profile — which is visible and durable — rather than by a one-off that
+// leaves the profile saying something nobody means.
+func (a *API) AcquireRelease(
+	ctx context.Context, id, candidateID string,
+) (catalog.Candidate, error) {
+	chosen, err := a.catalog.OverrideSelection(ctx, id, candidateID)
+	if err != nil {
+		return catalog.Candidate{}, err
+	}
 
 	// The state machine only moves if the want was not already SELECTED. An
 	// override during CANDIDATES_FOUND advances it; one that merely re-points
 	// an existing selection changes the row and not the phase.
-	if _, err := a.catalog.AdvanceAcquisition(r.Context(), id,
+	if _, err := a.catalog.AdvanceAcquisition(ctx, id,
 		acquisition.TransitionSelect, "selected by hand"); err != nil {
 		if !errors.Is(err, acquisition.ErrIllegalTransition) {
-			a.fail(w, r, "desired item", err)
-			return
+			return catalog.Candidate{}, err
 		}
 	}
 
@@ -214,10 +256,10 @@ func (a *API) selectCandidate(w http.ResponseWriter, r *http.Request) {
 	// only the automatic route would have left §60's manual override as the
 	// one path that still dead-ends, which is the harder half to notice.
 	//
-	// Enqueue failure is logged into the response's shape by NOT failing the
-	// request: the override itself is durable and is what the caller asked
-	// for. The want stays SELECTED and the next search re-enqueues.
-	if _, err := a.jobs.Enqueue(r.Context(), jobs.EnqueueOptions{
+	// Enqueue failure is logged rather than returned: the override itself is
+	// durable and is what the caller asked for. The want stays SELECTED and the
+	// next search re-enqueues.
+	if _, err := a.jobs.Enqueue(ctx, jobs.EnqueueOptions{
 		Type: acquisition.GrabJobType,
 		Payload: acquisition.GrabPayload{
 			DesiredItemID: id,
@@ -229,6 +271,5 @@ func (a *API) selectCandidate(w http.ResponseWriter, r *http.Request) {
 		a.log.Warn("could not queue the grab for a hand-selected release",
 			"desired_item_id", id, "candidate", chosen.CandidateID, "error", err)
 	}
-
-	a.write(w, r, http.StatusOK, candidateView(chosen))
+	return chosen, nil
 }
