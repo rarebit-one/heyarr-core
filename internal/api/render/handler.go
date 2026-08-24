@@ -138,7 +138,19 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 	rctx.URLParams.Add("hash", granted.BlobHash)
 	inner := r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 
-	h.blobs.Content(&retyped{ResponseWriter: w, mime: granted.MIME}, inner)
+	// The declared type is a CONSTANT from servableMIME, or nothing — see
+	// CanonicalMIME for why a table rather than a validator. An unknown type
+	// falls back to the blob endpoint's own OctetStream, which plays on fewer
+	// devices and is never scriptable.
+	mime, ok := CanonicalMIME(granted.MIME)
+	if !ok {
+		mime = blobs.OctetStream
+	}
+	// Declared up front rather than corrected afterwards. This used to wrap
+	// the ResponseWriter and rewrite the header in WriteHeader, for a body
+	// written in Write — which worked, read badly, and put a second io.Writer
+	// in the response path to change one string.
+	h.blobs.ContentAs(w, inner, mime)
 }
 
 // refuse answers a bad capability.
@@ -172,54 +184,4 @@ func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, err error) {
 	// an expiry from a blob this peer does not hold.
 	httpapi.Fail(w, r, problem.NotFound("no content is available at this address").
 		WithInstance(httpapi.RenderPrefix))
-}
-
-// retyped overrides the blob handler's Content-Type, and only that.
-//
-// The blob endpoint answers application/octet-stream deliberately: bytes have
-// no type, and a peer that sniffed one could type the same blob differently
-// from its neighbour (ADR-0006). A renderer, though, refuses octet-stream — so
-// the Asset's declared type, signed into the capability when an Asset was in
-// hand, is substituted here at the edge. The blob contract is unchanged; this
-// is a view of it.
-type retyped struct {
-	http.ResponseWriter
-	mime    string
-	written bool
-}
-
-func (w *retyped) WriteHeader(status int) {
-	if !w.written {
-		w.written = true
-		// Only the octet-stream default is replaced. A multi-range response is
-		// multipart/byteranges, and overwriting that would produce a body no
-		// client could parse — a renderer seeking around a file is exactly the
-		// caller that might ask for one.
-		// PlayableMIME is re-checked HERE, at the point the header is
-		// written, and not only where the capability was minted. Minting and
-		// serving are separated by an expiry window and by whatever the
-		// catalog did in between; a token minted before this rule existed
-		// must not be honoured by a binary that has it.
-		// The value written is a CONSTANT from servableMIME, never the
-		// caller's own string, so nothing that arrived in the URL can reach a
-		// response header. See CanonicalMIME for why that shape rather than a
-		// validator.
-		//
-		// Re-checked here, at the point the header is written, and not only
-		// where the capability was minted: the two are separated by a six-hour
-		// expiry, and a token minted before this rule existed must not be
-		// honoured by a binary that has it.
-		if canonical, ok := CanonicalMIME(w.mime); ok &&
-			w.Header().Get("Content-Type") == "application/octet-stream" {
-			w.Header().Set("Content-Type", canonical)
-		}
-	}
-	w.ResponseWriter.WriteHeader(status)
-}
-
-func (w *retyped) Write(b []byte) (int, error) {
-	if !w.written {
-		w.WriteHeader(http.StatusOK)
-	}
-	return w.ResponseWriter.Write(b)
 }
