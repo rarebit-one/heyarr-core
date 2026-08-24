@@ -101,8 +101,26 @@ func IngestAcquisitionHandler(
 		// re-enqueues, so arriving late — after another pass already ingested
 		// — is the normal case rather than an error.
 		if state.State.Phase != acquisition.PhaseVerifying {
-			log.Info("an acquisition ingest arrived after the want moved on",
-				"desired_item_id", payload.DesiredItemID, "phase", string(state.State.Phase))
+			// LATE and NEVER are different situations and used to share a log
+			// line (#240). "Arrived after the want moved on" describes a second
+			// delivery of a transfer already handled; an operator reading it
+			// about a want that never got there goes looking for an earlier
+			// delivery that does not exist.
+			//
+			// Managed is what tells them apart: a want holding bytes has been
+			// through this, and one holding none has not. Both are quiet
+			// successes — invariant 9 makes a duplicate ordinary, and the
+			// endpoint now advances a never-started want itself — so what is
+			// at stake is only whether the sentence is true.
+			if state.State.Managed {
+				log.Info("an acquisition ingest arrived after the want moved on",
+					"desired_item_id", payload.DesiredItemID,
+					"phase", string(state.State.Phase))
+			} else {
+				log.Warn("an acquisition ingest arrived for a want that never reached verifying",
+					"desired_item_id", payload.DesiredItemID,
+					"phase", string(state.State.Phase))
+			}
 			return nil
 		}
 
