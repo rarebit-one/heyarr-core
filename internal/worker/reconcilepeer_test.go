@@ -502,8 +502,8 @@ func TestABlobOnNeitherPeerIsWorkForBoth(t *testing.T) {
 // COUNT for the wrong reason fails.
 func TestALinkedAssetProducesNoReplicationWork(t *testing.T) {
 	h := newConvergeHarness(t)
-	h.linked(t, "photo1", "/home/jaryl/pictures/2019/beach.jpg")
-	h.linked(t, "photo2", "/home/jaryl/pictures/2019/hill.jpg")
+	h.linked(t, "photo1", "/srv/media/pictures/2019/beach.jpg")
+	h.linked(t, "photo2", "/srv/media/pictures/2019/hill.jpg")
 	h.managed(t, blobOne)
 	h.reports(t, h.self, blobOne)
 
