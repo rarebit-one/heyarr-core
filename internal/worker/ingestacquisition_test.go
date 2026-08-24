@@ -541,3 +541,112 @@ func hashOf(t *testing.T, b []byte) string {
 	}
 	return h.String()
 }
+
+// scalar reads one string out of the database, for asserting on a column.
+func (h *ingestHarness) scalar(t *testing.T, query string, args ...any) string {
+	t.Helper()
+	var out string
+	if err := h.db.Reader().QueryRow(query, args...).Scan(&out); err != nil {
+		t.Fatalf("querying (%s): %v", query, err)
+	}
+	return out
+}
+
+// THE assertion #224 exists for.
+//
+// The want is for "Arrival" (work_key `movie:arrival:2016`). The file that
+// arrives is named nothing like it — which is the ORDINARY case, not a corner:
+// release titles carry extensions, scene tags and the indexer's own
+// normalisation, so a filename that happens to parse back to the same work key
+// is the lucky outcome.
+//
+// Before this, the pipeline re-identified from the filename and attached the
+// asset to a second, path-derived Work. The bytes were hashed, stored,
+// verified and catalogued — and the want that asked for them reported
+// `assets: []` forever, in a state indistinguishable from patience.
+func TestAnAcquisitionAttachesToTheWantsWorkWhenTheFilenameDisagrees(t *testing.T) {
+	h := newIngestHarness(t)
+	h.selectAndComplete(t, "alpine-standard-3.23.2-armv7.iso", []byte("the bytes that arrived"))
+
+	if err := h.ingest(t); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := h.count(t, `SELECT count(*) FROM assets`); n != 1 {
+		t.Fatalf("%d assets, want 1", n)
+	}
+	// The want's own Work, by id. Asserting a COUNT of works would pass for an
+	// asset attached to the wrong one of two, and asserting the work key would
+	// pass for a second row that happened to be keyed the same way.
+	gotWork := h.scalar(t, `SELECT e.work_id FROM assets a JOIN editions e ON e.id = a.edition_id`)
+	wantWork := h.scalar(t, `SELECT work_id FROM desired_items WHERE id = ?`, h.want)
+	if gotWork != wantWork {
+		t.Errorf("the asset is on work %s; the want points at %s — "+
+			"the bytes arrived and the want will report assets: [] forever",
+			gotWork, wantWork)
+	}
+}
+
+// And no second Work is created, which is the other half of the same defect.
+//
+// Separate from the assertion above because they fail differently: an asset
+// could be attached correctly while a stray Work was still created beside it,
+// and a library that grows a phantom Work per acquisition is its own problem
+// (#227 is that problem arriving from the scanner).
+func TestAnAcquisitionDoesNotCreateASecondWork(t *testing.T) {
+	h := newIngestHarness(t)
+	before := h.count(t, `SELECT count(*) FROM works`)
+
+	h.selectAndComplete(t, "alpine-standard-3.23.2-armv7.iso", []byte("the bytes that arrived"))
+	if err := h.ingest(t); err != nil {
+		t.Fatal(err)
+	}
+
+	if after := h.count(t, `SELECT count(*) FROM works`); after != before {
+		t.Errorf("works went from %d to %d — an acquisition invented a Work "+
+			"for content somebody had already named", before, after)
+	}
+}
+
+// The asset says a WANT identified it, not a path heuristic.
+//
+// identification_source exists to answer "why is this asset on this Work". An
+// acquisition answering "path-heuristic" would name a heuristic that had no
+// part in the decision — and would be indistinguishable from the guess this
+// issue is about, in the one column an operator would check.
+func TestAnAcquiredAssetRecordsThatTheWantIdentifiedIt(t *testing.T) {
+	h := newIngestHarness(t)
+	h.selectAndComplete(t, "alpine-standard-3.23.2-armv7.iso", []byte("the bytes that arrived"))
+	if err := h.ingest(t); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := h.scalar(t, `SELECT identification_source FROM assets`); got != "desired-item" {
+		t.Errorf("identification_source = %q, want desired-item", got)
+	}
+}
+
+// The override replaces the WORK and nothing else.
+//
+// The risk in fixing #224 is over-reaching: a want names what was wanted, not
+// which of its editions arrived, and letting it dictate the asset's role would
+// file a subtitle as if it were the film. The filename here is a subtitle, and
+// the want is for a movie.
+func TestTheWantNamesTheWorkAndThePathStillNamesTheFile(t *testing.T) {
+	h := newIngestHarness(t)
+	h.selectAndComplete(t, "Arrival.2016.2160p.en.srt", []byte("1\n00:00:01,000 --> 00:00:02,000\nhello\n"))
+	if err := h.ingest(t); err != nil {
+		t.Fatal(err)
+	}
+
+	// Still on the want's Work — the override did its job.
+	gotWork := h.scalar(t, `SELECT e.work_id FROM assets a JOIN editions e ON e.id = a.edition_id`)
+	wantWork := h.scalar(t, `SELECT work_id FROM desired_items WHERE id = ?`, h.want)
+	if gotWork != wantWork {
+		t.Fatalf("the asset is on work %s, want %s", gotWork, wantWork)
+	}
+	// And the file's own facts still come from the path.
+	if got := h.scalar(t, `SELECT role FROM assets`); got != "subtitle" {
+		t.Errorf("role = %q, want subtitle — the want named the Work, not the file", got)
+	}
+}

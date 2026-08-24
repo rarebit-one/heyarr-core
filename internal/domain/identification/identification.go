@@ -29,6 +29,13 @@ const (
 	SourcePathHeuristic = "path-heuristic"
 	// SourceUnidentified marks a row that ingested without being identified.
 	SourceUnidentified = "unidentified"
+	// SourceDesiredItem is an asset whose Work was named by a want rather than
+	// parsed from a path — an acquisition attaching to the thing that asked for
+	// it. Distinct from the heuristic because "somebody declared this" and "a
+	// path shape suggested this" carry completely different confidence, and an
+	// operator asking why an asset is on a Work needs to be able to tell them
+	// apart (#224).
+	SourceDesiredItem = "desired-item"
 )
 
 // Asset roles (assets.role). A non-primary asset attaches to the same Work as

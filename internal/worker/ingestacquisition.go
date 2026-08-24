@@ -265,12 +265,35 @@ func ingestArtifact(
 		return ingest.Result{}, err
 	}
 
-	// The SAME pipeline the scanner uses. The only thing this handler tells it
-	// that a walk would not is which root to land in.
+	// The Work the WANT points at, which is authoritative here.
+	//
+	// Before #224 this handler passed only the root and the path, so the
+	// pipeline re-identified from the filename — and attached the asset to
+	// whatever Work that produced. When the two disagreed (routinely: a release
+	// title is not a filename) the bytes landed on a second, path-derived Work
+	// and the want reported `assets: []` indefinitely, in a state
+	// indistinguishable from a transfer still running.
+	//
+	// The handler already had the want in hand; it simply did not say so.
+	dw, err := cat.WorkForDesired(ctx, desiredItemID)
+	if err != nil {
+		return ingest.Result{}, err
+	}
+
+	// The SAME pipeline the scanner uses. What this handler tells it that a
+	// walk could not is which root to land in — and which Work, because unlike
+	// a walk it was asked for something specific.
 	return pipeline.Ingest(ctx, ingest.Request{
 		RootID:     root.ID,
 		SourcePath: a.Path,
 		RelPath:    a.RelPath,
+		Work: &ingest.WorkOverride{
+			ContentType: dw.ContentType,
+			WorkKey:     dw.WorkKey,
+			Title:       dw.Title,
+			SortTitle:   dw.SortTitle,
+			Year:        dw.Year,
+		},
 	})
 }
 
