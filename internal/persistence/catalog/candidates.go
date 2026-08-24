@@ -119,15 +119,23 @@ func parseStamp(s string) time.Time {
 // empty search is the outcome that most needs a record: it leaves no candidate
 // rows behind to explain itself, so without the event a want that found
 // nothing is indistinguishable from a want nobody searched.
+// incumbent is what the want already holds, and a zero AssetID means nothing
+// acceptable is. It is a PARAMETER rather than a read inside this method
+// because the caller has already gathered it with the rest of the search
+// context, and a second read here could disagree with the one the handler
+// reasoned about.
 func (c *Catalog) RecordSearch(
 	ctx context.Context, desiredItemID string, ranked []acquisition.Ranked,
+	incumbent acquisition.Incumbent,
 ) (SearchOutcome, error) {
 	searchID := uuid.Must(uuid.NewV7()).String()
 	now := c.clock.Now()
 	stamp := now.Format(timestampFormat)
 
 	outcome := SearchOutcome{SearchID: searchID, Found: len(ranked)}
-	if best, ok := acquisition.Best(ranked); ok {
+	// BestOver, not Best: for a satisfied want this is an upgrade search, and
+	// an upgrade must be strictly better than what is held (#229).
+	if best, ok := acquisition.BestOver(ranked, incumbent); ok {
 		outcome.SelectedCandidateID = best.Candidate.ID
 	}
 	for _, r := range ranked {
@@ -351,6 +359,26 @@ type SearchContext struct {
 	ContentType   string
 	Profile       policy.Profile
 	State         acquisition.State
+	// Incumbent is the evaluation of what this want ALREADY holds, and its
+	// AssetID is empty when it holds nothing acceptable.
+	//
+	// Read here because a search over a SATISFIED want is an upgrade search,
+	// and an upgrade search that does not know what is held cannot tell an
+	// improvement from the release it already has. Without it, the search beat
+	// re-selected the byte-identical incumbent and dragged the want backwards
+	// out of satisfaction (#229).
+	//
+	// Recomputed rather than cached, for the same reason ScanForUpgrades
+	// recomputes it: a profile edit changes the answer, and a stored score
+	// would measure against a standard nobody is using any more.
+	Incumbent acquisition.Evaluation
+	// IncumbentID is the asset that satisfies the want, empty when none does.
+	//
+	// Carried separately because Evaluation describes a RELEASE and this names
+	// an ASSET; folding the asset id into the evaluation would make the two
+	// interchangeable, which is exactly the confusion between "what we could
+	// get" and "what we have" that this whole comparison exists to keep clear.
+	IncumbentID string
 }
 
 // SearchContextFor gathers everything one search needs, in one read.
@@ -387,6 +415,17 @@ func (c *Catalog) SearchContextFor(ctx context.Context, desiredItemID string) (S
 		return SearchContext{}, err
 	}
 	out.State = rec.State
+
+	// What is already held, when anything is. Only for a satisfied want: for
+	// any other the evaluation is empty by construction and the extra queries
+	// would be spent proving it.
+	if rec.State.Content == acquisition.SatisfactionSatisfied {
+		incumbent, incumbentID, err := c.incumbentEvaluation(ctx, desiredItemID)
+		if err != nil {
+			return SearchContext{}, err
+		}
+		out.Incumbent, out.IncumbentID = incumbent, incumbentID
+	}
 	return out, nil
 }
 
@@ -505,4 +544,10 @@ func (c *Catalog) SelectedSource(ctx context.Context, desiredItemID string) (
 		return "", "", err
 	}
 	return candidateID, secret.Value(raw), nil
+}
+
+// Held is what this want already holds, in the shape the domain compares
+// against. A zero AssetID means nothing acceptable is held.
+func (sc SearchContext) Held() acquisition.Incumbent {
+	return acquisition.Incumbent{AssetID: sc.IncumbentID, Evaluation: sc.Incumbent}
 }

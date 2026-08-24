@@ -2,11 +2,14 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -475,5 +478,135 @@ func TestASearchThatReachedNobodyIsNotAnEmptySearch(t *testing.T) {
 	// It must still LEAVE searching, or it sticks there forever.
 	if got := h.state(t).Phase; got == acquisition.PhaseSearching {
 		t.Error("the want is stuck in SEARCHING")
+	}
+}
+
+// seedHeldAsset puts one asset under the want's work and gives it a probe, so
+// that reconciliation can evaluate it against the profile.
+//
+// The probe is the point: §62's resolution and codec attributes come from
+// blob_probes, not from the filename, so an asset without one is UNDETERMINED
+// against every rule and can never satisfy anything. A fixture that skipped it
+// would produce a want that looks held and reconciles to not_satisfied, which
+// is a confusing way to fail.
+func (h *searchHarness) seedHeldAsset(t *testing.T, id, codec string, height int64) {
+	t.Helper()
+	stamp := time.Now().UTC().Format(time.RFC3339Nano)
+	// A real-shaped digest: the blobs table CHECKs `blake3:` plus 64 hex
+	// characters, which is the invariant-1 constraint doing its job on a
+	// fixture. Derived from the id so two seeded assets differ.
+	sum := sha256.Sum256([]byte(id))
+	hash := "blake3:" + hex.EncodeToString(sum[:])
+	h.exec(t, `INSERT INTO blobs (hash, size, mime, first_seen_at)
+		VALUES (?, 8589934592, 'video/x-matroska', ?)`, hash, stamp)
+	h.exec(t, `INSERT INTO editions
+			(id, work_id, label, edition_key, edition_type, language, attributes, created_at)
+		VALUES (?, 'w1', ?, ?, 'remux', 'en', '{}', ?)`,
+		"e-"+id, id, id, stamp)
+	h.exec(t, `INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash,
+			source_path, role, filename, mime, identification_source, created_at, updated_at)
+		VALUES (?, ?, NULL, 'managed', ?, ?, 'primary', 'held.mkv',
+			'video/x-matroska', 'path-heuristic', ?, ?)`,
+		"a-"+id, "e-"+id, hash, "/srv/"+id+".mkv", stamp, stamp)
+	h.exec(t, `INSERT INTO blob_probes
+			(blob_hash, container, format_long, duration_seconds, bitrate_bps, streams,
+			 bytes_read, materialised, probed_at)
+		VALUES (?, 'matroska,webm', '', 7200.0, 8000000, ?, 1024, 0, ?)`,
+		hash, `[{"type":"video","codec":"`+codec+`","height":`+
+			strconv.FormatInt(height, 10)+`,"profile":"High"},`+
+			`{"type":"audio","codec":"aac","channels":6}]`, stamp)
+}
+
+// A satisfied want is not dragged backwards by its own next search.
+//
+// # The sequence this reproduces
+//
+// A want becomes satisfied. Twenty-seven seconds later the search beat looks at
+// it — correctly, it is monitored — and the indexer still offers a release
+// scoring exactly what is held. Before this, the evaluator accepted that
+// candidate, the handler selected it, and the want left CONTENT_SATISFIED for
+// SELECTED: §64's name for "a release has been chosen and not yet fetched",
+// reported about bytes that are already on disk.
+//
+// Every ingredient was individually right. The beat is right to schedule
+// monitored wants; the evaluator is right that the candidate is acceptable; the
+// satisfaction axes are right that content is satisfied. The regression appears
+// only when a want is satisfied AND monitored AND re-searched — the ordinary
+// steady state of every want after its first success, and a combination nothing
+// in CI exercised.
+func TestASatisfiedWantIsNotDraggedBackwardsByItsOwnNextSearch(t *testing.T) {
+	h := newSearchHarness(t)
+	h.seedHeldAsset(t, "held", "hevc", 2160)
+	if _, err := h.cat.ReconcileDesired(t.Context(), h.want); err != nil {
+		t.Fatal(err)
+	}
+	before := h.state(t)
+	if before.Content != acquisition.SatisfactionSatisfied {
+		t.Fatalf("the want is %s before the search, so this asserts nothing", before.Name())
+	}
+
+	// On offer: a release scoring exactly what is held. Not worse, not better —
+	// equivalent, which is what an indexer returns on the next pass for the
+	// release the want was satisfied by in the first place.
+	h.fake.Offer("Arrival", offer("equivalent", 2160, "hevc"))
+	if err := h.run(t); err != nil {
+		t.Fatal(err)
+	}
+
+	after := h.state(t)
+	if after.Phase == acquisition.PhaseSelected {
+		t.Errorf("the want regressed to SELECTED — it now reports a release chosen " +
+			"and not yet fetched, about bytes it already holds")
+	}
+	if after.Content != acquisition.SatisfactionSatisfied {
+		t.Errorf("content went from satisfied to %s", after.Content)
+	}
+
+	// And the ROW agrees with the phase.
+	//
+	// This assertion exists because the first version of this fix did not
+	// satisfy it. Suppressing only the state transition left the candidate
+	// recorded with selected = 1, so the want's phase said "not acquiring
+	// anything" while release_candidates said "acquiring this" — and that
+	// column's entire meaning is "what this want is currently acquiring".
+	//
+	// A sabotage found it: making a satisfied want never select again broke no
+	// test, because the row was being written either way and the test read the
+	// row. The two facts have to be decided together, which is why the rule
+	// moved into the selection itself.
+	if sel, err := h.cat.SelectedCandidate(t.Context(), h.want); err == nil {
+		t.Errorf("release_candidates still marks %q as selected, so the row claims "+
+			"this want is acquiring a release its phase says it is not", sel.CandidateID)
+	}
+}
+
+// A genuinely better release IS still selected.
+//
+// The control for the test above, and the assertion that fails if "do not go
+// backwards" is implemented as "never select again" — which would break §60's
+// upgrade workflow entirely while making the other test pass.
+func TestASatisfiedWantStillTakesAGenuineUpgrade(t *testing.T) {
+	h := newSearchHarness(t)
+	// Held: 2160p h264 — accepted by the gate, and it misses the hevc
+	// preference, so there is real room above it.
+	h.seedHeldAsset(t, "held", "h264", 2160)
+	if _, err := h.cat.ReconcileDesired(t.Context(), h.want); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.state(t).Content; got != acquisition.SatisfactionSatisfied {
+		t.Fatalf("content = %s before the search, so this asserts nothing", got)
+	}
+
+	h.fake.Offer("Arrival", offer("better", 2160, "hevc"))
+	if err := h.run(t); err != nil {
+		t.Fatal(err)
+	}
+
+	sel, err := h.cat.SelectedCandidate(t.Context(), h.want)
+	if err != nil {
+		t.Fatalf("a strictly better release was not selected: %v", err)
+	}
+	if sel.CandidateID != "better" {
+		t.Errorf("selected %q, want the higher-scoring release", sel.CandidateID)
 	}
 }
