@@ -3726,8 +3726,26 @@ YAML
   assert_eq "$(api /api/v1/capabilities | jq -r '[.holders[].worker_id] | length == (. | unique | length)')" \
     "true" "and each advertisement carries a worker id of its own, so a stuck job and a fleet entry name the same process"
   if [[ "$caps_ffmpeg_present" == "true" ]]; then
-    assert_eq "$(api '/api/v1/capabilities?capability=ffmpeg' | jq -r '.holders | length')" "1" \
-      "only the worker that resolved ffmpeg holds it — the bare one is not a candidate for transcode work"
+    # Asserted as "the bare worker is absent from the holders", NOT as a COUNT
+    # of holders. An advertisement outlives the process that made it, by design:
+    # it expires on a TTL (ADR-0039) because a worker that stopped answering is
+    # indistinguishable from one that is merely unreachable. So an equipped
+    # worker from earlier in this run is legitimately still listed, and a count
+    # here measures how recently the script restarted things rather than
+    # anything about capability routing.
+    #
+    # The claim this section actually makes is about THIS bare worker, and that
+    # is what is asserted: its own worker id is not among the ffmpeg holders.
+    local caps_bare_id
+    caps_bare_id=$(grep -o '"worker":"[^"]*"' "$caps_bare_log" | tail -1 | cut -d'"' -f4)
+    assert_eq "$([[ -n "$caps_bare_id" ]] && echo yes || echo no)" "yes" \
+      "the bare worker logged a worker id to assert against"
+    assert_eq "$(api '/api/v1/capabilities?capability=ffmpeg' \
+      | jq -r --arg w "$caps_bare_id" '[.holders[] | select(.worker_id == $w)] | length')" "0" \
+      "the worker that resolved no ffmpeg does not hold it — it is not a candidate for transcode work"
+    assert_eq "$(api '/api/v1/capabilities?capability=ffmpeg' \
+      | jq -r 'if (.holders | length) > 0 then "some" else "none" end')" "some" \
+      "and a worker that DID resolve ffmpeg holds it, so the filter is not simply empty"
   else
     not_exercised ffmpeg \
       "a MIXED fleet answering '/api/v1/capabilities?capability=ffmpeg' with one of two workers — both workers here resolved no toolchain, so the filter has nothing to separate them"
