@@ -173,6 +173,28 @@ separate role processes (ADR-0002).
 
 ### Fixed
 
+- **Binding the local socket no longer poisons the content-addressed store**
+  (#151). The unix socket was made owner-only by lowering the process umask to
+  `0o177` across the bind. umask is per-process, not per-goroutine, and `heyarr
+  all` runs the API and the worker together, so any directory another goroutine
+  created inside that window came out `0o600` — `0o750 &^ 0o177` — with no
+  search bit, and nothing could ever be written into it again. The store creates
+  its shard directories on first use, which is during start-up, which is when
+  the socket is bound: one unlucky microsecond left a shard, or the directory
+  holding every shard, permanently unwritable, and every later ingest failed
+  with `mkdir …: permission denied`. Reported six times over four months as a
+  one-in-ten flake and once as twelve ingests out of twelve. The socket is now
+  bound inside a private `0o700` directory and renamed onto its published path,
+  which closes the window the umask existed for without touching process-global
+  state.
+- **A store that cannot be written to says so, with evidence** (#151). A
+  permission failure anywhere in the store now carries a diagnosis gathered at
+  the moment it happened: the parent chain from the store root down, with each
+  level's mode and owner, the process umask, and whether an unrelated directory
+  can still be created — which is what separates one poisoned shard from a store
+  nothing can write to. A store-wide fault is reported once, at `ERROR`, rather
+  than once per job that trips over it.
+
 - **Peer liveness reaches a remote peer** (#184). Health is observed rather than
   declared, and in the topology Milestone 4 builds nothing observed it: a remote
   peer holds no bearer token, so it never reached the client API's membership

@@ -53,7 +53,7 @@ type Staged struct {
 // in the blob tree — and, critically, nothing that answers to any digest.
 func (s *FS) Stage() (*Staged, error) {
 	if err := os.MkdirAll(filepath.Join(s.root, tmpDir), dirPerm); err != nil {
-		return nil, fmt.Errorf("cas: creating the staging directory: %w", err)
+		return nil, s.permissionFault("creating the staging directory", filepath.Join(s.root, tmpDir), err)
 	}
 	path := s.stagingPathWith("stage")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, tempPerm) // #nosec G304 -- the name is generated within the configured root
