@@ -4089,6 +4089,80 @@ YAML
   "$BIN" --config "$WORK/full.yaml" gc >/dev/null 2>&1 || true
   after_gc=$(find "$FULLDATA/cas" -type f | wc -l | tr -d ' ')
   assert_eq "$after_gc" "$before_gc" "gc without flags changes nothing"
+  # ---------------------------------------------------------------------------
+  note "  integrity repair: chunks are replaced, a blob is never edited (ADR-0036, M5-08)"
+  # ---------------------------------------------------------------------------
+  #
+  # The blob corrupted above is still quarantined and is no longer addressable
+  # at its own digest. `fsck --repair` must therefore say what it could not
+  # repair and WHY, rather than exiting quietly or claiming success — a refusal
+  # nobody can read is an outage nobody can diagnose (M4-12).
+  #
+  # 🔴 What this can and cannot reach today. The repairer fetches its
+  # replacement chunks through a narrow `integrity.ChunkSource`, and the
+  # concrete peer-backed implementation is NOT wired in: `fsck --repair` passes
+  # a nil source deliberately, so a nil source REFUSES rather than permits. That
+  # is the honest state and it is asserted as such; the repaired path is
+  # recorded as unexercised below rather than skipped, so the verdict line says
+  # this run did not reach it.
+  local repair_out repair_rc=0 repair_json
+  repair_out=$("$BIN" --config "$WORK/full.yaml" fsck --deep --repair 2>&1) || repair_rc=$?
+  if (( repair_rc != 0 )); then
+    pass "fsck --repair still exits non-zero while the damage is unrepaired"
+  else
+    fail "fsck --repair exited 0 with a blob still damaged"
+  fi
+  assert_contains "$repair_out" "NOT REPAIRED" \
+    "fsck --repair names the blob it could not repair rather than reporting a count"
+  assert_contains "$repair_out" "chunks damaged" \
+    "and says how much of the blob was damaged, not merely that it was"
+
+  # The machine-readable half carries the same verdict as an enum, and the
+  # outcome is asserted with assert_eq: every value in this enum shares words
+  # with its neighbours, and `no_manifest` is the answer that says the blob was
+  # never chunked rather than that no peer answered.
+  repair_json=$("$BIN" --config "$WORK/full.yaml" fsck --deep --repair --json 2>/dev/null || true)
+  assert_eq "$(jq -r '.repairs | type' <<<"$repair_json")" "array" \
+    "fsck --repair --json reports a result per damaged blob, so a script can act on it"
+  assert_eq "$(jq -r '[.repairs[] | select(.outcome == "repaired")] | length' <<<"$repair_json")" "0" \
+    "nothing was repaired, which is the truth on a node with no manifest and no peer to fetch from"
+  assert_eq "$(jq -r '[.repairs[].outcome] | unique | join(",")' <<<"$repair_json")" "no_manifest" \
+    "and it says WHICH refusal it was: these bytes were never chunked, so there is nothing to repair FROM (§16)"
+
+  # Nothing was written. A repair that cannot complete leaves the store exactly
+  # as it was: the evidence stays in quarantine and no replacement is published.
+  local q_before q_after
+  q_before=$(find "$FULLDATA/cas/quarantine" -type f | wc -l | tr -d ' ')
+  "$BIN" --config "$WORK/full.yaml" fsck --deep --repair >/dev/null 2>&1 || true
+  q_after=$(find "$FULLDATA/cas/quarantine" -type f | wc -l | tr -d ' ')
+  assert_eq "$q_after" "$q_before" \
+    "a repair that could not complete quarantined nothing further"
+  if [[ -f "$victim" ]]; then
+    fail "a failed repair republished the damaged blob at its own digest"
+  else
+    pass "a failed repair published nothing: the digest still names no bytes"
+  fi
+
+  # Staging residue is WASTE, not damage: an abandoned reconstruction leaves a
+  # reapable partial and nothing addressable. Asserted only when there is
+  # residue to assert about, and stated as such rather than passing on an empty
+  # directory.
+  if find "$FULLDATA/cas/tmp" -name '*.part' 2>/dev/null | grep -q .; then
+    "$BIN" --config "$WORK/full.yaml" gc --apply --temp-grace 0 >/dev/null 2>&1 || true
+    if find "$FULLDATA/cas/tmp" -name '*.part' 2>/dev/null | grep -q .; then
+      fail "staging residue from a repair is not reapable"
+    else
+      pass "staging residue from a repair is reapable"
+    fi
+  fi
+
+  not_exercised repair_peer_fetch \
+    "a damaged blob actually REPAIRED, with the fetch scoped to the damage — the peer-backed \
+integrity.ChunkSource is not wired into fsck --repair yet, so this run reaches the refusal and \
+not the repair. The chunk-scoped repair itself is asserted in internal/storagefabric/integrity \
+(the fetch is exactly the damaged chunk, measured at 0.27% of the blob) and under a real SIGKILL \
+at four points inside the repair window"
+
 
   # ---------------------------------------------------------------------------
   # Garbage collection confirms placement before unlinking (ADR-0018, M4-12)
@@ -5032,6 +5106,50 @@ YAML
     "node A served these bytes on its peer surface — the record that was empty a moment ago is not now"
   assert_eq "$tp_served" "site-b" \
     "and to site-b alone: the only listener in the data path is the one a bearer token cannot open"
+  # -------------------------------------------------------------------------
+  note "  the byte saving, as a NUMBER (M5-06, M5-07, M5-08, M5-09)"
+  # -------------------------------------------------------------------------
+  #
+  # 🔴 Milestone 5's thesis is a saving, and a milestone whose thesis is a
+  # saving must assert the saving rather than describe it. This section is where
+  # that arithmetic is done, out loud, in the demo.
+  #
+  # THE CONTROL FIRST, because a saving assertion with no control passes on a
+  # transfer that fetched nothing at all. The transfer above moved a blob to a
+  # peer holding NONE of it, and the number is stated as a percentage rather
+  # than left as two byte counts a reader has to divide.
+  local sv_moved sv_pct
+  sv_moved=$(jq -r '.bytes | tostring' <<<"$tp_rep")
+  sv_pct=$(( sv_moved * 100 / tp_size ))
+  assert_eq "$sv_pct" "100" \
+    "THE CONTROL: replicating to a peer that holds nothing moves 100% of the blob — $sv_moved of $tp_size bytes"
+  assert_eq "$(cli_b blobs verify "$tp_blob" --json 2>/dev/null | jq -r '.verified | tostring')" "true" \
+    "and every one of those bytes was re-hashed by the destination against the blob's own digest (invariant 1)"
+
+  # 🔴 AND THE SAVINGS THEMSELVES ARE NOT ASSERTED HERE, which is the honest
+  # statement this section exists to make rather than avoid.
+  #
+  # A resumed transfer, a modified file replicated to a peer holding the
+  # original, and a repair scoped to the damage are all measured on the SOURCE's
+  # serving side in Go, with the same controls. None of them can be driven from
+  # this script on this build:
+  #
+  #   - resumption and chunk reuse (#193, #194) are not on `main`;
+  #   - the peer-backed chunk source for repair is not wired into fsck --repair,
+  #     which is asserted where the repair section says so.
+  #
+  # Recorded rather than skipped, so the verdict line says this run did not
+  # measure a saving. The figures below are the ones the Go tests assert, and
+  # they are stated here so nobody has to go looking for whether a number exists
+  # at all.
+  not_exercised byte_saving_over_the_wire \
+    "the SAVING itself, measured end to end: a resumed transfer moving materially fewer bytes than a \
+whole one (74.5% of a 512 KiB blob after a real SIGKILL, 29 of 110 chunks kept), a modified file \
+moving 1.1% of its size to a peer holding the original, 3 KiB prepended moving 1.2%, and a repair \
+fetching 0.27% of the blob for one damaged chunk. Each is measured on the SOURCE's serving side, \
+each has the 100% control this section asserts above, and each lives in internal/peer/transfer and \
+internal/storagefabric/integrity because the code paths they exercise are not on this build"
+
 
   cli_b peers report-inventory site-a --json >/dev/null
   tp_json=$(api_a "/api/v1/desired/$tp_want/satisfaction")
@@ -5041,6 +5159,51 @@ YAML
     "and the §64 name completes the walk CONTENT_SATISFIED → PLACEMENT_CONVERGING → FULLY_SATISFIED"
   assert_eq "$(jq -r '.placement.unproven' <<<"$tp_json")" "false" \
     "on evidence, with unproven false throughout"
+  # -------------------------------------------------------------------------
+  note "  the manifest on the peer surface: a description, not a negotiation (M5-05, ADR-0034)"
+  # -------------------------------------------------------------------------
+  #
+  # A destination may ask a source what its chunks are. The source answers with
+  # what it stored and decides NOTHING — it is never told what the destination
+  # holds, never asked what to send, and never computes a difference (ADR-0030).
+  #
+  # 🔴 And it never GENERATES. A GET that chunked a 20 GB blob to answer would
+  # be a remote denial of service with a polite name, so §16's third state is
+  # the ANSWER: a destination that is told "no manifest" pulls whole, which is
+  # exactly what the transfer above just did.
+  #
+  # The route lives on the PEER listener and nowhere else. A member that may
+  # read the bytes may read their description; a bearer token is not a peer
+  # credential (ADR-0011, ADR-0012, ADR-0015).
+  assert_contains "$(<api/openapi.yaml)" "/peer/v1/blobs/{hash}/manifest" \
+    "the manifest route is documented on the PEER surface (ADR-0015)"
+  assert_not_contains "$(<api/openapi.yaml)" "/api/v1/blobs/{hash}/manifest" \
+    "and nowhere on the client API: a bearer token is not a peer credential"
+
+  # The two manifest-less answers are DIFFERENT answers and a destination acts
+  # differently on each — one says "pull these bytes whole from this same
+  # source", the other says "there is nothing here at all, try another source".
+  # Asserted on the `type` URI, which is the contract, and asserted to be
+  # non-overlapping, because a contains-check on one must not match the other.
+  assert_contains "$(<api/openapi.yaml)" "no-chunk-manifest" \
+    "a blob the source HOLDS with no manifest has a problem type of its own"
+  assert_not_contains "no-chunk-manifest" "not-found" \
+    "and it is not a substring of the not-found type: the two do not overlap"
+
+  # 🔴 What this run does NOT do, recorded rather than skipped.
+  #
+  # Nothing in a running fabric calls this route yet: the transfer path on this
+  # build does not fetch a manifest before pulling, because the ranged fetch
+  # that would use one arrives with resumption (#193/#194). So the source's
+  # record of what it served, the 404 that names WHICH manifest-less state it
+  # was in, and the destination's handling of each are asserted in
+  # internal/api/peerapi and internal/peer/transfer against a real mTLS peer,
+  # and not by this script.
+  not_exercised manifest_over_the_wire \
+    "one peer reading another peer's chunk manifest over mTLS, and the source recording what it \
+served and to whom — the replication path on this build does not fetch a manifest, so no request \
+reaches the route in this run. Asserted in internal/api/peerapi and internal/peer/transfer"
+
 
   # -------------------------------------------------------------------------
   note "  a blob on NEITHER peer is not_satisfied, not converging"
@@ -5217,22 +5380,6 @@ YAML
     pass "the states blobs.chunked collapsed together are distinguishable in one read (M5-03)"
   fi
 
-  # ADR-0034's falsification, asserted about a transfer that has ALREADY
-  # happened rather than by deleting rows. Every blob in this arc was
-  # `undecided` when the five-megabyte blob crossed the wire a hundred lines
-  # above — there was no manifest on either node, and there was no chunk_blob
-  # job at all, both asserted at the time. The bytes still crossed, node B
-  # re-hashed them itself, and no replication job failed.
-  #
-  # That is ADR-0034's condition in its own words: if deleting every manifest in
-  # the store broke anything other than efficiency, the line would have been
-  # crossed. A store with no manifests is the state this run spent its whole
-  # transfer arc in.
-  assert_eq "$(api_b "/api/v1/jobs?type=replicate_blob" | jq -r '[.items[] | select(.state == "failed")] | length')" "0" \
-    "no replication has failed for want of a manifest: a manifest is an optimisation, never a precondition (ADR-0034)"
-  assert_eq "$(cli_b blobs verify "$tp_blob" --json 2>/dev/null | jq -r '.verified | tostring')" "true" \
-    "and the blob that crossed with no manifest anywhere verifies to its own whole-object digest on the destination"
-
 
   # Put the fabric back the way this section found it. The gap above was made
   # by deleting bytes from node B, and the garbage-collection refusal below
@@ -5251,6 +5398,22 @@ YAML
   cli_b peers report-inventory site-a --json >/dev/null
   assert_eq "$(peer_holds "$root/b/data/cas" "$lc_large")" "1" \
     "and the fabric is converged again, on the same transfer path, before the refusal below is asked for"
+  # ADR-0034's falsification, asserted about transfers that have ALREADY
+  # happened rather than by deleting rows out of a database. Every blob in this
+  # arc was `undecided` when the five-megabyte blob first crossed the wire a
+  # hundred lines above — no manifest on either node, and no chunk_blob job at
+  # all, both asserted at the time. The bytes crossed anyway, node B re-hashed
+  # them itself, and no replication job failed.
+  #
+  # That is ADR-0034's condition in its own words: if deleting every manifest in
+  # the store broke anything other than efficiency, the line would have been
+  # crossed. A store with no manifests is the state this run spent its whole
+  # transfer arc in.
+  assert_eq "$(api_b "/api/v1/jobs?type=replicate_blob" | jq -r '[.items[] | select(.state == "failed")] | length')" "0" \
+    "no replication has failed for want of a manifest: a manifest is an optimisation, never a precondition (ADR-0034)"
+  assert_eq "$(cli_b blobs verify "$tp_blob" --json 2>/dev/null | jq -r '.verified | tostring')" "true" \
+    "and the blob that crossed with no manifest anywhere verifies to its own whole-object digest on the destination"
+
   # -------------------------------------------------------------------------
   note "  garbage collection catches a LYING replica row (Refusal 3, #184)"
   # -------------------------------------------------------------------------
@@ -5608,6 +5771,54 @@ printf '         by hash, naming the peer nothing could be established about\n'
 printf '         (ADR-0018). The same collector on the same node unlinked a blob\n'
 printf '         minutes earlier, while that node was still a fabric of one, so\n'
 printf '         this is a gate and not a collector that refuses everything.\n'
+printf '         CHUNK MANIFESTS, AND THE THIRD STATE A BOOLEAN COULD NOT HOLD.\n'
+printf '         `blobs.chunked` had been 0 on every row in every deployment\n'
+printf '         since Milestone 1 because nothing ever wrote it, and §16 asks a\n'
+printf '         question with three answers. All three were read off one\n'
+printf '         running fabric in one pass: a blob with a manifest, a blob\n'
+printf '         RECORDED as never needing one, and a blob nobody has decided\n'
+printf '         about — asserted as an inequality, not inferred from three\n'
+printf '         separate reads (§16, ADR-0034). Asking never generated one:\n'
+printf '         ten reads of the state left no manifest, no chunk row and no\n'
+printf '         chunk_blob job, measured against the job queue rather than\n'
+printf '         against the answer.\n'
+printf '         LAZY CHUNKING, BY A JOB AND BY NOTHING ELSE. Ingest chunked\n'
+printf '         nothing; no sweep chunked anything; the manifests appeared\n'
+printf '         when a convergence cycle decided the bytes had to cross a\n'
+printf '         network, which is §16'"'"'s own trigger. The blob above the 4 MiB\n'
+printf '         threshold got a manifest and the one below it was recorded as\n'
+printf '         never needing one — the two sides of the threshold, on the same\n'
+printf '         node, in the same pass — and a second cycle changed neither.\n'
+printf '         WHICH WORKER CAN DO WHAT, from the running binary rather than\n'
+printf '         from a unit test (#112, ADR-0039). The worker this run started\n'
+printf '         advertised ITSELF within its startup beat — the assertion no Go\n'
+printf '         test can make, because every one of them passes on a build\n'
+printf '         where the beat is never started — with an expiry in the future,\n'
+printf '         a stated source for every capability, and an exact-match filter\n'
+printf '         that answers nothing for a partial dotted segment. A second\n'
+printf '         worker against the same database appeared as its own holder, so\n'
+printf '         the view is per worker rather than per node.\n'
+printf '         A LYING REPLICA ROW, CAUGHT (Refusal 3, ADR-0018, #184). The\n'
+printf '         refusal below is the easy half — nothing answered. This is the\n'
+printf '         other one: node B was UP and reachable, its row said `present`\n'
+printf '         and had been confirmed seconds earlier, its bytes were then\n'
+printf '         deleted from its disk without it reporting again, and node A was\n'
+printf '         asked to reclaim its last copy. A dialled the peer, B denied\n'
+printf '         holding the bytes, the sweep refused by name, and THE ROW WAS\n'
+printf '         CORRECTED to `missing` rather than deleted — so the next sweep\n'
+printf '         does not rediscover the same lie. Until #184 this path was\n'
+printf '         unreachable from a shell: a remote peer'"'"'s health was pinned at\n'
+printf '         `unknown` and the sweep refused with `peer_unreachable` before\n'
+printf '         it ever asked. Peer health was asserted `unknown` FIRST and then\n'
+printf '         observed moving to `reachable` on peer-surface traffic alone,\n'
+printf '         with the timestamp an operator acts on beside it.\n'
+printf '         A ONE-WAY PAIRING IS REPORTED AND ENROLLED, NEVER REFUSED\n'
+printf '         (#186, ADR-0037, ADR-0038). One node was pointed at a port that\n'
+printf '         refuses connections so the return leg genuinely could not\n'
+printf '         answer; the enrolment SUCCEEDED, and the operator was told which\n'
+printf '         direction failed, at which address, that it is not a fault, and\n'
+printf '         why. A healthy pairing said nothing at all, which is what makes\n'
+printf '         the report worth reading.\n'
 printf '\n'
 printf '       NOT proven, and not claimed:\n'
 printf '         A REAL NETWORK. The two peers above are two PROCESSES ON ONE\n'
@@ -5618,23 +5829,37 @@ printf '         whole of what was shown: nothing in this run has met a\n'
 printf '         partition, a slow link, an MTU, packet loss, a reordered or\n'
 printf '         half-open connection, or two clocks that disagree. A green run\n'
 printf '         here says the fabric is correct, not that it is deployable.\n'
+printf '         A GENUINELY ONE-WAY PATH. Two processes on one loopback\n'
+printf '         interface reach each other by construction, so the topology\n'
+printf '         #186 was found on cannot occur here. The section above\n'
+printf '         SIMULATES it, by pointing one node'"'"'s record of the other at a\n'
+printf '         port that refuses connections, and proves the report fires and\n'
+printf '         names the direction. It says nothing about what a real\n'
+printf '         asymmetric path does to a transfer already in flight. Note that\n'
+printf '         under ADR-0038 such a pairing is ORDINARY rather than broken:\n'
+printf '         each peer is authoritative for its own site, so a node that\n'
+printf '         cannot be reached back still serves everything on its own disk\n'
+printf '         and still fetches what it lacks from the peer it can reach. The\n'
+printf '         cost is convergence in one direction, and nothing here is\n'
+printf '         degraded for want of a partner.\n'
 printf '         A SECOND PHYSICAL MACHINE, and by extension any deployment\n'
 printf '         host. Nothing above left this one. Peer-to-peer mTLS, pinning,\n'
 printf '         revocation and re-enrolment WERE exercised between two real\n'
-printf '         machines during this milestone — by a person, at two keyboards,\n'
-printf '         once. That is recorded here so its absence from this run is not\n'
-printf '         mistaken for its absence altogether, and it is not an assertion\n'
-printf '         in this file. This paragraph describes the run.\n'
-printf '         THE DIALLED HALF OF THE DURABILITY CHECK. The refusal above is\n'
-printf '         reached from what this node has HEARD from the other, which in\n'
-printf '         a two-process topology is nothing: liveness is recorded on the\n'
-printf '         client API, the peer surface records none, so a remote peer'"'"'s\n'
-printf '         stored health never leaves `unknown` here. The refusals that\n'
-printf '         come from ASKING a peer and being answered — a stale claim, a\n'
-printf '         `replicas` row that is a lie and is corrected on the way past,\n'
-printf '         §53'"'"'s controller outage — are proven in the integrity and\n'
-printf '         peerapi packages, against a peer that answers, and not by this\n'
-printf '         script.\n'
+printf '         machines during Milestone 4, and #184'"'"'s liveness transition and\n'
+printf '         #186'"'"'s return-path check were exercised between two real\n'
+printf '         machines on different subnets during Milestone 5 — by a person,\n'
+printf '         at two keyboards, once each. That is recorded here so its\n'
+printf '         absence from this run is not mistaken for its absence\n'
+printf '         altogether, and it is not an assertion in this file. This\n'
+printf '         paragraph describes the run.\n'
+printf '         THE PROBED HALF OF PEER LIVENESS. The transition above is\n'
+printf '         driven by traffic ARRIVING: node A recorded node B because node\n'
+printf '         B spoke to its peer surface. The idle prober — a node dialling a\n'
+printf '         peer that has said nothing, over pinned mTLS, to find out\n'
+printf '         whether it is still there — is asserted in\n'
+printf '         internal/peer/health rather than here, and the two-machine run\n'
+printf '         that observed the transition observed the inbound half of it\n'
+printf '         too. Nothing in this file moves a health value by probing.\n'
 printf '         A REAL INDEXER. No Torznab client has ever answered a search\n'
 printf '         here; every candidate above came from a fake, and ADR-0026 says\n'
 printf '         that stays true in CI forever. The client now EXISTS — it is\n'
@@ -5645,10 +5870,10 @@ printf '         only tracker safe to capture from into a public repository\n'
 printf '         indexes Linux distributions, which assert no resolution, codec\n'
 printf '         or audio. Against a real indexer today, this system determines\n'
 printf '         a release SIZE and reports every quality rule undetermined.\n'
-printf '         TRANSCODE. Milestone 2 ships remux only, and nothing in\n'
-printf '         Milestone 3 or Milestone 4 needed more: quality profiles select\n'
-printf '         BETWEEN releases rather than producing them, and replication\n'
-printf '         moves bytes without looking inside them.\n'
+printf '         TRANSCODE. Milestone 2 ships remux only, and nothing through\n'
+printf '         Milestone 5 has needed more: quality profiles select BETWEEN\n'
+printf '         releases rather than producing them, and replication moves\n'
+printf '         bytes — now fewer of them — without looking inside them.\n'
 printf '         LINKED ASSETS still have no blob (ADR-0020). Milestone 3 added a\n'
 printf '         fifth place that has to say so — placement, which reports\n'
 printf '         not_applicable rather than a vacuous satisfied.\n'
@@ -5676,14 +5901,65 @@ if (( CAPS_UNEXERCISED_N > 0 )); then
   printf '         failures nor coverage, and the branch that ran in their place\n'
   printf '         asserts the degraded behaviour instead (ADR-0023, ADR-0025):\n'
   capability_ledger '           '
-  printf '         A green run here is NOT a green run on a fully equipped\n'
-  printf '         machine. Install the pinned toolchain with scripts/toolchain.sh\n'
-  printf '         to close the gap, or read CI, which runs it both ways.\n'
+  printf '         A green run here is NOT a green run on a machine, or a build,\n'
+  printf '         that has them. Two kinds are listed above and they close\n'
+  printf '         differently: a MACHINE capability (ffmpeg, ffprobe) closes by\n'
+  printf '         installing the pinned toolchain with scripts/toolchain.sh, or\n'
+  printf '         by reading CI, which runs it both ways. A BUILD gap — a block\n'
+  printf '         whose subject is a code path not on this build — closes only\n'
+  printf '         when that path lands, and no amount of tooling here will\n'
+  printf '         change it. Each entry says which it is.\n'
 else
   printf '         NOTHING WAS LEFT UNASKED for want of a capability: every\n'
   printf '         assertion block in this file found what it declared it needed,\n'
   printf '         so this run is the complete one (#187).\n'
 fi
+printf '\n'
+printf '       NEW IN THIS MILESTONE, and stated rather than left to be found:\n'
+printf '         PARTIAL TRANSFER STATE IS DECIDED BUT NOT YET BUILT. Milestone 4\n'
+printf '         had no partial state at all — a receive that did not finish left\n'
+printf '         nothing, and that absence is what made the handler idempotent —\n'
+printf '         and on THIS build that is still true: a failed transfer is\n'
+printf '         retried whole, and every byte this run moved was moved whole.\n'
+printf '         What has landed is the DECISION (ADR-0035), taken in writing\n'
+printf '         before any code creates bytes that outlive an attempt: a resumed\n'
+printf '         transfer may believe nothing it has not re-hashed against a\n'
+printf '         manifest entry it holds and verified itself, so the resume unit\n'
+printf '         is a CHUNK and never a byte offset; the assembled result is\n'
+printf '         still hashed whole before publication; partial bytes are\n'
+printf '         addressable by nothing and are never a replica; and a blob with\n'
+printf '         no manifest is not resumable, being retried whole exactly as it\n'
+printf '         is today. When the code lands, this paragraph is what it has to\n'
+printf '         satisfy, and this epilogue must say so instead.\n'
+printf '         MANIFESTS ARE LAZY, so any blob may have one, may be recorded as\n'
+printf '         never needing one, or may not have been decided about — and the\n'
+printf '         third is the ordinary state of a library nothing has replicated.\n'
+printf '         This run exercises all three, but it reaches `present` and\n'
+printf '         `not_required` only through a convergence cycle on a two-peer\n'
+printf '         fabric. A single-node Heyarr stays entirely `undecided` forever,\n'
+printf '         which is correct and is asserted above, and it means a\n'
+printf '         one-machine deployment exercises none of the chunk paths.\n'
+printf '         REPAIR WAS NOT PROVEN AGAINST REAL CORRUPTION. Every damaged\n'
+printf '         blob in this repository'"'"'s tests was damaged by OVERWRITING BYTES\n'
+printf '         THROUGH THE FILESYSTEM. That is not bit rot, not a failing\n'
+printf '         sector, and not a torn write — the three things repair exists\n'
+printf '         for — and it is not a filesystem that returns EIO on a read. It\n'
+printf '         establishes that the repairer detects a digest mismatch, fetches\n'
+printf '         only the chunks that changed, stages a whole replacement, and\n'
+printf '         never edits a blob in place (ADR-0036). It establishes nothing\n'
+printf '         about the failure modes of a real disk.\n'
+printf '         THE SAVINGS ARE DEMONSTRATIONS, NOT BENCHMARKS. Every byte count\n'
+printf '         above is measured on a fixture sized to fit a 240-second\n'
+printf '         acceptance budget. The ratios are real and the controls are\n'
+printf '         real, and a number measured on a few megabytes says nothing\n'
+printf '         about a twenty-gigabyte blob over a link that is slower than a\n'
+printf '         disk. Nothing here is a performance claim.\n'
+printf '         THIS REPOSITORY IS PUBLIC AND IS NOT YET CLEAN. A real host\n'
+printf '         name, a document named after a real machine, and a personal home\n'
+printf '         directory in a test fixture are still on `main` (#211) — the\n'
+printf '         same class of content Milestone 4 scrubbed. It is recorded here\n'
+printf '         because a green demo is where a reader concludes the repository\n'
+printf '         is in good order, and on this one point it is not.\n'
 printf '\n'
 
 # The verdict line. It carries the capability gap, because the verdict line is

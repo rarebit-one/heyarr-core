@@ -2,8 +2,9 @@
 // canonical byte identity (spec §13).
 //
 // A Blob's identity is the digest of its entire byte sequence and nothing else
-// (ADR-0005). Chunk manifests, arriving in Milestone 5, are an optimisation for
-// transfer and deduplication — they never become an identity.
+// (ADR-0005). Chunk manifests arrived in Milestone 5 and are an optimisation for
+// transfer and deduplication — a manifest is stored UNDER the whole-object
+// digest and never becomes one (ADR-0034).
 package hashing
 
 import (
