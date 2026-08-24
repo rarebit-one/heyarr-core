@@ -75,6 +75,11 @@ One logical library, multiple complete sovereign peers.`,
 		// in that person's own config directory (§40, ADR-0032). They take no
 		// --config on purpose.
 		newDeviceCommand(opts),
+		// Renderer discovery sits here for the same reason: it is multicast
+		// on the local segment and needs neither a controller nor a
+		// credential. An operator standing in the living room can run it
+		// before Heyarr is configured at all.
+		newRenderersCommand(opts),
 		newGCCommand(opts, &configPath),
 		// The client commands. Everything below this line talks to a running
 		// controller over /api/v1; everything above it is host administration

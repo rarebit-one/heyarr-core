@@ -220,17 +220,17 @@ func (a *API) enqueueRemux(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	device, err := a.deviceProfile(r, body.DeviceID)
+	device, err := a.deviceProfile(r.Context(), body.DeviceID)
 	if err != nil {
 		a.fail(w, r, "device", err)
 		return
 	}
-	media, blobHash, err := a.mediaProfile(r, body.AssetID)
+	media, blobHash, err := a.mediaProfile(r.Context(), body.AssetID)
 	if err != nil {
 		a.fail(w, r, "asset", err)
 		return
 	}
-	replicas, err := a.replicasFor(r, blobHash)
+	replicas, err := a.replicasFor(r.Context(), blobHash)
 	if err != nil {
 		a.fail(w, r, "replica", err)
 		return
