@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
 
 // Handler runs one job type.
@@ -187,6 +189,25 @@ type Runtime struct {
 	completed atomicCounter
 	failed    atomicCounter
 	panicked  atomicCounter
+
+	storeUnwritable onceAlarm
+}
+
+// onceAlarm raises a fault that is not this job's fault exactly once.
+//
+// A store that cannot be written to will refuse the next job too. Reporting it
+// per job turns one fault into as many failures as there are jobs — twelve
+// identical "job failed" lines at INFO, in #151, for a single store-wide
+// condition, with nothing saying they were all the same thing. The first one is
+// raised at ERROR with the store's own diagnosis attached; the rest fail the
+// way any job fails, so nothing is hidden and the alarm is not rung twelve
+// times.
+type onceAlarm struct{ raised atomic.Bool }
+
+// shouldRaise reports whether cause is a store-wide fault being seen for the
+// first time.
+func (a *onceAlarm) shouldRaise(cause error) bool {
+	return errors.Is(cause, cas.ErrStoreUnwritable) && a.raised.CompareAndSwap(false, true)
 }
 
 type atomicCounter struct {
@@ -514,6 +535,14 @@ func (r *Runtime) failJob(ctx context.Context, job jobs.Job, cause error) {
 	r.failed.inc()
 	if err := r.queue.Fail(context.WithoutCancel(ctx), job.ID, r.cfg.Owner, cause); err != nil {
 		r.log.Error("could not record the job failure", "job", job.ID, "error", err)
+		return
+	}
+	if r.storeUnwritable.shouldRaise(cause) {
+		// Deliberately not a per-job failure. Every job that touches the store
+		// will fail this way until an operator changes something, so this is
+		// said once, loudly, with the evidence the store gathered (#151).
+		r.log.Error("the content-addressed store cannot be written to; every job that writes to it will fail until this is fixed",
+			"job", job.ID, "type", job.Type, "cause", cause)
 		return
 	}
 	r.log.Info("job failed", "job", job.ID, "type", job.Type, "cause", cause)

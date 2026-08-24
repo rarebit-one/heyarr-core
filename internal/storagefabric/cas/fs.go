@@ -247,7 +247,7 @@ func (s *FS) blobPath(h hashing.Hash) string {
 func (s *FS) Put(ctx context.Context, r io.Reader) (Descriptor, error) {
 	tmp, err := os.CreateTemp(filepath.Join(s.root, tmpDir), "put-*.part")
 	if err != nil {
-		return Descriptor{}, fmt.Errorf("cas: creating temporary file: %w", err)
+		return Descriptor{}, s.permissionFault("creating temporary file", filepath.Join(s.root, tmpDir), err)
 	}
 	tmpName := tmp.Name()
 	// Best-effort cleanup. commit publishes by linking rather than renaming,
@@ -292,12 +292,12 @@ func (s *FS) Put(ctx context.Context, r io.Reader) (Descriptor, error) {
 func (s *FS) commit(tmpName string, h hashing.Hash) (deduplicated bool, err error) {
 	final := s.blobPath(h)
 	if err := os.MkdirAll(filepath.Dir(final), dirPerm); err != nil {
-		return false, fmt.Errorf("cas: creating blob directory: %w", err)
+		return false, s.permissionFault("creating blob directory", filepath.Dir(final), err)
 	}
 	if _, err := os.Stat(final); err == nil {
 		return true, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return false, fmt.Errorf("cas: checking for an existing blob: %w", err)
+		return false, s.permissionFault("checking for an existing blob", final, err)
 	}
 
 	if err := os.Chmod(tmpName, blobPerm); err != nil {
@@ -436,7 +436,7 @@ func (s *FS) PutExpecting(ctx context.Context, r io.Reader, expected hashing.Has
 func (s *FS) publish(staging string, h hashing.Hash) (deduplicated bool, err error) {
 	final := s.blobPath(h)
 	if err := os.MkdirAll(filepath.Dir(final), dirPerm); err != nil {
-		return false, fmt.Errorf("cas: creating blob directory: %w", err)
+		return false, s.permissionFault("creating blob directory", filepath.Dir(final), err)
 	}
 	if err := os.Chmod(staging, blobPerm); err != nil {
 		return false, fmt.Errorf("cas: setting blob mode: %w", err)
@@ -471,7 +471,7 @@ func (s *FS) Link(ctx context.Context, srcPath string, mode Materialisation) (De
 	// then goes unused costs nothing: the shard is two levels of a fixed
 	// layout, not per-blob state.
 	if err := os.MkdirAll(filepath.Dir(final), dirPerm); err != nil {
-		return Descriptor{}, fmt.Errorf("cas: creating blob directory: %w", err)
+		return Descriptor{}, s.permissionFault("creating blob directory", filepath.Dir(final), err)
 	}
 	if _, err := os.Stat(final); err == nil {
 		return Descriptor{Hash: h, Size: size, Materialised: mode, Deduplicated: true}, nil
@@ -480,7 +480,7 @@ func (s *FS) Link(ctx context.Context, srcPath string, mode Materialisation) (De
 		// fatal. The MkdirAll above means it should not happen; treating it as
 		// fatal is what would make a future reordering of these two lines a
 		// job-killing bug again rather than an extra syscall (#151).
-		return Descriptor{}, fmt.Errorf("cas: checking for an existing blob: %w", err)
+		return Descriptor{}, s.permissionFault("checking for an existing blob", final, err)
 	}
 
 	// Materialise into a private staging path and publish with a link, rather
@@ -584,7 +584,7 @@ func (s *FS) copyFile(ctx context.Context, src, dst string) error {
 
 	tmp, err := os.CreateTemp(filepath.Join(s.root, tmpDir), "link-*.part")
 	if err != nil {
-		return fmt.Errorf("cas: creating temporary file: %w", err)
+		return s.permissionFault("creating temporary file", filepath.Join(s.root, tmpDir), err)
 	}
 	tmpName := tmp.Name()
 	defer func() {
@@ -711,7 +711,7 @@ func (s *FS) quarantineFile(src string, h hashing.Hash) (string, error) {
 	dst := filepath.Join(s.root, quarantineDir,
 		fmt.Sprintf("%s.%d", h.Hex(), time.Now().UTC().UnixNano()))
 	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
-		return "", fmt.Errorf("cas: creating the quarantine directory: %w", err)
+		return "", s.permissionFault("creating the quarantine directory", filepath.Dir(dst), err)
 	}
 	if err := os.Chmod(src, tempPerm); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return "", fmt.Errorf("cas: preparing to quarantine %s: %w", h, err)
