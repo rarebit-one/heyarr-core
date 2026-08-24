@@ -50,6 +50,8 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr peers`](heyarr_peers.md) | Inspect and manage the peers of this instance |
 | [`heyarr quality-profile list`](heyarr_quality-profile_list.md) | List the quality profiles |
 | [`heyarr quality-profile`](heyarr_quality-profile.md) | Inspect the quality profiles a want is measured against |
+| [`heyarr renderers discover`](heyarr_renderers_discover.md) | Search the local network for media renderers |
+| [`heyarr renderers`](heyarr_renderers.md) | Find media renderers on the local network (§68) |
 | [`heyarr scan`](heyarr_scan.md) | Scan a library's roots, optionally waiting for the scan to finish |
 | [`heyarr system drift`](heyarr_system_drift.md) | Report how far a running instance has drifted from what was expected |
 | [`heyarr system info`](heyarr_system_info.md) | Print what the instance is running |

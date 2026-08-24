@@ -20,6 +20,10 @@ import (
 // means reading the Scope column here rather than opening nine handlers.
 
 func (s *Server) registerTools() {
+	// The renderer lane (§68), in its own file: four verbs about the
+	// physical world rather than about the catalog.
+	s.registerRendererTools()
+
 	s.tools.register(Tool{
 		Name:     "search_content",
 		Title:    "Search the library",

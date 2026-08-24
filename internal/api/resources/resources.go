@@ -20,6 +20,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -88,6 +89,22 @@ type Options struct {
 	// shapes be golden files rather than a regex (ADR-0017).
 	Now   func() time.Time
 	NewID func() string
+	// RenderSecret signs the capability URLs a dumb renderer fetches
+	// (ADR-0040). Empty disables them: POST /playback still answers, and the
+	// response simply carries no renderer URL. That is a legitimate
+	// deployment — a node whose only clients send Authorization headers needs
+	// no capability route — and it keeps every harness that predates this
+	// working unchanged rather than making each one mint a secret.
+	RenderSecret []byte
+	// RenderBaseURL is the absolute origin a renderer should fetch from,
+	// normally the peer endpoint. A relative URL is useless to a television:
+	// it has no notion of "the host you got the plan from" because it never
+	// spoke to the controller at all.
+	RenderBaseURL string
+	// SelfPeerID identifies this node, so playback can tell whether the routed
+	// replica is one this node can actually mint for. A capability is only
+	// valid at the peer that signed it (ADR-0040).
+	SelfPeerID string
 	// StreamHeartbeat is how often the SSE stream writes a keep-alive comment.
 	// Zero means the default.
 	StreamHeartbeat time.Duration
@@ -113,6 +130,17 @@ type API struct {
 	log        *slog.Logger
 	now        func() time.Time
 	newID      func() string
+
+	renderSecret  []byte
+	renderBaseURL string
+	selfPeerID    string
+
+	// rendererCache and rendererClient are the renderer control lane
+	// (§68). Nil cache means this node does not drive renderers, which is
+	// the right state for a controller that is not on the same LAN as the
+	// televisions — see internal/api/resources/renderers.go.
+	rendererCache  *rendererCache
+	rendererClient *http.Client
 
 	heartbeat  time.Duration
 	streamPoll time.Duration
@@ -183,9 +211,15 @@ func New(opts Options) (*API, error) {
 		log:        log.With("component", "api"),
 		now:        now,
 		newID:      newID,
-		heartbeat:  heartbeat,
-		streamPoll: streamPoll,
-		buffer:     buffer,
+
+		rendererCache:  &rendererCache{},
+		rendererClient: &http.Client{Timeout: 15 * time.Second},
+		renderSecret:   opts.RenderSecret,
+		renderBaseURL:  strings.TrimRight(opts.RenderBaseURL, "/"),
+		selfPeerID:     opts.SelfPeerID,
+		heartbeat:      heartbeat,
+		streamPoll:     streamPoll,
+		buffer:         buffer,
 	}, nil
 }
 
@@ -211,7 +245,7 @@ func (a *API) Mount(r chi.Router) {
 	r.Get("/devices", a.listDevices)
 	r.Get("/devices/{id}", a.getDevice)
 	r.Get("/providers", a.listProviders)
-	// The fleet capability view (ADR-0039). Under the `read` scope floor like
+	// The fleet capability view (ADR-0040). Under the `read` scope floor like
 	// every other collection: it names worker ids and peer names, which is more
 	// than an unauthenticated caller needs.
 	r.Get("/capabilities", a.listCapabilities)
@@ -219,6 +253,10 @@ func (a *API) Mount(r chi.Router) {
 	r.Get("/quality-profiles/{id}", a.getQualityProfile)
 	r.Get("/publications", a.listPublications)
 	r.Get("/publications/{id}", a.getPublication)
+	// Renderers (§68). Discovery is a read; everything that moves a picture is
+	// a write, because it changes what is happening in somebody's living room.
+	r.Get("/renderers", a.listRenderers)
+	r.Get("/renderers/{udn}/status", a.rendererStatus)
 	r.Get("/consumption/sessions", a.listSessions)
 	r.Get("/consumption/sessions/{id}", a.getSession)
 	r.Get("/jobs", a.listJobs)
@@ -236,6 +274,14 @@ func (a *API) Mount(r chi.Router) {
 	// admin token for it would put an admin credential on every set-top box in
 	// the house.
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/devices", a.registerDevice)
+	// Driving a renderer needs `write` and not `admin`. Playing something in
+	// the living room is ordinary use, and requiring an admin credential for
+	// it would put one on every phone in the house.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/renderers/{udn}/play", a.playOnRenderer)
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/renderers/{udn}/pause", a.transportAction("pause"))
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/renderers/{udn}/resume", a.transportAction("resume"))
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/renderers/{udn}/stop", a.transportAction("stop"))
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/renderers/{udn}/seek", a.seekRenderer)
 	// A quality profile is the standard desired state is measured against
 	// (§62). Authoring one is a write rather than an admin action: it is
 	// ordinary operator configuration, in the same class as creating a
@@ -343,6 +389,20 @@ func (a *API) write(w http.ResponseWriter, r *http.Request, status int, body any
 // runbook. Each layer spells it differently, so all three spellings are handled
 // here rather than at every call site, where one would eventually be missed and
 // a missing work would become an alert.
+// problemFor is fail's answer without writing it.
+//
+// It exists for the handlers that have to DECIDE something after the failure —
+// pushing to a renderer, say — rather than returning immediately. Sharing the
+// mapping keeps "no such row is a 404" in one place; duplicating it is how one
+// copy eventually turns a missing asset into an alert.
+func (a *API) problemFor(what string, err error) *problem.Problem {
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, jobs.ErrNotFound) || errors.Is(err, auth.ErrNotFound) {
+		return problem.NotFound("no " + what + " with that identifier")
+	}
+	a.log.Error("a request failed", "resource", what, "error", err)
+	return problem.Internal()
+}
+
 func (a *API) fail(w http.ResponseWriter, r *http.Request, what string, err error) {
 	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, jobs.ErrNotFound) || errors.Is(err, auth.ErrNotFound) {
 		httpapi.Fail(w, r, problem.NotFound("no "+what+" with that identifier"))

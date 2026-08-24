@@ -13,6 +13,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/mcp"
+	"github.com/rarebit-one/heyarr-core/internal/api/render"
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
@@ -215,7 +216,7 @@ func (c *Controller) Run(ctx context.Context) error {
 		return fmt.Errorf("controller: opening peer health: %w", err)
 	}
 
-	srv, members, err := c.newServer(db, blobStore, version, peerHealth)
+	srv, members, err := c.newServer(ctx, db, blobStore, version, peerHealth, self.PeerID)
 	if err != nil {
 		return err
 	}
@@ -327,7 +328,7 @@ func (c *Controller) Run(ctx context.Context) error {
 // reason: it is constructed before the server so that the peer guard mounted
 // on this router can record liveness through the same tracker the idle probe
 // and the reconciler read.
-func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion int64, peerHealth *health.Tracker) (*httpapi.Server, *membership.Store, error) {
+func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas.Store, schemaVersion int64, peerHealth *health.Tracker, selfPeerID string) (*httpapi.Server, *membership.Store, error) {
 	store, err := auth.NewStore(auth.StoreOptions{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
@@ -368,7 +369,7 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: opening peer membership: %w", err)
 	}
-	mounts, err := c.mounts(db, store, blobStore, eventLog, members)
+	mounts, publicMounts, err := c.mounts(ctx, db, store, blobStore, eventLog, members, selfPeerID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -393,6 +394,7 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 		KnownSchemaVersion: knownSchema,
 		CASRoot:            c.cfg.CAS.Root,
 		Mount:              mounts,
+		MountPublic:        publicMounts,
 		PeerMembership:     members,
 		PeerLiveness:       liveness(peerHealth),
 	})
@@ -411,10 +413,16 @@ func (c *Controller) newServer(db *sqlite.DB, blobStore cas.Store, schemaVersion
 // The event log is passed in rather than built here because the queue records
 // its own transitions through it (§76, ADR-0009) and GET /api/v1/system reports
 // its head — and those must be the same log.
-func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Store, eventLog *events.Log, members *membership.Store) ([]httpapi.MountFunc, error) {
+// mounts builds the authenticated API routes and, separately, the
+// unauthenticated renderer route (ADR-0040). They are returned apart rather
+// than in one slice because they are mounted on different routers with
+// different trust roots, and a mix-up in either direction is severe: an API
+// route mounted publicly is the library given away, and the renderer route
+// mounted privately is a 401 for every television.
+func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Store, blobStore cas.Store, eventLog *events.Log, members *membership.Store, selfPeerID string) (apiMounts, publicMounts []httpapi.MountFunc, err error) {
 	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
 	if err != nil {
-		return nil, fmt.Errorf("controller: %w", err)
+		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 	// The catalog answers §56's satisfaction questions for the API. It is the
 	// same construction reconcileLibraries and the worker use — one catalog
@@ -424,7 +432,7 @@ func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Stor
 		PeerName: c.cfg.Peer.Name, PeerSite: c.cfg.Peer.Site, Logger: c.log,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("controller: opening the catalog: %w", err)
+		return nil, nil, fmt.Errorf("controller: opening the catalog: %w", err)
 	}
 	// The provider registry, from configuration. Validation already happened
 	// at config load — a malformed endpoint or a missing credential stopped
@@ -432,18 +440,25 @@ func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Stor
 	// reason an operator can act on.
 	resolvedProviders, err := providers.Validate(c.cfg.Providers)
 	if err != nil {
-		return nil, fmt.Errorf("controller: %w", err)
+		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 	// ADR-0014, at the other end of the ladder. Checked before the registry is
 	// built so a refusal names the configuration rather than arriving after a
 	// provider has been registered and reported.
 	if err := checkDownloadPaths(c.cfg, resolvedProviders, c.log); err != nil {
-		return nil, fmt.Errorf("controller: %w", err)
+		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 	providerRegistry, err := providers.BuildWith(resolvedProviders, c.log, nil,
 		providers.Chain(indexers.Constructor, downloads.Constructor))
 	if err != nil {
-		return nil, fmt.Errorf("controller: building the provider registry: %w", err)
+		return nil, nil, fmt.Errorf("controller: building the provider registry: %w", err)
+	}
+
+	// The renderer capability secret (ADR-0040), read before the resource API
+	// because that is what mints the URLs.
+	secret, err := render.EnsureSecret(c.cfg.DataDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
 	api, err := resources.New(resources.Options{
@@ -455,13 +470,22 @@ func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Stor
 		Providers:  providerRegistry,
 		Membership: members,
 		Logger:     c.log,
+
+		RenderSecret:  secret,
+		RenderBaseURL: renderBaseURL(c.cfg),
+		SelfPeerID:    selfPeerID,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("controller: %w", err)
+		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
+	// The progress producer (§68, ADR-0024). It is what finally emits
+	// session transitions: until now the consumption state machine had no
+	// producer at all, so every session stayed at "created".
+	api.StartProgressBeat(ctx)
+
 	blobHandler, err := blobs.New(blobs.Options{Store: blobStore, Logger: c.log})
 	if err != nil {
-		return nil, fmt.Errorf("controller: %w", err)
+		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
 	// MCP mounts on the SAME authenticated router (§71, ADR-0019), so it
@@ -481,10 +505,23 @@ func (c *Controller) mounts(db *sqlite.DB, store *auth.Store, blobStore cas.Stor
 		Version:   buildinfo.Get().Version,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("controller: %w", err)
+		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
-	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, mcpServer.Mount}, nil
+	// The renderer route (ADR-0040). Its signing secret belongs to the node
+	// that serves the bytes, so a capability is only valid here — which is why
+	// this milestone mints one only for a replica on this node.
+	renderHandler, err := render.New(render.Options{
+		Blobs:  blobHandler,
+		Secret: secret,
+		Logger: c.log,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: %w", err)
+	}
+
+	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, mcpServer.Mount},
+		[]httpapi.MountFunc{renderHandler.Mount}, nil
 }
 
 // liveness converts a possibly-absent tracker into the interface the HTTP
