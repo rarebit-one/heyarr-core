@@ -5549,9 +5549,19 @@ $ctl_moved of $ctl_size bytes, measured on the SOURCE's serving side"
   # chmod first: a published blob is read-only, which is the store protecting
   # its own bytes from exactly this. Damaging it means stepping around that
   # deliberately, the way the single-node repair section already does.
-  rp_off=$(( rp_size / 2 / 4096 ))
+  #
+  # ONE BYTE, and the width is the point rather than a minimum.
+  #
+  # This wrote a 4096-byte block until it hit CI. A write wider than one byte
+  # can STRADDLE a content-defined chunk boundary, and then two chunks are
+  # damaged and two are fetched. At the old five-megabyte fixture that was
+  # three chunks and effectively unreachable; at a hundred megabytes it is
+  # eighty-odd chunks, boundaries are close enough together to land on, and it
+  # failed on `main` with `chunks_fetched — got '2', want '1'`. A single byte
+  # cannot span a boundary, so the damage is exactly one chunk every time.
+  rp_off=$(( rp_size / 2 ))
   chmod u+w "$rp_file"
-  dd if=/dev/urandom of="$rp_file" bs=4096 seek="$rp_off" count=1 conv=notrunc 2>/dev/null
+  dd if=/dev/urandom of="$rp_file" bs=1 seek="$rp_off" count=1 conv=notrunc 2>/dev/null
   assert_eq "$(cli_a blobs verify "$lc_large" --json 2>/dev/null | jq -r '.verified | tostring')" "false" \
     "the blob is damaged on node A: it no longer hashes to its own name"
 
@@ -5599,10 +5609,25 @@ never written in place (invariant 1, ADR-0036)"
   # need a blob with many chunks, and a blob with many chunks does not fit a
   # 240-second acceptance budget — which the epilogue says out loud rather than
   # letting this section imply otherwise.
-  assert_eq "$(jq -r '.chunks_fetched | tostring' <<<"$rp_entry")" "1" \
-    "🔴 THE SAVING: repairing one damaged chunk fetched exactly ONE chunk of the $rp_total this \
-blob has — $rp_moved bytes of $rp_size, $(pct "$rp_moved" "$rp_size")% — against the 100% control \
-above, both measured on the SOURCE's serving side (#196, ADR-0036)"
+  # THE CLAIM IS fetched == damaged, not fetched == 1.
+  #
+  # "Exactly one chunk" was a statement about the fixture's damage, and it went
+  # red on `main` the moment the fixture was big enough for a wide write to
+  # straddle a boundary. What the feature actually claims is that a repair
+  # fetches THE DAMAGE and nothing else, and that is what is asserted — so a
+  # repair that quietly pulled a spare chunk still fails, and a future change
+  # to how the damage is made cannot silently weaken it.
+  local rp_damaged
+  rp_damaged=$(jq -r '.chunks_damaged | tostring' <<<"$rp_entry")
+  assert_eq "$(jq -r '.chunks_fetched | tostring' <<<"$rp_entry")" "$rp_damaged" \
+    "🔴 THE SAVING: the repair fetched exactly the $rp_damaged damaged chunk(s) of the $rp_total \
+this blob has, and nothing else — $rp_moved bytes of $rp_size, $(pct "$rp_moved" "$rp_size")% — \
+against the 100% control above, both measured on the SOURCE's serving side (#196, ADR-0036)"
+  # And the damage really is a SMALL part of the blob, without which
+  # "fetched == damaged" is satisfied by a blob that was damaged end to end.
+  assert_eq "$(( rp_damaged >= 1 && rp_damaged * 10 < rp_total ))" "1" \
+    "and the damage is a small fraction of the blob — $rp_damaged chunk(s) of $rp_total — so \
+this is a saving rather than an arithmetic identity"
   assert_eq "$(( rp_total > 1 ))" "1" \
     "and the blob has MORE than one chunk ($rp_total), without which fetching one of them is not \
 a saving and this section would pass on a single-chunk blob"
