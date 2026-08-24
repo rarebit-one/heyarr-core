@@ -289,6 +289,7 @@ func (c *Catalog) assetsForWant(ctx context.Context, w desiredWant) ([]acquisiti
 type probeStream struct {
 	Type     string `json:"type"`
 	Codec    string `json:"codec"`
+	Width    int64  `json:"width"`
 	Height   int64  `json:"height"`
 	Channels int64  `json:"channels"`
 	Profile  string `json:"profile"`
@@ -317,8 +318,11 @@ func applyProbeAttributes(attrs acquisition.Attributes, streamsJSON string) {
 			if s.Codec != "" {
 				attrs[policy.AttrVideoCodec] = policy.Text(s.Codec)
 			}
-			if s.Height > 0 {
-				attrs[policy.AttrResolution] = policy.Num(s.Height)
+			// The class, not the frame's pixel height: a 2.35:1 1080p
+			// master is 1920x816, and taking the height rejected it as
+			// sub-1080 (#231). policy.ResolutionClass explains the ladder.
+			if class, ok := policy.ResolutionClass(s.Width, s.Height); ok {
+				attrs[policy.AttrResolution] = policy.Num(class)
 			}
 			// HDR is a substring match on the stream profile, and it is a
 			// KNOWN WEAKNESS carried over from Milestone 2 rather than a
