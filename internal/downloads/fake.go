@@ -46,10 +46,47 @@ type Fake struct {
 	label string
 	now   func() time.Time
 
+	// simulated makes this fake move on its own — see Simulate. Zero means it
+	// does not, which is what every Go test wants.
+	simulated int64
+
 	mu        sync.Mutex
 	transfers map[string]*fakeTransfer
 	// offers is what each source produces when grabbed — see Offer.
 	offers map[string]fakeOffer
+}
+
+// Simulate makes this fake produce and complete transfers WITHOUT being told
+// what they contain or being driven step by step.
+//
+// # Why a mode rather than the default
+//
+// Two callers want opposite things from a fake. A Go test wants to decide
+// exactly when a transfer progresses, so it can assert what happens at each
+// edge — that is Offer, Queue, Progress and Complete, and they stay the
+// default. The acceptance demo has no such control: it configures a client,
+// declares a want, and watches §64 run. It cannot call Complete, because it is
+// a shell script talking to a running daemon over HTTP.
+//
+// So a simulated fake invents its own content — `size` deterministic bytes
+// derived from the source, so the same release always produces the same blob —
+// and advances one step per observation: first poll sees bytes moving, second
+// sees it finished.
+//
+// # One step per OBSERVATION, not per second
+//
+// No clock and no goroutine. A demo that waited on wall-clock time would be a
+// demo that flakes on a loaded machine, and the poll beat is already the thing
+// that drives §64 forward. Advancing on the poll makes the arc deterministic:
+// exactly two passes, every run, on any machine.
+//
+// It also means the DOWNLOADING edge is genuinely observed rather than skipped,
+// which is the difference between proving the pipeline and proving its ends.
+func (f *Fake) Simulate(size int64) *Fake {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.simulated = size
+	return f
 }
 
 type fakeOffer struct {
@@ -100,10 +137,38 @@ func (f *Fake) Transfers(_ context.Context) ([]providers.Transfer, error) {
 
 	out := make([]providers.Transfer, 0, len(f.transfers))
 	for _, t := range f.transfers {
+		if f.simulated > 0 {
+			// One step per observation — see Simulate. Done first so a
+			// finished transfer stays finished rather than oscillating.
+			switch {
+			case t.transfer.Done:
+			case t.transfer.BytesDone > 0:
+				if err := f.completeLocked(t); err != nil {
+					return nil, err
+				}
+			default:
+				t.transfer.BytesDone = t.transfer.BytesTotal / 2
+			}
+		}
 		out = append(out, t.transfer)
 	}
 	sortTransfers(out)
 	return out, nil
+}
+
+// syntheticContent is deterministic bytes for a simulated transfer.
+//
+// Derived from the source key, so the same release produces the same blob on
+// every run and a demo can assert a digest. Not random: a fixture whose content
+// changes between runs cannot be asserted against, and this repository has
+// already been bitten by randomness coinciding with an expectation (#255).
+func syntheticContent(key string, size int64) []byte {
+	out := make([]byte, size)
+	seed := sha256.Sum256([]byte(key))
+	for i := range out {
+		out[i] = seed[i%len(seed)] ^ byte(i%251)
+	}
+	return out
 }
 
 // Queue adds a transfer that has not started.
@@ -174,6 +239,12 @@ func (f *Fake) Add(_ context.Context, source secret.Value) (providers.Transfer, 
 		return existing.transfer, nil
 	}
 	offer, ok := f.offers[key]
+	if !ok && f.simulated > 0 {
+		// A simulated fake was not told, and does not need to be. The content
+		// is derived from the source so the same release always produces the
+		// same blob — which is what lets a demo assert a digest at all.
+		offer, ok = fakeOffer{name: id + ".bin", content: syntheticContent(key, f.simulated)}, true
+	}
 	if !ok {
 		// Not echoed. The source is a credential (secret.Value), and an error
 		// string is exactly the sort of place one ends up in a log. The id is
@@ -234,18 +305,33 @@ func (f *Fake) Complete(id string) (providers.Transfer, error) {
 	if !ok {
 		return providers.Transfer{}, fmt.Errorf("%w: %s", ErrNotOurs, id)
 	}
-	if err := os.MkdirAll(f.dir, 0o750); err != nil {
+	if err := f.completeLocked(t); err != nil {
 		return providers.Transfer{}, err
+	}
+	return t.transfer, nil
+}
+
+// completeLocked writes the bytes and marks the transfer finished.
+//
+// Extracted so that Complete (driven by a test) and Transfers (driven by the
+// poll, when simulated) finish a transfer THE SAME WAY. Two code paths that
+// each set Done, BytesDone and Path would be two chances to set them
+// differently, and the demo would then be exercising a completion shape no Go
+// test covers.
+//
+// The caller holds f.mu.
+func (f *Fake) completeLocked(t *fakeTransfer) error {
+	if err := os.MkdirAll(f.dir, 0o750); err != nil {
+		return err
 	}
 	path := filepath.Join(f.dir, t.transfer.Name)
 	if err := os.WriteFile(path, t.content, 0o600); err != nil {
-		return providers.Transfer{}, err
+		return err
 	}
-
 	t.transfer.Done = true
 	t.transfer.BytesDone = t.transfer.BytesTotal
 	t.transfer.Path = path
-	return t.transfer, nil
+	return nil
 }
 
 // Fail marks a transfer as troubled.
