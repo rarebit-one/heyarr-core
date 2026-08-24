@@ -167,7 +167,7 @@ func SearchHandler(
 			// Nothing found. A modelled edge, recorded so the want does not go
 			// quiet — RecordSearch emits even with nothing to store, which is
 			// the only trace an empty search leaves.
-			if _, err := cat.RecordSearch(ctx, payload.DesiredItemID, nil); err != nil {
+			if _, err := cat.RecordSearch(ctx, payload.DesiredItemID, nil, sc.Held()); err != nil {
 				return err
 			}
 			if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
@@ -207,7 +207,7 @@ func SearchHandler(
 			// Everything on offer has failed before. Distinct from finding
 			// nothing: the indexers answered, and every answer is one this
 			// want has already tried and been let down by.
-			if _, err := cat.RecordSearch(ctx, payload.DesiredItemID, nil); err != nil {
+			if _, err := cat.RecordSearch(ctx, payload.DesiredItemID, nil, sc.Held()); err != nil {
 				return err
 			}
 			// CANDIDATES_FOUND first, then REJECT_ALL — the same two edges the
@@ -233,7 +233,7 @@ func SearchHandler(
 		// §63's scorer, and nothing else decides.
 		ranked := acquisition.EvaluateAll(considered, sc.Profile)
 
-		outcome, err := cat.RecordSearch(ctx, payload.DesiredItemID, ranked)
+		outcome, err := cat.RecordSearch(ctx, payload.DesiredItemID, ranked, sc.Held())
 		if err != nil {
 			return err
 		}
