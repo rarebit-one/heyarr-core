@@ -1,0 +1,41 @@
+{
+  "blob_hash": "blake3:1111111111111111111111111111111111111111111111111111111111111111",
+  "digest": "blake3:496e8fb82db634fd0c52fdf48869e61d0c439fea9e11fc40e71f07ebb8afe0bc",
+  "algorithm": "fastcdc",
+  "params": {
+    "min": 262144,
+    "avg": 1048576,
+    "max": 4194304
+  },
+  "covered_size": 90412,
+  "chunk_count": 5,
+  "generated_at": "2026-08-24T09:30:00Z",
+  "chunks": [
+    {
+      "offset": 0,
+      "length": 4096,
+      "digest": "blake3:cf657d3fd42311a258afdf3b5261c256983e3deb2bb38980cb0e754db903d549"
+    },
+    {
+      "offset": 4096,
+      "length": 65536,
+      "digest": "blake3:2f9095129febe894693f1cef7726a3248b2496a552bfff353fb90a3ba5a9c798"
+    },
+    {
+      "offset": 69632,
+      "length": 12288,
+      "digest": "blake3:fc14dc4248927c42ae3248930b935ee72dbef0d31e8afb97df893f6d6bef4df8"
+    },
+    {
+      "offset": 81920,
+      "length": 300,
+      "digest": "blake3:58793ab987ecff5221fce66ff3e4c2ea0cea3e9c67f06f108c2b978bddf000e2"
+    },
+    {
+      "offset": 82220,
+      "length": 8192,
+      "digest": "blake3:a5a5cf1cd9df8e16d0cf651143e3ea959f032fe23c7bf1a841dc4a9329dca6db"
+    }
+  ],
+  "served_by": "peer-source"
+}
