@@ -5594,9 +5594,20 @@ $ctl_moved of $ctl_size bytes, measured on the SOURCE's serving side"
   # eighty-odd chunks, boundaries are close enough together to land on, and it
   # failed on `main` with `chunks_fetched — got '2', want '1'`. A single byte
   # cannot span a boundary, so the damage is exactly one chunk every time.
+  #
+  # And the byte written is the ORIGINAL byte INVERTED, not a random one.
+  # `dd if=/dev/urandom … count=1` writes one random byte, which has a 1-in-256
+  # chance of being the byte already there — leaving the file unchanged, the
+  # blob still verifying, and this section failing with
+  # `the blob is damaged … got 'true', want 'false'`. That is a 0.4% flake per
+  # run, which is rare enough to look like something else and frequent enough
+  # to hit: it did, on CI, once. Inverting the byte that is there cannot
+  # produce the byte that is there.
   rp_off=$(( rp_size / 2 ))
   chmod u+w "$rp_file"
-  dd if=/dev/urandom of="$rp_file" bs=1 seek="$rp_off" count=1 conv=notrunc 2>/dev/null
+  rp_orig=$(dd if="$rp_file" bs=1 skip="$rp_off" count=1 2>/dev/null | od -An -tu1 | tr -d ' ')
+  printf "$(printf '\\%03o' "$(( rp_orig ^ 255 ))")" \
+    | dd of="$rp_file" bs=1 seek="$rp_off" count=1 conv=notrunc 2>/dev/null
   assert_eq "$(cli_a blobs verify "$lc_large" --json 2>/dev/null | jq -r '.verified | tostring')" "false" \
     "the blob is damaged on node A: it no longer hashes to its own name"
 
