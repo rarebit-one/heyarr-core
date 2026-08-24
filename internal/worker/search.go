@@ -138,6 +138,31 @@ func SearchHandler(
 				"desired_item_id", payload.DesiredItemID)
 		}
 
+		answered := result.Consulted - len(result.Failures)
+
+		// EVERY indexer failed. That is not a search that found nothing, it is
+		// a search that did not happen (#239).
+		//
+		// Recording it as TransitionNoCandidates would advance the want's
+		// search schedule on the strength of a look nobody took — so a want
+		// whose indexers are all down waits out the full `missing` cadence
+		// having learned nothing, and its durable detail reads as a definitive
+		// "not out there" (#130's cadence).
+		//
+		// So the want returns to rest via the SAME failure edge an unreachable
+		// registry takes, and the job FAILS so the reason reaches last_error
+		// and the queue retries on a backoff rather than on the beat.
+		if answered == 0 && result.Consulted > 0 {
+			detail := fmt.Sprintf("no indexer could be reached (%d tried)", result.Consulted)
+			if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
+				acquisition.TransitionFail, detail); err != nil {
+				return err
+			}
+			log.Warn("a search could not reach any indexer",
+				"desired_item_id", payload.DesiredItemID, "tried", result.Consulted)
+			return fmt.Errorf("worker: searching for %s: %s", payload.DesiredItemID, detail)
+		}
+
 		if len(result.Candidates) == 0 {
 			// Nothing found. A modelled edge, recorded so the want does not go
 			// quiet — RecordSearch emits even with nothing to store, which is
@@ -147,11 +172,12 @@ func SearchHandler(
 			}
 			if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
 				acquisition.TransitionNoCandidates,
-				fmt.Sprintf("%d indexer(s) had nothing", result.Consulted)); err != nil {
+				noCandidatesDetail(answered, len(result.Failures))); err != nil {
 				return err
 			}
 			log.Info("a search found nothing",
-				"desired_item_id", payload.DesiredItemID, "consulted", result.Consulted)
+				"desired_item_id", payload.DesiredItemID,
+				"answered", answered, "failed", len(result.Failures))
 			return nil
 		}
 
@@ -269,4 +295,33 @@ func excludeBlocked(
 		out = append(out, c)
 	}
 	return out, skipped
+}
+
+// noCandidatesDetail is what a want durably records when a search found
+// nothing.
+//
+// # Why the failures have to be in it
+//
+// The log line is transient and the want's detail is not. An operator asking
+// "why has this never been acquired?" three days later reads the want, not last
+// Tuesday's journal — and "nothing was found" and "we could not look" lead to
+// completely different actions: wait, or go fix the indexer.
+//
+// The old text said "N indexer(s) had nothing" using the CONSULTED count, which
+// includes every indexer that failed. A want whose only healthy indexer
+// returned nothing, and whose other one timed out three times, was
+// indistinguishable from a want where both looked properly (#239).
+//
+// This codebase makes exactly that distinction everywhere else on purpose:
+// /providers separates an absent checked_at from healthy: false, §56's axes
+// report `unknown` rather than `false`, and `system drift` reports `unknown`
+// rather than `current` when it could not compare (#132). The want's detail was
+// the one place that collapsed them, in the direction that reads as a
+// definitive negative.
+func noCandidatesDetail(answered, failed int) string {
+	if failed == 0 {
+		return fmt.Sprintf("%d indexer(s) had nothing", answered)
+	}
+	return fmt.Sprintf("%d of %d indexer(s) answered with nothing; %d could not be reached",
+		answered, answered+failed, failed)
 }
