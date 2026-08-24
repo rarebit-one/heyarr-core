@@ -140,6 +140,20 @@ separate role processes (ADR-0002).
   keeps `chunked` (computed honestly, deprecated) and gains `chunk_manifest`,
   which can say all three. Asking a blob's state never generates a manifest, and
   deleting every manifest in the store costs speed and nothing else (ADR-0034).
+- **Lazy chunking, by a job** — `chunk_blob` has been in §75's job list since
+  Milestone 1 with nothing behind it, and this is the handler. It streams a blob
+  once, chunks it, hashes every chunk and hashes the whole object on the same
+  pass; if the whole-object digest is not the blob's own name it writes no
+  manifest and reports corruption on the existing path, quarantined rather than
+  deleted (ADR-0018) — a manifest built from unchecked bytes would be every
+  chunk digest correct, describing a file that is not the one it is named after.
+  Blobs below 4 MiB are recorded as never needing a manifest rather than left
+  undecided: at that size a manifest is a handful of chunks and costs the same
+  full read as the transfer it would optimise. Nothing chunks at ingest and
+  nothing sweeps the library; the work is enqueued by the convergence cycle that
+  has just decided the bytes must cross a network, which is §16's own trigger.
+  It is idempotent, keyed on the blob, and emits no event — a manifest existing
+  is state, the same argument that keeps `blob.verified` out of the event log.
 
 ### Fixed
 
