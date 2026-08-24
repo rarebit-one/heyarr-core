@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
@@ -476,6 +477,7 @@ func (c *Client) candidates(f *feed) []acquisition.ReleaseCandidate {
 			Title:      title,
 			Provider:   c.name,
 			Attributes: attributesOf(i),
+			Source:     sourceOf(i),
 		})
 	}
 	// Sorted by identity, NOT left in the order the server sent.
@@ -514,6 +516,40 @@ func candidateID(i item) string {
 	// weak is still better than a position in a response: two parses of the
 	// same document produce the same id, which is the property §63 needs.
 	return "release:" + digest(strings.TrimSpace(i.Title)+"\x00"+i.Size)
+}
+
+// sourceOf is what to hand a download client to fetch this release.
+//
+// Preference order, and it is about how much the value can be trusted to be a
+// direct fetch rather than a web page:
+//
+//	magneturl attr  torznab's own field for it, unambiguous when present
+//	enclosure url   the RSS convention for "the bytes are here"
+//	guid            only when it is itself a magnet
+//
+// The guid is last and conditional because it is frequently a permalink to an
+// HTML details page, which a download client cannot do anything with. Handing
+// one to Add would produce a failure whose message is about the client rather
+// than about the indexer.
+//
+// Returns empty when the indexer offered nothing fetchable. That is a real
+// state — some feeds are catalogues — and the grab reports it as the indexer's
+// omission rather than as a transfer that went wrong (#225).
+//
+// Note this is the ONLY place the unhashed guid survives, and it survives into
+// a secret.Value. candidateID hashes it for everything else, because the id is
+// stored and returned by the API and this is not.
+func sourceOf(i item) secret.Value {
+	if m, ok := i.attr("magneturl"); ok {
+		return secret.Value(strings.TrimSpace(m))
+	}
+	if u := strings.TrimSpace(i.Enclosure.URL); u != "" {
+		return secret.Value(u)
+	}
+	if g := strings.TrimSpace(i.GUID); strings.HasPrefix(g, "magnet:") {
+		return secret.Value(g)
+	}
+	return ""
 }
 
 // digestLength is how much of the hash is kept — 128 bits, which is far past
