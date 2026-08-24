@@ -78,6 +78,12 @@ type Partial interface {
 	// Size is how many bytes are on disk right now. It is progress telemetry
 	// and a bound for reads — never a resume offset to be trusted. ADR-0035:
 	// "Length is not evidence."
+	//
+	// For a SPARSELY written partial it is the high-water mark rather than how
+	// much is present, so reading it as progress overstates (ADR-0043). A piece
+	// transfer's progress is its bitset's count over the geometry's, and code
+	// that reaches for Size() there is code that will report a transfer nearly
+	// done when its last piece happened to arrive first.
 	Size() int64
 
 	// ReadAt reads back what a previous attempt wrote, so the caller can
@@ -94,9 +100,33 @@ type Partial interface {
 	Append(ctx context.Context, r io.Reader) (int64, error)
 
 	// Truncate discards everything from n onwards. Shortening only: a partial
-	// never grows except by Append, because a hole is bytes nothing wrote and
-	// a file of zeroes reads exactly like a file of received data.
+	// never grows except by Append or WriteAt, because a hole is bytes nothing
+	// wrote and a file of zeroes reads exactly like a file of received data.
 	Truncate(n int64) error
+
+	// WriteAt writes at an arbitrary offset, for a transfer whose bytes do not
+	// arrive in order (ADR-0043).
+	//
+	// # Why this exists when Append's doc argues against holes
+	//
+	// It argues against UNRECORDED holes, and that is the whole difference. A
+	// piece transfer assembles out of order from several peers at once — §23's
+	// point — and keeps an availability bitset saying which pieces landed. A
+	// hole is then distinguishable from received data, because the bitset says
+	// the piece never arrived.
+	//
+	// The append-only path is unchanged and its warning still applies to it: a
+	// sequential resume has no such record, so for that path a hole really is
+	// indistinguishable and Append remains the only way to grow.
+	//
+	// # What stops a wrong bitset producing a wrong blob
+	//
+	// Publish re-reads the assembled file and hashes it WHOLE against the
+	// expected digest. A bitset that lies — by a bug, a torn write, a crash
+	// between the write and the record — yields a mismatch and the transfer
+	// fails closed. That is what lets the bitset be an optimisation and never
+	// evidence (ADR-0034's argument for a manifest, applied here).
+	WriteAt(p []byte, off int64) (int, error)
 
 	// Publish verifies the assembled bytes against expected and links them
 	// into the blob tree, or quarantines them and reports *Corruption.
@@ -187,6 +217,26 @@ func (p *filePartial) Append(ctx context.Context, r io.Reader) (int64, error) {
 		// until something re-hashes them, and the next attempt's prefix scan
 		// is what decides whether they were worth keeping.
 		return n, fmt.Errorf("cas: appending to the staging file for %s: %w", p.blob, err)
+	}
+	return n, nil
+}
+
+func (p *filePartial) WriteAt(b []byte, off int64) (int, error) {
+	if p.closed {
+		return 0, fs.ErrClosed
+	}
+	if off < 0 {
+		return 0, fmt.Errorf("cas: refusing to write the staging file for %s at offset %d",
+			p.blob, off)
+	}
+	n, err := p.f.WriteAt(b, off)
+	// The high-water mark, not a verified prefix. Size() means something
+	// weaker for a sparsely written partial and its doc says so.
+	if end := off + int64(n); end > p.size {
+		p.size = end
+	}
+	if err != nil {
+		return n, fmt.Errorf("cas: writing the staging file for %s at %d: %w", p.blob, off, err)
 	}
 	return n, nil
 }
