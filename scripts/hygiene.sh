@@ -6,6 +6,10 @@
 # reasoning; scripts/hygiene.denylist and scripts/hygiene.digests hold the two
 # lists and explain why they are two.
 #
+# Arguments are forwarded, so `--issues` runs the same two passes over issue
+# and pull request titles and bodies instead of over tracked files. That mode
+# needs `gh` and the network and is NOT in CI — see hygiene.py's header.
+#
 # python3 is the one dependency, and it is required rather than optional: this
 # job passing because an interpreter was missing is the failure mode a hygiene
 # guard can least afford.
