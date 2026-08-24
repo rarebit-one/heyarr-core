@@ -83,6 +83,27 @@ default.
 - An architectural stance change needs an ADR. Keep it to a page; record the
   decision and what would make us revisit it, not a description of the code.
 
+## When `main` goes red
+
+It will. A pull request's green matrix is not `main`'s: a defect can survive
+seven check legs and surface on the eighth run of the same code, after the
+squash. **Post-merge `main` runs are read, not assumed**, and a red one gets the
+same treatment a red PR check gets — investigate, never re-run on faith.
+
+**Fix forward when the defect is understood and contained**: it is in test code,
+or in a code path the failure has already localised, and one PR cycle of red
+`main` is the whole cost.
+
+**Revert when any of those does not hold** — the defect is in a shipped path,
+the cause is not yet understood, or the fix would leave `main` red for more than
+one cycle. Reverting is not an admission of anything; it is the cheaper of two
+bad mornings.
+
+The failure mode this rule exists for is that *"I understand it, I'll fix
+forward"* is exactly what gets said immediately before it turns out to be
+untrue. If the diagnosis is a hypothesis rather than a reading of evidence,
+revert first and diagnose against a green `main`.
+
 ## Milestone discipline
 
 The roadmap (§84) is eleven milestones and the order is load-bearing — each one

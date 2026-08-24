@@ -279,7 +279,12 @@ record independently agreeing on the bytes.
   chunks, so one chunk of it is a fifth or a third and the figure moves run to
   run with where a content-defined boundary lands in random bytes. Two
   independent instruments have to agree on the byte count: the repairer's own
-  `bytes_fetched` and the source's access record.
+  `bytes_fetched` and the source's access record. The fixture is a hundred
+  megabytes and the size is load-bearing: at five it was three chunks, where the
+  same correct behaviour measured anywhere between 8% and 23% depending on where
+  a content-defined boundary happened to fall. Twenty times the fixture costs
+  the acceptance run nothing measurable — 187s before, 188s after, against a
+  240-second budget.
 - **Three of the four savings are still asserted in Go, not by `make demo`.** A
   resumed transfer (74.5% of a 512 KiB blob after a real `SIGKILL`, 29 of 110
   chunks kept), a modified file replicated to a peer holding the original

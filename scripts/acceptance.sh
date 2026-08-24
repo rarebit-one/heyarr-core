@@ -4720,8 +4720,30 @@ two_peer_demo() { # mode
   # only one ABOVE §16's chunking threshold (manifests.ThresholdBytes, 4 MiB).
   # The lazy-chunking section at the end of this arc needs a blob on each side
   # of that number, and making the one that already crosses the wire the large
-  # one costs a five-megabyte loopback transfer and no new fixture.
-  head -c 5242880 /dev/urandom > "$lib/movies/Signal Fire (2021)/Signal.Fire.2021.1080p.mkv"
+  # one costs a loopback transfer and no new fixture.
+  #
+  # A HUNDRED megabytes rather than five, and the size is load-bearing rather
+  # than generous.
+  #
+  # The repair arc below asserts this milestone's thesis — that a repair costs
+  # the DAMAGE and not the blob — and how convincing that number looks is
+  # entirely a property of how many chunks the blob has. At the shipped chunker
+  # parameters (256 KiB minimum, 1 MiB average, 4 MiB maximum) five megabytes
+  # is THREE chunks, so one chunk of it is a third, and the measured figure
+  # swung between 8% and 23% run to run purely with where a content-defined
+  # boundary fell in random bytes. A hundred megabytes is ~89 chunks and one of
+  # them is ~1%.
+  #
+  # The alternative was shrinking the chunker for the fixture, and it is not
+  # available and should not be: two peers that chunk with different parameters
+  # share no chunks at all, which is why #198 pins boundaries with golden
+  # fixtures across three platforms. A per-node chunking knob would be a
+  # footgun aimed at the whole feature.
+  #
+  # Measured cost of the change, same machine, equipped, verdict line both
+  # times: 187s at five megabytes, 194s at a hundred. Seven seconds against a
+  # 240-second budget, for an assertion that reads as the thing it claims.
+  head -c 104857600 /dev/urandom > "$lib/movies/Signal Fire (2021)/Signal.Fire.2021.1080p.mkv"
   head -c 131072 /dev/urandom > "$lib/movies/Static Field (2019)/Static.Field.2019.1080p.mkv"
   head -c 196608 /dev/urandom > "$lib/movies/Cold Harbour (2018)/Cold.Harbour.2018.1080p.mkv"
 
@@ -6177,18 +6199,17 @@ printf '         acceptance budget. The ratios are real and the controls are\n'
 printf '         real, and a number measured on a few megabytes says nothing\n'
 printf '         about a twenty-gigabyte blob over a link that is slower than a\n'
 printf '         disk. Nothing here is a performance claim.\n'
-printf '         AND THE RATIO ABOVE IS THE FIXTURE SPEAKING, not the feature.\n'
-printf '         At the shipped chunker parameters — 256 KiB minimum, 1 MiB\n'
-printf '         average, 4 MiB maximum — the five-megabyte blob repaired above\n'
-printf '         is only a HANDFUL of chunks, so one chunk of it is a fifth or a\n'
-printf '         third, and the measured percentage moves run to run with where\n'
-printf '         a content-defined boundary happens to fall in random bytes. The\n'
-printf '         claim asserted is therefore the fixture-independent one — one\n'
-printf '         chunk fetched out of N, with the byte counts reported beside it\n'
-printf '         and agreed by the repairer and the source independently. The\n'
-printf '         percentages that make the feature sound impressive need a blob\n'
-printf '         with hundreds of chunks, and such a blob does not fit this\n'
-printf '         budget. Read the numerator, not the percentage.\n'
+printf '         AND THE CLAIM ASSERTED IS THE CHUNK COUNT, not the percentage.\n'
+printf '         One chunk fetched out of N is exact and independent of how big\n'
+printf '         the fixture is; the percentage is a property of the fixture and\n'
+printf '         of the chunker. At the shipped parameters — 256 KiB minimum,\n'
+printf '         1 MiB average, 4 MiB maximum — the blob repaired above is about\n'
+printf '         ninety chunks, so one of them reads at roughly one per cent. An\n'
+printf '         earlier five-megabyte fixture was THREE chunks, where the same\n'
+printf '         correct behaviour measured between 8%%%% and 23%%%% depending on\n'
+printf '         where a content-defined boundary happened to fall. Nothing about\n'
+printf '         the feature changed between those two numbers. Read the\n'
+printf '         numerator, and read the percentage as an illustration of it.\n'
 printf '         THIS REPOSITORY IS PUBLIC, AND THE GUARD IS NEW. A real host\n'
 printf '         name, a document named after a real machine and a personal home\n'
 printf '         directory were on `main` when this milestone opened (#211) and\n'
