@@ -369,6 +369,14 @@ func TestLinkDeduplicates(t *testing.T) {
 	if !second.Deduplicated {
 		t.Error("linking identical content twice did not report a duplicate")
 	}
+	// The rung is what HAPPENED, and on a dedupe nothing happened. Reporting
+	// the requested mode here made every deduplicating ingest on a filesystem
+	// without cloning claim `reflink` — the one value that filesystem can
+	// never produce (#223).
+	if second.Materialised != None {
+		t.Errorf("a deduplicated Link reported materialised=%s, want %s: "+
+			"nothing was materialised, so no rung was reached", second.Materialised, None)
+	}
 
 	var n int
 	if err := s.Walk(t.Context(), func(Descriptor) error { n++; return nil }); err != nil {
