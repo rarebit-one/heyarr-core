@@ -47,3 +47,5 @@ An ADR that merely describes the code is not worth having.
 | [0037](0037-one-way-reachability-is-reported-not-refused.md) | One-way reachability is reported at enrolment, never refused | Accepted |
 | [0038](0038-there-is-no-central-authority-peers-are-repositories.md) | Each peer is authoritative for its own site | Proposed |
 | [0039](0039-worker-capability-advertisement-is-durable-proven-by-execution-and-expires.md) | Worker capability advertisement is durable, proven by execution, and expires | Accepted |
+| [0040](0040-a-renderer-fetches-bytes-with-a-capability-not-a-credential.md) | A renderer fetches bytes with a capability, not a credential | Accepted |
+| [0041](0041-a-transfer-session-is-local-and-pieces-are-not-chunks.md) | A TransferSession is local to a peer, and pieces are not chunks | Proposed |
