@@ -111,10 +111,19 @@ func ReplicateBlobRegistration(deps TransferDeps) Registration {
 // reconciliation follows, where a re-run that changes nothing must also SAY
 // nothing, or every retry becomes event noise.
 //
-// A failed transfer is retried whole rather than resumed. §84 puts resumable
-// replication in Milestone 5, and the absence of resumption is what makes this
-// handler idempotent rather than merely re-runnable: there is no partial state
-// to be right about, because a receive that did not finish left nothing.
+// A failed transfer of a blob with no chunk manifest is still retried WHOLE,
+// and that is §16's lazy chunking doing its job rather than a gap: a small
+// blob's whole retry costs less than producing a manifest would.
+//
+// A blob that HAS a manifest is resumed, and the handler is idempotent in a
+// stronger sense than it used to be. It used to be idempotent because a
+// receive that did not finish left nothing to be right about. It is now
+// idempotent because a re-run re-verifies what an earlier attempt left against
+// a manifest this node fetched and verified itself, and keeps only the
+// contiguous prefix that checks out (ADR-0035). One run and ten interrupted
+// runs publish byte-identical bytes, and nothing partial is ever a replica:
+// `pending` in flight, `present` written once, after the whole-object digest
+// has been verified on this disk.
 func ReplicateBlobHandler(deps TransferDeps) HandlerFunc {
 	log := deps.Logger
 	if log == nil {
@@ -212,7 +221,7 @@ func ReplicateBlobHandler(deps TransferDeps) HandlerFunc {
 				return err
 			}
 			record.SourcePeerID = src.PeerID
-			outcome, err := puller.Pull(ctx, src, hash)
+			outcome, err := pullFrom(ctx, puller, src, hash, log)
 			if err == nil {
 				record.Bytes = outcome.Bytes
 				record.Reason = ""
@@ -222,6 +231,10 @@ func ReplicateBlobHandler(deps TransferDeps) HandlerFunc {
 				log.Info("replicated a blob",
 					"blob_hash", hash.String(), "source_peer_id", src.PeerID,
 					"destination_peer_id", self, "bytes", outcome.Bytes,
+					"mode", outcome.Mode.String(),
+					"chunks_kept", outcome.ChunksKept, "bytes_kept", outcome.BytesKept,
+					"chunks_reused", outcome.ChunksReused, "bytes_reused", outcome.BytesReused,
+					"chunks_fetched", outcome.ChunksFetched, "bytes_fetched", outcome.BytesFetched,
 					"deduplicated", outcome.Deduplicated)
 				return nil
 			}
@@ -258,6 +271,53 @@ func ReplicateBlobHandler(deps TransferDeps) HandlerFunc {
 	}
 }
 
+// pullFrom moves one blob from one source, chunked if it can be and whole if
+// it cannot (§16, ADR-0034, ADR-0035, M5-06).
+//
+// The branch is a question asked of the SOURCE and answered by the source's
+// own state: does it hold a chunk manifest for these bytes. There is exactly
+// one branch and it is here rather than inside the puller, so that "which path
+// ran" is a decision with a name and an outcome field rather than an inference
+// from how a transfer behaved.
+//
+// A source with no manifest is not a failure and is not retried elsewhere:
+// §16 makes chunking lazy, so a peer holding bytes it never chunked is in an
+// ordinary permanent state and a whole pull from it is always correct. A
+// manifest that does not check out is treated the same way — the manifest is
+// an optimisation and discarding a bad one costs a whole pull (ADR-0034),
+// which is cheaper than reasoning about a description this node cannot trust.
+func pullFrom(
+	ctx context.Context, puller *transfer.Puller, src replication.Source,
+	hash hashing.Hash, log *slog.Logger,
+) (transfer.Outcome, error) {
+	m, err := puller.FetchManifest(ctx, src, hash)
+	switch {
+	case err == nil:
+		return puller.PullChunked(ctx, src, hash, m)
+	case errors.Is(err, transfer.ErrSourceLacksBlob):
+		// This source does not hold the bytes at all, so there is nothing here
+		// to pull whole either. Try the next candidate.
+		return transfer.Outcome{}, err
+	case errors.Is(err, transfer.ErrSourceHasNoManifest):
+		log.Debug("a source holds these bytes and has no chunk manifest for them, so they are "+
+			"pulled whole", "blob_hash", hash.String(), "source_peer_id", src.PeerID)
+	case errors.Is(err, transfer.ErrManifestCorrupt):
+		log.Warn("a source served a chunk manifest that does not check out; pulling whole instead",
+			"blob_hash", hash.String(), "source_peer_id", src.PeerID, "error", err)
+	default:
+		// Anything else — a peer running an older build with no manifest route,
+		// a node serving bytes with no manifest store behind it, a refusal, a
+		// timeout — degrades to a whole pull rather than failing the source.
+		// That is ADR-0034's operational test applied at the transfer: a
+		// manifest is an optimisation and everything must still work without
+		// one. A source that cannot be reached at all will fail the pull too,
+		// on the path that already reports it.
+		log.Info("could not read a chunk manifest from a source; pulling whole instead",
+			"blob_hash", hash.String(), "source_peer_id", src.PeerID, "error", err)
+	}
+	return puller.Pull(ctx, src, hash)
+}
+
 // lazyPuller builds this node's blob puller once, on first use.
 //
 // The private key is the reason it is lazy. It lives at 0600 in the data
@@ -272,7 +332,9 @@ func ReplicateBlobHandler(deps TransferDeps) HandlerFunc {
 // resolves itself the moment the controller finishes starting, and memoising
 // the error would mean this worker never transferred anything again until it
 // was restarted.
-func lazyPuller(dataDir, peerID string, store cas.Store, log *slog.Logger) func() (*transfer.Puller, error) {
+func lazyPuller(
+	dataDir, peerID string, store cas.Store, index transfer.Index, log *slog.Logger,
+) func() (*transfer.Puller, error) {
 	var (
 		mu     sync.Mutex
 		puller *transfer.Puller
@@ -292,7 +354,9 @@ func lazyPuller(dataDir, peerID string, store cas.Store, log *slog.Logger) func(
 		if err != nil {
 			return nil, fmt.Errorf("worker: %w", err)
 		}
-		built, err := transfer.New(transfer.Options{Material: material, Store: store, Logger: log})
+		built, err := transfer.New(transfer.Options{
+			Material: material, Store: store, Index: index, Logger: log,
+		})
 		if err != nil {
 			return nil, err
 		}

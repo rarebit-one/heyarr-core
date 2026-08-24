@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -60,6 +61,10 @@ type Marker struct {
 // FS is a Store backed by a local directory tree.
 type FS struct {
 	root string
+	// inflight is the set of blobs whose resumable staging file is open in
+	// this process, so two transfers of one blob cannot interleave writes into
+	// one file. See OpenPartial and ErrPartialBusy.
+	inflight sync.Map
 }
 
 var _ Store = (*FS)(nil)
@@ -356,9 +361,12 @@ func (s *FS) commit(tmpName string, h hashing.Hash) (deduplicated bool, err erro
 //   - matched: a published, addressable blob, and no staging file.
 //   - mismatched: nothing addressable, a file under quarantine/, and a
 //     *Corruption naming both digests and where the evidence went (ADR-0018).
-//   - interrupted: nothing addressable, and a reapable .part under tmp/. There
-//     is no resumption here and there must not be until §84 says so — a failed
-//     transfer is retried whole, which is what makes the job idempotent.
+//   - interrupted: nothing addressable, and a reapable .part under tmp/. This
+//     function still has no resumption in it and must not acquire any: it
+//     stages under a name nothing can find again on purpose, so a whole pull
+//     is retried whole. Resumable staging is a separate, deliberately named
+//     thing — see [FS.OpenPartial] and ADR-0035, where the resume unit is a
+//     verified chunk and never a byte offset.
 func (s *FS) PutExpecting(ctx context.Context, r io.Reader, expected hashing.Hash) (Descriptor, error) {
 	if expected.IsZero() {
 		return Descriptor{}, errors.New("cas: refusing to receive bytes with no expected digest — " +
