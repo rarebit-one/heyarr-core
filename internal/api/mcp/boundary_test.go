@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rarebit-one/heyarr-core/internal/api/mcp"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 )
 
@@ -222,13 +223,19 @@ func TestNoToolIsAStub(t *testing.T) {
 
 // deferredNames mirrors the deferral list from outside the package, so the two
 // cannot silently agree by sharing a variable.
+// deferredNames is DERIVED from the production table rather than repeating it.
+//
+// It used to be a hand-written copy of the same four names, which is the very
+// thing #226 is about one layer down: two lists of what is deferred, nothing
+// keeping them in step, and the test comparing the code against a stale copy of
+// itself. When search_releases and acquire_release shipped, the production
+// table lost them and this one did not — so the test that exists to catch a
+// stub instead reported the two verbs as both registered and deferred.
+//
+// Derived, it cannot disagree. What it asserts is unchanged and still real: no
+// REGISTERED tool may also be recorded as deferred.
 func deferredNames() map[string]bool {
-	return map[string]bool{
-		"search_releases":   true,
-		"acquire_release":   true,
-		"play_content":      true,
-		"transfer_playback": true,
-	}
+	return mcp.DeferredVerbs()
 }
 
 // An unknown name that is NOT a §71 verb gets no milestone. An agent that

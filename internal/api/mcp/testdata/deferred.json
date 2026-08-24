@@ -2,9 +2,7 @@
   {
     "verb": "acquire_release",
     "data": {
-      "deferred": true,
-      "milestone": "M3-12 / M3-13",
-      "reason": "candidates are not persisted and no download client is wired, so there is no release to acquire and nowhere to acquire it to"
+      "tool": "acquire_release"
     }
   },
   {
@@ -18,9 +16,7 @@
   {
     "verb": "search_releases",
     "data": {
-      "deferred": true,
-      "milestone": "M3-12",
-      "reason": "there is no search job yet — the provider registry exists but nothing drives it, so a search would have nothing to run"
+      "tool": "search_releases"
     }
   },
   {
