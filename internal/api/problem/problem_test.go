@@ -69,6 +69,10 @@ func TestTypeURIsAreStableAndDistinct(t *testing.T) {
 		"not found":    problem.TypeNotFound,
 		"conflict":     problem.TypeConflict,
 		"internal":     problem.TypeInternal,
+		// M5-05's 404 that is not "no such thing": the node holds the blob and
+		// has no chunk manifest for it. A destination takes a DIFFERENT action
+		// on each, so they must not collapse.
+		"no chunk manifest": problem.TypeNoChunkManifest,
 	} {
 		if prev, dup := seen[uri]; dup {
 			t.Errorf("%q and %q share the type URI %s", name, prev, uri)
@@ -76,6 +80,20 @@ func TestTypeURIsAreStableAndDistinct(t *testing.T) {
 		seen[uri] = name
 		if !strings.HasPrefix(uri, problem.TypeBase) {
 			t.Errorf("%s does not start with %s", uri, problem.TypeBase)
+		}
+	}
+
+	// Distinct is not enough: no URI may CONTAIN another. A caller doing a
+	// substring check on one would match both, which is the assert_contains
+	// failure mode this repository has already shipped once — and here it
+	// would silently merge "there is no manifest, pull whole from this source"
+	// with "there is no such blob, try another source".
+	for a := range seen {
+		for b := range seen {
+			if a != b && strings.Contains(a, b) {
+				t.Errorf("the type URI %s contains %s, so a `contains` check on the shorter one "+
+					"matches both", a, b)
+			}
 		}
 	}
 }

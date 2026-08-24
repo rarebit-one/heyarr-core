@@ -1,0 +1,7 @@
+{
+  "type": "https://heyarr.dev/problems/no-chunk-manifest",
+  "title": "No Chunk Manifest",
+  "status": 404,
+  "detail": "this node holds blake3:2222222222222222222222222222222222222222222222222222222222222222 and has no chunk manifest for it (state: undecided). Asking does not produce one — a read that chunked a 20 GB blob to answer would be a denial of service (ADR-0034) — so this is a final answer: pull these bytes whole, which is always correct",
+  "instance": "/peer/v1/blobs/blake3:2222222222222222222222222222222222222222222222222222222222222222/manifest"
+}

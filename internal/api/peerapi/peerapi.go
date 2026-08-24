@@ -52,6 +52,13 @@
 // consults it to refuse a one-way pairing at enrolment rather than leaving it
 // to surface as a silent reconciliation (ADR-0037).
 //
+// GET /peer/v1/blobs/{hash}/manifest is M5-05: the chunk manifest for those
+// same bytes, on the same trust root and with no new credential. It is a
+// description the destination acts on, never a negotiation the source takes
+// part in, and it NEVER generates the manifest whose absence it reports —
+// 404 is the answer, and the destination that gets one pulls whole. See
+// manifests.go.
+//
 // GET|HEAD /peer/v1/blobs/{hash}/content is M4-09: the byte-carrying hop
 // itself. It is the SAME handler the client API serves, on a different trust
 // root — ADR-0013 called this out in advance — and it is the only route in
@@ -133,8 +140,20 @@ type Options struct {
 	// this router and an unmounted route would be documented and unserved —
 	// and answers 503. That keeps this package constructible without a CAS,
 	// which is what the parity test's own fixture needs.
-	Blobs  BlobServer
-	Logger *slog.Logger
+	Blobs BlobServer
+	// Manifests reads stored chunk manifests for pinned peers (M5-05).
+	//
+	// Optional, for the reason Blobs is, and nil is the ordinary state of a
+	// node with no catalogue behind its peer surface: the route is still
+	// MOUNTED — the OpenAPI parity test walks this router — and answers 503,
+	// which is the same answer the content route gives, because a node with
+	// nothing to serve has nothing to describe either.
+	//
+	// It is a READ and can only be a read. Nothing reachable through it may
+	// generate a manifest or enqueue a chunk_blob job: a GET that chunked a
+	// 20 GB blob to answer would be a remote denial of service (ADR-0034).
+	Manifests ManifestSource
+	Logger    *slog.Logger
 	// Now is injected so certificate validity is testable (ADR-0017).
 	Now func() time.Time
 	// Liveness records that a peer was heard from (§31, M4-10, #184).
@@ -181,6 +200,10 @@ type Server struct {
 	// returnPath probes the caller's own address, for the enrolment-time
 	// reachability check (#186, ADR-0037).
 	returnPath ReturnPathProber
+
+	// manifests describes those bytes to a pinned peer (M5-05). Nil for the
+	// same reason and with the same consequence. A read, always.
+	manifests ManifestSource
 
 	http     *http.Server
 	bound    string
@@ -232,6 +255,7 @@ func New(opts Options) (*Server, error) {
 		blobs:      opts.Blobs,
 		liveness:   opts.Liveness,
 		returnPath: opts.ReturnPath,
+		manifests:  opts.Manifests,
 	}
 	s.handler = s.routes()
 	s.http = &http.Server{
@@ -299,6 +323,20 @@ func (s *Server) routes() http.Handler {
 		r.Get("/reachback", s.handleReachback)
 		r.Get("/blobs/{hash}/content", s.handleBlobContent)
 		r.Head("/blobs/{hash}/content", s.handleBlobContent)
+		// The chunk manifest for those same bytes (§20, ADR-0034, M5-05).
+		// Beside the content route, INSIDE this same r.Use(requirePeerIdentity)
+		// subtree, and that placement is load-bearing rather than tidy: a new
+		// route on an existing listener is exactly where a mount gets attached
+		// to the wrong middleware chain, and a manifest route reachable without
+		// membership would describe this node's entire library to anyone who
+		// completed a TCP connection.
+		//
+		// It is a DESCRIPTION, not a negotiation. There is no body, no
+		// destination inventory, and no difference computed here — the
+		// destination decides for itself what to do with what it is told, and
+		// this node never learns what it holds (ADR-0030). And asking never
+		// generates: see manifests.go.
+		r.Get("/blobs/{hash}/manifest", s.handleBlobManifest)
 	})
 
 	// There is no admin route on this router and there is not going to be one.

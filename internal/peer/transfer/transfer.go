@@ -29,6 +29,17 @@
 // and it is the shape a well-meaning reverse proxy in front of a NATed peer
 // produces without anyone deciding to.
 //
+// # The manifest read is a description, not a negotiation
+//
+// manifest.go adds the destination half of GET
+// /peer/v1/blobs/{hash}/manifest (M5-05). It changes none of the above: it
+// goes through the same pinned, redirect-refusing [Puller.clientFor], it sends
+// a blob digest read from this node's OWN catalog and nothing else, and it
+// verifies what arrives against itself before the caller sees it. The source
+// is never told what this node holds and never computes a difference. A source
+// with no manifest is a 404 and an answer — the caller pulls whole, which is
+// what this file already does.
+//
 // # There is no resumption here
 //
 // §84 puts resumable replication in Milestone 5. A failed transfer is retried
@@ -51,7 +62,6 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
 	"github.com/rarebit-one/heyarr-core/internal/hashing"
-	"github.com/rarebit-one/heyarr-core/internal/peer/endpoint"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
@@ -159,25 +169,15 @@ type Outcome struct {
 func (p *Puller) Pull(
 	ctx context.Context, src replication.Source, expected hashing.Hash,
 ) (Outcome, error) {
-	if err := src.Usable(); err != nil {
-		// Refused before a socket exists. Membership is the only trust root in
-		// the inter-peer path (ADR-0012) and a candidate with no pinned key is
-		// one membership cannot vouch for — dialling it and accepting whatever
-		// answered would be trust on first use.
-		return Outcome{}, err
-	}
-	origin, err := endpoint.Normalise(src.Endpoint)
+	// Refused before a socket exists if the candidate has no pinned key or no
+	// dialable endpoint — dialling it and accepting whatever answered would be
+	// trust on first use. A unix:// endpoint is a legitimate peer endpoint and
+	// a legitimate probe target (§31), and it is not something a mutually
+	// authenticated TLS connection can be presented over. See originFor, which
+	// the manifest read shares so there is one place that decides this.
+	origin, err := p.originFor(src)
 	if err != nil {
-		return Outcome{}, fmt.Errorf("transfer: peer %s is recorded at an endpoint this node cannot "+
-			"dial: %w", src.PeerID, err)
-	}
-	if !strings.HasPrefix(origin, endpoint.Scheme+"://") {
-		// A unix:// endpoint is a legitimate peer endpoint and a legitimate
-		// probe target (§31), and it is not something a mutually authenticated
-		// TLS connection can be presented over.
-		return Outcome{}, fmt.Errorf("%w: peer %s is at %q, which is not an %s origin, and the peer "+
-			"surface is mutually authenticated TLS (ADR-0012)",
-			endpoint.ErrMalformed, src.PeerID, src.Endpoint, endpoint.Scheme)
+		return Outcome{}, err
 	}
 
 	client, err := p.clientFor(src)

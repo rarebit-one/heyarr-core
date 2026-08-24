@@ -526,9 +526,14 @@ var stagingSeq atomic.Uint64
 // stagingPath is a private destination for one materialisation attempt. It
 // lives under tmp/ with the .part suffix so an interrupted ingest leaves
 // something ReapTemp will clean up rather than a stray file in the blob tree.
-func (s *FS) stagingPath() string {
+func (s *FS) stagingPath() string { return s.stagingPathWith("link") }
+
+// stagingPathWith is stagingPath with the kind of write named in the file, so
+// an operator looking at a tmp/ full of interrupted work can tell an ingest
+// from a repair reconstruction (ADR-0036) without opening either.
+func (s *FS) stagingPathWith(kind string) string {
 	return filepath.Join(s.root, tmpDir,
-		fmt.Sprintf("link-%d-%d.part", os.Getpid(), stagingSeq.Add(1)))
+		fmt.Sprintf("%s-%d-%d.part", kind, os.Getpid(), stagingSeq.Add(1)))
 }
 
 // errDegrade signals that this rung of the ladder is not available here.
