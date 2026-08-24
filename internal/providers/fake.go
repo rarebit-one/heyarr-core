@@ -2,11 +2,13 @@ package providers
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 )
 
 // Fake is a provider that talks to nothing.
@@ -43,7 +45,9 @@ type Fake struct {
 	// failWith, when set, makes Search fail — so the "one indexer is down and
 	// the others still answer" path is exercisable without a network.
 	failWith error
-	now      func() time.Time
+	// added is every source handed to Add, in order — see Added().
+	added []secret.Value
+	now   func() time.Time
 }
 
 // NewFake builds an inert provider with the given capabilities.
@@ -120,6 +124,32 @@ func (f *Fake) Search(_ context.Context, q Query) ([]acquisition.ReleaseCandidat
 
 // Transfers implements Downloader. A fake moves nothing.
 func (f *Fake) Transfers(_ context.Context) ([]Transfer, error) { return nil, nil }
+
+// Add implements Downloader. It records what it was asked to fetch and returns
+// a transfer describing it, so a test can assert that a grab reached a client
+// AND what it handed over — the second half being the part that would
+// otherwise pass while sending an empty source.
+func (f *Fake) Add(_ context.Context, source secret.Value) (Transfer, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Inside the lock: FailWith writes this field under the same mutex, and
+	// reading it outside would be a data race that -race finds only sometimes.
+	if f.failWith != nil {
+		return Transfer{}, f.failWith
+	}
+	f.added = append(f.added, source)
+	return Transfer{
+		ID:   "fake:" + strconv.Itoa(len(f.added)),
+		Name: "a fake transfer",
+	}, nil
+}
+
+// Added is every source this fake was handed, in order.
+func (f *Fake) Added() []secret.Value {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]secret.Value(nil), f.added...)
+}
 
 func normaliseTitle(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))

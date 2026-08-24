@@ -1,0 +1,46 @@
+-- +goose Up
+-- Where a selected release is actually fetched from (§64's SELECTED → QUEUED).
+--
+-- # Why 00021 and not 00033
+--
+-- 00021 and 00022 were reserved during M3 and never spent, and four more gaps
+-- (00026, 00027, 00030, 00031) sit below the highest used number. Taking the
+-- lowest free number rather than appending keeps the sequence dense, because a
+-- gap in a migration directory reads as a DELETED migration — which is a much
+-- more alarming thing to conclude than "somebody reserved a number and did not
+-- need it". Filling them in order is how that ambiguity is retired.
+--
+-- # Why the column has to exist at all
+--
+-- release_candidates stored everything needed to EXPLAIN a choice and nothing
+-- needed to ACT on it. A candidate's id is deliberately a hash — a torznab guid
+-- is frequently a magnet URI carrying a private tracker's passkey, and the id
+-- reaches API responses and §63's stored explanations, so a credential must not
+-- follow it there (indexers.candidateID).
+--
+-- The consequence went unnoticed until a want was taken end to end against a
+-- live indexer: nothing that survived the search could be handed to a download
+-- client, so SELECTED → QUEUED could not be traversed by any code, and the want
+-- rested in SELECTED looking exactly like a transfer in flight (#225).
+--
+-- So the unhashed value is stored here, and ONLY here. It is read by the grab
+-- and by nothing else: no read path projects it, the API's candidate view does
+-- not carry it, and in Go it is a secret.Value, which redacts through fmt, slog
+-- and encoding/json alike.
+--
+-- # Why NOT NULL DEFAULT '' rather than nullable
+--
+-- Empty is a real and ordinary answer — some feeds are catalogues and offer no
+-- fetchable link — and it means the same thing as a missing row would. A
+-- nullable column would add a second spelling of "no source" for no gain, and
+-- the grab would have to handle both.
+--
+-- Existing rows get '': they were produced by a search that never captured a
+-- source, and pretending otherwise would make a candidate look grabbable when
+-- the value is not there. They are superseded by the next search of that want,
+-- which is the ordinary lifecycle of this table.
+
+ALTER TABLE release_candidates ADD COLUMN source TEXT NOT NULL DEFAULT '';
+
+-- +goose Down
+ALTER TABLE release_candidates DROP COLUMN source;

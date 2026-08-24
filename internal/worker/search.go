@@ -62,8 +62,11 @@ const candidateLimit = 200
 const candidateRetention = 30 * 24 * time.Hour
 
 // SearchHandler runs one want's search.
+// grabs is the queue the follow-up grab is written to. It is the same
+// interface the ingest and probe follow-ups use, and nil is tolerated so a
+// search can still be exercised without one (see enqueueGrab).
 func SearchHandler(
-	reg *providers.Registry, cat *catalog.Catalog, log *slog.Logger,
+	reg *providers.Registry, cat *catalog.Catalog, grabs ProbeEnqueuer, log *slog.Logger,
 ) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
 		var payload acquisition.SearchPayload
@@ -232,6 +235,11 @@ func SearchHandler(
 			fmt.Sprintf("selected %s", outcome.SelectedCandidateID)); err != nil {
 			return err
 		}
+		// And hand it to a download client. Before #225 the handler stopped
+		// at the line above, which is why SELECTED was where wants went to
+		// rest rather than a step on the way to bytes.
+		enqueueGrab(ctx, grabs, payload.DesiredItemID, outcome.SelectedCandidateID, log)
+
 		log.Info("a search selected a release",
 			"desired_item_id", payload.DesiredItemID,
 			"candidate", outcome.SelectedCandidateID,

@@ -126,3 +126,63 @@ type IngestPayload struct {
 	// path recorded five minutes ago is a job operating on a guess.
 	DesiredItemID string `json:"desired_item_id"`
 }
+
+// GrabJobType hands a want's selected release to a download client — §64's
+// SELECTED → QUEUED edge (#225).
+//
+// # Why the grab is a job and not part of the search
+//
+// The search handler already knows which release it selected, so handing it to
+// the download client on the spot looks like the smaller change. It is the
+// wrong shape for three reasons.
+//
+// A grab is a call to an external service that can be slow, rate-limited or
+// down, and folding it into the search would make a want's search fail — and
+// re-run, and re-search — because a download client was restarting. Those are
+// independent failures and they want independent retries.
+//
+// A want also reaches SELECTED by two routes: the search beat, and a person
+// choosing a candidate by hand through the API (§60's manual override). A grab
+// living inside the search handler would serve one of them and leave the other
+// exactly as stranded as everything was before.
+//
+// And §75 wants durable work durable. A transfer that was started must be
+// recoverable across a restart, which means the intent to start it has to exist
+// in the job table rather than in a goroutine.
+const GrabJobType = "grab_release"
+
+// GrabDedupeKey makes the grab idempotent per want.
+//
+// Keyed on the WANT and not on the candidate, because the thing that must not
+// happen twice is one want having two transfers in flight. Keying on the
+// candidate would let a want that re-selected a different release queue a
+// second grab alongside the first, and both would run.
+//
+// This is the queue's half of the guarantee. The other half is in the handler
+// and in the clients themselves: Transmission answers a duplicate add with the
+// existing transfer, which downloads.Client.Add returns rather than treating as
+// an error, so even a genuinely re-run grab converges (invariant 9).
+func GrabDedupeKey(desiredItemID string) string { return "grab:" + desiredItemID }
+
+// GrabPayload is what a grab job carries.
+type GrabPayload struct {
+	// DesiredItemID is the want whose selected release should be fetched.
+	//
+	// The SOURCE is deliberately not carried here, and this is the important
+	// line in the file. It is a credential — on a private tracker a magnet
+	// carries a passkey — and the job table is stored, listed by the API and
+	// read by anybody debugging a queue. It is read from the selected
+	// candidate at handling time instead, by the one query that asks for it.
+	//
+	// That also keeps the payload from going stale: if the selection changed
+	// between enqueue and run, the grab fetches what the want currently wants
+	// rather than what it wanted when the job was written.
+	DesiredItemID string `json:"desired_item_id"`
+	// CandidateID is what was selected when the grab was enqueued.
+	//
+	// Carried for one purpose: so the handler can notice that the selection
+	// moved under it and say so, rather than silently fetching a different
+	// release than the one this job was created for. It is a hash and safe to
+	// store (see indexers.candidateID).
+	CandidateID string `json:"candidate_id,omitempty"`
+}

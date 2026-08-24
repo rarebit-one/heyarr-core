@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 )
 
 // Registry is the centralised provider registry (§59).
@@ -410,4 +411,57 @@ func hasCapability(caps []Capability, want Capability) bool {
 		}
 	}
 	return false
+}
+
+// ErrNoSource is a candidate the indexer offered no way to fetch.
+//
+// Separate from ErrNoProvider — "we have no download client" — because the two
+// need opposite responses. One is a node that is not equipped and will not
+// become equipped by retrying; the other is a release that cannot be acquired
+// while a different release of the same want probably can. Collapsing them
+// would make "why is nothing downloading" unanswerable from the want.
+var ErrNoSource = errors.New("the indexer offered no way to fetch this release")
+
+// Grab hands a release to a download client and returns the transfer.
+//
+// # It routes to ONE client, unlike Search which asks them all
+//
+// A search fans out because more answers are strictly better and duplicates are
+// deduplicated. A grab must not: handing the same magnet to three clients
+// produces three copies of the same bytes, three entries in three queues, and
+// three ingests racing to adopt whichever landed first. So this walks the
+// routing order and stops at the first client that accepts.
+//
+// # A client that refuses does not end the grab
+//
+// The same reasoning as Search's Failures: one client being down must not make
+// the node unable to acquire anything when another is healthy. Every refusal is
+// collected, and they are ALL returned when none succeeded — because "the only
+// client you have is unreachable" and "every client refused this particular
+// magnet" look identical from the outside and want very different responses.
+func (r *Registry) Grab(ctx context.Context, source secret.Value) (Transfer, string, error) {
+	if source.IsZero() {
+		return Transfer{}, "", ErrNoSource
+	}
+	downloaders := r.Downloaders()
+	if len(downloaders) == 0 {
+		return Transfer{}, "", fmt.Errorf("%w: %s", ErrNoProvider, CapabilityDownload)
+	}
+
+	var refusals []string
+	for _, dl := range downloaders {
+		if err := ctx.Err(); err != nil {
+			return Transfer{}, "", err
+		}
+		t, err := dl.Add(ctx, source)
+		if err != nil {
+			// %v rather than %w, as in Search: this is a report for an
+			// operator, and %v renders a Secret through its redacting String.
+			refusals = append(refusals, fmt.Sprintf("%s: %v", dl.Name(), err))
+			continue
+		}
+		return t, dl.Name(), nil
+	}
+	return Transfer{}, "", fmt.Errorf("no download client accepted it: %s",
+		strings.Join(refusals, "; "))
 }
