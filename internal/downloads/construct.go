@@ -1,6 +1,7 @@
 package downloads
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -19,6 +20,9 @@ import (
 // constructors compose, and an unrecognised kind still falls through to the
 // registry's honest "configured, not implemented" report.
 func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider, bool, error) {
+	if r.Kind == providers.KindFake && isDownloadOnly(r) {
+		return fakeFromConfig(r)
+	}
 	if r.Kind != providers.KindTransmission {
 		return nil, false, nil
 	}
@@ -93,4 +97,73 @@ func credentialFor(r providers.Resolved) (user, pass string) {
 	// the thing that must send it. Reveal() greps cleanly, which is the whole
 	// argument for the Secret type.
 	return username, password.Reveal()
+}
+
+// simulatedTransferSize is what a configured fake download client produces.
+//
+// 256 KiB: large enough that the file is streamed and hashed rather than
+// living in one buffer, small enough that a demo which fetches several does not
+// notice. It is not configurable because nothing has needed it to be, and a
+// knob nobody turns is a knob that goes untested.
+const simulatedTransferSize = 256 * 1024
+
+// isDownloadOnly reports whether this fake is a download client rather than an
+// indexer.
+//
+// providers.Fake serves the indexer side — it answers Search from configured
+// offers — and this package's Fake serves the download side, writing real bytes
+// to a real directory. A fake declaring BOTH is left to providers.Fake, because
+// taking it here would silently remove its Search.
+func isDownloadOnly(r providers.Resolved) bool {
+	var download bool
+	for _, c := range r.Capabilities {
+		if c == providers.CapabilityIndexer {
+			return false
+		}
+		if c == providers.CapabilityDownload {
+			download = true
+		}
+	}
+	return download
+}
+
+// fakeFromConfig builds the in-process download client the acceptance demo
+// needs (#247).
+//
+// # Why this exists at all
+//
+// downloads.Fake is production code rather than a test fixture, and its own doc
+// says why: "putting it in a _test.go file would mean the demo could not reach
+// it, and the demo is the thing that proves the claim on a real machine over a
+// real socket". Until this constructor, THE DEMO COULD NOT REACH IT — only the
+// transmission kind had a constructor, and that needs a daemon. So the reason it
+// is not in a _test.go file was not served by anything.
+//
+// The consequence was narrow and specific: the demo's full-arc section reached
+// SELECTED and then adopted bytes by hand through POST /acquisitions, which is
+// §65's exceptional path. Everything between "a release was chosen" and "bytes
+// arrived" was unproven end to end, which is exactly where #225's hole was.
+//
+// # The download directory is the path map's local side
+//
+// Not a new configuration key. A download client's path map already says where
+// its completed files land as this host sees them, which is precisely what this
+// fake needs to write into — and reusing it means the demo configures a fake
+// exactly as it configures the real client.
+func fakeFromConfig(r providers.Resolved) (providers.Provider, bool, error) {
+	if len(r.PathMap) == 0 {
+		// Refused rather than defaulted to a temp directory. A fake writing
+		// somewhere nobody named would produce files the scanner never walks
+		// and an ingest that cannot find them, reported as a transfer that
+		// completed and vanished.
+		return nil, true, fmt.Errorf(
+			"provider %q: a fake download client needs a path_map so it has somewhere "+
+				"to write completed transfers", r.Name)
+	}
+	dir := r.PathMap[0].Local
+	if dir == "" {
+		return nil, true, fmt.Errorf(
+			"provider %q: the first path_map entry has no local path", r.Name)
+	}
+	return NewFake(r.Name, dir).Simulate(simulatedTransferSize), true, nil
 }
