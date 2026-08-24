@@ -121,9 +121,11 @@ opaque lump: bytes are cut into content-defined chunks, a manifest describes the
 and a peer can read another peer's description of a blob before deciding what to
 move. `make demo` asserts the three-way manifest state on a running fabric, that
 asking never generates a manifest, that manifests are made only by a job the
-convergence cycle enqueued, and the 100% control the savings are measured
-against. In progress: resumable replication and chunk reuse (#193, #194) have not
-landed.
+convergence cycle enqueued, one peer reading another's manifest over mTLS before
+pulling, the 100% control the savings are measured against, and — since #196 —
+the saving itself: a damaged blob repaired from a peer for exactly one chunk of
+the several it has, with the repairer's own count and the source's serving
+record independently agreeing on the bytes.
 
 - **Content-defined chunking** — FastCDC in `internal/storagefabric/chunking`,
   streaming and pure: no filesystem, no database, no CAS, no domain, and a
@@ -206,6 +208,17 @@ landed.
   the reason. `make demo` asserts that refusal, in both output shapes, rather
   than skipping the command.
 
+- **A source records how many bytes it served, and whether the read was
+  ranged.** The peer surface logged *who* read *which* blob and not *how much*,
+  which stopped being sufficient the moment replication gained ranged reads:
+  since Milestone 5 "site-b read this blob" no longer implies "this blob crossed
+  the wire". The count comes from the same response recorder the client API's
+  access log uses — so `http.ServeContent` keeps its sendfile fast path, and
+  `Flush`, `Unwrap` and `ReadFrom` are all still reachable through it — and it is
+  what the acceptance script's byte-saving assertions are read out of. Measured
+  on the source, because a destination's account of what it fetched is a claim
+  about itself.
+
 ### Fixed
 
 - **Binding the local socket no longer poisons the content-addressed store**
@@ -255,16 +268,27 @@ landed.
   lossy — and a green run must not be read as saying the fabric is deployable.
   Peer-to-peer mTLS, pinning, revocation and re-enrolment were exercised between
   two physical machines by hand during the milestone; no automated check does it.
-- **The byte saving is not asserted by `make demo`.** Milestone 5's thesis is
-  that replication stops re-sending whole files, and the demo asserts the 100%
-  control — a transfer to a peer holding nothing moves the whole blob, verified
-  by the destination — but not the saving itself. A resumed transfer and a
-  modified file replicated to a peer holding the original are measured on the
-  source's serving side in Go (74.5% and 1.1% respectively, each with its own
-  control); a repair scoped to one damaged chunk fetches 0.27% of the blob. None
-  of the three can be driven from the acceptance script on this build: #193 and
-  #194 have not landed, and the peer-backed chunk source is not wired into
-  `fsck --repair`, which reports every damaged blob unrepaired with the reason.
+- **The byte saving is asserted by `make demo`, in chunks rather than in
+  percent.** Milestone 5's thesis is that replication stops re-sending whole
+  files, and a milestone whose thesis is a saving has to assert the saving. It
+  does: a five-megabyte blob is damaged in one chunk on one node and repaired
+  from the other, and what crosses the wire is measured on the SOURCE's serving
+  side against the 100% control beside it. The claim asserted is *one chunk
+  fetched out of N* — not a percentage — because at the shipped chunker
+  parameters (256 KiB / 1 MiB / 4 MiB) a five-megabyte blob is only a handful of
+  chunks, so one chunk of it is a fifth or a third and the figure moves run to
+  run with where a content-defined boundary lands in random bytes. Two
+  independent instruments have to agree on the byte count: the repairer's own
+  `bytes_fetched` and the source's access record.
+- **Three of the four savings are still asserted in Go, not by `make demo`.** A
+  resumed transfer (74.5% of a 512 KiB blob after a real `SIGKILL`, 29 of 110
+  chunks kept), a modified file replicated to a peer holding the original
+  (1.1%), and 3 KiB prepended (1.2%) are measured on the source's serving side
+  in `internal/peer/transfer`, each with its own control. Driving them from a
+  shell would need a transfer interrupted at a chosen point — a test hook in
+  production code, or a race — or a second blob built to share chunks with the
+  first, which moves catalogue counts the acceptance script asserts elsewhere. A
+  flaky assertion about a saving would be worse than saying so here.
 - **Every saving figure is a demonstration, not a benchmark.** They are measured
   on fixtures sized to fit a 240-second acceptance budget. The ratios are real
   and so are the controls; a number taken on a few megabytes says nothing about

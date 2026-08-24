@@ -4174,12 +4174,14 @@ YAML
     fi
   fi
 
-  not_exercised repair_peer_fetch \
-    "a damaged blob actually REPAIRED, with the fetch scoped to the damage — the peer-backed \
-integrity.ChunkSource is not wired into fsck --repair yet, so this run reaches the refusal and \
-not the repair. The chunk-scoped repair itself is asserted in internal/storagefabric/integrity \
-(the fetch is exactly the damaged chunk, measured at 0.27% of the blob) and under a real SIGKILL \
-at four points inside the repair window"
+  # A damaged blob actually REPAIRED, with the fetch scoped to the damage, is
+  # asserted in the two-peer arc — where there is a peer to fetch from and a
+  # manifest to scope the fetch by. It cannot be asserted HERE, and the reason
+  # is not a missing mechanism any more: this node is a fabric of one, and the
+  # blob it just damaged was never chunked, so `no_manifest` is the correct and
+  # final answer whatever transport exists. That is what the assertions above
+  # check, and they are about the refusal rather than about the absence of a
+  # peer-backed source.
 
 
   # ---------------------------------------------------------------------------
@@ -4659,6 +4661,42 @@ peer_blob_reads() { # logfile method blob-hash
 # to wc and would report a surface that served nothing as having served once.
 peer_blob_read_count() { # logfile method blob-hash
   peer_blob_reads "$1" "$2" "$3" | grep -c . || true
+}
+
+# peer_served_bytes is how many CONTENT bytes this node has sent for a blob,
+# summed over every GET its peer surface answered.
+#
+# THE SOURCE'S SIDE, and that is the whole point. A destination's account of
+# what it fetched is a claim about itself: a transfer that fetched nothing and
+# published the wrong file would report a very good number. What left the
+# source is a fact about the source, and since #218 the source records it —
+# `bytes` on "served blob content to a peer", counted by the response recorder
+# the client API's access log already uses.
+#
+# GET only. A HEAD is the durability precondition asking whether a blob is here
+# and carries no body, and counting it would put a zero in every sum.
+#
+# Used as a DELTA around an operation rather than as an absolute. This arc
+# moves the same blob more than once, so a total answers "how much has ever
+# left" when the question is "how much did THAT cost".
+peer_served_bytes() { # logfile blob-hash
+  # The grep is braced with `|| true` rather than trailing the pipeline with
+  # `|| echo 0`. Under `pipefail` a grep that matches nothing fails the whole
+  # pipeline AFTER jq has already printed its 0, so the fallback would APPEND a
+  # second value and every arithmetic use of this would then be a syntax error
+  # on a two-line number.
+  { grep -F '"msg":"served blob content to a peer"' "$1" 2>/dev/null || true; } |
+    jq -s --arg h "$2" '[.[] | select(.method == "GET" and .blob_hash == $h) | .bytes] | add // 0'
+}
+
+# pct is a percentage as an integer, for a message a person reads.
+#
+# Integer arithmetic deliberately: bash has no floats, and every threshold this
+# file asserts is a coarse one — "under a tenth of the blob" rather than
+# "1.07%". A fraction that needs a decimal point to be convincing is a fraction
+# that is too close to its threshold to be asserted at all.
+pct() { # part whole
+  if (( $2 == 0 )); then echo 0; else echo $(( $1 * 100 / $2 )); fi
 }
 
 two_peer_demo() { # mode
@@ -5144,29 +5182,33 @@ YAML
   assert_eq "$(cli_b blobs verify "$tp_blob" --json 2>/dev/null | jq -r '.verified | tostring')" "true" \
     "and every one of those bytes was re-hashed by the destination against the blob's own digest (invariant 1)"
 
-  # 🔴 AND THE SAVINGS THEMSELVES ARE NOT ASSERTED HERE, which is the honest
-  # statement this section exists to make rather than avoid.
+  # 🔴 AND THE SAVING ITSELF IS ASSERTED, further down this same arc.
   #
-  # A resumed transfer, a modified file replicated to a peer holding the
-  # original, and a repair scoped to the damage are all measured on the SOURCE's
-  # serving side in Go, with the same controls. None of them can be driven from
-  # this script on this build:
+  # It was not, until this milestone closed: resumption and chunk reuse were
+  # not on `main`, and the peer-backed chunk source was not wired into
+  # `fsck --repair`, so this file could assert the expensive case and nothing
+  # else. #196's acceptance is that a milestone whose thesis is a saving must
+  # assert the saving, and a control on its own is a milestone that measured
+  # the wrong number.
   #
-  #   - resumption and chunk reuse (#193, #194) are not on `main`;
-  #   - the peer-backed chunk source for repair is not wired into fsck --repair,
-  #     which is asserted where the repair section says so.
+  # It is asserted where the fabric can be made to produce it deterministically
+  # — the repair arc, after lazy chunking has given node A a manifest — and the
+  # measurement is the same instrument as the control above: bytes the SOURCE
+  # recorded serving, not bytes a destination claims it fetched.
   #
-  # Recorded rather than skipped, so the verdict line says this run did not
-  # measure a saving. The figures below are the ones the Go tests assert, and
-  # they are stated here so nobody has to go looking for whether a number exists
-  # at all.
-  not_exercised byte_saving_over_the_wire \
-    "the SAVING itself, measured end to end: a resumed transfer moving materially fewer bytes than a \
-whole one (74.5% of a 512 KiB blob after a real SIGKILL, 29 of 110 chunks kept), a modified file \
-moving 1.1% of its size to a peer holding the original, 3 KiB prepended moving 1.2%, and a repair \
-fetching 0.27% of the blob for one damaged chunk. Each is measured on the SOURCE's serving side, \
-each has the 100% control this section asserts above, and each lives in internal/peer/transfer and \
-internal/storagefabric/integrity because the code paths they exercise are not on this build"
+  # THREE of the four savings this milestone measured are still asserted in Go
+  # rather than here, and that is a limitation rather than a preference:
+  #
+  #   - a resumed transfer moving 74.5% of a 512 KiB blob after a real SIGKILL,
+  #     29 of 110 chunks kept;
+  #   - a modified file moving 1.1% of its size to a peer holding the original;
+  #   - 3 KiB prepended moving 1.2%.
+  #
+  # Each needs an interruption at a chosen point, or a second blob built to
+  # share chunks with the first. From a shell the first means a test hook in
+  # production code and the second moves catalogue counts this file asserts
+  # elsewhere. They live in internal/peer/transfer, where the byte counts are
+  # measured on the source's serving side exactly as they are here.
 
 
   cli_b peers report-inventory site-a --json >/dev/null
@@ -5208,19 +5250,17 @@ internal/storagefabric/integrity because the code paths they exercise are not on
   assert_not_contains "no-chunk-manifest" "not-found" \
     "and it is not a substring of the not-found type: the two do not overlap"
 
-  # 🔴 What this run does NOT do, recorded rather than skipped.
+  # This route is CALLED in this run, and by a running fabric rather than by a
+  # curl. It is not called here: at this point in the arc no blob on either
+  # node has a manifest, which is why the transfer above took the whole path
+  # and is the assertion directly below. The call happens further down, once
+  # lazy chunking has given node A a manifest and node B has a gap — and the
+  # source's record of what it served, and to whom, is asserted there.
   #
-  # Nothing in a running fabric calls this route yet: the transfer path on this
-  # build does not fetch a manifest before pulling, because the ranged fetch
-  # that would use one arrives with resumption (#193/#194). So the source's
-  # record of what it served, the 404 that names WHICH manifest-less state it
-  # was in, and the destination's handling of each are asserted in
-  # internal/api/peerapi and internal/peer/transfer against a real mTLS peer,
-  # and not by this script.
-  not_exercised manifest_over_the_wire \
-    "one peer reading another peer's chunk manifest over mTLS, and the source recording what it \
-served and to whom — the replication path on this build does not fetch a manifest, so no request \
-reaches the route in this run. Asserted in internal/api/peerapi and internal/peer/transfer"
+  # The 404 that names WHICH manifest-less state a source was in is still a Go
+  # assertion (internal/api/peerapi): reaching it from here would mean asking a
+  # source for a manifest of a blob it holds and has not chunked, which is a
+  # request this fabric never makes on its own.
 
 
   # -------------------------------------------------------------------------
@@ -5406,6 +5446,15 @@ reaches the route in this run. Asserted in internal/api/peerapi and internal/pee
   # leaving this section's gap in place would quietly change which one is being
   # asserted. It is closed by the real mechanism rather than by copying files
   # about: node B reconciles, pulls, and reports what it now holds.
+  #
+  # It is also the first transfer in this run that the SOURCE can describe:
+  # node A has a manifest for these bytes now (asserted directly above) and
+  # node B holds none of them, so this pull takes the CHUNKED path, and what it
+  # costs is measured on node A's serving side either side of it.
+  local ctl_before ctl_moved ctl_size ctl_manifests_before
+  ctl_size=$(api_a "/api/v1/blobs/$lc_large" | jq -r '.size')
+  ctl_before=$(peer_served_bytes "$log_a" "$lc_large")
+  ctl_manifests_before=$(grep -cF '"msg":"served a chunk manifest to a peer"' "$log_a" 2>/dev/null || true)
   api_b "/api/v1/peers/site-b/reconcile" -X POST -o /dev/null
   waited=0
   while (( waited < 900 )); do
@@ -5416,6 +5465,154 @@ reaches the route in this run. Asserted in internal/api/peerapi and internal/pee
   cli_b peers report-inventory site-a --json >/dev/null
   assert_eq "$(peer_holds "$root/b/data/cas" "$lc_large")" "1" \
     "and the fabric is converged again, on the same transfer path, before the refusal below is asked for"
+  ctl_moved=$(( $(peer_served_bytes "$log_a" "$lc_large") - ctl_before ))
+
+  # THE MANIFEST, OVER THE WIRE. Until this pull, every transfer in this run
+  # was of a blob nothing had chunked, so the route existed and nothing had
+  # ever called it. This one is a destination asking a source to describe bytes
+  # it is about to fetch, over mTLS, and the source recording what it served
+  # and to whom.
+  assert_eq "$(( $(grep -cF '"msg":"served a chunk manifest to a peer"' "$log_a" 2>/dev/null || true) \
+      > ctl_manifests_before ))" "1" \
+    "a destination read the source's chunk manifest over the peer surface before pulling — the \
+route is no longer one nothing calls (M5-05, ADR-0034)"
+
+  # 🔴 THE CONTROL, as a number, on the chunked path.
+  #
+  # Milestone 5's thesis is a saving, and a saving assertion with no control
+  # passes on a transfer that fetched NOTHING at all. This is that control: the
+  # destination held none of these bytes, so the chunked path had nothing to
+  # reuse and had to move all of them. If this ever reads materially under 100%
+  # the saving asserted below is measuring an empty transfer.
+  assert_eq "$(pct "$ctl_moved" "$ctl_size")" "100" \
+    "THE CONTROL: a chunked pull to a peer holding NONE of the blob moves 100% of it — \
+$ctl_moved of $ctl_size bytes, measured on the SOURCE's serving side"
+  assert_eq "$(cli_b blobs verify "$lc_large" --json 2>/dev/null | jq -r '.verified | tostring')" "true" \
+    "and every one of those bytes was re-hashed by the destination against the blob's own digest (invariant 1)"
+
+  # -------------------------------------------------------------------------
+  note "  🔴 THE SAVING, as a NUMBER: a repair fetches the damage, not the blob (M5-08, M5-09)"
+  # -------------------------------------------------------------------------
+  #
+  # #196's acceptance in its own words: a milestone whose thesis is a saving
+  # must ASSERT the saving. Everything above this line is the control, and a
+  # control on its own is a milestone that measured the expensive case.
+  #
+  # This is the cheap case, driven end to end on the running fabric: node A's
+  # copy of a five-megabyte blob is damaged in ONE chunk, and `fsck --repair`
+  # rebuilds it from node B. Node A already holds every chunk but that one, so
+  # the only bytes that may cross the wire are the damaged chunk's — and what
+  # crosses is counted on NODE B, the machine that sent them.
+  #
+  # Repair rather than a resumed or reusing transfer, and that choice is worth
+  # stating. All three demonstrate the same saving. Only this one is
+  # DETERMINISTIC from a shell: a resumed transfer needs an interruption at a
+  # chosen point, and interrupting a transfer from outside means either a test
+  # hook in production code or a race with a five-megabyte loopback copy. A
+  # flaky assertion about a saving is worse than an honest paragraph saying the
+  # saving is asserted in Go — so the other three stay in Go, and the epilogue
+  # says which one this run drove.
+  local rp_size rp_file rp_off rp_before rp_moved rp_json rp_entry
+  rp_size=$ctl_size
+  # -print -quit rather than `| head -1`: this file runs under `pipefail`, and
+  # a find killed by the SIGPIPE `head` sends it makes the whole pipeline
+  # non-zero, which under `set -e` ends the run with no output at all.
+  rp_file=$(find "$root/a/data/cas/blobs" -name "${lc_large#blake3:}" -type f -print -quit)
+  if [[ ! -f "$rp_file" ]]; then
+    fail "the blob to damage is not in node A's store, so the repair below would measure nothing"
+  fi
+  # Damaged in the MIDDLE, not at the start: a chunker's first boundary is the
+  # one most likely to be shared by accident, and damage at offset 0 would let
+  # a repair that re-fetched a fixed prefix look chunk-scoped.
+  # chmod first: a published blob is read-only, which is the store protecting
+  # its own bytes from exactly this. Damaging it means stepping around that
+  # deliberately, the way the single-node repair section already does.
+  rp_off=$(( rp_size / 2 / 4096 ))
+  chmod u+w "$rp_file"
+  dd if=/dev/urandom of="$rp_file" bs=4096 seek="$rp_off" count=1 conv=notrunc 2>/dev/null
+  assert_eq "$(cli_a blobs verify "$lc_large" --json 2>/dev/null | jq -r '.verified | tostring')" "false" \
+    "the blob is damaged on node A: it no longer hashes to its own name"
+
+  rp_before=$(peer_served_bytes "$log_b" "$lc_large")
+  # ONE repair pass, reported as JSON. The enum is the diagnosis: every refusal
+  # this can end in — no_manifest, unreachable, source_corrupt — is a different
+  # sentence about a different thing, and asserting "the blob verifies" alone
+  # would report all of them as the same silence.
+  # "$BIN" directly rather than cli_a: fsck talks to the database and the store,
+  # not to the API, so it takes no --token (ADR-0002 — it has to work when the
+  # controller will not start, which is precisely when someone reaches for it).
+  rp_json=$("$BIN" --config "$cfg_a" fsck --deep --repair --json 2>/dev/null || true)
+  rp_moved=$(( $(peer_served_bytes "$log_b" "$lc_large") - rp_before ))
+  rp_entry=$(jq -c --arg h "$lc_large" '[.repairs[] | select(.hash == $h)][0] // {}' <<<"$rp_json")
+
+  assert_eq "$(jq -r '.outcome | tostring' <<<"$rp_entry")" "repaired" \
+    "the damaged blob was REPAIRED from a peer — the outcome enum, so a refusal names ITSELF \
+rather than arriving as a blob that still does not verify (ADR-0036)"
+  assert_eq "$(cli_a blobs verify "$lc_large" --json 2>/dev/null | jq -r '.verified | tostring')" "true" \
+    "and it hashes to its own name again: the replacement was verified WHOLE before publication, \
+never written in place (invariant 1, ADR-0036)"
+
+  # 🔴 THE NUMBER, from TWO instruments that do not share a code path.
+  #
+  # `bytes_fetched` is the repairer's own account of what it pulled. The delta
+  # is what node B recorded SERVING. A repairer that under-reported, and a
+  # source that over-reported, would each be invisible on its own; neither
+  # survives having to agree with the other.
+  local rp_reported rp_total
+  rp_reported=$(jq -r '.bytes_fetched | tostring' <<<"$rp_entry")
+  rp_total=$(jq -r '.chunks_total | tostring' <<<"$rp_entry")
+
+  # THE SAVING IS ASSERTED IN CHUNKS, and the bytes are reported beside it.
+  #
+  # That is not a softer claim, it is the fixture-independent one. At the
+  # chunker's shipped parameters — 256 KiB minimum, 1 MiB average, 4 MiB
+  # maximum — a five-megabyte blob is about FIVE chunks, so one chunk of it is
+  # a fifth, and the measured figure swings between roughly 8% and 23% run to
+  # run purely with where a content-defined boundary happens to fall in random
+  # bytes. A percentage threshold here would be asserting the fixture's size,
+  # and it would go red on a chunker re-tuning that is not a regression.
+  #
+  # What the feature actually claims is that a repair costs ONE CHUNK rather
+  # than one blob, and that is exact: fetched over total. The dramatic ratios
+  # need a blob with many chunks, and a blob with many chunks does not fit a
+  # 240-second acceptance budget — which the epilogue says out loud rather than
+  # letting this section imply otherwise.
+  assert_eq "$(jq -r '.chunks_fetched | tostring' <<<"$rp_entry")" "1" \
+    "🔴 THE SAVING: repairing one damaged chunk fetched exactly ONE chunk of the $rp_total this \
+blob has — $rp_moved bytes of $rp_size, $(pct "$rp_moved" "$rp_size")% — against the 100% control \
+above, both measured on the SOURCE's serving side (#196, ADR-0036)"
+  assert_eq "$(( rp_total > 1 ))" "1" \
+    "and the blob has MORE than one chunk ($rp_total), without which fetching one of them is not \
+a saving and this section would pass on a single-chunk blob"
+  assert_eq "$(( rp_moved > 0 ))" "1" \
+    "it crossed the WIRE: node B served $rp_moved bytes. A repair that fetched nothing repaired \
+nothing, and would report the best saving in this file"
+  assert_eq "$rp_reported" "$rp_moved" \
+    "and the two ends agree — the repairer says it fetched $rp_reported bytes and the source says \
+it served $rp_moved"
+  assert_eq "$(( rp_moved < rp_size ))" "1" \
+    "and it is materially less than the blob: $rp_moved of $rp_size bytes"
+
+  # The repair settled, asserted about THIS blob rather than about the whole
+  # store. A second pass may legitimately report other blobs — this arc leaves
+  # unreferenced and deleted bytes behind on purpose — and a global exit code
+  # would make this section fail for somebody else's fixture.
+  local rp_second
+  rp_second=$("$BIN" --config "$cfg_a" fsck --deep --repair --json 2>/dev/null || true)
+  assert_eq "$(jq -r --arg h "$lc_large" '[.repairs[]? | select(.hash == $h)] | length' <<<"$rp_second")" "0" \
+    "a second pass finds nothing to repair for these bytes — which is what tells a real repair \
+apart from one that republished the damage"
+
+  # The damaged original is preserved, never deleted (ADR-0018). It is then
+  # removed HERE, by this script, so the sections below count the store they
+  # expect: quarantine is evidence for an operator, and leaving it would make
+  # this section's cost show up in somebody else's assertion.
+  local rp_q
+  rp_q=$(find "$root/a/data/cas/quarantine" -type f 2>/dev/null | wc -l | tr -d ' ')
+  assert_eq "$(( rp_q >= 1 ))" "1" \
+    "the damaged original was QUARANTINED rather than deleted — on a hardlink-ingested library \
+the corruption may be the operator's own file (ADR-0018)"
+  find "$root/a/data/cas/quarantine" -type f -delete 2>/dev/null || true
   # ADR-0034's falsification, asserted about transfers that have ALREADY
   # happened rather than by deleting rows out of a database. Every blob in this
   # arc was `undecided` when the five-megabyte blob first crossed the wire a
@@ -5934,21 +6131,29 @@ else
 fi
 printf '\n'
 printf '       NEW IN THIS MILESTONE, and stated rather than left to be found:\n'
-printf '         PARTIAL TRANSFER STATE IS DECIDED BUT NOT YET BUILT. Milestone 4\n'
-printf '         had no partial state at all — a receive that did not finish left\n'
-printf '         nothing, and that absence is what made the handler idempotent —\n'
-printf '         and on THIS build that is still true: a failed transfer is\n'
-printf '         retried whole, and every byte this run moved was moved whole.\n'
-printf '         What has landed is the DECISION (ADR-0035), taken in writing\n'
-printf '         before any code creates bytes that outlive an attempt: a resumed\n'
-printf '         transfer may believe nothing it has not re-hashed against a\n'
-printf '         manifest entry it holds and verified itself, so the resume unit\n'
-printf '         is a CHUNK and never a byte offset; the assembled result is\n'
-printf '         still hashed whole before publication; partial bytes are\n'
-printf '         addressable by nothing and are never a replica; and a blob with\n'
-printf '         no manifest is not resumable, being retried whole exactly as it\n'
-printf '         is today. When the code lands, this paragraph is what it has to\n'
-printf '         satisfy, and this epilogue must say so instead.\n'
+printf '         PARTIAL TRANSFER STATE EXISTS NOW, and ADR-0035 is what it had\n'
+printf '         to satisfy. Milestone 4 had no partial state at all — a receive\n'
+printf '         that did not finish left nothing, and that absence is what made\n'
+printf '         the handler idempotent. It is idempotent in a stronger sense\n'
+printf '         now: a re-run re-verifies what an earlier attempt left, against\n'
+printf '         a manifest this node fetched and checked itself, and keeps only\n'
+printf '         the contiguous prefix that checks out. The resume unit is a\n'
+printf '         CHUNK and never a byte offset; the assembled result is hashed\n'
+printf '         WHOLE before publication; partial bytes are addressable by\n'
+printf '         nothing and are never a replica; and a blob with no manifest is\n'
+printf '         still not resumable, retried whole, which is §16 doing its job\n'
+printf '         rather than a gap.\n'
+printf '         WHAT THIS RUN DRIVES OF THAT, AND WHAT IT DOES NOT. The saving\n'
+printf '         is asserted above as a number, over mTLS, against a 100%%%%\n'
+printf '         control — but by the REPAIR path, because that is the one a\n'
+printf '         shell can make deterministic. Resumption after an interruption,\n'
+printf '         and reuse across a modified file, are asserted in\n'
+printf '         internal/peer/transfer and not here: the first needs a transfer\n'
+printf '         interrupted at a chosen point, which from outside means a test\n'
+printf '         hook in production code or a race, and the second needs a\n'
+printf '         second blob built to share chunks with the first, which moves\n'
+printf '         catalogue counts this file asserts elsewhere. A flaky assertion\n'
+printf '         about a saving would be worse than this paragraph.\n'
 printf '         MANIFESTS ARE LAZY, so any blob may have one, may be recorded as\n'
 printf '         never needing one, or may not have been decided about — and the\n'
 printf '         third is the ordinary state of a library nothing has replicated.\n'
@@ -5972,12 +6177,27 @@ printf '         acceptance budget. The ratios are real and the controls are\n'
 printf '         real, and a number measured on a few megabytes says nothing\n'
 printf '         about a twenty-gigabyte blob over a link that is slower than a\n'
 printf '         disk. Nothing here is a performance claim.\n'
-printf '         THIS REPOSITORY IS PUBLIC AND IS NOT YET CLEAN. A real host\n'
-printf '         name, a document named after a real machine, and a personal home\n'
-printf '         directory in a test fixture are still on `main` (#211) — the\n'
-printf '         same class of content Milestone 4 scrubbed. It is recorded here\n'
-printf '         because a green demo is where a reader concludes the repository\n'
-printf '         is in good order, and on this one point it is not.\n'
+printf '         AND THE RATIO ABOVE IS THE FIXTURE SPEAKING, not the feature.\n'
+printf '         At the shipped chunker parameters — 256 KiB minimum, 1 MiB\n'
+printf '         average, 4 MiB maximum — the five-megabyte blob repaired above\n'
+printf '         is only a HANDFUL of chunks, so one chunk of it is a fifth or a\n'
+printf '         third, and the measured percentage moves run to run with where\n'
+printf '         a content-defined boundary happens to fall in random bytes. The\n'
+printf '         claim asserted is therefore the fixture-independent one — one\n'
+printf '         chunk fetched out of N, with the byte counts reported beside it\n'
+printf '         and agreed by the repairer and the source independently. The\n'
+printf '         percentages that make the feature sound impressive need a blob\n'
+printf '         with hundreds of chunks, and such a blob does not fit this\n'
+printf '         budget. Read the numerator, not the percentage.\n'
+printf '         THIS REPOSITORY IS PUBLIC, AND THE GUARD IS NEW. A real host\n'
+printf '         name, a document named after a real machine and a personal home\n'
+printf '         directory were on `main` when this milestone opened (#211) and\n'
+printf '         were scrubbed during it. `make hygiene` now enforces the rule\n'
+printf '         rather than trusting it: shape patterns plus retired proper\n'
+printf '         nouns held as SHA-256 DIGESTS, so the guard cannot spell what it\n'
+printf '         forbids. It found a real device MAC in a renderer fixture on its\n'
+printf '         first run, which is the argument for it. A guard is not a proof\n'
+printf '         of cleanliness — it catches the shapes somebody thought of.\n'
 printf '\n'
 
 # The verdict line. It carries the capability gap, because the verdict line is
