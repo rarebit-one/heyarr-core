@@ -103,8 +103,21 @@ func TestAControllerEnqueuesAProviderHealthPassAtStartup(t *testing.T) {
 
 	// Polled to a deadline rather than slept on: the beat enqueues during
 	// startup, and how long startup takes is a property of the machine.
+	//
+	// AND the controller's own exit is watched while polling, which is not
+	// tidiness. `done` was previously never read before this loop, so a
+	// controller that failed to START — the bind losing a port race, most
+	// obviously — reported here as "nothing schedules the health pass": a
+	// claim about scheduling code that is working perfectly, sending the
+	// reader to the wrong file (#220). This is #207's shape one layer up,
+	// where the precondition is that the process under test came up at all.
 	deadline := time.Now().Add(10 * time.Second)
 	for countHealthJobs(t, db.Reader()) == 0 {
+		select {
+		case err := <-done:
+			t.Fatalf("the controller exited before it could enqueue anything: %v", err)
+		default:
+		}
 		if time.Now().After(deadline) {
 			t.Fatalf("no %s job was ever enqueued — nothing schedules the health pass",
 				providers.HealthJobType)
