@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 )
 
 // Provider is one configured external service.
@@ -73,6 +74,35 @@ type Downloader interface {
 	// transfers, and something that cannot tell them apart must never be
 	// allowed to remove or re-target anything.
 	Transfers(ctx context.Context) ([]Transfer, error)
+
+	// Add hands the client a release to fetch and returns the transfer it
+	// created.
+	//
+	// # Why this is on the interface
+	//
+	// It was not, and the omission was the whole of #225: the comment above
+	// said "add, observe, remove", the interface had only observe, and
+	// downloads.Client.Add existed with no caller anywhere outside tests
+	// because nothing could reach it without holding the concrete type. A want
+	// could be searched, scored and SELECTED, and then no code in the process
+	// could traverse §64's SELECTED → QUEUED edge.
+	//
+	// It belongs here rather than in a job holding the concrete client for the
+	// same reason Indexer.Search does: §59 makes routing the registry's job,
+	// and a registry that can express "search with whatever indexes" and not
+	// "fetch with whatever downloads" is not routing the one thing acquisition
+	// exists for. The thin-interface argument for keeping it off is real, but
+	// it was bought at the price of the capability being unreachable.
+	//
+	// `source` is a magnet URI or the URL of a .torrent/.nzb, and it is a
+	// credential: on a private tracker it carries a passkey. Implementations
+	// must Reveal() it exactly where they put it on the wire and nowhere else.
+	//
+	// Remove is deliberately NOT here. It is on downloads.Client, it has no
+	// caller yet, and adding it now would recreate this issue's exact shape in
+	// the other direction — an interface method that exists because a comment
+	// promised it rather than because anything routes to it.
+	Add(ctx context.Context, source secret.Value) (Transfer, error)
 }
 
 // Transfer is one external transfer, as a value.
