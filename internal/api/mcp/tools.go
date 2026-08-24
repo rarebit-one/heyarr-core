@@ -3,17 +3,23 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 )
 
 // The tool surface (§71).
 //
-// Nine verbs, each one §71 names. Five more that §71 names are ABSENT and
+// Eleven verbs, each one §71 names. Two more that §71 names are ABSENT and
 // recorded in deferred.go with the milestone that brings them — see the
 // package doc for why absent beats stubbed.
+//
+// search_releases and acquire_release moved from that list to this one in M6:
+// they were deferred for reasons that had stopped being true, which produces an
+// agent waiting for a milestone that already shipped (#226).
 //
 // The split between this file and the handlers is deliberate: this is the
 // VOCABULARY, readable in one screen, and reviewing the authorisation surface
@@ -61,6 +67,34 @@ func (s *Server) registerTools() {
 			"copy is fine, stop\".",
 		InputSchema: schemaMonitorContent,
 		Handler:     s.monitorContent,
+	})
+
+	s.tools.register(Tool{
+		Name:     "search_releases",
+		Title:    "Look for releases now",
+		Scope:    auth.ScopeWrite,
+		ReadOnly: false,
+		Description: "Ask the indexers for releases that would satisfy a want, now, " +
+			"rather than waiting for its next scheduled search. It QUEUES the search and " +
+			"returns a job — an indexer can take thirty seconds to refuse, so nothing " +
+			"holds while it runs. Read the want back afterwards to see what was found " +
+			"and what was chosen.",
+		InputSchema: schemaSearchReleases,
+		Handler:     s.searchReleases,
+	})
+
+	s.tools.register(Tool{
+		Name:     "acquire_release",
+		Title:    "Acquire a particular release",
+		Scope:    auth.ScopeWrite,
+		ReadOnly: false,
+		Description: "Choose one specific release for a want and start fetching it — " +
+			"§60's manual override. Use it when someone names the release they want " +
+			"rather than letting the scorer decide. A candidate the quality profile " +
+			"REJECTED is refused, and the refusal names the rule: change the profile if " +
+			"it should be acceptable, rather than overriding it here.",
+		InputSchema: schemaAcquireRelease,
+		Handler:     s.acquireRelease,
 	})
 
 	s.tools.register(Tool{
@@ -255,4 +289,76 @@ func (s *Server) monitorContent(ctx context.Context, raw json.RawMessage) (any, 
 		return nil, classify(err)
 	}
 	return item, nil
+}
+
+// searchReleases is §71's search_releases.
+//
+// It queues the search rather than performing it, and says so, because a search
+// is a job (invariant 4) that a different process may run and an indexer may
+// take thirty seconds to refuse. An agent that needs the answer reads the
+// want's candidates afterwards — get_content_satisfaction explains what is
+// held, and explain_release scores what was offered.
+func (s *Server) searchReleases(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args struct {
+		DesiredItemID string `json:"desired_item_id"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if args.DesiredItemID == "" {
+		return nil, invalidParams("desired_item_id is required")
+	}
+	out, err := s.resources.SearchReleases(ctx, args.DesiredItemID)
+	if err != nil {
+		return nil, classify(err)
+	}
+	return out, nil
+}
+
+// acquireRelease is §71's acquire_release.
+//
+// It is §60's manual override reached by an agent: select this candidate, and
+// arrange for it to be fetched. It refuses a candidate the quality profile
+// rejected — an agent that could override a gate would turn the operator's own
+// statement of what is acceptable into a suggestion, and the reason it gets
+// back names the rule so it can say WHY rather than that it failed.
+func (s *Server) acquireRelease(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args struct {
+		DesiredItemID string `json:"desired_item_id"`
+		CandidateID   string `json:"candidate_id"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if args.DesiredItemID == "" {
+		return nil, invalidParams("desired_item_id is required")
+	}
+	if args.CandidateID == "" {
+		return nil, invalidParams("candidate_id is required — name the release to acquire")
+	}
+	chosen, err := s.resources.AcquireRelease(ctx, args.DesiredItemID, args.CandidateID)
+	switch {
+	case errors.Is(err, catalog.ErrNoCandidate):
+		// Named explicitly rather than left to classify, which would answer
+		// "the tool failed" — and this server's own instructions tell an agent
+		// that the reason is the deliverable and to quote it to the person it
+		// is helping. "The tool failed" is not quotable.
+		return nil, invalidParams("no candidate with that id for this want — " +
+			"it may have been superseded by a later search; run search_releases and look again")
+	case errors.Is(err, catalog.ErrNotAcceptable):
+		return nil, invalidParams("that candidate was rejected by the quality profile — " +
+			"change the profile if it should be acceptable, rather than overriding it here; " +
+			"explain_release will say which rule rejected it")
+	case err != nil:
+		return nil, classify(err)
+	}
+	return map[string]any{
+		"desired_item_id": args.DesiredItemID,
+		"candidate_id":    chosen.CandidateID,
+		"provider":        chosen.Provider,
+		"title":           chosen.Title,
+		"score":           chosen.Evaluation.Score,
+		"accepted":        chosen.Evaluation.Accepted,
+		"status":          "selected; a grab has been queued",
+	}, nil
 }

@@ -180,3 +180,29 @@ var schemaExplainRelease = obj(map[string]any{
 		}),
 	},
 }, "quality_profile", "releases")
+
+// schemaSearchReleases is search_releases' input (§71).
+var schemaSearchReleases = obj(map[string]any{
+	"desired_item_id": map[string]any{
+		"type":        "string",
+		"description": "The want to look for releases of.",
+	},
+}, "desired_item_id")
+
+// schemaAcquireRelease is acquire_release's input (§71).
+//
+// Both arguments are required. A candidate id with no want is ambiguous — the
+// same release may be a candidate for several wants — and a want with no
+// candidate would make this "acquire something", which is what the scorer is
+// for.
+var schemaAcquireRelease = obj(map[string]any{
+	"desired_item_id": map[string]any{
+		"type":        "string",
+		"description": "The want the release should satisfy.",
+	},
+	"candidate_id": map[string]any{
+		"type": "string",
+		"description": "The candidate to acquire, from get_content_satisfaction or a " +
+			"prior search. It must be one this want's last search returned.",
+	},
+}, "desired_item_id", "candidate_id")
