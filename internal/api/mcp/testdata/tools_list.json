@@ -5,6 +5,33 @@
         "heyarr/requiredScope": "write",
         "readOnlyHint": false
       },
+      "description": "Choose one specific release for a want and start fetching it — §60's manual override. Use it when someone names the release they want rather than letting the scorer decide. A candidate the quality profile REJECTED is refused, and the refusal names the rule: change the profile if it should be acceptable, rather than overriding it here.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {
+            "description": "The candidate to acquire, from get_content_satisfaction or a prior search. It must be one this want's last search returned.",
+            "type": "string"
+          },
+          "desired_item_id": {
+            "description": "The want the release should satisfy.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "desired_item_id",
+          "candidate_id"
+        ],
+        "type": "object"
+      },
+      "name": "acquire_release",
+      "title": "Acquire a particular release"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "write",
+        "readOnlyHint": false
+      },
       "description": "Pause, resume or stop what a renderer is playing. Resume continues from where it was paused. Stop ends it and releases the content — use pause when someone is coming back.",
       "inputSchema": {
         "additionalProperties": false,
@@ -326,6 +353,28 @@
       },
       "name": "search_content",
       "title": "Search the library"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "write",
+        "readOnlyHint": false
+      },
+      "description": "Ask the indexers for releases that would satisfy a want, now, rather than waiting for its next scheduled search. It QUEUES the search and returns a job — an indexer can take thirty seconds to refuse, so nothing holds while it runs. Read the want back afterwards to see what was found and what was chosen.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "desired_item_id": {
+            "description": "The want to look for releases of.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "desired_item_id"
+        ],
+        "type": "object"
+      },
+      "name": "search_releases",
+      "title": "Look for releases now"
     },
     {
       "annotations": {
