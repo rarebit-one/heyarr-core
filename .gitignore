@@ -10,3 +10,9 @@
 # branch owns scripts/acceptance.sh. Read by whoever folds them in, then
 # discarded. Ignored because three reached main via `git add -A` in one day.
 /ACCEPTANCE-*.patch.md
+
+# Python bytecode, left behind by importing scripts/hygiene.py as a module —
+# which is what a test or a one-off helper does. Not merely untidy: this repo
+# uses `git status --porcelain` being empty to decide whether a worktree is
+# safe to remove, so a stray untracked directory makes that check answer wrong.
+__pycache__/
