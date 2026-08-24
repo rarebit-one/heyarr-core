@@ -3561,6 +3561,66 @@ YAML
   kill "$bare_pid" 2>/dev/null || true
   wait "$bare_pid" 2>/dev/null || true
 
+
+  # -------------------------------------------------------------------------
+  note "  the third state blobs.chunked could not express (§16, ADR-0034, M5-03)"
+  # -------------------------------------------------------------------------
+  #
+  # `blobs.chunked` was `required` in the OpenAPI, in the CLI, in catalog
+  # snapshots and in the peer snapshot schema, and it was `0` on every row in
+  # every deployment since Milestone 1 because nothing ever wrote it. §16 asks a
+  # question with three answers and a boolean holds two; the one it cannot hold
+  # — NOT YET — is the one replication has to branch on.
+  #
+  # This is the FABRIC OF ONE. There is no peer here, nothing has decided that
+  # any of these bytes must cross a network, and the answer must therefore be
+  # `undecided` for every blob in the library. The two-peer arc asserts the
+  # other two states; this asserts that a single-node deployment reaches neither
+  # of them by accident.
+  # There is no blobs COLLECTION route — a blob is reached by digest — so the
+  # digests come from the assets that reference them and each is read on its
+  # own. The non-vacuity guard is first and it is not decoration: an empty list
+  # would make both counts zero and every assertion below would pass having
+  # read nothing, which is precisely the shape #187 exists to stop.
+  local m3_undecided=0 m3_total=0 m3_chunked=0 m3_hash m3_blob
+  for m3_hash in $(api_all /api/v1/assets '.items[] | select(.blob_hash != null) | .blob_hash' | sort -u); do
+    m3_blob=$(api "/api/v1/blobs/$m3_hash")
+    m3_total=$(( m3_total + 1 ))
+    [[ "$(jq -r '.chunk_manifest' <<<"$m3_blob")" == "undecided" ]] && m3_undecided=$(( m3_undecided + 1 ))
+    [[ "$(jq -r '.chunked | tostring' <<<"$m3_blob")" == "false" ]] && m3_chunked=$(( m3_chunked + 1 ))
+  done
+  assert_eq "$(( m3_total >= 4 ))" "1" \
+    "there are blobs to ask about at all — $m3_total of them — so the two counts below are not both zero"
+  assert_eq "$m3_undecided" "$m3_total" \
+    "every blob on a node that has never had a peer is UNDECIDED: ingest chunks nothing (§16)"
+  # The compatibility field is still present and still a boolean, so a pre-M5
+  # client does not break — and it is `false` for BOTH states that are not
+  # `present`, which is exactly why nothing may branch on it.
+  assert_eq "$m3_chunked" "$m3_total" \
+    "the deprecated 'chunked' boolean is still there and still false — a pre-M5 client keeps working"
+
+  # 🔴 Asking generates nothing (ADR-0034). Ten reads of the state, through both
+  # surfaces, and no chunk_blob job exists afterwards. A GET that chunked a
+  # 20 GB blob to answer would be a remote denial of service with a polite name.
+  local m3_ask
+  for m3_ask in 1 2 3 4 5; do
+    api "/api/v1/blobs/$big_hash" >/dev/null
+    cli blobs stat "$big_hash" --json >/dev/null
+  done
+  assert_eq "$(api '/api/v1/jobs?type=chunk_blob' | jq -r '.items | length')" "0" \
+    "asking whether a blob has a manifest enqueued no chunk_blob job — the question is a READ"
+  assert_eq "$(api "/api/v1/blobs/$big_hash" | jq -r '.chunk_manifest')" "undecided" \
+    "and produced no manifest: the third state is the ANSWER, not a condition to be resolved"
+
+  # The CLI stopped printing a boolean that could not be true. Asserted on the
+  # plain output as well as on --json, because the operator reading a terminal
+  # is the one who was being told `chunked false` about bytes nobody had looked
+  # at.
+  assert_contains "$(cli blobs stat "$big_hash" 2>&1)" "manifest    undecided" \
+    "heyarr blobs stat reports the three-way state rather than a boolean that is always false"
+  assert_eq "$(cli blobs stat "$big_hash" --json | jq -r '.chunk_manifest')" \
+    "undecided" "and the --json shape carries it too"
+
   note "  worker capability advertisement (#112, ADR-0039, §6, §75)"
   # -------------------------------------------------------------------------
   #
@@ -4697,6 +4757,31 @@ YAML
 
   peer_b_id=$(cli_a peers add --name site-b --site site-b --mode full \
     --public-key "$key_b" --endpoint "https://$addr_b" --json | jq -r '.id')
+
+  # Peer health, before node B has said anything to node A (#184).
+  #
+  # `unknown` is the column's default and it is deliberately NOT a synonym for
+  # reachable: a peer that has never been heard from has not been shown to be
+  # up. Asserting it HERE is what makes the assertions after it mean something —
+  # without it, "reachable" below would pass on a build where the column started
+  # reachable and nothing ever moved it, which is precisely how #184 survived M4
+  # with every test green.
+  #
+  # It has to sit between the two enrolments rather than after both, and the
+  # reason is the mechanism itself. Node B's own `peers add` opens an
+  # AUTHENTICATED mTLS request to node A's peer surface to ask about the return
+  # path, and node A records liveness on exactly that — so by the line after the
+  # next, the value has legitimately moved. (Node A's enrolment a moment ago did
+  # not move node B's view for node A the same way, because at that point node B
+  # had not enrolled node A and the handshake was refused. That refusal is the
+  # "not verified in both directions" note on stderr, and it is correct.)
+  #
+  # assert_eq, not assert_contains: "unreachable" CONTAINS "reachable".
+  local tp_health
+  tp_health=$(cli_a peers list --json | jq -r '.[] | select(.name == "site-b") | .health')
+  assert_eq "$tp_health" "unknown" \
+    "a peer that has not been heard FROM is unknown — a dial OUT is not an observation of the far end (#184)"
+
   cli_b peers add --name site-a --site site-a --mode full \
     --public-key "$key_a" --endpoint "https://$addr_a" --json >/dev/null
   # Each node also records where IT can be reached, so it can report its own
@@ -4718,6 +4803,13 @@ YAML
     "node B recognises node A's certificate as the peer it enrolled (ADR-0012, ADR-0033)"
   assert_contains "$tp_ping" "served_by" \
     "over pinned mTLS, with no second credential anywhere (ADR-0033)"
+  # The ping went A -> B, so it is NODE B that just observed node A. Asserting
+  # it from the dialling side would be asserting about the wrong node: liveness
+  # is recorded by the end that was TALKED TO, which is the whole reason the
+  # peer surface had to become one of its writers (#184).
+  assert_eq "$(cli_b peers list --json | jq -r '.[] | select(.name == "site-a") | .health')" \
+    "reachable" "node B observed node A on the connection A opened to its peer surface (#184)"
+
 
   # The field the milestone changed, answering differently on the SAME node it
   # answered `true` on ninety seconds ago. Nothing about the code moved between
@@ -4744,6 +4836,83 @@ YAML
     "and the §64 name says so"
   assert_eq "$(jq -r '.placement.unproven' <<<"$tp_json")" "false" \
     "unproven does not come back when the answer is satisfied — it is about the target set"
+  # THE TRANSITION. Node B reported its inventory to node A over the peer
+  # surface — pinned mTLS, no bearer token anywhere near it — and that is the
+  # interaction that actually happens between two peers. Before #184 nothing
+  # observed it, and this value stayed "unknown" for the rest of the run.
+  #
+  # assert_eq, not assert_contains: "unreachable" CONTAINS "reachable".
+  tp_health=$(cli_a peers list --json | jq -r '.[] | select(.name == "site-b") | .health')
+  assert_eq "$tp_health" "reachable" \
+    "THE TRANSITION: a peer that has spoken only to the peer surface is reachable (#184)"
+  # last_seen_at is the actionable half. "reachable" with no timestamp is a
+  # status nobody can act on, and a column that is set but never advanced would
+  # pass the assertion above forever.
+  assert_eq "$(cli_a peers list --json | jq -r '.[] | select(.name == "site-b") | (.last_seen_at != null)')" \
+    "true" "and it records WHEN, which is the half an operator acts on"
+  # -------------------------------------------------------------------------
+  note "  a one-way pairing is REPORTED, not refused (#186, ADR-0037, ADR-0038)"
+  # -------------------------------------------------------------------------
+  #
+  # Replication needs two flows and they run in OPPOSITE directions: a peer
+  # PUSHES its inventory to the controller, and a destination PULLS bytes from
+  # the source (ADR-0030). A link that carries one direction only cannot
+  # converge in the other, and it fails SILENTLY — the controller is never told
+  # the far node holds a blob, so reconciliation correctly emits nothing and
+  # nothing is reported as wrong.
+  #
+  # 🔴 It is REPORTED and never refused, and that is ADR-0038 rather than a
+  # softened ADR-0037. Each peer is authoritative for its own site: a node that
+  # can be reached but cannot reach back still fetches what it lacks from the
+  # peer it CAN reach, and both sites keep serving everything already on their
+  # own disks. Refusing to enrol that would block a working configuration for
+  # being unusual. What is lost is convergence in one direction, and an operator
+  # who is told at the terminal can act on it.
+  #
+  # The first assertion is that a healthy pairing says NOTHING. A check that
+  # always spoke would be a check nobody reads.
+  local ow_quiet ow_broken ow_status
+  ow_quiet=$(cli_a peers add --name site-b --site site-b --mode full \
+    --public-key "$key_b" --endpoint "https://$addr_b" --json 2>&1 >/dev/null)
+  assert_eq "$ow_quiet" "" \
+    "a pairing verified in both directions enrols with nothing printed (#186)"
+
+  # Now break ONE direction, for real. Node B's record of node A is moved to a
+  # port that refuses connections, so when node A asks node B to reach back,
+  # node B genuinely cannot. Node A can still reach node B throughout: that is
+  # the observed asymmetry, reproduced on one host.
+  #
+  # Port 9 is discard: reserved, and refusing connections everywhere.
+  cli_b peers add --name site-a --site site-a --mode full \
+    --public-key "$key_a" --endpoint "https://127.0.0.1:9" --json >/dev/null 2>&1
+
+  ow_status=0
+  ow_broken=$(cli_a peers add --name site-b --site site-b --mode full \
+    --public-key "$key_b" --endpoint "https://$addr_b" --json 2>&1 >/dev/null) || ow_status=$?
+  assert_eq "$ow_status" "0" \
+    "a one-way pairing is ENROLLED, not refused — each peer is authoritative for its own site (ADR-0038)"
+  assert_contains "$ow_broken" "the return path did not answer" \
+    "and the operator is TOLD, naming the direction that failed"
+  assert_contains "$ow_broken" "127.0.0.1:9" \
+    "naming the address the far node actually tried, so a stale record is distinguishable from a firewall"
+  assert_contains "$ow_broken" "not a fault" \
+    "stated as information rather than as a fault, because under ADR-0038 it is not one"
+  assert_contains "$ow_broken" "ADR-0038" \
+    "and it cites the record that says why, so an operator need not infer the stance"
+
+  # The peer really was enrolled, and with the endpoint the operator typed. A
+  # report that half-applied would leave a working endpoint replaced while the
+  # peer looked healthy.
+  assert_eq "$(cli_a peers show site-b --json 2>/dev/null | jq -r '.endpoint')" "https://$addr_b" \
+    "the enrolment landed intact: node A's record of node B is exactly what was asked for"
+
+  # Repair, so the rest of the phase runs against a fabric working both ways.
+  # Load-bearing: without it every later assertion here runs against a node B
+  # that cannot reach node A.
+  cli_b peers add --name site-a --site site-a --mode full \
+    --public-key "$key_a" --endpoint "https://$addr_a" --json >/dev/null 2>&1
+
+
 
   # -------------------------------------------------------------------------
   note "  PLACEMENT_CONVERGING, reached by a real gap in real bytes"
@@ -5037,6 +5206,33 @@ YAML
     "a second cycle left the manifest alone"
   assert_eq "$(cli_a blobs stat "$lc_small" --json | jq -r '.chunk_manifest')" "not_required" \
     "and left the recorded exemption alone — a re-run that changes nothing must also SAY nothing"
+  # THE ASSERTION M5-03 EXISTS FOR: the two states a boolean collapsed together
+  # are not the same string. Written as an explicit inequality rather than left
+  # to be inferred from the two assertions above, because those two would both
+  # pass if the names had been made the same value.
+  if [[ "$(cli_a blobs stat "$lc_small" --json | jq -r '.chunk_manifest')" \
+     == "$(cli_a blobs stat "$lc_large" --json | jq -r '.chunk_manifest')" ]]; then
+    fail "'never needs a manifest' and 'has one' report the same state — that is the boolean again"
+  else
+    pass "the states blobs.chunked collapsed together are distinguishable in one read (M5-03)"
+  fi
+
+  # ADR-0034's falsification, asserted about a transfer that has ALREADY
+  # happened rather than by deleting rows. Every blob in this arc was
+  # `undecided` when the five-megabyte blob crossed the wire a hundred lines
+  # above — there was no manifest on either node, and there was no chunk_blob
+  # job at all, both asserted at the time. The bytes still crossed, node B
+  # re-hashed them itself, and no replication job failed.
+  #
+  # That is ADR-0034's condition in its own words: if deleting every manifest in
+  # the store broke anything other than efficiency, the line would have been
+  # crossed. A store with no manifests is the state this run spent its whole
+  # transfer arc in.
+  assert_eq "$(api_b "/api/v1/jobs?type=replicate_blob" | jq -r '[.items[] | select(.state == "failed")] | length')" "0" \
+    "no replication has failed for want of a manifest: a manifest is an optimisation, never a precondition (ADR-0034)"
+  assert_eq "$(cli_b blobs verify "$tp_blob" --json 2>/dev/null | jq -r '.verified | tostring')" "true" \
+    "and the blob that crossed with no manifest anywhere verifies to its own whole-object digest on the destination"
+
 
   # Put the fabric back the way this section found it. The gap above was made
   # by deleting bytes from node B, and the garbage-collection refusal below
@@ -5055,6 +5251,125 @@ YAML
   cli_b peers report-inventory site-a --json >/dev/null
   assert_eq "$(peer_holds "$root/b/data/cas" "$lc_large")" "1" \
     "and the fabric is converged again, on the same transfer path, before the refusal below is asked for"
+  # -------------------------------------------------------------------------
+  note "  garbage collection catches a LYING replica row (Refusal 3, #184)"
+  # -------------------------------------------------------------------------
+  #
+  # The refusal that needs a peer to ANSWER, and the one that lived only in Go
+  # until #184 made a remote peer's health able to move.
+  #
+  # The refusal below this one is the easy half: node B is stopped, nothing
+  # answers, and nothing about where the bytes are can be established. This is
+  # the other one. Node B is UP and reachable. Its `replicas` row for the blob
+  # says `present` and was confirmed moments ago, so the catalog's belief is
+  # fresh and positive. The bytes are then deleted from node B's disk WITHOUT B
+  # reporting its inventory again — which is the scenario ADR-0018 is about: a
+  # peer that lost a disk, restored an older CAS, or quarantined a blob, leaving
+  # a row that still says `present`. Node A is then asked to reclaim its last
+  # copy.
+  #
+  # Before #184 this path was unreachable from a shell. Reachable() is consulted
+  # before the dial, and a remote peer's health was pinned at `unknown`, so the
+  # sweep refused with `peer_unreachable` before it ever asked.
+  #
+  # It uses the SMALL blob, not the transferred one, and that is deliberate:
+  # this section leaves its blob unreferenced with a `missing` row on B, and the
+  # refusal below turns on node A believing node B still holds ITS blob. Sharing
+  # a blob between the two would quietly change which refusal the section below
+  # is asserting — from peer_unreachable (rank 3) to replica_not_present
+  # (rank 1) — and it would pass either way.
+  local r3_json r3_before r3_after r3_assets
+  # Node B has to genuinely HOLD these bytes for the lie to be a lie, and until
+  # now it has not: the small fixture was written into the shared library
+  # directory a moment ago and only node A has scanned it. Node B ingests it
+  # from the same file, by its own scan — content addressing gives the two
+  # catalogues the same digest without either being told about the other.
+  #
+  # This is deliberately BELOW the chunking assertions above rather than beside
+  # the scan that made the file. Those assertions turn on the small blob being a
+  # gap for node B; ingesting it here would close that gap and quietly change
+  # what they prove.
+  cli_b scan films --wait --json >/dev/null 2>&1 || true
+  waited=0
+  while (( waited < 900 )); do
+    (( $(peer_holds "$root/b/data/cas" "$lc_small") == 1 )) && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  cli_b peers report-inventory site-b --json >/dev/null
+  cli_b peers report-inventory site-a --json >/dev/null
+
+  # Node B is reachable, and it is asserted rather than assumed: this refusal is
+  # only distinguishable from peer_unreachable if the peer is actually up.
+  # assert_eq, never assert_contains — "unreachable" CONTAINS "reachable".
+  assert_eq "$(cli_a peers list --json | jq -r '.[] | select(.name == "site-b") | .health')" \
+    "reachable" "node B is reachable, so a refusal here cannot be silence wearing a lie's clothes"
+
+  # The catalog's BELIEF: present, and fresh, because B reported it moments ago.
+  assert_eq "$(api_a "/api/v1/replicas?state=present" |
+    jq -r --arg h "$lc_small" --arg p "$peer_b_id" \
+      '[.items[] | select(.blob_hash == $h and .peer_id == $p)] | length')" "1" \
+    "the catalog believes node B holds these bytes, and says so in a fresh row"
+
+  # And now the divergence. Deleted from B's disk, and B is NOT asked to report
+  # again — the row keeps saying present, which is exactly the lie.
+  assert_eq "$(peer_holds "$root/b/data/cas" "$lc_small")" "1" "node B holds the bytes before the lie is made"
+  find "$root/b/data/cas/blobs" -name "${lc_small#blake3:}" -type f -delete
+  assert_eq "$(peer_holds "$root/b/data/cas" "$lc_small")" "0" "and does not hold them after"
+
+  # Unreferenced on node A, so it is garbage by every LOCAL measure.
+  r3_assets=$(api_a /api/v1/assets | jq -r --arg h "$lc_small" '.items[] | select(.blob_hash == $h) | .id')
+  for aid in $r3_assets; do api_a "/api/v1/assets/$aid" -X DELETE -o /dev/null; done
+  assert_eq "$(api_a /api/v1/assets | jq -r --arg h "$lc_small" '[.items[] | select(.blob_hash == $h)] | length')" "0" \
+    "the blob is unreferenced on node A, and eligible by every LOCAL measure"
+
+  r3_before=$(find "$root/a/data/cas" -type f | wc -l | tr -d ' ')
+  # Marking pass, then the pass that would reclaim.
+  "$BIN" --config "$cfg_a" gc --apply --grace 1ns --json >/dev/null 2>&1
+
+  r3_json=$("$BIN" --config "$cfg_a" gc --apply --grace 1ns --json 2>/dev/null)
+  r3_after=$(find "$root/a/data/cas" -type f | wc -l | tr -d ' ')
+
+  assert_eq "$(jq -r '.reclaimed | length' <<<"$r3_json")" "0" "nothing was reclaimed"
+  assert_eq "$r3_after" "$r3_before" "and nothing left the store: the file count is unchanged"
+  assert_eq "$(peer_holds "$root/a/data/cas" "$lc_small")" "1" \
+    "THE LAST COPY IS STILL THERE — a lying row did not cost the fabric its only copy"
+  assert_eq "$(jq -r '[.spared[] | select(.hash == "'"$lc_small"'")] | length' <<<"$r3_json")" "1" \
+    "the blob whose last local copy was at stake was spared"
+  # THE ASSERTION THIS SECTION EXISTS FOR. assert_eq, never assert_contains:
+  # every reason in this enum shares words with its neighbours, and
+  # "peer_unreachable" is the answer this must NOT be — that is the easy half,
+  # and it is the one the demo could already prove.
+  assert_eq "$(jq -r '[.spared[] | select(.hash == "'"$lc_small"'")][0].reason' <<<"$r3_json")" "remote_lacks_blob" \
+    "REFUSAL 3: the row said present, the peer was ASKED, and it answered that it does not hold them"
+  assert_eq "$(jq -r '[.spared[] | select(.hash == "'"$lc_small"'")][0].peer_name' <<<"$r3_json")" "site-b" \
+    "and it names WHICH peer's claim did not survive being checked"
+
+  # The correction, which is the half that stops the next sweep rediscovering
+  # the same lie. The row is not deleted — a peer that lost bytes must stay
+  # VISIBLE — it is moved to `missing`.
+  assert_eq "$(api_a "/api/v1/replicas?state=missing" |
+    jq -r --arg h "$lc_small" --arg p "$peer_b_id" \
+      '[.items[] | select(.blob_hash == $h and .peer_id == $p)] | length')" "1" \
+    "and the lying row was CORRECTED to missing, so the next sweep does not have to discover it again"
+  assert_eq "$(api_a "/api/v1/replicas?state=present" |
+    jq -r --arg h "$lc_small" --arg p "$peer_b_id" \
+      '[.items[] | select(.blob_hash == $h and .peer_id == $p)] | length')" "0" \
+    "the present claim is gone: correcting it means the belief changed, not that a second row appeared"
+
+  # The operator at a terminal, on the NEXT sweep — and the reason has changed,
+  # which is the correction doing its job rather than a weaker assertion.
+  #
+  # This refusal corrects the row it caught, so the lie survives exactly one
+  # reclaiming pass. The next pass reads a row that now says `missing` — a peer
+  # claiming NOT to hold the bytes — and spares them on that alone, without
+  # dialling anybody. Asserting `remote_lacks_blob` here would be asserting that
+  # the correction did NOT happen, and it would pass while the feature was
+  # broken. `replica_not_present` is the assertion that the correction landed
+  # somewhere the collector reads.
+  assert_eq "$(grep -cF "spared        $lc_small  replica_not_present" \
+    <<<"$("$BIN" --config "$cfg_a" gc --apply --grace 1ns 2>/dev/null)" | tr -d ' ')" "1" \
+    "the next sweep spares the same blob on the CORRECTED row, without asking the peer again"
+
 
   # -------------------------------------------------------------------------
   note "  garbage collection REFUSES to delete the last copy (ADR-0018, §53, M4-12)"
@@ -5096,15 +5411,21 @@ YAML
   assert_eq "$gc_after" "$gc_before" "and nothing left the store: the file count is unchanged"
   assert_eq "$(peer_holds "$root/a/data/cas" "$tp_blob")" "1" \
     "THE LAST COPY IS STILL THERE — this is the assertion the milestone is for"
-  assert_eq "$(jq -r '.spared | length' <<<"$gc_refuse")" "1" \
-    "exactly one blob was spared, so this is a refusal about a blob and not a sweep that did nothing"
+  # Named rather than counted. Until Refusal 3 was folded in above, this could
+  # assert "exactly one blob was spared" and mean "the sweep did something"; that
+  # section now leaves a second unreferenced blob behind, whose own row it
+  # corrected to `missing`. Counting would fail on a change that made this
+  # section MORE thorough, so the blob at stake is named and the count is only
+  # asked to be non-zero.
+  assert_eq "$(( $(jq -r '.spared | length' <<<"$gc_refuse") >= 1 ))" "1" \
+    "at least one blob was spared, so this is a refusal and not a sweep that did nothing"
+  assert_eq "$(jq -r '[.spared[] | select(.hash == "'"$tp_blob"'")] | length' <<<"$gc_refuse")" "1" \
+    "and the blob whose last local copy was at stake is one of them"
   # assert_eq, never assert_contains: "no_other_peer" CONTAINS "other_peer",
   # and a substring match on an enum-like value has shipped here once already.
-  assert_eq "$(jq -r '.spared[0].hash' <<<"$gc_refuse")" "$tp_blob" \
-    "and it is the blob whose last local copy was at stake"
-  assert_eq "$(jq -r '.spared[0].reason' <<<"$gc_refuse")" "peer_unreachable" \
+  assert_eq "$(jq -r '[.spared[] | select(.hash == "'"$tp_blob"'")][0].reason' <<<"$gc_refuse")" "peer_unreachable" \
     "the reason is that nothing about where these bytes are could be established"
-  assert_eq "$(jq -r '.spared[0].peer_name' <<<"$gc_refuse")" "site-b" \
+  assert_eq "$(jq -r '[.spared[] | select(.hash == "'"$tp_blob"'")][0].peer_name' <<<"$gc_refuse")" "site-b" \
     "and it names WHICH peer could not be established against — a refusal nobody can diagnose is an outage"
 
   # The operator at a terminal must not be the one left guessing either. The
