@@ -150,13 +150,19 @@ func (s *servedCounter) Content(w http.ResponseWriter, r *http.Request) {
 		s.rangeBytes += rangeLength(spec)
 	}
 	delay := s.delay
+	// Read under the SAME lock as the counters, not beside it. Every field on
+	// this struct is written by a test goroutine and read by a server
+	// goroutine, and the two are concurrent for longer than they look: a
+	// request already in flight outlives the call that started it, and after a
+	// SIGKILL it outlives the process that made it.
+	over := s.overlong
 	s.mu.Unlock()
 	if delay > 0 {
 		time.Sleep(delay)
 	}
 
 	cw := &countingWriter{ResponseWriter: w}
-	if over := s.overlong; over != nil && r.Header.Get("Range") != "" {
+	if over != nil && r.Header.Get("Range") != "" {
 		serveOverlong(cw, r, over)
 	} else {
 		s.inner.Content(cw, r)
@@ -181,6 +187,27 @@ func (s *servedCounter) stats() (bytes int64, requests, ranged int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.bytes, s.requests, s.ranged
+}
+
+// setDelay and setOverlong are how a test changes this fixture's behaviour.
+//
+// Assignment straight to the field is what they replace, and it was a real
+// data race on `main` rather than a tidiness point: crash_test's resume phase
+// set `delay = 0` while a request begun by the process it had just SIGKILLed
+// was still being served, and -race caught it on a macOS runner and nowhere
+// else. A field on a struct a server goroutine is reading is not a plain
+// field, however obviously "the test is done with it" reads at the call site.
+func (s *servedCounter) setDelay(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.delay = d
+}
+
+// setOverlong makes every ranged read answer with one byte too many.
+func (s *servedCounter) setOverlong(content []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.overlong = content
 }
 
 func (s *servedCounter) reset() {
