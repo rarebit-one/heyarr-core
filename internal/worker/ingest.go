@@ -36,10 +36,11 @@ func (a *CASByteStore) Link(ctx context.Context, sourcePath string, mode ingest.
 		return ingest.Blob{}, err
 	}
 	return ingest.Blob{
-		Hash:         desc.Hash.String(),
-		Size:         desc.Size,
-		Materialised: ingest.Materialisation(desc.Materialised),
-		Deduplicated: desc.Deduplicated,
+		Hash:            desc.Hash.String(),
+		Size:            desc.Size,
+		Materialised:    ingest.Materialisation(desc.Materialised),
+		Deduplicated:    desc.Deduplicated,
+		DegradedBecause: desc.DegradedBecause,
 	}, nil
 }
 
