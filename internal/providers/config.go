@@ -9,6 +9,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
+	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 )
 
 // Kind is which PROTOCOL an entry speaks — not which product it is.
@@ -132,6 +133,19 @@ type OfferedCandidate struct {
 	// which is most of how a degraded node behaves and is otherwise
 	// unreachable without a real indexer that omits a field.
 	Attributes map[string]any `koanf:"attributes"`
+	// Source is what a download client would be handed to fetch this release.
+	//
+	// Optional, and the omission is meaningful rather than lazy: a candidate
+	// with no source is one an indexer listed and offered no way to fetch, and
+	// leaving it out is how the demo exercises that path. A real indexer
+	// produces both shapes.
+	//
+	// It is NOT a secret.Value here even though it becomes one. A fake's
+	// configured source is written in a config file by the person reading it,
+	// so redacting it in that file's own error messages would hide the value
+	// they just typed — and there is no credential to protect, because a fake
+	// talks to nothing.
+	Source string `koanf:"source"`
 }
 
 // Entry is one configured provider.
@@ -380,6 +394,7 @@ func resolveOffers(
 			}
 			candidates = append(candidates, acquisition.ReleaseCandidate{
 				ID: id, Title: strings.TrimSpace(c.Title), Provider: name, Attributes: attrs,
+				Source: secret.Value(strings.TrimSpace(c.Source)),
 			})
 		}
 		out[key] = candidates
