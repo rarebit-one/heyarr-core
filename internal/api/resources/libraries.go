@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
+	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/scanner"
@@ -178,6 +180,27 @@ func (a *API) createLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := required("content_type", body.ContentType); err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	// And it must be one Heyarr KNOWS, not merely non-empty (#227).
+	//
+	// The column is TEXT with no CHECK and this was the only gate, so any
+	// string got through — and `show` did. That is not cosmetic: Identify uses
+	// the library's type to choose which rules may fire, a type no rule
+	// declares matches nothing, and the fallback is every rule in registration
+	// order with the movie rules first. A television library declared as
+	// `show` had its artwork identified by `movie/title-year` and grew a movie
+	// Work that does not exist.
+	//
+	// Refused here rather than normalised: guessing that `show` meant `series`
+	// would be right this time and wrong for `films`, `tv`, or a typo — and a
+	// silent correction is how a library ends up holding something other than
+	// what its owner asked for. The refusal names the vocabulary.
+	body.ContentType = strings.TrimSpace(body.ContentType)
+	if !identification.IsContentType(body.ContentType) {
+		httpapi.Fail(w, r, problem.BadRequest(fmt.Sprintf(
+			"content_type %q is not one Heyarr understands — use one of: %s",
+			body.ContentType, strings.Join(identification.ContentTypes(), ", "))))
 		return
 	}
 	enabled := true
