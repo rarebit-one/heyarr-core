@@ -78,7 +78,15 @@ read-path query.
 ## Not here yet
 
 `desired_items`, `quality_profiles`, `providers`, `releases`, `acquisitions`,
-`download_jobs`, `artifacts` (Milestone 3); `blob_manifests`, `chunks`
-(Milestone 5); `devices`, `delegations`, `grants` (Milestone 8);
-`encrypted_spaces`, `wrapped_keys`, `private_state_heads` (Milestone 9);
-`jobs`, `events` (M1-05 and M1-06, alongside this).
+`download_jobs`, `artifacts` (Milestone 3); `devices`, `delegations`, `grants`
+(Milestone 8); `encrypted_spaces`, `wrapped_keys`, `private_state_heads`
+(Milestone 9); `jobs`, `events` (M1-05 and M1-06, alongside this).
+
+Milestone 5's chunk tables have landed and are no longer on that list:
+`chunk_manifests` (one row per blob that has a manifest, carrying the chunker
+parameters and the manifest's own digest), `manifest_chunks` (the ordered chunk
+sequence — the rows ARE the manifest) and `local_chunks` (this node's index of
+which chunks it already holds and inside which blob, which is the question chunk
+reuse asks). `blobs.chunked` survives as a deprecated boolean computed from
+them; the field to read is `chunk_manifest`, which can say all three of §16's
+answers (ADR-0034).

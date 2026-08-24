@@ -116,7 +116,16 @@ separate role processes (ADR-0002).
   during a transfer (against an instrument first proven to fire) and garbage
   collection sparing the last copy with the remote peer stopped.
 
-**Milestone 5 — Efficient Replication.** In progress.
+**Milestone 5 — Efficient Replication.** Replication stops treating a blob as an
+opaque lump: bytes are cut into content-defined chunks, a manifest describes them,
+and a peer can read another peer's description of a blob before deciding what to
+move. `make demo` asserts the three-way manifest state on a running fabric, that
+asking never generates a manifest, that manifests are made only by a job the
+convergence cycle enqueued, one peer reading another's manifest over mTLS before
+pulling, the 100% control the savings are measured against, and — since #196 —
+the saving itself: a damaged blob repaired from a peer for exactly one chunk of
+the several it has, with the repairer's own count and the source's serving
+record independently agreeing on the bytes.
 
 - **Content-defined chunking** — FastCDC in `internal/storagefabric/chunking`,
   streaming and pure: no filesystem, no database, no CAS, no domain, and a
@@ -154,6 +163,30 @@ separate role processes (ADR-0002).
   has just decided the bytes must cross a network, which is §16's own trigger.
   It is idempotent, keyed on the blob, and emits no event — a manifest existing
   is state, the same argument that keeps `blob.verified` out of the event log.
+- **Manifests on the peer surface** — `GET /peer/v1/blobs/{hash}/manifest`, on
+  the mTLS listener and nowhere else: a member that may read the bytes may read
+  their description, and a bearer token is not a peer credential. The source
+  answers with what it stored and decides nothing — it is never told what the
+  destination holds, never asked what to send, and never computes a difference.
+  Asking never generates: a GET that chunked a 20 GB blob to answer would be a
+  remote denial of service with a polite name, so the manifest-less answer is
+  final and the destination pulls whole. The two 404s are distinguishable and
+  call for opposite actions — `no-chunk-manifest` means "these bytes are here,
+  take them whole from this same source", `not-found` means "there is nothing
+  here at all, try another source".
+- **Worker capability advertisement** — `/api/v1/capabilities` answers what each
+  worker in the fleet can do, per worker rather than per node, proven by
+  execution rather than parsed from a version string: `ffmpeg -encoders` will
+  list a hardware encoder on silicon that cannot run it. Advertisements narrow
+  when a probe stops passing and expire, because a worker that dies cannot tidy
+  up after itself. The `?capability=` filter is an exact match on the whole
+  dotted string, never a prefix.
+- **One-way reachability, reported at enrolment** — `heyarr peers add` observes
+  both legs of a pairing and tells the operator when this node can reach the
+  peer but the peer cannot reach back, naming the direction and the address the
+  far node actually tried. It never refuses: under ADR-0038 each peer is
+  authoritative for its own site, so such a pairing is unusual rather than
+  broken — what it costs is convergence in one direction (ADR-0037).
 - **Integrity repair, which never edits a blob in place** — a damaged blob is
   located chunk by chunk against its manifest, a whole replacement is
   reconstructed in the store's private staging area from the intact local
@@ -169,7 +202,22 @@ separate role processes (ADR-0002).
   cannot complete (no manifest, no reachable peer, a peer whose copy is damaged
   too, an assembly that does not hash to the blob) changes nothing at all and
   says which it was; `heyarr fsck --repair` prints what was repaired, how many
-  chunks moved, and why not (ADR-0036, ADR-0018).
+  chunks moved, and why not (ADR-0036, ADR-0018). **The peer-backed chunk source
+  is not wired in yet**: `fsck --repair` passes a nil source, which refuses
+  rather than permits, so every damaged blob today is reported unrepaired with
+  the reason. `make demo` asserts that refusal, in both output shapes, rather
+  than skipping the command.
+
+- **A source records how many bytes it served, and whether the read was
+  ranged.** The peer surface logged *who* read *which* blob and not *how much*,
+  which stopped being sufficient the moment replication gained ranged reads:
+  since Milestone 5 "site-b read this blob" no longer implies "this blob crossed
+  the wire". The count comes from the same response recorder the client API's
+  access log uses — so `http.ServeContent` keeps its sendfile fast path, and
+  `Flush`, `Unwrap` and `ReadFrom` are all still reachable through it — and it is
+  what the acceptance script's byte-saving assertions are read out of. Measured
+  on the source, because a destination's account of what it fetched is a claim
+  about itself.
 
 ### Fixed
 
@@ -204,6 +252,12 @@ separate role processes (ADR-0002).
   collection's durability check running on an input that could not move. The
   peer surface now records liveness on an authenticated inbound request, and the
   probe dials the peer fabric itself, pinned, with this node's certificate.
+  `make demo` now asserts the transition — `unknown` first, then `reachable`
+  after peer-surface traffic alone — and, because health can move at last, the
+  garbage-collection refusal that needs a peer to ANSWER: a `replicas` row
+  claiming `present` against a live peer that denies holding the bytes spares
+  the blob, names the peer, and corrects the row to `missing`. That refusal
+  lived only in the Go tests for the whole of Milestone 4.
 
 ### Known limitations
 - **Everything Milestone 4 proves, it proves on one machine.** The two peers in
@@ -214,11 +268,47 @@ separate role processes (ADR-0002).
   lossy — and a green run must not be read as saying the fabric is deployable.
   Peer-to-peer mTLS, pinning, revocation and re-enrolment were exercised between
   two physical machines by hand during the milestone; no automated check does it.
-- The garbage-collection refusals that depend on a peer actually ANSWERING —
-  Refusal 3, the row that claims `present` against a peer that denies holding
-  the bytes — are proven by the Go tests rather than by `make demo`. Peer
-  liveness now moves in a peer-surface-only topology (#184), so the demo can
-  reach that path; the acceptance section that asserts it is not folded in yet.
+- **The byte saving is asserted by `make demo`, in chunks rather than in
+  percent.** Milestone 5's thesis is that replication stops re-sending whole
+  files, and a milestone whose thesis is a saving has to assert the saving. It
+  does: a five-megabyte blob is damaged in one chunk on one node and repaired
+  from the other, and what crosses the wire is measured on the SOURCE's serving
+  side against the 100% control beside it. The claim asserted is *one chunk
+  fetched out of N* — not a percentage — because at the shipped chunker
+  parameters (256 KiB / 1 MiB / 4 MiB) a five-megabyte blob is only a handful of
+  chunks, so one chunk of it is a fifth or a third and the figure moves run to
+  run with where a content-defined boundary lands in random bytes. Two
+  independent instruments have to agree on the byte count: the repairer's own
+  `bytes_fetched` and the source's access record.
+- **Three of the four savings are still asserted in Go, not by `make demo`.** A
+  resumed transfer (74.5% of a 512 KiB blob after a real `SIGKILL`, 29 of 110
+  chunks kept), a modified file replicated to a peer holding the original
+  (1.1%), and 3 KiB prepended (1.2%) are measured on the source's serving side
+  in `internal/peer/transfer`, each with its own control. Driving them from a
+  shell would need a transfer interrupted at a chosen point — a test hook in
+  production code, or a race — or a second blob built to share chunks with the
+  first, which moves catalogue counts the acceptance script asserts elsewhere. A
+  flaky assertion about a saving would be worse than saying so here.
+- **Every saving figure is a demonstration, not a benchmark.** They are measured
+  on fixtures sized to fit a 240-second acceptance budget. The ratios are real
+  and so are the controls; a number taken on a few megabytes says nothing about
+  a twenty-gigabyte blob over a link slower than a disk.
+- **Repair has not been proven against real disk corruption.** Every damaged
+  blob in this repository's tests was damaged by overwriting bytes through the
+  filesystem. That is not bit rot, a failing sector, or a torn write — the three
+  things repair exists for — and it is not a filesystem that returns EIO.
+- **Partial transfer state now survives an attempt**, and what a resumed
+  transfer may believe about it is exactly one thing: nothing it has not
+  re-hashed against a manifest entry it holds and verified itself (ADR-0035).
+  The resume unit is a chunk, never a byte offset; partial bytes are addressable
+  by nothing and are never a replica; a blob with no manifest is not resumable
+  and is retried whole.
+- **Manifests are lazy**, so a blob may have one, may be recorded as never
+  needing one, or may not have been decided about — and the third is the
+  ordinary state of a library nothing has replicated. A single-node Heyarr stays
+  entirely `undecided` and exercises none of the chunk paths.
+- **A real host name and a personal home directory are still in this public
+  repository** (#211), the same class of content Milestone 4 scrubbed.
 - The event stream's `job.succeeded` / `job.failed` events and its live tail
   work across roles, but `/api/v1/system` exposes no head sequence, so a client
   that wants to follow from "now" must replay from zero.

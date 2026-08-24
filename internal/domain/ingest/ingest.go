@@ -195,9 +195,15 @@ var (
 	// ErrRootDisabled means the root exists but ingest is switched off for it.
 	ErrRootDisabled = errors.New("ingest: library root is disabled")
 	// ErrLinkedRoot means the root catalogues files in place. Linked assets
-	// have no blob at all (ADR-0020) and Milestone 1 only ever writes managed
-	// ones, so this is refused rather than half-implemented.
-	ErrLinkedRoot = errors.New("ingest: linked roots are not supported before Milestone 5")
+	// have no blob at all (ADR-0020) and nothing has ever written one, so this
+	// is refused rather than half-implemented.
+	//
+	// The message used to say "before Milestone 5". Milestone 5 has been and
+	// gone without answering ADR-0020's question — it made replication cheaper,
+	// which is a different question — so the milestone is dropped rather than
+	// advanced to the next one. A date in an error message that keeps moving is
+	// a promise nobody made.
+	ErrLinkedRoot = errors.New("ingest: linked roots are not supported (ADR-0020)")
 	// ErrRootNotFound means no such library root.
 	ErrRootNotFound = errors.New("ingest: library root not found")
 )

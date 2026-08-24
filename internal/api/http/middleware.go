@@ -128,6 +128,14 @@ type responseRecorder struct {
 	wroteHeader bool
 }
 
+// Written is how many body bytes reached the client. Headers are not counted:
+// every caller of this asks it in order to say something about CONTENT moved,
+// and a per-request header allowance would make a stated fraction unreadable.
+func (r *responseRecorder) Written() int64 { return r.written }
+
+// Status is the code this response answered with.
+func (r *responseRecorder) Status() int { return r.status }
+
 // wrapResponse returns w as a recorder, reusing one that is already in place.
 // Two nested wrappers would each hide the other's optimised paths, and the
 // status the outer one saw would be the one the inner one already defaulted.
@@ -137,6 +145,31 @@ func wrapResponse(w http.ResponseWriter) *responseRecorder {
 	}
 	return &responseRecorder{ResponseWriter: w, status: http.StatusOK}
 }
+
+// Recorder is a ResponseWriter that knows what it wrote.
+//
+// Exported for the PEER listener, which does not share the client API's
+// middleware stack — it has its own router, its own identity middleware and no
+// access log — and so had no byte count for the one route on which byte counts
+// are the whole point (see peerapi's handleBlobContent).
+//
+// It is deliberately the same recorder rather than a second one. Wrapping an
+// http.ResponseWriter is easy to do badly: this one forwards Unwrap so
+// ResponseController still works, forwards Flush so streaming still streams,
+// and forwards ReadFrom so http.ServeContent keeps its sendfile fast path —
+// which is the difference between a zero-copy 20 GB range response and a
+// userspace byte shuffle. A hand-rolled counter beside the peer handler would
+// have quietly dropped all three.
+type Recorder interface {
+	http.ResponseWriter
+	// Written is the number of body bytes written to the client.
+	Written() int64
+	// Status is the response code.
+	Status() int
+}
+
+// Record returns w as a [Recorder], reusing one already in place.
+func Record(w http.ResponseWriter) Recorder { return wrapResponse(w) }
 
 func (r *responseRecorder) WriteHeader(code int) {
 	if r.wroteHeader {

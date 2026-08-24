@@ -19,7 +19,10 @@
 -- asset cannot be probed. ADR-0020 nonetheless calls linked assets playable.
 -- Milestone 1 never wrote a linked asset so nothing is broken today, but this
 -- is the THIRD place the linked class's absence of a blob bites, and it should
--- be answered deliberately in Milestone 5 rather than accreted around.
+-- be answered deliberately rather than accreted around. It said "in Milestone
+-- 5"; Milestone 5 has been and gone without answering it, because it was the
+-- milestone that made replication cheaper. The milestone is dropped rather than
+-- advanced to the next one — a date that keeps moving is a promise nobody made.
 
 CREATE TABLE blob_probes (
     blob_hash TEXT PRIMARY KEY REFERENCES blobs (hash) ON DELETE CASCADE,

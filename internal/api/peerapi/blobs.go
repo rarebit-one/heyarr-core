@@ -66,7 +66,8 @@ func (s *Server) handleBlobContent(w http.ResponseWriter, r *http.Request) {
 				"no content store behind its peer surface"))
 		return
 	}
-	s.blobs.Content(w, r)
+	rec := httpapi.Record(w)
+	s.blobs.Content(rec, r)
 
 	// Who read which bytes off this node, and over which surface.
 	//
@@ -95,8 +96,24 @@ func (s *Server) handleBlobContent(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodHead {
 		level = slog.LevelDebug
 	}
+	// HOW MANY BYTES, which is the half of "what left here" that was missing.
+	//
+	// Since Milestone 5 a replication read is not necessarily the whole blob:
+	// a destination holding a verified partial, or holding another blob that
+	// shares chunks with this one, asks for RANGES and asks for several. So
+	// "site-b read this blob" no longer implies "this blob crossed the wire",
+	// and a source that cannot say how much it sent cannot answer the only
+	// question the milestone is about. `ranged` is recorded beside it because
+	// the two together are what distinguish a cheap transfer from a failed one
+	// — both move few bytes.
+	//
+	// Counted on the SOURCE, which is the point: a destination's account of
+	// what it fetched is a claim about itself, and a transfer that fetched
+	// nothing and published the wrong file would report a very good number.
 	s.log.Log(r.Context(), level, "served blob content to a peer",
 		"blob_hash", chi.URLParam(r, "hash"), "method", r.Method,
+		"bytes", rec.Written(), "status", rec.Status(),
+		"ranged", r.Header.Get("Range") != "",
 		"peer_id", peer.PeerID, "peer_name", peer.Name)
 }
 

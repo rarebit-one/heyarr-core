@@ -7,8 +7,10 @@ package peerapi_test
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -247,4 +249,127 @@ func TestPeerSurfaceRefusesBlobContentToARevokedPeer(t *testing.T) {
 	if status != http.StatusForbidden {
 		t.Fatalf("a revoked peer read a blob and got %d, want 403 (reused connection: %t)", status, reused)
 	}
+}
+
+// What LEFT this node, in bytes, and not merely that something did.
+//
+// Since Milestone 5 a replication read is not necessarily the whole blob: a
+// destination holding a verified partial, or holding another blob that shares
+// chunks with this one, asks for RANGES and asks for several. So "site-b read
+// this blob" stopped implying "this blob crossed the wire", and the source —
+// the only machine that can answer honestly, because a destination's account
+// of what it fetched is a claim about itself — could not say how much.
+//
+// The acceptance script's byte-saving assertions are read out of this line, so
+// a wrong number here is a saving asserted against nothing. It is checked in Go
+// too, where the expected value is arithmetic on the fixture rather than
+// anything the server computed.
+func TestTheSourceRecordsHowManyBytesItServed(t *testing.T) {
+	source := newPeerNode(t, "peer-source", "source")
+	puller := newPeerNode(t, "peer-destination", "destination")
+	root := newTrustRoot(source.member(), puller.member())
+
+	// 26 distinct bytes, so a range's length and its content are independent:
+	// a fixture of repeated bytes would let an off-by-one in either go unseen.
+	content := []byte("0123456789abcdefghijklmnopqrstuvwxyz")
+	store, hash := sourceStore(t, content)
+	l := serveWithBlobs(t, source, root, store)
+	client := dialler(t, puller, mtls.PinnedKey(source.member()))
+
+	// A whole read first, so the ranged read below has something to be a
+	// FRACTION of. Without it "served 6 bytes" is a number with no control.
+	if status, _, _, err := peerSend(t, client, http.MethodGet,
+		l.blobURL(hash.String()), ""); err != nil || status != http.StatusOK {
+		t.Fatalf("a whole read answered %d: %v", status, err)
+	}
+	whole := servedRecord(t, l, hash.String(), false)
+	if whole.bytes != int64(len(content)) {
+		t.Errorf("a whole read recorded %d bytes served, want the blob's %d",
+			whole.bytes, len(content))
+	}
+	if whole.ranged {
+		t.Error("a read with no Range header was recorded as ranged")
+	}
+
+	// And now the read the milestone is about.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, l.blobURL(hash.String()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Range", "bytes=4-9")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, cErr := io.Copy(io.Discard, resp.Body); cErr != nil {
+		t.Fatal(cErr)
+	}
+	_ = resp.Body.Close()
+
+	ranged := servedRecord(t, l, hash.String(), true)
+	// 4 through 9 inclusive is six bytes. Spelled out rather than computed
+	// from the header this test just set, so that a handler serving the wrong
+	// range cannot make both sides of the comparison wrong together.
+	if ranged.bytes != 6 {
+		t.Errorf("a ranged read of bytes 4-9 recorded %d bytes served, want 6", ranged.bytes)
+	}
+	if !ranged.ranged {
+		t.Error("a read with a Range header was not recorded as ranged — a cheap transfer and a " +
+			"failed one both move few bytes, and this is what tells them apart")
+	}
+	if ranged.status != http.StatusPartialContent {
+		t.Errorf("the ranged read recorded status %d, want 206", ranged.status)
+	}
+	if ranged.bytes >= whole.bytes {
+		t.Errorf("the ranged read recorded %d bytes and the whole read %d — the saving this "+
+			"milestone exists for is not visible in the source's own record",
+			ranged.bytes, whole.bytes)
+	}
+}
+
+// servedRecord is the last "served blob content to a peer" line for a blob,
+// filtered by whether it was a ranged read.
+type servedLine struct {
+	bytes  int64
+	status int
+	ranged bool
+}
+
+func servedRecord(t *testing.T, l *listener, hash string, wantRanged bool) servedLine {
+	t.Helper()
+	var found *servedLine
+	for _, line := range strings.Split(l.logs.String(), "\n") {
+		if !strings.Contains(line, "served blob content to a peer") ||
+			!strings.Contains(line, hash) ||
+			!strings.Contains(line, "ranged="+strconv.FormatBool(wantRanged)) {
+			continue
+		}
+		rec := servedLine{ranged: wantRanged}
+		for _, field := range strings.Fields(line) {
+			k, v, ok := strings.Cut(field, "=")
+			if !ok {
+				continue
+			}
+			switch k {
+			case "bytes":
+				n, err := strconv.ParseInt(v, 10, 64)
+				if err != nil {
+					t.Fatalf("the bytes field is not a number: %q", field)
+				}
+				rec.bytes = n
+			case "status":
+				n, err := strconv.Atoi(v)
+				if err != nil {
+					t.Fatalf("the status field is not a number: %q", field)
+				}
+				rec.status = n
+			}
+		}
+		found = &rec
+	}
+	if found == nil {
+		t.Fatalf("no served-blob record for %s with ranged=%v; the log was:\n%s",
+			hash, wantRanged, l.logs.String())
+	}
+	return *found
 }

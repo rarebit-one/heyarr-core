@@ -66,9 +66,12 @@ blobs are all present, which is vacuously true — would make `FULLY_SATISFIED`
 mean "one copy, on one disk, with no integrity guarantee", which is the
 opposite of what the name promises.
 
-Milestone 5 owns the underlying question. What matters until then is that each
-new subsystem notices the gap and expresses it, rather than quietly assuming a
-blob and producing a wrong answer.
+Milestone 5 was expected to own the underlying question. It did not: it made
+replication cheaper, which is a different question, and linked assets still have
+no blob. The record is left as it was written rather than quietly re-pointed at
+a later milestone — what matters, and still does, is that each new subsystem
+notices the gap and expresses it rather than quietly assuming a blob and
+producing a wrong answer.
 
 **Two read paths with opposite caching.** ADR-0013's `Cache-Control: immutable`
 is correct for a hash-addressed Blob and wrong for a mutable path. Linked assets
