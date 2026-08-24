@@ -1,8 +1,10 @@
-# Deploying to hyperion-1
+# Deploying to the reference Linux host
 
-The reference deployment. Everything here was measured on the machine rather
-than assumed, and where the measurement contradicted the plan, the measurement
-wins and the plan is marked as such.
+The reference deployment — one ordinary x86_64 Linux box with a large ext4
+media filesystem, described by its shape rather than its name because this repo
+is public. Everything here was measured on the machine rather than assumed, and
+where the measurement contradicted the plan, the measurement wins and the plan
+is marked as such.
 
 ## What the machine actually is
 
@@ -12,7 +14,7 @@ wins and the plan is marked as such.
 | Architecture | x86_64 |
 | CPU / RAM | 16 cores / 31 GB |
 | Root filesystem | ext4 on LVM, 913 GB |
-| Media filesystem | **ext4**, 9.1 TB at `/srv/nas-seed` |
+| Media filesystem | **ext4**, 9.1 TB at `/srv/media` |
 | systemd | 255 |
 
 **There is no ZFS on this machine.** No pools, no datasets, no `zpool` binary.
@@ -27,7 +29,7 @@ cloning, adopting a 60 GB remux costs metadata — which is the difference betwe
 Heyarr being adoptable against an existing library and demanding you double your
 storage first.
 
-Measured on `/srv/nas-seed` using **free space, not `du`**. `du` reports the full
+Measured on `/srv/media` using **free space, not `du`**. `du` reports the full
 logical size for a clone on every filesystem that has them, so it would report a
 100% failure for an operation that consumed nothing. The instrument was
 validated with a control copy first:
@@ -91,9 +93,9 @@ puts the store at `<data_dir>/cas`, so the shipped default of
 `/dev/sdb1`:
 
 ```
-$ stat -c '%d %n' /var/lib/heyarr /srv/nas-seed
+$ stat -c '%d %n' /var/lib/heyarr /srv/media
 64512 /var/lib/heyarr
-2065  /srv/nas-seed
+2065  /srv/media
 ```
 
 Different devices, so `os.Link` returns `EXDEV`, the ladder degrades past
@@ -105,7 +107,7 @@ is:
 ```yaml
 data_dir: /var/lib/heyarr        # database and socket, on the fast NVMe
 cas:
-  root: /srv/nas-seed/heyarr/cas # the store, beside the library it adopts
+  root: /srv/media/heyarr/cas    # the store, beside the library it adopts
 ```
 
 That split is right on its own merits, not just for reflink: SQLite wants low
@@ -116,7 +118,7 @@ makes everything else read-only:
 
 ```ini
 [Service]
-ReadWritePaths=/srv/nas-seed/heyarr
+ReadWritePaths=/srv/media/heyarr
 ```
 
 Heyarr warns about this at startup, once per library root — `ingest from this
@@ -131,10 +133,10 @@ FHS, so that a package and a hand install put things in the same places:
 /usr/local/bin/heyarr              the binary
 /etc/heyarr/config.yaml            configuration, 0640 root:heyarr
 /var/lib/heyarr/heyarr.db          the controller database
-/srv/nas-seed/heyarr/cas/          the content-addressed store — see above,
+/srv/media/heyarr/cas/             the content-addressed store — see above,
                                    it must share a filesystem with the library
 /run/heyarr/                       the unix socket
-/srv/nas-seed/<library>/           the media, read-only to Heyarr
+/srv/media/<library>/              the media, read-only to Heyarr
 ```
 
 `StateDirectory=heyarr` creates and owns `/var/lib/heyarr`, so systemd handles
@@ -165,8 +167,8 @@ Where a media tree has mixed ownership from years of accumulation, a default ACL
 is less brittle than a recursive `chgrp`:
 
 ```bash
-sudo setfacl -R  -m g:media:rX /srv/nas-seed/<library>
-sudo setfacl -R -d -m g:media:rX /srv/nas-seed/<library>   # inherited by new files
+sudo setfacl -R  -m g:media:rX /srv/media/<library>
+sudo setfacl -R -d -m g:media:rX /srv/media/<library>   # inherited by new files
 ```
 
 `rX` rather than `rx`: capital X grants execute on directories only, so it does
@@ -220,22 +222,22 @@ not kill the process mid-drain and turn finished work into retried work.
 ## Verifying the deployment
 
 `scripts/acceptance.sh` is the gate, and it runs against the packaged binary on
-this host, not only in CI. There is **no Go toolchain on hyperion-1**, so both
-the binary and the fixture generator are cross-compiled and shipped:
+this host, not only in CI. There is **no Go toolchain on the reference host**,
+so both the binary and the fixture generator are cross-compiled and shipped:
 
 ```bash
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o heyarr ./cmd/heyarr
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o genlibrary \
   ./internal/testutil/fixtures/cmd/genlibrary
-scp heyarr genlibrary scripts/acceptance.sh hyperion-1:/srv/nas-seed/heyarr-acceptance/...
-ssh hyperion-1 'cd /srv/nas-seed/heyarr-acceptance && TMPDIR=$PWD/tmp ./scripts/acceptance.sh'
+scp heyarr genlibrary scripts/acceptance.sh <host>:/srv/media/heyarr-acceptance/
+ssh <host> 'cd /srv/media/heyarr-acceptance && TMPDIR=$PWD/tmp ./scripts/acceptance.sh'
 ```
 
 `TMPDIR` points at the media filesystem on purpose: running the demo on `/tmp`
 would exercise the root filesystem and prove nothing about the disk the library
 actually lives on.
 
-Recorded result, on ext4 at `/srv/nas-seed`, with the full 200 MiB streaming
+Recorded result, on ext4 at `/srv/media`, with the full 200 MiB streaming
 fixture:
 
 ```
