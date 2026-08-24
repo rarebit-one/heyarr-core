@@ -413,3 +413,50 @@ func (c *Catalog) PruneCandidates(ctx context.Context, olderThan time.Time) (int
 	}
 	return n, nil
 }
+
+// DesiredWork is the Work a want points at — its identity, not its contents.
+//
+// Separate from SearchContext because the two are read at different moments for
+// different reasons: a search needs a title to ask an indexer about, and an
+// ingest needs the identity of the Work an arriving asset must attach to.
+type DesiredWork struct {
+	ID          string
+	ContentType string
+	WorkKey     string
+	Title       string
+	SortTitle   string
+	Year        int
+}
+
+// WorkForDesired is the Work a want is about.
+//
+// # Why an acquisition needs this and a scan does not
+//
+// A library scan has no source of truth but the path, so it parses one — that
+// is what identification.Registry is for, and its guesses are honest guesses.
+//
+// An acquisition is the opposite situation: something asked for this, by Work
+// id, and that is authoritative. Re-deriving identity from the downloaded
+// filename discards the one fact that was certain, and the two disagree
+// ROUTINELY — release titles carry extensions, scene tags and the indexer's own
+// normalisation, so the case where they match is the lucky one (#224).
+func (c *Catalog) WorkForDesired(ctx context.Context, desiredItemID string) (DesiredWork, error) {
+	var (
+		out  DesiredWork
+		year sql.NullInt64
+	)
+	err := c.db.Reader().QueryRowContext(ctx, `
+		SELECT w.id, w.content_type, w.work_key, w.title, w.sort_title, w.year
+		FROM desired_items d
+		JOIN works w ON w.id = d.work_id
+		WHERE d.id = ?`, desiredItemID).
+		Scan(&out.ID, &out.ContentType, &out.WorkKey, &out.Title, &out.SortTitle, &year)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DesiredWork{}, fmt.Errorf("catalog: no desired item %s: %w", desiredItemID, err)
+	}
+	if err != nil {
+		return DesiredWork{}, err
+	}
+	out.Year = int(year.Int64)
+	return out, nil
+}

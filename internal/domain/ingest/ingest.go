@@ -228,6 +228,39 @@ type Request struct {
 	RelPath string
 	// MIME, when empty, is derived from the extension.
 	MIME string
+	// Work, when set, is the Work this file belongs to — and it OVERRIDES what
+	// the path heuristic would have concluded.
+	//
+	// # Why an override exists at all
+	//
+	// Identification parses RelPath because a library scan has nothing else:
+	// nobody asked for those files, so a guess from their shape is the honest
+	// best answer. An acquisition is the opposite situation. Something asked
+	// for this, by Work id, and re-deriving identity from the downloaded
+	// filename throws away the one fact that was certain.
+	//
+	// The two disagree ROUTINELY — release titles carry extensions, scene tags
+	// and the indexer's own normalisation — so the case where the guess happens
+	// to agree is the lucky one, not the normal one. When they disagree the
+	// asset lands on a second, path-derived Work and the want that asked for it
+	// reports `assets: []` forever, in a state indistinguishable from patience
+	// (#224).
+	//
+	// It overrides the WORK identity only. Everything the path legitimately
+	// knows better — the edition, the quality label, the asset's role, the
+	// language — is per-FILE and still comes from the heuristic, because the
+	// want names what was wanted and not which of its editions arrived.
+	Work *WorkOverride
+}
+
+// WorkOverride names the Work an asset must attach to, from a caller that
+// knows rather than guesses.
+type WorkOverride struct {
+	ContentType string
+	WorkKey     string
+	Title       string
+	SortTitle   string
+	Year        int
 }
 
 // Options configure a Pipeline.
@@ -305,6 +338,11 @@ func (p *Pipeline) Ingest(ctx context.Context, req Request) (Result, error) {
 	// parse still ingests — under the synthetic Unidentified work — rather than
 	// failing the job and being retried five times to no purpose (M1-11).
 	candidate := p.ident.Identify(req.RelPath, root.LibraryContentType)
+	// A caller that KNOWS which Work this is overrides the guess. See
+	// Request.Work — this is the whole of #224.
+	if req.Work != nil {
+		candidate = applyWorkOverride(candidate, *req.Work)
+	}
 
 	peerID, err := p.cat.SelfPeer(ctx)
 	if err != nil {
@@ -454,3 +492,36 @@ var mimeByExtension = map[string]string{
 // unknown rather than guessed: probing in Milestone 2 can correct it, and a
 // wrong media type is harder to notice than a missing one.
 func MIMEForExtension(ext string) string { return mimeByExtension[strings.ToLower(ext)] }
+
+// applyWorkOverride replaces a candidate's WORK identity with a known one.
+//
+// # What it deliberately does not touch
+//
+// EditionKey, EditionLabel, EditionType, EditionAttributes, Language and
+// AssetRole all survive. Those are facts about the FILE — which cut, which
+// resolution, whether this is a subtitle — and the path is the better source
+// for every one of them. The want names what was wanted; it does not name which
+// of its editions turned up.
+//
+// Identified becomes true and Source records that a person's declared want, not
+// a path shape, is why this asset is where it is. That distinction is the same
+// one identification_source exists to carry, and without it an operator reading
+// the asset would be told a heuristic matched when none did.
+//
+// Rule is CLEARED when the path heuristic did not itself identify the file:
+// keeping a rule name beside a source of "desired-item" would name a heuristic
+// that had no part in the answer. Where the heuristic DID match, the rule is
+// kept — it is true, and it is the trace of what the path would have said.
+func applyWorkOverride(c identification.Candidate, w WorkOverride) identification.Candidate {
+	if !c.Identified {
+		c.Rule = ""
+	}
+	c.ContentType = w.ContentType
+	c.WorkKey = w.WorkKey
+	c.Title = w.Title
+	c.SortTitle = w.SortTitle
+	c.Year = w.Year
+	c.Source = identification.SourceDesiredItem
+	c.Identified = true
+	return c
+}
