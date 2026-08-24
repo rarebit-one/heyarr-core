@@ -36,6 +36,21 @@ const (
 	Hardlink Materialisation = "hardlink"
 	// Copy always duplicates the bytes.
 	Copy Materialisation = "copy"
+	// None means nothing was materialised, because the store already held
+	// these bytes. It is NOT a rung, and it is deliberately not the top one.
+	//
+	// A deduplicated ingest used to report the rung it was ASKED for, so a
+	// store on ext4 — where cloning is impossible — logged
+	// `"materialised":"reflink"` for every deduplicating ingest while the
+	// ingests that actually moved bytes beside them logged `"copy"` (#223).
+	// `materialised` is the field an operator greps to check ADR-0014's ladder
+	// is reaching the rung they paid for, so a value that asserts the best
+	// possible outcome for an operation that did nothing is wrong in the
+	// direction that looks like success.
+	//
+	// Dedupe creates no new name for the bytes, so there is no rung to report.
+	// `Deduplicated` is the field that says what happened.
+	None Materialisation = "none"
 )
 
 // Errors returned by a Store.

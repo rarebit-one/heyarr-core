@@ -66,6 +66,15 @@ reports `Deduplicated`.
 `Link` tries copy-on-write cloning, then a hardlink, then a byte copy
 (ADR-0014), and records which rung it used.
 
+**A deduplicating `Link` records `none`, not a rung.** The store already held
+the bytes, so nothing was materialised and no rung was reached — `Deduplicated`
+is the field that says what happened. Reporting the rung it was *asked* for
+made every deduplicating ingest on a filesystem without block cloning claim
+`reflink`, the one value that filesystem can never produce, in the same run
+where the ingests that actually moved bytes reported `copy` (#223). `materialised`
+is what an operator greps to check the ladder is reaching the rung they paid
+for, so it must never assert an outcome no operation reached.
+
 **Measured**, in `TestReflinkCostsMetadataNotBytes`:
 
 | | Disk consumed for a 256 MiB file |
