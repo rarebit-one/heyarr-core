@@ -70,6 +70,14 @@ const (
 	// linked asset with no blob at all (ADR-0020). Milestone 1 never writes
 	// one; see ErrLinkedRoot.
 	Link Materialisation = "link"
+	// None is an OUTCOME only, never an intent: the store already held these
+	// bytes, so nothing was materialised and no rung was reached.
+	//
+	// It exists because reporting the requested rung for a deduplicating
+	// ingest made every such ingest on a filesystem without block cloning
+	// claim `reflink` — the one value that filesystem can never produce
+	// (#223). Pair it with Result.Deduplicated, which says why.
+	None Materialisation = "none"
 )
 
 // Blob is what the byte store reports after materialising bytes. Deliberately
