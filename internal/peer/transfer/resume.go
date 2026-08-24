@@ -497,6 +497,31 @@ func (p *Puller) fetchChunk(
 		}
 		return fmt.Errorf("%w: %s, chunk at %d: %w", ErrChunkCorrupt, blob, c.Offset, err)
 	}
+
+	// The response is read to its END before it is closed, and that is not
+	// tidiness.
+	//
+	// A chunk fetch reads exactly the range it asked for, so the reader above
+	// stops on a LIMIT rather than on the end of the body. Closing a body that
+	// has not reached its end resets the stream on HTTP/2 and forfeits the
+	// connection on HTTP/1.1 — and this path makes one request per chunk,
+	// which is on the order of eighteen thousand of them for a 20 GB blob
+	// (see chunking's default parameters). Ending each one cleanly is the
+	// difference between reusing one connection and renegotiating thousands,
+	// and it is why a source's accounting of what it sent agrees with what
+	// arrived instead of being truncated by a reset it did not expect.
+	//
+	// It is bounded to one byte, and a source that sent MORE than the range it
+	// was asked for is refused rather than tolerated. An over-long 206 is a
+	// source answering a question it was not asked, and the extra bytes are
+	// exactly what the next chunk's offset would otherwise land on.
+	if extra, _ := io.Copy(io.Discard, io.LimitReader(resp.Body, 1)); extra > 0 {
+		if tErr := partial.Truncate(before); tErr != nil {
+			return tErr
+		}
+		return fmt.Errorf("%w: %s sent more than the %d bytes at offset %d that it was asked for",
+			ErrChunkCorrupt, blob, c.Length, c.Offset)
+	}
 	return nil
 }
 

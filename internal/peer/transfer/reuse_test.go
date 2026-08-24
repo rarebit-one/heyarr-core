@@ -138,11 +138,12 @@ func TestTheSameTransferToAPeerHoldingNothingFetchesEverything(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	source.counting.assertClean(t)
 	served, _, _ := source.counting.stats()
 
 	if served != int64(len(modified)) {
-		t.Errorf("the source served %d bytes to a peer holding nothing, and the blob is %d",
-			served, len(modified))
+		t.Errorf("the source served %d bytes to a peer holding nothing, and the blob is %d [%s]",
+			served, len(modified), source.counting.diagnostic())
 	}
 	if out.ChunksReused != 0 {
 		t.Errorf("a peer holding nothing reused %d chunks", out.ChunksReused)
@@ -522,5 +523,36 @@ func TestASourceWithNoManifestIsPulledWhole(t *testing.T) {
 	}
 	if size := dest.partialSize(t, blob); size != 0 {
 		t.Errorf("the whole path staged %d resumable bytes, and it has nothing to resume", size)
+	}
+}
+
+// A source that answers a ranged read with MORE than the range it was asked
+// for is refused.
+//
+// It is caught by the same read that ends the stream cleanly: a chunk fetch
+// reads its range and then reads on to the end of the body, and anything still
+// there is a source answering a question it was not asked. The first bytes of
+// such a response verify perfectly against the manifest — they are the right
+// chunk — so nothing else on this path would notice, and the surplus is
+// exactly what the next chunk's offset would land on.
+func TestASourceThatSendsMoreThanTheRangeAskedForIsRefused(t *testing.T) {
+	src := newNode(t, "peer-source", "source")
+	dst := newNode(t, "peer-destination", "destination")
+	root := newTrustRoot(src.member(), dst.member())
+
+	content := deterministicContent(81, 128<<10)
+	source := startChunkedSource(t, src, root, content)
+	blob, m := manifestOf(t, content)
+	source.mans.store(m)
+	// The source now answers every ranged read with one byte too many.
+	source.counting.overlong = content
+
+	dest := newChunkedDestination(t, dst)
+	_, err := dest.puller.PullChunked(t.Context(), source.source(), blob, m)
+	if !errors.Is(err, transfer.ErrChunkCorrupt) {
+		t.Fatalf("a source that sent more than it was asked for returned %v, want ErrChunkCorrupt", err)
+	}
+	if held, hErr := dest.store.Has(t.Context(), blob); hErr != nil || held {
+		t.Errorf("Has = %v (err %v) after a refused transfer", held, hErr)
 	}
 }

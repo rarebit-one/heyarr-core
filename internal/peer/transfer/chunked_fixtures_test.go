@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -34,6 +37,24 @@ import (
 // believes it fetched, and a transfer that fetched nothing and published the
 // wrong file would report a very good number. What left the source is a fact
 // about the source.
+//
+// # It counts three things, because two of them can disagree
+//
+// `served` is what the response writer RETURNED, `offered` is what it was
+// GIVEN, and `rangeBytes` is what the destination ASKED for. They agree when
+// the fabric is behaving and diverge in a way that names the fault when it is
+// not: a transfer that fetched less shows a smaller rangeBytes, and a stream
+// that was reset before the source finished writing shows served < offered
+// with a write error.
+//
+// That distinction is not hypothetical. This harness counted only `served`
+// once, and on Linux it read ~2% short while every byte arrived and the blob
+// verified — because a chunk fetch read exactly its range through an
+// io.LimitReader, never reached the end of the body, and closing it reset the
+// stream, so the source's final Write returned "http2: stream closed" with a
+// short count. The transfer now reads each response to its end
+// ([Puller.fetchChunk]) and [servedCounter.assertClean] fails loudly if a
+// write is ever short again, rather than quietly under-reporting.
 
 // testChunking is a small chunker so that a fixture measured in hundreds of
 // kilobytes has tens of chunks.
@@ -96,6 +117,22 @@ type servedCounter struct {
 	bytes    int64
 	requests int
 	ranged   int
+	// offered is the sum of len(p) over every Write the source's handler made,
+	// as against `bytes`, which is the sum of what Write RETURNED. They differ
+	// only when a write is short or fails — which is the discriminator between
+	// "the source served less" and "the source's accounting lost some".
+	offered int64
+	// rangeBytes is the sum of the byte ranges the destination ASKED for,
+	// parsed out of the Range headers. If this equals the blob size then every
+	// byte was requested, whatever the counters below say.
+	rangeBytes int64
+	// writeErr is the first error any response write returned.
+	writeErr string
+	// overlong, when set, makes every ranged read answer with the range it was
+	// asked for PLUS one byte, so the surplus-bytes refusal has something to
+	// refuse. The bytes it serves are the blob's own, so the chunk the
+	// destination verifies is the right chunk and only the length is wrong.
+	overlong []byte
 	// onServed, when set, runs after each response with the running total. It
 	// is how a test interrupts a transfer at a chosen number of bytes instead
 	// of at a chosen time.
@@ -108,8 +145,9 @@ type servedCounter struct {
 func (s *servedCounter) Content(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.requests++
-	if r.Header.Get("Range") != "" {
+	if spec := r.Header.Get("Range"); spec != "" {
 		s.ranged++
+		s.rangeBytes += rangeLength(spec)
 	}
 	delay := s.delay
 	s.mu.Unlock()
@@ -118,10 +156,18 @@ func (s *servedCounter) Content(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cw := &countingWriter{ResponseWriter: w}
-	s.inner.Content(cw, r)
+	if over := s.overlong; over != nil && r.Header.Get("Range") != "" {
+		serveOverlong(cw, r, over)
+	} else {
+		s.inner.Content(cw, r)
+	}
 
 	s.mu.Lock()
 	s.bytes += cw.n
+	s.offered += cw.offered
+	if cw.err != nil && s.writeErr == "" {
+		s.writeErr = cw.err.Error()
+	}
 	total := s.bytes
 	hook := s.onServed
 	s.mu.Unlock()
@@ -141,6 +187,7 @@ func (s *servedCounter) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.bytes, s.requests, s.ranged = 0, 0, 0
+	s.offered, s.rangeBytes, s.writeErr = 0, 0, ""
 }
 
 func (s *servedCounter) interruptAfter(n int64, cancel context.CancelFunc) {
@@ -153,18 +200,105 @@ func (s *servedCounter) interruptAfter(n int64, cancel context.CancelFunc) {
 	}
 }
 
+// serveOverlong answers a ranged read with one byte more than was asked for.
+//
+// Written out rather than wrapped around the real handler because the real one
+// declares a Content-Length and the server refuses to write past it — which is
+// the standard library protecting the client from exactly this, and it has to
+// be stepped around to test that this package does not depend on it.
+func serveOverlong(w http.ResponseWriter, r *http.Request, content []byte) {
+	n := rangeLength(r.Header.Get("Range"))
+	start := int64(0)
+	if from, _, ok := strings.Cut(strings.TrimPrefix(r.Header.Get("Range"), "bytes="), "-"); ok {
+		start, _ = strconv.ParseInt(from, 10, 64)
+	}
+	if n <= 0 || start < 0 || start+n > int64(len(content)) {
+		http.Error(w, "the fixture cannot serve this range", http.StatusRequestedRangeNotSatisfiable)
+		return
+	}
+	// The surplus byte is the blob's FIRST byte rather than the one following
+	// the range, so that a range ending at the blob's end can be lengthened
+	// too. Without that the last chunk answers 416 and the test fails on the
+	// fixture's limitation instead of on the behaviour under test.
+	body := append(append([]byte(nil), content[start:start+n]...), content[0])
+	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, start+n, len(content)))
+	w.Header().Set("Content-Length", strconv.FormatInt(int64(len(body)), 10))
+	w.WriteHeader(http.StatusPartialContent)
+	_, _ = w.Write(body)
+}
+
 // countingWriter counts response body bytes. Headers are not counted: the
 // assertion is about content moved over the link, and a per-chunk request's
 // headers are a rounding error that would make a stated fraction unreadable.
 type countingWriter struct {
 	http.ResponseWriter
-	n int64
+	n       int64
+	offered int64
+	err     error
 }
 
 func (w *countingWriter) Write(p []byte) (int, error) {
+	w.offered += int64(len(p))
 	n, err := w.ResponseWriter.Write(p)
 	w.n += int64(n)
+	if err != nil && w.err == nil {
+		w.err = err
+	}
 	return n, err
+}
+
+// rangeLength is how many bytes a `bytes=a-b` header asks for. Only the single
+// closed range this package ever sends is understood; anything else is 0,
+// which would show up as an obviously wrong total rather than a plausible one.
+func rangeLength(spec string) int64 {
+	const prefix = "bytes="
+	if !strings.HasPrefix(spec, prefix) {
+		return 0
+	}
+	from, to, ok := strings.Cut(strings.TrimPrefix(spec, prefix), "-")
+	if !ok {
+		return 0
+	}
+	start, err := strconv.ParseInt(from, 10, 64)
+	if err != nil {
+		return 0
+	}
+	end, err := strconv.ParseInt(to, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return end - start + 1
+}
+
+// assertClean fails if this source's accounting is not self-consistent.
+//
+// Any byte the source was given to write must have been written, and no
+// response write may have failed. A short write means a stream was reset
+// under the source, which makes every byte assertion in this file an
+// underestimate — so it is caught here, once, rather than being blamed on the
+// transfer at each call site.
+func (s *servedCounter) assertClean(t *testing.T) {
+	t.Helper()
+	s.mu.Lock()
+	served, offered, writeErr := s.bytes, s.offered, s.writeErr
+	s.mu.Unlock()
+	if writeErr != "" {
+		t.Errorf("a response write failed on the source: %q — the stream was reset before the "+
+			"source finished writing, so every byte count here is an underestimate", writeErr)
+	}
+	if served != offered {
+		t.Errorf("the source was given %d bytes to write and reported writing %d", offered, served)
+	}
+}
+
+// diagnostic reports every counter this source keeps, for a failure message
+// that says which of the possible faults happened.
+func (s *servedCounter) diagnostic() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fmt.Sprintf(
+		"served=%d offered=%d requested-by-range=%d requests=%d ranged=%d first-write-error=%q",
+		s.bytes, s.offered, s.rangeBytes, s.requests, s.ranged, s.writeErr)
 }
 
 // chunkedSource is a source peer serving content, its manifest, and a count of

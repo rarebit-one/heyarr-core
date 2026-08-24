@@ -65,6 +65,7 @@ func TestAnUninterruptedChunkedTransferIsByteIdentical(t *testing.T) {
 		t.Errorf("the published blob does not verify: %v", err)
 	}
 
+	source.counting.assertClean(t)
 	served, requests, ranged := source.counting.stats()
 	if served != int64(len(content)) {
 		t.Errorf("the source served %d bytes for a %d byte blob", served, len(content))
@@ -223,10 +224,11 @@ func TestATransferWithNothingStagedMovesTheWholeBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	source.counting.assertClean(t)
 	served, _, _ := source.counting.stats()
 	if served != int64(len(content)) {
-		t.Errorf("a transfer to a node holding nothing served %d bytes of a %d byte blob",
-			served, len(content))
+		t.Errorf("a transfer to a node holding nothing served %d bytes of a %d byte blob [%s]",
+			served, len(content), source.counting.diagnostic())
 	}
 	if out.ChunksKept != 0 || out.ChunksReused != 0 {
 		t.Errorf("a node holding nothing kept %d and reused %d chunks", out.ChunksKept, out.ChunksReused)
@@ -384,9 +386,11 @@ func TestAWhollyInventedPartialCostsTheWholeBlob(t *testing.T) {
 	if got := readBlob(t, dest.store, blob); !bytes.Equal(got, content) {
 		t.Error("the published blob is not the source's content")
 	}
+	source.counting.assertClean(t)
 	served, _, _ := source.counting.stats()
 	if served != int64(len(content)) {
-		t.Errorf("the source served %d bytes, want the whole %d byte blob", served, len(content))
+		t.Errorf("the source served %d bytes, want the whole %d byte blob [%s]",
+			served, len(content), source.counting.diagnostic())
 	}
 }
 
