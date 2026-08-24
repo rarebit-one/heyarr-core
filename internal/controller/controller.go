@@ -414,7 +414,7 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 // its own transitions through it (§76, ADR-0009) and GET /api/v1/system reports
 // its head — and those must be the same log.
 // mounts builds the authenticated API routes and, separately, the
-// unauthenticated renderer route (ADR-0039). They are returned apart rather
+// unauthenticated renderer route (ADR-0040). They are returned apart rather
 // than in one slice because they are mounted on different routers with
 // different trust roots, and a mix-up in either direction is severe: an API
 // route mounted publicly is the library given away, and the renderer route
@@ -454,7 +454,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: building the provider registry: %w", err)
 	}
 
-	// The renderer capability secret (ADR-0039), read before the resource API
+	// The renderer capability secret (ADR-0040), read before the resource API
 	// because that is what mints the URLs.
 	secret, err := render.EnsureSecret(c.cfg.DataDir)
 	if err != nil {
@@ -508,7 +508,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
-	// The renderer route (ADR-0039). Its signing secret belongs to the node
+	// The renderer route (ADR-0040). Its signing secret belongs to the node
 	// that serves the bytes, so a capability is only valid here — which is why
 	// this milestone mints one only for a replica on this node.
 	renderHandler, err := render.New(render.Options{

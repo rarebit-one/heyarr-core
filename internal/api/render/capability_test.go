@@ -73,7 +73,7 @@ func TestCapabilityRoundTrip(t *testing.T) {
 	}
 }
 
-// TestCapabilityRejects is the security surface of ADR-0039 in one table. Each
+// TestCapabilityRejects is the security surface of ADR-0040 in one table. Each
 // row is a way somebody could try to turn a capability for one blob into a
 // capability for something else.
 func TestCapabilityRejects(t *testing.T) {
@@ -128,7 +128,7 @@ func TestCapabilityRejects(t *testing.T) {
 			want:  ErrSignature,
 		},
 		{
-			// ADR-0039 scopes a capability to the peer that minted it, so this
+			// ADR-0040 scopes a capability to the peer that minted it, so this
 			// is a real operational case and not only an attack.
 			name:  "a token minted by another peer",
 			token: mustSign(t, valid, otherSecret),

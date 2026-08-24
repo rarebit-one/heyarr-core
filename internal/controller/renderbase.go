@@ -8,7 +8,7 @@ import (
 )
 
 // renderBaseURL is the absolute origin a renderer should fetch bytes from
-// (ADR-0039), or empty when this node cannot name one.
+// (ADR-0040), or empty when this node cannot name one.
 //
 // A television never spoke to the controller, so it has no notion of "the host
 // you got the plan from" and a relative URL is useless to it. Everything here

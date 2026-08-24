@@ -1,4 +1,4 @@
-// Package render serves bytes to devices that can only fetch a URL (ADR-0039).
+// Package render serves bytes to devices that can only fetch a URL (ADR-0040).
 //
 // A UPnP renderer, an AirPlay receiver or a television's built-in player is
 // handed a URL and told to fetch it. That is the whole of its vocabulary: no
@@ -40,7 +40,7 @@ var (
 	// ErrMalformed is a token that is not a capability at all.
 	ErrMalformed = errors.New("render: malformed capability")
 	// ErrSignature is a token whose signature does not verify — a forgery, a
-	// truncation, or a token minted by a different peer. ADR-0039 scopes a
+	// truncation, or a token minted by a different peer. ADR-0040 scopes a
 	// capability to the node that minted it, so the third is a real case and
 	// not an attack.
 	ErrSignature = errors.New("render: capability signature does not verify")

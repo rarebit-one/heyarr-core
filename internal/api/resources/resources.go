@@ -90,7 +90,7 @@ type Options struct {
 	Now   func() time.Time
 	NewID func() string
 	// RenderSecret signs the capability URLs a dumb renderer fetches
-	// (ADR-0039). Empty disables them: POST /playback still answers, and the
+	// (ADR-0040). Empty disables them: POST /playback still answers, and the
 	// response simply carries no renderer URL. That is a legitimate
 	// deployment — a node whose only clients send Authorization headers needs
 	// no capability route — and it keeps every harness that predates this
@@ -103,7 +103,7 @@ type Options struct {
 	RenderBaseURL string
 	// SelfPeerID identifies this node, so playback can tell whether the routed
 	// replica is one this node can actually mint for. A capability is only
-	// valid at the peer that signed it (ADR-0039).
+	// valid at the peer that signed it (ADR-0040).
 	SelfPeerID string
 	// StreamHeartbeat is how often the SSE stream writes a keep-alive comment.
 	// Zero means the default.
@@ -245,7 +245,7 @@ func (a *API) Mount(r chi.Router) {
 	r.Get("/devices", a.listDevices)
 	r.Get("/devices/{id}", a.getDevice)
 	r.Get("/providers", a.listProviders)
-	// The fleet capability view (ADR-0039). Under the `read` scope floor like
+	// The fleet capability view (ADR-0040). Under the `read` scope floor like
 	// every other collection: it names worker ids and peer names, which is more
 	// than an unauthenticated caller needs.
 	r.Get("/capabilities", a.listCapabilities)
