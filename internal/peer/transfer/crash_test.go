@@ -140,7 +140,7 @@ func TestAKilledProcessResumesFromWhatIsOnDisk(t *testing.T) {
 	source.mans.store(m)
 	// Slowed so the child is reliably still transferring when it is killed. A
 	// kill that lands after the transfer finished would assert nothing.
-	source.counting.delay = 3 * time.Millisecond
+	source.counting.setDelay(3 * time.Millisecond)
 
 	casRoot := t.TempDir()
 	if _, err := cas.OpenFS(casRoot); err != nil {
@@ -216,7 +216,7 @@ func TestAKilledProcessResumesFromWhatIsOnDisk(t *testing.T) {
 	// source. Nothing was handed over: the resume re-reads the file and
 	// re-hashes it against the manifest.
 	source.counting.reset()
-	source.counting.delay = 0
+	source.counting.setDelay(0)
 	dest := openChunkedDestination(t, self, casRoot)
 	out, err := dest.puller.PullChunked(t.Context(), source.source(), blob, m)
 	if err != nil {

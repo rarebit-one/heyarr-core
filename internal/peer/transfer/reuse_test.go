@@ -545,7 +545,7 @@ func TestASourceThatSendsMoreThanTheRangeAskedForIsRefused(t *testing.T) {
 	blob, m := manifestOf(t, content)
 	source.mans.store(m)
 	// The source now answers every ranged read with one byte too many.
-	source.counting.overlong = content
+	source.counting.setOverlong(content)
 
 	dest := newChunkedDestination(t, dst)
 	_, err := dest.puller.PullChunked(t.Context(), source.source(), blob, m)
