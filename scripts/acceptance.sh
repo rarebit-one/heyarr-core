@@ -1270,6 +1270,7 @@ providers:
       - title: The Quiet Room
         candidates:
           - id: tqr-1080-web
+            fetch: magnet:?xt=urn:btih:tqr-1080-web
             title: The Quiet Room 1080p web-dl
             attributes:
               resolution: 1080
@@ -1280,6 +1281,7 @@ providers:
         candidates:
           # Acceptable and terminal: passes the gate, meets every preference.
           - id: bh-2160-remux
+            fetch: magnet:?xt=urn:btih:bh-2160-remux
             title: Blue Harvest 2160p remux
             attributes:
               resolution: 2160
@@ -1290,6 +1292,7 @@ providers:
           # Acceptable and NOT as good as it gets — the gap the upgrade
           # workflow lives in.
           - id: bh-1080-web
+            fetch: magnet:?xt=urn:btih:bh-1080-web
             title: Blue Harvest 1080p web-dl
             attributes:
               resolution: 1080
@@ -1299,6 +1302,7 @@ providers:
           # Rejected by the gate, so the demo has a real rejection to read a
           # reason off rather than asserting on an absence.
           - id: bh-480-cam
+            fetch: magnet:?xt=urn:btih:bh-480-cam
             title: Blue Harvest 480p cam
             attributes:
               resolution: 480
@@ -1311,6 +1315,7 @@ providers:
       - title: Nightfall Sonata
         candidates:
           - id: ns-2160-remux
+            fetch: magnet:?xt=urn:btih:ns-2160-remux
             title: Nightfall Sonata 2160p remux
             attributes:
               resolution: 2160
@@ -1326,18 +1331,21 @@ providers:
       - title: Static Bloom
         candidates:
           - id: sb-480-cam
+            fetch: magnet:?xt=urn:btih:sb-480-cam
             title: Static Bloom 480p cam
             attributes:
               resolution: 480
               source: cam
               video_codec: h264
           - id: sb-576-ts
+            fetch: magnet:?xt=urn:btih:sb-576-ts
             title: Static Bloom 576p telesync
             attributes:
               resolution: 576
               source: telesync
               video_codec: h264
           - id: sb-720-web
+            fetch: magnet:?xt=urn:btih:sb-720-web
             title: Static Bloom 720p web-dl
             attributes:
               resolution: 720
@@ -2370,6 +2378,33 @@ YAML
   done
   assert_eq "$search_state" "SELECTED" \
     "a want reaches SELECTED with no real indexer anywhere (§64, ADR-0026)"
+
+  # AND IT DOES NOT STOP THERE (#225). Selecting a release used to be where a
+  # want came to rest: Downloader.Add had no caller, no job type grabbed, and
+  # the only route from SELECTED to bytes was the by-hand adoption endpoint.
+  #
+  # What is asserted is that a grab was QUEUED, not that it succeeded. The only
+  # download client configured here points at port 9 and refuses connections on
+  # purpose (ADR-0025), so the grab will fail — which is the correct outcome for
+  # a client that is down, and leaves the want holding its selection to retry.
+  #
+  # A job existing is therefore the whole claim, and it is the right one: it is
+  # the edge that did not exist, and it is observable without a working daemon.
+  local grab_jobs
+  waited=0
+  while (( waited < 300 )); do
+    grab_jobs=$(api "/api/v1/jobs?type=grab_release" | jq -r '.items | length')
+    (( grab_jobs > 0 )) && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  assert_eq "$grab_jobs" "1" \
+    "selecting a release queues the grab that fetches it (§64 SELECTED -> QUEUED)"
+
+  # And the want KEEPS its selection when the grab cannot reach a client. A
+  # want that lost its selection on an unreachable daemon would re-search and
+  # re-decide every cycle, which is work and indexer load for no gain.
+  assert_eq "$(api "/api/v1/desired/$search_id" | jq -r '.acquisition.state')" "SELECTED" \
+    "and a download client that is down leaves the selection intact to retry"
 
   # §63's answer, durable and readable after the fact. An evaluation that lived
   # in memory for two hundred milliseconds is deterministic and is not

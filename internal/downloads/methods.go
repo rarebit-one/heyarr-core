@@ -7,6 +7,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
@@ -204,12 +205,17 @@ func (c *Client) resolvePath(t torrent) string {
 // treating as an error. That matters because the job that calls this WILL be
 // re-run (invariant 9), and a second copy of a transfer already downloading is
 // the duplicate grab this whole design exists to prevent.
-func (c *Client) Add(ctx context.Context, magnetOrURL string) (providers.Transfer, error) {
-	if strings.TrimSpace(magnetOrURL) == "" {
+func (c *Client) Add(ctx context.Context, source secret.Value) (providers.Transfer, error) {
+	// Reveal() here and nowhere else in this method: this is the point the
+	// value goes on the wire to Transmission. It must not reach the error
+	// below, the labels branch, or any log line — on a private tracker it
+	// carries a passkey that identifies a person.
+	filename := strings.TrimSpace(source.Reveal())
+	if filename == "" {
 		return providers.Transfer{}, errors.New("downloads: nothing to add")
 	}
 
-	args := map[string]any{"filename": magnetOrURL}
+	args := map[string]any{"filename": filename}
 	if c.session.SupportsLabels() {
 		args["labels"] = []string{c.label}
 	} else {
