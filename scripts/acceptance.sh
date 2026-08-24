@@ -273,6 +273,72 @@ unexercised_without() { # name description
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# Waits: poll THE CONDITION THE NEXT ASSERTION IS ABOUT (#207)
+# ---------------------------------------------------------------------------
+#
+# A sibling of require_capability above, and for the same reason: both exist so
+# that a green run means what it appears to mean. require_capability is about an
+# assertion whose SUBJECT IS ABSENT; this is about an assertion whose
+# PRECONDITION HAS NOT HAPPENED YET.
+#
+# The failure this exists to prevent, stated once: a loop waits for precondition
+# A, and the assertion below it is about consequence B, where B happens strictly
+# after A. The wait does not cover the thing being asserted, so the assertion
+# passes only when B lands inside the polling overhead — and when it does not,
+# it fails AS THOUGH THE LOGIC WERE WRONG.
+#
+# It bit twice in one night, both times by accident:
+#
+#   - The remux block asked the planner for a decision with nothing waiting for
+#     the blob's probe. With no container recorded the planner correctly answers
+#     `direct`, and the run reads `matroska on an mp4-only device plans REMUX —
+#     got 'direct', want 'remux'`. That reads as a planner regression. It is not.
+#   - The acquisition refusal arc broke on `candidates >= 3` and then asserted
+#     `phase == "idle"`, which happens strictly later — after the search
+#     concludes and the want is re-evaluated. That reads as a broken state
+#     machine. It is not.
+#
+# In both cases the code was right and the message sent the reader to it anyway.
+# THAT is the cost: a real failure and a slow runner become indistinguishable,
+# and the habit it teaches is re-running rather than reading.
+#
+# So the rule, and the whole of this helper:
+#
+#   1. Poll the condition the NEXT ASSERTION is about, not a precursor of it.
+#      Where the assertion needs two things — candidates recorded AND the phase
+#      settled — the condition is the conjunction, not the cheaper half.
+#   2. On timeout, say WHAT NEVER HAPPENED. Never a value mismatch. A mismatch
+#      message is the bug, not the report of it.
+#   3. Never a bare `sleep`. A fixed wait is a bet on machine speed and this
+#      repo has lost that bet more than four times now.
+#
+# wait_for <what-never-happened> <deciseconds> <command...>
+#   Runs <command> every 100ms until it succeeds. Present already: returns
+#   immediately, so a machine where the precondition was met costs one poll.
+#
+#   ALWAYS RETURNS 0, having already called `fail` — the same reasoning as
+#   not_exercised above. A non-zero return here would die under `set -e` in the
+#   middle of a block, and a run that dies at line 3500 without a verdict line
+#   is indistinguishable from a crash. The run continues, so one pass reports
+#   every wait it was short of rather than the first, and the FAIL it printed
+#   still makes the run exit non-zero at the verdict line.
+wait_for() { # what-never-happened deciseconds command...
+  local what=$1 budget=$2; shift 2
+  local waited=0
+  while (( waited < budget )); do
+    if "$@"; then return 0; fi
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  fail "NEVER HAPPENED: $what"
+  printf '       polled every 100ms for %ss and it did not happen.\n' "$(( budget / 10 ))"
+  printf '       This is the missing event itself, not a value mismatch. The assertions\n'
+  printf '       below this line are about what happens AFTER it, so whatever they\n'
+  printf '       report is a consequence of this line and not a claim about the code\n'
+  printf '       they name (#207).\n'
+  return 0
+}
+
 [[ -x "$BIN" ]] || { echo "acceptance: $BIN not built — run 'make build'"; exit 1; }
 
 cat > "$WORK/heyarr.yaml" <<YAML
@@ -355,6 +421,50 @@ assert_not_contains "${CAPS_UNEXERCISED[*]:-}" "never recorded" \
 # prove about Heyarr, and this entry is about the guard.
 CAPS_UNEXERCISED=()
 CAPS_UNEXERCISED_N=0
+
+# ---------------------------------------------------------------------------
+note "the wait helper itself (M5-11, #207)"
+# ---------------------------------------------------------------------------
+#
+# Exercised here for the same reason the capability guard above it is: its whole
+# subject is what happens when something does NOT arrive, and a wait nobody has
+# watched time out is a wait whose failure message has never been read. Every
+# run reads it.
+#
+# This section creates nothing — no Work, no asset, no job, no library — so it
+# is safe above the catalogue counts asserted inside `note "  the CLI (M1-17)"`.
+WAIT_NEVER() { false; }
+WAIT_ALWAYS() { true; }
+
+# 1. THE TIMEOUT, which is the point. It fails, and it fails by naming the event
+#    rather than by reporting a value.
+WAIT_OUT=$( wait_for "the phase never left candidates_found" 3 WAIT_NEVER 2>&1 )
+assert_contains "$WAIT_OUT" "FAIL" \
+  "a wait that times out FAILS rather than falling through to the assertion below it"
+assert_contains "$WAIT_OUT" "NEVER HAPPENED: the phase never left candidates_found" \
+  "and the message names WHAT NEVER HAPPENED"
+assert_not_contains "$WAIT_OUT" "want '" \
+  "and it is NOT a value mismatch — a mismatch sends the reader to the code that was right (#207)"
+
+# 2. It returns 0 even then, so a timed-out wait reports the rest of the run
+#    instead of dying at line 3500 with no verdict line.
+WAIT_RC=0
+( wait_for "a self-test that never arrives" 2 WAIT_NEVER ) >/dev/null 2>&1 || WAIT_RC=$?
+assert_eq "$WAIT_RC" "0" \
+  "a timed-out wait still returns 0, so the run finishes and reports every wait it was short of"
+
+# 3. Already true: silent, and one poll rather than a duration.
+WAIT_OUT=$( wait_for "a condition that is already true" 600 WAIT_ALWAYS 2>&1 )
+assert_eq "$WAIT_OUT" "" \
+  "and it is silent when the condition is already met, so an equipped machine pays nothing for it"
+
+# 4. It POLLS, and it stops on arrival rather than sleeping the budget out —
+#    the property that makes it correct to give it a generous timeout.
+WAIT_TICKS=0
+WAIT_THIRD() { WAIT_TICKS=$(( WAIT_TICKS + 1 )); (( WAIT_TICKS >= 3 )); }
+wait_for "a condition that arrives on the third poll" 600 WAIT_THIRD
+assert_eq "$WAIT_TICKS" "3" \
+  "it polls until the condition arrives and stops there, rather than sleeping a fixed duration"
 
 note "build identity"
 V=$("$BIN" version --json)
@@ -988,14 +1098,56 @@ api_all() { # path jq-filter
 # them mean something; the wait itself is bounded, and a beat that never fires
 # fails the caller rather than hanging this script.
 wait_for_health_check() { # provider-name
-  local name=$1 waited=0 entry
-  while (( waited < 300 )); do
-    entry=$(jq -c --arg n "$name" '[.providers[] | select(.name == $n)] | .[0]' \
-      <<<"$(api /api/v1/providers)")
-    [[ "$(jq -r '.checked_at // "never"' <<<"$entry")" != "never" ]] && break
-    sleep 0.1; waited=$(( waited + 1 ))
-  done
-  printf '%s' "$entry"
+  local name=$1
+  wait_for "the health beat never recorded an observation for provider '$name' — every assertion below is about what it observed" \
+    300 health_check_recorded "$name"
+  printf '%s' "$WAIT_HEALTH_ENTRY"
+}
+
+# health_check_recorded <provider-name> — 0 once that provider has been checked
+# at least once. Leaves the entry in WAIT_HEALTH_ENTRY so the caller does not
+# pay for a second request to read what the poll already fetched.
+WAIT_HEALTH_ENTRY=
+health_check_recorded() { # provider-name
+  WAIT_HEALTH_ENTRY=$(jq -c --arg n "$1" '[.providers[] | select(.name == $n)] | .[0]' \
+    <<<"$(api /api/v1/providers)")
+  [[ "$(jq -r '.checked_at // "never"' <<<"$WAIT_HEALTH_ENTRY")" != "never" ]]
+}
+
+# probe_recorded <blob-hash> — 0 once the blob's probe has landed and named a
+# container.
+#
+# THE CONTAINER, not the 200 and not the job row. The planner decides on the
+# container recorded for the blob, so the container is the thing every assertion
+# downstream of a probe is actually about — and a probe row without one would
+# leave the planner in exactly the state this wait exists to get it out of.
+probe_recorded() { # blob-hash
+  [[ -n "$(api "/api/v1/blobs/$1/probe" 2>/dev/null | jq -r '.container // ""' 2>/dev/null)" ]]
+}
+
+# wait_for_probe <blob-hash> <what the assertions below are about> — the wait
+# every probe-derived assertion needs, with the failure message those assertions
+# would otherwise print in place of.
+#
+# Without it, a planner asked before the probe lands correctly answers `direct`
+# — it has no container, and `direct` is the honest answer to "I do not know
+# what this file is" — and the run reports a planner regression that did not
+# happen (#207).
+wait_for_probe() { # blob-hash description
+  wait_for "the probe never recorded a container for blob $1, so $2" \
+    600 probe_recorded "$1"
+}
+
+# refusal_arc_at_rest <want-id> — 0 once a fruitless search has BOTH recorded
+# its three candidates and returned the want to `idle`.
+#
+# The conjunction, because neither half is the condition on its own: the
+# candidates appear first and the phase settles after, so waiting on the
+# candidates asserts the phase too early — and waiting on the phase alone is
+# satisfied before the search has even started, since a fresh want starts idle.
+refusal_arc_at_rest() { # want-id
+  [[ "$(api "/api/v1/desired/$1/candidates" | jq -r '.candidates | length')" -ge 3 ]] &&
+    [[ "$(api "/api/v1/desired/$1" | jq -r '.acquisition.phase')" == "idle" ]]
 }
 
 # Starts heyarr, waits for readiness and for the scan to finish ingesting, and
@@ -1489,6 +1641,20 @@ YAML
   play_asset=$(api_all /api/v1/assets '.items[] | select(.filename != null) | select(.filename | endswith(".mkv") or endswith(".mp4")) | .id' | head -1)
   play_hash=$(api "/api/v1/assets/$play_asset" | jq -r '.blob_hash')
 
+  # WAIT FOR THE PROBE BEFORE ANY PLAN IS ASKED FOR (#207). Everything from here
+  # to the end of the planner section decides against the container and streams
+  # recorded for this blob: the refusal below wants a 409, and a planner with no
+  # probe cannot refuse anything — it answers DIRECT and declares the guess,
+  # which is correct behaviour reported as a broken refusal.
+  #
+  # Guarded on ffprobe, because on a machine without it the probe CANNOT land
+  # and the else-branches below are the honest ADR-0023 assertions rather than a
+  # missing precondition.
+  if command -v ffprobe >/dev/null 2>&1; then
+    wait_for_probe "$play_hash" \
+      "the planner had no container to refuse and answered DIRECT — which is correct, and is not what the assertions below report"
+  fi
+
   play_device=$(api /api/v1/devices -X POST -H 'Content-Type: application/json' \
     -d '{"device_key":"acceptance-player","name":"Acceptance Player","platform":"linux",
          "profile":{"containers":["mp4","mkv"],"video_codecs":["h264","hevc"],
@@ -1562,8 +1728,17 @@ YAML
   # is the join: real probe rows, real device profiles and real replicas, over
   # a real socket — because each of those three being right in isolation is
   # how a wiring bug survives.
-  local plan_device limited_device plan_json
+  local plan_device limited_device plan_json plan_hash
   plan_asset=$(api_all /api/v1/assets '.items[] | select(.filename != null) | select(.filename | endswith(".mkv") or endswith(".mp4")) | .id' | head -1)
+  plan_hash=$(api "/api/v1/assets/$plan_asset" | jq -r '.blob_hash')
+
+  # The same wait as the playing section, and it is not redundant: this filter
+  # is free to select a different asset, and "the one above happened to be the
+  # same blob" is not a property this section may rely on (#207).
+  if command -v ffprobe >/dev/null 2>&1; then
+    wait_for_probe "$plan_hash" \
+      "the planner decided with no streams — DIRECT with a no_probe reason, which is the right answer to an unmeasured file and reads here as a planner regression"
+  fi
 
   plan_device=$(api /api/v1/devices -X POST -H 'Content-Type: application/json' \
     -d '{"device_key":"acceptance-tv","name":"Acceptance TV","platform":"tvos",
@@ -1628,6 +1803,12 @@ YAML
   assert_contains "$probe_jobs" "" "probe jobs were enqueued by ingest"
 
   if command -v ffprobe >/dev/null 2>&1; then
+    # WAIT FOR THE PROBE THIS SECTION IS ABOUT (#207). Nothing above guarantees
+    # THIS blob's probe has landed — the filter here admits .flac as well, so it
+    # may not be either of the blobs the two sections above waited on — and
+    # every assertion below is a claim about a probe that ran.
+    wait_for_probe "$probe_hash" \
+      "there was no probe result to query, and the three assertions below report an empty pipeline rather than the missing probe"
     # A capable worker claims them and the results are queryable.
     assert_eq "$(api "/api/v1/jobs?type=probe_blob&state=succeeded" | jq -r '.items | length > 0')" \
       "true" "a worker with ffprobe ran the probe jobs"
@@ -3225,11 +3406,17 @@ YAML
          "quality_profile":"living-room"}' | jq -r '.id')
   api "/api/v1/desired/$ref_want/search" -X POST -o /dev/null
 
-  waited=0
-  while (( waited < 600 )); do
-    [[ "$(api "/api/v1/desired/$ref_want/candidates" | jq -r '.candidates | length')" -ge 3 ]] && break
-    sleep 0.1; waited=$(( waited + 1 ))
-  done
+  # THE SECOND INSTANCE #207 WAS FILED ABOUT. This loop used to break on the
+  # candidates appearing and then assert `phase == "idle"` — which happens
+  # strictly later, after the search concludes and the want is re-evaluated. It
+  # failed as `got 'candidates_found', want 'idle'`, which reads as a broken
+  # state machine and is not one.
+  #
+  # The condition is the CONJUNCTION, and both halves are load-bearing: the
+  # phase alone is not enough because a fresh want STARTS idle, so `idle` is
+  # already true before the search has run at all.
+  wait_for "the refusal arc never came to rest — three candidates recorded AND the phase back to idle" \
+    600 refusal_arc_at_rest "$ref_want"
   ref_cands=$(api "/api/v1/desired/$ref_want/candidates")
 
   assert_eq "$(jq -r '.candidates | length' <<<"$ref_cands")" "3" \
@@ -3468,9 +3655,22 @@ YAML
   # job, wait for a capable worker to run it, and confirm a NEW asset appeared
   # on the same edition in a container the device actually declares.
   if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
-    local mkv_asset mkv_edition remux_device remux_job remux_code derived_before derived_after
+    local mkv_asset mkv_edition mkv_hash remux_device remux_job remux_code derived_before derived_after
     mkv_asset=$(api_all /api/v1/assets '.items[] | select(.filename != null) | select(.filename | endswith(".mkv")) | .id' | head -1)
     mkv_edition=$(api "/api/v1/assets/$mkv_asset" | jq -r '.edition_id')
+    mkv_hash=$(api "/api/v1/assets/$mkv_asset" | jq -r '.blob_hash')
+
+    # THE INSTANCE #207 WAS FILED ABOUT. This block used to ask the planner for
+    # a decision with nothing at all waiting for this blob's probe. With no
+    # container recorded the planner correctly answers `direct`, and the run
+    # printed `matroska on an mp4-only device plans REMUX — got 'direct', want
+    # 'remux'` followed by four cascading failures, all of it reading as a
+    # planner regression on a machine that was merely slow.
+    #
+    # ffmpeg AND ffprobe are already established by the branch above, so the
+    # probe genuinely can land here: the fix is a wait, not a skip.
+    wait_for_probe "$mkv_hash" \
+      "the planner was asked to decide on a file it had not measured, and answered DIRECT — correctly. The four assertions below are consequences of that, not claims about the planner"
 
     # A device that takes the streams and refuses the container: the REMUX
     # case exactly.
@@ -3869,6 +4069,10 @@ YAML
   hb_api() { curl -sS --unix-socket "$sock" "http://heyarr$1"; }
   hb_jobs() { "$BIN" --config "$WORK/healthbeat.yaml" jobs list --type provider_health --json; }
   hb_entry() { jq -c --arg n "$1" '[.providers[] | select(.name == $n)] | .[0]' <<<"$(hb_api /api/v1/providers)"; }
+  # hb_entry_checked <name> — 0 once that provider has been observed at least
+  # once, for wait_for. Per-provider, because the beat records each check as it
+  # makes it and one provider's observation says nothing about another's.
+  hb_entry_checked() { [[ "$(jq -r '.checked_at // "never"' <<<"$(hb_entry "$1")")" != "never" ]]; }
   hb_wait_ready() {
     local waited=0
     while (( waited < 600 )); do
@@ -3919,6 +4123,15 @@ YAML
   fi
   pass "a worker claims the beat's job and checked_at becomes populated"
 
+  # A SECOND PROVIDER IS A SECOND OBSERVATION (#207). The wait above is about
+  # health-torznab; the two assertions below are about health-indexer, which the
+  # pass checks separately and therefore records at its own moment. Asserting
+  # one provider's observation on the strength of another's is the same
+  # wait-for-A-assert-B shape, with the subjects side by side rather than in
+  # sequence — and it would fail as "healthy: null", reading as a health check
+  # that got the wrong answer rather than one that had not run.
+  wait_for "the health beat never recorded an observation for provider 'health-indexer' — the two assertions below are about what that check saw" \
+    300 hb_entry_checked health-indexer
   hb_fake=$(hb_entry health-indexer)
   assert_eq "$(jq -r '.healthy' <<<"$hb_fake")" "true" \
     "a provider that answers is reported healthy, having actually been asked"
@@ -4075,6 +4288,15 @@ peer_listen_addr() { # logfile
 # hard-coded it would be asserting on an implementation detail it does not own.
 peer_holds() { # cas-root blob-hash
   find "$1/blobs" -name "${2#blake3:}" -type f 2>/dev/null | wc -l | tr -d ' '
+}
+
+# replicate_job_succeeded — 0 once node B has a replicate_blob job in
+# `succeeded`. That is the LAST of the things the transfer section asserts:
+# bytes, then the transfer record, then the log line, then the job state.
+# Waiting on it covers all four; waiting on the bytes covers only the first
+# (#207). Reads node B through api_b, which the two-peer arc defines.
+replicate_job_succeeded() {
+  [[ "$(api_b "/api/v1/jobs?type=replicate_blob" | jq -r '[.items[] | select(.state == "succeeded")] | length > 0')" == "true" ]]
 }
 
 # start_peer_node starts one two-peer node in the mode this pass is exercising,
@@ -4472,11 +4694,14 @@ YAML
   note "  the transfer: the destination pulls, verifies, and then claims (M4-09)"
   # -------------------------------------------------------------------------
   api_b "/api/v1/peers/site-b/reconcile" -X POST -o /dev/null
-  waited=0
-  while (( waited < 900 )); do
-    (( $(peer_holds "$root/b/data/cas" "$tp_blob") == 1 )) && break
-    sleep 0.1; waited=$(( waited + 1 ))
-  done
+  # WAIT FOR THE LAST OF THE THREE THINGS ASSERTED BELOW, not the first (#207).
+  # internal/worker/replicateblob.go pulls the bytes, THEN records the transfer,
+  # THEN logs "replicated a blob", and only then does the queue mark the job
+  # succeeded. Waiting on the bytes landing left the job row and the log line —
+  # both asserted below — still in flight, and a slow runner would have reported
+  # a replication job "retried into silence" that had simply not finished.
+  wait_for "the replicate_blob job never reached succeeded on node B — the bytes, the transfer record and the log line all land before it does" \
+    900 replicate_job_succeeded
   assert_eq "$(peer_holds "$root/b/data/cas" "$tp_blob")" "1" \
     "the bytes crossed the wire and landed in node B's content store"
   assert_eq "$(api_b "/api/v1/jobs?type=replicate_blob" | jq -r '[.items[] | select(.state == "succeeded")] | length > 0')" "true" \
