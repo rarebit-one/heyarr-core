@@ -268,3 +268,40 @@ func Default() *Registry {
 func Identify(relPath, libraryContentType string) Candidate {
 	return Default().Identify(relPath, libraryContentType)
 }
+
+// ContentTypes is §12's content types, in a stable order.
+//
+// Exported because they are a VOCABULARY and not this package's private
+// business: a library declares one, a want declares one, and until #227 nothing
+// checked that what was declared is one of these.
+func ContentTypes() []string { return []string{Movie, Series, Music, Book} }
+
+// IsContentType reports whether ct is one Heyarr understands.
+//
+// # Why this has to exist rather than being obvious
+//
+// libraries.content_type is TEXT with no CHECK, and the create path required it
+// to be non-empty and nothing more. So a library could be created with any
+// string — and one was, with `show`.
+//
+// The consequence is not that the type is merely cosmetic. Identify uses it to
+// choose which rules may fire; a type no rule declares matches nothing, falls
+// back to every rule in registration order, and the movie rules are first. A
+// television library declared as `show` therefore had its artwork identified by
+// `movie/title-year` and grew a movie Work that does not exist (#227).
+//
+// The failure is silent, it is permanent for that library, and it looks like a
+// parser that guesses badly rather than a declaration nobody checked.
+//
+// Unknown is deliberately NOT accepted here. It is the content type of the
+// synthetic Unidentified Work and the value a caller passes to Identify to
+// suppress bias; a library declaring it would be declaring that it holds
+// unidentifiable things, which is not a statement anybody means to make.
+func IsContentType(ct string) bool {
+	for _, known := range ContentTypes() {
+		if ct == known {
+			return true
+		}
+	}
+	return false
+}

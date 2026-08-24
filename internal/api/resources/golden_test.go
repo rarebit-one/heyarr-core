@@ -160,8 +160,12 @@ func TestWriteShapes(t *testing.T) {
 	h := newHarness(t).seed()
 
 	t.Run("a created library", func(t *testing.T) {
+		// `music`, not `album`. This fixture said `album` — which is not one of
+		// §12's content types either, and was accepted because nothing checked
+		// (#227). An album is what a music WORK is; the library's type is
+		// `music`.
 		resp := h.doStable(http.MethodPost, "/api/v1/libraries",
-			strings.NewReader(`{"name":"music","content_type":"album"}`))
+			strings.NewReader(`{"name":"music","content_type":"music"}`))
 		if resp.StatusCode != http.StatusCreated {
 			t.Fatalf("status = %d, want 201", resp.StatusCode)
 		}
