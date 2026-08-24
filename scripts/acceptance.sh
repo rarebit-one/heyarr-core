@@ -3561,6 +3561,120 @@ YAML
   kill "$bare_pid" 2>/dev/null || true
   wait "$bare_pid" 2>/dev/null || true
 
+  note "  worker capability advertisement (#112, ADR-0039, §6, §75)"
+  # -------------------------------------------------------------------------
+  #
+  # Almost everything #112 turns on is asserted in Go, and deliberately: the
+  # "lists an encoder it cannot run" case needs a fake FFmpeg re-exec, narrowing
+  # needs an injected prober, and expiry needs a movable clock.
+  #
+  # What shell adds is the one thing those structurally cannot catch: that the
+  # REAL binary, started as it ships, actually advertises. Every unit above
+  # would pass on a build where worker.go never started the beat.
+  #
+  # Nothing here creates a Work, an edition or an asset. Every assertion but the
+  # second worker is a read, so this section moves no catalogue count.
+  local caps caps_holders caps_sources caps_expires caps_self
+  caps=$(api /api/v1/capabilities)
+  assert_eq "$(jq -r 'has("holders")' <<<"$caps")" "true" \
+    "the fleet capability view is mounted"
+  assert_eq "$(jq -r 'has("available")' <<<"$caps")" "true" \
+    "and states the union across the fleet, rather than leaving a client to derive it"
+
+  # THE ASSERTION NO GO TEST CAN MAKE: the running worker advertised ITSELF.
+  # Polled rather than slept on — the beat advertises at startup and how long
+  # that takes is a property of the machine, not of the code.
+  waited=0
+  while (( waited < 300 )); do
+    caps=$(api /api/v1/capabilities)
+    (( $(jq -r '.holders | length' <<<"$caps") >= 1 )) && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  caps_holders=$(jq -r '.holders | length' <<<"$caps")
+  assert_eq "$(( caps_holders >= 1 ))" "1" \
+    "the running worker advertised itself: the beat is wired into worker.go and started"
+
+  # It named the NODE, and the name is the one this node knows itself by rather
+  # than the string the config typed — read back from the peer table, which is
+  # the node's own record of its identity.
+  caps_self=$(api /api/v1/peers | jq -r '.items[] | select(.is_self) | .name')
+  assert_eq "$(jq -r '[.holders[].peer_name] | unique | join(",")' <<<"$caps")" "$caps_self" \
+    "the advertisement names this node, and only this node — a fabric of one advertises once"
+
+  # The advertisement EXPIRES, and the value is in the future. Not "the field is
+  # present": a worker that dies cannot tidy up after itself, and expiry is the
+  # only thing that stops a dead worker being routed work.
+  caps_expires=$(jq -r '.holders[0].expires_at' <<<"$caps")
+  assert_eq "$([[ "$caps_expires" > "$(date -u +%Y-%m-%dT%H:%M:%SZ)" ]] && echo future || echo past)" \
+    "future" "the advertisement carries an expiry in the future, so a dead worker falls out of the fleet"
+
+  # Every advertised capability says HOW it was established, and the value is
+  # one of exactly three. assert_eq on the whole sorted set, never
+  # assert_contains: `ffmpeg` is a PREFIX of `ffmpeg.encoder.hevc` and the same
+  # discipline has to apply to the source enum.
+  caps_sources=$(jq -r '[.holders[].capabilities[].source] | unique | join(",")' <<<"$caps")
+  case "$caps_sources" in
+    ""|binary|probe|service|binary,probe|binary,service|probe,service|binary,probe,service)
+      pass "every advertised capability declares a known source (binary, probe or service)" ;;
+    *)
+      fail "an advertised capability declares an unknown source: $caps_sources" ;;
+  esac
+
+  # Both halves are asserted, so neither the equipped CI runner nor a bare
+  # laptop passes this vacuously. ADR-0023 makes a node without ffmpeg a
+  # SUPPORTED node, not a broken one.
+  local caps_ffmpeg_present caps_ffmpeg_source
+  caps_ffmpeg_present=$(api /api/v1/system | jq -r '[.media[] | select(.name == "ffmpeg") | .available] | first // false')
+  caps_ffmpeg_source=$(jq -r '[.holders[].capabilities[] | select(.name == "ffmpeg") | .source] | first // ""' <<<"$caps")
+  if [[ "$caps_ffmpeg_present" == "true" ]]; then
+    assert_eq "$caps_ffmpeg_source" "binary" \
+      "a node with ffmpeg advertises it, sourced from the startup resolution rather than from a probe"
+  else
+    assert_eq "$caps_ffmpeg_source" "" \
+      "a node without ffmpeg advertises no ffmpeg capability — and that is a supported node (ADR-0023)"
+  fi
+
+  # The filter is an EXACT match. A prefix match would answer "which nodes can
+  # encode AV1" with every node that merely has the binary installed, which is
+  # the failure the whole mechanism exists to prevent.
+  assert_eq "$(api '/api/v1/capabilities?capability=ffmpeg.encoder.vp9' | jq -r '.holders | length')" \
+    "0" "asking for a capability nobody holds returns no holders"
+  assert_eq "$(api '/api/v1/capabilities?capability=ffmpeg.encoder' | jq -r '.holders | length')" \
+    "0" "a partial dotted segment matches nothing: the filter is equality, never a prefix"
+
+  # THE FLEET QUESTION, which is unanswerable with one worker. A second worker
+  # against the SAME database with a scrubbed PATH must appear as its OWN
+  # holder — the view is per worker, not per node — and must advertise strictly
+  # less than the equipped one wherever there is anything to be less than.
+  #
+  # This is deliberately NOT inside the mixed-fleet block below: that one needs
+  # ffprobe to mean anything, and the per-worker shape of this view does not.
+  local caps_bare_log caps_bare_pid caps_bare_n
+  caps_bare_log=$WORK/caps-bare-worker.log
+  mkdir -p "$WORK/empty-bin"
+  env -i PATH="$WORK/empty-bin" HOME="$HOME" \
+    "$PWD/$BIN" --config "$WORK/full.yaml" worker >"$caps_bare_log" 2>&1 &
+  caps_bare_pid=$!
+  waited=0
+  while (( waited < 300 )); do
+    caps_bare_n=$(api /api/v1/capabilities | jq -r '.holders | length')
+    (( caps_bare_n > caps_holders )) && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  assert_eq "$(( caps_bare_n == caps_holders + 1 ))" "1" \
+    "a second worker on the same node advertises SEPARATELY: the view is per worker, not per node"
+  assert_eq "$(api /api/v1/capabilities | jq -r '[.holders[].worker_id] | length == (. | unique | length)')" \
+    "true" "and each advertisement carries a worker id of its own, so a stuck job and a fleet entry name the same process"
+  if [[ "$caps_ffmpeg_present" == "true" ]]; then
+    assert_eq "$(api '/api/v1/capabilities?capability=ffmpeg' | jq -r '.holders | length')" "1" \
+      "only the worker that resolved ffmpeg holds it — the bare one is not a candidate for transcode work"
+  else
+    not_exercised ffmpeg \
+      "a MIXED fleet answering '/api/v1/capabilities?capability=ffmpeg' with one of two workers — both workers here resolved no toolchain, so the filter has nothing to separate them"
+  fi
+  kill "$caps_bare_pid" 2>/dev/null || true
+  wait "$caps_bare_pid" 2>/dev/null || true
+
   note "  a mixed fleet (§75, ADR-0023)"
   # The one claim in ADR-0023 with no evidence behind it until now.
   #
