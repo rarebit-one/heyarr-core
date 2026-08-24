@@ -33,7 +33,7 @@ import (
 // an operator to run it from a laptop in the living room, and it also means a
 // result here is not what the peer would see if the peer is somewhere else.
 // The command says so rather than letting someone discover it the hard way.
-func newRenderersCommand(opts Options) *cobra.Command {
+func newRenderersCommand(opts Options, configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "renderers",
 		Short: "Find media renderers on the local network (§68)",
@@ -48,6 +48,10 @@ Discovery is multicast and does not leave the local segment: run it on the same
 network as the screen you are looking for.`,
 	}
 	cmd.AddCommand(newRenderersDiscoverCommand(opts))
+	// The transport verbs live here rather than at the top level:
+	// `heyarr pause` reads like it pauses Heyarr. Only `play` is
+	// promoted, because that is the one anybody types.
+	cmd.AddCommand(newRenderersTransportCommands(opts, configPath)...)
 	return cmd
 }
 

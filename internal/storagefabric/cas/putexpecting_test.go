@@ -145,8 +145,11 @@ func TestPutExpectingQuarantinesBytesThatDoNotMatch(t *testing.T) {
 	}
 }
 
-// A stream that dies mid-body. Resumption is out of scope (§84), so the only
-// property here is that nothing survives to be mistaken for a replica.
+// A stream that dies mid-body. This path has no resumption and must not acquire
+// any — it stages under a name nothing can find again on purpose (ADR-0035
+// puts resumable staging in [FS.OpenPartial], where the unit is a verified
+// chunk) — so the only property here is that nothing survives to be mistaken
+// for a replica.
 func TestPutExpectingLeavesNothingAddressableWhenInterrupted(t *testing.T) {
 	s := newStore(t)
 	content := bytes.Repeat([]byte("interrupted"), 10000)

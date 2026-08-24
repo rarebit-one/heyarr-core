@@ -607,6 +607,10 @@ func (s synthStore) PutExpecting(context.Context, io.Reader, hashing.Hash) (cas.
 	return cas.Descriptor{}, errReadOnly
 }
 
+func (s synthStore) OpenPartial(context.Context, hashing.Hash) (cas.Partial, error) {
+	return nil, errReadOnly
+}
+
 func (s synthStore) Link(context.Context, string, cas.Materialisation) (cas.Descriptor, error) {
 	return cas.Descriptor{}, errReadOnly
 }

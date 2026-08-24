@@ -50,6 +50,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
+      # No setup step: the guard needs only git and python3, both present on
+      # the runner image. It refuses to pass if python3 is missing rather than
+      # skipping, because a hygiene check that silently no-ops is worse than
+      # not having one.
       - run: ./scripts/hygiene.sh
 
   generate-check:
