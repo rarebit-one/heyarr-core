@@ -287,6 +287,14 @@ func (a *API) renderURL(ctx context.Context, route routing.Decision, blobHash, a
 			"request_id", httpapi.RequestIDFrom(ctx), "asset_id", assetID, "error", err)
 		return "", "this asset's media type could not be read"
 	}
+	// Refused at mint time as well as at serve time. Both are needed and they
+	// answer different questions: the serve-side check is the security
+	// boundary, and this one is why an operator gets an explanation instead of
+	// a television that silently will not play a file.
+	if mime.Valid && mime.String != "" && !render.PlayableMIME(mime.String) {
+		return "", "this asset is " + mime.String +
+			", which is not an audio or video type a renderer can be handed safely"
+	}
 	if !mime.Valid || mime.String == "" {
 		// Refused rather than defaulted. Handing a renderer the wrong type is
 		// a device that fails with something unhelpful on screen; handing it

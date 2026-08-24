@@ -195,7 +195,13 @@ func (w *retyped) WriteHeader(status int) {
 		// multipart/byteranges, and overwriting that would produce a body no
 		// client could parse — a renderer seeking around a file is exactly the
 		// caller that might ask for one.
-		if w.mime != "" && w.Header().Get("Content-Type") == "application/octet-stream" {
+		// PlayableMIME is re-checked HERE, at the point the header is
+		// written, and not only where the capability was minted. Minting and
+		// serving are separated by an expiry window and by whatever the
+		// catalog did in between; a token minted before this rule existed
+		// must not be honoured by a binary that has it.
+		if w.mime != "" && PlayableMIME(w.mime) &&
+			w.Header().Get("Content-Type") == "application/octet-stream" {
 			w.Header().Set("Content-Type", w.mime)
 		}
 	}

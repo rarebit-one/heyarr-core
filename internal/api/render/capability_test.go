@@ -2,6 +2,8 @@ package render
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -223,4 +225,85 @@ func mustSign(t *testing.T, c Capability, secret []byte) string {
 		t.Fatalf("Sign: %v", err)
 	}
 	return token
+}
+
+// TestPlayableMIME is a security boundary, so the table is written from the
+// attacker's side: each row is a Content-Type somebody would want this route
+// to emit, and all but the first two must be refused.
+//
+// The route overrides the blob endpoint's application/octet-stream, which
+// internal/api/blobs chose so a peer never invites a browser to render content
+// the catalog has not classified. That protection is given back here, so this
+// is what replaces it. CodeQL found the gap (go/reflected-xss) before a person
+// did.
+func TestPlayableMIME(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		mime string
+		want bool
+	}{
+		{name: "video", mime: "video/mp4", want: true},
+		{name: "audio", mime: "audio/mpeg", want: true},
+		{name: "a real type with dots", mime: "audio/vnd.dolby.dd-raw", want: true},
+		{name: "matroska", mime: "video/x-matroska", want: true},
+
+		// The finding. A scanner types a file by looking at it, and a library
+		// is filled from the internet.
+		{name: "html is stored XSS on the peer's origin", mime: "text/html"},
+		{name: "xhtml is the same thing", mime: "application/xhtml+xml"},
+		{name: "javascript", mime: "text/javascript"},
+		// Images are excluded wholesale rather than filtered, because SVG is
+		// scriptable and sorting the inert image types from the live ones is a
+		// subtler job than this route needs.
+		{name: "svg is scriptable", mime: "image/svg+xml"},
+		{name: "even an inert image is out of scope", mime: "image/png"},
+		{name: "octet-stream is not an upgrade", mime: "application/octet-stream"},
+
+		// Header injection, and the parameter that would need a parser.
+		{name: "a newline", mime: "video/mp4\r\nX-Evil: 1"},
+		{name: "a parameter", mime: "video/mp4; charset=utf-8"},
+		{name: "a quote", mime: `video/"mp4"`},
+		{name: "a space", mime: "video/ mp4"},
+
+		{name: "empty", mime: ""},
+		{name: "no subtype", mime: "video/"},
+		{name: "no slash", mime: "video"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := PlayableMIME(tc.mime); got != tc.want {
+				t.Errorf("PlayableMIME(%q) = %v, want %v", tc.mime, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestARefusedTypeIsNotServed proves the boundary end to end: a capability
+// signed with a dangerous type still does not produce that Content-Type.
+func TestARefusedTypeIsNotServed(t *testing.T) {
+	t.Parallel()
+
+	router, _, hash := seeded(t, 4<<10)
+	// Signed, valid, unexpired — and still not honoured, because signing
+	// proves nobody altered the type, not that the type is safe.
+	token := mustSign(t, Capability{
+		BlobHash: hash.String(), ExpiresAt: testNow.Add(time.Hour), MIME: "text/html",
+	}, testSecret)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, Path(token), nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — the bytes are still served", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/octet-stream" {
+		t.Errorf("Content-Type = %q, want application/octet-stream", got)
+	}
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+	}
 }

@@ -178,6 +178,59 @@ func sign(secret []byte, payload string) []byte {
 	return mac.Sum(nil)
 }
 
+// PlayableMIME reports whether a media type may be served by this route.
+//
+// # This is a security boundary, not a tidiness check
+//
+// internal/api/blobs serves application/octet-stream deliberately, so that a
+// peer never "invites a browser to render content the catalog has not
+// classified" — its words. This route exists to override that, which hands
+// back exactly the risk that decision avoided: an asset whose sniffed type is
+// text/html, served as text/html from the peer's own origin, is stored XSS on
+// every other page that origin serves.
+//
+// And the type is not as trustworthy as its signature suggests. Signing proves
+// nobody altered it in transit; it says nothing about where it came from,
+// which is a scanner looking at a file somebody put in a library. A torrent
+// can contain an .html file.
+//
+// So only the types a renderer could ever play are allowed. Deliberately NOT
+// image/*: SVG is scriptable, and distinguishing the scriptable image formats
+// from the inert ones is a subtler job than this route needs to take on.
+func PlayableMIME(mime string) bool {
+	// A parameter is refused rather than stripped. "video/mp4; charset=utf-8"
+	// is not a type a renderer asked for, and permitting parameters means
+	// parsing them, which means a parser between an attacker and a response
+	// header.
+	if mime == "" || strings.ContainsAny(mime, ";\r\n \t\"") {
+		return false
+	}
+	kind, sub, ok := strings.Cut(mime, "/")
+	if !ok || sub == "" {
+		return false
+	}
+	switch strings.ToLower(kind) {
+	case "audio", "video":
+		return isTokenValue(sub)
+	default:
+		return false
+	}
+}
+
+// isTokenValue keeps anything that is not an ordinary subtype out of a
+// response header.
+func isTokenValue(s string) bool {
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.', r == '-', r == '+', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func encode(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 func decode(s string) ([]byte, error) { return base64.RawURLEncoding.DecodeString(s) }
