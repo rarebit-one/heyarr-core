@@ -6166,6 +6166,36 @@ the corruption may be the operator's own file (ADR-0018)"
 
 
   # -------------------------------------------------------------------------
+  note "  a peer pushes its control plane to the one that trusts it (§50, ADR-0046, M7-03)"
+  # -------------------------------------------------------------------------
+  #
+  # §50: a control-plane backup is not kept only where it was taken. Node B takes
+  # a signed snapshot of its own control plane and pushes it to every Full Peer
+  # that trusts it — here, node A. This is the half that makes the recovery at the
+  # end of this arc possible: a peer can only be rebuilt from a backup some OTHER
+  # peer already holds, and nothing PULLS a control plane (ADR-0046), so it has to
+  # have been pushed across before the disk was lost.
+  #
+  # The facts node B must come back with are captured now, while it still has
+  # them: its own peer id, and its catalogue of works. Works are control-DATABASE
+  # rows, not content, so a restore is the only thing that returns them and a
+  # convergence cycle never could — which is what makes them the right witness
+  # that a control plane came back rather than a disk being re-filled.
+  local b_self_id b_works_before tp_push tp_push_gen
+  b_self_id=$(cli_b peers list --json | jq -r '.[] | select(.is_self) | .id')
+  b_works_before=$(api_b /api/v1/works | jq -r '[.items[].title] | sort | join(",")')
+
+  tp_push=$("$BIN" --config "$cfg_b" backup push --json 2>>"$log_b")
+  assert_eq "$(jq -r '[.peers[] | select(.name == "site-a") | .ok] | first' <<<"$tp_push")" "true" \
+    "the control-plane backup crossed to the peer that trusts this one"
+  tp_push_gen=$(jq -r '.peers[] | select(.name == "site-a") | .held_generation' <<<"$tp_push")
+  if [[ "$tp_push_gen" =~ ^[0-9]+$ ]] && (( tp_push_gen > 0 )); then
+    pass "and node A reports the generation it now holds ($tp_push_gen), answering from its own side of the push"
+  else
+    fail "node A did not report a generation held after the push: $tp_push"
+  fi
+
+  # -------------------------------------------------------------------------
   note "  garbage collection REFUSES to delete the last copy (ADR-0018, §53, M4-12)"
   # -------------------------------------------------------------------------
   #
@@ -6228,6 +6258,86 @@ the corruption may be the operator's own file (ADR-0018)"
   gc_text=$("$BIN" --config "$cfg_a" gc --apply --grace 1ns 2>/dev/null)
   assert_eq "$(grep -cF "spared        $tp_blob  peer_unreachable" <<<"$gc_text" | tr -d ' ')" "1" \
     "gc's plain output names the blob it spared and why"
+
+  # -------------------------------------------------------------------------
+  note "  the peer that went away lost its disk, and is rebuilt from the one that trusts it (§51, §82, M7-04)"
+  # -------------------------------------------------------------------------
+  #
+  # THE MILESTONE'S SENTENCE, end to end: a peer that loses its disk is restored
+  # from a peer that trusted it, comes back with the SAME identity, and NO OTHER
+  # peer is re-enrolled or reconfigured. Node B is already gone — the refusal
+  # above needed it to be — and now its disk is gone too. The one input with no
+  # fetch path, its Ed25519 identity, is what an operator keeps aside; everything
+  # else is rebuilt from the backup node A has held since the push at the top of
+  # this arc.
+  #
+  # Under ADR-0038 there is no re-clone: a node with an empty control plane
+  # computes zero gaps and fetches nothing, so this restore is load-bearing, not a
+  # convenience. Node A, the survivor, is never stopped or reconfigured through
+  # any of it — which is the third clause, and it is asserted FROM A at the end.
+  local b_recover_dry b_recover_done b_recover_ping rb_sock rb_wait
+  cp "$root/b/data/peer_ed25519.key" "$root/b-identity.key"
+  rm -rf "$root/b/data"
+
+  # A DRY RUN first: fetch from A, verify the backup against B's OWN identity,
+  # report what a restore would do, and touch nothing. A recovery trusts a
+  # signature over its identity, not the peer that served the file.
+  b_recover_dry=$("$BIN" --config "$cfg_b" recover \
+    --from-endpoint "https://$addr_a" --from-key "$key_a" \
+    --identity-key "$root/b-identity.key" --json 2>>"$log_b")
+  assert_eq "$(jq -r '.applied' <<<"$b_recover_dry")" "false" \
+    "recover defaults to a dry run that restores nothing"
+  assert_eq "$(jq -r '.plan.source_peer_id' <<<"$b_recover_dry")" "$b_self_id" \
+    "and it names the control plane it would restore — this node's own, verified against this node's key"
+  assert_eq "$(jq -r '.plan.signed' <<<"$b_recover_dry")" "true" \
+    "the backup verified against this node's identity, not against the peer that served it"
+  assert_eq "$(jq -r '.plan.inputs[] | select(.name == "content-cas") | .status' <<<"$b_recover_dry")" "refetched-by-convergence" \
+    "recover rebuilds the control plane and identity and leaves the content store to convergence — it is not a disk copy"
+
+  # A --confirm that does not match the data directory exactly is refused, and it
+  # is refused BEFORE any fetch — so the guard is reachable without a peer at all,
+  # and a typo on an unrecoverable command does not run.
+  assert_refuses "a --confirm that does not match the data directory exactly is refused" \
+    "does not match the data directory" \
+    "$BIN" --config "$cfg_b" recover \
+    --from-endpoint "https://$addr_a" --from-key "$key_a" \
+    --identity-key "$root/b-identity.key" --confirm "$root/b/data-typo"
+
+  # The restore.
+  b_recover_done=$("$BIN" --config "$cfg_b" recover \
+    --from-endpoint "https://$addr_a" --from-key "$key_a" \
+    --identity-key "$root/b-identity.key" --confirm "$root/b/data" --json 2>>"$log_b")
+  assert_eq "$(jq -r '.applied' <<<"$b_recover_done")" "true" \
+    "recover rebuilt the control plane from the surviving peer"
+
+  # Restart the rebuilt node and let it prove the control plane came back — the
+  # same catalogue, from the same peer id, none of which the content store could
+  # have returned.
+  start_peer_node "$cfg_b" "$log_b" "$mode"; pids_b=("${NODE_PIDS[@]}")
+  rb_sock="$root/b/data/heyarr.sock"; rb_wait=0
+  while (( rb_wait < 600 )); do
+    curl -sf --unix-socket "$rb_sock" http://heyarr/readyz >/dev/null 2>&1 && break
+    sleep 0.1; rb_wait=$(( rb_wait + 1 ))
+  done
+  (( rb_wait < 600 )) || { fail "the rebuilt node never became ready"; tail -20 "$log_b"; }
+
+  assert_eq "$(api_b /api/v1/works | jq -r '[.items[].title] | sort | join(",")')" "$b_works_before" \
+    "the control plane came back with the same catalogue it had before the disk was lost"
+
+  # 🔴 THE THIRD CLAUSE, asserted FROM THE OTHER PEER. The rebuilt node dials A
+  # over mTLS and A answers with the identity it derives from the certificate.
+  # That A names it "site-b" means A recognised the rebuilt node as the same peer
+  # without being told anything — no re-enrolment, no key change. This is the
+  # load-bearing assertion: a restore that completes but leaves the fabric no
+  # longer trusting the node is the failure worth catching, not the restore.
+  b_recover_ping=$(cli_b peers ping site-a --json 2>>"$log_b")
+  assert_eq "$(jq -r '.name' <<<"$b_recover_ping")" "site-b" \
+    "the peer that trusts it recognised the rebuilt node as the same peer, with no re-enrolment"
+
+  # And node A's own membership is untouched: it still pins the SAME key it first
+  # enrolled, never having re-added the node that went away and came back.
+  assert_eq "$(cli_a peers list --json | jq -r '.[] | select(.name == "site-b") | .public_key')" "$key_b" \
+    "and node A still pins the key it first enrolled — nothing about the survivor was reconfigured"
 
   local p
   for p in "${PEER_PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done

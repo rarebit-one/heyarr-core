@@ -169,5 +169,17 @@ evidence an HLS playlist was served
 claim control-plane-backup-and-restore
 state proven
 ref   §49, §50, §51, §82, ADR-0044
-why   Milestone 7. A peer's own control plane and its Ed25519 identity are the two things nothing else in the fabric can give back. M7-02 (#282) delivers the backup — a VACUUM INTO snapshot with signed provenance — and a restore that opens it (unit-proven: state at the moment, refused as a control plane, tampered backup refused). The demo takes one against the running controller and proves the generation reports real change: a re-take with no change is the SAME generation, and a control-plane write advances it. Reaching every peer is #283; recover-from-peer is #284.
+why   Milestone 7. A peer's own control plane and its Ed25519 identity are the two things nothing else in the fabric can give back. M7-02 (#282) delivers the backup — a VACUUM INTO snapshot with signed provenance — and a restore that opens it (unit-proven: state at the moment, refused as a control plane, tampered backup refused). The demo takes one against the running controller and proves the generation reports real change: a re-take with no change is the SAME generation, and a control-plane write advances it. The push that carries it to a peer is control-plane-backup-reaches-peers; the rebuild that reads it back is recover-from-peer-is-recognised.
 evidence a control-plane change advances the backup generation
+
+claim control-plane-backup-reaches-peers
+state proven
+ref   §50, ADR-0046, #283
+why   A control-plane backup is not kept only where it was taken: a peer takes a signed snapshot of its own control plane and PUSHES it to every Full Peer that trusts it, and the receiver verifies and holds it. Nothing pulls a control plane, so unless it was pushed across before the disk was lost there is nothing to rebuild from — this is the half that makes recover-from-peer-is-recognised possible. The receiver's own account of the generation it holds is the fact, because a sender's belief about what a peer holds is a claim about itself (the durability lesson ADR-0046 is written around).
+evidence the control-plane backup crossed to the peer that trusts this one
+
+claim recover-from-peer-is-recognised
+state proven
+ref   §51, §82, ADR-0044, ADR-0046, #284
+why   The milestone's sentence. A peer that loses its disk is rebuilt from a peer that trusted it, comes back with the SAME identity, and no other peer is re-enrolled or reconfigured. The evidence is the third clause, and it is asserted FROM THE OTHER PEER: the rebuilt node dials the survivor over mTLS and the survivor names it as the same peer, from the key it pinned before the loss — nobody reconfigured. A restore that completes but leaves the fabric no longer trusting the node passes every assertion about the restore itself and is exactly the failure this catches; "the restore applied" is deliberately NOT the evidence.
+evidence the peer that trusts it recognised the rebuilt node as the same peer, with no re-enrolment
