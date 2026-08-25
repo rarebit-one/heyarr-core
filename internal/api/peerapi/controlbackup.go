@@ -72,8 +72,10 @@ type receivedResponse struct {
 
 // handleControlBackupReceive stores a backup a peer pushed of its OWN control
 // plane. The source is the certificate's peer, never anything in the body: a
-// peer may push only what it can sign as itself, and the store re-checks that
-// the manifest's source matches (ADR-0044 Q2, ADR-0046).
+// peer may push only what it can sign as itself, which the store enforces by
+// verifying the manifest's signature against the caller's pinned key — not by
+// comparing the manifest's self-stamped id, which lives in the sender's own id
+// space (ADR-0044 Q2, ADR-0046).
 func (s *Server) handleControlBackupReceive(w http.ResponseWriter, r *http.Request) {
 	peer, ok := PeerFrom(r.Context())
 	if !ok {

@@ -15,11 +15,6 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/backup"
 )
 
-// ErrSourceMismatch is a peer pushing a backup whose manifest names a different
-// source than the peer itself. A peer may push its OWN control plane, never
-// another's under its name.
-var ErrSourceMismatch = errors.New("backupsync: the backup's source does not match the peer pushing it")
-
 // ErrBadSourceID is a source peer id that is not a safe single path component.
 var ErrBadSourceID = errors.New("backupsync: the source peer id is not a safe path component")
 
@@ -57,12 +52,23 @@ func ReceivedPathFor(dataDir string) string {
 
 // Receive verifies a pushed backup and stores it under the source peer.
 //
-// Verification is [backup.Open]'s, reused whole: the manifest signature against
-// sourceKey (a pushed backup MUST be signed, so an unsigned one is refused), the
-// snapshot digest against its bytes, integrity_check and foreign_key_check, and
-// the read-only open that proves it cannot be run as a control plane. Only then
-// is it moved into place. retain bounds how many generations are kept for this
-// source; zero uses [DefaultRetain].
+// The source is the AUTHENTICATED caller: sourcePeerID and sourceKey are the
+// receiver's own membership id and pinned key for the peer that presented the
+// certificate. Verification is [backup.Open]'s, reused whole: the manifest
+// signature against sourceKey (a pushed backup MUST be signed, so an unsigned
+// one is refused), the snapshot digest against its bytes, integrity_check and
+// foreign_key_check, and the read-only open that proves it cannot be run as a
+// control plane. Only then is it moved into place. retain bounds how many
+// generations are kept for this source; zero uses [DefaultRetain].
+//
+// The signature check against sourceKey is what binds a backup to the peer that
+// pushed it — you can push only what you signed as yourself. The manifest's OWN
+// SourcePeerID is the sender's self-label in ITS id space; two independently
+// enrolled peers assign each other unrelated ids (nothing derives a shared id
+// from the key), so it is not comparable to sourcePeerID and is never used to
+// authorise. Keying storage on the cert-derived sourcePeerID is exactly what
+// lets a rebuilt node, presenting the same certificate, fetch back the
+// generation it pushed.
 func (s *Store) Receive(ctx context.Context, sourcePeerID string, sourceKey ed25519.PublicKey,
 	manifest backup.Manifest, snapshot io.Reader,
 ) (backup.Manifest, error) {
@@ -71,10 +77,6 @@ func (s *Store) Receive(ctx context.Context, sourcePeerID string, sourceKey ed25
 	}
 	if err := manifest.Validate(); err != nil {
 		return backup.Manifest{}, err
-	}
-	if manifest.SourcePeerID != sourcePeerID {
-		return backup.Manifest{}, fmt.Errorf("%w: manifest says %q, pushed by %q",
-			ErrSourceMismatch, manifest.SourcePeerID, sourcePeerID)
 	}
 
 	sourceDir := filepath.Join(s.root, sourcePeerID)
