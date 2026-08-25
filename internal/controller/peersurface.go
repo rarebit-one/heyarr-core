@@ -13,6 +13,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/heyarr-core/internal/peer/backupsync"
 	peercatalog "github.com/rarebit-one/heyarr-core/internal/peer/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/peer/endpoint"
 	"github.com/rarebit-one/heyarr-core/internal/peer/health"
@@ -287,15 +288,21 @@ func (c *Controller) newPeerSurface(
 		return nil, fmt.Errorf("controller: building the peer surface's blob handler: %w", err)
 	}
 
+	// Where this node holds control-plane backups pushed to it by the peers it
+	// trusts (§50, M7-03). A different directory from the catalog snapshot, and
+	// held inert — the store opens nothing it receives as a control plane.
+	controlBackups := backupsync.NewStore(backupsync.ReceivedPathFor(c.cfg.DataDir), c.cfg.Backup.PeerRetain)
+
 	srv, err := peerapi.New(peerapi.Options{
-		Addr:       c.cfg.Peer.Listen,
-		Material:   material,
-		Members:    peerLookup{store: members},
-		SelfPeerID: self.PeerID,
-		Inventory:  peerCatalog,
-		Snapshots:  snapshotSource{cat: peerCatalog, self: self.PeerID},
-		ReturnPath: returnPathProber{store: members},
-		Blobs:      blobHandler,
+		Addr:          c.cfg.Peer.Listen,
+		Material:      material,
+		Members:       peerLookup{store: members},
+		SelfPeerID:    self.PeerID,
+		Inventory:     peerCatalog,
+		ControlBackup: controlBackups,
+		Snapshots:     snapshotSource{cat: peerCatalog, self: self.PeerID},
+		ReturnPath:    returnPathProber{store: members},
+		Blobs:         blobHandler,
 		// The peer surface's own liveness observation (#184). Without it a
 		// remote peer — which holds no bearer token and so never reaches the
 		// client API's guard — could talk to this node all day without its

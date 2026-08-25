@@ -66,6 +66,7 @@ a restore with it.`,
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
+	cmd.AddCommand(newBackupPushCommand(Options{}, configPath))
 	return cmd
 }
 

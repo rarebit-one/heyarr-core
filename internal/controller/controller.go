@@ -284,7 +284,7 @@ func (c *Controller) Run(ctx context.Context) error {
 	// pass an unparsed value through.
 	backupInterval, _ := c.cfg.BackupInterval()
 	startBackup(ctx, db, reconcileEvents, c.cfg.DataDir, c.cfg.Backup.Dir,
-		backupInterval, self.PeerID, c.log)
+		backupInterval, self.PeerID, c.log, material, members)
 
 	// "started" is logged only after every listener is bound. A start line
 	// printed before the socket exists is a lie that costs someone an
