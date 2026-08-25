@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +34,11 @@ type pieceHolder struct {
 	content  []byte
 	claim    pieces.Availability
 
+	// mu guards everything a request touches. The driver fetches from several
+	// sources at once (§23), so a fixture that records what it served without
+	// a lock is a data race in the TEST — and `-race` finds it, correctly,
+	// while saying nothing about the code under test.
+	mu sync.Mutex
 	// served records every piece this holder answered.
 	served []int
 	// order, when shared between holders, records every fetch across ALL of
@@ -48,6 +54,28 @@ type pieceHolder struct {
 	// shortenPiece, when set, is an index this holder serves at the wrong
 	// length.
 	shortenPiece int
+	// probe, when set, records how many holders were serving AT THE SAME
+	// MOMENT. It is the only thing that distinguishes sources used together
+	// from sources used in turn: both finish, both are attributed, and only
+	// the overlap tells them apart.
+	probe *concurrencyProbe
+	// failFrom, when set, makes this holder refuse every piece after it has
+	// served this many — a source that dies MID-transfer rather than one that
+	// was never there.
+	failFrom int
+	// onServed, when set, runs after each piece is served. It exists so a test
+	// can change the WORLD while a session is running, which is the only way to
+	// exercise a swarm that fills up while this node is fetching from it.
+	onServed func(index int)
+}
+
+// gain gives this holder pieces it did not have, mid-session.
+func (h *pieceHolder) gain(indices ...int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, i := range indices {
+		h.claim.Add(i)
+	}
 }
 
 func newPieceHolder(t *testing.T, content []byte, indices ...int) *pieceHolder {
@@ -60,25 +88,52 @@ func newPieceHolder(t *testing.T, content []byte, indices ...int) *pieceHolder {
 	for _, i := range indices {
 		claim.Add(i)
 	}
-	return &pieceHolder{geometry: g, content: content, claim: claim, shortenPiece: -1}
+	return &pieceHolder{
+		geometry: g, content: content, claim: claim, shortenPiece: -1, failFrom: -1,
+	}
 }
 
 func (h *pieceHolder) PieceAvailability(
 	_ context.Context, _ hashing.Hash,
 ) (string, bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	return pieces.Encode(h.geometry, h.claim), true, nil
+}
+
+// servedPieces is a copy of what this holder answered, safely.
+func (h *pieceHolder) servedPieces() []int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]int(nil), h.served...)
 }
 
 func (h *pieceHolder) ReadPiece(
 	_ context.Context, _ hashing.Hash, index int,
 ) ([]byte, error) {
+	h.mu.Lock()
 	if !h.claim.Has(index) {
+		h.mu.Unlock()
+		return nil, peerapi.ErrNoSuchPiece
+	}
+	if h.failFrom >= 0 && len(h.served) >= h.failFrom {
+		h.mu.Unlock()
 		return nil, peerapi.ErrNoSuchPiece
 	}
 	h.served = append(h.served, index)
 	if h.order != nil {
 		*h.order = append(*h.order, fmt.Sprintf("%s:%d", h.id, index))
 	}
+	h.mu.Unlock()
+
+	if h.onServed != nil {
+		h.onServed(index)
+	}
+	if h.probe != nil {
+		defer h.probe.leave()
+		h.probe.enter()
+	}
+
 	off, length, err := h.geometry.Range(index)
 	if err != nil {
 		return nil, peerapi.ErrNoSuchPiece
@@ -268,9 +323,9 @@ func TestAPeerThatDividesTheBlobDifferentlyIsNotUsed(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNoPieceSource — a peer with a different geometry is not a "+
 			"source, and must be dropped at the survey rather than caught at Publish", err)
 	}
-	if len(holder.served) != 0 {
+	if len(holder.servedPieces()) != 0 {
 		t.Errorf("%d pieces were fetched from a peer that divides the blob differently",
-			len(holder.served))
+			len(holder.servedPieces()))
 	}
 }
 
@@ -420,7 +475,7 @@ func TestAPiecePullResumesFromItsBitset(t *testing.T) {
 	if out.Fetched != 5 {
 		t.Errorf("fetched %d pieces, want 5 — the three already staged were refetched", out.Fetched)
 	}
-	for _, i := range holder.served {
+	for _, i := range holder.servedPieces() {
 		if i < 3 {
 			t.Errorf("piece %d was refetched despite being recorded as held", i)
 		}
@@ -472,9 +527,24 @@ func TestABitsetFromADifferentGeometryIsIgnored(t *testing.T) {
 	}
 }
 
-// The rarest piece is fetched first: the piece one peer holds is the piece that
-// disappears if that peer goes away.
-func TestTheRarestPieceIsFetchedFirst(t *testing.T) {
+// The rarest piece a source holds is the piece it is asked for first: the piece
+// one peer holds is the piece that disappears if that peer goes away.
+//
+// # Why this is asserted per source and no longer across them
+//
+// It used to be asserted on a SHARED order — "the very first fetch of the whole
+// transfer was the rare piece" — because a per-holder record could not express
+// ordering across peers. That assertion was correct for a driver that fetched
+// from one source at a time, and it is meaningless for one that fetches from
+// every source at once (§23): both sources start together, so which of their
+// first fetches reaches its handler first is a property of the scheduler.
+//
+// The claim that survives is sharper than it looks. The sole holder holds ALL
+// FOUR pieces, so a driver that ignored rarity would ask it for piece 0 — the
+// lowest index — and this fails. Asserting on its own record is exactly right
+// HERE, and was exactly wrong in the version that made the sole holder the only
+// possible source of the rare piece.
+func TestTheRarestPieceASourceHoldsIsFetchedFirst(t *testing.T) {
 	content := pieceFixture(t, 4)
 	blob := digestOfBytes(t, content)
 
@@ -489,14 +559,6 @@ func TestTheRarestPieceIsFetchedFirst(t *testing.T) {
 	onlyHolder := newPieceHolder(t, content, 0, 1, 2, 3)
 	commonHolder := newPieceHolder(t, content, 0, 1, 2)
 
-	// A SHARED order across both peers. Asserting on one holder's own record
-	// cannot see this: the sole holder is the only peer that can serve piece 3,
-	// so piece 3 is its first fetch whatever order the puller chose. Reversing
-	// rarest to commonest left that assertion passing, which sabotage caught.
-	var order []string
-	onlyHolder.order, onlyHolder.id = &order, only.peerID
-	commonHolder.order, commonHolder.id = &order, common.peerID
-
 	o := startPieceSource(t, only, root, onlyHolder)
 	c := startPieceSource(t, common, root, commonHolder)
 
@@ -505,13 +567,13 @@ func TestTheRarestPieceIsFetchedFirst(t *testing.T) {
 		[]transfer.Candidate{transfer.Peer(sourceFor(only, o.addr)), transfer.Peer(sourceFor(common, c.addr))}); err != nil {
 		t.Fatalf("pulling: %v", err)
 	}
-	if len(order) != 4 {
-		t.Fatalf("%d pieces were fetched, want 4: %v", len(order), order)
+	served := onlyHolder.servedPieces()
+	if len(served) == 0 {
+		t.Fatal("the sole holder of the rare piece was never asked for anything")
 	}
-	if want := fmt.Sprintf("%s:3", only.peerID); order[0] != want {
-		t.Errorf("the first fetch was %q, want %q — the piece only one peer holds is the piece "+
-			"that disappears if that peer goes away, so it goes first. Full order: %v",
-			order[0], want, order)
+	if served[0] != 3 {
+		t.Errorf("the sole holder was first asked for piece %d, want 3 — it holds all four, so a "+
+			"driver that ignored rarity would have asked it for 0. Full order: %v", served[0], served)
 	}
 }
 
@@ -541,8 +603,8 @@ func TestPullingABlobAlreadyHeldFetchesNothing(t *testing.T) {
 	if !out.Deduplicated {
 		t.Error("a blob already held was not reported as deduplicated")
 	}
-	if len(holder.served) != 0 {
-		t.Errorf("%d pieces were fetched for a blob already held", len(holder.served))
+	if len(holder.servedPieces()) != 0 {
+		t.Errorf("%d pieces were fetched for a blob already held", len(holder.servedPieces()))
 	}
 }
 

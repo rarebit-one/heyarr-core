@@ -54,6 +54,15 @@ type PieceOutcome struct {
 	// retry uses to prefer peers that did not contribute to a failed attempt —
 	// a heuristic and not attribution, per ADR-0043.
 	FromPeer map[string]int
+	// Unreachable names the sources this session could not use — one that
+	// never said what it held, or one that failed every piece it was asked
+	// for and delivered none.
+	//
+	// It is reported rather than returned as an error, which is ADR-0041's
+	// rule made visible: a session makes progress with whoever it has, so an
+	// unreachable participant is a fact about the run and never its verdict.
+	// Sorted, so a test can assert on it.
+	Unreachable []string
 	// Deduplicated reports the store already held the blob by the time this
 	// finished. Success, not conflict.
 	Deduplicated bool
@@ -110,74 +119,49 @@ func (p *Puller) PullPieces(
 	have := p.resume(blob, g)
 	out.Resumed = have.Count()
 
-	// Ask everyone what they hold, once, before fetching anything. A source
-	// that cannot be asked is dropped rather than fatal: §23's rule is that a
+	// Ask everyone what they hold before fetching anything. A source that
+	// cannot be asked is dropped rather than fatal: §23's rule is that a
 	// session makes progress with whoever it has.
-	held := p.survey(ctx, blob, g, sources)
+	//
+	// This survey is the session's FIRST question, not its only one. The other
+	// peers are filling up while this one is, so a source that answers "nothing"
+	// now is asked again as the transfer progresses — see [Puller.resurvey].
+	held, silent := p.survey(ctx, blob, g, sources)
 	if len(held) == 0 && !g.Complete(have) {
+		out.Unreachable = silent
 		return out, ErrNoPieceSource
 	}
 
-	for !g.Complete(have) {
-		if err := ctx.Err(); err != nil {
-			return out, err
-		}
-		index, chosen, ok := rarest(g, have, held)
-		if !ok {
-			// Everything still missing is held by nobody who answered. Save
-			// what landed so the next attempt resumes from it.
-			p.saveProgress(blob, g, have)
-			return out, ErrNoPieceSource
-		}
+	s := newPieceSession(g, have, partial)
+	for _, id := range silent {
+		s.silent[id] = struct{}{}
+	}
 
-		src := chosen.src
-		var body []byte
-		var ferr error
-		if chosen.kind == domaintransfer.KindWebSeed {
-			// A web seed has no piece route. A piece is a byte range, so it is
-			// a ranged GET on the ordinary content route (§27, ADR-0013), and
-			// the serving side needs no piece awareness at all.
-			body, ferr = p.fetchPieceFromWebSeed(ctx, src, blob, g, index)
-		} else {
-			body, ferr = p.fetchPiece(ctx, src, blob, index)
-		}
-		if ferr != nil {
-			// One peer failing one piece is not the transfer failing. Forget
-			// that this peer claimed this piece and go round again; if it was
-			// the only claimant, the loop ends in ErrNoPieceSource with
-			// progress saved.
-			p.log.Debug("a piece could not be fetched",
-				"blob", blob.String(), "piece", index, "peer_id", src.PeerID, "error", ferr)
-			held[src.PeerID].claim.Remove(index)
-			continue
-		}
+	// Every source at once, bounded, each fetching the rarest piece it holds.
+	// The order is only the order workers pick sources up in, so it is sorted
+	// for determinism rather than because anything depends on it.
+	order := make([]string, 0, len(held))
+	for id := range held {
+		order = append(order, id)
+	}
+	sort.Strings(order)
+	p.driveSources(ctx, s, blob, held, order)
 
-		off, length, rerr := g.Range(index)
-		if rerr != nil {
-			return out, rerr
-		}
-		// A short or long piece is a peer disagreeing about the geometry after
-		// all. Refuse the bytes rather than write them at an offset they do not
-		// belong at — this is the one write that could corrupt a range some
-		// other piece owns.
-		if int64(len(body)) != length {
-			p.log.Debug("a peer served a piece of the wrong length",
-				"blob", blob.String(), "piece", index, "peer_id", src.PeerID,
-				"got", len(body), "want", length)
-			held[src.PeerID].claim.Remove(index)
-			continue
-		}
-		if _, werr := partial.WriteAt(body, off); werr != nil {
-			return out, fmt.Errorf("transfer: writing piece %d of %s: %w", index, blob, werr)
-		}
+	out.Fetched = s.fetched
+	out.FromPeer = s.fromPeer
+	out.Unreachable = s.unusable()
+	p.saveProgress(blob, g, s.have)
 
-		// The bitset is written AFTER the bytes, never before. A crash between
-		// the two costs a refetch; the other order would have this node serving
-		// a piece it does not have (ADR-0043).
-		have.Add(index)
-		p.saveProgress(blob, g, have)
-		out.Fetched++
-		out.FromPeer[src.PeerID]++
+	if s.err != nil {
+		return out, s.err
+	}
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
+	if !g.Complete(s.have) {
+		// Everything still missing is held by nobody who answered. What landed
+		// is saved above, so the next attempt resumes from it.
+		return out, ErrNoPieceSource
 	}
 
 	desc, err := partial.Publish(ctx, blob)
@@ -199,15 +183,35 @@ func (p *Puller) PullPieces(
 
 	p.log.Info("a blob was assembled from pieces",
 		"blob", blob.String(), "bytes", out.Bytes, "pieces_fetched", out.Fetched,
-		"pieces_resumed", out.Resumed, "peers", len(out.FromPeer))
+		"pieces_resumed", out.Resumed, "peers", len(out.FromPeer),
+		"unreachable", len(out.Unreachable))
 	return out, nil
 }
 
-// sourceClaim is one source and what it says it holds.
+// sourceClaim is one source, what it says it holds, and what it has already
+// failed to deliver.
 type sourceClaim struct {
 	src   replication.Source
 	kind  domaintransfer.Kind
 	claim pieces.Availability
+	// declined is every piece this source was asked for and did not deliver:
+	// refused, served at the wrong length, or unreachable at that moment.
+	//
+	// It is separate from the claim, and outlives a re-survey, because a
+	// re-survey replaces the claim wholesale with whatever the peer now says —
+	// which for a peer that holds the blob is "everything", including the piece
+	// it just failed. Without this the session asks the same source for the
+	// same piece forever, which it did: the symptom was one piece fetched
+	// hundreds of times until the machine ran out of ephemeral ports.
+	declined map[int]struct{}
+}
+
+// declines records that this source did not deliver a piece it claimed.
+func (sc *sourceClaim) declines(index int) {
+	if sc.declined == nil {
+		sc.declined = map[int]struct{}{}
+	}
+	sc.declined[index] = struct{}{}
 }
 
 // resume reads the bitset a previous attempt left, as a HINT about where to
@@ -260,11 +264,13 @@ func (p *Puller) discardProgress(blob hashing.Hash) {
 // confused peer must not stop a swarm that has others.
 func (p *Puller) survey(
 	ctx context.Context, blob hashing.Hash, g pieces.Geometry, sources []Candidate,
-) map[string]*sourceClaim {
+) (map[string]*sourceClaim, []string) {
 	out := map[string]*sourceClaim{}
+	silent := map[string]struct{}{}
 	for _, candidate := range sources {
 		src := candidate.Source
 		if err := src.Usable(); err != nil {
+			silent[src.PeerID] = struct{}{}
 			continue
 		}
 
@@ -292,6 +298,7 @@ func (p *Puller) survey(
 		if err != nil {
 			p.log.Debug("a source could not say what it holds",
 				"blob", blob.String(), "peer_id", src.PeerID, "error", err)
+			silent[src.PeerID] = struct{}{}
 			continue
 		}
 		if encoded == "" {
@@ -311,57 +318,7 @@ func (p *Puller) survey(
 		}
 		out[src.PeerID] = &sourceClaim{src: src, kind: candidate.Kind, claim: claim}
 	}
-	return out
-}
-
-// rarest picks the missing piece the fewest sources hold, and a source holding
-// it.
-//
-// Rarest-first, because the piece one peer holds is the piece that disappears
-// if that peer goes away, and a swarm that fetches common pieces first ends
-// with everybody waiting on the same last peer. Ties break by peer id so the
-// choice is deterministic and a test can assert it — not by "first source in
-// the list", which would make the ranking's order decide and hide a bug where
-// availability is ignored entirely.
-func rarest(
-	g pieces.Geometry, have pieces.Availability, held map[string]*sourceClaim,
-) (int, *sourceClaim, bool) {
-	bestIndex, bestCount := -1, 0
-	for _, index := range have.Missing() {
-		if index >= g.Count() {
-			break
-		}
-		n := 0
-		for _, h := range held {
-			if h.claim.Has(index) {
-				n++
-			}
-		}
-		if n == 0 {
-			continue
-		}
-		if bestIndex < 0 || n < bestCount {
-			bestIndex, bestCount = index, n
-		}
-	}
-	if bestIndex < 0 {
-		return 0, nil, false
-	}
-
-	ids := make([]string, 0, len(held))
-	for id, h := range held {
-		if h.claim.Has(bestIndex) {
-			ids = append(ids, id)
-		}
-	}
-	if len(ids) == 0 {
-		// Unreachable while the n == 0 guard above stands, and cheap insurance
-		// that it stays that way: this loop is driven by what peers claim, and
-		// a panic here would be a peer crashing this node's transfer.
-		return 0, nil, false
-	}
-	sort.Strings(ids)
-	return bestIndex, held[ids[0]], true
+	return out, sortedKeys(silent)
 }
 
 // fetchAvailability asks one source which pieces it holds.
