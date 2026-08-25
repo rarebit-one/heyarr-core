@@ -50,3 +50,4 @@ An ADR that merely describes the code is not worth having.
 | [0040](0040-a-renderer-fetches-bytes-with-a-capability-not-a-credential.md) | A renderer fetches bytes with a capability, not a credential | Accepted |
 | [0041](0041-a-transfer-session-is-local-and-pieces-are-not-chunks.md) | A TransferSession is local to a peer, and pieces are not chunks | Proposed |
 | [0042](0042-piece-exchange-is-native-and-rides-the-peer-surface.md) | Piece exchange is Heyarr's own, and rides the peer surface | Proposed |
+| [0043](0043-a-piece-transfer-writes-sparsely-and-its-bitset-is-a-hint.md) | A piece transfer writes sparsely, and its record of what landed is a hint | Proposed |
