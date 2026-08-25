@@ -11,6 +11,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
+	domaintransfer "github.com/rarebit-one/heyarr-core/internal/domain/transfer"
 	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/pieces"
 )
@@ -84,7 +85,7 @@ type PieceOutcome struct {
 // BLAKE3 digest — which is checked, whole, at Publish (invariant 1). There are
 // no piece hashes and adding them would not help; ADR-0043 says why.
 func (p *Puller) PullPieces(
-	ctx context.Context, blob hashing.Hash, size int64, sources []replication.Source,
+	ctx context.Context, blob hashing.Hash, size int64, sources []Candidate,
 ) (PieceOutcome, error) {
 	g, err := pieces.For(size)
 	if err != nil {
@@ -121,7 +122,7 @@ func (p *Puller) PullPieces(
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
-		index, src, ok := rarest(g, have, held)
+		index, chosen, ok := rarest(g, have, held)
 		if !ok {
 			// Everything still missing is held by nobody who answered. Save
 			// what landed so the next attempt resumes from it.
@@ -129,7 +130,17 @@ func (p *Puller) PullPieces(
 			return out, ErrNoPieceSource
 		}
 
-		body, ferr := p.fetchPiece(ctx, src, blob, index)
+		src := chosen.src
+		var body []byte
+		var ferr error
+		if chosen.kind == domaintransfer.KindWebSeed {
+			// A web seed has no piece route. A piece is a byte range, so it is
+			// a ranged GET on the ordinary content route (§27, ADR-0013), and
+			// the serving side needs no piece awareness at all.
+			body, ferr = p.fetchPieceFromWebSeed(ctx, src, blob, g, index)
+		} else {
+			body, ferr = p.fetchPiece(ctx, src, blob, index)
+		}
 		if ferr != nil {
 			// One peer failing one piece is not the transfer failing. Forget
 			// that this peer claimed this piece and go round again; if it was
@@ -195,6 +206,7 @@ func (p *Puller) PullPieces(
 // sourceClaim is one source and what it says it holds.
 type sourceClaim struct {
 	src   replication.Source
+	kind  domaintransfer.Kind
 	claim pieces.Availability
 }
 
@@ -247,13 +259,35 @@ func (p *Puller) discardProgress(blob hashing.Hash) {
 // dropped and named in the log rather than failing the transfer, because one
 // confused peer must not stop a swarm that has others.
 func (p *Puller) survey(
-	ctx context.Context, blob hashing.Hash, g pieces.Geometry, sources []replication.Source,
+	ctx context.Context, blob hashing.Hash, g pieces.Geometry, sources []Candidate,
 ) map[string]*sourceClaim {
 	out := map[string]*sourceClaim{}
-	for _, src := range sources {
+	for _, candidate := range sources {
+		src := candidate.Source
 		if err := src.Usable(); err != nil {
 			continue
 		}
+
+		// A web seed is not ASKED what it holds. It serves byte ranges of a
+		// whole blob or it does not have the blob at all, so "which pieces" has
+		// no meaning for it and there is no route to ask on. It claims
+		// everything, and a 404 on the first range is how it says otherwise —
+		// which the fetch loop already handles as one source failing one piece.
+		if candidate.Kind == domaintransfer.KindWebSeed {
+			all := pieces.NewAvailability(g.Count())
+			for i := range g.Count() {
+				all.Add(i)
+			}
+			out[src.PeerID] = &sourceClaim{src: src, kind: candidate.Kind, claim: all}
+			continue
+		}
+		if candidate.Kind != domaintransfer.KindPeer {
+			p.log.Warn("a source of a kind this transport cannot drive was skipped",
+				"blob", blob.String(), "peer_id", src.PeerID, "kind", string(candidate.Kind),
+				"error", ErrUndrivableSource)
+			continue
+		}
+
 		encoded, err := p.fetchAvailability(ctx, src, blob)
 		if err != nil {
 			p.log.Debug("a source could not say what it holds",
@@ -275,7 +309,7 @@ func (p *Puller) survey(
 				"their_size", theirs.Size, "our_size", g.Size)
 			continue
 		}
-		out[src.PeerID] = &sourceClaim{src: src, claim: claim}
+		out[src.PeerID] = &sourceClaim{src: src, kind: candidate.Kind, claim: claim}
 	}
 	return out
 }
@@ -291,7 +325,7 @@ func (p *Puller) survey(
 // availability is ignored entirely.
 func rarest(
 	g pieces.Geometry, have pieces.Availability, held map[string]*sourceClaim,
-) (int, replication.Source, bool) {
+) (int, *sourceClaim, bool) {
 	bestIndex, bestCount := -1, 0
 	for _, index := range have.Missing() {
 		if index >= g.Count() {
@@ -311,7 +345,7 @@ func rarest(
 		}
 	}
 	if bestIndex < 0 {
-		return 0, replication.Source{}, false
+		return 0, nil, false
 	}
 
 	ids := make([]string, 0, len(held))
@@ -324,10 +358,10 @@ func rarest(
 		// Unreachable while the n == 0 guard above stands, and cheap insurance
 		// that it stays that way: this loop is driven by what peers claim, and
 		// a panic here would be a peer crashing this node's transfer.
-		return 0, replication.Source{}, false
+		return 0, nil, false
 	}
 	sort.Strings(ids)
-	return bestIndex, held[ids[0]].src, true
+	return bestIndex, held[ids[0]], true
 }
 
 // fetchAvailability asks one source which pieces it holds.
