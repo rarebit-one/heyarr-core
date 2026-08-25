@@ -40,7 +40,29 @@ trap cleanup EXIT INT TERM
 # how much was actually exercised rather than leaving a reader to count `ok`s.
 ASSERTIONS=0
 pass() { ASSERTIONS=$(( ASSERTIONS + 1 )); printf '  \033[32mok\033[0m   %s\n' "$1"; }
-fail() { ASSERTIONS=$(( ASSERTIONS + 1 )); printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILED=1; }
+# FAILURES records every failure in the order it happened, so the verdict can
+# print them back.
+#
+# Without it the verdict says only "FAILED — N assertions", and the failures
+# themselves are wherever they happened — often thousands of lines up. Anyone
+# reading the TAIL of a CI log, which is what a person checking a red check and
+# every tool that greps one actually reads, sees the LAST failure and infers it
+# is the fault.
+#
+# That is not hypothetical: it cost a misdiagnosis. A run failed with six
+# assertion failures followed by "the demo took 288s, past its 240s budget",
+# and the overrun — a CONSEQUENCE of the six, since a wait that never lands
+# runs to its full timeout — was read as the whole story (#274).
+#
+# The first failure is nearly always the cause and the rest the consequences,
+# so they are printed in order and the first is called out.
+FAILURES=()
+fail() {
+  ASSERTIONS=$(( ASSERTIONS + 1 ))
+  printf '  \033[31mFAIL\033[0m %s\n' "$1"
+  FAILURES+=("$1")
+  FAILED=1
+}
 note() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 assert_contains() { # haystack needle description
@@ -6343,7 +6365,20 @@ fi
 
 VERDICT_REACHED=1
 if (( FAILED )); then
-  printf '\n\033[31macceptance: FAILED\033[0m — %d assertions\n' "$ASSERTIONS"
+  printf '\n\033[31macceptance: FAILED\033[0m — %d assertions, %d of them failing\n' \
+    "$ASSERTIONS" "${#FAILURES[@]}"
+  if (( ${#FAILURES[@]} > 0 )); then
+    printf '\n  what failed, in the order it happened:\n'
+    local_i=1
+    for f in "${FAILURES[@]}"; do
+      printf '    %d. %s\n' "$local_i" "$f"
+      local_i=$(( local_i + 1 ))
+    done
+    printf '\n  The FIRST one is usually the cause and the rest its consequences —\n'
+    printf '  a wait that never lands runs to its full timeout, so a run that blew\n'
+    printf '  its time budget very often blew it BECAUSE of the failure above,\n'
+    printf '  not instead of it (#274). Read down, not up.\n'
+  fi
   if (( CAPS_MISSING_N > 0 )); then
     printf '  %d of those failures are MISSING CAPABILITIES: an assertion declared\n' "$CAPS_MISSING_N"
     printf '  something this machine does not have, so it could not be exercised.\n'
