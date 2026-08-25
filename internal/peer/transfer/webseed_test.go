@@ -121,11 +121,28 @@ func TestAMixedSessionTakesPiecesFromBothKindsAndSaysWhichCameFromWhere(t *testi
 		t.Errorf("attribution accounts for %d of 8 pieces (%d peer, %d seed)",
 			fromPeer+fromSeed, fromPeer, fromSeed)
 	}
-	// The four the peer alone holds are rarest, so they come from the peer;
-	// the other four are held only by the seed.
-	if fromPeer != 4 || fromSeed != 4 {
-		t.Errorf("pieces split %d peer / %d seed, want 4 and 4 — the peer holds "+
-			"0,2,4,6 and only the seed has the rest", fromPeer, fromSeed)
+	// The EXACT split is deliberately not asserted, and this is the second
+	// place in this repository to learn the same lesson.
+	//
+	// It used to be `4 and 4`, which was right for a driver that fetched from
+	// one source at a time: the seed took the four pieces only it held, and the
+	// peer took the other four because it sorted first among their two holders.
+	// A driver that fetches from every source AT ONCE (§23) makes that a race —
+	// the seed, having finished its four, competes for the rest — and it split
+	// 3/5 on a CI runner while splitting 4/4 on a laptop, on identical code.
+	//
+	// What remains true whatever the timing is the shape of the fixture: the
+	// four pieces the peer does not hold can only have come from the seed, and
+	// the peer cannot have served bytes it refuses to serve. Both bounds are
+	// sharp — a driver that ignored availability would break the second, and one
+	// that ignored the web seed entirely could not satisfy the first.
+	if fromSeed < 4 {
+		t.Errorf("the seed served %d pieces, and at least 4 must be its own — the peer holds "+
+			"only 0,2,4,6 and refuses everything else", fromSeed)
+	}
+	if fromPeer > 4 {
+		t.Errorf("the peer served %d pieces but holds only 4, so something served bytes it "+
+			"had refused", fromPeer)
 	}
 }
 

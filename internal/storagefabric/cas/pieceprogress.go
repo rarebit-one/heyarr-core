@@ -54,8 +54,29 @@ func (s *FS) SavePieceProgress(blob hashing.Hash, encoded string) error {
 		}
 		return nil
 	}
-	if err := os.WriteFile(path, []byte(encoded), blobPerm); err != nil {
-		return s.permissionFault("recording piece progress", path, err)
+	// Written to a sibling and renamed over, for two reasons that are both
+	// about this file being rewritten OFTEN — once per piece — rather than
+	// produced once.
+	//
+	// A blob is immutable and is stored read-only (blobPerm). This is not a
+	// blob: it is a temp record that is replaced on every piece, and writing it
+	// read-only meant the FIRST save succeeded and every later one failed with
+	// EACCES — silently, because losing a hint is not fatal. The visible
+	// symptom was a peer that advertised its first piece and never any of the
+	// others, which is §23 not happening rather than anything red.
+	//
+	// And the reader is another node. A peer serves from a partial while this
+	// one fills it (ADR-0042), and its availability comes from this file — so a
+	// truncate-and-rewrite in place has a window where a reader sees a shorter
+	// bitset than either the old or the new one. A rename is atomic and has no
+	// such window.
+	tmp := path + ".new"
+	if err := os.WriteFile(tmp, []byte(encoded), tempPerm); err != nil {
+		return s.permissionFault("recording piece progress", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("cas: recording piece progress for %s: %w", blob, err)
 	}
 	return nil
 }
