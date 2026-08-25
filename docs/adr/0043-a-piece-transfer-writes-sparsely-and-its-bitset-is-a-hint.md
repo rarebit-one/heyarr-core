@@ -1,6 +1,6 @@
 # 0043. A piece transfer writes sparsely, and its record of what landed is a hint
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-25
 
 ## Context
@@ -155,3 +155,25 @@ refetch, which is what a reaped partial already costs.
   becomes incremental or is skipped for a fast path, this decision has to be
   re-made with the bitset promoted from hint to evidence — which is a much
   stronger requirement than it currently meets.
+
+## Status note
+
+**Accepted 2026-08-25.** Shipped in #271 and #275. The load-bearing ordering —
+the bitset is written AFTER the bytes, never before — survived concurrency
+(#280) and is now proven rather than asserted: a staging file that refuses one
+offset must not leave a record claiming that piece, and inverting the order
+fails that test.
+
+Two defects in this record's first implementation are worth carrying here,
+because both were silent and both would have read as the feature simply not
+working:
+
+- the progress record was written with the **blob** permission (`0o440`) —
+  correct for an immutable blob, wrong for a file replaced on every piece — so
+  the first save succeeded and every later one failed with `EACCES`. The symptom
+  was a peer that advertised its first piece and never any of the others. It is
+  written to a sibling and renamed now, which also closes the window where a
+  peer serving from that partial reads a half-rewritten bitset.
+- a staging-file write failure was handled as though the SOURCE had refused it,
+  so the piece was offered round the fabric forever. A local fault ends the
+  session; a remote one does not.

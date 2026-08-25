@@ -1,6 +1,6 @@
 # 0042. Piece exchange is Heyarr's own, and rides the peer surface
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-25
 
 ## Context
@@ -131,3 +131,21 @@ bytes on the path where invariant 1 matters most.
 - **Hostile peers inside membership.** The threat model here is that enrolment is
   the trust boundary (ADR-0012). If a peer can be enrolled and malicious, the
   hardening a mature engine has and this does not becomes worth its cost.
+
+## Status note
+
+**Accepted 2026-08-25**, with one departure recorded rather than left to be
+discovered.
+
+This record said a piece would be fetched as a ranged GET on the existing blob
+CONTENT route, and that the serving side would need no new surface. That is true
+for a blob a peer holds whole and impossible for one it holds partially: the
+content route promises a strong `ETag` naming the whole-object digest, a length
+that is the blob's length, and a `404` meaning *not here* — and a node holding a
+third of the bytes can honour none of the three. **A piece is therefore its own
+route**, `GET /peer/v1/blobs/{hash}/pieces/{index}`, alongside an availability
+route (#272, #275).
+
+Everything else stands: no engine was linked in, no daemon was added, `go.mod`
+gained no torrent dependency, and discovery is membership with nowhere for a
+tracker to be configured (#265).

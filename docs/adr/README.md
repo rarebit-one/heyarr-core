@@ -45,10 +45,10 @@ An ADR that merely describes the code is not worth having.
 | [0035](0035-a-resumed-transfer-trusts-nothing-it-has-not-re-verified.md) | A resumed transfer trusts nothing it has not re-verified itself | Accepted |
 | [0036](0036-integrity-repair-stages-a-whole-replacement.md) | Integrity repair stages a whole replacement; a blob is never edited in place | Accepted |
 | [0037](0037-one-way-reachability-is-reported-not-refused.md) | One-way reachability is reported at enrolment, never refused | Accepted |
-| [0038](0038-there-is-no-central-authority-peers-are-repositories.md) | Each peer is authoritative for its own site | Proposed |
+| [0038](0038-there-is-no-central-authority-peers-are-repositories.md) | Each peer is authoritative for its own site | Accepted |
 | [0039](0039-worker-capability-advertisement-is-durable-proven-by-execution-and-expires.md) | Worker capability advertisement is durable, proven by execution, and expires | Accepted |
 | [0040](0040-a-renderer-fetches-bytes-with-a-capability-not-a-credential.md) | A renderer fetches bytes with a capability, not a credential | Accepted |
-| [0041](0041-a-transfer-session-is-local-and-pieces-are-not-chunks.md) | A TransferSession is local to a peer, and pieces are not chunks | Proposed |
-| [0042](0042-piece-exchange-is-native-and-rides-the-peer-surface.md) | Piece exchange is Heyarr's own, and rides the peer surface | Proposed |
-| [0043](0043-a-piece-transfer-writes-sparsely-and-its-bitset-is-a-hint.md) | A piece transfer writes sparsely, and its record of what landed is a hint | Proposed |
+| [0041](0041-a-transfer-session-is-local-and-pieces-are-not-chunks.md) | A TransferSession is local to a peer, and pieces are not chunks | Accepted |
+| [0042](0042-piece-exchange-is-native-and-rides-the-peer-surface.md) | Piece exchange is Heyarr's own, and rides the peer surface | Accepted |
+| [0043](0043-a-piece-transfer-writes-sparsely-and-its-bitset-is-a-hint.md) | A piece transfer writes sparsely, and its record of what landed is a hint | Accepted |
 | [0044](0044-a-controller-backup-is-a-signed-whole-database-snapshot.md) | A controller backup is a signed whole-database snapshot, a restore verifies it, and it carries the controller's identity wrapped | Proposed |
