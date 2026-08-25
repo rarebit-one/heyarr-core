@@ -40,7 +40,29 @@ trap cleanup EXIT INT TERM
 # how much was actually exercised rather than leaving a reader to count `ok`s.
 ASSERTIONS=0
 pass() { ASSERTIONS=$(( ASSERTIONS + 1 )); printf '  \033[32mok\033[0m   %s\n' "$1"; }
-fail() { ASSERTIONS=$(( ASSERTIONS + 1 )); printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILED=1; }
+# FAILURES records every failure in the order it happened, so the verdict can
+# print them back.
+#
+# Without it the verdict says only "FAILED — N assertions", and the failures
+# themselves are wherever they happened — often thousands of lines up. Anyone
+# reading the TAIL of a CI log, which is what a person checking a red check and
+# every tool that greps one actually reads, sees the LAST failure and infers it
+# is the fault.
+#
+# That is not hypothetical: it cost a misdiagnosis. A run failed with six
+# assertion failures followed by "the demo took 288s, past its 240s budget",
+# and the overrun — a CONSEQUENCE of the six, since a wait that never lands
+# runs to its full timeout — was read as the whole story (#274).
+#
+# The first failure is nearly always the cause and the rest the consequences,
+# so they are printed in order and the first is called out.
+FAILURES=()
+fail() {
+  ASSERTIONS=$(( ASSERTIONS + 1 ))
+  printf '  \033[31mFAIL\033[0m %s\n' "$1"
+  FAILURES+=("$1")
+  FAILED=1
+}
 note() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 assert_contains() { # haystack needle description
@@ -1133,9 +1155,32 @@ probe_recorded() { # blob-hash
 # — it has no container, and `direct` is the honest answer to "I do not know
 # what this file is" — and the run reports a planner regression that did not
 # happen (#207).
+#
+# # Why this budget is the largest in the file rather than the middle one
+#
+# It was 600 (60s), and it ran out on CI — on a DOCS-ONLY branch, taking six
+# assertions down with it, because everything below a missing probe is a
+# consequence of the probe missing (#274).
+#
+# This is the only wait here whose condition depends on all three of an external
+# binary, a job queue, AND deliberate contention: the section that calls it
+# starts a worker that CANNOT probe alongside one that can, precisely so the
+# claim discipline is exercised. So the probe has to wait for the right claimant
+# by design. Every other wait in this file is in-process and uncontended, and
+# the replication wait — with neither an external binary nor a rival claimant —
+# already had 900.
+#
+# 60 seconds was therefore the tightest budget on the heaviest wait, which is
+# backwards. On the run that failed, the demo took 288s against a median of
+# ~165s: a runner 1.7x slower turns a probe that comfortably lands in 40s into
+# one that does not land in 60.
+#
+# This does not make the wait a bet on machine speed — it still polls for a
+# CONDITION and stops the moment it arrives, so a fast machine pays nothing.
+# It only widens how slow a machine may be before the run calls it a failure.
 wait_for_probe() { # blob-hash description
   wait_for "the probe never recorded a container for blob $1, so $2" \
-    600 probe_recorded "$1"
+    900 probe_recorded "$1"
 }
 
 # refusal_arc_at_rest <want-id> — 0 once a fruitless search has BOTH recorded
@@ -1270,6 +1315,7 @@ providers:
       - title: The Quiet Room
         candidates:
           - id: tqr-1080-web
+            fetch: magnet:?xt=urn:btih:tqr-1080-web
             title: The Quiet Room 1080p web-dl
             attributes:
               resolution: 1080
@@ -1280,6 +1326,7 @@ providers:
         candidates:
           # Acceptable and terminal: passes the gate, meets every preference.
           - id: bh-2160-remux
+            fetch: magnet:?xt=urn:btih:bh-2160-remux
             title: Blue Harvest 2160p remux
             attributes:
               resolution: 2160
@@ -1290,6 +1337,7 @@ providers:
           # Acceptable and NOT as good as it gets — the gap the upgrade
           # workflow lives in.
           - id: bh-1080-web
+            fetch: magnet:?xt=urn:btih:bh-1080-web
             title: Blue Harvest 1080p web-dl
             attributes:
               resolution: 1080
@@ -1299,6 +1347,7 @@ providers:
           # Rejected by the gate, so the demo has a real rejection to read a
           # reason off rather than asserting on an absence.
           - id: bh-480-cam
+            fetch: magnet:?xt=urn:btih:bh-480-cam
             title: Blue Harvest 480p cam
             attributes:
               resolution: 480
@@ -1311,6 +1360,7 @@ providers:
       - title: Nightfall Sonata
         candidates:
           - id: ns-2160-remux
+            fetch: magnet:?xt=urn:btih:ns-2160-remux
             title: Nightfall Sonata 2160p remux
             attributes:
               resolution: 2160
@@ -1326,18 +1376,21 @@ providers:
       - title: Static Bloom
         candidates:
           - id: sb-480-cam
+            fetch: magnet:?xt=urn:btih:sb-480-cam
             title: Static Bloom 480p cam
             attributes:
               resolution: 480
               source: cam
               video_codec: h264
           - id: sb-576-ts
+            fetch: magnet:?xt=urn:btih:sb-576-ts
             title: Static Bloom 576p telesync
             attributes:
               resolution: 576
               source: telesync
               video_codec: h264
           - id: sb-720-web
+            fetch: magnet:?xt=urn:btih:sb-720-web
             title: Static Bloom 720p web-dl
             attributes:
               resolution: 720
@@ -2138,11 +2191,18 @@ YAML
 
   # What is deliberately absent, and why. A tool answering "not implemented"
   # would be a published vocabulary with a hole in it.
+  #
+  # THE VERB PROBED HERE MUST STILL BE IN internal/api/mcp/deferred.go. This
+  # asked for `acquire_release` until M6 shipped it, at which point the call
+  # started answering -32602 (the verb exists, the arguments were wrong) instead
+  # of -32601 (no such verb) — which is the assertion below failing for the best
+  # possible reason. When the last deferred verb ships, this block goes rather
+  # than being pointed at something arbitrary.
   local mcp_deferred
-  mcp_deferred=$(mcp_call "acquire_release" '{}')
+  mcp_deferred=$(mcp_call "transfer_playback" '{}')
   assert_eq "$(jq -r '.error.code' <<<"$mcp_deferred")" "-32601" \
     "a §71 verb this milestone does not carry is absent rather than stubbed"
-  assert_contains "$(jq -r '.error.data.milestone' <<<"$mcp_deferred")" "M3" \
+  assert_contains "$(jq -r '.error.data.milestone' <<<"$mcp_deferred")" "M4" \
     "and names the milestone that brings it, so an agent waits rather than retrying"
 
   # A typo is NOT reported as a deferred feature.
@@ -2370,6 +2430,33 @@ YAML
   done
   assert_eq "$search_state" "SELECTED" \
     "a want reaches SELECTED with no real indexer anywhere (§64, ADR-0026)"
+
+  # AND IT DOES NOT STOP THERE (#225). Selecting a release used to be where a
+  # want came to rest: Downloader.Add had no caller, no job type grabbed, and
+  # the only route from SELECTED to bytes was the by-hand adoption endpoint.
+  #
+  # What is asserted is that a grab was QUEUED, not that it succeeded. The only
+  # download client configured here points at port 9 and refuses connections on
+  # purpose (ADR-0025), so the grab will fail — which is the correct outcome for
+  # a client that is down, and leaves the want holding its selection to retry.
+  #
+  # A job existing is therefore the whole claim, and it is the right one: it is
+  # the edge that did not exist, and it is observable without a working daemon.
+  local grab_jobs
+  waited=0
+  while (( waited < 300 )); do
+    grab_jobs=$(api "/api/v1/jobs?type=grab_release" | jq -r '.items | length')
+    (( grab_jobs > 0 )) && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  assert_eq "$grab_jobs" "1" \
+    "selecting a release queues the grab that fetches it (§64 SELECTED -> QUEUED)"
+
+  # And the want KEEPS its selection when the grab cannot reach a client. A
+  # want that lost its selection on an unreachable daemon would re-search and
+  # re-decide every cycle, which is work and indexer load for no gain.
+  assert_eq "$(api "/api/v1/desired/$search_id" | jq -r '.acquisition.state')" "SELECTED" \
+    "and a download client that is down leaves the selection intact to retry"
 
   # §63's answer, durable and readable after the fact. An evaluation that lived
   # in memory for two hundred milliseconds is deterministic and is not
@@ -5559,9 +5646,30 @@ $ctl_moved of $ctl_size bytes, measured on the SOURCE's serving side"
   # eighty-odd chunks, boundaries are close enough together to land on, and it
   # failed on `main` with `chunks_fetched — got '2', want '1'`. A single byte
   # cannot span a boundary, so the damage is exactly one chunk every time.
+  #
+  # And the byte written is the ORIGINAL byte INVERTED, not a random one.
+  # `dd if=/dev/urandom … count=1` writes one random byte, which has a 1-in-256
+  # chance of being the byte already there — leaving the file unchanged, the
+  # blob still verifying, and this section failing with
+  # `the blob is damaged … got 'true', want 'false'`. That is a 0.4% flake per
+  # run, which is rare enough to look like something else and frequent enough
+  # to hit: it did, on CI, once. Inverting the byte that is there cannot
+  # produce the byte that is there.
   rp_off=$(( rp_size / 2 ))
   chmod u+w "$rp_file"
-  dd if=/dev/urandom of="$rp_file" bs=1 seek="$rp_off" count=1 conv=notrunc 2>/dev/null
+  rp_orig=$(dd if="$rp_file" bs=1 skip="$rp_off" count=1 2>/dev/null | od -An -tu1 | tr -d ' ')
+  printf "$(printf '\\%03o' "$(( rp_orig ^ 255 ))")" \
+    | dd of="$rp_file" bs=1 seek="$rp_off" count=1 conv=notrunc 2>/dev/null
+  # And CHECK the damage landed, before asserting anything about repair.
+  #
+  # The write's stderr is discarded — it is noisy — so a write that did not
+  # happen at all would look exactly like a write that changed nothing, and the
+  # section would fail three assertions later complaining about repair. This
+  # reads the byte back and fails HERE, naming the step that did not work.
+  rp_now=$(dd if="$rp_file" bs=1 skip="$rp_off" count=1 2>/dev/null | od -An -tu1 | tr -d ' ')
+  if [[ "$rp_now" == "$rp_orig" ]]; then
+    fail "the damage did not land: byte $rp_off of the blob is still $rp_orig, so nothing below measures a repair"
+  fi
   assert_eq "$(cli_a blobs verify "$lc_large" --json 2>/dev/null | jq -r '.verified | tostring')" "false" \
     "the blob is damaged on node A: it no longer hashes to its own name"
 
@@ -5866,6 +5974,387 @@ the corruption may be the operator's own file (ADR-0018)"
   PEER_PIDS=()
 }
 
+# ---------------------------------------------------------------------------
+# THE SWARM: two peers converge, and the external source serves less than two
+# copies (§23, §24, §33, §85, M6-06)
+# ---------------------------------------------------------------------------
+#
+# THE MILESTONE'S GATE. Everything above this point moves a blob from a peer
+# that holds ALL of it to one that holds NONE of it. That is `Internet → A`,
+# then `A → B`, and it is the shape Milestone 6 exists to replace:
+#
+#                        external source
+#                     ↙                  ↘
+#                  peer A ◄──────────► peer B
+#
+# Both peers pulling from the external source WHILE exchanging with each other,
+# and both arriving as complete replicas. Until this runs, M6 is a set of
+# packages with a Go test.
+#
+# # Why there is a third node, and why it is not enrolled as a holder
+#
+# The swarm path is reached only where single-source replication has no answer.
+# `replicas` has no `partial` state — §23's opening sentence, still true in the
+# schema — so a peer holding a third of a blob is recorded exactly like one that
+# never heard of it, and `BlobSources` therefore returns nothing for a blob no
+# peer holds WHOLE. That branch used to be a dead end and is now where the swarm
+# runs (#279). When some peer does hold it whole, the streamed pull is better in
+# every way and is deliberately left alone.
+#
+# So the third node stands in for the outside world: it holds the blob, it is an
+# enrolled member, and it never reports its inventory to the other two. They know
+# it exists and can ask it for pieces; their catalogues do not record it as
+# holding anything, which is exactly the state a peer that acquired bytes ten
+# seconds ago is in.
+#
+# # Why it is countable
+#
+# The cooperation claim is an INEQUALITY and cannot be stated without a number
+# from the source's own side. Every node records what left it — "served a piece
+# to a peer", with bytes and the peer that asked — so the external source's
+# contribution is a fact about the external source rather than a claim by the
+# peers about themselves.
+#
+# # What is NOT asserted, and why
+#
+# Not how much each peer contributed. That is a property of timing and it will
+# move; M5 learned this twice in one afternoon and the second lesson was the
+# expensive one. The claims below are the fixture-independent ones: both peers
+# hold the whole blob, the external source served less than two copies of it,
+# and bytes moved directly between the two peers.
+
+# piece_served_bytes is how many PIECE bytes a node has sent for a blob.
+#
+# The sibling of peer_served_bytes, against the piece route rather than the
+# content route, and it exists for the same reason that one does: what left a
+# source is a fact about the source, where a destination's account of what it
+# fetched is a claim about itself.
+#
+# The field is `blob`, not `blob_hash` — the piece route logs the digest under
+# the name the transport calls it. Matching the wrong field would sum nothing
+# and read as a source that served nothing, which is a passing assertion in
+# three of the four places it is used below.
+piece_served_bytes() { # logfile blob-hash
+  { grep -F '"msg":"served a piece to a peer"' "$1" 2>/dev/null || true; } |
+    jq -s --arg h "$2" '[.[] | select(.blob == $h) | .bytes] | add // 0'
+}
+
+# piece_served_count counts those reads, optionally to ONE peer.
+#
+# `grep -c .` rather than `wc -l`, because a here-string of "" is one empty line
+# to wc and would report a surface that served nothing as having served once.
+piece_served_count() { # logfile blob-hash [peer-id]
+  { grep -F '"msg":"served a piece to a peer"' "$1" 2>/dev/null || true; } |
+    jq -r --arg h "$2" --arg p "${3:-}" \
+      'select(.blob == $h and ($p == "" or .peer_id == $p)) | .peer_id' | grep -c . || true
+}
+
+swarm_demo() {
+  local root="$WORK/swarm" lib
+  lib="$root/library"
+  mkdir -p "$lib/movies/Drift Season (2022)"
+
+  # THIRTY-TWO megabytes, and the size is load-bearing rather than generous.
+  #
+  # A piece is fixed-length and derived from the blob's size, clamped at 256 KiB
+  # below (internal/storagefabric/pieces), so this is 128 pieces — enough that
+  # the work divides between three sources many times over and one piece is
+  # under a per cent of the transfer.
+  #
+  # The number that actually chose it is not the piece count, though. It is HOW
+  # LONG ONE TRANSFER TAKES. This section needs node B to join while node A is
+  # still fetching, and it observes that from the shell, which cannot see
+  # anything faster than its 100ms poll. At eight megabytes — thirty-two pieces
+  # over loopback — node A finished INSIDE THE FIRST POLL, so the overlap this
+  # section is about did not exist and the run was `A, then B` wearing a
+  # swarm'"'"'s clothes. It still passed every assertion, which is why the overlap
+  # is now asserted rather than arranged.
+  #
+  # It is also deliberately ABOVE §16's 4 MiB chunking threshold, so the blob
+  # has a manifest — which takes no part in the exchange (ADR-0041) and is here
+  # so that its absence is not what makes the exchange work.
+  head -c 33554432 /dev/urandom > "$lib/movies/Drift Season (2022)/Drift.Season.2022.1080p.mkv"
+
+  local n
+  for n in a b origin; do
+    mkdir -p "$root/$n"
+    cat > "$WORK/swarm-$n.yaml" <<YAML
+data_dir: $root/$n/data
+peer:
+  name: swarm-$n
+  site: swarm-$n
+  listen: 127.0.0.1:0
+log:
+  level: info
+  format: json
+http:
+  addr: ""
+libraries:
+  - name: films
+    content_type: movie
+    roots: ["$lib/movies"]
+YAML
+  done
+
+  local cfg_a="$WORK/swarm-a.yaml" cfg_b="$WORK/swarm-b.yaml" cfg_o="$WORK/swarm-origin.yaml"
+  local log_a="$root/a.log" log_b="$root/b.log" log_o="$root/origin.log"
+  local sock_a="$root/a/data/heyarr.sock" sock_b="$root/b/data/heyarr.sock"
+  local sock_o="$root/origin/data/heyarr.sock"
+  local tok_a tok_b tok_o
+  tok_a=$("$BIN" --config "$cfg_a" token create acceptance --scopes admin --json | jq -r .token)
+  tok_b=$("$BIN" --config "$cfg_b" token create acceptance --scopes admin --json | jq -r .token)
+  tok_o=$("$BIN" --config "$cfg_o" token create acceptance --scopes admin --json | jq -r .token)
+
+  start_peer_node "$cfg_a" "$log_a" all
+  start_peer_node "$cfg_b" "$log_b" all
+  start_peer_node "$cfg_o" "$log_o" all
+
+  sw_a() { curl -sS --unix-socket "$sock_a" -H "Authorization: Bearer $tok_a" "${@:2}" "http://heyarr$1"; }
+  sw_b() { curl -sS --unix-socket "$sock_b" -H "Authorization: Bearer $tok_b" "${@:2}" "http://heyarr$1"; }
+  sw_o() { curl -sS --unix-socket "$sock_o" -H "Authorization: Bearer $tok_o" "${@:2}" "http://heyarr$1"; }
+  cli_sa() { "$BIN" --config "$cfg_a" --token "$tok_a" "$@"; }
+  cli_sb() { "$BIN" --config "$cfg_b" --token "$tok_b" "$@"; }
+  cli_so() { "$BIN" --config "$cfg_o" --token "$tok_o" "$@"; }
+
+  local s waited
+  for s in "$sock_a" "$sock_b" "$sock_o"; do
+    waited=0
+    while (( waited < 900 )); do
+      curl -sf --unix-socket "$s" http://heyarr/readyz >/dev/null 2>&1 && break
+      sleep 0.1; waited=$(( waited + 1 ))
+    done
+    if (( waited >= 900 )); then fail "swarm: $s never became ready"; tail -20 "$log_a"; return 1; fi
+  done
+
+  local l
+  for l in "$log_a" "$log_b" "$log_o"; do
+    waited=0
+    while (( waited < 1200 )); do
+      (( $(grep -c '"msg":"ingested"' "$l" 2>/dev/null || true) >= 1 )) && break
+      sleep 0.1; waited=$(( waited + 1 ))
+    done
+    if (( waited >= 1200 )); then fail "swarm: $l never ingested the fixture"; tail -20 "$l"; return 1; fi
+  done
+
+  local addr_a addr_b addr_o
+  addr_a=$(peer_listen_addr "$log_a") || { fail "swarm: node A never bound a peer surface"; return 1; }
+  addr_b=$(peer_listen_addr "$log_b") || { fail "swarm: node B never bound a peer surface"; return 1; }
+  addr_o=$(peer_listen_addr "$log_o") || { fail "swarm: the source never bound a peer surface"; return 1; }
+
+  # -------------------------------------------------------------------------
+  note "  three enrolled members, and one of them never says what it holds"
+  # -------------------------------------------------------------------------
+  local key_a key_b key_o
+  key_a=$(cli_sa peers list --json | jq -r '.[] | select(.is_self) | .public_key')
+  key_b=$(cli_sb peers list --json | jq -r '.[] | select(.is_self) | .public_key')
+  key_o=$(cli_so peers list --json | jq -r '.[] | select(.is_self) | .public_key')
+
+  # Every pair, in both directions, plus each node's record of itself so it can
+  # report its own inventory through the same door everyone else uses (M4-07).
+  cli_sa peers add --name swarm-a --public-key "$key_a" --endpoint "https://$addr_a" --json >/dev/null
+  cli_sb peers add --name swarm-b --public-key "$key_b" --endpoint "https://$addr_b" --json >/dev/null
+  cli_so peers add --name swarm-origin --public-key "$key_o" --endpoint "https://$addr_o" --json >/dev/null
+  cli_sa peers add --name swarm-b --site swarm-b --mode full --public-key "$key_b" --endpoint "https://$addr_b" --json >/dev/null
+  cli_sa peers add --name swarm-origin --site swarm-origin --mode full --public-key "$key_o" --endpoint "https://$addr_o" --json >/dev/null
+  cli_sb peers add --name swarm-a --site swarm-a --mode full --public-key "$key_a" --endpoint "https://$addr_a" --json >/dev/null
+  cli_sb peers add --name swarm-origin --site swarm-origin --mode full --public-key "$key_o" --endpoint "https://$addr_o" --json >/dev/null
+  cli_so peers add --name swarm-a --site swarm-a --mode full --public-key "$key_a" --endpoint "https://$addr_a" --json >/dev/null
+  cli_so peers add --name swarm-b --site swarm-b --mode full --public-key "$key_b" --endpoint "https://$addr_b" --json >/dev/null
+
+  assert_eq "$(cli_sa peers list --json | jq -r 'length')" "3" \
+    "node A has three members: itself, the other peer, and the external source"
+
+  local blob size
+  blob=$(sw_o /api/v1/assets | jq -r '.items[0].blob_hash')
+  assert_contains "$blob" "blake3:" "the fixture names bytes all three nodes hashed to the same digest"
+  size=$(sw_o "/api/v1/blobs/$blob" | jq -r '.size')
+  assert_eq "$size" "33554432" "and the catalogue agrees how big they are"
+
+  # -------------------------------------------------------------------------
+  note "  the gap: two peers want a blob that, as far as either can tell, nobody holds"
+  # -------------------------------------------------------------------------
+  #
+  # The bytes are really deleted from two real disks, and each node then reports
+  # what it now holds. The external source reports NOTHING to anybody, so its
+  # `replicas` rows on A and B stay unproven — which is the state §23 is about,
+  # and the state that sends this through the swarm rather than the streamed
+  # pull.
+  assert_eq "$(peer_holds "$root/a/data/cas" "$blob")" "1" "node A holds the bytes before the gap is made"
+  assert_eq "$(peer_holds "$root/b/data/cas" "$blob")" "1" "and so does node B"
+  find "$root/a/data/cas/blobs" -name "${blob#blake3:}" -type f -delete
+  find "$root/b/data/cas/blobs" -name "${blob#blake3:}" -type f -delete
+  assert_eq "$(peer_holds "$root/a/data/cas" "$blob")" "0" "node A does not hold them after"
+  assert_eq "$(peer_holds "$root/b/data/cas" "$blob")" "0" "and neither does node B"
+  assert_eq "$(peer_holds "$root/origin/data/cas" "$blob")" "1" \
+    "the external source still holds every byte — it is the only complete copy in the fabric"
+
+  cli_sa peers report-inventory swarm-a --json >/dev/null
+  cli_sb peers report-inventory swarm-b --json >/dev/null
+
+  # The precondition the whole section rests on is asserted AFTER the fact, from
+  # the log, rather than before it from a route that does not exist: the swarm
+  # branch and the streamed pull write different lines, and which one ran is the
+  # only form of this claim that cannot be satisfied by a system that took the
+  # other path. See the two assertions below the wait.
+
+  # -------------------------------------------------------------------------
+  note "  🔴 both peers converge, from an external source and from each other (§23)"
+  # -------------------------------------------------------------------------
+  #
+  # Node A starts, and node B JOINS A TRANSFER ALREADY IN PROGRESS. The two
+  # overlap — A is nowhere near done, and that is asserted below — but they do
+  # not start in the same instant.
+  #
+  # # Why not both at once, which is what this did first
+  #
+  # Because two peers fetching the same blob at the same rate from the same
+  # source hold almost the same pieces at every moment, so there is very little
+  # either can give the other, and how much there is depends on which one the
+  # scheduler happens to favour. Measured across two runs of the simultaneous
+  # version on one machine: the external source carried 78% of two copies in one
+  # and 95% in the other, and the direction REVERSED — node A seeded node B in
+  # the first run and node B seeded node A in the second. An assertion that each
+  # peer served the other would have been a coin toss, and one on the share
+  # would have been worse.
+  #
+  # A peer joining a swarm that is already running is not a thumb on the scale;
+  # it is §23's ordinary case, and the one where cooperation is structural
+  # rather than accidental. Both peers are still fetching from the external
+  # source at the same time, which is the "while also" the section is about.
+  sw_a "/api/v1/peers/swarm-a/reconcile" -X POST -o /dev/null
+
+  # The wait is on an OBSERVED fact rather than a sleep: the external source's
+  # own record of what it has served to node A. A sleep would be a guess about a
+  # machine, and it would be wrong on the slowest runner, which is the one that
+  # matters.
+  # Unfiltered by peer, deliberately. The record names the peer by its ID —
+  # the value `peers add` generated — and not by the name this script typed,
+  # so a filter on "swarm-a" matches nothing, waits out its budget, and lets
+  # node B start after node A has already finished. That is what it did: the
+  # section still passed every assertion below, because a node A that has
+  # finished is an excellent piece source, and the run was `A, then B` wearing
+  # the swarm's clothes. Node B is the only other fetcher and it has not been
+  # told to start yet, so an unfiltered count of pieces served for THIS blob is
+  # a count of pieces served to node A.
+  swarm_a_has_started() {
+    (( $(piece_served_count "$log_o" "$blob") >= 8 ))
+  }
+  wait_for "node A never fetched a piece from the external source, so there was never a swarm for node B to join" \
+    900 swarm_a_has_started
+
+  # THE OVERLAP, asserted rather than assumed. If node A had finished, what
+  # follows would be `A, then B` — the sequential shape this milestone replaces
+  # — and every assertion below would still pass.
+  assert_eq "$(peer_holds "$root/a/data/cas" "$blob")" "0" \
+    "node A is still mid-transfer when node B joins: the two overlap, which is what makes this a swarm and not a queue"
+
+  sw_b "/api/v1/peers/swarm-b/reconcile" -X POST -o /dev/null
+
+  swarm_converged() {
+    [[ "$(peer_holds "$root/a/data/cas" "$blob")" == "1" &&
+       "$(peer_holds "$root/b/data/cas" "$blob")" == "1" ]]
+  }
+  wait_for "the two peers never both ended up holding the blob — a swarm that does not converge is the milestone failing, not a slow runner" \
+    1800 swarm_converged
+
+  # BOTH PEERS COMPLETE, each having verified the whole object against its own
+  # BLAKE3 digest. `peer_holds` finds the blob by digest under the store's own
+  # fanout, and a partial never reaches the blob tree: Publish re-reads the
+  # assembled file and hashes it whole before linking anything (invariant 1), so
+  # the file being there under that name IS the verification having passed.
+  assert_eq "$(peer_holds "$root/a/data/cas" "$blob")" "1" \
+    "node A holds the whole blob, assembled from pieces and verified against its own digest"
+  assert_eq "$(peer_holds "$root/b/data/cas" "$blob")" "1" \
+    "node B holds it too — both peers converged, which is §23's claim"
+  assert_eq "$(sw_a "/api/v1/blobs/$blob" | jq -r '.size')" "$size" \
+    "and node A's catalogue accounts for every byte of it"
+
+  # The path is named from the log rather than inferred: this is the line the
+  # swarm branch writes and the streamed pull does not.
+  local assembled_a assembled_b
+  assembled_a=$(grep -cF '"msg":"a blob was assembled from peers that each held part of it"' "$log_a" || true)
+  assembled_b=$(grep -cF '"msg":"a blob was assembled from peers that each held part of it"' "$log_b" || true)
+  assert_eq "$(( assembled_a >= 1 ))" "1" \
+    "node A took the PIECE path, not the streamed pull — the branch this milestone added is the one that ran"
+  assert_eq "$(( assembled_b >= 1 ))" "1" "and so did node B"
+
+  # -------------------------------------------------------------------------
+  note "  🔴 cooperation, as an inequality the split cannot move"
+  # -------------------------------------------------------------------------
+  #
+  # Two peers each needed a whole copy. If they had not cooperated the external
+  # source would have served two of them — that is the `Internet → A, then
+  # A → B` shape measured in bytes. Stated as an inequality rather than as a
+  # share, because how the work divided is a property of timing and will move
+  # run to run; that it divided AT ALL is a property of the feature.
+  local served_o served_a served_b two_copies
+  served_o=$(( $(piece_served_bytes "$log_o" "$blob") + $(peer_served_bytes "$log_o" "$blob") ))
+  served_a=$(piece_served_bytes "$log_a" "$blob")
+  served_b=$(piece_served_bytes "$log_b" "$blob")
+  two_copies=$(( size * 2 ))
+
+  assert_eq "$(( served_o > 0 ))" "1" \
+    "the external source served something: the instrument is live, and an inequality against a dead counter proves nothing"
+  assert_eq "$(( served_o < two_copies ))" "1" \
+    "THE COOPERATION CLAIM: the external source served ${served_o} bytes, fewer than the ${two_copies} two full copies would have cost"
+  assert_eq "$(( served_a + served_b > 0 ))" "1" \
+    "and the difference came from the peers themselves: ${served_a} bytes left node A and ${served_b} left node B, peer to peer"
+
+  note "  the external source carried $(pct "$served_o" "$two_copies")% of what two independent pulls would have cost"
+
+  # -------------------------------------------------------------------------
+  note "  🔴 a client never learns what a piece is (§33, §85)"
+  # -------------------------------------------------------------------------
+  #
+  # M6 is an INTERNAL optimisation, and this is the assertion that keeps it one.
+  # It is about an absence, which is why it is easy to forget: a blob that
+  # arrived as thirty-two pieces from three machines is served to an ordinary
+  # HTTP client exactly as any other blob is — one range request, one bearer
+  # token, no piece anywhere in the exchange.
+  # Two counters are read around the client reads, and they must move in
+  # opposite ways. The client API's own counter must MOVE — otherwise the
+  # absence asserted next is an absence of instrumentation — and the piece
+  # record must NOT, because a piece is something only the peer surface has ever
+  # heard of.
+  #
+  # The negative alone is the weakest assertion in this file: it passes against
+  # a metric that was never registered and a log line that was renamed. The
+  # positive beside it is what makes it evidence.
+  # The control is read from the EXTERNAL SOURCE's record, not from node A's.
+  #
+  # It was node A's first, and that was wrong for a reason worth keeping: which
+  # of the two peers ends up serving the other is a race, and it reversed
+  # between two runs on one machine. A control that is only true when node A
+  # happened to be the one ahead is a control that fails on the run where it was
+  # needed. The external source serves pieces in every run by construction, and
+  # it is the same log line read by the same helper, so it establishes exactly
+  # what the control has to establish: this instrument records piece reads.
+  local pieces_before pieces_after ctrl_before range_code range_len
+  assert_eq "$(( $(piece_served_count "$log_o" "$blob") >= 1 ))" "1" \
+    "pieces were served and recorded during the swarm: the record the absence below is measured against is a live instrument"
+  pieces_before=$(piece_served_count "$log_a" "$blob")
+  ctrl_before=$(ctrl_blob_bytes "$(sw_a /metrics)")
+
+  range_code=$(sw_a "/api/v1/blobs/$blob/content" -H 'Range: bytes=0-1023' -o "$root/range.bin" -w '%{http_code}')
+  assert_eq "$range_code" "206" \
+    "a cooperatively-assembled blob range-reads over ordinary HTTP, on a bearer token (§28, §33)"
+  range_len=$(wc -c < "$root/range.bin" | tr -d ' ')
+  assert_eq "$range_len" "1024" "and the bytes are the bytes: a 1 KiB range is 1 KiB"
+  assert_eq "$(sw_a "/api/v1/blobs/$blob/content" -o /dev/null -w '%{http_code}')" "200" \
+    "and the whole blob streams to a client that asked for no range at all"
+
+  assert_eq "$(( $(ctrl_blob_bytes "$(sw_a /metrics)") - ctrl_before ))" "2" \
+    "the client API counted both of those reads: the instrument the absence below is measured against is live"
+  pieces_after=$(piece_served_count "$log_a" "$blob")
+  assert_eq "$pieces_after" "$pieces_before" \
+    "AND THE PIECE RECORD DID NOT MOVE: a client asking for bytes over HTTP causes no piece anywhere, which is what keeps M6 an internal optimisation rather than a client requirement (§33, §85)"
+
+  local p
+  for p in "${PEER_PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done
+  for p in "${PEER_PIDS[@]:-}"; do wait "$p" 2>/dev/null || true; done
+  PEER_PIDS=()
+}
+
 # ADR-0002: the roles must be independently runnable as OS processes, and the
 # only way that stays true is running the real checks in both configurations.
 # Otherwise one of the two is never exercised and the split is decorative.
@@ -5970,6 +6459,8 @@ else
   two_peer_demo all
   note "THE SECOND PEER, again, as separate role processes (ADR-0002, M4-16)"
   two_peer_demo split
+  note "THE SWARM: two peers converge (§23, §24, §33, M6-06)"
+  swarm_demo
   note "split-process mode, end to end (ADR-0002)"
   split_process_demo
   stop_full
@@ -6081,8 +6572,46 @@ printf '         answer; the enrolment SUCCEEDED, and the operator was told whic
 printf '         direction failed, at which address, that it is not a fault, and\n'
 printf '         why. A healthy pairing said nothing at all, which is what makes\n'
 printf '         the report worth reading.\n'
+printf '         COOPERATIVE ACQUISITION, AS A NUMBER (§23, §24, M6). Two peers\n'
+printf '         wanted the same blob and, as far as either catalogue could\n'
+printf '         tell, nobody held it — `replicas` has no `partial` state, so a\n'
+printf '         peer part-way through a fetch is recorded exactly like one that\n'
+printf '         never heard of it. Both took the PIECE path rather than the\n'
+printf '         streamed pull, asked every pinned member what it held, fetched\n'
+printf '         from several of them at once, and each verified the whole\n'
+printf '         object against its own BLAKE3 digest before it became a blob.\n'
+printf '         The cooperation claim is an INEQUALITY measured from the\n'
+printf '         sending side: the external source served strictly less than the\n'
+printf '         two full copies two independent pulls would have cost, and the\n'
+printf '         difference crossed directly between the peers. A blob that\n'
+printf '         arrived that way then range-read over ordinary HTTP on a bearer\n'
+printf '         token, and caused no piece anywhere — measured against a piece\n'
+printf '         record that had just moved, so the absence is an absence and\n'
+printf '         not an uninstrumented path (§33, §85).\n'
 printf '\n'
 printf '       NOT proven, and not claimed:\n'
+printf '         WHICH WAY THE PEERS HELPED EACH OTHER, or how much. The\n'
+printf '         assertion above is that bytes moved between the peers and that\n'
+printf '         the external source served less than two copies. It is NOT that\n'
+printf '         each peer served the other: measured on this machine, one peer\n'
+printf '         ran slightly ahead and seeded the other, and the other seeded\n'
+printf '         nothing back. That is a property of two transfers starting at\n'
+printf '         the same instant on one kernel, not of the feature, and\n'
+printf '         asserting it would be asserting a race. The split between the\n'
+printf '         sources is not asserted either, for the reason the repair\n'
+printf '         section gives about percentages: read the inequality, and read\n'
+printf '         the share as an illustration of it.\n'
+printf '         THAT PIECE EXCHANGE IS FASTER. Nothing here measures\n'
+printf '         throughput. What is shown is that the external source moved\n'
+printf '         fewer bytes, which is the claim §23 makes; whether the wall\n'
+printf '         clock improved is a different question and this file does not\n'
+printf '         ask it.\n'
+printf '         A PEER SERVING FROM A PARTIAL UNDER CONTENTION. Each peer here\n'
+printf '         served pieces out of a blob it was still assembling, which is\n'
+printf '         the capability that turns a pull into a swarm — but with three\n'
+printf '         members on one loopback interface. Nothing has met a peer that\n'
+printf '         stalls mid-piece, a partial reaped underneath a reader, or a\n'
+printf '         member revoked while it was serving.\n'
 printf '         A REAL NETWORK. The two peers above are two PROCESSES ON ONE\n'
 printf '         MACHINE. They share a kernel, a disk, a clock and a loopback\n'
 printf '         interface. That is enough for the protocol, the pinning, the\n'
@@ -6257,7 +6786,20 @@ fi
 
 VERDICT_REACHED=1
 if (( FAILED )); then
-  printf '\n\033[31macceptance: FAILED\033[0m — %d assertions\n' "$ASSERTIONS"
+  printf '\n\033[31macceptance: FAILED\033[0m — %d assertions, %d of them failing\n' \
+    "$ASSERTIONS" "${#FAILURES[@]}"
+  if (( ${#FAILURES[@]} > 0 )); then
+    printf '\n  what failed, in the order it happened:\n'
+    local_i=1
+    for f in "${FAILURES[@]}"; do
+      printf '    %d. %s\n' "$local_i" "$f"
+      local_i=$(( local_i + 1 ))
+    done
+    printf '\n  The FIRST one is usually the cause and the rest its consequences —\n'
+    printf '  a wait that never lands runs to its full timeout, so a run that blew\n'
+    printf '  its time budget very often blew it BECAUSE of the failure above,\n'
+    printf '  not instead of it (#274). Read down, not up.\n'
+  fi
   if (( CAPS_MISSING_N > 0 )); then
     printf '  %d of those failures are MISSING CAPABILITIES: an assertion declared\n' "$CAPS_MISSING_N"
     printf '  something this machine does not have, so it could not be exercised.\n'

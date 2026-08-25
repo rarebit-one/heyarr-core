@@ -27,17 +27,23 @@ type deferral struct {
 }
 
 // deferredTools is every §71 verb this server does not implement.
+//
+// # It rots, and that is the failure mode to watch for
+//
+// This table is prose maintained by hand, and NOTHING FAILS when the world
+// moves past it. The coverage test asserts every §71 verb is shipped or
+// explicitly deferred, which stays green when a verb is deferred for a reason
+// that has stopped being true — and an entry that is WRONG produces an agent
+// that waits for a milestone which already shipped, which is worse than the
+// missing tool this whole mechanism exists to avoid.
+//
+// It happened: search_releases and acquire_release were deferred here for
+// "there is no search job" and "no download client is wired" long after both
+// were false, and they were removed by shipping the verbs (#226). When a
+// deferral's reason stops describing the world, the answer is to ship the verb
+// or to write the true reason — never to leave the old one because the
+// conclusion still happens to hold.
 var deferredTools = map[string]deferral{
-	"search_releases": {
-		Milestone: "M3-12",
-		Reason: "there is no search job yet — the provider registry exists but nothing " +
-			"drives it, so a search would have nothing to run",
-	},
-	"acquire_release": {
-		Milestone: "M3-12 / M3-13",
-		Reason: "candidates are not persisted and no download client is wired, so there " +
-			"is no release to acquire and nowhere to acquire it to",
-	},
 	"play_content": {
 		Milestone: "M4+",
 		Reason: "playback is device-mediated: it returns a credentialed URL scoped to a " +

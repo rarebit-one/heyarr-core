@@ -111,6 +111,29 @@ type Descriptor struct {
 	// Deduplicated reports that the bytes were already present, so nothing was
 	// written. Ingest surfaces this rather than silently reporting a new blob.
 	Deduplicated bool
+	// DegradedBecause says why Materialised is not a higher rung, when it is
+	// not, and is empty when the best available rung was reached.
+	//
+	// # Why a reason and not just the rung
+	//
+	// ADR-0014's ladder degrades on purpose — a cross-device source, a
+	// filesystem without cloning and a hardlink limit are all ordinary. But the
+	// old code discarded the error and moved to the next rung, so a `copy` was
+	// indistinguishable from a `copy` for a completely different reason, and
+	// nothing anywhere recorded which.
+	//
+	// That is how #222 stayed hidden: adopting a ~25 GB library produced
+	// `materialised: copy` 63 times out of 63 while every instrument said
+	// hardlink SHOULD have worked, and finding out why took an A/B experiment
+	// on file modes to refute the obvious hypothesis. The errno was there each
+	// time and was thrown away — under ProtectSystem=strict the library and the
+	// store are separate bind mounts of one filesystem, and link(2) returns
+	// EXDEV across mounts whatever the device.
+	//
+	// It carries every rung that was tried and refused, not only the last, so
+	// "reflink is unavailable AND hardlink is cross-mount" reads as two facts
+	// rather than as one mysterious copy.
+	DegradedBecause string
 }
 
 // ReadSeekCloser is a blob's byte stream. Seeking is required, not optional:

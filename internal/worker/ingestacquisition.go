@@ -101,8 +101,26 @@ func IngestAcquisitionHandler(
 		// re-enqueues, so arriving late — after another pass already ingested
 		// — is the normal case rather than an error.
 		if state.State.Phase != acquisition.PhaseVerifying {
-			log.Info("an acquisition ingest arrived after the want moved on",
-				"desired_item_id", payload.DesiredItemID, "phase", string(state.State.Phase))
+			// LATE and NEVER are different situations and used to share a log
+			// line (#240). "Arrived after the want moved on" describes a second
+			// delivery of a transfer already handled; an operator reading it
+			// about a want that never got there goes looking for an earlier
+			// delivery that does not exist.
+			//
+			// Managed is what tells them apart: a want holding bytes has been
+			// through this, and one holding none has not. Both are quiet
+			// successes — invariant 9 makes a duplicate ordinary, and the
+			// endpoint now advances a never-started want itself — so what is
+			// at stake is only whether the sentence is true.
+			if state.State.Managed {
+				log.Info("an acquisition ingest arrived after the want moved on",
+					"desired_item_id", payload.DesiredItemID,
+					"phase", string(state.State.Phase))
+			} else {
+				log.Warn("an acquisition ingest arrived for a want that never reached verifying",
+					"desired_item_id", payload.DesiredItemID,
+					"phase", string(state.State.Phase))
+			}
 			return nil
 		}
 
@@ -265,12 +283,35 @@ func ingestArtifact(
 		return ingest.Result{}, err
 	}
 
-	// The SAME pipeline the scanner uses. The only thing this handler tells it
-	// that a walk would not is which root to land in.
+	// The Work the WANT points at, which is authoritative here.
+	//
+	// Before #224 this handler passed only the root and the path, so the
+	// pipeline re-identified from the filename — and attached the asset to
+	// whatever Work that produced. When the two disagreed (routinely: a release
+	// title is not a filename) the bytes landed on a second, path-derived Work
+	// and the want reported `assets: []` indefinitely, in a state
+	// indistinguishable from a transfer still running.
+	//
+	// The handler already had the want in hand; it simply did not say so.
+	dw, err := cat.WorkForDesired(ctx, desiredItemID)
+	if err != nil {
+		return ingest.Result{}, err
+	}
+
+	// The SAME pipeline the scanner uses. What this handler tells it that a
+	// walk could not is which root to land in — and which Work, because unlike
+	// a walk it was asked for something specific.
 	return pipeline.Ingest(ctx, ingest.Request{
 		RootID:     root.ID,
 		SourcePath: a.Path,
 		RelPath:    a.RelPath,
+		Work: &ingest.WorkOverride{
+			ContentType: dw.ContentType,
+			WorkKey:     dw.WorkKey,
+			Title:       dw.Title,
+			SortTitle:   dw.SortTitle,
+			Year:        dw.Year,
+		},
 	})
 }
 

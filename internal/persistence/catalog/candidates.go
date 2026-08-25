@@ -12,6 +12,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
+	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 )
 
@@ -118,15 +119,23 @@ func parseStamp(s string) time.Time {
 // empty search is the outcome that most needs a record: it leaves no candidate
 // rows behind to explain itself, so without the event a want that found
 // nothing is indistinguishable from a want nobody searched.
+// incumbent is what the want already holds, and a zero AssetID means nothing
+// acceptable is. It is a PARAMETER rather than a read inside this method
+// because the caller has already gathered it with the rest of the search
+// context, and a second read here could disagree with the one the handler
+// reasoned about.
 func (c *Catalog) RecordSearch(
 	ctx context.Context, desiredItemID string, ranked []acquisition.Ranked,
+	incumbent acquisition.Incumbent,
 ) (SearchOutcome, error) {
 	searchID := uuid.Must(uuid.NewV7()).String()
 	now := c.clock.Now()
 	stamp := now.Format(timestampFormat)
 
 	outcome := SearchOutcome{SearchID: searchID, Found: len(ranked)}
-	if best, ok := acquisition.Best(ranked); ok {
+	// BestOver, not Best: for a satisfied want this is an upgrade search, and
+	// an upgrade must be strictly better than what is held (#229).
+	if best, ok := acquisition.BestOver(ranked, incumbent); ok {
 		outcome.SelectedCandidateID = best.Candidate.ID
 	}
 	for _, r := range ranked {
@@ -164,14 +173,14 @@ func (c *Catalog) RecordSearch(
 				INSERT INTO release_candidates
 					(id, desired_item_id, search_id, provider, candidate_id, title,
 					 attributes, evaluation, accepted, score, terminal, selected,
-					 overridden, override_detail, searched_at, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?)`,
+					 overridden, override_detail, searched_at, created_at, source)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, ?)`,
 				uuid.Must(uuid.NewV7()).String(), desiredItemID, searchID,
 				r.Candidate.Provider, r.Candidate.ID, r.Candidate.Title,
 				string(attrs), string(eval),
 				boolToInt(r.Evaluation.Accepted), r.Evaluation.Score,
 				boolToInt(r.Evaluation.Terminal), selected,
-				stamp, stamp); err != nil {
+				stamp, stamp, r.Candidate.Source.Reveal()); err != nil {
 				return fmt.Errorf("catalog: recording candidate %s: %w", r.Candidate.ID, err)
 			}
 		}
@@ -350,6 +359,26 @@ type SearchContext struct {
 	ContentType   string
 	Profile       policy.Profile
 	State         acquisition.State
+	// Incumbent is the evaluation of what this want ALREADY holds, and its
+	// AssetID is empty when it holds nothing acceptable.
+	//
+	// Read here because a search over a SATISFIED want is an upgrade search,
+	// and an upgrade search that does not know what is held cannot tell an
+	// improvement from the release it already has. Without it, the search beat
+	// re-selected the byte-identical incumbent and dragged the want backwards
+	// out of satisfaction (#229).
+	//
+	// Recomputed rather than cached, for the same reason ScanForUpgrades
+	// recomputes it: a profile edit changes the answer, and a stored score
+	// would measure against a standard nobody is using any more.
+	Incumbent acquisition.Evaluation
+	// IncumbentID is the asset that satisfies the want, empty when none does.
+	//
+	// Carried separately because Evaluation describes a RELEASE and this names
+	// an ASSET; folding the asset id into the evaluation would make the two
+	// interchangeable, which is exactly the confusion between "what we could
+	// get" and "what we have" that this whole comparison exists to keep clear.
+	IncumbentID string
 }
 
 // SearchContextFor gathers everything one search needs, in one read.
@@ -386,6 +415,17 @@ func (c *Catalog) SearchContextFor(ctx context.Context, desiredItemID string) (S
 		return SearchContext{}, err
 	}
 	out.State = rec.State
+
+	// What is already held, when anything is. Only for a satisfied want: for
+	// any other the evaluation is empty by construction and the extra queries
+	// would be spent proving it.
+	if rec.State.Content == acquisition.SatisfactionSatisfied {
+		incumbent, incumbentID, err := c.incumbentEvaluation(ctx, desiredItemID)
+		if err != nil {
+			return SearchContext{}, err
+		}
+		out.Incumbent, out.IncumbentID = incumbent, incumbentID
+	}
 	return out, nil
 }
 
@@ -412,4 +452,102 @@ func (c *Catalog) PruneCandidates(ctx context.Context, olderThan time.Time) (int
 		return 0, err
 	}
 	return n, nil
+}
+
+// DesiredWork is the Work a want points at — its identity, not its contents.
+//
+// Separate from SearchContext because the two are read at different moments for
+// different reasons: a search needs a title to ask an indexer about, and an
+// ingest needs the identity of the Work an arriving asset must attach to.
+type DesiredWork struct {
+	ID          string
+	ContentType string
+	WorkKey     string
+	Title       string
+	SortTitle   string
+	Year        int
+}
+
+// WorkForDesired is the Work a want is about.
+//
+// # Why an acquisition needs this and a scan does not
+//
+// A library scan has no source of truth but the path, so it parses one — that
+// is what identification.Registry is for, and its guesses are honest guesses.
+//
+// An acquisition is the opposite situation: something asked for this, by Work
+// id, and that is authoritative. Re-deriving identity from the downloaded
+// filename discards the one fact that was certain, and the two disagree
+// ROUTINELY — release titles carry extensions, scene tags and the indexer's own
+// normalisation, so the case where they match is the lucky one (#224).
+func (c *Catalog) WorkForDesired(ctx context.Context, desiredItemID string) (DesiredWork, error) {
+	var (
+		out  DesiredWork
+		year sql.NullInt64
+	)
+	err := c.db.Reader().QueryRowContext(ctx, `
+		SELECT w.id, w.content_type, w.work_key, w.title, w.sort_title, w.year
+		FROM desired_items d
+		JOIN works w ON w.id = d.work_id
+		WHERE d.id = ?`, desiredItemID).
+		Scan(&out.ID, &out.ContentType, &out.WorkKey, &out.Title, &out.SortTitle, &year)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DesiredWork{}, fmt.Errorf("catalog: no desired item %s: %w", desiredItemID, err)
+	}
+	if err != nil {
+		return DesiredWork{}, err
+	}
+	out.Year = int(year.Int64)
+	return out, nil
+}
+
+// ErrNoSelection is returned when a want has no selected candidate.
+//
+// Distinct from ErrNoCandidate — which is "you named one that is not there" —
+// because this one is an ordinary race rather than a mistake: a grab job is
+// durable and re-runnable (invariant 9), and by the time it runs the search
+// that selected the release may have been superseded by another that selected
+// nothing. The grab treats it as work that no longer applies, not as a failure.
+var ErrNoSelection = errors.New("catalog: this want has no selected candidate")
+
+// SelectedSource is where the want's chosen release is fetched from.
+//
+// # Why this is its own read and not a column on Candidate
+//
+// The value is a credential — on a private tracker the magnet carries a
+// passkey — and Candidate is what the API returns and what §63's explanations
+// are built from. Adding a field there would put the credential one accidental
+// serialisation away from every candidate listing, and the redaction would be
+// the only thing standing between it and a response body.
+//
+// So `source` is deliberately absent from candidateCols, and the ONE caller
+// that needs it asks for it by name. That makes `grep -rn SelectedSource` the
+// complete list of places this value is read, which is the same property
+// secret.Value's Reveal gives inside the process.
+//
+// Returns the candidate id alongside it so the caller can record WHICH release
+// it grabbed without a second query — and so a grab can tell that the selection
+// changed under it rather than silently fetching a different release than the
+// one whose id it was enqueued with.
+func (c *Catalog) SelectedSource(ctx context.Context, desiredItemID string) (
+	candidateID string, source secret.Value, err error,
+) {
+	var raw string
+	err = c.db.Reader().QueryRowContext(ctx,
+		`SELECT candidate_id, source FROM release_candidates
+		 WHERE desired_item_id = ? AND selected = 1`, desiredItemID).
+		Scan(&candidateID, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", fmt.Errorf("%w: %s", ErrNoSelection, desiredItemID)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return candidateID, secret.Value(raw), nil
+}
+
+// Held is what this want already holds, in the shape the domain compares
+// against. A zero AssetID means nothing acceptable is held.
+func (sc SearchContext) Held() acquisition.Incumbent {
+	return acquisition.Incumbent{AssetID: sc.IncumbentID, Evaluation: sc.Incumbent}
 }

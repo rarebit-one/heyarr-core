@@ -93,6 +93,14 @@ type Blob struct {
 	// Deduplicated reports that the store already held these bytes, so nothing
 	// was written.
 	Deduplicated bool
+	// DegradedBecause says why Materialised is not a higher rung, and is empty
+	// when the best available one was reached.
+	//
+	// Carried through to the ingest log because that is where somebody looks.
+	// #222 was 63 files copied where hardlink should have worked, with the
+	// errno discarded 63 times — the ladder degrading is ordinary, degrading
+	// SILENTLY is what made a 22 GB surprise take an experiment to explain.
+	DegradedBecause string
 }
 
 // Root is a library root's ingest configuration, as the pipeline needs it.
@@ -131,6 +139,8 @@ type Result struct {
 	BlobSize     int64
 	BlobCreated  bool
 	Materialised Materialisation
+	// DegradedBecause says why Materialised is not a higher rung (#222).
+	DegradedBecause string
 	// Deduplicated reports that the bytes were already under management. It is
 	// exactly !BlobCreated, and it is the flag carried on ingest.completed.
 	Deduplicated   bool
@@ -228,6 +238,39 @@ type Request struct {
 	RelPath string
 	// MIME, when empty, is derived from the extension.
 	MIME string
+	// Work, when set, is the Work this file belongs to — and it OVERRIDES what
+	// the path heuristic would have concluded.
+	//
+	// # Why an override exists at all
+	//
+	// Identification parses RelPath because a library scan has nothing else:
+	// nobody asked for those files, so a guess from their shape is the honest
+	// best answer. An acquisition is the opposite situation. Something asked
+	// for this, by Work id, and re-deriving identity from the downloaded
+	// filename throws away the one fact that was certain.
+	//
+	// The two disagree ROUTINELY — release titles carry extensions, scene tags
+	// and the indexer's own normalisation — so the case where the guess happens
+	// to agree is the lucky one, not the normal one. When they disagree the
+	// asset lands on a second, path-derived Work and the want that asked for it
+	// reports `assets: []` forever, in a state indistinguishable from patience
+	// (#224).
+	//
+	// It overrides the WORK identity only. Everything the path legitimately
+	// knows better — the edition, the quality label, the asset's role, the
+	// language — is per-FILE and still comes from the heuristic, because the
+	// want names what was wanted and not which of its editions arrived.
+	Work *WorkOverride
+}
+
+// WorkOverride names the Work an asset must attach to, from a caller that
+// knows rather than guesses.
+type WorkOverride struct {
+	ContentType string
+	WorkKey     string
+	Title       string
+	SortTitle   string
+	Year        int
 }
 
 // Options configure a Pipeline.
@@ -305,6 +348,11 @@ func (p *Pipeline) Ingest(ctx context.Context, req Request) (Result, error) {
 	// parse still ingests — under the synthetic Unidentified work — rather than
 	// failing the job and being retried five times to no purpose (M1-11).
 	candidate := p.ident.Identify(req.RelPath, root.LibraryContentType)
+	// A caller that KNOWS which Work this is overrides the guess. See
+	// Request.Work — this is the whole of #224.
+	if req.Work != nil {
+		candidate = applyWorkOverride(candidate, *req.Work)
+	}
 
 	peerID, err := p.cat.SelfPeer(ctx)
 	if err != nil {
@@ -351,12 +399,21 @@ func (p *Pipeline) Ingest(ctx context.Context, req Request) (Result, error) {
 		// after its grace window (ADR-0018), and the job will be retried.
 		return Result{}, fmt.Errorf("ingest: recording %s: %w", req.SourcePath, err)
 	}
+	// Set here rather than passed through Recording: it is a fact about HOW the
+	// bytes arrived, not about the catalogue, and the catalogue has no use for
+	// it. Threading it through the persistence layer would make every store
+	// implementation carry a field none of them reads.
+	res.DegradedBecause = blob.DegradedBecause
 
 	p.logger.Info("ingested",
 		"source_path", req.SourcePath,
 		"blob", res.BlobHash,
 		"size", res.BlobSize,
 		"materialised", string(res.Materialised),
+		// Only when there is something to say. A field that is empty on every
+		// healthy ingest would be noise on every line, and this one is meant
+		// to be noticed.
+		slog.String("degraded_because", res.DegradedBecause),
 		"deduplicated", res.Deduplicated,
 		"asset", res.AssetID,
 		"asset_created", res.AssetCreated,
@@ -454,3 +511,36 @@ var mimeByExtension = map[string]string{
 // unknown rather than guessed: probing in Milestone 2 can correct it, and a
 // wrong media type is harder to notice than a missing one.
 func MIMEForExtension(ext string) string { return mimeByExtension[strings.ToLower(ext)] }
+
+// applyWorkOverride replaces a candidate's WORK identity with a known one.
+//
+// # What it deliberately does not touch
+//
+// EditionKey, EditionLabel, EditionType, EditionAttributes, Language and
+// AssetRole all survive. Those are facts about the FILE — which cut, which
+// resolution, whether this is a subtitle — and the path is the better source
+// for every one of them. The want names what was wanted; it does not name which
+// of its editions turned up.
+//
+// Identified becomes true and Source records that a person's declared want, not
+// a path shape, is why this asset is where it is. That distinction is the same
+// one identification_source exists to carry, and without it an operator reading
+// the asset would be told a heuristic matched when none did.
+//
+// Rule is CLEARED when the path heuristic did not itself identify the file:
+// keeping a rule name beside a source of "desired-item" would name a heuristic
+// that had no part in the answer. Where the heuristic DID match, the rule is
+// kept — it is true, and it is the trace of what the path would have said.
+func applyWorkOverride(c identification.Candidate, w WorkOverride) identification.Candidate {
+	if !c.Identified {
+		c.Rule = ""
+	}
+	c.ContentType = w.ContentType
+	c.WorkKey = w.WorkKey
+	c.Title = w.Title
+	c.SortTitle = w.SortTitle
+	c.Year = w.Year
+	c.Source = identification.SourceDesiredItem
+	c.Identified = true
+	return c
+}
