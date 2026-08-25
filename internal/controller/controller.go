@@ -272,6 +272,14 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 	startSearchBeat(ctx, beatCatalog, reconcileQueue, c.log)
 
+	// The continuous control-plane backup (§49, ADR-0044, M7-02). Its interval
+	// was validated at config load, so the error here cannot fire; it is read
+	// rather than dropped so a future change to BackupInterval cannot silently
+	// pass an unparsed value through.
+	backupInterval, _ := c.cfg.BackupInterval()
+	startBackup(ctx, db, reconcileEvents, c.cfg.DataDir, c.cfg.Backup.Dir,
+		backupInterval, self.PeerID, c.log)
+
 	// "started" is logged only after every listener is bound. A start line
 	// printed before the socket exists is a lie that costs someone an
 	// afternoon: the supervisor, the acceptance script and an operator tailing

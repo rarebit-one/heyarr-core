@@ -20,6 +20,7 @@ One logical library, multiple complete sovereign peers.
 
 * [heyarr all](heyarr_all.md)	 - Run every role in one process (small deployments)
 * [heyarr assets](heyarr_assets.md)	 - Browse the files behind the catalog
+* [heyarr backup](heyarr_backup.md)	 - Take a whole-database backup of this peer's control plane (§49, ADR-0044)
 * [heyarr blobs](heyarr_blobs.md)	 - Inspect and read stored bytes
 * [heyarr config](heyarr_config.md)	 - Inspect configuration
 * [heyarr controller](heyarr_controller.md)	 - Own coordinated mutable state: catalog, policy, jobs, API

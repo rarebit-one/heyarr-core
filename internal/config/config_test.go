@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -46,6 +47,45 @@ func TestDerivedPathsFollowDataDir(t *testing.T) {
 		if !strings.HasPrefix(got, "/srv/heyarr/") {
 			t.Errorf("%s = %q, want it to follow data_dir", name, got)
 		}
+	}
+}
+
+func TestBackupIntervalAndDir(t *testing.T) {
+	// Default: a 5-minute cadence, dir derived from data_dir.
+	cfg, err := Load(writeConfig(t, "data_dir: /srv/heyarr\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	d, err := cfg.BackupInterval()
+	if err != nil {
+		t.Fatalf("BackupInterval: %v", err)
+	}
+	if d != 5*time.Minute {
+		t.Errorf("default backup interval = %v, want 5m", d)
+	}
+	if !strings.HasPrefix(cfg.Backup.Dir, "/srv/heyarr/") {
+		t.Errorf("backup dir = %q, want it to follow data_dir", cfg.Backup.Dir)
+	}
+
+	// Empty or "0" disables the cadence — the CLI verb still works, but no beat.
+	disabled := []string{
+		"data_dir: /srv/heyarr\nbackup:\n  interval: \"0\"\n",
+		"data_dir: /srv/heyarr\nbackup:\n  interval: \"\"\n",
+	}
+	for _, off := range disabled {
+		cfg, err := Load(writeConfig(t, off))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if d, err := cfg.BackupInterval(); err != nil || d != 0 {
+			t.Errorf("disabled interval: got (%v, %v), want (0, nil)", d, err)
+		}
+	}
+
+	// A malformed interval is a startup error, not a silently-ignored one.
+	_, err = Load(writeConfig(t, "data_dir: /srv/heyarr\nbackup:\n  interval: \"every-tuesday\"\n"))
+	if err == nil {
+		t.Error("a malformed backup.interval loaded without error")
 	}
 }
 

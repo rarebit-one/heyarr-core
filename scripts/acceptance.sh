@@ -2700,6 +2700,53 @@ YAML
   tailed=$(cli events tail --after 0 --limit 5 --json | jq -rs 'length')
   assert_eq "$tailed" "5" "events tail emits JSON Lines a line at a time"
 
+  note "  continuous backup (§49, ADR-0044, M7-02)"
+  # A backup is a VACUUM INTO snapshot with its own signed provenance, taken
+  # against the running controller. Its generation is the control plane's event
+  # high-water mark EXCLUDING the backup's own bookkeeping, so it reports real
+  # change: two backups with nothing between them are the same generation, and a
+  # control-plane write moves it. A generation that advanced on its own would
+  # make "it advanced" a statement about the verb running, not the state
+  # changing — the tautology this exists to avoid.
+  local bk1 bk1_gen bk1b bk2 bk2_gen bk_work bk_want
+  bk1=$("$BIN" --config "$WORK/full.yaml" backup --json)
+  bk1_gen=$(jq -r '.generation' <<<"$bk1")
+  if [[ "$bk1_gen" =~ ^[0-9]+$ ]] && (( bk1_gen > 0 )); then
+    pass "a backup of the running controller reports a positive generation ($bk1_gen)"
+  else
+    fail "backup produced no usable generation: $bk1"
+  fi
+  assert_eq "$(jq -r '.signed' <<<"$bk1")" "true" \
+    "the backup is signed with this peer's identity key, so a holder can verify its origin (ADR-0044 Q2)"
+  assert_contains "$(jq -r '.omissions | join(",")' <<<"$bk1")" "provider-credentials" \
+    "the backup records the credentials it structurally cannot carry, rather than surprising a restore (ADR-0044 Q6)"
+
+  # No control-plane change: the generation must NOT move.
+  bk1b=$("$BIN" --config "$WORK/full.yaml" backup --json)
+  assert_eq "$(jq -r '.generation' <<<"$bk1b")" "$bk1_gen" \
+    "a re-take with no control-plane change reports the SAME generation, not a mechanism that merely ran twice"
+
+  # A real control-plane change, then a backup: the generation must advance.
+  bk_work=$(api_all /api/v1/works '.items[].id' | head -1)
+  bk_want=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d "{\"work_id\":\"$bk_work\",\"quality_profile\":\"archival\",\"monitor\":false}" | jq -r '.id')
+  bk2=$("$BIN" --config "$WORK/full.yaml" backup --json)
+  bk2_gen=$(jq -r '.generation' <<<"$bk2")
+  if [[ "$bk2_gen" =~ ^[0-9]+$ ]] && (( bk2_gen > bk1_gen )); then
+    pass "a control-plane change advances the backup generation ($bk1_gen -> $bk2_gen)"
+  else
+    fail "the generation did not advance after a control-plane write: $bk1_gen -> $bk2_gen"
+  fi
+  # The read instant is recorded, so a restore can say how stale it is (§53's
+  # "conservative rather than unavailable" needs an answerable age).
+  if [[ "$(jq -r '.taken_at' <<<"$bk2")" =~ ^20 ]]; then
+    pass "the backup records when it was taken, so its age is answerable"
+  else
+    fail "the backup has no usable taken_at: $bk2"
+  fi
+  # Undo the change so the durability counts below are undisturbed.
+  api "/api/v1/desired/$bk_want" -X DELETE -o /dev/null
+
   local jobs_before
   jobs_before=$(api_all /api/v1/jobs '.items[].id' | sort -u | wc -l | tr -d ' ')
 

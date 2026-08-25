@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/knadh/koanf/parsers/yaml"
 	env "github.com/knadh/koanf/providers/env/v2"
@@ -52,6 +53,23 @@ type Config struct {
 	// plays. Search and acquire jobs simply stay pending and visible
 	// (ADR-0025).
 	Providers []providers.Entry `koanf:"providers"`
+
+	// Backup configures the continuous backup of this peer's control plane
+	// (§49, ADR-0044). The database is where it lives; the backups are copies of
+	// it, so they live under the data directory too unless pointed elsewhere.
+	Backup Backup `koanf:"backup"`
+}
+
+// Backup configures the control-plane backup cadence (§49, ADR-0044).
+type Backup struct {
+	// Interval is the backup cadence as a duration string ("5m"). It is also the
+	// RPO: at most this much control-plane work is lost if the disk dies between
+	// backups (ADR-0044 question 1). Empty or "0" disables the background
+	// cadence; `heyarr backup` still takes one on demand.
+	Interval string `koanf:"interval"`
+	// Dir is where backups are written. Empty derives <data_dir>/backups, so a
+	// single data_dir move takes the backups with it.
+	Dir string `koanf:"dir"`
 }
 
 // CAS configures the content-addressed store. Its on-disk layout is private to
@@ -188,6 +206,7 @@ func Defaults() Config {
 		CAS:      CAS{},
 		Database: Database{},
 		Media:    Media{},
+		Backup:   Backup{Interval: "5m"},
 	}
 }
 
@@ -257,6 +276,28 @@ func (c *Config) applyDerivedDefaults() {
 	if c.HTTP.UnixSocket == "" && c.DataDir != "" {
 		c.HTTP.UnixSocket = filepath.Join(c.DataDir, "heyarr.sock")
 	}
+	if c.Backup.Dir == "" && c.DataDir != "" {
+		c.Backup.Dir = filepath.Join(c.DataDir, "backups")
+	}
+}
+
+// BackupInterval parses the configured cadence, or 0 when the background
+// cadence is disabled. A malformed value is a startup error rather than a
+// silently-ignored one — a backup nobody takes is the failure this exists to
+// prevent.
+func (c Config) BackupInterval() (time.Duration, error) {
+	s := strings.TrimSpace(c.Backup.Interval)
+	if s == "" || s == "0" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("config: backup.interval %q is not a duration (e.g. \"5m\"): %w", s, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("config: backup.interval must not be negative, got %q", s)
+	}
+	return d, nil
 }
 
 var validLogLevels = []string{"debug", "info", "warn", "error"}
@@ -276,6 +317,9 @@ func (c Config) Validate() error {
 	}
 	if f := c.Log.Format; f != "json" && f != "text" && f != "auto" {
 		return fmt.Errorf("config: log.format %q is not one of json, text, auto", f)
+	}
+	if _, err := c.BackupInterval(); err != nil {
+		return err
 	}
 	if c.Peer.Name == "" {
 		return errors.New("config: peer.name must be set")
