@@ -197,7 +197,7 @@ func TestABlobIsAssembledFromTwoPeersThatEachHoldHalf(t *testing.T) {
 
 	d := newDestination(t, dst)
 	out, err := d.puller.PullPieces(t.Context(), blob, int64(len(content)),
-		[]replication.Source{sourceFor(left, l.addr), sourceFor(right, r.addr)})
+		[]transfer.Candidate{transfer.Peer(sourceFor(left, l.addr)), transfer.Peer(sourceFor(right, r.addr))})
 	if err != nil {
 		t.Fatalf("assembling from two half-holders: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestAPeerThatDividesTheBlobDifferentlyIsNotUsed(t *testing.T) {
 
 	d := newDestination(t, dst)
 	_, err := d.puller.PullPieces(t.Context(), blob, int64(len(content)),
-		[]replication.Source{sourceFor(odd, o.addr)})
+		[]transfer.Candidate{transfer.Peer(sourceFor(odd, o.addr))})
 	if !errors.Is(err, transfer.ErrNoPieceSource) {
 		t.Fatalf("err = %v, want ErrNoPieceSource — a peer with a different geometry is not a "+
 			"source, and must be dropped at the survey rather than caught at Publish", err)
@@ -305,7 +305,7 @@ func TestAPieceOfTheWrongLengthIsNotWritten(t *testing.T) {
 
 	d := newDestination(t, dst)
 	out, err := d.puller.PullPieces(t.Context(), blob, int64(len(content)),
-		[]replication.Source{sourceFor(bad, b.addr), sourceFor(good, g.addr)})
+		[]transfer.Candidate{transfer.Peer(sourceFor(bad, b.addr)), transfer.Peer(sourceFor(good, g.addr))})
 	if err != nil {
 		t.Fatalf("a short piece from one peer should be survivable with another: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestBytesAPeerCannotBackFailTheWholeObjectCheckAndDiscardEverything(t *test
 
 	d := newDestination(t, dst)
 	_, err := d.puller.PullPieces(t.Context(), blob, int64(len(content)),
-		[]replication.Source{sourceFor(liar, l.addr)})
+		[]transfer.Candidate{transfer.Peer(sourceFor(liar, l.addr))})
 	if err == nil {
 		t.Fatal("a blob assembled from bytes the peer could not back was accepted")
 	}
@@ -410,7 +410,7 @@ func TestAPiecePullResumesFromItsBitset(t *testing.T) {
 	}
 
 	out, err := d.puller.PullPieces(t.Context(), blob, int64(len(content)),
-		[]replication.Source{sourceFor(src, s.addr)})
+		[]transfer.Candidate{transfer.Peer(sourceFor(src, s.addr))})
 	if err != nil {
 		t.Fatalf("resuming: %v", err)
 	}
@@ -457,7 +457,7 @@ func TestABitsetFromADifferentGeometryIsIgnored(t *testing.T) {
 	}
 
 	out, err := d.puller.PullPieces(t.Context(), blob, int64(len(content)),
-		[]replication.Source{sourceFor(src, s.addr)})
+		[]transfer.Candidate{transfer.Peer(sourceFor(src, s.addr))})
 	if err != nil {
 		t.Fatalf("pulling with a stale record: %v", err)
 	}
@@ -502,7 +502,7 @@ func TestTheRarestPieceIsFetchedFirst(t *testing.T) {
 
 	d := newDestination(t, dst)
 	if _, err := d.puller.PullPieces(t.Context(), blob, int64(len(content)),
-		[]replication.Source{sourceFor(only, o.addr), sourceFor(common, c.addr)}); err != nil {
+		[]transfer.Candidate{transfer.Peer(sourceFor(only, o.addr)), transfer.Peer(sourceFor(common, c.addr))}); err != nil {
 		t.Fatalf("pulling: %v", err)
 	}
 	if len(order) != 4 {
@@ -534,7 +534,7 @@ func TestPullingABlobAlreadyHeldFetchesNothing(t *testing.T) {
 	}
 
 	out, err := d.puller.PullPieces(t.Context(), desc.Hash, desc.Size,
-		[]replication.Source{sourceFor(src, s.addr)})
+		[]transfer.Candidate{transfer.Peer(sourceFor(src, s.addr))})
 	if err != nil {
 		t.Fatalf("pulling a blob already held: %v", err)
 	}
@@ -562,7 +562,7 @@ func TestNoSourceHoldingWhatIsNeededIsNotYetRatherThanFailed(t *testing.T) {
 
 	d := newDestination(t, dst)
 	_, err := d.puller.PullPieces(t.Context(), blob, int64(len(content)),
-		[]replication.Source{sourceFor(src, s.addr)})
+		[]transfer.Candidate{transfer.Peer(sourceFor(src, s.addr))})
 	if !errors.Is(err, transfer.ErrNoPieceSource) {
 		t.Errorf("err = %v, want ErrNoPieceSource", err)
 	}
@@ -623,7 +623,7 @@ func TestABitsetClaimingPiecesTheFileLacksFailsClosedAndClearsItself(t *testing.
 	}
 
 	_, err = d.puller.PullPieces(t.Context(), blob, int64(len(content)),
-		[]replication.Source{sourceFor(src, s.addr)})
+		[]transfer.Candidate{transfer.Peer(sourceFor(src, s.addr))})
 	if err == nil {
 		t.Fatal("a blob was published from a record that claimed pieces the file did not have")
 	}
