@@ -2721,10 +2721,35 @@ YAML
   assert_contains "$(jq -r '.omissions | join(",")' <<<"$bk1")" "provider-credentials" \
     "the backup records the credentials it structurally cannot carry, rather than surprising a restore (ADR-0044 Q6)"
 
-  # No control-plane change: the generation must NOT move.
+  # A re-take is MONOTONIC. It was "the generation must NOT move", and that was
+  # wrong the day it was written.
+  #
+  # "No control-plane change" is not a state a RUNNING node can reach. The beats
+  # never stop writing — provider health every minute, reconciliation, the
+  # search beat, and since #247 a download poll every fifteen seconds — so two
+  # backups taken moments apart legitimately differ, and the assertion was a
+  # race against whichever beat happened to land between them. #247's beat did
+  # not break it; it turned a rare flake into a likely one, which is the good
+  # kind of exposure.
+  #
+  # What holds on a running node is that a re-take never RESETS or decreases the
+  # generation: it is the event high-water mark and it is monotonic. That a
+  # backup does not advance it by its OWN bookkeeping is a different claim and
+  # is proven against a quiescent database in TestIdempotentPerGeneration, which
+  # is where it can be isolated — the demo cannot isolate it on a live node and
+  # should not pretend to.
+  #
+  # The load-bearing half is the one below this: a real control-plane change
+  # DOES advance it. That is what catches a mechanism which merely ran twice,
+  # and it is untouched.
+  local bk1b_gen
   bk1b=$("$BIN" --config "$WORK/full.yaml" backup --json)
-  assert_eq "$(jq -r '.generation' <<<"$bk1b")" "$bk1_gen" \
-    "a re-take with no control-plane change reports the SAME generation, not a mechanism that merely ran twice"
+  bk1b_gen=$(jq -r '.generation' <<<"$bk1b")
+  if (( bk1b_gen >= bk1_gen )); then
+    pass "a re-take never resets or decreases the backup generation (monotonic)"
+  else
+    fail "a re-take moved the generation backwards: $bk1_gen -> $bk1b_gen"
+  fi
 
   # A real control-plane change, then a backup: the generation must advance.
   bk_work=$(api_all /api/v1/works '.items[].id' | head -1)
@@ -6320,6 +6345,21 @@ peer:
   name: swarm-$n
   site: swarm-$n
   listen: 127.0.0.1:0
+  # THE EXTERNAL SOURCE IS A WEB SEED, and the other two are piece peers
+  # (§27, ADR-0042, #266).
+  #
+  # `serve_pieces: false` leaves the content route untouched and refuses the
+  # piece routes permanently, which is exactly §27's shape: a member reachable
+  # over HTTP that serves byte ranges of blobs it holds whole and takes no part
+  # in swarms. Until this existed nothing in the tree could produce such a node,
+  # so `transfer.WebSeed` was constructed nowhere outside a Go test and the
+  # transport's web-seed half was unreachable from any running binary.
+  #
+  # It costs the demo nothing — the same three nodes, the same fixture, the same
+  # transfers — and it makes this section a truer picture of §23 than it was:
+  # the thing standing in for the outside world is now a plain byte source
+  # rather than a full swarm participant, which is what an external source is.
+  serve_pieces: $( [ "$n" = "origin" ] && echo false || echo true )
 log:
   level: info
   format: json
@@ -6400,6 +6440,20 @@ YAML
   assert_eq "$(cli_sa peers list --json | jq -r 'length')" "3" \
     "node A has three members: itself, the other peer, and the external source"
 
+  # WHAT EACH MEMBER SPEAKS, asked over mTLS rather than assumed (§27, #266).
+  #
+  # ADR-0038 makes each peer authoritative for its own site, so this is the
+  # peer's statement about itself and not an operator's claim about a machine
+  # they are not. `peers ping` reads the identity route, which is where that
+  # statement lives.
+  local sw_speaks_o sw_speaks_b
+  sw_speaks_o=$(cli_sa peers ping swarm-origin --json 2>/dev/null | jq -r '(.speaks // []) | sort | join(",")')
+  sw_speaks_b=$(cli_sa peers ping swarm-b --json 2>/dev/null | jq -r '(.speaks // []) | sort | join(",")')
+  assert_eq "$sw_speaks_o" "blob-content" \
+    "the external source says it speaks blob content and NOT piece exchange — it is a web seed (§27)"
+  assert_eq "$sw_speaks_b" "blob-content,piece-exchange" \
+    "and the other peer says it speaks both, so the two are distinguishable before either is asked for anything"
+
   local blob size
   blob=$(sw_o /api/v1/assets | jq -r '.items[0].blob_hash')
   assert_contains "$blob" "blake3:" "the fixture names bytes all three nodes hashed to the same digest"
@@ -6463,17 +6517,22 @@ YAML
   # own record of what it has served to node A. A sleep would be a guess about a
   # machine, and it would be wrong on the slowest runner, which is the one that
   # matters.
-  # Unfiltered by peer, deliberately. The record names the peer by its ID —
-  # the value `peers add` generated — and not by the name this script typed,
-  # so a filter on "swarm-a" matches nothing, waits out its budget, and lets
-  # node B start after node A has already finished. That is what it did: the
-  # section still passed every assertion below, because a node A that has
-  # finished is an excellent piece source, and the run was `A, then B` wearing
-  # the swarm's clothes. Node B is the only other fetcher and it has not been
-  # told to start yet, so an unfiltered count of pieces served for THIS blob is
-  # a count of pieces served to node A.
+  # Measured on the external source's CONTENT route, because the external
+  # source is a web seed and serves no pieces at all (#266). This wait read its
+  # PIECE record when the source was still a piece peer, and turning it into a
+  # web seed made the count permanently zero — the wait then ran to its full
+  # budget and let node B start after node A had finished, which is the
+  # sequential shape this section exists to replace. It passed everything below.
+  #
+  # Unfiltered by peer, deliberately: the record names a peer by the ID `peers
+  # add` generated rather than by the name this script typed, and node B is the
+  # only other fetcher and has not been told to start yet. So bytes served for
+  # THIS blob are bytes served to node A.
+  #
+  # Two megabytes is eight pieces' worth at this geometry — enough that node A
+  # has something worth having and far short of the thirty-two it needs.
   swarm_a_has_started() {
-    (( $(piece_served_count "$log_o" "$blob") >= 8 ))
+    (( $(peer_served_bytes "$log_o" "$blob") >= 2097152 ))
   }
   wait_for "node A never fetched a piece from the external source, so there was never a swarm for node B to join" \
     900 swarm_a_has_started
@@ -6536,6 +6595,18 @@ YAML
   assert_eq "$(( served_a + served_b > 0 ))" "1" \
     "and the difference came from the peers themselves: ${served_a} bytes left node A and ${served_b} left node B, peer to peer"
 
+  # 🔴 THE WEB SEED WAS A REAL SOURCE, and it served no piece to anybody.
+  #
+  # Both halves, because either alone is satisfiable by the wrong thing. That
+  # it served bytes says the web-seed contract carried a real share of the
+  # transfer; that its PIECE record is empty says those bytes went over the
+  # ordinary content route, which is what makes it a web seed rather than a
+  # peer that happened to be asked politely.
+  assert_eq "$(( $(peer_served_bytes "$log_o" "$blob") > 0 ))" "1" \
+    "the web seed served blob content: §27's ordinary endpoint carried part of a swarm transfer"
+  assert_eq "$(piece_served_count "$log_o" "$blob")" "0" \
+    "AND IT SERVED NO PIECES AT ALL — a member that does not speak piece exchange was driven as a web seed, which is the half of the transport nothing could reach before (#266)"
+
   note "  the external source carried $(pct "$served_o" "$two_copies")% of what two independent pulls would have cost"
 
   # -------------------------------------------------------------------------
@@ -6566,8 +6637,16 @@ YAML
   # it is the same log line read by the same helper, so it establishes exactly
   # what the control has to establish: this instrument records piece reads.
   local pieces_before pieces_after ctrl_before range_code range_len
-  assert_eq "$(( $(piece_served_count "$log_o" "$blob") >= 1 ))" "1" \
-    "pieces were served and recorded during the swarm: the record the absence below is measured against is a live instrument"
+  # Read from the two PEERS rather than from the external source, which is a
+  # web seed and serves no pieces by design (#266). Summed across both, because
+  # which of them ends up serving the other is a race that reversed between two
+  # runs on one machine — a control that is only true when node A happened to
+  # be ahead is a control that fails on the run where it was needed. The
+  # cooperation assertion above has already established that the sum is
+  # non-zero, so this reads the same fact through the instrument the absence
+  # below is measured with.
+  assert_eq "$(( $(piece_served_count "$log_a" "$blob") + $(piece_served_count "$log_b" "$blob") >= 1 ))" "1" \
+    "pieces were served and recorded between the two peers: the record the absence below is measured against is a live instrument"
   pieces_before=$(piece_served_count "$log_a" "$blob")
   ctrl_before=$(ctrl_blob_bytes "$(sw_a /metrics)")
 

@@ -4247,7 +4247,7 @@ components:
 
     PeerIdentity:
       type: object
-      required: [peer_id, name, public_key, served_by]
+      required: [peer_id, name, public_key, served_by, speaks]
       description: |
         The identity the answering node derived from the client certificate on
         the connection, plus which node answered.
@@ -4272,6 +4272,25 @@ components:
         served_by:
           type: string
           description: The answering node's own peer id.
+        speaks:
+          type: array
+          items:
+            type: string
+          description: |
+            What the ANSWERING node's peer surface will actually do, so a
+            caller can tell a piece peer from a web seed before asking either
+            of them for anything (§27, ADR-0042).
+
+            `blob-content` is the ranged content route every serving node has
+            had since M4-09 — the byte channel a web seed is. `piece-exchange`
+            is the availability and piece routes; its ABSENCE is what makes a
+            member a web seed.
+
+            Derived from what the answering server was built with rather than
+            from what was configured, so it cannot claim a capability whose
+            routes refuse. A reader that meets a name it does not know must
+            ignore it, and one that meets a missing name must not conclude the
+            peer is broken — this list grows.
 
     PeerReachback:
       type: object

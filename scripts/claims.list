@@ -141,11 +141,10 @@ evidence and no chunk_blob job exists at all — not even one waiting to run
 # ---------------------------------------------------------------------------
 
 claim web-seed-is-a-source
-state pending
-issue 266
-ref   §27, ADR-0013, ADR-0042
-why   internal/peer/transfer/webseed.go is written and tested, and transfer.WebSeed is constructed nowhere outside tests — pullPieces builds every candidate as transfer.Peer. §27's ordinary blob endpoint is not reachable as a piece source from any running binary.
-evidence a piece was fetched from a web seed
+state proven
+ref   §27, ADR-0013, ADR-0042, #266
+why   A member that does not speak piece exchange is driven as a web seed — its ordinary content route carries part of a swarm transfer and it serves no piece at all. Before #266 nothing in the tree could produce such a member: Blobs and Pieces were built from one store in one call, so transfer.WebSeed was constructed nowhere outside a Go test.
+evidence AND IT SERVED NO PIECES AT ALL
 
 claim polled-acquisition-completes
 state proven

@@ -54,3 +54,4 @@ An ADR that merely describes the code is not worth having.
 | [0044](0044-a-controller-backup-is-a-signed-whole-database-snapshot.md) | A controller backup is a signed whole-database snapshot, a restore verifies it, and it carries the controller's identity wrapped | Proposed |
 | [0045](0045-a-partial-holding-is-transfer-scoped-and-never-a-replica.md) | A partial holding is transfer-scoped, and is never a replica | Accepted |
 | [0046](0046-a-control-plane-backup-is-pushed-to-peers.md) | A control-plane backup is pushed to peers; content is pulled by them | Proposed |
+| [0047](0047-a-peer-says-what-it-speaks-and-a-web-seed-is-a-configuration.md) | A peer says what it speaks, and a web seed is a configuration | Accepted |

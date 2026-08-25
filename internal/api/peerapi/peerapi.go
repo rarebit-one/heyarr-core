@@ -161,7 +161,24 @@ type Options struct {
 	// geometry is derivable from the size without touching a byte, so there is
 	// nothing to compute even if somebody wanted to.
 	Pieces PieceSource
-	Logger *slog.Logger
+	// WebSeedOnly makes this node serve whole blobs and take no part in
+	// swarms (§27, ADR-0042, #266).
+	//
+	// Separate from Pieces being nil, and the distinction is the whole of
+	// #266. A nil Pieces means "there is no content store behind this peer
+	// surface" — the node serves no bytes of any kind. This means the content
+	// store is present and serving, and the operator has said this node is a
+	// WEB SEED. The two answer differently because a destination does
+	// different things with them, and because a refusal that says the wrong
+	// thing sends somebody to the wrong file.
+	//
+	// Stated NEGATIVELY so that the zero value is the ordinary node. The first
+	// version of this was `ServesPieces bool`, which made every existing
+	// caller — and every future one that forgot the field — silently a web
+	// seed. Two peerapi tests caught it immediately; a caller added later
+	// would not have been so lucky.
+	WebSeedOnly bool
+	Logger      *slog.Logger
 	// Now is injected so certificate validity is testable (ADR-0017).
 	Now func() time.Time
 	// Liveness records that a peer was heard from (§31, M4-10, #184).
@@ -220,6 +237,10 @@ type Server struct {
 	// pieces answers what this node holds of a blob, whole or in part. Nil
 	// when there is no store behind the surface. A read, always.
 	pieces PieceSource
+	// webSeedOnly is set when this node serves whole blobs and no pieces
+	// (#266). See Options.WebSeedOnly for why it is distinct from pieces
+	// being nil, and why it is stated negatively.
+	webSeedOnly bool
 	// controlBackup holds control-plane backups pushed to this peer (§50,
 	// M7-03). Nil on a node that stores none.
 	controlBackup ControlBackupSink
@@ -276,6 +297,7 @@ func New(opts Options) (*Server, error) {
 		returnPath:    opts.ReturnPath,
 		manifests:     opts.Manifests,
 		pieces:        opts.Pieces,
+		webSeedOnly:   opts.WebSeedOnly,
 		controlBackup: opts.ControlBackup,
 	}
 	s.handler = s.routes()
@@ -514,6 +536,55 @@ type IdentityResponse struct {
 	// ServedBy is the answering node's own peer id, so a caller can tell which
 	// end of the fabric replied.
 	ServedBy string `json:"served_by"`
+	// Speaks is what the ANSWERING node's peer surface will actually do, so a
+	// caller can tell a piece peer from a web seed before it asks either of
+	// them for anything (§27, ADR-0042, #266).
+	//
+	// # Why here, and why it is not configuration echoed back
+	//
+	// ADR-0038 makes each peer authoritative for its own site, so what a peer
+	// does is the peer's statement and nobody else's — and this route already
+	// exists to make exactly that kind of statement over authenticated mTLS.
+	// A field on the ASKING node's membership record would be an operator's
+	// claim about a machine they are not, and it would never self-correct.
+	//
+	// It is derived from what this server was BUILT with rather than from what
+	// was configured, in the spirit of ADR-0039's "proven by execution": the
+	// list cannot say piece-exchange while the piece routes refuse, because
+	// both read the same two fields. ADR-0039 needed durability and an expiry
+	// because a worker has no inbound surface to be asked on; a peer is
+	// defined by having one, so the answer is fetched fresh and cannot go
+	// stale.
+	//
+	// Sorted, so a caller may compare it and a golden file may contain it.
+	Speaks []string `json:"speaks"`
+}
+
+// What a peer surface can say it speaks.
+//
+// Strings rather than an enum on the wire, because this list is read by nodes
+// of other versions: one that meets a capability it does not know must ignore
+// it, and one that meets a missing capability must not conclude the peer is
+// broken. Both of those are easier to get right against a list of names.
+const (
+	// SpeaksBlobContent is the ranged content route every serving node has had
+	// since M4-09 — the byte channel a web seed IS (§27, §28, ADR-0013).
+	SpeaksBlobContent = "blob-content"
+	// SpeaksPieceExchange is the availability and piece routes (M6, ADR-0042).
+	// Its ABSENCE is what makes a member a web seed rather than a piece peer.
+	SpeaksPieceExchange = "piece-exchange"
+)
+
+// speaks is what this node will actually answer, derived rather than declared.
+func (s *Server) speaks() []string {
+	var out []string
+	if s.blobs != nil {
+		out = append(out, SpeaksBlobContent)
+	}
+	if s.pieces != nil && !s.webSeedOnly {
+		out = append(out, SpeaksPieceExchange)
+	}
+	return out
 }
 
 func (s *Server) handleIdentity(w http.ResponseWriter, r *http.Request) {
@@ -529,6 +600,7 @@ func (s *Server) handleIdentity(w http.ResponseWriter, r *http.Request) {
 		Name:      peer.Name,
 		PublicKey: identity.FormatPublicKey(peer.PublicKey),
 		ServedBy:  s.self,
+		Speaks:    s.speaks(),
 	}
 	s.writeJSON(w, r, body)
 }
