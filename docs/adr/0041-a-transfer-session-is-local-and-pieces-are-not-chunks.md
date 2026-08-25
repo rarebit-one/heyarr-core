@@ -1,6 +1,6 @@
 # 0041. A TransferSession is local to a peer, and pieces are not chunks
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-24
 
 ## Context
@@ -139,3 +139,13 @@ after**. That is a narrowing of what a manifest is for, and it is deliberate.
   exceptional.** Decision 2 assumes the no-path-either-way case is rare enough
   to absorb. If it is not, peers need a relay, which is a different ADR and a
   much larger one.
+
+## Status note
+
+**Accepted 2026-08-25.** Shipped and proven across Milestone 6: `TransferSession`
+(#256), the piece stack (#270, #271, #272, #275), a caller (#279), and
+concurrent sources (#280). Decision 2's rule — a session makes progress with
+whoever it has, never a quorum — is asserted by tests that fail when an
+unreachable participant is made fatal, and decision 3's independence of pieces
+and chunks held: no piece table is persisted, no manifest gained a piece, and
+the chunker's parameters were not touched.

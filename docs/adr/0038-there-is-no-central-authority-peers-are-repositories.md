@@ -1,6 +1,6 @@
 # 0038. Each peer is authoritative for its own site
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-23
 
 ## Context
@@ -166,3 +166,38 @@ not what a homelab content fabric needs, and it would be a new ADR that says so.
 Equally: if per-repository revocation proves to be a footgun in practice rather
 than in theory, the answer is probably signed, expiring grants (M8) rather than a
 return to a central authority.
+
+## What ratified this
+
+**Accepted 2026-08-25, on evidence rather than on argument.** It was `Proposed`
+for two days while Milestone 6 was built entirely on top of it, which is a
+worse state to be in than either accepting or rejecting it.
+
+Every M6 mechanism assumes this record and none of them would be correct
+without it:
+
+- **Piece candidates come from MEMBERSHIP, not from a controller's catalogue**
+  (`internal/worker/replicateblob.go`). There is no node to ask who holds what;
+  each peer asks the peers it can reach.
+- **"A smaller swarm, not a failure"** (ADR-0041, decision 2). A pair with no
+  working direction is ordinary, which is this record's third clause.
+- **A session makes progress with whoever it has**, and completion is the
+  target digest rather than a quorum — asserted, and the tests fail when a
+  survey failure or a fetch failure is made fatal (#280).
+- **The acceptance demo runs three peers with three control planes**, and the
+  hub topology has still never been run.
+
+So the code has been treating this as accepted since Milestone 4. Marking it so
+records reality; it does not decide anything new.
+
+**What this ratification obliges.** The Consequences above are now
+commitments rather than predictions, and two of them rewrite work that was
+already planned: Milestone 7 gets smaller (see #26), and "degraded" mostly
+stops being a state (§53). Both were decomposed against the superseded
+ADR-0029 reading and have been reworked.
+
+**What would still make us revisit it.** A deployment where one site is
+genuinely subordinate to another — a family member's node that should not be
+authoritative about anything — is the case this model has no answer for, and it
+is not exotic. It would not restore the hub; it would need a notion of a peer
+that is a member without being an authority, which is a different record.
