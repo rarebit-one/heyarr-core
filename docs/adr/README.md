@@ -49,3 +49,4 @@ An ADR that merely describes the code is not worth having.
 | [0039](0039-worker-capability-advertisement-is-durable-proven-by-execution-and-expires.md) | Worker capability advertisement is durable, proven by execution, and expires | Accepted |
 | [0040](0040-a-renderer-fetches-bytes-with-a-capability-not-a-credential.md) | A renderer fetches bytes with a capability, not a credential | Accepted |
 | [0041](0041-a-transfer-session-is-local-and-pieces-are-not-chunks.md) | A TransferSession is local to a peer, and pieces are not chunks | Proposed |
+| [0042](0042-piece-exchange-is-native-and-rides-the-peer-surface.md) | Piece exchange is Heyarr's own, and rides the peer surface | Proposed |
