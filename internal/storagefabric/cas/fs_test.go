@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -611,4 +612,87 @@ func slicesContains[T comparable](haystack []T, needle T) bool {
 		}
 	}
 	return false
+}
+
+// A degraded materialisation SAYS WHY.
+//
+// # What this is really about
+//
+// ADR-0014's ladder degrading is ordinary and correct. Degrading SILENTLY is
+// what made #222 a 22 GB surprise that took an A/B experiment on file modes to
+// explain: adopting a ~25 GB library produced `materialised: copy` 63 times out
+// of 63, on a host where every instrument said hardlink should work, and the
+// errno that would have named the cause was discarded 63 times.
+//
+// (The real cause was not the one anyone guessed: under ProtectSystem=strict
+// the library and the store are separate bind mounts of ONE filesystem, and
+// link(2) returns EXDEV across mounts whatever the device number says. This
+// test does not reproduce that — it reproduces the DEGRADATION, which is the
+// part the code can be held to.)
+//
+// The source is on a genuinely different filesystem, using the same platform
+// switch TestSameFilesystemRecognisesTwoFilesystems uses, so both the reflink
+// and hardlink rungs are refused and the fall to copy is certain rather than
+// hoped for. Without that this test passed on APFS by cloning successfully and
+// asserting nothing about the branch it exists for.
+func TestADegradedMaterialisationSaysWhy(t *testing.T) {
+	var src string
+	switch runtime.GOOS {
+	case "linux":
+		src = "/proc/self/cmdline"
+	case "darwin":
+		src = "/dev/null"
+	default:
+		t.Skip("no reliably distinct filesystem to source from on this platform")
+	}
+	if _, err := os.Stat(src); err != nil {
+		t.Skipf("%s is not available: %v", src, err)
+	}
+
+	s := newStore(t)
+	desc, err := s.Link(t.Context(), src, Reflink)
+	if err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+
+	if desc.Materialised == Reflink {
+		t.Fatalf("a source on %s was reflinked into the store, so nothing degraded and "+
+			"this test asserts nothing", src)
+	}
+	if desc.DegradedBecause == "" {
+		t.Fatalf("materialised as %s instead of reflink and gave NO REASON — which is "+
+			"exactly what made #222 invisible", desc.Materialised)
+	}
+	// The reason names the rung that was refused, or an operator cannot tell
+	// which step of the ladder to go and look at.
+	if !strings.Contains(desc.DegradedBecause, string(Reflink)) {
+		t.Errorf("the reason %q does not name the rung that was refused", desc.DegradedBecause)
+	}
+	t.Logf("materialised=%s degraded_because=%q", desc.Materialised, desc.DegradedBecause)
+}
+
+// Copy is the bottom rung, so asking for it degrades from nothing and there is
+// nothing to explain.
+//
+// The control: without it, a change that always populated the field would pass
+// the test above while putting a reason on every healthy ingest — and a field
+// that is never empty is one nobody reads.
+func TestTheBottomRungHasNothingToExplain(t *testing.T) {
+	s := newStore(t)
+	src := filepath.Join(t.TempDir(), "source.bin")
+	if err := os.WriteFile(src, []byte("copy me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	desc, err := s.Link(t.Context(), src, Copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if desc.Materialised != Copy {
+		t.Fatalf("materialised as %s, want copy", desc.Materialised)
+	}
+	if desc.DegradedBecause != "" {
+		t.Errorf("a copy that was ASKED for reports %q; nothing was refused",
+			desc.DegradedBecause)
+	}
 }

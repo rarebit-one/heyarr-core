@@ -824,12 +824,24 @@ func TestReplicateBlobRegistrationIsBoundedAndUnconditional(t *testing.T) {
 }
 
 // Health ranks candidates and does not exclude them — see RankSources.
+//
+// # The peer ids run OPPOSITE to the health order, deliberately
+//
+// They used to run with it — `a` reachable, `b` unknown, `c` unreachable — so
+// "ordered by health" and "ordered by id" were the same sequence and the test
+// could not tell them apart. A sabotage that removed health from the ordering
+// entirely left this green.
+//
+// That is the fixture flaw this repository has now catalogued four times: #206's
+// monotonic chunk digests, M5's lying peer at position zero, the repair
+// candidate list, and this. Whenever a fixture's expected order agrees with its
+// incidental order, the test asserts nothing about the rule.
 func TestRankSourcesPrefersReachableWithoutExcludingUnknown(t *testing.T) {
 	key := []byte("0123456789abcdef0123456789abcdef")
 	candidates := []replication.Source{
-		{PeerID: "c", Endpoint: "https://c:1", PublicKey: key, Health: replication.HealthUnreachable},
+		{PeerID: "a", Endpoint: "https://a:1", PublicKey: key, Health: replication.HealthUnreachable},
 		{PeerID: "b", Endpoint: "https://b:1", PublicKey: key, Health: replication.HealthUnknown},
-		{PeerID: "a", Endpoint: "https://a:1", PublicKey: key, Health: replication.HealthReachable},
+		{PeerID: "c", Endpoint: "https://c:1", PublicKey: key, Health: replication.HealthReachable},
 		{PeerID: "d", Endpoint: "https://d:1", Health: replication.HealthReachable},
 	}
 	got := replication.RankSources(candidates)
@@ -837,7 +849,7 @@ func TestRankSourcesPrefersReachableWithoutExcludingUnknown(t *testing.T) {
 	for _, s := range got {
 		order = append(order, s.PeerID)
 	}
-	assertEq(t, strings.Join(order, ","), "a,b,c",
+	assertEq(t, strings.Join(order, ","), "c,b,a",
 		"the source order: reachable, then unknown, then unreachable, and never a peer with no key")
 }
 
