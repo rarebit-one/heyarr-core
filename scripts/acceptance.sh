@@ -1133,9 +1133,32 @@ probe_recorded() { # blob-hash
 # — it has no container, and `direct` is the honest answer to "I do not know
 # what this file is" — and the run reports a planner regression that did not
 # happen (#207).
+#
+# # Why this budget is the largest in the file rather than the middle one
+#
+# It was 600 (60s), and it ran out on CI — on a DOCS-ONLY branch, taking six
+# assertions down with it, because everything below a missing probe is a
+# consequence of the probe missing (#274).
+#
+# This is the only wait here whose condition depends on all three of an external
+# binary, a job queue, AND deliberate contention: the section that calls it
+# starts a worker that CANNOT probe alongside one that can, precisely so the
+# claim discipline is exercised. So the probe has to wait for the right claimant
+# by design. Every other wait in this file is in-process and uncontended, and
+# the replication wait — with neither an external binary nor a rival claimant —
+# already had 900.
+#
+# 60 seconds was therefore the tightest budget on the heaviest wait, which is
+# backwards. On the run that failed, the demo took 288s against a median of
+# ~165s: a runner 1.7x slower turns a probe that comfortably lands in 40s into
+# one that does not land in 60.
+#
+# This does not make the wait a bet on machine speed — it still polls for a
+# CONDITION and stops the moment it arrives, so a fast machine pays nothing.
+# It only widens how slow a machine may be before the run calls it a failure.
 wait_for_probe() { # blob-hash description
   wait_for "the probe never recorded a container for blob $1, so $2" \
-    600 probe_recorded "$1"
+    900 probe_recorded "$1"
 }
 
 # refusal_arc_at_rest <want-id> — 0 once a fruitless search has BOTH recorded
