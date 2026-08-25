@@ -1,0 +1,176 @@
+# What this repository claims to do, and the evidence in `make demo` for each.
+#
+# ---------------------------------------------------------------------------
+# WHY THIS FILE EXISTS
+# ---------------------------------------------------------------------------
+#
+# The defect this codebase reliably produces is a MECHANISM WITH NO CALLER: a
+# package that is built, reviewed, unit-tested and merged, and that no running
+# binary can reach. Five instances by the close of Milestone 6, every one of
+# them green:
+#
+#   #273  the piece transport      — Puller.PullPieces had no caller outside a
+#                                    Go test, so the milestone it existed for
+#                                    could not be demonstrated at all
+#   #266  the HTTP web seed        — transfer.WebSeed is constructed nowhere
+#                                    outside tests, and still is
+#   #247  the fake download client — built, then never configured by the demo,
+#                                    so the acceptance gate proves the by-hand
+#                                    acquisition route and not the ordinary one
+#   §33   partial playback         — cas.ReadPartialAt is reached only from the
+#                                    peer surface; the client blob route has no
+#                                    partial path, so nothing a player talks to
+#                                    can serve what has not finished arriving
+#   #202  HTTP/HLS                 — §33 says clients keep speaking it, and
+#                                    nothing produces it
+#
+# Every one passed `go test -race`, `golangci-lint`, and review. Unit tests
+# cannot catch this by construction: a test IS a caller, so a package with a
+# thorough test suite and no production caller looks exactly like a healthy one.
+#
+# Static analysis cannot catch it either, and this was measured rather than
+# assumed. A reachability check over exported declarations flags 318 of 1055
+# (30%); restricted to funcs and methods, 149 of 618 (24%). The noise is
+# structural, not a matter of tuning: a Go type returned into `:=` is never
+# named by its caller, a handler reached through a registry is named only where
+# it is registered, and `MarshalJSON` is called by the standard library. A guard
+# that is wrong a quarter of the time is a guard people disable.
+#
+# What DID catch all five, every time, was one question: *what in `make demo`
+# exercises this?* So that is the question this file asks mechanically.
+#
+# ---------------------------------------------------------------------------
+# HOW IT WORKS, AND WHY IT IS A LEDGER RATHER THAN A LINTER
+# ---------------------------------------------------------------------------
+#
+# Each claim names a fixed string that must appear in a `make demo` transcript.
+# `proven` claims FAIL the build when their evidence is absent — that is the
+# regression guard, and it is what stops a caller being deleted quietly.
+# `pending` claims are REPORTED and do not fail: they are the known gaps, each
+# carrying the issue that closes it.
+#
+# The two states are the same distinction `require_capability` and
+# `not_exercised` already draw inside scripts/acceptance.sh (#187), for the same
+# reason: an assertion whose subject is absent does not fail and does not skip.
+# It quietly passes and reads as coverage.
+#
+# **This is a ledger and not a proof.** It catches the claims somebody wrote
+# down, exactly as `make hygiene` catches the name shapes somebody thought of.
+# Its value is that adding a mechanism now has a place where its absence is
+# visible, and that flipping `pending` to `proven` is a deliberate act with a
+# string attached to it.
+#
+# The evidence is a FIXED STRING, matched literally, never a regex. A regex here
+# would drift into matching a sentence that merely mentions the feature — and
+# the failure mode this file exists for is precisely a claim that reads as
+# coverage without being it.
+#
+# 🔴 EVIDENCE MUST BE ASSERTION TEXT, NEVER NARRATION. The demo prints an
+# epilogue describing what the run proved, and that epilogue prints whether or
+# not the section it describes ran. This file's first version used `took the
+# PIECE path` for the cooperative-acquisition claim, and the sabotage run that
+# deleted the entire swarm section did not catch it — the phrase survived in the
+# epilogue's own prose. Two of that section's three claims failed and the third
+# passed against a paragraph of narration.
+#
+# So: take the string from an `assert_*` description or from a log line the code
+# itself emits. If a phrase would still be printed by a run that did nothing,
+# it is not evidence.
+#
+# ---------------------------------------------------------------------------
+# FORMAT
+# ---------------------------------------------------------------------------
+#
+#   claim <id>
+#   state proven|pending
+#   ref   <spec sections, ADRs, issues>
+#   why   <one line: what would be untrue if this stopped happening>
+#   issue <number>            (pending only: what closes it)
+#   evidence <fixed string that must appear in the demo transcript>
+#
+# A stanza ends at the next `claim` or at end of file.
+
+claim cooperative-acquisition
+state proven
+ref   §23, §24, ADR-0041, ADR-0042, #267
+why   Two peers assemble one blob from pieces rather than one pulling it whole from the other. This is the branch Milestone 6 added, and it went unproven for most of that milestone because the transport had no caller.
+evidence the branch this milestone added is the one that ran
+
+claim cooperation-is-a-number
+state proven
+ref   §23, #267
+why   The external source served strictly less than two full copies. Without this the peers converge without cooperating, which is the shape M6 replaced and which passes every other assertion.
+evidence THE COOPERATION CLAIM
+
+claim clients-never-learn-what-a-piece-is
+state proven
+ref   §33, §85, #267
+why   A blob that arrived as pieces from several machines range-reads over ordinary HTTP and causes no piece anywhere. This is what keeps piece exchange an internal optimisation rather than a client requirement, and it is an assertion about an ABSENCE, which is the easiest kind to lose.
+evidence AND THE PIECE RECORD DID NOT MOVE
+
+claim bytes-cross-the-peer-surface
+state proven
+ref   §21, §32, ADR-0030, ADR-0012
+why   The byte-carrying hop is the mTLS peer surface and the controller carries nothing. Asserted from the SENDING side, because a destination's account of what it fetched is a claim about itself.
+evidence served these bytes on its peer surface
+
+claim placement-converging
+state proven
+ref   §56, §64, M4-11
+why   A real gap in real bytes on a second peer is reported as converging and names which peer is missing them. The milestone Milestone 4 exists for.
+evidence PLACEMENT_CONVERGING: one of two required peers holds the bytes
+
+claim gc-refuses-what-it-cannot-establish
+state proven
+ref   §19, §53, ADR-0018, M4-12
+why   The collector will not unlink the last local copy unless it can affirmatively establish the bytes survive elsewhere, and records peer_unreachable as a reason rather than an error. Under ADR-0038 a peer will routinely be unable to establish it, so this refusal is load-bearing rather than an edge case.
+evidence THE LAST COPY IS STILL THERE
+
+claim lazy-chunking-by-a-job
+state proven
+ref   §16, ADR-0034, M5
+why   Ingest chunks nothing and no sweep chunks anything; a manifest is a job's product and never a lookup's. A sweep that quietly started chunking everything would still be green everywhere else.
+evidence and no chunk_blob job exists at all — not even one waiting to run
+
+# ---------------------------------------------------------------------------
+# PENDING — mechanisms that exist and that nothing running reaches.
+#
+# Each of these is a package with tests and no path from the binary. They are
+# listed rather than left implicit so that the gap is visible at the gate
+# instead of being rediscovered by whoever writes the next acceptance section.
+# ---------------------------------------------------------------------------
+
+claim web-seed-is-a-source
+state pending
+issue 266
+ref   §27, ADR-0013, ADR-0042
+why   internal/peer/transfer/webseed.go is written and tested, and transfer.WebSeed is constructed nowhere outside tests — pullPieces builds every candidate as transfer.Peer. §27's ordinary blob endpoint is not reachable as a piece source from any running binary.
+evidence a piece was fetched from a web seed
+
+claim polled-acquisition-completes
+state pending
+issue 247
+ref   §58, §65, ADR-0025
+why   The demo asserts that a grab_release job was QUEUED and stops there, so the gate proves the by-hand acquisition route. internal/downloads/fake.go exists and no acceptance section configures it, so SELECTED -> QUEUED -> downloaded -> ingest has never run end to end.
+evidence a grab_release job succeeded
+
+claim playback-over-a-partial-blob
+state pending
+issue 29
+ref   §33, ADR-0043
+why   cas.ReadPartialAt serves bytes out of a blob still being assembled and is reached only from the peer surface. internal/api/blobs has no partial path, so nothing a player talks to can serve what has not finished arriving. Milestone 10's premise.
+evidence a client range-read a blob that had not finished arriving
+
+claim clients-are-served-hls
+state pending
+issue 202
+ref   §33, §70
+why   §33 opens by saying clients continue to consume standard HTTP/HLS, and nothing in the tree produces a playlist. Milestone 10 is built on that sentence.
+evidence an HLS playlist was served
+
+claim control-plane-backup-and-restore
+state pending
+issue 282
+ref   §49, §50, §51, §82, ADR-0044
+why   Milestone 7. A peer's own control plane and its Ed25519 identity are the two things nothing else in the fabric can give back, and there is no backup, no restore and no recover verb yet.
+evidence a controller backup was taken

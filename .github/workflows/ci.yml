@@ -196,7 +196,14 @@ jobs:
       # Linux runs the demo with a toolchain, macOS without one. Both must
       # pass: everything M1 proved is independent of FFmpeg, and ADR-0023 says
       # it stays that way.
-      - run: make demo
+      #
+      # `make claims` rather than `make demo`: it runs the same demo and then
+      # checks what it printed against scripts/claims.list, which fails when
+      # something this repository claims to do was not exercised. That is the
+      # guard for the defect five features shipped with — a mechanism built,
+      # tested, reviewed and merged, that no running binary can reach. See the
+      # header of scripts/claims.list.
+      - run: make claims
 
   # The degraded pass, on the SAME operating system as the equipped one.
   #
