@@ -15,9 +15,12 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/pieces"
 
 	"github.com/go-chi/chi/v5"
 
@@ -143,11 +146,12 @@ type transferFabric struct {
 	self  string
 
 	// The source: a real peer surface over real mTLS.
-	sourceID    string
-	sourceStore *cas.FS
-	sourceSrv   *peerapi.Server
-	sourceBlobs *countingBlobServer
-	sourceMans  *fabricManifests
+	sourceID     string
+	sourceStore  *cas.FS
+	sourceSrv    *peerapi.Server
+	sourceBlobs  *countingBlobServer
+	sourceMans   *fabricManifests
+	sourcePieces *fabricPieces
 
 	// The controller: a plain client-API blob route, standing in for the node
 	// that schedules. It holds the same bytes so that a data-path mistake would
@@ -226,6 +230,7 @@ func newTransferFabric(t *testing.T) *transferFabric {
 	}
 	f.sourceBlobs = &countingBlobServer{inner: sourceHandler}
 	f.sourceMans = newFabricManifests()
+	f.sourcePieces = &fabricPieces{}
 	srcMaterial, err := mtls.NewMaterial(mtls.MaterialOptions{PrivateKey: srcPriv, PeerID: f.sourceID})
 	if err != nil {
 		t.Fatal(err)
@@ -244,7 +249,12 @@ func newTransferFabric(t *testing.T) *transferFabric {
 		// two answerable states: it holds a manifest for these bytes, or it
 		// holds none and the blob is pulled whole (M5-05, M5-06).
 		Manifests: f.sourceMans,
-		Logger:    slog.New(slog.DiscardHandler),
+		// A piece route, so a test can put the source into the state §23 is
+		// about and no earlier milestone could express: holding PART of a blob.
+		// It counts what it is asked, so a test can assert the piece path was
+		// not taken as easily as that it was.
+		Pieces: f.sourcePieces,
+		Logger: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -877,4 +887,240 @@ func assertTransitions(t *testing.T, got, want []string) {
 	t.Helper()
 	assertEq(t, strings.Join(got, " → "), strings.Join(want, " → "),
 		"the replication.transfer_changed transitions")
+}
+
+// fabricPieces is the source's piece routes: what it says it holds of a blob,
+// and the bytes for those pieces.
+//
+// Empty by default, which is the honest state for every test written before
+// M6 — a source that holds blobs WHOLE has no pieces to offer and answers 404,
+// exactly as a node with no transfer in flight does.
+type fabricPieces struct {
+	mu sync.Mutex
+	// content is the whole blob, from which claimed pieces are cut.
+	content []byte
+	// claimed is the pieces this source will admit to and serve.
+	claimed map[int]bool
+	// asked counts availability requests, so a test can assert the piece path
+	// was NOT taken as readily as that it was.
+	asked int
+	// served counts pieces handed over.
+	served int
+}
+
+func (f *fabricPieces) hold(content []byte, indices ...int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.content = content
+	f.claimed = map[int]bool{}
+	for _, i := range indices {
+		f.claimed[i] = true
+	}
+}
+
+func (f *fabricPieces) counts() (asked, served int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.asked, f.served
+}
+
+func (f *fabricPieces) PieceAvailability(
+	_ context.Context, _ hashing.Hash,
+) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.asked++
+	if len(f.content) == 0 {
+		// Never heard of it, which is a 404 and NOT an empty availability —
+		// the difference between "no transfer of it here" and "fetching,
+		// nothing yet".
+		return "", false, nil
+	}
+	g, err := pieces.For(int64(len(f.content)))
+	if err != nil {
+		return "", false, err
+	}
+	have := pieces.NewAvailability(g.Count())
+	for i := range g.Count() {
+		if f.claimed[i] {
+			have.Add(i)
+		}
+	}
+	return pieces.Encode(g, have), true, nil
+}
+
+func (f *fabricPieces) ReadPiece(
+	_ context.Context, _ hashing.Hash, index int,
+) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.claimed[index] {
+		return nil, peerapi.ErrNoSuchPiece
+	}
+	g, err := pieces.For(int64(len(f.content)))
+	if err != nil {
+		return nil, err
+	}
+	off, length, err := g.Range(index)
+	if err != nil {
+		return nil, peerapi.ErrNoSuchPiece
+	}
+	f.served++
+	return append([]byte(nil), f.content[off:off+length]...), nil
+}
+
+// seedPartialBlob records a blob this node KNOWS ABOUT but which no peer holds
+// whole: a `blobs` row with its size, and no `present` replica anywhere.
+//
+// That combination is the entire point. `BlobSources` selects replicas in state
+// `present`, and there is no `partial` state, so a peer holding a third of this
+// blob has no row distinguishing it from a peer that never heard of it. Before
+// M6 this was simply a gap nobody could close.
+func (f *transferFabric) seedPartialBlob(content []byte) hashing.Hash {
+	f.t.Helper()
+	h, _, err := hashing.HashReader(bytes.NewReader(content))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.exec(`INSERT INTO blobs (hash, size, first_seen_at) VALUES (?, ?, ?)`,
+		h.String(), int64(len(content)), f.stamp)
+	return h
+}
+
+// 🔴 THE assertion for M6-07: a blob NOBODY holds whole is assembled from a
+// peer that holds part of it.
+//
+// This branch used to be a dead end. `BlobSources` returns nothing, the handler
+// reported that no source had the bytes, and the reconciliation cycle offered
+// the same gap again forever — even when the bytes were sitting on peers, in
+// pieces, the whole time.
+func TestReplicateBlobAssemblesFromAPeerHoldingOnlyPartOfIt(t *testing.T) {
+	f := newTransferFabric(t)
+	content := transferPayload(9)
+	hash := f.seedPartialBlob(content)
+
+	// The source holds EVERY piece but has no `present` replica row, so the
+	// catalogue still says nobody has it. That is the state a peer is in while
+	// it is fetching, and the state the schema cannot express.
+	g, err := pieces.For(int64(len(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := make([]int, 0, g.Count())
+	for i := range g.Count() {
+		all = append(all, i)
+	}
+	f.sourcePieces.hold(content, all...)
+
+	if err := f.run(hash); err != nil {
+		t.Fatalf("replicate_blob over pieces: %v", err)
+	}
+
+	// The destination's DISK, hashed — not what the transfer said.
+	rsc, _, err := f.store.Open(t.Context(), hash)
+	if err != nil {
+		t.Fatalf("opening the assembled blob: %v", err)
+	}
+	defer func() { _ = rsc.Close() }()
+	landed, err := io.ReadAll(rsc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	onDisk, _, err := hashing.HashReader(bytes.NewReader(landed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onDisk != hash {
+		t.Fatalf("the assembled bytes hash to %s, want %s", onDisk, hash)
+	}
+	if !bytes.Equal(landed, content) {
+		t.Fatal("the assembled bytes are not the source's bytes")
+	}
+
+	asked, served := f.sourcePieces.counts()
+	if asked == 0 {
+		t.Error("the source was never asked what it holds, so the piece path did not run")
+	}
+	if served != g.Count() {
+		t.Errorf("the source served %d pieces, want %d", served, g.Count())
+	}
+	// The whole-blob content route was NOT used: this is piece exchange, not a
+	// pull wearing a different name.
+	if got := f.sourceBlobs.requests.Load(); got != 0 {
+		t.Errorf("the content route was hit %d times during a piece transfer", got)
+	}
+
+	state, bytesPresent, ok := f.replicaState(hash)
+	if !ok {
+		t.Fatal("the transfer left no replicas row")
+	}
+	assertEq(t, state, "present", "the replica state after an assembled transfer")
+	if bytesPresent != int64(len(content)) {
+		t.Errorf("bytes_present = %d, want %d", bytesPresent, len(content))
+	}
+	assertTransitions(t, f.transferEvents(hash), []string{
+		replication.TransferStarted, replication.TransferSucceeded,
+	})
+}
+
+// 🔴 The fast path is NOT hijacked. A peer that holds the blob whole is pulled
+// from, streamed, and the piece routes are never touched.
+//
+// Piece exchange answers a question single-source replication cannot answer at
+// all; it is not a faster way to answer one it can. A swarm attempt against a
+// source holding everything would trade one streamed connection for N round
+// trips and gain nothing, so the branch is deliberately reachable only when
+// there is no whole source.
+func TestReplicateBlobStillStreamsWhenAPeerHoldsTheWholeBlob(t *testing.T) {
+	f := newTransferFabric(t)
+	content := transferPayload(10)
+	hash := f.seedBlob(content) // seedBlob writes a `present` replica
+
+	// The source ALSO has every piece available. If the handler preferred
+	// pieces whenever it could, it would take them, and this would catch it.
+	g, err := pieces.For(int64(len(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := make([]int, 0, g.Count())
+	for i := range g.Count() {
+		all = append(all, i)
+	}
+	f.sourcePieces.hold(content, all...)
+
+	if err := f.run(hash); err != nil {
+		t.Fatalf("replicate_blob: %v", err)
+	}
+
+	asked, served := f.sourcePieces.counts()
+	if asked != 0 || served != 0 {
+		t.Errorf("the piece routes were used (%d asked, %d served) for a blob a peer holds "+
+			"WHOLE — the streamed pull should have handled it", asked, served)
+	}
+	if got := f.sourceBlobs.requests.Load(); got != 1 {
+		t.Errorf("the content route served %d requests, want exactly 1", got)
+	}
+}
+
+// A blob nobody holds — whole OR in part — is still the original answer: there
+// is no source. Not a failed transfer: nothing was attempted, nothing about
+// this peer's disk changed, and the gap is offered again next cycle.
+func TestReplicateBlobWithNoWholeAndNoPartialSourceIsStillNoSource(t *testing.T) {
+	f := newTransferFabric(t)
+	hash := f.seedPartialBlob(transferPayload(11))
+	// f.sourcePieces is empty: the member answers 404 for this blob.
+
+	err := f.run(hash)
+	if !errors.Is(err, replication.ErrNoSource) {
+		t.Fatalf("err = %v, want ErrNoSource", err)
+	}
+	if _, _, ok := f.replicaState(hash); ok {
+		t.Error("a transfer that never started left a replicas row")
+	}
+	if events := f.transferEvents(hash); len(events) != 0 {
+		t.Errorf("a transfer that never started emitted %v", events)
+	}
+	if asked, _ := f.sourcePieces.counts(); asked == 0 {
+		t.Error("the member was never asked what it holds, so the swarm was not tried at all")
+	}
 }

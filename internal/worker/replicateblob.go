@@ -189,22 +189,76 @@ func ReplicateBlobHandler(deps TransferDeps) HandlerFunc {
 		if err != nil {
 			return err
 		}
-		if len(sources) == 0 {
-			// Nothing to pull from. Refused before a connection exists, which
-			// is also what a revoked source looks like from here: revocation is
-			// the deletion of the membership record (ADR-0012), and the
-			// replicas rows referencing it go with it.
-			//
-			// Not recorded as a failed replica: nothing was attempted and
-			// nothing about this peer's disk changed. It stays a gap, which the
-			// next reconciliation cycle offers again once a source is enrolled
-			// or comes back.
-			return fmt.Errorf("%w: %s, wanted on peer %s", replication.ErrNoSource, hash, self)
-		}
 
+		// Built before the branch below, because BOTH paths need it.
 		puller, err := deps.Puller()
 		if err != nil {
 			return err
+		}
+		if len(sources) == 0 {
+			// Nobody holds it WHOLE. Before M6 that was the end of it.
+			//
+			// `BlobSources` selects replicas in state `present`, and there is
+			// no `partial` state — so a peer holding a third of this blob is
+			// recorded exactly like a peer holding none of it. That is §23's
+			// opening sentence, and it is why this branch existed as a dead
+			// end: the bytes could be spread across three peers and this node
+			// would report that no source had them.
+			//
+			// So this is where the swarm earns its keep, and deliberately ONLY
+			// here. When some peer does hold the blob whole, the streamed
+			// whole-or-chunked pull below is better in every way — one
+			// connection, sendfile, no per-piece round trips — and taking
+			// pieces instead would be slower for no gain. Piece exchange is the
+			// answer to a question single-source replication cannot answer at
+			// all, not a faster way to answer one it can.
+			outcome, perr := pullPieces(ctx, deps, puller, hash, self, log)
+			switch {
+			case perr == nil:
+				record.Bytes = outcome.Bytes
+				record.Reason = ""
+				record.Sources = outcome.FromPeer
+				if err := deps.Catalog.BeginBlobTransfer(ctx, record); err != nil {
+					return err
+				}
+				if err := deps.Catalog.RecordBlobTransferred(ctx, record); err != nil {
+					return err
+				}
+				log.Info("a blob was assembled from peers that each held part of it",
+					"blob_hash", hash.String(), "destination_peer_id", self,
+					"bytes", outcome.Bytes, "pieces_fetched", outcome.Fetched,
+					"pieces_resumed", outcome.Resumed, "peers", len(outcome.FromPeer))
+				return nil
+			case errors.Is(perr, transfer.ErrNoPieceSource),
+				errors.Is(perr, catalog.ErrBlobSizeUnknown):
+				// Nobody has any of it either, or this node cannot say how big
+				// it is. Both are the ORIGINAL answer — there is no source —
+				// and neither is a failed transfer: nothing was attempted and
+				// nothing about this peer's disk changed. It stays a gap for
+				// the next reconciliation cycle.
+				log.Debug("no peer holds this blob whole or in part",
+					"blob_hash", hash.String(), "error", perr)
+			default:
+				// A swarm attempt that got somewhere and then failed IS a
+				// failed transfer, and is recorded as one — bytes arrived and
+				// did not verify, or a write failed. Distinct from the case
+				// above, which never started.
+				record.Bytes = 0
+				record.Reason = "piece_transfer_failed"
+				if err := deps.Catalog.BeginBlobTransfer(ctx, record); err != nil {
+					return err
+				}
+				if recErr := deps.Catalog.RecordBlobTransferFailed(ctx, record, "corrupt"); recErr != nil {
+					return errors.Join(perr, recErr)
+				}
+				return perr
+			}
+
+			// Refused before a connection exists, which is also what a revoked
+			// source looks like from here: revocation is the deletion of the
+			// membership record (ADR-0012), and the replicas rows referencing
+			// it go with it.
+			return fmt.Errorf("%w: %s, wanted on peer %s", replication.ErrNoSource, hash, self)
 		}
 
 		record.SourcePeerID = sources[0].PeerID
@@ -363,4 +417,64 @@ func lazyPuller(
 		puller = built
 		return puller, nil
 	}
+}
+
+// pullPieces assembles a blob from peers that each hold PART of it.
+//
+// # Where the candidates come from, and why not from the catalogue
+//
+// From MEMBERSHIP, not from `replicas`. That is not a preference; it is forced.
+// `replicas` records `present`, `pending`, `not_required` and `undecided` —
+// there is no `partial` — so a peer midway through fetching this same blob has
+// no row that distinguishes it from a peer that has never heard of it. Asking
+// the catalogue who holds part of a blob returns nothing, always.
+//
+// So the question goes to the peers instead, which is what §26 asks for and
+// what ADR-0038 means by peers being repositories rather than rows in somebody
+// else's table: every pinned member is asked what it holds, and the ones
+// holding nothing say so cheaply. The availability route is designed for
+// exactly this — it answers from the blob's size without reading content, so
+// asking a peer that has nothing costs a round trip and no disk.
+//
+// # There is no tracker, and this is where that shows
+//
+// Discovery is the membership list. Not a DHT, not a bootstrap node, not a
+// tracker — there is nowhere for one to be configured, because the candidates
+// are precisely the peers this node has already authenticated (ADR-0012).
+func pullPieces(
+	ctx context.Context, deps TransferDeps, puller *transfer.Puller,
+	hash hashing.Hash, self string, log *slog.Logger,
+) (transfer.PieceOutcome, error) {
+	// This node's OWN record of the size, never a peer's claim: both ends must
+	// derive the same division, and a source that chose it could choose wrongly
+	// in a way nothing could attribute (ADR-0043).
+	size, err := deps.Catalog.BlobSize(ctx, hash.String())
+	if err != nil {
+		return transfer.PieceOutcome{}, err
+	}
+
+	members, err := deps.Catalog.Peers(ctx)
+	if err != nil {
+		return transfer.PieceOutcome{}, err
+	}
+	candidates := make([]transfer.Candidate, 0, len(members))
+	for _, m := range members {
+		if m.PeerID == self {
+			continue
+		}
+		candidates = append(candidates, transfer.Peer(replication.Source{
+			PeerID:    m.PeerID,
+			Name:      m.Name,
+			Endpoint:  m.Endpoint,
+			PublicKey: m.PublicKey,
+			Health:    m.Health,
+		}))
+	}
+	if len(candidates) == 0 {
+		return transfer.PieceOutcome{}, transfer.ErrNoPieceSource
+	}
+
+	log.Debug("asking every pinned member what it holds of a blob nobody holds whole",
+		"blob_hash", hash.String(), "members", len(candidates), "bytes", size)
+	return puller.PullPieces(ctx, hash, size, candidates)
 }
