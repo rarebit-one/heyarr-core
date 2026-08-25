@@ -2721,10 +2721,35 @@ YAML
   assert_contains "$(jq -r '.omissions | join(",")' <<<"$bk1")" "provider-credentials" \
     "the backup records the credentials it structurally cannot carry, rather than surprising a restore (ADR-0044 Q6)"
 
-  # No control-plane change: the generation must NOT move.
+  # A re-take is MONOTONIC. It was "the generation must NOT move", and that was
+  # wrong the day it was written.
+  #
+  # "No control-plane change" is not a state a RUNNING node can reach. The beats
+  # never stop writing — provider health every minute, reconciliation, the
+  # search beat, and since #247 a download poll every fifteen seconds — so two
+  # backups taken moments apart legitimately differ, and the assertion was a
+  # race against whichever beat happened to land between them. #247's beat did
+  # not break it; it turned a rare flake into a likely one, which is the good
+  # kind of exposure.
+  #
+  # What holds on a running node is that a re-take never RESETS or decreases the
+  # generation: it is the event high-water mark and it is monotonic. That a
+  # backup does not advance it by its OWN bookkeeping is a different claim and
+  # is proven against a quiescent database in TestIdempotentPerGeneration, which
+  # is where it can be isolated — the demo cannot isolate it on a live node and
+  # should not pretend to.
+  #
+  # The load-bearing half is the one below this: a real control-plane change
+  # DOES advance it. That is what catches a mechanism which merely ran twice,
+  # and it is untouched.
+  local bk1b_gen
   bk1b=$("$BIN" --config "$WORK/full.yaml" backup --json)
-  assert_eq "$(jq -r '.generation' <<<"$bk1b")" "$bk1_gen" \
-    "a re-take with no control-plane change reports the SAME generation, not a mechanism that merely ran twice"
+  bk1b_gen=$(jq -r '.generation' <<<"$bk1b")
+  if (( bk1b_gen >= bk1_gen )); then
+    pass "a re-take never resets or decreases the backup generation (monotonic)"
+  else
+    fail "a re-take moved the generation backwards: $bk1_gen -> $bk1b_gen"
+  fi
 
   # A real control-plane change, then a backup: the generation must advance.
   bk_work=$(api_all /api/v1/works '.items[].id' | head -1)
