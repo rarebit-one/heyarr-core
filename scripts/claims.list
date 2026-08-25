@@ -169,8 +169,7 @@ why   §33 opens by saying clients continue to consume standard HTTP/HLS, and no
 evidence an HLS playlist was served
 
 claim control-plane-backup-and-restore
-state pending
-issue 282
+state proven
 ref   §49, §50, §51, §82, ADR-0044
-why   Milestone 7. A peer's own control plane and its Ed25519 identity are the two things nothing else in the fabric can give back, and there is no backup, no restore and no recover verb yet.
-evidence a controller backup was taken
+why   Milestone 7. A peer's own control plane and its Ed25519 identity are the two things nothing else in the fabric can give back. M7-02 (#282) delivers the backup — a VACUUM INTO snapshot with signed provenance — and a restore that opens it (unit-proven: state at the moment, refused as a control plane, tampered backup refused). The demo takes one against the running controller and proves the generation reports real change: a re-take with no change is the SAME generation, and a control-plane write advances it. Reaching every peer is #283; recover-from-peer is #284.
+evidence a control-plane change advances the backup generation
