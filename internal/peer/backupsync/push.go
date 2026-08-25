@@ -140,6 +140,61 @@ func (p *Pusher) HeldBy(ctx context.Context, target Target) ([]int64, error) {
 	return out.Generations, nil
 }
 
+// FetchBundle downloads a generation of THIS node's own backup from a peer that
+// holds it, writing the bundle (manifest.json + snapshot.db) into destDir, and
+// returns the manifest. Generation 0 fetches the latest the peer holds.
+//
+// It is the fetch half of `recover --from-peer` (M7-04): a rebuilt node pulls
+// the control plane it can no longer produce for itself. The bytes are NOT
+// trusted here — the caller verifies the bundle (digest, signature) before
+// restoring, exactly as a received push is verified.
+func (p *Pusher) FetchBundle(ctx context.Context, target Target, generation int64, destDir string) (backup.Manifest, error) {
+	origin, err := originFor(target)
+	if err != nil {
+		return backup.Manifest{}, err
+	}
+	client, closeIdle, err := p.clientFor(target.Peer)
+	if err != nil {
+		return backup.Manifest{}, err
+	}
+	defer closeIdle()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		origin+peerapi.ControlBackupDownloadPath(generation), nil)
+	if err != nil {
+		return backup.Manifest{}, fmt.Errorf("backupsync: building the fetch request: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return backup.Manifest{}, fmt.Errorf("backupsync: fetching from %s: %w", target.Peer.PeerID, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return backup.Manifest{}, fmt.Errorf("backupsync: peer %s has no such backup: %s", target.Peer.PeerID, resp.Status)
+	}
+
+	header := resp.Header.Get(peerapi.ControlBackupManifestHeader)
+	if header == "" {
+		return backup.Manifest{}, fmt.Errorf("backupsync: peer %s served a backup with no manifest header", target.Peer.PeerID)
+	}
+	manifestJSON, err := base64.StdEncoding.DecodeString(header)
+	if err != nil {
+		return backup.Manifest{}, fmt.Errorf("backupsync: the served manifest header is not base64: %w", err)
+	}
+	var m backup.Manifest
+	if err := json.Unmarshal(manifestJSON, &m); err != nil {
+		return backup.Manifest{}, fmt.Errorf("backupsync: decoding the served manifest: %w", err)
+	}
+
+	if err := os.MkdirAll(destDir, 0o750); err != nil {
+		return backup.Manifest{}, fmt.Errorf("backupsync: preparing the fetch directory: %w", err)
+	}
+	if err := writeBundle(destDir, m, io.LimitReader(resp.Body, m.SizeBytes+1)); err != nil {
+		return backup.Manifest{}, err
+	}
+	return m, nil
+}
+
 // clientFor builds a pinned mTLS client for exactly one peer, and a function to
 // release its idle connection — this is a one-shot dial, not a pool.
 func (p *Pusher) clientFor(peer mtls.Peer) (*http.Client, func(), error) {

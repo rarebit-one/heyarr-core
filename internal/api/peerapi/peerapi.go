@@ -376,6 +376,10 @@ func (s *Server) routes() http.Handler {
 		// fact the pusher checks its belief against.
 		r.Post("/control-backup", s.handleControlBackupReceive)
 		r.Get("/control-backup", s.handleControlBackupList)
+		// A recovering node fetching its OWN backup that this node holds
+		// (§51, M7-04). The generation is in the path; the source is the
+		// certificate's, so a peer downloads only its own control plane.
+		r.Get("/control-backup/{generation}", s.handleControlBackupDownload)
 	})
 
 	// There is no admin route on this router and there is not going to be one.

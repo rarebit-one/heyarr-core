@@ -6,6 +6,9 @@ import (
 	"encoding/base64"
 	"io"
 	"net/http"
+	"strconv"
+
+	"github.com/go-chi/chi/v5"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
@@ -41,6 +44,17 @@ type ControlBackupSink interface {
 		manifestJSON []byte, snapshot io.Reader) (generation int64, err error)
 	// HeldBackups lists the generations held for a source, newest first.
 	HeldBackups(sourcePeerID string) (generations []int64, err error)
+	// OpenHeldBackup opens a held backup for serving back to the peer whose
+	// control plane it is (a recovering node fetching its own backup, M7-04).
+	// Generation zero means the latest held. The caller closes the reader.
+	OpenHeldBackup(sourcePeerID string, generation int64) (manifestJSON []byte, snapshot io.ReadCloser, err error)
+}
+
+// ControlBackupDownloadPath is where a recovering peer fetches a specific
+// generation of its own backup that this node holds (M7-04). Generation 0 (or
+// omitted via the base path) means the latest.
+func ControlBackupDownloadPath(generation int64) string {
+	return ControlBackupPath + "/" + strconv.FormatInt(generation, 10)
 }
 
 // heldResponse is what GET /peer/v1/control-backup answers: what this peer holds
@@ -123,4 +137,47 @@ func (s *Server) handleControlBackupList(w http.ResponseWriter, r *http.Request)
 		resp.Latest = gens[0]
 	}
 	s.writeJSON(w, r, resp)
+}
+
+// handleControlBackupDownload serves a held backup back to the peer whose
+// control plane it is — a recovering node fetching its own backup (M7-04,
+// `recover --from-peer`). The source is the certificate's, so a peer can only
+// download ITS OWN backups, never another peer's.
+//
+// The framing mirrors the push: the manifest in the response header, the
+// snapshot in the body.
+func (s *Server) handleControlBackupDownload(w http.ResponseWriter, r *http.Request) {
+	peer, ok := PeerFrom(r.Context())
+	if !ok {
+		httpapi.Fail(w, r, problem.Internal())
+		return
+	}
+	if s.controlBackup == nil {
+		httpapi.Fail(w, r, problem.New(http.StatusServiceUnavailable, problem.TypeInternal,
+			"No Control-Plane Store", "this node does not hold control-plane backups for peers"))
+		return
+	}
+	generation, err := strconv.ParseInt(chi.URLParam(r, "generation"), 10, 64)
+	if err != nil || generation < 0 {
+		httpapi.Fail(w, r, problem.BadRequest("the generation must be a non-negative integer"))
+		return
+	}
+	manifestJSON, snapshot, err := s.controlBackup.OpenHeldBackup(peer.PeerID, generation)
+	if err != nil {
+		s.log.Warn("a peer asked for a backup this node does not hold",
+			"peer_id", peer.PeerID, "generation", generation, "error", err)
+		httpapi.Fail(w, r, problem.NotFound("no such backup is held for you"))
+		return
+	}
+	defer func() { _ = snapshot.Close() }()
+
+	w.Header().Set(ControlBackupManifestHeader, base64.StdEncoding.EncodeToString(manifestJSON))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, snapshot); err != nil {
+		// The header is already sent; nothing to do but record it. The recovering
+		// node verifies the digest and refetches on a short read.
+		s.log.Warn("serving a held backup was cut short", "peer_id", peer.PeerID, "error", err)
+	}
 }

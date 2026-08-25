@@ -203,6 +203,48 @@ func (s *Store) PathFor(sourcePeerID string, generation int64) string {
 	return filepath.Join(s.root, sourcePeerID, genDir(generation))
 }
 
+// ErrNoSuchBackup is a request for a generation this peer does not hold.
+var ErrNoSuchBackup = errors.New("backupsync: no such backup held for that source and generation")
+
+// OpenHeldBackup opens a held backup for serving back to the peer whose control
+// plane it is (M7-04, `recover --from-peer`). It returns the manifest bytes and
+// an open reader over the snapshot; the caller closes the reader.
+//
+// When generation is zero the latest held is served, which is what a recovering
+// node asks for when it does not yet know which generation survives.
+func (s *Store) OpenHeldBackup(sourcePeerID string, generation int64) ([]byte, io.ReadCloser, error) {
+	if err := safeComponent(sourcePeerID); err != nil {
+		return nil, nil, err
+	}
+	if generation <= 0 {
+		latest, ok, err := s.Latest(sourcePeerID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !ok {
+			return nil, nil, fmt.Errorf("%w: nothing held for %s", ErrNoSuchBackup, sourcePeerID)
+		}
+		generation = latest.Generation
+	}
+	dir := s.PathFor(sourcePeerID, generation)
+	m, err := backup.ReadManifest(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil, fmt.Errorf("%w: %s generation %d", ErrNoSuchBackup, sourcePeerID, generation)
+		}
+		return nil, nil, err
+	}
+	manifestJSON, err := json.Marshal(m)
+	if err != nil {
+		return nil, nil, fmt.Errorf("backupsync: encoding the held manifest: %w", err)
+	}
+	f, err := os.Open(filepath.Join(dir, backup.SnapshotFile)) //nolint:gosec // a held backup path under this store's root
+	if err != nil {
+		return nil, nil, fmt.Errorf("backupsync: opening the held snapshot: %w", err)
+	}
+	return manifestJSON, f, nil
+}
+
 // prune keeps only the newest s.retain generations for a source.
 func (s *Store) prune(sourcePeerID string) error {
 	held, err := s.Held(sourcePeerID)

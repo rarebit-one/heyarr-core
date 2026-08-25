@@ -35,6 +35,7 @@ One logical library, multiple complete sovereign peers.
 * [heyarr peers](heyarr_peers.md)	 - Inspect and manage the peers of this instance
 * [heyarr play](heyarr_play.md)	 - Play an asset on a television, speaker or projector (§68)
 * [heyarr quality-profile](heyarr_quality-profile.md)	 - Inspect the quality profiles a want is measured against
+* [heyarr recover](heyarr_recover.md)	 - Rebuild this peer's control plane from a surviving peer (§51, §82, M7-04)
 * [heyarr renderers](heyarr_renderers.md)	 - Find media renderers on the local network (§68)
 * [heyarr scan](heyarr_scan.md)	 - Scan a library's roots, optionally waiting for the scan to finish
 * [heyarr system](heyarr_system.md)	 - Report what a running instance is and how far behind it has drifted
