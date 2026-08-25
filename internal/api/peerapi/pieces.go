@@ -115,6 +115,22 @@ func (s *Server) handleBlobPieces(w http.ResponseWriter, r *http.Request) {
 		httpapi.Fail(w, r, problem.Internal())
 		return
 	}
+	// Told not to take part in swarms, with a content store present and
+	// serving (#266). A DIFFERENT answer from the one below, because the two
+	// send a reader to different places: this one says the operator decided,
+	// and that one says there is nothing here to serve.
+	//
+	// 501 rather than 503. A destination must not retry it, must not conclude
+	// the node is unwell, and must not conclude the node lacks the blob — it
+	// is a permanent statement about what this surface does, which is exactly
+	// what identity's `speaks` list says ahead of time.
+	if s.pieces != nil && s.webSeedOnly {
+		httpapi.Fail(w, r, problem.New(http.StatusNotImplemented, problem.TypeBadRequest,
+			"Not Implemented", "this node does not take part in piece exchange: it serves whole "+
+				"blobs over its content route and is a web seed (§27). Ask GET /peer/v1/identity "+
+				"what it speaks before asking it for pieces"))
+		return
+	}
 	if s.pieces == nil {
 		// The same 503 the content and manifest routes give, and for the same
 		// reason: this node is not serving content on the peer fabric at all,
@@ -188,6 +204,22 @@ func (s *Server) handleBlobPiece(w http.ResponseWriter, r *http.Request) {
 	peer, ok := PeerFrom(r.Context())
 	if !ok {
 		httpapi.Fail(w, r, problem.Internal())
+		return
+	}
+	// Told not to take part in swarms, with a content store present and
+	// serving (#266). A DIFFERENT answer from the one below, because the two
+	// send a reader to different places: this one says the operator decided,
+	// and that one says there is nothing here to serve.
+	//
+	// 501 rather than 503. A destination must not retry it, must not conclude
+	// the node is unwell, and must not conclude the node lacks the blob — it
+	// is a permanent statement about what this surface does, which is exactly
+	// what identity's `speaks` list says ahead of time.
+	if s.pieces != nil && s.webSeedOnly {
+		httpapi.Fail(w, r, problem.New(http.StatusNotImplemented, problem.TypeBadRequest,
+			"Not Implemented", "this node does not take part in piece exchange: it serves whole "+
+				"blobs over its content route and is a web seed (§27). Ask GET /peer/v1/identity "+
+				"what it speaks before asking it for pieces"))
 		return
 	}
 	if s.pieces == nil {

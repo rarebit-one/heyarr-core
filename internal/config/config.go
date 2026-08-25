@@ -138,7 +138,50 @@ type Peer struct {
 	// provide much weaker resilience than two at different sites, so this is
 	// recorded rather than inferred.
 	Site string `koanf:"site"`
+
+	// ServePieces is whether this node answers piece exchange on its peer
+	// surface (§26, §27, ADR-0042). Default true; a pointer so that "not
+	// mentioned" and "set to false" are different things.
+	//
+	// # What turning it off makes this node
+	//
+	// A WEB SEED, in §27's sense: a member that serves byte ranges of blobs it
+	// holds WHOLE, over the ordinary content route, and takes no part in
+	// swarms. Its content route is unchanged, its inventory and manifests are
+	// unchanged, and a peer fetching a whole blob from it sees no difference
+	// at all.
+	//
+	// # Why anyone would
+	//
+	// Serving pieces means answering an availability question per blob and a
+	// request per piece, which is many small reads and many small responses
+	// where a whole-blob pull is one large sequential one. On a low-power NAS
+	// holding an archive tier that is read rarely and never acquired to, that
+	// is CPU and IOPS spent on a role the node is not there to play. §19's
+	// peer modes already say a fabric is not uniform; this says the same thing
+	// about the transport rather than about storage.
+	//
+	// # Why it is not inferred
+	//
+	// Before this existed, `Blobs` and `Pieces` were built from the same store
+	// in the same call, so a peer served both or neither and §27's web seed
+	// had NO COUNTERPARTY — nothing in the tree could produce a node one was
+	// correct for (#266). A transport that chose a source kind was therefore
+	// choosing between one real case and one that could not occur. This is the
+	// counterparty, stated by an operator rather than discovered by probing:
+	// ADR-0042 is right that a peer whose piece route is BROKEN must not look
+	// like one that never served pieces, and only a declaration tells them
+	// apart.
+	ServePieces *bool `koanf:"serve_pieces"`
 }
+
+// ServesPieces reports whether this node answers piece exchange, defaulting to
+// true when configuration does not say.
+//
+// A method rather than a resolved field, so that the zero Peer — which several
+// tests and `heyarr all` on a laptop construct — means the same thing as an
+// unmentioned key rather than meaning "off".
+func (p Peer) ServesPieces() bool { return p.ServePieces == nil || *p.ServePieces }
 
 // Log configures diagnostic output.
 type Log struct {

@@ -317,7 +317,15 @@ func (c *Controller) newPeerSurface(
 		// The same store the content route serves from, so availability and
 		// bytes cannot disagree about what is here.
 		Pieces: peerPieces{store: blobStore},
-		Logger: c.log,
+		// Whether this node takes part in swarms at all (§27, ADR-0042, #266).
+		//
+		// Default true, and the config method rather than the raw field so an
+		// unmentioned key and a zero Peer mean the same thing. Turning it off
+		// makes this node a WEB SEED: the content route is untouched, whole
+		// blobs are served exactly as before, and the piece routes say so
+		// permanently rather than looking broken.
+		WebSeedOnly: !c.cfg.Peer.ServesPieces(),
+		Logger:      c.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)

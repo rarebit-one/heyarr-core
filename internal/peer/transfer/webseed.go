@@ -2,10 +2,12 @@ package transfer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
@@ -155,4 +157,83 @@ func (p *Puller) fetchPieceFromWebSeed(
 			"asked for", ErrRangeRefused, src.PeerID, length, index)
 	}
 	return buf, nil
+}
+
+// Speaks asks a source what its peer surface will actually do (§27, #266).
+//
+// # Why this is asked rather than configured or probed
+//
+// ADR-0038 makes each peer authoritative for its own site, so what a peer does
+// is the peer's statement. A field on THIS node's membership record would be an
+// operator's claim about a machine they are not, and it would never
+// self-correct when the far node changed.
+//
+// And it is asked ONCE, before anything is fetched, rather than inferred from a
+// refusal. ADR-0042's objection to probe-and-fallback stands: a peer whose
+// piece route is BROKEN must not become indistinguishable from one that never
+// served pieces, because the first is a fault worth reporting and the second is
+// an ordinary member doing its job.
+//
+// # What a failure to ask means
+//
+// Not "web seed". A source that cannot be asked is left as whatever the caller
+// assumed, which is the piece-exchange default — so an unreachable peer is
+// dropped by the survey that follows, exactly as it was before this existed,
+// rather than being quietly downgraded to a slower contract on the strength of
+// a network error. Downgrading on failure is the precise mistake ADR-0042 names.
+func (p *Puller) Speaks(ctx context.Context, src replication.Source) ([]string, error) {
+	client, err := p.clientFor(src)
+	if err != nil {
+		return nil, err
+	}
+	origin, err := p.originFor(src)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin+peerapi.IdentityPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, p.refusal(resp, src, hashing.Hash{})
+	}
+
+	var body peerapi.IdentityResponse
+	dec := json.NewDecoder(io.LimitReader(resp.Body, maxAvailabilityBody))
+	// NOT DisallowUnknownFields, unlike the availability decode. This response
+	// is read across versions and is expected to grow: a node that refused an
+	// identity carrying a field it did not know would stop being able to talk
+	// to a newer peer at all, which is a much worse failure than ignoring a
+	// key. The availability route can afford strictness because its shape is
+	// the transport's own and both ends ship together.
+	if err := dec.Decode(&body); err != nil {
+		return nil, fmt.Errorf("peer %s answered 200 with something that is not an identity: %w",
+			src.PeerID, err)
+	}
+	return body.Speaks, nil
+}
+
+// KindOf classifies a source from what it says it speaks.
+//
+// A source that does not list piece exchange is a WEB SEED: it serves byte
+// ranges of blobs it holds whole and takes no part in swarms (§27). One that
+// cannot be asked keeps the piece-exchange contract — see Speaks.
+func (p *Puller) KindOf(ctx context.Context, src replication.Source) Candidate {
+	speaks, err := p.Speaks(ctx, src)
+	if err != nil {
+		p.log.Debug("a source could not say what it speaks, so it keeps the piece contract",
+			"peer_id", src.PeerID, "error", err)
+		return Peer(src)
+	}
+	if slices.Contains(speaks, peerapi.SpeaksPieceExchange) {
+		return Peer(src)
+	}
+	p.log.Debug("a source does not speak piece exchange, so it is a web seed",
+		"peer_id", src.PeerID, "speaks", strings.Join(speaks, ","))
+	return WebSeed(src)
 }
