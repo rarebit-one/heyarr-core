@@ -27,7 +27,16 @@ if ! command -v python3 >/dev/null 2>&1; then
 	exit 2
 fi
 
-TRANSCRIPT=${CLAIMS_TRANSCRIPT:-$(mktemp -t heyarr-demo)}
+# An EXPLICIT template with six X's, rather than `mktemp -t heyarr-demo`.
+#
+# BSD mktemp takes `-t` as a bare prefix and invents the suffix; GNU mktemp
+# treats the argument as a template and refuses one with no X's — "too few X's
+# in template", which is what the Linux acceptance job said the first time this
+# ran. It is the same portability class as `stat -f`, a valid GNU flag meaning
+# something entirely different, and as a brace in a regex being an interval
+# operator on one awk and a literal on another. A path template with X's means
+# the same thing on both.
+TRANSCRIPT=${CLAIMS_TRANSCRIPT:-$(mktemp "${TMPDIR:-/tmp}/heyarr-demo.XXXXXX")}
 trap 'rm -f "$TRANSCRIPT"' EXIT
 
 # The demo's exit status is what gates the build, and `tee` would replace it
