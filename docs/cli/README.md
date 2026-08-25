@@ -10,6 +10,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr all`](heyarr_all.md) | Run every role in one process (small deployments) |
 | [`heyarr assets list`](heyarr_assets_list.md) | List assets |
 | [`heyarr assets`](heyarr_assets.md) | Browse the files behind the catalog |
+| [`heyarr backup push`](heyarr_backup_push.md) | Take a backup and push it to every trusted Full Peer (§50, ADR-0046) |
 | [`heyarr backup`](heyarr_backup.md) | Take a whole-database backup of this peer's control plane (§49, ADR-0044) |
 | [`heyarr blobs cat`](heyarr_blobs_cat.md) | Write a blob's bytes to a file or to stdout |
 | [`heyarr blobs stat`](heyarr_blobs_stat.md) | Show what the catalog knows about a blob |

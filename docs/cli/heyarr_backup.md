@@ -42,3 +42,4 @@ heyarr backup [flags]
 ### See also
 
 * [heyarr](heyarr.md)	 - Self-hosted content lifecycle, replication and consumption
+* [heyarr backup push](heyarr_backup_push.md)	 - Take a backup and push it to every trusted Full Peer (§50, ADR-0046)
