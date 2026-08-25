@@ -96,16 +96,40 @@ func TestReceiveStoresAndLists(t *testing.T) {
 	}
 }
 
-func TestReceiveRefusesSourceMismatch(t *testing.T) {
+// TestReceiveKeysOnTheCertNotTheManifestLabel proves the receiver identifies a
+// backup's source by the AUTHENTICATED caller, not by the manifest's own
+// SourcePeerID. Two independently enrolled peers assign each other unrelated
+// ids, so a backup a peer signed and stamped with its OWN id arrives under the
+// id the receiver derived for it from the certificate — and is stored and
+// retrievable under THAT. The original code compared the two id spaces and so
+// refused every real cross-peer push; the signature against the pinned key
+// (TestReceiveRefusesWrongKey) is the identity guard, and keying on the cert is
+// what lets recover-from-peer fetch back exactly what was pushed.
+func TestReceiveKeysOnTheCertNotTheManifestLabel(t *testing.T) {
 	t.Parallel()
-	src := newSource(t, "peer-a")
+	src := newSource(t, "peer-a") // the manifest is stamped "peer-a"
 	m, snap := src.take(t)
 	store := backupsync.NewStore(t.TempDir(), 0)
 
-	// A peer pushing under a source id that is not the one in the manifest.
-	_, err := store.Receive(t.Context(), "peer-impostor", src.pub, m, open(t, snap))
-	if !errors.Is(err, backupsync.ErrSourceMismatch) {
-		t.Errorf("source mismatch: got %v, want ErrSourceMismatch", err)
+	// The receiver's id for this peer — what it derived from the certificate — is
+	// not the id the peer stamped into its own manifest. The push must still be
+	// accepted, because it is signed by the key the receiver pinned.
+	const certID = "a-receivers-own-id-for-peer-a"
+	got, err := store.Receive(t.Context(), certID, src.pub, m, open(t, snap))
+	if err != nil {
+		t.Fatalf("a validly signed cross-peer push was refused: %v", err)
+	}
+	// Held under the cert-derived id...
+	latest, ok, err := store.Latest(certID)
+	if err != nil || !ok {
+		t.Fatalf("not held under the cert id: ok=%v err=%v", ok, err)
+	}
+	if latest.Generation != got.Generation {
+		t.Errorf("held generation %d, want %d", latest.Generation, got.Generation)
+	}
+	// ...and nothing under the manifest's own self-label.
+	if _, ok, _ := store.Latest("peer-a"); ok {
+		t.Error("a backup was held under the manifest's self-label instead of the cert id")
 	}
 }
 
