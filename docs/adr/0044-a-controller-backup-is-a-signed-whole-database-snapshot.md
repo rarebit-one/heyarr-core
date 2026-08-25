@@ -17,6 +17,21 @@ writing first.
 
 This record answers six questions. It ships no behaviour.
 
+**Read "the controller" throughout as "a peer's own control plane."** This ADR
+was written before ADR-0038 (each peer is authoritative for its own site) moved
+to Accepted (#292). Under ADR-0038 there is no single hub controller whose loss
+is the disaster; every peer runs its own single-writer control plane (ADR-0003 in
+its strongest form — one database per peer), and the backup and restore here are
+of a peer's **own** control plane, streamed to the peers that trust it. This does
+not soften the milestone into a convenience: content, personal state and the read
+catalogue re-fetch themselves from the fabric, but a peer's control plane and its
+Ed25519 identity have **no fetch path** — nothing else holds an authoritative
+copy of this peer's control state, and nothing can reissue its identity — so
+recovery is necessarily control-plane-first (ADR-0038's ratification note records
+this, correcting its own "recovery is a fetch, not a restore" clause). The six
+answers below are unchanged by the reframing; only the noun and the reconvergence
+story move — and the identity question (Q4) gets **sharper**, not moot.
+
 Invariant 5 / ADR-0003 rules the whole thing: **never active-active SQLite**.
 This milestone is backup and restore, not replication, and any answer that
 drifts toward two writers has taken a wrong turn.
@@ -112,10 +127,12 @@ of question 4 is ciphertext). Verification happens twice, at the two places the
 anchor genuinely exists:
 
 - **At receive.** A Full Peer refuses to store a backup whose signature does not
-  verify against the controller public key it has pinned in its own membership
-  record. A stored backup is therefore authentic-by-construction, and a
-  compromised peer cannot quietly substitute a forged control plane it will later
-  serve to a recovering operator.
+  verify against the **origin peer's** public key — the key it has pinned for the
+  peer whose control plane this is, in its own membership record (under ADR-0038
+  enrolment is mutual, so "the controller's key" is just the pinned key of
+  whichever peer produced the backup). A stored backup is therefore
+  authentic-by-construction, and a compromised peer cannot quietly substitute a
+  forged control plane it will later serve to a recovering operator.
 - **At restore.** `recover` re-verifies the signature against the controller's
   identity fingerprint, which it prints, so a peer that stored a forgery before
   enrolment — or was itself the forger — is still caught.
@@ -146,11 +163,14 @@ data-loss event dressed as a successful recovery. So:
 
 ### 4. A restored controller keeps its Ed25519 identity; the private key rides the backup, wrapped under an operator recovery secret.
 
-This is the 🔴 question with the longest tail. Every other node has pinned this
-node's key (ADR-0012). §82 lists "peer identity/configuration" among what a
-recovery must reconstruct, which is the steer: **keep the identity**, so the
-fabric reconverges with no per-peer re-enrolment — the alternative being "the
-disaster continuing" as an operator hand-re-pins every peer.
+This is the 🔴 question with the longest tail, and ADR-0038 makes it the whole
+milestone's point: the epic's acceptance sentence is *"a peer that loses its disk
+is restored from a peer that trusted it, comes back with the same identity, and
+**no other peer is re-enrolled or reconfigured**."* Every other node has pinned
+this node's key (ADR-0012). §82 lists "peer identity/configuration" among what a
+recovery must reconstruct, which is the steer: **keep the identity**, so **no
+other peer is re-enrolled** — the alternative being "the disaster continuing" as
+an operator hand-re-pins this peer on every node that trusted it.
 
 Keeping the identity requires the private key to survive the controller host. It
 does so in the bundle's **wrapped-secrets blob, encrypted under a recovery secret
@@ -182,16 +202,16 @@ Without the recovery secret, `recover` still reconstructs all control-plane data
 but the controller comes up under a **new** identity and every peer must re-pin —
 this is that fallback (a known hole, question 6), not a surprise.
 
-**Two live controllers with one identity** is *not mechanically prevented* — a
-clean full restore reproduces all three identity artefacts consistently (the key
-file, the `peers`-table public key, the CAS root marker), so
+**Two live peers with one identity** is *not mechanically prevented* — a clean
+full restore reproduces all three identity artefacts consistently (the key file,
+the `peers`-table public key, the CAS root marker), so
 `internal/peer/identity`'s three-way agreement check passes on both nodes. It is
 **prevented by the operator's assertion**: invoking `recover` is the assertion
-that the old controller is gone, and §51's no-election stance places that
-judgement with the operator. The named mitigation that would move this from
-*merely unlikely* to *detected* is a **monotonic controller incarnation** the
-restored node bumps and re-announces, letting peers reject a returning stale
-controller; #282/#284 implement it or explicitly defer it.
+that the lost peer is gone, and §51's no-election stance places that judgement
+with the operator. The named mitigation that would move this from *merely
+unlikely* to *detected* is a **monotonic incarnation** the restored node bumps and
+re-announces, letting the peers that trust it reject a returning stale twin;
+#282/#284 implement it or explicitly defer it.
 
 ### 5. A backup is structurally not an openable control plane, and not the catalog snapshot.
 
@@ -288,7 +308,8 @@ not coverage):
   wrapped-key-in-backup mechanism (question 4) becomes one option among several,
   and question 4's fallback ("comes up new, re-enrol") stops being the only
   no-secret path.
-- **Two live controllers needing to be *prevented* rather than *asserted away*.**
-  The incarnation counter named in question 4 is the first step; a deployment
-  that cannot rely on operator discipline would need more, and that is a
-  distributed-leadership problem (ADR-0003's own "revisit if"), not a backup one.
+- **Two live peers with one identity needing to be *prevented* rather than
+  *asserted away*.** The incarnation counter named in question 4 is the first
+  step; a deployment that cannot rely on operator discipline would need more, and
+  that is a distributed-leadership problem (ADR-0003's own "revisit if"), not a
+  backup one.
