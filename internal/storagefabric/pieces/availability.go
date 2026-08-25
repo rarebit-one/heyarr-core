@@ -177,3 +177,17 @@ func Decode(s string) (Geometry, Availability, error) {
 	}
 	return g, a, nil
 }
+
+// Remove clears a piece.
+//
+// Used by a transfer to forget that a source CLAIMED a piece — after that
+// source failed to serve it, or served it at the wrong length. It is not used
+// to un-record a piece this node holds: bytes on disk are not un-written by
+// changing a bitset, and a piece removed from the record is simply refetched.
+func (a *Availability) Remove(i int) {
+	if i < 0 || i >= a.total || !a.Has(i) {
+		return
+	}
+	a.bits[i/8] &^= 1 << (i % 8)
+	a.count--
+}
