@@ -101,79 +101,93 @@ func (a Availability) Intersect(want Availability) []int {
 	return out
 }
 
-// Encode renders availability for the wire as `<count>:<hex bitset>`.
+// Encode renders availability for the wire as `<blob size>:<hex bitset>`.
 //
-// # Why the count is on the wire and not implied by the width
+// # Why the SIZE and not the piece count
 //
-// It was implied by the width, and that is wrong by up to seven pieces: a
-// bitset for 20 pieces and one for 21 are both three bytes, so a peer claiming
-// a geometry this node did not compute slipped through whenever the difference
-// rounded into the same byte. A test caught it.
+// The first version carried the count, because a bitset's width alone cannot
+// tell 20 pieces from 21 — both are three bytes. That fixed the rounding
+// ambiguity and left a worse one: **the count does not determine the piece
+// length.** 1024 pieces is a 256 MiB blob at 256 KiB pieces, and equally a
+// 8 GiB blob at 8 MiB pieces. A node serving from a partial — which does not
+// know the blob's size, because a partial's length is a high-water mark
+// (ADR-0043) — could not work out where a piece starts.
 //
-// Rounding is exactly where an implied length fails, and the failure is silent
-// — the two peers then request pieces whose boundaries they do not share, and
-// the bytes fail verification for a reason nobody could diagnose. Saying the
-// number is four characters and removes the class.
+// The size determines everything: For derives the piece length and the count
+// from it, deterministically, which is the property two peers already rely on
+// to divide a blob identically without negotiating. So the size goes on the
+// wire and the count is derived rather than claimed — which also makes the
+// width check exact instead of approximate.
 //
-// Hex rather than base64 for the bitset because it is greppable in a log and in
-// a test failure, and 128 bytes becomes 256 characters, which is not worth
-// optimising.
-func (a Availability) Encode() string {
-	if a.total == 0 {
+// Hex for the bitset because it is greppable in a log and in a test failure,
+// and 128 bytes becomes 256 characters, which is not worth optimising.
+func Encode(g Geometry, a Availability) string {
+	if g.Size <= 0 || a.total == 0 {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d:", a.total)
+	fmt.Fprintf(&b, "%d:", g.Size)
 	for _, x := range a.bits {
 		fmt.Fprintf(&b, "%02x", x)
 	}
 	return b.String()
 }
 
-// DecodeAvailability parses what Encode produced, for a blob of n pieces.
+// Decode parses what Encode produced, returning the geometry it describes and
+// the availability within it.
 //
-// It refuses a bitset of the wrong width rather than padding or truncating. A
-// peer describing a different number of pieces than this node computed is a
-// peer that disagrees about the GEOMETRY, and quietly accepting the overlap
-// would mean requesting pieces whose boundaries the two do not share — which
-// produces bytes that fail verification for a reason nobody could diagnose.
-func DecodeAvailability(s string, n int) (Availability, error) {
-	a := NewAvailability(n)
-	if n <= 0 {
-		return a, nil
-	}
-	total, hex, ok := strings.Cut(s, ":")
+// The geometry is DERIVED from the size rather than read from the wire, so a
+// peer cannot describe a division this node would not compute — it can only
+// describe a different blob size, which is caught here.
+func Decode(s string) (Geometry, Availability, error) {
+	sizeText, hex, ok := strings.Cut(s, ":")
 	if !ok {
-		return Availability{}, fmt.Errorf(
-			"pieces: availability %q does not say how many pieces it describes", s)
+		return Geometry{}, Availability{}, fmt.Errorf(
+			"pieces: availability %q does not say what size blob it describes", s)
 	}
-	var claimed int
-	if _, err := fmt.Sscanf(total, "%d", &claimed); err != nil {
-		return Availability{}, fmt.Errorf("pieces: availability piece count is not a number: %w", err)
+	var size int64
+	if _, err := fmt.Sscanf(sizeText, "%d", &size); err != nil {
+		return Geometry{}, Availability{}, fmt.Errorf(
+			"pieces: availability size is not a number: %w", err)
 	}
-	if claimed != n {
-		return Availability{}, fmt.Errorf(
-			"pieces: the peer describes %d pieces and this node computed %d — "+
-				"the two are describing a different geometry", claimed, n)
+	g, err := For(size)
+	if err != nil {
+		return Geometry{}, Availability{}, err
 	}
+
+	a := NewAvailability(g.Count())
 	if want := len(a.bits) * 2; len(hex) != want {
-		return Availability{}, fmt.Errorf(
-			"pieces: availability is %d hex characters for %d pieces, want %d — "+
-				"the peer is describing a different geometry", len(hex), n, want)
+		return Geometry{}, Availability{}, fmt.Errorf(
+			"pieces: availability is %d hex characters for a %d byte blob, want %d — "+
+				"the peer is describing a different geometry", len(hex), size, want)
 	}
 	for i := range a.bits {
 		var v byte
 		if _, err := fmt.Sscanf(hex[i*2:i*2+2], "%02x", &v); err != nil {
-			return Availability{}, fmt.Errorf("pieces: availability is not hex: %w", err)
+			return Geometry{}, Availability{}, fmt.Errorf("pieces: availability is not hex: %w", err)
 		}
 		a.bits[i] = v
 	}
 	// Recount rather than trust: a byte with bits set past the last piece would
 	// otherwise make a peer look complete when it is not.
-	for i := range n {
+	for i := range g.Count() {
 		if a.bits[i/8]&(1<<(i%8)) != 0 {
 			a.count++
 		}
 	}
-	return a, nil
+	return g, a, nil
+}
+
+// Remove clears a piece.
+//
+// Used by a transfer to forget that a source CLAIMED a piece — after that
+// source failed to serve it, or served it at the wrong length. It is not used
+// to un-record a piece this node holds: bytes on disk are not un-written by
+// changing a bitset, and a piece removed from the record is simply refetched.
+func (a *Availability) Remove(i int) {
+	if i < 0 || i >= a.total || !a.Has(i) {
+		return
+	}
+	a.bits[i/8] &^= 1 << (i % 8)
+	a.count--
 }

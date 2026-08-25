@@ -94,3 +94,50 @@ func (s *FS) DiscardPieceProgress(blob hashing.Hash) error {
 	}
 	return nil
 }
+
+// ReadPartialAt reads from a blob's staging file WITHOUT taking it.
+//
+// # Why this cannot go through OpenPartial
+//
+// OpenPartial is exclusive — a second caller gets ErrPartialBusy — and it has
+// to be, because two transfers appending to one file would interleave and both
+// fail verification. But a swarm peer serves WHILE it fetches: that is the
+// whole of §23, and the transfer holding the partial is exactly the one whose
+// bytes another peer wants. An exclusive read would make a node unable to share
+// precisely the blob it is working on.
+//
+// So this opens the file read-only and takes nothing. Concurrent reads and
+// writes to DISJOINT regions of one file are safe, and disjointness is what the
+// availability bitset establishes.
+//
+// # The ordering rule that makes it safe, stated so it cannot be lost
+//
+// A piece is recorded in the bitset AFTER its bytes are written, never before.
+// So "the bitset says this piece landed" implies "those bytes are fully
+// written", and a reader that consults the bitset first can never observe a
+// half-written piece. Recording first would invert that and put torn bytes on
+// the wire — where, unlike a local failure, they are somebody else's problem.
+//
+// This function does not consult the bitset itself, because it does not know
+// what a piece is (ADR-0041). The caller must, and the caller is the one place
+// where believing a bitset wrongly sends bad bytes to another peer rather than
+// failing locally.
+func (s *FS) ReadPartialAt(blob hashing.Hash, b []byte, off int64) (int, error) {
+	if blob.IsZero() {
+		return 0, errors.New("cas: refusing to read a staging file with no blob digest")
+	}
+	if off < 0 {
+		return 0, fmt.Errorf("cas: refusing to read the staging file for %s at offset %d",
+			blob, off)
+	}
+	path := filepath.Join(s.root, tmpDir, PartialName(blob))
+	f, err := os.Open(path) // #nosec G304 -- the name is derived from a validated digest
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, fmt.Errorf("%w: no staging file for %s", ErrNotFound, blob)
+		}
+		return 0, fmt.Errorf("cas: opening the staging file for %s: %w", blob, err)
+	}
+	defer func() { _ = f.Close() }()
+	return f.ReadAt(b, off)
+}

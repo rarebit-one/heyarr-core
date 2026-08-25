@@ -45,6 +45,23 @@ Concretely:
   session's lifetime and is never an identity).
 - **Fetching a piece is a ranged GET** against a peer's existing blob content
   route. Nothing new is invented for the byte-carrying half.
+
+  > **Superseded in part, by the work this ADR authorised.** This holds for a
+  > blob held WHOLE, and it is what §27's web seed does. It does not work for a
+  > blob held in PART, which is the case §23 exists for: the content route
+  > promises the blob — a strong `ETag` naming the whole-object digest, a
+  > `Content-Length` that is the blob's length, and a `404` meaning *this peer
+  > does not have it* — and a node holding a third of the bytes can honour none
+  > of the three. Making it try would mean either lying about the `ETag` or
+  > inventing partial-content semantics on a route whose contract is
+  > deliberately simple (ADR-0013).
+  >
+  > So there is one new route, `GET /peer/v1/blobs/{hash}/pieces/{index}`, and
+  > it is the one way a piece is fetched — whole blob and partial alike. The
+  > content route is untouched, still serving the whole-blob pulls replication
+  > already does. The rest of this decision stands: the piece routes ride the
+  > existing peer surface, on the existing mTLS trust root, with no new
+  > credential and no second transport.
 - **Two things are new**, and they are what turns a pull into a swarm:
   1. a peer can say **which pieces it holds of a blob it does not hold
      completely**;

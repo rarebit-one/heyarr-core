@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"time"
@@ -391,6 +392,14 @@ type pieceProgressReader interface {
 	LoadPieceProgress(blob hashing.Hash) (string, error)
 }
 
+// partialPieceReader adds the lock-free read a serving node needs. Separate
+// from pieceProgressReader because reporting and serving are different
+// capabilities and a store might honestly offer one without the other.
+type partialPieceReader interface {
+	LoadPieceProgress(blob hashing.Hash) (string, error)
+	ReadPartialAt(blob hashing.Hash, b []byte, off int64) (int, error)
+}
+
 var _ peerapi.PieceSource = peerPieces{}
 
 // PieceAvailability satisfies [peerapi.PieceSource].
@@ -416,7 +425,7 @@ func (p peerPieces) PieceAvailability(
 		for i := range g.Count() {
 			have.Add(i)
 		}
-		return have.Encode(), true, nil
+		return pieces.Encode(g, have), true, nil
 	case errors.Is(err, cas.ErrNotFound):
 		// Fall through to the in-flight case.
 	default:
@@ -445,4 +454,94 @@ func (p peerPieces) PieceAvailability(
 		return "", false, nil
 	}
 	return progress, true, nil
+}
+
+// ReadPiece satisfies [peerapi.PieceSource].
+//
+// # The one place a wrong availability record hurts somebody else
+//
+// Everywhere else in M6 a bitset that overstates costs a wasted request and is
+// caught by the destination's own verification. Here it would put half-written
+// or absent bytes on the wire under the name of a piece. So this checks
+// availability BEFORE reading, and the check is against the same record the
+// availability route reports — not a second opinion that could disagree with
+// what this node just told the caller it had.
+//
+// The ordering rule that makes the partial case safe is stated on
+// cas.ReadPartialAt: a piece is recorded AFTER its bytes are written, so "the
+// bitset says landed" implies "fully written", and a reader consulting the
+// bitset first cannot observe a torn piece.
+func (p peerPieces) ReadPiece(
+	ctx context.Context, blob hashing.Hash, index int,
+) ([]byte, error) {
+	if p.store == nil {
+		return nil, peerapi.ErrNoSuchPiece
+	}
+
+	// Held whole? Read the range straight out of the store. This is also §27's
+	// web seed: a piece is a byte range, and a complete blob can serve any of
+	// them.
+	desc, err := p.store.Stat(ctx, blob)
+	switch {
+	case err == nil:
+		g, gerr := pieces.For(desc.Size)
+		if gerr != nil {
+			return nil, peerapi.ErrNoSuchPiece
+		}
+		off, length, rerr := g.Range(index)
+		if rerr != nil {
+			return nil, peerapi.ErrNoSuchPiece
+		}
+		rsc, _, oerr := p.store.Open(ctx, blob)
+		if oerr != nil {
+			return nil, oerr
+		}
+		defer func() { _ = rsc.Close() }()
+		if _, serr := rsc.Seek(off, io.SeekStart); serr != nil {
+			return nil, serr
+		}
+		buf := make([]byte, length)
+		if _, rerr := io.ReadFull(rsc, buf); rerr != nil {
+			return nil, rerr
+		}
+		return buf, nil
+	case errors.Is(err, cas.ErrNotFound):
+		// Fall through to the in-flight case.
+	default:
+		return nil, err
+	}
+
+	// Being fetched? Serve only what the record says landed.
+	reader, ok := p.store.(partialPieceReader)
+	if !ok {
+		return nil, peerapi.ErrNoSuchPiece
+	}
+	encoded, err := reader.LoadPieceProgress(blob)
+	if err != nil {
+		return nil, err
+	}
+	if encoded == "" {
+		return nil, peerapi.ErrNoSuchPiece
+	}
+
+	// The geometry comes from the SIZE the record carries, not from a length
+	// this node could measure: a partial's length is a high-water mark and says
+	// nothing about the blob's true size (ADR-0043). The size is what makes the
+	// division exact, including the short last piece.
+	g, have, err := pieces.Decode(encoded)
+	if err != nil {
+		return nil, err
+	}
+	if !have.Has(index) {
+		return nil, peerapi.ErrNoSuchPiece
+	}
+	off, length, err := g.Range(index)
+	if err != nil {
+		return nil, peerapi.ErrNoSuchPiece
+	}
+	buf := make([]byte, length)
+	if _, err := reader.ReadPartialAt(blob, buf, off); err != nil {
+		return nil, err
+	}
+	return buf, nil
 }

@@ -2960,12 +2960,11 @@ paths:
       responses:
         "200":
           description: |
-            What this node holds of the blob. `available` carries its own piece
-            count so that a peer computing a different geometry is refused
-            rather than half-believed — a bitset's width alone cannot tell 20
-            pieces from 21, and two peers requesting pieces whose boundaries
-            they do not share produce bytes that fail verification for a reason
-            nobody could diagnose (ADR-0043).
+            What this node holds of the blob. `available` carries the blob's
+            SIZE so that a peer computing a different geometry is refused
+            rather than half-believed: two peers requesting pieces whose
+            boundaries they do not share produce bytes that fail verification
+            for a reason nobody could diagnose (ADR-0043).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PeerBlobPieces" }
@@ -2999,6 +2998,90 @@ paths:
             This node has no content store behind its peer surface, so it holds
             no pieces to report. Matches the content and manifest routes:
             distinct from 404 because there is nothing here to try again for.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /peer/v1/blobs/{hash}/pieces/{index}:
+    parameters:
+      - name: hash
+        in: path
+        required: true
+        description: The BLAKE3 digest that names the blob.
+        schema:
+          type: string
+          pattern: '^blake3:[0-9a-f]{64}$'
+      - name: index
+        in: path
+        required: true
+        description: >-
+          The piece's index in the division the blob's size implies, as
+          reported by the availability route. Indices are meaningful only
+          within that geometry and are not names for bytes (ADR-0041).
+        schema: { type: integer, minimum: 0 }
+    get:
+      tags: [peer]
+      operationId: getPeerBlobPiece
+      summary: Serve one piece of a blob, held whole or in part.
+      description: |
+        **Why this is a route and not a `Range` header.** ADR-0042 said
+        fetching a piece would be a ranged `GET` against the existing content
+        route, and for a blob held WHOLE that is exactly right. It does not
+        work for a blob held in PART, which is the case §23 exists for. The
+        content route promises the blob: a strong `ETag` naming the
+        whole-object digest, a `Content-Length` that is the blob's length, and
+        a `404` meaning *this peer does not have it*. A node holding a third of
+        the bytes can honour none of those, and making it try would mean either
+        lying about the `ETag` or inventing partial-content semantics on a
+        route whose contract is deliberately simple (ADR-0013).
+
+        So this route is the one way a piece is fetched, from a whole blob and
+        a partial one alike, and the content route is left exactly as it is for
+        the whole-blob pulls replication already does.
+
+        **The bitset gates it.** A piece the availability record does not claim
+        is refused even when the staging file happens to have bytes at that
+        offset, because a partial's length is a high-water mark: bytes may be
+        present at an offset whose piece was never completed. This is the one
+        place where believing the bitset wrongly sends bad bytes to somebody
+        else rather than failing locally (ADR-0043).
+
+        **No validator.** A piece is not addressable, so an `ETag` would be a
+        cache key for a thing with a session's lifetime, and a peer that cached
+        it would later serve a piece of a geometry that no longer applies.
+      responses:
+        "200":
+          description: The piece's bytes.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "400":
+          description: The hash is not a `blake3:<64 hex>` digest, or the index is not a non-negative integer.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "401":
+          description: No client certificate was presented.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "403":
+          description: The presented key is not a member of this fabric.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404":
+          description: |
+            This node does not hold that piece — it knows nothing of the blob,
+            or its availability does not claim that index, or the index is past
+            the end of the blob's division. All three are the same answer to
+            the caller: try another peer, or ask again later. This is the
+            ordinary answer while two peers converge, not a fault.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503":
+          description: This node has no content store behind its peer surface.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -3838,19 +3921,24 @@ components:
         available:
           type: string
           description: |
-            The availability, as `<piece count>:<lowercase hex bitset>`, one
-            bit per piece in index order.
+            The availability, as `<blob size in bytes>:<lowercase hex bitset>`,
+            one bit per piece in index order.
 
-            The count is on the wire rather than implied by the bitset's width,
-            and that is not redundancy: a bitset for 20 pieces and one for 21
-            are both three bytes, so an implied length cannot tell them apart
-            and a peer describing a geometry this node did not compute would be
-            half-believed (ADR-0043).
+            The SIZE is what is on the wire, and neither the piece count nor
+            the piece length is. The count cannot be implied by the bitset's
+            width — a bitset for 20 pieces and one for 21 are both three bytes
+            — and the count in turn does not determine the piece length: 1024
+            pieces is a 256 MiB blob at 256 KiB pieces and equally an 8 GiB
+            blob at 8 MiB pieces. The size determines both, by the same
+            deterministic rule both peers already run, so the reader derives
+            the geometry rather than believing a claimed one, and a peer
+            describing a division this node would not compute is refused
+            (ADR-0043).
 
             An empty string means this node holds none of it yet — a transfer
             in progress that has landed nothing. A node that knows nothing
             about the blob answers `404` instead.
-          example: "12:ff0f"
+          example: "3145728:ff0f"
 
     PeerBlobManifest:
       type: object

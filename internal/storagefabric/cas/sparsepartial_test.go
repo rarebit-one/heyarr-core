@@ -224,3 +224,49 @@ func TestAppendStillOnlyGrowsFromTheEnd(t *testing.T) {
 		t.Fatalf("the sequential path stopped working: %v", err)
 	}
 }
+
+// A staging file can be read WHILE a transfer holds it.
+//
+// This is the swarm case: the transfer holding the partial is exactly the one
+// whose bytes another peer wants, so an exclusive read would make a node unable
+// to share precisely the blob it is working on (§23).
+func TestAStagingFileCanBeReadWhileATransferHoldsIt(t *testing.T) {
+	s := newStore(t)
+	want := content(3000, 0x33)
+	digest := digestOfBytes(t, want)
+
+	p, err := s.OpenPartial(t.Context(), digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = p.Close() }()
+	if _, err := p.WriteAt(want[1000:2000], 1000); err != nil {
+		t.Fatal(err)
+	}
+
+	// The partial is still held — OpenPartial would refuse a second caller.
+	if _, err := s.OpenPartial(t.Context(), digest); err == nil {
+		t.Fatal("a second OpenPartial succeeded, so this test is not exercising " +
+			"the case it exists for")
+	}
+
+	got := make([]byte, 1000)
+	n, err := s.ReadPartialAt(digest, got, 1000)
+	if err != nil {
+		t.Fatalf("reading a held staging file: %v", err)
+	}
+	if n != 1000 || !bytes.Equal(got, want[1000:2000]) {
+		t.Error("the bytes read back are not the bytes written")
+	}
+}
+
+// Reading a staging file that does not exist is ErrNotFound, not a panic and
+// not an empty success — a peer asked for a blob it has no transfer of must be
+// able to say so.
+func TestReadingAnAbsentStagingFileSaysSo(t *testing.T) {
+	s := newStore(t)
+	digest := digestOfBytes(t, []byte("never staged"))
+	if _, err := s.ReadPartialAt(digest, make([]byte, 8), 0); err == nil {
+		t.Error("reading a staging file that was never created succeeded")
+	}
+}

@@ -2,7 +2,9 @@ package peerapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -57,7 +59,29 @@ type PieceSource interface {
 	// found=false means this node has neither the blob nor a transfer of it in
 	// progress, which is an ordinary answer and not an error.
 	PieceAvailability(ctx context.Context, blob hashing.Hash) (encoded string, found bool, err error)
+
+	// ReadPiece returns the bytes of one piece, from a blob this node holds
+	// whole or in part.
+	//
+	// # It must refuse a piece it has not recorded as landed
+	//
+	// This is the one place in the design where believing the availability
+	// record wrongly sends bad bytes to SOMEBODY ELSE rather than failing
+	// locally. Everywhere else a wrong bitset costs a wasted request and is
+	// caught by the destination's own verification; here it would put
+	// half-written or absent bytes on the wire under the name of a piece.
+	//
+	// ErrNoSuchPiece is the refusal, and it is the correct answer rather than
+	// an error condition: a peer asking for a piece this node does not have is
+	// ordinary, and it happens constantly while two peers converge.
+	ReadPiece(ctx context.Context, blob hashing.Hash, index int) ([]byte, error)
 }
+
+// ErrNoSuchPiece is a piece this node does not hold.
+//
+// Ordinary rather than exceptional: two peers converging ask each other for
+// pieces constantly, and a "not yet" is most of the conversation.
+var ErrNoSuchPiece = errors.New("peerapi: this node does not hold that piece")
 
 // PieceAvailabilityResponse is what GET /peer/v1/blobs/{hash}/pieces answers.
 type PieceAvailabilityResponse struct {
@@ -133,4 +157,100 @@ func (s *Server) handleBlobPieces(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, PieceAvailabilityResponse{
 		BlobHash: blob.String(), Available: encoded,
 	})
+}
+
+// PiecePath is the route for one piece of a blob.
+func PiecePath(hash string, index int) string {
+	return Prefix + "/blobs/" + strings.TrimSpace(hash) + "/pieces/" + strconv.Itoa(index)
+}
+
+// handleBlobPiece answers GET /peer/v1/blobs/{hash}/pieces/{index}.
+//
+// # Why a piece route rather than a Range on the content route
+//
+// ADR-0042 said fetching a piece would be a ranged GET against the existing
+// content route, and for a blob held WHOLE that is exactly right — that route
+// serves ranges, and §27's web seed needs nothing more.
+//
+// It does not work for a blob held in PART, and that is the case §23 is about.
+// The content route promises the blob: it answers with a strong ETag naming the
+// whole-object digest, a length that is the blob's length, and a 404 meaning
+// "this peer does not have it". A node holding a third of the bytes can honour
+// none of those, and making it try would mean either lying about the ETag or
+// inventing a partial-content semantics on a route whose contract is
+// deliberately simple (ADR-0013).
+//
+// So the piece route is new, and it is the ONE way the transport fetches a
+// piece — from a whole blob or a partial one alike. The content route is left
+// exactly as it is, for whole-blob pulls, which is what replication already
+// does.
+func (s *Server) handleBlobPiece(w http.ResponseWriter, r *http.Request) {
+	peer, ok := PeerFrom(r.Context())
+	if !ok {
+		httpapi.Fail(w, r, problem.Internal())
+		return
+	}
+	if s.pieces == nil {
+		httpapi.Fail(w, r, problem.New(http.StatusServiceUnavailable, problem.TypeInternal,
+			"Service Unavailable", "this node is not serving blob content on the peer fabric: it has "+
+				"no content store behind its peer surface, so it holds no pieces to serve"))
+		return
+	}
+
+	blob, err := hashing.Parse(chi.URLParam(r, "hash"))
+	if err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(
+			"that is not a blob identifier: it must be blake3: followed by 64 hex characters"))
+		return
+	}
+	index, err := strconv.Atoi(chi.URLParam(r, "index"))
+	if err != nil || index < 0 {
+		httpapi.Fail(w, r, problem.BadRequest("the piece index must be a non-negative integer"))
+		return
+	}
+
+	body, err := s.pieces.ReadPiece(r.Context(), blob, index)
+	switch {
+	case errors.Is(err, ErrNoSuchPiece):
+		// The ordinary answer while two peers converge, not a fault. It is a
+		// 404 rather than a 409 because from the caller's side it is exactly
+		// "not here": try another peer, or ask again later.
+		httpapi.Fail(w, r, problem.NotFound(
+			"this node does not hold that piece of that blob"))
+		return
+	case err != nil:
+		s.log.Error("could not serve a piece",
+			"blob", blob.String(), "piece", index, "peer_id", peer.PeerID, "error", err)
+		httpapi.Fail(w, r, problem.Internal())
+		return
+	}
+
+	// No ETag. A piece is not addressable and never will be (ADR-0041), so a
+	// validator naming one would be a cache key for a thing with a session's
+	// lifetime — and a peer that cached it would serve a piece of a geometry
+	// that no longer applies.
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(http.StatusOK)
+	// gosec reads "bytes from a store, written to a response" as a possible XSS
+	// sink. It is the same bytes, to the same peers, under the same headers as
+	// /blobs/{hash}/content already serves — that route escapes the check only
+	// because it goes through http.ServeContent. Opaque blob content, declared
+	// application/octet-stream with nosniff, to an mTLS-pinned member: there is
+	// no HTML context for it to be script in.
+	if _, err := w.Write(body); err != nil { //nolint:gosec // opaque blob bytes as octet-stream+nosniff, as the content route serves
+		// The response is already committed, so this is a report rather than a
+		// recovery. The destination will notice: it verifies every piece
+		// against that piece's hash before counting it.
+		s.log.Debug("a piece write was cut short",
+			"blob", blob.String(), "piece", index, "peer_id", peer.PeerID, "error", err)
+		return
+	}
+
+	// What left here, and to whom — the source-side accounting M5 added for
+	// the content route, extended to pieces for the same reason: everything
+	// else in the fabric is written from the reader's side.
+	s.log.Info("served a piece to a peer",
+		"blob", blob.String(), "piece", index, "bytes", len(body), "peer_id", peer.PeerID)
 }

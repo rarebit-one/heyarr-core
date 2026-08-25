@@ -353,6 +353,10 @@ func (s *Server) routes() http.Handler {
 		// (M6, ADR-0042). A read, and the question that makes a swarm
 		// possible at all — see pieces.go.
 		r.Get("/blobs/{hash}/pieces", s.handleBlobPieces)
+		// One piece of a blob this node holds whole OR in part — the
+		// byte-carrying half of the swarm. See pieces.go for why this is a
+		// route rather than a Range on the content one.
+		r.Get("/blobs/{hash}/pieces/{index}", s.handleBlobPiece)
 	})
 
 	// There is no admin route on this router and there is not going to be one.
