@@ -51,3 +51,4 @@ An ADR that merely describes the code is not worth having.
 | [0041](0041-a-transfer-session-is-local-and-pieces-are-not-chunks.md) | A TransferSession is local to a peer, and pieces are not chunks | Accepted |
 | [0042](0042-piece-exchange-is-native-and-rides-the-peer-surface.md) | Piece exchange is Heyarr's own, and rides the peer surface | Accepted |
 | [0043](0043-a-piece-transfer-writes-sparsely-and-its-bitset-is-a-hint.md) | A piece transfer writes sparsely, and its record of what landed is a hint | Accepted |
+| [0044](0044-a-controller-backup-is-a-signed-whole-database-snapshot.md) | A controller backup is a signed whole-database snapshot, a restore verifies it, and it carries the controller's identity wrapped | Proposed |
