@@ -636,6 +636,76 @@ func (q *Queue) ReapExpiredLeases(ctx context.Context) (int, error) {
 	return reaped, nil
 }
 
+// ReclaimAllLeases returns EVERY leased job to pending, unconditionally, and
+// reports how many.
+//
+// It is for disaster recovery (`recover --from-peer`, M7-04), not for ordinary
+// running. A control database restored from a dead node carries leases whose
+// expiry is still in the FUTURE by the dead worker's clock, so
+// [Queue.ReapExpiredLeases] — which only reclaims leases already past their
+// expiry — would leave them looking live, and the restored node would believe
+// jobs were running on a worker that no longer exists. §75/ADR-0008 makes a job
+// durable, leased and idempotent, and a restore is the extreme case of "it will
+// be re-run": on the restored node nothing is leased until a live worker claims
+// it afresh.
+func (q *Queue) ReclaimAllLeases(ctx context.Context) (int, error) {
+	now := q.clock.Now()
+	const reason = "control plane restored; leases from the previous node are void"
+	reclaimed := 0
+	err := q.inTx(ctx, func(tx *sql.Tx) ([]events.Event, error) {
+		ids, err := allLeasedIDs(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		if len(ids) == 0 {
+			return nil, nil
+		}
+		out := make([]events.Event, 0, len(ids))
+		for _, id := range ids {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE jobs SET state = 'pending', lease_owner = NULL, lease_expires_at = NULL,
+					last_error = ?, updated_at = ?
+				WHERE id = ? AND state = 'leased'`, reason, format(now), id); err != nil {
+				return nil, fmt.Errorf("jobs: reclaiming %s: %w", id, err)
+			}
+			job, err := scanJob(tx.QueryRowContext(ctx, `SELECT `+claimableSelectCols+` FROM jobs WHERE id = ?`, id))
+			if err != nil {
+				return nil, err
+			}
+			e, err := q.events.EmitTx(ctx, tx, events.TypeJobFailed, "job", id,
+				transitionPayload(job, map[string]any{"terminal": false, "reclaimed": true}))
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, e)
+		}
+		reclaimed = len(ids)
+		return out, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return reclaimed, nil
+}
+
+// allLeasedIDs collects every leased job, for [Queue.ReclaimAllLeases].
+func allLeasedIDs(ctx context.Context, tx *sql.Tx) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM jobs WHERE state = 'leased'`)
+	if err != nil {
+		return nil, fmt.Errorf("jobs: finding leased jobs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // expiredLeaseIDs collects the jobs whose leases have run out. It is its own
 // function so the rows can be closed with defer on every path, including the
 // scan error one.

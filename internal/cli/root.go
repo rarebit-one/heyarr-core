@@ -82,6 +82,7 @@ One logical library, multiple complete sovereign peers.`,
 		// before Heyarr is configured at all.
 		newRenderersCommand(opts, &configPath),
 		newGCCommand(opts, &configPath),
+		newRecoverCommand(opts, &configPath),
 		// The client commands. Everything below this line talks to a running
 		// controller over /api/v1; everything above it is host administration
 		// that has to work before a credential exists or when the controller

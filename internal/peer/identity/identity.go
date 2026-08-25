@@ -348,6 +348,56 @@ func generate(ctx context.Context, opts Options, path string, _ *slog.Logger) (e
 // KeyPath is where the private key lives for a given data directory.
 func KeyPath(dataDir string) string { return filepath.Join(dataDir, KeyFileName) }
 
+// ErrKeyExists is [Install] refusing to overwrite an identity already on disk.
+var ErrKeyExists = errors.New("identity: a key already exists; refusing to overwrite an identity")
+
+// Install writes an operator-supplied identity seed into a data directory, for
+// disaster recovery (`recover --from-peer`, M7-04).
+//
+// The seed is the 32-byte ed25519 seed — the same on-disk form [Ensure]
+// generates — so a node recovered with it comes back as the SAME peer (ADR-0044
+// question 4). Every other node has pinned this key, and reusing it is what lets
+// the fabric reconverge with no re-enrolment anywhere.
+//
+// It refuses to overwrite an existing key ([ErrKeyExists]): installing over a
+// live identity is exactly how two machines end up claiming one, and that
+// refusal belongs at the write, not only in the command above it.
+func Install(dataDir string, seed []byte) error {
+	if len(seed) != ed25519.SeedSize {
+		return fmt.Errorf("identity: an identity seed is %d bytes, got %d", ed25519.SeedSize, len(seed))
+	}
+	if dataDir == "" {
+		return errors.New("identity: a data directory is required to install a key")
+	}
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return fmt.Errorf("identity: preparing the data directory: %w", err)
+	}
+	path := KeyPath(dataDir)
+	switch _, err := os.Stat(path); {
+	case err == nil:
+		return fmt.Errorf("%w: %s", ErrKeyExists, path)
+	case !errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("identity: checking for an existing key: %w", err)
+	}
+	return writeKeyFile(path, seed)
+}
+
+// InstallFromFile reads a key file the operator kept aside — the format [Ensure]
+// writes, at 0600 — and installs it (`recover --identity-key <file>`, M7-04).
+func InstallFromFile(dataDir, keyFile string) error {
+	seed, err := readKeyFile(keyFile)
+	if err != nil {
+		return err
+	}
+	return Install(dataDir, seed)
+}
+
+// ReadSeed reads the 32-byte identity seed from a key file — the format [Ensure]
+// writes, at 0600. It is how `recover` loads the operator-supplied key without
+// installing it, so the dry run can verify a backup against this node's identity
+// before anything touches the data directory.
+func ReadSeed(keyFile string) ([]byte, error) { return readKeyFile(keyFile) }
+
 // writeKeyFile writes the seed at 0600 through a temporary file in the same
 // directory, so that a crash mid-write cannot leave a truncated key that the
 // next start would read as a different identity.

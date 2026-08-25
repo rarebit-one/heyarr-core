@@ -2728,6 +2728,42 @@ paths:
                   latest: { type: integer, format: int64 }
         "503":
           description: This node does not hold control-plane backups for peers.
+  /peer/v1/control-backup/{generation}:
+    get:
+      tags: [peer]
+      operationId: downloadControlBackup
+      summary: Fetch a generation of YOUR own backup this peer holds (§51).
+      description: |
+        A recovering node fetches its own control-plane backup that this peer
+        holds, to rebuild its control plane (§51, M7-04, `recover --from-peer`).
+        The source is the certificate's, so a peer can download only ITS OWN
+        backups. The manifest is in the `X-Heyarr-Control-Backup` response header
+        (base64 JSON); the body is the snapshot database bytes. Generation `0`
+        means the latest held.
+      security:
+        - peerCertificate: []
+      parameters:
+        - name: generation
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 0 }
+          description: The generation to fetch; 0 for the latest held.
+      responses:
+        "200":
+          description: The backup bundle — manifest in the header, snapshot in the body.
+          headers:
+            X-Heyarr-Control-Backup:
+              schema: { type: string }
+              description: The base64-encoded JSON manifest.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "400":
+          description: The generation is not a non-negative integer.
+        "404":
+          description: No such backup is held for the calling peer.
+        "503":
+          description: This node does not hold control-plane backups for peers.
   /peer/v1/blobs/{hash}/content:
     parameters:
       - name: hash
