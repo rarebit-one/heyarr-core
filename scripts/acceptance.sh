@@ -40,7 +40,29 @@ trap cleanup EXIT INT TERM
 # how much was actually exercised rather than leaving a reader to count `ok`s.
 ASSERTIONS=0
 pass() { ASSERTIONS=$(( ASSERTIONS + 1 )); printf '  \033[32mok\033[0m   %s\n' "$1"; }
-fail() { ASSERTIONS=$(( ASSERTIONS + 1 )); printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILED=1; }
+# FAILURES records every failure in the order it happened, so the verdict can
+# print them back.
+#
+# Without it the verdict says only "FAILED — N assertions", and the failures
+# themselves are wherever they happened — often thousands of lines up. Anyone
+# reading the TAIL of a CI log, which is what a person checking a red check and
+# every tool that greps one actually reads, sees the LAST failure and infers it
+# is the fault.
+#
+# That is not hypothetical: it cost a misdiagnosis. A run failed with six
+# assertion failures followed by "the demo took 288s, past its 240s budget",
+# and the overrun — a CONSEQUENCE of the six, since a wait that never lands
+# runs to its full timeout — was read as the whole story (#274).
+#
+# The first failure is nearly always the cause and the rest the consequences,
+# so they are printed in order and the first is called out.
+FAILURES=()
+fail() {
+  ASSERTIONS=$(( ASSERTIONS + 1 ))
+  printf '  \033[31mFAIL\033[0m %s\n' "$1"
+  FAILURES+=("$1")
+  FAILED=1
+}
 note() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 assert_contains() { # haystack needle description
@@ -1133,9 +1155,32 @@ probe_recorded() { # blob-hash
 # — it has no container, and `direct` is the honest answer to "I do not know
 # what this file is" — and the run reports a planner regression that did not
 # happen (#207).
+#
+# # Why this budget is the largest in the file rather than the middle one
+#
+# It was 600 (60s), and it ran out on CI — on a DOCS-ONLY branch, taking six
+# assertions down with it, because everything below a missing probe is a
+# consequence of the probe missing (#274).
+#
+# This is the only wait here whose condition depends on all three of an external
+# binary, a job queue, AND deliberate contention: the section that calls it
+# starts a worker that CANNOT probe alongside one that can, precisely so the
+# claim discipline is exercised. So the probe has to wait for the right claimant
+# by design. Every other wait in this file is in-process and uncontended, and
+# the replication wait — with neither an external binary nor a rival claimant —
+# already had 900.
+#
+# 60 seconds was therefore the tightest budget on the heaviest wait, which is
+# backwards. On the run that failed, the demo took 288s against a median of
+# ~165s: a runner 1.7x slower turns a probe that comfortably lands in 40s into
+# one that does not land in 60.
+#
+# This does not make the wait a bet on machine speed — it still polls for a
+# CONDITION and stops the moment it arrives, so a fast machine pays nothing.
+# It only widens how slow a machine may be before the run calls it a failure.
 wait_for_probe() { # blob-hash description
   wait_for "the probe never recorded a container for blob $1, so $2" \
-    600 probe_recorded "$1"
+    900 probe_recorded "$1"
 }
 
 # refusal_arc_at_rest <want-id> — 0 once a fruitless search has BOTH recorded
@@ -6320,7 +6365,20 @@ fi
 
 VERDICT_REACHED=1
 if (( FAILED )); then
-  printf '\n\033[31macceptance: FAILED\033[0m — %d assertions\n' "$ASSERTIONS"
+  printf '\n\033[31macceptance: FAILED\033[0m — %d assertions, %d of them failing\n' \
+    "$ASSERTIONS" "${#FAILURES[@]}"
+  if (( ${#FAILURES[@]} > 0 )); then
+    printf '\n  what failed, in the order it happened:\n'
+    local_i=1
+    for f in "${FAILURES[@]}"; do
+      printf '    %d. %s\n' "$local_i" "$f"
+      local_i=$(( local_i + 1 ))
+    done
+    printf '\n  The FIRST one is usually the cause and the rest its consequences —\n'
+    printf '  a wait that never lands runs to its full timeout, so a run that blew\n'
+    printf '  its time budget very often blew it BECAUSE of the failure above,\n'
+    printf '  not instead of it (#274). Read down, not up.\n'
+  fi
   if (( CAPS_MISSING_N > 0 )); then
     printf '  %d of those failures are MISSING CAPABILITIES: an assertion declared\n' "$CAPS_MISSING_N"
     printf '  something this machine does not have, so it could not be exercised.\n'
