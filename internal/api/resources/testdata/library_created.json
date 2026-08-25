@@ -1,7 +1,7 @@
 {
   "id": "01990000-0000-7000-8000-00000000new1",
   "name": "music",
-  "content_type": "album",
+  "content_type": "music",
   "enabled": true,
   "created_at": "2026-08-20T12:00:00Z",
   "roots": []

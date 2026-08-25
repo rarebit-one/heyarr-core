@@ -3,7 +3,8 @@ package replication
 import (
 	"errors"
 	"fmt"
-	"sort"
+
+	"github.com/rarebit-one/heyarr-core/internal/domain/transfer"
 )
 
 // The transfer itself: which peer the destination pulls from, and what the
@@ -140,8 +141,22 @@ func (s Source) Usable() error {
 // candidates are ordered by peer id. Two runs of the same fabric therefore pull
 // from the same peer, which is what makes a transfer test assert against a
 // named source rather than against whichever one the map walk produced.
+// # The ORDER itself lives in internal/domain/transfer
+//
+// This function keeps the part that is about PEERS — a candidate with no key to
+// pin or nowhere to dial is not a candidate — and delegates the ordering to
+// transfer.Session, which is §24's shared abstraction over acquisition and
+// replication (M6, ADR-0041).
+//
+// One implementation rather than two, because M6 puts web seeds (§27) and
+// external sources (§25) into the same list as peers, and an ordering that
+// existed here as well would be the one that stopped agreeing. What is
+// delegated is exactly the rule this function's comment above argues for:
+// health decides order, unknown sits in the middle, and a peer known to be
+// down is tried LAST rather than never.
 func RankSources(candidates []Source) []Source {
-	out := make([]Source, 0, len(candidates))
+	usable := make([]Source, 0, len(candidates))
+	sources := make([]transfer.Source, 0, len(candidates))
 	for _, c := range candidates {
 		if c.Usable() != nil {
 			// Not a candidate at all: there is no key to pin or nowhere to
@@ -150,28 +165,35 @@ func RankSources(candidates []Source) []Source {
 			// reported as the same thing by the caller.
 			continue
 		}
-		out = append(out, c)
+		usable = append(usable, c)
+		sources = append(sources, transfer.Source{
+			ID: c.PeerID, Kind: transfer.KindPeer, Health: c.Health,
+		})
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		li, lj := healthRank(out[i].Health), healthRank(out[j].Health)
-		if li != lj {
-			return li < lj
-		}
-		return out[i].PeerID < out[j].PeerID
-	})
-	return out
-}
 
-// healthRank orders the health states. Unknown sits between reachable and
-// unreachable deliberately: it is the absence of evidence, not evidence of
-// absence, and the column defaults to it.
-func healthRank(state string) int {
-	switch state {
-	case HealthReachable:
-		return 0
-	case HealthUnreachable:
-		return 2
-	default:
-		return 1
+	// Background urgency, which is what replication is: nobody is waiting, the
+	// queue retries, and the cost of trying a peer that has been off since
+	// Tuesday is one failed connection — while the cost of skipping a live one
+	// is a durability gap that reports itself as nothing to do.
+	plan, err := transfer.Session{
+		Target:  "", // not used by the ordering; the caller already has the digest
+		Sources: sources,
+		Urgency: transfer.UrgencyBackground,
+	}.Plan()
+	if err != nil {
+		// The only error is "nothing usable", and this function's contract is
+		// an empty slice for that — the caller distinguishes it already, and
+		// changing the contract here would move a decision the caller makes.
+		return []Source{}
 	}
+
+	byID := make(map[string]Source, len(usable))
+	for _, c := range usable {
+		byID[c.PeerID] = c
+	}
+	out := make([]Source, 0, len(plan))
+	for _, p := range plan {
+		out = append(out, byID[p.ID])
+	}
+	return out
 }
