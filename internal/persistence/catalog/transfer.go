@@ -3,7 +3,9 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
 	"github.com/rarebit-one/heyarr-core/internal/events"
@@ -110,6 +112,32 @@ type BlobTransfer struct {
 	// Bytes is how many arrived and verified. Zero on every outcome but
 	// success.
 	Bytes int64
+	// Sources is how many pieces each peer contributed, for a transfer that
+	// had more than one.
+	//
+	// # Why this exists rather than SourcePeerID naming the biggest contributor
+	//
+	// A piece transfer has no single source. Writing one peer's id into
+	// SourcePeerID would be a claim that peer served the blob, which is false,
+	// and it is false in a way nothing downstream could catch: the value is
+	// well-formed, it names a peer that really did contribute, and every
+	// consumer would believe it. The M5 accounting assertion — that a source's
+	// own record of what it served agrees with the destination's — would then
+	// compare one peer's bytes against four peers' worth and fail for a reason
+	// that had nothing to do with the fault.
+	//
+	// So SourcePeerID stays EMPTY for these, which is a state it already has a
+	// meaning for ("no single source was chosen"), and the breakdown goes here.
+	// Empty for an ordinary single-source transfer.
+	//
+	// # Why a payload field and not a column
+	//
+	// Because SourcePeerID is not a column either. It is carried in the
+	// transfer event, and `replicas` records where replicas ARE rather than
+	// where they came from — so per-source attribution needs no migration, and
+	// inventing a table for it would add a schema that nothing yet reads.
+	Sources map[string]int
+
 	// Reason explains a failure in one phrase, for the event payload. Empty on
 	// success.
 	Reason string
@@ -277,5 +305,63 @@ func (c *Catalog) emitTransferChanged(
 	if t.Reason != "" {
 		payload["reason"] = t.Reason
 	}
+	if len(t.Sources) > 0 {
+		// Sorted, so the event is byte-identical for the same transfer however
+		// the map happened to iterate — an event that differs run to run cannot
+		// be compared, and comparing them is what a subscriber following one
+		// blob across the fabric does.
+		ids := make([]string, 0, len(t.Sources))
+		for id := range t.Sources {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		contributions := make([]map[string]any, 0, len(ids))
+		for _, id := range ids {
+			contributions = append(contributions, map[string]any{
+				"peer_id": id, "pieces": t.Sources[id],
+			})
+		}
+		payload["sources"] = contributions
+		payload["mode"] = "pieces"
+	}
 	return c.events.EmitTx(ctx, tx, events.TypeReplicationTransferChanged, "blob", t.BlobHash, payload)
 }
+
+// BlobSize is the size this node has recorded for a blob, in bytes.
+//
+// # Why a transfer needs it, and why it must come from HERE
+//
+// A piece transfer divides a blob by its SIZE, and both ends must divide it
+// identically or they are naming different byte ranges under the same index
+// (ADR-0043). The size therefore cannot come from whichever peer answered
+// first: that would let a source choose the division, and a source that chose
+// wrongly would be indistinguishable from one that was merely unlucky.
+//
+// It comes from the local catalogue, which learned it the same way it learned
+// the blob exists at all — a peer's catalogue snapshot, reconciled. That makes
+// it this node's own claim about the blob rather than a claim made during the
+// transfer, which is the property that lets a disagreement be attributed.
+//
+// # When it is missing
+//
+// A blob nobody has ever described has no size here, and that is not a
+// degenerate case: it is what asking for a blob this node has never heard of
+// looks like. Refused with a named error rather than a zero, because a zero
+// size divides into no pieces and would surface much later as an empty
+// transfer that blamed the peers.
+func (c *Catalog) BlobSize(ctx context.Context, blobHash string) (int64, error) {
+	var size int64
+	err := c.db.Reader().QueryRowContext(ctx,
+		`SELECT size FROM blobs WHERE hash = ?`, blobHash).Scan(&size)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, fmt.Errorf("%w: %s", ErrBlobSizeUnknown, blobHash)
+	case err != nil:
+		return 0, fmt.Errorf("catalog: reading the size of %s: %w", blobHash, err)
+	}
+	return size, nil
+}
+
+// ErrBlobSizeUnknown is a blob this node has no record of, asked about by
+// something that needs its size.
+var ErrBlobSizeUnknown = errors.New("catalog: this node has no recorded size for that blob")
