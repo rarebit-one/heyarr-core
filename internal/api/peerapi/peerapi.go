@@ -153,7 +153,15 @@ type Options struct {
 	// generate a manifest or enqueue a chunk_blob job: a GET that chunked a
 	// 20 GB blob to answer would be a remote denial of service (ADR-0034).
 	Manifests ManifestSource
-	Logger    *slog.Logger
+	// Pieces reports what this node holds of a blob, whole or in part (M6,
+	// ADR-0042). Nil for the same reason as Manifests and with the same
+	// consequence: a node serving no content has no pieces to report either.
+	//
+	// A READ, always. Nothing reachable through it may compute anything — the
+	// geometry is derivable from the size without touching a byte, so there is
+	// nothing to compute even if somebody wanted to.
+	Pieces PieceSource
+	Logger *slog.Logger
 	// Now is injected so certificate validity is testable (ADR-0017).
 	Now func() time.Time
 	// Liveness records that a peer was heard from (§31, M4-10, #184).
@@ -204,6 +212,9 @@ type Server struct {
 	// manifests describes those bytes to a pinned peer (M5-05). Nil for the
 	// same reason and with the same consequence. A read, always.
 	manifests ManifestSource
+	// pieces answers what this node holds of a blob, whole or in part. Nil
+	// when there is no store behind the surface. A read, always.
+	pieces PieceSource
 
 	http     *http.Server
 	bound    string
@@ -256,6 +267,7 @@ func New(opts Options) (*Server, error) {
 		liveness:   opts.Liveness,
 		returnPath: opts.ReturnPath,
 		manifests:  opts.Manifests,
+		pieces:     opts.Pieces,
 	}
 	s.handler = s.routes()
 	s.http = &http.Server{
@@ -337,6 +349,10 @@ func (s *Server) routes() http.Handler {
 		// this node never learns what it holds (ADR-0030). And asking never
 		// generates: see manifests.go.
 		r.Get("/blobs/{hash}/manifest", s.handleBlobManifest)
+		// Which pieces this node holds of a blob it may hold only in part
+		// (M6, ADR-0042). A read, and the question that makes a swarm
+		// possible at all — see pieces.go.
+		r.Get("/blobs/{hash}/pieces", s.handleBlobPieces)
 	})
 
 	// There is no admin route on this router and there is not going to be one.
