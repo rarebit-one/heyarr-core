@@ -141,37 +141,75 @@ func advancePipeline(
 		return 0, err
 	}
 
-	var want acquisition.Transition
+	// The edges this transfer's state implies, in order — PLURAL, because a
+	// transfer can move further between two passes than one edge covers.
+	//
+	// A finished transfer asks for `downloaded`, which is legal only from
+	// DOWNLOADING. A want in QUEUED never saw `start_download`, so applying a
+	// single edge refused it silently and the want stayed in QUEUED with a
+	// completed download on disk, forever, looking exactly like a transfer
+	// still running (#253).
+	//
+	// That is not a corner: the poll runs on a beat, and any download that
+	// starts and finishes inside one interval is NEVER observed in progress.
+	// It only became reachable when #225 gave anything the ability to put a
+	// want into QUEUED in the first place.
+	var wants []acquisition.Transition
 	var detail string
 	switch {
 	case t.Error != "":
 		// Including the invisible tracker stall, which reached us as an Error
 		// because stall.go read trackerStats. Without that this branch would
 		// never fire for the most common stall there is.
-		want, detail = acquisition.TransitionFail, t.Error
+		wants, detail = []acquisition.Transition{acquisition.TransitionFail}, t.Error
 	case t.Done:
 		// To VERIFYING, never straight to ingest: a download client's claim of
 		// completion is a claim by a third party about bytes it fetched from
 		// strangers (invariant 1).
-		want, detail = acquisition.TransitionDownloaded, ""
+		//
+		// `start_download` is included and is RECORDED when it applies, even
+		// though nobody watched bytes move. The alternative — skipping it —
+		// leaves a hole in the phase sequence, and §64's edges are what the
+		// event log is made of. The detail says which happened, so the history
+		// is continuous AND honest.
+		wants = []acquisition.Transition{
+			acquisition.TransitionStartDownload, acquisition.TransitionDownloaded,
+		}
 	case t.BytesDone > 0:
-		want, detail = acquisition.TransitionStartDownload, ""
+		wants = []acquisition.Transition{acquisition.TransitionStartDownload}
 	default:
 		return 0, nil
 	}
 
-	if _, err := state.State.Apply(want); err != nil {
-		// Illegal from here, which is the normal case on a repeat pass: the
-		// transfer is still complete and the want moved on three passes ago.
-		// Not an error and not worth logging.
-		return 0, nil //nolint:nilerr // an illegal transition here means "already moved"
+	var applied int
+	var reachedVerifying bool
+	for _, want := range wants {
+		if _, err := state.State.Apply(want); err != nil {
+			// Illegal from here, which is the normal case on a repeat pass:
+			// the transfer is still complete and the want moved on three
+			// passes ago. Not an error and not worth logging.
+			continue
+		}
+		edgeDetail := detail
+		if want == acquisition.TransitionStartDownload && t.Done {
+			edgeDetail = "already complete when first observed"
+		}
+		rec, err := cat.AdvanceAcquisition(ctx, desiredItemID, want, edgeDetail)
+		if err != nil {
+			return applied, err
+		}
+		state = rec
+		applied++
+		if want == acquisition.TransitionDownloaded {
+			reachedVerifying = true
+		}
+		log.Info("a transfer advanced its acquisition",
+			"desired_item_id", desiredItemID, "transition", string(want),
+			"detail", edgeDetail)
 	}
-
-	if _, err := cat.AdvanceAcquisition(ctx, desiredItemID, want, detail); err != nil {
-		return 0, err
+	if applied == 0 {
+		return 0, nil
 	}
-	log.Info("a transfer advanced its acquisition",
-		"desired_item_id", desiredItemID, "transition", string(want), "detail", detail)
 
 	// Reaching VERIFYING is what schedules the hash (M3-13).
 	//
@@ -183,10 +221,12 @@ func advancePipeline(
 	// Enqueued only on the transition, not on every pass that sees a completed
 	// transfer — the dedupe key makes a repeat harmless, but queueing one per
 	// beat would fill the queue with work that is already done.
-	if want == acquisition.TransitionDownloaded && ingests != nil {
+	// On what ACTUALLY applied, not on what was intended: a pass that walked
+	// only start_download has not reached VERIFYING and has nothing to hash.
+	if reachedVerifying && ingests != nil {
 		enqueueAcquisitionIngest(ctx, ingests, desiredItemID, log)
 	}
-	return 1, nil
+	return applied, nil
 }
 
 // enqueueAcquisitionIngest queues the hash-and-ingest for a completed transfer.
