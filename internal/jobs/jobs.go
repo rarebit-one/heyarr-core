@@ -79,6 +79,39 @@ var (
 	// ErrLeaseLost means the job is no longer held by this owner. A handler
 	// that sees it must stop: something else may already be running the work.
 	ErrLeaseLost = errors.New("jobs: lease lost")
+	// ErrPermanent is a handler saying this work will fail identically however
+	// many times it is retried. Wrapping it sends the job straight to dead.
+	//
+	// # Why the queue needed one at all
+	//
+	// Until this there was exactly ONE route to dead — attempts exhausted — so
+	// a handler that already knew the answer had no way to say so, and the
+	// queue spent four more attempts rediscovering it.
+	//
+	// The cost is not the retries. It is what the retries DO: a probe of a blob
+	// that is not media range-probes, gives up past §29's threshold, and then
+	// MATERIALISES THE WHOLE BLOB — five times, for a fact established the
+	// first time. On a corrupt 60 GB remux that is five whole-blob
+	// materialisations to relearn that ffprobe does not recognise it (#232).
+	//
+	// # What may and may not use it
+	//
+	// Only a failure that is a property of the INPUT, where the input cannot
+	// change. Bytes are immutable and addressed by their digest (invariant 1),
+	// so "ffprobe read these bytes and they are not a format it knows" cannot
+	// become untrue. A missing binary, a lost lease, a store that is briefly
+	// unavailable and an I/O error are all the opposite — they are properties
+	// of the moment, and retrying them is exactly right.
+	//
+	// Getting that wrong is worse than the retries were: a transient failure
+	// declared permanent is work that silently never happens. When in doubt,
+	// do not wrap.
+	//
+	// It does NOT bypass the handler's own idempotence (invariant 9). A
+	// permanently-failed job can still be retried by hand — `jobs retry` moves
+	// dead back to pending — because an operator who has fixed the world is
+	// making a different claim than the handler was.
+	ErrPermanent = errors.New("jobs: this will fail the same way every time")
 )
 
 // Defaults.
@@ -471,7 +504,11 @@ func (q *Queue) Fail(ctx context.Context, id, owner string, cause error) error {
 		message = cause.Error()
 	}
 
-	if job.Attempts >= job.MaxAttempts {
+	// A handler that says this will fail identically forever is believed, and
+	// the remaining attempts are not spent proving it — see ErrPermanent.
+	permanent := errors.Is(cause, ErrPermanent)
+
+	if permanent || job.Attempts >= job.MaxAttempts {
 		return q.inTx(ctx, func(tx *sql.Tx) ([]events.Event, error) {
 			res, err := tx.ExecContext(ctx, `
 				UPDATE jobs SET state = 'dead', lease_owner = NULL, lease_expires_at = NULL,
@@ -488,8 +525,16 @@ func (q *Queue) Fail(ctx context.Context, id, owner string, cause error) error {
 			// Terminal, and the flag says so without a consumer having to know
 			// that dead is the state attempts run out into. `heyarr scan
 			// --wait` branches on exactly this.
+			// `permanent` is carried BESIDE `terminal` rather than instead of
+			// it. Both are true, and they answer different questions: terminal
+			// is "this job is finished", permanent is "retrying it would not
+			// have helped". An operator deciding whether to `jobs retry` needs
+			// the second, and a consumer branching on completion needs the
+			// first — `heyarr scan --wait` reads exactly that.
 			e, err := q.events.EmitTx(ctx, tx, events.TypeJobFailed, "job", id,
-				transitionPayload(job, map[string]any{"terminal": true}))
+				transitionPayload(job, map[string]any{
+					"terminal": true, "permanent": permanent,
+				}))
 			if err != nil {
 				return nil, err
 			}

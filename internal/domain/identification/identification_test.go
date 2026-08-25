@@ -217,3 +217,56 @@ func TestRulesAreNamed(t *testing.T) {
 		seen[rule.Name] = true
 	}
 }
+
+// An unknown library content type does not merely fail to bias — it makes the
+// parser identify content as the WRONG TYPE.
+//
+// This is the mechanism behind #227's fabricated movie, pinned as a fact rather
+// than as a fix. A type no rule declares matches nothing in ordered(), which
+// falls back to every rule in registration order with the movie rules first —
+// so a television library declared `show` has its artwork read by
+// `movie/title-year`.
+//
+// What this milestone does about it is refuse to CREATE such a library (see
+// TestALibraryCannotBeCreatedWithATypeHeyarrDoesNotKnow). The parser is left
+// alone deliberately: making artwork stop producing a Work at all is #227's
+// separate sidecar finding, and it happens under a correct content type too.
+//
+// The test therefore asserts the DIFFERENCE the declaration makes, which is
+// what validation protects, and not that artwork is handled well.
+func TestAnUnknownLibraryTypeChangesWhatContentIsIdentifiedAs(t *testing.T) {
+	r := Default()
+	const art = "The Expanse (2015) [tvdb-1]/poster.jpg"
+
+	correct := r.Identify(art, Series)
+	if correct.ContentType != Series {
+		t.Fatalf("under %q the artwork is %q, so the control does not hold", Series, correct.ContentType)
+	}
+
+	wrong := r.Identify(art, "show")
+	if wrong.ContentType == correct.ContentType {
+		t.Fatal("an unknown library type produced the same answer as the correct one, " +
+			"so there is nothing for validation to protect and this test is vacuous")
+	}
+	if wrong.ContentType != Movie {
+		t.Errorf("a %q library read series artwork as %q; the recorded symptom is a movie",
+			"show", wrong.ContentType)
+	}
+}
+
+// The vocabulary is closed, and `unknown` is not part of it.
+func TestOnlyTheFourContentTypesAreAccepted(t *testing.T) {
+	for _, ct := range ContentTypes() {
+		if !IsContentType(ct) {
+			t.Errorf("%q is in ContentTypes() and is not accepted", ct)
+		}
+	}
+	for _, ct := range []string{"show", "album", "tv", "film", "", "unknown", "Movie", " movie"} {
+		if IsContentType(ct) {
+			t.Errorf("%q is accepted as a content type", ct)
+		}
+	}
+	if len(ContentTypes()) != 4 {
+		t.Errorf("%d content types, want §12's four", len(ContentTypes()))
+	}
+}
