@@ -70,6 +70,11 @@ type Backup struct {
 	// Dir is where backups are written. Empty derives <data_dir>/backups, so a
 	// single data_dir move takes the backups with it.
 	Dir string `koanf:"dir"`
+	// PeerRetain is how many generations of EACH peer's control-plane backup
+	// this node keeps when peers push to it (§50, M7-03). Zero uses a sensible
+	// default. Keeping only the newest leaves nothing when the newest is the
+	// copy written during the incident, so the default is more than one.
+	PeerRetain int `koanf:"peer_retain"`
 }
 
 // CAS configures the content-addressed store. Its on-disk layout is private to

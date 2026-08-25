@@ -198,6 +198,11 @@ type Options struct {
 	// disappearing, so "this node does not do that" and "this build does not
 	// have that route" stay distinguishable.
 	Snapshots SnapshotSource
+	// ControlBackup holds control-plane backups pushed to this peer (§50,
+	// M7-03, ADR-0046). Nil on a node that stores no backups for others — the
+	// route is still mounted and answers 503, for the same reason the others
+	// are.
+	ControlBackup ControlBackupSink
 }
 
 // Server is the peer listener.
@@ -236,6 +241,9 @@ type Server struct {
 	// (#266). See Options.WebSeedOnly for why it is distinct from pieces
 	// being nil, and why it is stated negatively.
 	webSeedOnly bool
+	// controlBackup holds control-plane backups pushed to this peer (§50,
+	// M7-03). Nil on a node that stores none.
+	controlBackup ControlBackupSink
 
 	http     *http.Server
 	bound    string
@@ -282,14 +290,15 @@ func New(opts Options) (*Server, error) {
 		tls:     tlsCfg,
 		errc:    make(chan error, 1),
 
-		inventory:   opts.Inventory,
-		snapshots:   opts.Snapshots,
-		blobs:       opts.Blobs,
-		liveness:    opts.Liveness,
-		returnPath:  opts.ReturnPath,
-		manifests:   opts.Manifests,
-		pieces:      opts.Pieces,
-		webSeedOnly: opts.WebSeedOnly,
+		inventory:     opts.Inventory,
+		snapshots:     opts.Snapshots,
+		blobs:         opts.Blobs,
+		liveness:      opts.Liveness,
+		returnPath:    opts.ReturnPath,
+		manifests:     opts.Manifests,
+		pieces:        opts.Pieces,
+		webSeedOnly:   opts.WebSeedOnly,
+		controlBackup: opts.ControlBackup,
 	}
 	s.handler = s.routes()
 	s.http = &http.Server{
@@ -379,6 +388,16 @@ func (s *Server) routes() http.Handler {
 		// byte-carrying half of the swarm. See pieces.go for why this is a
 		// route rather than a Range on the content one.
 		r.Get("/blobs/{hash}/pieces/{index}", s.handleBlobPiece)
+		// The control-plane backup a peer pushes of its OWN control plane
+		// (§50, M7-03, ADR-0046). This is the ONE route on this surface that
+		// moves controller state, and it moves it INBOUND — a peer pushing to
+		// this node — which is the mirror image of the catalog snapshot above,
+		// a controller→peer read. Two artefacts, opposite directions, so §50's
+		// "it is NOT the catalog snapshot" holds by construction. POST stores;
+		// GET reports what this node holds of the caller's control plane, the
+		// fact the pusher checks its belief against.
+		r.Post("/control-backup", s.handleControlBackupReceive)
+		r.Get("/control-backup", s.handleControlBackupList)
 	})
 
 	// There is no admin route on this router and there is not going to be one.

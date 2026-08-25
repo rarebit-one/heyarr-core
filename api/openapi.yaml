@@ -2648,6 +2648,86 @@ paths:
               schema: { $ref: "#/components/schemas/CatalogSnapshot" }
         "400":
           description: "`holding` is not a non-negative integer."
+  /peer/v1/control-backup:
+    post:
+      tags: [peer]
+      operationId: pushControlBackup
+      summary: Push a backup of your OWN control plane to this peer (§50).
+      description: |
+        A peer pushes a signed backup of its own control plane to the peers
+        that trust it, so that losing its disk is survivable (§50, ADR-0046).
+        Push, not pull: the bytes are the pusher's own small state, so ADR-0030's
+        "never carry content bytes" does not apply, and pushing moves the backup
+        structurally opposite the pulled catalog snapshot — one more way the two
+        artefacts cannot be confused.
+
+        **The source is the certificate's, always.** The manifest names the
+        source peer, and this node refuses a backup whose named source is not the
+        peer pushing it (ADR-0044 Q2): a peer may push only what it can sign as
+        itself, never another peer's control plane under its own name.
+
+        **Verified before it is stored.** The manifest signature is checked
+        against the pusher's pinned key, and the snapshot digest against its
+        bytes; a backup that fails either is rejected and nothing is stored. What
+        lands is inert — held in its own directory and never opened as a control
+        plane (Invariant 5, ADR-0044 Q5).
+
+        The manifest travels in the `X-Heyarr-Control-Backup` header (base64 JSON);
+        the request body is the snapshot database bytes.
+      security:
+        - peerCertificate: []
+      parameters:
+        - name: X-Heyarr-Control-Backup
+          in: header
+          required: true
+          schema: { type: string }
+          description: The base64-encoded JSON manifest of the pushed backup.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: The backup was verified and stored.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [generation]
+                properties:
+                  generation: { type: integer, format: int64 }
+        "400":
+          description: The pushed backup was rejected (bad signature, digest mismatch, or a source that is not the caller).
+        "503":
+          description: This node does not hold control-plane backups for peers.
+    get:
+      tags: [peer]
+      operationId: listHeldControlBackups
+      summary: What this peer holds of YOUR control plane (§50).
+      description: |
+        Reports the generations this node holds of the CALLING peer's control
+        plane, newest first — the fact the pusher checks its own belief against
+        (ADR-0046). The peer is the certificate's; there is no id in the path or
+        query.
+      security:
+        - peerCertificate: []
+      responses:
+        "200":
+          description: The generations held for the calling peer.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [source, generations, latest]
+                properties:
+                  source: { type: string }
+                  generations:
+                    type: array
+                    items: { type: integer, format: int64 }
+                  latest: { type: integer, format: int64 }
+        "503":
+          description: This node does not hold control-plane backups for peers.
   /peer/v1/blobs/{hash}/content:
     parameters:
       - name: hash
