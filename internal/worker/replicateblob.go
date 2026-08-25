@@ -462,7 +462,22 @@ func pullPieces(
 		if m.PeerID == self {
 			continue
 		}
-		candidates = append(candidates, transfer.Peer(replication.Source{
+		// ASK each member what it speaks, rather than assuming every member
+		// runs piece exchange (§27, ADR-0042, #266).
+		//
+		// Until this existed every candidate was built as a piece peer, so
+		// `transfer.WebSeed` was constructed nowhere outside a test and §27's
+		// web seed was unreachable from any running binary — the mechanism
+		// with no caller, for the sixth time in this repository.
+		//
+		// One round trip per member, and it replaces nothing: the survey that
+		// follows skips the availability question for a web seed, because a
+		// web seed has no availability route and claims every piece by
+		// construction. So the cost per member is unchanged.
+		//
+		// A member that cannot be asked keeps the piece contract rather than
+		// being downgraded — KindOf says why.
+		candidates = append(candidates, puller.KindOf(ctx, replication.Source{
 			PeerID:    m.PeerID,
 			Name:      m.Name,
 			Endpoint:  m.Endpoint,
