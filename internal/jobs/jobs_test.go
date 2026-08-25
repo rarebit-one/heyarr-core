@@ -3,8 +3,10 @@ package jobs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -558,5 +560,98 @@ func TestGetReportsMissingJobs(t *testing.T) {
 func TestNewRequiresAWriter(t *testing.T) {
 	if _, err := New(Options{}); err == nil {
 		t.Error("New accepted a queue with no writer")
+	}
+}
+
+// A handler that KNOWS the work will fail identically forever is believed, and
+// the remaining attempts are not spent proving it.
+//
+// The cost this saves is not the retries themselves. It is what they do: a
+// probe of a blob that is not media range-probes, gives up past §29's
+// threshold, and then materialises the WHOLE blob — five times, for a fact
+// established the first time (#232).
+func TestAPermanentFailureGoesStraightToDead(t *testing.T) {
+	q, _ := newQueue(t)
+	enqueue(t, q, EnqueueOptions{MaxAttempts: 5})
+
+	job, err := q.Claim(t.Context(), ClaimOptions{Owner: "w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause := fmt.Errorf("%w: ffprobe does not recognise these bytes", ErrPermanent)
+	if err := q.Fail(t.Context(), job.ID, "w", cause); err != nil {
+		t.Fatal(err)
+	}
+
+	dead, err := q.Get(t.Context(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dead.State != Dead {
+		t.Fatalf("state = %s after ONE permanent failure of a 5-attempt job, want dead", dead.State)
+	}
+	if dead.Attempts != 1 {
+		t.Errorf("attempts = %d, want 1 — the other four must not be spent", dead.Attempts)
+	}
+	// The reason survives, or an operator cannot tell this from any other
+	// terminal failure.
+	if !strings.Contains(dead.LastError, "ffprobe") {
+		t.Errorf("last_error = %q, which does not say what happened", dead.LastError)
+	}
+}
+
+// The control: an ORDINARY failure still retries. Without it, a fix that sent
+// everything straight to dead would pass the test above and silently stop the
+// queue retrying anything.
+func TestAnOrdinaryFailureStillRetries(t *testing.T) {
+	q, _ := newQueue(t)
+	enqueue(t, q, EnqueueOptions{MaxAttempts: 5})
+
+	job, err := q.Claim(t.Context(), ClaimOptions{Owner: "w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Fail(t.Context(), job.ID, "w", errors.New("the network went away")); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := q.Get(t.Context(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State == Dead {
+		t.Fatal("a transient failure was treated as permanent — work that silently never happens")
+	}
+	if after.State != Pending {
+		t.Errorf("state = %s, want pending so the backoff can retry it", after.State)
+	}
+}
+
+// A permanently-failed job is still revivable by hand.
+//
+// The handler said "this will fail the same way every time"; an operator who
+// has fixed the world is making a different claim, and `jobs retry` is where
+// they make it.
+func TestAPermanentlyFailedJobCanStillBeRetriedByHand(t *testing.T) {
+	q, _ := newQueue(t)
+	enqueue(t, q, EnqueueOptions{MaxAttempts: 5})
+
+	job, err := q.Claim(t.Context(), ClaimOptions{Owner: "w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Fail(t.Context(), job.ID, "w", fmt.Errorf("%w: nope", ErrPermanent)); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Retry(t.Context(), job.ID); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+
+	revived, err := q.Get(t.Context(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revived.State != Pending {
+		t.Errorf("state = %s after a hand retry, want pending", revived.State)
 	}
 }

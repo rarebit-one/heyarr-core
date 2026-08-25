@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -164,6 +165,85 @@ func TestProbeHandlerRefusesNonsensePayloads(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := handler(t.Context(), jobs.Job{Payload: []byte(tc.payload)}); err == nil {
 				t.Error("a nonsense payload was accepted")
+			}
+		})
+	}
+}
+
+// stubProber returns whatever it was constructed with, so the handler's failure
+// classification can be exercised without ffprobe or a machine that has one.
+type stubProber struct {
+	err   error
+	stats probe.Stats
+}
+
+func (s stubProber) Probe(
+	_ context.Context, _ probe.Target,
+) (probe.Result, probe.Stats, error) {
+	return probe.Result{}, s.stats, s.err
+}
+
+// probeOnce runs the handler against a stub and returns what it decided.
+func probeOnce(t *testing.T, cause error) error {
+	t.Helper()
+	handler := ProbeHandler(ProbeHandlerOptions{
+		Prober:   stubProber{err: cause, stats: probe.Stats{BytesRead: 12582912}},
+		Recorder: nil, // unreached: the failure returns first
+		Tokens:   &fakeMinter{},
+		BaseURL:  "http://heyarr",
+		Now:      func() time.Time { return time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC) },
+	})
+	payload, err := json.Marshal(probe.Payload{BlobHash: "blake3:abc", Size: 8 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler(t.Context(), jobs.Job{Type: probe.JobType, Payload: payload})
+}
+
+// "These bytes are not media" is permanent, and the queue is told so.
+//
+// The bytes are immutable and addressed by their digest (invariant 1), so
+// ffprobe's answer cannot change — the second attempt cannot succeed and
+// neither can the fifth. Each one range-probes, gives up past §29's threshold,
+// and then materialises the WHOLE blob (#232).
+func TestABlobThatIsNotMediaIsNotRetried(t *testing.T) {
+	err := probeOnce(t, fmt.Errorf("%w: Invalid data found when processing input",
+		probe.ErrProbeFailed))
+	if err == nil {
+		t.Fatal("an unreadable blob was reported as a successful probe")
+	}
+	if !errors.Is(err, jobs.ErrPermanent) {
+		t.Errorf("err = %v, which the queue will retry four more times", err)
+	}
+	// The original cause survives, or `last_error` says only that something was
+	// permanent and not what.
+	if !errors.Is(err, probe.ErrProbeFailed) {
+		t.Errorf("err = %v, which loses what actually happened", err)
+	}
+}
+
+// The control: everything else still retries.
+//
+// ffprobe missing, a lost lease, a store briefly unavailable, an I/O error —
+// all properties of the MOMENT rather than of the bytes. A transient failure
+// declared permanent is work that silently never happens, which is worse than
+// the retries this saves.
+func TestATransientProbeFailureIsStillRetried(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cause error
+	}{
+		{"the network went away", errors.New("dial tcp: connection refused")},
+		{"the lease was lost", jobs.ErrLeaseLost},
+		{"ffprobe is missing", errors.New("exec: \"ffprobe\": executable file not found in $PATH")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := probeOnce(t, tc.cause)
+			if err == nil {
+				t.Fatal("a failure was reported as success")
+			}
+			if errors.Is(err, jobs.ErrPermanent) {
+				t.Errorf("%q was declared permanent, so this work silently never happens", tc.name)
 			}
 		})
 	}

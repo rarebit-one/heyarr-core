@@ -93,6 +93,14 @@ type Blob struct {
 	// Deduplicated reports that the store already held these bytes, so nothing
 	// was written.
 	Deduplicated bool
+	// DegradedBecause says why Materialised is not a higher rung, and is empty
+	// when the best available one was reached.
+	//
+	// Carried through to the ingest log because that is where somebody looks.
+	// #222 was 63 files copied where hardlink should have worked, with the
+	// errno discarded 63 times — the ladder degrading is ordinary, degrading
+	// SILENTLY is what made a 22 GB surprise take an experiment to explain.
+	DegradedBecause string
 }
 
 // Root is a library root's ingest configuration, as the pipeline needs it.
@@ -131,6 +139,8 @@ type Result struct {
 	BlobSize     int64
 	BlobCreated  bool
 	Materialised Materialisation
+	// DegradedBecause says why Materialised is not a higher rung (#222).
+	DegradedBecause string
 	// Deduplicated reports that the bytes were already under management. It is
 	// exactly !BlobCreated, and it is the flag carried on ingest.completed.
 	Deduplicated   bool
@@ -389,12 +399,21 @@ func (p *Pipeline) Ingest(ctx context.Context, req Request) (Result, error) {
 		// after its grace window (ADR-0018), and the job will be retried.
 		return Result{}, fmt.Errorf("ingest: recording %s: %w", req.SourcePath, err)
 	}
+	// Set here rather than passed through Recording: it is a fact about HOW the
+	// bytes arrived, not about the catalogue, and the catalogue has no use for
+	// it. Threading it through the persistence layer would make every store
+	// implementation carry a field none of them reads.
+	res.DegradedBecause = blob.DegradedBecause
 
 	p.logger.Info("ingested",
 		"source_path", req.SourcePath,
 		"blob", res.BlobHash,
 		"size", res.BlobSize,
 		"materialised", string(res.Materialised),
+		// Only when there is something to say. A field that is empty on every
+		// healthy ingest would be noise on every line, and this one is meant
+		// to be noticed.
+		slog.String("degraded_because", res.DegradedBecause),
 		"deduplicated", res.Deduplicated,
 		"asset", res.AssetID,
 		"asset_created", res.AssetCreated,

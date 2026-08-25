@@ -504,6 +504,13 @@ func (s *FS) Link(ctx context.Context, srcPath string, mode Materialisation) (De
 	staging := s.stagingPath()
 	defer func() { _ = os.Remove(staging) }()
 
+	// Why each rung was refused, in the order they were tried. Kept rather than
+	// discarded: a `copy` with no reason is indistinguishable from a `copy` for
+	// a completely different reason, and that is exactly how #222 hid — 63
+	// files copied where hardlink should have worked, with the EXDEV thrown
+	// away 63 times.
+	var refusals []string
+
 	for _, attempt := range ladder(mode) {
 		used, err := s.materialise(ctx, srcPath, staging, attempt)
 		if err != nil {
@@ -512,7 +519,11 @@ func (s *FS) Link(ctx context.Context, srcPath string, mode Materialisation) (De
 			}
 			// Fall through to the next rung. A cross-filesystem source, a
 			// filesystem without cloning, or a hardlink limit are all ordinary
-			// and must degrade rather than fail (ADR-0014).
+			// and must degrade rather than fail (ADR-0014) — but they are now
+			// recorded on the way past.
+			refusals = append(refusals,
+				fmt.Sprintf("%s: %s", attempt, strings.TrimPrefix(
+					err.Error(), errDegrade.Error()+": ")))
 			_ = os.Remove(staging)
 			continue
 		}
@@ -529,9 +540,13 @@ func (s *FS) Link(ctx context.Context, srcPath string, mode Materialisation) (De
 		if err := syncDir(filepath.Dir(final)); err != nil {
 			return Descriptor{}, err
 		}
-		return Descriptor{Hash: h, Size: size, Materialised: used}, nil
+		return Descriptor{
+			Hash: h, Size: size, Materialised: used,
+			DegradedBecause: strings.Join(refusals, "; "),
+		}, nil
 	}
-	return Descriptor{}, fmt.Errorf("cas: could not materialise %s into the store", srcPath)
+	return Descriptor{}, fmt.Errorf("cas: could not materialise %s into the store: %s",
+		srcPath, strings.Join(refusals, "; "))
 }
 
 // stagingSeq makes staging names unique within a process; the pid makes them
