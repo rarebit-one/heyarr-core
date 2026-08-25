@@ -190,11 +190,32 @@ without it:
 So the code has been treating this as accepted since Milestone 4. Marking it so
 records reality; it does not decide anything new.
 
-**What this ratification obliges.** The Consequences above are now
-commitments rather than predictions, and two of them rewrite work that was
-already planned: Milestone 7 gets smaller (see #26), and "degraded" mostly
-stops being a state (§53). Both were decomposed against the superseded
-ADR-0029 reading and have been reworked.
+**What this ratification obliges.** Two of the Consequences above rewrite work
+that was already planned: Milestone 7 gets smaller (see #26), and "degraded"
+mostly stops being a state (§53). Both had been decomposed against the
+superseded ADR-0029 reading and have been reworked.
+
+**One clause above is a prediction the code contradicts, and ratifying this
+record does not ratify it.** The Milestone 7 consequence says recovery is
+*"re-cloning from a peer that still has it — which is a fetch, not a restore"*.
+There is no such fetch. Content arrives on a peer exclusively through
+desired-state reconciliation driven by that peer's OWN control database:
+`canonicalBlobs` reads local `assets`, `PlanPeerConvergence` diffs against local
+`replicas`, and `reconcile_peer` enqueues one `replicate_blob` per gap. The peer
+surface serves per-hash and there is no bulk route, no `clone` verb and no
+`bootstrap` verb anywhere. **A node with no control plane computes zero gaps and
+therefore fetches nothing** — it has nothing that decides what to want.
+
+So the dependency runs the other way from what that clause assumes: content and
+encrypted personal state do converge on their own, but they converge *toward a
+desired set that only a restored control plane provides*. Backup and restore of
+the control plane are therefore load-bearing rather than a convenience, and the
+milestone is smaller for different reasons than this record gave — §53, not §49.
+
+The one §82 input that genuinely is pullable in one shot is the **catalog
+snapshot**: a peer whose store was lost reports `holding=0` and receives a full
+rebuild. That is the read view, and it carries no desired items, policy or
+grants.
 
 **What would still make us revisit it.** A deployment where one site is
 genuinely subordinate to another — a family member's node that should not be
