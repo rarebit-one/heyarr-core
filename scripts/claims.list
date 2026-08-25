@@ -148,10 +148,9 @@ why   internal/peer/transfer/webseed.go is written and tested, and transfer.WebS
 evidence a piece was fetched from a web seed
 
 claim polled-acquisition-completes
-state pending
-issue 247
-ref   §58, §65, ADR-0025
-why   The demo asserts that a grab_release job was QUEUED and stops there, so the gate proves the by-hand acquisition route. internal/downloads/fake.go exists and no acceptance section configures it, so SELECTED -> QUEUED -> downloaded -> ingest has never run end to end.
+state proven
+ref   §58, §61, §65, ADR-0025, #247
+why   A release is handed to a download client that takes it, and something asks the client what it finished. Before #247 nothing enqueued poll_downloads, so a transfer was never asked about again and no arc could pass QUEUED on a running node — the gate proved the by-hand adoption route and nothing else.
 evidence a grab_release job succeeded
 
 claim playback-over-a-partial-blob

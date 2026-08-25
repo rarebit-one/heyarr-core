@@ -4624,6 +4624,195 @@ YAML
   wait "$hb_ctrl" "$hb_worker" 2>/dev/null || true
 }
 
+
+# ---------------------------------------------------------------------------
+# THE POLLED ACQUISITION ARC: a grab that SUCCEEDS, and the poll that notices
+# (§58, §61, §65, #247)
+# ---------------------------------------------------------------------------
+#
+# Every acquisition arc above this point ends at one of two places: a want that
+# reaches SELECTED and stops, or bytes adopted through
+# `POST /desired/{id}/acquisitions` — the endpoint documented as the path for
+# "a transfer that finished before Heyarr knew about it, something fetched by
+# hand". §65 keeps several ways for bytes to arrive and the ORDINARY one was
+# not among them.
+#
+# # What was actually missing, which was not the fake client
+#
+# #247 read as "the demo cannot construct a working download client", and #259
+# built one. That was necessary and it was not sufficient: `poll_downloads` was
+# declared, its handler was registered, its dedupe key was declared beside it,
+# and NOTHING ENQUEUED IT. A transfer handed to a client was never asked about
+# again, so no arc could get past QUEUED on a running node however the client
+# was configured.
+#
+# That is the same defect #164 closed for `provider_health`, and finding it
+# twice is why scripts/claims.list exists. The beat is in
+# internal/controller/downloadbeat.go; this section is what proves it runs.
+#
+# # Why its own node
+#
+# The full demo node configures a download client at port 9 that refuses
+# connections ON PURPOSE — ADR-0025's claim that a client which is down is a
+# degraded state rather than a failure, and the assertion that a want keeps its
+# selection to retry. Giving that node a working client would delete the
+# section that proves the opposite. So this is a second node with its own
+# library, its own catalogue and its own downloads directory, which also keeps
+# it out of every catalogue count asserted elsewhere.
+polled_acquisition_demo() {
+  local root="$WORK/polled" lib
+  lib="$root/library"
+  mkdir -p "$lib/movies" "$root/downloads" "$root/data"
+
+  # An EMPTY library. The want below is for content nothing holds, which is the
+  # case the ordinary arc is about: if the library already had it there would be
+  # nothing to acquire and the whole section would assert on a shortcut.
+  cat > "$WORK/polled.yaml" <<YAML
+data_dir: $root/data
+log:
+  level: info
+  format: json
+http:
+  addr: ""
+libraries:
+  - name: films
+    content_type: movie
+    roots: ["$lib/movies"]
+providers:
+  - name: polled-indexer
+    type: fake
+    capabilities: [indexer]
+    offers:
+      - title: Harbour Lights
+        candidates:
+          - id: hl-1080-web
+            fetch: magnet:?xt=urn:btih:hl-1080-web
+            title: Harbour Lights 1080p web-dl
+            attributes:
+              resolution: 1080
+              source: web-dl
+              video_codec: h264
+  # THE POINT OF THIS SECTION. A fake declaring the DOWNLOAD capability, which
+  # downloads.Constructor turns into a client that writes real bytes into the
+  # local side of its path map. The content is derived from the source, so the
+  # same release always produces the same blob.
+  - name: polled-downloads
+    type: fake
+    capabilities: [download]
+    path_map:
+      - remote: /downloads/complete
+        local: $root/downloads
+YAML
+
+  local sock="$root/data/heyarr.sock" log="$root/node.log" token
+  token=$("$BIN" --config "$WORK/polled.yaml" token create acceptance --scopes admin --json | jq -r .token)
+  "$BIN" --config "$WORK/polled.yaml" all >>"$log" 2>&1 &
+  PEER_PIDS+=($!)
+
+  pa_api() { curl -sS --unix-socket "$sock" -H "Authorization: Bearer $token" "${@:2}" "http://heyarr$1"; }
+
+  local waited=0
+  while (( waited < 900 )); do
+    curl -sf --unix-socket "$sock" http://heyarr/readyz >/dev/null 2>&1 && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if (( waited >= 900 )); then fail "polled: the node never became ready"; tail -20 "$log"; return 1; fi
+
+  # The beat says so on startup, and it says so BEFORE anything is asserted
+  # about its effects. A node that decided it had no download client would
+  # produce every failure below with no explanation of why.
+  assert_eq "$(grep -c '"msg":"download poll beat started"' "$log" || true)" "1" \
+    "the node started a download poll beat, because a download client is configured (#247)"
+
+  # -------------------------------------------------------------------------
+  note "  a want for content nothing holds, acquired the ORDINARY way (§65)"
+  # -------------------------------------------------------------------------
+  local pa_profile pa_want pa_state
+  pa_profile=$(pa_api /api/v1/quality-profiles -X POST -H 'Content-Type: application/json' \
+    -d '{"name":"polled-anything","description":"accepts whatever exists"}' | jq -r '.name')
+  assert_eq "$pa_profile" "polled-anything" "a profile that gates on nothing, so random bytes are acceptable"
+
+  pa_want=$(pa_api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d '{"work":{"content_type":"movie","title":"Harbour Lights","year":2016},
+         "quality_profile":"polled-anything","reason":"the polled arc"}' | jq -r '.id')
+  assert_contains "$pa_want" "-" "a want for content this node holds nothing of"
+  assert_eq "$(pa_api "/api/v1/desired/$pa_want" | jq -r '.acquisition.managed')" "false" \
+    "and it begins holding nothing at all"
+
+  # Searched ON DEMAND rather than waiting for the beat, which is the same
+  # reason the satisfaction section reconciles on demand: asserting against a
+  # timer is what made an earlier section flake on half of runs.
+  #
+  # It is also thirty seconds of the demo's budget. The search beat's cadence
+  # is #130's business and is asserted where that issue lives; this section is
+  # about what happens AFTER a selection, and waiting out somebody else's
+  # cadence to get there proves nothing it does not already prove.
+  pa_api "/api/v1/desired/$pa_want/search" -X POST -o /dev/null
+
+  waited=0
+  while (( waited < 900 )); do
+    pa_state=$(pa_api "/api/v1/desired/$pa_want" | jq -r '.acquisition.state')
+    [[ "$pa_state" == "SELECTED" || "$pa_state" == "QUEUED" || "$pa_state" == "VERIFYING" ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  assert_eq "$(( waited < 900 ))" "1" \
+    "the want reaches a selection with no real indexer anywhere (§64, ADR-0026)"
+
+  # -------------------------------------------------------------------------
+  note "  🔴 the grab SUCCEEDS, and the poll notices (#247, #225)"
+  # -------------------------------------------------------------------------
+  #
+  # THE ASSERTION THIS SECTION EXISTS FOR. Everywhere else the demo asserts a
+  # grab was QUEUED, because the only client configured refuses connections. A
+  # queued job is the edge existing; a SUCCEEDED one is the edge working.
+  pa_grab_succeeded() {
+    [[ "$(pa_api "/api/v1/jobs?type=grab_release" |
+      jq -r '[.items[] | select(.state == "succeeded")] | length > 0')" == "true" ]]
+  }
+  wait_for "no grab_release job ever succeeded — SELECTED never became QUEUED against a client that answers" \
+    900 pa_grab_succeeded
+  pass "a grab_release job succeeded — the release was handed to a download client that took it"
+
+  # And the poll pass ran. Asserted separately from its effect, because a
+  # transfer that completed for some other reason would satisfy the ingest
+  # assertion below while saying nothing about the beat.
+  pa_poll_succeeded() {
+    [[ "$(pa_api "/api/v1/jobs?type=poll_downloads" |
+      jq -r '[.items[] | select(.state == "succeeded")] | length > 0')" == "true" ]]
+  }
+  wait_for "no poll_downloads job ever succeeded — nothing observed the transfer, which is #247 exactly" \
+    900 pa_poll_succeeded
+  pass "a poll_downloads job succeeded — something asked the client what it had finished"
+
+  # -------------------------------------------------------------------------
+  note "  and the bytes arrive under management, with nobody adopting them"
+  # -------------------------------------------------------------------------
+  pa_managed() {
+    [[ "$(pa_api "/api/v1/desired/$pa_want" | jq -r '.acquisition.managed')" == "true" ]]
+  }
+  wait_for "the want never came under management — the polled arc stopped somewhere after the transfer completed" \
+    1200 pa_managed
+  assert_eq "$(pa_api "/api/v1/desired/$pa_want" | jq -r '.acquisition.managed')" "true" \
+    "the acquisition is verified and brought under management, reached WITHOUT the by-hand endpoint (§65)"
+
+  # The adoption endpoint was never called on this node, which is what makes
+  # the claim above about the ORDINARY route rather than about ingest in
+  # general. Asserted from the access log, positively: this node served no POST
+  # to /acquisitions at all.
+  assert_eq "$(grep -c '"path":"/api/v1/desired/[^"]*/acquisitions"' "$log" || true)" "0" \
+    "and nothing adopted anything by hand — the by-hand endpoint was never called on this node"
+
+  local pa_sat
+  pa_sat=$(pa_api "/api/v1/desired/$pa_want/satisfaction")
+  assert_eq "$(jq -r '.content.assets | length' <<<"$pa_sat")" "1" \
+    "the acquired asset is the one considered for satisfaction"
+
+  local p
+  for p in "${PEER_PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done
+  for p in "${PEER_PIDS[@]:-}"; do wait "$p" 2>/dev/null || true; done
+  PEER_PIDS=()
+}
+
 # ---------------------------------------------------------------------------
 # THE SECOND PEER: placement, proven (§56, §64, M4-11, ADR-0010, ADR-0027)
 # ---------------------------------------------------------------------------
@@ -6490,7 +6679,25 @@ YAML
 # a laptop and this must not be flaky — but it exists so that a change which
 # doubles the runtime is noticed by CI rather than by whoever stops running
 # `make demo` six weeks later.
-DEMO_BUDGET_SECONDS=${DEMO_BUDGET_SECONDS:-240}
+# Raised from 240 to 300 on 2026-08-25, deliberately, which is what the failure
+# message below asks for.
+#
+# #247's polled acquisition arc costs about thirty-five seconds and cannot cost
+# much less. It brings up a node of its own — it must, because the full demo's
+# only download client refuses connections ON PURPOSE and giving that node a
+# working one would delete the ADR-0025 section that proves a client being down
+# is a degraded state rather than a failure. The search is forced rather than
+# waited for, which already took thirty seconds off it. What remains is the
+# download poll interval: fifteen seconds is the beat's own cadence and the
+# section deliberately does not reach into it, because a demo that special-cased
+# the interval would stop proving the interval anybody actually runs.
+#
+# Measured on this machine, equipped, verdict line each time: 196s before the
+# section, 263s with it and the search beat waited out, and 233s with the search
+# forced. macOS is the tight runner class — M6 measured it at 205-213s against
+# 240 — so 300 restores roughly the margin that existed before, rather than
+# buying new room.
+DEMO_BUDGET_SECONDS=${DEMO_BUDGET_SECONDS:-300}
 DEMO_STARTED=$SECONDS
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -6502,6 +6709,8 @@ else
   stop_full
   note "the provider health beat (#164)"
   provider_health_beat_demo
+  note "THE POLLED ACQUISITION ARC: a grab that succeeds (§58, §65, #247)"
+  polled_acquisition_demo
   note "THE SECOND PEER: placement, proven (§56, §64, M4-11) — heyarr all"
   two_peer_demo all
   note "THE SECOND PEER, again, as separate role processes (ADR-0002, M4-16)"

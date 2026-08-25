@@ -272,6 +272,12 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 	startSearchBeat(ctx, beatCatalog, reconcileQueue, c.log)
 
+	// The download poll beat (#247). Same queue and the same serving context.
+	// See downloadbeat.go for why fifteen seconds rather than the health
+	// beat's minute, why the startup pass is the important one, and why this
+	// beat asks the configuration first where the health beat does not.
+	startDownloadPoll(ctx, c.cfg.Providers, reconcileQueue, c.log)
+
 	// The continuous control-plane backup (§49, ADR-0044, M7-02). Its interval
 	// was validated at config load, so the error here cannot fire; it is read
 	// rather than dropped so a future change to BackupInterval cannot silently
