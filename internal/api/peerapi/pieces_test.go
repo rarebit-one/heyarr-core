@@ -5,10 +5,15 @@
 package peerapi_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +45,12 @@ type sourcePieces struct {
 	known map[string]bool
 	// reads counts calls, so a test can assert the route asked exactly once.
 	reads int
+	// held is the piece bytes this fake serves; see hold.
+	held map[string][]byte
+	// pieceReads counts piece fetches.
+	pieceReads int
+	// readErr, when set, is what ReadPiece fails with — for the fault path.
+	readErr error
 	// computed counts calls to a method that WOULD be expensive. The honest
 	// build never reaches it; the fixture offers it so the absence assertion
 	// below is capable of failing rather than being a sentence.
@@ -72,6 +83,34 @@ func (s *sourcePieces) PieceAvailability(
 		return "", true, nil
 	}
 	return got, true, nil
+}
+
+// held is the piece bytes this fake will serve, keyed by "<blob>/<index>".
+// A blob can be known and have availability without any entry here, which is
+// how a test arranges "the bitset claims it, the bytes are not there".
+func (s *sourcePieces) hold(blob hashing.Hash, index int, body []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.held == nil {
+		s.held = map[string][]byte{}
+	}
+	s.held[blob.String()+"/"+strconv.Itoa(index)] = body
+}
+
+func (s *sourcePieces) ReadPiece(
+	_ context.Context, blob hashing.Hash, index int,
+) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pieceReads++
+	if s.readErr != nil {
+		return nil, s.readErr
+	}
+	body, ok := s.held[blob.String()+"/"+strconv.Itoa(index)]
+	if !ok {
+		return nil, peerapi.ErrNoSuchPiece
+	}
+	return body, nil
 }
 
 // computeExpensivelyLocked stands in for reading the whole blob to answer,
@@ -112,6 +151,26 @@ func serveWithPieces(
 		}
 	})
 	return &listener{srv: srv, self: self, addr: srv.Addr(), logs: logs}
+}
+
+// digestOf names a blob from a phrase, so a test reads as being about a thing
+// rather than about "ab" repeated thirty-two times.
+func digestOf(t *testing.T, phrase string) hashing.Hash {
+	t.Helper()
+	sum := sha256.Sum256([]byte(phrase))
+	return hashing.MustParse("blake3:" + hex.EncodeToString(sum[:]))
+}
+
+// know marks a blob as one this node has heard of, without saying what of it
+// it holds.
+func (s *sourcePieces) know(blob hashing.Hash) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.known[blob.String()] = true
+}
+
+func (l *listener) pieceURL(hash string, index int) string {
+	return "https://" + l.addr + peerapi.PiecePath(hash, index)
 }
 
 func (l *listener) piecesURL(hash string) string {
@@ -274,5 +333,181 @@ func TestANonDigestPathIsRefused(t *testing.T) {
 	}
 	if reads, _ := src.counts(); reads != 0 {
 		t.Errorf("the source was asked %d times about a path that is not a digest", reads)
+	}
+}
+
+// THE assertion the piece route exists for: a peer can fetch ONE piece of a
+// blob the serving node holds only part of.
+//
+// The content route cannot do this. It promises the blob — a strong ETag
+// naming the whole-object digest, a length that is the blob's length, a 404
+// meaning "not here". A node holding a third of the bytes can honour none of
+// those, so the piece is its own route (ADR-0042 said otherwise; the PR that
+// added this says why it no longer holds).
+func TestAPeerCanFetchOnePieceOfAPartiallyHeldBlob(t *testing.T) {
+	source := newPeerNode(t, "peer-source", "source")
+	dest := newPeerNode(t, "peer-destination", "destination")
+	root := newTrustRoot(source.member(), dest.member())
+
+	blob := digestOf(t, "a blob held in part")
+	want := bytes.Repeat([]byte{0xA5}, 4096)
+	src := newSourcePieces()
+	src.know(blob)
+	src.hold(blob, 7, want)
+
+	l := serveWithPieces(t, source, root, src)
+	client := dialler(t, dest, mtls.PinnedKey(source.member()))
+
+	status, body, _, err := peerSend(t, client, http.MethodGet, l.pieceURL(blob.String(), 7), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", status, body)
+	}
+	if !bytes.Equal([]byte(body), want) {
+		t.Errorf("served %d bytes, want the %d the node holds", len(body), len(want))
+	}
+}
+
+// 🔴 A piece this node does not hold is refused, and the refusal is ordinary.
+//
+// While two peers converge, most pieces are absent most of the time. If that
+// were an error the logs would be nothing but errors, and a session choosing
+// sources could not tell "not yet" from "broken". So it is a 404: try another
+// peer, or ask again later.
+func TestAPieceThisNodeDoesNotHoldIsRefusedAsNotFound(t *testing.T) {
+	source := newPeerNode(t, "peer-source", "source")
+	dest := newPeerNode(t, "peer-destination", "destination")
+	root := newTrustRoot(source.member(), dest.member())
+
+	blob := digestOf(t, "a blob whose piece 3 has not landed")
+	src := newSourcePieces()
+	src.know(blob)
+	src.hold(blob, 0, []byte("piece zero is here"))
+
+	l := serveWithPieces(t, source, root, src)
+	client := dialler(t, dest, mtls.PinnedKey(source.member()))
+
+	status, body, _, err := peerSend(t, client, http.MethodGet, l.pieceURL(blob.String(), 3), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", status, body)
+	}
+	// The refusal must not leak a body that could be mistaken for content: a
+	// caller writing the response straight into its staging file would
+	// otherwise write a problem document where a piece belongs.
+	if bytes.Contains([]byte(body), []byte("piece zero")) {
+		t.Error("the refusal carried another piece's bytes")
+	}
+}
+
+// A negative or unparseable index is a bad request, and the source is never
+// asked — the same discipline the availability route applies to a non-digest.
+func TestAnIndexThatIsNotAPieceNumberIsRefused(t *testing.T) {
+	source := newPeerNode(t, "peer-source", "source")
+	dest := newPeerNode(t, "peer-destination", "destination")
+	root := newTrustRoot(source.member(), dest.member())
+
+	blob := digestOf(t, "a blob")
+	src := newSourcePieces()
+	src.know(blob)
+	l := serveWithPieces(t, source, root, src)
+	client := dialler(t, dest, mtls.PinnedKey(source.member()))
+
+	for _, index := range []string{"-1", "four", "", "1.5"} {
+		url := "https://" + l.addr + peerapi.Prefix + "/blobs/" + blob.String() + "/pieces/" + index
+		status, _, _, err := peerSend(t, client, http.MethodGet, url, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status == http.StatusOK {
+			t.Errorf("index %q was served", index)
+		}
+	}
+	src.mu.Lock()
+	asked := src.pieceReads
+	src.mu.Unlock()
+	if asked != 0 {
+		t.Errorf("the source was asked %d times for an index that is not a piece number", asked)
+	}
+}
+
+// A node with no content store answers 503 rather than 404: there is nothing
+// here to try again for, which is a different thing from not holding a piece.
+func TestAPieceFromANodeWithNoStoreIsUnavailableRatherThanNotFound(t *testing.T) {
+	source := newPeerNode(t, "peer-source", "source")
+	dest := newPeerNode(t, "peer-destination", "destination")
+	root := newTrustRoot(source.member(), dest.member())
+
+	l := serveWithPieces(t, source, root, nil)
+	client := dialler(t, dest, mtls.PinnedKey(source.member()))
+
+	status, _, _, err := peerSend(t, client, http.MethodGet,
+		l.pieceURL(digestOf(t, "anything").String(), 0), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", status)
+	}
+}
+
+// A fault reading the piece is a 500 that says nothing, and the detail goes to
+// the log — a peer is not told why this node's disk is unhappy.
+func TestAFaultServingAPieceIsNotExplainedToThePeer(t *testing.T) {
+	source := newPeerNode(t, "peer-source", "source")
+	dest := newPeerNode(t, "peer-destination", "destination")
+	root := newTrustRoot(source.member(), dest.member())
+
+	blob := digestOf(t, "a blob on an unhappy disk")
+	src := newSourcePieces()
+	src.know(blob)
+	src.readErr = errors.New("staging file lives at /srv/media/private and is on fire")
+
+	l := serveWithPieces(t, source, root, src)
+	client := dialler(t, dest, mtls.PinnedKey(source.member()))
+
+	status, body, _, err := peerSend(t, client, http.MethodGet, l.pieceURL(blob.String(), 0), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", status)
+	}
+	if bytes.Contains([]byte(body), []byte("/srv/media")) {
+		t.Error("the response told the peer a local path")
+	}
+}
+
+// An unpinned caller cannot fetch a piece, exactly as it cannot fetch content.
+// The piece route is new; the credential is not (ADR-0012).
+func TestAnUnpinnedPeerCannotFetchAPiece(t *testing.T) {
+	source := newPeerNode(t, "peer-source", "source")
+	stranger := newPeerNode(t, "peer-stranger", "stranger")
+	root := newTrustRoot(source.member())
+
+	blob := digestOf(t, "a blob a stranger wants")
+	src := newSourcePieces()
+	src.know(blob)
+	src.hold(blob, 0, []byte("bytes a stranger must not get"))
+
+	l := serveWithPieces(t, source, root, src)
+	client := dialler(t, stranger, mtls.PinnedKey(source.member()))
+
+	status, body, _, _ := peerSend(t, client, http.MethodGet, l.pieceURL(blob.String(), 0), "")
+	if status == http.StatusOK {
+		t.Fatal("a stranger was served a piece")
+	}
+	if bytes.Contains([]byte(body), []byte("must not get")) {
+		t.Error("the refusal carried the bytes anyway")
+	}
+	src.mu.Lock()
+	asked := src.pieceReads
+	src.mu.Unlock()
+	if asked != 0 {
+		t.Errorf("the source was asked %d times on behalf of a stranger", asked)
 	}
 }

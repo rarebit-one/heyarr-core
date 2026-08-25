@@ -1,6 +1,7 @@
 package pieces
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -105,24 +106,79 @@ func TestIntersectIsWhatTheSourceCanGiveTheDestination(t *testing.T) {
 	}
 }
 
-// Availability survives the wire.
+// Availability and its geometry survive the wire together.
 func TestAvailabilityRoundTripsThroughItsEncoding(t *testing.T) {
-	a := NewAvailability(20)
+	g, err := For(20 * MinPieceLength)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := NewAvailability(g.Count())
 	for _, i := range []int{0, 5, 13, 19} {
 		a.Add(i)
 	}
 
-	back, err := DecodeAvailability(a.Encode(), 20)
+	backG, back, err := Decode(Encode(g, a))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
+	}
+	if backG != g {
+		t.Errorf("geometry = %+v after a round trip, want %+v", backG, g)
 	}
 	if back.Count() != a.Count() {
 		t.Errorf("count = %d after a round trip, want %d", back.Count(), a.Count())
 	}
-	for i := range 20 {
+	for i := range g.Count() {
 		if back.Has(i) != a.Has(i) {
 			t.Errorf("piece %d is %v after a round trip, want %v", i, back.Has(i), a.Has(i))
 		}
+	}
+}
+
+// 🔴 The SIZE is what the geometry is derived from, and the count alone could
+// not have done it.
+//
+// This is why the encoding carries a size rather than a piece count. 1024
+// pieces is a 256 MiB blob at 256 KiB pieces AND an 8 GiB blob at 8 MiB pieces,
+// so a node told only "1024 pieces" cannot work out where piece 5 starts —
+// which is exactly what a node serving from a partial has to do, because a
+// partial's length is a high-water mark and not the blob's size (ADR-0043).
+func TestTwoBlobsWithTheSamePieceCountHaveDifferentGeometries(t *testing.T) {
+	small, err := For(256 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	large, err := For(8 << 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if small.Count() != large.Count() {
+		t.Skipf("the fixture no longer produces equal counts (%d and %d); pick two sizes that do",
+			small.Count(), large.Count())
+	}
+	if small.PieceLength == large.PieceLength {
+		t.Fatal("two blobs with the same piece count also have the same piece length, " +
+			"so this test asserts nothing")
+	}
+
+	// Both encode the same bitset width; only the size tells them apart.
+	a := NewAvailability(small.Count())
+	a.Add(5)
+	gotSmall, _, err := Decode(Encode(small, a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotLarge, _, err := Decode(Encode(large, a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotSmall.PieceLength == gotLarge.PieceLength {
+		t.Error("both decoded to the same piece length, so a serving node would read " +
+			"the wrong bytes for one of them")
+	}
+	offSmall, _, _ := gotSmall.Range(5)
+	offLarge, _, _ := gotLarge.Range(5)
+	if offSmall == offLarge {
+		t.Error("piece 5 starts at the same offset in both, which cannot be right")
 	}
 }
 
@@ -132,13 +188,21 @@ func TestAvailabilityRoundTripsThroughItsEncoding(t *testing.T) {
 // overlap would mean requesting pieces whose boundaries are not shared — which
 // produces bytes that fail verification for a reason nobody could diagnose.
 func TestABitsetOfTheWrongWidthIsRefused(t *testing.T) {
-	a := NewAvailability(20)
+	g, err := For(20 * MinPieceLength)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := NewAvailability(g.Count())
 	a.Add(3)
-	encoded := a.Encode()
+	encoded := Encode(g, a)
 
-	for _, n := range []int{8, 40, 21} {
-		if _, err := DecodeAvailability(encoded, n); err == nil {
-			t.Errorf("a %d-piece bitset was accepted as %d pieces", 20, n)
+	// Keep the bitset, claim a different blob size. The width check is now
+	// EXACT rather than approximate, because the count is derived from the
+	// size rather than claimed beside it.
+	_, hex, _ := strings.Cut(encoded, ":")
+	for _, size := range []int64{MinPieceLength, 400 * MinPieceLength} {
+		if _, _, err := Decode(fmt.Sprintf("%d:%s", size, hex)); err == nil {
+			t.Errorf("a 20-piece bitset was accepted for a %d byte blob", size)
 		} else if !strings.Contains(err.Error(), "geometry") {
 			t.Errorf("the refusal does not say the peers disagree about geometry: %v", err)
 		}
@@ -151,16 +215,27 @@ func TestABitsetOfTheWrongWidthIsRefused(t *testing.T) {
 // multiple of eight, and a peer that sets them — by accident or otherwise —
 // must not be believed to hold pieces that do not exist.
 func TestBitsPastTheLastPieceDoNotInflateTheCount(t *testing.T) {
-	// 12 pieces is two bytes with four spare bits in the second.
-	full := "12:ffff"
-	got, err := DecodeAvailability(full, 12)
+	// A size whose piece count is not a multiple of eight, so the last byte of
+	// the bitset has spare bits.
+	g, err := For(12 * MinPieceLength)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Count() != 12 {
-		t.Errorf("count = %d, want 12 — the four spare bits were counted", got.Count())
+	if g.Count()%8 == 0 {
+		t.Skipf("the fixture's count (%d) is a multiple of 8, so there are no spare bits",
+			g.Count())
 	}
-	if got.Has(12) || got.Has(15) {
+	width := (g.Count() + 7) / 8
+	full := fmt.Sprintf("%d:%s", g.Size, strings.Repeat("ff", width))
+
+	_, got, err := Decode(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Count() != g.Count() {
+		t.Errorf("count = %d, want %d — the spare bits were counted", got.Count(), g.Count())
+	}
+	if got.Has(g.Count()) {
 		t.Error("a piece past the end reports as held")
 	}
 }

@@ -58,11 +58,60 @@ check if anyone proposes making `Publish` cheaper.
 ADR-0035 answered this for chunks — *"nothing it has not re-verified"* — and
 this does not carve an exception into it.
 
-A bitset found on disk is **a hint about where to resume**. Every piece it
-claims is either re-verified against its piece hash before being counted, or
-simply refetched. Both are cheap; neither trusts the file. The stance is
+A bitset found on disk is **a hint about where to resume**. Nothing else. A
+piece it claims is refetched or it is not, and either way the blob is re-hashed
+whole before it becomes a blob, so the file is never trusted. The stance is
 unchanged, and the bitset merely means a resumed transfer starts from a better
 guess than zero.
+
+### There are no piece hashes, and adding them would not help
+
+An earlier draft of this ADR said a claimed piece could be *"re-verified against
+its piece hash"*. **There is no such hash, and this corrects that sentence
+before anything was built on it.**
+
+Nothing publishes one. The manifest lists CHUNKS — content-defined, variable
+length, an optimisation and not identity (ADR-0034) — and ADR-0041 already
+settled that a piece is not a chunk. So the obvious repair is to have the
+serving peer publish a hash per piece beside its availability.
+
+That repair is worth nothing, and the reason is worth writing down because it
+will be proposed again.
+
+A piece hash published by the peer serving the piece is **a claim from the same
+party as the bytes**. A peer that wants to send garbage sends garbage and the
+hash of that garbage, and the piece verifies perfectly. It defends only against
+the bytes changing in transit — which is what the mTLS session already does
+(ADR-0012), for free, for every route. Per-piece hashes would buy a second,
+weaker copy of a guarantee already held, at the cost of a route that promises
+never to read content in order to answer.
+
+The only statement about these bytes that does not come from the peer serving
+them is **the blob's own BLAKE3 digest**, which is where the request started and
+which is invariant 1. So whole-object verification at `Publish` is not the
+fallback for the absence of piece verification. It is the only verification that
+could ever have existed here, and a piece transfer is exactly as safe as a
+whole-blob pull because it ends in the same check.
+
+### What happens when the whole-object check fails
+
+The transfer discards the staging file and starts again — the same thing a
+failed whole-blob pull does, and no new machinery.
+
+What it does NOT do is work out WHICH peer sent the bad piece. It cannot: every
+peer that contributed to the failed attempt is equally a suspect, and telling
+them apart means refetching disputed ranges from a different peer and comparing,
+which is a dispute-resolution protocol and is **out of scope for M6 and named
+here as absent** rather than left to be discovered. A session records which peer
+served which piece so that a retry can prefer peers that did not contribute to a
+failed attempt, which is a heuristic and is not attribution.
+
+The practical consequence is honest and should be stated: one broken peer in a
+swarm can make a blob fail repeatedly, and the operator sees repeated failure
+without a name. That is a worse experience than a single-source pull, where the
+one source is obviously the culprit. It is the price of the shape, it is bounded
+by the retry preferring uncontaminated peers, and closing it properly is a
+follow-up rather than a thing to improvise inside M6.
 
 ### Where it lives
 
