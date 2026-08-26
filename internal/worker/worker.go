@@ -275,7 +275,23 @@ func (w *Worker) Run(ctx context.Context) error {
 	// CLAIM about this disk and the transfer re-verifies every chunk it
 	// supplies against the manifest, so a stale entry costs a refetch rather
 	// than a wrong file.
-	transferPuller := lazyPuller(w.cfg.DataDir, peerID, store, cat, w.log)
+	// The membership the puller re-reads mid-session, so a peer revoked while a
+	// piece transfer is running stops being asked within one generation rather
+	// than at the next session (#290, ADR-0012). It reads the SAME rows
+	// pullPieces surveys from — Peers() already excludes this node — so the two
+	// cannot disagree about who a member is.
+	members := func(ctx context.Context) (map[string]bool, error) {
+		peers, err := cat.Peers(ctx)
+		if err != nil {
+			return nil, err
+		}
+		roster := make(map[string]bool, len(peers))
+		for _, p := range peers {
+			roster[p.PeerID] = true
+		}
+		return roster, nil
+	}
+	transferPuller := lazyPuller(w.cfg.DataDir, peerID, store, cat, members, w.log)
 	registry.Register(replication.ReplicateBlobJobType, ReplicateBlobRegistration(TransferDeps{
 		Catalog: cat,
 		Store:   store,

@@ -160,6 +160,22 @@ type Options struct {
 	// degraded one — a node with no index answers "I hold none of these
 	// chunks", which is the same answer an empty index gives.
 	Index Index
+	// Members reports this node's CURRENT membership — the peers it still
+	// authenticates — as a set of peer ids (ADR-0012, ADR-0038). A piece
+	// session re-reads it as it runs, at most once per generation, so a
+	// revocation mid-transfer takes effect within one generation rather than at
+	// the next session (#290). Revocation is the deletion of a membership
+	// record (ADR-0012), so a peer that was surveyed into the session and is no
+	// longer in this set is dropped: it stops being asked, and its outstanding
+	// work is redistributed to the sources that remain (#280).
+	//
+	// Optional. A Puller without one never drops a source for revocation
+	// mid-session — the pre-#290 behaviour — which is safe rather than a hole:
+	// the reverse direction, this node refusing to SERVE a revoked peer, is
+	// mTLS's job at the connection (ADR-0012) and is unaffected by this. The
+	// worker always supplies it; a test that does not is asserting something
+	// that revocation cannot change.
+	Members func(ctx context.Context) (map[string]bool, error)
 	// Logger records what was pulled from where. Optional.
 	Logger *slog.Logger
 }
@@ -169,6 +185,7 @@ type Puller struct {
 	material *mtls.Material
 	store    Store
 	index    Index
+	members  func(ctx context.Context) (map[string]bool, error)
 	log      *slog.Logger
 }
 
@@ -188,7 +205,8 @@ func New(opts Options) (*Puller, error) {
 	}
 	return &Puller{
 		material: opts.Material, store: opts.Store, index: opts.Index,
-		log: log.With("component", "transfer"),
+		members: opts.Members,
+		log:     log.With("component", "transfer"),
 	}, nil
 }
 
