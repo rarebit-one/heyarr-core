@@ -2,6 +2,7 @@ package crdt
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -76,6 +77,28 @@ type addRecord struct {
 	order  OrderKey
 }
 
+// lesserRecord is the lattice join for two records that landed under the SAME
+// tag. Legitimately a tag is globally unique (a UUIDv7), so a tag maps to one
+// record and this is never reached; but a Change is unsigned and an
+// authorised-but-malicious device could ship two adds under one tag. A blind
+// overwrite would then be last-write-by-arrival-order and two replicas would
+// DIVERGE (found by a synthetic test). Choosing the deterministically-lesser
+// record by (itemID, counter, tag) makes the OR-Set a true semilattice again:
+// every replica keeps the same record for the tag no matter what order the
+// colliding adds arrive in.
+func lesserRecord(a, b addRecord) addRecord {
+	if a.itemID != b.itemID {
+		if a.itemID < b.itemID {
+			return a
+		}
+		return b
+	}
+	if a.order.Less(b.order) {
+		return a
+	}
+	return b
+}
+
 // State is the materialised playlist: the full OR-Set plus the Lamport clock.
 //
 // It is fully described by three grow-only pieces — the map of every add-tag
@@ -110,7 +133,15 @@ func newTag() Tag {
 // after them. The change is applied to this state before it is returned, so the
 // caller's own view already reflects it.
 func (s *State) Add(itemID string) Change {
-	s.counter++
+	// Saturating increment. A malicious change can poison the Lamport clock up to
+	// math.MaxUint64 (applyOne takes the max), and a bare ++ there wraps to 0 —
+	// which would make every future local insert sort BEFORE everything (found by
+	// a synthetic test). Saturating instead keeps the clock monotonic: once
+	// poisoned, new inserts share MaxUint64 and settle deterministically by their
+	// tie-break tag, sorting last rather than jumping to the front.
+	if s.counter < math.MaxUint64 {
+		s.counter++
+	}
 	c := Change{
 		Op:     OpAdd,
 		ItemID: itemID,
@@ -170,7 +201,11 @@ func (s *State) Apply(changes ...Change) {
 func (s *State) applyOne(c Change) {
 	switch c.Op {
 	case OpAdd:
-		s.adds[c.Tag] = addRecord{itemID: c.ItemID, order: c.Order}
+		rec := addRecord{itemID: c.ItemID, order: c.Order}
+		if existing, ok := s.adds[c.Tag]; ok {
+			rec = lesserRecord(existing, rec)
+		}
+		s.adds[c.Tag] = rec
 		if c.Order.Counter > s.counter {
 			s.counter = c.Order.Counter
 		}
@@ -193,6 +228,9 @@ func Merge(states ...*State) *State {
 			continue
 		}
 		for tag, rec := range s.adds {
+			if existing, ok := out.adds[tag]; ok {
+				rec = lesserRecord(existing, rec)
+			}
 			out.adds[tag] = rec
 		}
 		for tag := range s.tombstones {
