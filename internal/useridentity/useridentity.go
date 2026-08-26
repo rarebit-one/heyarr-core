@@ -195,17 +195,19 @@ func (s *Store) Generate(name string, force bool) (Identity, error) {
 // Get returns the user identity on this machine, or ErrNoIdentity.
 func (s *Store) Get() (Identity, error) { return s.load() }
 
-// SignCert issues a user-signed enrolment cert binding devicePub to this
-// identity, valid for lifetime from the store's clock (a zero lifetime uses
-// enrolment.CertLifetime). The private key is loaded here and nowhere else, and
-// is never returned: signing is the only thing this store does with the seed,
-// exactly as ADR-0032 keeps the seed out of every rendered value.
-func (s *Store) SignCert(devicePub ed25519.PublicKey, lifetime time.Duration) (string, error) {
+// SignCert issues a user-signed enrolment cert binding devicePub AND deviceEnc
+// (the device's "x25519:<hex>" encryption key, §41) to this identity, valid for
+// lifetime from the store's clock (a zero lifetime uses enrolment.CertLifetime).
+// deviceEnc may be empty for a device that has no encryption key (a v1-shaped
+// binding). The private key is loaded here and nowhere else, and is never
+// returned: signing is the only thing this store does with the seed, exactly as
+// ADR-0032 keeps the seed out of every rendered value.
+func (s *Store) SignCert(devicePub ed25519.PublicKey, deviceEnc string, lifetime time.Duration) (string, error) {
 	priv, err := s.signingKey()
 	if err != nil {
 		return "", err
 	}
-	return enrolment.SignCert(priv, devicePub, s.clock.Now().UTC(), lifetime)
+	return enrolment.SignCert(priv, devicePub, deviceEnc, s.clock.Now().UTC(), lifetime)
 }
 
 // signingKey loads the seed and reconstitutes the private key. It is unexported
