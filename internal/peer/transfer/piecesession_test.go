@@ -287,6 +287,166 @@ func TestASourceThatDiesMidTransferIsRedistributed(t *testing.T) {
 	assertPublished(t, d, blob, content)
 }
 
+// membershipSet is a mutable roster a test can revoke a peer from mid-transfer.
+//
+// It stands in for the catalog rows Options.Members reads: removing a peer is
+// the deletion of its membership record (ADR-0012), and snapshot is what the
+// running session re-reads. It is mutex-guarded because a source's request
+// handler revokes on one goroutine while the destination's session reads on
+// another, and `-race` is right to want that serialised.
+type membershipSet struct {
+	mu      sync.Mutex
+	members map[string]bool
+}
+
+func newMembershipSet(peerIDs ...string) *membershipSet {
+	m := &membershipSet{members: map[string]bool{}}
+	for _, id := range peerIDs {
+		m.members[id] = true
+	}
+	return m
+}
+
+func (m *membershipSet) revoke(peerID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.members, peerID)
+}
+
+func (m *membershipSet) snapshot(context.Context) (map[string]bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]bool, len(m.members))
+	for id, ok := range m.members {
+		out[id] = ok
+	}
+	return out, nil
+}
+
+// 🔴 A peer revoked mid-transfer stops being fetched from, and its outstanding
+// work is picked up by the sources that remain (#290, §26, ADR-0012, ADR-0038).
+//
+// The session reads membership ONCE at survey time and then re-surveys those
+// candidates as it runs — but until #290 it never re-read WHO they are, so a
+// peer whose membership record was deleted mid-transfer went on being asked for
+// pieces, and went on answering, until the transfer ended. #265 asked for this
+// and it was not delivered: a revoked peer that keeps receiving until the end is
+// a revocation that did not happen.
+func TestARevokedPeerStopsBeingFetchedFromMidTransfer(t *testing.T) {
+	content := pieceFixture(t, 8)
+	blob := digestOfBytes(t, content)
+
+	revoked := newNode(t, "peer-revoked", "revoked")
+	steady := newNode(t, "peer-steady", "steady")
+	dst := newNode(t, "peer-destination", "destination")
+	root := newTrustRoot(revoked.member(), steady.member(), dst.member())
+
+	// The revoked peer holds the whole blob and is the only source at the
+	// survey; the steady peer starts empty and gains everything the instant the
+	// revocation happens. So the pieces the revoked peer had not yet served are
+	// there for the steady peer to pick up — the redistribution #280 built for a
+	// source that dies mid-transfer, reached through the revocation path rather
+	// than a second one.
+	revokedHolder := newPieceHolder(t, content, 0, 1, 2, 3, 4, 5, 6, 7)
+	steadyHolder := newPieceHolder(t, content)
+
+	roster := newMembershipSet(revoked.peerID, steady.peerID)
+	revokedHolder.onServed = func(int) {
+		if len(revokedHolder.servedPieces()) == 2 {
+			roster.revoke(revoked.peerID)
+			steadyHolder.gain(0, 1, 2, 3, 4, 5, 6, 7)
+		}
+	}
+
+	rs := startPieceSource(t, revoked, root, revokedHolder)
+	ss := startPieceSource(t, steady, root, steadyHolder)
+
+	store, err := cas.OpenFS(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	puller, err := transfer.New(transfer.Options{
+		Material: dst.material, Store: store, Members: roster.snapshot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &destination{puller: puller, store: store}
+
+	out, err := d.puller.PullPieces(t.Context(), blob, int64(len(content)),
+		[]transfer.Candidate{
+			transfer.Peer(sourceFor(revoked, rs.addr)),
+			transfer.Peer(sourceFor(steady, ss.addr)),
+		})
+	if err != nil {
+		t.Fatalf("a revocation mid-transfer failed the session: %v", err)
+	}
+	// It served two before it was revoked and not one more. The membership
+	// check is at the TOP of the fetch loop, so the piece in flight when the
+	// record vanished lands and is kept, and the NEXT is never asked for. A
+	// revoked peer that keeps receiving until the transfer ends is the exact bug
+	// #290 names, and this is the number that fails when the check is removed.
+	if got := out.FromPeer[revoked.peerID]; got != 2 {
+		t.Errorf("the revoked peer served %d pieces, want the 2 it served before revocation — "+
+			"a revoked peer must stop being fetched from within one generation: %v",
+			got, out.FromPeer)
+	}
+	// The other six are the revoked peer's outstanding work, picked up rather
+	// than abandoned.
+	if got := out.FromPeer[steady.peerID]; got != 6 {
+		t.Errorf("the steady peer served %d pieces, want the other 6 — the revoked peer's "+
+			"outstanding work must be redistributed, not abandoned: %v", got, out.FromPeer)
+	}
+	// It contributed, so it is not named unreachable: a peer that was revoked
+	// after serving two pieces and a peer that was never there are different
+	// facts (ADR-0041).
+	if slices.Contains(out.Unreachable, revoked.peerID) {
+		t.Errorf("a peer that served two pieces before revocation is named unreachable: %v",
+			out.Unreachable)
+	}
+	// Bytes already received from the revoked peer are KEPT: the whole object is
+	// verified at Publish against a digest that did not come from it (invariant
+	// 1, ADR-0043), so its two pieces are part of the blob rather than discarded.
+	assertPublished(t, d, blob, content)
+}
+
+// An unenrolled peer that dials is refused at the piece handshake, not with a
+// status code (#290's reverse direction, ADR-0012).
+//
+// This node must stop FETCHING from a revoked peer — the test above — and it
+// must also stop SERVING to one, which is mTLS's job at the connection rather
+// than the session's. The session for a stranger never comes into being:
+// asserting it here is the cheap insurance #290 asks for that nothing opened a
+// second door.
+func TestAnUnenrolledPeerIsRefusedAtThePieceHandshake(t *testing.T) {
+	content := pieceFixture(t, 4)
+	blob := digestOfBytes(t, content)
+
+	src := newNode(t, "peer-source", "source")
+	dst := newNode(t, "peer-destination", "destination")
+	// The source's listener does not know the destination: an unenrolled dialer.
+	sourceRoot := newTrustRoot(src.member())
+
+	holder := newPieceHolder(t, content, 0, 1, 2, 3)
+	s := startPieceSource(t, src, sourceRoot, holder)
+
+	d := newDestination(t, dst)
+	out, err := d.puller.PullPieces(t.Context(), blob, int64(len(content)),
+		[]transfer.Candidate{transfer.Peer(sourceFor(src, s.addr))})
+	if !errors.Is(err, transfer.ErrNoPieceSource) {
+		t.Fatalf("a stranger read pieces from a source that does not pin it: err=%v", err)
+	}
+	// It could not even be surveyed, so it is named unreachable rather than
+	// credited — the handshake failed before any piece route answered.
+	if !slices.Contains(out.Unreachable, src.peerID) {
+		t.Errorf("the refused source is not named unreachable: %v", out.Unreachable)
+	}
+	if served := holder.servedPieces(); len(served) != 0 {
+		t.Errorf("a source that refused the handshake still served %d pieces: %v",
+			len(served), served)
+	}
+}
+
 // 🔴 A peer that acquires pieces DURING the session becomes a source of them.
 //
 // This is the difference between a swarm and two independent pulls, and it is

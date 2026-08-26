@@ -387,7 +387,8 @@ func pullFrom(
 // the error would mean this worker never transferred anything again until it
 // was restarted.
 func lazyPuller(
-	dataDir, peerID string, store cas.Store, index transfer.Index, log *slog.Logger,
+	dataDir, peerID string, store cas.Store, index transfer.Index,
+	members func(ctx context.Context) (map[string]bool, error), log *slog.Logger,
 ) func() (*transfer.Puller, error) {
 	var (
 		mu     sync.Mutex
@@ -409,7 +410,7 @@ func lazyPuller(
 			return nil, fmt.Errorf("worker: %w", err)
 		}
 		built, err := transfer.New(transfer.Options{
-			Material: material, Store: store, Index: index, Logger: log,
+			Material: material, Store: store, Index: index, Members: members, Logger: log,
 		})
 		if err != nil {
 			return nil, err

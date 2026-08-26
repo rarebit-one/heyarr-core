@@ -103,6 +103,16 @@ type pieceSession struct {
 	failed map[string]int
 	// silent is a source that could not say what it holds at all.
 	silent map[string]struct{}
+
+	// roster is this node's membership the last time it was re-read, and
+	// rosterAt the generation that read reflects. A session re-reads membership
+	// at most once per generation — the re-survey's cadence, not a query per
+	// piece — so a peer revoked mid-transfer is dropped within one generation
+	// rather than at the next session (#290). nil means "not read yet, or the
+	// Puller has no membership source", in which case no source is dropped for
+	// revocation, which is the pre-#290 behaviour.
+	roster   map[string]bool
+	rosterAt uint64
 }
 
 func newPieceSession(g pieces.Geometry, have pieces.Availability, partial cas.Partial) *pieceSession {
@@ -221,6 +231,31 @@ func (s *pieceSession) refused(index int, sc *sourceClaim) {
 	s.cond.Broadcast()
 }
 
+// revoke drops a source whose membership was withdrawn mid-session (#290).
+//
+// Revocation is the deletion of a membership record (ADR-0012), and ADR-0038's
+// rule is that a member going away is an ordinary day: the session must stop
+// asking it for pieces and keep going with whoever remains. So its claim is
+// cleared — nothing counts it as a holder any longer, and rarity stops
+// weighting pieces by a source that will never serve them — and its worker
+// returns, which is where its outstanding work is picked up. Every piece it had
+// not yet served is still MISSING, and every source that also claims those
+// pieces will now be assigned them: the same redistribution #280 built for a
+// source that dies mid-transfer, reached here without a second path.
+//
+// Bytes it already served are KEPT. The whole object is verified at Publish
+// against a digest that did not come from this peer (invariant 1, ADR-0043), so
+// a revoked contributor cannot have made the blob wrong, and discarding its
+// pieces would be a cost with no benefit.
+func (s *pieceSession) revoke(sc *sourceClaim) {
+	sc.claim = pieces.NewAvailability(s.g.Count())
+	// Advance the generation and wake every parked worker: a source leaving the
+	// pool changes what the others should do next, exactly as a piece landing
+	// does, and an idle worker holding out for this source must re-evaluate.
+	s.generation++
+	s.cond.Broadcast()
+}
+
 // abort ends the session because of a fault on THIS node.
 //
 // A source that will not serve a piece is somebody else's problem and is
@@ -304,6 +339,63 @@ func (p *Puller) driveSources(
 	wg.Wait()
 }
 
+// stillMember reports whether a source is still in this node's membership.
+//
+// # Why per generation and not per piece
+//
+// Re-reading membership for every piece would be a query per request. Re-reading
+// it once per generation — the cadence the re-survey already runs at — bounds a
+// revoked source's exposure at one generation while costing one membership read
+// per generation shared across every worker, which is nearly free next to the
+// network round trips a generation already involves (#290). A worker driving a
+// busy source calls this each iteration, but the read behind it happens once per
+// generation; the rest are cache hits.
+//
+// # Fail safe, not open
+//
+// A Puller with no membership source (Options.Members unset) does not enforce
+// revocation mid-session and every source stays — the pre-#290 behaviour, and
+// safe because refusing to SERVE a revoked peer is mTLS's job at the connection
+// (ADR-0012), not this session's. A membership read that ERRORS keeps the last
+// roster this session held rather than dropping every source at once: a
+// transient catalog error is not evidence that the whole fabric was revoked, and
+// treating it as such would abandon a transfer that ADR-0038 says should make
+// progress with whoever it has. Until the FIRST read succeeds the roster is nil
+// and no source is dropped.
+func (p *Puller) stillMember(ctx context.Context, s *pieceSession, peerID string) bool {
+	if p.members == nil {
+		return true
+	}
+
+	s.mu.Lock()
+	gen := s.generation
+	roster, fresh := s.roster, s.rosterAt == gen && s.roster != nil
+	s.mu.Unlock()
+
+	if !fresh {
+		read, err := p.members(ctx)
+		if err != nil {
+			p.log.Debug("could not re-read membership mid-session; keeping the current roster",
+				"peer_id", peerID, "error", err)
+		} else {
+			s.mu.Lock()
+			// Record against the generation observed at read time. A later
+			// generation simply re-reads next time round, which is correct: the
+			// roster is a hint that costs a refetch of who is present, never a
+			// wrong byte.
+			s.roster, s.rosterAt = read, gen
+			roster = read
+			s.mu.Unlock()
+		}
+	}
+
+	// nil roster: not read yet, or every read has failed. Do not drop.
+	if roster == nil {
+		return true
+	}
+	return roster[peerID]
+}
+
 // driveOneSource fetches from one source until it has nothing left to give.
 //
 // # Why a source goroutine rather than a piece goroutine
@@ -323,6 +415,23 @@ func (p *Puller) driveOneSource(
 	var surveyedAt uint64
 
 	for {
+		// Re-read membership before fetching the next piece, at most once per
+		// generation (#290). A source revoked since the survey is dropped here
+		// rather than at the next session: it stops being asked, and returning
+		// hands its outstanding work to the sources that remain. This is the
+		// one check that must run even while a source is BUSY — a peer that
+		// claims the whole blob never enters the idle re-survey branch below,
+		// so a membership check gated on that branch would never fire for the
+		// case the issue is about.
+		if !p.stillMember(ctx, s, sc.src.PeerID) {
+			p.log.Info("a source was revoked mid-transfer, so it stops receiving pieces",
+				"blob", blob.String(), "peer_id", sc.src.PeerID)
+			s.mu.Lock()
+			s.revoke(sc)
+			s.mu.Unlock()
+			return
+		}
+
 		s.mu.Lock()
 		var index int
 		var ok bool
