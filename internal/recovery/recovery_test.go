@@ -2,7 +2,9 @@ package recovery
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"go/parser"
 	"go/token"
@@ -124,6 +126,52 @@ func TestValidity(t *testing.T) {
 	}
 }
 
+// TestEncryptionSeedIsAUsableX25519Key: the seed DeriveUserEncryptionSeed
+// produces is a valid X25519 scalar that yields a working key-agreement key —
+// the primitive M9's wrap/unwrap is built on (ADR-0049). Deterministic like the
+// signing seed: the same secret reconstructs the same recovery encryption key, so
+// the copies peers hold wrapped for it unwrap after a total device loss.
+func TestEncryptionSeedIsAUsableX25519Key(t *testing.T) {
+	s := mustGenerate(t)
+	seed := DeriveUserEncryptionSeed(s)
+	if len(seed) != 32 {
+		t.Fatalf("encryption seed is %d bytes, want 32 (an X25519 scalar)", len(seed))
+	}
+
+	priv, err := ecdh.X25519().NewPrivateKey(seed)
+	if err != nil {
+		t.Fatalf("the derived seed is not a usable X25519 private key: %v", err)
+	}
+
+	// Deterministic: the same secret reconstructs the same public key, so the
+	// recovery target the wraps name is stable across machines and time.
+	priv2, err := ecdh.X25519().NewPrivateKey(DeriveUserEncryptionSeed(s))
+	if err != nil {
+		t.Fatalf("second derivation is not a usable key: %v", err)
+	}
+	if !bytes.Equal(priv.PublicKey().Bytes(), priv2.PublicKey().Bytes()) {
+		t.Fatal("the recovery encryption key is not deterministic across derivations")
+	}
+
+	// It agrees with a peer key — i.e. it can actually do ECDH, which is what a
+	// space-key unwrap needs.
+	other, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating a counterpart key: %v", err)
+	}
+	shared1, err := priv.ECDH(other.PublicKey())
+	if err != nil {
+		t.Fatalf("ECDH from the recovery key: %v", err)
+	}
+	shared2, err := other.ECDH(priv.PublicKey())
+	if err != nil {
+		t.Fatalf("ECDH to the recovery key: %v", err)
+	}
+	if !bytes.Equal(shared1, shared2) {
+		t.Fatal("the recovery encryption key did not agree with a counterpart: not a working X25519 key")
+	}
+}
+
 // TestFailsLoudOnChecksum is the load-bearing one: a well-formed secret with a
 // single character changed to another alphabet character — the shape of a
 // transcription slip — is REJECTED by the checksum as [ErrCorruptSecret], not
@@ -207,15 +255,26 @@ func TestDomainSeparation(t *testing.T) {
 	s := mustGenerate(t)
 
 	userSeed := deriveSeed(s.entropy, UserIdentityLabel)
-	encRoot := deriveSeed(s.entropy, "heyarr/recovery/v1/encryption-root")
+	encRoot := deriveSeed(s.entropy, UserEncryptionLabel)
 	if bytes.Equal(userSeed, encRoot) {
-		t.Fatal("two distinct labels derived the same key: domain separation is broken")
+		t.Fatal("the signing and encryption labels derived the same key: domain separation is broken")
 	}
 
 	// DeriveUserSeed must use exactly UserIdentityLabel — not some other label
 	// or a bare expand — so the public entry point and the label agree.
 	if !bytes.Equal(DeriveUserSeed(s), userSeed) {
 		t.Fatal("DeriveUserSeed does not derive under UserIdentityLabel")
+	}
+
+	// DeriveUserEncryptionSeed must use exactly UserEncryptionLabel — the M9
+	// encryption root — and so must be independent of the signing seed. This is
+	// the sabotage target: deriving the encryption seed under the signing label
+	// (or any shared one) makes these two equal and fires here.
+	if !bytes.Equal(DeriveUserEncryptionSeed(s), encRoot) {
+		t.Fatal("DeriveUserEncryptionSeed does not derive under UserEncryptionLabel")
+	}
+	if bytes.Equal(DeriveUserSeed(s), DeriveUserEncryptionSeed(s)) {
+		t.Fatal("the signing seed and the encryption seed coincide: §79 domain separation is broken")
 	}
 
 	// A one-character change to the label yields an independent key too — the

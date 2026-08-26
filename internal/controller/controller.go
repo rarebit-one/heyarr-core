@@ -24,6 +24,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/indexers"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
+	"github.com/rarebit-one/heyarr-core/internal/pairrelay"
 	"github.com/rarebit-one/heyarr-core/internal/peer/health"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
@@ -549,8 +550,15 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
+	// The device-pairing relay (§40, ADR-0022, ADR-0038). A dumb, ephemeral,
+	// in-memory store-and-forward that two devices exchange through so an old
+	// one can authorise a new one — mounted publicly, like the renderer route,
+	// because a device being paired has no credential and the relay grants no
+	// authority (see internal/pairrelay).
+	relayHandler := pairrelay.NewHandler(pairrelay.HandlerOptions{Logger: c.log})
+
 	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, mcpServer.Mount},
-		[]httpapi.MountFunc{renderHandler.Mount}, nil
+		[]httpapi.MountFunc{renderHandler.Mount, relayHandler.Mount}, nil
 }
 
 // liveness converts a possibly-absent tracker into the interface the HTTP

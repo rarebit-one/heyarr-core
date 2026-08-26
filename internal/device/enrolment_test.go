@@ -52,7 +52,7 @@ func TestEnrolTakesTheLabelOff(t *testing.T) {
 	}
 
 	userPub, userPriv := newUser(t)
-	cert, err := enrolment.SignCert(userPriv, dev.PublicKey, storeClock, 0)
+	cert, err := enrolment.SignCert(userPriv, dev.PublicKey, "", storeClock, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestEnrolRefusesACertForAnotherDevice(t *testing.T) {
 	}
 	otherPub, _ := newUser(t) // a different Ed25519 key, standing in for another device
 	_, userPriv := newUser(t)
-	cert, err := enrolment.SignCert(userPriv, otherPub, storeClock, 0)
+	cert, err := enrolment.SignCert(userPriv, otherPub, "", storeClock, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestEnrolRefusesAnExpiredCert(t *testing.T) {
 	}
 	_, userPriv := newUser(t)
 	// Issued long ago with a short life, so it is expired at the store's clock.
-	cert, err := enrolment.SignCert(userPriv, dev.PublicKey, storeClock.Add(-100*24*time.Hour), time.Hour)
+	cert, err := enrolment.SignCert(userPriv, dev.PublicKey, "", storeClock.Add(-100*24*time.Hour), time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestCredentialAuthenticates(t *testing.T) {
 		t.Fatal(err)
 	}
 	userPub, userPriv := newUser(t)
-	cert, err := enrolment.SignCert(userPriv, dev.PublicKey, storeClock, 0)
+	cert, err := enrolment.SignCert(userPriv, dev.PublicKey, "", storeClock, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestUnenrolPutsTheLabelBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, userPriv := newUser(t)
-	cert, err := enrolment.SignCert(userPriv, dev.PublicKey, storeClock, 0)
+	cert, err := enrolment.SignCert(userPriv, dev.PublicKey, "", storeClock, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

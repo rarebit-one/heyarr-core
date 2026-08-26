@@ -37,7 +37,14 @@ import (
 // Version prefixes every cert payload, so a change to what is signed is a cert
 // that fails to parse rather than one verified against a different reading of
 // its fields.
-const Version = 1
+//
+// Version 2 (Milestone 9, ADR-0049) adds the device's X25519 ENCRYPTION key to
+// the binding: a cert now says "device D — signing key S, encryption key E — is
+// user U's", signed once. A v1 cert (signing key only) still verifies and still
+// authenticates; it simply binds no encryption key, so the device it names is
+// not yet a wrap target. The bump is what makes a change to the encryption
+// binding a cert that fails to parse rather than one read under the old shape.
+const Version = 2
 
 // CertLifetime is the default life of an enrolment cert: 90 days, renewable.
 //
@@ -144,28 +151,38 @@ func GenerateUserIdentity() (UserIdentity, ed25519.PrivateKey, error) {
 // authority a verifier checks the signature against; Device is who the cert
 // authenticates. It carries no capability — that is a grant's job.
 type Cert struct {
-	User      string
-	Device    string
+	User   string
+	Device string
+	// DeviceEnc is the device's X25519 ENCRYPTION public key ("x25519:<hex>"),
+	// bound by a v2 cert (ADR-0049). Empty for a v1 cert: such a device
+	// authenticates but binds no encryption key, so nothing is wrapped for it
+	// until it re-enrols. It is the key a space key is sealed to (§41).
+	DeviceEnc string
 	IssuedAt  time.Time
 	ExpiresAt time.Time
 }
 
 type payload struct {
-	V        int    `json:"v"`
-	User     string `json:"usr"`
-	Device   string `json:"dev"`
-	IssuedAt int64  `json:"iat"`
-	Expires  int64  `json:"exp"`
+	V         int    `json:"v"`
+	User      string `json:"usr"`
+	Device    string `json:"dev"`
+	DeviceEnc string `json:"denc,omitempty"`
+	IssuedAt  int64  `json:"iat"`
+	Expires   int64  `json:"exp"`
 }
 
-// SignCert issues a cert binding devicePub to the signer, valid for lifetime
-// from issuedAt. A zero lifetime uses CertLifetime.
+// SignCert issues a cert binding devicePub AND deviceEnc (the device's
+// "x25519:<hex>" encryption key, §41) to the signer, valid for lifetime from
+// issuedAt. A zero lifetime uses CertLifetime. deviceEnc is treated as an opaque
+// rendered key — the wrapper that seals to it validates its format, not this
+// package — and may be empty, which mints a cert that authenticates the device
+// but binds no encryption key (the v1-equivalent shape under a v2 version).
 //
 // It refuses to mint a cert that could not be honoured — no device, a lifetime
 // that does not advance — for the same reason grant.Sign does: a cert that
 // exists should be one that could have authenticated, so its refusal at
 // verification cannot be mistaken for an attack.
-func SignCert(userPriv ed25519.PrivateKey, devicePub ed25519.PublicKey, issuedAt time.Time, lifetime time.Duration) (string, error) {
+func SignCert(userPriv ed25519.PrivateKey, devicePub ed25519.PublicKey, deviceEnc string, issuedAt time.Time, lifetime time.Duration) (string, error) {
 	if len(userPriv) != ed25519.PrivateKeySize {
 		return "", fmt.Errorf("enrolment: a user signing key is required")
 	}
@@ -180,11 +197,12 @@ func SignCert(userPriv ed25519.PrivateKey, devicePub ed25519.PublicKey, issuedAt
 	}
 	user := identity.FormatPublicKey(userPriv.Public().(ed25519.PublicKey))
 	body, err := json.Marshal(payload{
-		V:        Version,
-		User:     user,
-		Device:   identity.FormatPublicKey(devicePub),
-		IssuedAt: issuedAt.Unix(),
-		Expires:  issuedAt.Add(lifetime).Unix(),
+		V:         Version,
+		User:      user,
+		Device:    identity.FormatPublicKey(devicePub),
+		DeviceEnc: deviceEnc,
+		IssuedAt:  issuedAt.Unix(),
+		Expires:   issuedAt.Add(lifetime).Unix(),
 	})
 	if err != nil {
 		return "", fmt.Errorf("enrolment: encoding: %w", err)
@@ -230,7 +248,11 @@ func VerifyCert(token string, pinnedUser ed25519.PublicKey, now time.Time) (Cert
 	if err := json.Unmarshal(body, &p); err != nil {
 		return Cert{}, ErrMalformed
 	}
-	if p.V != Version || p.User == "" || p.Device == "" {
+	// Accept any minted version from v1 up to the current: a v1 cert (M8, no
+	// encryption key) still authenticates, so an already-enrolled device keeps
+	// working after this bump. An unknown FUTURE version is refused rather than
+	// read under an older shape.
+	if p.V < 1 || p.V > Version || p.User == "" || p.Device == "" {
 		return Cert{}, ErrMalformed
 	}
 
@@ -248,6 +270,7 @@ func VerifyCert(token string, pinnedUser ed25519.PublicKey, now time.Time) (Cert
 	c := Cert{
 		User:      p.User,
 		Device:    p.Device,
+		DeviceEnc: p.DeviceEnc,
 		IssuedAt:  time.Unix(p.IssuedAt, 0).UTC(),
 		ExpiresAt: time.Unix(p.Expires, 0).UTC(),
 	}

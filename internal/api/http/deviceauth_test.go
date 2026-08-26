@@ -106,7 +106,7 @@ func (h *deviceAuthHarness) enrolledDevice(t *testing.T) (deviceKey string, cred
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert, err := enrolment.SignCert(userPriv, devicePub, time.Now().UTC(), 0)
+	cert, err := enrolment.SignCert(userPriv, devicePub, "", time.Now().UTC(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestDeviceCredentialForUnenrolledUserIsRefusedOverHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert, err := enrolment.SignCert(userPriv, devicePub, time.Now().UTC(), 0)
+	cert, err := enrolment.SignCert(userPriv, devicePub, "", time.Now().UTC(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

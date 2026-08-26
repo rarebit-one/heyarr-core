@@ -81,6 +81,10 @@ One logical library, multiple complete sovereign peers.`,
 		// user identity that vouches for device keys (§40, ADR-0048) — in that
 		// person's own config directory, taking no --config (ADR-0032).
 		newIdentityCommand(opts),
+		// Pairing sits beside identity: an old device authorises a new one over
+		// a dumb relay, exchanging through the server rather than trusting it
+		// (§40, ADR-0022, ADR-0038). Client-side, taking no --config.
+		newPairCommand(opts),
 		// Renderer discovery sits here for the same reason: it is multicast
 		// on the local segment and needs neither a controller nor a
 		// credential. An operator standing in the living room can run it
