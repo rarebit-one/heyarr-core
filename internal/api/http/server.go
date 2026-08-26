@@ -56,6 +56,13 @@ type Options struct {
 	// Verifier authenticates bearer tokens. Required unless authentication is
 	// disabled.
 	Verifier *auth.Verifier
+	// DeviceVerifier authenticates a device credential presented under the
+	// "Device" Authorization scheme (§40, ADR-0048). Nil disables that scheme,
+	// which is the correct state where no user identity has been enrolled — a
+	// device credential then simply falls through to a 401 like any other
+	// unrecognised credential. It is never a substitute for Verifier: the two
+	// schemes coexist, bearer for services and device for users.
+	DeviceVerifier DeviceVerifier
 	// Events reports the log's head sequence for GET /api/v1/system. Required:
 	// the alternative is a server that reports head 0 because it was wired
 	// without a log, which is indistinguishable from an empty log and would
@@ -126,6 +133,7 @@ type Server struct {
 	log      *slog.Logger
 	db       *sqlite.DB
 	verifier *auth.Verifier
+	deviceV  DeviceVerifier
 	events   EventHead
 	media    []ToolInfo
 	build    buildinfo.Info
@@ -196,6 +204,7 @@ func New(opts Options) (*Server, error) {
 		log:      log.With("component", "http"),
 		db:       opts.DB,
 		verifier: opts.Verifier,
+		deviceV:  opts.DeviceVerifier,
 		events:   opts.Events,
 		// Normalised so the JSON shape is stable: a nil slice marshals as
 		// null, and a client parsing `media` should not have to handle both

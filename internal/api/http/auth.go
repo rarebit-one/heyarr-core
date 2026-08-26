@@ -5,10 +5,73 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
+	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 )
+
+// DeviceVerifier authenticates a device credential (ADR-0048): a user-signed
+// enrolment cert plus a proof the caller holds the device key, resolved offline
+// against a pinned user key. It is an interface so the server can be wired
+// without the identity store in tests, mirroring PeerMembership.
+type DeviceVerifier interface {
+	Verify(ctx context.Context, credential string, now time.Time) (deviceauth.Authenticated, error)
+}
+
+// deviceCredential extracts the value presented under the "Device" scheme, the
+// device counterpart to bearerToken. The header is the only place it is
+// accepted, for the same reason a bearer token is: a query parameter writes the
+// credential into every proxy log and Referer between here and the client.
+func deviceCredential(r *http.Request) (string, bool) {
+	h := r.Header.Get("Authorization")
+	if h == "" {
+		return "", false
+	}
+	const prefix = deviceauth.Scheme + " "
+	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
+		return "", false
+	}
+	v := strings.TrimSpace(h[len(prefix):])
+	return v, v != ""
+}
+
+// deviceFailureReason is the closed metric/log label set for a rejected device
+// credential — never the error text, so cardinality stays bounded, and every
+// distinct refusal is tellable apart in the log without being disclosed to the
+// caller.
+func deviceFailureReason(err error) string {
+	switch {
+	case errors.Is(err, deviceauth.ErrMalformedCredential), errors.Is(err, enrolment.ErrMalformed):
+		return "device_malformed"
+	case errors.Is(err, deviceauth.ErrUnknownUser):
+		return "device_unknown_user"
+	case errors.Is(err, deviceauth.ErrUnknownDevice):
+		return "device_unknown_device"
+	case errors.Is(err, deviceauth.ErrDeviceRevoked):
+		return "device_revoked"
+	case errors.Is(err, deviceauth.ErrCertMismatch):
+		return "device_cert_mismatch"
+	case errors.Is(err, enrolment.ErrExpired):
+		return "device_cert_expired"
+	case errors.Is(err, enrolment.ErrNotYetValid):
+		return "device_cert_not_yet_valid"
+	case errors.Is(err, enrolment.ErrBadSignature), errors.Is(err, enrolment.ErrUnknownUser):
+		return "device_cert_bad_signature"
+	case errors.Is(err, enrolment.ErrPossessionExpired):
+		return "device_possession_expired"
+	case errors.Is(err, enrolment.ErrPossessionNotYet):
+		return "device_possession_not_yet_valid"
+	case errors.Is(err, enrolment.ErrPossessionSignature):
+		return "device_possession_bad_signature"
+	case errors.Is(err, enrolment.ErrPossessionCert):
+		return "device_possession_wrong_cert"
+	default:
+		return "device_error"
+	}
+}
 
 // IdentityFrom returns the authenticated caller, if the request passed through
 // the authentication middleware.
@@ -38,32 +101,69 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			return
 		}
 
-		raw, ok := bearerToken(r)
-		if !ok {
-			// No credential at all is not a failure worth a metric spike or a
-			// log line of its own: it is what every first request from a
-			// browser looks like. RequireScope turns it into a 401.
-			next.ServeHTTP(w, r)
+		if raw, ok := bearerToken(r); ok {
+			id, err := s.verifier.Verify(r.Context(), raw)
+			if err != nil {
+				s.rejectCredential(w, r, authFailureReason(err))
+				return
+			}
+			next.ServeHTTP(w, s.withIdentity(r, id))
 			return
 		}
 
-		id, err := s.verifier.Verify(r.Context(), raw)
-		if err != nil {
-			s.metrics.authFails.WithLabelValues(authFailureReason(err)).Inc()
-			// The reason is logged; the client is told only that the
-			// credential was rejected. "No such token" and "wrong secret" are
-			// different facts, and handing an unauthorised caller the
-			// difference is free reconnaissance.
-			s.log.Warn("rejected a credential",
-				"request_id", RequestIDFrom(r.Context()),
-				"reason", authFailureReason(err),
-				"path", r.URL.Path)
-			Fail(w, r, problem.Unauthorized("the presented credential was rejected"))
+		// A device presents its identity under its own scheme (ADR-0048). It is
+		// tried only when a verifier is wired: with no user enrolled there is
+		// nothing to authenticate against, and a device credential falls through
+		// to the 401 any unrecognised credential gets.
+		if cred, ok := deviceCredential(r); ok && s.deviceV != nil {
+			id, err := s.authenticateDevice(r.Context(), cred)
+			if err != nil {
+				s.rejectCredential(w, r, deviceFailureReason(err))
+				return
+			}
+			next.ServeHTTP(w, s.withIdentity(r, id))
 			return
 		}
 
-		next.ServeHTTP(w, s.withIdentity(r, id))
+		// No credential at all, or a scheme this server does not handle, is not
+		// a failure worth a metric spike or a log line of its own: it is what
+		// every first request from a browser looks like. RequireScope turns it
+		// into a 401.
+		next.ServeHTTP(w, r)
 	})
+}
+
+// rejectCredential logs the real reason and tells the client only that the
+// credential was rejected. Two different facts — "no such user" and "bad
+// signature" — look identical to the caller, because handing an unauthorised
+// one the difference is free reconnaissance. Same stance as the bearer path.
+func (s *Server) rejectCredential(w http.ResponseWriter, r *http.Request, reason string) {
+	s.metrics.authFails.WithLabelValues(reason).Inc()
+	s.log.Warn("rejected a credential",
+		"request_id", RequestIDFrom(r.Context()),
+		"reason", reason,
+		"path", r.URL.Path)
+	Fail(w, r, problem.Unauthorized("the presented credential was rejected"))
+}
+
+// authenticateDevice resolves a device credential into the identity of the user
+// it acts as. No token is issued: the identity is the device key and a
+// user-signed cert, verified offline against a pinned key. The synthetic Token
+// carries only the baseline read scope an authenticated user device holds;
+// anything finer is a capability grant (internal/grant, #304), not a scope.
+func (s *Server) authenticateDevice(ctx context.Context, credential string) (auth.Identity, error) {
+	a, err := s.deviceV.Verify(ctx, credential, s.now())
+	if err != nil {
+		return auth.Identity{}, err
+	}
+	return auth.Identity{
+		Principal: auth.Principal{ID: a.PrincipalID, Kind: "user", Name: a.PrincipalName},
+		Token: auth.Token{
+			Name:        "device:" + a.DeviceKey,
+			PrincipalID: a.PrincipalID,
+			Scopes:      []auth.Scope{auth.ScopeRead},
+		},
+	}, nil
 }
 
 // withIdentity puts the identity where handlers read it, and also into the slot

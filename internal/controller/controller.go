@@ -18,6 +18,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/downloads"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/indexers"
@@ -383,6 +384,18 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: opening peer membership: %w", err)
 	}
+	// The Milestone 8 device-identity store (§40, ADR-0048): pinned user
+	// identities and the device keys they vouch for. One store, shared by the
+	// enrolment paths that write it and the authentication middleware that reads
+	// it, so a device revoked through the API stops authenticating on the very
+	// next request — the same "one trust root, read every request" shape as peer
+	// membership above.
+	deviceIdentities, err := deviceauth.New(deviceauth.Options{
+		Writer: db.Writer(), Reader: db.Reader(), Events: eventLog,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: opening device identity store: %w", err)
+	}
 	mounts, publicMounts, err := c.mounts(ctx, db, store, blobStore, eventLog, members, selfPeerID)
 	if err != nil {
 		return nil, nil, err
@@ -401,6 +414,7 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 		Logger:             c.log,
 		DB:                 db,
 		Verifier:           verifier,
+		DeviceVerifier:     deviceIdentities,
 		Events:             eventLog,
 		Media:              mediaInfo(toolchain),
 		Build:              buildinfo.Get(),

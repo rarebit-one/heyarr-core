@@ -251,6 +251,30 @@ func VerifyCert(token string, pinnedUser ed25519.PublicKey, now time.Time) (Cert
 	return c, nil
 }
 
+// CertUser reads the user a cert CLAIMS, without verifying it. It is the hint a
+// caller uses to look up which pinned key to check the cert against — the exact
+// role the issuer field plays in a grant. Reading it proves nothing: VerifyCert
+// against the looked-up key is what makes it true, and a cert naming a user the
+// caller has not pinned is refused there.
+func CertUser(token string) (string, error) {
+	bodyEnc, _, ok := strings.Cut(token, ".")
+	if !ok {
+		return "", ErrMalformed
+	}
+	body, err := decode(bodyEnc)
+	if err != nil {
+		return "", ErrMalformed
+	}
+	var p payload
+	if err := json.Unmarshal(body, &p); err != nil {
+		return "", ErrMalformed
+	}
+	if p.V != Version || p.User == "" {
+		return "", ErrMalformed
+	}
+	return p.User, nil
+}
+
 func encode(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 func decode(s string) ([]byte, error) { return base64.RawURLEncoding.DecodeString(s) }
