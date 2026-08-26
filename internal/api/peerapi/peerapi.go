@@ -203,6 +203,10 @@ type Options struct {
 	// route is still mounted and answers 503, for the same reason the others
 	// are.
 	ControlBackup ControlBackupSink
+	// Leases serves this peer's signed access leases for a sibling to cache
+	// ahead of an outage (§54, ADR-0048, #285). Nil on a node that issues no
+	// leases — the route is still mounted and answers 503, like the others.
+	Leases LeaseSource
 }
 
 // Server is the peer listener.
@@ -244,6 +248,9 @@ type Server struct {
 	// controlBackup holds control-plane backups pushed to this peer (§50,
 	// M7-03). Nil on a node that stores none.
 	controlBackup ControlBackupSink
+	// leases serves this peer's access leases for a sibling to cache (§54,
+	// #285). Nil on a node that issues none.
+	leases LeaseSource
 
 	http     *http.Server
 	bound    string
@@ -299,6 +306,7 @@ func New(opts Options) (*Server, error) {
 		pieces:        opts.Pieces,
 		webSeedOnly:   opts.WebSeedOnly,
 		controlBackup: opts.ControlBackup,
+		leases:        opts.Leases,
 	}
 	s.handler = s.routes()
 	s.http = &http.Server{
@@ -402,6 +410,11 @@ func (s *Server) routes() http.Handler {
 		// (§51, M7-04). The generation is in the path; the source is the
 		// certificate's, so a peer downloads only its own control plane.
 		r.Get("/control-backup/{generation}", s.handleControlBackupDownload)
+		// A sibling caching this peer's access leases ahead of an outage (§54,
+		// ADR-0048, #285). GET only: leases are read from the issuer, never
+		// pushed to it, and each token carries its own authority so serving
+		// them to a member discloses nothing (see handleLeases).
+		r.Get("/leases", s.handleLeases)
 	})
 
 	// There is no admin route on this router and there is not going to be one.

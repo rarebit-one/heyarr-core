@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/heyarr-core/internal/leases"
 	"github.com/rarebit-one/heyarr-core/internal/peer/backupsync"
 	peercatalog "github.com/rarebit-one/heyarr-core/internal/peer/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/peer/endpoint"
@@ -293,6 +295,23 @@ func (c *Controller) newPeerSurface(
 	// held inert — the store opens nothing it receives as a control plane.
 	controlBackups := backupsync.NewStore(backupsync.ReceivedPathFor(c.cfg.DataDir), c.cfg.Backup.PeerRetain)
 
+	// This peer's access leases, served for siblings to cache ahead of an outage
+	// (§54, ADR-0048, #285). Signed with this node's identity, so a sibling
+	// verifies them against the key it already pinned (ADR-0012) with no reach
+	// back — the cross-site property. The same store's trust widens to enrolled
+	// peers (Siblings), so it also honours a sibling's leases here.
+	leaseSigner, err := identity.Signer(c.cfg.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("controller: loading the identity key for access leases: %w", err)
+	}
+	leaseStore, err := leases.New(leases.Options{
+		Writer: db.Writer(), Reader: db.Reader(), Events: peerEvents,
+		Signer: leaseSigner, Siblings: siblingKeys{store: members},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("controller: opening the access-lease store: %w", err)
+	}
+
 	srv, err := peerapi.New(peerapi.Options{
 		Addr:          c.cfg.Peer.Listen,
 		Material:      material,
@@ -325,12 +344,37 @@ func (c *Controller) newPeerSurface(
 		// blobs are served exactly as before, and the piece routes say so
 		// permanently rather than looking broken.
 		WebSeedOnly: !c.cfg.Peer.ServesPieces(),
-		Logger:      c.log,
+		// This peer's access leases, for a sibling to cache (§54, #285). The
+		// route serves signed tokens; a sibling verifies each against the
+		// issuer's pinned key, not against this peer that served them.
+		Leases: leaseStore,
+		Logger: c.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}
 	return srv, nil
+}
+
+// siblingKeys adapts the peer membership store to leases.SiblingKeys: the pinned
+// public keys of enrolled peers, which a lease may be verified against
+// (ADR-0012). Self is excluded — a peer's own key is the lease signer, which the
+// lease store adds itself; a malformed key is skipped rather than trusted.
+type siblingKeys struct{ store *membership.Store }
+
+func (s siblingKeys) PeerKeys(ctx context.Context) (map[string]ed25519.PublicKey, error) {
+	members, err := s.store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	keys := make(map[string]ed25519.PublicKey, len(members))
+	for _, m := range members {
+		if m.IsSelf || len(m.PublicKey) != ed25519.PublicKeySize {
+			continue
+		}
+		keys[identity.FormatPublicKey(m.PublicKey)] = m.PublicKey
+	}
+	return keys, nil
 }
 
 // peerMaterial builds this node's certificate material.

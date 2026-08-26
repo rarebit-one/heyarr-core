@@ -2764,6 +2764,40 @@ paths:
           description: No such backup is held for the calling peer.
         "503":
           description: This node does not hold control-plane backups for peers.
+  /peer/v1/leases:
+    get:
+      tags: [peer]
+      operationId: listAccessLeases
+      summary: This peer's access leases, for a sibling to cache (§54, ADR-0048).
+      description: |
+        Returns the signed access-lease tokens this peer has issued and that are
+        still live — unrevoked, and unexpired on this peer's clock — so a sibling
+        can cache them and, once this peer is unreachable, still answer a read on
+        whose authority (§53, §54, #285).
+
+        **The tokens carry their own authority.** Each is a capability grant
+        (ADR-0048) signed by this peer's identity key; a fetching peer verifies
+        it against the key it already pinned for this one (ADR-0012), never
+        against the connection that served it — a lease served by A stays A's
+        signed statement however it travelled (the ADR-0043 caution). Serving
+        them to a member therefore discloses nothing a member could not be
+        granted, which is why the route needs no authorisation beyond membership.
+      security:
+        - peerCertificate: []
+      responses:
+        "200":
+          description: The signed tokens of this peer's active leases (possibly empty).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [leases]
+                properties:
+                  leases:
+                    type: array
+                    items: { type: string }
+        "503":
+          description: This node issues no access leases to cache.
   /peer/v1/blobs/{hash}/content:
     parameters:
       - name: hash
