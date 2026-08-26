@@ -798,6 +798,93 @@ paths:
           description: The blob exists.
         '404':
           description: See `/render/{capability}`.
+  /pair/sessions/{session}/slots/{slot}:
+    parameters:
+      - name: session
+        in: path
+        required: true
+        description: >-
+          A rendezvous label the two devices agree on out of band (the old
+          device generates it and shows it, in a QR or a short code, to the
+          new one). It is NOT a secret — the pairing's security is the short
+          authentication string the humans compare, not the obscurity of this
+          id — and a URL-safe token of at most 128 characters.
+        schema:
+          type: string
+      - name: slot
+        in: path
+        required: true
+        description: >-
+          One of the fixed handshake slots: `initiator_commit`,
+          `responder_commit`, `initiator_reveal`, `responder_reveal`, `cert`
+          or `abort`. Any other name is a 400.
+        schema:
+          type: string
+          enum: [initiator_commit, responder_commit, initiator_reveal, responder_reveal, cert, abort]
+    put:
+      tags: [pairing]
+      operationId: putPairSlot
+      security: []
+      summary: Post one value into a pairing handshake slot (§40, ADR-0022, ADR-0038).
+      description: >-
+        The device-pairing relay, and — with `render` — one of Heyarr's two
+        unauthenticated surfaces. It exists because enrolment is PAIRING, not
+        sharing (ADR-0022): a new device that is not yet enrolled has no
+        credential to present, and the old device authorises it directly, with
+        the server acting only as a dumb store-and-forward.
+
+
+        Every value that crosses this relay is PUBLIC — a commitment (a hash),
+        a public key, a session salt, or a signed enrolment cert — so a relay
+        that read every byte would still learn nothing it could pair with
+        (ADR-0038). The relay never joins two sessions, never inspects a value
+        and vouches for nothing; the man-in-the-middle defence is the
+        commit-before-reveal ordering and the short authentication string the
+        two humans compare, neither of which this endpoint can see or affect.
+
+
+        Slots are write-once: a second PUT of the same bytes is idempotent, a
+        different value to a written slot is a 409. Sessions are in-memory,
+        bounded and short-lived (a ten-minute TTL, a per-slot size cap, a cap
+        on live sessions), which is the whole security surface of serving this
+        without a credential — it grants no authority, so the only abuse is
+        memory, and the bounds close it.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        '204':
+          description: The value was stored (or an identical value already was).
+        '400':
+          description: An unknown slot name or a malformed session id.
+        '409':
+          description: The slot already holds a different value; slots are write-once.
+        '413':
+          description: The value is larger than the per-slot cap.
+        '429':
+          description: Too many live pairing sessions; try again once some expire.
+    get:
+      tags: [pairing]
+      operationId: getPairSlot
+      security: []
+      summary: Read one value from a pairing handshake slot.
+      description: >-
+        The other half of the relay: the peer polls the slot it is waiting on
+        until it appears. Returns the opaque bytes another device posted, or a
+        404 while the slot is still empty (which is the ordinary "keep
+        waiting") or once the session has expired.
+      responses:
+        '200':
+          description: The stored value.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '400':
+          description: A malformed session id.
+        '404':
+          description: Nothing is stored at this slot yet, or the session has expired.
   /api/v1/blobs/{hash}/content:
     parameters:
       - name: hash

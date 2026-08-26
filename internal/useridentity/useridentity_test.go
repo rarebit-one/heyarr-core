@@ -12,8 +12,78 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
+	"github.com/rarebit-one/heyarr-core/internal/recovery"
 	"github.com/rarebit-one/heyarr-core/internal/useridentity"
 )
+
+// TestRecoverReconstructsTheSameIdentity is the load-bearing recovery property
+// (ADR-0022, §79): the secret Generate displays reconstructs the SAME identity —
+// same public key — on a machine with no surviving identity, so a recovered user
+// re-issues device certs that verify against the already-pinned key and nothing
+// is re-pinned. It is asserted on the public key, not on an exit code: a recover
+// that produced a DIFFERENT key would pass any "it worked" check and fail every
+// pinned peer.
+func TestRecoverReconstructsTheSameIdentity(t *testing.T) {
+	original := newStore(t)
+	created, secret, err := original.Generate("me", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secret.String() == "" {
+		t.Fatal("Generate did not return a displayable recovery secret")
+	}
+
+	// A DIFFERENT machine — a fresh store with no identity — recovers from the
+	// secret alone. No server, no surviving key.
+	fresh := newStore(t)
+	recovered, err := fresh.RecoverFromSecret(secret, "recovered", false)
+	if err != nil {
+		t.Fatalf("RecoverFromSecret: %v", err)
+	}
+	if recovered.UserID() != created.UserID() {
+		t.Fatalf("recovery produced %q, the original was %q — a different identity",
+			recovered.UserID(), created.UserID())
+	}
+
+	// And it is really usable: a cert the recovered store signs verifies against
+	// the ORIGINAL public key, so peers that pinned the original honour it.
+	devPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := fresh.SignCert(devPub, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := enrolment.VerifyCert(cert, created.PublicKey, clockAt); err != nil {
+		t.Fatalf("a recovered identity's cert did not verify against the original key: %v", err)
+	}
+}
+
+// TestRecoverFromWrongSecretFailsLoud: a mistyped secret is rejected at parse
+// time and never reconstructs a garbage key (ADR-0022's SLIP-39-over-Shamir
+// concern, applied to the base secret). The wiring surfaces the loud failure
+// rather than deriving a plausible-but-wrong identity.
+func TestRecoverFromWrongSecretFailsLoud(t *testing.T) {
+	// A corrupted secret: a valid one with one character changed.
+	good, err := recovery.GenerateSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := []byte(good.String())
+	// Flip a character in the data part (after the "heyarr1" separator) to a
+	// different, valid charset symbol so the checksum — not the charset — is
+	// what rejects it.
+	i := len(enc) - 3
+	if enc[i] == 'q' {
+		enc[i] = 'p'
+	} else {
+		enc[i] = 'q'
+	}
+	if _, err := recovery.ParseSecret(string(enc)); !errors.Is(err, recovery.ErrCorruptSecret) {
+		t.Fatalf("a corrupted secret should be ErrCorruptSecret, got %v", err)
+	}
+}
 
 type fixedClock struct{ t time.Time }
 
@@ -36,7 +106,7 @@ func newStore(t *testing.T) *useridentity.Store {
 // "it worked" check.
 func TestGenerateRoundTrips(t *testing.T) {
 	store := newStore(t)
-	created, err := store.Generate("me", false)
+	created, _, err := store.Generate("me", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +126,7 @@ func TestGenerateRoundTrips(t *testing.T) {
 // more than its owner is refused on read.
 func TestPrivateKeyIsOwnerOnly(t *testing.T) {
 	store := newStore(t)
-	if _, err := store.Generate("me", false); err != nil {
+	if _, _, err := store.Generate("me", false); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(store.KeyPath())
@@ -78,15 +148,15 @@ func TestPrivateKeyIsOwnerOnly(t *testing.T) {
 // because replacing the identity invalidates every device it enrolled.
 func TestGenerateRefusesToClobber(t *testing.T) {
 	store := newStore(t)
-	if _, err := store.Generate("me", false); err != nil {
+	if _, _, err := store.Generate("me", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Generate("me", false); !errors.Is(err, useridentity.ErrIdentityExists) {
+	if _, _, err := store.Generate("me", false); !errors.Is(err, useridentity.ErrIdentityExists) {
 		t.Fatalf("second generate: err = %v, want ErrIdentityExists", err)
 	}
 	// --force replaces it: the key changes.
 	first, _ := store.Get()
-	forced, err := store.Generate("me", true)
+	forced, _, err := store.Generate("me", true)
 	if err != nil {
 		t.Fatalf("forced generate: %v", err)
 	}
@@ -100,7 +170,7 @@ func TestGenerateRefusesToClobber(t *testing.T) {
 // which is the whole contract SignCert exists for.
 func TestSignCertProducesAVerifiableBinding(t *testing.T) {
 	store := newStore(t)
-	id, err := store.Generate("me", false)
+	id, _, err := store.Generate("me", false)
 	if err != nil {
 		t.Fatal(err)
 	}
