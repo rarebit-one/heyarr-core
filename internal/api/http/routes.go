@@ -24,6 +24,15 @@ const APIPrefix = "/api/v1"
 // mitigation it names for query strings has to apply here too.
 const RenderPrefix = "/render"
 
+// RelayPrefix is where the device-pairing relay is mounted (§40, ADR-0022,
+// ADR-0038). Like RenderPrefix it is deliberately OUTSIDE APIPrefix and its
+// authenticated group: a device being paired is not yet enrolled and has no
+// credential to present, and the relay is a DUMB store-and-forward of PUBLIC
+// values (two commitments, two public keys, a salt, a signed cert). It learns no
+// key material and vouches for nothing, which is why serving it without a
+// credential adds no authority to anyone — it is a rendezvous, not a resource.
+const RelayPrefix = "/pair"
+
 // routes builds the whole handler.
 //
 // The middleware order is the design, not an accident:

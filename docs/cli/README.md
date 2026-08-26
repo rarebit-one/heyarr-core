@@ -37,6 +37,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr identity credential`](heyarr_identity_credential.md) | Print an Authorization credential for this enrolled device |
 | [`heyarr identity enrol`](heyarr_identity_enrol.md) | Sign an enrolment cert binding this machine's device to your identity |
 | [`heyarr identity generate`](heyarr_identity_generate.md) | Generate your user identity keypair |
+| [`heyarr identity recover`](heyarr_identity_recover.md) | Reconstruct your user identity from its recovery secret, offline (ADR-0022) |
 | [`heyarr identity show`](heyarr_identity_show.md) | Show your user identity |
 | [`heyarr identity`](heyarr_identity.md) | Manage your user identity and enrol this machine's device (§40, ADR-0048) |
 | [`heyarr jobs list`](heyarr_jobs_list.md) | List jobs |
@@ -46,6 +47,10 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr library add`](heyarr_library_add.md) | Create a library, optionally with roots |
 | [`heyarr library list`](heyarr_library_list.md) | List libraries and their roots |
 | [`heyarr library`](heyarr_library.md) | Manage libraries and their roots |
+| [`heyarr pair authorise`](heyarr_pair_authorise.md) | Old device: authorise a new device and sign its enrolment cert |
+| [`heyarr pair enrol`](heyarr_pair_enrol.md) | New device: pair with an old device and store the enrolment cert |
+| [`heyarr pair sas`](heyarr_pair_sas.md) | Compute the short authentication string for two keys and a salt |
+| [`heyarr pair`](heyarr_pair.md) | Authorise a new device from an already-enrolled one (§40, ADR-0022) |
 | [`heyarr peer`](heyarr_peer.md) | Serve and replicate bytes |
 | [`heyarr peers add`](heyarr_peers_add.md) | Enrol another peer by its public key |
 | [`heyarr peers attach`](heyarr_peers_attach.md) | Attach to a controller over mTLS and report what it records this node as |

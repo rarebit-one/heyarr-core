@@ -189,3 +189,33 @@ state proven
 ref   §51, §82, ADR-0044, ADR-0046, #284
 why   The milestone's sentence. A peer that loses its disk is rebuilt from a peer that trusted it, comes back with the SAME identity, and no other peer is re-enrolled or reconfigured. The evidence is the third clause, and it is asserted FROM THE OTHER PEER: the rebuilt node dials the survivor over mTLS and the survivor names it as the same peer, from the key it pinned before the loss — nobody reconfigured. A restore that completes but leaves the fabric no longer trusting the node passes every assertion about the restore itself and is exactly the failure this catches; "the restore applied" is deliberately NOT the evidence.
 evidence the peer that trusts it recognised the rebuilt node as the same peer, with no re-enrolment
+
+claim pairing-enrols-a-new-device
+state proven
+ref   §40, ADR-0022, ADR-0038, #305
+why   An OLD device authorises a NEW one over a dumb relay: the two exchange public keys and a salt, derive the same short code, and on a human match the old device signs an enrolment cert the new device stores — the server trusted with nothing (ADR-0038). Before this the pairing primitives (the SAS, the commitment) and the relay each existed with no path from the binary that ran an actual handshake: internal/pairflow and internal/pairrelay were built and unit-tested, and no command reached them. This is that caller, end to end, over the real HTTP relay.
+evidence the new device is enrolled by the old one over the relay — paired, no server trusted
+
+claim pairing-substitution-changes-the-code
+state proven
+ref   §40, ADR-0022, #305
+why   The short authentication string binds BOTH keys, so a man-in-the-middle that substitutes the responder key derives a DIFFERENT code, which the two humans catch. This is the whole security argument for a 7-digit code, and it is the property commit-before-reveal (internal/pairing/commitment.go) makes true against a rushing attacker; measured here by deriving the code over an honest key and over a substitute and asserting they differ.
+evidence a substituted responder key yields a DIFFERENT short code — the MITM the humans catch
+
+claim recovery-reconstructs-the-identity-offline
+state proven
+ref   §79, ADR-0022, #306
+why   Key loss is total data loss (ADR-0021), so a recovery secret is minted once at generate and the identity is derived deterministically from it — the secret ALONE reconstructs the same identity, same public key peers pinned, on a machine with no surviving device and no server. Before this the recovery primitive (internal/recovery.DeriveUserSeed) derived a seed that nothing generated FROM or recovered TO; useridentity.Generate drew a raw-random key that no secret could regenerate. Now generate derives from the secret and `identity recover` rebuilds from it offline. A recover that produced a different key would pass any "it worked" check and fail every pinned peer, so the evidence is the public key, not an exit code.
+evidence recovery reconstructs the SAME identity from the secret alone, offline — the public key peers already pinned
+
+claim recovered-device-authenticates
+state proven
+ref   §79, §40, ADR-0022, ADR-0048, #306
+why   Recovery is not done when the key is back: the recovered identity must be usable. The recovered machine enrols its own device under the reconstructed identity offline, and that device then authenticates as the same user over the real middleware chain, presenting only its cert — no token issued. This closes the arc from "the secret reconstructs a key" to "a person is back in", and rides an auth-enabled node because the Device scheme is only reached where a credential is required.
+evidence the recovered device authenticates as the same user — offline recovery, then a live request, no token issued
+
+claim wrong-recovery-secret-fails-loud
+state proven
+ref   §79, ADR-0022, #306
+why   A mistyped secret must be refused by its checksum rather than reconstructing a different, plausible-but-wrong identity in silence (ADR-0022's SLIP-39 concern, applied to the base secret). recovery.ParseSecret rejects a corrupted bech32m string, and the `identity recover` wiring surfaces that loudly instead of deriving garbage. Asserted by flipping one character in the checksum tail and confirming the command refuses before any key is derived.
+evidence a corrupted recovery secret is refused loudly, never turned into a wrong identity

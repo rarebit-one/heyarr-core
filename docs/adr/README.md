@@ -29,7 +29,7 @@ An ADR that merely describes the code is not worth having.
 | [0019](0019-mcp-lands-in-milestone-3-not-milestone-1.md) | MCP lands in Milestone 3, not Milestone 1 | Accepted |
 | [0020](0020-managed-linked-and-vault-assets.md) | Managed, linked and vault assets | Accepted |
 | [0021](0021-encrypted-vault-content.md) | Encrypted vault content | Proposed |
-| [0022](0022-device-enrolment-and-key-recovery.md) | Device enrolment and key recovery | Proposed |
+| [0022](0022-device-enrolment-and-key-recovery.md) | Device enrolment and key recovery | Accepted |
 | [0023](0023-the-external-media-toolchain-is-optional.md) | The external media toolchain is optional, capability-routed and pinned | Accepted |
 | [0024](0024-one-consumption-session-model.md) | One ConsumptionSession model for watching, listening and reading | Accepted |
 | [0025](0025-external-services-are-optional-and-capability-routed.md) | External network services are optional and capability-routed | Accepted |
