@@ -128,6 +128,14 @@ const (
 	TypeDeviceEnrolled = "identity.device.enrolled"
 	TypeDeviceRevoked  = "identity.device.revoked"
 
+	// lease.* is the Milestone 8 cross-site access lease (§54, ADR-0048, #285):
+	// a signed, expiring grant this peer issued, and its revocation. These are
+	// durable STATE transitions (invariant 7). Honouring and refusing a lease
+	// are per-request and belong in metrics, not the log — this package's
+	// standing rule is against one event per item.
+	TypeLeaseIssued  = "lease.issued"
+	TypeLeaseRevoked = "lease.revoked"
+
 	// desired.* is §76's own category for wanting (M3-02).
 	//
 	// TypeDesiredSatisfied predates them: it was declared in Milestone 1 and
