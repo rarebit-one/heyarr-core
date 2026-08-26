@@ -29,8 +29,9 @@ func deviceDir(t *testing.T) string {
 }
 
 var (
-	publicKeyPattern = regexp.MustCompile(`ed25519:[0-9a-f]{64}`)
-	keyPathPattern   = regexp.MustCompile(`"key_path": "[^"]*"`)
+	publicKeyPattern     = regexp.MustCompile(`ed25519:[0-9a-f]{64}`)
+	encryptionKeyPattern = regexp.MustCompile(`x25519:[0-9a-f]{64}`)
+	keyPathPattern       = regexp.MustCompile(`"key_path": "[^"]*"`)
 )
 
 // normaliseDevice hides what legitimately differs per run, so the golden file
@@ -40,6 +41,7 @@ func normaliseDevice(s string) string {
 	s = uuidPattern.ReplaceAllString(s, "<uuid>")
 	s = timestampPattern.ReplaceAllString(s, "<timestamp>")
 	s = publicKeyPattern.ReplaceAllString(s, "ed25519:<hex>")
+	s = encryptionKeyPattern.ReplaceAllString(s, "x25519:<hex>")
 	s = keyPathPattern.ReplaceAllString(s, `"key_path": "<config-dir>/device_ed25519.key"`)
 	return s
 }
