@@ -55,6 +55,15 @@ const CertLifetime = 90 * 24 * time.Hour
 // honouring an expired one (ADR-0048).
 const SkewMargin = 5 * time.Minute
 
+// CredentialSeparator joins the two halves of a device credential — the
+// user-signed enrolment cert and a fresh possession proof — into the single
+// value presented under the Device authorization scheme. A tilde is outside
+// base64url's alphabet, so it cannot occur inside either half, and deviceauth
+// splits the presented credential on it. It lives here, with the two halves it
+// joins, so the client that assembles the value and the server that splits it
+// name one constant rather than two spellings of the same byte.
+const CredentialSeparator = "~"
+
 // Reason is the machine-readable enum a refusal reports, asserted with equality
 // because the neighbours share substrings (expired / not_yet_valid).
 type Reason string

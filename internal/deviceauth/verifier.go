@@ -17,9 +17,10 @@ import (
 const Scheme = "Device"
 
 // credentialSeparator joins the two halves of a device credential: the
-// user-signed enrolment cert, and the device's fresh possession proof. A tilde
-// is not produced by base64url, so it cannot occur inside either half.
-const credentialSeparator = "~"
+// user-signed enrolment cert, and the device's fresh possession proof. It is
+// enrolment's constant rather than a second spelling of "~", so the client that
+// assembles the credential and this verifier that splits it cannot drift apart.
+const credentialSeparator = enrolment.CredentialSeparator
 
 // ErrMalformedCredential is a device credential that is not "<cert>~<proof>".
 var ErrMalformedCredential = errors.New("deviceauth: malformed device credential")

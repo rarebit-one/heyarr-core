@@ -3551,6 +3551,174 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/v1/identities/users:
+    get:
+      tags: [operations]
+      operationId: listIdentityUsers
+      summary: Every pinned user identity. Requires `admin`.
+      description: |
+        The device-identity trust root (§40, ADR-0048): the user public keys
+        this node has pinned, against which a device's enrolment cert is
+        verified. Reading it is `admin` because the list is a map of who may
+        authenticate as a principal on this node. It carries no secret and no
+        cert — a user identity's private key is the person's and never enters
+        the server (ADR-0032).
+      responses:
+        "200":
+          description: The pinned user identities.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/IdentityUser" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [operations]
+      operationId: enrolUser
+      summary: Pin a user identity. Requires `admin`.
+      description: |
+        The out-of-band pin ADR-0032 requires: an operator reads a user's public
+        key from `heyarr identity show` and posts it here. Nothing that user
+        signs is honoured until this pin exists — "a key issued and immediately
+        honoured" must stay unspellable, so pinning is a deliberate human act,
+        not something a device can assert about itself.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [public_key]
+              additionalProperties: false
+              properties:
+                public_key:
+                  type: string
+                  description: The user's public key, `ed25519:<64 hex characters>`.
+                name: { type: string }
+      responses:
+        "201":
+          description: The pinned user identity.
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityUser" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/identities/users/{key}:
+    delete:
+      tags: [operations]
+      operationId: revokeIdentityUser
+      summary: Unpin a user identity. Requires `admin`.
+      description: |
+        Revocation is removing the pin (ADR-0012's shape, applied to a user). It
+        cascades to the user's devices: a device authenticates only as its user,
+        and a device with no user authenticates as nobody. Returns the record it
+        removed rather than 204, so an operator can see exactly which key stopped
+        being trusted.
+      parameters: [{ $ref: "#/components/parameters/publicKey" }]
+      responses:
+        "200":
+          description: The unpinned user identity.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityUser" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/identities/users/{key}/devices:
+    get:
+      tags: [operations]
+      operationId: listIdentityDevices
+      summary: A user's enrolled devices. Requires `admin`.
+      description: |
+        The device keys this user has vouched for. The enrolment cert is not on
+        the wire: authentication re-verifies the presented cert against the
+        pinned user key rather than trusting a stored copy, so the stored token
+        is an implementation detail, not a field a client reads.
+      parameters: [{ $ref: "#/components/parameters/publicKey" }]
+      responses:
+        "200":
+          description: The user's enrolled devices.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/IdentityDevice" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/identities/devices:
+    post:
+      tags: [operations]
+      operationId: enrolDevice
+      summary: Enrol a device under the user its cert names. Requires `admin`.
+      description: |
+        The cert is the whole request: it names its own user and device keys and
+        is verified against the pinned user key before anything is written, so a
+        device cannot be enrolled under a user who did not sign for it, and a
+        cert naming an unpinned user is refused.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cert]
+              additionalProperties: false
+              properties:
+                cert:
+                  type: string
+                  description: The user-signed enrolment cert, as `heyarr identity enrol` produced.
+                name: { type: string }
+      responses:
+        "201":
+          description: The enrolled device.
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityDevice" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/identities/devices/{key}:
+    delete:
+      tags: [operations]
+      operationId: revokeIdentityDevice
+      summary: Revoke a device. Requires `admin`.
+      description: |
+        A tombstone, unlike a user revoke: the row stays and `revoked_at` is set,
+        so a re-presented cert for the key is refused rather than silently
+        re-enrolled, and the revocation is auditable.
+      parameters: [{ $ref: "#/components/parameters/publicKey" }]
+      responses:
+        "200":
+          description: The revoked device.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityDevice" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/tokens:
     get:
       tags: [operations]
@@ -3686,6 +3854,15 @@ components:
       in: path
       required: true
       schema: { type: string }
+    publicKey:
+      name: key
+      in: path
+      required: true
+      schema: { type: string }
+      description: |
+        A rendered Ed25519 public key, `ed25519:<64 hex characters>` — a user
+        key on the user routes, a device key on the device route. The ":" is a
+        legal path character and no key contains a "/".
     cursor:
       name: cursor
       in: query
@@ -4595,6 +4772,46 @@ components:
         last_used_at: { type: [string, "null"], format: date-time }
         expires_at: { type: [string, "null"], format: date-time }
         revoked_at: { type: [string, "null"], format: date-time }
+
+    IdentityUser:
+      type: object
+      description: |
+        A pinned user identity (§40, ADR-0048): the trust root a device's
+        enrolment cert is verified against. Carries no secret and no cert — the
+        pin is the public key.
+      required: [id, principal_id, public_key, name, enrolled_at]
+      properties:
+        id: { type: string }
+        principal_id: { type: string }
+        public_key:
+          type: string
+          description: The pinned key, `ed25519:<64 hex characters>`.
+        name: { type: string }
+        enrolled_at: { type: string, format: date-time }
+
+    IdentityDevice:
+      type: object
+      description: |
+        A device key a user has vouched for (§40, ADR-0048). The enrolment cert
+        is deliberately absent: authentication re-verifies the presented cert
+        against the pinned user key rather than trusting a stored copy.
+      required: [id, user_id, device_key, name, enrolled_at, expires_at]
+      properties:
+        id: { type: string }
+        user_id: { type: string }
+        device_key:
+          type: string
+          description: The device's key, `ed25519:<64 hex characters>`.
+        name: { type: string }
+        enrolled_at: { type: string, format: date-time }
+        expires_at:
+          type: string
+          format: date-time
+          description: The cert's expiry, for listing and pruning.
+        revoked_at:
+          type: [string, "null"]
+          format: date-time
+          description: Set once revoked; the row is kept so a re-presented cert is refused.
 
     SystemInfo:
       type: object

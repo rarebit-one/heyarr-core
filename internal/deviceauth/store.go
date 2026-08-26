@@ -266,6 +266,33 @@ func (s *Store) LookupUser(ctx context.Context, publicKey string) (User, error) 
 	return u, nil
 }
 
+// ListUsers returns every pinned user identity, most-recently-enrolled first.
+// It is what the admin surface lists so an operator can see which users a peer
+// trusts and copy a key out to revoke — the read counterpart of EnrolUser.
+func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.reader.QueryContext(ctx,
+		`SELECT u.id, u.principal_id, u.public_key, u.enrolled_at, p.name
+		 FROM user_identities u JOIN principals p ON p.id = u.principal_id
+		 ORDER BY u.enrolled_at DESC, u.id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("deviceauth: listing users: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := []User{}
+	for rows.Next() {
+		var u User
+		var enrolled string
+		if err := rows.Scan(&u.ID, &u.PrincipalID, &u.PublicKey, &enrolled, &u.Name); err != nil {
+			return nil, fmt.Errorf("deviceauth: reading user: %w", err)
+		}
+		if u.EnrolledAt, err = time.Parse(timeFormat, enrolled); err != nil {
+			return nil, fmt.Errorf("deviceauth: user %s has an unparseable enrolled_at: %w", u.ID, err)
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 // LookupDevice returns the enrolled device for a rendered device key.
 func (s *Store) LookupDevice(ctx context.Context, deviceKey string) (Device, error) {
 	row := s.reader.QueryRowContext(ctx,

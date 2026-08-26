@@ -396,7 +396,7 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: opening device identity store: %w", err)
 	}
-	mounts, publicMounts, err := c.mounts(ctx, db, store, blobStore, eventLog, members, selfPeerID)
+	mounts, publicMounts, err := c.mounts(ctx, db, store, blobStore, eventLog, members, deviceIdentities, selfPeerID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -447,7 +447,7 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 // different trust roots, and a mix-up in either direction is severe: an API
 // route mounted publicly is the library given away, and the renderer route
 // mounted privately is a 401 for every television.
-func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Store, blobStore cas.Store, eventLog *events.Log, members *membership.Store, selfPeerID string) (apiMounts, publicMounts []httpapi.MountFunc, err error) {
+func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Store, blobStore cas.Store, eventLog *events.Log, members *membership.Store, identities *deviceauth.Store, selfPeerID string) (apiMounts, publicMounts []httpapi.MountFunc, err error) {
 	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
@@ -497,6 +497,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		Catalog:    cat,
 		Providers:  providerRegistry,
 		Membership: members,
+		Identities: identities,
 		Logger:     c.log,
 
 		RenderSecret:  secret,

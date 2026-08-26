@@ -19,6 +19,7 @@ import (
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
+	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
@@ -100,7 +101,11 @@ func newPeerSurfaceHarness(t *testing.T, presented httpapi.PresentedPeerKey) *pe
 	if err != nil {
 		t.Fatal(err)
 	}
-	mounts, publicMounts, err := c.mounts(t.Context(), db, tokens, blobStore, eventLog, members, "peer-under-test")
+	identities, err := deviceauth.New(deviceauth.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mounts, publicMounts, err := c.mounts(t.Context(), db, tokens, blobStore, eventLog, members, identities, "peer-under-test")
 	if err != nil {
 		t.Fatal(err)
 	}

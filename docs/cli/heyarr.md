@@ -29,6 +29,7 @@ One logical library, multiple complete sovereign peers.
 * [heyarr events](heyarr_events.md)	 - Follow the event log
 * [heyarr fsck](heyarr_fsck.md)	 - Check stored bytes against the catalog (§57, ADR-0018)
 * [heyarr gc](heyarr_gc.md)	 - Reclaim bytes nothing references (ADR-0018)
+* [heyarr identity](heyarr_identity.md)	 - Manage your user identity and enrol this machine's device (§40, ADR-0048)
 * [heyarr jobs](heyarr_jobs.md)	 - Inspect and retry durable work
 * [heyarr library](heyarr_library.md)	 - Manage libraries and their roots
 * [heyarr peer](heyarr_peer.md)	 - Serve and replicate bytes
