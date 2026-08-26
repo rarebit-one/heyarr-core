@@ -23,6 +23,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
@@ -177,6 +178,15 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The device-identity trust root (§40, ADR-0048). Wired here for the same
+	// reason membership is: a route only mounted in the test that needs it is a
+	// route no other test can catch breaking.
+	identities, err := deviceauth.New(deviceauth.Options{
+		Writer: db.Writer(), Reader: db.Reader(), Events: eventLog, Clock: clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	api, err := resources.New(resources.Options{
 		DB:         db,
@@ -186,6 +196,7 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		Catalog:    cat,
 		Providers:  hc.providers,
 		Membership: members,
+		Identities: identities,
 		Logger:     slog.New(slog.DiscardHandler),
 		Now:        clock.Now,
 		NewID:      ids.next,

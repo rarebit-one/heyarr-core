@@ -146,6 +146,12 @@ ref   §27, ADR-0013, ADR-0042, #266
 why   A member that does not speak piece exchange is driven as a web seed — its ordinary content route carries part of a swarm transfer and it serves no piece at all. Before #266 nothing in the tree could produce such a member: Blobs and Pieces were built from one store in one call, so transfer.WebSeed was constructed nowhere outside a Go test.
 evidence AND IT SERVED NO PIECES AT ALL
 
+claim device-authenticates-as-user
+state proven
+ref   §40, ADR-0048, ADR-0032, #303
+why   A device authenticates as its user over the real middleware chain, presenting only its key and a user-signed enrolment cert — no token is issued. This is M8's premise, and it went unreachable through M8-02: the enrolment primitives, the control-plane store and the Device scheme were each built and unit-tested with no path from the binary that enrolled a user, enrolled a device, and then authenticated as it. The negatives ride the same section — no credential is a 401, a revoked device is a 401 — so a green run cannot mean "the endpoint answered" rather than "it authenticated someone".
+evidence a device authenticates as its user with only a cert and a possession proof — no token issued
+
 claim polled-acquisition-completes
 state proven
 ref   §58, §61, §65, ADR-0025, #247

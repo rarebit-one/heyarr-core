@@ -6859,6 +6859,151 @@ YAML
   stop_full
 }
 
+# THE DEVICE AUTHENTICATES AS ITS USER (§40, ADR-0048, ADR-0032, #303).
+#
+# M8-02 built the primitives — a user identity, an enrolment cert, a control
+# plane that pins them — and left them one step short of a caller. This is that
+# step, proved through the real binary: a person self-enrols a device
+# client-side, an operator pins the user and enrols the device, and the device
+# then authenticates a request with ONLY its key and a user-signed cert. No
+# token is issued at any point (the acceptance sentence's first half): the
+# identity is the Device Authorization scheme, verified offline against a pinned
+# key. The negatives carry as much weight as the positive — no credential is a
+# 401, and a revoked device is a 401 — because that is what makes "authenticated"
+# mean something rather than "the endpoint answered".
+#
+# It is a node of its own with auth ENABLED, and that is load-bearing: the
+# device scheme is only reached when a bearer token is required, so the
+# auth-disabled nodes elsewhere in this file could never exercise it. The client
+# keys live under $WORK through the two env overrides that exist precisely so a
+# private key never lands in a server data directory (ADR-0032).
+device_auth_demo() {
+  local root="$WORK/deviceauth" data sock cfg iddir ddir
+  data="$root/data"; sock="$data/heyarr.sock"
+  cfg="$root/client"; iddir="$cfg/identity"; ddir="$cfg/device"
+  mkdir -p "$data" "$cfg"
+
+  cat > "$WORK/deviceauth.yaml" <<YAML
+data_dir: $data
+peer:
+  name: acceptance-deviceauth
+  site: test
+log:
+  level: info
+  format: json
+# Auth ON, unlike the other single-node sections: the Device scheme is only
+# tried when a credential is required, so proving it needs a node that requires
+# one. The socket is the transport, so no fixed port collides across runs.
+http:
+  addr: ""
+  unix_socket: $sock
+  auth:
+    enabled: true
+YAML
+
+  # The admin token migrates the database and pins identities. Minted before the
+  # server starts, the only order an operator can use (ADR-0011).
+  local token
+  token=$("$BIN" --config "$WORK/deviceauth.yaml" token create acceptance --scopes admin --json | jq -r .token)
+
+  "$BIN" --config "$WORK/deviceauth.yaml" controller >"$root/controller.log" 2>&1 &
+  local pid=$!
+  local waited=0
+  while (( waited < 600 )); do
+    curl -sf --unix-socket "$sock" http://heyarr/readyz >/dev/null 2>&1 && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if (( waited >= 600 )); then
+    fail "the device-auth node never became ready"; cat "$root/controller.log"
+    kill -KILL "$pid" 2>/dev/null || true; return 1
+  fi
+
+  da_api() { curl -sS --unix-socket "$sock" -H "Authorization: Bearer $token" "${@:2}" "http://heyarr$1"; }
+  # A device presents its own scheme, no bearer token. Returns just the status.
+  da_device() { # credential
+    curl -sS --unix-socket "$sock" -H "Authorization: Device $1" \
+      -o /dev/null -w '%{http_code}' "http://heyarr/api/v1/libraries"
+  }
+  local client=( env "HEYARR_IDENTITY_DIR=$iddir" "HEYARR_DEVICE_DIR=$ddir" "$BIN" )
+
+  # Client-side: a user identity and a device key, and the cert that binds them.
+  # Nothing has reached the server yet — this is all on the person's machine.
+  "${client[@]}" identity generate --name owner >/dev/null 2>&1
+  "${client[@]}" device generate --name phone >/dev/null 2>&1
+
+  # Everything below assigns each value to a plain variable BEFORE asserting on
+  # it. macOS ships bash 3.2, whose parser mangles a multiline command
+  # substitution that carries nested double quotes when it sits inside another
+  # quoted argument — it silently shifts the arguments, and an assert then reads
+  # a passing status against the wrong expectation. Assigning first sidesteps
+  # that parser entirely, and is easier to read besides.
+
+  # BEFORE enrol: the label is on, and honest.
+  local before status unproven
+  before=$("${client[@]}" device show --json)
+  status=$(jq -r .enrolment_status <<<"$before")
+  assert_eq "$status" "not_enrolled" "a fresh device reports not_enrolled before it is enrolled"
+  unproven=$(jq -r .unproven <<<"$before")
+  assert_eq "$unproven" "true" "and it reports unproven — the ADR-0032 caveat, still true"
+
+  "${client[@]}" identity enrol >/dev/null 2>&1
+
+  # AFTER enrol: the label came off, in the same change that made it untrue —
+  # the ADR-0032 revisit, observed at the edge a person actually uses.
+  local after user_key device_key
+  after=$("${client[@]}" device show --json)
+  status=$(jq -r .enrolment_status <<<"$after")
+  assert_eq "$status" "enrolled" \
+    "the device reports enrolled once it holds a valid cert (ADR-0032 revisit: the label comes off)"
+  unproven=$(jq -r .unproven <<<"$after")
+  assert_eq "$unproven" "false" \
+    "and it is no longer unproven — the caveat came off in the same change, not a milestone later"
+  user_key=$("${client[@]}" identity show --json | jq -r .public_key)
+  device_key=$(jq -r .public_key <<<"$after")
+
+  # Operator-mediated pinning (ADR-0032's gate): pin the user, then enrol the
+  # device by its cert. Nothing the user signed is honoured until this pin — a
+  # human act, out of band, not something the device can assert about itself.
+  local user_body cert cert_body code cred
+  user_body="{\"public_key\":\"$user_key\",\"name\":\"owner\"}"
+  code=$(da_api /api/v1/identities/users -X POST -H 'Content-Type: application/json' \
+    -d "$user_body" -o /dev/null -w '%{http_code}')
+  assert_eq "$code" "201" "an operator pins the user identity"
+
+  cert=$("${client[@]}" identity credential | cut -d'~' -f1)
+  cert_body="{\"cert\":\"$cert\",\"name\":\"phone\"}"
+  code=$(da_api /api/v1/identities/devices -X POST -H 'Content-Type: application/json' \
+    -d "$cert_body" -o /dev/null -w '%{http_code}')
+  assert_eq "$code" "201" "and enrols the device by its user-signed cert"
+
+  # THE POSITIVE. The device authenticates as its user over the real middleware
+  # chain, presenting only its key and the cert. This is the claims.list
+  # evidence, and it is an assertion, not a line of the epilogue.
+  cred=$("${client[@]}" identity credential)
+  code=$(da_device "$cred")
+  assert_eq "$code" "200" \
+    "a device authenticates as its user with only a cert and a possession proof — no token issued"
+
+  # NEGATIVE 1: no credential is a 401. Without this the positive proves only
+  # that the endpoint answers, not that it authenticated anyone.
+  code=$(curl -sS --unix-socket "$sock" -o /dev/null -w '%{http_code}' "http://heyarr/api/v1/libraries")
+  assert_eq "$code" "401" \
+    "no credential is refused — an unauthenticated request is a 401, not a silent read"
+
+  # NEGATIVE 2: a revoked device is a 401, even holding a once-valid cert. The
+  # cert still verifies; the membership no longer does, and the membership is
+  # the gate (ADR-0012's revocation shape, per device).
+  code=$(da_api "/api/v1/identities/devices/$device_key" -X DELETE -o /dev/null -w '%{http_code}')
+  assert_eq "$code" "200" "the operator revokes the device"
+  cred=$("${client[@]}" identity credential)
+  code=$(da_device "$cred")
+  assert_eq "$code" "401" \
+    "a revoked device is refused — its once-valid cert authenticates nobody now"
+
+  kill -TERM "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
 # The gate is only a gate if people run it, and people stop running a gate
 # they have to wait for. Milestone 1 finished at about fifteen seconds and 100
 # assertions; Milestone 2 adds probing, remuxing and a second worker process,
@@ -6900,6 +7045,8 @@ else
   provider_health_beat_demo
   note "THE POLLED ACQUISITION ARC: a grab that succeeds (§58, §65, #247)"
   polled_acquisition_demo
+  note "THE DEVICE AUTHENTICATES AS ITS USER (§40, ADR-0048, ADR-0032, #303)"
+  device_auth_demo
   note "THE SECOND PEER: placement, proven (§56, §64, M4-11) — heyarr all"
   two_peer_demo all
   note "THE SECOND PEER, again, as separate role processes (ADR-0002, M4-16)"

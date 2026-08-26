@@ -76,6 +76,11 @@ One logical library, multiple complete sovereign peers.`,
 		// in that person's own config directory (§40, ADR-0032). They take no
 		// --config on purpose.
 		newDeviceCommand(opts),
+		// The identity commands sit beside the device commands and for the same
+		// reason: they manage the key of the person at the keyboard — here the
+		// user identity that vouches for device keys (§40, ADR-0048) — in that
+		// person's own config directory, taking no --config (ADR-0032).
+		newIdentityCommand(opts),
 		// Renderer discovery sits here for the same reason: it is multicast
 		// on the local segment and needs neither a controller nor a
 		// credential. An operator standing in the living room can run it

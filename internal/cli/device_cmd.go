@@ -95,7 +95,7 @@ what the old one could. So a second generate refuses unless you pass --force.`,
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "device key generated\n\n")
 			printDevice(cmd.OutOrStdout(), dev)
-			fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", caveat())
+			fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", caveat(dev))
 			return nil
 		},
 	}
@@ -134,7 +134,7 @@ func newDeviceListCommand(_ Options, dir *string) *cobra.Command {
 				fmt.Fprintf(w, "%-36s  %-20s  %-14s  %-10s  %s\n",
 					d.ID, d.Name, d.EnrolmentStatus(), provenWord(d), d.PublicKeyString())
 			}
-			fmt.Fprintf(w, "\n%s\n", caveat())
+			fmt.Fprintf(w, "\n%s\n", caveat(devices[0]))
 			return nil
 		},
 	}
@@ -166,7 +166,7 @@ func newDeviceShowCommand(_ Options, dir *string) *cobra.Command {
 				return encodeJSON(cmd.OutOrStdout(), device.NewView(dev))
 			}
 			printDevice(cmd.OutOrStdout(), dev)
-			fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", caveat())
+			fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", caveat(dev))
 			return nil
 		},
 	}
@@ -260,6 +260,9 @@ func printDevice(w io.Writer, d device.Device) {
 	fmt.Fprintf(w, "  created      %s\n", d.CreatedAt.UTC().Format(time.RFC3339))
 	fmt.Fprintf(w, "  private key  %s (mode %#o, never printed)\n", d.KeyPath, device.KeyFileMode)
 	fmt.Fprintf(w, "  enrolment    %s\n", d.EnrolmentStatus())
+	if u := d.EnrolledUser(); u != "" {
+		fmt.Fprintf(w, "  enrolled as  %s\n", u)
+	}
 	fmt.Fprintf(w, "  proven       %s\n", provenWord(d))
 }
 
@@ -276,10 +279,14 @@ func provenWord(d device.Device) string {
 //
 // It is here, at the edge, and not only in the domain, for the reason placement
 // made `unproven` a required response field: a caveat that lives only in the
-// domain is one the edge forgets.
-func caveat() string {
-	return "unproven: " + device.NotYetAuthorising + ".\n" +
-		"Use `heyarr token create` for a credential that does authorise something today."
+// domain is one the edge forgets. It reads the device so it reflects enrolment
+// — the un-enrolled prefix stops being printed once the label comes off, which
+// is the whole point of ADR-0032's revisit clause.
+func caveat(d device.Device) string {
+	if _, enrolled := d.EnrolmentCert(); enrolled {
+		return "enrolled: " + d.AuthorisationNote() + "."
+	}
+	return "unproven: " + d.AuthorisationNote() + "."
 }
 
 func encodeJSON(w io.Writer, v any) error {

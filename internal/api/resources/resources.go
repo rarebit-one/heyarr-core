@@ -29,6 +29,7 @@ import (
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
@@ -83,6 +84,15 @@ type Options struct {
 	// is the state ADR-0010 has shipped for three milestones — and an endpoint
 	// that exists and 500s is worse than one that is not there.
 	Membership *membership.Store
+	// Identities is the device-identity trust root (§40, ADR-0048): pinned user
+	// identities and the device keys they vouch for. It backs the /identities
+	// admin surface.
+	//
+	// Optional like Membership: a nil store leaves the identity routes
+	// unmounted. The middleware's Device scheme is what authenticates a device;
+	// this store is what an operator writes through to pin the users it checks
+	// against.
+	Identities *deviceauth.Store
 	Logger     *slog.Logger
 	// Now and NewID are injected so that a created resource's timestamp and
 	// identifier are fixed values in a test, which is what lets the response
@@ -126,6 +136,7 @@ type API struct {
 	tokens     *auth.Store
 	catalog    *catalog.Catalog
 	membership *membership.Store
+	identities *deviceauth.Store
 	providers  *providers.Registry
 	log        *slog.Logger
 	now        func() time.Time
@@ -206,6 +217,7 @@ func New(opts Options) (*API, error) {
 		events:     opts.Events,
 		tokens:     opts.Tokens,
 		membership: opts.Membership,
+		identities: opts.Identities,
 		catalog:    opts.Catalog,
 		providers:  registryOrEmpty(opts.Providers),
 		log:        log.With("component", "api"),
@@ -362,6 +374,21 @@ func (a *API) Mount(r chi.Router) {
 		// notice now what the beat would notice within five minutes.
 		r.With(httpapi.RequireScope(auth.ScopeWrite)).
 			Post("/peers/{id}/reconcile", a.reconcilePeer)
+	}
+
+	// Device identity (§40, ADR-0048, ADR-0032). Admin in both directions, and
+	// for the same reason peer enrolment is: pinning a user identity decides
+	// who may authenticate as a principal on this node. Reads stay admin too —
+	// the list of pinned users is a map of who this node trusts. The {key}
+	// parameter is a rendered public key ("ed25519:<hex>"); a ":" is a legal
+	// path character and no key contains a "/".
+	if a.identities != nil {
+		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Get("/identities/users", a.listIdentityUsers)
+		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/identities/users", a.enrolUser)
+		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Delete("/identities/users/{key}", a.revokeIdentityUser)
+		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Get("/identities/users/{key}/devices", a.listIdentityDevices)
+		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/identities/devices", a.enrolDevice)
+		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Delete("/identities/devices/{key}", a.revokeIdentityDevice)
 	}
 }
 

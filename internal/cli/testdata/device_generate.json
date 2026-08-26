@@ -7,5 +7,5 @@
   "key_path": "<config-dir>/device_ed25519.key",
   "enrolment_status": "not_enrolled",
   "unproven": true,
-  "authorises": "this key authorises nothing yet: it is not enrolled with any user identity, and every grant against a Heyarr controller remains an ADR-0011 bearer scope until Milestone 8"
+  "authorises": "this key is not enrolled with any user identity, so it authenticates as nobody. Enrol it with `heyarr identity enrol`, or use `heyarr token create` for a credential that authorises something today"
 }

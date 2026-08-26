@@ -34,6 +34,11 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr events`](heyarr_events.md) | Follow the event log |
 | [`heyarr fsck`](heyarr_fsck.md) | Check stored bytes against the catalog (§57, ADR-0018) |
 | [`heyarr gc`](heyarr_gc.md) | Reclaim bytes nothing references (ADR-0018) |
+| [`heyarr identity credential`](heyarr_identity_credential.md) | Print an Authorization credential for this enrolled device |
+| [`heyarr identity enrol`](heyarr_identity_enrol.md) | Sign an enrolment cert binding this machine's device to your identity |
+| [`heyarr identity generate`](heyarr_identity_generate.md) | Generate your user identity keypair |
+| [`heyarr identity show`](heyarr_identity_show.md) | Show your user identity |
+| [`heyarr identity`](heyarr_identity.md) | Manage your user identity and enrol this machine's device (§40, ADR-0048) |
 | [`heyarr jobs list`](heyarr_jobs_list.md) | List jobs |
 | [`heyarr jobs retry`](heyarr_jobs_retry.md) | Put a finished job back on the queue |
 | [`heyarr jobs show`](heyarr_jobs_show.md) | Show one job |

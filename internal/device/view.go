@@ -21,13 +21,18 @@ type View struct {
 	CreatedAt string `json:"created_at"`
 	// KeyPath is where the private key lives. The path, never the bytes.
 	KeyPath string `json:"key_path"`
-	// EnrolmentStatus is enum-like: today always "not_enrolled".
+	// EnrolmentStatus is enum-like: "not_enrolled" or "enrolled".
 	EnrolmentStatus string `json:"enrolment_status"`
+	// EnrolledUser is the user identity this device authenticates as, when
+	// enrolled — "ed25519:<hex>", omitted otherwise.
+	EnrolledUser string `json:"enrolled_user,omitempty"`
 	// Unproven says this key has proved nothing to anything. It is the same
-	// word, meaning the same thing, as placement's `unproven`.
+	// word, meaning the same thing, as placement's `unproven`. It is false once
+	// a valid enrolment cert is held.
 	Unproven bool `json:"unproven"`
 	// Authorises spells the caveat out for a reader who did not come here
-	// looking for it.
+	// looking for it. It changes with enrolment so it never claims something
+	// that has stopped being true.
 	Authorises string `json:"authorises"`
 }
 
@@ -41,8 +46,9 @@ func NewView(d Device) View {
 		CreatedAt:       d.CreatedAt.UTC().Format(time.RFC3339Nano),
 		KeyPath:         d.KeyPath,
 		EnrolmentStatus: d.EnrolmentStatus(),
+		EnrolledUser:    d.EnrolledUser(),
 		Unproven:        d.Unproven(),
-		Authorises:      NotYetAuthorising,
+		Authorises:      d.AuthorisationNote(),
 	}
 }
 
