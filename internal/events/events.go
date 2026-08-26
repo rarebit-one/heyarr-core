@@ -118,6 +118,16 @@ const (
 	// regenerated, which is a re-enrolment and should be loud.
 	TypePeerIdentityEstablished = "peer.identity_established"
 
+	// identity.* is Milestone 8 device identity (§40, ADR-0048): a user
+	// identity being pinned, a device the user vouches for being enrolled, and
+	// either being revoked. They are the ADR-0012 peer-membership transitions
+	// applied to users rather than peers, so they read the same way in the log:
+	// "who became able to authenticate here, and when?".
+	TypeUserEnrolled   = "identity.user.enrolled"
+	TypeUserRevoked    = "identity.user.revoked"
+	TypeDeviceEnrolled = "identity.device.enrolled"
+	TypeDeviceRevoked  = "identity.device.revoked"
+
 	// desired.* is §76's own category for wanting (M3-02).
 	//
 	// TypeDesiredSatisfied predates them: it was declared in Milestone 1 and
