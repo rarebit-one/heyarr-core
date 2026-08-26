@@ -136,6 +136,16 @@ const (
 	TypeLeaseIssued  = "lease.issued"
 	TypeLeaseRevoked = "lease.revoked"
 
+	// personalstate.* is the Milestone 9 encrypted personal-state plane (§38,
+	// §41, §79, ADR-0049). They are METADATA transitions only — a space came into
+	// existence, a wrapped copy of its key was stored for a recipient — and carry
+	// NO plaintext: the peer that emits them holds ciphertext it cannot read, so
+	// the log records that a space exists and which keys can read it, never a name
+	// or a key (§38). Invariant 7 still applies: the plane's state transitions are
+	// events like every other, they are just opaque ones.
+	TypeSpaceCreated    = "personalstate.space.created"
+	TypeSpaceKeyWrapped = "personalstate.space.key_wrapped"
+
 	// desired.* is §76's own category for wanting (M3-02).
 	//
 	// TypeDesiredSatisfied predates them: it was declared in Milestone 1 and
