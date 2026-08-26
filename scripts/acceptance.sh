@@ -6931,13 +6931,20 @@ YAML
   "${client[@]}" identity generate --name owner >/dev/null 2>&1
   "${client[@]}" device generate --name phone >/dev/null 2>&1
 
+  # Everything below assigns each value to a plain variable BEFORE asserting on
+  # it. macOS ships bash 3.2, whose parser mangles a multiline command
+  # substitution that carries nested double quotes when it sits inside another
+  # quoted argument — it silently shifts the arguments, and an assert then reads
+  # a passing status against the wrong expectation. Assigning first sidesteps
+  # that parser entirely, and is easier to read besides.
+
   # BEFORE enrol: the label is on, and honest.
-  local before
+  local before status unproven
   before=$("${client[@]}" device show --json)
-  assert_eq "$(jq -r .enrolment_status <<<"$before")" "not_enrolled" \
-    "a fresh device reports not_enrolled before it is enrolled"
-  assert_eq "$(jq -r .unproven <<<"$before")" "true" \
-    "and it reports unproven — the ADR-0032 caveat, still true"
+  status=$(jq -r .enrolment_status <<<"$before")
+  assert_eq "$status" "not_enrolled" "a fresh device reports not_enrolled before it is enrolled"
+  unproven=$(jq -r .unproven <<<"$before")
+  assert_eq "$unproven" "true" "and it reports unproven — the ADR-0032 caveat, still true"
 
   "${client[@]}" identity enrol >/dev/null 2>&1
 
@@ -6945,9 +6952,11 @@ YAML
   # the ADR-0032 revisit, observed at the edge a person actually uses.
   local after user_key device_key
   after=$("${client[@]}" device show --json)
-  assert_eq "$(jq -r .enrolment_status <<<"$after")" "enrolled" \
+  status=$(jq -r .enrolment_status <<<"$after")
+  assert_eq "$status" "enrolled" \
     "the device reports enrolled once it holds a valid cert (ADR-0032 revisit: the label comes off)"
-  assert_eq "$(jq -r .unproven <<<"$after")" "false" \
+  unproven=$(jq -r .unproven <<<"$after")
+  assert_eq "$unproven" "false" \
     "and it is no longer unproven — the caveat came off in the same change, not a milestone later"
   user_key=$("${client[@]}" identity show --json | jq -r .public_key)
   device_key=$(jq -r .public_key <<<"$after")
@@ -6955,33 +6964,40 @@ YAML
   # Operator-mediated pinning (ADR-0032's gate): pin the user, then enrol the
   # device by its cert. Nothing the user signed is honoured until this pin — a
   # human act, out of band, not something the device can assert about itself.
-  assert_eq "$(da_api /api/v1/identities/users -X POST -H 'Content-Type: application/json' \
-    -d "{\"public_key\":\"$user_key\",\"name\":\"owner\"}" -o /dev/null -w '%{http_code}')" \
-    "201" "an operator pins the user identity"
-  local cert
+  local user_body cert cert_body code cred
+  user_body="{\"public_key\":\"$user_key\",\"name\":\"owner\"}"
+  code=$(da_api /api/v1/identities/users -X POST -H 'Content-Type: application/json' \
+    -d "$user_body" -o /dev/null -w '%{http_code}')
+  assert_eq "$code" "201" "an operator pins the user identity"
+
   cert=$("${client[@]}" identity credential | cut -d'~' -f1)
-  assert_eq "$(da_api /api/v1/identities/devices -X POST -H 'Content-Type: application/json' \
-    -d "{\"cert\":\"$cert\",\"name\":\"phone\"}" -o /dev/null -w '%{http_code}')" \
-    "201" "and enrols the device by its user-signed cert"
+  cert_body="{\"cert\":\"$cert\",\"name\":\"phone\"}"
+  code=$(da_api /api/v1/identities/devices -X POST -H 'Content-Type: application/json' \
+    -d "$cert_body" -o /dev/null -w '%{http_code}')
+  assert_eq "$code" "201" "and enrols the device by its user-signed cert"
 
   # THE POSITIVE. The device authenticates as its user over the real middleware
   # chain, presenting only its key and the cert. This is the claims.list
   # evidence, and it is an assertion, not a line of the epilogue.
-  assert_eq "$(da_device "$("${client[@]}" identity credential)")" "200" \
+  cred=$("${client[@]}" identity credential)
+  code=$(da_device "$cred")
+  assert_eq "$code" "200" \
     "a device authenticates as its user with only a cert and a possession proof — no token issued"
 
   # NEGATIVE 1: no credential is a 401. Without this the positive proves only
   # that the endpoint answers, not that it authenticated anyone.
-  assert_eq "$(curl -sS --unix-socket "$sock" -o /dev/null -w '%{http_code}' \
-    "http://heyarr/api/v1/libraries")" "401" \
+  code=$(curl -sS --unix-socket "$sock" -o /dev/null -w '%{http_code}' "http://heyarr/api/v1/libraries")
+  assert_eq "$code" "401" \
     "no credential is refused — an unauthenticated request is a 401, not a silent read"
 
   # NEGATIVE 2: a revoked device is a 401, even holding a once-valid cert. The
   # cert still verifies; the membership no longer does, and the membership is
   # the gate (ADR-0012's revocation shape, per device).
-  assert_eq "$(da_api "/api/v1/identities/devices/$device_key" -X DELETE -o /dev/null -w '%{http_code}')" \
-    "200" "the operator revokes the device"
-  assert_eq "$(da_device "$("${client[@]}" identity credential)")" "401" \
+  code=$(da_api "/api/v1/identities/devices/$device_key" -X DELETE -o /dev/null -w '%{http_code}')
+  assert_eq "$code" "200" "the operator revokes the device"
+  cred=$("${client[@]}" identity credential)
+  code=$(da_device "$cred")
+  assert_eq "$code" "401" \
     "a revoked device is refused — its once-valid cert authenticates nobody now"
 
   kill -TERM "$pid" 2>/dev/null || true
