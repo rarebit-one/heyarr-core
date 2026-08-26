@@ -51,7 +51,7 @@ func TestRecoverReconstructsTheSameIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert, err := fresh.SignCert(devPub, 0)
+	cert, err := fresh.SignCert(devPub, "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestSignCertProducesAVerifiableBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cert, err := store.SignCert(dev.PublicKey, 0)
+	cert, err := store.SignCert(dev.PublicKey, "", 0)
 	if err != nil {
 		t.Fatalf("SignCert: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestSignCertNeedsAnIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SignCert(devicePub, 0); !errors.Is(err, useridentity.ErrNoIdentity) {
+	if _, err := store.SignCert(devicePub, "", 0); !errors.Is(err, useridentity.ErrNoIdentity) {
 		t.Fatalf("SignCert with no identity: err = %v, want ErrNoIdentity", err)
 	}
 }

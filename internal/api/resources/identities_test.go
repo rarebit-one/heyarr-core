@@ -91,7 +91,7 @@ func TestEnrolUserThenDeviceThenRevoke(t *testing.T) {
 	_ = userPub
 
 	// Enrol a device under it, by its user-signed cert.
-	cert, err := enrolment.SignCert(userPriv, devicePub, fixedTime, 0)
+	cert, err := enrolment.SignCert(userPriv, devicePub, "", fixedTime, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestEnrolDeviceRefusesAnUnpinnedUser(t *testing.T) {
 
 	_, userPriv, _ := newIdentityKey(t) // never pinned
 	devicePub, _, _ := newIdentityKey(t)
-	cert, err := enrolment.SignCert(userPriv, devicePub, fixedTime, 0)
+	cert, err := enrolment.SignCert(userPriv, devicePub, "", fixedTime, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

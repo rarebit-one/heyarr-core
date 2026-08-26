@@ -75,7 +75,7 @@ func newActor(t *testing.T) *actor {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert, err := enrolment.SignCert(upriv, dpub, now, 0)
+	cert, err := enrolment.SignCert(upriv, dpub, "", now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestVerifyRefusalsAreDistinct(t *testing.T) {
 		// A cert that CLAIMS a's user but is signed by an impostor.
 		_, impostor, _ := ed25519.GenerateKey(nil)
 		devicePub := a.devicePriv.Public().(ed25519.PublicKey)
-		forged, err := enrolment.SignCert(impostor, devicePub, now, 0)
+		forged, err := enrolment.SignCert(impostor, devicePub, "", now, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -349,4 +349,72 @@ func rewriteCertUser(cert, newUser string) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(reencoded) + "." + sigEnc, nil
+}
+
+// TestEnrolDevicePinsTheEncryptionKey: a v2 cert binds the device's X25519
+// encryption key (§41, ADR-0049), and enrolling pins it so a wrapper on either
+// peer can learn an enrolled device's encryption key from LookupDevice —
+// authenticated by the user's signature, not an unverified claim.
+func TestEnrolDevicePinsTheEncryptionKey(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	u, upriv, err := enrolment.GenerateUserIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dpub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const deviceEnc = "x25519:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+	cert, err := enrolment.SignCert(upriv, dpub, deviceEnc, now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.store.EnrolUser(ctx, u.UserID(), "alice"); err != nil {
+		t.Fatalf("enrol user: %v", err)
+	}
+	enrolled, err := f.store.EnrolDevice(ctx, cert, "phone")
+	if err != nil {
+		t.Fatalf("enrol device: %v", err)
+	}
+	if enrolled.EncryptionKey != deviceEnc {
+		t.Fatalf("EnrolDevice pinned encryption key %q, want %q", enrolled.EncryptionKey, deviceEnc)
+	}
+
+	// It survives the round trip through the database, on both read paths.
+	looked, err := f.store.LookupDevice(ctx, identity.FormatPublicKey(dpub))
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if looked.EncryptionKey != deviceEnc {
+		t.Fatalf("LookupDevice returned encryption key %q, want %q", looked.EncryptionKey, deviceEnc)
+	}
+	list, err := f.store.ListDevices(ctx, enrolled.UserID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 || list[0].EncryptionKey != deviceEnc {
+		t.Fatalf("ListDevices did not return the pinned encryption key: %+v", list)
+	}
+}
+
+// TestEnrolV1DevicePinsNoEncryptionKey: a v1 cert (no encryption key) enrols with
+// an empty encryption key rather than failing — the Milestone 8 device stays
+// enrollable and is simply not yet a wrap target.
+func TestEnrolV1DevicePinsNoEncryptionKey(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	a := newActor(t) // newActor mints a cert with an empty encryption key
+	f.enrol(t, a)
+
+	looked, err := f.store.LookupDevice(ctx, a.deviceKey)
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if looked.EncryptionKey != "" {
+		t.Fatalf("a v1 device reported encryption key %q, want none", looked.EncryptionKey)
+	}
 }

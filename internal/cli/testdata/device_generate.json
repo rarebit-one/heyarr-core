@@ -3,6 +3,7 @@
   "name": "laptop",
   "algorithm": "ed25519",
   "public_key": "ed25519:<hex>",
+  "encryption_public_key": "x25519:<hex>",
   "created_at": "<timestamp>",
   "key_path": "<config-dir>/device_ed25519.key",
   "enrolment_status": "not_enrolled",
