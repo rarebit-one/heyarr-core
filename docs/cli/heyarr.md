@@ -32,6 +32,7 @@ One logical library, multiple complete sovereign peers.
 * [heyarr identity](heyarr_identity.md)	 - Manage your user identity and enrol this machine's device (§40, ADR-0048)
 * [heyarr jobs](heyarr_jobs.md)	 - Inspect and retry durable work
 * [heyarr library](heyarr_library.md)	 - Manage libraries and their roots
+* [heyarr pair](heyarr_pair.md)	 - Authorise a new device from an already-enrolled one (§40, ADR-0022)
 * [heyarr peer](heyarr_peer.md)	 - Serve and replicate bytes
 * [heyarr peers](heyarr_peers.md)	 - Inspect and manage the peers of this instance
 * [heyarr play](heyarr_play.md)	 - Play an asset on a television, speaker or projector (§68)

@@ -19,7 +19,6 @@ package useridentity
 
 import (
 	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -34,6 +33,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
+	"github.com/rarebit-one/heyarr-core/internal/recovery"
 )
 
 // Algorithm names the signature scheme, identity's constant so a user key, a
@@ -145,8 +145,51 @@ func (s *Store) KeyPath() string { return filepath.Join(s.dir, KeyFileName) }
 // RecordPath is the metadata's location.
 func (s *Store) RecordPath() string { return filepath.Join(s.dir, RecordFileName) }
 
-// Generate creates this person's user identity.
-func (s *Store) Generate(name string, force bool) (Identity, error) {
+// Generate creates this person's user identity from a FRESH recovery secret,
+// and returns that secret to be displayed once (ADR-0022).
+//
+// The identity is derived DETERMINISTICALLY from the secret
+// (recovery.DeriveUserSeed), rather than drawn as a raw-random keypair, so that
+// [Store.RecoverFromSecret] can later reconstruct the SAME identity — same
+// public key — from the secret alone, with no server and no surviving device
+// (§79). That is what makes key loss survivable: the secret IS the identity's
+// root, and every device this identity enrols verifies against a public key the
+// secret can regenerate offline.
+//
+// The returned secret is the ONLY time the entropy leaves the store in a
+// transcribable form. The caller shows it once and never persists it; it is not
+// written to disk here (only the derived seed is), so a store on disk plus a
+// lost secret is exactly the "no surviving device" case recovery is for.
+func (s *Store) Generate(name string, force bool) (Identity, recovery.Secret, error) {
+	secret, err := recovery.GenerateSecret()
+	if err != nil {
+		return Identity{}, recovery.Secret{}, fmt.Errorf("useridentity: drawing a recovery secret: %w", err)
+	}
+	id, err := s.writeFromSecret(secret, name, force)
+	if err != nil {
+		return Identity{}, recovery.Secret{}, err
+	}
+	return id, secret, nil
+}
+
+// RecoverFromSecret reconstructs the user identity from a recovery secret,
+// writing it into this store. It is the offline restore of ADR-0022: the secret
+// derives the same seed [Store.Generate] derived, so the reconstructed identity
+// has the public key peers already pinned and nothing is re-pinned. It runs with
+// no server — the derivation is pure — which is the whole point (§51, §79).
+//
+// force behaves as it does for Generate: recovering over an existing identity is
+// refused unless asked for, because the ordinary recovery case is a machine with
+// no identity at all.
+func (s *Store) RecoverFromSecret(secret recovery.Secret, name string, force bool) (Identity, error) {
+	return s.writeFromSecret(secret, name, force)
+}
+
+// writeFromSecret derives the keypair from a recovery secret and writes the
+// store's two files. It is the shared body of Generate and RecoverFromSecret, so
+// the on-disk shape of a generated identity and a recovered one is identical by
+// construction — a recovered identity is not a second kind of identity.
+func (s *Store) writeFromSecret(secret recovery.Secret, name string, force bool) (Identity, error) {
 	existing, err := s.load()
 	switch {
 	case err == nil && !force:
@@ -170,11 +213,13 @@ func (s *Store) Generate(name string, force bool) (Identity, error) {
 		return Identity{}, fmt.Errorf("useridentity: creating %s: %w", s.dir, err)
 	}
 
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return Identity{}, fmt.Errorf("useridentity: generating a keypair: %w", err)
+	seed := recovery.DeriveUserSeed(secret)
+	priv := ed25519.NewKeyFromSeed(seed)
+	pub, ok := priv.Public().(ed25519.PublicKey)
+	if !ok {
+		return Identity{}, errors.New("useridentity: derived key did not yield an ed25519 public key")
 	}
-	if err := writeKeyFile(s.KeyPath(), priv.Seed()); err != nil {
+	if err := writeKeyFile(s.KeyPath(), seed); err != nil {
 		return Identity{}, err
 	}
 

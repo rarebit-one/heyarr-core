@@ -33,4 +33,5 @@ deliberate human act rather than something a device can claim about itself
 * [heyarr identity credential](heyarr_identity_credential.md)	 - Print an Authorization credential for this enrolled device
 * [heyarr identity enrol](heyarr_identity_enrol.md)	 - Sign an enrolment cert binding this machine's device to your identity
 * [heyarr identity generate](heyarr_identity_generate.md)	 - Generate your user identity keypair
+* [heyarr identity recover](heyarr_identity_recover.md)	 - Reconstruct your user identity from its recovery secret, offline (ADR-0022)
 * [heyarr identity show](heyarr_identity_show.md)	 - Show your user identity
