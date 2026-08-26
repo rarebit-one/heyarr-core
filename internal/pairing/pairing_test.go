@@ -25,14 +25,24 @@ func key(t *testing.T, seed byte) ed25519.PublicKey {
 	return pub
 }
 
-// deriveOK derives and fails the test on any error — the honest-path helper.
+// deriveOK derives and fails the test on any error — the honest-path helper. It
+// takes bare signing keys and pairs with no encryption key (the v1-shaped path),
+// so the many tests that are about the signing-key binding and the salt stay
+// unchanged across the v2 bump; the encryption-key binding has its own tests below.
 func deriveOK(t *testing.T, initiator, responder ed25519.PublicKey, salt []byte) SAS {
 	t.Helper()
-	s, err := Derive(initiator, responder, salt)
+	s, err := Derive(Keys{Sign: initiator}, Keys{Sign: responder}, salt)
 	if err != nil {
 		t.Fatalf("Derive refused a well-formed input: %v", err)
 	}
 	return s
+}
+
+// encKey returns a deterministic 32-byte X25519-shaped public key for a seed —
+// the encryption half of a device's key set. Pairing only hashes the bytes, so a
+// fixed pattern is a fine stand-in for a real X25519 point here.
+func encKey(seed byte) []byte {
+	return bytes.Repeat([]byte{seed}, EncKeySize)
 }
 
 // The honest path: two devices that exchanged the SAME two keys under the SAME
@@ -213,14 +223,14 @@ func TestMalformedInputsAreRefused(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := Derive(tc.initiator, tc.resp, tc.salt); !errors.Is(err, tc.want) {
+			if _, err := Derive(Keys{Sign: tc.initiator}, Keys{Sign: tc.resp}, tc.salt); !errors.Is(err, tc.want) {
 				t.Fatalf("want %v, got %v", tc.want, err)
 			}
 		})
 	}
 
 	// A salt of exactly the minimum is accepted — the boundary is inclusive.
-	if _, err := Derive(good, other, make([]byte, MinSaltLen)); err != nil {
+	if _, err := Derive(Keys{Sign: good}, Keys{Sign: other}, make([]byte, MinSaltLen)); err != nil {
 		t.Fatalf("a salt of exactly MinSaltLen should be accepted, got %v", err)
 	}
 }
@@ -243,7 +253,7 @@ func TestNewSaltIsFreshAndUsable(t *testing.T) {
 	if bytes.Equal(a, b) {
 		t.Fatal("two NewSalt calls returned the same bytes")
 	}
-	if _, err := Derive(key(t, 1), key(t, 2), a); err != nil {
+	if _, err := Derive(Keys{Sign: key(t, 1)}, Keys{Sign: key(t, 2)}, a); err != nil {
 		t.Fatalf("a NewSalt salt should derive, got %v", err)
 	}
 }
@@ -259,5 +269,108 @@ func TestGroupedIsDisplayOnly(t *testing.T) {
 	}
 	if strings.Count(g, " ") != 1 || len(g) != Digits+1 {
 		t.Fatalf("grouped form is not the documented 3-4 shape: %q", g)
+	}
+}
+
+// 🔴 The v2 property, direction one: a relay that substitutes the INITIATOR's
+// ENCRYPTION key — forwarding the real signing key but swapping the key space
+// keys would be wrapped for — derives a different string (§41, ADR-0049). If the
+// SAS ever stopped binding the initiator encryption key (the sabotage: drop it
+// from the hash), this test fires.
+func TestSubstitutedInitiatorEncKeyBreaksTheString(t *testing.T) {
+	t.Parallel()
+	initiator := Keys{Sign: key(t, 1), Enc: encKey(0x11)}
+	responder := Keys{Sign: key(t, 2), Enc: encKey(0x22)}
+
+	honest, err := Derive(initiator, responder, testSalt)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	substituted, err := Derive(Keys{Sign: initiator.Sign, Enc: encKey(0x99)}, responder, testSalt)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if substituted == honest {
+		t.Fatalf("substituting the initiator encryption key left the SAS unchanged (%q): it is not bound", honest)
+	}
+}
+
+// 🔴 The v2 property, direction two: a relay that substitutes the RESPONDER's
+// ENCRYPTION key derives a different string. Both directions are asserted because
+// binding only one device's encryption key is the same friendly-UI relay hole the
+// signing-key binding already closes for signing.
+func TestSubstitutedResponderEncKeyBreaksTheString(t *testing.T) {
+	t.Parallel()
+	initiator := Keys{Sign: key(t, 1), Enc: encKey(0x11)}
+	responder := Keys{Sign: key(t, 2), Enc: encKey(0x22)}
+
+	honest, err := Derive(initiator, responder, testSalt)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	substituted, err := Derive(initiator, Keys{Sign: responder.Sign, Enc: encKey(0x99)}, testSalt)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if substituted == honest {
+		t.Fatalf("substituting the responder encryption key left the SAS unchanged (%q): it is not bound", honest)
+	}
+}
+
+// A device WITH an encryption key and the same device WITHOUT one derive different
+// strings: the encryption key's presence is bound, so a relay cannot strip it (or
+// add one) unnoticed. This is the framed-absence property — an empty encryption
+// field is part of the hash, not a no-op.
+func TestEncKeyPresenceIsBound(t *testing.T) {
+	t.Parallel()
+	initiator := Keys{Sign: key(t, 1), Enc: encKey(0x11)}
+	responder := Keys{Sign: key(t, 2), Enc: encKey(0x22)}
+
+	withEnc, err := Derive(initiator, responder, testSalt)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	withoutEnc, err := Derive(Keys{Sign: initiator.Sign}, Keys{Sign: responder.Sign}, testSalt)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if withEnc == withoutEnc {
+		t.Fatal("a device with an encryption key derived the same SAS as one without: presence is not bound")
+	}
+}
+
+// The honest v2 path: two sides with the same full key sets under the same salt
+// derive the same string, and it is the documented Digits-wide decimal shape.
+func TestV2HonestPathAgrees(t *testing.T) {
+	t.Parallel()
+	initiator := Keys{Sign: key(t, 1), Enc: encKey(0x11)}
+	responder := Keys{Sign: key(t, 2), Enc: encKey(0x22)}
+
+	a, err := Derive(initiator, responder, testSalt)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	b, err := Derive(initiator, responder, testSalt)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if a != b {
+		t.Fatalf("two honest v2 sides derived different strings: %q vs %q", a, b)
+	}
+	if len(a) != Digits {
+		t.Fatalf("v2 SAS is %d chars, want %d", len(a), Digits)
+	}
+}
+
+// A malformed (wrong-length, non-empty) encryption key is refused, the same rule
+// the signing key has — a truncated key is not something to pair on.
+func TestMalformedEncKeyIsRefused(t *testing.T) {
+	t.Parallel()
+	good := Keys{Sign: key(t, 2), Enc: encKey(0x22)}
+	for _, n := range []int{1, EncKeySize - 1, EncKeySize + 1} {
+		bad := Keys{Sign: key(t, 1), Enc: bytes.Repeat([]byte{0x11}, n)}
+		if _, err := Derive(bad, good, testSalt); !errors.Is(err, ErrMalformedKey) {
+			t.Fatalf("a %d-byte encryption key was not refused: %v", n, err)
+		}
 	}
 }
