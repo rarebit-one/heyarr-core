@@ -3,13 +3,28 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/rarebit-one/heyarr-core/internal/device"
+	"github.com/rarebit-one/heyarr-core/internal/recovery"
 	"github.com/rarebit-one/heyarr-core/internal/useridentity"
 )
+
+// identityGenerateJSON is the --json shape of `identity generate` and
+// `identity recover`. It carries the recovery secret ONCE, at generate time
+// only — never on `identity show`, whose View has no field for it — because the
+// secret is displayed once and then never leaves the store again (ADR-0022).
+type identityGenerateJSON struct {
+	Identity useridentity.View `json:"identity"`
+	// RecoverySecret is the bech32m "heyarr1…" secret to write down. Present on
+	// generate, empty on recover (recovery consumes an existing secret rather
+	// than minting one).
+	RecoverySecret string `json:"recovery_secret,omitempty"`
+}
 
 // newIdentityCommand builds `heyarr identity`.
 //
@@ -51,6 +66,7 @@ deliberate human act rather than something a device can claim about itself
 		newIdentityGenerateCommand(opts, &identityDir),
 		newIdentityShowCommand(opts, &identityDir),
 		newIdentityEnrolCommand(opts, &identityDir, &deviceDir),
+		newIdentityRecoverCommand(opts, &identityDir, &deviceDir),
 		newIdentityCredentialCommand(opts, &deviceDir),
 	)
 	return cmd
@@ -92,15 +108,19 @@ them all. A second generate refuses unless you pass --force.`,
 			if err != nil {
 				return err
 			}
-			id, err := store.Generate(name, force)
+			id, secret, err := store.Generate(name, force)
 			if err != nil {
 				return err
 			}
 			if asJSON {
-				return encodeJSON(cmd.OutOrStdout(), useridentity.NewView(id))
+				return encodeJSON(cmd.OutOrStdout(), identityGenerateJSON{
+					Identity:       useridentity.NewView(id),
+					RecoverySecret: secret.String(),
+				})
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "user identity generated\n\n")
 			printIdentity(cmd.OutOrStdout(), id)
+			fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", recoverySecretNotice(secret))
 			fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", identityPinHint(id))
 			return nil
 		},
@@ -109,6 +129,144 @@ them all. A second generate refuses unless you pass --force.`,
 	cmd.Flags().BoolVar(&force, "force", false, "replace an existing identity — unrecoverable")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
 	return cmd
+}
+
+// recoverySecretNotice is the once-only display of the recovery secret. It is
+// spelled out where the person generating an identity will see it, because the
+// secret is the ONLY way back if every device is lost (ADR-0022), and it is
+// shown here and nowhere else — `identity show` cannot print it.
+func recoverySecretNotice(secret recovery.Secret) string {
+	return "RECOVERY SECRET — write this down and keep it OFFLINE. It is shown once and never again:\n" +
+		"  " + secret.String() + "\n" +
+		"It reconstructs this identity if every device is lost (`heyarr identity recover`). " +
+		"Anyone who has it can become you, so store it like a house key, not a password."
+}
+
+func newIdentityRecoverCommand(_ Options, identityDir, deviceDir *string) *cobra.Command {
+	var (
+		secretStr  string
+		secretFile string
+		name       string
+		force      bool
+		lifetime   time.Duration
+		asJSON     bool
+	)
+	cmd := &cobra.Command{
+		Use:   "recover",
+		Short: "Reconstruct your user identity from its recovery secret, offline (ADR-0022)",
+		Long: `Rebuild your user identity from the recovery secret you saved at
+` + "`heyarr identity generate`" + ` — on a machine with no surviving device and with
+NO Heyarr running.
+
+The secret derives the SAME identity keypair, so the reconstructed identity has
+the public key peers already pinned: a recovered user re-issues device
+enrolments and nothing is re-pinned (ADR-0048). This command then enrols THIS
+machine's device under the recovered identity, so it can authenticate as you
+immediately — generating a device key first if there is none.
+
+A mistyped secret is rejected loudly by its checksum rather than reconstructing
+a different, wrong identity (ADR-0022). The whole flow is offline: it reads the
+secret, derives the key and signs a cert, touching no server.
+
+The secret is read from --secret-file, or from --secret, or from standard input
+— prefer a file or a pipe, since a secret in argv is visible in ps and shell
+history.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			raw, err := readRecoverySecret(cmd, secretStr, secretFile)
+			if err != nil {
+				return err
+			}
+			secret, err := recovery.ParseSecret(raw)
+			if err != nil {
+				// Surface the loud failure cleanly rather than as a stack of
+				// wrapped internals — a mistyped secret is a re-read, not a bug.
+				return fmt.Errorf("the recovery secret was not accepted: %w\n"+
+					"check it against what you wrote down — a single mistyped character is caught here "+
+					"rather than reconstructing a different identity", err)
+			}
+			idStore, err := openUserIdentityStore(*identityDir)
+			if err != nil {
+				return err
+			}
+			id, err := idStore.RecoverFromSecret(secret, name, force)
+			if err != nil {
+				return err
+			}
+
+			// Enrol this machine's device under the recovered identity, so the
+			// recovered user can authenticate straight away. Generate a device
+			// key if this machine has none (the ordinary "all devices lost" case).
+			devStore, err := openDeviceStore(*deviceDir)
+			if err != nil {
+				return err
+			}
+			dev, err := devStore.Get("")
+			if err != nil {
+				dev, err = devStore.Generate("", false)
+				if err != nil {
+					return err
+				}
+			}
+			cert, err := idStore.SignCert(dev.PublicKey, lifetime)
+			if err != nil {
+				return err
+			}
+			enrolled, err := devStore.Enrol(cert)
+			if err != nil {
+				return err
+			}
+
+			if asJSON {
+				return encodeJSON(cmd.OutOrStdout(), struct {
+					Identity useridentity.View `json:"identity"`
+					Device   device.View       `json:"device"`
+				}{Identity: useridentity.NewView(id), Device: device.NewView(enrolled)})
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "identity recovered — offline, from the recovery secret alone\n\n")
+			printIdentity(cmd.OutOrStdout(), id)
+			fmt.Fprintf(cmd.OutOrStdout(), "\nand this machine's device is enrolled under it:\n\n")
+			printDevice(cmd.OutOrStdout(), enrolled)
+			fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", identityPinHint(id))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&secretStr, "secret", "",
+		"the recovery secret (prefer --secret-file or a pipe: a secret in argv is visible in ps)")
+	cmd.Flags().StringVar(&secretFile, "secret-file", "",
+		"read the recovery secret from this file")
+	cmd.Flags().StringVar(&name, "name", "", "what to call the recovered identity (default: derived from this machine's hostname)")
+	cmd.Flags().BoolVar(&force, "force", false, "recover over an existing identity here — unrecoverable if it differs")
+	cmd.Flags().DurationVar(&lifetime, "lifetime", 0,
+		"how long the fresh device cert is valid (default: the 90-day enrolment lifetime)")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
+	return cmd
+}
+
+// readRecoverySecret resolves the secret from --secret-file, then --secret, then
+// standard input. A file or a pipe is preferred, so the default path keeps the
+// secret out of argv.
+func readRecoverySecret(cmd *cobra.Command, secretStr, secretFile string) (string, error) {
+	switch {
+	case secretFile != "":
+		raw, err := os.ReadFile(secretFile) // #nosec G304 -- the operator explicitly passed this path to read their own recovery secret
+		if err != nil {
+			return "", fmt.Errorf("reading the recovery secret from %s: %w", secretFile, err)
+		}
+		return strings.TrimSpace(string(raw)), nil
+	case secretStr != "":
+		return strings.TrimSpace(secretStr), nil
+	default:
+		raw, err := io.ReadAll(cmd.InOrStdin())
+		if err != nil {
+			return "", fmt.Errorf("reading the recovery secret from standard input: %w", err)
+		}
+		s := strings.TrimSpace(string(raw))
+		if s == "" {
+			return "", fmt.Errorf("no recovery secret given — pass --secret-file, --secret, or pipe it on standard input")
+		}
+		return s, nil
+	}
 }
 
 func newIdentityShowCommand(_ Options, dir *string) *cobra.Command {

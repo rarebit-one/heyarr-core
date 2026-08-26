@@ -1,6 +1,6 @@
 # 0022. Device enrolment and key recovery
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-20
 
 ## Context
@@ -115,3 +115,38 @@ Enrolment and the recovery secret ship with Milestone 8, before vaults exist,
 because ADR-0021 must not ship without them. SLIP-39 sharing and the exported
 blob can follow — they are additions to a working recovery path, not
 prerequisites for one.
+
+## What ratified this
+
+**Accepted 2026-08-26, on evidence rather than on argument.** The condition this
+record set for itself — that *enrolment* and *recovery* both work behaviourally,
+not just as unit-tested primitives — is met. Both halves are now reachable from
+the binary and proven in `make demo`, which is what moves this from `Proposed`
+to `Accepted`:
+
+- **Pairing enrols a device with no operator and no trusted server** (#305).
+  An old device authorises a new one over a dumb relay (`internal/pairrelay`,
+  ADR-0038): the two exchange public keys and a salt, derive the same short
+  authentication string over both keys, and on a human match the old device
+  signs the enrolment cert — the relay learns no key material. The
+  **commit-before-reveal** ordering (`internal/pairing/commitment.go`,
+  `internal/pairflow`) is what makes the short code's security real against a
+  rushing attacker: each side commits to its key before either reveals, so a
+  man-in-the-middle cannot choose its substituted key after seeing the peer's.
+  The demo proves both the honest enrolment and that a mismatched code enrols
+  nobody; a substituted key yields a different code.
+
+- **The recovery secret reconstructs the identity offline** (#306). The
+  identity is derived deterministically from the secret
+  (`recovery.DeriveUserSeed`), so the secret alone rebuilds the *same* identity
+  — the public key peers already pinned — on a machine with no surviving device
+  and no running server, and the recovered device then authenticates as the
+  same user. A mistyped secret is refused by its checksum
+  (`recovery.ParseSecret`) rather than reconstructing a different, wrong
+  identity. This is the "no authorised device survives" branch of the Decision,
+  made real.
+
+What remains is explicitly *additive* and does not gate this record (see
+Sequencing): SLIP-39 share splitting for social recovery, and the exported
+recovery blob. This ADR is accepted on the base secret path both problems are
+built on, exactly as the Decision separated enrolment from recovery.
