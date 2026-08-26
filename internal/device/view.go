@@ -18,7 +18,11 @@ type View struct {
 	// PublicKey is `ed25519:` followed by 64 lowercase hex characters —
 	// identity.FormatPublicKey, the convention #135 established.
 	PublicKey string `json:"public_key"`
-	CreatedAt string `json:"created_at"`
+	// EncryptionPublicKey is `x25519:` followed by 64 lowercase hex characters —
+	// the device's key-agreement key, what space keys are wrapped for (§41,
+	// ADR-0049). Omitted for a pre-Milestone-9 device that has none.
+	EncryptionPublicKey string `json:"encryption_public_key,omitempty"`
+	CreatedAt           string `json:"created_at"`
 	// KeyPath is where the private key lives. The path, never the bytes.
 	KeyPath string `json:"key_path"`
 	// EnrolmentStatus is enum-like: "not_enrolled" or "enrolled".
@@ -39,16 +43,17 @@ type View struct {
 // NewView renders a device.
 func NewView(d Device) View {
 	return View{
-		ID:              d.ID,
-		Name:            d.Name,
-		Algorithm:       d.Algorithm,
-		PublicKey:       d.PublicKeyString(),
-		CreatedAt:       d.CreatedAt.UTC().Format(time.RFC3339Nano),
-		KeyPath:         d.KeyPath,
-		EnrolmentStatus: d.EnrolmentStatus(),
-		EnrolledUser:    d.EnrolledUser(),
-		Unproven:        d.Unproven(),
-		Authorises:      d.AuthorisationNote(),
+		ID:                  d.ID,
+		Name:                d.Name,
+		Algorithm:           d.Algorithm,
+		PublicKey:           d.PublicKeyString(),
+		EncryptionPublicKey: d.EncryptionKeyString(),
+		CreatedAt:           d.CreatedAt.UTC().Format(time.RFC3339Nano),
+		KeyPath:             d.KeyPath,
+		EnrolmentStatus:     d.EnrolmentStatus(),
+		EnrolledUser:        d.EnrolledUser(),
+		Unproven:            d.Unproven(),
+		Authorises:          d.AuthorisationNote(),
 	}
 }
 
