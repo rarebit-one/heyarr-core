@@ -271,6 +271,48 @@ func (s *Store) Revoke(ctx context.Context, id string) (Lease, error) {
 	return lease, nil
 }
 
+// ActiveLeases returns the leases worth serving to a sibling ahead of an
+// outage (§54): unrevoked, and not yet expired at now. A revoked or expired
+// lease is not sent — a sibling caching it would only cache a refusal — so this
+// is what the peer surface hands over, oldest expiry first so the most urgent to
+// re-fetch sorts last.
+func (s *Store) ActiveLeases(ctx context.Context, now time.Time) ([]Lease, error) {
+	rows, err := s.reader.QueryContext(ctx,
+		`SELECT id, principal, resource, capabilities, issuer, token, issued_at, expires_at, revoked_at
+		 FROM access_leases
+		 WHERE revoked_at IS NULL AND expires_at > ?
+		 ORDER BY expires_at ASC, id ASC`, now.UTC().Format(timeFormat))
+	if err != nil {
+		return nil, fmt.Errorf("leases: listing active leases: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := []Lease{}
+	for rows.Next() {
+		l, err := scanLease(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// ActiveLeaseTokens returns the signed tokens of this peer's active leases, on
+// the store's own clock. It is the peer surface's view (peerapi.LeaseSource): a
+// sibling caches these to answer reads while this peer is unreachable, and each
+// token carries its own authority, so only the tokens cross — never the row.
+func (s *Store) ActiveLeaseTokens(ctx context.Context) ([]string, error) {
+	active, err := s.ActiveLeases(ctx, s.clock.Now())
+	if err != nil {
+		return nil, err
+	}
+	tokens := make([]string, len(active))
+	for i, l := range active {
+		tokens[i] = l.Token
+	}
+	return tokens, nil
+}
+
 // List returns all leases, most-recently-issued first.
 func (s *Store) List(ctx context.Context) ([]Lease, error) {
 	rows, err := s.reader.QueryContext(ctx,

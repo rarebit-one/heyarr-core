@@ -227,3 +227,66 @@ func TestIssueRefusedWithoutSigner(t *testing.T) {
 		t.Fatalf("want ErrNoSigner, got %v", err)
 	}
 }
+
+// ActiveLeaseTokens is what the peer surface serves: unrevoked and unexpired
+// only. A sibling caching an already-dead lease would only cache a refusal.
+func TestActiveLeaseTokensExcludesExpiredAndRevoked(t *testing.T) {
+	t.Parallel()
+	store, _ := newStore(t)
+	ctx := context.Background()
+
+	live, err := store.Issue(ctx, "user-a", "asset-1", []grant.Capability{grant.CapabilityRead}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, err := store.Issue(ctx, "user-a", "asset-2", []grant.Capability{grant.CapabilityRead}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoked, err := store.Issue(ctx, "user-a", "asset-3", []grant.Capability{grant.CapabilityRead}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Revoke(ctx, revoked.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// On the store's own clock (fixed at `now`), all three are unexpired, so
+	// ActiveLeaseTokens excludes only the revoked one.
+	tokens, err := store.ActiveLeaseTokens(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(tokens, revoked.Token) {
+		t.Fatalf("a revoked lease was served: %v", tokens)
+	}
+	if !contains(tokens, live.Token) || !contains(tokens, short.Token) || len(tokens) != 2 {
+		t.Fatalf("want the two live tokens, got %v", tokens)
+	}
+
+	// Two minutes on, the one-minute lease has expired: ActiveLeases at that
+	// instant drops it AND the revoked one, leaving only the hour-long lease.
+	later, err := store.ActiveLeases(ctx, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var laterTokens []string
+	for _, l := range later {
+		laterTokens = append(laterTokens, l.Token)
+	}
+	if contains(laterTokens, short.Token) || contains(laterTokens, revoked.Token) {
+		t.Fatalf("an expired or revoked lease was served: %v", laterTokens)
+	}
+	if len(laterTokens) != 1 || laterTokens[0] != live.Token {
+		t.Fatalf("want only the live token after expiry, got %v", laterTokens)
+	}
+}
+
+func contains(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
