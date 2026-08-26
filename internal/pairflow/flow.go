@@ -199,8 +199,12 @@ func (in Initiator) Run(ctx context.Context) (Result, error) {
 		return Result{}, fmt.Errorf("%w: %w", ErrCommitmentMismatch, err)
 	}
 
-	// 6. Derive the SAS and ask the human.
-	sas, err := pairing.Derive(in.UserPub, respPub, in.Salt)
+	// 6. Derive the SAS and ask the human. The flow commits and reveals the
+	//    device SIGNING keys today; folding each device's ENCRYPTION key into the
+	//    commit-reveal (so the v2 SAS binds it too, §41) is a tracked follow-up, so
+	//    the encryption fields are empty here for now — a v1-shaped SAS the v2
+	//    primitive derives identically.
+	sas, err := pairing.Derive(pairing.Keys{Sign: in.UserPub}, pairing.Keys{Sign: respPub}, in.Salt)
 	if err != nil {
 		abort(ctx, in.Relay, in.Session, "derive failed")
 		return Result{}, err
@@ -300,8 +304,9 @@ func (rp Responder) Run(ctx context.Context) (Result, error) {
 		return Result{}, fmt.Errorf("%w: %w", ErrCommitmentMismatch, err)
 	}
 
-	// 6. Derive the SAS and ask the human.
-	sas, err := pairing.Derive(userPub, rp.DevicePub, salt)
+	// 6. Derive the SAS and ask the human. Encryption keys are empty pending the
+	//    commit-reveal follow-up (see the initiator side) — a v1-shaped SAS.
+	sas, err := pairing.Derive(pairing.Keys{Sign: userPub}, pairing.Keys{Sign: rp.DevicePub}, salt)
 	if err != nil {
 		abort(ctx, rp.Relay, rp.Session, "derive failed")
 		return Result{}, err

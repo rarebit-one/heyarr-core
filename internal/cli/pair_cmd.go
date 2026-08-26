@@ -222,7 +222,9 @@ differ, which is exactly why a man-in-the-middle is caught.`,
 			if err != nil {
 				return fmt.Errorf("--salt is not hex: %w", err)
 			}
-			sas, err := pairing.Derive(initPub, respPub, saltBytes)
+			// Encryption keys are empty pending the commit-reveal follow-up that
+			// folds them into the flow (§41) — a v1-shaped SAS from the v2 primitive.
+			sas, err := pairing.Derive(pairing.Keys{Sign: initPub}, pairing.Keys{Sign: respPub}, saltBytes)
 			if err != nil {
 				return err
 			}

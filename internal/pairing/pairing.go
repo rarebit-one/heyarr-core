@@ -61,13 +61,19 @@ import (
 // Version is folded into the domain label below; a change to what is hashed is
 // then a different string entirely, never one computed against a different
 // reading of the same inputs. It is here for the reader — the label is the wire.
-const Version = 1
+const Version = 2
 
 // domain separates this hash from every other SHA-256 in the system, so a SAS can
 // never collide with, say, the possession-proof cert hash (internal/enrolment)
 // even on identical bytes. It carries the version, so bumping Version reshapes the
 // string.
-const domain = "heyarr/pairing/sas/v1"
+//
+// v2 (Milestone 9, ADR-0049) binds each device's X25519 ENCRYPTION key as well as
+// its signing key: a device is two keys now, and a pairing that authenticated the
+// signing key while a relay substituted the encryption key would let the relay
+// become a wrap target (§41). Binding both closes that. The bump reshapes every
+// string, which is correct — a v1 and a v2 pairing are different protocols.
+const domain = "heyarr/pairing/sas/v2"
 
 // Digits is the length of the decimal string, and it is a security parameter.
 //
@@ -141,31 +147,50 @@ func (s SAS) Grouped() string {
 	return d[:3] + " " + d[3:]
 }
 
-// Derive computes the short authentication string binding the two device public
-// keys and a fresh session salt. Both sides run it; they get the same string IFF
-// they hashed the same two keys, in the same roles, under the same salt.
+// EncKeySize is the length of a device's X25519 encryption public key — the same
+// 32 bytes an ed25519 key happens to be, named separately because it is a
+// different primitive (§41, ADR-0049).
+const EncKeySize = 32
+
+// Keys are one device's two public keys the pairing SAS commits to: its Ed25519
+// SIGNING key (§40) and its X25519 ENCRYPTION key (§41, ADR-0049). Binding both
+// is v2's whole point — a relay that swapped the encryption key while forwarding
+// the real signing key would become a wrap target, and the SAS must catch that
+// the same way it catches a swapped signing key.
 //
-// initiator is the authorising (existing) device's key and responder is the new
-// device's key. The ROLES fix the order: both sides know, out of band, which key
-// is which, so both slot identically and derive the same string. The order is not
-// sorted — it is the protocol's role assignment — and it is load-bearing only in
-// that the two sides must agree on it, which they do by construction (the old
-// device is always the initiator). Substituting EITHER key, in EITHER role,
-// changes the preimage and so the string, which is the property the tests pin.
+// Enc may be empty: a device with no encryption key (a Milestone 8 / v1 device)
+// pairs with an empty encryption field, still bound (its ABSENCE is framed, so a
+// relay that ADDS an encryption key changes the string). A non-empty Enc must be
+// exactly EncKeySize, or Derive refuses it as malformed — the same rule the
+// signing key has.
+type Keys struct {
+	Sign ed25519.PublicKey
+	Enc  []byte
+}
+
+// Derive computes the short authentication string binding both devices' key sets
+// and a fresh session salt. Both sides run it; they get the same string IFF they
+// hashed the same keys, in the same roles, under the same salt.
 //
-// The preimage is length-FRAMED: the domain label and each of the three inputs is
-// written with its length ahead of it. Plain concatenation would let a relay shift
-// a byte from the end of one key onto the start of the next and leave the hash
-// unchanged; framing makes every field's boundary part of what is hashed, so no
-// such shuffle exists. Keys must be exactly ed25519.PublicKeySize and the salt at
-// least MinSaltLen, or Derive refuses — a truncated key or an absent salt is not
-// something to pair on.
-func Derive(initiator, responder ed25519.PublicKey, salt []byte) (SAS, error) {
-	if len(initiator) != ed25519.PublicKeySize {
-		return "", fmt.Errorf("%w: initiator key is %d bytes, want %d", ErrMalformedKey, len(initiator), ed25519.PublicKeySize)
+// initiator is the authorising (existing) device and responder is the new device.
+// The ROLES fix the order: both sides know, out of band, which is which, so both
+// slot identically and derive the same string. Substituting ANY key — either
+// device's signing OR encryption key, in either role — changes the preimage and
+// so the string, which is the property the tests pin in every direction.
+//
+// The preimage is length-FRAMED: the domain label and every input is written with
+// its length ahead of it. Plain concatenation would let a relay shift a byte from
+// the end of one field onto the start of the next and leave the hash unchanged;
+// framing makes every boundary part of what is hashed, so no such shuffle exists —
+// and it is what lets an empty encryption key be bound by its absence rather than
+// silently dropped. Signing keys must be exactly ed25519.PublicKeySize, an
+// encryption key empty or exactly EncKeySize, and the salt at least MinSaltLen.
+func Derive(initiator, responder Keys, salt []byte) (SAS, error) {
+	if err := initiator.validate("initiator"); err != nil {
+		return "", err
 	}
-	if len(responder) != ed25519.PublicKeySize {
-		return "", fmt.Errorf("%w: responder key is %d bytes, want %d", ErrMalformedKey, len(responder), ed25519.PublicKeySize)
+	if err := responder.validate("responder"); err != nil {
+		return "", err
 	}
 	if len(salt) < MinSaltLen {
 		return "", fmt.Errorf("%w: %d bytes, want at least %d", ErrShortSalt, len(salt), MinSaltLen)
@@ -173,11 +198,14 @@ func Derive(initiator, responder ed25519.PublicKey, salt []byte) (SAS, error) {
 
 	h := sha256.New()
 	// Every field is length-framed so no byte can migrate across a boundary and
-	// leave the digest unchanged. The domain label is framed too, so it cannot be
-	// confused with the start of a key.
+	// leave the digest unchanged, and so an empty encryption key is bound by its
+	// framed length rather than vanishing. The domain label is framed too, so it
+	// cannot be confused with the start of a key.
 	writeField(h, []byte(domain))
-	writeField(h, initiator)
-	writeField(h, responder)
+	writeField(h, initiator.Sign)
+	writeField(h, initiator.Enc)
+	writeField(h, responder.Sign)
+	writeField(h, responder.Enc)
 	writeField(h, salt)
 
 	// Reduce the full 256-bit digest modulo 10^Digits. Using the whole digest via
@@ -186,6 +214,20 @@ func Derive(initiator, responder ed25519.PublicKey, salt []byte) (SAS, error) {
 	n := new(big.Int).SetBytes(h.Sum(nil))
 	n.Mod(n, big.NewInt(space))
 	return SAS(fmt.Sprintf("%0*d", Digits, n)), nil
+}
+
+// validate refuses a key set that is not something to pair on: a signing key that
+// is not exactly a key's length, or a non-empty encryption key that is not exactly
+// EncKeySize. An empty encryption key is allowed (a v1 device) and bound by its
+// framed absence.
+func (k Keys) validate(role string) error {
+	if len(k.Sign) != ed25519.PublicKeySize {
+		return fmt.Errorf("%w: %s signing key is %d bytes, want %d", ErrMalformedKey, role, len(k.Sign), ed25519.PublicKeySize)
+	}
+	if len(k.Enc) != 0 && len(k.Enc) != EncKeySize {
+		return fmt.Errorf("%w: %s encryption key is %d bytes, want %d or 0", ErrMalformedKey, role, len(k.Enc), EncKeySize)
+	}
+	return nil
 }
 
 // NewSalt returns a fresh SaltLen-byte session salt from the system CSPRNG. A new
