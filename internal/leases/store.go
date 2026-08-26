@@ -75,6 +75,7 @@ type Store struct {
 	events   *events.Log
 	signer   ed25519.PrivateKey
 	issuerID string
+	siblings SiblingKeys
 }
 
 // Options configure a Store.
@@ -89,7 +90,22 @@ type Options struct {
 	// ISSUE; a store built without it can still honour and revoke leases others
 	// issued, which is what a read-only replica does.
 	Signer ed25519.PrivateKey
-	Clock  Clock
+	// Siblings supplies the peer identities a lease may ALSO be verified against
+	// (ADR-0012 membership). It is what makes a lease minted at site A honourable
+	// at site B: B trusts A because B has A pinned. Nil means "this peer's own
+	// leases only" — correct for a single-peer deployment, and the #304 shape
+	// before this widening. The lookup is at honour time, so enrolling or
+	// revoking a peer takes effect on the next honoured lease, not at restart.
+	Siblings SiblingKeys
+	Clock    Clock
+}
+
+// SiblingKeys supplies the pinned public keys of enrolled peers, keyed by their
+// rendered form ("ed25519:<hex>"). A membership store satisfies it through a
+// thin adapter; a test satisfies it with a map. It is deliberately narrow — the
+// leases package needs the trust set, not the membership model.
+type SiblingKeys interface {
+	PeerKeys(ctx context.Context) (map[string]ed25519.PublicKey, error)
 }
 
 // New constructs a Store.
@@ -108,7 +124,7 @@ func New(opts Options) (*Store, error) {
 	if clock == nil {
 		clock = systemClock{}
 	}
-	s := &Store{writer: opts.Writer, reader: reader, clock: clock, events: opts.Events, signer: opts.Signer}
+	s := &Store{writer: opts.Writer, reader: reader, clock: clock, events: opts.Events, signer: opts.Signer, siblings: opts.Siblings}
 	if len(opts.Signer) == ed25519.PrivateKeySize {
 		s.issuerID = identity.FormatPublicKey(opts.Signer.Public().(ed25519.PublicKey))
 	}
@@ -164,19 +180,25 @@ func (s *Store) Issue(ctx context.Context, principal, resource string, caps []gr
 	}, nil
 }
 
-// Honour verifies a presented lease token against the request and this issuer's
-// key, and refuses one this issuer has revoked.
+// Honour verifies a presented lease token against the request and the trust
+// store, and refuses one this issuer has revoked.
 //
-// The trust store here is this peer's OWN key only: #304 issues and honours a
-// peer's own leases. #285 widens the trust store to sibling peers from
-// membership, which is what makes a lease minted at site A honourable at site B.
-// A revoked lease this store holds is refused — but ONLY here, at the issuer;
-// across a partition a sibling has no such row and honours until expiry, which
-// is the stated consequence, not a bug (ADR-0048).
+// The trust store is this peer's OWN key plus every enrolled sibling's (Options.
+// Siblings) — which is the whole cross-site property: a lease minted at site A
+// verifies at site B because B has A pinned, and B reaches NOBODY to check it.
+// The signature does all the work the network would otherwise have to; that is
+// what makes a lease honourable "whether or not the two peers can reach each
+// other" (ADR-0048).
+//
+// Revocation is asymmetric, by design. A lease THIS store issued and has since
+// revoked is refused here (the reachable-issuer path holds the row). A sibling's
+// cached lease has no row here, so this peer honours it on its signature until
+// it expires — the stated consequence that the 24h cap (grant.MaxTTL) bounds,
+// not a bug.
 func (s *Store) Honour(ctx context.Context, token string, req grant.Request, now time.Time) (grant.Grant, error) {
-	trust := grant.Keys{}
-	if s.issuerID != "" {
-		trust[s.issuerID] = s.signer.Public().(ed25519.PublicKey)
+	trust, err := s.trustStore(ctx)
+	if err != nil {
+		return grant.Grant{}, err
 	}
 	g, err := grant.Verify(token, trust, req, now)
 	if err != nil {
@@ -190,6 +212,30 @@ func (s *Store) Honour(ctx context.Context, token string, req grant.Request, now
 		return grant.Grant{}, ErrLeaseRevoked
 	}
 	return g, nil
+}
+
+// trustStore is this peer's own key plus every enrolled sibling's. It is built
+// per honour so enrolling or revoking a peer takes effect on the next request,
+// the same "read the trust root every time" property peer membership already
+// has — a revoked peer's leases stop verifying at once, not at the next restart.
+func (s *Store) trustStore(ctx context.Context) (grant.Keys, error) {
+	trust := grant.Keys{}
+	if s.issuerID != "" {
+		trust[s.issuerID] = s.signer.Public().(ed25519.PublicKey)
+	}
+	if s.siblings != nil {
+		keys, err := s.siblings.PeerKeys(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("leases: reading sibling keys: %w", err)
+		}
+		for id, pub := range keys {
+			// self already present; a sibling never overrides it.
+			if _, ok := trust[id]; !ok {
+				trust[id] = pub
+			}
+		}
+	}
+	return trust, nil
 }
 
 // Revoke tombstones a lease by id. Idempotent.
