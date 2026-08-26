@@ -421,6 +421,13 @@ func (s *Store) Enrol(certToken string) (Device, error) {
 		return Device{}, fmt.Errorf("%w: cert binds %s, this device is %s",
 			ErrCertNotForDevice, cert.Device, dev.PublicKeyString())
 	}
+	// A v2 cert names an encryption key too (§41); it must be THIS device's. A v1
+	// cert (no encryption key) and a pre-Milestone-9 device (no key to match) both
+	// skip this — the binding is only checked when both sides have one.
+	if cert.DeviceEnc != "" && dev.EncryptionKeyString() != "" && cert.DeviceEnc != dev.EncryptionKeyString() {
+		return Device{}, fmt.Errorf("%w: cert binds encryption key %s, this device is %s",
+			ErrCertNotForDevice, cert.DeviceEnc, dev.EncryptionKeyString())
+	}
 	if err := os.WriteFile(s.CertPath(), []byte(certToken+"\n"), KeyFileMode); err != nil {
 		return Device{}, fmt.Errorf("device: writing the enrolment cert: %w", err)
 	}

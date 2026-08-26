@@ -30,7 +30,7 @@ func TestRoundTripAuthenticatesTheDevice(t *testing.T) {
 	t.Parallel()
 	userPriv, user, devicePub := actors(t)
 
-	tok, err := SignCert(userPriv, devicePub, testNow, 0)
+	tok, err := SignCert(userPriv, devicePub, "", testNow, 0)
 	if err != nil {
 		t.Fatalf("signing: %v", err)
 	}
@@ -50,12 +50,66 @@ func TestRoundTripAuthenticatesTheDevice(t *testing.T) {
 	}
 }
 
+// TestV2CertBindsTheEncryptionKey: a v2 cert binds the device's X25519
+// encryption key (§41, ADR-0049), and VerifyCert returns it under the one user
+// signature — so a wrapper learns an enrolled device's encryption key from a
+// source the user signed. Tampering the bound key breaks the signature.
+func TestV2CertBindsTheEncryptionKey(t *testing.T) {
+	t.Parallel()
+	userPriv, user, devicePub := actors(t)
+	const deviceEnc = "x25519:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+
+	tok, err := SignCert(userPriv, devicePub, deviceEnc, testNow, 0)
+	if err != nil {
+		t.Fatalf("signing a v2 cert: %v", err)
+	}
+	c, err := VerifyCert(tok, user.PublicKey, testNow)
+	if err != nil {
+		t.Fatalf("a valid v2 cert was refused: %v (%s)", err, ReasonForCert(err))
+	}
+	if c.DeviceEnc != deviceEnc {
+		t.Fatalf("cert binds encryption key %q, want %q", c.DeviceEnc, deviceEnc)
+	}
+
+	// The encryption key is inside the signed payload: the body carries "denc",
+	// so a cert re-pointed at a different encryption key cannot verify (it is a
+	// different signed message). Assert the field is signed by confirming it is
+	// present in the encoded body.
+	body, _, _ := strings.Cut(tok, ".")
+	decoded, err := decode(body)
+	if err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	if !strings.Contains(string(decoded), "denc") {
+		t.Fatal("the encryption key is not in the signed payload")
+	}
+}
+
+// TestV1CertStillVerifies: a v1-shaped cert (empty encryption key) still
+// authenticates and returns no encryption key — an already-enrolled Milestone 8
+// device keeps working after the version bump.
+func TestV1CertStillVerifies(t *testing.T) {
+	t.Parallel()
+	userPriv, user, devicePub := actors(t)
+	tok, err := SignCert(userPriv, devicePub, "", testNow, 0)
+	if err != nil {
+		t.Fatalf("signing: %v", err)
+	}
+	c, err := VerifyCert(tok, user.PublicKey, testNow)
+	if err != nil {
+		t.Fatalf("a v1-shaped cert was refused: %v", err)
+	}
+	if c.DeviceEnc != "" {
+		t.Fatalf("a cert with no encryption key reported %q", c.DeviceEnc)
+	}
+}
+
 // The same device key, enrolled by user A, authenticates as A against a SECOND
 // verifier that has also pinned A — the "either peer, same user" property (§40).
 func TestSameCertAuthenticatesAtEitherPeer(t *testing.T) {
 	t.Parallel()
 	userPriv, user, devicePub := actors(t)
-	tok, err := SignCert(userPriv, devicePub, testNow, 0)
+	tok, err := SignCert(userPriv, devicePub, "", testNow, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +126,7 @@ func TestSameCertAuthenticatesAtEitherPeer(t *testing.T) {
 func TestUnenrolledUserIsRefused(t *testing.T) {
 	t.Parallel()
 	userPriv, _, devicePub := actors(t)
-	tok, err := SignCert(userPriv, devicePub, testNow, 0)
+	tok, err := SignCert(userPriv, devicePub, "", testNow, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +152,7 @@ func TestUnenrolledUserIsRefused(t *testing.T) {
 func TestCertSignedByAnotherKeyFailsSignature(t *testing.T) {
 	t.Parallel()
 	userPriv, user, devicePub := actors(t)
-	tok, err := SignCert(userPriv, devicePub, testNow, 0)
+	tok, err := SignCert(userPriv, devicePub, "", testNow, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +175,7 @@ func TestCertSignedByAnotherKeyFailsSignature(t *testing.T) {
 func TestTamperedCertIsNeverHonoured(t *testing.T) {
 	t.Parallel()
 	userPriv, user, devicePub := actors(t)
-	tok, err := SignCert(userPriv, devicePub, testNow, 0)
+	tok, err := SignCert(userPriv, devicePub, "", testNow, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +209,7 @@ func TestExpiryAndSkewFailTowardRefusal(t *testing.T) {
 	t.Parallel()
 	userPriv, user, devicePub := actors(t)
 	// A short-lived cert so the boundary is easy to name.
-	tok, err := SignCert(userPriv, devicePub, testNow, time.Hour)
+	tok, err := SignCert(userPriv, devicePub, "", testNow, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,13 +235,13 @@ func TestExpiryAndSkewFailTowardRefusal(t *testing.T) {
 func TestSignCertRefusesIncompleteCerts(t *testing.T) {
 	t.Parallel()
 	userPriv, _, devicePub := actors(t)
-	if _, err := SignCert(userPriv, nil, testNow, 0); !errors.Is(err, ErrIncomplete) {
+	if _, err := SignCert(userPriv, nil, "", testNow, 0); !errors.Is(err, ErrIncomplete) {
 		t.Fatalf("no device key: want ErrIncomplete, got %v", err)
 	}
-	if _, err := SignCert(userPriv, devicePub, time.Time{}, 0); !errors.Is(err, ErrIncomplete) {
+	if _, err := SignCert(userPriv, devicePub, "", time.Time{}, 0); !errors.Is(err, ErrIncomplete) {
 		t.Fatalf("no issued-at: want ErrIncomplete, got %v", err)
 	}
-	if _, err := SignCert(nil, devicePub, testNow, 0); err == nil {
+	if _, err := SignCert(nil, devicePub, "", testNow, 0); err == nil {
 		t.Fatal("a nil signing key should be refused")
 	}
 }
@@ -197,7 +251,7 @@ func TestSignCertRefusesIncompleteCerts(t *testing.T) {
 func TestAuthenticatedDeviceKeyIsUsable(t *testing.T) {
 	t.Parallel()
 	userPriv, user, devicePub := actors(t)
-	tok, _ := SignCert(userPriv, devicePub, testNow, 0)
+	tok, _ := SignCert(userPriv, devicePub, "", testNow, 0)
 	c, err := VerifyCert(tok, user.PublicKey, testNow)
 	if err != nil {
 		t.Fatal(err)

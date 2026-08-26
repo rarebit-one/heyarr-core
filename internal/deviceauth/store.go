@@ -68,14 +68,20 @@ type User struct {
 
 // Device is a device key a user has vouched for.
 type Device struct {
-	ID         string
-	UserID     string
-	DeviceKey  string // rendered "ed25519:<hex>"
-	Name       string
-	Cert       string // the user-signed enrolment cert token
-	EnrolledAt time.Time
-	ExpiresAt  time.Time
-	RevokedAt  *time.Time
+	ID        string
+	UserID    string
+	DeviceKey string // rendered "ed25519:<hex>"
+	// EncryptionKey is the device's X25519 encryption key ("x25519:<hex>"), the
+	// key space keys are wrapped for (§41, ADR-0049). It is pinned here so a
+	// wrapper on either peer can learn an enrolled device's encryption key from
+	// the cert the user signed, rather than trusting an unauthenticated claim.
+	// Empty for a device enrolled by a v1 cert (no encryption key bound).
+	EncryptionKey string
+	Name          string
+	Cert          string // the user-signed enrolment cert token
+	EnrolledAt    time.Time
+	ExpiresAt     time.Time
+	RevokedAt     *time.Time
 }
 
 // Active reports whether the device may authenticate at t.
@@ -223,9 +229,9 @@ func (s *Store) EnrolDevice(ctx context.Context, certToken, name string) (Device
 
 	id := uuid.Must(uuid.NewV7()).String()
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO device_identities (id, user_id, device_key, name, cert, enrolled_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, user.ID, cert.Device, name, certToken, now.Format(timeFormat), cert.ExpiresAt.UTC().Format(timeFormat)); err != nil {
+		`INSERT INTO device_identities (id, user_id, device_key, encryption_key, name, cert, enrolled_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, user.ID, cert.Device, cert.DeviceEnc, name, certToken, now.Format(timeFormat), cert.ExpiresAt.UTC().Format(timeFormat)); err != nil {
 		return Device{}, fmt.Errorf("deviceauth: enrolling device: %w", err)
 	}
 	ev, err := s.events.EmitTx(ctx, tx, events.TypeDeviceEnrolled, "device_identity", id,
@@ -238,8 +244,8 @@ func (s *Store) EnrolDevice(ctx context.Context, certToken, name string) (Device
 	}
 	s.events.Publish(ev)
 	return Device{
-		ID: id, UserID: user.ID, DeviceKey: cert.Device, Name: name, Cert: certToken,
-		EnrolledAt: now, ExpiresAt: cert.ExpiresAt.UTC(),
+		ID: id, UserID: user.ID, DeviceKey: cert.Device, EncryptionKey: cert.DeviceEnc,
+		Name: name, Cert: certToken, EnrolledAt: now, ExpiresAt: cert.ExpiresAt.UTC(),
 	}, nil
 }
 
@@ -296,7 +302,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 // LookupDevice returns the enrolled device for a rendered device key.
 func (s *Store) LookupDevice(ctx context.Context, deviceKey string) (Device, error) {
 	row := s.reader.QueryRowContext(ctx,
-		`SELECT id, user_id, device_key, name, cert, enrolled_at, expires_at, revoked_at
+		`SELECT id, user_id, device_key, encryption_key, name, cert, enrolled_at, expires_at, revoked_at
 		 FROM device_identities WHERE device_key = ?`, deviceKey)
 	return scanDevice(row)
 }
@@ -383,7 +389,7 @@ func (s *Store) RevokeDevice(ctx context.Context, deviceKey string) (Device, err
 // ListDevices returns a user's devices, most-recently-enrolled first.
 func (s *Store) ListDevices(ctx context.Context, userID string) ([]Device, error) {
 	rows, err := s.reader.QueryContext(ctx,
-		`SELECT id, user_id, device_key, name, cert, enrolled_at, expires_at, revoked_at
+		`SELECT id, user_id, device_key, encryption_key, name, cert, enrolled_at, expires_at, revoked_at
 		 FROM device_identities WHERE user_id = ? ORDER BY enrolled_at DESC, id DESC`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("deviceauth: listing devices: %w", err)
@@ -408,7 +414,7 @@ func scanDevice(row rowScanner) (Device, error) {
 	var d Device
 	var enrolled, expires string
 	var revoked sql.NullString
-	err := row.Scan(&d.ID, &d.UserID, &d.DeviceKey, &d.Name, &d.Cert, &enrolled, &expires, &revoked)
+	err := row.Scan(&d.ID, &d.UserID, &d.DeviceKey, &d.EncryptionKey, &d.Name, &d.Cert, &enrolled, &expires, &revoked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, ErrUnknownDevice
 	}

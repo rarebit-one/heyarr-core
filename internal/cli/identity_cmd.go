@@ -330,7 +330,11 @@ identity lives. It reads the local device key (generate one with
 			if err != nil {
 				return err
 			}
-			cert, err := idStore.SignCert(dev.PublicKey, lifetime)
+			// Bind the device's encryption key (§41) as well as its signing key, so
+			// the cert authenticates the device AND names what space keys are
+			// wrapped for. A pre-Milestone-9 device with no encryption key passes
+			// "", minting the v1-shaped binding.
+			cert, err := idStore.SignCert(dev.PublicKey, dev.EncryptionKeyString(), lifetime)
 			if err != nil {
 				return err
 			}
