@@ -51,7 +51,7 @@ func TestRecoverReconstructsTheSameIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert, err := fresh.SignCert(devPub, 0)
+	cert, err := fresh.SignCert(devPub, "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

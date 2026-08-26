@@ -208,7 +208,10 @@ history.`,
 					return err
 				}
 			}
-			cert, err := idStore.SignCert(dev.PublicKey, lifetime)
+			// Bind the device's encryption key (§41) as well as its signing key, so
+			// the cert names what space keys are wrapped for. A device with none
+			// passes "" (the v1-shaped binding).
+			cert, err := idStore.SignCert(dev.PublicKey, dev.EncryptionKeyString(), lifetime)
 			if err != nil {
 				return err
 			}

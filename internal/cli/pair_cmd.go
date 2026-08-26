@@ -129,7 +129,10 @@ lives.`,
 				UserPub: id.PublicKey, Salt: salt,
 				Confirm: confirmFunc(cmd, &f),
 				Sign: func(devPub ed25519.PublicKey) (string, error) {
-					return idStore.SignCert(devPub, lifetime)
+					// The pairing flow does not yet exchange the new device's
+					// encryption key, so the cert binds none for now (v1-shaped);
+					// folding it into the commit-reveal is the #336 follow-up.
+					return idStore.SignCert(devPub, "", lifetime)
 				},
 			}.Run(ctx)
 			return reportPairResult(cmd, "authorise", res, err)
