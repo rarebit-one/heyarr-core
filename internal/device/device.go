@@ -17,6 +17,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
 // Algorithm names the signature scheme. It is identity's constant rather than
@@ -32,6 +33,13 @@ const (
 	// from the key so that everything a person or an agent may see can be read
 	// without opening the file that must never be shown.
 	RecordFileName = "device.json"
+	// EncryptionKeyFileName holds the device's X25519 ENCRYPTION private key —
+	// a different primitive from the signing key above, for key agreement rather
+	// than signing (ADR-0049). It is what space keys are wrapped for (§41): a
+	// separate keypair, generated on the device, its private half never leaving
+	// it. Kept in its own file, at the same 0600, so the two secrets are never
+	// conflated and either can be reasoned about alone.
+	EncryptionKeyFileName = "device_x25519.key"
 	// CertFileName holds the user-signed enrolment cert (§40, ADR-0048), when
 	// this device has been enrolled. It is what takes the `not_enrolled` label
 	// off: a device that holds a valid cert authenticates as its user. It lives
@@ -53,6 +61,11 @@ const DirMode fs.FileMode = 0o700
 // peer key at a glance — the two are the same kind of secret with very
 // different owners, and finding one where the other belongs is a finding.
 const keyFilePrefix = "heyarr-device-" + Algorithm + "-seed:"
+
+// encKeyFilePrefix is keyFilePrefix's counterpart for the X25519 encryption key,
+// naming the different primitive so the two key files can never be mistaken for
+// each other even by a person reading them.
+const encKeyFilePrefix = "heyarr-device-" + encryption.Algorithm + "-seed:"
 
 // The enrolment statuses a device can report. Enum-like values rather than
 // prose because a caller must be able to compare them.
@@ -128,6 +141,17 @@ type Device struct {
 	CreatedAt time.Time
 	KeyPath   string
 
+	// EncryptionKey is the device's X25519 ENCRYPTION public key — the key space
+	// keys are wrapped for (§41, ADR-0049). It is the raw 32-byte public half,
+	// rendered "x25519:<hex>" by EncryptionKeyString. Nil for a device generated
+	// before Milestone 9 (its record carries no encryption key): such a device
+	// authenticates and signs as before but is not yet a wrap target until it is
+	// regenerated with `heyarr device generate --force`.
+	EncryptionKey []byte
+	// EncryptionKeyPath is where the X25519 private key lives. The path, never
+	// the bytes, like KeyPath.
+	EncryptionKeyPath string
+
 	// cert and enrolledUser hold the VALIDATED enrolment state, empty when this
 	// device holds no valid cert. They are set by load() from the cert file
 	// after checking it binds this device key and is unexpired — never trusted
@@ -141,6 +165,12 @@ type Device struct {
 // PublicKeyString renders the public key the way #135 renders a peer's:
 // algorithm-prefixed lowercase hex.
 func (d Device) PublicKeyString() string { return identity.FormatPublicKey(d.PublicKey) }
+
+// EncryptionKeyString renders the X25519 encryption public key "x25519:<hex>"
+// (encryption.FormatPublicKey), or "" when this device has none — the same
+// algorithm-prefixed convention as the signing key, so a reader tells the two
+// primitives apart at a glance (ADR-0049).
+func (d Device) EncryptionKeyString() string { return encryption.FormatPublicKey(d.EncryptionKey) }
 
 // EnrolmentStatus reports whether this key is enrolled with a user identity. It
 // is [EnrolmentEnrolled] exactly when this device holds a valid, unexpired
@@ -188,7 +218,12 @@ type record struct {
 	Name      string `json:"name"`
 	Algorithm string `json:"algorithm"`
 	PublicKey string `json:"public_key"`
-	CreatedAt string `json:"created_at"`
+	// EncryptionKey is the rendered X25519 public key ("x25519:<hex>"), stored so
+	// a swapped encryption-key file is caught rather than adopted, exactly as
+	// PublicKey guards the signing key. `omitempty` so a pre-Milestone-9 record
+	// (no encryption key) round-trips unchanged and reads back as "no key".
+	EncryptionKey string `json:"encryption_key,omitempty"`
+	CreatedAt     string `json:"created_at"`
 }
 
 // StoreOptions configure a Store.
@@ -222,6 +257,9 @@ func (s *Store) Dir() string { return s.dir }
 
 // KeyPath is the private key's location.
 func (s *Store) KeyPath() string { return filepath.Join(s.dir, KeyFileName) }
+
+// EncryptionKeyPath is the X25519 encryption private key's location.
+func (s *Store) EncryptionKeyPath() string { return filepath.Join(s.dir, EncryptionKeyFileName) }
 
 // RecordPath is the metadata's location.
 func (s *Store) RecordPath() string { return filepath.Join(s.dir, RecordFileName) }
@@ -265,17 +303,28 @@ func (s *Store) Generate(name string, force bool) (Device, error) {
 	if err != nil {
 		return Device{}, fmt.Errorf("device: generating a keypair: %w", err)
 	}
-	if err := writeKeyFile(s.KeyPath(), priv.Seed()); err != nil {
+	// The X25519 encryption keypair, drawn beside the signing key: a device
+	// carries two keys, one to authenticate and one to be wrapped for (ADR-0049).
+	encPriv, err := encryption.GenerateKey()
+	if err != nil {
+		return Device{}, fmt.Errorf("device: generating an encryption keypair: %w", err)
+	}
+	if err := writeKeyFile(s.KeyPath(), keyFilePrefix, priv.Seed()); err != nil {
+		return Device{}, err
+	}
+	if err := writeKeyFile(s.EncryptionKeyPath(), encKeyFilePrefix, encPriv.Bytes()); err != nil {
 		return Device{}, err
 	}
 
 	dev := Device{
-		ID:        uuid.Must(uuid.NewV7()).String(),
-		Name:      name,
-		Algorithm: Algorithm,
-		PublicKey: pub,
-		CreatedAt: s.clock.Now().UTC(),
-		KeyPath:   s.KeyPath(),
+		ID:                uuid.Must(uuid.NewV7()).String(),
+		Name:              name,
+		Algorithm:         Algorithm,
+		PublicKey:         pub,
+		EncryptionKey:     encPriv.PublicKey().Bytes(),
+		CreatedAt:         s.clock.Now().UTC(),
+		KeyPath:           s.KeyPath(),
+		EncryptionKeyPath: s.EncryptionKeyPath(),
 	}
 	if err := s.writeRecord(dev); err != nil {
 		return Device{}, err
@@ -330,6 +379,9 @@ func (s *Store) Remove(id string) (Device, error) {
 	if err := os.Remove(s.KeyPath()); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return Device{}, fmt.Errorf("device: removing the private key: %w", err)
 	}
+	if err := os.Remove(s.EncryptionKeyPath()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return Device{}, fmt.Errorf("device: removing the encryption key: %w", err)
+	}
 	if err := os.Remove(s.RecordPath()); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return Device{}, fmt.Errorf("device: removing the device record: %w", err)
 	}
@@ -368,6 +420,13 @@ func (s *Store) Enrol(certToken string) (Device, error) {
 	if cert.Device != dev.PublicKeyString() {
 		return Device{}, fmt.Errorf("%w: cert binds %s, this device is %s",
 			ErrCertNotForDevice, cert.Device, dev.PublicKeyString())
+	}
+	// A v2 cert names an encryption key too (§41); it must be THIS device's. A v1
+	// cert (no encryption key) and a pre-Milestone-9 device (no key to match) both
+	// skip this — the binding is only checked when both sides have one.
+	if cert.DeviceEnc != "" && dev.EncryptionKeyString() != "" && cert.DeviceEnc != dev.EncryptionKeyString() {
+		return Device{}, fmt.Errorf("%w: cert binds encryption key %s, this device is %s",
+			ErrCertNotForDevice, cert.DeviceEnc, dev.EncryptionKeyString())
 	}
 	if err := os.WriteFile(s.CertPath(), []byte(certToken+"\n"), KeyFileMode); err != nil {
 		return Device{}, fmt.Errorf("device: writing the enrolment cert: %w", err)
@@ -410,7 +469,7 @@ func (s *Store) Credential(now time.Time, ttl time.Duration) (string, error) {
 	if dev.cert == "" {
 		return "", fmt.Errorf("%w: enrol it with `heyarr identity enrol` first", ErrNotEnrolled)
 	}
-	seed, err := readKeyFile(s.KeyPath())
+	seed, err := readKeyFile(s.KeyPath(), keyFilePrefix, ed25519.SeedSize)
 	if err != nil {
 		return "", err
 	}
@@ -440,7 +499,7 @@ func (s *Store) load() (Device, error) {
 			ErrMalformedKey, s.RecordPath(), err)
 	}
 
-	seed, err := readKeyFile(s.KeyPath())
+	seed, err := readKeyFile(s.KeyPath(), keyFilePrefix, ed25519.SeedSize)
 	if err != nil {
 		return Device{}, err
 	}
@@ -455,13 +514,40 @@ func (s *Store) load() (Device, error) {
 			ErrMalformedKey, s.RecordPath(), rec.PublicKey, s.KeyPath(), got)
 	}
 
+	// The encryption key, when the record carries one. It is verified the same
+	// way the signing key is — the file must back the recorded public key — so a
+	// swapped encryption-key file is caught, not adopted. A record without an
+	// encryption key is a pre-Milestone-9 device: it loads with EncryptionKey nil
+	// rather than failing, so `device list` still works and the device keeps
+	// authenticating; it simply is not yet a wrap target.
+	var encPub []byte
+	if rec.EncryptionKey != "" {
+		encSeed, err := readKeyFile(s.EncryptionKeyPath(), encKeyFilePrefix, encryption.SeedSize)
+		if err != nil {
+			return Device{}, err
+		}
+		encKey, err := encryption.NewPrivateKey(encSeed)
+		if err != nil {
+			return Device{}, fmt.Errorf("%w: the encryption key at %s is unusable: %w",
+				ErrMalformedKey, s.EncryptionKeyPath(), err)
+		}
+		encPub = encKey.PublicKey().Bytes()
+		if got := encryption.FormatPublicKey(encPub); got != rec.EncryptionKey {
+			return Device{}, fmt.Errorf("%w: %s records encryption key %s and the key at %s is %s — "+
+				"one of the two files was replaced, and adopting either would silently change what this device can be wrapped for",
+				ErrMalformedKey, s.RecordPath(), rec.EncryptionKey, s.EncryptionKeyPath(), got)
+		}
+	}
+
 	dev := Device{
-		ID:        rec.ID,
-		Name:      rec.Name,
-		Algorithm: rec.Algorithm,
-		PublicKey: pub,
-		CreatedAt: createdAt,
-		KeyPath:   s.KeyPath(),
+		ID:                rec.ID,
+		Name:              rec.Name,
+		Algorithm:         rec.Algorithm,
+		PublicKey:         pub,
+		EncryptionKey:     encPub,
+		CreatedAt:         createdAt,
+		KeyPath:           s.KeyPath(),
+		EncryptionKeyPath: s.EncryptionKeyPath(),
 	}
 	// A held enrolment cert takes the `not_enrolled` label off — but only if it
 	// still validates. A missing file is the ordinary un-enrolled state; a
@@ -514,11 +600,12 @@ func (s *Store) loadCert(devicePub ed25519.PublicKey) (user, token string, ok bo
 
 func (s *Store) writeRecord(dev Device) error {
 	buf, err := json.MarshalIndent(record{
-		ID:        dev.ID,
-		Name:      dev.Name,
-		Algorithm: dev.Algorithm,
-		PublicKey: dev.PublicKeyString(),
-		CreatedAt: dev.CreatedAt.UTC().Format(time.RFC3339Nano),
+		ID:            dev.ID,
+		Name:          dev.Name,
+		Algorithm:     dev.Algorithm,
+		PublicKey:     dev.PublicKeyString(),
+		EncryptionKey: dev.EncryptionKeyString(),
+		CreatedAt:     dev.CreatedAt.UTC().Format(time.RFC3339Nano),
 	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("device: encoding the device record: %w", err)
@@ -531,8 +618,10 @@ func (s *Store) writeRecord(dev Device) error {
 
 // writeKeyFile writes the seed at 0600 through a temporary file in the same
 // directory, so a crash mid-write cannot leave a truncated key that a later
-// read would take for a different identity.
-func writeKeyFile(path string, seed []byte) error {
+// read would take for a different identity. The prefix makes the file
+// self-describing and is what readKeyFile checks — the signing and encryption
+// keys pass their own prefixes so neither can be read as the other.
+func writeKeyFile(path, prefix string, seed []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".devicekey-*.tmp")
 	if err != nil {
 		return fmt.Errorf("device: writing the private key: %w", err)
@@ -545,7 +634,7 @@ func writeKeyFile(path string, seed []byte) error {
 		_ = tmp.Close()
 		return fmt.Errorf("device: writing the private key: %w", err)
 	}
-	if _, err := tmp.WriteString(keyFilePrefix + hex.EncodeToString(seed) + "\n"); err != nil {
+	if _, err := tmp.WriteString(prefix + hex.EncodeToString(seed) + "\n"); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("device: writing the private key: %w", err)
 	}
@@ -562,8 +651,12 @@ func writeKeyFile(path string, seed []byte) error {
 	return nil
 }
 
-// readKeyFile loads the seed, refusing a key anyone but its owner can read.
-func readKeyFile(path string) ([]byte, error) {
+// readKeyFile loads the seed, refusing a key anyone but its owner can read. The
+// prefix and wantLen are the key's own — the signing key passes keyFilePrefix and
+// ed25519.SeedSize, the encryption key encKeyFilePrefix and encryption.SeedSize —
+// so a file holding the wrong kind of key is refused rather than decoded as the
+// one expected.
+func readKeyFile(path, prefix string, wantLen int) ([]byte, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -583,16 +676,16 @@ func readKeyFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("device: reading the private key: %w", err)
 	}
 	text := strings.TrimSpace(string(raw))
-	if !strings.HasPrefix(text, keyFilePrefix) {
-		return nil, fmt.Errorf("%w: %s does not start with %q", ErrMalformedKey, path, keyFilePrefix)
+	if !strings.HasPrefix(text, prefix) {
+		return nil, fmt.Errorf("%w: %s does not start with %q", ErrMalformedKey, path, prefix)
 	}
-	seed, err := hex.DecodeString(strings.TrimPrefix(text, keyFilePrefix))
+	seed, err := hex.DecodeString(strings.TrimPrefix(text, prefix))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s is not valid hex: %w", ErrMalformedKey, path, err)
 	}
-	if len(seed) != ed25519.SeedSize {
+	if len(seed) != wantLen {
 		return nil, fmt.Errorf("%w: %s holds %d bytes of key material, want %d",
-			ErrMalformedKey, path, len(seed), ed25519.SeedSize)
+			ErrMalformedKey, path, len(seed), wantLen)
 	}
 	return seed, nil
 }

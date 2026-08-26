@@ -81,11 +81,25 @@ const hrp = "heyarr"
 // is written on paper, and a change to how the seed is derived must be a new
 // label (a new key), never a silent reinterpretation of the old one.
 //
-// Milestone 9's encryption root will derive from the SAME secret under its own
-// distinct label (e.g. "heyarr/recovery/v1/encryption-root"), which is why this
-// is a label and not a bare HKDF-Expand: RFC 5869's info parameter is exactly
-// the domain-separation tag, and two distinct labels yield two independent keys.
+// Milestone 9's encryption root derives from the SAME secret under
+// [UserEncryptionLabel], a distinct label, which is why this is a label and not
+// a bare HKDF-Expand: RFC 5869's info parameter is exactly the domain-separation
+// tag, and two distinct labels yield two independent keys.
 const UserIdentityLabel = "heyarr/recovery/v1/user-identity-ed25519-seed"
+
+// UserEncryptionLabel is the HKDF info string that domain-separates the user's
+// recovery ENCRYPTION seed — the X25519 key-agreement key of Milestone 9
+// (ADR-0049) — from the signing seed above and from every other key the recovery
+// secret will ever derive.
+//
+// It is the counterpart of [UserIdentityLabel]: the recovery secret restores the
+// user identity signing key (that label) AND the encryption root (this one), and
+// because the two labels differ, a white-box test proves the two seeds are
+// independent — the M9 encryption root shares the recovery secret without ever
+// colliding with the signing seed (§79). It is versioned for the same reason: the
+// derivation is a wire format the instant one space key is wrapped for the
+// recovery key, and a change to it must be a new label, never a reinterpretation.
+const UserEncryptionLabel = "heyarr/recovery/v1/user-encryption-x25519-seed"
 
 // The sentinel errors [ParseSecret] refuses with. They are distinct because a
 // user does different things about each: a MALFORMED secret was mis-copied at
@@ -200,6 +214,24 @@ func ParseSecret(encoded string) (Secret, error) {
 // this secret without colliding with the signing seed.
 func DeriveUserSeed(s Secret) []byte {
 	return deriveSeed(s.entropy, UserIdentityLabel)
+}
+
+// DeriveUserEncryptionSeed derives the 32-byte X25519 scalar of the user's
+// recovery ENCRYPTION key from the recovery secret (ADR-0049, §79). The caller in
+// the M9 encryption package composes crypto/ecdh's X25519().NewPrivateKey(seed)
+// to get the key that unwraps space keys the peers hold wrapped for the recovery
+// target — so a user with no surviving device recovers the ability to read,
+// offline.
+//
+// It is the encryption counterpart of [DeriveUserSeed] and shares its guarantees:
+// a pure function of the secret, deterministic on any machine with no process,
+// network or disk. The derivation is HKDF-SHA256 under [UserEncryptionLabel];
+// because that label differs from [UserIdentityLabel], this seed is INDEPENDENT
+// of the signing seed — the same secret yields two keys that cannot coincide. An
+// X25519 scalar and an Ed25519 seed are both 32 bytes, so the output width is the
+// same by choice, not by construction.
+func DeriveUserEncryptionSeed(s Secret) []byte {
+	return deriveSeed(s.entropy, UserEncryptionLabel)
 }
 
 // deriveSeed is the one derivation primitive, taking the domain-separation label
