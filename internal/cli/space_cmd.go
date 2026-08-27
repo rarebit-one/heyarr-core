@@ -58,6 +58,7 @@ it.`,
 		newSpacePutCommand(opts, configPath, &deviceDir),
 		newSpaceReadCommand(opts, configPath, &deviceDir),
 		newSpaceSnapshotCommand(opts, configPath, &deviceDir),
+		newSpaceRotateCommand(opts, configPath, &deviceDir),
 		newSpaceCompactCommand(opts, configPath),
 	)
 	return cmd
@@ -540,6 +541,159 @@ materialises the state.`,
 	}
 	flags.register(cmd)
 	return cmd
+}
+
+// spaceRotateView is the --json shape of `space rotate`.
+type spaceRotateView struct {
+	SpaceID    string   `json:"space_id"`
+	Revoked    []string `json:"revoked"`
+	Remaining  []string `json:"remaining"`
+	SnapshotID string   `json:"snapshot_id"`
+	Dropped    int      `json:"dropped"`
+}
+
+// newSpaceRotateCommand builds `heyarr space rotate` — revoke recipients from a
+// space by re-keying it (§41, ADR-0049, #361).
+func newSpaceRotateCommand(_ Options, configPath, deviceDir *string) *cobra.Command {
+	var (
+		flags  clientFlags
+		revoke []string
+	)
+	cmd := &cobra.Command{
+		Use:   "rotate <space-id> --revoke <recipient>",
+		Short: "Revoke recipients from a space by rotating its key (§41, #361)",
+		Long: `Revoke one or more recipients from an encrypted space.
+
+Rotation mints a FRESH space key, re-wraps it for every REMAINING recipient,
+deletes each revoked recipient's stored copy, and pushes a snapshot of the current
+state under the new key (then compacts the now-unreadable old change log the
+snapshot subsumes). The revoked device keeps whatever it already decrypted —
+revocation is forward-looking, not retroactive — but can read nothing encrypted
+from here on.
+
+This device must itself be a current recipient (only a device that can read a
+space may re-key it), and at least one recipient must remain.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			spaceID := args[0]
+			if len(revoke) == 0 {
+				return fmt.Errorf("name at least one recipient to revoke with --revoke")
+			}
+			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
+				mgr, err := openSpace(ctx, c, *deviceDir, spaceID)
+				if err != nil {
+					return err
+				}
+				// Materialise the current state under the OLD key BEFORE rotating —
+				// after Rotate the manager holds the new key and cannot read the old
+				// changes. The snapshot below re-encrypts this state under the new key.
+				st, changes, _, err := materialise(ctx, c, mgr, spaceID)
+				if err != nil {
+					return err
+				}
+				keys, err := c.WrappedKeys(ctx, spaceID)
+				if err != nil {
+					return err
+				}
+				remaining, revoked, err := partitionRecipients(keys, revoke)
+				if err != nil {
+					return err
+				}
+				wrapped, err := mgr.Rotate(spaceID, remaining)
+				if err != nil {
+					return err
+				}
+				inputs := make([]apiclient.WrappedKeyInput, 0, len(wrapped))
+				for _, w := range wrapped {
+					inputs = append(inputs, apiclient.WrappedKeyInput{Recipient: w.Recipient, Wrapped: w.Wrapped})
+				}
+				if err := c.RewrapKeys(ctx, spaceID, inputs); err != nil {
+					return err
+				}
+				for _, r := range revoked {
+					if err := c.RevokeKey(ctx, spaceID, r); err != nil {
+						return err
+					}
+				}
+				// A snapshot of the current state under the NEW key, so remaining
+				// devices reach it without the old key; then compact the old,
+				// now-unreadable changes the snapshot subsumes.
+				snap, err := statesync.EncodeSnapshot(mgr, spaceID, protocol.Heads(changes), st)
+				if err != nil {
+					return err
+				}
+				snapID, err := c.PushSnapshot(ctx, snap)
+				if err != nil {
+					return err
+				}
+				dropped, err := c.Compact(ctx, spaceID, snap.Frontier)
+				if err != nil {
+					return err
+				}
+				remainIDs := recipientIDs(remaining)
+				if flags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), spaceRotateView{
+						SpaceID: spaceID, Revoked: revoked, Remaining: remainIDs,
+						SnapshotID: snapID, Dropped: dropped,
+					})
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "space %s re-keyed\n\n  revoked %d recipient(s):\n", spaceID, len(revoked))
+				for _, r := range revoked {
+					fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", r)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "  re-wrapped for %d remaining recipient(s)\n", len(remainIDs))
+				fmt.Fprintf(cmd.OutOrStdout(), "  snapshot %s taken; %d old change(s) compacted\n", snapID, dropped)
+				return nil
+			})
+		},
+	}
+	flags.register(cmd)
+	cmd.Flags().StringArrayVar(&revoke, "revoke", nil, "a recipient (x25519:<hex>) to revoke; repeatable")
+	return cmd
+}
+
+// partitionRecipients splits a space's current wrapped-key recipients into those
+// that REMAIN (parsed, for re-wrapping under the new key) and those to revoke.
+// Every --revoke target must currently be a recipient (a typo that would revoke
+// nobody is an error, not a silent no-op), and at least one recipient must remain.
+func partitionRecipients(keys []apiclient.WrappedKey, revoke []string) (remaining []client.Recipient, revoked []string, err error) {
+	revokeSet := make(map[string]bool, len(revoke))
+	for _, r := range revoke {
+		revokeSet[r] = true
+	}
+	current := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		current[k.Recipient] = true
+		if revokeSet[k.Recipient] {
+			continue
+		}
+		r, perr := client.ParseRecipient(k.Recipient)
+		if perr != nil {
+			return nil, nil, fmt.Errorf("parsing remaining recipient %q: %w", k.Recipient, perr)
+		}
+		remaining = append(remaining, r)
+	}
+	for r := range revokeSet {
+		if !current[r] {
+			return nil, nil, fmt.Errorf("%q is not a current recipient of this space — nothing to revoke", r)
+		}
+		revoked = append(revoked, r)
+	}
+	if len(remaining) == 0 {
+		return nil, nil, fmt.Errorf("refusing to revoke every recipient — the space would be readable by no one")
+	}
+	sort.Strings(revoked)
+	return remaining, revoked, nil
+}
+
+// recipientIDs renders a recipient slice as sorted ids for stable output.
+func recipientIDs(rs []client.Recipient) []string {
+	ids := make([]string, 0, len(rs))
+	for _, r := range rs {
+		ids = append(ids, r.ID)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // newSpaceCompactCommand builds `heyarr space compact` — drop the changes the

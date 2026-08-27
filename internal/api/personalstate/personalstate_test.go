@@ -311,3 +311,115 @@ func TestReplicateEndpointDrivesTheReconciler(t *testing.T) {
 	}
 	_ = ctx
 }
+
+// TestRewrapAndRevokeRotatesAccess is the API-layer evidence for revocation (#361):
+// after a rotation the remaining recipient's copy seals the NEW key and the revoked
+// recipient's copy is DELETED, so the peer holds no copy the revoked device can
+// open. All opaque — the peer never reads a key.
+//
+// SABOTAGE (the reviewer's break): make revokeKey a no-op (skip DeleteWrappedKey),
+// and the "B is gone" assertion below fires — B's stale copy would still be listed.
+func TestRewrapAndRevokeRotatesAccess(t *testing.T) {
+	api := newAPI(t)
+
+	aKey, err := encryption.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bKey, err := encryption.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	aRecip := psclient.Recipient{ID: encryption.FormatPublicKey(aKey.PublicKey().Bytes()), Key: aKey.PublicKey()}
+	bRecip := psclient.Recipient{ID: encryption.FormatPublicKey(bKey.PublicKey().Bytes()), Key: bKey.PublicKey()}
+
+	mgr := psclient.New()
+	sp, wrapped, err := mgr.Create(spaces.KindPersonal, time.Now().UTC(), []psclient.Recipient{aRecip, bRecip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := createSpaceRequest{ID: sp.ID, Kind: string(sp.Kind)}
+	for _, w := range wrapped {
+		create.WrappedKeys = append(create.WrappedKeys, wrappedKeyInput{Recipient: w.Recipient, Wrapped: w.Wrapped})
+	}
+	if rec := call(t, api.createSpace, http.MethodPost, "/spaces", create, nil); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+
+	// A's wrapped copy before rotation, to prove it changes.
+	aWrappedBefore := wrappedFor(t, api, sp.ID, aRecip.ID)
+
+	// Rotate: a fresh key sealed for A only (B revoked). This is exactly what the
+	// client's mgr.Rotate produces.
+	rotated, err := mgr.Rotate(sp.ID, []psclient.Recipient{aRecip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := rewrapRequest{}
+	for _, w := range rotated {
+		body.WrappedKeys = append(body.WrappedKeys, wrappedKeyInput{Recipient: w.Recipient, Wrapped: w.Wrapped})
+	}
+	if rec := call(t, api.rewrapKeys, http.MethodPost, "/spaces/"+sp.ID+"/keys", body, map[string]string{"id": sp.ID}); rec.Code != http.StatusOK {
+		t.Fatalf("rewrap: %d %s", rec.Code, rec.Body)
+	}
+
+	// Revoke B: delete its stored copy.
+	if rec := call(t, api.revokeKey, http.MethodDelete, "/spaces/"+sp.ID+"/keys/"+bRecip.ID, nil,
+		map[string]string{"id": sp.ID, "recipient": bRecip.ID}); rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke B: %d %s", rec.Code, rec.Body)
+	}
+
+	// Exactly one key remains — A's — and its bytes changed (the new key).
+	var keys wrappedKeysView
+	rec := call(t, api.listWrappedKeys, http.MethodGet, "/spaces/"+sp.ID+"/keys", nil, map[string]string{"id": sp.ID})
+	mustJSON(t, rec, &keys)
+	if len(keys.WrappedKeys) != 1 || keys.WrappedKeys[0].Recipient != aRecip.ID {
+		t.Fatalf("after revocation, want only A's key, got %+v", keys.WrappedKeys)
+	}
+	if bytes.Equal(keys.WrappedKeys[0].Wrapped, aWrappedBefore) {
+		t.Fatal("A's wrapped key did not change — the rotation did not re-key it")
+	}
+
+	// Revocation is idempotent: revoking B again is still a 204, not a 404.
+	if rec := call(t, api.revokeKey, http.MethodDelete, "/spaces/"+sp.ID+"/keys/"+bRecip.ID, nil,
+		map[string]string{"id": sp.ID, "recipient": bRecip.ID}); rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke B again: want idempotent 204, got %d %s", rec.Code, rec.Body)
+	}
+}
+
+// wrappedFor returns the wrapped bytes stored for one recipient of a space.
+func wrappedFor(t *testing.T, api *API, spaceID, recipient string) []byte {
+	t.Helper()
+	var keys wrappedKeysView
+	rec := call(t, api.listWrappedKeys, http.MethodGet, "/spaces/"+spaceID+"/keys", nil, map[string]string{"id": spaceID})
+	mustJSON(t, rec, &keys)
+	for _, k := range keys.WrappedKeys {
+		if k.Recipient == recipient {
+			return k.Wrapped
+		}
+	}
+	t.Fatalf("no wrapped key for %q", recipient)
+	return nil
+}
+
+func TestRewrapRejectsEmpty(t *testing.T) {
+	api := newAPI(t)
+	id := mustUUID(t)
+	if rec := call(t, api.createSpace, http.MethodPost, "/spaces", createSpaceRequest{ID: id, Kind: "personal"}, nil); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	rec := call(t, api.rewrapKeys, http.MethodPost, "/spaces/"+id+"/keys", rewrapRequest{}, map[string]string{"id": id})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for an empty re-wrap, got %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestRevokeOnUnknownSpaceIs404(t *testing.T) {
+	api := newAPI(t)
+	id := mustUUID(t)
+	rec := call(t, api.revokeKey, http.MethodDelete, "/spaces/"+id+"/keys/x25519:dead", nil,
+		map[string]string{"id": id, "recipient": "x25519:dead"})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404 revoking on an unknown space, got %d %s", rec.Code, rec.Body)
+	}
+}
