@@ -7345,6 +7345,104 @@ YAML
   wait "$pid" 2>/dev/null || true
 }
 
+# REVOCATION CUTS ACCESS: a device is revoked from a space by rotating its key.
+# The revoked device's wrapped copy is DELETED and the space is re-keyed for
+# everyone else, then a snapshot re-encrypts the current state under the new key
+# and the old change log is compacted — so the revoked device can read nothing
+# encrypted from here on (§41, ADR-0022, ADR-0049, #361). It is forward-looking,
+# not retroactive: the revoked device keeps whatever it already decrypted.
+revocation_demo() {
+  local root="$WORK/revocation" data sock cfg A B C
+  data="$root/data"; sock="$data/heyarr.sock"; cfg="$WORK/revocation.yaml"
+  A="$root/dev-a"; B="$root/dev-b"; C="$root/dev-c"
+  mkdir -p "$data"
+
+  cat > "$cfg" <<YAML
+data_dir: $data
+peer:
+  name: acceptance-revocation
+  site: test
+log:
+  level: info
+  format: json
+http:
+  addr: ""
+  unix_socket: $sock
+  auth:
+    enabled: true
+YAML
+
+  local token
+  token=$("$BIN" --config "$cfg" token create acceptance --scopes admin --json | jq -r .token)
+  "$BIN" --config "$cfg" controller >"$root/controller.log" 2>&1 &
+  local pid=$!
+  local waited=0
+  while (( waited < 600 )); do
+    curl -sf --unix-socket "$sock" http://heyarr/readyz >/dev/null 2>&1 && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if (( waited >= 600 )); then
+    fail "the revocation node never became ready"; cat "$root/controller.log"
+    kill -KILL "$pid" 2>/dev/null || true; return 1
+  fi
+
+  # Three devices: A creates and stays, B will be revoked, C stays.
+  "$BIN" device generate --device-dir "$A" --name reva >/dev/null 2>&1
+  "$BIN" device generate --device-dir "$B" --name revb >/dev/null 2>&1
+  "$BIN" device generate --device-dir "$C" --name revc >/dev/null 2>&1
+
+  local bpub cpub base
+  bpub=$("$BIN" device show --device-dir "$B" --json | jq -r .encryption_public_key)
+  cpub=$("$BIN" device show --device-dir "$C" --json | jq -r .encryption_public_key)
+  base=( env "HEYARR_TOKEN=$token" "$BIN" --config "$cfg" )
+
+  # A mints a space wrapped for A, B and C (no recovery key in this demo).
+  local create space_id recips
+  create=$("${base[@]}" space create --device-dir "$A" --kind personal \
+    --recipient "$bpub" --recipient "$cpub" --recovery=false --json)
+  space_id=$(jq -r .id <<<"$create")
+  recips=$(jq -r '.recipients | length' <<<"$create")
+  assert_eq "$recips" "3" \
+    "the space is wrapped for three devices before any revocation"
+
+  # A adds an item; B can read it — B is a recipient at this point.
+  "${base[@]}" space put "$space_id" --device-dir "$A" --item "midnight-jazz" >/dev/null
+  local b_before
+  b_before=$("${base[@]}" space read "$space_id" --device-dir "$B" --json | jq -r '.items[0]')
+  assert_eq "$b_before" "midnight-jazz" \
+    "before revocation the soon-to-be-revoked device can read the space"
+
+  # A revokes B: rotate the key, re-wrap for A and C, delete B's copy, snapshot,
+  # compact the old log the snapshot subsumes.
+  "${base[@]}" space rotate "$space_id" --device-dir "$A" --revoke "$bpub" >/dev/null
+
+  # THE INVARIANT: the revoked device can no longer read the space. Its wrapped key
+  # is gone, so the read fails before any change is fetched (the confidentiality
+  # gate) — a rotation that left B's key in place, or re-keyed for B too, would let
+  # this succeed.
+  assert_refuses "a revoked device can no longer read the space — its wrapped key is gone and the space was re-keyed without it" \
+    "cannot read space" "${base[@]}" space read "$space_id" --device-dir "$B"
+
+  # A remaining device still reads the state — re-keyed for it, reachable from the
+  # post-rotation snapshot without the old key.
+  local c_after
+  c_after=$("${base[@]}" space read "$space_id" --device-dir "$C" --json | jq -r '.items[0]')
+  assert_eq "$c_after" "midnight-jazz" \
+    "a remaining device still reads the space after the rotation — re-keyed, and reachable from the new snapshot"
+
+  # And the peer holds no wrapped key for the revoked device: two remain (A, C).
+  local remaining count_b
+  remaining=$("${base[@]}" space keys "$space_id" --json | jq -r 'length')
+  assert_eq "$remaining" "2" \
+    "after revocation the peer holds a wrapped key for the two remaining devices only"
+  count_b=$("${base[@]}" space keys "$space_id" --json | jq -r --arg b "$bpub" '[.[] | select(.recipient == $b)] | length')
+  assert_eq "$count_b" "0" \
+    "the revoked device's wrapped copy of the key is deleted from the peer"
+
+  kill -TERM "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
 # CONVERGE AFTER A PARTITION: two peers, an offline concurrent edit on each, and
 # on reconnect the encrypted changes replicate and the two devices converge to
 # one state — merged CLIENT-SIDE, the server never seeing plaintext (§42, §43,
@@ -7614,6 +7712,8 @@ else
   converge_after_partition_demo
   note "SNAPSHOTS BOUND THE LOG: snapshot + compaction, and the state survives (§44, ADR-0049, #325)"
   snapshot_demo
+  note "REVOCATION CUTS ACCESS: a device is revoked by rotating the space key (§41, ADR-0022, ADR-0049, #361)"
+  revocation_demo
   note "THE SECOND PEER: placement, proven (§56, §64, M4-11) — heyarr all"
   two_peer_demo all
   note "THE SECOND PEER, again, as separate role processes (ADR-0002, M4-16)"

@@ -475,6 +475,67 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [personal-state]
+      operationId: rewrapSpaceKeys
+      summary: Re-wrap a space's key for the remaining recipients after a rotation. Requires `write`.
+      description: |
+        Replaces the wrapped copies of a space's key — the remaining recipients'
+        copies now seal the NEW key minted by a rotation (§41, #361). Each copy is
+        opaque; the peer upserts it and opens none. The revoked recipient's copy is
+        deleted separately via DELETE /spaces/{id}/keys/{recipient}.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [wrapped_keys]
+              additionalProperties: false
+              properties:
+                wrapped_keys:
+                  type: array
+                  items: { $ref: "#/components/schemas/WrappedKeyInput" }
+      responses:
+        "200":
+          description: How many recipient copies were replaced.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rewrapped]
+                properties:
+                  rewrapped: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/spaces/{id}/keys/{recipient}:
+    delete:
+      tags: [personal-state]
+      operationId: revokeSpaceKey
+      summary: Delete one recipient's wrapped copy of a space's key — revocation. Requires `admin`.
+      description: |
+        Deletes the wrapped copy sealed for one recipient (§41, ADR-0049, #361).
+        After it, that recipient holds no copy of the key; combined with a rotation
+        that re-keys for everyone else, the revoked device can read nothing
+        encrypted from here on. Idempotent: deleting a copy already gone is a 204,
+        not a 404.
+      parameters:
+        - { $ref: "#/components/parameters/id" }
+        - name: recipient
+          in: path
+          required: true
+          description: The recipient key id ("x25519:<hex>"), URL-escaped.
+          schema: { type: string }
+      responses:
+        "204":
+          description: The wrapped copy is gone (or was already).
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /api/v1/spaces/{id}/changes:
     get:

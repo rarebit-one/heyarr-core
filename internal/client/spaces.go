@@ -95,6 +95,24 @@ func (c *Client) WrappedKeys(ctx context.Context, spaceID string) ([]WrappedKey,
 	return out.WrappedKeys, nil
 }
 
+// rewrapRequest is the body of POST /spaces/{id}/keys: the wrapped copies of a
+// space's NEW key after a rotation (#361).
+type rewrapRequest struct {
+	WrappedKeys []WrappedKeyInput `json:"wrapped_keys"`
+}
+
+// RewrapKeys replaces the wrapped copies of a space's key after a rotation — the
+// remaining recipients' copies now seal the new key. The peer upserts each.
+func (c *Client) RewrapKeys(ctx context.Context, spaceID string, keys []WrappedKeyInput) error {
+	return c.Post(ctx, "/spaces/"+url.PathEscape(spaceID)+"/keys", rewrapRequest{WrappedKeys: keys}, nil)
+}
+
+// RevokeKey deletes one recipient's wrapped copy of a space's key — the storage
+// half of revocation. Idempotent: revoking a copy already gone is not an error.
+func (c *Client) RevokeKey(ctx context.Context, spaceID, recipient string) error {
+	return c.Delete(ctx, "/spaces/"+url.PathEscape(spaceID)+"/keys/"+url.PathEscape(recipient))
+}
+
 // PutChange pushes one encrypted change; the peer re-verifies its content-address
 // before storing. Returns the id the peer holds it under.
 func (c *Client) PutChange(ctx context.Context, ch protocol.EncryptedChange) (string, error) {

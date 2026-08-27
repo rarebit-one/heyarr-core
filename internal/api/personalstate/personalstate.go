@@ -95,6 +95,12 @@ func (a *API) Mount(r chi.Router) {
 
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces", a.createSpace)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces/{id}/changes", a.putChange)
+	// Re-wrapping a space's key for the remaining recipients after a rotation
+	// stores ciphertext copies, exactly as create does — a write. The revoked
+	// device's copy is DELETED separately, an authority action that removes access,
+	// so it needs `admin` (§41, ADR-0049, #361).
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces/{id}/keys", a.rewrapKeys)
+	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Delete("/spaces/{id}/keys/{recipient}", a.revokeKey)
 	// A snapshot is materialised and encrypted on the device (§44); pushing it is
 	// a write, like a change.
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces/{id}/snapshots", a.putSnapshot)
@@ -146,6 +152,18 @@ type createSpaceRequest struct {
 	ID          string            `json:"id"`
 	Kind        string            `json:"kind"`
 	WrappedKeys []wrappedKeyInput `json:"wrapped_keys"`
+}
+
+// rewrapRequest is POST /spaces/{id}/keys: the wrapped copies of a space's NEW key
+// after a rotation, replacing the remaining recipients' copies (#361). Same shape
+// as create's key list; the peer upserts each and opens none of them.
+type rewrapRequest struct {
+	WrappedKeys []wrappedKeyInput `json:"wrapped_keys"`
+}
+
+// rewrapResult acks a re-wrap: how many recipient copies were replaced.
+type rewrapResult struct {
+	Rewrapped int `json:"rewrapped"`
 }
 
 // spaceView is a space as the peer holds it — the opaque id, the structural kind,
@@ -249,6 +267,46 @@ func (a *API) listWrappedKeys(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	a.write(w, r, http.StatusOK, out)
+}
+
+// rewrapKeys replaces the wrapped copies of a space's key after a rotation — the
+// remaining recipients' copies now seal the NEW key (#361). Each is opaque; the
+// peer upserts it and opens none. Idempotent per (space, recipient), like create.
+func (a *API) rewrapKeys(w http.ResponseWriter, r *http.Request) {
+	spaceID := chi.URLParam(r, "id")
+	var req rewrapRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	if len(req.WrappedKeys) == 0 {
+		httpapi.Fail(w, r, problem.BadRequest("a re-wrap needs at least one wrapped key"))
+		return
+	}
+	for _, k := range req.WrappedKeys {
+		if _, err := a.store.PutWrappedKey(r.Context(), spaceID, k.Recipient, k.Wrapped); err != nil {
+			a.failStore(w, r, "re-wrapping a space key", err)
+			return
+		}
+	}
+	a.log.Info("re-wrapped a space key", "space", spaceID, "recipients", len(req.WrappedKeys))
+	a.write(w, r, http.StatusOK, rewrapResult{Rewrapped: len(req.WrappedKeys)})
+}
+
+// revokeKey deletes one recipient's wrapped copy of a space's key — the storage
+// half of revocation (#361). After it, that recipient holds no copy of the key and
+// openSpace refuses it; combined with a rotation (which re-keys for everyone else),
+// the revoked device can read nothing encrypted from here on. Idempotent: deleting
+// a copy that is already gone is a 204, not a 404.
+func (a *API) revokeKey(w http.ResponseWriter, r *http.Request) {
+	spaceID := chi.URLParam(r, "id")
+	recipient := chi.URLParam(r, "recipient")
+	if err := a.store.DeleteWrappedKey(r.Context(), spaceID, recipient); err != nil {
+		a.failStore(w, r, "revoking a space key", err)
+		return
+	}
+	a.log.Info("revoked a space key", "space", spaceID, "recipient", recipient)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) putChange(w http.ResponseWriter, r *http.Request) {
