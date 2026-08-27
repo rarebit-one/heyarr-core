@@ -153,6 +153,18 @@ const (
 	// (§42, §44). Opaque like its siblings: it records that a change with this id
 	// landed, never the plaintext the peer cannot read.
 	TypeChangeStored = "personalstate.change.stored"
+	// TypeSnapshotWritten is a peer accepting an encrypted snapshot — a
+	// materialised CRDT state at a causal point (§44) — so a joining device syncs
+	// a bounded snapshot plus the tail rather than the whole log. Opaque: it names
+	// the snapshot id, its space and the frontier it covers, never the plaintext
+	// state the peer cannot read.
+	TypeSnapshotWritten = "personalstate.snapshot.written"
+	// TypeChangesCompacted is a peer dropping the changes a snapshot subsumes and
+	// every replica already holds (§44) — the log bounded, not the state lost,
+	// because the dropped changes are recoverable from the snapshot. It records
+	// how many changes were compacted for a space, never any content, and is
+	// bounded by the acknowledged frontier so a partitioned peer's change survives.
+	TypeChangesCompacted = "personalstate.change.compacted"
 	// TypeSpaceReplicated is this node having reconciled an encrypted space to a
 	// trusted Full Peer (§37, §45): its metadata, wrapped keys and changes are now
 	// held there too, as ciphertext neither peer can read. Opaque — it names the

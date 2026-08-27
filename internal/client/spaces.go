@@ -114,3 +114,45 @@ func (c *Client) Changes(ctx context.Context, spaceID string) ([]protocol.Encryp
 	}
 	return out.Changes, nil
 }
+
+type snapshotStored struct {
+	SnapshotID string `json:"snapshot_id"`
+}
+
+type compactResult struct {
+	Dropped int `json:"dropped"`
+}
+
+// Snapshot fetches the latest encrypted snapshot for a space. ok is false (with a
+// nil error) when the space has none yet.
+func (c *Client) Snapshot(ctx context.Context, spaceID string) (protocol.EncryptedSnapshot, bool, error) {
+	var out protocol.EncryptedSnapshot
+	if err := c.Get(ctx, "/spaces/"+url.PathEscape(spaceID)+"/snapshot", nil, &out); err != nil {
+		if IsNotFound(err) {
+			return protocol.EncryptedSnapshot{}, false, nil
+		}
+		return protocol.EncryptedSnapshot{}, false, err
+	}
+	return out, true, nil
+}
+
+// PushSnapshot pushes a materialised, encrypted snapshot; the peer verifies its
+// content-address before storing. Returns the id it holds it under.
+func (c *Client) PushSnapshot(ctx context.Context, snap protocol.EncryptedSnapshot) (string, error) {
+	var out snapshotStored
+	if err := c.Post(ctx, "/spaces/"+url.PathEscape(snap.SpaceID)+"/snapshots", snap, &out); err != nil {
+		return "", err
+	}
+	return out.SnapshotID, nil
+}
+
+// Compact drops the changes the latest snapshot subsumes and every replica holds
+// (the acknowledged frontier), returning how many were dropped.
+func (c *Client) Compact(ctx context.Context, spaceID string, frontier []string) (int, error) {
+	var out compactResult
+	body := map[string][]string{"frontier": frontier}
+	if err := c.Post(ctx, "/spaces/"+url.PathEscape(spaceID)+"/compact", body, &out); err != nil {
+		return 0, err
+	}
+	return out.Dropped, nil
+}

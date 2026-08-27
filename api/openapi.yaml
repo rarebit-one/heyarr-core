@@ -531,6 +531,95 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/spaces/{id}/snapshot:
+    get:
+      tags: [personal-state]
+      operationId: getSpaceSnapshot
+      summary: The latest encrypted snapshot for a space — ciphertext (§44).
+      description: |
+        Returns the most recent snapshot the peer holds — a materialised CRDT
+        state at a causal point, as ciphertext the peer never decrypted — so a
+        joining device syncs a bounded snapshot plus the tail rather than the
+        whole log. 404 when the space has no snapshot yet.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: The latest snapshot.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EncryptedSnapshot" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/spaces/{id}/snapshots:
+    post:
+      tags: [personal-state]
+      operationId: putSpaceSnapshot
+      summary: Push a materialised, encrypted snapshot. Requires `write`.
+      description: |
+        The device materialises the state and encrypts it under the space key;
+        this stores the opaque snapshot after verifying its content-address
+        (Invariant 1). The server never materialises it (§44).
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EncryptedSnapshot" }
+      responses:
+        "201":
+          description: The id the peer verified and stored the snapshot under.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [snapshot_id]
+                properties:
+                  snapshot_id: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/spaces/{id}/compact:
+    post:
+      tags: [personal-state]
+      operationId: compactSpace
+      summary: Drop the changes the latest snapshot subsumes and every replica holds. Requires `admin`.
+      description: |
+        Compacts the change log: drops changes the latest snapshot subsumes and
+        that lie within the acknowledged frontier (the frontier every trusted Full
+        Peer holds), so a change a partitioned peer still needs survives (§44).
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [frontier]
+              additionalProperties: false
+              properties:
+                frontier:
+                  type: array
+                  items: { type: string }
+                  description: The acknowledged causal frontier every replica holds.
+      responses:
+        "200":
+          description: How many changes were compacted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [dropped]
+                properties:
+                  dropped: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/state/replicate:
     post:
       tags: [personal-state]
@@ -4471,6 +4560,26 @@ components:
           type: string
           format: byte
           description: The encrypted change (base64), opaque to the peer.
+
+    EncryptedSnapshot:
+      type: object
+      description: |
+        A materialised CRDT state at a causal point (§44), encrypted under the
+        space key. Content-addressed by the blake3 digest of its space, frontier
+        and ciphertext; the peer verifies the id and never decrypts it.
+      required: [space_id, snapshot_id, ciphertext]
+      additionalProperties: false
+      properties:
+        space_id: { type: string }
+        snapshot_id: { type: string, description: "blake3:<hex> over space, frontier and ciphertext." }
+        frontier:
+          type: array
+          items: { type: string }
+          description: The causal heads this snapshot materialises; the tail begins after them.
+        ciphertext:
+          type: string
+          format: byte
+          description: The encrypted materialised state (base64), opaque to the peer.
 
     Problem:
       type: object

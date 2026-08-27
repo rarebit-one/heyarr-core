@@ -9,6 +9,34 @@ package protocol
 
 import "sort"
 
+// CausalHistory returns the set of change ids reachable from heads within have —
+// the ids heads causally cover. A head not present in have contributes nothing
+// (its ancestry is unknown here), which only ever makes the set smaller — the
+// safe bias for its callers (snapshot subsumption, and the compaction bound that
+// must never drop a change a partitioned peer still needs).
+func CausalHistory(have []EncryptedChange, heads []string) map[string]bool {
+	byID := make(map[string]EncryptedChange, len(have))
+	for _, c := range have {
+		byID[c.ChangeID] = c
+	}
+	seen := make(map[string]bool, len(have))
+	queue := append([]string(nil), heads...)
+	for len(queue) > 0 {
+		id := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		if seen[id] {
+			continue
+		}
+		c, ok := byID[id]
+		if !ok {
+			continue
+		}
+		seen[id] = true
+		queue = append(queue, c.Parents...)
+	}
+	return seen
+}
+
 // Missing returns the changes in have that are NOT in the causal history of
 // knownHeads — what a peer holding knownHeads lacks from have. It is pure DAG
 // reachability over change ids: a knownHead this holder also has marks that

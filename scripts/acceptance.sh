@@ -7479,6 +7479,88 @@ YAML
   for p in "${mypids[@]}"; do wait "$p" 2>/dev/null || true; done
 }
 
+# SNAPSHOTS BOUND THE LOG (§44, ADR-0049, #325): a device takes an encrypted
+# snapshot at a causal point, the log is compacted so the pre-snapshot changes are
+# dropped, and a device still reaches the full state from the snapshot plus the
+# tail — the bounded sync a long-lived space (or a phone) needs. The snapshot at
+# rest is ciphertext the server cannot read.
+snapshot_demo() {
+  local root="$WORK/snapshot" data sock cfg dev
+  data="$root/data"; sock="$data/heyarr.sock"; cfg="$WORK/snapshot.yaml"; dev="$root/dev"
+  mkdir -p "$data"
+
+  cat > "$cfg" <<YAML
+data_dir: $data
+peer:
+  name: acceptance-snapshot
+  site: test
+log:
+  level: info
+  format: json
+http:
+  addr: ""
+  unix_socket: $sock
+  auth:
+    enabled: true
+YAML
+
+  local token
+  token=$("$BIN" --config "$cfg" token create acceptance --scopes admin --json | jq -r .token)
+  "$BIN" --config "$cfg" controller >"$root/controller.log" 2>&1 &
+  local pid=$!
+  local waited=0
+  while (( waited < 600 )); do
+    curl -sf --unix-socket "$sock" http://heyarr/readyz >/dev/null 2>&1 && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if (( waited >= 600 )); then
+    fail "the snapshot node never became ready"; cat "$root/controller.log"
+    kill -KILL "$pid" 2>/dev/null || true; return 1
+  fi
+
+  "$BIN" device generate --device-dir "$dev" --name snap-dev >/dev/null 2>&1
+  local base space_id
+  base=( env "HEYARR_TOKEN=$token" "$BIN" --config "$cfg" )
+  sapi() { curl -sS --unix-socket "$sock" -H "Authorization: Bearer $token" "${@:2}" "http://heyarr$1"; }
+
+  space_id=$("${base[@]}" space create --device-dir "$dev" --kind personal --json | jq -r .id)
+  "${base[@]}" space put "$space_id" --device-dir "$dev" --item one >/dev/null
+  "${base[@]}" space put "$space_id" --device-dir "$dev" --item two >/dev/null
+  "${base[@]}" space put "$space_id" --device-dir "$dev" --item three >/dev/null
+
+  # Take a snapshot, then add one more change (the tail).
+  "${base[@]}" space snapshot "$space_id" --device-dir "$dev" >/dev/null
+  "${base[@]}" space put "$space_id" --device-dir "$dev" --item four >/dev/null
+
+  local before after dropped
+  before=$("${base[@]}" space changes "$space_id" --json | jq 'length')
+  assert_eq "$before" "4" "the log holds all four changes before compaction"
+
+  dropped=$("${base[@]}" space compact "$space_id" --json | jq -r .dropped)
+  assert_eq "$dropped" "3" "compaction drops the three changes the snapshot subsumes"
+
+  after=$("${base[@]}" space changes "$space_id" --json | jq 'length')
+  assert_eq "$after" "1" "the log is now bounded — only the tail change remains"
+
+  # A device STILL reaches the full state, reconstructed from the snapshot + tail,
+  # even though the pre-snapshot changes are gone.
+  local items
+  items=$("${base[@]}" space read "$space_id" --device-dir "$dev" --json | jq -c '.items')
+  assert_eq "$(jq 'length' <<<"$items")" "4" \
+    "a device reaches the full state from the snapshot plus the tail, after the pre-snapshot changes were compacted away"
+  assert_contains "$items" "one" "and the state folded into the snapshot survives the compaction"
+
+  # The snapshot at rest is ciphertext — no item appears in its bytes.
+  local ct opaque
+  ct=$(sapi "/api/v1/spaces/$space_id/snapshot" | jq -r .ciphertext)
+  opaque=$(python3 -c 'import base64,sys; b=base64.b64decode(sys.argv[1]); items=[b"one",b"two",b"three",b"four"]; sys.stdout.write("PLAINTEXT-LEAKED" if any(i in b for i in items) else "OPAQUE")' "$ct")
+  assert_eq "$opaque" "OPAQUE" \
+    "the snapshot at rest is ciphertext — the server materialises nothing and reads nothing"
+
+  kill -TERM "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
 # The gate is only a gate if people run it, and people stop running a gate
 # they have to wait for. Milestone 1 finished at about fifteen seconds and 100
 # assertions; Milestone 2 adds probing, remuxing and a second worker process,
@@ -7530,6 +7612,8 @@ else
   personalstate_demo
   note "CONVERGE AFTER A PARTITION: two devices, an offline concurrent edit each, merged client-side (§42, §43, ADR-0049, #324)"
   converge_after_partition_demo
+  note "SNAPSHOTS BOUND THE LOG: snapshot + compaction, and the state survives (§44, ADR-0049, #325)"
+  snapshot_demo
   note "THE SECOND PEER: placement, proven (§56, §64, M4-11) — heyarr all"
   two_peer_demo all
   note "THE SECOND PEER, again, as separate role processes (ADR-0002, M4-16)"

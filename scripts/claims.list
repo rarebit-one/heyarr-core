@@ -243,3 +243,9 @@ state proven
 ref   §42, §43, ADR-0038, ADR-0049, #324
 why   The personal-state plane is deliberate multi-master (§43): unlike the control plane it stays writable on both peers during a partition and merges on reconnect, with the semantic merge CLIENT-SIDE (§42). This is the milestone's payoff and the second evidence line epic #28 owes. The demo partitions two peers, has a device write on each, reconnects and replicates both ways, and asserts the two devices materialise the SAME state (order-independent, all three concurrent items) — while peer B's stored bytes stayed ciphertext throughout, so the server merged nothing and read nothing. A server-side merge, or an order-dependent one, would break it.
 evidence the two devices converge to the same state after an offline concurrent edit, merged client-side
+
+claim personal-state-snapshot-bounds-the-log
+state proven
+ref   §44, ADR-0049, #325
+why   Without snapshots and compaction a long-lived space is an unbounded change log every new or long-offline device must replay — the sync a phone cannot afford (#330). A snapshot is a materialised CRDT state at a causal point, encrypted under the space key; compaction drops the changes the snapshot subsumes and every replica holds. The demo takes a snapshot, adds a tail change, compacts away the three pre-snapshot changes, and shows a device STILL reaching the full four-item state from the snapshot plus the tail — while the snapshot at rest is ciphertext the server cannot read. Compaction is bounded by the acknowledged frontier so a partitioned peer's change is never dropped (a store test).
+evidence a device reaches the full state from the snapshot plus the tail, after the pre-snapshot changes were compacted away
