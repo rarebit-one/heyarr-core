@@ -432,6 +432,11 @@ func (s *Server) routes() http.Handler {
 		r.Get("/state/{space}/heads", s.handleStateHeads)
 		r.Get("/state/{space}/changes", s.handleStateChanges)
 		r.Post("/state/{space}/changes", s.handleStateChangePush)
+		// Metadata replication (§37, §45): a sibling pushes a space's identity and
+		// the wrapped copies of its key, so a Full Peer holds the whole encrypted
+		// space — metadata, keys and changes — as ciphertext it cannot read.
+		r.Post("/state/{space}", s.handleStatePutSpace)
+		r.Post("/state/{space}/keys", s.handleStatePutWrappedKey)
 	})
 
 	// There is no admin route on this router and there is not going to be one.
