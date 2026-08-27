@@ -58,6 +58,27 @@ var schemaSearchContent = obj(map[string]any{
 	},
 })
 
+var schemaGetExternalIDs = obj(map[string]any{
+	"work_id": map[string]any{
+		"type": "string",
+		"description": "Forward lookup: a work (from search_content) whose external " +
+			"ids you want. Give this OR edition_id OR a source+value pair.",
+	},
+	"edition_id": map[string]any{
+		"type":        "string",
+		"description": "Forward lookup: an edition whose external ids you want.",
+	},
+	"source": map[string]any{
+		"type": "string",
+		"description": "Reverse lookup: the identifier scheme, e.g. tmdb or imdb. " +
+			"Give together with value to find which work or edition carries it.",
+	},
+	"value": map[string]any{
+		"type":        "string",
+		"description": "Reverse lookup: the identifier's value, e.g. 603. Give with source.",
+	},
+})
+
 var schemaWantContent = obj(map[string]any{
 	"work_id": map[string]any{
 		"type": "string",

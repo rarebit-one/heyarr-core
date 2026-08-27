@@ -155,6 +155,58 @@ func TestSearchContent(t *testing.T) {
 	}
 }
 
+// get_external_ids (ADR-0050) reads heyarr's stored external ids both ways: an
+// entity's ids (forward) and which entity carries an id (reverse). An unknown id
+// is a no-match, not an error, so a consumer can probe cheaply.
+func TestGetExternalIDs(t *testing.T) {
+	h := newHarness(t, false)
+	h.exec(`INSERT INTO external_ids (id, entity_type, entity_id, source, value)
+		VALUES (?, 'work', ?, 'tmdb', '329865')`,
+		"01990000-0000-7000-8000-0000000000x1", workID)
+	h.exec(`INSERT INTO external_ids (id, entity_type, entity_id, source, value)
+		VALUES (?, 'work', ?, 'imdb', 'tt2543164')`,
+		"01990000-0000-7000-8000-0000000000x2", workID)
+
+	type row struct {
+		Source     string `json:"source"`
+		Value      string `json:"value"`
+		EntityType string `json:"entity_type"`
+		EntityID   string `json:"entity_id"`
+	}
+	var out struct {
+		ExternalIDs []row `json:"external_ids"`
+	}
+
+	// Forward: the work's two ids.
+	h.call("", "get_external_ids", `{"work_id":"`+workID+`"}`).structured(t, &out)
+	if len(out.ExternalIDs) != 2 {
+		t.Fatalf("forward lookup found %+v, want 2 ids", out.ExternalIDs)
+	}
+
+	// Reverse: tmdb:329865 resolves to the work that carries it.
+	h.call("", "get_external_ids", `{"source":"tmdb","value":"329865"}`).structured(t, &out)
+	if len(out.ExternalIDs) != 1 ||
+		out.ExternalIDs[0].EntityType != "work" || out.ExternalIDs[0].EntityID != workID {
+		t.Fatalf("reverse lookup found %+v, want the one work", out.ExternalIDs)
+	}
+
+	// An unknown id is a no-match (empty list), never an error.
+	h.call("", "get_external_ids", `{"source":"tmdb","value":"does-not-exist"}`).structured(t, &out)
+	if len(out.ExternalIDs) != 0 {
+		t.Errorf("unknown id should return empty, got %+v", out.ExternalIDs)
+	}
+
+	// A lookup with no arguments, or with both a forward ref and a reverse pair,
+	// is the caller's fault.
+	if resp := h.call("", "get_external_ids", `{}`); resp.Body.Error == nil {
+		t.Error("a lookup with no arguments should be refused")
+	}
+	if resp := h.call("", "get_external_ids",
+		`{"work_id":"`+workID+`","source":"tmdb","value":"329865"}`); resp.Body.Error == nil {
+		t.Error("both a forward ref and a reverse pair should be refused")
+	}
+}
+
 // The central action, and the one that must work for content nothing has seen.
 func TestWantContentForSomethingTheLibraryHasNeverSeen(t *testing.T) {
 	h := newHarness(t, false)

@@ -115,6 +115,84 @@ func (s *Server) searchContent(ctx context.Context, raw json.RawMessage) (any, e
 	return out, nil
 }
 
+// getExternalIDs resolves external catalogue identifiers (tmdb, imdb, …) for a
+// work or edition, or reverses a source+value back to whatever carries it —
+// implements ADR-0050. It is a read-only projection of the external_ids rows
+// heyarr already stores, so a consumer (e.g. a knowledge-graph index) can
+// reconcile an outside id to a heyarr work_id and back by id rather than by a
+// fuzzy title match. An unknown id is "no match" (an empty list), never an error.
+func (s *Server) getExternalIDs(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args struct {
+		WorkID    string `json:"work_id"`
+		EditionID string `json:"edition_id"`
+		Source    string `json:"source"`
+		Value     string `json:"value"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	workID := strings.TrimSpace(args.WorkID)
+	editionID := strings.TrimSpace(args.EditionID)
+	source := strings.TrimSpace(args.Source)
+	value := strings.TrimSpace(args.Value)
+
+	hasEntity := workID != "" || editionID != ""
+	hasPair := source != "" || value != ""
+	switch {
+	case hasEntity && hasPair:
+		return nil, invalidParams("give me EITHER a work_id/edition_id (forward) OR a source and value (reverse), not both")
+	case !hasEntity && !hasPair:
+		return nil, invalidParams("give me a work_id or edition_id to read its external ids, or a source and value to resolve which work/edition carries it")
+	case workID != "" && editionID != "":
+		return nil, invalidParams("give me a work_id OR an edition_id, not both")
+	case hasPair && (source == "" || value == ""):
+		return nil, invalidParams("a reverse lookup needs both a source and a value")
+	}
+
+	var where string
+	var sqlArgs []any
+	switch {
+	case workID != "":
+		where, sqlArgs = "entity_type = 'work' AND entity_id = ?", []any{workID}
+	case editionID != "":
+		where, sqlArgs = "entity_type = 'edition' AND entity_id = ?", []any{editionID}
+	default:
+		where, sqlArgs = "source = ? AND value = ?", []any{source, value}
+	}
+
+	//nolint:gosec // assembled only from the literal fragments above; every value is bound
+	stmt := `SELECT source, value, entity_type, entity_id FROM external_ids WHERE ` +
+		where + ` ORDER BY source, value, entity_type`
+
+	rows, err := s.reader.QueryContext(ctx, stmt, sqlArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	type externalID struct {
+		Source     string `json:"source"`
+		Value      string `json:"value"`
+		EntityType string `json:"entity_type"`
+		EntityID   string `json:"entity_id"`
+	}
+	out := struct {
+		ExternalIDs []externalID `json:"external_ids"`
+	}{ExternalIDs: []externalID{}}
+
+	for rows.Next() {
+		var x externalID
+		if err := rows.Scan(&x.Source, &x.Value, &x.EntityType, &x.EntityID); err != nil {
+			return nil, err
+		}
+		out.ExternalIDs = append(out.ExternalIDs, x)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // wantSummary is one desired item as an agent needs it.
 //
 // Deliberately not the full DesiredItem: an agent reading a list of forty wants
