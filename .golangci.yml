@@ -100,6 +100,27 @@ linters:
             - pkg: github.com/rarebit-one/heyarr-core/internal/api
               desc: "chunking must not know Heyarr's API layer (spec §18, ADR-0007)"
 
+        # Invariant 6, §38, §42, ADR-0049: the peer moves opaque encrypted
+        # changes and NEVER decrypts or merges one — the semantic merge is
+        # client-side. The peer-side sync surface may depend on the opaque wire
+        # type (internal/personalstate/protocol) but not on the plaintext CRDT
+        # model or the device-side decrypt path, so "a merge helper on the peer
+        # that peeks at a decrypted field" does not compile. This is that
+        # sentence, enforced — the personal-state counterpart of
+        # domain-is-storage-agnostic.
+        peer-never-reads-personal-state:
+          files:
+            - "**/internal/api/peerapi/**"
+          deny:
+            - pkg: github.com/rarebit-one/heyarr-core/internal/personalstate/crdt
+              desc: "the peer must not import the plaintext CRDT model — it moves opaque changes and merges none (Invariant 6, §42, ADR-0049)"
+            - pkg: github.com/rarebit-one/heyarr-core/internal/personalstate/client
+              desc: "the peer must not import the device-side space client — unwrapping and decryption are client-side only (Invariant 6, ADR-0049)"
+            - pkg: github.com/rarebit-one/heyarr-core/internal/personalstate/statesync
+              desc: "the peer must not import the CRDT<->change bridge — decoding a change to a CRDT op is a client-side operation (Invariant 6, §42)"
+            - pkg: github.com/rarebit-one/heyarr-core/internal/personalstate/encryption
+              desc: "the peer must not import the encryption package — it holds no key and turns no stored byte into plaintext (Invariant 6, ADR-0049)"
+
     revive:
       rules:
         - name: package-comments

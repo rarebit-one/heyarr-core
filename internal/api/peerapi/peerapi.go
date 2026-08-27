@@ -207,6 +207,11 @@ type Options struct {
 	// ahead of an outage (§54, ADR-0048, #285). Nil on a node that issues no
 	// leases — the route is still mounted and answers 503, like the others.
 	Leases LeaseSource
+	// State is the encrypted personal-state sync backend (§42, §44, ADR-0049):
+	// opaque spaces' heads and changes, moved as ciphertext. Nil on a node that
+	// keeps no personal state — the routes are still mounted and answer 503, like
+	// every other optional capability here.
+	State StateStore
 }
 
 // Server is the peer listener.
@@ -251,6 +256,9 @@ type Server struct {
 	// leases serves this peer's access leases for a sibling to cache (§54,
 	// #285). Nil on a node that issues none.
 	leases LeaseSource
+	// state is the encrypted personal-state sync backend (§42, §44). Nil on a
+	// node that keeps none.
+	state StateStore
 
 	http     *http.Server
 	bound    string
@@ -307,6 +315,7 @@ func New(opts Options) (*Server, error) {
 		webSeedOnly:   opts.WebSeedOnly,
 		controlBackup: opts.ControlBackup,
 		leases:        opts.Leases,
+		state:         opts.State,
 	}
 	s.handler = s.routes()
 	s.http = &http.Server{
@@ -415,6 +424,14 @@ func (s *Server) routes() http.Handler {
 		// pushed to it, and each token carries its own authority so serving
 		// them to a member discloses nothing (see handleLeases).
 		r.Get("/leases", s.handleLeases)
+		// The encrypted personal-state sync protocol (§42, §44, ADR-0049) — a
+		// SEPARATE protocol from CAS sync, riding the same listener and mTLS. It
+		// offers a space's causal heads and moves opaque changes; the peer never
+		// decrypts one (Invariant 6). Mounted always (nil backend → 503) so the
+		// OpenAPI parity walk sees it.
+		r.Get("/state/{space}/heads", s.handleStateHeads)
+		r.Get("/state/{space}/changes", s.handleStateChanges)
+		r.Post("/state/{space}/changes", s.handleStateChangePush)
 	})
 
 	// There is no admin route on this router and there is not going to be one.
