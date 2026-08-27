@@ -157,6 +157,37 @@
         "heyarr/requiredScope": "read",
         "readOnlyHint": true
       },
+      "description": "Resolve external catalogue identifiers (tmdb, imdb) for a work or edition, or reverse a source+value back to the work or edition that carries it. Use this to reconcile an outside id to a heyarr work_id and back by id rather than by a fuzzy title. Read-only; an unknown id returns an empty list.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "edition_id": {
+            "description": "Forward lookup: an edition whose external ids you want.",
+            "type": "string"
+          },
+          "source": {
+            "description": "Reverse lookup: the identifier scheme, e.g. tmdb or imdb. Give together with value to find which work or edition carries it.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Reverse lookup: the identifier's value, e.g. 603. Give with source.",
+            "type": "string"
+          },
+          "work_id": {
+            "description": "Forward lookup: a work (from search_content) whose external ids you want. Give this OR edition_id OR a source+value pair.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "get_external_ids",
+      "title": "Get external identifiers"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
       "description": "List wants whose content is not satisfied — either nothing is held, or what is held does not meet the profile. Use get_content_satisfaction on one of them to find out which, and why.",
       "inputSchema": {
         "additionalProperties": false,
