@@ -231,3 +231,15 @@ state proven
 ref   §41, ADR-0049, ADR-0022, #336
 why   The pairing SAS must bind each device's X25519 ENCRYPTION key, not only its signing key: without it a relay present during pairing could keep the honest signing key yet substitute the device's encryption key, getting itself enrolled as a wrap target for the user's spaces (§41) before the cert is signed. The v2 commit-reveal flow now commits to and reveals both keys, and the demo shows that swapping only the encryption key yields a different short code — the wrap-target MITM the humans catch — mirroring the signing-key substitution.
 evidence a substituted responder ENCRYPTION key yields a DIFFERENT short code — the wrap-target swap the humans catch too
+
+claim personal-state-replicated-as-ciphertext
+state proven
+ref   §37, §45, ADR-0038, ADR-0049, #323
+why   Encrypted personal state replicates to every trusted Full Peer by default (§37, §45): it is small and less replaceable than media, so a device syncs against whichever site it can reach. Without this a space created on one peer would be readable only there, and losing that peer would lose the state. The demo replicates a space from peer A to peer B and shows an authorised device reading it from B — B holds the whole encrypted space (metadata, wrapped keys, changes) as ciphertext it cannot itself read, and only the device's key opens it.
+evidence the second peer holds the encrypted space and an authorised device reads it there — replicated as ciphertext
+
+claim personal-state-converges-after-partition
+state proven
+ref   §42, §43, ADR-0038, ADR-0049, #324
+why   The personal-state plane is deliberate multi-master (§43): unlike the control plane it stays writable on both peers during a partition and merges on reconnect, with the semantic merge CLIENT-SIDE (§42). This is the milestone's payoff and the second evidence line epic #28 owes. The demo partitions two peers, has a device write on each, reconnects and replicates both ways, and asserts the two devices materialise the SAME state (order-independent, all three concurrent items) — while peer B's stored bytes stayed ciphertext throughout, so the server merged nothing and read nothing. A server-side merge, or an order-dependent one, would break it.
+evidence the two devices converge to the same state after an offline concurrent edit, merged client-side
