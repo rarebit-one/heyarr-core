@@ -1,6 +1,6 @@
 # 0050. External identifiers are readable, for knowledge-graph reconciliation
 
-**Status:** Proposed — **external draft, awaiting heyarr-maintainer sign-off** (raised by the `jumpdrive-index` / Starchart track; ADR number 0050 coordinated against main @ ADR-0049)
+**Status:** Accepted (2026-08-27) — **MCP tool only** (maintainer sign-off received; REST twin deferred until a REST consumer exists)
 **Date:** 2026-08-27
 
 ## Context
@@ -65,25 +65,41 @@ Framing facts:
 
 ## Decision
 
-Expose the existing `external_ids` rows through three read-only, additive
-surfaces. No schema change; no new content type; no write path.
+Expose the existing `external_ids` rows through **one** read-only, additive MCP
+tool — `get_external_ids` (`Scope: auth.ScopeRead`), registered in
+`internal/api/mcp/tools.go` beside `search_content`. No schema change, no new
+content type, no write path, and — by the maintainer's sign-off (2026-08-27) —
+**no REST route for now**: heyarr's only consumer here, jumpdrive-index, speaks
+MCP, so the agent surface alone covers the need (`search_content` is likewise
+MCP-only). REST `GET` twins (`/api/v1/works/{id}/external-ids` and the reverse
+`/api/v1/external-ids?source=&value=`) are the natural extension the day a
+non-MCP consumer appears; this ADR's revisit clause covers adding them then
+(hand-written, contract-tested OpenAPI per ADR-0015).
 
-1. **`GET /api/v1/works/{id}/external-ids`** (and the `editions` analogue) —
-   forward lookup: the external ids of a known work/edition. Returns
-   `[{source, value}, …]`, empty array when none.
-2. **`GET /api/v1/external-ids?source=tmdb&value=603`** — reverse lookup: the
-   `{entity_type, entity_id}` (at most one, by the `UNIQUE(source,value,entity_type)`
-   constraint per type) carrying that id. Empty result when unmatched — **"no
-   match," per ADR-0025, never a 4xx for an absent id.**
-3. **MCP tool `get_external_ids`** (`Scope: auth.ScopeRead`, registered in
-   `internal/api/mcp/tools.go` beside `search_content`) — the agent-facing twin of
-   the two routes, taking either `{work_id}`/`{edition_id}` (forward) or
-   `{source, value}` (reverse).
+**Contract — `get_external_ids` (this is the shape the consumer's mock pins).**
+Both directions in one tool, returning a single uniform row shape:
 
-All three are read-only projections of rows heyarr already owns. OpenAPI is
-hand-written and contract-tested (ADR-0015), so the two REST routes land with
-their spec and a contract test; the MCP tool lands with a boundary test
-(`internal/api/mcp/boundary_test.go` idiom).
+- **Input** (provide EITHER an entity ref OR a `source`+`value` pair):
+  ```json
+  { "work_id": "…", "edition_id": "…", "source": "tmdb", "value": "603" }
+  ```
+  `work_id`/`edition_id` → forward (that entity's ids); `source`+`value` → reverse
+  (who carries that id). Missing/contradictory args → an `invalidParams` error, as
+  `search_content` does for an empty query.
+- **Output** — a flat list of full mappings, empty when nothing matches (**"no
+  match," per ADR-0025 — never an error for an absent id**):
+  ```json
+  { "external_ids": [
+      { "source": "tmdb", "value": "603", "entity_type": "work", "entity_id": "…" }
+  ] }
+  ```
+  Reverse resolves to at most one row per `entity_type` (the
+  `UNIQUE(source,value,entity_type)` constraint). The uniform row lets a caller do
+  the reverse lookup (read `entity_id`) and the forward lookup (read `source`/`value`)
+  off the same shape.
+
+Read-only projection of rows heyarr already owns. Lands with a boundary test
+(`internal/api/mcp/boundary_test.go` idiom) and a `tools_test.go` case.
 
 ## Consequences
 
@@ -100,9 +116,13 @@ their spec and a contract test; the MCP tool lands with a boundary test
 - **Revisit if** heyarr ever wants to *write* external ids from a consumer, or to
   model a first-class cross-system link on its own side — both are new authority
   and out of scope here; this ADR is deliberately the read-only floor.
+- **Add the REST twins** (`GET /api/v1/works/{id}/external-ids` + reverse) the day
+  a non-MCP consumer needs them — additive, no decision to re-open, just the
+  hand-written OpenAPI + contract test of ADR-0015.
 
 ---
 
-*Provenance: proposed by the jumpdrive-index/Starchart integration track (M3).
-Needs a heyarr-maintainer decision on the route shapes and the ADR number before
-any implementation PR. Do not merge without that sign-off.*
+*Provenance: proposed by the jumpdrive-index/Starchart integration track (M3);
+maintainer signed off 2026-08-27 on the MCP-tool-only surface. Implementation
+follows in a separate PR; the consumer (jumpdrive-index M4) re-pins its mocked
+contract to the shape above once shipped.*
