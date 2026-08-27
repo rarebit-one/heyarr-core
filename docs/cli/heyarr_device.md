@@ -33,6 +33,6 @@ token scope (ADR-0011) until Milestone 8. The key exists now so that Milestone
 * [heyarr](heyarr.md)	 - Self-hosted content lifecycle, replication and consumption
 * [heyarr device generate](heyarr_device_generate.md)	 - Generate this machine's device key
 * [heyarr device list](heyarr_device_list.md)	 - List this machine's device keys
-* [heyarr device mcp](heyarr_device_mcp.md)	 - Run the Personal MCP for this machine's device key (§73)
+* [heyarr device mcp](heyarr_device_mcp.md)	 - Run the Personal MCP for this machine's device key and personal state (§73)
 * [heyarr device remove](heyarr_device_remove.md)	 - Remove a device key
 * [heyarr device show](heyarr_device_show.md)	 - Show one device key

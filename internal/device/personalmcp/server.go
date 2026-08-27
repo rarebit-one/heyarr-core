@@ -120,6 +120,12 @@ type annotations struct {
 type Options struct {
 	// Store is the device store this server manages. Required.
 	Store *device.Store
+	// PersonalState reads the decrypted personal state this device can see —
+	// playlists and the like (§73). Optional: when nil, the Personal MCP exposes
+	// only the device-key tools (the Milestone 8 shell); when set, it also exposes
+	// the read tools over real encrypted state (§72/§73, M9). The state is
+	// decrypted on THIS device and never reaches the controller — the whole point.
+	PersonalState PersonalStateReader
 	// Version is reported at initialize.
 	Version string
 	// Stdin and Stdout are the transport. Defaults are the process's, which is
@@ -130,10 +136,11 @@ type Options struct {
 
 // Server is the Personal MCP.
 type Server struct {
-	store   *device.Store
-	version string
-	in      io.Reader
-	out     io.Writer
+	store         *device.Store
+	personalState PersonalStateReader
+	version       string
+	in            io.Reader
+	out           io.Writer
 
 	byName map[string]Tool
 	names  []string
@@ -149,13 +156,17 @@ func New(opts Options) (*Server, error) {
 		version = "dev"
 	}
 	s := &Server{
-		store:   opts.Store,
-		version: version,
-		in:      opts.Stdin,
-		out:     opts.Stdout,
-		byName:  map[string]Tool{},
+		store:         opts.Store,
+		personalState: opts.PersonalState,
+		version:       version,
+		in:            opts.Stdin,
+		out:           opts.Stdout,
+		byName:        map[string]Tool{},
 	}
 	s.registerTools()
+	if s.personalState != nil {
+		s.registerPersonalStateTools()
+	}
 	return s, nil
 }
 

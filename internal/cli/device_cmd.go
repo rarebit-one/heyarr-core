@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,8 +10,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
+	apiclient "github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/device/personalmcp"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
 )
 
 // newDeviceCommand builds `heyarr device`.
@@ -212,15 +216,22 @@ required and is matched exactly, because an unrecoverable command that accepts
 // controller-side MCP cannot decrypt user artifacts, and a controller tool that
 // managed device keys would put the private key on the server. See ADR-0032.
 func newDeviceMCPCommand(_ Options, dir *string) *cobra.Command {
-	return &cobra.Command{
+	var configPath string
+	cmd := &cobra.Command{
 		Use:   "mcp",
-		Short: "Run the Personal MCP for this machine's device key (§73)",
+		Short: "Run the Personal MCP for this machine's device key and personal state (§73)",
 		Long: `Serve the Personal MCP over stdio, for an agent running on THIS machine.
 
 This is not the Heyarr MCP. The Heyarr MCP is served by the controller and
 covers the library, acquisition, peers and playback; it cannot see private
-state and never will (§72). This one runs here, reads no network socket, and
-exposes exactly the key-management verbs this device can perform.
+state and never will (§72). This one runs here and exposes the key-management
+verbs this device can perform.
+
+With --config it also exposes the READ tools over your encrypted personal state
+(§73): it fetches the ciphertext from the controller, unwraps the space key with
+THIS device's key, and decrypts and merges the playlist locally — the controller
+sees only ciphertext and can read none of it. Without --config it serves the
+device-key tools alone.
 
 It speaks newline-delimited JSON-RPC 2.0 on stdin and stdout, so configure your
 agent to launch it as a command rather than to dial a URL. Nothing but protocol
@@ -231,12 +242,24 @@ messages goes to stdout.`,
 			if err != nil {
 				return err
 			}
-			srv, err := personalmcp.New(personalmcp.Options{
+			opts := personalmcp.Options{
 				Store:   store,
 				Version: buildinfo.Get().Version,
 				Stdin:   cmd.InOrStdin(),
 				Stdout:  cmd.OutOrStdout(),
-			})
+			}
+			// With a controller configured, wire the read-over-real-state tools.
+			// The decrypt happens here, on the device; the controller only ever
+			// serves ciphertext (§72, §73).
+			if configPath != "" {
+				var flags clientFlags
+				c, err := flags.newClient(configPath)
+				if err != nil {
+					return err
+				}
+				opts.PersonalState = personalStateReader{ctx: cmd.Context(), c: c, deviceDir: *dir}
+			}
+			srv, err := personalmcp.New(opts)
 			if err != nil {
 				return err
 			}
@@ -247,6 +270,37 @@ messages goes to stdout.`,
 			return srv.Serve(cmd.Context())
 		},
 	}
+	cmd.Flags().StringVar(&configPath, "config", "",
+		"connect to this controller to expose the read tools over your encrypted personal state (§73)")
+	return cmd
+}
+
+// personalStateReader is the device-side decrypt path behind the Personal MCP's
+// read tools (§73): it opens a space by unwrapping the space key with this
+// device's key, decrypts the changes the controller holds, and merges them into
+// the playlist — all locally, so the controller only ever serves ciphertext.
+type personalStateReader struct {
+	ctx       context.Context
+	c         *apiclient.Client
+	deviceDir string
+}
+
+func (r personalStateReader) Playlist(spaceID string) ([]string, error) {
+	mgr, err := openSpace(r.ctx, r.c, r.deviceDir, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	changes, err := r.c.Changes(r.ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	decoded, err := statesync.DecodeAll(mgr, changes)
+	if err != nil {
+		return nil, err
+	}
+	st := crdt.New()
+	st.Apply(decoded...)
+	return st.IDs(), nil
 }
 
 // printDevice renders one device for a person. The private key is represented
