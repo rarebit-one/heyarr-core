@@ -525,7 +525,19 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// producer at all, so every session stayed at "created".
 	api.StartProgressBeat(ctx)
 
-	blobHandler, err := blobs.New(blobs.Options{Store: blobStore, Logger: c.log})
+	// The CLIENT blob route may serve a blob that is still arriving, blocking
+	// until the requested range lands (§33, §84, ADR-0044). That capability is
+	// wired HERE and nowhere else: the peer surface builds its own handler with
+	// no Partial, so the peer content route keeps its untouched whole-blob
+	// contract (ADR-0042). The adapter decodes the piece record into byte terms
+	// so the blob-serving package needs no piece awareness; a store that cannot
+	// stage partials does not satisfy the reader, and the route falls back to a
+	// plain 404.
+	var partialSource blobs.PartialSource
+	if pr, ok := blobStore.(partialPieceReader); ok {
+		partialSource = piecePartialSource{store: pr, log: c.log}
+	}
+	blobHandler, err := blobs.New(blobs.Options{Store: blobStore, Logger: c.log, Partial: partialSource})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
