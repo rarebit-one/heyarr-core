@@ -1079,6 +1079,17 @@ if [[ ! -x "$GEN" ]] && command -v go >/dev/null 2>&1; then
   go build -o "$WORK/genlibrary" ./internal/testutil/fixtures/cmd/genlibrary 2>/dev/null && GEN="$WORK/genlibrary"
 fi
 
+# stagepartial is the same shape of dev helper (never shipped): it writes a blob
+# into a CAS as an in-flight transfer — a sparse staging file with only some
+# pieces and the availability record that says which — so the progressive-playback
+# section can demonstrate serving a blob that has not finished arriving (§33, §84,
+# ADR-0044) deterministically, rather than racing the live swarm to catch one
+# mid-transfer.
+STAGEPARTIAL=${STAGEPARTIAL:-./bin/stagepartial}
+if [[ ! -x "$STAGEPARTIAL" ]] && command -v go >/dev/null 2>&1; then
+  go build -o "$WORK/stagepartial" ./internal/testutil/fixtures/cmd/stagepartial 2>/dev/null && STAGEPARTIAL="$WORK/stagepartial"
+fi
+
 # A ~200 MB streaming fixture is the point: a file that fits in one buffer
 # proves nothing about the 20 GB remux ADR-0013 calls a normal case. Shrinkable
 # for a quick local loop, and the size is printed so a green run against a tiny
@@ -6773,6 +6784,57 @@ YAML
   pieces_after=$(piece_served_count "$log_a" "$blob")
   assert_eq "$pieces_after" "$pieces_before" \
     "AND THE PIECE RECORD DID NOT MOVE: a client asking for bytes over HTTP causes no piece anywhere, which is what keeps M6 an internal optimisation rather than a client requirement (§33, §85)"
+
+  # -------------------------------------------------------------------------
+  note "  🔴 progressive playback: a client range-reads a blob that has not finished arriving (§33, §84, ADR-0044)"
+  # -------------------------------------------------------------------------
+  #
+  # Everything above served a blob held WHOLE. M10's premise is the opposite: a
+  # player consuming ordinary HTTP over content that is still arriving. M6 built
+  # the byte machinery — cas.ReadPartialAt serves out of a still-assembling blob —
+  # and wired it to the peer surface alone, so nothing a PLAYER talks to could
+  # reach it. This is the client route's partial path (ADR-0044): consult the
+  # availability record, serve a landed range, and BLOCK on a range that has not
+  # landed rather than serving the hole (ADR-0042/0043).
+  #
+  # Staged directly into node A's CAS rather than raced out of the swarm above: a
+  # blob with a middle-piece HOLE is genuinely incomplete — Publish would fail on
+  # it — deterministic, and the landed range is known. Only the client mount grows
+  # this; the peer content route never does (ADR-0042).
+  local pp_full="$root/pp-full.bin" pp_blob pp_got="$root/pp-got.bin"
+  pp_blob=$("$STAGEPARTIAL" --cas "$root/a/data/cas" --size 786432 --landed 0,2 --content-out "$pp_full")
+  assert_contains "$pp_blob" "blake3:" "the staged partial has a digest node A can be asked for"
+  assert_eq "$(peer_holds "$root/a/data/cas" "$pp_blob")" "0" \
+    "the staged blob is genuinely incomplete: nowhere in the blob tree, only a partial in staging with a hole where piece 1 should be"
+
+  # A range wholly inside piece 0 (0..262143), which has landed: it must serve at
+  # once, over the client route, from the still-assembling partial.
+  local pp_code
+  pp_code=$(sw_a "/api/v1/blobs/$pp_blob/content" -H 'Range: bytes=1000-9191' -o "$pp_got" -w '%{http_code}')
+  assert_eq "$pp_code" "206" \
+    "a client range-read a blob that had not finished arriving — 206 from the still-assembling partial, over ordinary HTTP"
+  dd if="$pp_full" of="$root/pp-expect.bin" bs=1 skip=1000 count=8192 2>/dev/null
+  assert_eq "$("$GEN" -hash "$pp_got")" "$("$GEN" -hash "$root/pp-expect.bin")" \
+    "and the served bytes are the true content of that range, not a zero-filled hole — the bitset gate held (ADR-0043)"
+
+  # A range inside the HOLE (piece 1, 262144..524287) must BLOCK: the reader waits
+  # for bytes that never come rather than 500ing or serving zeroes. A short client
+  # timeout proves it — curl exits 28, no body delivered.
+  local pp_hole_rc=0
+  sw_a "/api/v1/blobs/$pp_blob/content" -H 'Range: bytes=300000-300999' --max-time 2 -o /dev/null >/dev/null 2>&1 || pp_hole_rc=$?
+  assert_eq "$pp_hole_rc" "28" \
+    "a range that has NOT landed blocks rather than serving a hole or failing — the client times out waiting, it is never handed garbage (ADR-0044)"
+
+  # Land the missing piece — what a worker does as it arrives — and the same range
+  # now serves: block-then-serve resolves, and the client never knew it waited.
+  "$STAGEPARTIAL" --cas "$root/a/data/cas" --size 786432 --landed 0,1,2 >/dev/null
+  local pp_code2
+  pp_code2=$(sw_a "/api/v1/blobs/$pp_blob/content" -H 'Range: bytes=300000-300999' -o "$root/pp-hole.bin" -w '%{http_code}')
+  assert_eq "$pp_code2" "206" \
+    "once the missing piece lands, the same range serves — the transparent transition a player sees as an ordinary read"
+  dd if="$pp_full" of="$root/pp-hole-expect.bin" bs=1 skip=300000 count=1000 2>/dev/null
+  assert_eq "$("$GEN" -hash "$root/pp-hole.bin")" "$("$GEN" -hash "$root/pp-hole-expect.bin")" \
+    "and those bytes are the true content too, once the piece that carried them landed"
 
   local p
   for p in "${PEER_PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done

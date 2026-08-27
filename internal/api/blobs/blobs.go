@@ -33,6 +33,7 @@
 package blobs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -53,12 +54,34 @@ type Options struct {
 	Store cas.Store
 	// Logger records the failures a client is not told about. Optional.
 	Logger *slog.Logger
+	// Partial enables serving a blob that is still arriving, by blocking until
+	// the requested range lands (§33, §84, ADR-0044). Optional, and deliberately
+	// so: it is passed by the CLIENT wiring and left nil by the peer surface,
+	// which must keep the untouched whole-blob content contract (ADR-0042). When
+	// nil, an absent blob is a 404 exactly as before.
+	Partial PartialSource
+	// PollInterval is how long a blocked partial read waits before re-consulting
+	// the availability record. Defaults to defaultPollInterval. It is a knob
+	// rather than a signal because the piece lands in another role and the only
+	// role-legal notification is the record the worker rewrites on disk
+	// (invariant 4). Ignored when Partial is nil.
+	PollInterval time.Duration
 }
+
+// defaultPollInterval paces a blocked partial read. Pieces land on network
+// timescales — hundreds of milliseconds to seconds — so a poll a few times a
+// second re-checks promptly enough for a player to keep its buffer without
+// making a busy loop of a disk read.
+const defaultPollInterval = 200 * time.Millisecond
 
 // Handler serves blob content.
 type Handler struct {
-	store cas.Store
-	log   *slog.Logger
+	store   cas.Store
+	log     *slog.Logger
+	partial PartialSource
+	// wait blocks a partial read for one poll interval, or until the request's
+	// context ends. Built from PollInterval, replaced in tests for determinism.
+	wait func(context.Context) error
 }
 
 // New builds the handler. It returns an error rather than panicking so that a
@@ -71,7 +94,32 @@ func New(opts Options) (*Handler, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Handler{store: opts.Store, log: log.With("component", "blobs")}, nil
+	interval := opts.PollInterval
+	if interval <= 0 {
+		interval = defaultPollInterval
+	}
+	return &Handler{
+		store:   opts.Store,
+		log:     log.With("component", "blobs"),
+		partial: opts.Partial,
+		wait:    pollWait(interval),
+	}, nil
+}
+
+// pollWait returns a wait that sleeps for interval or returns the context error,
+// whichever comes first. A timer rather than time.Sleep so a cancelled request
+// wakes at once instead of after the interval.
+func pollWait(interval time.Duration) func(context.Context) error {
+	return func(ctx context.Context) error {
+		t := time.NewTimer(interval)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+			return nil
+		}
+	}
 }
 
 // Mount registers the routes on the authenticated /api/v1 router. It satisfies
@@ -164,6 +212,14 @@ func (h *Handler) ContentAs(w http.ResponseWriter, r *http.Request, mime string)
 	rsc, _, err := h.store.Open(r.Context(), hash)
 	switch {
 	case errors.Is(err, cas.ErrNotFound):
+		// Not held whole. If a transfer is assembling it and this is the client
+		// route (Partial wired), serve progressively over what has landed
+		// (§33/§84, ADR-0044). The peer route leaves Partial nil, so it 404s here
+		// exactly as before — a partial has none of the whole-blob promises that
+		// route makes (ADR-0042).
+		if h.serveIfPartial(w, r, hash, mime) {
+			return
+		}
 		httpapi.Fail(w, r, problem.NotFound("this peer holds no blob "+hash.String()))
 		return
 	case err != nil:
@@ -179,6 +235,44 @@ func (h *Handler) ContentAs(w http.ResponseWriter, r *http.Request, mime string)
 		}
 	}()
 
+	h.writeContentHeaders(w, r, hash, mime)
+
+	// The modtime is deliberately the zero time.
+	//
+	// ServeContent omits Last-Modified for a zero time and skips the
+	// date-based half of If-Range and If-Modified-Since. That is what we want:
+	// a real mtime is a property of *this peer's copy* — when it was
+	// materialised, restored, or reflinked — and passing it would make two
+	// peers holding byte-identical content advertise different validators.
+	// Replication and a web-seed swarm both read the same blob from several
+	// peers, and a cache keyed on a validator that varies per peer either
+	// thrashes or, worse, decides a mid-transfer switch of source invalidates
+	// what it already has. The strong ETag is a validator of the bytes rather
+	// than of the file, so conditional requests still work correctly — they
+	// just work identically everywhere. Nothing here is mutable, so there is
+	// nothing a modification date could tell a client that the digest does not.
+	var noModTime time.Time
+
+	// Anything after this point is ServeContent's: status, Content-Range,
+	// Content-Length and the body. rsc stays a seekable stream all the way
+	// down, so the response is copied through a fixed-size buffer (or handed to
+	// sendfile) and memory stays flat in the blob's size. Reading it into a
+	// []byte first — with io.ReadAll, or by "just" caching small blobs — would
+	// turn a 20 GB remux, which ADR-0013 calls a normal case, into 20 GB of
+	// heap per concurrent request.
+	http.ServeContent(w, r, "", noModTime, rsc)
+}
+
+// writeContentHeaders sets the identity, caching and range headers ServeContent
+// reads back before it writes a status. Extracted so the whole-blob path and the
+// partial path (ADR-0044) advertise byte-for-byte the same contract: a partial
+// served over a live transfer carries the SAME strong ETag and the SAME
+// Content-Type as the finished blob will, because the bytes are the same bytes —
+// the whole-object digest the ETag names is exactly what those pieces will hash
+// to once complete (invariant 1). A client that caches a fully-delivered range
+// from a partial and later revalidates against the whole blob gets a match, not
+// a surprise.
+func (h *Handler) writeContentHeaders(w http.ResponseWriter, r *http.Request, hash hashing.Hash, mime string) {
 	// A strong validator derived from the content itself. ServeContent reads it
 	// back out of the header to answer If-Range and If-None-Match, so it has to
 	// be set before the call, not after.
@@ -208,31 +302,61 @@ func (h *Handler) ContentAs(w http.ResponseWriter, r *http.Request, mime string)
 		w.Header().Set("Content-Disposition",
 			fmt.Sprintf("attachment; filename=%q", hash.Hex()+".bin"))
 	}
+}
 
-	// The modtime is deliberately the zero time.
-	//
-	// ServeContent omits Last-Modified for a zero time and skips the
-	// date-based half of If-Range and If-Modified-Since. That is what we want:
-	// a real mtime is a property of *this peer's copy* — when it was
-	// materialised, restored, or reflinked — and passing it would make two
-	// peers holding byte-identical content advertise different validators.
-	// Replication and a web-seed swarm both read the same blob from several
-	// peers, and a cache keyed on a validator that varies per peer either
-	// thrashes or, worse, decides a mid-transfer switch of source invalidates
-	// what it already has. The strong ETag is a validator of the bytes rather
-	// than of the file, so conditional requests still work correctly — they
-	// just work identically everywhere. Nothing here is mutable, so there is
-	// nothing a modification date could tell a client that the digest does not.
+// serveIfPartial serves a blob that is still arriving, and reports whether it
+// took the response. It returns false only when there is nothing to serve — no
+// Partial capability (the peer route), or no transfer in flight — so the caller
+// can fall through to the ordinary 404. Once it decides to serve, it owns the
+// response: an error building the reader is answered here, not by a misleading
+// "not found".
+//
+// Availability is a HINT (ADR-0043): this reads the logical size to SIZE the
+// response and to decide the blob is worth serving, but every byte the reader
+// returns is re-gated against availability at read time. A record that overstates
+// here costs a blocked read that resolves when the bytes truly land, never a
+// wrong byte.
+func (h *Handler) serveIfPartial(w http.ResponseWriter, r *http.Request, hash hashing.Hash, mime string) bool {
+	if h.partial == nil {
+		return false
+	}
+	size, inflight, err := h.partial.ArrivingSize(r.Context(), hash)
+	if err != nil {
+		h.log.Error("reading partial availability failed",
+			"request_id", httpapi.RequestIDFrom(r.Context()),
+			"hash", hash.String(), "error", err)
+		httpapi.Fail(w, r, problem.Internal())
+		return true
+	}
+	if !inflight {
+		// Neither held nor in flight (this also covers a zero digest and a record
+		// too corrupt to serve). The 404 the caller writes is correct.
+		return false
+	}
+
+	reader := &partialBlobReader{
+		ctx:   r.Context(),
+		store: h.store,
+		src:   h.partial,
+		wait:  h.wait,
+		blob:  hash,
+		size:  size,
+	}
+	defer func() {
+		if err := reader.Close(); err != nil {
+			h.log.Warn("closing a partial blob reader failed", "hash", hash.String(), "error", err)
+		}
+	}()
+
+	h.writeContentHeaders(w, r, hash, mime)
 	var noModTime time.Time
-
-	// Anything after this point is ServeContent's: status, Content-Range,
-	// Content-Length and the body. rsc stays a seekable stream all the way
-	// down, so the response is copied through a fixed-size buffer (or handed to
-	// sendfile) and memory stays flat in the blob's size. Reading it into a
-	// []byte first — with io.ReadAll, or by "just" caching small blobs — would
-	// turn a 20 GB remux, which ADR-0013 calls a normal case, into 20 GB of
-	// heap per concurrent request.
-	http.ServeContent(w, r, "", noModTime, rsc)
+	// ServeContent writes the status and Content-Length from the reader's Seek —
+	// the whole logical length — before the first Read blocks, so a player sees a
+	// 200/206 with the true length immediately and receives the body as pieces
+	// land. A range whose bytes are already present streams without ever
+	// blocking; one that is not blocks THIS request only, never the server.
+	http.ServeContent(w, r, "", noModTime, reader)
+	return true
 }
 
 // wantsDownload reports whether the caller asked for an attachment.

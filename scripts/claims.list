@@ -159,10 +159,9 @@ why   A release is handed to a download client that takes it, and something asks
 evidence a grab_release job succeeded
 
 claim playback-over-a-partial-blob
-state pending
-issue 29
-ref   §33, ADR-0043
-why   cas.ReadPartialAt serves bytes out of a blob still being assembled and is reached only from the peer surface. internal/api/blobs has no partial path, so nothing a player talks to can serve what has not finished arriving. Milestone 10's premise.
+state proven
+ref   §33, §84, ADR-0043, ADR-0044, #29
+why   cas.ReadPartialAt serves bytes out of a blob still being assembled and was reached only from the peer surface. M10 adds the client route's partial path (internal/api/blobs, ADR-0044): it consults the availability record, serves a landed range over ordinary HTTP, and BLOCKS on a range that has not landed rather than serving the hole. Before this nothing a player talks to could serve what had not finished arriving — Milestone 10's premise, and the fourth mechanism-with-no-caller this ledger names. The negative rides alongside: a range in the hole times out rather than being handed zeroes, so a green run cannot mean "it served something" when what it served was a hole.
 evidence a client range-read a blob that had not finished arriving
 
 claim clients-are-served-hls
