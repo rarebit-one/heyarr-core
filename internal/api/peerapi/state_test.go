@@ -29,6 +29,9 @@ type stubState struct {
 	gotSpaces map[string]string // space id -> kind
 	gotKeys   map[string]string // space id -> recipient (last)
 	badKind   string            // a kind PutSpace rejects as invalid
+
+	snapshots map[string]protocol.EncryptedSnapshot // space id -> latest snapshot
+	gotSnap   *protocol.EncryptedSnapshot           // the last snapshot PutSnapshot accepted
 }
 
 func (s *stubState) HeadsFor(_ context.Context, spaceID string) ([]string, error) {
@@ -78,6 +81,25 @@ func (s *stubState) PutWrappedKey(_ context.Context, spaceID, recipient string, 
 		s.gotKeys = map[string]string{}
 	}
 	s.gotKeys[spaceID] = recipient
+	return nil
+}
+
+func (s *stubState) LatestSnapshotFor(_ context.Context, spaceID string) (protocol.EncryptedSnapshot, bool, error) {
+	if s.unknown[spaceID] {
+		return protocol.EncryptedSnapshot{}, false, peerapi.ErrNoSuchSpace
+	}
+	snap, ok := s.snapshots[spaceID]
+	return snap, ok, nil
+}
+
+func (s *stubState) PutSnapshot(_ context.Context, snap protocol.EncryptedSnapshot) error {
+	if s.unknown[snap.SpaceID] {
+		return peerapi.ErrNoSuchSpace
+	}
+	if err := snap.Validate(); err != nil {
+		return err
+	}
+	s.gotSnap = &snap
 	return nil
 }
 
@@ -181,6 +203,113 @@ func TestStateRouteServesOpaqueChangesToAMember(t *testing.T) {
 	}
 	if len(st.got) != 1 || st.got[0].ChangeID != chB.ChangeID {
 		t.Fatalf("peer did not store the pushed change: %+v", st.got)
+	}
+}
+
+// mustSnapshot mints an opaque snapshot for a space at a frontier.
+func mustSnapshot(t *testing.T, space string, frontier []string, ciphertext []byte) protocol.EncryptedSnapshot {
+	t.Helper()
+	snap, err := protocol.NewSnapshot(space, frontier, ciphertext)
+	if err != nil {
+		t.Fatalf("minting a snapshot: %v", err)
+	}
+	return snap
+}
+
+// TestStateSnapshotRouteOffersAndAcceptsOpaqueSnapshots: a member pulls the latest
+// snapshot a peer holds (ciphertext moved verbatim) and pushes one, which the peer
+// accepts after verifying its content-address — the snapshot leg of §44.
+func TestStateSnapshotRouteOffersAndAcceptsOpaqueSnapshots(t *testing.T) {
+	const space = "0199dddd-0000-7000-8000-00000000face"
+	a := newPeerNode(t, "peer-a-id", "peer-a")
+	b := newPeerNode(t, "peer-b-id", "peer-b")
+	root := newTrustRoot(a.member(), b.member())
+
+	opaque := []byte("OPAQUE-SNAPSHOT-not-a-playlist")
+	held := mustSnapshot(t, space, nil, opaque)
+	st := &stubState{
+		changes:   map[string][]protocol.EncryptedChange{space: nil},
+		snapshots: map[string]protocol.EncryptedSnapshot{space: held},
+	}
+	l := serveState(t, a, root, st)
+	client := dialler(t, b, root)
+
+	// Offer: the latest snapshot, served verbatim as ciphertext.
+	status, body, _, err := peerGet(t, client, stateURL(l, space, "/snapshot"))
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GET snapshot: status=%d err=%v\n%s", status, err, body)
+	}
+	var served protocol.EncryptedSnapshot
+	if err := json.Unmarshal([]byte(body), &served); err != nil {
+		t.Fatal(err)
+	}
+	if served.SnapshotID != held.SnapshotID || !bytes.Equal(served.Ciphertext, opaque) {
+		t.Fatalf("the peer altered the snapshot in transit: %+v", served)
+	}
+
+	// Push a fresh snapshot; the peer accepts it after verifying its id.
+	next := mustSnapshot(t, space, nil, []byte("OPAQUE-SNAPSHOT-second"))
+	payload, err := json.Marshal(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, body, _, err = peerSend(t, client, http.MethodPost, stateURL(l, space, "/snapshots"), string(payload))
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("POST snapshot: status=%d err=%v\n%s", status, err, body)
+	}
+	if st.gotSnap == nil || st.gotSnap.SnapshotID != next.SnapshotID {
+		t.Fatalf("peer did not store the pushed snapshot: %+v", st.gotSnap)
+	}
+}
+
+// TestStateLatestSnapshotAbsentIs404: a space with no snapshot yet 404s, distinct
+// from a served empty body — the caller then seeds from the change log alone.
+func TestStateLatestSnapshotAbsentIs404(t *testing.T) {
+	const space = "0199eeee-0000-7000-8000-00000000beef"
+	a := newPeerNode(t, "peer-a-id", "peer-a")
+	b := newPeerNode(t, "peer-b-id", "peer-b")
+	root := newTrustRoot(a.member(), b.member())
+
+	st := &stubState{changes: map[string][]protocol.EncryptedChange{space: nil}}
+	l := serveState(t, a, root, st)
+	client := dialler(t, b, root)
+
+	status, _, _, err := peerGet(t, client, stateURL(l, space, "/snapshot"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusNotFound {
+		t.Fatalf("GET snapshot on a space with none: status=%d, want 404", status)
+	}
+}
+
+// TestStateSnapshotPushRejectsForgedID: a snapshot whose stated id does not match
+// its bytes is refused before storage (Invariant 1), exactly as a change is.
+func TestStateSnapshotPushRejectsForgedID(t *testing.T) {
+	const space = "0199ffff-0000-7000-8000-00000000d00d"
+	a := newPeerNode(t, "peer-a-id", "peer-a")
+	b := newPeerNode(t, "peer-b-id", "peer-b")
+	root := newTrustRoot(a.member(), b.member())
+
+	st := &stubState{changes: map[string][]protocol.EncryptedChange{space: nil}}
+	l := serveState(t, a, root, st)
+	client := dialler(t, b, root)
+
+	forged := mustSnapshot(t, space, nil, []byte("OPAQUE-SNAPSHOT"))
+	forged.SnapshotID = "blake3:0000000000000000000000000000000000000000000000000000000000000000" // a plausible but wrong id
+	payload, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, _, _, err := peerSend(t, client, http.MethodPost, stateURL(l, space, "/snapshots"), string(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusBadRequest {
+		t.Fatalf("POST forged snapshot: status=%d, want 400", status)
+	}
+	if st.gotSnap != nil {
+		t.Fatalf("the peer stored a forged snapshot: %+v", st.gotSnap)
 	}
 }
 

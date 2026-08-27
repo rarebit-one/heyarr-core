@@ -18,6 +18,10 @@ type ReadStore interface {
 	ListSpaces(ctx context.Context) ([]spaces.EncryptedSpace, error)
 	WrappedKeysFor(ctx context.Context, spaceID string) ([]store.WrappedKey, error)
 	ChangesFor(ctx context.Context, spaceID string) ([]protocol.EncryptedChange, error)
+	// LatestSnapshotFor returns the newest snapshot held for a space (§44), and
+	// whether one exists, so the reconciler can replicate it too. ok is false with
+	// a nil error when the space has no snapshot yet.
+	LatestSnapshotFor(ctx context.Context, spaceID string) (protocol.EncryptedSnapshot, bool, error)
 }
 
 // PeerLister enumerates the trusted Full Peers to replicate to. It is read FRESH
@@ -102,6 +106,16 @@ func replicateSpace(ctx context.Context, local ReadStore, pusher Pusher, t Targe
 	missing := protocol.Missing(changes, targetHeads)
 	for _, ch := range missing {
 		if err := pusher.PushChange(ctx, t, ch); err != nil {
+			return 0, err
+		}
+	}
+	// Push the latest snapshot AFTER its changes (§44), so the target holds the
+	// tail the snapshot's frontier references before it receives the snapshot. A
+	// space with no snapshot yet skips this — nothing to replicate.
+	if snap, ok, err := local.LatestSnapshotFor(ctx, sp.ID); err != nil {
+		return 0, fmt.Errorf("reading the latest snapshot for %s: %w", sp.ID, err)
+	} else if ok {
+		if err := pusher.PushSnapshot(ctx, t, snap); err != nil {
 			return 0, err
 		}
 	}
