@@ -39,6 +39,7 @@ package pairflow
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"time"
@@ -103,6 +104,11 @@ type Result struct {
 	// PeerKey is the authenticated key the peer contributed: the responder's
 	// device key (to the initiator) or the user identity key (to the responder).
 	PeerKey ed25519.PublicKey
+	// PeerEncKey is the peer's X25519 encryption key, when it has one: the
+	// responder's device encryption key (to the initiator), so the cert can bind
+	// it (§41, ADR-0049). Empty when the peer contributed none (the user identity,
+	// or a pre-Milestone-9 device).
+	PeerEncKey []byte
 	// Confirmed is whether the human accepted the SAS on this side.
 	Confirmed bool
 	// Cert is the enrolment cert: signed by the initiator, stored by the
@@ -136,9 +142,11 @@ type Initiator struct {
 	// Confirm is the human comparison. Given the derived SAS it returns true to
 	// proceed (sign the cert) or false to refuse. Required.
 	Confirm func(pairing.SAS) (bool, error)
-	// Sign issues a user-signed enrolment cert for the responder's device key,
-	// using the user private key the flow never sees. Required.
-	Sign func(responderDeviceKey ed25519.PublicKey) (certToken string, err error)
+	// Sign issues a user-signed enrolment cert for the responder's device keys —
+	// its signing key and its X25519 encryption key (§41, ADR-0049) — using the
+	// user private key the flow never sees. The encryption key is empty for a
+	// pre-Milestone-9 responder. Required.
+	Sign func(responderDeviceKey ed25519.PublicKey, responderEncKey []byte) (certToken string, err error)
 }
 
 // Run drives the initiator through the handshake and, on a confirmed match,
@@ -156,8 +164,9 @@ func (in Initiator) Run(ctx context.Context) (Result, error) {
 	}
 	interval := pollInterval(in.PollInterval)
 
-	// 1. Commit to the user key, before revealing anything.
-	commit, err := pairing.Commit(in.UserPub)
+	// 1. Commit to the user key, before revealing anything. The user identity has
+	//    no encryption key, so its committed enc key is empty (framed, still bound).
+	commit, err := pairing.Commit(in.UserPub, nil)
 	if err != nil {
 		return Result{}, err
 	}
@@ -175,8 +184,8 @@ func (in Initiator) Run(ctx context.Context) (Result, error) {
 		return Result{}, fmt.Errorf("pairflow: reading the responder commitment: %w", err)
 	}
 
-	// 3. Reveal the user key and the salt.
-	if err := in.Relay.Put(ctx, in.Session, SlotInitiatorReveal, revealBytes(in.UserPub, in.Salt)); err != nil {
+	// 3. Reveal the user key and the salt (the user identity carries no enc key).
+	if err := in.Relay.Put(ctx, in.Session, SlotInitiatorReveal, revealBytes(in.UserPub, nil, in.Salt)); err != nil {
 		return Result{}, fmt.Errorf("pairflow: posting the initiator reveal: %w", err)
 	}
 
@@ -185,31 +194,31 @@ func (in Initiator) Run(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	respPub, _, err := parseReveal(respReveal, false)
+	respPub, respEnc, _, err := parseReveal(respReveal, false)
 	if err != nil {
 		abort(ctx, in.Relay, in.Session, "responder reveal malformed")
 		return Result{}, err
 	}
 
-	// 5. THE CHECK. The revealed key must open the commitment the responder
-	//    published in step 2. Without this, the responder could commit to one
-	//    key and reveal another — the rushing attack.
-	if err := pairing.Commitment(respCommit).Open(respPub); err != nil {
+	// 5. THE CHECK. The revealed keys must open the commitment the responder
+	//    published in step 2 — BOTH the signing and the encryption key. Without
+	//    this, the responder could commit to one pair and reveal another (the
+	//    rushing attack), including substituting only its encryption key.
+	if err := pairing.Commitment(respCommit).Open(respPub, respEnc); err != nil {
 		abort(ctx, in.Relay, in.Session, "commitment mismatch")
 		return Result{}, fmt.Errorf("%w: %w", ErrCommitmentMismatch, err)
 	}
 
-	// 6. Derive the SAS and ask the human. The flow commits and reveals the
-	//    device SIGNING keys today; folding each device's ENCRYPTION key into the
-	//    commit-reveal (so the v2 SAS binds it too, §41) is a tracked follow-up, so
-	//    the encryption fields are empty here for now — a v1-shaped SAS the v2
-	//    primitive derives identically.
-	sas, err := pairing.Derive(pairing.Keys{Sign: in.UserPub}, pairing.Keys{Sign: respPub}, in.Salt)
+	// 6. Derive the SAS and ask the human. The v2 SAS binds the responder's
+	//    ENCRYPTION key alongside its signing key (§41, ADR-0049), so a relay that
+	//    substitutes the enc key yields a different string the humans catch. The
+	//    user identity contributes no enc key.
+	sas, err := pairing.Derive(pairing.Keys{Sign: in.UserPub}, pairing.Keys{Sign: respPub, Enc: respEnc}, in.Salt)
 	if err != nil {
 		abort(ctx, in.Relay, in.Session, "derive failed")
 		return Result{}, err
 	}
-	res := Result{SAS: sas, PeerKey: respPub}
+	res := Result{SAS: sas, PeerKey: respPub, PeerEncKey: respEnc}
 	ok, err := in.Confirm(sas)
 	if err != nil {
 		abort(ctx, in.Relay, in.Session, "confirm error")
@@ -221,8 +230,9 @@ func (in Initiator) Run(ctx context.Context) (Result, error) {
 	}
 	res.Confirmed = true
 
-	// 7. Sign the cert for the responder's device key and post it.
-	cert, err := in.Sign(respPub)
+	// 7. Sign the cert for the responder's device keys (signing + encryption) and
+	//    post it, so the cert binds the enc key the SAS just authenticated (§41).
+	cert, err := in.Sign(respPub, respEnc)
 	if err != nil {
 		abort(ctx, in.Relay, in.Session, "sign failed")
 		return res, fmt.Errorf("pairflow: signing the enrolment cert: %w", err)
@@ -243,6 +253,11 @@ type Responder struct {
 	// DevicePub is this device's freshly generated public key — its SAS input
 	// and the key the cert will bind. Exactly ed25519.PublicKeySize.
 	DevicePub ed25519.PublicKey
+	// DeviceEnc is this device's X25519 encryption public key (§41, ADR-0049),
+	// committed and revealed alongside DevicePub so the v2 SAS binds it and the
+	// cert can wrap-target it. Empty for a pre-Milestone-9 device, which pairs
+	// with a v1-shaped SAS the v2 primitive derives identically.
+	DeviceEnc []byte
 
 	// Confirm is the human comparison, as on the initiator. Required.
 	Confirm func(pairing.SAS) (bool, error)
@@ -272,8 +287,8 @@ func (rp Responder) Run(ctx context.Context) (Result, error) {
 		return Result{}, fmt.Errorf("pairflow: reading the initiator commitment: %w", err)
 	}
 
-	// 2. Commit to the device key.
-	commit, err := pairing.Commit(rp.DevicePub)
+	// 2. Commit to the device keys — signing AND encryption (§41, ADR-0049).
+	commit, err := pairing.Commit(rp.DevicePub, rp.DeviceEnc)
 	if err != nil {
 		return Result{}, err
 	}
@@ -281,9 +296,9 @@ func (rp Responder) Run(ctx context.Context) (Result, error) {
 		return Result{}, fmt.Errorf("pairflow: posting the responder commitment: %w", err)
 	}
 
-	// 3. Reveal the device key (after committing, and after seeing the
-	//    initiator's commitment).
-	if err := rp.Relay.Put(ctx, rp.Session, SlotResponderReveal, revealBytes(rp.DevicePub, nil)); err != nil {
+	// 3. Reveal the device keys (after committing, and after seeing the
+	//    initiator's commitment). The responder carries no salt.
+	if err := rp.Relay.Put(ctx, rp.Session, SlotResponderReveal, revealBytes(rp.DevicePub, rp.DeviceEnc, nil)); err != nil {
 		return Result{}, fmt.Errorf("pairflow: posting the responder reveal: %w", err)
 	}
 
@@ -292,21 +307,22 @@ func (rp Responder) Run(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	userPub, salt, err := parseReveal(initReveal, true)
+	userPub, _, salt, err := parseReveal(initReveal, true)
 	if err != nil {
 		abort(ctx, rp.Relay, rp.Session, "initiator reveal malformed")
 		return Result{}, err
 	}
 
-	// 5. THE CHECK: the initiator's revealed key must open its commitment.
-	if err := pairing.Commitment(initCommit).Open(userPub); err != nil {
+	// 5. THE CHECK: the initiator's revealed key must open its commitment. The
+	//    user identity has no encryption key, so an empty enc is what it committed.
+	if err := pairing.Commitment(initCommit).Open(userPub, nil); err != nil {
 		abort(ctx, rp.Relay, rp.Session, "commitment mismatch")
 		return Result{}, fmt.Errorf("%w: %w", ErrCommitmentMismatch, err)
 	}
 
-	// 6. Derive the SAS and ask the human. Encryption keys are empty pending the
-	//    commit-reveal follow-up (see the initiator side) — a v1-shaped SAS.
-	sas, err := pairing.Derive(pairing.Keys{Sign: userPub}, pairing.Keys{Sign: rp.DevicePub}, salt)
+	// 6. Derive the SAS and ask the human. The v2 SAS binds THIS device's
+	//    encryption key (§41, ADR-0049); the user identity contributes none.
+	sas, err := pairing.Derive(pairing.Keys{Sign: userPub}, pairing.Keys{Sign: rp.DevicePub, Enc: rp.DeviceEnc}, salt)
 	if err != nil {
 		abort(ctx, rp.Relay, rp.Session, "derive failed")
 		return Result{}, err
@@ -336,32 +352,72 @@ func (rp Responder) Run(ctx context.Context) (Result, error) {
 	return res, nil
 }
 
-// revealBytes concatenates a public key with an optional trailing salt. The key
-// is fixed-width (ed25519.PublicKeySize), so parseReveal splits on that offset
-// with no framing needed.
-func revealBytes(pub ed25519.PublicKey, salt []byte) []byte {
-	out := make([]byte, 0, len(pub)+len(salt))
-	out = append(out, pub...)
-	out = append(out, salt...)
+// revealBytes frames a reveal as three length-prefixed fields: the signing key,
+// the encryption key, and the salt. The encryption key is empty for the user
+// identity (which has none) and the salt is empty for the responder (which
+// carries none); framing makes the three unambiguous whichever are empty. A
+// fixed-offset split — as this used before the encryption key was added — could
+// not tell an absent enc key from the first byte of the salt, so it had to become
+// self-describing the moment the reveal carried two keys (§41, ADR-0049).
+func revealBytes(pub ed25519.PublicKey, enc, salt []byte) []byte {
+	var out []byte
+	out = appendField(out, pub)
+	out = appendField(out, enc)
+	out = appendField(out, salt)
 	return out
 }
 
-// parseReveal splits a reveal into the public key and, when withSalt, the salt.
-// It refuses a reveal too short to hold a key, or (with a salt) one whose salt is
-// below the freshness floor — a truncated reveal is not something to derive on.
-func parseReveal(b []byte, withSalt bool) (pub ed25519.PublicKey, salt []byte, err error) {
-	if len(b) < ed25519.PublicKeySize {
-		return nil, nil, fmt.Errorf("pairflow: a reveal is %d bytes, too short for a key", len(b))
+// appendField writes a uvarint length prefix and then the bytes.
+func appendField(dst, b []byte) []byte {
+	var hdr [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(hdr[:], uint64(len(b)))
+	dst = append(dst, hdr[:n]...)
+	return append(dst, b...)
+}
+
+// readField reads one length-prefixed field and returns it (copied) and the rest.
+func readField(b []byte) (field, rest []byte, err error) {
+	n, adv := binary.Uvarint(b)
+	if adv <= 0 {
+		return nil, nil, errors.New("truncated field length prefix")
 	}
-	pub = ed25519.PublicKey(append([]byte(nil), b[:ed25519.PublicKeySize]...))
-	if !withSalt {
-		return pub, nil, nil
+	b = b[adv:]
+	if uint64(len(b)) < n {
+		return nil, nil, fmt.Errorf("field claims %d bytes, %d remain", n, len(b))
 	}
-	salt = append([]byte(nil), b[ed25519.PublicKeySize:]...)
-	if len(salt) < pairing.MinSaltLen {
-		return nil, nil, fmt.Errorf("pairflow: a revealed salt is %d bytes, want at least %d", len(salt), pairing.MinSaltLen)
+	return append([]byte(nil), b[:n]...), b[n:], nil
+}
+
+// parseReveal splits a framed reveal into the signing key, the encryption key
+// (empty for the user identity), and, when withSalt, the salt. It refuses a
+// signing key of the wrong length, a malformed frame, or (with a salt) one below
+// the freshness floor — a truncated reveal is not something to derive on. The
+// encryption key's length is not checked here: an empty one is legitimate (a
+// pre-Milestone-9 device or the user identity), and pairing.Derive enforces the
+// exact width when it binds a non-empty one.
+func parseReveal(b []byte, withSalt bool) (pub ed25519.PublicKey, enc, salt []byte, err error) {
+	signB, rest, err := readField(b)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("pairflow: a reveal's signing key is malformed: %w", err)
 	}
-	return pub, salt, nil
+	if len(signB) != ed25519.PublicKeySize {
+		return nil, nil, nil, fmt.Errorf("pairflow: a revealed signing key is %d bytes, want %d", len(signB), ed25519.PublicKeySize)
+	}
+	enc, rest, err = readField(rest)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("pairflow: a reveal's encryption key is malformed: %w", err)
+	}
+	saltB, _, err := readField(rest)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("pairflow: a reveal's salt is malformed: %w", err)
+	}
+	if withSalt {
+		if len(saltB) < pairing.MinSaltLen {
+			return nil, nil, nil, fmt.Errorf("pairflow: a revealed salt is %d bytes, want at least %d", len(saltB), pairing.MinSaltLen)
+		}
+		salt = saltB
+	}
+	return ed25519.PublicKey(signB), enc, salt, nil
 }
 
 // waitSlot polls the relay for a slot until it appears, the peer aborts, or the

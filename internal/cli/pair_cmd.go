@@ -21,6 +21,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/pairflow"
 	"github.com/rarebit-one/heyarr-core/internal/pairing"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 	"github.com/rarebit-one/heyarr-core/internal/useridentity"
 )
 
@@ -128,11 +129,11 @@ lives.`,
 				Relay: relay, Session: session, PollInterval: f.poll,
 				UserPub: id.PublicKey, Salt: salt,
 				Confirm: confirmFunc(cmd, &f),
-				Sign: func(devPub ed25519.PublicKey) (string, error) {
-					// The pairing flow does not yet exchange the new device's
-					// encryption key, so the cert binds none for now (v1-shaped);
-					// folding it into the commit-reveal is the #336 follow-up.
-					return idStore.SignCert(devPub, "", lifetime)
+				Sign: func(devPub ed25519.PublicKey, devEnc []byte) (string, error) {
+					// The handshake now authenticates the new device's encryption
+					// key too (§41, ADR-0049), so the cert binds it — rendered
+					// x25519:<hex>, empty for a pre-Milestone-9 responder.
+					return idStore.SignCert(devPub, encryption.FormatPublicKey(devEnc), lifetime)
 				},
 			}.Run(ctx)
 			return reportPairResult(cmd, "authorise", res, err)
@@ -183,6 +184,7 @@ cert the old device signs. Afterwards this device authenticates as your user.`,
 			res, err := pairflow.Responder{
 				Relay: relay, Session: f.session, PollInterval: f.poll,
 				DevicePub: dev.PublicKey,
+				DeviceEnc: dev.EncryptionKey,
 				Confirm:   confirmFunc(cmd, &f),
 				Accept: func(cert string) error {
 					_, err := devStore.Enrol(cert)
@@ -199,7 +201,7 @@ cert the old device signs. Afterwards this device authenticates as your user.`,
 }
 
 func newPairSASCommand(_ Options) *cobra.Command {
-	var initiator, responder, salt string
+	var initiator, responder, salt, initiatorEnc, responderEnc string
 	cmd := &cobra.Command{
 		Use:   "sas",
 		Short: "Compute the short authentication string for two keys and a salt",
@@ -207,7 +209,11 @@ func newPairSASCommand(_ Options) *cobra.Command {
 a session salt — the same primitive the handshake compares. It is a utility for
 scripts and for demonstrating that SUBSTITUTING a key changes the code: run it
 with an honest responder key and again with a different one, and the two codes
-differ, which is exactly why a man-in-the-middle is caught.`,
+differ, which is exactly why a man-in-the-middle is caught.
+
+The v2 SAS also binds each device's X25519 ENCRYPTION key (§41, ADR-0049): pass
+--responder-enc (and --initiator-enc) and substituting only the encryption key
+changes the code too, so a relay that swaps the wrap-target key is caught.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			initPub, err := identity.ParsePublicKey(initiator)
@@ -222,9 +228,18 @@ differ, which is exactly why a man-in-the-middle is caught.`,
 			if err != nil {
 				return fmt.Errorf("--salt is not hex: %w", err)
 			}
-			// Encryption keys are empty pending the commit-reveal follow-up that
-			// folds them into the flow (§41) — a v1-shaped SAS from the v2 primitive.
-			sas, err := pairing.Derive(pairing.Keys{Sign: initPub}, pairing.Keys{Sign: respPub}, saltBytes)
+			initEnc, err := parseOptionalEnc(initiatorEnc)
+			if err != nil {
+				return fmt.Errorf("--initiator-enc: %w", err)
+			}
+			respEnc, err := parseOptionalEnc(responderEnc)
+			if err != nil {
+				return fmt.Errorf("--responder-enc: %w", err)
+			}
+			sas, err := pairing.Derive(
+				pairing.Keys{Sign: initPub, Enc: initEnc},
+				pairing.Keys{Sign: respPub, Enc: respEnc},
+				saltBytes)
 			if err != nil {
 				return err
 			}
@@ -235,10 +250,26 @@ differ, which is exactly why a man-in-the-middle is caught.`,
 	cmd.Flags().StringVar(&initiator, "initiator", "", "the initiator (user identity) public key, ed25519:<hex>")
 	cmd.Flags().StringVar(&responder, "responder", "", "the responder (device) public key, ed25519:<hex>")
 	cmd.Flags().StringVar(&salt, "salt", "", "the session salt, hex-encoded")
+	cmd.Flags().StringVar(&initiatorEnc, "initiator-enc", "", "the initiator's X25519 encryption key, x25519:<hex> (optional)")
+	cmd.Flags().StringVar(&responderEnc, "responder-enc", "", "the responder's X25519 encryption key, x25519:<hex> (optional)")
 	_ = cmd.MarkFlagRequired("initiator")
 	_ = cmd.MarkFlagRequired("responder")
 	_ = cmd.MarkFlagRequired("salt")
 	return cmd
+}
+
+// parseOptionalEnc parses an optional x25519:<hex> encryption key into its raw
+// bytes, returning nil for an empty flag — a device that has no encryption key
+// (or a caller demonstrating only the signing key) derives a v1-shaped SAS.
+func parseOptionalEnc(s string) ([]byte, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	pub, err := encryption.ParsePublicKey(s)
+	if err != nil {
+		return nil, err
+	}
+	return pub.Bytes(), nil
 }
 
 // confirmFunc builds the SAS comparison callback from the flags. It prints the
