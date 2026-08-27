@@ -1,6 +1,7 @@
 package device
 
 import (
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
@@ -260,6 +261,31 @@ func (s *Store) KeyPath() string { return filepath.Join(s.dir, KeyFileName) }
 
 // EncryptionKeyPath is the X25519 encryption private key's location.
 func (s *Store) EncryptionKeyPath() string { return filepath.Join(s.dir, EncryptionKeyFileName) }
+
+// LoadEncryptionKey reads this device's X25519 encryption PRIVATE key so the
+// device can unwrap a space key sealed for it (§41, ADR-0049). It is the one
+// place the private half is handed out, and it is handed out only on the device
+// itself: the personal-state client wraps it in a [client.NewKeyUnwrapper] to do
+// the ECDH in-process (ADR-0032's first device — the exportable-key path a phone
+// replaces with an in-enclave unwrapper, #330). The rest of the device layer
+// deals only in the public half; nothing writes this key anywhere new.
+//
+// It refuses a device that has no encryption key (a pre-Milestone-9 device that
+// enrolled with only a signing key) rather than returning a zero key, so a caller
+// gets a clear "this device is not a wrap target yet" instead of a decrypt that
+// silently fails later.
+func (s *Store) LoadEncryptionKey() (*ecdh.PrivateKey, error) {
+	seed, err := readKeyFile(s.EncryptionKeyPath(), encKeyFilePrefix, encryption.SeedSize)
+	if err != nil {
+		return nil, err
+	}
+	priv, err := encryption.NewPrivateKey(seed)
+	if err != nil {
+		return nil, fmt.Errorf("%w: the encryption key at %s is unusable: %w",
+			ErrMalformedKey, s.EncryptionKeyPath(), err)
+	}
+	return priv, nil
+}
 
 // RecordPath is the metadata's location.
 func (s *Store) RecordPath() string { return filepath.Join(s.dir, RecordFileName) }

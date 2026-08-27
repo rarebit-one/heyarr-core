@@ -63,6 +63,13 @@ tags:
       mutual TLS pinned to peer membership (§26, ADR-0012). No bearer token is
       accepted here and no peer certificate authenticates anything under
       /api/v1.
+  - name: personal-state
+    description: |
+      Encrypted personal state (§38, §42, ADR-0049). A device pushes opaque
+      spaces, wrapped keys and ciphertext changes; the server stores them and
+      can read none of it. Fetching ciphertext needs `read`; storing it needs
+      `write`; a wrapped key no token conveys is what turns ciphertext into
+      plaintext, and only on an authorised device (Invariant 6).
 
 paths:
   /healthz:
@@ -382,6 +389,147 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/spaces:
+    get:
+      tags: [personal-state]
+      operationId: listSpaces
+      summary: The encrypted spaces this peer holds — metadata only (§38).
+      description: |
+        Returns each space's opaque id, structural kind and when the peer
+        recorded it. There is no name, no member list and no key: those are
+        encrypted state, never metadata a peer stores.
+      responses:
+        "200":
+          description: The spaces this peer holds (possibly empty).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [spaces]
+                properties:
+                  spaces:
+                    type: array
+                    items: { $ref: "#/components/schemas/EncryptedSpace" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [personal-state]
+      operationId: createSpace
+      summary: Record a client-minted space and the wrapped copies of its key. Requires `write`.
+      description: |
+        The device mints the space id and space key together and seals the key
+        for each recipient client-side; this stores the opaque space and the
+        wrapped copies. The server holds a key it cannot open (ADR-0049).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, kind]
+              additionalProperties: false
+              properties:
+                id:
+                  type: string
+                  description: The client-minted opaque space id (a UUIDv7).
+                kind:
+                  type: string
+                  enum: [personal, family, shared, research]
+                wrapped_keys:
+                  type: array
+                  items: { $ref: "#/components/schemas/WrappedKeyInput" }
+      responses:
+        "201":
+          description: The space, as recorded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EncryptedSpace" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/spaces/{id}/keys:
+    get:
+      tags: [personal-state]
+      operationId: listSpaceWrappedKeys
+      summary: The wrapped copies of a space's key — a device finds the one sealed for it.
+      description: |
+        Each entry names the recipient key the copy was sealed for and the
+        opaque wrapped bytes. The peer holds these and no private key, so it
+        cannot open any of them (Invariant 6).
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: The wrapped keys for the space (possibly empty).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [space_id, wrapped_keys]
+                properties:
+                  space_id: { type: string }
+                  wrapped_keys:
+                    type: array
+                    items: { $ref: "#/components/schemas/WrappedKey" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/spaces/{id}/changes:
+    get:
+      tags: [personal-state]
+      operationId: listSpaceChanges
+      summary: A space's encrypted changes — ciphertext a device pulls to decrypt and merge (§42).
+      description: |
+        Every change is opaque: a content-addressed id, its causal parents, and
+        ciphertext. The peer never decrypted any of it; the semantic merge is
+        client-side.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: The changes the peer holds for the space (possibly empty).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [space_id, changes]
+                properties:
+                  space_id: { type: string }
+                  changes:
+                    type: array
+                    items: { $ref: "#/components/schemas/EncryptedChange" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [personal-state]
+      operationId: putSpaceChange
+      summary: Store one encrypted change; the peer verifies its content-address. Requires `write`.
+      description: |
+        The peer re-derives the change's blake3 id over its space, parents and
+        ciphertext and refuses a mismatch — it never trusts a claimed id
+        (Invariant 1). It stores the ciphertext without decrypting it.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EncryptedChange" }
+      responses:
+        "201":
+          description: The id the peer verified and stored the change under.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [change_id]
+                properties:
+                  change_id: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /api/v1/libraries/{id}:
     get:
@@ -4029,6 +4177,60 @@ components:
           schema: { $ref: "#/components/schemas/Problem" }
 
   schemas:
+    EncryptedSpace:
+      type: object
+      description: |
+        A personal-state space as the peer holds it (§38, §39). Opaque id,
+        structural kind, and when the peer recorded it — never a name.
+      required: [id, kind, created_at]
+      additionalProperties: false
+      properties:
+        id: { type: string, description: The opaque space id (a UUIDv7). }
+        kind:
+          type: string
+          enum: [personal, family, shared, research]
+        created_at: { type: string, format: date-time }
+    WrappedKeyInput:
+      type: object
+      description: One recipient's sealed copy of a space key, as pushed at create time.
+      required: [recipient, wrapped]
+      additionalProperties: false
+      properties:
+        recipient:
+          type: string
+          description: The recipient encryption key this copy is sealed for (x25519:<hex>).
+        wrapped:
+          type: string
+          format: byte
+          description: The opaque sealed bytes (base64). The peer cannot open them.
+    WrappedKey:
+      type: object
+      description: A stored wrapped copy of a space key.
+      required: [recipient, wrapped, created_at]
+      additionalProperties: false
+      properties:
+        recipient: { type: string }
+        wrapped: { type: string, format: byte }
+        created_at: { type: string, format: date-time }
+    EncryptedChange:
+      type: object
+      description: |
+        One opaque CRDT change (§42, §44). Content-addressed by the blake3 digest
+        of its space, parents and ciphertext; the peer verifies the id and never
+        decrypts the ciphertext.
+      required: [space_id, change_id, ciphertext]
+      additionalProperties: false
+      properties:
+        space_id: { type: string }
+        change_id: { type: string, description: "blake3:<hex> over space, parents and ciphertext." }
+        parents:
+          type: array
+          items: { type: string }
+        ciphertext:
+          type: string
+          format: byte
+          description: The encrypted change (base64), opaque to the peer.
+
     Problem:
       type: object
       description: RFC 9457. Clients branch on `type` and nothing else.

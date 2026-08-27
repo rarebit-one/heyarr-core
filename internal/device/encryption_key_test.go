@@ -163,3 +163,30 @@ func hexOf(b []byte) string {
 	}
 	return string(out)
 }
+
+// TestLoadEncryptionKeyMatchesTheRecordedPublicKey: the private encryption key
+// LoadEncryptionKey returns is the private half of the public key the device
+// records — the key that unwraps a space key sealed for this device (§41,
+// ADR-0049). A device with no encryption key (a pre-M9 device) is refused rather
+// than handed a zero key.
+func TestLoadEncryptionKeyMatchesTheRecordedPublicKey(t *testing.T) {
+	store, _ := newStore(t)
+	dev, err := store.Generate("laptop", false)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	priv, err := store.LoadEncryptionKey()
+	if err != nil {
+		t.Fatalf("LoadEncryptionKey: %v", err)
+	}
+	got := encryption.FormatPublicKey(priv.PublicKey().Bytes())
+	if got != dev.EncryptionKeyString() {
+		t.Fatalf("loaded key %s, device records %s", got, dev.EncryptionKeyString())
+	}
+
+	// With no device at all, there is nothing to load.
+	empty, _ := newStore(t)
+	if _, err := empty.LoadEncryptionKey(); err == nil {
+		t.Fatal("LoadEncryptionKey on a store with no device should fail")
+	}
+}

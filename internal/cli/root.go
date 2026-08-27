@@ -105,6 +105,11 @@ One logical library, multiple complete sovereign peers.`,
 		newPlayCommand(opts, &configPath),
 		newBlobsCommand(opts, &configPath),
 		newJobsCommand(opts, &configPath),
+		// Encrypted personal state (§38, §42, ADR-0049). A hybrid: it talks to
+		// the controller over /api/v1 like a client command, and holds this
+		// machine's device key like a device command — the controller stores the
+		// ciphertext and only this device holds the key that opens it.
+		newSpaceCommand(opts, &configPath),
 		newPeersCommand(opts, &configPath),
 		newEventsCommand(opts, &configPath),
 		newSystemCommand(opts, &configPath),

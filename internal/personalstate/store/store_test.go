@@ -223,3 +223,55 @@ func TestEmptyInputsRefused(t *testing.T) {
 		t.Fatalf("empty wrapped = %v, want ErrEmptyWrapped", err)
 	}
 }
+
+// TestPutSpace records a client-minted space, is idempotent on a re-push, and
+// refuses a re-push under a different kind or a non-uuid id.
+func TestPutSpace(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+
+	sp, err := spaces.NewSpace(spaces.KindFamily, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.PutSpace(ctx, sp.ID, sp.Kind)
+	if err != nil {
+		t.Fatalf("PutSpace: %v", err)
+	}
+	if got.ID != sp.ID || got.Kind != spaces.KindFamily {
+		t.Fatalf("unexpected space: %+v", got)
+	}
+	back, err := s.Space(ctx, sp.ID)
+	if err != nil || back.ID != sp.ID {
+		t.Fatalf("Space after PutSpace: %+v %v", back, err)
+	}
+
+	// Idempotent: a second push of the same id+kind is a no-op success.
+	if _, err := s.PutSpace(ctx, sp.ID, spaces.KindFamily); err != nil {
+		t.Fatalf("idempotent re-push: %v", err)
+	}
+
+	// A different kind under the same id is a conflict, not an overwrite.
+	if _, err := s.PutSpace(ctx, sp.ID, spaces.KindPersonal); err == nil {
+		t.Fatal("re-recording a space under a different kind should be refused")
+	}
+
+	// A non-uuid id is refused.
+	if _, err := s.PutSpace(ctx, "not-a-uuid", spaces.KindPersonal); err == nil {
+		t.Fatal("a non-uuid space id should be refused")
+	}
+
+	// An unknown kind is refused (spaces.ErrUnknownKind).
+	if _, err := s.PutSpace(ctx, mustUUIDStr(t), spaces.Kind("bogus")); !errors.Is(err, spaces.ErrUnknownKind) {
+		t.Fatalf("unknown kind = %v, want ErrUnknownKind", err)
+	}
+}
+
+func mustUUIDStr(t *testing.T) string {
+	t.Helper()
+	sp, err := spaces.NewSpace(spaces.KindPersonal, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sp.ID
+}
