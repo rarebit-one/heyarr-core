@@ -3033,6 +3033,141 @@ paths:
                     items: { type: string }
         "503":
           description: This node issues no access leases to cache.
+
+  /peer/v1/state/{space}/heads:
+    parameters:
+      - name: space
+        in: path
+        required: true
+        description: The opaque space id (a UUIDv7).
+        schema: { type: string }
+    get:
+      tags: [peer]
+      operationId: peerStateHeads
+      summary: A space's causal heads, offered for incremental sync (§42, §44, ADR-0049).
+      description: |
+        Returns the space's causal frontier — the change ids no other change
+        names as a parent. A sibling offers its own heads and pulls only what it
+        is missing beneath them, never a full-log replay (the resumable sync a
+        phone needs, §46). A head is an opaque change id; nothing here is
+        decrypted (Invariant 6). This is a SEPARATE protocol from CAS sync (§44)
+        that shares this listener and its mTLS authentication.
+      security:
+        - peerCertificate: []
+      responses:
+        "200":
+          description: The space's causal heads (possibly empty).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [space_id, heads]
+                properties:
+                  space_id: { type: string }
+                  heads:
+                    type: array
+                    items: { type: string }
+        "404":
+          description: This peer does not hold that encrypted space.
+        "503":
+          description: This node keeps no encrypted personal state to sync.
+
+  /peer/v1/state/{space}/changes:
+    parameters:
+      - name: space
+        in: path
+        required: true
+        description: The opaque space id (a UUIDv7).
+        schema: { type: string }
+    get:
+      tags: [peer]
+      operationId: peerStateChanges
+      summary: The opaque changes a caller is missing — ciphertext only (§42, §44).
+      description: |
+        Serves the space's encrypted changes. A caller may offer its known heads
+        as repeated `have` query parameters; only the changes it is missing
+        beneath this peer's frontier are then returned (pure DAG reachability, no
+        decryption). With no `have`, the whole set is served. Every change is
+        opaque: a content-addressed id, its causal parents, and ciphertext the
+        peer never decrypted.
+      security:
+        - peerCertificate: []
+      parameters:
+        - name: have
+          in: query
+          required: false
+          description: A causal head the caller already holds; repeat for each.
+          schema:
+            type: array
+            items: { type: string }
+      responses:
+        "200":
+          description: The changes the caller is missing (possibly empty), as ciphertext.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [space_id, changes]
+                properties:
+                  space_id: { type: string }
+                  changes:
+                    type: array
+                    items:
+                      type: object
+                      required: [space_id, change_id, ciphertext]
+                      properties:
+                        space_id: { type: string }
+                        change_id: { type: string }
+                        parents:
+                          type: array
+                          items: { type: string }
+                        ciphertext: { type: string, format: byte }
+        "404":
+          description: This peer does not hold that encrypted space.
+        "503":
+          description: This node keeps no encrypted personal state to sync.
+    post:
+      tags: [peer]
+      operationId: peerStateChangePush
+      summary: Accept one opaque change; the peer verifies its content-address (§42, Invariant 1).
+      description: |
+        Accepts one encrypted change from a sibling. The peer re-derives the
+        change's blake3 id over its space, parents and ciphertext and refuses a
+        mismatch (it never trusts a claimed id), then stores the ciphertext
+        without decrypting it. Idempotent on the id.
+      security:
+        - peerCertificate: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [space_id, change_id, ciphertext]
+              properties:
+                space_id: { type: string }
+                change_id: { type: string }
+                parents:
+                  type: array
+                  items: { type: string }
+                ciphertext: { type: string, format: byte }
+      responses:
+        "200":
+          description: The id the peer verified and stored the change under.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [change_id]
+                properties:
+                  change_id: { type: string }
+        "400":
+          description: The change is malformed or its id does not match its bytes.
+        "404":
+          description: This peer does not hold that encrypted space.
+        "503":
+          description: This node keeps no encrypted personal state to sync.
+
   /peer/v1/blobs/{hash}/content:
     parameters:
       - name: hash

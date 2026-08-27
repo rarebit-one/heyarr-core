@@ -25,6 +25,8 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/reachability"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
+	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/pieces"
@@ -312,11 +314,25 @@ func (c *Controller) newPeerSurface(
 		return nil, fmt.Errorf("controller: opening the access-lease store: %w", err)
 	}
 
+	// The encrypted personal-state sync backend (§42, §44, ADR-0049). Its own
+	// single-writer store over the same controller database (ADR-0003 holds — one
+	// writer per database, shared with the rest of the controller); it moves
+	// ciphertext the peer cannot read. Wrapped in an adapter that translates the
+	// store's not-found into the peer surface's own sentinel, so peerapi imports
+	// no persistence.
+	psStore, err := psstore.New(psstore.Options{Writer: db.Writer(), Reader: db.Reader(), Events: peerEvents})
+	if err != nil {
+		return nil, fmt.Errorf("controller: opening the personal-state store for the peer surface: %w", err)
+	}
+
 	srv, err := peerapi.New(peerapi.Options{
-		Addr:          c.cfg.Peer.Listen,
-		Material:      material,
-		Members:       peerLookup{store: members},
-		SelfPeerID:    self.PeerID,
+		Addr:       c.cfg.Peer.Listen,
+		Material:   material,
+		Members:    peerLookup{store: members},
+		SelfPeerID: self.PeerID,
+		// The encrypted personal-state sync routes (§42, §44). Opaque changes
+		// only; the peer never decrypts one.
+		State:         personalStateBackend{store: psStore},
 		Inventory:     peerCatalog,
 		ControlBackup: controlBackups,
 		Snapshots:     snapshotSource{cat: peerCatalog, self: self.PeerID},
@@ -603,4 +619,32 @@ func (p peerPieces) ReadPiece(
 		return nil, err
 	}
 	return buf, nil
+}
+
+// personalStateBackend adapts the personal-state store to peerapi.StateStore. Its
+// only job beyond forwarding is to translate the store's ErrUnknownSpace into the
+// peer surface's own ErrNoSuchSpace sentinel, so the peer API package needs no
+// import of persistence to answer a 404 for a space it does not hold. Everything
+// it moves is opaque: it never decrypts a change.
+type personalStateBackend struct{ store *psstore.Store }
+
+func (p personalStateBackend) HeadsFor(ctx context.Context, spaceID string) ([]string, error) {
+	heads, err := p.store.HeadsFor(ctx, spaceID)
+	return heads, translateNoSuchSpace(err)
+}
+
+func (p personalStateBackend) ChangesFor(ctx context.Context, spaceID string) ([]protocol.EncryptedChange, error) {
+	changes, err := p.store.ChangesFor(ctx, spaceID)
+	return changes, translateNoSuchSpace(err)
+}
+
+func (p personalStateBackend) PutChange(ctx context.Context, ch protocol.EncryptedChange) error {
+	return translateNoSuchSpace(p.store.PutChange(ctx, ch))
+}
+
+func translateNoSuchSpace(err error) error {
+	if errors.Is(err, psstore.ErrUnknownSpace) {
+		return peerapi.ErrNoSuchSpace
+	}
+	return err
 }
