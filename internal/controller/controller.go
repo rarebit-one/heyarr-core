@@ -292,6 +292,14 @@ func (c *Controller) Run(ctx context.Context) error {
 	startBackup(ctx, db, reconcileEvents, c.cfg.DataDir, c.cfg.Backup.Dir,
 		backupInterval, self.PeerID, c.log, material, members)
 
+	// Encrypted personal state replicates to every trusted Full Peer by default
+	// (§37, §45). It shares the backup cadence — both are peer-sync RPO intervals,
+	// so a node that takes control-plane backups also fans out its personal state,
+	// and one with backups disabled relies on the on-demand /state/replicate route
+	// (a dedicated interval knob is a follow-up if the two need to diverge).
+	startStatePlaneReplication(ctx, db, reconcileEvents, backupInterval,
+		self.PeerID, c.log, material, members)
+
 	// "started" is logged only after every listener is bound. A start line
 	// printed before the socket exists is a lie that costs someone an
 	// afternoon: the supervisor, the acceptance script and an operator tailing
