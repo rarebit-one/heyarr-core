@@ -24,12 +24,14 @@ type (
 	View         = vb.View
 )
 
-// Constructors.
-var (
-	DefaultDir = vb.DefaultDir
-	NewStore   = vb.NewStore
-	NewView    = vb.NewView
-)
+// DefaultDir is the default user-identity directory. See voidbind-go/useridentity.
+func DefaultDir() (string, error) { return vb.DefaultDir() }
+
+// NewStore opens a user-identity store. See voidbind-go/useridentity.
+func NewStore(opts StoreOptions) (*Store, error) { return vb.NewStore(opts) }
+
+// NewView renders an Identity for display. See voidbind-go/useridentity.
+func NewView(i Identity) View { return vb.NewView(i) }
 
 // Constants.
 const (

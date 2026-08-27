@@ -22,13 +22,17 @@ type (
 	View         = vb.View
 )
 
-// Constructors.
-var (
-	DefaultDir = vb.DefaultDir
-	NewStore   = vb.NewStore
-	NewView    = vb.NewView
-	NewViews   = vb.NewViews
-)
+// DefaultDir is the default device directory. See voidbind-go/device.
+func DefaultDir() (string, error) { return vb.DefaultDir() }
+
+// NewStore opens a device store. See voidbind-go/device.
+func NewStore(opts StoreOptions) (*Store, error) { return vb.NewStore(opts) }
+
+// NewView renders a Device for display. See voidbind-go/device.
+func NewView(d Device) View { return vb.NewView(d) }
+
+// NewViews renders a list of Devices for display. See voidbind-go/device.
+func NewViews(devices []Device) []View { return vb.NewViews(devices) }
 
 // Constants.
 const (
