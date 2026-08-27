@@ -46,7 +46,7 @@ import (
 // SHA-256 in the system), so a commitment can never be confused with a derived
 // string even on identical bytes. It carries its own version for the same reason
 // [domain] does.
-const commitDomain = "heyarr/pairing/commit/v1"
+const commitDomain = "heyarr/pairing/commit/v2"
 
 // CommitmentLen is the fixed byte length of a commitment: a full SHA-256 digest.
 // It is exported so the transport can length-check a commitment off the wire
@@ -68,40 +68,51 @@ var ErrCommitmentMismatch = errors.New("pairing: revealed key does not open its 
 // moments later anyway. Compare with [Commitment.Open], never by eye.
 type Commitment []byte
 
-// Commit produces the commitment to a public key. Both the initiator and the
-// responder call it on their own key at the start of the handshake, and each
-// sends the RESULT — never the key — until both commitments are in.
+// Commit produces the commitment to a device's BOTH public keys — its Ed25519
+// signing key and its X25519 encryption key (§41, ADR-0049). Both the initiator
+// and the responder call it on their own keys at the start of the handshake, and
+// each sends the RESULT — never a key — until both commitments are in.
+//
+// The encryption key is committed alongside the signing key so the rushing-attack
+// protection covers BOTH: without it, a relay could commit to a signing key
+// honestly yet substitute the encryption key at reveal time, choosing one whose
+// v2 SAS collides, and get a device enrolled with the relay's encryption key as a
+// wrap target (§41). The user identity has no encryption key, so enc is empty for
+// the initiator's commitment — framed as a zero-length field, still bound.
 //
 // The preimage is length-framed exactly as [Derive]'s is, and under a distinct
-// domain, so a commitment and a SAS computed over the same key are unrelated
-// values and no field boundary can be shifted. A key that is not exactly
+// domain, so a commitment and a SAS computed over the same keys are unrelated
+// values and no field boundary can be shifted. A signing key that is not exactly
 // ed25519.PublicKeySize is refused rather than committed to, for the reason
 // [Derive] refuses one: a commitment to a truncated key is a commitment to a
-// prefix, and two truncations could collide.
-func Commit(pub ed25519.PublicKey) (Commitment, error) {
+// prefix, and two truncations could collide. The encryption key is committed
+// as-is (empty or its raw bytes); [Derive] enforces its length when it binds it.
+func Commit(pub ed25519.PublicKey, enc []byte) (Commitment, error) {
 	if len(pub) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("%w: key is %d bytes, want %d", ErrMalformedKey, len(pub), ed25519.PublicKeySize)
 	}
 	h := sha256.New()
 	writeField(h, []byte(commitDomain))
 	writeField(h, pub)
+	writeField(h, enc)
 	return h.Sum(nil), nil
 }
 
-// Open checks that pub is the key this commitment was made to, and is the check
-// the transport MUST run on a peer's revealed key before deriving the SAS from
-// it. It returns nil when the key opens the commitment, [ErrCommitmentMismatch]
-// when it does not, and [ErrMalformedKey] when the key or the commitment is the
-// wrong length.
+// Open checks that pub and enc are the keys this commitment was made to, and is
+// the check the transport MUST run on a peer's revealed keys before deriving the
+// SAS from them. It returns nil when the keys open the commitment,
+// [ErrCommitmentMismatch] when they do not, and [ErrMalformedKey] when the
+// signing key or the commitment is the wrong length.
 //
 // Removing this call from the handshake is the sabotage that re-opens the
-// rushing attack: without it, a party may commit to one key and reveal another,
-// which is precisely the freedom the commitment exists to remove.
-func (c Commitment) Open(pub ed25519.PublicKey) error {
+// rushing attack: without it, a party may commit to one pair of keys and reveal
+// another, which is precisely the freedom the commitment exists to remove — and
+// with the encryption key covered here, that freedom is removed for it too.
+func (c Commitment) Open(pub ed25519.PublicKey, enc []byte) error {
 	if len(c) != CommitmentLen {
 		return fmt.Errorf("%w: commitment is %d bytes, want %d", ErrMalformedKey, len(c), CommitmentLen)
 	}
-	expected, err := Commit(pub)
+	expected, err := Commit(pub, enc)
 	if err != nil {
 		return err
 	}

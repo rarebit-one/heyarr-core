@@ -84,7 +84,7 @@ func TestHonestPairingEnrolsTheNewDevice(t *testing.T) {
 			Relay: relay, Session: "s1", PollInterval: 5 * time.Millisecond,
 			UserPub: userPub, Salt: salt,
 			Confirm: alwaysYes,
-			Sign: func(dk ed25519.PublicKey) (string, error) {
+			Sign: func(dk ed25519.PublicKey, _ []byte) (string, error) {
 				// Stand in for useridentity.SignCert: sign the new device key.
 				return "cert-for:" + string(dk), nil
 			},
@@ -149,7 +149,7 @@ func TestRelayLearnsNoKeyMaterial(t *testing.T) {
 		_, _ = Initiator{
 			Relay: relay, Session: "s", PollInterval: 5 * time.Millisecond,
 			UserPub: userPub, Salt: salt, Confirm: alwaysYes,
-			Sign: func(dk ed25519.PublicKey) (string, error) { return "cert", nil },
+			Sign: func(dk ed25519.PublicKey, _ []byte) (string, error) { return "cert", nil },
 		}.Run(ctx)
 	}()
 	go func() {
@@ -206,7 +206,7 @@ func TestRushingSubstitutionIsRefused(t *testing.T) {
 		initRes, initErr = Initiator{
 			Relay: relay, Session: "rush", PollInterval: 5 * time.Millisecond,
 			UserPub: userPub, Salt: salt, Confirm: alwaysYes,
-			Sign: func(ed25519.PublicKey) (string, error) { signed = true; return "cert", nil },
+			Sign: func(ed25519.PublicKey, []byte) (string, error) { signed = true; return "cert", nil },
 		}.Run(ctx)
 	}()
 	go func() {
@@ -215,9 +215,9 @@ func TestRushingSubstitutionIsRefused(t *testing.T) {
 		if _, err := waitSlot(ctx, relay, "rush", SlotInitiatorCommit, 5*time.Millisecond); err != nil {
 			return
 		}
-		commit, _ := pairing.Commit(committedKey)
+		commit, _ := pairing.Commit(committedKey, nil)
 		_ = relay.Put(ctx, "rush", SlotResponderCommit, commit)
-		_ = relay.Put(ctx, "rush", SlotResponderReveal, revealBytes(revealedKey, nil))
+		_ = relay.Put(ctx, "rush", SlotResponderReveal, revealBytes(revealedKey, nil, nil))
 	}()
 	wg.Wait()
 
@@ -257,7 +257,7 @@ func TestSubstitutedKeyChangesTheInitiatorSAS(t *testing.T) {
 				UserPub: userPub, Salt: salt,
 				// Record the SAS and refuse, so no cert is signed.
 				Confirm: func(s pairing.SAS) (bool, error) { got = s; return false, nil },
-				Sign:    func(ed25519.PublicKey) (string, error) { return "cert", nil },
+				Sign:    func(ed25519.PublicKey, []byte) (string, error) { return "cert", nil },
 			}.Run(ctx)
 			_ = res
 		}()
@@ -266,9 +266,9 @@ func TestSubstitutedKeyChangesTheInitiatorSAS(t *testing.T) {
 			if _, err := waitSlot(ctx, relay, "sub", SlotInitiatorCommit, 5*time.Millisecond); err != nil {
 				return
 			}
-			commit, _ := pairing.Commit(responderKey)
+			commit, _ := pairing.Commit(responderKey, nil)
 			_ = relay.Put(ctx, "sub", SlotResponderCommit, commit)
-			_ = relay.Put(ctx, "sub", SlotResponderReveal, revealBytes(responderKey, nil))
+			_ = relay.Put(ctx, "sub", SlotResponderReveal, revealBytes(responderKey, nil, nil))
 		}()
 		wg.Wait()
 		return got
@@ -304,7 +304,7 @@ func TestSASRefusalStopsBeforeSigning(t *testing.T) {
 			Relay: relay, Session: "no", PollInterval: 5 * time.Millisecond,
 			UserPub: userPub, Salt: salt,
 			Confirm: func(pairing.SAS) (bool, error) { return false, nil },
-			Sign:    func(ed25519.PublicKey) (string, error) { signed = true; return "cert", nil },
+			Sign:    func(ed25519.PublicKey, []byte) (string, error) { signed = true; return "cert", nil },
 		}.Run(ctx)
 	}()
 	go func() {
@@ -325,5 +325,102 @@ func TestSASRefusalStopsBeforeSigning(t *testing.T) {
 	}
 	if accepted {
 		t.Fatal("the responder accepted a cert after a refusal")
+	}
+}
+
+// A substituted ENCRYPTION key yields a different SAS, even with the signing key
+// held constant (§41, ADR-0049). This is the enc-key half of
+// TestSubstitutedKeyChangesTheInitiatorSAS: a relay that keeps the honest signing
+// key but swaps the device's encryption key — the wrap target — cannot make the
+// two screens match, so the humans catch it.
+func TestSubstitutedEncKeyChangesTheInitiatorSAS(t *testing.T) {
+	userPub, _ := keypair(t, 30)
+	devPub, _ := keypair(t, 31) // one signing key throughout
+	honestEnc := bytes.Repeat([]byte{0xE1}, pairing.EncKeySize)
+	substituteEnc := bytes.Repeat([]byte{0xE2}, pairing.EncKeySize)
+	salt := bytes.Repeat([]byte{0x55}, pairing.SaltLen)
+
+	sasFor := func(enc []byte) pairing.SAS {
+		relay := newMemRelay()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		var got pairing.SAS
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = Initiator{
+				Relay: relay, Session: "subenc", PollInterval: 5 * time.Millisecond,
+				UserPub: userPub, Salt: salt,
+				Confirm: func(s pairing.SAS) (bool, error) { got = s; return false, nil },
+				Sign:    func(ed25519.PublicKey, []byte) (string, error) { return "cert", nil },
+			}.Run(ctx)
+		}()
+		go func() {
+			defer wg.Done()
+			if _, err := waitSlot(ctx, relay, "subenc", SlotInitiatorCommit, 5*time.Millisecond); err != nil {
+				return
+			}
+			commit, _ := pairing.Commit(devPub, enc)
+			_ = relay.Put(ctx, "subenc", SlotResponderCommit, commit)
+			_ = relay.Put(ctx, "subenc", SlotResponderReveal, revealBytes(devPub, enc, nil))
+		}()
+		wg.Wait()
+		return got
+	}
+
+	if honestSAS, subSAS := sasFor(honestEnc), sasFor(substituteEnc); honestSAS == "" || subSAS == "" {
+		t.Fatal("a SAS was not derived")
+	} else if honestSAS == subSAS {
+		t.Fatalf("a substituted ENCRYPTION key produced the SAME SAS (%q) — the enc key is not bound into the flow's SAS", honestSAS)
+	}
+}
+
+// The rushing attack on the ENCRYPTION key, and the commit-before-reveal defence
+// that now closes it too. A malicious responder commits to one enc key and
+// reveals a different one (signing key honest throughout); the initiator must
+// refuse, because the revealed enc key does not open the commitment.
+//
+// Sabotage target: revert Commit/Open to signing-key-only, and this stops
+// failing — the initiator would sign a cert binding the rushed enc key.
+func TestRushingEncSubstitutionIsRefused(t *testing.T) {
+	relay := newMemRelay()
+	userPub, _ := keypair(t, 32)
+	devPub, _ := keypair(t, 33)
+	committedEnc := bytes.Repeat([]byte{0xC1}, pairing.EncKeySize)
+	revealedEnc := bytes.Repeat([]byte{0xC2}, pairing.EncKeySize)
+	salt := bytes.Repeat([]byte{0x66}, pairing.SaltLen)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var signed bool
+	var initErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, initErr = Initiator{
+			Relay: relay, Session: "rushenc", PollInterval: 5 * time.Millisecond,
+			UserPub: userPub, Salt: salt, Confirm: alwaysYes,
+			Sign: func(ed25519.PublicKey, []byte) (string, error) { signed = true; return "cert", nil },
+		}.Run(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		if _, err := waitSlot(ctx, relay, "rushenc", SlotInitiatorCommit, 5*time.Millisecond); err != nil {
+			return
+		}
+		// Commit to the honest device key with committedEnc; rush revealedEnc in.
+		commit, _ := pairing.Commit(devPub, committedEnc)
+		_ = relay.Put(ctx, "rushenc", SlotResponderCommit, commit)
+		_ = relay.Put(ctx, "rushenc", SlotResponderReveal, revealBytes(devPub, revealedEnc, nil))
+	}()
+	wg.Wait()
+
+	if !errors.Is(initErr, ErrCommitmentMismatch) {
+		t.Fatalf("the initiator did not refuse a rushed ENCRYPTION-key substitution: err=%v — the commitment does not cover the enc key", initErr)
+	}
+	if signed {
+		t.Fatal("the initiator SIGNED a cert after an enc-key rushing substitution — the attack succeeded")
 	}
 }

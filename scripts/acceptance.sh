@@ -7083,6 +7083,20 @@ YAML
   assert_eq "$sas_cmp" "differ" \
     "a substituted responder key yields a DIFFERENT short code — the MITM the humans catch"
 
+  # THE ENCRYPTION KEY IS BOUND TOO (§41, ADR-0049). The v2 SAS binds each
+  # device's X25519 encryption key — the wrap target — alongside its signing key,
+  # so a relay that keeps the honest SIGNING key but swaps the ENCRYPTION key
+  # (to get itself enrolled as a wrap target) still yields a different code. Same
+  # signing key throughout; only the responder-enc differs.
+  local new_enc sub_enc enc_honest_sas enc_sub_sas enc_cmp
+  new_enc=$("${newc[@]}" device show --json | jq -r .encryption_public_key)
+  sub_enc=$("${subc[@]}" device show --json | jq -r .encryption_public_key)
+  enc_honest_sas=$("${oldc[@]}" pair sas --initiator "$user_key" --responder "$new_key" --responder-enc "$new_enc" --salt "$salt")
+  enc_sub_sas=$("${oldc[@]}" pair sas --initiator "$user_key" --responder "$new_key" --responder-enc "$sub_enc" --salt "$salt")
+  enc_cmp="same"; [[ "$enc_honest_sas" != "$enc_sub_sas" ]] && enc_cmp="differ"
+  assert_eq "$enc_cmp" "differ" \
+    "a substituted responder ENCRYPTION key yields a DIFFERENT short code — the wrap-target swap the humans catch too"
+
   # THE HONEST PAIRING, over the real relay: both sides derive the SAME code and
   # the new device ends up enrolled under the user. Run concurrently, as the two
   # devices are; --yes stands in for the human who saw the codes match.
