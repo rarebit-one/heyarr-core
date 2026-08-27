@@ -7345,6 +7345,140 @@ YAML
   wait "$pid" 2>/dev/null || true
 }
 
+# CONVERGE AFTER A PARTITION: two peers, an offline concurrent edit on each, and
+# on reconnect the encrypted changes replicate and the two devices converge to
+# one state — merged CLIENT-SIDE, the server never seeing plaintext (§42, §43,
+# ADR-0049, #324). This is the SECOND of the two evidence lines Milestone 9 owes
+# (epic #28), alongside the ciphertext-at-rest line from personalstate_demo.
+converge_after_partition_demo() {
+  local root="$WORK/converge"
+  mkdir -p "$root"
+
+  local cfg_a="$WORK/converge-a.yaml" cfg_b="$WORK/converge-b.yaml"
+  local n
+  for n in a b; do
+    mkdir -p "$root/$n"
+    cat > "$WORK/converge-$n.yaml" <<YAML
+data_dir: $root/$n/data
+peer:
+  name: site-$n
+  site: site-$n
+  listen: 127.0.0.1:0
+log:
+  level: info
+  format: json
+http:
+  addr: ""
+YAML
+  done
+
+  local sock_a="$root/a/data/heyarr.sock" sock_b="$root/b/data/heyarr.sock"
+  local log_a="$root/a.log" log_b="$root/b.log"
+  local token_a token_b
+  token_a=$("$BIN" --config "$cfg_a" token create acceptance --scopes admin --json | jq -r .token)
+  token_b=$("$BIN" --config "$cfg_b" token create acceptance --scopes admin --json | jq -r .token)
+
+  local mypids=() p
+  start_peer_node "$cfg_a" "$log_a" all; mypids+=("${NODE_PIDS[@]}")
+  start_peer_node "$cfg_b" "$log_b" all; mypids+=("${NODE_PIDS[@]}")
+
+  local s waited
+  for s in "$sock_a" "$sock_b"; do
+    waited=0
+    while (( waited < 600 )); do
+      curl -sf --unix-socket "$s" http://heyarr/readyz >/dev/null 2>&1 && break
+      sleep 0.1; waited=$(( waited + 1 ))
+    done
+    if (( waited >= 600 )); then
+      fail "converge: $s never became ready"; tail -20 "$log_a" "$log_b"
+      for p in "${mypids[@]}"; do kill -KILL "$p" 2>/dev/null || true; done
+      return 1
+    fi
+  done
+
+  local addr_a addr_b
+  addr_a=$(peer_listen_addr "$log_a") || { fail "converge: node A never bound a peer surface"; return 1; }
+  addr_b=$(peer_listen_addr "$log_b") || { fail "converge: node B never bound a peer surface"; return 1; }
+
+  cli_a() { "$BIN" --config "$cfg_a" --token "$token_a" "$@"; }
+  cli_b() { "$BIN" --config "$cfg_b" --token "$token_b" "$@"; }
+  sa_api() { curl -sS --unix-socket "$sock_a" -H "Authorization: Bearer $token_a" "${@:2}" "http://heyarr$1"; }
+  sb_api() { curl -sS --unix-socket "$sock_b" -H "Authorization: Bearer $token_b" "${@:2}" "http://heyarr$1"; }
+  local base_a base_b
+  base_a=( env "HEYARR_TOKEN=$token_a" "$BIN" --config "$cfg_a" )
+  base_b=( env "HEYARR_TOKEN=$token_b" "$BIN" --config "$cfg_b" )
+
+  # Enrol the two peers into each other's membership (mTLS, ADR-0012), each with
+  # the other's bound peer-surface endpoint, plus itself — the sequence that makes
+  # a peer-to-peer request trusted in both directions.
+  local key_a key_b
+  key_a=$(cli_a peers list --json | jq -r '.[] | select(.is_self) | .public_key')
+  key_b=$(cli_b peers list --json | jq -r '.[] | select(.is_self) | .public_key')
+  cli_a peers add --name site-b --site site-b --mode full --public-key "$key_b" --endpoint "https://$addr_b" --json >/dev/null
+  cli_b peers add --name site-a --site site-a --mode full --public-key "$key_a" --endpoint "https://$addr_a" --json >/dev/null
+  cli_a peers add --name site-a --public-key "$key_a" --endpoint "https://$addr_a" --json >/dev/null
+  cli_b peers add --name site-b --public-key "$key_b" --endpoint "https://$addr_b" --json >/dev/null
+
+  # Two devices, one per site: X on A, Y on B, each with its own encryption key.
+  local dx="$root/dev-x" dy="$root/dev-y" ypub
+  "$BIN" device generate --device-dir "$dx" --name device-x >/dev/null 2>&1
+  "$BIN" device generate --device-dir "$dy" --name device-y >/dev/null 2>&1
+  ypub=$("$BIN" device show --device-dir "$dy" --json | jq -r .encryption_public_key)
+
+  # Device X creates a space on A, wrapped for X (self) and Y, and writes one item.
+  local create space_id
+  create=$("${base_a[@]}" space create --device-dir "$dx" --kind shared --recipient "$ypub" --json)
+  space_id=$(jq -r .id <<<"$create")
+  "${base_a[@]}" space put "$space_id" --device-dir "$dx" --item "x-first" >/dev/null
+
+  # Replicate A -> B. Now B holds the space, the wrapped keys and X's change — as
+  # ciphertext it cannot read.
+  local repl replicated
+  repl=$(sa_api "/api/v1/state/replicate" -X POST)
+  replicated=$(jq -r '.replicated' <<<"$repl")
+  assert_eq "$replicated" "1" \
+    "the space replicated from peer A to peer B — one (peer, space) pair converged"
+
+  # Device Y, on B, decrypts what replicated: the second peer holds the space it
+  # cannot itself read, and only Y's key opens it.
+  local y_sees
+  y_sees=$("${base_b[@]}" space read "$space_id" --device-dir "$dy" --json | jq -r '.items[0]')
+  assert_eq "$y_sees" "x-first" \
+    "the second peer holds the encrypted space and an authorised device reads it there — replicated as ciphertext"
+
+  # THE PARTITION: with no replication, X writes on A and Y writes on B — a
+  # concurrent, offline edit on each side.
+  "${base_a[@]}" space put "$space_id" --device-dir "$dx" --item "x-second" >/dev/null
+  "${base_b[@]}" space put "$space_id" --device-dir "$dy" --item "y-only" >/dev/null
+
+  # RECONNECT: replicate both ways. A gets Y's change, B gets X's second change.
+  sa_api "/api/v1/state/replicate" -X POST >/dev/null
+  sb_api "/api/v1/state/replicate" -X POST >/dev/null
+
+  # CONVERGENCE, merged CLIENT-SIDE: device X (reading from A) and device Y
+  # (reading from B) materialise the SAME playlist — order-independent, from the
+  # causal DAG — containing all three concurrent items.
+  local x_state y_state
+  x_state=$("${base_a[@]}" space read "$space_id" --device-dir "$dx" --json | jq -c '.items')
+  y_state=$("${base_b[@]}" space read "$space_id" --device-dir "$dy" --json | jq -c '.items')
+  assert_eq "$x_state" "$y_state" \
+    "the two devices converge to the same state after an offline concurrent edit, merged client-side"
+  assert_contains "$x_state" "y-only" "the converged state contains the edit made on the OTHER peer during the partition"
+  assert_eq "$(jq 'length' <<<"$x_state")" "3" "and all three concurrent items survived the merge"
+
+  # THE SERVER NEVER SAW PLAINTEXT: decode peer B's stored change bytes and confirm
+  # no item appears in any of them — ciphertext throughout the exchange. (python3
+  # decodes each change separately, so a NUL byte cannot truncate the check.)
+  local raw opaque
+  raw=$(sb_api "/api/v1/spaces/$space_id/changes" | jq -c '[.changes[].ciphertext]')
+  opaque=$(python3 -c 'import base64,json,sys; arr=json.loads(sys.argv[1]); items=[b"x-first",b"x-second",b"y-only"]; leaked=any(i in base64.b64decode(c) for c in arr for i in items); sys.stdout.write("PLAINTEXT-LEAKED" if leaked else "OPAQUE")' "$raw")
+  assert_eq "$opaque" "OPAQUE" \
+    "peer B's stored personal-state bytes stayed ciphertext throughout — the server merged nothing and read nothing"
+
+  for p in "${mypids[@]}"; do kill -TERM "$p" 2>/dev/null || true; done
+  for p in "${mypids[@]}"; do wait "$p" 2>/dev/null || true; done
+}
+
 # The gate is only a gate if people run it, and people stop running a gate
 # they have to wait for. Milestone 1 finished at about fifteen seconds and 100
 # assertions; Milestone 2 adds probing, remuxing and a second worker process,
@@ -7394,6 +7528,8 @@ else
   recovery_demo
   note "ENCRYPTED PERSONAL STATE: the peer stores ciphertext it cannot read (§38, §42, ADR-0049, #320)"
   personalstate_demo
+  note "CONVERGE AFTER A PARTITION: two devices, an offline concurrent edit each, merged client-side (§42, §43, ADR-0049, #324)"
+  converge_after_partition_demo
   note "THE SECOND PEER: placement, proven (§56, §64, M4-11) — heyarr all"
   two_peer_demo all
   note "THE SECOND PEER, again, as separate role processes (ADR-0002, M4-16)"
