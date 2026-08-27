@@ -1,0 +1,25 @@
+name: private-modules
+description: >
+  Grant this job read access to rarebit-one's private Go modules (voidbind-go),
+  so go build / go test / go mod download can fetch them. It rewrites the HTTPS
+  clone URL for the org to carry a read PAT; GOPRIVATE (set at the workflow
+  level) keeps those module paths off the public proxy and checksum database.
+  Without both, a fetch of a private module in the org fails closed — the exact
+  failure this milestone had to prove absent before it converted any package to
+  a shim over the shared library.
+inputs:
+  token:
+    description: A PAT with read access to rarebit-one private repositories.
+    required: true
+runs:
+  using: composite
+  steps:
+    # The token is passed via env rather than interpolated into the command so
+    # it is never rendered into the step's echoed script.
+    - shell: bash
+      env:
+        RAREBIT_MODULE_TOKEN: ${{ inputs.token }}
+      run: |
+        git config --global \
+          url."https://x-access-token:${RAREBIT_MODULE_TOKEN}@github.com/rarebit-one/".insteadOf \
+          "https://github.com/rarebit-one/"

@@ -8,6 +8,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
+	"github.com/rarebit-one/voidbind-go/rp"
 )
 
 // Scheme is the HTTP Authorization scheme a device presents, alongside the
@@ -69,16 +70,26 @@ func (s *Store) Verify(ctx context.Context, credential string, now time.Time) (A
 	if err != nil {
 		return Authenticated{}, err
 	}
+	// Steps 1 and 3 — the claimed user is a hint, and the cert must verify against
+	// the pinned key and be unexpired — are exactly voidbind-go/rp's pure
+	// verifier: the shared trust core All Thing and heyarr hold in common
+	// (ADR-0048, generalised from this very method). We back it with the single
+	// key we just resolved from the device store, pinned under the same claimed
+	// user, so it reports the identical enrolment.* refusals this method always
+	// has. Step 2's ErrUnknownUser stays LookupUser's above — the pin is present
+	// by construction here, so rp never reaches its own unknown-user gate. The
+	// possession proof and the device-revocation checks below are heyarr's
+	// DB-backed half and stay here.
 	pinned, err := identity.ParsePublicKey(user.PublicKey)
 	if err != nil {
 		return Authenticated{}, err
 	}
-	cert, err := enrolment.VerifyCert(certToken, pinned, now)
+	auth, err := rp.Verifier{Trust: rp.MemTrust{claimedUser: pinned}}.Verify(certToken, now)
 	if err != nil {
 		return Authenticated{}, err
 	}
 
-	device, err := s.LookupDevice(ctx, cert.Device)
+	device, err := s.LookupDevice(ctx, auth.DeviceKey)
 	if err != nil {
 		return Authenticated{}, err
 	}
@@ -93,7 +104,7 @@ func (s *Store) Verify(ctx context.Context, credential string, now time.Time) (A
 		return Authenticated{}, ErrCertMismatch
 	}
 
-	devicePub, err := identity.ParsePublicKey(cert.Device)
+	devicePub, err := identity.ParsePublicKey(auth.DeviceKey)
 	if err != nil {
 		return Authenticated{}, err
 	}
@@ -106,6 +117,6 @@ func (s *Store) Verify(ctx context.Context, credential string, now time.Time) (A
 		PrincipalName: user.Name,
 		UserID:        user.ID,
 		UserKey:       user.PublicKey,
-		DeviceKey:     cert.Device,
+		DeviceKey:     auth.DeviceKey,
 	}, nil
 }
