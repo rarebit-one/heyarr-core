@@ -237,6 +237,44 @@ func (s *Store) WrappedKeysFor(ctx context.Context, spaceID string) ([]WrappedKe
 	return out, rows.Err()
 }
 
+// DeleteWrappedKey removes a recipient's wrapped copy of a space's key — the
+// storage side of device revocation (§41, ADR-0022). After a rotation re-wraps
+// the space for the REMAINING devices, the revoked device's copy is deleted here
+// so a peer no longer serves it; the revoked device keeps only what it already
+// downloaded (revocation is forward-looking, not retroactive). Deleting a copy
+// that is not present is a no-op — revoking an already-revoked device is
+// idempotent. The space must exist.
+func (s *Store) DeleteWrappedKey(ctx context.Context, spaceID, recipient string) error {
+	if _, err := s.Space(ctx, spaceID); err != nil {
+		return err
+	}
+	tx, err := s.writer.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("personalstate/store: beginning transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx,
+		`DELETE FROM wrapped_keys WHERE space_id = ? AND recipient = ?`, spaceID, recipient)
+	if err != nil {
+		return fmt.Errorf("personalstate/store: deleting wrapped key: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// Nothing to revoke — idempotent, no event.
+		return tx.Commit()
+	}
+	ev, err := s.events.EmitTx(ctx, tx, events.TypeSpaceKeyRevoked, "encrypted_space", spaceID,
+		map[string]any{"recipient": recipient})
+	if err != nil {
+		return fmt.Errorf("personalstate/store: recording revocation: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("personalstate/store: committing: %w", err)
+	}
+	s.events.Publish(ev)
+	return nil
+}
+
 type rowScanner interface{ Scan(dest ...any) error }
 
 func scanSpace(row rowScanner) (spaces.EncryptedSpace, error) {

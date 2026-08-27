@@ -145,6 +145,10 @@ const (
 	// events like every other, they are just opaque ones.
 	TypeSpaceCreated    = "personalstate.space.created"
 	TypeSpaceKeyWrapped = "personalstate.space.key_wrapped"
+	// TypeSpaceKeyRevoked is a wrapped copy of a space key being deleted for a
+	// recipient — the storage side of device revocation (§41, ADR-0022). Opaque:
+	// it records that a recipient can no longer read the space, never a key.
+	TypeSpaceKeyRevoked = "personalstate.space.key_revoked"
 
 	// desired.* is §76's own category for wanting (M3-02).
 	//
