@@ -1,432 +1,50 @@
-// Package useridentity is the CLIENT-side store for a user's root identity
-// (§40, ADR-0048, ADR-0032): the one Ed25519 keypair whose public half a peer
-// pins and whose private half signs enrolment certs for the person's devices.
+// Package useridentity is a thin re-export of the self-sovereign user-identity
+// store, which now lives in voidbind-go. Heyarr's identity core is Voidbind (the
+// extracted, self-sovereign authenticator); this package keeps Heyarr's import
+// path and public surface stable while the single implementation lives in one
+// place. See rarebit-one/heyarr-core#366.
 //
-// It is the counterpart to internal/device. A device key authorises nothing; a
-// user identity is the root of authority that vouches for device keys. Both are
-// the person's, both live 0600 in the person's own configuration directory, and
-// NEITHER is ever the server's: a private key in the server's data dir is inside
-// the blast radius the key exists to stay out of (ADR-0032). This package takes
-// no --config, opens no database and calls no controller — enrolling the pin at
-// a peer is a separate, admin-mediated act over the API.
-//
-// It mirrors internal/device deliberately: same key-file format and mode, same
-// "the store never hands out the seed" discipline (the private key is loaded
-// only inside SignCert and never returned), same record/key split so that
-// everything a person may see is readable without opening the file that must
-// never be shown.
+// voidbind-go v0.3.0 is a superset of what this package used to hold — including
+// the §41 recovery encryption key on Identity (rarebit-one/voidbind-go#12), the
+// last thing that had diverged. Two on-disk behaviours changed with the rename to
+// Voidbind, both backward-compatible on read: the key-file prefix is now
+// "voidbind-user-…" (the legacy "heyarr-user-…" is still accepted), and the
+// directory override env var is VOIDBIND_IDENTITY_DIR (was HEYARR_IDENTITY_DIR).
+// Existing key files keep working; a HEYARR_IDENTITY_DIR override does not.
 package useridentity
 
-import (
-	"crypto/ed25519"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
+import vb "github.com/rarebit-one/voidbind-go/useridentity"
 
-	"github.com/google/uuid"
-
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
-	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
-	"github.com/rarebit-one/heyarr-core/internal/recovery"
+// Types (aliases carry every field and method, including Identity.EncryptionKey).
+type (
+	Clock        = vb.Clock
+	Identity     = vb.Identity
+	Store        = vb.Store
+	StoreOptions = vb.StoreOptions
+	View         = vb.View
 )
 
-// Algorithm names the signature scheme, identity's constant so a user key, a
-// device key and a peer key are all rendered the same way (ADR-0012, #135).
-const Algorithm = identity.Algorithm
-
-// The names of the two files a user-identity store keeps, matching the device
-// store's split for the same reason: the public half and the metadata can be
-// read without ever opening the file that holds the seed.
-const (
-	// KeyFileName holds the private key. Only SignCert ever reads it.
-	KeyFileName = "user_ed25519.key"
-	// RecordFileName holds the public half and the metadata.
-	RecordFileName = "identity.json"
-)
-
-// KeyFileMode is the only mode the private key may have — asserted on read as
-// well as set on write, because a key that became group-readable is exactly as
-// exposed as one written that way.
-const KeyFileMode fs.FileMode = 0o600
-
-// DirMode is the mode of the identity directory itself.
-const DirMode fs.FileMode = 0o700
-
-// keyFilePrefix makes the file self-describing and tells it apart at a glance
-// from a device or peer key — the same kind of secret with a very different
-// owner, and finding one where another belongs is a finding.
-const keyFilePrefix = "heyarr-user-" + Algorithm + "-seed:"
-
-// Errors this package refuses with, distinct because each calls for a different
-// action: a chmod, a restore, a decision the caller has to make on purpose.
+// Constructors.
 var (
-	// ErrKeyPermissions is a private key readable by more than its owner.
-	ErrKeyPermissions = errors.New("useridentity: the private key is readable by more than its owner")
-	// ErrMalformedKey is a key or record file that is not what it should be.
-	ErrMalformedKey = errors.New("useridentity: the key file is not a heyarr user identity key")
-	// ErrNoIdentity is an operation that needs an identity where none exists.
-	ErrNoIdentity = errors.New("useridentity: this machine has no user identity yet")
-	// ErrIdentityExists is generate finding an identity already here.
-	// Overwriting one is unrecoverable — every device this identity enrolled
-	// verifies against its public key — so it takes an explicit --force.
-	ErrIdentityExists = errors.New("useridentity: a user identity already exists here")
+	DefaultDir = vb.DefaultDir
+	NewStore   = vb.NewStore
+	NewView    = vb.NewView
 )
 
-// Clock is the injected time source (ADR-0017).
-type Clock interface{ Now() time.Time }
+// Constants.
+const (
+	KeyFileName    = vb.KeyFileName
+	RecordFileName = vb.RecordFileName
+	Algorithm      = vb.Algorithm
+	DirMode        = vb.DirMode
+	EnvDir         = vb.EnvDir
+	KeyFileMode    = vb.KeyFileMode
+)
 
-type systemClock struct{}
-
-func (systemClock) Now() time.Time { return time.Now().UTC() }
-
-// Identity is one user identity, as everything outside this package sees it.
-// There is deliberately no private-key field, following device.Device and
-// identity.Identity: a caller that is never handed the seed cannot leak it.
-type Identity struct {
-	ID        string
-	Name      string
-	Algorithm string
-	PublicKey ed25519.PublicKey
-	// EncryptionKey is the user's RECOVERY encryption public key, rendered
-	// "x25519:<hex>" (§41), derived from the recovery secret at generation
-	// (recovery.DeriveUserEncryptionSeed) so the same secret regenerates it
-	// offline. It is the default recipient a new space is wrapped for, so the
-	// space key is always recoverable from the secret alone (#360). Empty on a
-	// pre-#360 identity record, which round-trips unchanged.
-	EncryptionKey string
-	CreatedAt     time.Time
-	KeyPath       string
-}
-
-// UserID renders the public key the way a cert's issuer and a grant's issuer are
-// rendered: algorithm-prefixed lowercase hex. It is the principal's stable name.
-func (i Identity) UserID() string { return identity.FormatPublicKey(i.PublicKey) }
-
-// record is the on-disk metadata. The public key is stored as well as derivable
-// so that a key file swapped underneath it is caught rather than adopted.
-type record struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Algorithm string `json:"algorithm"`
-	PublicKey string `json:"public_key"`
-	// EncryptionKey is the recovery x25519 public key ("x25519:<hex>", §41).
-	// omitempty so a pre-#360 record (no encryption key) round-trips unchanged
-	// and reads back as "no recovery key", exactly as device.record does.
-	EncryptionKey string `json:"encryption_key,omitempty"`
-	CreatedAt     string `json:"created_at"`
-}
-
-// StoreOptions configure a Store.
-type StoreOptions struct {
-	// Dir is the identity directory. Required, and never the server's data dir.
-	Dir   string
-	Clock Clock
-}
-
-// Store is the identity directory.
-type Store struct {
-	dir   string
-	clock Clock
-}
-
-// NewStore opens a user-identity store. It creates nothing until asked to.
-func NewStore(opts StoreOptions) (*Store, error) {
-	if opts.Dir == "" {
-		return nil, errors.New("useridentity: an identity directory is required")
-	}
-	clock := opts.Clock
-	if clock == nil {
-		clock = systemClock{}
-	}
-	return &Store{dir: filepath.Clean(opts.Dir), clock: clock}, nil
-}
-
-// Dir is where this store keeps its files.
-func (s *Store) Dir() string { return s.dir }
-
-// KeyPath is the private key's location.
-func (s *Store) KeyPath() string { return filepath.Join(s.dir, KeyFileName) }
-
-// RecordPath is the metadata's location.
-func (s *Store) RecordPath() string { return filepath.Join(s.dir, RecordFileName) }
-
-// Generate creates this person's user identity from a FRESH recovery secret,
-// and returns that secret to be displayed once (ADR-0022).
-//
-// The identity is derived DETERMINISTICALLY from the secret
-// (recovery.DeriveUserSeed), rather than drawn as a raw-random keypair, so that
-// [Store.RecoverFromSecret] can later reconstruct the SAME identity — same
-// public key — from the secret alone, with no server and no surviving device
-// (§79). That is what makes key loss survivable: the secret IS the identity's
-// root, and every device this identity enrols verifies against a public key the
-// secret can regenerate offline.
-//
-// The returned secret is the ONLY time the entropy leaves the store in a
-// transcribable form. The caller shows it once and never persists it; it is not
-// written to disk here (only the derived seed is), so a store on disk plus a
-// lost secret is exactly the "no surviving device" case recovery is for.
-func (s *Store) Generate(name string, force bool) (Identity, recovery.Secret, error) {
-	secret, err := recovery.GenerateSecret()
-	if err != nil {
-		return Identity{}, recovery.Secret{}, fmt.Errorf("useridentity: drawing a recovery secret: %w", err)
-	}
-	id, err := s.writeFromSecret(secret, name, force)
-	if err != nil {
-		return Identity{}, recovery.Secret{}, err
-	}
-	return id, secret, nil
-}
-
-// RecoverFromSecret reconstructs the user identity from a recovery secret,
-// writing it into this store. It is the offline restore of ADR-0022: the secret
-// derives the same seed [Store.Generate] derived, so the reconstructed identity
-// has the public key peers already pinned and nothing is re-pinned. It runs with
-// no server — the derivation is pure — which is the whole point (§51, §79).
-//
-// force behaves as it does for Generate: recovering over an existing identity is
-// refused unless asked for, because the ordinary recovery case is a machine with
-// no identity at all.
-func (s *Store) RecoverFromSecret(secret recovery.Secret, name string, force bool) (Identity, error) {
-	return s.writeFromSecret(secret, name, force)
-}
-
-// writeFromSecret derives the keypair from a recovery secret and writes the
-// store's two files. It is the shared body of Generate and RecoverFromSecret, so
-// the on-disk shape of a generated identity and a recovered one is identical by
-// construction — a recovered identity is not a second kind of identity.
-func (s *Store) writeFromSecret(secret recovery.Secret, name string, force bool) (Identity, error) {
-	existing, err := s.load()
-	switch {
-	case err == nil && !force:
-		return Identity{}, fmt.Errorf("%w: %s (%s) was created at %s.\n"+
-			"Regenerating would produce a DIFFERENT identity: every device this one enrolled "+
-			"verifies against its public key %s, and a replaced key invalidates them all with no "+
-			"warning at the moment it mattered.\n"+
-			"Pass --force if that is what you mean",
-			ErrIdentityExists, existing.ID, existing.Name, existing.CreatedAt.UTC().Format(time.RFC3339),
-			existing.PublicKeyString())
-	case err != nil && !errors.Is(err, ErrNoIdentity) && !force:
-		// A key that is here but unreadable — wrong mode, or corrupt. Refusing
-		// is the only safe answer, exactly as device.Generate does.
-		return Identity{}, err
-	}
-
-	if name == "" {
-		name = defaultName()
-	}
-	if err := os.MkdirAll(s.dir, DirMode); err != nil {
-		return Identity{}, fmt.Errorf("useridentity: creating %s: %w", s.dir, err)
-	}
-
-	seed := recovery.DeriveUserSeed(secret)
-	priv := ed25519.NewKeyFromSeed(seed)
-	pub, ok := priv.Public().(ed25519.PublicKey)
-	if !ok {
-		return Identity{}, errors.New("useridentity: derived key did not yield an ed25519 public key")
-	}
-	// The recovery ENCRYPTION key: an independent x25519 key derived from the same
-	// secret under a distinct HKDF label (recovery.DeriveUserEncryptionSeed), so the
-	// secret alone regenerates it offline (§79). Only its public half is persisted —
-	// the seed is never written, exactly as the signing seed is the sole secret on
-	// disk. This is the default recovery recipient a new space is wrapped for (#360).
-	encPriv, err := encryption.NewPrivateKey(recovery.DeriveUserEncryptionSeed(secret))
-	if err != nil {
-		return Identity{}, fmt.Errorf("useridentity: deriving the recovery encryption key: %w", err)
-	}
-	encKey := encryption.FormatPublicKey(encPriv.PublicKey().Bytes())
-	if err := writeKeyFile(s.KeyPath(), seed); err != nil {
-		return Identity{}, err
-	}
-
-	id := Identity{
-		ID:            uuid.Must(uuid.NewV7()).String(),
-		Name:          name,
-		Algorithm:     Algorithm,
-		PublicKey:     pub,
-		EncryptionKey: encKey,
-		CreatedAt:     s.clock.Now().UTC(),
-		KeyPath:       s.KeyPath(),
-	}
-	if err := s.writeRecord(id); err != nil {
-		return Identity{}, err
-	}
-	return id, nil
-}
-
-// Get returns the user identity on this machine, or ErrNoIdentity.
-func (s *Store) Get() (Identity, error) { return s.load() }
-
-// SignCert issues a user-signed enrolment cert binding devicePub AND deviceEnc
-// (the device's "x25519:<hex>" encryption key, §41) to this identity, valid for
-// lifetime from the store's clock (a zero lifetime uses enrolment.CertLifetime).
-// deviceEnc may be empty for a device that has no encryption key (a v1-shaped
-// binding). The private key is loaded here and nowhere else, and is never
-// returned: signing is the only thing this store does with the seed, exactly as
-// ADR-0032 keeps the seed out of every rendered value.
-func (s *Store) SignCert(devicePub ed25519.PublicKey, deviceEnc string, lifetime time.Duration) (string, error) {
-	priv, err := s.signingKey()
-	if err != nil {
-		return "", err
-	}
-	return enrolment.SignCert(priv, devicePub, deviceEnc, s.clock.Now().UTC(), lifetime)
-}
-
-// signingKey loads the seed and reconstitutes the private key. It is unexported
-// and its result never leaves this package (SignCert consumes it immediately),
-// so no caller can hold the user's seed.
-func (s *Store) signingKey() (ed25519.PrivateKey, error) {
-	seed, err := readKeyFile(s.KeyPath())
-	if err != nil {
-		return nil, err
-	}
-	return ed25519.NewKeyFromSeed(seed), nil
-}
-
-// load reads the record and verifies the key file backs it.
-func (s *Store) load() (Identity, error) {
-	raw, err := os.ReadFile(filepath.Clean(s.RecordPath()))
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return Identity{}, fmt.Errorf("%w: generate one with `heyarr identity generate`", ErrNoIdentity)
-		}
-		return Identity{}, fmt.Errorf("useridentity: reading %s: %w", s.RecordPath(), err)
-	}
-	var rec record
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		return Identity{}, fmt.Errorf("%w: %s is not an identity record: %w", ErrMalformedKey, s.RecordPath(), err)
-	}
-	createdAt, err := time.Parse(time.RFC3339Nano, rec.CreatedAt)
-	if err != nil {
-		return Identity{}, fmt.Errorf("%w: %s has an unreadable created_at: %w",
-			ErrMalformedKey, s.RecordPath(), err)
-	}
-
-	seed, err := readKeyFile(s.KeyPath())
-	if err != nil {
-		return Identity{}, err
-	}
-	pub, ok := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
-	if !ok {
-		return Identity{}, fmt.Errorf("%w: the key at %s did not yield an ed25519 public key",
-			ErrMalformedKey, s.KeyPath())
-	}
-	if got := identity.FormatPublicKey(pub); got != rec.PublicKey {
-		return Identity{}, fmt.Errorf("%w: %s records %s and the key at %s is %s — "+
-			"one of the two files was replaced, and adopting either would silently change this identity",
-			ErrMalformedKey, s.RecordPath(), rec.PublicKey, s.KeyPath(), got)
-	}
-
-	return Identity{
-		ID:            rec.ID,
-		Name:          rec.Name,
-		Algorithm:     rec.Algorithm,
-		PublicKey:     pub,
-		EncryptionKey: rec.EncryptionKey,
-		CreatedAt:     createdAt,
-		KeyPath:       s.KeyPath(),
-	}, nil
-}
-
-// PublicKeyString renders the public key algorithm-prefixed, lowercase hex.
-func (i Identity) PublicKeyString() string { return identity.FormatPublicKey(i.PublicKey) }
-
-func (s *Store) writeRecord(id Identity) error {
-	buf, err := json.MarshalIndent(record{
-		ID:            id.ID,
-		Name:          id.Name,
-		Algorithm:     id.Algorithm,
-		PublicKey:     id.PublicKeyString(),
-		EncryptionKey: id.EncryptionKey,
-		CreatedAt:     id.CreatedAt.UTC().Format(time.RFC3339Nano),
-	}, "", "  ")
-	if err != nil {
-		return fmt.Errorf("useridentity: encoding the identity record: %w", err)
-	}
-	if err := os.WriteFile(s.RecordPath(), append(buf, '\n'), KeyFileMode); err != nil {
-		return fmt.Errorf("useridentity: writing the identity record: %w", err)
-	}
-	return nil
-}
-
-// writeKeyFile writes the seed at 0600 through a temp file in the same
-// directory, so a crash mid-write cannot leave a truncated key a later read
-// would take for a different identity. It mirrors device.writeKeyFile.
-func writeKeyFile(path string, seed []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".userkey-*.tmp")
-	if err != nil {
-		return fmt.Errorf("useridentity: writing the private key: %w", err)
-	}
-	name := tmp.Name()
-	defer func() { _ = os.Remove(name) }()
-	if err := tmp.Chmod(KeyFileMode); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("useridentity: writing the private key: %w", err)
-	}
-	if _, err := tmp.WriteString(keyFilePrefix + hex.EncodeToString(seed) + "\n"); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("useridentity: writing the private key: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("useridentity: writing the private key: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("useridentity: writing the private key: %w", err)
-	}
-	if err := os.Rename(name, path); err != nil {
-		return fmt.Errorf("useridentity: writing the private key: %w", err)
-	}
-	return nil
-}
-
-// readKeyFile loads the seed, refusing a key anyone but its owner can read.
-func readKeyFile(path string) ([]byte, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("%w: the record names an identity whose private key is missing at %s",
-				ErrNoIdentity, path)
-		}
-		return nil, fmt.Errorf("useridentity: reading the private key: %w", err)
-	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		return nil, fmt.Errorf("%w: %s is %#o and must be %#o — "+
-			"a key another account can read is a key another account can sign your certs with. "+
-			"Fix it with `chmod 600 %s`",
-			ErrKeyPermissions, path, perm, KeyFileMode, path)
-	}
-	raw, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, fmt.Errorf("useridentity: reading the private key: %w", err)
-	}
-	text := strings.TrimSpace(string(raw))
-	if !strings.HasPrefix(text, keyFilePrefix) {
-		return nil, fmt.Errorf("%w: %s does not start with %q", ErrMalformedKey, path, keyFilePrefix)
-	}
-	seed, err := hex.DecodeString(strings.TrimPrefix(text, keyFilePrefix))
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s is not valid hex: %w", ErrMalformedKey, path, err)
-	}
-	if len(seed) != ed25519.SeedSize {
-		return nil, fmt.Errorf("%w: %s holds %d bytes of key material, want %d",
-			ErrMalformedKey, path, len(seed), ed25519.SeedSize)
-	}
-	return seed, nil
-}
-
-// defaultName names the identity after the machine that generated it, because
-// that is what a person would have typed and it is only a label.
-func defaultName() string {
-	host, err := os.Hostname()
-	if err != nil || strings.TrimSpace(host) == "" {
-		return "my-identity"
-	}
-	return host + "-identity"
-}
+// Sentinel errors.
+var (
+	ErrKeyPermissions = vb.ErrKeyPermissions
+	ErrMalformedKey   = vb.ErrMalformedKey
+	ErrNoIdentity     = vb.ErrNoIdentity
+	ErrIdentityExists = vb.ErrIdentityExists
+)
