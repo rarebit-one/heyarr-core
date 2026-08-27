@@ -6664,6 +6664,15 @@ YAML
   assert_eq "$(peer_holds "$root/a/data/cas" "$blob")" "0" \
     "node A is still mid-transfer when node B joins: the two overlap, which is what makes this a swarm and not a queue"
 
+  # Give node B a playback window before it joins (§33, §84 — time-critical
+  # priority). A player reading a partial records where it is, and the transfer
+  # fetches the pieces there FIRST rather than in survey order. Written as a
+  # client would write it — a byte offset in the CAS the transfer reads (invariant
+  # 4's role-legal channel) — for the blob B is about to assemble from pieces. 5
+  # MiB is piece 20 at this 256 KiB geometry, well past the front, so a driver
+  # honouring it is visibly not just fetching from zero.
+  "$STAGEPARTIAL" --cas "$root/b/data/cas" --blob "$blob" --playhead 5242880
+
   sw_b "/api/v1/peers/swarm-b/reconcile" -X POST -o /dev/null
 
   swarm_converged() {
@@ -6693,6 +6702,18 @@ YAML
   assert_eq "$(( assembled_a >= 1 ))" "1" \
     "node A took the PIECE path, not the streamed pull — the branch this milestone added is the one that ran"
   assert_eq "$(( assembled_b >= 1 ))" "1" "and so did node B"
+
+  # 🔴 TIME-CRITICAL PRIORITY (§33, §84). Node B was given a playback window
+  # before it joined, and its transfer adopted it: the driver read the client's
+  # byte offset, converted it to the piece that contains it, and logged that it
+  # prioritised the window. The offset was 5 MiB, which is piece 20 — so a log
+  # naming piece 20 is the client's read position having steered the fetch order,
+  # not the survey order. The reader publishes the offset (blobs), the store
+  # carries it across the role boundary (invariant 4), and the driver honours it.
+  local prioritised_b
+  prioritised_b=$(grep -F '"msg":"prioritising pieces near the playback window"' "$log_b" | grep -c '"piece":20' || true)
+  assert_eq "$(( prioritised_b >= 1 ))" "1" \
+    "the transfer fetched the playback window first: node B's driver adopted the playhead and prioritised piece 20, the piece at the client's 5 MiB read position"
 
   # -------------------------------------------------------------------------
   note "  🔴 cooperation, as an inequality the split cannot move"

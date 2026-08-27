@@ -164,6 +164,12 @@ ref   §33, §84, ADR-0043, ADR-0044, #29
 why   cas.ReadPartialAt serves bytes out of a blob still being assembled and was reached only from the peer surface. M10 adds the client route's partial path (internal/api/blobs, ADR-0044): it consults the availability record, serves a landed range over ordinary HTTP, and BLOCKS on a range that has not landed rather than serving the hole. Before this nothing a player talks to could serve what had not finished arriving — Milestone 10's premise, and the fourth mechanism-with-no-caller this ledger names. The negative rides alongside: a range in the hole times out rather than being handed zeroes, so a green run cannot mean "it served something" when what it served was a hole.
 evidence a client range-read a blob that had not finished arriving
 
+claim time-critical-piece-priority
+state proven
+ref   §33, §84, ADR-0043, #29
+why   The local peer prioritises the pieces near the playback window (§33), so a player's next bytes arrive next rather than whenever the swarm converges on them. The reader publishes where it is stalled (a byte offset), the store carries it across the role boundary invariant 4 allows, and the driver converts it to a piece index and fetches that window before falling back to rarest-first. Without a demo the mechanism is invisible: the driver would adopt a playhead nothing wrote, or write one nothing reads — the same mechanism-with-no-caller shape M6 hit. Here a node is given a playback window before it joins the swarm and its transfer logs that it prioritised the piece at that offset, proving the whole chain ran.
+evidence the transfer fetched the playback window first
+
 claim clients-are-served-hls
 state pending
 issue 202

@@ -844,7 +844,17 @@ func (s *FS) TempFiles() ([]TempFile, error) {
 	return out, nil
 }
 
-// RemoveTemp deletes one partial write by the name TempFiles reported.
+// RemoveTemp deletes one partial write by the name TempFiles reported, and the
+// sidecars that describe it — the availability record and the playhead — so a
+// reaped partial takes its whole footprint with it.
+//
+// The sidecars share the partial's base name but not its .part suffix, so
+// TempFiles (which lists only .part files) never reports them on their own: a
+// `.pieces` or `.playhead` that outlived its partial would otherwise linger until
+// the disk was wiped. ADR-0043 said the availability record is "reaped with its
+// partial"; this is where that happens, and the playhead rides the same path for
+// the same reason. Removing a sidecar that is already gone is not an error —
+// there may never have been one.
 //
 // It refuses anything that is not a bare .part base name. The store owns its
 // layout and nothing outside this package may assume it (§18); accepting a path
@@ -859,6 +869,13 @@ func (s *FS) RemoveTemp(name string) error {
 			return nil
 		}
 		return fmt.Errorf("cas: removing temporary file %s: %w", name, err)
+	}
+	base := strings.TrimSuffix(name, ".part")
+	for _, suffix := range []string{piecesSuffix, playheadSuffix} {
+		if err := os.Remove(filepath.Join(s.root, tmpDir, base+suffix)); err != nil &&
+			!errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("cas: removing %s sidecar for %s: %w", suffix, name, err)
+		}
 	}
 	return nil
 }

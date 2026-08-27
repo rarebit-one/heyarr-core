@@ -164,3 +164,28 @@ func TestPartialSourceReapedTransferReportsGone(t *testing.T) {
 		t.Fatalf("after reap: ok=%v inflight=%v err=%v; want all false/nil", ok, inflight, err)
 	}
 }
+
+// TestPartialSourceSetPlayheadWritesThrough proves the adapter records the byte
+// offset the reader announced into the CAS sidecar the transfer reads — the
+// client→worker crossing for time-critical priority (§33, §84), with no piece
+// decoding because a playhead has none.
+func TestPartialSourceSetPlayheadWritesThrough(t *testing.T) {
+	t.Parallel()
+	fs, err := cas.OpenFS(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newAdapter(fs)
+	blob, _, err := hashing.HashReader(bytes.NewReader([]byte("a blob being watched")))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.SetPlayhead(context.Background(), blob, 5242880); err != nil {
+		t.Fatal(err)
+	}
+	off, ok, err := fs.LoadPlayhead(blob)
+	if err != nil || !ok || off != 5242880 {
+		t.Fatalf("LoadPlayhead after SetPlayhead: off=%d ok=%v err=%v; want 5242880, true", off, ok, err)
+	}
+}

@@ -113,7 +113,29 @@ type pieceSession struct {
 	// revocation, which is the pre-#290 behaviour.
 	roster   map[string]bool
 	rosterAt uint64
+
+	// playhead is the piece a consumer is currently reading, or -1 when none is
+	// (§33, §84). Time-critical priority fetches the pieces in a window from here
+	// before falling back to rarest-first, so a player's next bytes arrive next
+	// rather than whenever the swarm happens to converge on them. It is a HINT and
+	// steers only WHICH missing piece is chosen — never whether one is trusted, so
+	// a stale value costs a worse order and never a wrong byte (ADR-0043).
+	//
+	// playheadRead and playheadAt bound the re-read to once per generation, the
+	// same cadence membership and the re-survey run at: the byte offset is read
+	// from the store (invariant 4's role-legal channel), converted to a piece
+	// index against this session's geometry, and cached until a piece lands.
+	playhead     int
+	playheadRead bool
+	playheadAt   uint64
 }
+
+// playbackWindow is how many pieces from the playhead a time-critical fetch
+// prefers before falling back to rarest-first. It is a read-ahead buffer: large
+// enough that a player does not stall at every piece boundary, small enough that
+// the rest of the blob is still fetched rarest-first so swarm health — nobody
+// waiting on one last peer — is preserved outside the window.
+const playbackWindow = 8
 
 func newPieceSession(g pieces.Geometry, have pieces.Availability, partial cas.Partial) *pieceSession {
 	s := &pieceSession{
@@ -122,6 +144,7 @@ func newPieceSession(g pieces.Geometry, have pieces.Availability, partial cas.Pa
 		fromPeer: map[string]int{},
 		failed:   map[string]int{},
 		silent:   map[string]struct{}{},
+		playhead: -1,
 	}
 	s.cond = sync.NewCond(&s.mu)
 	return s
@@ -172,7 +195,23 @@ func rarityLocked(index int, held map[string]*sourceClaim) int {
 // and therefore assertable. With several sources the interleaving is not
 // deterministic and must not be asserted on; what is assertable is that every
 // source contributed, which is the claim §23 actually makes.
+//
+// # Time-critical priority (§33, §84)
+//
+// When a consumer is reading — a playhead is set — the pieces in a window from it
+// are fetched IN ORDER before anything else, so a player's next bytes are what
+// arrives next. Only when this source holds nothing in that window does it fall
+// through to rarest-first for the rest of the blob. The window is deliberately
+// small: outside it, rarest-first still governs, so the priority is an
+// optimisation of playback latency and not a change to how the swarm converges
+// (§84 — an optimisation, never load-bearing for the ordinary path).
 func (s *pieceSession) assignLocked(sc *sourceClaim, held map[string]*sourceClaim) (int, bool) {
+	if index, ok := s.assignFromWindowLocked(sc); ok {
+		s.inflight[index] = struct{}{}
+		s.fetching++
+		return index, true
+	}
+
 	best, bestRarity := -1, 0
 	for _, index := range s.have.Missing() {
 		if index >= s.g.Count() {
@@ -197,6 +236,37 @@ func (s *pieceSession) assignLocked(sc *sourceClaim, held map[string]*sourceClai
 	s.inflight[best] = struct{}{}
 	s.fetching++
 	return best, true
+}
+
+// assignFromWindowLocked picks the lowest-index missing piece THIS source holds
+// within the playback window, or reports none. Lowest-index rather than rarest:
+// inside the window the order that matters is the player's, not the swarm's — the
+// next byte it will read is the next piece it needs. Bookkeeping (inflight,
+// fetching) is left to the caller so it is done once for both paths.
+func (s *pieceSession) assignFromWindowLocked(sc *sourceClaim) (int, bool) {
+	if s.playhead < 0 {
+		return 0, false
+	}
+	end := s.playhead + playbackWindow
+	if end > s.g.Count() {
+		end = s.g.Count()
+	}
+	for index := s.playhead; index < end; index++ {
+		if s.have.Has(index) {
+			continue // already landed
+		}
+		if _, busy := s.inflight[index]; busy {
+			continue
+		}
+		if !sc.claim.Has(index) {
+			continue
+		}
+		if _, no := sc.declined[index]; no {
+			continue
+		}
+		return index, true
+	}
+	return 0, false
 }
 
 // landed records a piece whose bytes are on disk.
@@ -431,6 +501,12 @@ func (p *Puller) driveOneSource(
 			s.mu.Unlock()
 			return
 		}
+
+		// Re-read where the consumer is reading, at most once per generation — the
+		// same cadence as the membership check above. A byte offset written by a
+		// player (§33) steers which missing piece is fetched next; absent, the
+		// fetch stays rarest-first.
+		p.refreshPlayhead(s, blob)
 
 		s.mu.Lock()
 		var index int

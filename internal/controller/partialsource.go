@@ -25,8 +25,20 @@ import (
 // and never trusted as evidence, and the whole-object digest verified at Publish
 // is the only identity. A record that overstates costs a blocked read that
 // resolves when the bytes truly land, never a wrong byte on the wire.
+// partialStore is what the adapter needs of the CAS: the read side of the
+// availability record and the partial bytes (which the peer surface also uses),
+// plus the write side of the playback-window hint. Asserted at the wiring site,
+// not added to any shared Store, for the reason ADR-0013 and pieceProgressStore
+// both give — a capability only the client route needs should not become a
+// method every store must grow.
+type partialStore interface {
+	LoadPieceProgress(blob hashing.Hash) (string, error)
+	ReadPartialAt(blob hashing.Hash, b []byte, off int64) (int, error)
+	SavePlayhead(blob hashing.Hash, off int64) error
+}
+
 type piecePartialSource struct {
-	store partialPieceReader
+	store partialStore
 	log   *slog.Logger
 }
 
@@ -100,4 +112,13 @@ func (s piecePartialSource) Available(
 // must have confirmed the range via Available first.
 func (s piecePartialSource) ReadPartialAt(blob hashing.Hash, b []byte, off int64) (int, error) {
 	return s.store.ReadPartialAt(blob, b, off)
+}
+
+// SetPlayhead records where a consumer is reading so the transfer can prioritise
+// the pieces near it (§33, §84). The offset is a byte fact the reader knows; the
+// transfer turns it into a piece index on its own side. It writes straight
+// through to the CAS sidecar the transfer reads — no piece decoding here, because
+// a playhead has none.
+func (s piecePartialSource) SetPlayhead(_ context.Context, blob hashing.Hash, off int64) error {
+	return s.store.SavePlayhead(blob, off)
 }

@@ -335,12 +335,13 @@ func (h *Handler) serveIfPartial(w http.ResponseWriter, r *http.Request, hash ha
 	}
 
 	reader := &partialBlobReader{
-		ctx:   r.Context(),
-		store: h.store,
-		src:   h.partial,
-		wait:  h.wait,
-		blob:  hash,
-		size:  size,
+		ctx:          r.Context(),
+		store:        h.store,
+		src:          h.partial,
+		wait:         h.wait,
+		blob:         hash,
+		size:         size,
+		lastPlayhead: -1,
 	}
 	defer func() {
 		if err := reader.Close(); err != nil {

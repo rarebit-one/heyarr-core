@@ -49,6 +49,13 @@ type PartialSource interface {
 	// MUST have confirmed the range via Available first — this reads whatever is
 	// on disk, holes included.
 	ReadPartialAt(blob hashing.Hash, b []byte, off int64) (int, error)
+
+	// SetPlayhead records that a consumer is reading at byte offset off, so the
+	// transfer can prioritise the pieces near it (§33, §84 — time-critical
+	// priority). It is a hint in byte terms; the piece translation happens on the
+	// far side of this interface. Best-effort: a failure loses only the
+	// optimisation, so the reader ignores the error.
+	SetPlayhead(ctx context.Context, blob hashing.Hash, off int64) error
 }
 
 // partialBlobReader presents a blob that is still assembling as a seekable
@@ -83,6 +90,10 @@ type partialBlobReader struct {
 	// the reader; only which bytes have landed does, and that is re-read per gap.
 	size int64
 	pos  int64
+	// lastPlayhead is the offset most recently published to the transfer, so the
+	// playback window is announced once per distinct stall position rather than on
+	// every poll. -1 means none published yet.
+	lastPlayhead int64
 
 	// whole is the finished blob's reader, opened lazily once the transfer
 	// completes. From then on every read comes from here — the transparent
@@ -179,10 +190,28 @@ func (r *partialBlobReader) Read(p []byte) (int, error) {
 			}
 		}
 
-		// 3. The byte at pos has not landed. Wait, then re-consult availability.
+		// 3. The byte at pos has not landed. Tell the transfer where we are stuck
+		//    so it fetches the pieces here first (§33, §84), then wait and
+		//    re-consult availability. Announced once per distinct stall position:
+		//    the read only blocks where it is waiting, which is exactly the
+		//    playhead worth prioritising.
+		r.announcePlayhead()
 		if err := r.wait(r.ctx); err != nil {
 			return 0, err
 		}
+	}
+}
+
+// announcePlayhead publishes the current read position to the transfer as the
+// playback window to prioritise, unless it is already the last one announced.
+// Best-effort: a failed write loses only the optimisation, and the read blocks
+// and resolves exactly as it would have without it.
+func (r *partialBlobReader) announcePlayhead() {
+	if r.pos == r.lastPlayhead {
+		return
+	}
+	if err := r.src.SetPlayhead(r.ctx, r.blob, r.pos); err == nil {
+		r.lastPlayhead = r.pos
 	}
 }
 
