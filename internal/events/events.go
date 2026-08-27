@@ -145,6 +145,10 @@ const (
 	// events like every other, they are just opaque ones.
 	TypeSpaceCreated    = "personalstate.space.created"
 	TypeSpaceKeyWrapped = "personalstate.space.key_wrapped"
+	// TypeChangeStored is a peer accepting an encrypted CRDT change into a space
+	// (§42, §44). Opaque like its siblings: it records that a change with this id
+	// landed, never the plaintext the peer cannot read.
+	TypeChangeStored = "personalstate.change.stored"
 
 	// desired.* is §76's own category for wanting (M3-02).
 	//

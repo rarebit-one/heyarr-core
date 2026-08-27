@@ -1,7 +1,7 @@
 {
   "path": "<path>",
   "generation": 1,
-  "schema_version": 37,
+  "schema_version": 38,
   "taken_at": "<taken_at>",
   "digest": "<digest>",
   "size_bytes": "<size>",
