@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# voidbind-go is a private module in this org. GOPRIVATE keeps its path off the
+# public proxy and checksum database; the private-modules action (used in each
+# compiling job below) supplies the token that lets git fetch it.
+env:
+  GOPRIVATE: github.com/rarebit-one/*
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -28,6 +34,9 @@ jobs:
       GOARCH: amd64
     steps:
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/private-modules
+        with:
+          token: ${{ secrets.AUTOLAND_PAT }}
       - uses: actions/setup-go@v7
         with: { go-version: stable, cache: true }
       - run: go vet ./...
@@ -62,6 +71,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/private-modules
+        with:
+          token: ${{ secrets.AUTOLAND_PAT }}
       - uses: actions/setup-go@v7
         with: { go-version: stable, cache: true }
       - run: ./scripts/gen.sh
@@ -85,6 +97,9 @@ jobs:
         go: [stable, oldstable]
     steps:
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/private-modules
+        with:
+          token: ${{ secrets.AUTOLAND_PAT }}
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
@@ -150,6 +165,9 @@ jobs:
           - { os: windows-latest, flags: "" }
     steps:
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/private-modules
+        with:
+          token: ${{ secrets.AUTOLAND_PAT }}
       - uses: actions/setup-go@v7
         with: { go-version: stable, cache: true }
       - run: go test -count=1 -v ${{ matrix.flags }} ./internal/storagefabric/chunking/...
@@ -165,6 +183,9 @@ jobs:
           - { goos: darwin, goarch: arm64 }
     steps:
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/private-modules
+        with:
+          token: ${{ secrets.AUTOLAND_PAT }}
       - uses: actions/setup-go@v7
         with: { go-version: stable, cache: true }
       - env:
@@ -188,6 +209,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/private-modules
+        with:
+          token: ${{ secrets.AUTOLAND_PAT }}
       - uses: actions/setup-go@v7
         with: { go-version: stable, cache: true }
       - name: install the pinned media toolchain
@@ -235,6 +259,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/private-modules
+        with:
+          token: ${{ secrets.AUTOLAND_PAT }}
       - uses: actions/setup-go@v7
         with: { go-version: stable, cache: true }
       - name: assert this runner has no toolchain

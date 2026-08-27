@@ -11,11 +11,19 @@ permissions:
   contents: read
   security-events: write
 
+# CodeQL autobuilds the Go module, which fetches the private voidbind-go
+# dependency. GOPRIVATE + the private-modules token below let that fetch succeed.
+env:
+  GOPRIVATE: github.com/rarebit-one/*
+
 jobs:
   analyze:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/private-modules
+        with:
+          token: ${{ secrets.AUTOLAND_PAT }}
       - uses: github/codeql-action/init@v4
         with: { languages: go }
       - uses: github/codeql-action/autobuild@v4
