@@ -55,6 +55,8 @@ it.`,
 		newSpaceChangesCommand(opts, configPath),
 		newSpacePutCommand(opts, configPath, &deviceDir),
 		newSpaceReadCommand(opts, configPath, &deviceDir),
+		newSpaceSnapshotCommand(opts, configPath, &deviceDir),
+		newSpaceCompactCommand(opts, configPath),
 	)
 	return cmd
 }
@@ -255,21 +257,16 @@ never sees the item.`,
 				if err != nil {
 					return err
 				}
-				// Read-modify-write: decode the current changes to reconstruct the
-				// CRDT (and its Lamport clock), add the item, and ship the new
-				// change parented on the current heads.
-				existing, err := c.Changes(ctx, spaceID)
+				// Read-modify-write: reconstruct the CRDT (and its Lamport clock)
+				// from the snapshot plus the changes the peer holds, add the item,
+				// and ship the new change parented on the current heads. Using the
+				// snapshot keeps this correct after the log has been compacted.
+				st, existing, snap, err := materialise(ctx, c, mgr, spaceID)
 				if err != nil {
 					return err
 				}
-				decoded, err := statesync.DecodeAll(mgr, existing)
-				if err != nil {
-					return err
-				}
-				st := crdt.New()
-				st.Apply(decoded...)
 				change := st.Add(item)
-				ec, err := statesync.Encode(mgr, spaceID, protocol.Heads(existing), change)
+				ec, err := statesync.Encode(mgr, spaceID, currentHeads(existing, snap), change)
 				if err != nil {
 					return err
 				}
@@ -316,16 +313,13 @@ and is refused.`,
 				if err != nil {
 					return err
 				}
-				changes, err := c.Changes(ctx, spaceID)
+				// Materialise from the snapshot (if any) plus the changes the peer
+				// holds — so a device reaches the state from a bounded snapshot +
+				// tail after the log has been compacted, not just from a full log.
+				st, _, _, err := materialise(ctx, c, mgr, spaceID)
 				if err != nil {
 					return err
 				}
-				decoded, err := statesync.DecodeAll(mgr, changes)
-				if err != nil {
-					return err
-				}
-				st := crdt.New()
-				st.Apply(decoded...)
 				items := st.IDs()
 				if flags.asJSON {
 					if items == nil {
@@ -425,4 +419,130 @@ func openSpace(ctx context.Context, c *apiclient.Client, deviceDir, spaceID stri
 		return nil, err
 	}
 	return mgr, nil
+}
+
+// newSpaceSnapshotCommand builds `heyarr space snapshot` — materialise the current
+// state on this device, encrypt it, and push it as a bounded checkpoint (§44).
+func newSpaceSnapshotCommand(_ Options, configPath, deviceDir *string) *cobra.Command {
+	var flags clientFlags
+	cmd := &cobra.Command{
+		Use:   "snapshot <space-id>",
+		Short: "Take an encrypted snapshot at the current causal point (§44)",
+		Long: `Materialise the space's current state on this device, encrypt it under the
+space key, and push it as a snapshot. A snapshot lets a fresh or long-offline
+device reach the state from the snapshot plus the tail of changes after it,
+rather than replaying the whole log. The server stores ciphertext; it never
+materialises the state.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			spaceID := args[0]
+			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
+				mgr, err := openSpace(ctx, c, *deviceDir, spaceID)
+				if err != nil {
+					return err
+				}
+				st, changes, _, err := materialise(ctx, c, mgr, spaceID)
+				if err != nil {
+					return err
+				}
+				snap, err := statesync.EncodeSnapshot(mgr, spaceID, protocol.Heads(changes), st)
+				if err != nil {
+					return err
+				}
+				id, err := c.PushSnapshot(ctx, snap)
+				if err != nil {
+					return err
+				}
+				if flags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), map[string]any{"snapshot_id": id, "frontier": snap.Frontier})
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "snapshot %s taken over %d heads (%d bytes ciphertext)\n", id, len(snap.Frontier), len(snap.Ciphertext))
+				return nil
+			})
+		},
+	}
+	flags.register(cmd)
+	return cmd
+}
+
+// newSpaceCompactCommand builds `heyarr space compact` — drop the changes the
+// latest snapshot subsumes and every replica holds, bounding the log (§44).
+func newSpaceCompactCommand(_ Options, configPath *string) *cobra.Command {
+	var flags clientFlags
+	cmd := &cobra.Command{
+		Use:   "compact <space-id>",
+		Short: "Drop the changes the latest snapshot subsumes (§44)",
+		Long: `Compact the space's change log: drop the changes the latest snapshot subsumes
+and that every replica already holds, so a long-lived space is not an unbounded
+log. The snapshot is what makes it safe — the dropped changes are recoverable
+from it — and only changes within the acknowledged frontier are ever dropped, so
+a change a partitioned peer still needs survives.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			spaceID := args[0]
+			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
+				snap, ok, err := c.Snapshot(ctx, spaceID)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					return fmt.Errorf("space %s has no snapshot to compact against — take one first with `space snapshot`", spaceID)
+				}
+				dropped, err := c.Compact(ctx, spaceID, snap.Frontier)
+				if err != nil {
+					return err
+				}
+				if flags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), map[string]any{"dropped": dropped})
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "compacted %d change(s) the snapshot subsumes\n", dropped)
+				return nil
+			})
+		},
+	}
+	flags.register(cmd)
+	return cmd
+}
+
+// materialise reconstructs a space's CRDT state from its latest snapshot (if any)
+// plus every change the peer still holds. It is correct whether or not the log has
+// been compacted: a snapshot folds the changes it drops, and applying a change
+// already folded in is a no-op (the CRDT is idempotent). It returns the state, the
+// changes the peer holds, and the latest snapshot (nil if none).
+func materialise(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spaceID string) (*crdt.State, []protocol.EncryptedChange, *protocol.EncryptedSnapshot, error) {
+	st := crdt.New()
+	var snapPtr *protocol.EncryptedSnapshot
+	if snap, ok, err := c.Snapshot(ctx, spaceID); err != nil {
+		return nil, nil, nil, err
+	} else if ok {
+		base, err := statesync.DecodeSnapshot(mgr, snap)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		st = base
+		snapPtr = &snap
+	}
+	changes, err := c.Changes(ctx, spaceID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	decoded, err := statesync.DecodeAll(mgr, changes)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	st.Apply(decoded...)
+	return st, changes, snapPtr, nil
+}
+
+// currentHeads is the space's causal heads for parenting a new change: the heads
+// of the changes the peer holds, or the snapshot's frontier when the log has been
+// compacted to nothing.
+func currentHeads(changes []protocol.EncryptedChange, snap *protocol.EncryptedSnapshot) []string {
+	if h := protocol.Heads(changes); len(h) > 0 {
+		return h
+	}
+	if snap != nil {
+		return snap.Frontier
+	}
+	return nil
 }
