@@ -3283,6 +3283,78 @@ paths:
         "503":
           description: This node keeps no encrypted personal state to sync.
 
+  /peer/v1/state/{space}/snapshot:
+    parameters:
+      - name: space
+        in: path
+        required: true
+        description: The opaque space id (a UUIDv7).
+        schema: { type: string }
+    get:
+      tags: [peer]
+      operationId: peerStateLatestSnapshot
+      summary: The newest opaque snapshot a space holds — ciphertext only (§44).
+      description: |
+        Offers the latest encrypted snapshot this peer holds for a space, so a
+        replicating sibling can seed a bounded snapshot + tail rather than the
+        whole change log. The snapshot is opaque: a content-addressed id, its
+        causal frontier, and ciphertext the peer never decrypted. 404 when the
+        space is held but has no snapshot yet, or is not held at all.
+      security:
+        - peerCertificate: []
+      responses:
+        "200":
+          description: The latest snapshot, as ciphertext.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EncryptedSnapshot"
+        "404":
+          description: This peer holds no snapshot for that space (or does not hold the space).
+        "503":
+          description: This node keeps no encrypted personal state to sync.
+
+  /peer/v1/state/{space}/snapshots:
+    parameters:
+      - name: space
+        in: path
+        required: true
+        description: The opaque space id (a UUIDv7).
+        schema: { type: string }
+    post:
+      tags: [peer]
+      operationId: peerStateSnapshotPush
+      summary: Accept one opaque snapshot; the peer verifies its content-address (§44, Invariant 1).
+      description: |
+        Accepts one encrypted snapshot from a sibling. The peer re-derives the
+        snapshot's blake3 id over its space, frontier and ciphertext and refuses a
+        mismatch, then stores the ciphertext without decrypting it. Idempotent on
+        the id.
+      security:
+        - peerCertificate: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EncryptedSnapshot"
+      responses:
+        "200":
+          description: The id the peer verified and stored the snapshot under.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [snapshot_id]
+                properties:
+                  snapshot_id: { type: string }
+        "400":
+          description: The snapshot is malformed or its id does not match its bytes.
+        "404":
+          description: This peer does not hold that encrypted space.
+        "503":
+          description: This node keeps no encrypted personal state to sync.
+
   /peer/v1/state/{space}:
     parameters:
       - name: space

@@ -74,6 +74,10 @@ func (p storePusher) PushChange(ctx context.Context, _ replication.Target, ch pr
 	return p.target.PutChange(ctx, ch)
 }
 
+func (p storePusher) PushSnapshot(ctx context.Context, _ replication.Target, snap protocol.EncryptedSnapshot) error {
+	return p.target.PutSnapshot(ctx, snap)
+}
+
 // reconcile replicates every space on source to target, one direction.
 func reconcile(t *testing.T, ctx context.Context, source, target *store.Store) {
 	t.Helper()

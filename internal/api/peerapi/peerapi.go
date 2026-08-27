@@ -437,6 +437,11 @@ func (s *Server) routes() http.Handler {
 		// space — metadata, keys and changes — as ciphertext it cannot read.
 		r.Post("/state/{space}", s.handleStatePutSpace)
 		r.Post("/state/{space}/keys", s.handleStatePutWrappedKey)
+		// Snapshot replication (§44): a sibling offers the latest snapshot it holds
+		// and accepts one pushed to it, so a Full Peer holds a bounded snapshot +
+		// tail — ciphertext it cannot read.
+		r.Get("/state/{space}/snapshot", s.handleStateLatestSnapshot)
+		r.Post("/state/{space}/snapshots", s.handleStateSnapshotPush)
 	})
 
 	// There is no admin route on this router and there is not going to be one.
