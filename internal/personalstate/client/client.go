@@ -124,6 +124,48 @@ func (m *Manager) Create(kind spaces.Kind, now time.Time, recipients []Recipient
 	return sp, wrapped, nil
 }
 
+// Rotate mints a FRESH key for an already-open space and seals it for the given
+// recipients — the forward-looking half of device revocation (§41, ADR-0022,
+// ADR-0049). The recipients are the ones that REMAIN authorised: the revoked
+// device is simply left out, so it is not sealed the new key and cannot read
+// anything encrypted under it from here on. The new key replaces the old in
+// memory, so this device's subsequent Encrypt uses it; past changes under the old
+// key stay readable to whoever already held it (revocation is forward-looking,
+// not retroactive — that honesty is ADR-0022's, kept here).
+//
+// The space must be open (only a device that can read a space may re-key it), and
+// at least one recipient is required, or the space would be re-keyed for no one.
+// It returns the new wrapped copies to push to the peer, replacing the remaining
+// recipients' copies; the caller deletes the revoked device's stored copy
+// separately (store.DeleteWrappedKey).
+func (m *Manager) Rotate(spaceID string, recipients []Recipient) ([]WrappedFor, error) {
+	if !m.IsOpen(spaceID) {
+		return nil, fmt.Errorf("%w: %s", ErrSpaceNotOpen, spaceID)
+	}
+	if len(recipients) == 0 {
+		return nil, errors.New("personalstate/client: a rotation needs at least one recipient, or the space is re-keyed for no one")
+	}
+	key, err := encryption.NewSpaceKey()
+	if err != nil {
+		return nil, err
+	}
+	wrapped := make([]WrappedFor, 0, len(recipients))
+	for _, r := range recipients {
+		if r.Key == nil {
+			return nil, fmt.Errorf("personalstate/client: recipient %q has no key", r.ID)
+		}
+		w, err := encryption.Seal(key, r.Key)
+		if err != nil {
+			return nil, fmt.Errorf("personalstate/client: sealing for %s: %w", r.ID, err)
+		}
+		wrapped = append(wrapped, WrappedFor{Recipient: r.ID, Wrapped: w})
+	}
+	m.mu.Lock()
+	m.keys[spaceID] = key
+	m.mu.Unlock()
+	return wrapped, nil
+}
+
 // Open recovers a space key from the wrapped copy this device holds, via the
 // [Unwrapper], and remembers it so the device can read the space. Idempotent.
 func (m *Manager) Open(spaceID string, wrapped []byte, u Unwrapper) error {
