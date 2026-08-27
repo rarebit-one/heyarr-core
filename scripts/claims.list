@@ -219,3 +219,9 @@ state proven
 ref   §79, ADR-0022, #306
 why   A mistyped secret must be refused by its checksum rather than reconstructing a different, plausible-but-wrong identity in silence (ADR-0022's SLIP-39 concern, applied to the base secret). recovery.ParseSecret rejects a corrupted bech32m string, and the `identity recover` wiring surfaces that loudly instead of deriving garbage. Asserted by flipping one character in the checksum tail and confirming the command refuses before any key is derived.
 evidence a corrupted recovery secret is refused loudly, never turned into a wrong identity
+
+claim personal-state-stored-as-ciphertext
+state proven
+ref   §38, §42, §41, ADR-0049, #320
+why   Invariant 6 is the whole point of the personal-state plane: the server stores personal state it cannot read. A device mints a space key, wraps it for the authorised devices, and pushes an encrypted change; the peer stores the opaque space, the wrapped keys and the ciphertext, holding no key to unwrap any of it. The demo decodes the peer's stored change bytes and confirms the plaintext item is nowhere in them, the authorised devices decrypt it client-side, and a device the space was never wrapped for cannot. Without this the plane would be a plaintext store with an encryption-shaped API.
+evidence the peer stores the change as ciphertext — the plaintext item is nowhere in the bytes at rest

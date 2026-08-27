@@ -72,6 +72,13 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr renderers stop`](heyarr_renderers_stop.md) | Stop a renderer and release the content |
 | [`heyarr renderers`](heyarr_renderers.md) | Find media renderers on the local network (§68) |
 | [`heyarr scan`](heyarr_scan.md) | Scan a library's roots, optionally waiting for the scan to finish |
+| [`heyarr space changes`](heyarr_space_changes.md) | List a space's stored changes AS THE PEER HOLDS THEM — ciphertext |
+| [`heyarr space create`](heyarr_space_create.md) | Mint an encrypted space and wrap its key for the authorised devices |
+| [`heyarr space keys`](heyarr_space_keys.md) | List the wrapped copies of a space's key (recipients only, no key material) |
+| [`heyarr space list`](heyarr_space_list.md) | List the encrypted spaces the controller holds (metadata only) |
+| [`heyarr space put`](heyarr_space_put.md) | Add an item to a space's playlist (encrypted client-side, then pushed) |
+| [`heyarr space read`](heyarr_space_read.md) | Read a space's playlist on an authorised device (decrypts and merges locally) |
+| [`heyarr space`](heyarr_space.md) | Create and read encrypted personal-state spaces (§38, §42, ADR-0049) |
 | [`heyarr system drift`](heyarr_system_drift.md) | Report how far a running instance has drifted from what was expected |
 | [`heyarr system info`](heyarr_system_info.md) | Print what the instance is running |
 | [`heyarr system`](heyarr_system.md) | Report what a running instance is and how far behind it has drifted |

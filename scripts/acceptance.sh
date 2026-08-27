@@ -7235,6 +7235,102 @@ YAML
   wait "$pid" 2>/dev/null || true
 }
 
+# ENCRYPTED PERSONAL STATE: the peer stores ciphertext it cannot read (§38, §42,
+# ADR-0049, #320). A device mints a space key, wraps it for two enrolled devices,
+# and pushes an encrypted change; the controller stores the opaque space, the
+# wrapped keys and the ciphertext, and can turn none of it into plaintext. The
+# authorised devices read the item back; a device the space was NOT wrapped for
+# cannot. This is the first of the two evidence lines Milestone 9 owes (epic #28).
+personalstate_demo() {
+  local root="$WORK/personalstate" data sock cfg A B C
+  data="$root/data"; sock="$data/heyarr.sock"; cfg="$WORK/personalstate.yaml"
+  A="$root/dev-a"; B="$root/dev-b"; C="$root/dev-c"
+  mkdir -p "$data"
+
+  cat > "$cfg" <<YAML
+data_dir: $data
+peer:
+  name: acceptance-personalstate
+  site: test
+log:
+  level: info
+  format: json
+http:
+  addr: ""
+  unix_socket: $sock
+  auth:
+    enabled: true
+YAML
+
+  local token
+  token=$("$BIN" --config "$cfg" token create acceptance --scopes admin --json | jq -r .token)
+  "$BIN" --config "$cfg" controller >"$root/controller.log" 2>&1 &
+  local pid=$!
+  local waited=0
+  while (( waited < 600 )); do
+    curl -sf --unix-socket "$sock" http://heyarr/readyz >/dev/null 2>&1 && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if (( waited >= 600 )); then
+    fail "the personal-state node never became ready"; cat "$root/controller.log"
+    kill -KILL "$pid" 2>/dev/null || true; return 1
+  fi
+
+  # Three devices, each with its own X25519 encryption key. A creates and reads,
+  # B is a second authorised reader, C is a stranger the space is never wrapped for.
+  "$BIN" device generate --device-dir "$A" --name deva >/dev/null 2>&1
+  "$BIN" device generate --device-dir "$B" --name devb >/dev/null 2>&1
+  "$BIN" device generate --device-dir "$C" --name devc >/dev/null 2>&1
+
+  local bpub base
+  bpub=$("$BIN" device show --device-dir "$B" --json | jq -r .encryption_public_key)
+  base=( env "HEYARR_TOKEN=$token" "$BIN" --config "$cfg" )
+
+  # Device A mints a space, wrapping its key for itself (--self, default) and B.
+  local create space_id recips
+  create=$("${base[@]}" space create --device-dir "$A" --kind personal --recipient "$bpub" --json)
+  space_id=$(jq -r .id <<<"$create")
+  recips=$(jq -r '.recipients | length' <<<"$create")
+  assert_eq "$recips" "2" \
+    "a space key is wrapped for two enrolled devices — the creating device and one more (§41)"
+
+  # The kind is visible to the peer (structural, §38); nothing else is.
+  local kind
+  kind=$("${base[@]}" space list --json | jq -r '.[0].kind')
+  assert_eq "$kind" "personal" \
+    "the peer sees the space's kind — structural metadata — and stores no name (§38)"
+
+  # Device A adds an item; it is encrypted on the device and pushed as ciphertext.
+  "${base[@]}" space put "$space_id" --device-dir "$A" --item "midnight-jazz" >/dev/null
+
+  # THE INVARIANT: what the peer stores is ciphertext. Fetch the stored change and
+  # decode its bytes — the plaintext item is nowhere in them. (python3 does the
+  # byte-containment check so a NUL in the ciphertext cannot truncate it in bash.)
+  local changes ct opaque
+  changes=$("${base[@]}" space changes "$space_id" --json)
+  ct=$(jq -r '.[0].ciphertext' <<<"$changes")
+  opaque=$(python3 -c 'import base64,sys; b=base64.b64decode(sys.argv[1]); sys.stdout.write("OPAQUE" if b"midnight-jazz" not in b else "PLAINTEXT-LEAKED")' "$ct")
+  assert_eq "$opaque" "OPAQUE" \
+    "the peer stores the change as ciphertext — the plaintext item is nowhere in the bytes at rest"
+
+  # The authorised devices decrypt it locally; the merge is client-side.
+  local a_item b_item
+  a_item=$("${base[@]}" space read "$space_id" --device-dir "$A" --json | jq -r '.items[0]')
+  assert_eq "$a_item" "midnight-jazz" \
+    "the creating device unwraps the space key and reads the item back — the server never held it"
+  b_item=$("${base[@]}" space read "$space_id" --device-dir "$B" --json | jq -r '.items[0]')
+  assert_eq "$b_item" "midnight-jazz" \
+    "a second authorised device decrypts the same item — the key was wrapped for it too"
+
+  # A device the space was NOT wrapped for cannot read it — decrypt without the key
+  # fails, and it fails before any change is fetched (the confidentiality gate).
+  assert_refuses "a device the space was not wrapped for cannot read it — a decrypt without the key fails" \
+    "cannot read space" "${base[@]}" space read "$space_id" --device-dir "$C"
+
+  kill -TERM "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
 # The gate is only a gate if people run it, and people stop running a gate
 # they have to wait for. Milestone 1 finished at about fifteen seconds and 100
 # assertions; Milestone 2 adds probing, remuxing and a second worker process,
@@ -7282,6 +7378,8 @@ else
   pairing_demo
   note "IDENTITY RECOVERY: the secret reconstructs the identity offline (§79, ADR-0022, #306)"
   recovery_demo
+  note "ENCRYPTED PERSONAL STATE: the peer stores ciphertext it cannot read (§38, §42, ADR-0049, #320)"
+  personalstate_demo
   note "THE SECOND PEER: placement, proven (§56, §64, M4-11) — heyarr all"
   two_peer_demo all
   note "THE SECOND PEER, again, as separate role processes (ADR-0002, M4-16)"

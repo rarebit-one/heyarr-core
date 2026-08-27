@@ -13,6 +13,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/mcp"
+	personalstateapi "github.com/rarebit-one/heyarr-core/internal/api/personalstate"
 	"github.com/rarebit-one/heyarr-core/internal/api/render"
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
@@ -30,6 +31,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
@@ -557,7 +559,22 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// authority (see internal/pairrelay).
 	relayHandler := pairrelay.NewHandler(pairrelay.HandlerOptions{Logger: c.log})
 
-	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, mcpServer.Mount},
+	// The encrypted personal-state plane's device-facing API (§38, §42,
+	// ADR-0049). It stores the opaque things a device pushes — a space, the
+	// wrapped copies of its key, the encrypted changes — and can read none of
+	// them (Invariant 6). The store is a thin single-writer wrapper over the same
+	// controller database (ADR-0003); the peer-to-peer sync surface (#322) opens
+	// its own over the same DB, which is safe because there is one writer.
+	psStore, err := psstore.New(psstore.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: opening the personal-state store: %w", err)
+	}
+	psAPI, err := personalstateapi.New(personalstateapi.Options{Store: psStore, Logger: c.log})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: %w", err)
+	}
+
+	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, mcpServer.Mount, psAPI.Mount},
 		[]httpapi.MountFunc{renderHandler.Mount, relayHandler.Mount}, nil
 }
 

@@ -130,6 +130,72 @@ func (s *Store) CreateSpace(ctx context.Context, kind spaces.Kind) (spaces.Encry
 	return sp, nil
 }
 
+// PutSpace records a space MINTED BY A CLIENT (client.Manager.Create mints the
+// id and the space key together, client-side, and hands the peer only the opaque
+// space and the wrapped copies). It is the push counterpart of CreateSpace: where
+// CreateSpace mints the id server-side, this persists an id the device already
+// minted, because the space key held in the device's memory is keyed by THAT id
+// and a server-minted one would not match. The id is opaque to the peer (a
+// UUIDv7, ADR-0017) — the peer validates only that the kind is a known §39
+// category (structural, a peer may see it) and never derives meaning from the id.
+//
+// It is idempotent (Invariant 9): re-pushing a space the peer already holds is a
+// no-op that emits no second event, so a device that retries a create after a
+// dropped response does not double-record it. Re-pushing an id under a DIFFERENT
+// kind is refused — a kind is a wire value, and silently adopting a new one would
+// let a relay re-categorise a space out from under its owner. created_at is the
+// peer's own clock, not the client's: the peer timestamps what it received.
+func (s *Store) PutSpace(ctx context.Context, id string, kind spaces.Kind) (spaces.EncryptedSpace, error) {
+	if err := kind.Validate(); err != nil {
+		return spaces.EncryptedSpace{}, err
+	}
+	if _, err := uuid.Parse(id); err != nil {
+		// The peer treats the id as opaque, but a well-formed opaque handle is a
+		// UUID here (spaces.NewSpace mints one) — refusing junk keeps a malformed
+		// id from becoming a row nothing can ever reference correctly.
+		return spaces.EncryptedSpace{}, fmt.Errorf("personalstate/store: a space id must be a uuid: %q: %w", id, err)
+	}
+	now := s.clock.Now().UTC()
+
+	tx, err := s.writer.BeginTx(ctx, nil)
+	if err != nil {
+		return spaces.EncryptedSpace{}, fmt.Errorf("personalstate/store: beginning transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// An existing space with a different kind is a conflict, not an overwrite.
+	var existingKind string
+	err = tx.QueryRowContext(ctx, `SELECT kind FROM encrypted_spaces WHERE id = ?`, id).Scan(&existingKind)
+	switch {
+	case err == nil:
+		if existingKind != string(kind) {
+			return spaces.EncryptedSpace{}, fmt.Errorf(
+				"personalstate/store: space %s already exists as kind %q, refusing to re-record it as %q",
+				id, existingKind, string(kind))
+		}
+		// Already held, same kind — idempotent no-op, no second event.
+		return s.Space(ctx, id)
+	case !errors.Is(err, sql.ErrNoRows):
+		return spaces.EncryptedSpace{}, fmt.Errorf("personalstate/store: checking space: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO encrypted_spaces (id, kind, created_at) VALUES (?, ?, ?)`,
+		id, string(kind), now.Format(timeFormat)); err != nil {
+		return spaces.EncryptedSpace{}, fmt.Errorf("personalstate/store: recording space: %w", err)
+	}
+	ev, err := s.events.EmitTx(ctx, tx, events.TypeSpaceCreated, "encrypted_space", id,
+		map[string]any{"kind": string(kind)})
+	if err != nil {
+		return spaces.EncryptedSpace{}, fmt.Errorf("personalstate/store: recording space: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return spaces.EncryptedSpace{}, fmt.Errorf("personalstate/store: committing: %w", err)
+	}
+	s.events.Publish(ev)
+	return spaces.EncryptedSpace{ID: id, Kind: kind, CreatedAt: now}, nil
+}
+
 // PutWrappedKey stores (or replaces) the sealed copy of a space's key for one
 // recipient. The wrapped bytes are opaque — the peer holds them and cannot open
 // them. Replacing an existing copy for the same (space, recipient) is how a
