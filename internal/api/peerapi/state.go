@@ -74,6 +74,13 @@ type StateStore interface {
 	// bytes are opaque — the peer holds them and cannot open them. Idempotent per
 	// (space, recipient). ErrNoSuchSpace if the space is not held here.
 	PutWrappedKey(ctx context.Context, spaceID, recipient string, wrapped []byte) error
+	// LatestSnapshotFor returns the newest snapshot held for a space, and whether
+	// one exists (§44). ok is false — with a nil error — when the space is held but
+	// has no snapshot yet. ErrNoSuchSpace if the space itself is not held.
+	LatestSnapshotFor(ctx context.Context, spaceID string) (protocol.EncryptedSnapshot, bool, error)
+	// PutSnapshot stores an encrypted snapshot after verifying its content-address
+	// (§44). Idempotent on the id. ErrNoSuchSpace if the space is not held here.
+	PutSnapshot(ctx context.Context, snap protocol.EncryptedSnapshot) error
 }
 
 // stateHeadsResponse is the offer side: the space's causal heads.
@@ -206,7 +213,8 @@ func (s *Server) failState(w http.ResponseWriter, r *http.Request, principal Pri
 	switch {
 	case errors.Is(err, ErrNoSuchSpace):
 		httpapi.Fail(w, r, problem.NotFound("this peer does not hold that encrypted space"))
-	case errors.Is(err, protocol.ErrIDMismatch), errors.Is(err, protocol.ErrIncomplete), errors.Is(err, ErrInvalidState):
+	case errors.Is(err, protocol.ErrIDMismatch), errors.Is(err, protocol.ErrIncomplete), errors.Is(err, ErrInvalidState),
+		errors.Is(err, protocol.ErrSnapshotIDMismatch), errors.Is(err, protocol.ErrSnapshotIncomplete):
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 	default:
 		s.log.Error(doing+" failed",

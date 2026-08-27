@@ -65,6 +65,10 @@ func (p storePusher) PushChange(ctx context.Context, _ replication.Target, ch pr
 	return p.target.PutChange(ctx, ch)
 }
 
+func (p storePusher) PushSnapshot(ctx context.Context, _ replication.Target, snap protocol.EncryptedSnapshot) error {
+	return p.target.PutSnapshot(ctx, snap)
+}
+
 // downPusher is an unreachable peer: every call fails, as a network partition
 // looks (ADR-0038).
 type downPusher struct{}
@@ -84,6 +88,10 @@ func (downPusher) Heads(context.Context, replication.Target, string) ([]string, 
 }
 
 func (downPusher) PushChange(context.Context, replication.Target, protocol.EncryptedChange) error {
+	return errDown
+}
+
+func (downPusher) PushSnapshot(context.Context, replication.Target, protocol.EncryptedSnapshot) error {
 	return errDown
 }
 
@@ -173,6 +181,57 @@ func TestReconcileConvergesATargetThenIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestReconcileReplicatesTheLatestSnapshot: a space that carries a snapshot has
+// that snapshot replicated to the target alongside its changes (§44), so a Full
+// Peer holds a bounded snapshot + tail — not just the change log. The snapshot is
+// pushed AFTER its changes, so the target holds the tail the frontier references
+// before it receives the snapshot. The peer stores ciphertext it never opens.
+func TestReconcileReplicatesTheLatestSnapshot(t *testing.T) {
+	ctx := context.Background()
+	local := newStore(t)
+	target := newStore(t)
+	spaceID := seed(t, local)
+
+	// Materialise a snapshot at the current frontier — opaque ciphertext, exactly
+	// as a client would push one; this test never touches the encryption package.
+	heads, err := local.HeadsFor(ctx, spaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := protocol.NewSnapshot(spaceID, heads, []byte("OPAQUE-SNAPSHOT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := local.PutSnapshot(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+
+	tgt := replication.Target{Peer: mtls.Peer{PeerID: "peer-b", Name: "peer-b"}}
+	pusher := storePusher{target: target}
+
+	outcomes := replication.Reconcile(ctx, local, pusher, []replication.Target{tgt}, nil, nil)
+	if len(outcomes) != 1 || outcomes[0].Err != nil {
+		t.Fatalf("reconcile: %+v", outcomes)
+	}
+
+	// The target now holds the snapshot as ciphertext, content-addressed identically.
+	got, has, err := target.LatestSnapshotFor(ctx, spaceID)
+	if err != nil || !has {
+		t.Fatalf("target snapshot has=%v err=%v, want a snapshot", has, err)
+	}
+	if got.SnapshotID != snap.SnapshotID {
+		t.Fatalf("target snapshot id = %q, want %q", got.SnapshotID, snap.SnapshotID)
+	}
+	if string(got.Ciphertext) != "OPAQUE-SNAPSHOT" {
+		t.Fatalf("target snapshot ciphertext = %q, want the bytes pushed verbatim", got.Ciphertext)
+	}
+
+	// Idempotent: a second reconcile re-pushes the same snapshot as a no-op.
+	if again := replication.Reconcile(ctx, local, pusher, []replication.Target{tgt}, nil, nil); again[0].Err != nil {
+		t.Fatalf("second reconcile errored: %+v", again[0])
+	}
+}
+
 // TestReconcileDefersUnreachablePeerButConvergesOthers: an unreachable peer is a
 // recorded fact, not a failure of the cycle — a reachable peer still converges
 // (ADR-0038).
@@ -234,4 +293,8 @@ func (r routingPusher) Heads(ctx context.Context, t replication.Target, s string
 
 func (r routingPusher) PushChange(ctx context.Context, t replication.Target, ch protocol.EncryptedChange) error {
 	return r.route(t).PushChange(ctx, t, ch)
+}
+
+func (r routingPusher) PushSnapshot(ctx context.Context, t replication.Target, snap protocol.EncryptedSnapshot) error {
+	return r.route(t).PushSnapshot(ctx, t, snap)
 }

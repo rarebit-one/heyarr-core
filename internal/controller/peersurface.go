@@ -654,6 +654,15 @@ func (p personalStateBackend) PutWrappedKey(ctx context.Context, spaceID, recipi
 	return translateStateErr(err)
 }
 
+func (p personalStateBackend) LatestSnapshotFor(ctx context.Context, spaceID string) (protocol.EncryptedSnapshot, bool, error) {
+	snap, ok, err := p.store.LatestSnapshotFor(ctx, spaceID)
+	return snap, ok, translateStateErr(err)
+}
+
+func (p personalStateBackend) PutSnapshot(ctx context.Context, snap protocol.EncryptedSnapshot) error {
+	return translateStateErr(p.store.PutSnapshot(ctx, snap))
+}
+
 // translateStateErr maps the store's sentinels into the peer surface's own, so
 // peerapi answers 404/400 without importing persistence: an unknown space becomes
 // ErrNoSuchSpace, and a malformed push (bad kind, empty recipient or wrapped

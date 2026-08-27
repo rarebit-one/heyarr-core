@@ -43,6 +43,9 @@ type Pusher interface {
 	Heads(ctx context.Context, t Target, spaceID string) ([]string, error)
 	// PushChange sends one opaque change; the target verifies its content-address.
 	PushChange(ctx context.Context, t Target, ch protocol.EncryptedChange) error
+	// PushSnapshot sends one opaque snapshot; the target verifies its
+	// content-address. Idempotent on the id.
+	PushSnapshot(ctx context.Context, t Target, snap protocol.EncryptedSnapshot) error
 }
 
 // Client is the mTLS-pinned [Pusher]: it dials each target's peer surface with
@@ -98,6 +101,11 @@ func (c *Client) PushWrappedKey(ctx context.Context, t Target, spaceID, recipien
 // PushChange POSTs one opaque change to /peer/v1/state/{space}/changes.
 func (c *Client) PushChange(ctx context.Context, t Target, ch protocol.EncryptedChange) error {
 	return c.post(ctx, t, statePath(ch.SpaceID, "/changes"), ch)
+}
+
+// PushSnapshot POSTs one opaque snapshot to /peer/v1/state/{space}/snapshots.
+func (c *Client) PushSnapshot(ctx context.Context, t Target, snap protocol.EncryptedSnapshot) error {
+	return c.post(ctx, t, statePath(snap.SpaceID, "/snapshots"), snap)
 }
 
 // Heads GETs the target's causal frontier from /peer/v1/state/{space}/heads.
