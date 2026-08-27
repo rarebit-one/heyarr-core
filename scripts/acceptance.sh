@@ -6924,7 +6924,7 @@ YAML
     curl -sS --unix-socket "$sock" -H "Authorization: Device $1" \
       -o /dev/null -w '%{http_code}' "http://heyarr/api/v1/libraries"
   }
-  local client=( env "HEYARR_IDENTITY_DIR=$iddir" "HEYARR_DEVICE_DIR=$ddir" "$BIN" )
+  local client=( env "VOIDBIND_IDENTITY_DIR=$iddir" "VOIDBIND_DEVICE_DIR=$ddir" "$BIN" )
 
   # Client-side: a user identity and a device key, and the cert that binds them.
   # Nothing has reached the server yet — this is all on the person's machine.
@@ -7056,9 +7056,9 @@ YAML
   # The OLD device holds the user identity; the NEW device has only its own key.
   # A SECOND device key stands in for a MITM's substituted key.
   local oldc newc subc
-  oldc=( env "HEYARR_IDENTITY_DIR=$root/old-id" "HEYARR_DEVICE_DIR=$root/old-dev" "$BIN" )
-  newc=( env "HEYARR_IDENTITY_DIR=$root/new-id" "HEYARR_DEVICE_DIR=$root/new-dev" "$BIN" )
-  subc=( env "HEYARR_IDENTITY_DIR=$root/sub-id" "HEYARR_DEVICE_DIR=$root/sub-dev" "$BIN" )
+  oldc=( env "VOIDBIND_IDENTITY_DIR=$root/old-id" "VOIDBIND_DEVICE_DIR=$root/old-dev" "$BIN" )
+  newc=( env "VOIDBIND_IDENTITY_DIR=$root/new-id" "VOIDBIND_DEVICE_DIR=$root/new-dev" "$BIN" )
+  subc=( env "VOIDBIND_IDENTITY_DIR=$root/sub-id" "VOIDBIND_DEVICE_DIR=$root/sub-dev" "$BIN" )
   "${oldc[@]}" identity generate --name owner >/dev/null 2>&1
   "${newc[@]}" device generate --name new-phone >/dev/null 2>&1
   "${subc[@]}" device generate --name attacker >/dev/null 2>&1
@@ -7131,7 +7131,7 @@ YAML
   # device refuses to sign and NO device is enrolled. The refusal is the
   # deliverable as much as the success.
   local rsess="acceptance-pair-refuse" refc rapid repid rarc auth_verdict ref_status
-  refc=( env "HEYARR_IDENTITY_DIR=$root/ref-id" "HEYARR_DEVICE_DIR=$root/ref-dev" "$BIN" )
+  refc=( env "VOIDBIND_IDENTITY_DIR=$root/ref-id" "VOIDBIND_DEVICE_DIR=$root/ref-dev" "$BIN" )
   "${refc[@]}" device generate --name reject-phone >/dev/null 2>&1
   ( "${oldc[@]}" pair authorise --relay "$sock" --session "$rsess" --confirm-sas 0000000 --poll 10ms >"$root/refuse-auth.out" 2>&1 ) &
   rapid=$!
@@ -7200,7 +7200,7 @@ YAML
 
   # The ORIGINAL machine mints an identity and, once, its recovery secret.
   local origc gen orig_key secret secret_shown
-  origc=( env "HEYARR_IDENTITY_DIR=$root/orig-id" "HEYARR_DEVICE_DIR=$root/orig-dev" "$BIN" )
+  origc=( env "VOIDBIND_IDENTITY_DIR=$root/orig-id" "VOIDBIND_DEVICE_DIR=$root/orig-dev" "$BIN" )
   gen=$("${origc[@]}" identity generate --name owner --json)
   orig_key=$(jq -r .identity.public_key <<<"$gen")
   secret=$(jq -r .recovery_secret <<<"$gen")
@@ -7212,7 +7212,7 @@ YAML
   # the secret ALONE, offline (piped on stdin, out of argv). It reconstructs the
   # SAME identity and enrols this machine's device under it in one step.
   local newc rec rec_key rec_dev_status
-  newc=( env "HEYARR_IDENTITY_DIR=$root/rec-id" "HEYARR_DEVICE_DIR=$root/rec-dev" "$BIN" )
+  newc=( env "VOIDBIND_IDENTITY_DIR=$root/rec-id" "VOIDBIND_DEVICE_DIR=$root/rec-dev" "$BIN" )
   rec=$(printf '%s' "$secret" | "${newc[@]}" identity recover --json)
   rec_key=$(jq -r .identity.public_key <<<"$rec")
   assert_eq "$rec_key" "$orig_key" \
