@@ -44,6 +44,19 @@ func (s *Server) registerTools() {
 	})
 
 	s.tools.register(Tool{
+		Name:     "get_external_ids",
+		Title:    "Get external identifiers",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "Resolve external catalogue identifiers (tmdb, imdb) for a work or " +
+			"edition, or reverse a source+value back to the work or edition that carries " +
+			"it. Use this to reconcile an outside id to a heyarr work_id and back by id " +
+			"rather than by a fuzzy title. Read-only; an unknown id returns an empty list.",
+		InputSchema: schemaGetExternalIDs,
+		Handler:     s.getExternalIDs,
+	})
+
+	s.tools.register(Tool{
 		Name:     "want_content",
 		Title:    "Want content",
 		Scope:    auth.ScopeWrite,

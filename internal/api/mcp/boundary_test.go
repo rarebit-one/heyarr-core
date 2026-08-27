@@ -73,6 +73,7 @@ func TestAReadTokenCanCallEveryReadOnlyTool(t *testing.T) {
 
 	args := map[string]string{
 		"search_content":           `{"query":"arrival"}`,
+		"get_external_ids":         `{"work_id":"` + workID + `"}`,
 		"get_replica_status":       `{"blob_hash":"` + blobHash + `"}`,
 		"explain_release":          `{"quality_profile":"living-room","releases":[{"id":"a","attributes":{"resolution":2160}}]}`,
 		"get_content_satisfaction": "",
