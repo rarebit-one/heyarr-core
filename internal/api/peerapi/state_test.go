@@ -3,6 +3,7 @@ package peerapi_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -22,9 +23,12 @@ import (
 // route's job is to move bytes verbatim, and the boundary test proves it has no
 // path to read them.)
 type stubState struct {
-	changes map[string][]protocol.EncryptedChange
-	unknown map[string]bool
-	got     []protocol.EncryptedChange
+	changes   map[string][]protocol.EncryptedChange
+	unknown   map[string]bool
+	got       []protocol.EncryptedChange
+	gotSpaces map[string]string // space id -> kind
+	gotKeys   map[string]string // space id -> recipient (last)
+	badKind   string            // a kind PutSpace rejects as invalid
 }
 
 func (s *stubState) HeadsFor(_ context.Context, spaceID string) ([]string, error) {
@@ -49,6 +53,31 @@ func (s *stubState) PutChange(_ context.Context, ch protocol.EncryptedChange) er
 		return err
 	}
 	s.got = append(s.got, ch)
+	return nil
+}
+
+func (s *stubState) PutSpace(_ context.Context, spaceID, kind string) error {
+	if s.badKind != "" && kind == s.badKind {
+		return peerapi.ErrInvalidState
+	}
+	if s.gotSpaces == nil {
+		s.gotSpaces = map[string]string{}
+	}
+	s.gotSpaces[spaceID] = kind
+	return nil
+}
+
+func (s *stubState) PutWrappedKey(_ context.Context, spaceID, recipient string, wrapped []byte) error {
+	if s.unknown[spaceID] {
+		return peerapi.ErrNoSuchSpace
+	}
+	if recipient == "" || len(wrapped) == 0 {
+		return peerapi.ErrInvalidState
+	}
+	if s.gotKeys == nil {
+		s.gotKeys = map[string]string{}
+	}
+	s.gotKeys[spaceID] = recipient
 	return nil
 }
 
@@ -283,3 +312,63 @@ func TestANonMemberCannotReachState(t *testing.T) {
 		t.Fatal("a non-member reached the state route; the mTLS handshake should have refused it")
 	}
 }
+
+// TestStatePutSpaceAndWrappedKey: a sibling replicates a space's identity and a
+// wrapped key to this peer over the metadata routes; both are stored (204), and a
+// malformed push (bad kind, empty recipient) is a 400.
+func TestStatePutSpaceAndWrappedKey(t *testing.T) {
+	const space = "0199a0a0-0000-7000-8000-0000000000aa"
+	a := newPeerNode(t, "peer-a-id", "peer-a")
+	b := newPeerNode(t, "peer-b-id", "peer-b")
+	root := newTrustRoot(a.member(), b.member())
+	st := &stubState{badKind: "nonsense"}
+	l := serveState(t, a, root, st)
+	client := dialler(t, b, root)
+
+	// Replicate the space.
+	status, body, _, err := peerSend(t, client, http.MethodPost, stateURL(l, space, ""), `{"kind":"personal"}`)
+	if err != nil || status != http.StatusNoContent {
+		t.Fatalf("POST space: status=%d err=%v body=%s", status, err, body)
+	}
+	if st.gotSpaces[space] != "personal" {
+		t.Fatalf("the space was not recorded: %+v", st.gotSpaces)
+	}
+
+	// A bad kind is a 400.
+	status, _, _, err = peerSend(t, client, http.MethodPost, stateURL(l, space, ""), `{"kind":"nonsense"}`)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if status != http.StatusBadRequest {
+		t.Fatalf("a bad kind should be a 400, got %d", status)
+	}
+
+	// Replicate a wrapped key.
+	keyBody := `{"recipient":"x25519:` + repeatHexTest("cc", 32) + `","wrapped":"` + base64Std("OPAQUE-WRAP") + `"}`
+	status, body, _, err = peerSend(t, client, http.MethodPost, stateURL(l, space, "/keys"), keyBody)
+	if err != nil || status != http.StatusNoContent {
+		t.Fatalf("POST wrapped key: status=%d err=%v body=%s", status, err, body)
+	}
+	if st.gotKeys[space] == "" {
+		t.Fatalf("the wrapped key was not recorded: %+v", st.gotKeys)
+	}
+
+	// An empty recipient is a 400.
+	status, _, _, err = peerSend(t, client, http.MethodPost, stateURL(l, space, "/keys"), `{"recipient":"","wrapped":"AA=="}`)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if status != http.StatusBadRequest {
+		t.Fatalf("an empty recipient should be a 400, got %d", status)
+	}
+}
+
+func repeatHexTest(unit string, n int) string {
+	out := ""
+	for len(out) < n*2 {
+		out += unit
+	}
+	return out[:n*2]
+}
+
+func base64Std(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }

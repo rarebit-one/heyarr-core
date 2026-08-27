@@ -56,6 +56,22 @@ func newAPI(t *testing.T) *API {
 	return api
 }
 
+// newDB opens a migrated temp database, for tests that build the store and API
+// themselves (e.g. to inject a Replicator).
+func newDB(t *testing.T) *sqlite.DB {
+	t.Helper()
+	ctx := context.Background()
+	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := sqlite.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
 // call invokes one handler with a request that carries the given URL params, so a
 // {id} route can be tested without a router in front of it.
 func call(t *testing.T, handler http.HandlerFunc, method, target string, body any, params map[string]string) *httptest.ResponseRecorder {
@@ -240,4 +256,58 @@ func mustUUID(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return sp.ID
+}
+
+// fakeReplicator records that ReconcileAll was called and returns fixed counts.
+type fakeReplicator struct {
+	replicated, deferred int
+	called               bool
+}
+
+func (f *fakeReplicator) ReconcileAll(context.Context) (int, int, error) {
+	f.called = true
+	return f.replicated, f.deferred, nil
+}
+
+// TestReplicateEndpointDrivesTheReconciler: POST /state/replicate runs the
+// reconciler and returns its counts; with no reconciler it is a 503.
+func TestReplicateEndpointDrivesTheReconciler(t *testing.T) {
+	ctx := context.Background()
+	db := newDB(t)
+	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.New(store.Options{Writer: db.Writer(), Reader: db.Reader(), Events: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := &fakeReplicator{replicated: 3, deferred: 1}
+	api, err := New(Options{Store: st, Replicator: rep})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := call(t, api.replicate, http.MethodPost, "/state/replicate", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("replicate: %d %s", rec.Code, rec.Body)
+	}
+	if !rep.called {
+		t.Fatal("the endpoint did not drive the reconciler")
+	}
+	var out replicateResult
+	mustJSON(t, rec, &out)
+	if out.Replicated != 3 || out.Deferred != 1 {
+		t.Fatalf("counts = %+v, want {3,1}", out)
+	}
+
+	// With no reconciler wired, the route is a 503.
+	bare, err := New(Options{Store: st})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = call(t, bare.replicate, http.MethodPost, "/state/replicate", nil, nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("replicate with no reconciler = %d, want 503", rec.Code)
+	}
+	_ = ctx
 }

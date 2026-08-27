@@ -29,8 +29,10 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/health"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
+	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/replication"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
@@ -220,7 +222,7 @@ func (c *Controller) Run(ctx context.Context) error {
 		return fmt.Errorf("controller: opening peer health: %w", err)
 	}
 
-	srv, members, err := c.newServer(ctx, db, blobStore, version, peerHealth, self.PeerID)
+	srv, members, err := c.newServer(ctx, db, blobStore, version, peerHealth, self.PeerID, material)
 	if err != nil {
 		return err
 	}
@@ -346,7 +348,7 @@ func (c *Controller) Run(ctx context.Context) error {
 // reason: it is constructed before the server so that the peer guard mounted
 // on this router can record liveness through the same tracker the idle probe
 // and the reconciler read.
-func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas.Store, schemaVersion int64, peerHealth *health.Tracker, selfPeerID string) (*httpapi.Server, *membership.Store, error) {
+func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas.Store, schemaVersion int64, peerHealth *health.Tracker, selfPeerID string, material *mtls.Material) (*httpapi.Server, *membership.Store, error) {
 	store, err := auth.NewStore(auth.StoreOptions{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
@@ -399,7 +401,7 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: opening device identity store: %w", err)
 	}
-	mounts, publicMounts, err := c.mounts(ctx, db, store, blobStore, eventLog, members, deviceIdentities, selfPeerID)
+	mounts, publicMounts, err := c.mounts(ctx, db, store, blobStore, eventLog, members, deviceIdentities, selfPeerID, material)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -450,7 +452,7 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 // different trust roots, and a mix-up in either direction is severe: an API
 // route mounted publicly is the library given away, and the renderer route
 // mounted privately is a 401 for every television.
-func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Store, blobStore cas.Store, eventLog *events.Log, members *membership.Store, identities *deviceauth.Store, selfPeerID string) (apiMounts, publicMounts []httpapi.MountFunc, err error) {
+func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Store, blobStore cas.Store, eventLog *events.Log, members *membership.Store, identities *deviceauth.Store, selfPeerID string, material *mtls.Material) (apiMounts, publicMounts []httpapi.MountFunc, err error) {
 	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
@@ -569,7 +571,20 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: opening the personal-state store: %w", err)
 	}
-	psAPI, err := personalstateapi.New(personalstateapi.Options{Store: psStore, Logger: c.log})
+	// On a node with a peer surface (it has certificate material), the plane
+	// replicates to every trusted Full Peer (§37, §45): the reconciler dials each
+	// peer's state routes with this node's cert and pushes the opaque metadata,
+	// wrapped keys and missing changes. Without material there is no peer to reach,
+	// and the replicate route answers 503 — a single-peer node, not a wiring error.
+	var replicator personalstateapi.Replicator
+	if material != nil {
+		replicator = replication.NewReconciler(
+			psStore,
+			replication.NewClient(material, c.log),
+			fullPeerLister{members: members, self: selfPeerID},
+			eventLog, c.log)
+	}
+	psAPI, err := personalstateapi.New(personalstateapi.Options{Store: psStore, Replicator: replicator, Logger: c.log})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}

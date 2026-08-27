@@ -18,6 +18,7 @@
 package personalstate
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -38,16 +39,31 @@ import (
 // surface's optional backends these routes are mounted only when the plane is
 // wired, which it always is on a controller (the store is cheap and stateless).
 type API struct {
-	store *store.Store
-	log   *slog.Logger
+	store      *store.Store
+	replicator Replicator
+	log        *slog.Logger
+}
+
+// Replicator runs one on-demand reconcile of this node's encrypted personal state
+// to its trusted Full Peers (§37, §45), returning how many (peer, space) pairs
+// converged and how many were deferred. It is the caller behind POST
+// /api/v1/state/replicate; *personalstate/replication.Reconciler satisfies it.
+//
+// nil is legitimate — a node with no peer surface replicates to nobody, and the
+// route answers 503 rather than 500.
+type Replicator interface {
+	ReconcileAll(ctx context.Context) (replicated, deferred int, err error)
 }
 
 // Options configure the API.
 type Options struct {
 	// Store is the peer-side opaque store (spaces, wrapped keys, changes).
 	// Required — the API is nothing without it.
-	Store  *store.Store
-	Logger *slog.Logger
+	Store *store.Store
+	// Replicator drives on-demand replication to Full Peers. Optional: nil leaves
+	// POST /state/replicate answering 503 (a node with no peers).
+	Replicator Replicator
+	Logger     *slog.Logger
 }
 
 // New builds the API. It fails if no store is given rather than mounting routes
@@ -60,7 +76,7 @@ func New(opts Options) (*API, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &API{store: opts.Store, log: log.With("component", "personalstate-api")}, nil
+	return &API{store: opts.Store, replicator: opts.Replicator, log: log.With("component", "personalstate-api")}, nil
 }
 
 // Mount registers the routes on the authenticated /api/v1 router. The scope on
@@ -78,6 +94,33 @@ func (a *API) Mount(r chi.Router) {
 
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces", a.createSpace)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces/{id}/changes", a.putChange)
+	// Triggering replication to Full Peers is an operator action — it dials other
+	// peers on this node's authority — so it needs `admin`, not `write`.
+	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/state/replicate", a.replicate)
+}
+
+// replicateResult is the ack of an on-demand reconcile: how many (peer, space)
+// pairs converged and how many were deferred (an unreachable peer, ADR-0038).
+type replicateResult struct {
+	Replicated int `json:"replicated"`
+	Deferred   int `json:"deferred"`
+}
+
+func (a *API) replicate(w http.ResponseWriter, r *http.Request) {
+	if a.replicator == nil {
+		httpapi.Fail(w, r, problem.New(http.StatusServiceUnavailable, problem.TypeInternal,
+			"Service Unavailable", "this node replicates encrypted state to no peers (§37, §45)"))
+		return
+	}
+	replicated, deferred, err := a.replicator.ReconcileAll(r.Context())
+	if err != nil {
+		a.log.Error("on-demand replication failed",
+			"request_id", httpapi.RequestIDFrom(r.Context()), "error", err)
+		httpapi.Fail(w, r, problem.Internal())
+		return
+	}
+	a.log.Info("replicated encrypted personal state", "replicated", replicated, "deferred", deferred)
+	a.write(w, r, http.StatusOK, replicateResult{Replicated: replicated, Deferred: deferred})
 }
 
 // --- wire types ---------------------------------------------------------------

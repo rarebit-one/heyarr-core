@@ -111,6 +111,7 @@ linters:
         peer-never-reads-personal-state:
           files:
             - "**/internal/api/peerapi/**"
+            - "**/internal/personalstate/replication/**"
           deny:
             - pkg: github.com/rarebit-one/heyarr-core/internal/personalstate/crdt
               desc: "the peer must not import the plaintext CRDT model — it moves opaque changes and merges none (Invariant 6, §42, ADR-0049)"

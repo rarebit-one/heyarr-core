@@ -41,6 +41,13 @@ const maxStateChangeBody = 1 << 20
 // a 404 without ever depending on how the peer stores anything.
 var ErrNoSuchSpace = errors.New("peerapi: no such encrypted space")
 
+// ErrInvalidState is a replicated space or wrapped key the store refused as
+// malformed — an unknown space kind, an empty recipient, or empty wrapped bytes.
+// Like ErrNoSuchSpace it is declared here so the handler maps a push the store
+// rejects to a 400 without this package importing persistence: the wiring adapter
+// translates the store's validation sentinels into this one.
+var ErrInvalidState = errors.New("peerapi: invalid personal-state push")
+
 // StateStore is the peer's opaque personal-state storage, as this surface needs
 // it: the causal heads of a space, its changes (all, or those a caller is
 // missing), and a sink that accepts a change after verifying its content-address.
@@ -59,6 +66,14 @@ type StateStore interface {
 	// idempotent, and refuses a change whose id does not match its bytes.
 	// ErrNoSuchSpace if the space is not held here.
 	PutChange(ctx context.Context, ch protocol.EncryptedChange) error
+	// PutSpace records an encrypted space a replicating sibling pushes — the
+	// opaque id and its structural kind (§37, §45). Idempotent; a space already
+	// held is a no-op. The kind is a known §39 category, refused otherwise.
+	PutSpace(ctx context.Context, spaceID, kind string) error
+	// PutWrappedKey stores a wrapped copy of a space's key a sibling pushes. The
+	// bytes are opaque — the peer holds them and cannot open them. Idempotent per
+	// (space, recipient). ErrNoSuchSpace if the space is not held here.
+	PutWrappedKey(ctx context.Context, spaceID, recipient string, wrapped []byte) error
 }
 
 // stateHeadsResponse is the offer side: the space's causal heads.
@@ -191,7 +206,7 @@ func (s *Server) failState(w http.ResponseWriter, r *http.Request, principal Pri
 	switch {
 	case errors.Is(err, ErrNoSuchSpace):
 		httpapi.Fail(w, r, problem.NotFound("this peer does not hold that encrypted space"))
-	case errors.Is(err, protocol.ErrIDMismatch), errors.Is(err, protocol.ErrIncomplete):
+	case errors.Is(err, protocol.ErrIDMismatch), errors.Is(err, protocol.ErrIncomplete), errors.Is(err, ErrInvalidState):
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 	default:
 		s.log.Error(doing+" failed",

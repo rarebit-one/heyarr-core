@@ -153,6 +153,19 @@ const (
 	// (§42, §44). Opaque like its siblings: it records that a change with this id
 	// landed, never the plaintext the peer cannot read.
 	TypeChangeStored = "personalstate.change.stored"
+	// TypeSpaceReplicated is this node having reconciled an encrypted space to a
+	// trusted Full Peer (§37, §45): its metadata, wrapped keys and changes are now
+	// held there too, as ciphertext neither peer can read. Opaque — it names the
+	// space id and the target peer and a count, never a key or a plaintext — and
+	// it is idempotent, so a re-run that pushes nothing new still records that the
+	// two are converged.
+	TypeSpaceReplicated = "personalstate.space.replicated"
+	// TypeReplicationDeferred is a trusted Full Peer being unreachable when this
+	// node tried to reconcile a space to it (§37, ADR-0038): a recorded fact with
+	// a timestamp, never an alarm — a week of silence is Tuesday, and the next
+	// cycle retries. It names the target peer and the space, never any content, so
+	// an operator can see WHICH peer fell behind without learning what it holds.
+	TypeReplicationDeferred = "personalstate.space.replication_deferred"
 
 	// desired.* is §76's own category for wanting (M3-02).
 	//

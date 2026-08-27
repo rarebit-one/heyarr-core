@@ -531,6 +531,32 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/state/replicate:
+    post:
+      tags: [personal-state]
+      operationId: replicatePersonalState
+      summary: Reconcile encrypted personal state to all trusted Full Peers now. Requires `admin`.
+      description: |
+        Runs one on-demand reconcile: for every local space, push its metadata,
+        wrapped keys and the changes each Full Peer is missing, as ciphertext
+        (§37, §45). Leaderless and idempotent — a converged fleet is a no-op — and
+        an unreachable peer is recorded and retried next cycle, not an error.
+      responses:
+        "200":
+          description: How many (peer, space) pairs converged and how many were deferred.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [replicated, deferred]
+                properties:
+                  replicated: { type: integer }
+                  deferred: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503":
+          description: This node replicates encrypted state to no peers.
+
   /api/v1/libraries/{id}:
     get:
       tags: [content]
@@ -3163,6 +3189,86 @@ paths:
                   change_id: { type: string }
         "400":
           description: The change is malformed or its id does not match its bytes.
+        "404":
+          description: This peer does not hold that encrypted space.
+        "503":
+          description: This node keeps no encrypted personal state to sync.
+
+  /peer/v1/state/{space}:
+    parameters:
+      - name: space
+        in: path
+        required: true
+        description: The opaque space id (a UUIDv7).
+        schema: { type: string }
+    post:
+      tags: [peer]
+      operationId: peerStatePutSpace
+      summary: Replicate a space's identity to a Full Peer (§37, §45).
+      description: |
+        A replicating sibling records a space's opaque id and its structural kind
+        on this peer, so a Full Peer holds the whole encrypted space alongside the
+        wrapped keys and changes. Idempotent; a space already held is a no-op.
+      security:
+        - peerCertificate: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind]
+              additionalProperties: false
+              properties:
+                kind:
+                  type: string
+                  enum: [personal, family, shared, research]
+      responses:
+        "204":
+          description: The space is recorded (or was already held).
+        "400":
+          description: The kind is unknown.
+        "503":
+          description: This node keeps no encrypted personal state to sync.
+
+  /peer/v1/state/{space}/keys:
+    parameters:
+      - name: space
+        in: path
+        required: true
+        description: The opaque space id (a UUIDv7).
+        schema: { type: string }
+    post:
+      tags: [peer]
+      operationId: peerStatePutWrappedKey
+      summary: Replicate a wrapped copy of a space's key to a Full Peer (§41, §45).
+      description: |
+        A replicating sibling pushes one recipient's sealed copy of a space's key.
+        The bytes are opaque — the peer holds them and cannot open them.
+        Idempotent per (space, recipient); a re-push replaces the copy.
+      security:
+        - peerCertificate: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recipient, wrapped]
+              additionalProperties: false
+              properties:
+                recipient:
+                  type: string
+                  description: The recipient encryption key this copy is sealed for (x25519:<hex>).
+                wrapped:
+                  type: string
+                  format: byte
+                  description: The opaque sealed bytes (base64).
+      responses:
+        "204":
+          description: The wrapped key is stored (or replaced).
+        "400":
+          description: The recipient or wrapped bytes are empty.
         "404":
           description: This peer does not hold that encrypted space.
         "503":

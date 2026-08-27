@@ -81,7 +81,7 @@ func newTestHandler(t *testing.T) http.Handler {
 	// No health tracker: this fixture asserts the OpenAPI surface, and
 	// liveness recording is a side effect on the request path rather than a
 	// route.
-	srv, _, err := c.newServer(t.Context(), db, blobStore, 4, nil, "peer-under-test")
+	srv, _, err := c.newServer(t.Context(), db, blobStore, 4, nil, "peer-under-test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

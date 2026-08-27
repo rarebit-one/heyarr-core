@@ -26,6 +26,8 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/replication"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
@@ -630,21 +632,71 @@ type personalStateBackend struct{ store *psstore.Store }
 
 func (p personalStateBackend) HeadsFor(ctx context.Context, spaceID string) ([]string, error) {
 	heads, err := p.store.HeadsFor(ctx, spaceID)
-	return heads, translateNoSuchSpace(err)
+	return heads, translateStateErr(err)
 }
 
 func (p personalStateBackend) ChangesFor(ctx context.Context, spaceID string) ([]protocol.EncryptedChange, error) {
 	changes, err := p.store.ChangesFor(ctx, spaceID)
-	return changes, translateNoSuchSpace(err)
+	return changes, translateStateErr(err)
 }
 
 func (p personalStateBackend) PutChange(ctx context.Context, ch protocol.EncryptedChange) error {
-	return translateNoSuchSpace(p.store.PutChange(ctx, ch))
+	return translateStateErr(p.store.PutChange(ctx, ch))
 }
 
-func translateNoSuchSpace(err error) error {
-	if errors.Is(err, psstore.ErrUnknownSpace) {
+func (p personalStateBackend) PutSpace(ctx context.Context, spaceID, kind string) error {
+	_, err := p.store.PutSpace(ctx, spaceID, spaces.Kind(kind))
+	return translateStateErr(err)
+}
+
+func (p personalStateBackend) PutWrappedKey(ctx context.Context, spaceID, recipient string, wrapped []byte) error {
+	_, err := p.store.PutWrappedKey(ctx, spaceID, recipient, wrapped)
+	return translateStateErr(err)
+}
+
+// translateStateErr maps the store's sentinels into the peer surface's own, so
+// peerapi answers 404/400 without importing persistence: an unknown space becomes
+// ErrNoSuchSpace, and a malformed push (bad kind, empty recipient or wrapped
+// bytes) becomes ErrInvalidState.
+func translateStateErr(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, psstore.ErrUnknownSpace):
 		return peerapi.ErrNoSuchSpace
+	case errors.Is(err, spaces.ErrUnknownKind),
+		errors.Is(err, psstore.ErrEmptyRecipient),
+		errors.Is(err, psstore.ErrEmptyWrapped):
+		return fmt.Errorf("%w: %w", peerapi.ErrInvalidState, err)
+	default:
+		return err
 	}
-	return err
+}
+
+// fullPeerLister enumerates the trusted Full Peers encrypted personal state
+// replicates to (§37, §45). It is read fresh every reconcile — a peer removed
+// from membership simply stops appearing, which is the whole of ADR-0012's
+// revocation. It mirrors backupsync.FullPeerTargets, in replication's own Target
+// type so that package need not import the CAS-replication one.
+type fullPeerLister struct {
+	members *membership.Store
+	self    string
+}
+
+func (l fullPeerLister) FullPeerTargets(ctx context.Context) ([]replication.Target, error) {
+	ms, err := l.members.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("controller: listing peers for personal-state replication: %w", err)
+	}
+	var targets []replication.Target
+	for _, m := range ms {
+		if m.IsSelf || m.Mode != "full" {
+			continue
+		}
+		targets = append(targets, replication.Target{
+			Peer:     mtls.Peer{PeerID: m.PeerID, Name: m.Name, PublicKey: m.PublicKey},
+			Endpoint: m.Endpoint,
+		})
+	}
+	return targets, nil
 }
