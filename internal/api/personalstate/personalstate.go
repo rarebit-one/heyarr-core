@@ -91,11 +91,17 @@ func (a *API) Mount(r chi.Router) {
 	r.Get("/spaces", a.listSpaces)
 	r.Get("/spaces/{id}/keys", a.listWrappedKeys)
 	r.Get("/spaces/{id}/changes", a.listChanges)
+	r.Get("/spaces/{id}/snapshot", a.getSnapshot)
 
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces", a.createSpace)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces/{id}/changes", a.putChange)
-	// Triggering replication to Full Peers is an operator action — it dials other
-	// peers on this node's authority — so it needs `admin`, not `write`.
+	// A snapshot is materialised and encrypted on the device (§44); pushing it is
+	// a write, like a change.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces/{id}/snapshots", a.putSnapshot)
+	// Compaction — dropping the changes a snapshot subsumes and every replica
+	// holds — and triggering replication are operator actions on this node's
+	// authority, so they need `admin`.
+	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/spaces/{id}/compact", a.compact)
 	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/state/replicate", a.replicate)
 }
 
@@ -291,7 +297,9 @@ func (a *API) failStore(w http.ResponseWriter, r *http.Request, doing string, er
 		errors.Is(err, store.ErrEmptyRecipient),
 		errors.Is(err, store.ErrEmptyWrapped),
 		errors.Is(err, protocol.ErrIncomplete),
-		errors.Is(err, protocol.ErrIDMismatch):
+		errors.Is(err, protocol.ErrIDMismatch),
+		errors.Is(err, protocol.ErrSnapshotIncomplete),
+		errors.Is(err, protocol.ErrSnapshotIDMismatch):
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 	default:
 		a.log.Error(doing+" failed",

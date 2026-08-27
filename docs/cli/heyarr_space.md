@@ -32,8 +32,10 @@ it.
 
 * [heyarr](heyarr.md)	 - Self-hosted content lifecycle, replication and consumption
 * [heyarr space changes](heyarr_space_changes.md)	 - List a space's stored changes AS THE PEER HOLDS THEM — ciphertext
+* [heyarr space compact](heyarr_space_compact.md)	 - Drop the changes the latest snapshot subsumes (§44)
 * [heyarr space create](heyarr_space_create.md)	 - Mint an encrypted space and wrap its key for the authorised devices
 * [heyarr space keys](heyarr_space_keys.md)	 - List the wrapped copies of a space's key (recipients only, no key material)
 * [heyarr space list](heyarr_space_list.md)	 - List the encrypted spaces the controller holds (metadata only)
 * [heyarr space put](heyarr_space_put.md)	 - Add an item to a space's playlist (encrypted client-side, then pushed)
 * [heyarr space read](heyarr_space_read.md)	 - Read a space's playlist on an authorised device (decrypts and merges locally)
+* [heyarr space snapshot](heyarr_space_snapshot.md)	 - Take an encrypted snapshot at the current causal point (§44)
