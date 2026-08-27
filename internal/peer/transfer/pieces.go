@@ -256,6 +256,65 @@ func (p *Puller) discardProgress(blob hashing.Hash) {
 	}
 }
 
+// playheadStore is the read side of the playback-window hint. Asserted here, not
+// added to [Store], for the same reason pieceProgressStore is: a store that
+// cannot report a playhead — every test double, every non-CAS backend — should
+// not have to grow a method to say so, and its absence simply means the fetch
+// stays rarest-first.
+type playheadStore interface {
+	LoadPlayhead(blob hashing.Hash) (int64, bool, error)
+}
+
+// refreshPlayhead re-reads where a consumer is reading and points the session's
+// playback window at the piece that contains it — at most once per generation,
+// the cadence membership and the re-survey already run at. The byte offset is
+// the reader's (API role); it crosses to this worker through the store, which is
+// the only channel invariant 4 allows, and is converted to a piece index HERE
+// against this session's geometry — the reader knows nothing of pieces (§33).
+//
+// A wrong or stale value costs a worse fetch order and never a wrong byte
+// (ADR-0043): it selects among MISSING pieces and changes nothing about how one
+// is verified. Absent, unreadable, or outside the blob, it clears the window and
+// the fetch is rarest-first as before.
+func (p *Puller) refreshPlayhead(s *pieceSession, blob hashing.Hash) {
+	store, ok := p.store.(playheadStore)
+	if !ok {
+		return
+	}
+
+	s.mu.Lock()
+	gen := s.generation
+	fresh := s.playheadRead && s.playheadAt == gen
+	s.mu.Unlock()
+	if fresh {
+		return
+	}
+
+	off, has, err := store.LoadPlayhead(blob)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.playheadRead = true
+	s.playheadAt = gen
+	prev := s.playhead
+	switch {
+	case err != nil || !has:
+		s.playhead = -1
+	default:
+		if idx, ierr := s.g.IndexAt(off); ierr == nil {
+			s.playhead = idx
+		} else {
+			// A playhead past the end of the blob is a stale hint; ignore it
+			// rather than let it point the window nowhere.
+			s.playhead = -1
+		}
+	}
+	if s.playhead >= 0 && s.playhead != prev {
+		p.log.Info("prioritising pieces near the playback window",
+			"blob", blob.String(), "piece", s.playhead, "offset", off)
+	}
+}
+
 // survey asks every source what it holds, dropping those that cannot answer or
 // that describe a different geometry.
 //

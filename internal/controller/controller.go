@@ -534,7 +534,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// stage partials does not satisfy the reader, and the route falls back to a
 	// plain 404.
 	var partialSource blobs.PartialSource
-	if pr, ok := blobStore.(partialPieceReader); ok {
+	if pr, ok := blobStore.(partialStore); ok {
 		partialSource = piecePartialSource{store: pr, log: c.log}
 	}
 	blobHandler, err := blobs.New(blobs.Options{Store: blobStore, Logger: c.log, Partial: partialSource})

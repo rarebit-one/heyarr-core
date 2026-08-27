@@ -37,16 +37,50 @@ import (
 
 func main() {
 	casRoot := flag.String("cas", "", "CAS root to stage into (required)")
-	size := flag.Int64("size", 0, "blob size in bytes (required)")
+	size := flag.Int64("size", 0, "blob size in bytes (required unless --playhead-only)")
 	landedCSV := flag.String("landed", "", "comma-separated piece indices to write and record")
 	seed := flag.Int64("seed", 20260828, "seed for the deterministic content")
 	contentOut := flag.String("content-out", "", "write the full content bytes here (optional)")
+	// Playhead-only mode: record where a consumer is reading in an EXTERNALLY
+	// named blob, without staging any bytes. Used to demonstrate time-critical
+	// priority (§33, §84) against a blob a running node is about to fetch.
+	blobFlag := flag.String("blob", "", "with --playhead: the blob digest to record a playhead for")
+	playhead := flag.Int64("playhead", -1, "with --blob: record this byte offset as the playhead and exit")
 	flag.Parse()
+
+	if *playhead >= 0 || *blobFlag != "" {
+		if err := writePlayhead(*casRoot, *blobFlag, *playhead); err != nil {
+			fmt.Fprintf(os.Stderr, "stagepartial: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if err := run(*casRoot, *size, *landedCSV, *seed, *contentOut); err != nil {
 		fmt.Fprintf(os.Stderr, "stagepartial: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// writePlayhead records a playhead for an externally named blob and nothing else,
+// so the demo can point a fresh transfer's window at a byte offset without
+// staging any pieces itself.
+func writePlayhead(casRoot, blobHex string, offset int64) error {
+	if casRoot == "" || blobHex == "" || offset < 0 {
+		return fmt.Errorf("playhead mode needs --cas, --blob and a non-negative --playhead")
+	}
+	blob, err := hashing.Parse(blobHex)
+	if err != nil {
+		return fmt.Errorf("parsing --blob: %w", err)
+	}
+	fs, err := cas.OpenFS(casRoot)
+	if err != nil {
+		return fmt.Errorf("opening CAS: %w", err)
+	}
+	if err := fs.SavePlayhead(blob, offset); err != nil {
+		return fmt.Errorf("recording playhead: %w", err)
+	}
+	return nil
 }
 
 func run(casRoot string, size int64, landedCSV string, seed int64, contentOut string) error {

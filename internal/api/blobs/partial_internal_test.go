@@ -26,10 +26,11 @@ type byteRange struct{ from, to int64 }
 // staging file's behaviour — so a reader that serves a hole emits zeroes that do
 // not match the content, which is what the invariant test turns on.
 type fakePartialSource struct {
-	mu       sync.Mutex
-	content  []byte
-	landed   []byteRange
-	inflight bool
+	mu        sync.Mutex
+	content   []byte
+	landed    []byteRange
+	inflight  bool
+	playheads []int64 // every offset the reader announced, in order
 }
 
 func newFakeSource(content []byte, landed ...byteRange) *fakePartialSource {
@@ -48,6 +49,19 @@ func (f *fakePartialSource) end() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inflight = false
+}
+
+func (f *fakePartialSource) SetPlayhead(_ context.Context, _ hashing.Hash, off int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.playheads = append(f.playheads, off)
+	return nil
+}
+
+func (f *fakePartialSource) announced() []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int64(nil), f.playheads...)
 }
 
 func (f *fakePartialSource) isLandedLocked(off int64) bool {
@@ -214,6 +228,35 @@ func TestPartialReaderBlocksThenServes(t *testing.T) {
 	}
 	if !bytes.Equal(got, content) {
 		t.Fatal("served bytes do not match the content after the missing run landed")
+	}
+}
+
+// TestPartialReaderAnnouncesPlayheadOnBlock proves the reader publishes WHERE it
+// is stalled to the transfer (§33, §84's time-critical priority), so the driver
+// can fetch the pieces the player is waiting on first. It announces the stall
+// offset, not the start — the byte it actually needs next.
+func TestPartialReaderAnnouncesPlayheadOnBlock(t *testing.T) {
+	t.Parallel()
+	content := testContent(30000)
+	src := newFakeSource(content, byteRange{0, 10000}, byteRange{20000, 30000}) // gap [10000,20000)
+	r := &partialBlobReader{
+		ctx:   context.Background(),
+		store: emptyStore(t),
+		src:   src,
+		wait: func(context.Context) error {
+			src.land(byteRange{10000, 20000})
+			return nil
+		},
+		blob:         hashing.Hash{},
+		size:         src.size(),
+		lastPlayhead: -1,
+	}
+	if _, err := io.ReadAll(r); err != nil {
+		t.Fatal(err)
+	}
+	announced := src.announced()
+	if len(announced) == 0 || announced[0] != 10000 {
+		t.Fatalf("reader announced %v; want it to publish the stall offset 10000 to the transfer", announced)
 	}
 }
 

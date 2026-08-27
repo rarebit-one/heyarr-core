@@ -36,6 +36,8 @@ func (f fakeSource) ArrivingSize(context.Context, hashing.Hash) (int64, bool, er
 	return int64(len(f.content)), f.inflight, nil
 }
 
+func (f fakeSource) SetPlayhead(context.Context, hashing.Hash, int64) error { return nil }
+
 func (f fakeSource) Available(_ context.Context, _ hashing.Hash, off int64) (int64, bool, bool, error) {
 	if !f.inflight {
 		return 0, false, false, nil
