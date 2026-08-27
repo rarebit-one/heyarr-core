@@ -13,14 +13,20 @@ package device
 
 import vb "github.com/rarebit-one/voidbind-go/device"
 
-// Types (aliases carry every field and method).
-type (
-	Clock        = vb.Clock
-	Device       = vb.Device
-	Store        = vb.Store
-	StoreOptions = vb.StoreOptions
-	View         = vb.View
-)
+// Clock is re-exported from voidbind-go/device.
+type Clock = vb.Clock
+
+// Device is re-exported from voidbind-go/device.
+type Device = vb.Device
+
+// Store is re-exported from voidbind-go/device.
+type Store = vb.Store
+
+// StoreOptions is re-exported from voidbind-go/device.
+type StoreOptions = vb.StoreOptions
+
+// View is re-exported from voidbind-go/device.
+type View = vb.View
 
 // DefaultDir is the default device directory. See voidbind-go/device.
 func DefaultDir() (string, error) { return vb.DefaultDir() }

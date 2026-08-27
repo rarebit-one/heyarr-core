@@ -15,14 +15,21 @@ package useridentity
 
 import vb "github.com/rarebit-one/voidbind-go/useridentity"
 
-// Types (aliases carry every field and method, including Identity.EncryptionKey).
-type (
-	Clock        = vb.Clock
-	Identity     = vb.Identity
-	Store        = vb.Store
-	StoreOptions = vb.StoreOptions
-	View         = vb.View
-)
+// Clock is re-exported from voidbind-go/useridentity.
+type Clock = vb.Clock
+
+// Identity is re-exported from voidbind-go/useridentity (it carries the §41
+// recovery EncryptionKey, since aliases keep every field).
+type Identity = vb.Identity
+
+// Store is re-exported from voidbind-go/useridentity.
+type Store = vb.Store
+
+// StoreOptions is re-exported from voidbind-go/useridentity.
+type StoreOptions = vb.StoreOptions
+
+// View is re-exported from voidbind-go/useridentity.
+type View = vb.View
 
 // DefaultDir is the default user-identity directory. See voidbind-go/useridentity.
 func DefaultDir() (string, error) { return vb.DefaultDir() }
