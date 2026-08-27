@@ -19,7 +19,7 @@ token scope (ADR-0011) until Milestone 8. The key exists now so that Milestone
 ### Options
 
 ```
-      --device-dir string   where this machine's device key lives (default: your config directory; HEYARR_DEVICE_DIR overrides)
+      --device-dir string   where this machine's device key lives (default: your config directory; VOIDBIND_DEVICE_DIR overrides)
 ```
 
 ### Options inherited from parent commands

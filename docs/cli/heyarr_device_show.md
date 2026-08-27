@@ -20,7 +20,7 @@ heyarr device show [id] [flags]
 
 ```
   -c, --config string       path to the configuration file (default: built-in defaults plus HEYARR_ environment)
-      --device-dir string   where this machine's device key lives (default: your config directory; HEYARR_DEVICE_DIR overrides)
+      --device-dir string   where this machine's device key lives (default: your config directory; VOIDBIND_DEVICE_DIR overrides)
 ```
 
 ### See also

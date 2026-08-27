@@ -18,7 +18,7 @@ heyarr pair authorise [flags]
 
 ```
       --confirm-sas string    proceed only if the derived code equals this value — the scripted stand-in for a human comparison
-      --identity-dir string   where your user identity lives (default: your config directory; HEYARR_IDENTITY_DIR overrides)
+      --identity-dir string   where your user identity lives (default: your config directory; VOIDBIND_IDENTITY_DIR overrides)
       --lifetime duration     how long the signed cert is valid (default: the 90-day enrolment lifetime)
       --poll duration         how often to re-check the relay for the next handshake step (default 150ms)
       --relay string          the running Heyarr's relay: a unix socket path, unix:///path, http://host:port or host:port
