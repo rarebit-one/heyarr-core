@@ -33,6 +33,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 	"github.com/rarebit-one/heyarr-core/internal/recovery"
 )
 
@@ -93,8 +94,15 @@ type Identity struct {
 	Name      string
 	Algorithm string
 	PublicKey ed25519.PublicKey
-	CreatedAt time.Time
-	KeyPath   string
+	// EncryptionKey is the user's RECOVERY encryption public key, rendered
+	// "x25519:<hex>" (§41), derived from the recovery secret at generation
+	// (recovery.DeriveUserEncryptionSeed) so the same secret regenerates it
+	// offline. It is the default recipient a new space is wrapped for, so the
+	// space key is always recoverable from the secret alone (#360). Empty on a
+	// pre-#360 identity record, which round-trips unchanged.
+	EncryptionKey string
+	CreatedAt     time.Time
+	KeyPath       string
 }
 
 // UserID renders the public key the way a cert's issuer and a grant's issuer are
@@ -108,7 +116,11 @@ type record struct {
 	Name      string `json:"name"`
 	Algorithm string `json:"algorithm"`
 	PublicKey string `json:"public_key"`
-	CreatedAt string `json:"created_at"`
+	// EncryptionKey is the recovery x25519 public key ("x25519:<hex>", §41).
+	// omitempty so a pre-#360 record (no encryption key) round-trips unchanged
+	// and reads back as "no recovery key", exactly as device.record does.
+	EncryptionKey string `json:"encryption_key,omitempty"`
+	CreatedAt     string `json:"created_at"`
 }
 
 // StoreOptions configure a Store.
@@ -219,17 +231,28 @@ func (s *Store) writeFromSecret(secret recovery.Secret, name string, force bool)
 	if !ok {
 		return Identity{}, errors.New("useridentity: derived key did not yield an ed25519 public key")
 	}
+	// The recovery ENCRYPTION key: an independent x25519 key derived from the same
+	// secret under a distinct HKDF label (recovery.DeriveUserEncryptionSeed), so the
+	// secret alone regenerates it offline (§79). Only its public half is persisted —
+	// the seed is never written, exactly as the signing seed is the sole secret on
+	// disk. This is the default recovery recipient a new space is wrapped for (#360).
+	encPriv, err := encryption.NewPrivateKey(recovery.DeriveUserEncryptionSeed(secret))
+	if err != nil {
+		return Identity{}, fmt.Errorf("useridentity: deriving the recovery encryption key: %w", err)
+	}
+	encKey := encryption.FormatPublicKey(encPriv.PublicKey().Bytes())
 	if err := writeKeyFile(s.KeyPath(), seed); err != nil {
 		return Identity{}, err
 	}
 
 	id := Identity{
-		ID:        uuid.Must(uuid.NewV7()).String(),
-		Name:      name,
-		Algorithm: Algorithm,
-		PublicKey: pub,
-		CreatedAt: s.clock.Now().UTC(),
-		KeyPath:   s.KeyPath(),
+		ID:            uuid.Must(uuid.NewV7()).String(),
+		Name:          name,
+		Algorithm:     Algorithm,
+		PublicKey:     pub,
+		EncryptionKey: encKey,
+		CreatedAt:     s.clock.Now().UTC(),
+		KeyPath:       s.KeyPath(),
 	}
 	if err := s.writeRecord(id); err != nil {
 		return Identity{}, err
@@ -301,12 +324,13 @@ func (s *Store) load() (Identity, error) {
 	}
 
 	return Identity{
-		ID:        rec.ID,
-		Name:      rec.Name,
-		Algorithm: rec.Algorithm,
-		PublicKey: pub,
-		CreatedAt: createdAt,
-		KeyPath:   s.KeyPath(),
+		ID:            rec.ID,
+		Name:          rec.Name,
+		Algorithm:     rec.Algorithm,
+		PublicKey:     pub,
+		EncryptionKey: rec.EncryptionKey,
+		CreatedAt:     createdAt,
+		KeyPath:       s.KeyPath(),
 	}, nil
 }
 
@@ -315,11 +339,12 @@ func (i Identity) PublicKeyString() string { return identity.FormatPublicKey(i.P
 
 func (s *Store) writeRecord(id Identity) error {
 	buf, err := json.MarshalIndent(record{
-		ID:        id.ID,
-		Name:      id.Name,
-		Algorithm: id.Algorithm,
-		PublicKey: id.PublicKeyString(),
-		CreatedAt: id.CreatedAt.UTC().Format(time.RFC3339Nano),
+		ID:            id.ID,
+		Name:          id.Name,
+		Algorithm:     id.Algorithm,
+		PublicKey:     id.PublicKeyString(),
+		EncryptionKey: id.EncryptionKey,
+		CreatedAt:     id.CreatedAt.UTC().Format(time.RFC3339Nano),
 	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("useridentity: encoding the identity record: %w", err)

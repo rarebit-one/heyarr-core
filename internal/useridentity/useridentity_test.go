@@ -3,15 +3,18 @@ package useridentity_test
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 	"github.com/rarebit-one/heyarr-core/internal/recovery"
 	"github.com/rarebit-one/heyarr-core/internal/useridentity"
 )
@@ -211,5 +214,104 @@ func TestSignCertNeedsAnIdentity(t *testing.T) {
 	}
 	if _, err := store.SignCert(devicePub, "", 0); !errors.Is(err, useridentity.ErrNoIdentity) {
 		t.Fatalf("SignCert with no identity: err = %v, want ErrNoIdentity", err)
+	}
+}
+
+// expectedRecoveryEncKey derives the recovery x25519 public key id the way the
+// store must, from the secret alone — the offline derivation #360 depends on.
+func expectedRecoveryEncKey(t *testing.T, secret recovery.Secret) string {
+	t.Helper()
+	priv, err := encryption.NewPrivateKey(recovery.DeriveUserEncryptionSeed(secret))
+	if err != nil {
+		t.Fatalf("deriving the expected recovery encryption key: %v", err)
+	}
+	return encryption.FormatPublicKey(priv.PublicKey().Bytes())
+}
+
+// TestGeneratePersistsRecoveryEncryptionKey: a generated identity carries a
+// recovery x25519 key derived from the secret (#360), it is the default space
+// recipient, and it round-trips through the on-disk record unchanged.
+func TestGeneratePersistsRecoveryEncryptionKey(t *testing.T) {
+	store := newStore(t)
+	id, secret, err := store.Generate("me", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := expectedRecoveryEncKey(t, secret)
+	if id.EncryptionKey != want {
+		t.Fatalf("generated recovery key = %q, want %q (derived from the secret)", id.EncryptionKey, want)
+	}
+	if !strings.HasPrefix(id.EncryptionKey, "x25519:") {
+		t.Fatalf("recovery key %q is not an x25519 recipient id", id.EncryptionKey)
+	}
+	// Read back from disk: the record persisted it, load returns the same.
+	reloaded, err := store.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.EncryptionKey != want {
+		t.Fatalf("reloaded recovery key = %q, want %q — it did not survive the record round-trip", reloaded.EncryptionKey, want)
+	}
+}
+
+// TestRecoverRegeneratesTheSameRecoveryEncryptionKey is the load-bearing #360
+// property: the recovery key is reproducible from the secret alone, so a space
+// wrapped for it stays openable after every device is lost. A recovery on a fresh
+// machine must yield the SAME x25519 key, or the wrapped copy is unrecoverable —
+// exactly the failure recovery exists to prevent. Asserted on the key, not an
+// exit code.
+func TestRecoverRegeneratesTheSameRecoveryEncryptionKey(t *testing.T) {
+	original := newStore(t)
+	created, secret, err := original.Generate("me", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.EncryptionKey == "" {
+		t.Fatal("Generate persisted no recovery encryption key")
+	}
+
+	fresh := newStore(t) // a different machine, no surviving identity
+	recovered, err := fresh.RecoverFromSecret(secret, "recovered", false)
+	if err != nil {
+		t.Fatalf("RecoverFromSecret: %v", err)
+	}
+	if recovered.EncryptionKey != created.EncryptionKey {
+		t.Fatalf("recovery produced recovery key %q, the original was %q — a space wrapped for the original would be unrecoverable",
+			recovered.EncryptionKey, created.EncryptionKey)
+	}
+}
+
+// TestPreRecoveryRecordRoundTripsWithoutEncryptionKey: an identity record written
+// before #360 (no encryption_key field) loads without error and reads back as "no
+// recovery key", so the omitempty field is genuinely backward-compatible.
+func TestPreRecoveryRecordRoundTripsWithoutEncryptionKey(t *testing.T) {
+	store := newStore(t)
+	if _, _, err := store.Generate("me", false); err != nil {
+		t.Fatal(err)
+	}
+	// Rewrite the record with the encryption_key stripped, as a pre-#360 file.
+	raw, err := os.ReadFile(store.RecordPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatal(err)
+	}
+	delete(rec, "encryption_key")
+	stripped, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.RecordPath(), append(stripped, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	id, err := store.Get()
+	if err != nil {
+		t.Fatalf("a pre-#360 record failed to load: %v", err)
+	}
+	if id.EncryptionKey != "" {
+		t.Fatalf("a record with no encryption_key read back %q, want empty", id.EncryptionKey)
 	}
 }

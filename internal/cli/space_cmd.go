@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"crypto/ecdh"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
+	"github.com/rarebit-one/heyarr-core/internal/useridentity"
 )
 
 // newSpaceCommand builds `heyarr space` — the device side of encrypted personal
@@ -70,23 +72,35 @@ type spaceCreateView struct {
 
 func newSpaceCreateCommand(opts Options, configPath, deviceDir *string) *cobra.Command {
 	var (
-		flags       clientFlags
-		kind        string
-		recipients  []string
-		includeSelf bool
+		flags           clientFlags
+		kind            string
+		recipients      []string
+		includeSelf     bool
+		includeRecovery bool
+		identityDir     string
 	)
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Mint an encrypted space and wrap its key for the authorised devices",
 		Long: `Mint a new encrypted space of a given kind (personal, family, shared, research)
-and seal its key for each recipient — this device (unless --no-self) plus every
---recipient encryption key you name.
+and seal its key for each recipient — this device (unless --no-self), your
+recovery key (unless --recovery=false), plus every --recipient encryption key you
+name.
 
 The space key is generated here and never leaves: the controller receives the
-opaque space and the wrapped copies of the key, and can open none of them.`,
+opaque space and the wrapped copies of the key, and can open none of them.
+
+By default the space is also wrapped for your user identity's RECOVERY key, so the
+space key survives the loss of every device — your recovery secret alone
+regenerates it (§79, #360). This is silently skipped if you have no user identity
+yet; run ` + "`heyarr identity generate`" + ` to enable it, or pass --recovery=false.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			recips, err := resolveRecipients(*deviceDir, recipients, includeSelf)
+			recoveryID, err := resolveRecoveryRecipient(cmd, identityDir, includeRecovery)
+			if err != nil {
+				return err
+			}
+			recips, err := resolveRecipients(*deviceDir, recipients, includeSelf, recoveryID)
 			if err != nil {
 				return err
 			}
@@ -127,7 +141,64 @@ opaque space and the wrapped copies of the key, and can open none of them.`,
 	cmd.Flags().StringVar(&kind, "kind", string(spaces.KindPersonal), "space kind: personal, family, shared, or research")
 	cmd.Flags().StringArrayVar(&recipients, "recipient", nil, "an authorised device's encryption key (x25519:<hex>); repeatable")
 	cmd.Flags().BoolVar(&includeSelf, "self", true, "also wrap the key for this device, so it can read the space")
+	cmd.Flags().BoolVar(&includeRecovery, "recovery", true, "also wrap the key for your user identity's recovery key, so it survives losing every device (#360)")
+	cmd.Flags().StringVar(&identityDir, "identity-dir", "",
+		"where your user identity lives (default: your config directory; "+useridentity.EnvDir+" overrides)")
 	return cmd
+}
+
+// resolveRecoveryRecipient returns the recovery encryption key id ("x25519:<hex>")
+// a new space should be wrapped for by default (#360), or "" when there is none to
+// wrap for. When includeRecovery is false it returns "" without touching the
+// identity store. A missing identity, or one that predates recovery-wrap, is a
+// NOTE on stderr and an empty id — never a hard failure — so a device with no user
+// identity can still create spaces; but if the user EXPLICITLY asked for --recovery
+// and there is nothing to satisfy it, that is an error, not a silent skip.
+func resolveRecoveryRecipient(cmd *cobra.Command, identityDir string, includeRecovery bool) (string, error) {
+	if !includeRecovery {
+		return "", nil
+	}
+	id, err := recoveryRecipientID(identityDir)
+	switch {
+	case err == nil:
+		return id, nil
+	case errors.Is(err, useridentity.ErrNoIdentity):
+		if cmd.Flags().Changed("recovery") {
+			return "", fmt.Errorf("--recovery was requested but this machine has no user identity to recover to — "+
+				"run `heyarr identity generate` first, or pass --recovery=false: %w", err)
+		}
+		fmt.Fprintln(cmd.ErrOrStderr(), "note: no user identity found — this space will NOT be wrapped for a recovery key. "+
+			"Run `heyarr identity generate` (then recovery-wrap is automatic), or pass --recovery=false to silence this.")
+		return "", nil
+	case errors.Is(err, errNoRecoveryKey):
+		fmt.Fprintln(cmd.ErrOrStderr(), "note: your user identity predates recovery-wrap and has no recovery encryption key — "+
+			"this space will NOT be wrapped for recovery. Regenerate your identity to enable it, or pass --recovery=false.")
+		return "", nil
+	default:
+		return "", err
+	}
+}
+
+// errNoRecoveryKey marks a user identity that exists but carries no recovery
+// encryption key — a record written before #360. It is a skip, not a failure.
+var errNoRecoveryKey = errors.New("user identity has no recovery encryption key")
+
+// recoveryRecipientID opens the user identity store and returns its recovery
+// encryption key id. It returns useridentity.ErrNoIdentity if there is no identity
+// here, and errNoRecoveryKey if the identity predates recovery-wrap.
+func recoveryRecipientID(identityDir string) (string, error) {
+	store, err := openUserIdentityStore(identityDir)
+	if err != nil {
+		return "", err
+	}
+	id, err := store.Get()
+	if err != nil {
+		return "", err
+	}
+	if id.EncryptionKey == "" {
+		return "", errNoRecoveryKey
+	}
+	return id.EncryptionKey, nil
 }
 
 func newSpaceListCommand(opts Options, configPath *string) *cobra.Command {
@@ -352,10 +423,11 @@ func loadDeviceEncKey(deviceDir string) (*ecdh.PrivateKey, error) {
 	return ds.LoadEncryptionKey()
 }
 
-// resolveRecipients builds the wrap-target set for a new space: the named
-// --recipient keys, plus this device's own encryption key when includeSelf is
-// set (the default, so the creating device can read what it just made).
-func resolveRecipients(deviceDir string, named []string, includeSelf bool) ([]client.Recipient, error) {
+// resolveRecipients builds the wrap-target set for a new space: this device's own
+// encryption key when includeSelf is set (the default, so the creating device can
+// read what it just made), the recovery key when recoveryID is non-empty (#360),
+// and the named --recipient keys. Duplicates across the three sources collapse.
+func resolveRecipients(deviceDir string, named []string, includeSelf bool, recoveryID string) ([]client.Recipient, error) {
 	seen := make(map[string]bool)
 	var out []client.Recipient
 	add := func(id string) error {
@@ -377,6 +449,11 @@ func resolveRecipients(deviceDir string, named []string, includeSelf bool) ([]cl
 		}
 		if err := add(encryption.FormatPublicKey(priv.PublicKey().Bytes())); err != nil {
 			return nil, err
+		}
+	}
+	if recoveryID != "" {
+		if err := add(recoveryID); err != nil {
+			return nil, fmt.Errorf("wrapping the space for your recovery key: %w", err)
 		}
 	}
 	for _, id := range named {
