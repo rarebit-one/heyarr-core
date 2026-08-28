@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
+	"github.com/rarebit-one/heyarr-core/internal/api/dlna"
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/mcp"
 	"github.com/rarebit-one/heyarr-core/internal/api/opds"
@@ -646,8 +647,25 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
+	// The DLNA/UPnP ContentDirectory MediaServer (§70, #202). A public mount
+	// like render/pair/subsonic/opds: a television or speaker browses it with no
+	// credential, and the res URLs it hands out are render capabilities, so the
+	// device fetches bytes from the unauthenticated render route. It shares the
+	// render signing secret so the URLs it mints verify there. Its BaseURL — the
+	// advertised origin a device dials — is left empty here and travels with the
+	// deferred SSDP advertisement work; a control point given the description URL
+	// browses and plays without it.
+	dlnaHandler, err := dlna.New(dlna.Options{
+		DB:           db,
+		RenderSecret: secret,
+		Logger:       c.log,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: %w", err)
+	}
+
 	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, mcpServer.Mount, psAPI.Mount},
-		[]httpapi.MountFunc{renderHandler.Mount, relayHandler.Mount, subsonicHandler.Mount, opdsHandler.Mount}, nil
+		[]httpapi.MountFunc{renderHandler.Mount, relayHandler.Mount, subsonicHandler.Mount, opdsHandler.Mount, dlnaHandler.Mount}, nil
 }
 
 // liveness converts a possibly-absent tracker into the interface the HTTP
