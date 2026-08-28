@@ -41,6 +41,13 @@ const (
 	// KindTransmission is the initial acquisition transport (§58).
 	// Implemented in M3-10.
 	KindTransmission Kind = "transmission"
+	// KindHTTP is a plain-HTTP download client (§58): the release's source is a
+	// direct http(s) URL and HEYARR is the client that fetches it, so unlike
+	// Transmission there is no daemon to reach and no per-instance endpoint —
+	// the URL arrives per release. It refuses any source that is not an http(s)
+	// URL (a magnet or an .nzb belongs to another client), so it composes with
+	// them rather than competing for their transfers.
+	KindHTTP Kind = "http"
 	// KindFake is an in-process provider that talks to nothing.
 	//
 	// It is a first-class kind rather than a test-only construct because the
@@ -57,7 +64,7 @@ const (
 )
 
 // Kinds lists every kind, in a stable order.
-func Kinds() []Kind { return []Kind{KindTorznab, KindTransmission, KindFake} }
+func Kinds() []Kind { return []Kind{KindTorznab, KindTransmission, KindHTTP, KindFake} }
 
 // ParseKind validates a kind from configuration.
 func ParseKind(s string) (Kind, error) {
@@ -85,7 +92,7 @@ func DefaultCapabilities(k Kind) []Capability {
 	switch k {
 	case KindTorznab:
 		return []Capability{CapabilityIndexer}
-	case KindTransmission:
+	case KindTransmission, KindHTTP:
 		return []Capability{CapabilityDownload}
 	default:
 		// A fake declares nothing by default: what it stands in for is the
@@ -96,9 +103,11 @@ func DefaultCapabilities(k Kind) []Capability {
 
 // needsEndpoint reports whether a kind must be told where the service is.
 //
-// The fake is the exception and the only one: it reaches nothing, so requiring
-// an endpoint would be requiring a fiction.
-func needsEndpoint(k Kind) bool { return k != KindFake }
+// The fake reaches nothing, so requiring an endpoint would be requiring a
+// fiction. The plain-HTTP client is the second exception for a different
+// reason: its "endpoint" is the release's own source URL, handed to it per
+// grab, so a single configured endpoint would be a value it never uses.
+func needsEndpoint(k Kind) bool { return k != KindFake && k != KindHTTP }
 
 // needsCredential reports whether a kind must be given one.
 //

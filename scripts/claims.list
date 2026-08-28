@@ -293,6 +293,19 @@ ref   §69, §70, #30
 why   make demo proves protocol conformance and a real byte path, but not the honest far end of the bar: a real OPDS reader APP (KOReader/Foliate/Marvin) browsing and downloading. That is app-in-the-loop and out of the demo budget, exactly as #202 keeps the real video client out of M2's demo and #373 the Subsonic app. Recorded pending, not skipped.
 evidence a real OPDS reader browsed and downloaded
 
+claim acquires-over-plain-http
+state proven
+ref   §58, #30
+why   §58's "additional acquisition clients" includes plain HTTP, and it is the one where HEYARR is the client rather than driving an external daemon — so it is the one provable end to end without a mock. The demo stands up a real HTTP server on a real port serving deterministic bytes, offers a release whose source is that URL, and drives the ordinary acquisition arc: the grab tries the plain-HTTP client first, it takes the http source and REFUSES a magnet (so the magnet want beside it still falls through to the fake — the clients compose, registry.Grab), fetches over a real connection into the path-map dir, and the bytes that land are asserted byte-identical to what the server served. The mechanism-with-no-caller trap is defeated the same way the OpenSubsonic and OPDS scenes defeat it: a real caller (the grab) drives a real fetch, proven by digest rather than by a passing conformance handler.
+evidence the bytes Heyarr fetched over plain HTTP are byte-identical to what the server served
+
+claim acquires-over-daemon-clients
+state pending
+issue 379
+ref   §58, ADR-0026, #30
+why   Proving a real DAEMON transfer (a torrent actually downloaded by qBittorrent, an .nzb by SABnzbd/NZBGet) is kept out of the demo BY DESIGN, not by a missing harness: ADR-0026 decided a download client is an operator-managed service Heyarr never installs or runs in CI, so its transfer is proven by an opt-in, env-gated live test against a real instance (TestLiveQBittorrent), skipped when unset. The client itself is a real configured caller (see qbittorrent-is-a-configured-download-client); what stays pending is only the end-to-end daemon transfer, honest by the repo's own standard.
+evidence a real qBittorrent transfer completed
+
 claim dlna-device-browses-and-plays
 state proven
 ref   §70, #202, #30
