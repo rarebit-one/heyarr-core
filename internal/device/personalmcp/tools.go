@@ -135,7 +135,7 @@ func (s *Server) generate(args json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"device": device.NewView(dev)}, nil
+	return map[string]any{"device": device.NewView(dev, device.CommandHint)}, nil
 }
 
 func (s *Server) list(args json.RawMessage) (any, error) {
@@ -148,10 +148,11 @@ func (s *Server) list(args json.RawMessage) (any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"devices": device.NewViews(devices),
+		"devices": device.NewViews(devices, device.CommandHint),
 		// The caveat rides on the LIST as well as on each record, because an
-		// empty list is also an answer somebody will act on.
-		"authorises": device.NotYetAuthorising,
+		// empty list is also an answer somebody will act on. It names heyarr,
+		// not the voidbind CLI, like every other rendering here (#369).
+		"authorises": device.NotYetAuthorisingFor(device.CommandHint),
 	}, nil
 }
 
@@ -166,7 +167,7 @@ func (s *Server) show(args json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"device": device.NewView(dev)}, nil
+	return map[string]any{"device": device.NewView(dev, device.CommandHint)}, nil
 }
 
 func (s *Server) remove(args json.RawMessage) (any, error) {
@@ -180,5 +181,5 @@ func (s *Server) remove(args json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"removed": device.NewView(dev)}, nil
+	return map[string]any{"removed": device.NewView(dev, device.CommandHint)}, nil
 }

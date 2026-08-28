@@ -9,6 +9,6 @@
     "key_path": "<config-dir>/device_ed25519.key",
     "enrolment_status": "not_enrolled",
     "unproven": true,
-    "authorises": "this key is not enrolled with any user identity, so it authenticates as nobody. Enrol it with `voidbind identity enrol`, or use `voidbind token create` for a credential that authorises something today"
+    "authorises": "this key is not enrolled with any user identity, so it authenticates as nobody. Enrol it with `heyarr identity enrol`, or use `heyarr token create` for a credential that authorises something today"
   }
 ]
