@@ -311,3 +311,16 @@ issue 379
 ref   §58, ADR-0026, #30
 why   Proving a real DAEMON transfer (a torrent actually downloaded by qBittorrent, an .nzb by SABnzbd/NZBGet) is kept out of the demo BY DESIGN, not by a missing harness: ADR-0026 decided a download client is an operator-managed service Heyarr never installs or runs in CI, so its transfer is proven by an opt-in, env-gated live test against a real instance (TestLiveQBittorrent), skipped when unset. The client itself is a real configured caller (see qbittorrent-is-a-configured-download-client); what stays pending is only the end-to-end daemon transfer, honest by the repo's own standard.
 evidence a real qBittorrent transfer completed
+
+claim dlna-device-browses-and-plays
+state proven
+ref   §70, #202, #30
+why   The video-and-audio client story: the devices that matter (a television, a speaker) speak DLNA natively, so they browse a UPnP ContentDirectory and play — Heyarr owning no client. The mechanism-with-no-caller trap here is a ContentDirectory that answers Browse but hands out res URLs nothing can fetch; so the demo drives it as a real device would — a SOAP Browse of the root, then a folder, then a fetch of the item's res URL — and asserts those bytes are byte-identical to what the ordinary blob route serves. The res URL is a render capability (ADR-0040), so the device fetches with no credential and the byte path is the proven one, not reimplemented. A conformant Browse handler emitting decorative or wrong res URLs would fail the digest.
+evidence the bytes a DLNA device fetches from a res URL are byte-identical to the blob route's
+
+claim dlna-real-device-plays
+state pending
+issue 382
+ref   §70, #202, #30
+why   make demo proves the ContentDirectory contract — a control point Browses and fetches — but not SSDP LAN advertisement (a UDP-multicast responder, untestable headlessly) or a real Samsung TV / Devialet discovering, browsing and playing (app-in-the-loop). Both are deferred to #382, the #202/#373 pattern. Recorded pending, not skipped.
+evidence a real Samsung TV browsed and played

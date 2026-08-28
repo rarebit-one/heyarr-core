@@ -2007,6 +2007,68 @@ YAML
   not_exercised real_opds_reader \
     "a real OPDS reader (KOReader/Foliate/Marvin) browsing and downloading — app-in-the-loop, out of the demo budget like #202's video client (tracked pending: opds-real-reader-in-the-loop)"
 
+  note "  the DLNA/UPnP ContentDirectory (§70, #202, M11)"
+  # The video-and-audio client: the devices that matter — a television, a
+  # speaker — speak DLNA natively, so they BROWSE the library over a UPnP
+  # ContentDirectory and play from it, Heyarr owning no client. The res URLs a
+  # Browse hands out are render capabilities (ADR-0040), so the device fetches
+  # bytes from the unauthenticated render route — which is why this drives it
+  # the way such a device would: a SOAP Browse (no credential), then a fetch of
+  # a res URL, asserted byte-identical to the blob route. SSDP LAN advertisement
+  # and the real-device proof are out of a headless demo and recorded pending.
+  dlna_browse() { # object-id browse-flag
+    curl -sS --unix-socket "$SOCK" -H 'Content-Type: text/xml; charset="utf-8"' \
+      -H 'SOAPAction: "urn:schemas-upnp-org:service:ContentDirectory:1#Browse"' \
+      --data "<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><u:Browse xmlns:u=\"urn:schemas-upnp-org:service:ContentDirectory:1\"><ObjectID>$1</ObjectID><BrowseFlag>$2</BrowseFlag><Filter>*</Filter><StartingIndex>0</StartingIndex><RequestedCount>0</RequestedCount><SortCriteria></SortCriteria></u:Browse></s:Body></s:Envelope>" \
+      "http://heyarr/dlna/control/ContentDirectory"
+  }
+
+  # The device fetches the description first to learn it is a MediaServer.
+  assert_contains "$(curl -sS --unix-socket "$SOCK" "http://heyarr/dlna/description.xml")" \
+    "urn:schemas-upnp-org:device:MediaServer:1" \
+    "the DLNA device announces itself as a MediaServer"
+
+  local dlna_root dlna_container dlna_items dlna_res dlna_asset dlna_blob dlna_sha dlna_blob_sha
+  dlna_root=$(dlna_browse 0 BrowseDirectChildren)
+  assert_contains "$dlna_root" "object.container.storageFolder" \
+    "browsing the DLNA root lists content folders projected from the catalogue"
+  dlna_container=$(printf '%s' "$dlna_root" | grep -oE 'ct:[a-z]+' | head -1)
+  assert_eq "$([[ -n "$dlna_container" ]] && echo 1 || echo 0)" "1" \
+    "the root offers at least one browsable folder"
+
+  dlna_items=$(dlna_browse "$dlna_container" BrowseDirectChildren)
+  assert_contains "$dlna_items" "http-get:*:" \
+    "a folder lists playable items with a UPnP resource"
+  dlna_res=$(printf '%s' "$dlna_items" | grep -oE '/render/[A-Za-z0-9._-]+' | head -1)
+  assert_eq "$([[ -n "$dlna_res" ]] && echo 1 || echo 0)" "1" \
+    "an item carries a real render-capability res URL (a caller, not an empty feed)"
+
+  # Prove the res URL is the blob's bytes — the same byte route (ADR-0013), not
+  # the adapter's invention. The item id names the asset; its blob is found via
+  # the ordinary assets API and fetched via the ordinary blob route to compare.
+  dlna_asset=$(printf '%s' "$dlna_items" | grep -oE 'asset:[0-9a-fA-F-]+' | head -1)
+  dlna_asset=${dlna_asset#asset:}
+  dlna_blob=$(api "/api/v1/assets/$dlna_asset" | jq -r '.blob_hash')
+  dlna_sha=$(curl -sS --unix-socket "$SOCK" "http://heyarr$dlna_res" | shasum -a 256 | cut -d" " -f1)
+  dlna_blob_sha=$(api "/api/v1/blobs/$dlna_blob/content" | shasum -a 256 | cut -d" " -f1)
+  assert_eq "$dlna_sha" "$dlna_blob_sha" \
+    "the bytes a DLNA device fetches from a res URL are byte-identical to the blob route's"
+
+  # A device seeks: the res URL honours Range because it IS the render route,
+  # which delegates to the ordinary blob handler.
+  assert_eq "$(curl -sS --unix-socket "$SOCK" -H 'Range: bytes=0-3' -o /dev/null -w '%{http_code}' \
+    "http://heyarr$dlna_res")" "206" \
+    "a DLNA res URL honours Range with a 206, delegated to the blob route"
+
+  # An unimplemented action is a faithful SOAP fault, not a silent 404.
+  assert_contains "$(curl -sS --unix-socket "$SOCK" -H 'Content-Type: text/xml' \
+    --data '<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:Search xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1"><ContainerID>0</ContainerID></u:Search></s:Body></s:Envelope>' \
+    "http://heyarr/dlna/control/ContentDirectory")" "UPnPError" \
+    "an unimplemented ContentDirectory action returns a SOAP fault, not a 404"
+
+  not_exercised real_dlna_device \
+    "a real Samsung TV / Devialet discovering (SSDP), browsing and playing — app-in-the-loop and needs LAN multicast, out of the demo budget like #202's video client (tracked pending: dlna-real-device-plays)"
+
   note "  probing (§29, ADR-0023)"
   # Capability routing existed from M1-05 and had no user until M2: the worker
   # built its runtime with an empty capability set, so no job could ever
