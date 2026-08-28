@@ -279,3 +279,16 @@ issue 373
 ref   §70, #30
 why   make demo proves protocol conformance and a real byte path, but not the honest far end of the bar: a real Subsonic APP (Symfonium/DSub/Feishin) browsing and playing. That is app-in-the-loop and out of the demo budget, exactly as #202 keeps the real video client out of M2's demo. Recorded pending, not skipped.
 evidence a real Subsonic app browsed and played
+
+claim opds-reader-browses-and-downloads
+state proven
+ref   §69, §70, ADR-0013, #30
+why   The publications half of the external plane: an existing OPDS reader talks to Heyarr over OPDS 1.2, browses the server-readable catalogue and downloads from it — Heyarr owning no client. Like the OpenSubsonic adapter this risks the mechanism-with-no-caller defect this file exists to catch: a protocol-conformant feed no real reader drives. So the demo drives it the reader's own way — a Basic challenge, the navigation feed, the acquisition feed — then downloads a publication and proves the bytes are honest by resolving the acquisition link's edition through the ordinary assets API, fetching its blob through the ordinary blob route, and asserting the two byte streams are identical: the adapter delegates byte serving (ADR-0013) rather than inventing it. A feed that offered a link to fabricated or absent bytes would fail the byte-identity assertion.
+evidence the bytes an OPDS reader downloads are byte-identical to the blob route's
+
+claim opds-real-reader-in-the-loop
+state pending
+issue 376
+ref   §69, §70, #30
+why   make demo proves protocol conformance and a real byte path, but not the honest far end of the bar: a real OPDS reader APP (KOReader/Foliate/Marvin) browsing and downloading. That is app-in-the-loop and out of the demo budget, exactly as #202 keeps the real video client out of M2's demo and #373 the Subsonic app. Recorded pending, not skipped.
+evidence a real OPDS reader browsed and downloaded
