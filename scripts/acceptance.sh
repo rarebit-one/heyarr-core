@@ -1441,8 +1441,33 @@ providers:
     type: torznab
     endpoint: http://127.0.0.1:9/api
     api_key: not-a-real-key-and-nothing-will-read-it
+  # A REAL NEWZNAB (usenet) INDEXER, configured and pointing at nothing (§59, M11).
+  # Same discipline as the torznab entry above and for the same ADR-0026 reason:
+  # a real usenet indexer proxies real services and can never run here. What it
+  # proves is that the registry constructs a REAL client for the newznab kind —
+  # the same client, because Newznab and Torznab are one wire protocol — rather
+  # than the "configured, not implemented" placeholder.
+  - name: acceptance-newznab
+    type: newznab
+    endpoint: http://127.0.0.1:9/api
+    api_key: not-a-real-newznab-key-and-nothing-will-read-it
   - name: acceptance-downloads
     type: transmission
+    endpoint: http://127.0.0.1:9
+    path_map:
+      - remote: /downloads/complete
+        local: $FULLDATA/downloads
+  # A second REAL download client — qBittorrent (§58, M11) — configured and
+  # pointing at nothing (port 9 refuses everywhere). Like the torznab entry, what
+  # this proves is narrow and worth having: the registry now constructs a REAL
+  # qBittorrent client for the kind. Before M11 this same entry reported "the
+  # qbittorrent client is not implemented yet"; now the health beat reaches real
+  # client code — a login it cannot complete — and reports what happened, which
+  # is the difference between a placeholder and a client. A real transfer is NOT
+  # asserted here: ADR-0026 keeps a download daemon out of CI, so the transfer
+  # path is proven by the fake at the unit level and by TestLiveQBittorrent.
+  - name: acceptance-qbittorrent
+    type: qbittorrent
     endpoint: http://127.0.0.1:9
     path_map:
       - remote: /downloads/complete
@@ -1992,6 +2017,68 @@ YAML
   not_exercised real_opds_reader \
     "a real OPDS reader (KOReader/Foliate/Marvin) browsing and downloading — app-in-the-loop, out of the demo budget like #202's video client (tracked pending: opds-real-reader-in-the-loop)"
 
+  note "  the DLNA/UPnP ContentDirectory (§70, #202, M11)"
+  # The video-and-audio client: the devices that matter — a television, a
+  # speaker — speak DLNA natively, so they BROWSE the library over a UPnP
+  # ContentDirectory and play from it, Heyarr owning no client. The res URLs a
+  # Browse hands out are render capabilities (ADR-0040), so the device fetches
+  # bytes from the unauthenticated render route — which is why this drives it
+  # the way such a device would: a SOAP Browse (no credential), then a fetch of
+  # a res URL, asserted byte-identical to the blob route. SSDP LAN advertisement
+  # and the real-device proof are out of a headless demo and recorded pending.
+  dlna_browse() { # object-id browse-flag
+    curl -sS --unix-socket "$SOCK" -H 'Content-Type: text/xml; charset="utf-8"' \
+      -H 'SOAPAction: "urn:schemas-upnp-org:service:ContentDirectory:1#Browse"' \
+      --data "<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><u:Browse xmlns:u=\"urn:schemas-upnp-org:service:ContentDirectory:1\"><ObjectID>$1</ObjectID><BrowseFlag>$2</BrowseFlag><Filter>*</Filter><StartingIndex>0</StartingIndex><RequestedCount>0</RequestedCount><SortCriteria></SortCriteria></u:Browse></s:Body></s:Envelope>" \
+      "http://heyarr/dlna/control/ContentDirectory"
+  }
+
+  # The device fetches the description first to learn it is a MediaServer.
+  assert_contains "$(curl -sS --unix-socket "$SOCK" "http://heyarr/dlna/description.xml")" \
+    "urn:schemas-upnp-org:device:MediaServer:1" \
+    "the DLNA device announces itself as a MediaServer"
+
+  local dlna_root dlna_container dlna_items dlna_res dlna_asset dlna_blob dlna_sha dlna_blob_sha
+  dlna_root=$(dlna_browse 0 BrowseDirectChildren)
+  assert_contains "$dlna_root" "object.container.storageFolder" \
+    "browsing the DLNA root lists content folders projected from the catalogue"
+  dlna_container=$(printf '%s' "$dlna_root" | grep -oE 'ct:[a-z]+' | head -1)
+  assert_eq "$([[ -n "$dlna_container" ]] && echo 1 || echo 0)" "1" \
+    "the root offers at least one browsable folder"
+
+  dlna_items=$(dlna_browse "$dlna_container" BrowseDirectChildren)
+  assert_contains "$dlna_items" "http-get:*:" \
+    "a folder lists playable items with a UPnP resource"
+  dlna_res=$(printf '%s' "$dlna_items" | grep -oE '/render/[A-Za-z0-9._-]+' | head -1)
+  assert_eq "$([[ -n "$dlna_res" ]] && echo 1 || echo 0)" "1" \
+    "an item carries a real render-capability res URL (a caller, not an empty feed)"
+
+  # Prove the res URL is the blob's bytes — the same byte route (ADR-0013), not
+  # the adapter's invention. The item id names the asset; its blob is found via
+  # the ordinary assets API and fetched via the ordinary blob route to compare.
+  dlna_asset=$(printf '%s' "$dlna_items" | grep -oE 'asset:[0-9a-fA-F-]+' | head -1)
+  dlna_asset=${dlna_asset#asset:}
+  dlna_blob=$(api "/api/v1/assets/$dlna_asset" | jq -r '.blob_hash')
+  dlna_sha=$(curl -sS --unix-socket "$SOCK" "http://heyarr$dlna_res" | shasum -a 256 | cut -d" " -f1)
+  dlna_blob_sha=$(api "/api/v1/blobs/$dlna_blob/content" | shasum -a 256 | cut -d" " -f1)
+  assert_eq "$dlna_sha" "$dlna_blob_sha" \
+    "the bytes a DLNA device fetches from a res URL are byte-identical to the blob route's"
+
+  # A device seeks: the res URL honours Range because it IS the render route,
+  # which delegates to the ordinary blob handler.
+  assert_eq "$(curl -sS --unix-socket "$SOCK" -H 'Range: bytes=0-3' -o /dev/null -w '%{http_code}' \
+    "http://heyarr$dlna_res")" "206" \
+    "a DLNA res URL honours Range with a 206, delegated to the blob route"
+
+  # An unimplemented action is a faithful SOAP fault, not a silent 404.
+  assert_contains "$(curl -sS --unix-socket "$SOCK" -H 'Content-Type: text/xml' \
+    --data '<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:Search xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1"><ContainerID>0</ContainerID></u:Search></s:Body></s:Envelope>' \
+    "http://heyarr/dlna/control/ContentDirectory")" "UPnPError" \
+    "an unimplemented ContentDirectory action returns a SOAP fault, not a 404"
+
+  not_exercised real_dlna_device \
+    "a real Samsung TV / Devialet discovering (SSDP), browsing and playing — app-in-the-loop and needs LAN multicast, out of the demo budget like #202's video client (tracked pending: dlna-real-device-plays)"
+
   note "  probing (§29, ADR-0023)"
   # Capability routing existed from M1-05 and had no user until M2: the worker
   # built its runtime with an empty capability set, so no job could ever
@@ -2433,6 +2520,32 @@ YAML
   assert_not_contains "$dl_json" "api_key" "no credential field reaches the providers response"
   assert_not_contains "$dl_json" "password" "and no password field either"
 
+  note "  a second download client: qBittorrent (§58, M11)"
+  # What is honestly provable WITHOUT a daemon (ADR-0026 keeps one out of CI):
+  # the registry constructs a REAL qBittorrent client for its kind, it is
+  # registered with the download capability, and the health beat reaches its
+  # real Check code — a login against an endpoint that refuses — and reports
+  # unhealthy rather than pretending. A real transfer is proven by the fake
+  # (unit) and TestLiveQBittorrent (opt-in), never here.
+  local qb_entry
+  qb_entry=$(wait_for_health_check acceptance-qbittorrent)
+
+  assert_eq "$(jq -r '. != null' <<<"$qb_entry")" "true" \
+    "a configured qBittorrent client is reported — a REAL client, not an unimplemented placeholder"
+  assert_eq "$(jq -r '.capabilities | join(",")' <<<"$qb_entry")" "download" \
+    "the qBittorrent client advertises the download capability, so poll jobs can route to it"
+  # The health beat reached real qBittorrent Check code: a client with no caller
+  # would have no observation to show. checked_at proves the caller exists.
+  if [[ "$(jq -r '.checked_at // "never"' <<<"$qb_entry")" == "never" ]]; then
+    fail "no health check ever ran on the qBittorrent client — nothing reached the real client code"
+  else
+    pass "the health beat checked the qBittorrent client — a real caller reaching real client code"
+  fi
+  assert_eq "$(jq -r '.healthy' <<<"$qb_entry")" "false" \
+    "an unreachable qBittorrent is reported unhealthy, not pretended healthy"
+  assert_not_contains "$(jq -r '.detail' <<<"$qb_entry")" "credential" \
+    "an unreachable qBittorrent is not misreported as a credential problem"
+
   note "  Torznab, a real indexer client (§59, ADR-0028, M3-09)"
   # Placed here with the download client's assertions because this section
   # READS state and writes none — no catalog count moves, so its position is
@@ -2528,6 +2641,38 @@ YAML
   # it is a claim about the credential rather than about the schema.
   assert_not_contains "$dl_json" "not-a-real-key" \
     "an indexer credential does not reach the providers response"
+
+  note "  Newznab, a usenet indexer over the same protocol (§59, ADR-0028, M11)"
+  # Newznab IS Torznab minus the torrent extension — one wire protocol, one
+  # client (internal/indexers), per ADR-0028's "implement the protocol, not the
+  # product". The client's parsing of a real newznab feed (the newznab: namespace
+  # and an .nzb source) is proven in internal/indexers/newznab_test.go, where a
+  # real server can run; here the narrow, worth-having claim is the registry one,
+  # exactly as for torznab: the newznab kind is a REAL client, not a placeholder.
+  local nz_entry
+  nz_entry=$(wait_for_health_check acceptance-newznab)
+
+  assert_eq "$(jq -r '. != null' <<<"$nz_entry")" "true" \
+    "a configured newznab indexer is reported"
+  assert_eq "$(jq -r '[.capabilities[] | select(. == "indexer")] | length' <<<"$nz_entry")" "1" \
+    "and advertises the indexer capability"
+  # THE ASSERTION THIS ADAPTER EXISTS FOR: the registry holds a real client for
+  # the newznab kind, so its health check reports a real connection attempt
+  # rather than "not implemented".
+  assert_not_contains "$(jq -r '.detail' <<<"$nz_entry")" "not implemented" \
+    "the newznab kind is a real client in the registry, not a placeholder"
+  # Observed health, not a default: an unreachable indexer must not be reported
+  # healthy (ADR-0025), and the check must actually have run (#164's vacuity).
+  if [[ "$(jq -r '.checked_at // "never"' <<<"$nz_entry")" == "never" ]]; then
+    fail "no health check ever ran on the newznab indexer — nothing enqueues the pass"
+  else
+    pass "the health beat checked the newznab indexer"
+  fi
+  assert_eq "$(jq -r '.healthy' <<<"$nz_entry")" "false" \
+    "an unreachable newznab indexer is not reported as healthy"
+  # The credential three lines apart in the config must not reach the response.
+  assert_not_contains "$(api /api/v1/providers)" "not-a-real-newznab-key" \
+    "a newznab credential does not reach the providers response"
 
   note "  the search job (§60, §63, M3-12)"
   # THE MILESTONE'S CENTRAL CLAIM, made executable:

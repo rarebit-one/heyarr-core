@@ -26,7 +26,7 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 	if r.Kind == providers.KindHTTP {
 		return httpFromConfig(r, now)
 	}
-	if r.Kind != providers.KindTransmission {
+	if r.Kind != providers.KindTransmission && r.Kind != providers.KindQBittorrent {
 		return nil, false, nil
 	}
 
@@ -51,6 +51,26 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 	// The credential comes out of its wrapper in credentialFor, which is the
 	// one place in this package where it does.
 	user, pass := credentialFor(r)
+
+	// Both torrent clients are configured the same way; only the constructor
+	// differs, because the difference between them is the wire, not the config.
+	if r.Kind == providers.KindQBittorrent {
+		client, err := NewQBittorrent(QBOptions{
+			Name:         r.Name,
+			Endpoint:     endpoint,
+			Username:     user,
+			Password:     pass,
+			PathMap:      pathMap,
+			Label:        r.Label,
+			Capabilities: r.Capabilities,
+			Now:          now,
+		})
+		if err != nil {
+			return nil, true, err
+		}
+		return client, true, nil
+	}
+
 	client, err := New(Options{
 		Name:         r.Name,
 		Endpoint:     endpoint,

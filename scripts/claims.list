@@ -306,9 +306,34 @@ ref   §58, #30
 why   §58's "additional acquisition clients" includes plain HTTP, and it is the one where HEYARR is the client rather than driving an external daemon — so it is the one provable end to end without a mock. The demo stands up a real HTTP server on a real port serving deterministic bytes, offers a release whose source is that URL, and drives the ordinary acquisition arc: the grab tries the plain-HTTP client first, it takes the http source and REFUSES a magnet (so the magnet want beside it still falls through to the fake — the clients compose, registry.Grab), fetches over a real connection into the path-map dir, and the bytes that land are asserted byte-identical to what the server served. The mechanism-with-no-caller trap is defeated the same way the OpenSubsonic and OPDS scenes defeat it: a real caller (the grab) drives a real fetch, proven by digest rather than by a passing conformance handler.
 evidence the bytes Heyarr fetched over plain HTTP are byte-identical to what the server served
 
+claim qbittorrent-is-a-configured-download-client
+state proven
+ref   §58, ADR-0026, ADR-0025, #30, #379
+why   §58's "additional acquisition clients" includes qBittorrent, a second real torrent client beside Transmission. ADR-0026 decided the test strategy for the whole class: a download client is an operator-managed service Heyarr targets by configuration, not one it installs, so it is never a daemon in CI — the merge path tests it against a fake of its Web API and its transfer is proven by TestLiveQBittorrent against a real instance, opt-in and skipped when unset. So the demo proves exactly what is honest WITHOUT a daemon and no more: the registry constructs a REAL qBittorrent client for its kind (before M11 the same config reported "not implemented"), it is registered with the download capability, and the health beat reaches its real Check code — a login against an endpoint that refuses — and reports unhealthy rather than pretending. That is a real caller reaching real client code, which is the mechanism-with-no-caller guard this file exists for; the protocol handling (add/resolve-by-infohash, category filtering, refusing a non-torrent source so it composes) is proven by the fake at the unit level. A registry that still returned a placeholder for the qbittorrent kind, or a client whose health was never checked, would fail this.
+evidence the health beat checked the qBittorrent client — a real caller reaching real client code
+
 claim acquires-over-daemon-clients
 state pending
 issue 379
-ref   §58, #30
-why   The other §58 clients — qBittorrent, SABnzbd, NZBGet — each drive an external daemon, so a client tested only against a mock would be a mechanism with no real caller. They are deferred until a daemon-in-the-loop harness exists, the #202/#373 app-in-the-loop pattern.
+ref   §58, ADR-0026, #30
+why   Proving a real DAEMON transfer (a torrent actually downloaded by qBittorrent, an .nzb by SABnzbd/NZBGet) is kept out of the demo BY DESIGN, not by a missing harness: ADR-0026 decided a download client is an operator-managed service Heyarr never installs or runs in CI, so its transfer is proven by an opt-in, env-gated live test against a real instance (TestLiveQBittorrent), skipped when unset. The client itself is a real configured caller (see qbittorrent-is-a-configured-download-client); what stays pending is only the end-to-end daemon transfer, honest by the repo's own standard.
 evidence a real qBittorrent transfer completed
+
+claim dlna-device-browses-and-plays
+state proven
+ref   §70, #202, #30
+why   The video-and-audio client story: the devices that matter (a television, a speaker) speak DLNA natively, so they browse a UPnP ContentDirectory and play — Heyarr owning no client. The mechanism-with-no-caller trap here is a ContentDirectory that answers Browse but hands out res URLs nothing can fetch; so the demo drives it as a real device would — a SOAP Browse of the root, then a folder, then a fetch of the item's res URL — and asserts those bytes are byte-identical to what the ordinary blob route serves. The res URL is a render capability (ADR-0040), so the device fetches with no credential and the byte path is the proven one, not reimplemented. A conformant Browse handler emitting decorative or wrong res URLs would fail the digest.
+evidence the bytes a DLNA device fetches from a res URL are byte-identical to the blob route's
+
+claim dlna-real-device-plays
+state pending
+issue 382
+ref   §70, #202, #30
+why   make demo proves the ContentDirectory contract — a control point Browses and fetches — but not SSDP LAN advertisement (a UDP-multicast responder, untestable headlessly) or a real Samsung TV / Devialet discovering, browsing and playing (app-in-the-loop). Both are deferred to #382, the #202/#373 pattern. Recorded pending, not skipped.
+evidence a real Samsung TV browsed and played
+
+claim newznab-is-a-real-indexer-client
+state proven
+ref   §59, ADR-0028, #30
+why   §59's "additional provider adapters" gains Newznab, the usenet counterpart of Torznab. The honest design is one client for both, because Torznab IS Newznab plus a torrent extension and ADR-0028's rule is to implement the protocol not the product — a second client would be that rule broken. So the adapter is a new kind served by the existing indexer client, and the risk it must clear is being a vacuous alias. Two proofs answer that: internal/indexers/newznab_test.go drives the REAL client against a real newznab feed (the newznab: namespace on the attrs, an .nzb enclosure) and asserts parsed usenet candidates — the parts that actually differ from a torrent feed, where a real server can run; and the demo proves the registry holds a REAL client for the newznab kind (its health check reports a real connection attempt, not "not implemented"), the same narrow claim the torznab entry makes, because a real usenet indexer can never run in CI (ADR-0026). Live-search against a real usenet indexer is the same deferral as torznab — an indexer proxies real services and cannot run here.
+evidence the newznab kind is a real client in the registry, not a placeholder

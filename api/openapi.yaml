@@ -1406,6 +1406,72 @@ paths:
       responses:
         '200':
           description: Headers only, no body.
+  /dlna/description.xml:
+    get:
+      tags: [compat]
+      operationId: dlnaDescription
+      security: []
+      summary: The DLNA/UPnP MediaServer device description (§70, #202).
+      description: >-
+        The root device document a UPnP control point — a television, a speaker
+        — fetches first to learn this is a MediaServer and where its
+        ContentDirectory service lives. Served unauthenticated, like the
+        renderer and pairing routes, because the device that reads it has no
+        credential to present. SSDP LAN advertisement is a tracked follow-up; a
+        control point given this URL browses and plays without discovery.
+      responses:
+        '200':
+          description: The UPnP device description XML.
+          content:
+            application/xml:
+              schema: { type: string }
+  /dlna/ContentDirectory.xml:
+    get:
+      tags: [compat]
+      operationId: dlnaContentDirectorySCPD
+      security: []
+      summary: The ContentDirectory service description (SCPD).
+      description: >-
+        Describes the one action this service implements — Browse — and the
+        arguments it takes, so a control point can build a request. A constant
+        document; the service does not vary per instance.
+      responses:
+        '200':
+          description: The UPnP service description XML.
+          content:
+            application/xml:
+              schema: { type: string }
+  /dlna/control/ContentDirectory:
+    post:
+      tags: [compat]
+      operationId: dlnaBrowse
+      security: []
+      summary: The ContentDirectory SOAP control endpoint (Browse).
+      description: >-
+        Answers the SOAP Browse action over a read-only projection of the
+        server-readable catalogue (§70): a folder per content type, its playable
+        items inside. The reply is DIDL-Lite whose resource URLs are render
+        capabilities (ADR-0040) — the device fetches bytes from the
+        unauthenticated render route, which exists precisely because it has no
+        Authorization header. Only assets the render route can serve become
+        items; the model is never reshaped to suit UPnP. Browse is the only
+        action implemented; another returns a SOAP UPnPError fault, not a 404.
+      requestBody:
+        required: true
+        content:
+          text/xml:
+            schema: { type: string }
+      responses:
+        '200':
+          description: A BrowseResponse SOAP envelope carrying DIDL-Lite.
+          content:
+            text/xml:
+              schema: { type: string }
+        '500':
+          description: A SOAP fault carrying a UPnP error code (e.g. 701 no such object, 401 invalid action).
+          content:
+            text/xml:
+              schema: { type: string }
   /api/v1/blobs/{hash}/content:
     parameters:
       - name: hash
