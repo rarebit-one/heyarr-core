@@ -73,7 +73,7 @@ func AuthSchemes() []AuthScheme { return []AuthScheme{AuthNone, AuthToken, AuthB
 // the shape from what it was given.
 func AuthSchemeOf(k Kind) AuthScheme {
 	switch k {
-	case KindTorznab:
+	case KindTorznab, KindNewznab:
 		return AuthToken
 	case KindTransmission, KindQBittorrent:
 		// qBittorrent's Web API is a username+password login (it mints a session
