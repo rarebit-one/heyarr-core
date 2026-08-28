@@ -161,8 +161,16 @@ func TestHTTPAddIsIdempotent(t *testing.T) {
 	if second.ID != first.ID {
 		t.Fatalf("a repeated Add produced a new id: %s vs %s", second.ID, first.ID)
 	}
-	if got := atomic.LoadInt32(&hits); got != 1 {
-		t.Fatalf("the server was fetched %d times, want 1", got)
+	// A second fetch, if one were wrongly started, would run in a goroutine and
+	// reach the (local) server within milliseconds. Watch for that rather than
+	// sampling once the instant Add returns — sampling too early is how this
+	// exact assertion can pass while proving nothing.
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if got := atomic.LoadInt32(&hits); got != 1 {
+			t.Fatalf("a repeated Add started a second fetch: server hit %d times, want 1", got)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
