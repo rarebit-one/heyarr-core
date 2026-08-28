@@ -58,3 +58,4 @@ An ADR that merely describes the code is not worth having.
 | [0048](0048-a-cross-site-grant-is-a-signed-expiring-delegation.md) | A cross-site grant is a signed, expiring delegation verified against a pinned key | Proposed |
 | [0049](0049-a-space-key-is-wrapped-for-a-device-encryption-key-and-a-peer-cannot-unwrap-it.md) | A space key is wrapped for a device encryption key, and a peer cannot unwrap it | Proposed |
 | [0050](0050-external-identifiers-are-readable-for-knowledge-graph-reconciliation.md) | External identifiers are readable, for knowledge-graph reconciliation | Accepted |
+| [0051](0051-personal-state-reaches-clients-through-a-device-gateway-not-the-controller.md) | Personal state reaches clients through a device gateway, not the controller | Proposed |
