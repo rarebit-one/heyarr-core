@@ -1309,6 +1309,103 @@ paths:
       responses:
         '200':
           description: Headers only, no body.
+  /opds:
+    get:
+      tags: [compat]
+      operationId: opdsRoot
+      security: []
+      summary: The OPDS catalog root (§69, §70, M11).
+      description: >-
+        The OPDS 1.2 compatibility adapter for publications — the Atom profile
+        real readers speak (KOReader, Foliate, Marvin, Chunky, Panels) — as a
+        read-only projection of Heyarr's server-readable publication catalogue,
+        so an existing reader can browse the library and download from it without
+        Heyarr owning a client. This is the navigation feed: a menu whose one
+        entry descends into the acquisition feed.
+
+
+        Mounted outside `/api/v1` and authenticated with HTTP **Basic**, for the
+        same reason `render`, `pair` and `rest` are outside it: an OPDS reader
+        cannot present a Heyarr bearer credential in the group's scheme. The
+        password a reader sends is a Heyarr bearer token, mapped onto the same
+        tokens and `read` scope the rest of the API uses; a missing or bad
+        credential is a real 401 with a `WWW-Authenticate: Basic` challenge.
+
+
+        It exposes NO personal state: reading position, bookmarks and shelves are
+        encrypted and opaque to the controller (Invariant 6, §72) and belong to
+        a device-side Personal MCP (§73), not this adapter.
+      responses:
+        '200':
+          description: The navigation feed, as OPDS 1.2 Atom XML.
+          content:
+            application/atom+xml:
+              schema: { type: string }
+        '401':
+          description: No or bad credential; carries an HTTP Basic authentication challenge.
+  /opds/publications:
+    get:
+      tags: [compat]
+      operationId: opdsPublications
+      security: []
+      summary: The OPDS acquisition feed — every downloadable publication.
+      description: >-
+        One Atom entry per book, each carrying its title and author and an
+        acquisition link per streamable format (EPUB, PDF, CBZ, …) with that
+        format's media type. A publication is a book Work, a format is an
+        Edition, the bytes are an Asset; the canonical model is not reshaped to
+        suit OPDS (§70). Only formats backed by a blob are offered — a linked
+        asset has no bytes (ADR-0020), so it is never advertised as acquirable.
+      responses:
+        '200':
+          description: The acquisition feed, as OPDS 1.2 Atom XML.
+          content:
+            application/atom+xml:
+              schema: { type: string }
+        '401':
+          description: No or bad credential; carries an HTTP Basic authentication challenge.
+  /opds/download/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The edition (format) id an acquisition link points at.
+        schema:
+          type: string
+    get:
+      tags: [compat]
+      operationId: opdsDownload
+      security: []
+      summary: Download one publication format.
+      description: >-
+        Resolves the edition to a blob hash and a server-known media type and
+        delegates byte serving to the ordinary blob route (ADR-0013): Range and
+        206 are inherited, not reimplemented, past the point where Basic auth has
+        decided the caller may read.
+      responses:
+        '200':
+          description: The publication's bytes.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '206':
+          description: A byte range (with a `Range` header).
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '401':
+          description: No or bad credential; carries an HTTP Basic authentication challenge.
+        '404':
+          description: No such publication, or the edition has no downloadable blob.
+    head:
+      tags: [compat]
+      operationId: opdsDownloadHead
+      security: []
+      summary: Headers for a publication download (size before fetching).
+      description: The HEAD counterpart, used by a reader probing a format's size.
+      responses:
+        '200':
+          description: Headers only, no body.
   /api/v1/blobs/{hash}/content:
     parameters:
       - name: hash

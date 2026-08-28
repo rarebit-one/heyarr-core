@@ -13,6 +13,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/mcp"
+	"github.com/rarebit-one/heyarr-core/internal/api/opds"
 	personalstateapi "github.com/rarebit-one/heyarr-core/internal/api/personalstate"
 	"github.com/rarebit-one/heyarr-core/internal/api/render"
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
@@ -628,8 +629,25 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
+	// The OPDS compatibility adapter (§69, §70, M11). The publications
+	// counterpart to the OpenSubsonic adapter, and a PUBLIC mount for the same
+	// reason: an OPDS reader cannot present a Heyarr bearer credential the
+	// group's way, so it authenticates with HTTP Basic — mapping the password
+	// onto the same tokens the API uses. It reads the server-readable
+	// publication catalogue and delegates byte serving to blobHandler; it never
+	// touches the encrypted personal-state plane (§72).
+	opdsHandler, err := opds.New(opds.Options{
+		DB:     db,
+		Auth:   verifier,
+		Blobs:  blobHandler,
+		Logger: c.log,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: %w", err)
+	}
+
 	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, mcpServer.Mount, psAPI.Mount},
-		[]httpapi.MountFunc{renderHandler.Mount, relayHandler.Mount, subsonicHandler.Mount}, nil
+		[]httpapi.MountFunc{renderHandler.Mount, relayHandler.Mount, subsonicHandler.Mount, opdsHandler.Mount}, nil
 }
 
 // liveness converts a possibly-absent tracker into the interface the HTTP
