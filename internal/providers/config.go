@@ -41,6 +41,12 @@ const (
 	// KindTransmission is the initial acquisition transport (§58).
 	// Implemented in M3-10.
 	KindTransmission Kind = "transmission"
+	// KindQBittorrent is a torrent transport speaking the qBittorrent Web API
+	// v2 (§58, M11). A second real download client beside Transmission: it takes
+	// magnet/.torrent sources and refuses the rest, so it composes with the
+	// other clients, and like every download client its live exercise is opt-in
+	// against a real instance — never a daemon in CI (ADR-0026).
+	KindQBittorrent Kind = "qbittorrent"
 	// KindFake is an in-process provider that talks to nothing.
 	//
 	// It is a first-class kind rather than a test-only construct because the
@@ -57,7 +63,7 @@ const (
 )
 
 // Kinds lists every kind, in a stable order.
-func Kinds() []Kind { return []Kind{KindTorznab, KindTransmission, KindFake} }
+func Kinds() []Kind { return []Kind{KindTorznab, KindTransmission, KindQBittorrent, KindFake} }
 
 // ParseKind validates a kind from configuration.
 func ParseKind(s string) (Kind, error) {
@@ -85,7 +91,7 @@ func DefaultCapabilities(k Kind) []Capability {
 	switch k {
 	case KindTorznab:
 		return []Capability{CapabilityIndexer}
-	case KindTransmission:
+	case KindTransmission, KindQBittorrent:
 		return []Capability{CapabilityDownload}
 	default:
 		// A fake declares nothing by default: what it stands in for is the

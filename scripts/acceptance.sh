@@ -1447,6 +1447,21 @@ providers:
     path_map:
       - remote: /downloads/complete
         local: $FULLDATA/downloads
+  # A second REAL download client — qBittorrent (§58, M11) — configured and
+  # pointing at nothing (port 9 refuses everywhere). Like the torznab entry, what
+  # this proves is narrow and worth having: the registry now constructs a REAL
+  # qBittorrent client for the kind. Before M11 this same entry reported "the
+  # qbittorrent client is not implemented yet"; now the health beat reaches real
+  # client code — a login it cannot complete — and reports what happened, which
+  # is the difference between a placeholder and a client. A real transfer is NOT
+  # asserted here: ADR-0026 keeps a download daemon out of CI, so the transfer
+  # path is proven by the fake at the unit level and by TestLiveQBittorrent.
+  - name: acceptance-qbittorrent
+    type: qbittorrent
+    endpoint: http://127.0.0.1:9
+    path_map:
+      - remote: /downloads/complete
+        local: $FULLDATA/downloads
 YAML
 
   # Mint the token BEFORE anything starts. It migrates the database itself, so
@@ -2432,6 +2447,32 @@ YAML
   # from.
   assert_not_contains "$dl_json" "api_key" "no credential field reaches the providers response"
   assert_not_contains "$dl_json" "password" "and no password field either"
+
+  note "  a second download client: qBittorrent (§58, M11)"
+  # What is honestly provable WITHOUT a daemon (ADR-0026 keeps one out of CI):
+  # the registry constructs a REAL qBittorrent client for its kind, it is
+  # registered with the download capability, and the health beat reaches its
+  # real Check code — a login against an endpoint that refuses — and reports
+  # unhealthy rather than pretending. A real transfer is proven by the fake
+  # (unit) and TestLiveQBittorrent (opt-in), never here.
+  local qb_entry
+  qb_entry=$(wait_for_health_check acceptance-qbittorrent)
+
+  assert_eq "$(jq -r '. != null' <<<"$qb_entry")" "true" \
+    "a configured qBittorrent client is reported — a REAL client, not an unimplemented placeholder"
+  assert_eq "$(jq -r '.capabilities | join(",")' <<<"$qb_entry")" "download" \
+    "the qBittorrent client advertises the download capability, so poll jobs can route to it"
+  # The health beat reached real qBittorrent Check code: a client with no caller
+  # would have no observation to show. checked_at proves the caller exists.
+  if [[ "$(jq -r '.checked_at // "never"' <<<"$qb_entry")" == "never" ]]; then
+    fail "no health check ever ran on the qBittorrent client — nothing reached the real client code"
+  else
+    pass "the health beat checked the qBittorrent client — a real caller reaching real client code"
+  fi
+  assert_eq "$(jq -r '.healthy' <<<"$qb_entry")" "false" \
+    "an unreachable qBittorrent is reported unhealthy, not pretended healthy"
+  assert_not_contains "$(jq -r '.detail' <<<"$qb_entry")" "credential" \
+    "an unreachable qBittorrent is not misreported as a credential problem"
 
   note "  Torznab, a real indexer client (§59, ADR-0028, M3-09)"
   # Placed here with the download client's assertions because this section
