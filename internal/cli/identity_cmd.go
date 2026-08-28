@@ -224,7 +224,7 @@ history.`,
 				return encodeJSON(cmd.OutOrStdout(), struct {
 					Identity useridentity.View `json:"identity"`
 					Device   device.View       `json:"device"`
-				}{Identity: useridentity.NewView(id), Device: device.NewView(enrolled)})
+				}{Identity: useridentity.NewView(id), Device: device.NewView(enrolled, device.CommandHint)})
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "identity recovered — offline, from the recovery secret alone\n\n")
 			printIdentity(cmd.OutOrStdout(), id)
@@ -346,7 +346,7 @@ identity lives. It reads the local device key (generate one with
 				return err
 			}
 			if asJSON {
-				return encodeJSON(cmd.OutOrStdout(), device.NewView(enrolled))
+				return encodeJSON(cmd.OutOrStdout(), device.NewView(enrolled, device.CommandHint))
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "device enrolled\n\n")
 			printDevice(cmd.OutOrStdout(), enrolled)
