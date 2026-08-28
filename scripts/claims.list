@@ -260,3 +260,22 @@ state proven
 ref   §41, ADR-0022, ADR-0049, #361
 why   Revocation is only real if the revoked device actually loses access. A rotation mints a fresh space key, re-wraps it for the remaining recipients, DELETES the revoked device's stored copy, then snapshots the current state under the new key and compacts the old log the snapshot subsumes — so the revoked device holds no copy of any key it can open and can read nothing encrypted from here on. The demo wraps a space for three devices, revokes one, and asserts the revoked device can no longer read (its wrapped key is gone) while a remaining device still reads the state from the post-rotation snapshot, and the peer holds a wrapped key for the two remaining devices only. A rotation that left the revoked copy in place, or re-keyed for it too, would let the revoked read succeed; a rotation that broke the remaining devices would fail their read. Forward-looking, not retroactive: it keeps what it already decrypted (ADR-0022's honesty).
 evidence a revoked device can no longer read the space — its wrapped key is gone and the space was re-keyed without it
+
+claim subsonic-client-browses-and-plays
+state proven
+ref   §70, §33, ADR-0013, #30
+why   The external plane's first adapter: an existing music client talks to Heyarr over OpenSubsonic, browses the server-readable catalogue and plays from it — Heyarr owning no client. The signature defect this whole file exists to catch is a mechanism with no caller, and a protocol-conformant handler no real app drives is exactly that; so the demo drives the adapter the way a real Subsonic app would — authenticate with a bearer token as the password, derive an artist index and album list from the ingested music, open an album, and STREAM a track. The stream is proven honest by resolving the song's edition through the ordinary assets API and fetching its blob through the ordinary blob route, then asserting the two byte streams are identical: the adapter delegates byte serving (ADR-0013) rather than inventing it, and rides a real caller on real bytes. A conformant handler serving fabricated or empty bytes would fail the byte-identity assertion.
+evidence the bytes a Subsonic client streams are byte-identical to the blob route's
+
+claim subsonic-serves-no-personal-state
+state proven
+ref   §72, §73, #30, #372
+why   Invariant 6 is load-bearing here: playlists, play-counts, scrobbles and starred items are personal state, encrypted and opaque to the controller (§72), so a controller-side adapter cannot serve them faithfully and must not fabricate them. The adapter is scoped to the server-readable library + stream; personal-state list types (starred/recent/frequent) return an empty list rather than a fabricated ranking, and the playlist methods are not served at all. Exposing that state is the deliberate device-side Personal MCP second step (§73, #372), not a controller feature. An adapter that quietly returned an empty-but-successful playlist, or a fabricated "most played", would read as coverage while breaking the invariant — so the demo asserts the empty starred list and the refused playlist method explicitly.
+evidence a personal-state album list (starred) is empty, not fabricated
+
+claim subsonic-real-app-in-the-loop
+state pending
+issue 373
+ref   §70, #30
+why   make demo proves protocol conformance and a real byte path, but not the honest far end of the bar: a real Subsonic APP (Symfonium/DSub/Feishin) browsing and playing. That is app-in-the-loop and out of the demo budget, exactly as #202 keeps the real video client out of M2's demo. Recorded pending, not skipped.
+evidence a real Subsonic app browsed and played
