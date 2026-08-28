@@ -23,7 +23,10 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 	if r.Kind == providers.KindFake && isDownloadOnly(r) {
 		return fakeFromConfig(r)
 	}
-	if r.Kind != providers.KindTransmission {
+	if r.Kind == providers.KindHTTP {
+		return httpFromConfig(r, now)
+	}
+	if r.Kind != providers.KindTransmission && r.Kind != providers.KindQBittorrent {
 		return nil, false, nil
 	}
 
@@ -48,6 +51,26 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 	// The credential comes out of its wrapper in credentialFor, which is the
 	// one place in this package where it does.
 	user, pass := credentialFor(r)
+
+	// Both torrent clients are configured the same way; only the constructor
+	// differs, because the difference between them is the wire, not the config.
+	if r.Kind == providers.KindQBittorrent {
+		client, err := NewQBittorrent(QBOptions{
+			Name:         r.Name,
+			Endpoint:     endpoint,
+			Username:     user,
+			Password:     pass,
+			PathMap:      pathMap,
+			Label:        r.Label,
+			Capabilities: r.Capabilities,
+			Now:          now,
+		})
+		if err != nil {
+			return nil, true, err
+		}
+		return client, true, nil
+	}
+
 	client, err := New(Options{
 		Name:         r.Name,
 		Endpoint:     endpoint,
@@ -166,4 +189,35 @@ func fakeFromConfig(r providers.Resolved) (providers.Provider, bool, error) {
 			"provider %q: the first path_map entry has no local path", r.Name)
 	}
 	return NewFake(r.Name, dir).Simulate(simulatedTransferSize), true, nil
+}
+
+// httpFromConfig builds the plain-HTTP download client (§58).
+//
+// Like the fake, its download directory is the path map's local side rather
+// than a new configuration key: a download client's path map already says where
+// its completed files land as this host sees them, and for a client that IS
+// this host that is exactly where the fetch must write. A client with no
+// path_map has nowhere to put a completed transfer, so it is refused at
+// construction rather than defaulting to a directory the scanner never walks.
+func httpFromConfig(r providers.Resolved, now func() time.Time) (providers.Provider, bool, error) {
+	if len(r.PathMap) == 0 {
+		return nil, true, fmt.Errorf(
+			"provider %q: an http download client needs a path_map so it has somewhere "+
+				"to write completed transfers", r.Name)
+	}
+	dir := r.PathMap[0].Local
+	if dir == "" {
+		return nil, true, fmt.Errorf(
+			"provider %q: the first path_map entry has no local path", r.Name)
+	}
+	client, err := NewHTTP(HTTPOptions{
+		Name:  r.Name,
+		Dir:   dir,
+		Label: r.Label,
+		Now:   now,
+	})
+	if err != nil {
+		return nil, true, err
+	}
+	return client, true, nil
 }

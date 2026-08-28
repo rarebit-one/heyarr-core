@@ -1457,6 +1457,21 @@ providers:
     path_map:
       - remote: /downloads/complete
         local: $FULLDATA/downloads
+  # A second REAL download client — qBittorrent (§58, M11) — configured and
+  # pointing at nothing (port 9 refuses everywhere). Like the torznab entry, what
+  # this proves is narrow and worth having: the registry now constructs a REAL
+  # qBittorrent client for the kind. Before M11 this same entry reported "the
+  # qbittorrent client is not implemented yet"; now the health beat reaches real
+  # client code — a login it cannot complete — and reports what happened, which
+  # is the difference between a placeholder and a client. A real transfer is NOT
+  # asserted here: ADR-0026 keeps a download daemon out of CI, so the transfer
+  # path is proven by the fake at the unit level and by TestLiveQBittorrent.
+  - name: acceptance-qbittorrent
+    type: qbittorrent
+    endpoint: http://127.0.0.1:9
+    path_map:
+      - remote: /downloads/complete
+        local: $FULLDATA/downloads
 YAML
 
   # Mint the token BEFORE anything starts. It migrates the database itself, so
@@ -2442,6 +2457,32 @@ YAML
   # from.
   assert_not_contains "$dl_json" "api_key" "no credential field reaches the providers response"
   assert_not_contains "$dl_json" "password" "and no password field either"
+
+  note "  a second download client: qBittorrent (§58, M11)"
+  # What is honestly provable WITHOUT a daemon (ADR-0026 keeps one out of CI):
+  # the registry constructs a REAL qBittorrent client for its kind, it is
+  # registered with the download capability, and the health beat reaches its
+  # real Check code — a login against an endpoint that refuses — and reports
+  # unhealthy rather than pretending. A real transfer is proven by the fake
+  # (unit) and TestLiveQBittorrent (opt-in), never here.
+  local qb_entry
+  qb_entry=$(wait_for_health_check acceptance-qbittorrent)
+
+  assert_eq "$(jq -r '. != null' <<<"$qb_entry")" "true" \
+    "a configured qBittorrent client is reported — a REAL client, not an unimplemented placeholder"
+  assert_eq "$(jq -r '.capabilities | join(",")' <<<"$qb_entry")" "download" \
+    "the qBittorrent client advertises the download capability, so poll jobs can route to it"
+  # The health beat reached real qBittorrent Check code: a client with no caller
+  # would have no observation to show. checked_at proves the caller exists.
+  if [[ "$(jq -r '.checked_at // "never"' <<<"$qb_entry")" == "never" ]]; then
+    fail "no health check ever ran on the qBittorrent client — nothing reached the real client code"
+  else
+    pass "the health beat checked the qBittorrent client — a real caller reaching real client code"
+  fi
+  assert_eq "$(jq -r '.healthy' <<<"$qb_entry")" "false" \
+    "an unreachable qBittorrent is reported unhealthy, not pretended healthy"
+  assert_not_contains "$(jq -r '.detail' <<<"$qb_entry")" "credential" \
+    "an unreachable qBittorrent is not misreported as a credential problem"
 
   note "  Torznab, a real indexer client (§59, ADR-0028, M3-09)"
   # Placed here with the download client's assertions because this section
@@ -4877,7 +4918,28 @@ YAML
 polled_acquisition_demo() {
   local root="$WORK/polled" lib
   lib="$root/library"
-  mkdir -p "$lib/movies" "$root/downloads" "$root/data"
+  mkdir -p "$lib/movies" "$root/downloads" "$root/data" "$root/fixture"
+
+  # A REAL HTTP server serving KNOWN bytes, so the plain-HTTP download client
+  # (§58, M11) can be driven end to end with no external daemon — Heyarr IS the
+  # client. It binds 127.0.0.1:0 and reports the port it got, the same "never
+  # guess a port" discipline the peer surface uses, and the bytes are
+  # deterministic so a digest can be asserted.
+  python3 -c "import sys; sys.stdout.buffer.write(b'beacon-hill-http-payload-'*700)" > "$root/fixture/beacon.mkv"
+  cat > "$WORK/httpfixture.py" <<'PY'
+import http.server, socketserver, sys, os
+os.chdir(sys.argv[1])
+with socketserver.TCPServer(("127.0.0.1", 0), http.server.SimpleHTTPRequestHandler) as httpd:
+    with open(sys.argv[2], "w") as portfile:
+        portfile.write(str(httpd.server_address[1]))
+    httpd.serve_forever()
+PY
+  python3 "$WORK/httpfixture.py" "$root/fixture" "$WORK/httpfixture.port" >/dev/null 2>&1 &
+  PEER_PIDS+=($!)
+  local http_port pw=0
+  while (( pw < 200 )); do [[ -s "$WORK/httpfixture.port" ]] && break; sleep 0.05; pw=$(( pw + 1 )); done
+  http_port=$(cat "$WORK/httpfixture.port" 2>/dev/null || true)
+  if [[ -z "$http_port" ]]; then fail "polled: the http fixture server never reported a port"; return 1; fi
 
   # An EMPTY library. The want below is for content nothing holds, which is the
   # case the ordinary arc is about: if the library already had it there would be
@@ -4907,6 +4969,27 @@ providers:
               resolution: 1080
               source: web-dl
               video_codec: h264
+      # A release whose source is a direct http(s) URL — the §58 plain-HTTP
+      # case. The fetch points at the fixture server above, so the plain-HTTP
+      # client fetches REAL bytes over a real connection.
+      - title: Beacon Hill
+        candidates:
+          - id: bh-1080-web
+            fetch: http://127.0.0.1:$http_port/beacon.mkv
+            title: Beacon Hill 1080p web-dl
+            attributes:
+              resolution: 1080
+              source: web-dl
+              video_codec: h264
+  # The plain-HTTP download client (§58, M11). Listed BEFORE the fake so a grab
+  # tries it first: it takes the http(s) source and REFUSES a magnet, so the
+  # magnet want above still falls through to the fake — the two clients compose
+  # rather than compete (registry.Grab).
+  - name: polled-http
+    type: http
+    path_map:
+      - remote: /downloads/complete
+        local: $root/downloads
   # THE POINT OF THIS SECTION. A fake declaring the DOWNLOAD capability, which
   # downloads.Constructor turns into a client that writes real bytes into the
   # local side of its path map. The content is derived from the source, so the
@@ -5021,6 +5104,40 @@ YAML
   pa_sat=$(pa_api "/api/v1/desired/$pa_want/satisfaction")
   assert_eq "$(jq -r '.content.assets | length' <<<"$pa_sat")" "1" \
     "the acquired asset is the one considered for satisfaction"
+
+  # -------------------------------------------------------------------------
+  note "  a second want fetched over PLAIN HTTP (§58, M11)"
+  # -------------------------------------------------------------------------
+  # The other §58 client: the release's source is a direct URL and HEYARR is the
+  # client. The grab tries the http client first; it takes the http source and
+  # fetches the fixture bytes, while the magnet want above went to the fake — the
+  # two compose (registry.Grab). What is proven is a REAL caller (the grab)
+  # driving a REAL fetch, asserted by byte-identity with what the server served —
+  # the same honest bar the OpenSubsonic and OPDS scenes hold to.
+  local pa_http_want
+  pa_http_want=$(pa_api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d '{"work":{"content_type":"movie","title":"Beacon Hill","year":2016},
+         "quality_profile":"polled-anything","reason":"the plain-http arc"}' | jq -r '.id')
+  assert_contains "$pa_http_want" "-" "a want whose release is a direct http link"
+  pa_api "/api/v1/desired/$pa_http_want/search" -X POST -o /dev/null
+
+  # The http client renames its .part to beacon.mkv only when the fetch is
+  # complete, so the file appearing IS the download finishing — and it appears
+  # only if the grab routed to the http client, because nothing else writes this
+  # name into the download directory.
+  pa_http_fetched() { [[ -f "$root/downloads/beacon.mkv" ]]; }
+  wait_for "beacon.mkv never appeared — the grab did not reach the http client, or the fetch failed" \
+    1200 pa_http_fetched
+  pass "a grab routed to the plain-HTTP client, which fetched the release over a real connection (§58)"
+
+  local http_got http_want_sha
+  http_got=$(shasum -a 256 "$root/downloads/beacon.mkv" | cut -d" " -f1)
+  http_want_sha=$(shasum -a 256 "$root/fixture/beacon.mkv" | cut -d" " -f1)
+  assert_eq "$http_got" "$http_want_sha" \
+    "the bytes Heyarr fetched over plain HTTP are byte-identical to what the server served"
+
+  not_exercised daemon_download_clients \
+    "qBittorrent/SABnzbd/NZBGet download clients — each needs a LIVE daemon, so a conformance test against a mock would be a mechanism with no real caller; deferred to a daemon-in-the-loop harness (tracked pending: acquires-over-daemon-clients)"
 
   local p
   for p in "${PEER_PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done
