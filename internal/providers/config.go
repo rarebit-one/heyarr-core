@@ -47,6 +47,13 @@ const (
 	// other clients, and like every download client its live exercise is opt-in
 	// against a real instance — never a daemon in CI (ADR-0026).
 	KindQBittorrent Kind = "qbittorrent"
+	// KindHTTP is a plain-HTTP download client (§58): the release's source is a
+	// direct http(s) URL and HEYARR is the client that fetches it, so unlike
+	// Transmission there is no daemon to reach and no per-instance endpoint —
+	// the URL arrives per release. It refuses any source that is not an http(s)
+	// URL (a magnet or an .nzb belongs to another client), so it composes with
+	// them rather than competing for their transfers.
+	KindHTTP Kind = "http"
 	// KindFake is an in-process provider that talks to nothing.
 	//
 	// It is a first-class kind rather than a test-only construct because the
@@ -63,7 +70,9 @@ const (
 )
 
 // Kinds lists every kind, in a stable order.
-func Kinds() []Kind { return []Kind{KindTorznab, KindTransmission, KindQBittorrent, KindFake} }
+func Kinds() []Kind {
+	return []Kind{KindTorznab, KindTransmission, KindQBittorrent, KindHTTP, KindFake}
+}
 
 // ParseKind validates a kind from configuration.
 func ParseKind(s string) (Kind, error) {
@@ -91,7 +100,7 @@ func DefaultCapabilities(k Kind) []Capability {
 	switch k {
 	case KindTorznab:
 		return []Capability{CapabilityIndexer}
-	case KindTransmission, KindQBittorrent:
+	case KindTransmission, KindQBittorrent, KindHTTP:
 		return []Capability{CapabilityDownload}
 	default:
 		// A fake declares nothing by default: what it stands in for is the
@@ -102,9 +111,11 @@ func DefaultCapabilities(k Kind) []Capability {
 
 // needsEndpoint reports whether a kind must be told where the service is.
 //
-// The fake is the exception and the only one: it reaches nothing, so requiring
-// an endpoint would be requiring a fiction.
-func needsEndpoint(k Kind) bool { return k != KindFake }
+// The fake reaches nothing, so requiring an endpoint would be requiring a
+// fiction. The plain-HTTP client is the second exception for a different
+// reason: its "endpoint" is the release's own source URL, handed to it per
+// grab, so a single configured endpoint would be a value it never uses.
+func needsEndpoint(k Kind) bool { return k != KindFake && k != KindHTTP }
 
 // needsCredential reports whether a kind must be given one.
 //
