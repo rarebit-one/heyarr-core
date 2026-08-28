@@ -75,7 +75,10 @@ func AuthSchemeOf(k Kind) AuthScheme {
 	switch k {
 	case KindTorznab:
 		return AuthToken
-	case KindTransmission:
+	case KindTransmission, KindQBittorrent:
+		// qBittorrent's Web API is a username+password login (it mints a session
+		// cookie from them); the CREDENTIAL an operator supplies is the same
+		// basic pair, and how it goes on the wire is the client's business.
 		return AuthBasic
 	case KindHTTP:
 		// A plain-HTTP download fetches a public direct link; it authenticates
@@ -97,10 +100,16 @@ func AuthSchemeOf(k Kind) AuthScheme {
 // own default account is "transmission", and #102 already defaulted to it. An
 // operator who was relying on that keeps working with no config change.
 func defaultUsername(k Kind) string {
-	if k == KindTransmission {
+	switch k {
+	case KindTransmission:
 		return "transmission"
+	case KindQBittorrent:
+		// qBittorrent's default Web UI account is "admin"; an operator who left
+		// it and supplied only a password keeps working with no config change.
+		return "admin"
+	default:
+		return ""
 	}
-	return ""
 }
 
 // Credential is a provider's credential, shaped by its scheme.
