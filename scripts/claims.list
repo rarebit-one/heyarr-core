@@ -293,6 +293,13 @@ ref   §69, §70, #30
 why   make demo proves protocol conformance and a real byte path, but not the honest far end of the bar: a real OPDS reader APP (KOReader/Foliate/Marvin) browsing and downloading. That is app-in-the-loop and out of the demo budget, exactly as #202 keeps the real video client out of M2's demo and #373 the Subsonic app. Recorded pending, not skipped.
 evidence a real OPDS reader browsed and downloaded
 
+claim gateway-serves-decrypted-playlists
+state pending
+issue 387
+ref   §70, §72, §73, ADR-0051, #372
+why   The device-side compatibility gateway (internal/device/gateway) is what lets a STOCK Subsonic app show the user's playlists: it serves getPlaylists/getPlaylist from state it decrypts ON THE DEVICE and proxies library/stream to the controller, which never holds the key (Invariant 6, §72). This is the signature mechanism-with-no-caller risk one layer up from the controller adapter — a gateway no real app drives — AND it carries the invariant this whole plane exists for. It is proven now by a thorough Go INTEGRATION TEST (internal/device/gateway/gateway_test.go): a real controller (the OpenSubsonic adapter + the encrypted personal-state API) behind a recording middleware, a genuinely-encrypted playlist pushed as ciphertext, and stock-Subsonic-shaped requests to the gateway — asserting getPlaylists/getPlaylist come from on-device-decrypted CRDT state, getArtists is proxied, a proxied stream is byte-identical, and the controller's CIPHERTEXT AT REST never contains the playlist plaintext. A two-tier acceptance scene (controller + device gateway process) and real-app-in-the-loop are out of the demo budget, tracked in #387 — the #373/#376 pattern. Recorded pending, not skipped: the Go integration test is the authoritative proof today.
+evidence a stock app read its playlists through the device gateway while the controller held only ciphertext
+
 claim acquires-over-plain-http
 state proven
 ref   §58, #30

@@ -31,6 +31,7 @@ token scope (ADR-0011) until Milestone 8. The key exists now so that Milestone
 ### See also
 
 * [heyarr](heyarr.md)	 - Self-hosted content lifecycle, replication and consumption
+* [heyarr device gateway](heyarr_device_gateway.md)	 - Run the device-side Subsonic compatibility gateway (§73, ADR-0051)
 * [heyarr device generate](heyarr_device_generate.md)	 - Generate this machine's device key
 * [heyarr device list](heyarr_device_list.md)	 - List this machine's device keys
 * [heyarr device mcp](heyarr_device_mcp.md)	 - Run the Personal MCP for this machine's device key and personal state (§73)

@@ -24,6 +24,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr desired rm`](heyarr_desired_rm.md) | Stop wanting something |
 | [`heyarr desired set`](heyarr_desired_set.md) | Change the conditions, the monitoring or the note |
 | [`heyarr desired`](heyarr_desired.md) | Say what should exist, whether or not it does yet |
+| [`heyarr device gateway`](heyarr_device_gateway.md) | Run the device-side Subsonic compatibility gateway (§73, ADR-0051) |
 | [`heyarr device generate`](heyarr_device_generate.md) | Generate this machine's device key |
 | [`heyarr device list`](heyarr_device_list.md) | List this machine's device keys |
 | [`heyarr device mcp`](heyarr_device_mcp.md) | Run the Personal MCP for this machine's device key and personal state (§73) |
