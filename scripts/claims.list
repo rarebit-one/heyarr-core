@@ -299,6 +299,12 @@ ref   §58, #30
 why   §58's "additional acquisition clients" includes plain HTTP, and it is the one where HEYARR is the client rather than driving an external daemon — so it is the one provable end to end without a mock. The demo stands up a real HTTP server on a real port serving deterministic bytes, offers a release whose source is that URL, and drives the ordinary acquisition arc: the grab tries the plain-HTTP client first, it takes the http source and REFUSES a magnet (so the magnet want beside it still falls through to the fake — the clients compose, registry.Grab), fetches over a real connection into the path-map dir, and the bytes that land are asserted byte-identical to what the server served. The mechanism-with-no-caller trap is defeated the same way the OpenSubsonic and OPDS scenes defeat it: a real caller (the grab) drives a real fetch, proven by digest rather than by a passing conformance handler.
 evidence the bytes Heyarr fetched over plain HTTP are byte-identical to what the server served
 
+claim qbittorrent-is-a-configured-download-client
+state proven
+ref   §58, ADR-0026, ADR-0025, #30, #379
+why   §58's "additional acquisition clients" includes qBittorrent, a second real torrent client beside Transmission. ADR-0026 decided the test strategy for the whole class: a download client is an operator-managed service Heyarr targets by configuration, not one it installs, so it is never a daemon in CI — the merge path tests it against a fake of its Web API and its transfer is proven by TestLiveQBittorrent against a real instance, opt-in and skipped when unset. So the demo proves exactly what is honest WITHOUT a daemon and no more: the registry constructs a REAL qBittorrent client for its kind (before M11 the same config reported "not implemented"), it is registered with the download capability, and the health beat reaches its real Check code — a login against an endpoint that refuses — and reports unhealthy rather than pretending. That is a real caller reaching real client code, which is the mechanism-with-no-caller guard this file exists for; the protocol handling (add/resolve-by-infohash, category filtering, refusing a non-torrent source so it composes) is proven by the fake at the unit level. A registry that still returned a placeholder for the qbittorrent kind, or a client whose health was never checked, would fail this.
+evidence the health beat checked the qBittorrent client — a real caller reaching real client code
+
 claim acquires-over-daemon-clients
 state pending
 issue 379

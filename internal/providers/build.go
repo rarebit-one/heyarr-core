@@ -172,7 +172,7 @@ func construct(r Resolved, now func() time.Time, ctor Constructor) (Provider, er
 			f.Offer(title, candidates...)
 		}
 		return f, nil
-	case KindTorznab, KindTransmission, KindHTTP:
+	case KindTorznab, KindTransmission, KindQBittorrent, KindHTTP:
 		// No constructor claimed it. BOTH clients exist now — internal/indexers
 		// and internal/downloads — but neither can be constructed from here,
 		// because both import this package for the Provider contract and a
