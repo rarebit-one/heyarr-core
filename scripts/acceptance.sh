@@ -4835,7 +4835,28 @@ YAML
 polled_acquisition_demo() {
   local root="$WORK/polled" lib
   lib="$root/library"
-  mkdir -p "$lib/movies" "$root/downloads" "$root/data"
+  mkdir -p "$lib/movies" "$root/downloads" "$root/data" "$root/fixture"
+
+  # A REAL HTTP server serving KNOWN bytes, so the plain-HTTP download client
+  # (§58, M11) can be driven end to end with no external daemon — Heyarr IS the
+  # client. It binds 127.0.0.1:0 and reports the port it got, the same "never
+  # guess a port" discipline the peer surface uses, and the bytes are
+  # deterministic so a digest can be asserted.
+  python3 -c "import sys; sys.stdout.buffer.write(b'beacon-hill-http-payload-'*700)" > "$root/fixture/beacon.mkv"
+  cat > "$WORK/httpfixture.py" <<'PY'
+import http.server, socketserver, sys, os
+os.chdir(sys.argv[1])
+with socketserver.TCPServer(("127.0.0.1", 0), http.server.SimpleHTTPRequestHandler) as httpd:
+    with open(sys.argv[2], "w") as portfile:
+        portfile.write(str(httpd.server_address[1]))
+    httpd.serve_forever()
+PY
+  python3 "$WORK/httpfixture.py" "$root/fixture" "$WORK/httpfixture.port" >/dev/null 2>&1 &
+  PEER_PIDS+=($!)
+  local http_port pw=0
+  while (( pw < 200 )); do [[ -s "$WORK/httpfixture.port" ]] && break; sleep 0.05; pw=$(( pw + 1 )); done
+  http_port=$(cat "$WORK/httpfixture.port" 2>/dev/null || true)
+  if [[ -z "$http_port" ]]; then fail "polled: the http fixture server never reported a port"; return 1; fi
 
   # An EMPTY library. The want below is for content nothing holds, which is the
   # case the ordinary arc is about: if the library already had it there would be
@@ -4865,6 +4886,27 @@ providers:
               resolution: 1080
               source: web-dl
               video_codec: h264
+      # A release whose source is a direct http(s) URL — the §58 plain-HTTP
+      # case. The fetch points at the fixture server above, so the plain-HTTP
+      # client fetches REAL bytes over a real connection.
+      - title: Beacon Hill
+        candidates:
+          - id: bh-1080-web
+            fetch: http://127.0.0.1:$http_port/beacon.mkv
+            title: Beacon Hill 1080p web-dl
+            attributes:
+              resolution: 1080
+              source: web-dl
+              video_codec: h264
+  # The plain-HTTP download client (§58, M11). Listed BEFORE the fake so a grab
+  # tries it first: it takes the http(s) source and REFUSES a magnet, so the
+  # magnet want above still falls through to the fake — the two clients compose
+  # rather than compete (registry.Grab).
+  - name: polled-http
+    type: http
+    path_map:
+      - remote: /downloads/complete
+        local: $root/downloads
   # THE POINT OF THIS SECTION. A fake declaring the DOWNLOAD capability, which
   # downloads.Constructor turns into a client that writes real bytes into the
   # local side of its path map. The content is derived from the source, so the
@@ -4979,6 +5021,40 @@ YAML
   pa_sat=$(pa_api "/api/v1/desired/$pa_want/satisfaction")
   assert_eq "$(jq -r '.content.assets | length' <<<"$pa_sat")" "1" \
     "the acquired asset is the one considered for satisfaction"
+
+  # -------------------------------------------------------------------------
+  note "  a second want fetched over PLAIN HTTP (§58, M11)"
+  # -------------------------------------------------------------------------
+  # The other §58 client: the release's source is a direct URL and HEYARR is the
+  # client. The grab tries the http client first; it takes the http source and
+  # fetches the fixture bytes, while the magnet want above went to the fake — the
+  # two compose (registry.Grab). What is proven is a REAL caller (the grab)
+  # driving a REAL fetch, asserted by byte-identity with what the server served —
+  # the same honest bar the OpenSubsonic and OPDS scenes hold to.
+  local pa_http_want
+  pa_http_want=$(pa_api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d '{"work":{"content_type":"movie","title":"Beacon Hill","year":2016},
+         "quality_profile":"polled-anything","reason":"the plain-http arc"}' | jq -r '.id')
+  assert_contains "$pa_http_want" "-" "a want whose release is a direct http link"
+  pa_api "/api/v1/desired/$pa_http_want/search" -X POST -o /dev/null
+
+  # The http client renames its .part to beacon.mkv only when the fetch is
+  # complete, so the file appearing IS the download finishing — and it appears
+  # only if the grab routed to the http client, because nothing else writes this
+  # name into the download directory.
+  pa_http_fetched() { [[ -f "$root/downloads/beacon.mkv" ]]; }
+  wait_for "beacon.mkv never appeared — the grab did not reach the http client, or the fetch failed" \
+    1200 pa_http_fetched
+  pass "a grab routed to the plain-HTTP client, which fetched the release over a real connection (§58)"
+
+  local http_got http_want_sha
+  http_got=$(shasum -a 256 "$root/downloads/beacon.mkv" | cut -d" " -f1)
+  http_want_sha=$(shasum -a 256 "$root/fixture/beacon.mkv" | cut -d" " -f1)
+  assert_eq "$http_got" "$http_want_sha" \
+    "the bytes Heyarr fetched over plain HTTP are byte-identical to what the server served"
+
+  not_exercised daemon_download_clients \
+    "qBittorrent/SABnzbd/NZBGet download clients — each needs a LIVE daemon, so a conformance test against a mock would be a mechanism with no real caller; deferred to a daemon-in-the-loop harness (tracked pending: acquires-over-daemon-clients)"
 
   local p
   for p in "${PEER_PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done
