@@ -279,3 +279,16 @@ issue 373
 ref   §70, #30
 why   make demo proves protocol conformance and a real byte path, but not the honest far end of the bar: a real Subsonic APP (Symfonium/DSub/Feishin) browsing and playing. That is app-in-the-loop and out of the demo budget, exactly as #202 keeps the real video client out of M2's demo. Recorded pending, not skipped.
 evidence a real Subsonic app browsed and played
+
+claim acquires-over-plain-http
+state proven
+ref   §58, #30
+why   §58's "additional acquisition clients" includes plain HTTP, and it is the one where HEYARR is the client rather than driving an external daemon — so it is the one provable end to end without a mock. The demo stands up a real HTTP server on a real port serving deterministic bytes, offers a release whose source is that URL, and drives the ordinary acquisition arc: the grab tries the plain-HTTP client first, it takes the http source and REFUSES a magnet (so the magnet want beside it still falls through to the fake — the clients compose, registry.Grab), fetches over a real connection into the path-map dir, and the bytes that land are asserted byte-identical to what the server served. The mechanism-with-no-caller trap is defeated the same way the OpenSubsonic and OPDS scenes defeat it: a real caller (the grab) drives a real fetch, proven by digest rather than by a passing conformance handler.
+evidence the bytes Heyarr fetched over plain HTTP are byte-identical to what the server served
+
+claim acquires-over-daemon-clients
+state pending
+issue 379
+ref   §58, #30
+why   The other §58 clients — qBittorrent, SABnzbd, NZBGet — each drive an external daemon, so a client tested only against a mock would be a mechanism with no real caller. They are deferred until a daemon-in-the-loop harness exists, the #202/#373 app-in-the-loop pattern.
+evidence a real qBittorrent transfer completed

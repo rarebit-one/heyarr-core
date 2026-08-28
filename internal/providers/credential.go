@@ -77,6 +77,12 @@ func AuthSchemeOf(k Kind) AuthScheme {
 		return AuthToken
 	case KindTransmission:
 		return AuthBasic
+	case KindHTTP:
+		// A plain-HTTP download fetches a public direct link; it authenticates
+		// with nothing. A URL behind a credential is a later scheme, not this
+		// slice — and AuthNone means configuration refuses a credential here
+		// rather than accepting one that would never be sent.
+		return AuthNone
 	case KindFake:
 		return AuthNone
 	default:
