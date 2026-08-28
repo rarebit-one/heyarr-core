@@ -438,10 +438,16 @@ func TestDeviceHumanOutputSaysTheKeyAuthorisesNothing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"unproven", "not_enrolled", device.NotYetAuthorising} {
+		// The caveat names heyarr, the binary the reader ran — not the voidbind
+		// CLI they do not have (#369). Assert the heyarr-rendered form, and that
+		// the voidbind default is NOT what leaked through.
+		for _, want := range []string{"unproven", "not_enrolled", device.NotYetAuthorisingFor(device.CommandHint)} {
 			if !strings.Contains(out, want) {
 				t.Errorf("`heyarr %s` does not say %q:\n%s", strings.Join(args, " "), want, out)
 			}
+		}
+		if strings.Contains(out, "voidbind") {
+			t.Errorf("`heyarr %s` leaked the voidbind command name:\n%s", strings.Join(args, " "), out)
 		}
 	}
 }
