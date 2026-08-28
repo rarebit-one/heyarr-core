@@ -1943,6 +1943,55 @@ YAML
   not_exercised real_subsonic_app \
     "a real Subsonic app (Symfonium/DSub/Feishin) browsing and playing — app-in-the-loop, out of the demo budget like #202's video client (tracked pending: subsonic-real-app-in-the-loop)"
 
+  note "  the OPDS adapter (§69, §70, M11)"
+  # The publications counterpart: an existing OPDS reader browses the library
+  # over OPDS 1.2 and downloads from it, Heyarr owning no client. Same shape as
+  # the OpenSubsonic scene — authenticate, browse, then fetch and check the
+  # bytes are the bytes — and the same honest limit: a real reader app is out
+  # of the demo budget and recorded pending, not skipped.
+  opds() { # path
+    curl -sS --unix-socket "$SOCK" -u "acceptance:$TOKEN" "http://heyarr/opds$1"
+  }
+
+  # HTTP Basic, where the password is a Heyarr bearer token. No credential is a
+  # real 401 with a Basic challenge — what a reader waits for before it prompts.
+  assert_eq "$(curl -sS --unix-socket "$SOCK" -o /dev/null -w '%{http_code}' "http://heyarr/opds")" "401" \
+    "an OPDS request without a credential is challenged"
+
+  local opds_root opds_pub
+  opds_root=$(opds "")
+  assert_contains "$opds_root" 'kind=navigation' "the OPDS root is a navigation feed"
+  assert_contains "$opds_root" '/opds/publications' "the root descends into the acquisition feed"
+
+  opds_pub=$(opds "/publications")
+  assert_contains "$opds_pub" 'kind=acquisition' "the OPDS publications feed is an acquisition feed"
+  assert_contains "$opds_pub" 'http://opds-spec.org/acquisition' "a publication carries an acquisition link"
+
+  # The reader's own path: pull an acquisition href out of the feed and download
+  # it, then prove the bytes ARE the blob's bytes — the same byte route
+  # (ADR-0013), not the adapter's invention. The link names the edition, whose
+  # blob is found through the ordinary assets API and fetched through the
+  # ordinary blob route for the comparison.
+  local dl_path edition blob opds_sha blob_sha
+  dl_path=$(printf '%s' "$opds_pub" | grep -oE '/opds/download/[^"]+' | head -1)
+  assert_eq "$([[ -n "$dl_path" ]] && echo 1 || echo 0)" "1" \
+    "the acquisition feed offers a real download link (a caller, not an empty feed)"
+  edition=${dl_path#/opds/download/}
+  blob=$(api_all /api/v1/assets ".items[] | select(.edition_id==\"$edition\") | .blob_hash" | head -1)
+  opds_sha=$(curl -sS --unix-socket "$SOCK" -u "acceptance:$TOKEN" "http://heyarr$dl_path" | shasum -a 256 | cut -d" " -f1)
+  blob_sha=$(api "/api/v1/blobs/$blob/content" | shasum -a 256 | cut -d" " -f1)
+  assert_eq "$opds_sha" "$blob_sha" \
+    "the bytes an OPDS reader downloads are byte-identical to the blob route's"
+
+  # A reader resumes a partial download: Range is honoured because byte serving
+  # is delegated, not reimplemented in the adapter.
+  assert_eq "$(curl -sS --unix-socket "$SOCK" -u "acceptance:$TOKEN" -H 'Range: bytes=0-3' \
+    -o /dev/null -w '%{http_code}' "http://heyarr$dl_path")" "206" \
+    "an OPDS download honours Range with a 206, delegated to the blob route"
+
+  not_exercised real_opds_reader \
+    "a real OPDS reader (KOReader/Foliate/Marvin) browsing and downloading — app-in-the-loop, out of the demo budget like #202's video client (tracked pending: opds-real-reader-in-the-loop)"
+
   note "  probing (§29, ADR-0023)"
   # Capability routing existed from M1-05 and had no user until M2: the worker
   # built its runtime with an empty capability set, so no job could ever
