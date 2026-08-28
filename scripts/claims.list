@@ -292,3 +292,9 @@ issue 376
 ref   §69, §70, #30
 why   make demo proves protocol conformance and a real byte path, but not the honest far end of the bar: a real OPDS reader APP (KOReader/Foliate/Marvin) browsing and downloading. That is app-in-the-loop and out of the demo budget, exactly as #202 keeps the real video client out of M2's demo and #373 the Subsonic app. Recorded pending, not skipped.
 evidence a real OPDS reader browsed and downloaded
+
+claim newznab-is-a-real-indexer-client
+state proven
+ref   §59, ADR-0028, #30
+why   §59's "additional provider adapters" gains Newznab, the usenet counterpart of Torznab. The honest design is one client for both, because Torznab IS Newznab plus a torrent extension and ADR-0028's rule is to implement the protocol not the product — a second client would be that rule broken. So the adapter is a new kind served by the existing indexer client, and the risk it must clear is being a vacuous alias. Two proofs answer that: internal/indexers/newznab_test.go drives the REAL client against a real newznab feed (the newznab: namespace on the attrs, an .nzb enclosure) and asserts parsed usenet candidates — the parts that actually differ from a torrent feed, where a real server can run; and the demo proves the registry holds a REAL client for the newznab kind (its health check reports a real connection attempt, not "not implemented"), the same narrow claim the torznab entry makes, because a real usenet indexer can never run in CI (ADR-0026). Live-search against a real usenet indexer is the same deferral as torznab — an indexer proxies real services and cannot run here.
+evidence the newznab kind is a real client in the registry, not a placeholder

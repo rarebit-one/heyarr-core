@@ -1441,6 +1441,16 @@ providers:
     type: torznab
     endpoint: http://127.0.0.1:9/api
     api_key: not-a-real-key-and-nothing-will-read-it
+  # A REAL NEWZNAB (usenet) INDEXER, configured and pointing at nothing (§59, M11).
+  # Same discipline as the torznab entry above and for the same ADR-0026 reason:
+  # a real usenet indexer proxies real services and can never run here. What it
+  # proves is that the registry constructs a REAL client for the newznab kind —
+  # the same client, because Newznab and Torznab are one wire protocol — rather
+  # than the "configured, not implemented" placeholder.
+  - name: acceptance-newznab
+    type: newznab
+    endpoint: http://127.0.0.1:9/api
+    api_key: not-a-real-newznab-key-and-nothing-will-read-it
   - name: acceptance-downloads
     type: transmission
     endpoint: http://127.0.0.1:9
@@ -2528,6 +2538,38 @@ YAML
   # it is a claim about the credential rather than about the schema.
   assert_not_contains "$dl_json" "not-a-real-key" \
     "an indexer credential does not reach the providers response"
+
+  note "  Newznab, a usenet indexer over the same protocol (§59, ADR-0028, M11)"
+  # Newznab IS Torznab minus the torrent extension — one wire protocol, one
+  # client (internal/indexers), per ADR-0028's "implement the protocol, not the
+  # product". The client's parsing of a real newznab feed (the newznab: namespace
+  # and an .nzb source) is proven in internal/indexers/newznab_test.go, where a
+  # real server can run; here the narrow, worth-having claim is the registry one,
+  # exactly as for torznab: the newznab kind is a REAL client, not a placeholder.
+  local nz_entry
+  nz_entry=$(wait_for_health_check acceptance-newznab)
+
+  assert_eq "$(jq -r '. != null' <<<"$nz_entry")" "true" \
+    "a configured newznab indexer is reported"
+  assert_eq "$(jq -r '[.capabilities[] | select(. == "indexer")] | length' <<<"$nz_entry")" "1" \
+    "and advertises the indexer capability"
+  # THE ASSERTION THIS ADAPTER EXISTS FOR: the registry holds a real client for
+  # the newznab kind, so its health check reports a real connection attempt
+  # rather than "not implemented".
+  assert_not_contains "$(jq -r '.detail' <<<"$nz_entry")" "not implemented" \
+    "the newznab kind is a real client in the registry, not a placeholder"
+  # Observed health, not a default: an unreachable indexer must not be reported
+  # healthy (ADR-0025), and the check must actually have run (#164's vacuity).
+  if [[ "$(jq -r '.checked_at // "never"' <<<"$nz_entry")" == "never" ]]; then
+    fail "no health check ever ran on the newznab indexer — nothing enqueues the pass"
+  else
+    pass "the health beat checked the newznab indexer"
+  fi
+  assert_eq "$(jq -r '.healthy' <<<"$nz_entry")" "false" \
+    "an unreachable newznab indexer is not reported as healthy"
+  # The credential three lines apart in the config must not reach the response.
+  assert_not_contains "$(api /api/v1/providers)" "not-a-real-newznab-key" \
+    "a newznab credential does not reach the providers response"
 
   note "  the search job (§60, §63, M3-12)"
   # THE MILESTONE'S CENTRAL CLAIM, made executable:

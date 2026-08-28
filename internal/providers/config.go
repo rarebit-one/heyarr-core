@@ -38,6 +38,19 @@ const (
 	// KindTorznab is an indexer speaking Torznab (§59, ADR-0028). Prowlarr and
 	// Jackett both serve it; so do some trackers directly.
 	KindTorznab Kind = "torznab"
+	// KindNewznab is an indexer speaking Newznab (§59, ADR-0028) — the usenet
+	// counterpart of Torznab.
+	//
+	// Torznab IS Newznab plus a torrent extension, so the two are one wire
+	// protocol and ONE client serves both (internal/indexers): ADR-0028's rule
+	// is to implement the protocol, not the product, and a second client would
+	// be that rule broken. The kind exists because an operator names a USENET
+	// indexer, whose releases carry a usenet source — an .nzb URL, not a magnet —
+	// and are therefore grabbed by a usenet download client (SABnzbd or NZBGet,
+	// deferred to a daemon-in-the-loop harness, #379). The distinction that
+	// matters at runtime is the release's source, which routes on its own; the
+	// search is identical.
+	KindNewznab Kind = "newznab"
 	// KindTransmission is the initial acquisition transport (§58).
 	// Implemented in M3-10.
 	KindTransmission Kind = "transmission"
@@ -57,7 +70,7 @@ const (
 )
 
 // Kinds lists every kind, in a stable order.
-func Kinds() []Kind { return []Kind{KindTorznab, KindTransmission, KindFake} }
+func Kinds() []Kind { return []Kind{KindTorznab, KindNewznab, KindTransmission, KindFake} }
 
 // ParseKind validates a kind from configuration.
 func ParseKind(s string) (Kind, error) {
@@ -83,7 +96,7 @@ func ParseKind(s string) (Kind, error) {
 // that Prowlarr is an indexer is ceremony that teaches nothing.
 func DefaultCapabilities(k Kind) []Capability {
 	switch k {
-	case KindTorznab:
+	case KindTorznab, KindNewznab:
 		return []Capability{CapabilityIndexer}
 	case KindTransmission:
 		return []Capability{CapabilityDownload}
@@ -109,7 +122,7 @@ func needsEndpoint(k Kind) bool { return k != KindFake }
 // Transmission does NOT: an operator running it on a trusted network with
 // authentication off is an ordinary, supported deployment, and refusing to
 // start would be Heyarr insisting on a policy the operator already declined.
-func needsCredential(k Kind) bool { return k == KindTorznab }
+func needsCredential(k Kind) bool { return k == KindTorznab || k == KindNewznab }
 
 // Offer is a canned answer a fake indexer gives to one search title.
 type Offer struct {

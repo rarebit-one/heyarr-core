@@ -20,7 +20,12 @@ import (
 // constructors compose, and an unrecognised kind still falls through to the
 // registry's honest "configured, not implemented" report.
 func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider, bool, error) {
-	if r.Kind != providers.KindTorznab {
+	// Torznab and Newznab are one wire protocol (ADR-0028): the same client
+	// serves both, because Torznab is Newznab plus a torrent extension and this
+	// package implements the protocol, not the product. A newznab-kind provider
+	// is a usenet indexer whose releases carry an .nzb source rather than a
+	// magnet — a distinction that lives in the release, not in the search.
+	if r.Kind != providers.KindTorznab && r.Kind != providers.KindNewznab {
 		return nil, false, nil
 	}
 
