@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -174,6 +175,31 @@ func VerifySecret(encoded string, secret []byte) (bool, error) {
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }
 
-// cacheKey is the lookup key for the verified-token cache: a fast digest of
-// the presented credential, so the cache never holds the token itself.
-func cacheKey(raw string) [sha256.Size]byte { return sha256.Sum256([]byte(raw)) }
+// cacheSecret keys the verified-token cache digest. It is process-random and
+// never persisted: the cache is in-process only (verifier.go), so the key does
+// not need to survive a restart, and keying the digest means a memory image
+// cannot be turned into a table that maps a guessed token to a cache hit. It is
+// also why cacheKey is an HMAC and not a bare hash of the credential — the
+// digest is a keyed lookup over an already-opaque bearer token, categorically
+// not password-at-rest hashing (which is argon2id, in verifyHash above).
+var cacheSecret = mustRandomKey()
+
+func mustRandomKey() []byte {
+	k := make([]byte, 32)
+	if _, err := rand.Read(k); err != nil {
+		// The process cannot authenticate anyone without randomness; failing at
+		// startup is the honest outcome, not limping on with a fixed key.
+		panic("auth: generating the cache key secret: " + err.Error())
+	}
+	return k
+}
+
+// cacheKey is the lookup key for the verified-token cache: a fast KEYED digest
+// of the presented credential, so the cache never holds the token itself.
+func cacheKey(raw string) [sha256.Size]byte {
+	mac := hmac.New(sha256.New, cacheSecret)
+	mac.Write([]byte(raw))
+	var out [sha256.Size]byte
+	copy(out[:], mac.Sum(nil))
+	return out
+}

@@ -1855,6 +1855,94 @@ YAML
   assert_contains "$(jq -r '.peer_id' <<<"$plan_json")" "-" \
     "the plan names the peer it would serve from"
 
+  note "  the OpenSubsonic adapter (§70, M11)"
+  # The external plane: an existing music client talks to Heyarr over the
+  # OpenSubsonic protocol, browses the server-readable catalogue and plays from
+  # it — Heyarr owning no client. The adapter is a projection over the real
+  # model and delegates every byte to the same blob route the rest of this
+  # milestone proved, so the scene drives it the way a real Subsonic app would:
+  # authenticate, browse, then fetch a track and check the bytes are the bytes.
+  #
+  # What make demo proves here is protocol conformance and a real byte path. The
+  # honest far end of the bar — a real Subsonic APP browsing and playing — is
+  # app-in-the-loop and out of this budget, the way #202 keeps the video client
+  # out of the demo. It is RECORDED as pending, not skipped.
+  subsonic() { # method [extra-query]
+    curl -sS --unix-socket "$SOCK" \
+      "http://heyarr/rest/$1?u=acceptance&p=$TOKEN&c=acceptance&v=1.16.1&f=json${2:+&$2}"
+  }
+
+  local sub_ping
+  sub_ping=$(subsonic ping)
+  assert_eq "$(jq -r '.["subsonic-response"].status' <<<"$sub_ping")" "ok" \
+    "a Subsonic client's ping is answered ok"
+  assert_eq "$(jq -r '.["subsonic-response"].type' <<<"$sub_ping")" "heyarr" \
+    "the OpenSubsonic handshake names the server it really reached"
+  assert_eq "$(jq -r '.["subsonic-response"].openSubsonic' <<<"$sub_ping")" "true" \
+    "and advertises OpenSubsonic support"
+
+  # The credential is a Heyarr bearer token sent as the Subsonic password,
+  # mapped onto the same tokens and scopes the whole API uses.
+  assert_eq "$(jq -r '.["subsonic-response"].status' <<<"$(curl -sS --unix-socket "$SOCK" \
+    "http://heyarr/rest/ping?u=acceptance&p=not-the-token&c=c&v=1.16.1&f=json")")" "failed" \
+    "a wrong Subsonic password is refused"
+  # The salted-token scheme cannot be honoured — Heyarr never holds the plaintext
+  # token to recompute the MD5 — so it is refused with the fix, not faked.
+  assert_eq "$(jq -r '.["subsonic-response"].error.code' <<<"$(curl -sS --unix-socket "$SOCK" \
+    "http://heyarr/rest/ping?u=acceptance&t=deadbeef&s=salt&c=c&v=1.16.1&f=json")")" "40" \
+    "the Subsonic salted-token scheme is refused, not silently accepted"
+
+  # Browse: the artist index and album list are non-empty projections of the
+  # music the scan ingested — an artist is DERIVED, not an entity in the model.
+  local sub_albums n_albums n_index album_id
+  assert_eq "$(( $(jq -r '.["subsonic-response"].artists.index | length' <<<"$(subsonic getArtists)") > 0 ))" "1" \
+    "getArtists derives an artist index from the music works"
+  sub_albums=$(subsonic getAlbumList2 "type=alphabeticalByName&size=500")
+  n_albums=$(jq -r '.["subsonic-response"].albumList2.album | length' <<<"$sub_albums")
+  assert_eq "$(( n_albums > 0 ))" "1" \
+    "getAlbumList2 projects the ingested music as browsable albums"
+  assert_eq "$(( $(subsonic getMusicFolders | jq -r '.["subsonic-response"].musicFolders.musicFolder | length') > 0 ))" "1" \
+    "getMusicFolders lists the music library"
+
+  # The first album that actually has streamable songs — the browse-to-listen path.
+  album_id=$(jq -r 'first(.["subsonic-response"].albumList2.album[] | select(.songCount > 0) | .id)' <<<"$sub_albums")
+  assert_eq "$([[ -n "$album_id" && "$album_id" != "null" ]] && echo 1 || echo 0)" "1" \
+    "at least one album has streamable songs (a real caller, not an empty projection)"
+
+  local sub_album song_id song_id_enc edition blob sub_sha blob_sha
+  sub_album=$(subsonic getAlbum "id=$album_id")
+  song_id=$(jq -r '.["subsonic-response"].album.song[0].id' <<<"$sub_album")
+  assert_contains "$song_id" "tr:" "a song carries the opaque track id a client streams by"
+
+  # Play: stream the track and prove its bytes ARE the blob's bytes — the same
+  # byte route (ADR-0013), not the adapter's invention. The song id encodes the
+  # edition, so the blob it maps to is found through the ordinary assets API and
+  # fetched through the ordinary blob route for the comparison.
+  song_id_enc=$(printf '%s' "$song_id" | jq -sRr @uri)
+  edition=${song_id#tr:}
+  blob=$(api_all /api/v1/assets ".items[] | select(.edition_id==\"$edition\") | .blob_hash" | head -1)
+  sub_sha=$(subsonic stream "id=$song_id_enc" | shasum -a 256 | cut -d" " -f1)
+  blob_sha=$(api "/api/v1/blobs/$blob/content" | shasum -a 256 | cut -d" " -f1)
+  assert_eq "$sub_sha" "$blob_sha" \
+    "the bytes a Subsonic client streams are byte-identical to the blob route's"
+
+  # A player seeks: Range is honoured because byte serving is delegated, not
+  # reimplemented in the adapter.
+  assert_eq "$(curl -sS --unix-socket "$SOCK" -H 'Range: bytes=0-3' -o /dev/null -w '%{http_code}' \
+    "http://heyarr/rest/stream?u=acceptance&p=$TOKEN&c=c&v=1.16.1&id=$song_id_enc")" "206" \
+    "a Subsonic stream honours Range with a 206, delegated to the blob route"
+
+  # No personal state. Playlists, scrobbles and starred items are encrypted and
+  # opaque to the controller (§72): the history/starred list types return empty
+  # rather than a fabricated ranking, and the playlist endpoints are not served.
+  assert_eq "$(subsonic getAlbumList2 "type=starred" | jq -r '.["subsonic-response"].albumList2.album | length')" "0" \
+    "a personal-state album list (starred) is empty, not fabricated"
+  assert_eq "$(subsonic getPlaylists | jq -r '.["subsonic-response"].status')" "failed" \
+    "playlists are not served by the controller-side adapter"
+
+  not_exercised real_subsonic_app \
+    "a real Subsonic app (Symfonium/DSub/Feishin) browsing and playing — app-in-the-loop, out of the demo budget like #202's video client (tracked pending: subsonic-real-app-in-the-loop)"
+
   note "  probing (§29, ADR-0023)"
   # Capability routing existed from M1-05 and had no user until M2: the worker
   # built its runtime with an empty capability set, so no job could ever

@@ -70,6 +70,13 @@ tags:
       can read none of it. Fetching ciphertext needs `read`; storing it needs
       `write`; a wrapped key no token conveys is what turns ciphertext into
       plaintext, and only on an authorised device (Invariant 6).
+  - name: compat
+    description: |
+      Compatibility adapters that let existing client ecosystems talk to Heyarr
+      over their own protocols (§70), as read-only projections over the
+      canonical model. OpenSubsonic for music is the first. Mounted outside
+      /api/v1 with the protocol's own authentication, and exposing no personal
+      state (§72).
 
 paths:
   /healthz:
@@ -1209,6 +1216,99 @@ paths:
           description: A malformed session id.
         '404':
           description: Nothing is stored at this slot yet, or the session has expired.
+  /rest/{method}:
+    parameters:
+      - name: method
+        in: path
+        required: true
+        description: >-
+          The OpenSubsonic method, optionally with the legacy `.view` suffix
+          (`ping`, `getArtists`, `getAlbumList2`, `getAlbum`, `stream`, …). The
+          method vocabulary is the OpenSubsonic specification's, not Heyarr's —
+          which is why this is one compatibility endpoint rather than forty
+          hand-written operations.
+        schema:
+          type: string
+      - name: u
+        in: query
+        required: true
+        description: The Subsonic username. Carried for protocol compatibility; the credential is `p`.
+        schema: { type: string }
+      - name: p
+        in: query
+        description: >-
+          The password a Subsonic client sends — for Heyarr, a bearer token
+          (optionally `enc:<hex>`-encoded), mapped onto the same tokens and
+          scopes the rest of the API uses. The salted-token pair (`t`+`s`) is
+          NOT supported: Heyarr keeps tokens argon2id-hashed and never holds the
+          plaintext to recompute the MD5, so it is refused with error 40.
+        schema: { type: string }
+      - name: f
+        in: query
+        description: Response format, `xml` (default) or `json`.
+        schema: { type: string, enum: [xml, json] }
+      - name: c
+        in: query
+        description: The client application name (protocol handshake).
+        schema: { type: string }
+      - name: v
+        in: query
+        description: The Subsonic protocol version the client speaks.
+        schema: { type: string }
+    get:
+      tags: [compat]
+      operationId: subsonicMethod
+      security: []
+      summary: The OpenSubsonic compatibility adapter (§70, M11).
+      description: >-
+        A read-only projection of Heyarr's server-readable catalogue onto the
+        OpenSubsonic REST protocol, so an existing music client can browse the
+        library and play from it without Heyarr owning a client. It is mounted
+        outside `/api/v1` and authenticates in the protocol's own terms, for the
+        same reason `render` and `pair` are: a Subsonic client cannot present a
+        Heyarr bearer credential in an `Authorization` header.
+
+
+        It exposes NO personal state. Playlists, play-counts, scrobbles and
+        starred items are encrypted and opaque to the controller (Invariant 6,
+        §72): the server holds no key, so it cannot serve them faithfully and
+        must not fake them. They belong to a device-side Personal MCP (§73).
+        History/starred list types return empty rather than a fabricated
+        ranking, and the playlist methods are simply not served.
+
+
+        `stream` and `download` resolve a track to a blob hash and delegate to
+        the ordinary blob route (ADR-0013): Range, 206 and progressive partial
+        serving are inherited, and the adapter neither reimplements byte serving
+        nor reshapes the canonical model to suit the protocol (§70).
+      responses:
+        '200':
+          description: >-
+            For browse and handshake methods, the Subsonic response envelope in
+            the requested format — always HTTP 200, with success or failure
+            carried inside as `status`. For `stream`/`download`, the track's
+            bytes.
+          content:
+            application/xml:
+              schema: { type: string }
+            application/json:
+              schema: { type: object }
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '206':
+          description: A byte range of a track (`stream`/`download` with a `Range` header).
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+    head:
+      tags: [compat]
+      operationId: subsonicMethodHead
+      security: []
+      summary: Headers for an OpenSubsonic method (chiefly `stream`/`download`).
+      description: The HEAD counterpart, used by clients probing a track's size before streaming it.
+      responses:
+        '200':
+          description: Headers only, no body.
   /api/v1/blobs/{hash}/content:
     parameters:
       - name: hash

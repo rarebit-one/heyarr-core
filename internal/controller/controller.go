@@ -16,6 +16,7 @@ import (
 	personalstateapi "github.com/rarebit-one/heyarr-core/internal/api/personalstate"
 	"github.com/rarebit-one/heyarr-core/internal/api/render"
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
+	"github.com/rarebit-one/heyarr-core/internal/api/subsonic"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
@@ -409,7 +410,7 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: opening device identity store: %w", err)
 	}
-	mounts, publicMounts, err := c.mounts(ctx, db, store, blobStore, eventLog, members, deviceIdentities, selfPeerID, material)
+	mounts, publicMounts, err := c.mounts(ctx, db, store, verifier, blobStore, eventLog, members, deviceIdentities, selfPeerID, material)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -460,7 +461,7 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 // different trust roots, and a mix-up in either direction is severe: an API
 // route mounted publicly is the library given away, and the renderer route
 // mounted privately is a 401 for every television.
-func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Store, blobStore cas.Store, eventLog *events.Log, members *membership.Store, identities *deviceauth.Store, selfPeerID string, material *mtls.Material) (apiMounts, publicMounts []httpapi.MountFunc, err error) {
+func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Store, verifier *auth.Verifier, blobStore cas.Store, eventLog *events.Log, members *membership.Store, identities *deviceauth.Store, selfPeerID string, material *mtls.Material) (apiMounts, publicMounts []httpapi.MountFunc, err error) {
 	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
@@ -609,8 +610,26 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
+	// The OpenSubsonic compatibility adapter (§70, M11). Like the renderer and
+	// relay it is a PUBLIC mount: a Subsonic client cannot present a Heyarr
+	// bearer credential, so the adapter authenticates in the protocol's own
+	// terms — mapping the password onto the same tokens the API uses — rather
+	// than sitting behind the /api/v1 bearer guard that would 401 it. It reads
+	// the server-readable catalogue and delegates byte serving to blobHandler;
+	// it never touches the encrypted personal-state plane (§72).
+	subsonicHandler, err := subsonic.New(subsonic.Options{
+		DB:            db,
+		Auth:          verifier,
+		Blobs:         blobHandler,
+		ServerVersion: buildinfo.Get().Version,
+		Logger:        c.log,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: %w", err)
+	}
+
 	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, mcpServer.Mount, psAPI.Mount},
-		[]httpapi.MountFunc{renderHandler.Mount, relayHandler.Mount}, nil
+		[]httpapi.MountFunc{renderHandler.Mount, relayHandler.Mount, subsonicHandler.Mount}, nil
 }
 
 // liveness converts a possibly-absent tracker into the interface the HTTP
