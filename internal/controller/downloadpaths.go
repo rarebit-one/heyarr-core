@@ -84,17 +84,18 @@ func refuseDownloadInsideALibrary(provider, local string, cfg config.Config) err
 // hardlink.
 //
 // The same reasoning as warnIfIngestWillCopy, applied to the other end. Both
-// cheap rungs of ADR-0014's ladder need the source and the destination on ONE
-// filesystem — reflink because cloning is a filesystem operation, hardlink
-// because an inode does not span devices — so a download directory on a
-// different filesystem from the store means every acquisition is a full byte
-// copy, silently, one file at a time.
+// cheap rungs of ADR-0014's ladder need the source and the destination in ONE
+// mount — reflink because cloning is a filesystem operation, hardlink because
+// link(2) returns EXDEV across mounts whatever the device — so a download
+// directory on a different mount from the store means every acquisition is a
+// full byte copy, silently, one file at a time.
 //
 // A warning rather than an error: it works, it is merely expensive, and an
-// operator who genuinely has two filesystems should not be prevented from
-// running Heyarr. What they should not be is uninformed.
+// operator who genuinely has two mounts should not be prevented from running
+// Heyarr. What they should not be is uninformed. It asks SameMount, not
+// SameFilesystem, for the #222 reason: one device can be two mounts.
 func warnIfDownloadWillCopy(provider, local, casRoot string, log *slog.Logger) {
-	same, known, err := cas.SameFilesystem(casRoot, local)
+	same, known, err := cas.SameMount(casRoot, local)
 	if err != nil {
 		// Not fatal. The download directory may not exist yet — the client
 		// creates it on first use — and a startup check is the wrong place to
@@ -110,10 +111,10 @@ func warnIfDownloadWillCopy(provider, local, casRoot string, log *slog.Logger) {
 		"provider", provider,
 		"path", local,
 		"cas_root", casRoot,
-		"why", "the download path and the content store are on different filesystems, "+
-			"and both reflink and hardlink require one filesystem",
+		"why", "the download path and the content store are in different mounts (they may "+
+			"even be on the same filesystem), and reflink and hardlink cannot cross a mount",
 		"cost", "every acquisition will consume a second full copy of itself",
-		"fix", "put the download path and cas.root on the same filesystem")
+		"fix", "put the download path and cas.root in the same mount, not merely the same filesystem")
 }
 
 // within reports whether child is inside parent.

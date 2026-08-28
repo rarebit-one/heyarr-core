@@ -15,27 +15,32 @@ import (
 )
 
 // warnIfIngestWillCopy says so, once per root, when the store and the library
-// are on different filesystems.
+// are in different MOUNTS and ingest cannot therefore hardlink.
 //
 // ADR-0014 says cross-filesystem ingest "degrades to a copy with a warning,
 // never an error". The degrading was implemented; the warning was not, and its
 // absence is expensive in a way nothing else notices. Both cheap rungs of the
-// ladder need the source and destination on one filesystem — reflink because
-// cloning is a filesystem operation, hardlink because an inode does not span
-// devices — so a CAS on the root disk and a library on the media disk means
+// ladder need the source and destination in one MOUNT — reflink because cloning
+// is a filesystem operation, hardlink because link(2) returns EXDEV across
+// mounts whatever the device — so a CAS and a library on different mounts means
 // EVERY ingest is a full byte copy and adopting a library doubles its storage.
 // That is the outcome ADR-0014 exists to avoid, and it arrives silently, one
 // file at a time.
+//
+// It asks about mounts, not device numbers (SameMount, not SameFilesystem):
+// #222 was a store and a library on ONE device but two bind mounts under
+// ProtectSystem=strict, which st_dev cannot distinguish, so the check that
+// asked it was silent on the one host where the problem was real.
 //
 // Once per root at startup, not once per file: this is a configuration
 // question, answerable before any bytes move, and a million-line log is not a
 // warning.
 func warnIfIngestWillCopy(casRoot, libraryPath string, log *slog.Logger) {
-	same, known, err := cas.SameFilesystem(casRoot, libraryPath)
+	same, known, err := cas.SameMount(casRoot, libraryPath)
 	if err != nil {
 		// Not fatal. The library may not be mounted yet, which the scan will
 		// report far more usefully than a startup check can.
-		log.Debug("could not compare the content store and the library filesystem",
+		log.Debug("could not compare the content store and the library mount",
 			"cas_root", casRoot, "path", libraryPath, "error", err)
 		return
 	}
@@ -45,10 +50,13 @@ func warnIfIngestWillCopy(casRoot, libraryPath string, log *slog.Logger) {
 	log.Warn("ingest from this library will COPY every file rather than share its bytes",
 		"path", libraryPath,
 		"cas_root", casRoot,
-		"why", "the content store and the library are on different filesystems, "+
-			"and both reflink and hardlink require one filesystem",
+		"why", "the content store and the library are in different mounts (they may even "+
+			"be on the same filesystem), and reflink and hardlink cannot cross a mount — "+
+			"under a ProtectSystem=strict systemd unit a read-only library and a "+
+			"read-write store are separate mounts",
 		"cost", "adopting this library will consume a second full copy of it",
-		"fix", "set cas.root to a directory on the same filesystem as the library")
+		"fix", "the store and the library must be in the SAME mount, not merely the same "+
+			"filesystem — see #222 and reference-linux-host.md")
 }
 
 // reconcileLibraries turns the `libraries:` block of the configuration into
