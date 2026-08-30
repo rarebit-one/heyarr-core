@@ -33,14 +33,14 @@ jobs:
       GOOS: ${{ matrix.goos }}
       GOARCH: amd64
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
           token: ${{ secrets.AUTOLAND_PAT }}
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: stable, cache: true }
       - run: go vet ./...
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with: { version: latest }
       # A malformed workflow file does not fail — it silently never runs.
       # actionlint catches that before it can hide a broken pipeline.
@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # No setup step: the guard needs only git and python3, both present on
       # the runner image. It refuses to pass if python3 is missing rather than
       # skipping, because a hygiene check that silently no-ops is worse than
@@ -70,11 +70,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
           token: ${{ secrets.AUTOLAND_PAT }}
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: stable, cache: true }
       - run: ./scripts/gen.sh
       - name: fail if generated output drifted
@@ -96,11 +96,11 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         go: [stable, oldstable]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
           token: ${{ secrets.AUTOLAND_PAT }}
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go }}
           cache: true
@@ -164,11 +164,11 @@ jobs:
           # about. The two rows above run this package under -race.
           - { os: windows-latest, flags: "" }
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
           token: ${{ secrets.AUTOLAND_PAT }}
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: stable, cache: true }
       - run: go test -count=1 -v ${{ matrix.flags }} ./internal/storagefabric/chunking/...
 
@@ -182,11 +182,11 @@ jobs:
           - { goos: linux,  goarch: arm64 }
           - { goos: darwin, goarch: arm64 }
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
           token: ${{ secrets.AUTOLAND_PAT }}
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: stable, cache: true }
       - env:
           CGO_ENABLED: "0"
@@ -208,11 +208,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
           token: ${{ secrets.AUTOLAND_PAT }}
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: stable, cache: true }
       - name: install the pinned media toolchain
         if: runner.os == 'Linux'
@@ -258,11 +258,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
           token: ${{ secrets.AUTOLAND_PAT }}
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: stable, cache: true }
       - name: assert this runner has no toolchain
         run: |
