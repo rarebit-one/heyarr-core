@@ -322,8 +322,8 @@ evidence the health beat checked the qBittorrent client — a real caller reachi
 claim acquires-over-daemon-clients
 state pending
 issue 379
-ref   §58, ADR-0026, #30
-why   Proving a real DAEMON transfer (a torrent actually downloaded by qBittorrent, an .nzb by SABnzbd/NZBGet) is kept out of the demo BY DESIGN, not by a missing harness: ADR-0026 decided a download client is an operator-managed service Heyarr never installs or runs in CI, so its transfer is proven by an opt-in, env-gated live test against a real instance (TestLiveQBittorrent), skipped when unset. The client itself is a real configured caller (see qbittorrent-is-a-configured-download-client); what stays pending is only the end-to-end daemon transfer, honest by the repo's own standard.
+ref   §58, ADR-0026, ADR-0052, #30
+why   Proving a real DAEMON transfer (a torrent actually downloaded by qBittorrent, an .nzb by SABnzbd/NZBGet) is kept out of the DEMO by design: a download daemon is out of the demo budget (ADR-0026), so this claim stays pending HERE — the demo does not prove it and does not pretend to. What has changed (ADR-0052, the second-download-client revisit trigger ADR-0026 named) is that the qBittorrent leg is now proven OUT OF BAND, not by hand: scripts/daemon-acceptance.sh stands up a DISPOSABLE qBittorrent and a web seed, adds a real .torrent through the ordinary client Add path, drives it to completion, and asserts the completed bytes are byte-identical to what the web seed offered (TestHarnessQBittorrentTransfer, the scheduled daemon-acceptance workflow). That is honest by the repo's own standard — a real caller drove a real fetch, proven by digest — and the read-only objection to TestLiveQBittorrent (mutating somebody else's client, spending their bandwidth) does not apply to a daemon the harness owns and tears down. The SABnzbd/NZBGet legs remain pending for a different reason: their clients are not built yet, so a daemon for them would be one with no caller (ADR-0052); the harness pattern extends to them when they land.
 evidence a real qBittorrent transfer completed
 
 claim dlna-device-browses-and-plays

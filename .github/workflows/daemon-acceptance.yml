@@ -1,0 +1,47 @@
+name: daemon-acceptance
+
+# The download-client daemon-in-the-loop lane (#379, ADR-0052).
+#
+# It stands up a real, disposable qBittorrent and drives the client through a
+# whole transfer — the proof the merge-path demo cannot make because a download
+# daemon is out of the demo budget by design (ADR-0026).
+#
+# It is deliberately OFF the merge path: it runs on a schedule and on demand,
+# never on pull_request or push. So a container pull can never gate a merge or
+# hang a PR (the failure mode ADR-0026 rejected a container lane to avoid), and
+# a moved upstream image tag surfaces here as a scheduled-run diff, not a red PR.
+on:
+  schedule:
+    # 03:30 UTC nightly — a cadence, so image drift is caught on a schedule
+    # rather than when somebody remembers (the ADR-0026 revisit trigger).
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOPRIVATE: github.com/rarebit-one/*
+
+concurrency:
+  group: daemon-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qbittorrent:
+    name: qBittorrent daemon-in-the-loop
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/private-modules
+        with:
+          token: ${{ secrets.AUTOLAND_PAT }}
+      - uses: actions/setup-go@v7
+        with: { go-version: stable, cache: true }
+      # ubuntu-latest ships docker and the compose plugin; assert it rather than
+      # assume, so a runner image change fails loudly instead of skipping.
+      - name: docker is available
+        run: docker version && docker compose version
+      - name: daemon-in-the-loop acceptance
+        run: ./scripts/daemon-acceptance.sh

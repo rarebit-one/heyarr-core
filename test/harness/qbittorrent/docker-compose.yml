@@ -1,0 +1,52 @@
+# The qBittorrent daemon-in-the-loop harness (#379, ADR-0052).
+#
+# Two disposable services on one private network:
+#
+#   qbittorrent  a real qBittorrent-nox Web API, the daemon under test. Its
+#                WebUI is published to the host so the Go harness test can drive
+#                it; its save directory is bind-mounted to a host path so the
+#                bytes it completes are readable by the test that offered them.
+#   webseed      a plain nginx serving a directory the test writes into. It is
+#                the BEP-19 web seed the generated .torrent points at, so the
+#                transfer completes from a single HTTP source with no tracker,
+#                no peer and no DHT — deterministic and offline.
+#
+# Nothing here is a service Heyarr installs in production (ADR-0026): it is
+# disposable test infrastructure the harness owns, torn down with `down -v`.
+#
+# Images: nginx is pinned to a version tag; qBittorrent tracks the linuxserver
+# image. Both SHOULD be pinned to a digest once this lane has run once and the
+# resolved digests are recorded (see test/harness/qbittorrent/README.md) — the
+# author could not resolve them offline. The lane is scheduled and non-blocking,
+# so a tag that moves shows up as a scheduled-run diff, never as a red PR.
+
+services:
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    environment:
+      - PUID=1000 # match the CI runner uid so completed files are readable by the test
+      - PGID=1000
+      - TZ=Etc/UTC
+      - WEBUI_PORT=8080
+    volumes:
+      - ./config:/config
+      - ${HEYARR_HARNESS_DOWNLOAD_DIR:-./_downloads}:/downloads
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - harness
+    restart: "no"
+
+  webseed:
+    image: nginx:1.27-alpine
+    volumes:
+      - ${HEYARR_HARNESS_WEBSEED_DIR:-./_webseed}:/usr/share/nginx/html:ro
+    networks:
+      harness:
+        aliases:
+          - webseed
+    restart: "no"
+
+networks:
+  harness:
+    driver: bridge

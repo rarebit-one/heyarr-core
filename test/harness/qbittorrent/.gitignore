@@ -1,0 +1,9 @@
+# Runtime scratch the harness creates and tears down; never committed.
+_webseed/
+_downloads/
+# linuxserver writes generated state alongside the seed config; keep only the
+# seed file we ship.
+config/*
+!config/qBittorrent/
+config/qBittorrent/*
+!config/qBittorrent/qBittorrent.conf
