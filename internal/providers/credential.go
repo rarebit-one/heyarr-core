@@ -73,7 +73,10 @@ func AuthSchemes() []AuthScheme { return []AuthScheme{AuthNone, AuthToken, AuthB
 // the shape from what it was given.
 func AuthSchemeOf(k Kind) AuthScheme {
 	switch k {
-	case KindTorznab, KindNewznab:
+	case KindTorznab, KindNewznab, KindTVDB:
+		// TheTVDB v4 authenticates with one API key it exchanges for a bearer
+		// token — one opaque secret, sent however the protocol says, which is
+		// exactly AuthToken (M12).
 		return AuthToken
 	case KindTransmission, KindQBittorrent:
 		// qBittorrent's Web API is a username+password login (it mints a session

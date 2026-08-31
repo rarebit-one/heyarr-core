@@ -210,6 +210,22 @@ func (r *Registry) Downloaders() []Downloader {
 	return out
 }
 
+// FeedProviders is every provider that can enumerate a source's items, in
+// routing order (M12). It is the metadata capability's routing accessor, the
+// sibling of Indexers and Downloaders: the follow pipeline asks the registry
+// "which providers answer for `metadata`" rather than iterating and casting at
+// the call site, so the cast that could silently drop a mis-declared provider
+// lives in one place.
+func (r *Registry) FeedProviders() []FeedProvider {
+	var out []FeedProvider
+	for _, p := range r.Route(CapabilityMetadata) {
+		if fp, ok := p.(FeedProvider); ok {
+			out = append(out, fp)
+		}
+	}
+	return out
+}
+
 // Health returns what the last check found for one provider.
 func (r *Registry) Health(name string) (Health, bool) {
 	r.mu.RLock()

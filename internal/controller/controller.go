@@ -39,6 +39,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/replication"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/tvdb"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
 
@@ -282,6 +283,14 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 	startSearchBeat(ctx, beatCatalog, reconcileQueue, c.log)
 
+	// The follow beat (§55, M12). The search beat's sibling: it asks a per-source
+	// question — "what does this feed have now" — before enqueueing a poll, so it
+	// needs the same catalog and shares the same queue and event log. Its polls
+	// project item-scoped wants that the search beat above then drives. See
+	// followbeat.go for why it mirrors the search beat and where it deliberately
+	// differs (the poll outcome is stored, not derived from a resting state).
+	startFollowBeat(ctx, beatCatalog, reconcileQueue, c.log)
+
 	// The download poll beat (#247). Same queue and the same serving context.
 	// See downloadbeat.go for why fifteen seconds rather than the health
 	// beat's minute, why the startup pass is the important one, and why this
@@ -523,7 +532,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 	providerRegistry, err := providers.BuildWith(resolvedProviders, c.log, nil,
-		providers.Chain(indexers.Constructor, downloads.Constructor))
+		providers.Chain(indexers.Constructor, downloads.Constructor, tvdb.Constructor))
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: building the provider registry: %w", err)
 	}
