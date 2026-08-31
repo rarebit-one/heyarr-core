@@ -13,6 +13,12 @@ import (
 type stubReader struct{}
 
 func (stubReader) Playlist(string) ([]string, error) { return nil, nil }
+func (stubReader) Starred(string) ([]string, error)  { return nil, nil }
+func (stubReader) History(string) (personalmcp.PlayHistory, error) {
+	return personalmcp.PlayHistory{}, nil
+}
+
+func (stubReader) ReadingPositions(string) ([]personalmcp.ReadingPosition, error) { return nil, nil }
 
 // TestTheTwoMCPSurfacesAreDisjoint is §72/§73 made structural: the controller-side
 // MCP (this package) and the device-side Personal MCP share NO tool. The Personal

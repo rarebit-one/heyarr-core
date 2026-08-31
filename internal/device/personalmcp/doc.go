@@ -30,4 +30,17 @@
 // those are Milestone 8 and 9 — so those verbs are absent rather than stubbed.
 // A test enumerates the surface exactly, so a verb added later cannot arrive
 // unnoticed.
+//
+// # The personal-state read verbs (§72, §73, M9/M11)
+//
+// When a controller is configured, this server also exposes the READ verbs over
+// the user's encrypted personal state — personal_playlist, personal_starred,
+// personal_history and personal_reading_position (#372, gated on the M9 plane and
+// the CRDT types of #386). Each fetches the opaque ciphertext from the
+// controller, unwraps the space key with THIS device's key, and materialises the
+// matching CRDT locally: the controller stores ciphertext and can read none of
+// it. Which CRDT a space holds is decided by the verb, never carried on the wire
+// (a space holds one CRDT — see internal/personalstate/statesync). These verbs
+// appear only when a reader is wired, so the bare device-key shell advertises
+// nothing it cannot serve.
 package personalmcp

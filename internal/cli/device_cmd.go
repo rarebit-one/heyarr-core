@@ -229,8 +229,9 @@ state and never will (§72). This one runs here and exposes the key-management
 verbs this device can perform.
 
 With --config it also exposes the READ tools over your encrypted personal state
-(§73): it fetches the ciphertext from the controller, unwraps the space key with
-THIS device's key, and decrypts and merges the playlist locally — the controller
+(§73) — your playlists, starred items, listening history and reading positions:
+it fetches the ciphertext from the controller, unwraps the space key with THIS
+device's key, and decrypts and merges the matching CRDT locally — the controller
 sees only ciphertext and can read none of it. Without --config it serves the
 device-key tools alone.
 
@@ -302,6 +303,74 @@ func (r personalStateReader) Playlist(spaceID string) ([]string, error) {
 	st := crdt.New()
 	st.Apply(decoded...)
 	return st.IDs(), nil
+}
+
+// Starred opens the space, decrypts its changes as star/unstar operations, and
+// folds them into the add-wins OR-Set — all on this device (§46, §72).
+func (r personalStateReader) Starred(spaceID string) ([]string, error) {
+	changes, err := decodeSpaceChanges[crdt.StarChange](r, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	s := crdt.NewStarSet()
+	s.Apply(changes...)
+	return s.StarredIDs(), nil
+}
+
+// History opens the space, decrypts its changes as play events, and folds them
+// into the grow-only play log, returning the recent/frequent/now-playing views
+// a stock client asks for — all decrypted on this device (§46, §72).
+func (r personalStateReader) History(spaceID string) (personalmcp.PlayHistory, error) {
+	changes, err := decodeSpaceChanges[crdt.PlayChange](r, spaceID)
+	if err != nil {
+		return personalmcp.PlayHistory{}, err
+	}
+	log := crdt.NewPlayLog()
+	log.Apply(changes...)
+
+	var recent []string
+	for _, e := range log.Recent() {
+		recent = append(recent, e.ID)
+	}
+	var frequent []personalmcp.ItemCount
+	for _, e := range log.Frequent() {
+		frequent = append(frequent, personalmcp.ItemCount{ID: e.ID, Count: e.Count})
+	}
+	now, _ := log.NowPlaying()
+	return personalmcp.PlayHistory{Recent: recent, Frequent: frequent, NowPlaying: now}, nil
+}
+
+// ReadingPositions opens the space, decrypts its writes as position updates, and
+// folds them into the per-publication LWW register — all on this device (§45,
+// §72).
+func (r personalStateReader) ReadingPositions(spaceID string) ([]personalmcp.ReadingPosition, error) {
+	changes, err := decodeSpaceChanges[crdt.PositionChange](r, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	positions := crdt.NewReadingPositions()
+	positions.Apply(changes...)
+	var out []personalmcp.ReadingPosition
+	for _, e := range positions.All() {
+		out = append(out, personalmcp.ReadingPosition{PubID: e.PubID, Position: e.Position})
+	}
+	return out, nil
+}
+
+// decodeSpaceChanges is the shared device-side decrypt path for a typed CRDT
+// read: open the space by unwrapping its key with this device's key, fetch the
+// opaque changes the controller holds, and decrypt+decode them into CRDT changes
+// of type T ready to fold. The controller only ever serves ciphertext.
+func decodeSpaceChanges[T any](r personalStateReader, spaceID string) ([]T, error) {
+	mgr, err := openSpace(r.ctx, r.c, r.deviceDir, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	changes, err := r.c.Changes(r.ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	return statesync.DecodeAllChanges[T](mgr, changes)
 }
 
 // printDevice renders one device for a person. The private key is represented

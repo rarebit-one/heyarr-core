@@ -12,8 +12,9 @@ state and never will (§72). This one runs here and exposes the key-management
 verbs this device can perform.
 
 With --config it also exposes the READ tools over your encrypted personal state
-(§73): it fetches the ciphertext from the controller, unwraps the space key with
-THIS device's key, and decrypts and merges the playlist locally — the controller
+(§73) — your playlists, starred items, listening history and reading positions:
+it fetches the ciphertext from the controller, unwraps the space key with THIS
+device's key, and decrypts and merges the matching CRDT locally — the controller
 sees only ciphertext and can read none of it. Without --config it serves the
 device-key tools alone.
 
