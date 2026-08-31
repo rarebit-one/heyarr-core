@@ -1,0 +1,20 @@
+{
+  "name": "episodes",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tvdb",
+    "version": "v4",
+    "captured_at": "2026-08-31T00:00:00Z",
+    "procedure": "GET /series/12345/episodes/default?page=0 with a Bearer token; synthesised from the published v4 episodes contract (ADR-0026). Regenerate with scripts/capture-fixtures.sh tvdb episodes against a real key.",
+    "note": "Synthesised: a two-episode season in default (aired) order. links.next is null, so the client stops after one page. Fields beyond those the client reads (id, name, aired, seasonNumber, number) are omitted deliberately — the client tolerates extra fields but the corpus should only assert what it consumes."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/series/12345/episodes/default?page=0"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "body": "{\"status\":\"success\",\"data\":{\"series\":{\"id\":12345,\"name\":\"A Test Series\"},\"episodes\":[{\"id\":1001,\"seriesId\":12345,\"name\":\"Pilot\",\"aired\":\"2026-01-05\",\"seasonNumber\":1,\"number\":1},{\"id\":1002,\"seriesId\":12345,\"name\":\"The Second One\",\"aired\":\"2026-01-12\",\"seasonNumber\":1,\"number\":2}]},\"links\":{\"prev\":null,\"self\":\"...\",\"next\":null,\"total_items\":2,\"page_size\":500}}"
+  }
+}
