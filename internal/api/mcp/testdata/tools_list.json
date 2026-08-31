@@ -132,6 +132,64 @@
     },
     {
       "annotations": {
+        "heyarr/requiredScope": "write",
+        "readOnlyHint": false
+      },
+      "description": "Subscribe to a source and archive everything it emits, forever — a STANDING subscription, distinct from want_content, which gets one thing once. Give a content intent (which series) and an identity (a url, or a tvdb_id); the type is inferred, you never name a source or a provider. Phase 1 follows TV series only.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "backfill": {
+            "description": "How much back-catalogue to pull on the first poll. from_now (the default) archives only episodes that air after you follow; full walks the whole back-catalogue into wants — a real capacity commitment.",
+            "enum": [
+              "from_now",
+              "full"
+            ],
+            "type": "string"
+          },
+          "monitor": {
+            "description": "Keep looking for a better copy of each episode after it is satisfied. Defaults to true.",
+            "type": "boolean"
+          },
+          "quality_profile": {
+            "description": "The standard every episode this source archives is measured against, named as a person would: \"living-room\". Required — every projected want inherits it.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "A note for whoever reads this in six months — \"Kate watches this\". Never interpreted.",
+            "type": "string"
+          },
+          "title": {
+            "description": "The series title, for a series the library has never seen. The work is created from it the same way want_content does, so a follow and a later scan converge on one work.",
+            "type": "string"
+          },
+          "tvdb_id": {
+            "description": "A TVDB series id, as an alternative to url when you have the id directly. Numeric.",
+            "type": "string"
+          },
+          "url": {
+            "description": "A URL identifying the source to follow. Phase 1 understands a TVDB series URL. The type is inferred from it — you do not name a source or a provider.",
+            "type": "string"
+          },
+          "work_id": {
+            "description": "An existing series work, from search_content. Give this or title, never both.",
+            "type": "string"
+          },
+          "year": {
+            "description": "Part of the series identity when known.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "quality_profile"
+        ],
+        "type": "object"
+      },
+      "name": "follow_source",
+      "title": "Follow a source"
+    },
+    {
+      "annotations": {
         "heyarr/requiredScope": "read",
         "readOnlyHint": true
       },
@@ -267,6 +325,27 @@
       },
       "name": "get_upgrade_candidates",
       "title": "What could be better"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "List every followed source with how many items its feed has yielded, how many are archived, when it was last polled and when it is due next, and whether its feed adapter is healthy. Read this to answer \"is this working\".",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "How many rows at most. Defaults to the maximum.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_followed",
+      "title": "What is followed"
     },
     {
       "annotations": {
@@ -428,6 +507,32 @@
       },
       "name": "sync_peer",
       "title": "Reconcile against a peer"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "write",
+        "readOnlyHint": false
+      },
+      "description": "Stop a subscription. By default it stops future polls and KEEPS every episode already archived (keep_archive true). Phase 1 always keeps the archive; asking to remove it is refused.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "keep_archive": {
+            "description": "Keep the episodes already archived (the default, true). Phase 1 always keeps the archive, so false is refused.",
+            "type": "boolean"
+          },
+          "source_id": {
+            "description": "The followed source to stop, from list_followed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id"
+        ],
+        "type": "object"
+      },
+      "name": "unfollow",
+      "title": "Stop following a source"
     },
     {
       "annotations": {

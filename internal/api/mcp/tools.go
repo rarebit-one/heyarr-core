@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
@@ -108,6 +110,44 @@ func (s *Server) registerTools() {
 			"it should be acceptable, rather than overriding it here.",
 		InputSchema: schemaAcquireRelease,
 		Handler:     s.acquireRelease,
+	})
+
+	s.tools.register(Tool{
+		Name:     "follow_source",
+		Title:    "Follow a source",
+		Scope:    auth.ScopeWrite,
+		ReadOnly: false,
+		Description: "Subscribe to a source and archive everything it emits, forever — a " +
+			"STANDING subscription, distinct from want_content, which gets one thing once. " +
+			"Give a content intent (which series) and an identity (a url, or a tvdb_id); the " +
+			"type is inferred, you never name a source or a provider. Phase 1 follows TV " +
+			"series only.",
+		InputSchema: schemaFollowSource,
+		Handler:     s.followSource,
+	})
+
+	s.tools.register(Tool{
+		Name:     "list_followed",
+		Title:    "What is followed",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "List every followed source with how many items its feed has yielded, " +
+			"how many are archived, when it was last polled and when it is due next, and " +
+			"whether its feed adapter is healthy. Read this to answer \"is this working\".",
+		InputSchema: schemaNoArgs,
+		Handler:     s.listFollowed,
+	})
+
+	s.tools.register(Tool{
+		Name:     "unfollow",
+		Title:    "Stop following a source",
+		Scope:    auth.ScopeWrite,
+		ReadOnly: false,
+		Description: "Stop a subscription. By default it stops future polls and KEEPS every " +
+			"episode already archived (keep_archive true). Phase 1 always keeps the archive; " +
+			"asking to remove it is refused.",
+		InputSchema: schemaUnfollow,
+		Handler:     s.unfollow,
 	})
 
 	s.tools.register(Tool{
@@ -374,4 +414,80 @@ func (s *Server) acquireRelease(ctx context.Context, raw json.RawMessage) (any, 
 		"accepted":        chosen.Evaluation.Accepted,
 		"status":          "selected; a grab has been queued",
 	}, nil
+}
+
+// followSource is §55's follow_source — the subscription intent, shared with
+// POST /api/v1/followed-sources. The same "one intent, two doors" discipline as
+// want_content: the source, its poll bookkeeping and its event are created
+// through resources.FollowSource, so the two doors cannot drift.
+func (s *Server) followSource(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args struct {
+		URL            string `json:"url"`
+		TVDBID         string `json:"tvdb_id"`
+		WorkID         string `json:"work_id"`
+		Title          string `json:"title"`
+		Year           int    `json:"year"`
+		QualityProfile string `json:"quality_profile"`
+		Monitor        *bool  `json:"monitor"`
+		Backfill       string `json:"backfill"`
+		Reason         string `json:"reason"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	out, err := s.resources.FollowSource(ctx, resources.FollowSourceRequest{
+		URL: args.URL, TVDBID: args.TVDBID,
+		WorkID: args.WorkID, Title: args.Title, Year: args.Year,
+		QualityProfile: args.QualityProfile,
+		Monitor:        args.Monitor, Backfill: args.Backfill, Reason: args.Reason,
+	})
+	if err != nil {
+		return nil, classifyFollow(err)
+	}
+	return out, nil
+}
+
+// listFollowed is §55's list_followed, shared with GET /api/v1/followed-sources.
+func (s *Server) listFollowed(ctx context.Context, _ json.RawMessage) (any, error) {
+	out, err := s.resources.ListFollowed(ctx)
+	if err != nil {
+		return nil, classifyFollow(err)
+	}
+	return map[string]any{"followed_sources": out}, nil
+}
+
+// unfollow is §55's unfollow, shared with DELETE /api/v1/followed-sources/{id}.
+// keep_archive defaults to true — stop polling, keep what was archived.
+func (s *Server) unfollow(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args struct {
+		SourceID    string `json:"source_id"`
+		KeepArchive *bool  `json:"keep_archive"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if args.SourceID == "" {
+		return nil, invalidParams("source_id is required — the source to stop, from list_followed")
+	}
+	keepArchive := true
+	if args.KeepArchive != nil {
+		keepArchive = *args.KeepArchive
+	}
+	if err := s.resources.Unfollow(ctx, args.SourceID, keepArchive); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, invalidParams("there is no followed source with that id")
+		}
+		return nil, classifyFollow(err)
+	}
+	return map[string]any{"source_id": args.SourceID, "status": "unfollowed; the archive was kept"}, nil
+}
+
+// classifyFollow maps a follow op's error onto a JSON-RPC code the way classify
+// does for the desired ops, using resources.FollowClientFault so the MCP door
+// and the REST door agree about whose fault an error is.
+func classifyFollow(err error) error {
+	if msg, isClient := resources.FollowClientFault(err); isClient {
+		return &toolError{code: codeInvalidParams, err: fmt.Errorf("%s", msg)}
+	}
+	return err
 }

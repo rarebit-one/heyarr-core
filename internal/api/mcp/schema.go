@@ -131,6 +131,73 @@ var schemaMonitorContent = obj(map[string]any{
 	},
 }, "desired_item_id", "monitor")
 
+// schemaFollowSource is source-agnostic on purpose (#396): there is no `source`,
+// `provider` or `feed_type` field. The caller gives a content intent (which
+// series) and an identity (a URL or an explicit id), and the type is inferred.
+var schemaFollowSource = obj(map[string]any{
+	"url": map[string]any{
+		"type": "string",
+		"description": "A URL identifying the source to follow. Phase 1 understands a " +
+			"TVDB series URL. The type is inferred from it — you do not name a source or a " +
+			"provider.",
+	},
+	"tvdb_id": map[string]any{
+		"type": "string",
+		"description": "A TVDB series id, as an alternative to url when you have the id " +
+			"directly. Numeric.",
+	},
+	"work_id": map[string]any{
+		"type": "string",
+		"description": "An existing series work, from search_content. Give this or title, " +
+			"never both.",
+	},
+	"title": map[string]any{
+		"type": "string",
+		"description": "The series title, for a series the library has never seen. The work " +
+			"is created from it the same way want_content does, so a follow and a later scan " +
+			"converge on one work.",
+	},
+	"year": map[string]any{
+		"type":        "integer",
+		"description": "Part of the series identity when known.",
+	},
+	"quality_profile": map[string]any{
+		"type": "string",
+		"description": "The standard every episode this source archives is measured against, " +
+			"named as a person would: \"living-room\". Required — every projected want inherits it.",
+	},
+	"monitor": map[string]any{
+		"type": "boolean",
+		"description": "Keep looking for a better copy of each episode after it is satisfied. " +
+			"Defaults to true.",
+	},
+	"backfill": map[string]any{
+		"type": "string",
+		"enum": []any{"from_now", "full"},
+		"description": "How much back-catalogue to pull on the first poll. from_now (the " +
+			"default) archives only episodes that air after you follow; full walks the whole " +
+			"back-catalogue into wants — a real capacity commitment.",
+	},
+	"reason": map[string]any{
+		"type":        "string",
+		"description": "A note for whoever reads this in six months — \"Kate watches this\". Never interpreted.",
+	},
+}, "quality_profile")
+
+// schemaUnfollow stops a subscription. keep_archive defaults to true — stop
+// polling, keep what was archived.
+var schemaUnfollow = obj(map[string]any{
+	"source_id": map[string]any{
+		"type":        "string",
+		"description": "The followed source to stop, from list_followed.",
+	},
+	"keep_archive": map[string]any{
+		"type": "boolean",
+		"description": "Keep the episodes already archived (the default, true). Phase 1 " +
+			"always keeps the archive, so false is refused.",
+	},
+}, "source_id")
+
 var schemaDesiredItemID = obj(map[string]any{
 	"desired_item_id": map[string]any{
 		"type":        "string",

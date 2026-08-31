@@ -315,6 +315,17 @@ func (a *API) Mount(r chi.Router) {
 	// across this file's two halves would make the scope contract harder to
 	// read off, not easier.
 	a.mountDesired(r)
+
+	// Followed sources (§55, M12). Subscriptions that archive everything a source
+	// emits — distinct from a want, which gets one thing once. Source-agnostic:
+	// the caller gives a content intent and an identity, and the type is inferred.
+	a.mountFollowedSources(r)
+
+	// Content-intent search (§55, M12, #396). A POST because the intent travels
+	// in a body, under the read floor the router already requires — the same
+	// reasoning as /quality-profiles/{id}/evaluate. No source parameter: the
+	// question is what a work IS, not which service to ask.
+	r.Post("/search", a.searchContentRoute)
 	// Satisfaction explains §56's two axes for one want. Mounted only when a
 	// catalog was supplied — see Options.Catalog.
 	if a.catalog != nil {
