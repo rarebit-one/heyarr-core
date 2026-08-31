@@ -123,7 +123,12 @@ jobs:
               exit 1
             fi
           fi
-      - run: go test -race -count=1 -coverprofile=coverage.out ./...
+      # -timeout=20m, not the default 10m per package: internal/api/resources
+      # can approach the default under -race plus coverage on a loaded runner,
+      # and a per-package test timeout is only a hang reported as a failure if
+      # the bound is generous enough to be reached solely when something is
+      # genuinely wedged. The job's own timeout-minutes: 25 stays the outer stop.
+      - run: go test -race -count=1 -timeout=20m -coverprofile=coverage.out ./...
       - name: the toolchain tests ran rather than skipping
         if: runner.os == 'Linux'
         run: |
