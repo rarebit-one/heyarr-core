@@ -34,6 +34,7 @@ import (
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
+	"github.com/rarebit-one/voidbind-go/notify"
 	"github.com/rarebit-one/voidbind-go/rp"
 	"github.com/rarebit-one/voidbind-go/weblogin"
 )
@@ -50,12 +51,15 @@ const SigninPath = "/signin"
 var assets embed.FS
 
 // Handler mounts the QR web-login routes and adapts the broker's minted tokens
-// into the httpapi session-authentication seam.
+// into the httpapi session-authentication seam. It also mounts the push/wake
+// plane (ADR-0055): the /v1/subscriptions registry and the login-init wake.
 type Handler struct {
-	broker *weblogin.Broker
-	base   string
-	signin []byte
-	log    *slog.Logger
+	broker    *weblogin.Broker
+	base      string
+	signin    []byte
+	log       *slog.Logger
+	subRoutes http.Handler  // notify plane's POST/DELETE /v1/subscriptions
+	push      loginNotifier // wakes subscribed devices on a login initiation
 }
 
 // Options configure a Handler.
@@ -72,6 +76,21 @@ type Options struct {
 	// this at all when it cannot name an origin.
 	Base   string
 	Logger *slog.Logger
+
+	// NtfyBaseURL records this deployment's self-hosted ntfy origin (ADR-0055). It
+	// is informational — a device registers its FULL ntfy topic URL as its
+	// subscription endpoint, so the plane works with this empty — and is logged by
+	// the caller at startup. Optional.
+	NtfyBaseURL string
+	// WakeChannel overrides the default ntfy transport (notify.NtfyChannel). A test
+	// injects a fake so the push plane is exercised with no live ntfy server; nil
+	// selects the shipped ntfy/UnifiedPush channel. Optional.
+	WakeChannel notify.WakeChannel
+	// SubscriptionStore overrides the default in-memory subscription store
+	// (notify.NewMemStore). A durable notify.FileStore may be passed for a
+	// deployment that wants the address book to survive a restart; nil uses the
+	// in-memory store, which is rebuilt as devices re-register on app open. Optional.
+	SubscriptionStore notify.Store
 }
 
 // New builds the Handler and its broker.
@@ -97,7 +116,55 @@ func New(opts Options) (*Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("weblogin: reading the signin page: %w", err)
 	}
-	return &Handler{broker: broker, base: opts.Base, signin: page, log: log.With("component", "weblogin")}, nil
+	log = log.With("component", "weblogin")
+
+	// The push/wake plane (ADR-0055), over the SAME pinned trust the broker uses.
+	// It is additive to the QR: the store and channel default to zero-config
+	// (in-memory address book, ntfy transport), and a login initiation wakes only
+	// devices that have registered a subscription — never the critical path.
+	trust := userTrust{store: opts.Identities}
+	store := opts.SubscriptionStore
+	if store == nil {
+		store = notify.NewMemStore()
+	}
+	channel := opts.WakeChannel
+	if channel == nil {
+		channel = notify.NtfyChannel{Title: "Heyarr login"}
+	}
+	notifier := &notify.Notifier{
+		Store:    store,
+		Channels: map[string]notify.WakeChannel{channel.Name(): channel},
+	}
+	identities := opts.Identities
+	push := &pushNotifier{
+		notifier: notifier,
+		rpBase:   opts.Base,
+		// Resolved on each initiation so a user enrolled or revoked through the API is
+		// woken (or not) on the very next login — no static list, no restart. A QR login
+		// is user-agnostic at initiation, so every pinned user's devices are addressed;
+		// Enqueue is a no-op for any that never subscribed.
+		pinned: func(ctx context.Context) ([]string, error) {
+			users, err := identities.ListUsers(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("weblogin: listing pinned users for push: %w", err)
+			}
+			ids := make([]string, 0, len(users))
+			for _, u := range users {
+				ids = append(ids, u.PublicKey)
+			}
+			return ids, nil
+		},
+		log: log,
+	}
+
+	return &Handler{
+		broker:    broker,
+		base:      opts.Base,
+		signin:    page,
+		log:       log,
+		subRoutes: SubscriptionRoutes(store, trust, nil),
+		push:      push,
+	}, nil
 }
 
 // Mount registers the login routes and the /signin page on an unauthenticated
@@ -108,10 +175,16 @@ func New(opts Options) (*Handler, error) {
 // request path, so it does the method routing for /login and its sub-paths; chi
 // only dispatches the prefix to it.
 func (h *Handler) Mount(r chi.Router) {
-	routes := (&weblogin.Handler{Broker: h.broker, Base: h.base}).Routes()
+	// The broker's login routes, wrapped so a successful POST /login also wakes the
+	// pinned users' subscribed devices (ADR-0055). The wrap is a passthrough for
+	// every other request, including the /login/{id} sub-routes.
+	routes := loginInitPush((&weblogin.Handler{Broker: h.broker, Base: h.base}).Routes(), h.push, h.log)
 	r.Handle(LoginPrefix, routes)
 	r.Handle(LoginPrefix+"/*", routes)
 	r.Get(SigninPath, h.handleSignin)
+	// The notify plane's device-facing registry (POST/DELETE /v1/subscriptions),
+	// cert-authenticated by the plane itself against the same pinned trust.
+	r.Handle(SubscriptionsPrefix, h.subRoutes)
 }
 
 func (h *Handler) handleSignin(w http.ResponseWriter, _ *http.Request) {
