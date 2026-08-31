@@ -194,3 +194,134 @@ func TestParseScope(t *testing.T) {
 		t.Error("episode is not a scope Heyarr can express yet — see the Scope doc")
 	}
 }
+
+// The item scope is the sanctioned addition ADR-0056 records: a want may point
+// at one byte-less Item, and it validates by the same rules the other two
+// scopes do — its own id required, the other scopes' ids refused.
+func TestItemScope(t *testing.T) {
+	const (
+		work    = "work-1"
+		item    = "item-1"
+		edition = "edition-1"
+		profile = "profile-1"
+	)
+
+	cases := []struct {
+		name    string
+		item    Item
+		wantErr string
+	}{
+		{
+			name: "an item-scoped want",
+			item: Item{Scope: ScopeItem, WorkID: work, ItemID: item, QualityProfileID: profile},
+		},
+		{
+			name:    "an item scope with no item is refused",
+			item:    Item{Scope: ScopeItem, WorkID: work, QualityProfileID: profile},
+			wantErr: "must name the item",
+		},
+		{
+			// The item's edition grouping lives on the item row, not the want.
+			name: "an item scope carrying an edition is refused",
+			item: Item{
+				Scope: ScopeItem, WorkID: work, ItemID: item,
+				EditionID: edition, QualityProfileID: profile,
+			},
+			wantErr: "must not name an edition",
+		},
+		{
+			// An unused id is the kind of field something later reads without
+			// checking the scope — the same care the edition arm takes.
+			name: "a work scope carrying an item is refused",
+			item: Item{
+				Scope: ScopeWork, WorkID: work, ItemID: item, QualityProfileID: profile,
+			},
+			wantErr: "must not name an item",
+		},
+		{
+			name: "an edition scope carrying an item is refused",
+			item: Item{
+				Scope: ScopeEdition, WorkID: work, EditionID: edition,
+				ItemID: item, QualityProfileID: profile,
+			},
+			wantErr: "must not name an item",
+		},
+		{
+			// An item still belongs to a work — the semantic anchor is required
+			// at every scope.
+			name:    "an item scope still needs its work",
+			item:    Item{Scope: ScopeItem, ItemID: item, QualityProfileID: profile},
+			wantErr: "must name the work",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			it := tc.item
+			err := it.Validate()
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("expected this want to validate, got: %v", err)
+			case tc.wantErr != "" && err == nil:
+				t.Fatalf("expected a refusal mentioning %q, got none", tc.wantErr)
+			case tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr):
+				t.Fatalf("the refusal should mention %q, but said: %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// Target() follows the item scope too, and reading EditionID or WorkID without
+// checking the scope is the mistake it exists to prevent.
+func TestTargetFollowsItemScope(t *testing.T) {
+	it := Item{Scope: ScopeItem, WorkID: "w", ItemID: "i", QualityProfileID: "p"}
+	if kind, id := it.Target(); kind != "item" || id != "i" {
+		t.Errorf("item scope targets (%s, %s), want (item, i)", kind, id)
+	}
+}
+
+// An item-scoped want is expressible before any bytes exist — that is the whole
+// point of the Item entity, the byte-less thing a source emitted.
+func TestAnItemWantNeedsNothingToExist(t *testing.T) {
+	it := Item{Scope: ScopeItem, WorkID: "series", ItemID: "s02e05", QualityProfileID: "p"}
+	if err := it.Validate(); err != nil {
+		t.Fatalf("wanting an episode that does not exist yet is the whole point: %v", err)
+	}
+}
+
+// §61 again, now across the item scope: two profiles of one episode are two
+// wants, and an item-scoped want is never the same want as a work- or
+// edition-scoped one even if an id collides across tables.
+func TestSameWantAcrossItemScope(t *testing.T) {
+	base := Item{Scope: ScopeItem, WorkID: "w", ItemID: "i", QualityProfileID: "living-room"}
+
+	otherProfile := base
+	otherProfile.QualityProfileID = "phone"
+	if SameWant(base, otherProfile) {
+		t.Error("two profiles of one item are two wants (§61)")
+	}
+
+	dup := base
+	dup.ID = "another row"
+	dup.Monitor = true
+	if !SameWant(base, dup) {
+		t.Error("the same item and profile is one want, whatever else differs")
+	}
+
+	workScoped := Item{Scope: ScopeWork, WorkID: "i", QualityProfileID: "p"}
+	itemScoped := Item{Scope: ScopeItem, WorkID: "w", ItemID: "i", QualityProfileID: "p"}
+	if SameWant(workScoped, itemScoped) {
+		t.Error("scope is part of identity — an id is only unique within its table")
+	}
+}
+
+// "item" is now a scope Heyarr can express; "episode" is still not — the item
+// scope is the general primitive, not a per-type one.
+func TestItemIsAScopeEpisodeIsNot(t *testing.T) {
+	if _, err := ParseScope("item"); err != nil {
+		t.Errorf("item is a scope now: %v", err)
+	}
+	if _, err := ParseScope("episode"); err == nil {
+		t.Error("episode is not a scope — an episode is one Item, wanted at scope item")
+	}
+}
