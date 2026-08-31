@@ -152,6 +152,27 @@ func (c *Catalog) ListFollowSources(ctx context.Context) ([]StoredSource, error)
 	return out, rows.Err()
 }
 
+// FollowStats counts what a source has produced, for the followed listing:
+// how many Items its feed has yielded, and how many of those are archived —
+// i.e. have an item-scoped want whose content is satisfied. Counted over the
+// source's Work, because that is what an Item and a projected want both anchor
+// to (§11, ADR-0056).
+func (c *Catalog) FollowStats(ctx context.Context, workID string) (known, archived int, err error) {
+	if err := c.db.Reader().QueryRowContext(ctx,
+		`SELECT count(*) FROM items WHERE work_id = ?`, workID).Scan(&known); err != nil {
+		return 0, 0, fmt.Errorf("catalog: counting items for a work: %w", err)
+	}
+	if err := c.db.Reader().QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM desired_items d
+		JOIN acquisition_state a ON a.desired_item_id = d.id
+		WHERE d.scope = 'item' AND d.work_id = ? AND a.content = 'satisfied'`,
+		workID).Scan(&archived); err != nil {
+		return 0, 0, fmt.Errorf("catalog: counting archived items for a work: %w", err)
+	}
+	return known, archived, nil
+}
+
 // DeleteFollowSource removes a subscription and emits its removal (invariant 7).
 // It does NOT touch the Items it discovered or the wants it projected: unfollowing
 // stops future polls, and whether to keep what was already archived is the

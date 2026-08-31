@@ -2809,6 +2809,132 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/followed-sources:
+    get:
+      tags: [desired]
+      operationId: listFollowedSources
+      summary: List every followed source.
+      description: |
+        A followed source is a standing subscription that archives everything a
+        source emits (§55, M12). Each entry carries the derived counts a person
+        actually wants — how many items its feed has yielded, and how many are
+        archived — plus when it was last polled, when it is due next, and whether
+        its feed adapter is healthy.
+      responses:
+        "200":
+          description: Every followed source.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  followed_sources:
+                    type: array
+                    items: { $ref: "#/components/schemas/FollowedSource" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [desired]
+      operationId: createFollowedSource
+      summary: Follow a source.
+      description: |
+        Subscribe to a source and archive everything it emits, forever — a
+        **standing subscription**, distinct from `POST /desired` (`want_content`),
+        which gets one thing once.
+
+        **Source-agnostic (#396).** There is no `source`, `provider` or
+        `feed_type` field. Give a content intent (which series) and an identity
+        (a `url`, or an explicit `tvdb_id`); the system **infers** the type. Phase
+        1 implements `tv_series` only — anything else is refused with a message
+        that says so, rather than being stored and never polled.
+
+        The series work is resolved exactly as `want_content` resolves a work: an
+        existing `work_id`, or a `title` (and optional `year`) that
+        get-or-creates the series work, so a follow and a later scan converge on
+        one work.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FollowSourceRequest" }
+      responses:
+        "201":
+          description: The source is now followed; its first poll has been queued.
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FollowedSource" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/followed-sources/{id}:
+    delete:
+      tags: [desired]
+      operationId: deleteFollowedSource
+      summary: Stop following a source.
+      description: |
+        Stops future polls. `keep_archive` defaults to `true` — it keeps every
+        item and asset already archived. Removing the archive (`keep_archive=false`)
+        is not implemented in Phase 1 and is refused rather than silently ignored.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: keep_archive
+          in: query
+          description: Keep what was already archived. Defaults to true; false is refused in Phase 1.
+          schema: { type: string, enum: ["true", "false"] }
+      responses:
+        "204": { description: Unfollowed. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/search:
+    post:
+      tags: [content]
+      operationId: searchContent
+      summary: Find a work by what it is.
+      description: |
+        A content-intent search over the library's works, by title and/or content
+        type (§55, #396). **No source parameter**: the question is what a work IS,
+        not which service to ask. It matches the normalised `sort_title` a scan
+        records, so "the conversation" finds "The Conversation".
+
+        A `POST` under the read floor, because the intent travels in a body — the
+        same reasoning as `POST /quality-profiles/{id}/evaluate`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query: { type: string }
+                content_type: { type: string }
+                limit: { type: integer }
+      responses:
+        "200":
+          description: The works that matched.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  works:
+                    type: array
+                    items: { $ref: "#/components/schemas/WorkSummary" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /api/v1/providers:
     get:
       tags: [providers]
@@ -6988,6 +7114,100 @@ components:
         quality_profile: { type: string }
         monitor: { type: boolean }
         reason: { type: string }
+
+    FollowSourceRequest:
+      type: object
+      description: |
+        The intent behind `POST /followed-sources`. Source-agnostic (#396): give
+        a feed identity (a `url` or a `tvdb_id`) and a series identity (a
+        `work_id`, or a `title`); the type is inferred. Exactly one of `work_id`
+        and `title`. A quality profile is required — every projected episode is
+        measured against it.
+      required: [quality_profile]
+      properties:
+        url:
+          type: string
+          description: A feed identity to infer the source from — a TVDB series URL in Phase 1.
+        tvdb_id:
+          type: string
+          description: A numeric TVDB series id, as an alternative to url.
+        work_id:
+          type: string
+          description: An existing series work. Give this or title, never both.
+        title:
+          type: string
+          description: |
+            The series title, for a series not yet catalogued. Get-or-creates the
+            series work the same way `want_content` does.
+        year: { type: integer }
+        quality_profile_id: { type: string }
+        quality_profile:
+          type: string
+          description: The profile by name, as a person would say it. Give this or quality_profile_id.
+        monitor:
+          type: boolean
+          description: Keep looking for a better copy of each episode. Defaults to true.
+        backfill:
+          type: string
+          enum: [from_now, full]
+          description: |
+            How much back-catalogue to pull on the first poll. `from_now` (the
+            default) archives only episodes airing after you follow; `full` walks
+            the whole back-catalogue into wants.
+        reason:
+          type: string
+          description: A free-text note, never interpreted.
+        retention:
+          type: string
+          description: Reserved. Phase 1 keeps everything; a non-empty value is refused.
+
+    FollowedSource:
+      type: object
+      description: |
+        A followed source as the API presents it — the subscription plus the
+        derived counts and health a caller reads to answer "is this working".
+      required:
+        [id, work_id, type, feed_ref, quality_profile_id, monitor, backfill,
+         items_known, items_archived, health, created_at]
+      properties:
+        id: { type: string }
+        work_id: { type: string }
+        type:
+          type: string
+          description: The inferred source type. Reported, never a request field.
+          enum: [tv_series, podcast, youtube_channel, rss_feed]
+        feed_ref:
+          type: string
+          description: The source-stable handle the feed adapter polls — a TVDB series id.
+        quality_profile_id: { type: string }
+        monitor: { type: boolean }
+        backfill: { type: string, enum: [from_now, full] }
+        reason: { type: string }
+        items_known:
+          type: integer
+          description: How many items the feed has yielded.
+        items_archived:
+          type: integer
+          description: How many of those are held at the profile.
+        health:
+          type: string
+          enum: [healthy, unhealthy, unknown]
+          description: |
+            The state of the feed adapter this source is polled through. `unknown`
+            means none is configured, or none has been checked yet.
+        created_at: { type: string, format: date-time }
+        last_polled_at: { type: string, format: date-time }
+        next_poll_at: { type: string, format: date-time }
+
+    WorkSummary:
+      type: object
+      description: One work a content-intent search returned.
+      required: [work_id, content_type, title]
+      properties:
+        work_id: { type: string }
+        content_type: { type: string }
+        title: { type: string }
+        year: { type: integer }
 
     Providers:
       type: object
