@@ -60,3 +60,5 @@ An ADR that merely describes the code is not worth having.
 | [0050](0050-external-identifiers-are-readable-for-knowledge-graph-reconciliation.md) | External identifiers are readable, for knowledge-graph reconciliation | Accepted |
 | [0051](0051-personal-state-reaches-clients-through-a-device-gateway-not-the-controller.md) | Personal state reaches clients through a device gateway, not the controller | Accepted |
 | [0052](0052-a-disposable-download-daemon-earns-a-scheduled-lane.md) | A disposable download-client daemon earns a scheduled acceptance lane (amends 0026) | Accepted |
+| [0053](0053-a-weblogin-broker-for-browser-and-tv-qr-login.md) | A weblogin.Broker for browser/TV QR login (and, later, push) | Accepted |
+| [0054](0054-client-strategy-first-party-key-holder-compat-adapters-are-reach.md) | Client strategy: a first-party device-side key-holder is the product; compat adapters are reach | Accepted |

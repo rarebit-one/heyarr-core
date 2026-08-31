@@ -103,11 +103,23 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 
 		if raw, ok := bearerToken(r); ok {
 			id, err := s.verifier.Verify(r.Context(), raw)
-			if err != nil {
-				s.rejectCredential(w, r, authFailureReason(err))
+			if err == nil {
+				next.ServeHTTP(w, s.withIdentity(r, id))
 				return
 			}
-			next.ServeHTTP(w, s.withIdentity(r, id))
+			// A Voidbind web-login session token is also carried as a Bearer
+			// credential (ADR-0053). It is tried ONLY after the primary verifier
+			// declines this value, so a real service token keeps its exact path,
+			// metrics and error mapping, and only an otherwise-rejected bearer value
+			// is ever offered to the broker. On a hit the browser or TV acts as the
+			// pinned user its device approved for, read-scoped like a device.
+			if s.sessions != nil {
+				if p, ok := s.sessions.Session(raw); ok {
+					next.ServeHTTP(w, s.withIdentity(r, sessionIdentity(p)))
+					return
+				}
+			}
+			s.rejectCredential(w, r, authFailureReason(err))
 			return
 		}
 
