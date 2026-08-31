@@ -265,6 +265,28 @@ const (
 	TypeDesiredRemoved   = "desired.removed"
 	TypeDesiredSatisfied = "desired.satisfied"
 
+	// Followed sources (§55, M12). A subscription to archive everything a source
+	// emits is a standing statement of intent, so it lives under desired.* beside
+	// the wants it projects — a subscriber asking "what does the operator want"
+	// learns that a whole source is wanted, not only the individual episodes.
+	//
+	// There is no "desired.source.polled" event, and there must not be: a poll
+	// that found nothing new is not a state transition, and one per source per
+	// six hours would turn the log into a heartbeat. What a poll DID change — a
+	// new Item, a new want — emits its own event below and in the desired.created
+	// path the projection reuses.
+	TypeFollowSourceCreated = "desired.source.followed"
+	TypeFollowSourceRemoved = "desired.source.unfollowed"
+
+	// TypeItemDiscovered is a byte-less Item appearing in the catalog (ADR-0056,
+	// M12) — a single episode a feed adapter enumerated, before any bytes for it
+	// exist. It is content.* rather than desired.* for the reason work.created
+	// is: an Item appearing is a fact about the catalog's spine, and a subscriber
+	// watching the catalog grow should see it whether a followed source or a
+	// later scan produced it. Emitted once, when the row is first upserted; a
+	// re-poll that re-presents the same key is not a discovery and emits nothing.
+	TypeItemDiscovered = "content.item.discovered"
+
 	// Quality profiles are POLICY, and policy.* is a category §76 does not
 	// list (M3-01).
 	//

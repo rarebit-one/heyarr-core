@@ -14,6 +14,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
@@ -28,6 +29,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/tvdb"
 	"github.com/rarebit-one/heyarr-core/internal/scanner"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
@@ -333,7 +335,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		return fmt.Errorf("worker: %w", err)
 	}
 	providerRegistry, err := providers.BuildWith(resolvedProviders, w.log, nil,
-		providers.Chain(indexers.Constructor, downloads.Constructor))
+		providers.Chain(indexers.Constructor, downloads.Constructor, tvdb.Constructor))
 	if err != nil {
 		return fmt.Errorf("worker: building the provider registry: %w", err)
 	}
@@ -373,6 +375,25 @@ func (w *Worker) Run(ctx context.Context) error {
 		registry.Register(acquisition.SearchJobType, Registration{
 			Handler:            SearchHandler(providerRegistry, cat, queue, w.log),
 			RequiredCapability: providers.CapabilityIndexer.JobCapability(),
+		})
+	}
+	// The source-poll handler (§55, M12), registered only when this worker has a
+	// feed adapter — the same reasoning as the search handler. A node with no
+	// metadata provider never advertises `metadata`, so a poll_source job stays
+	// PENDING AND VISIBLE rather than being claimed and failed (ADR-0025), and the
+	// startup log names the types this worker will claim so "why is nothing being
+	// followed" is answerable from it.
+	//
+	// MaxConcurrent is deliberately NOT 1: each poll is scoped to one source and
+	// writes only that source's items and wants, so two running at once contend
+	// over nothing, and a library of many followed sources coming due at once must
+	// not be polled one feed round-trip at a time.
+	if providerRegistry.Has(providers.CapabilityMetadata) {
+		w.log.Info("a feed adapter is available",
+			"providers", strings.Join(feedProviderNames(providerRegistry), ", "))
+		registry.Register(followed.PollSourceJobType, Registration{
+			Handler:            PollSourceHandler(providerRegistry, cat, queue, w.log),
+			RequiredCapability: providers.CapabilityMetadata.JobCapability(),
 		})
 	}
 	// The poll handler, registered only when this worker has a download client

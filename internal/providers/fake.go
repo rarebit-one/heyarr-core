@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 )
 
@@ -47,7 +48,14 @@ type Fake struct {
 	failWith error
 	// added is every source handed to Add, in order — see Added().
 	added []secret.Value
-	now   func() time.Time
+	// feeds is what Enumerate returns, per feed ref — so one fake can stand in
+	// for a metadata service across a library of followed sources, which is what
+	// the demo and the follow-pipeline integration test need (M12).
+	feeds map[string][]followed.FeedItem
+	// enumerations counts Enumerate calls, so a test can assert the poll loop
+	// actually reached the adapter rather than inferring it from projected wants.
+	enumerations int
+	now          func() time.Time
 }
 
 // NewFake builds an inert provider with the given capabilities.
@@ -56,6 +64,7 @@ func NewFake(name string, caps ...Capability) *Fake {
 		name:       name,
 		caps:       sortCapabilities(caps),
 		candidates: map[string][]acquisition.ReleaseCandidate{},
+		feeds:      map[string][]followed.FeedItem{},
 		now:        func() time.Time { return time.Now().UTC() },
 	}
 }
@@ -151,14 +160,51 @@ func (f *Fake) Added() []secret.Value {
 	return append([]secret.Value(nil), f.added...)
 }
 
+// OfferFeed makes a set of feed items the answer Enumerate gives for a ref, so
+// a fake metadata provider can drive the follow pipeline without a network —
+// the same reason Offer exists for searches (M12).
+func (f *Fake) OfferFeed(ref string, items ...followed.FeedItem) *Fake {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.feeds[normaliseRef(ref)] = items
+	return f
+}
+
+// Enumerations is how many times Enumerate was called.
+func (f *Fake) Enumerations() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.enumerations
+}
+
+// Enumerate implements FeedProvider. It returns whatever OfferFeed staged for
+// the ref, so the poll loop and projection are exercisable end to end without a
+// metadata service. FailWith makes it fail, so the beat's hold-off and the
+// worker's error path are reachable too.
+func (f *Fake) Enumerate(_ context.Context, ref string) ([]followed.FeedItem, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.enumerations++
+	if f.failWith != nil {
+		return nil, f.failWith
+	}
+	found := f.feeds[normaliseRef(ref)]
+	return append([]followed.FeedItem(nil), found...), nil
+}
+
 func normaliseTitle(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
+}
+
+func normaliseRef(s string) string {
+	return strings.TrimSpace(s)
 }
 
 // Compile-time proof that a Fake really is substitutable for the real thing. If
 // the interface grows a method, this breaks here rather than in the demo.
 var (
-	_ Provider   = (*Fake)(nil)
-	_ Indexer    = (*Fake)(nil)
-	_ Downloader = (*Fake)(nil)
+	_ Provider     = (*Fake)(nil)
+	_ Indexer      = (*Fake)(nil)
+	_ Downloader   = (*Fake)(nil)
+	_ FeedProvider = (*Fake)(nil)
 )

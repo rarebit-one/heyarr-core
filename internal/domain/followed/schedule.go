@@ -61,6 +61,15 @@ func FeedPoll() acquisition.Schedule {
 // handlers.
 const PollSourceJobType = "poll_source"
 
+// PollSourcePayload is what a poll_source job carries: which source to poll. It
+// lives here beside the job type and the dedupe key, so the controller that
+// enqueues and the worker that runs it share one definition and cannot drift
+// about the field name — the same reason acquisition.SearchPayload sits beside
+// its job type rather than in the handler.
+type PollSourcePayload struct {
+	SourceID string `json:"source_id"`
+}
+
 // PollDedupeKey is the queue's idempotency key for a source's poll, in the
 // colon-separated shape acquisition's keys use (reconcile:desired,
 // upgrade:scan). Two controllers, or a controller and an operator forcing a

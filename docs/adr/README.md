@@ -66,3 +66,4 @@ An ADR that merely describes the code is not worth having.
 | [0056](0056-the-item-scope-is-the-sanctioned-addition.md) | The Item entity and the item scope are the sanctioned addition, not a retrofit | Accepted |
 | [0057](0057-a-followed-source-projects-items-onto-wants.md) | A followed source projects items onto wants; the follow beat is the search beat's sibling | Accepted |
 | [0058](0058-the-feed-provider-is-capability-metadata-tvdb-first.md) | The feed adapter is a CapabilityMetadata provider; TVDB is the first, TMDB is pluggable | Accepted |
+| [0059](0059-the-poll-outcome-is-stored-and-a-want-is-created-through-one-path.md) | The poll outcome is stored (not derived), and a want is created through one shared path | Accepted |

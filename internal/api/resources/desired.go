@@ -377,111 +377,64 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (DesiredI
 		monitor = *req.Monitor
 	}
 
-	var (
-		ev      events.Event
-		pending []events.Event
-		out     DesiredItem
-		created bool
-	)
-	err := a.db.InTx(ctx, func(tx *sql.Tx) error {
-		profileID, err := a.resolveProfile(ctx, tx, req.QualityProfileID, req.QualityProfile)
+	// Resolving a profile name and getting-or-creating a work from a descriptor
+	// are the API's business — the catalog's CreateDesiredItem takes ids already
+	// resolved. Both happen first, in one transaction, so a want and its work
+	// converge on the scanner's get-or-create (§55, and see resolveWorkDescriptor).
+	var profileID, workID string
+	if err := a.db.InTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		profileID, err = a.resolveProfile(ctx, tx, req.QualityProfileID, req.QualityProfile)
 		if err != nil {
 			return err
 		}
-		workID := req.WorkID
+		workID = req.WorkID
 		if req.Work != nil {
 			workID, err = a.resolveWorkDescriptor(ctx, tx, *req.Work)
-			if err != nil {
-				return err
-			}
 		}
+		return err
+	}); err != nil {
+		return DesiredItem{}, err
+	}
 
-		item := desired.Item{
-			ID:               a.newID(),
-			Scope:            desired.Scope(req.Scope),
-			WorkID:           workID,
-			EditionID:        req.EditionID,
-			QualityProfileID: profileID,
-			Monitor:          monitor,
-			Reason:           req.Reason,
-		}
-		if err := item.Validate(); err != nil {
-			return &badRequest{err}
-		}
+	item := desired.Item{
+		ID:               a.newID(),
+		Scope:            desired.Scope(req.Scope),
+		WorkID:           workID,
+		EditionID:        req.EditionID,
+		QualityProfileID: profileID,
+		Monitor:          monitor,
+		Reason:           req.Reason,
+	}
+	// Validate here, wrapped as a client fault, so the two front doors classify
+	// a malformed want identically (see ClientFault). CreateDesiredItem validates
+	// again — it is the shared persistence path M12's poll worker also uses, and
+	// it must not trust a hand-built caller — but by then a bad want is already
+	// this door's 400 rather than the catalog's raw error.
+	if err := item.Validate(); err != nil {
+		return DesiredItem{}, &badRequest{err}
+	}
 
-		now := a.now().UTC()
-		out = DesiredItem{
-			ID: item.ID, Scope: string(item.Scope), WorkID: item.WorkID,
-			EditionID: item.EditionID, QualityProfileID: item.QualityProfileID,
-			Monitor: item.Monitor, Reason: item.Reason,
-			CreatedAt: now, UpdatedAt: now,
-		}
-		if err := insertDesired(ctx, tx, out); err != nil {
-			return err
-		}
-		// A want and its acquisition state are created together, in one
-		// transaction. A want with no acquisition row is a want the
-		// reconciliation sweep cannot advance and nothing would notice — it
-		// would simply sit there, wanted and never searched for, which is the
-		// quietest possible failure this feature has.
-		initial := acquisition.Initial()
-		if err := insertAcquisition(ctx, tx, out.ID, initial, now); err != nil {
-			return err
-		}
-		// And it emits, in the same transaction (invariant 7).
-		//
-		// Two events on one create looks redundant next to desired.created —
-		// a fresh want can only start MISSING, so the state is implied. It is
-		// not redundant for the subscriber this event exists for: something
-		// following only acquisition.* to build a pipeline view would never
-		// see the acquisition appear, and its table would be missing rows
-		// forever with nothing to indicate why.
-		//
-		// This was found by an acceptance assertion, not by review: the API
-		// wrote the row directly while the catalog's own StartAcquisition
-		// emitted, and the two paths had silently diverged.
-		acqEvent, err := a.events.EmitTx(ctx, tx, events.TypeAcquisitionPhaseChanged,
-			"desired_item", out.ID, map[string]any{
-				"desired_item_id": out.ID,
-				"transition":      "created",
-				"from":            "",
-				"to":              string(initial.Phase),
-				"state":           initial.Name(),
-			})
-		if err != nil {
-			return err
-		}
-		pending = append(pending, acqEvent)
-		out.Acquisition = &AcquisitionView{
-			State:     initial.Name(),
-			Phase:     string(initial.Phase),
-			Managed:   initial.Managed,
-			Content:   string(initial.Content),
-			Placement: string(initial.Placement),
-		}
-		created = true
-
-		kind, target := item.Target()
-		var emitErr error
-		ev, emitErr = a.events.EmitTx(ctx, tx, events.TypeDesiredCreated,
-			"desired_item", out.ID, map[string]any{
-				"desired_item_id":    out.ID,
-				"scope":              out.Scope,
-				"target_type":        kind,
-				"target_id":          target,
-				"quality_profile_id": out.QualityProfileID,
-				"monitor":            out.Monitor,
-			})
-		return emitErr
-	})
+	// The row, its resting acquisition state and both events, in one place
+	// (invariant 7). This is the SAME path the poll_source worker projects an
+	// episode through — one implementation, two callers, so the two cannot drift
+	// about whether a create emits or leaves a want with no acquisition row.
+	rec, err := a.catalog.CreateDesiredItem(ctx, item)
 	if err != nil {
 		return DesiredItem{}, err
 	}
-	if created {
-		a.events.Publish(ev)
-		for _, e := range pending {
-			a.events.Publish(e)
-		}
+	out := DesiredItem{
+		ID: rec.Item.ID, Scope: string(rec.Item.Scope), WorkID: rec.Item.WorkID,
+		EditionID: rec.Item.EditionID, QualityProfileID: rec.Item.QualityProfileID,
+		Monitor: rec.Item.Monitor, Reason: rec.Item.Reason,
+		CreatedAt: rec.CreatedAt, UpdatedAt: rec.UpdatedAt,
+		Acquisition: &AcquisitionView{
+			State:     rec.State.Name(),
+			Phase:     string(rec.State.Phase),
+			Managed:   rec.State.Managed,
+			Content:   string(rec.State.Content),
+			Placement: string(rec.State.Placement),
+		},
 	}
 
 	// Reconcile this want now rather than waiting for the beat (§57, M3-05).
@@ -807,43 +760,10 @@ func sameDesired(a, b DesiredItem) bool {
 		a.Reason == b.Reason
 }
 
-func insertDesired(ctx context.Context, tx *sql.Tx, d DesiredItem) error {
-	var edition any
-	if d.EditionID != "" {
-		edition = d.EditionID
-	}
-	monitor := 0
-	if d.Monitor {
-		monitor = 1
-	}
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO desired_items
-			(id, scope, work_id, edition_id, quality_profile_id, monitor, reason,
-			 created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		d.ID, d.Scope, d.WorkID, edition, d.QualityProfileID, monitor, d.Reason,
-		d.CreatedAt.Format(time.RFC3339Nano), d.UpdatedAt.Format(time.RFC3339Nano))
-	return err
-}
-
-func insertAcquisition(
-	ctx context.Context, tx *sql.Tx, desiredItemID string,
-	s acquisition.State, now time.Time,
-) error {
-	stamp := now.Format(time.RFC3339Nano)
-	managed := 0
-	if s.Managed {
-		managed = 1
-	}
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO acquisition_state
-			(desired_item_id, phase, managed, content, placement, detail,
-			 phase_entered_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, '', ?, ?, ?)`,
-		desiredItemID, string(s.Phase), managed, string(s.Content), string(s.Placement),
-		stamp, stamp, stamp)
-	return err
-}
+// insertDesired and insertAcquisition used to live here; a new want's row, its
+// resting acquisition state and both events are now catalog.CreateDesiredItem,
+// so the API door and M12's poll_source worker create a want through one path
+// (see WantContent, and the catalog method's own note).
 
 func updateDesiredRow(ctx context.Context, tx *sql.Tx, d DesiredItem) error {
 	monitor := 0

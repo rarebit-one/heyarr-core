@@ -172,18 +172,18 @@ func construct(r Resolved, now func() time.Time, ctor Constructor) (Provider, er
 			f.Offer(title, candidates...)
 		}
 		return f, nil
-	case KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindHTTP:
-		// No constructor claimed it. BOTH clients exist now — internal/indexers
-		// and internal/downloads — but neither can be constructed from here,
-		// because both import this package for the Provider contract and a
-		// registry that reached into every integration would be one every
-		// integration had to be linked into.
+	case KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindHTTP, KindTVDB:
+		// No constructor claimed it. The clients exist now — internal/indexers,
+		// internal/downloads and internal/providers/tvdb — but none can be
+		// constructed from here, because each imports this package for the Provider
+		// contract and a registry that reached into every integration would be one
+		// every integration had to be linked into.
 		//
-		// So reaching this branch means the caller built a registry without
-		// Chain(indexers.Constructor, downloads.Constructor). That is
-		// legitimate — a test wanting only the registry's own behaviour does
-		// it deliberately — and it is a real registry entry with real
-		// capabilities that reports honestly rather than pretending.
+		// So reaching this branch means the caller built a registry without the
+		// matching Constructor in its Chain (indexers, downloads, tvdb). That is
+		// legitimate — a test wanting only the registry's own behaviour does it
+		// deliberately — and it is a real registry entry with real capabilities
+		// that reports honestly rather than pretending.
 		return newUnimplemented(r, now), nil
 	default:
 		// Unreachable: ParseKind refuses anything else. Kept because a kind

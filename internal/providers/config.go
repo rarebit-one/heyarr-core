@@ -67,6 +67,14 @@ const (
 	// URL (a magnet or an .nzb belongs to another client), so it composes with
 	// them rather than competing for their transfers.
 	KindHTTP Kind = "http"
+	// KindTVDB is a metadata provider speaking TheTVDB v4 (§59, M12, ADR-0058):
+	// it enumerates a TV series' episodes and air dates so a followed source can
+	// project a want per episode. It is the first CapabilityMetadata kind — the
+	// capability capability.go reserved in Milestone 3 with nothing implementing
+	// it. TMDB is a pluggable later kind behind the same FeedProvider interface;
+	// this names the service the way `transmission` does, because the v4 API has
+	// no second implementation to abstract over (ADR-0028).
+	KindTVDB Kind = "tvdb"
 	// KindFake is an in-process provider that talks to nothing.
 	//
 	// It is a first-class kind rather than a test-only construct because the
@@ -84,7 +92,7 @@ const (
 
 // Kinds lists every kind, in a stable order.
 func Kinds() []Kind {
-	return []Kind{KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindHTTP, KindFake}
+	return []Kind{KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindHTTP, KindTVDB, KindFake}
 }
 
 // ParseKind validates a kind from configuration.
@@ -115,6 +123,8 @@ func DefaultCapabilities(k Kind) []Capability {
 		return []Capability{CapabilityIndexer}
 	case KindTransmission, KindQBittorrent, KindHTTP:
 		return []Capability{CapabilityDownload}
+	case KindTVDB:
+		return []Capability{CapabilityMetadata}
 	default:
 		// A fake declares nothing by default: what it stands in for is the
 		// whole of what a test or the demo is configuring, so it must say.
@@ -127,8 +137,11 @@ func DefaultCapabilities(k Kind) []Capability {
 // The fake reaches nothing, so requiring an endpoint would be requiring a
 // fiction. The plain-HTTP client is the second exception for a different
 // reason: its "endpoint" is the release's own source URL, handed to it per
-// grab, so a single configured endpoint would be a value it never uses.
-func needsEndpoint(k Kind) bool { return k != KindFake && k != KindHTTP }
+// grab, so a single configured endpoint would be a value it never uses. TVDB is
+// the third: it has one well-known v4 base URL that the client defaults to, so
+// an operator supplies a key, not an address — an endpoint is accepted (tests
+// point it at a fixture server) but not required.
+func needsEndpoint(k Kind) bool { return k != KindFake && k != KindHTTP && k != KindTVDB }
 
 // needsCredential reports whether a kind must be given one.
 //
@@ -139,7 +152,7 @@ func needsEndpoint(k Kind) bool { return k != KindFake && k != KindHTTP }
 // Transmission does NOT: an operator running it on a trusted network with
 // authentication off is an ordinary, supported deployment, and refusing to
 // start would be Heyarr insisting on a policy the operator already declined.
-func needsCredential(k Kind) bool { return k == KindTorznab || k == KindNewznab }
+func needsCredential(k Kind) bool { return k == KindTorznab || k == KindNewznab || k == KindTVDB }
 
 // Offer is a canned answer a fake indexer gives to one search title.
 type Offer struct {

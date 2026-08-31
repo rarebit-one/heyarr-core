@@ -489,6 +489,71 @@ func TestDesiredItemConstraints(t *testing.T) {
 	}
 }
 
+// The item scope (M12, ADR-0056): a want may point at one byte-less Item, and
+// the scope/target CHECK the migration rebuilt desired_items to enforce is the
+// floor under desired.Item.Validate — the same reason the work/edition
+// constraints above exist. These assert the refusals a repair script or a
+// migration, which do not go through the validator, would otherwise sail past.
+func TestDesiredItemItemScopeConstraints(t *testing.T) {
+	db := openTestDB(t)
+	seedDesiredFixtures(t, db)
+	mustExec(t, db, `INSERT INTO items
+		(id, work_id, edition_id, item_key, title, published_at, attributes, created_at, updated_at)
+		VALUES ('i1', 'w1', NULL, 'S02E01', 'The Return', NULL, '{}', ?, ?)`, ts, ts)
+
+	insert := func(id, scope string, edition, item any) error {
+		return exec(t, db, `INSERT INTO desired_items
+			(id, scope, work_id, edition_id, item_id, quality_profile_id, monitor, reason,
+			 created_at, updated_at)
+			VALUES (?, ?, 'w1', ?, ?, 'q1', 1, '', ?, ?)`, id, scope, edition, item, ts, ts)
+	}
+
+	if err := insert("ok", "item", nil, "i1"); err != nil {
+		t.Fatalf("a valid item-scoped want was rejected: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name          string
+		scope         string
+		edition, item any
+	}{
+		// Each scope names its own target and refuses the other two's.
+		{"an item scope with no item", "item", nil, nil},
+		{"an item scope carrying an edition", "item", "e1", "i1"},
+		{"a work scope carrying an item", "work", nil, "i1"},
+		{"an edition scope carrying an item", "edition", "e1", "i1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := insert("bad-"+tc.name, tc.scope, tc.edition, tc.item); err == nil {
+				t.Error("the database accepted it")
+			}
+		})
+	}
+}
+
+// The uniqueness index now coalesces item_id too: two item-scoped wants over the
+// same item under one profile are one want written twice, and would sail through
+// a naive index because NULL is not equal to itself.
+func TestItemScopedUniquenessIsPerItemAndProfile(t *testing.T) {
+	db := openTestDB(t)
+	seedDesiredFixtures(t, db)
+	mustExec(t, db, `INSERT INTO items
+		(id, work_id, edition_id, item_key, title, published_at, attributes, created_at, updated_at)
+		VALUES ('i1', 'w1', NULL, 'S02E01', 'The Return', NULL, '{}', ?, ?)`, ts, ts)
+
+	stmt := `INSERT INTO desired_items
+		(id, scope, work_id, edition_id, item_id, quality_profile_id, monitor, reason, created_at, updated_at)
+		VALUES (?, 'item', 'w1', NULL, 'i1', ?, 1, '', ?, ?)`
+
+	mustExec(t, db, stmt, "d1", "q1", ts, ts)
+	if err := exec(t, db, stmt, "d2", "q2", ts, ts); err != nil {
+		t.Fatalf("two profiles over one item must both exist (§61): %v", err)
+	}
+	if err := exec(t, db, stmt, "d3", "q1", ts, ts); err == nil {
+		t.Error("a duplicate item-scoped want was accepted; the index does not coalesce item_id")
+	}
+}
+
 // §61: never one version per title. Two wants over one work under DIFFERENT
 // profiles are two wants and must both exist; the same profile twice is one
 // want written twice.

@@ -92,3 +92,14 @@ func indexerNames(reg *providers.Registry) []string {
 	}
 	return out
 }
+
+// feedProviderNames is the same, for the metadata providers a worker will poll
+// followed sources through — so the startup log says which feed adapters it
+// would use, and "why is nothing being followed" is answerable from it (M12).
+func feedProviderNames(reg *providers.Registry) []string {
+	var out []string
+	for _, p := range reg.Route(providers.CapabilityMetadata) {
+		out = append(out, p.Name())
+	}
+	return out
+}
