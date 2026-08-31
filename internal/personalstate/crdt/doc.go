@@ -1,6 +1,25 @@
-// Package crdt is the client-side, plaintext merge logic for a personal
-// playlist — an ordered set of items — that Milestone 9 converges after a
-// device decrypts concurrent offline edits (spec §42, §43; issue #324).
+// Package crdt is the client-side, plaintext merge logic for a user's PERSONAL
+// STATE — the family of conflict-free replicated types Milestone 9 and Milestone
+// 11 converge after a device decrypts concurrent offline edits (spec §42, §43;
+// issues #324, #386). It holds four independent CRDTs, one per kind of personal
+// state, each in its own file with its own tests:
+//
+//   - the PLAYLIST — an add-wins OR-Set with a Lamport total order (playlist.go,
+//     the type this doc describes in full below);
+//   - STARRED / favourites — the playlist's membership OR-Set minus positional
+//     order, feeding Subsonic star/unstar/getStarred2 (starred.go, §46);
+//   - READING-POSITION — a per-publication last-writer-wins register, feeding
+//     the OPDS reading-position surface (readingpos.go, §45);
+//   - PLAY-HISTORY — a grow-only set of play events, feeding Subsonic scrobble /
+//     getNowPlaying / getAlbumList2 recent|frequent (history.go, §46).
+//
+// The four share one discipline — every merge is a semilattice JOIN, so it is
+// commutative, associative, and idempotent — and one guarantee: they operate on
+// plaintext, on the device, only after the encrypted change has been decrypted;
+// the controller never merges and never sees it (Invariant 6, §72). The rest of
+// this doc walks the playlist in full as the worked example of that discipline;
+// the sibling files carry the same structure and the same convergence and
+// adversarial tests.
 //
 // # What this package is, and what it deliberately is not
 //
