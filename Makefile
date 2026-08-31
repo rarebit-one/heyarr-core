@@ -8,7 +8,7 @@ LDFLAGS := -s -w \
   -X $(PKG)/internal/buildinfo.Commit=$(COMMIT) \
   -X $(PKG)/internal/buildinfo.Date=$(DATE)
 
-.PHONY: all build fixtures test test-skips race lint claims hygiene hygiene-issues fmt gen tidy demo clean help
+.PHONY: all build fixtures test test-skips race lint claims hygiene hygiene-issues fmt gen tidy demo daemon-acceptance clean help
 
 all: lint test build          ## lint, test and build
 
@@ -53,6 +53,9 @@ tidy:                         ## tidy modules
 
 demo: build fixtures          ## run the end-to-end acceptance demo (the milestone gate)
 	./scripts/acceptance.sh
+
+daemon-acceptance:            ## stand up a real qBittorrent and prove a transfer completes (#379; needs docker, off the merge path)
+	./scripts/daemon-acceptance.sh
 
 snapshot:                     ## build release artefacts locally, without publishing
 	goreleaser release --snapshot --clean --skip=publish
