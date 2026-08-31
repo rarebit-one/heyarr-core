@@ -58,6 +58,26 @@ type Config struct {
 	// (§49, ADR-0044). The database is where it lives; the backups are copies of
 	// it, so they live under the data directory too unless pointed elsewhere.
 	Backup Backup `koanf:"backup"`
+
+	// Notify configures the Voidbind push/wake plane (ADR-0055): the self-hosted
+	// ntfy server that carries a login push to a paired device. Push is additive
+	// to the QR web-login (ADR-0053) — the QR stays the primary channel — so an
+	// empty configuration is fully supported: the login broker still mounts and
+	// still shows a QR, it simply wakes no device.
+	Notify Notify `koanf:"notify"`
+}
+
+// Notify configures the push/wake login channel (ADR-0055). The subscription
+// address book and fan-out live in voidbind-go/notify; this records only the
+// operator-facing deployment detail.
+type Notify struct {
+	// NtfyBaseURL records this deployment's self-hosted ntfy origin. It is
+	// informational: a device registers its FULL ntfy topic URL as its
+	// subscription endpoint (the wake channel POSTs there directly), so the plane
+	// works without this being set. It is logged at startup so an operator can see
+	// which ntfy server a login push is meant for, and defaults empty (no default
+	// public server is assumed — push is opt-in on the device registering a topic).
+	NtfyBaseURL string `koanf:"ntfy_base_url"`
 }
 
 // Backup configures the control-plane backup cadence (§49, ADR-0044).

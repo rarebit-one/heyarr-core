@@ -427,12 +427,23 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	// exactly as it mints no renderer URL.
 	var sessions httpapi.SessionValidator
 	if base := renderBaseURL(c.cfg); base != "" {
-		loginHandler, err := weblogin.New(weblogin.Options{Identities: deviceIdentities, Base: base, Logger: c.log})
+		loginHandler, err := weblogin.New(weblogin.Options{
+			Identities:  deviceIdentities,
+			Base:        base,
+			Logger:      c.log,
+			NtfyBaseURL: c.cfg.Notify.NtfyBaseURL,
+		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("controller: standing up web login: %w", err)
 		}
 		publicMounts = append(publicMounts, loginHandler.Mount)
 		sessions = loginHandler.Sessions()
+		// The push/wake plane is additive to the QR (ADR-0055). Record which ntfy
+		// server a login push is meant for so it is visible in the logs; empty is a
+		// supported state (a device registers its full topic URL regardless).
+		c.log.Info("web login push plane mounted",
+			"subscriptions", weblogin.SubscriptionsPrefix,
+			"ntfy_base_url", c.cfg.Notify.NtfyBaseURL)
 	}
 	// What this binary knows how to migrate to, as opposed to what the database
 	// is actually at. The two are compared on GET /api/v1/system (#150), and
