@@ -1,0 +1,21 @@
+{
+  "name": "login",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tvdb",
+    "version": "v4",
+    "captured_at": "2026-08-31T00:00:00Z",
+    "procedure": "scripts/capture-fixtures.sh tvdb login  (requires a real TVDB v4 API key in TVDB_API_KEY); synthesised here from the published v4 /login contract because CI has no key and none may be committed (ADR-0026).",
+    "note": "Synthesised: TheTVDB v4 login exchanges {\"apikey\": ...} for a bearer token. The token here is a placeholder; the real value is a JWT. Body is not matched by the replay harness, only method+path, so any apikey drives this response."
+  },
+  "request": {
+    "method": "POST",
+    "path": "/login",
+    "body": "{\"apikey\":\"FAKE-KEY\"}"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "body": "{\"status\":\"success\",\"data\":{\"token\":\"FAKE-TOKEN-eyJ0eXAiOiJKV1QifQ\"}}"
+  }
+}

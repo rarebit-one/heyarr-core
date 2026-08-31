@@ -1,0 +1,21 @@
+{
+  "name": "login-unauthorised",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tvdb",
+    "version": "v4",
+    "captured_at": "2026-08-31T00:00:00Z",
+    "procedure": "POST /login with a bad apikey; synthesised from the v4 contract (ADR-0026).",
+    "note": "Synthesised: TheTVDB answers a rejected key with HTTP 401 and a JSON error. Used via Exchange.ServeOne so the status, not the routing, is the subject — it shares method+path with the happy-path login fixture."
+  },
+  "request": {
+    "method": "POST",
+    "path": "/login",
+    "body": "{\"apikey\":\"WRONG\"}"
+  },
+  "response": {
+    "status": 401,
+    "headers": { "Content-Type": "application/json" },
+    "body": "{\"status\":\"failure\",\"message\":\"Unauthorized\"}"
+  }
+}
