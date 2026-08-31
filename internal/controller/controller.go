@@ -19,6 +19,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/render"
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
 	"github.com/rarebit-one/heyarr-core/internal/api/subsonic"
+	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
@@ -416,6 +417,23 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	if err != nil {
 		return nil, nil, err
 	}
+	// The Voidbind QR web-login (ADR-0053), stood up here rather than inside
+	// mounts because it is a distinct trust root — a browser/TV that holds no
+	// device cert, logging in through a device that does — and it feeds TWO of
+	// httpapi's seams at once: its /login + /signin routes join the public mounts,
+	// and its broker becomes the SessionValidator that accepts the tokens it mints.
+	// It is stood up only when this node can name an origin a scanning device can
+	// dial back (renderBaseURL); a loopback- or socket-only node mounts no login,
+	// exactly as it mints no renderer URL.
+	var sessions httpapi.SessionValidator
+	if base := renderBaseURL(c.cfg); base != "" {
+		loginHandler, err := weblogin.New(weblogin.Options{Identities: deviceIdentities, Base: base, Logger: c.log})
+		if err != nil {
+			return nil, nil, fmt.Errorf("controller: standing up web login: %w", err)
+		}
+		publicMounts = append(publicMounts, loginHandler.Mount)
+		sessions = loginHandler.Sessions()
+	}
 	// What this binary knows how to migrate to, as opposed to what the database
 	// is actually at. The two are compared on GET /api/v1/system (#150), and
 	// they are read from two different places on purpose: one is compiled in,
@@ -431,6 +449,7 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 		DB:                 db,
 		Verifier:           verifier,
 		DeviceVerifier:     deviceIdentities,
+		SessionValidator:   sessions,
 		Events:             eventLog,
 		Media:              mediaInfo(toolchain),
 		Build:              buildinfo.Get(),

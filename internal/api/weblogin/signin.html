@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · heyarr</title>
+<style>
+  :root { color-scheme: light dark; --fg:#111; --bg:#fafafa; --card:#fff; --muted:#666; --ok:#0a7d28; --err:#b3261e; --line:#ddd; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#eee; --bg:#0f1115; --card:#191c22; --muted:#9aa0aa; --ok:#4ec36e; --err:#f2b8b5; --line:#2a2f38; } }
+  body { font: 15px/1.5 system-ui, sans-serif; color:var(--fg); background:var(--bg); margin:0; display:grid; place-items:center; min-height:100vh; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:28px 32px; width:min(92vw,560px); }
+  h1 { font-size:18px; margin:0 0 4px; }
+  .muted { color:var(--muted); }
+  code { font-family: ui-monospace, monospace; }
+  .qr { display:block; word-break:break-all; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:14px; margin:14px 0; font-size:13px; font-family: ui-monospace, monospace; }
+  .status { margin-top:16px; padding:12px; border-radius:8px; border:1px solid var(--line); }
+  .ok { color:var(--ok); border-color:var(--ok); }
+  .err { color:var(--err); border-color:var(--err); }
+  .spin::after { content:""; animation: dots 1.2s steps(4,end) infinite; }
+  @keyframes dots { 0%{content:""} 25%{content:"."} 50%{content:".."} 75%{content:"..."} }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Sign in with Voidbind</h1>
+  <p class="muted">Scan the login link below from a device the account owner has
+  enrolled — no password, no third party. A pinned device approves it and this
+  screen is signed in. (No phone app yet? Use the CLI stand-in.)</p>
+  <p class="muted" style="font-size:13px; margin:14px 0 4px">Login link (scan or copy):</p>
+  <div class="qr spin" id="qr">preparing a login challenge</div>
+  <p class="muted" id="hint" style="font-size:13px"></p>
+  <div class="status spin" id="status">waiting for approval</div>
+</div>
+<script>
+(function () {
+  'use strict';
+  var qrEl = document.getElementById('qr');
+  var hintEl = document.getElementById('hint');
+  var statusEl = document.getElementById('status');
+
+  // Where to send the browser once authenticated (same-origin absolute path
+  // only, so a crafted ?return= cannot bounce the token off-site).
+  function safeReturn() {
+    var r = new URLSearchParams(window.location.search).get('return') || '/';
+    if (r.charAt(0) !== '/' || r.charAt(1) === '/') return '/';
+    return r;
+  }
+
+  fetch('/login', { method: 'POST' })
+    .then(function (r) { if (!r.ok) throw new Error('login start ' + r.status); return r.json(); })
+    .then(function (j) {
+      qrEl.textContent = j.qr;
+      qrEl.classList.remove('spin');
+      hintEl.innerHTML = 'CLI stand-in: <code>heyarr login-approve --qr \'' + j.qr + '\'</code>';
+      poll(j.id);
+    })
+    .catch(function (e) { statusEl.className = 'status err'; statusEl.textContent = 'could not start a login: ' + e; });
+
+  function poll(id) {
+    fetch('/login/' + encodeURIComponent(id))
+      .then(function (r) { if (!r.ok) throw new Error('gone'); return r.json(); })
+      .then(function (j) {
+        if (j.status === 'approved') {
+          try { sessionStorage.setItem('heyarr_token', j.token); } catch (_) {}
+          statusEl.className = 'status ok';
+          statusEl.textContent = '✓ authenticated as ' + j.user + ' — loading…';
+          window.location.href = safeReturn();
+          return;
+        }
+        if (j.status === 'expired') {
+          statusEl.className = 'status err';
+          statusEl.textContent = 'this login expired — reload to try again';
+          return;
+        }
+        setTimeout(function () { poll(id); }, 1000);
+      })
+      .catch(function () { statusEl.className = 'status err'; statusEl.textContent = 'this login no longer exists — reload'; });
+  }
+})();
+</script>
+</body>
+</html>

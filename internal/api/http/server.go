@@ -63,6 +63,14 @@ type Options struct {
 	// unrecognised credential. It is never a substitute for Verifier: the two
 	// schemes coexist, bearer for services and device for users.
 	DeviceVerifier DeviceVerifier
+	// SessionValidator authenticates an opaque web-login session token presented
+	// under the "Bearer" scheme — the credential a browser or TV holds after a
+	// Voidbind QR login the broker approved (ADR-0053). Nil disables the scheme,
+	// which is the correct state where no broker is stood up: a session token then
+	// falls through to a 401 like any other unrecognised bearer value. It is tried
+	// only after Verifier declines a bearer credential, so a real service token
+	// keeps its exact path and never reaches the broker.
+	SessionValidator SessionValidator
 	// Events reports the log's head sequence for GET /api/v1/system. Required:
 	// the alternative is a server that reports head 0 because it was wired
 	// without a log, which is indistinguishable from an empty log and would
@@ -134,6 +142,7 @@ type Server struct {
 	db       *sqlite.DB
 	verifier *auth.Verifier
 	deviceV  DeviceVerifier
+	sessions SessionValidator
 	events   EventHead
 	media    []ToolInfo
 	build    buildinfo.Info
@@ -205,6 +214,7 @@ func New(opts Options) (*Server, error) {
 		db:       opts.DB,
 		verifier: opts.Verifier,
 		deviceV:  opts.DeviceVerifier,
+		sessions: opts.SessionValidator,
 		events:   opts.Events,
 		// Normalised so the JSON shape is stable: a nil slice marshals as
 		// null, and a client parsing `media` should not have to handle both
