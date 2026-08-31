@@ -40,6 +40,8 @@ func newDeviceGatewayCommand(_ Options, dir *string) *cobra.Command {
 		controllerURL    string
 		deviceUser       string
 		devicePasswdFile string
+		starredSpace     string
+		historySpace     string
 	)
 	cmd := &cobra.Command{
 		Use:   "gateway",
@@ -48,14 +50,16 @@ func newDeviceGatewayCommand(_ Options, dir *string) *cobra.Command {
 
 Two families of method, served from where each honestly lives:
 
-  - getPlaylists / getPlaylist are your ENCRYPTED personal state. The gateway
-    fetches the ciphertext from the controller, unwraps the space key with THIS
-    device's key, and materialises the playlist locally — the controller sees
-    only ciphertext and can read none of it (§72).
-  - ping, getArtists, getArtist, getAlbumList2, getAlbum, stream and download are
-    proxied to the controller's Subsonic adapter, which serves the
-    server-readable library. The gateway substitutes its own controller bearer,
-    so the app never holds it.
+  - getPlaylists / getPlaylist, and — with --starred-space / --history-space —
+    getStarred2, getNowPlaying and getAlbumList2?type=recent|frequent|starred are
+    your ENCRYPTED personal state. The gateway fetches the ciphertext from the
+    controller, unwraps the space key with THIS device's key, and materialises the
+    matching CRDT locally — the controller sees only ciphertext and can read none
+    of it (§72).
+  - ping, getArtists, getArtist, the catalogue getAlbumList2 types, getAlbum,
+    stream and download are proxied to the controller's Subsonic adapter, which
+    serves the server-readable library. The gateway substitutes its own controller
+    bearer, so the app never holds it.
 
 The app authenticates to the DEVICE with a Subsonic username and password (set
 --device-user and the password via --device-password-file or ` + GatewayPasswordEnvVar + `).
@@ -89,7 +93,8 @@ credentials are distinct by design.`,
 			}
 
 			srv, err := gateway.New(gateway.Options{
-				Personal: gateway.NewSpaceLibrary(apiClient, *dir),
+				Personal: gateway.NewSpaceLibrary(apiClient, *dir).
+					WithRoles(gateway.SpaceRoles{StarredSpace: starredSpace, HistorySpace: historySpace}),
 				Controller: gateway.Controller{
 					BaseURL: base,
 					User:    deviceUser,
@@ -113,6 +118,10 @@ credentials are distinct by design.`,
 	cmd.Flags().StringVar(&deviceUser, "device-user", "heyarr", "the username the stock app authenticates to this device with")
 	cmd.Flags().StringVar(&devicePasswdFile, "device-password-file", "",
 		"read the device password from this file (or set "+GatewayPasswordEnvVar+")")
+	cmd.Flags().StringVar(&starredSpace, "starred-space", "",
+		"space id holding your starred set, to serve getStarred2 and getAlbumList2?type=starred (§46)")
+	cmd.Flags().StringVar(&historySpace, "history-space", "",
+		"space id holding your play history, to serve getNowPlaying and getAlbumList2?type=recent|frequent (§46)")
 	return cmd
 }
 

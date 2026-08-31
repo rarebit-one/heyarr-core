@@ -17,12 +17,12 @@ import (
 // configuration beyond the device's address.
 const Prefix = "/rest"
 
-// Library reads this device's DECRYPTED personal-state playlists (§73). Its
-// implementation lives on the device and decrypts locally: it fetches the opaque
-// ciphertext from the controller, unwraps the space key with this device's key,
-// and materialises the CRDT — all here, never on the controller. The controller
-// sees only ciphertext; this interface returns the plaintext the device alone can
-// produce. [SpaceLibrary] is the production implementation.
+// Library reads this device's DECRYPTED personal state (§73). Its implementation
+// lives on the device and decrypts locally: it fetches the opaque ciphertext from
+// the controller, unwraps the space key with this device's key, and materialises
+// the CRDT — all here, never on the controller. The controller sees only
+// ciphertext; this interface returns the plaintext the device alone can produce.
+// [SpaceLibrary] is the production implementation.
 type Library interface {
 	// Playlists lists every playlist this device can decrypt, in a stable order,
 	// without their entries.
@@ -31,6 +31,20 @@ type Library interface {
 	// cannot decrypt a playlist of that id (it holds no key for it, or none
 	// exists).
 	Playlist(ctx context.Context, id string) (pl Playlist, ok bool, err error)
+	// Starred returns the item ids this device has starred, most-recently-starred
+	// first — feeds getStarred2 and getAlbumList2?type=starred. It returns an empty
+	// slice (no error) when no starred space is configured or decryptable.
+	Starred(ctx context.Context) ([]string, error)
+	// Recent returns distinct played item ids, most-recently-played first — feeds
+	// getAlbumList2?type=recent. Empty when no history space is available.
+	Recent(ctx context.Context) ([]string, error)
+	// Frequent returns distinct played item ids, most-played first — feeds
+	// getAlbumList2?type=frequent. Empty when no history space is available.
+	Frequent(ctx context.Context) ([]string, error)
+	// NowPlaying returns the item id of the single most recent play, or ok=false
+	// when nothing has been played (or no history space is available) — feeds
+	// getNowPlaying.
+	NowPlaying(ctx context.Context) (id string, ok bool, err error)
 }
 
 // Playlist is a decrypted playlist: an id (the space id), a display name, and the
@@ -154,13 +168,25 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		s.handleGetPlaylists(w, r, p)
 	case "getPlaylist":
 		s.handleGetPlaylist(w, r, p)
+	case "getStarred2":
+		s.handleGetStarred2(w, r, p)
+	case "getNowPlaying":
+		s.handleGetNowPlaying(w, r, p)
+	case "getAlbumList2":
+		// getAlbumList2 straddles the split: the personal types (recent, frequent,
+		// starred) are served HERE from decrypted history/starred state; every
+		// catalogue type (newest, byYear, alphabetical…) is proxied to the
+		// controller, which is what serves the server-readable library.
+		if s.personalAlbumList(w, r, p) {
+			return
+		}
+		s.proxy.forward(w, r, method)
 	case "ping",
 		"getLicense",
 		"getOpenSubsonicExtensions",
 		"getMusicFolders",
 		"getArtists",
 		"getArtist",
-		"getAlbumList2",
 		"getAlbum",
 		"stream",
 		"download":
@@ -264,6 +290,72 @@ func (s *Server) handleGetPlaylist(w http.ResponseWriter, r *http.Request, p par
 	resp := s.ok()
 	resp.Playlist = &playlist{ID: pl.ID, Name: pl.Name, SongCount: len(entries), Entry: entries}
 	s.write(w, p.format, resp)
+}
+
+// handleGetStarred2 serves the user's starred items from on-device-decrypted
+// state (§46, §72). The starred set holds opaque item ids; like a playlist entry
+// they are rendered as songs whose title mirrors the id — catalogue enrichment is
+// the controller's to serve, and a first-party client resolves each id through
+// the proxied browse methods. An empty set is a valid, successful answer.
+func (s *Server) handleGetStarred2(w http.ResponseWriter, r *http.Request, p params) {
+	ids, err := s.personal.Starred(r.Context())
+	if err != nil {
+		s.internalError(w, p, "getStarred2", err)
+		return
+	}
+	resp := s.ok()
+	resp.Starred2 = &starred2{Song: songsFromIDs(ids)}
+	s.write(w, p.format, resp)
+}
+
+// handleGetNowPlaying serves the single most-recent play from decrypted history
+// (§46, §72). Subsonic's nowPlaying is a list; the device reports at most the one
+// entry its own history knows, and an empty list when nothing has played.
+func (s *Server) handleGetNowPlaying(w http.ResponseWriter, r *http.Request, p params) {
+	id, ok, err := s.personal.NowPlaying(r.Context())
+	if err != nil {
+		s.internalError(w, p, "getNowPlaying", err)
+		return
+	}
+	np := &nowPlaying{}
+	if ok {
+		np.Entry = []nowPlayingEntry{{ID: id, Title: id, Username: s.deviceUser}}
+	}
+	resp := s.ok()
+	resp.NowPlaying = np
+	s.write(w, p.format, resp)
+}
+
+// personalAlbumList serves getAlbumList2 for the three personal-state types
+// (recent, frequent, starred) from decrypted history/starred state, returning
+// true when it handled the request. A catalogue type returns false so dispatch
+// proxies it to the controller. The ids are rendered as albums whose name mirrors
+// the id, the same device-holds-ids / controller-holds-metadata split the
+// playlist entries use.
+func (s *Server) personalAlbumList(w http.ResponseWriter, r *http.Request, p params) bool {
+	listType := r.URL.Query().Get("type")
+	var (
+		ids []string
+		err error
+	)
+	switch listType {
+	case "recent":
+		ids, err = s.personal.Recent(r.Context())
+	case "frequent":
+		ids, err = s.personal.Frequent(r.Context())
+	case "starred":
+		ids, err = s.personal.Starred(r.Context())
+	default:
+		return false
+	}
+	if err != nil {
+		s.internalError(w, p, "getAlbumList2", err)
+		return true
+	}
+	resp := s.ok()
+	resp.AlbumList2 = &albumList2{Album: albumsFromIDs(ids)}
+	s.write(w, p.format, resp)
+	return true
 }
 
 // internalError logs a device-side failure and returns the generic Subsonic

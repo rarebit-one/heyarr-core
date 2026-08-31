@@ -46,9 +46,12 @@ type response struct {
 	ServerVersion string   `json:"serverVersion" xml:"serverVersion,attr"`
 	OpenSubsonic  bool     `json:"openSubsonic" xml:"openSubsonic,attr"`
 
-	Error     *subError  `json:"error,omitempty" xml:"error,omitempty"`
-	Playlists *playlists `json:"playlists,omitempty" xml:"playlists,omitempty"`
-	Playlist  *playlist  `json:"playlist,omitempty" xml:"playlist,omitempty"`
+	Error      *subError   `json:"error,omitempty" xml:"error,omitempty"`
+	Playlists  *playlists  `json:"playlists,omitempty" xml:"playlists,omitempty"`
+	Playlist   *playlist   `json:"playlist,omitempty" xml:"playlist,omitempty"`
+	Starred2   *starred2   `json:"starred2,omitempty" xml:"starred2,omitempty"`
+	AlbumList2 *albumList2 `json:"albumList2,omitempty" xml:"albumList2,omitempty"`
+	NowPlaying *nowPlaying `json:"nowPlaying,omitempty" xml:"nowPlaying,omitempty"`
 }
 
 type subError struct {
@@ -85,6 +88,70 @@ type entry struct {
 	ID    string `json:"id" xml:"id,attr"`
 	Title string `json:"title" xml:"title,attr"`
 	IsDir bool   `json:"isDir" xml:"isDir,attr"`
+}
+
+// The personal-state listings served from decrypted history/starred state (§46,
+// §72). Each carries opaque item ids only, rendered with the id mirrored as the
+// display field, for the same reason a playlist entry does: catalogue metadata is
+// the controller's to serve, and a first-party client resolves each id through
+// the proxied browse methods. See doc.go.
+
+// starred2 is the getStarred2 payload. Subsonic groups starred artists, albums
+// and songs; the device's starred set is a flat set of opaque ids, so they are
+// reported as songs — the granularity a music client stars and streams.
+type starred2 struct {
+	Song []song `json:"song" xml:"song"`
+}
+
+// song is a starred/now-playing item as a Subsonic Child.
+type song struct {
+	ID    string `json:"id" xml:"id,attr"`
+	Title string `json:"title" xml:"title,attr"`
+	IsDir bool   `json:"isDir" xml:"isDir,attr"`
+}
+
+// albumList2 is the getAlbumList2 payload for the personal types (recent,
+// frequent, starred). Each id is reported as an album with its name mirroring the
+// id; songCount is 0 because the device holds no catalogue.
+type albumList2 struct {
+	Album []albumID3 `json:"album" xml:"album"`
+}
+
+type albumID3 struct {
+	ID        string `json:"id" xml:"id,attr"`
+	Name      string `json:"name" xml:"name,attr"`
+	SongCount int    `json:"songCount" xml:"songCount,attr"`
+}
+
+// nowPlaying is the getNowPlaying payload: at most the one entry this device's
+// history knows.
+type nowPlaying struct {
+	Entry []nowPlayingEntry `json:"entry,omitempty" xml:"entry,omitempty"`
+}
+
+type nowPlayingEntry struct {
+	ID       string `json:"id" xml:"id,attr"`
+	Title    string `json:"title" xml:"title,attr"`
+	Username string `json:"username" xml:"username,attr"`
+	IsDir    bool   `json:"isDir" xml:"isDir,attr"`
+}
+
+// songsFromIDs renders opaque item ids as Subsonic songs, id mirrored as title.
+func songsFromIDs(ids []string) []song {
+	out := make([]song, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, song{ID: id, Title: id, IsDir: false})
+	}
+	return out
+}
+
+// albumsFromIDs renders opaque item ids as Subsonic albums, id mirrored as name.
+func albumsFromIDs(ids []string) []albumID3 {
+	out := make([]albumID3, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, albumID3{ID: id, Name: id, SongCount: 0})
+	}
+	return out
 }
 
 // ok builds a successful envelope with the server-identifying fields filled.

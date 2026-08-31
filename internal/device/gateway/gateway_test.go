@@ -51,6 +51,16 @@ const stamp = "2026-08-01T00:00:00Z"
 // controller must NEVER see in the clear.
 var secretItems = []string{"tr:ea1", "SECRET-track-hunter2"}
 
+// The plaintext starred items and played items, likewise the whole point of the
+// per-type at-rest assertions. secretStars are starred oldest-first, so the
+// gateway must return them newest-first. secretPlays lists plays in order: alpha
+// is played twice and bravo once with bravo last, so frequent leads with alpha,
+// recent and now-playing lead with bravo.
+var (
+	secretStars = []string{"star:SECRET-alpha", "star:SECRET-bravo"}
+	secretPlays = []string{"play:SECRET-alpha", "play:SECRET-alpha", "play:SECRET-bravo"}
+)
+
 // The app's credential (to the DEVICE) and, distinct from it, the device's
 // credential (to the CONTROLLER).
 const (
@@ -61,12 +71,14 @@ const (
 )
 
 type harness struct {
-	t         *testing.T
-	gateway   *httptest.Server
-	api       *apiclient.Client // the device's controller client, to inspect ciphertext at rest
-	spaceID   string
-	ctlBodies func() []byte   // everything the controller wrote as a response body
-	ctlPaths  func() []string // every path the controller received a request for
+	t              *testing.T
+	gateway        *httptest.Server
+	api            *apiclient.Client // the device's controller client, to inspect ciphertext at rest
+	spaceID        string
+	starredSpaceID string
+	historySpaceID string
+	ctlBodies      func() []byte   // everything the controller wrote as a response body
+	ctlPaths       func() []string // every path the controller received a request for
 }
 
 func newHarness(t *testing.T) *harness {
@@ -162,9 +174,12 @@ func newHarness(t *testing.T) *harness {
 	}
 
 	spaceID := createEncryptedPlaylist(t, ctx, ds, apiClient)
+	starredSpaceID := createEncryptedStarred(t, ctx, ds, apiClient)
+	historySpaceID := createEncryptedHistory(t, ctx, ds, apiClient)
 
 	gw, err := gateway.New(gateway.Options{
-		Personal: gateway.NewSpaceLibrary(apiClient, filepath.Join(dir, "device")),
+		Personal: gateway.NewSpaceLibrary(apiClient, filepath.Join(dir, "device")).
+			WithRoles(gateway.SpaceRoles{StarredSpace: starredSpaceID, HistorySpace: historySpaceID}),
 		Controller: gateway.Controller{
 			BaseURL: controller.URL,
 			User:    ctlUser,
@@ -183,6 +198,7 @@ func newHarness(t *testing.T) *harness {
 
 	return &harness{
 		t: t, gateway: gwServer, api: apiClient, spaceID: spaceID,
+		starredSpaceID: starredSpaceID, historySpaceID: historySpaceID,
 		ctlBodies: cap.bodiesSnapshot, ctlPaths: cap.pathsSnapshot,
 	}
 }
@@ -239,6 +255,77 @@ func createEncryptedPlaylist(t *testing.T, ctx context.Context, ds *device.Store
 		parents = []string{id}
 	}
 	return sp.ID
+}
+
+// newEncryptedSpace mints a space wrapped for this device and registers it,
+// returning the space id and the manager opened on it — the shared setup the
+// per-type helpers push their genuinely-encrypted changes into.
+func newEncryptedSpace(t *testing.T, ctx context.Context, ds *device.Store, c *apiclient.Client) (string, *psclient.Manager) {
+	t.Helper()
+	priv, err := ds.LoadEncryptionKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recip, err := psclient.ParseRecipient(encryption.FormatPublicKey(priv.PublicKey().Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := psclient.New()
+	sp, wrapped, err := mgr.Create(spaces.KindPersonal, time.Now().UTC(), []psclient.Recipient{recip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := apiclient.CreateSpaceRequest{ID: sp.ID, Kind: string(sp.Kind)}
+	for _, w := range wrapped {
+		req.WrappedKeys = append(req.WrappedKeys, apiclient.WrappedKeyInput{Recipient: w.Recipient, Wrapped: w.Wrapped})
+	}
+	if _, err := c.CreateSpace(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	return sp.ID, mgr
+}
+
+// pushGatewayChange encrypts one CRDT change under the space key and pushes it as
+// ciphertext, returning the stored change id to chain as the next parent.
+func pushGatewayChange[T any](t *testing.T, ctx context.Context, mgr *psclient.Manager, c *apiclient.Client, spaceID string, parents []string, ch T) string {
+	t.Helper()
+	ec, err := statesync.EncodeChange(mgr, spaceID, parents, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := c.PutChange(ctx, ec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// createEncryptedStarred mints a starred space and pushes the secretStars as
+// genuinely-encrypted star operations — the ordinary device flow (§46, §73).
+func createEncryptedStarred(t *testing.T, ctx context.Context, ds *device.Store, c *apiclient.Client) string {
+	t.Helper()
+	spaceID, mgr := newEncryptedSpace(t, ctx, ds, c)
+	s := crdt.NewStarSet()
+	var parents []string
+	for _, item := range secretStars {
+		id := pushGatewayChange(t, ctx, mgr, c, spaceID, parents, s.Star(item))
+		parents = []string{id}
+	}
+	return spaceID
+}
+
+// createEncryptedHistory mints a history space and pushes the secretPlays as
+// genuinely-encrypted play events — the ordinary device flow (§46, §73).
+func createEncryptedHistory(t *testing.T, ctx context.Context, ds *device.Store, c *apiclient.Client) string {
+	t.Helper()
+	spaceID, mgr := newEncryptedSpace(t, ctx, ds, c)
+	log := crdt.NewPlayLog()
+	var parents []string
+	for _, item := range secretPlays {
+		id := pushGatewayChange(t, ctx, mgr, c, spaceID, parents, log.Record(item))
+		parents = []string{id}
+	}
+	return spaceID
 }
 
 func seedMusic(t *testing.T, ctx context.Context, db *sqlite.DB, store cas.Store) {
@@ -388,6 +475,23 @@ type subResp struct {
 			} `json:"artist"`
 		} `json:"index"`
 	} `json:"artists"`
+	Starred2 *struct {
+		Song []idTitle `json:"song"`
+	} `json:"starred2"`
+	AlbumList2 *struct {
+		Album []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"album"`
+	} `json:"albumList2"`
+	NowPlaying *struct {
+		Entry []idTitle `json:"entry"`
+	} `json:"nowPlaying"`
+}
+
+type idTitle struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }
 
 type playlistT struct {

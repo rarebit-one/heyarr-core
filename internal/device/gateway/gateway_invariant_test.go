@@ -172,3 +172,165 @@ func artistPresent(r subResp, name string) bool {
 	}
 	return false
 }
+
+// TestGatewayServesStarredAndHistoryFromDecryptedState is #387's claim, end to
+// end: getStarred2, getNowPlaying and the three personal getAlbumList2 types
+// (starred, recent, frequent) all return ON-DEVICE-DECRYPTED CRDT state, in the
+// converged order — while the controller never sees a byte of the starred or
+// played plaintext at rest (Invariant 6, §72).
+func TestGatewayServesStarredAndHistoryFromDecryptedState(t *testing.T) {
+	h := newHarness(t)
+
+	// getStarred2 — most-recently-starred first: bravo was starred after alpha.
+	starred := h.get("getStarred2", nil)
+	if starred.Status != "ok" || starred.Starred2 == nil {
+		t.Fatalf("getStarred2 status = %q (%+v)", starred.Status, starred.Error)
+	}
+	if got := idsOfSongs(starred.Starred2.Song); !equal(got, reverse(secretStars)) {
+		t.Errorf("getStarred2 songs = %v, want %v (decrypted, newest-first)", got, reverse(secretStars))
+	}
+	if starred.Type != "heyarr-gateway" {
+		t.Errorf("getStarred2 answered by %q, not the gateway itself", starred.Type)
+	}
+
+	// getAlbumList2?type=starred — the same set, rendered as albums.
+	starAlbums := h.get("getAlbumList2", url.Values{"type": {"starred"}})
+	if starAlbums.Status != "ok" || starAlbums.AlbumList2 == nil {
+		t.Fatalf("getAlbumList2?type=starred status = %q (%+v)", starAlbums.Status, starAlbums.Error)
+	}
+	if got := idsOfAlbums(starAlbums.AlbumList2.Album); !equal(got, reverse(secretStars)) {
+		t.Errorf("getAlbumList2?type=starred = %v, want %v", got, reverse(secretStars))
+	}
+
+	// getAlbumList2?type=recent — distinct items, most-recently-played first:
+	// bravo (latest) then alpha.
+	recent := h.get("getAlbumList2", url.Values{"type": {"recent"}})
+	wantRecent := []string{"play:SECRET-bravo", "play:SECRET-alpha"}
+	if got := idsOfAlbums(recent.AlbumList2.Album); !equal(got, wantRecent) {
+		t.Errorf("getAlbumList2?type=recent = %v, want %v", got, wantRecent)
+	}
+
+	// getAlbumList2?type=frequent — most-played first: alpha (2) then bravo (1).
+	frequent := h.get("getAlbumList2", url.Values{"type": {"frequent"}})
+	wantFrequent := []string{"play:SECRET-alpha", "play:SECRET-bravo"}
+	if got := idsOfAlbums(frequent.AlbumList2.Album); !equal(got, wantFrequent) {
+		t.Errorf("getAlbumList2?type=frequent = %v, want %v", got, wantFrequent)
+	}
+
+	// getNowPlaying — the single most recent play: bravo.
+	np := h.get("getNowPlaying", nil)
+	if np.Status != "ok" || np.NowPlaying == nil {
+		t.Fatalf("getNowPlaying status = %q (%+v)", np.Status, np.Error)
+	}
+	if len(np.NowPlaying.Entry) != 1 || np.NowPlaying.Entry[0].ID != "play:SECRET-bravo" {
+		t.Errorf("getNowPlaying = %+v, want the single entry play:SECRET-bravo", np.NowPlaying.Entry)
+	}
+
+	// A catalogue getAlbumList2 type is still PROXIED, not served locally: the
+	// controller must have received it.
+	catalogue := h.get("getAlbumList2", url.Values{"type": {"newest"}})
+	if catalogue.Status != "ok" {
+		t.Fatalf("getAlbumList2?type=newest (proxied) status = %q (%+v)", catalogue.Status, catalogue.Error)
+	}
+	if !pathSeen(h.ctlPaths(), "/rest/getAlbumList2") {
+		t.Error("a catalogue getAlbumList2 was not proxied to the controller")
+	}
+
+	// THE INVARIANT (Invariant 6, §72): the controller never held the starred or
+	// played plaintext at rest, even though the gateway just served all of it. The
+	// decisive check is over the CIPHERTEXT AT REST for each type's own space.
+	h.assertNoPlaintextAtRest(h.starredSpaceID, secretStars)
+	h.assertNoPlaintextAtRest(h.historySpaceID, distinct(secretPlays))
+
+	// The personal-state methods were served locally, never proxied.
+	for _, p := range h.ctlPaths() {
+		for _, method := range []string{"/rest/getStarred2", "/rest/getNowPlaying"} {
+			if strings.Contains(p, method) {
+				t.Errorf("the controller received a personal-state request %q — it must be served on the device", p)
+			}
+		}
+	}
+}
+
+// assertNoPlaintextAtRest fetches the controller's stored ciphertext for a space
+// and asserts none of the secrets appear in it — the §72 claim applied to a
+// non-playlist type's own space.
+func (h *harness) assertNoPlaintextAtRest(spaceID string, secrets []string) {
+	h.t.Helper()
+	changes, err := h.api.Changes(context.Background(), spaceID)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if len(changes) == 0 {
+		h.t.Fatalf("space %s holds no changes at rest — the at-rest check would be vacuous", spaceID)
+	}
+	for _, ec := range changes {
+		for _, secret := range secrets {
+			if bytes.Contains(ec.Ciphertext, []byte(secret)) {
+				h.t.Errorf("controller ciphertext for %s contains plaintext %q (Invariant 6, §72 VIOLATED)", spaceID, secret)
+			}
+		}
+	}
+}
+
+func idsOfSongs(songs []idTitle) []string {
+	out := make([]string, 0, len(songs))
+	for _, s := range songs {
+		out = append(out, s.ID)
+	}
+	return out
+}
+
+func idsOfAlbums(albums []struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+},
+) []string {
+	out := make([]string, 0, len(albums))
+	for _, a := range albums {
+		out = append(out, a.ID)
+	}
+	return out
+}
+
+func equal(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func reverse(xs []string) []string {
+	out := make([]string, len(xs))
+	for i, x := range xs {
+		out[len(xs)-1-i] = x
+	}
+	return out
+}
+
+// distinct collapses a slice to its unique values, preserving first-seen order.
+func distinct(xs []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, x := range xs {
+		if !seen[x] {
+			seen[x] = true
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func pathSeen(paths []string, want string) bool {
+	for _, p := range paths {
+		if strings.Contains(p, want) {
+			return true
+		}
+	}
+	return false
+}

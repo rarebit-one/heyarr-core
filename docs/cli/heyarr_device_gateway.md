@@ -8,14 +8,16 @@ Serve a Subsonic API a STOCK music app points at as its one origin.
 
 Two families of method, served from where each honestly lives:
 
-  - getPlaylists / getPlaylist are your ENCRYPTED personal state. The gateway
-    fetches the ciphertext from the controller, unwraps the space key with THIS
-    device's key, and materialises the playlist locally — the controller sees
-    only ciphertext and can read none of it (§72).
-  - ping, getArtists, getArtist, getAlbumList2, getAlbum, stream and download are
-    proxied to the controller's Subsonic adapter, which serves the
-    server-readable library. The gateway substitutes its own controller bearer,
-    so the app never holds it.
+  - getPlaylists / getPlaylist, and — with --starred-space / --history-space —
+    getStarred2, getNowPlaying and getAlbumList2?type=recent|frequent|starred are
+    your ENCRYPTED personal state. The gateway fetches the ciphertext from the
+    controller, unwraps the space key with THIS device's key, and materialises the
+    matching CRDT locally — the controller sees only ciphertext and can read none
+    of it (§72).
+  - ping, getArtists, getArtist, the catalogue getAlbumList2 types, getAlbum,
+    stream and download are proxied to the controller's Subsonic adapter, which
+    serves the server-readable library. The gateway substitutes its own controller
+    bearer, so the app never holds it.
 
 The app authenticates to the DEVICE with a Subsonic username and password (set
 --device-user and the password via --device-password-file or HEYARR_GATEWAY_PASSWORD).
@@ -34,8 +36,10 @@ heyarr device gateway [flags]
       --controller-url string         the controller's Subsonic origin for proxied library/stream methods (default: http.addr from the config)
       --device-password-file string   read the device password from this file (or set HEYARR_GATEWAY_PASSWORD)
       --device-user string            the username the stock app authenticates to this device with (default "heyarr")
+      --history-space string          space id holding your play history, to serve getNowPlaying and getAlbumList2?type=recent|frequent (§46)
       --json                          emit machine-readable JSON
       --listen string                 address to serve the gateway on (default "127.0.0.1:4040")
+      --starred-space string          space id holding your starred set, to serve getStarred2 and getAlbumList2?type=starred (§46)
       --timeout duration              how long one request may take; streaming reads and the event stream are exempt (default 30s)
       --token string                  bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
       --token-file string             read the bearer token from this file (default: <data_dir>/cli.token when it exists)
