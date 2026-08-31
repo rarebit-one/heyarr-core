@@ -219,3 +219,98 @@ func EvaluatePlacement(blobHash string, required []string, replicas []PeerReplic
 		}
 	}
 }
+
+// ItemVerdict is one enumerated Item's content satisfaction, as a value.
+//
+// It is what a source-completeness fold needs to know about an item: the item's
+// id and whether an acceptable Asset for it exists. Deliberately not the
+// content verdict itself — the fold does not re-examine the per-asset reasons,
+// it counts items — and deliberately the DOMAIN's own shape, so the query that
+// enumerates a followed source's items and evaluates each (EvaluateContent per
+// item, at the edge) can hand this in without the fold importing persistence.
+type ItemVerdict struct {
+	// ItemID is the byte-less Item (ADR-0056) this verdict is about.
+	ItemID string
+	// Satisfaction is that item's content axis: SatisfactionSatisfied when an
+	// acceptable Asset attached to the item exists, SatisfactionNot when the
+	// item was evaluated and nothing acceptable is held, SatisfactionUnknown
+	// when the item has never been looked at.
+	Satisfaction Satisfaction
+}
+
+// CompletenessVerdict is a source's completeness reading: whether EVERY item a
+// feed adapter enumerated for it is content-satisfied.
+//
+// It mirrors PlacementVerdict's shape on purpose — a satisfaction plus the
+// actionable list of what is missing plus a one-line detail — because it is the
+// same kind of answer about the same kind of gap, and a reader who knows one
+// reads the other.
+type CompletenessVerdict struct {
+	Satisfaction Satisfaction
+	// Missing lists the enumerated items with no acceptable Asset, in a stable
+	// order. It is the actionable half: "incomplete" with no list of which
+	// items are missing is a status nobody can act on, exactly as it is for
+	// placement.
+	Missing []string
+	Detail  string
+}
+
+// EvaluateCompleteness folds the per-item content verdicts of an enumerated
+// source into one answer: is every item this source has emitted held?
+//
+// # This is the guarantee desired.go said was impossible, now a fold
+//
+// desired.go's Scope doc stated plainly that, with no metadata provider, a
+// work-scoped want over a series could not mean "every episode exists" — only
+// "an acceptable asset exists". A feed adapter (CapabilityMetadata) is that
+// metadata provider: once it has enumerated the items a source SHOULD have,
+// completeness is no longer unknowable, and it does not need a new evaluator.
+// It is a fold over the item-scoped verdicts the existing EvaluateContent
+// already produces, one per item, at the edge.
+//
+// The values are the content axis's (unknown / not / satisfied); there is no
+// "converging" here, because completeness is a whole-set property that is
+// either met or not, exactly as content satisfaction for a single want is.
+//
+//   - No items enumerated is UNKNOWN, not vacuously satisfied. A source a feed
+//     adapter has not yet enumerated has an empty set, and calling an empty set
+//     "complete" would report a source Heyarr has never polled as fully
+//     archived — the same lie EvaluatePlacement refuses for an empty required
+//     set. "Nobody has looked" is unknown; it is a different statement from
+//     "looked, and everything is here".
+//   - Every item satisfied is SATISFIED.
+//   - Otherwise NOT, and Missing names the items that are not yet held — which
+//     is precisely the per-item wants a followed source keeps working.
+//
+// An item whose own verdict is UNKNOWN (never looked at) counts as missing for
+// completeness: the source is not known-complete while any item is unexamined.
+func EvaluateCompleteness(items []ItemVerdict) CompletenessVerdict {
+	if len(items) == 0 {
+		return CompletenessVerdict{
+			Satisfaction: SatisfactionUnknown,
+			Detail:       "no items have been enumerated for this source yet",
+		}
+	}
+
+	var missing []string
+	for _, it := range items {
+		if it.Satisfaction != SatisfactionSatisfied {
+			missing = append(missing, it.ItemID)
+		}
+	}
+	sort.Strings(missing)
+
+	if len(missing) == 0 {
+		return CompletenessVerdict{
+			Satisfaction: SatisfactionSatisfied,
+			Detail: fmt.Sprintf("every enumerated item is held (%d of %d)",
+				len(items), len(items)),
+		}
+	}
+	return CompletenessVerdict{
+		Satisfaction: SatisfactionNot,
+		Missing:      missing,
+		Detail: fmt.Sprintf("%d of %d enumerated items are held",
+			len(items)-len(missing), len(items)),
+	}
+}
