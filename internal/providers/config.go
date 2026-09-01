@@ -84,6 +84,36 @@ const (
 	// kind beside KindTVDB; the two differ only in the wire format they parse, and
 	// the neutral followed.FeedItem is what the poll loop reads from either.
 	KindPodcast Kind = "podcast"
+	// KindYoutube is a metadata provider that parses a YouTube channel's RSS
+	// feed (§59, M12 Phase 3): the public, key-less feed at
+	// youtube.com/feeds/videos.xml?channel_id=… enumerates a channel's recent
+	// videos so a followed source can project a want per video. Its "endpoint"
+	// is not configured — the channel feed URL is the source's own FeedRef,
+	// handed in per enumerate — and like a public feed it needs no credential.
+	// It is a third CapabilityMetadata kind beside KindTVDB and KindPodcast; the
+	// three differ only in the wire format they parse, and the neutral
+	// followed.FeedItem is what the poll loop reads from any of them.
+	//
+	// A video has no directly-fetchable enclosure — the watch URL is an HTML
+	// page, not the bytes — so unlike a podcast this adapter tags each item's
+	// source for the KindYtDlp download client rather than the plain-HTTP one
+	// (followed.YtDlpSourceScheme, ADR-0062).
+	KindYoutube Kind = "youtube"
+	// KindYtDlp is a download client that fetches a video by running the
+	// external `yt-dlp` tool (§58, M12 Phase 3, ADR-0062). It is the first
+	// transport that is a SUBPROCESS rather than a socket: it accepts only the
+	// yt-dlp-tagged sources a KindYoutube feed produces (followed.YtDlpSourceScheme)
+	// and refuses everything else, so it composes with the http and torrent
+	// clients rather than competing for their transfers — and refusing a plain
+	// http source is also just correct, since it would hand yt-dlp a page it has
+	// no reason to want.
+	//
+	// yt-dlp is a SYSTEM DEPENDENCY expected on PATH, not vendored or
+	// containerised (a deploy decision, plan §8): a host without it degrades
+	// gracefully — the transfer fails with a named error rather than the process
+	// refusing to start — and like every download client its byte-moving is
+	// exercised only against the live tool, never in CI (ADR-0026).
+	KindYtDlp Kind = "yt-dlp"
 	// KindFake is an in-process provider that talks to nothing.
 	//
 	// It is a first-class kind rather than a test-only construct because the
@@ -101,7 +131,7 @@ const (
 
 // Kinds lists every kind, in a stable order.
 func Kinds() []Kind {
-	return []Kind{KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindHTTP, KindTVDB, KindPodcast, KindFake}
+	return []Kind{KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindHTTP, KindTVDB, KindPodcast, KindYoutube, KindYtDlp, KindFake}
 }
 
 // ParseKind validates a kind from configuration.
@@ -130,9 +160,9 @@ func DefaultCapabilities(k Kind) []Capability {
 	switch k {
 	case KindTorznab, KindNewznab:
 		return []Capability{CapabilityIndexer}
-	case KindTransmission, KindQBittorrent, KindHTTP:
+	case KindTransmission, KindQBittorrent, KindHTTP, KindYtDlp:
 		return []Capability{CapabilityDownload}
-	case KindTVDB, KindPodcast:
+	case KindTVDB, KindPodcast, KindYoutube:
 		return []Capability{CapabilityMetadata}
 	default:
 		// A fake declares nothing by default: what it stands in for is the
@@ -153,9 +183,13 @@ func DefaultCapabilities(k Kind) []Capability {
 // for the plain-HTTP client's reason rather than TVDB's: a podcast feed has no
 // well-known base URL — the feed URL is the source's own FeedRef, handed to the
 // adapter per enumerate — so a single configured endpoint would be a value it
-// never uses.
+// never uses. Youtube is the fifth and yt-dlp the sixth, each for one of those
+// same reasons: a channel feed has no well-known base URL (the feed URL is the
+// source's own FeedRef, like podcast), and the yt-dlp client's "endpoint" is the
+// watch URL handed to it per grab (like the plain-HTTP client).
 func needsEndpoint(k Kind) bool {
-	return k != KindFake && k != KindHTTP && k != KindTVDB && k != KindPodcast
+	return k != KindFake && k != KindHTTP && k != KindTVDB && k != KindPodcast &&
+		k != KindYoutube && k != KindYtDlp
 }
 
 // needsCredential reports whether a kind must be given one.

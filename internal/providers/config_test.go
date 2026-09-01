@@ -186,6 +186,34 @@ func TestValidateAccepts(t *testing.T) {
 			},
 		},
 		{
+			// A youtube feed adapter needs neither endpoint nor credential: the
+			// channel feed URL is the source's own FeedRef (like podcast).
+			name:  "a youtube feed provider needs no endpoint or credential",
+			entry: Entry{Name: "yt", Type: "youtube"},
+			check: func(t *testing.T, r Resolved) {
+				if len(r.Capabilities) != 1 || r.Capabilities[0] != CapabilityMetadata {
+					t.Errorf("capabilities = %v, want [metadata]", r.Capabilities)
+				}
+				if r.Endpoint != nil {
+					t.Errorf("a channel feed's address is its FeedRef, so no endpoint: %v", r.Endpoint)
+				}
+			},
+		},
+		{
+			// The yt-dlp download client's "endpoint" is the watch URL handed to
+			// it per grab (like the plain-HTTP client), so none is configured.
+			name:  "a yt-dlp download client needs no endpoint or credential",
+			entry: Entry{Name: "ytd", Type: "yt-dlp"},
+			check: func(t *testing.T, r Resolved) {
+				if len(r.Capabilities) != 1 || r.Capabilities[0] != CapabilityDownload {
+					t.Errorf("capabilities = %v, want [download]", r.Capabilities)
+				}
+				if r.Endpoint != nil {
+					t.Errorf("a yt-dlp client takes its source per grab, so no endpoint: %v", r.Endpoint)
+				}
+			},
+		},
+		{
 			name: "a duplicate capability is collapsed rather than refused",
 			entry: Entry{
 				Name: "p", Type: "fake",

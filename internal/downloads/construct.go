@@ -26,6 +26,9 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 	if r.Kind == providers.KindHTTP {
 		return httpFromConfig(r, now)
 	}
+	if r.Kind == providers.KindYtDlp {
+		return ytdlpFromConfig(r, now)
+	}
 	if r.Kind != providers.KindTransmission && r.Kind != providers.KindQBittorrent {
 		return nil, false, nil
 	}
@@ -211,6 +214,38 @@ func httpFromConfig(r providers.Resolved, now func() time.Time) (providers.Provi
 			"provider %q: the first path_map entry has no local path", r.Name)
 	}
 	client, err := NewHTTP(HTTPOptions{
+		Name:  r.Name,
+		Dir:   dir,
+		Label: r.Label,
+		Now:   now,
+	})
+	if err != nil {
+		return nil, true, err
+	}
+	return client, true, nil
+}
+
+// ytdlpFromConfig builds the yt-dlp download client (§58, M12 Phase 3).
+//
+// Like the http client its download directory is the path map's local side
+// rather than a new configuration key: yt-dlp writes the finished video to this
+// host's disk, and a client with no path_map has nowhere to put a completed
+// transfer, so it is refused at construction rather than defaulting to a
+// directory the scanner never walks. It takes no endpoint and no credential — a
+// public video is fetched by running the tool, not by reaching a configured
+// service.
+func ytdlpFromConfig(r providers.Resolved, now func() time.Time) (providers.Provider, bool, error) {
+	if len(r.PathMap) == 0 {
+		return nil, true, fmt.Errorf(
+			"provider %q: a yt-dlp download client needs a path_map so it has somewhere "+
+				"to write completed transfers", r.Name)
+	}
+	dir := r.PathMap[0].Local
+	if dir == "" {
+		return nil, true, fmt.Errorf(
+			"provider %q: the first path_map entry has no local path", r.Name)
+	}
+	client, err := NewYtDlp(YtDlpOptions{
 		Name:  r.Name,
 		Dir:   dir,
 		Label: r.Label,

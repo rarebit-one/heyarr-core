@@ -53,10 +53,13 @@ func Types() []Type {
 }
 
 // Implemented reports whether a feed adapter for this type exists yet. Phase 1
-// shipped TV; Phase 2 adds podcast (RSS enclosure → the existing KindHTTP
-// downloader). YouTube and generic RSS remain declared so their phases are
-// additions rather than renames.
-func (t Type) Implemented() bool { return t == TypeTVSeries || t == TypePodcast }
+// shipped TV; Phase 2 added podcast (RSS enclosure → the existing KindHTTP
+// downloader); Phase 3 adds YouTube (channel RSS → the new KindYtDlp downloader,
+// ADR-0062). Generic RSS remains declared so its phase is an addition rather
+// than a rename.
+func (t Type) Implemented() bool {
+	return t == TypeTVSeries || t == TypePodcast || t == TypeYouTubeChannel
+}
 
 // ParseType validates a source type from configuration or the wire. An unknown
 // type is refused rather than ignored, for the reason providers.ParseCapability
@@ -231,6 +234,23 @@ type FeedItem struct {
 // the neutral FeedItem, not in any adapter, so any future direct-URL source
 // (Phase 4's captured articles) reuses the same seam.
 const AttrEnclosureURL = "enclosure_url"
+
+// YtDlpSourceScheme prefixes an enclosure URL a feed adapter knows must be
+// fetched by running yt-dlp rather than by a plain HTTP GET (§58, M12 Phase 3,
+// ADR-0062).
+//
+// It is the seam that keeps the routing decision on the SOURCE's shape, the way
+// KindHTTP routes on the http(s) scheme and a torrent client on `magnet:`. A
+// YouTube video's bytes location is the watch page, which is itself an http URL —
+// so if the adapter recorded it bare, the plain-HTTP download client would claim
+// it and fetch the HTML page instead of the video. Tagging it here (the
+// KindYoutube adapter writes YtDlpSourceScheme+watchURL into AttrEnclosureURL)
+// makes the plain-HTTP client refuse it — its scheme is no longer http — and the
+// KindYtDlp client claim it, with no dependence on the order the two happen to be
+// registered in. The tag lives here, beside AttrEnclosureURL, because this is the
+// one place the non-search-source-to-acquisition seam is defined; both the feed
+// adapter that writes it and the download client that strips it read it from here.
+const YtDlpSourceScheme = "ytdlp:"
 
 // EnclosureURL is the item's direct-fetch URL, if the feed adapter supplied one.
 //
