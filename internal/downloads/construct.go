@@ -29,6 +29,9 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 	if r.Kind == providers.KindYtDlp {
 		return ytdlpFromConfig(r, now)
 	}
+	if r.Kind == providers.KindWebCapture {
+		return webCaptureFromConfig(r, now)
+	}
 	if r.Kind != providers.KindTransmission && r.Kind != providers.KindQBittorrent {
 		return nil, false, nil
 	}
@@ -246,6 +249,37 @@ func ytdlpFromConfig(r providers.Resolved, now func() time.Time) (providers.Prov
 			"provider %q: the first path_map entry has no local path", r.Name)
 	}
 	client, err := NewYtDlp(YtDlpOptions{
+		Name:  r.Name,
+		Dir:   dir,
+		Label: r.Label,
+		Now:   now,
+	})
+	if err != nil {
+		return nil, true, err
+	}
+	return client, true, nil
+}
+
+// webCaptureFromConfig builds the web-capture download client (§58, M12 Phase 4).
+//
+// Its download directory is the path map's local side, like the http and yt-dlp
+// clients: the captured single-file HTML is written to this host's disk, and a
+// client with no path_map has nowhere to put a completed capture, so it is
+// refused at construction rather than defaulting to a directory the scanner never
+// walks. It takes no endpoint and no credential — an article is captured by
+// fetching its page, not by reaching a configured service.
+func webCaptureFromConfig(r providers.Resolved, now func() time.Time) (providers.Provider, bool, error) {
+	if len(r.PathMap) == 0 {
+		return nil, true, fmt.Errorf(
+			"provider %q: a web-capture download client needs a path_map so it has somewhere "+
+				"to write completed captures", r.Name)
+	}
+	dir := r.PathMap[0].Local
+	if dir == "" {
+		return nil, true, fmt.Errorf(
+			"provider %q: the first path_map entry has no local path", r.Name)
+	}
+	client, err := NewWebCapture(WebCaptureOptions{
 		Name:  r.Name,
 		Dir:   dir,
 		Label: r.Label,

@@ -41,6 +41,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 	"github.com/rarebit-one/heyarr-core/internal/providers/podcast"
 	"github.com/rarebit-one/heyarr-core/internal/providers/tvdb"
+	"github.com/rarebit-one/heyarr-core/internal/providers/webfeed"
 	"github.com/rarebit-one/heyarr-core/internal/providers/youtube"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
@@ -551,7 +552,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 	providerRegistry, err := providers.BuildWith(resolvedProviders, c.log, nil,
-		providers.Chain(indexers.Constructor, downloads.Constructor, tvdb.Constructor, podcast.Constructor, youtube.Constructor))
+		providers.Chain(indexers.Constructor, downloads.Constructor, tvdb.Constructor, podcast.Constructor, youtube.Constructor, webfeed.Constructor))
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: building the provider registry: %w", err)
 	}
