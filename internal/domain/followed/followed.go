@@ -54,11 +54,13 @@ func Types() []Type {
 
 // Implemented reports whether a feed adapter for this type exists yet. Phase 1
 // shipped TV; Phase 2 added podcast (RSS enclosure → the existing KindHTTP
-// downloader); Phase 3 adds YouTube (channel RSS → the new KindYtDlp downloader,
-// ADR-0062). Generic RSS remains declared so its phase is an addition rather
-// than a rename.
+// downloader); Phase 3 added YouTube (channel RSS → the KindYtDlp downloader,
+// ADR-0062); Phase 4 adds generic RSS/Atom web feeds (articles → the KindWebCapture
+// client, ADR-0063). Every declared type is now implemented; the method and its
+// Validate guard remain so that a FUTURE type added to Types() before its adapter
+// exists is refused loudly rather than silently going unpolled.
 func (t Type) Implemented() bool {
-	return t == TypeTVSeries || t == TypePodcast || t == TypeYouTubeChannel
+	return t == TypeTVSeries || t == TypePodcast || t == TypeYouTubeChannel || t == TypeRSSFeed
 }
 
 // ParseType validates a source type from configuration or the wire. An unknown
@@ -251,6 +253,19 @@ const AttrEnclosureURL = "enclosure_url"
 // one place the non-search-source-to-acquisition seam is defined; both the feed
 // adapter that writes it and the download client that strips it read it from here.
 const YtDlpSourceScheme = "ytdlp:"
+
+// WebCaptureSourceScheme prefixes an enclosure URL a feed adapter knows must be
+// archived by capturing the page into a self-contained single-file HTML rather
+// than fetched as a file (§58, M12 Phase 4, ADR-0063).
+//
+// It is the same seam as YtDlpSourceScheme, for the same reason: a web article's
+// address is an http URL, so if the adapter recorded it bare the plain-HTTP
+// download client would claim it and store the raw, dependency-laden page.
+// Tagging it here (the KindWebFeed adapter writes WebCaptureSourceScheme+articleURL
+// into AttrEnclosureURL) makes the plain-HTTP client refuse it — its scheme is no
+// longer http — and the KindWebCapture client claim it, independent of the order
+// the clients are registered in.
+const WebCaptureSourceScheme = "webcapture:"
 
 // EnclosureURL is the item's direct-fetch URL, if the feed adapter supplied one.
 //

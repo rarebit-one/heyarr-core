@@ -53,17 +53,18 @@ func TestSourceValidate(t *testing.T) {
 			wantErr: "is not a source type",
 		},
 		{
-			// Source-agnostic: the caller expresses intent, the system infers a
-			// type — but a type with no adapter yet must fail loudly, not sit
-			// unpolled. Generic RSS is still a later phase (Phase 4).
-			name:    "an unimplemented type is refused",
-			mutate:  func(s *Source) { s.Type = TypeRSSFeed },
-			wantErr: "not implemented yet",
-		},
-		{
 			// YouTube is Phase 3 — an implemented type validates like tv_series.
 			name:   "an implemented youtube source validates",
 			mutate: func(s *Source) { s.Type = TypeYouTubeChannel },
+		},
+		{
+			// Generic RSS is Phase 4 — an implemented type validates like
+			// tv_series. Every declared type is now implemented, so there is no
+			// valid-but-unimplemented type left to exercise the "not implemented
+			// yet" refusal; that branch of Validate remains defensive for a FUTURE
+			// type added to Types() before its adapter (see Type.Implemented).
+			name:   "an implemented rss source validates",
+			mutate: func(s *Source) { s.Type = TypeRSSFeed },
 		},
 		{
 			// Podcast is Phase 2 — an implemented type validates like tv_series.
@@ -133,17 +134,15 @@ func TestParseType(t *testing.T) {
 	}
 }
 
-// TV (Phase 1), podcast (Phase 2) and YouTube (Phase 3) are wired; generic RSS
-// is declared so its phase is an addition rather than a rename.
+// Every declared type is now wired: TV (Phase 1), podcast (Phase 2), YouTube
+// (Phase 3) and generic RSS/web (Phase 4). The guard stays because a FUTURE type
+// added to Types() before its adapter must report unimplemented — so this asserts
+// exactly the set that Types() declares is the set that is implemented, which
+// fails loudly the day a new type is declared without one.
 func TestImplementedTypes(t *testing.T) {
-	for _, ty := range []Type{TypeTVSeries, TypePodcast, TypeYouTubeChannel} {
+	for _, ty := range Types() {
 		if !ty.Implemented() {
-			t.Errorf("%s is wired and must report implemented", ty)
-		}
-	}
-	for _, ty := range []Type{TypeRSSFeed} {
-		if ty.Implemented() {
-			t.Errorf("%s is a later phase and must not claim to be implemented", ty)
+			t.Errorf("%s is declared but reports unimplemented — wire its adapter or drop the type", ty)
 		}
 	}
 }

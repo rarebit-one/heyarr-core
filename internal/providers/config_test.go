@@ -214,6 +214,34 @@ func TestValidateAccepts(t *testing.T) {
 			},
 		},
 		{
+			// A webfeed adapter needs neither endpoint nor credential: the feed
+			// URL is the source's own FeedRef (like podcast and youtube).
+			name:  "a webfeed provider needs no endpoint or credential",
+			entry: Entry{Name: "wf", Type: "webfeed"},
+			check: func(t *testing.T, r Resolved) {
+				if len(r.Capabilities) != 1 || r.Capabilities[0] != CapabilityMetadata {
+					t.Errorf("capabilities = %v, want [metadata]", r.Capabilities)
+				}
+				if r.Endpoint != nil {
+					t.Errorf("a web feed's address is its FeedRef, so no endpoint: %v", r.Endpoint)
+				}
+			},
+		},
+		{
+			// The web-capture client's "endpoint" is the article URL handed to it
+			// per grab (like the plain-HTTP and yt-dlp clients).
+			name:  "a web-capture download client needs no endpoint or credential",
+			entry: Entry{Name: "wc", Type: "web-capture"},
+			check: func(t *testing.T, r Resolved) {
+				if len(r.Capabilities) != 1 || r.Capabilities[0] != CapabilityDownload {
+					t.Errorf("capabilities = %v, want [download]", r.Capabilities)
+				}
+				if r.Endpoint != nil {
+					t.Errorf("a web-capture client takes its source per grab, so no endpoint: %v", r.Endpoint)
+				}
+			},
+		},
+		{
 			name: "a duplicate capability is collapsed rather than refused",
 			entry: Entry{
 				Name: "p", Type: "fake",

@@ -114,6 +114,27 @@ const (
 	// refusing to start — and like every download client its byte-moving is
 	// exercised only against the live tool, never in CI (ADR-0026).
 	KindYtDlp Kind = "yt-dlp"
+	// KindWebFeed is a metadata provider that parses a web publication's RSS or
+	// Atom feed (§59, M12 Phase 4): it enumerates a feed's article entries so a
+	// followed source can project a want per article. Like KindPodcast and
+	// KindYoutube its "endpoint" is not configured — the feed URL is the source's
+	// own FeedRef, handed in per enumerate — and a public feed needs no
+	// credential. It is a fourth CapabilityMetadata kind; the four differ only in
+	// the wire format they parse, and the neutral followed.FeedItem is what the
+	// poll loop reads from any of them.
+	//
+	// An article has no directly-fetchable file — its bytes are an HTML page — so
+	// this adapter tags each item's source for the KindWebCapture client rather
+	// than the plain-HTTP one (followed.WebCaptureSourceScheme, ADR-0063).
+	KindWebFeed Kind = "webfeed"
+	// KindWebCapture is a download client that archives a web article by
+	// capturing its page into a single, self-contained HTML file — stylesheets
+	// inlined, images embedded as data: URIs, external references dropped (§58,
+	// M12 Phase 4, ADR-0063). Like the other download clients it accepts only the
+	// tagged sources a KindWebFeed adapter produces (followed.WebCaptureSourceScheme)
+	// and refuses everything else, so it composes with the http, torrent and
+	// yt-dlp clients rather than competing for their transfers.
+	KindWebCapture Kind = "web-capture"
 	// KindFake is an in-process provider that talks to nothing.
 	//
 	// It is a first-class kind rather than a test-only construct because the
@@ -131,7 +152,7 @@ const (
 
 // Kinds lists every kind, in a stable order.
 func Kinds() []Kind {
-	return []Kind{KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindHTTP, KindTVDB, KindPodcast, KindYoutube, KindYtDlp, KindFake}
+	return []Kind{KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindHTTP, KindTVDB, KindPodcast, KindYoutube, KindYtDlp, KindWebFeed, KindWebCapture, KindFake}
 }
 
 // ParseKind validates a kind from configuration.
@@ -160,9 +181,9 @@ func DefaultCapabilities(k Kind) []Capability {
 	switch k {
 	case KindTorznab, KindNewznab:
 		return []Capability{CapabilityIndexer}
-	case KindTransmission, KindQBittorrent, KindHTTP, KindYtDlp:
+	case KindTransmission, KindQBittorrent, KindHTTP, KindYtDlp, KindWebCapture:
 		return []Capability{CapabilityDownload}
-	case KindTVDB, KindPodcast, KindYoutube:
+	case KindTVDB, KindPodcast, KindYoutube, KindWebFeed:
 		return []Capability{CapabilityMetadata}
 	default:
 		// A fake declares nothing by default: what it stands in for is the
@@ -186,10 +207,13 @@ func DefaultCapabilities(k Kind) []Capability {
 // never uses. Youtube is the fifth and yt-dlp the sixth, each for one of those
 // same reasons: a channel feed has no well-known base URL (the feed URL is the
 // source's own FeedRef, like podcast), and the yt-dlp client's "endpoint" is the
-// watch URL handed to it per grab (like the plain-HTTP client).
+// watch URL handed to it per grab (like the plain-HTTP client). Webfeed and
+// web-capture are the seventh and eighth, for those same two reasons: a web feed
+// has no well-known base URL (its FeedRef is the feed URL), and the web-capture
+// client's "endpoint" is the article URL handed to it per grab.
 func needsEndpoint(k Kind) bool {
 	return k != KindFake && k != KindHTTP && k != KindTVDB && k != KindPodcast &&
-		k != KindYoutube && k != KindYtDlp
+		k != KindYoutube && k != KindYtDlp && k != KindWebFeed && k != KindWebCapture
 }
 
 // needsCredential reports whether a kind must be given one.
