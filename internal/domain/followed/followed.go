@@ -53,8 +53,10 @@ func Types() []Type {
 }
 
 // Implemented reports whether a feed adapter for this type exists yet. Phase 1
-// ships TV only; the others are declared so their phases are additions.
-func (t Type) Implemented() bool { return t == TypeTVSeries }
+// shipped TV; Phase 2 adds podcast (RSS enclosure → the existing KindHTTP
+// downloader). YouTube and generic RSS remain declared so their phases are
+// additions rather than renames.
+func (t Type) Implemented() bool { return t == TypeTVSeries || t == TypePodcast }
 
 // ParseType validates a source type from configuration or the wire. An unknown
 // type is refused rather than ignored, for the reason providers.ParseCapability
@@ -167,7 +169,7 @@ func (s *Source) Validate() error {
 		// Refused rather than stored-and-ignored: a subscription that will never
 		// be polled must fail loudly at creation, not sit looking healthy.
 		return fmt.Errorf("following a %s source is not implemented yet — "+
-			"Phase 1 follows tv_series only", s.Type)
+			"heyarr follows tv_series and podcast so far", s.Type)
 	}
 	if s.WorkID == "" {
 		return errors.New("a followed source must name the work its items belong to")
@@ -215,6 +217,29 @@ type FeedItem struct {
 	// as a map so a new source type is not a new column (the same rule the Item
 	// entity's attributes follow, ADR-0056).
 	Attributes map[string]string
+}
+
+// AttrEnclosureURL is the Attributes key a feed adapter uses to carry an item's
+// direct-fetch URL — a podcast episode's <enclosure> (§55, M12 Phase 2).
+//
+// It is the seam between a NON-SEARCH source and acquisition. A TV episode has
+// no bytes location until an indexer is searched, so it carries no enclosure and
+// the search pipeline finds its release. A podcast episode's bytes location is
+// exactly what the feed already handed us, so the adapter records it here and the
+// poll projects it straight onto the want as a direct release the existing
+// KindHTTP downloader fetches — there is nothing to search for. The key lives on
+// the neutral FeedItem, not in any adapter, so any future direct-URL source
+// (Phase 4's captured articles) reuses the same seam.
+const AttrEnclosureURL = "enclosure_url"
+
+// EnclosureURL is the item's direct-fetch URL, if the feed adapter supplied one.
+//
+// A non-empty return is what tells the poll loop this item is acquired directly
+// (the feed IS the discovery) rather than by searching an indexer — see
+// AttrEnclosureURL. An item without one falls through to the search pipeline, so
+// the two source shapes need no type switch at the projection site.
+func (i FeedItem) EnclosureURL() string {
+	return strings.TrimSpace(i.Attributes[AttrEnclosureURL])
 }
 
 // Validate refuses a feed item that cannot be diffed or projected.

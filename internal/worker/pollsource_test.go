@@ -39,6 +39,12 @@ type followHarness struct {
 }
 
 func newFollowHarness(t *testing.T, backfill followed.Backfill) *followHarness {
+	return newFollowHarnessOf(t, backfill, followed.TypeTVSeries, "tvdb:12345")
+}
+
+func newFollowHarnessOf(
+	t *testing.T, backfill followed.Backfill, srcType followed.Type, feedRef string,
+) *followHarness {
 	t.Helper()
 	ctx := t.Context()
 	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
@@ -66,7 +72,7 @@ func newFollowHarness(t *testing.T, backfill followed.Backfill) *followHarness {
 
 	h := &followHarness{
 		db: db, queue: queue, cat: cat,
-		workID: "w1", feedRef: "tvdb:12345",
+		workID: "w1", feedRef: feedRef,
 	}
 	stamp := time.Now().UTC().Format(time.RFC3339Nano)
 	h.exec(t, `INSERT INTO quality_profiles
@@ -81,7 +87,7 @@ func newFollowHarness(t *testing.T, backfill followed.Backfill) *followHarness {
 	// surface will use — not raw SQL — so the test drives the real projection.
 	src, err := cat.CreateFollowSource(ctx, followed.Source{
 		WorkID:           h.workID,
-		Type:             followed.TypeTVSeries,
+		Type:             srcType,
 		FeedRef:          h.feedRef,
 		QualityProfileID: "q1",
 		Monitor:          true,
@@ -93,7 +99,7 @@ func newFollowHarness(t *testing.T, backfill followed.Backfill) *followHarness {
 	}
 	h.sourceID = src.ID
 
-	h.feed = providers.NewFake("fake-tvdb", providers.CapabilityMetadata)
+	h.feed = providers.NewFake("fake-feed", providers.CapabilityMetadata)
 	h.reg = providers.New(nil)
 	if err := h.reg.Register(h.feed); err != nil {
 		t.Fatal(err)
@@ -215,6 +221,134 @@ func TestAPollProjectsAWantPerEpisode(t *testing.T) {
 		}
 		if _, err := h.cat.Acquisition(t.Context(), desiredID); err != nil {
 			t.Errorf("projected want %s has no acquisition state: %v", desiredID, err)
+		}
+	}
+}
+
+func podcastEpisode(guid, title, enclosure string, published time.Time) followed.FeedItem {
+	return followed.FeedItem{
+		Key: guid, Title: title, PublishedAt: published,
+		Attributes: map[string]string{followed.AttrEnclosureURL: enclosure},
+	}
+}
+
+// The Phase-2 seam, end to end: a followed podcast is archived WITHOUT a search.
+// The feed hands over each episode's enclosure URL, the poll records it as the
+// want's direct release and drives it to SELECTED, and the ORDINARY grab fetches
+// it over a download client. No indexer is configured — and none is needed, which
+// is the whole point of podcast-following being nearly free.
+func TestAFollowedPodcastArchivesEachEpisodeDirectly(t *testing.T) {
+	h := newFollowHarnessOf(t, followed.BackfillFull,
+		followed.TypePodcast, "https://feeds.example.com/show.xml")
+	aired := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	enclosureByKey := map[string]string{
+		"ep-0001": "https://cdn.example.com/ep1.mp3",
+		"ep-0002": "https://cdn.example.com/ep2.mp3",
+	}
+	h.feed.OfferFeed(h.feedRef,
+		podcastEpisode("ep-0001", "Episode One", enclosureByKey["ep-0001"], aired),
+		podcastEpisode("ep-0002", "Episode Two", enclosureByKey["ep-0002"], aired.AddDate(0, 0, 7)))
+
+	// A download client so the grab this poll enqueues has somewhere to route,
+	// and deliberately NO indexer — a podcast needs none.
+	dl := providers.NewFake("fake-http", providers.CapabilityDownload)
+	if err := h.reg.Register(dl); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.poll(t); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+
+	items, err := h.cat.ItemsForWork(t.Context(), h.workID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("recorded %d items, want 2", len(items))
+	}
+
+	desiredFor := func(itemID string) string {
+		t.Helper()
+		var id string
+		if err := h.db.Reader().QueryRow(
+			`SELECT id FROM desired_items WHERE item_id = ?`, itemID).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	// Each want is already SELECTED — no search ran — with the enclosure as its
+	// release source, keyed by the episode's guid.
+	for _, it := range items {
+		desiredID := desiredFor(it.ID)
+		rec, err := h.cat.Acquisition(t.Context(), desiredID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := rec.State.Name(); got != "SELECTED" {
+			t.Fatalf("episode %s reached %s, want SELECTED (a direct release, no search)", it.ItemKey, got)
+		}
+		candID, source, err := h.cat.SelectedSource(t.Context(), desiredID)
+		if err != nil {
+			t.Fatalf("episode %s has no selected release: %v", it.ItemKey, err)
+		}
+		if candID != it.ItemKey {
+			t.Errorf("selected candidate %q, want the item key %q", candID, it.ItemKey)
+		}
+		if got := source.Reveal(); got != enclosureByKey[it.ItemKey] {
+			t.Errorf("release source = %q, want the enclosure %q", got, enclosureByKey[it.ItemKey])
+		}
+	}
+
+	// The poll enqueued a grab per episode; running them hands each enclosure to
+	// the download client and advances the want to QUEUED — the archive actually
+	// fetches, over the existing KindHTTP path (a Fake stands in for it here).
+	grab := GrabReleaseHandler(h.reg, h.cat, slog.New(slog.DiscardHandler))
+	for _, it := range items {
+		desiredID := desiredFor(it.ID)
+		payload, _ := json.Marshal(acquisition.GrabPayload{DesiredItemID: desiredID})
+		if err := grab(t.Context(), jobs.Job{Type: acquisition.GrabJobType, Payload: payload}); err != nil {
+			t.Fatalf("grab for %s: %v", it.ItemKey, err)
+		}
+		rec, err := h.cat.Acquisition(t.Context(), desiredID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := rec.State.Name(); got != "QUEUED" {
+			t.Errorf("after the grab, %s is %s, want QUEUED", it.ItemKey, got)
+		}
+	}
+
+	added := map[string]bool{}
+	for _, s := range dl.Added() {
+		added[s.Reveal()] = true
+	}
+	for key, url := range enclosureByKey {
+		if !added[url] {
+			t.Errorf("the download client was never handed %s's enclosure %q", key, url)
+		}
+	}
+
+	// A re-poll is idempotent (invariant 9): the same episodes reappear in the
+	// feed, but no want is re-driven — still two items, and each keeps exactly one
+	// selected release rather than a second being stacked on.
+	if err := h.poll(t); err != nil {
+		t.Fatalf("re-poll: %v", err)
+	}
+	if again, _ := h.cat.ItemsForWork(t.Context(), h.workID); len(again) != 2 {
+		t.Errorf("after a re-poll there are %d items, want 2", len(again))
+	}
+	for _, it := range items {
+		desiredID := desiredFor(it.ID)
+		var selectedCount int
+		if err := h.db.Reader().QueryRow(
+			`SELECT count(*) FROM release_candidates WHERE desired_item_id = ? AND selected = 1`,
+			desiredID).Scan(&selectedCount); err != nil {
+			t.Fatal(err)
+		}
+		if selectedCount != 1 {
+			t.Errorf("episode %s has %d selected releases after a re-poll, want 1", it.ItemKey, selectedCount)
 		}
 	}
 }

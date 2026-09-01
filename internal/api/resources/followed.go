@@ -26,13 +26,14 @@ import (
 //
 // # Why there is no `source` / `provider` / `feed_type` parameter (#396)
 //
-// A caller says "follow this" with a content intent (which series) and an
-// identity (a URL, or an explicit external id) — never which adapter to use.
-// The system INFERS the type from the identity: a TVDB id or URL is a TV series
-// in Phase 1, and the other three source types are refused with a message that
-// says so rather than pretending. Picking the adapter is the registry's job, the
-// same stance the provider layer takes for indexers; a `feed_type` knob would
-// hand the caller a decision they should not have to make and could get wrong.
+// A caller says "follow this" with a content intent (which series or podcast)
+// and an identity (a URL, or an explicit external id) — never which adapter to
+// use. The system INFERS the type from the identity: a TVDB id or URL is a TV
+// series, any other http(s) feed URL is a podcast, and the not-yet-implemented
+// source types are refused with a message that says so rather than pretending.
+// Picking the adapter is the registry's job, the same stance the provider layer
+// takes for indexers; a `feed_type` knob would hand the caller a decision they
+// should not have to make and could get wrong.
 //
 // # FOLLOW is a subscription; want_content stays the one-off
 //
@@ -46,15 +47,16 @@ import (
 // follow_source: subscribe to a source, archiving everything it emits.
 type FollowSourceRequest struct {
 	// The feed identity — where to poll. Give a URL or an explicit external id;
-	// the system infers the type. Phase 1 understands a TVDB series.
+	// the system infers the type. A TVDB id or URL is a TV series; any other
+	// http(s) feed URL is a podcast.
 	URL    string `json:"url"`
 	TVDBID string `json:"tvdb_id"`
 
-	// The work identity — which series the items belong to, resolved exactly as
-	// want_content resolves a work: an existing WorkID, or a Title (and optional
-	// Year) that gets-or-creates the series work so a follow and a later scan
-	// converge on one work. content_type is always "series" for a followed source
-	// in Phase 1, so a caller need not say it.
+	// The work identity — which series or podcast the items belong to, resolved
+	// exactly as want_content resolves a work: an existing WorkID, or a Title
+	// (and optional Year) that gets-or-creates the work so a follow and a later
+	// scan converge on one work. content_type is derived from the inferred source
+	// type (series or podcast), so a caller need not say it.
 	WorkID string `json:"work_id"`
 	Title  string `json:"title"`
 	Year   int    `json:"year"`
@@ -111,41 +113,63 @@ var (
 	reAllDigits   = regexp.MustCompile(`^\d+$`)
 )
 
-// inferTVSeriesFeed turns a caller's identity into the feed_ref a followed
-// source stores, inferring the type. Phase 1 implements tv_series only; anything
-// that is not a TVDB series is refused loudly rather than stored unpolled.
-func inferTVSeriesFeed(rawURL, tvdbID string) (feedRef string, err error) {
+// inferFeed turns a caller's identity into the feed_ref a followed source stores
+// AND the source type it implies, without the caller naming a type (#396). A
+// TVDB id or thetvdb.com URL is a tv_series; any other http(s) URL is a podcast
+// RSS feed, whose feed_ref is the URL itself — the two implemented source shapes.
+// YouTube and generic RSS get their own, earlier-matching branches when their
+// phases land, so the podcast fall-through does not misclaim them silently: it is
+// the general "a feed URL" case, and today the only feed URL heyarr follows is a
+// podcast's.
+func inferFeed(rawURL, tvdbID string) (feedRef string, typ followed.Type, err error) {
 	tvdbID = strings.TrimSpace(tvdbID)
 	rawURL = strings.TrimSpace(rawURL)
 
 	if tvdbID != "" {
 		if !reAllDigits.MatchString(tvdbID) {
-			return "", &badRequest{fmt.Errorf(
+			return "", "", &badRequest{fmt.Errorf(
 				"tvdb_id must be a numeric TVDB series id, not %q", tvdbID)}
 		}
-		return tvdbID, nil
+		return tvdbID, followed.TypeTVSeries, nil
 	}
 	if rawURL == "" {
-		return "", &badRequest{errors.New(
+		return "", "", &badRequest{errors.New(
 			"a followed source needs a feed identity — a tvdb_id, or a url")}
 	}
-	if !strings.Contains(strings.ToLower(rawURL), "thetvdb.com") {
-		// Not a TVDB reference, so not something Phase 1 can follow. The message
-		// names the limit rather than the URL, because "we cannot follow this"
-		// and "this URL is malformed" are different answers.
-		return "", &badRequest{errors.New(
-			"following this source is not implemented yet — Phase 1 follows tv_series only " +
-				"(give a TVDB series id or URL)")}
+
+	lower := strings.ToLower(rawURL)
+	if strings.Contains(lower, "thetvdb.com") {
+		if m := reTVDBQueryID.FindStringSubmatch(rawURL); m != nil {
+			return m[1], followed.TypeTVSeries, nil
+		}
+		if m := reTVDBPathID.FindStringSubmatch(rawURL); m != nil {
+			return m[1], followed.TypeTVSeries, nil
+		}
+		return "", "", &badRequest{errors.New(
+			"that TVDB URL has no numeric series id — pass the numeric id as tvdb_id " +
+				"(a slug URL cannot be resolved without a lookup)")}
 	}
-	if m := reTVDBQueryID.FindStringSubmatch(rawURL); m != nil {
-		return m[1], nil
+
+	// Not a TVDB reference — a podcast RSS feed, whose feed_ref is the URL the
+	// adapter fetches per poll. It must be an http(s) URL: a bare host or a
+	// mistyped scheme would be stored and then fail every enumeration, looking
+	// like a dead feed rather than a typo.
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		return "", "", &badRequest{fmt.Errorf(
+			"a followed source's url must be an http(s) feed url (a podcast RSS feed), not %q", rawURL)}
 	}
-	if m := reTVDBPathID.FindStringSubmatch(rawURL); m != nil {
-		return m[1], nil
+	return rawURL, followed.TypePodcast, nil
+}
+
+// workContentType is the §12 content type a source's items belong to, so a
+// follow and a later scan converge on ONE work (resolveWorkDescriptor). A TV
+// series' items are episodes under a series work; a podcast's are episodes under
+// a podcast work.
+func workContentType(t followed.Type) string {
+	if t == followed.TypePodcast {
+		return "podcast"
 	}
-	return "", &badRequest{errors.New(
-		"that TVDB URL has no numeric series id — pass the numeric id as tvdb_id " +
-			"(a slug URL cannot be resolved without a lookup)")}
+	return "series"
 }
 
 // FollowSource creates a subscription from an intent (§55). Exported and shared
@@ -170,7 +194,7 @@ func (a *API) FollowSource(ctx context.Context, req FollowSourceRequest) (Follow
 			"name the quality profile with either quality_profile_id or quality_profile, not both")}
 	}
 
-	feedRef, err := inferTVSeriesFeed(req.URL, req.TVDBID)
+	feedRef, srcType, err := inferFeed(req.URL, req.TVDBID)
 	if err != nil {
 		return FollowedSourceView{}, err
 	}
@@ -197,7 +221,7 @@ func (a *API) FollowSource(ctx context.Context, req FollowSourceRequest) (Follow
 		workID = req.WorkID
 		if req.WorkID == "" {
 			workID, e = a.resolveWorkDescriptor(ctx, tx, WorkDescriptor{
-				ContentType: "series", Title: req.Title, Year: req.Year,
+				ContentType: workContentType(srcType), Title: req.Title, Year: req.Year,
 			})
 		}
 		return e
@@ -207,7 +231,7 @@ func (a *API) FollowSource(ctx context.Context, req FollowSourceRequest) (Follow
 
 	src, err := a.catalog.CreateFollowSource(ctx, followed.Source{
 		WorkID:           workID,
-		Type:             followed.TypeTVSeries,
+		Type:             srcType,
 		FeedRef:          feedRef,
 		QualityProfileID: profileID,
 		Monitor:          monitor,

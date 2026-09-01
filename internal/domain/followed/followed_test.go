@@ -55,10 +55,15 @@ func TestSourceValidate(t *testing.T) {
 		{
 			// Source-agnostic: the caller expresses intent, the system infers a
 			// type — but a type with no adapter yet must fail loudly, not sit
-			// unpolled.
+			// unpolled. YouTube is still a later phase.
 			name:    "an unimplemented type is refused",
-			mutate:  func(s *Source) { s.Type = TypePodcast },
+			mutate:  func(s *Source) { s.Type = TypeYouTubeChannel },
 			wantErr: "not implemented yet",
+		},
+		{
+			// Podcast is Phase 2 — an implemented type validates like tv_series.
+			name:   "an implemented podcast source validates",
+			mutate: func(s *Source) { s.Type = TypePodcast },
 		},
 		{
 			name:    "an oversized reason is refused",
@@ -123,13 +128,15 @@ func TestParseType(t *testing.T) {
 	}
 }
 
-// Only TV is wired in Phase 1; the other three are declared so their phases are
-// additions rather than renames.
-func TestOnlyTVIsImplemented(t *testing.T) {
-	if !TypeTVSeries.Implemented() {
-		t.Error("tv_series is Phase 1")
+// TV (Phase 1) and podcast (Phase 2) are wired; YouTube and RSS are declared so
+// their phases are additions rather than renames.
+func TestImplementedTypes(t *testing.T) {
+	for _, ty := range []Type{TypeTVSeries, TypePodcast} {
+		if !ty.Implemented() {
+			t.Errorf("%s is wired and must report implemented", ty)
+		}
 	}
-	for _, ty := range []Type{TypePodcast, TypeYouTubeChannel, TypeRSSFeed} {
+	for _, ty := range []Type{TypeYouTubeChannel, TypeRSSFeed} {
 		if ty.Implemented() {
 			t.Errorf("%s is a later phase and must not claim to be implemented", ty)
 		}

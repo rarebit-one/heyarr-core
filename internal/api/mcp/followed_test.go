@@ -50,14 +50,29 @@ func TestFollowSourceListAndUnfollow(t *testing.T) {
 	}
 }
 
-// follow_source is source-agnostic: a non-TVDB source is refused with the
-// Phase-1 message rather than stored.
-func TestFollowSourceRefusesNonTVSeries(t *testing.T) {
+// follow_source is source-agnostic: an http(s) feed URL is inferred as a podcast
+// and followed, while an identity that is neither a tvdb id nor an http(s) URL is
+// refused rather than stored unpolled.
+func TestFollowSourceInfersPodcastAndRefusesJunk(t *testing.T) {
 	h := newHarness(t, false)
 
+	var followed struct {
+		Type    string `json:"type"`
+		FeedRef string `json:"feed_ref"`
+	}
+	h.call("", "follow_source",
+		`{"url":"https://example.com/feed.xml","title":"Pod","quality_profile":"living-room"}`).
+		structured(t, &followed)
+	if followed.Type != "podcast" {
+		t.Errorf("a feed URL should be followed as a podcast, got type %q", followed.Type)
+	}
+	if followed.FeedRef != "https://example.com/feed.xml" {
+		t.Errorf("feed_ref = %q, want the feed URL itself", followed.FeedRef)
+	}
+
 	resp := h.call("", "follow_source",
-		`{"url":"https://example.com/feed.xml","title":"Pod","quality_profile":"living-room"}`)
+		`{"url":"not-a-url","title":"X","quality_profile":"living-room"}`)
 	if resp.Body.Error == nil {
-		t.Fatal("following a non-TVDB source should be an error in Phase 1")
+		t.Fatal("an identity that is neither a tvdb id nor an http(s) url should be an error")
 	}
 }

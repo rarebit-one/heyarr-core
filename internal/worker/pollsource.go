@@ -10,6 +10,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
+	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -103,16 +104,37 @@ func PollSourceHandler(
 				continue
 			}
 			want := src.ProjectWant(item.ID)
-			if _, err := cat.CreateDesiredItem(ctx, want); err != nil {
-				if catalog.IsDuplicateWant(err) {
-					// Already projected on a previous poll. Idempotent: nothing to do.
+			rec, err := cat.CreateDesiredItem(ctx, want)
+			wantID := rec.Item.ID
+			switch {
+			case err == nil:
+				projected++
+			case catalog.IsDuplicateWant(err):
+				// Already projected on a previous poll. The want exists, but a poll
+				// that crashed after creating it may not have started its
+				// acquisition — so resume rather than skip (invariant 9). Look the
+				// want up, because CreateDesiredItem does not hand back the id on a
+				// duplicate, and let the acquisition kick-off below run idempotently.
+				id, ok, lerr := cat.DesiredItemForItem(ctx, item.ID, src.QualityProfileID)
+				if lerr != nil {
+					return fmt.Errorf("worker: resolving a projected want for source %s: %w",
+						payload.SourceID, lerr)
+				}
+				if !ok {
+					// The want was created under a different profile, or removed
+					// between the duplicate and this read. Nothing to resume.
 					continue
 				}
+				wantID = id
+			default:
 				return fmt.Errorf("worker: projecting a want for source %s: %w",
 					payload.SourceID, err)
 			}
-			projected++
-			enqueuePollReconcile(ctx, grabs, want.ID, log)
+
+			if err := startAcquisition(ctx, cat, grabs, src, item, fi, wantID, log); err != nil {
+				return fmt.Errorf("worker: starting acquisition for source %s: %w",
+					payload.SourceID, err)
+			}
 		}
 
 		// The authoritative schedule: a poll that discovered a new item resets the
@@ -165,6 +187,61 @@ func shouldProject(src catalog.StoredSource, fi followed.FeedItem) bool {
 		return false
 	}
 	return !fi.PublishedAt.Before(src.CreatedAt)
+}
+
+// startAcquisition begins acquiring a projected item's bytes, by the route the
+// item's shape implies (§64, M12 Phase 2).
+//
+// An item the feed handed a direct enclosure URL — a podcast episode — is
+// acquired WITHOUT a search: RecordDirectRelease records the enclosure as the
+// want's single, pre-selected release and walks it to SELECTED, and the ordinary
+// grab (§64's SELECTED → QUEUED) fetches it over KindHTTP. An item with no
+// enclosure — a TV episode — rests in MISSING and the search pipeline finds its
+// release; reconciliation is kicked now for the same immediacy WantContent gives
+// an operator.
+//
+// The choice is read off the ITEM (does the feed know where the bytes are?), not
+// off the source type, so a later direct-URL source reuses this seam untouched.
+// Idempotent (invariant 9): RecordDirectRelease no-ops on a want already past
+// MISSING, so a re-poll drives nothing twice and enqueues no duplicate grab.
+func startAcquisition(
+	ctx context.Context, cat *catalog.Catalog, grabs *jobs.Queue,
+	src catalog.StoredSource, item catalog.Item, fi followed.FeedItem,
+	wantID string, log *slog.Logger,
+) error {
+	enclosure := fi.EnclosureURL()
+	if enclosure == "" {
+		// No bytes location from the feed — the search pipeline finds the release.
+		enqueuePollReconcile(ctx, grabs, wantID, log)
+		return nil
+	}
+	selected, err := cat.RecordDirectRelease(ctx, wantID, directReleaseCandidate(src, item, fi, enclosure))
+	if err != nil {
+		return err
+	}
+	if selected {
+		// SELECTED now; hand it to a download client exactly as the search beat
+		// does. enqueueGrab is best-effort and idempotent (GrabDedupeKey), so a
+		// re-poll's fresh selection cannot double-grab.
+		enqueueGrab(ctx, grabs, wantID, item.ItemKey, log)
+	}
+	return nil
+}
+
+// directReleaseCandidate turns a feed item's enclosure into the release the want
+// acquires. The candidate id is the source-stable item key (a podcast GUID), so
+// it is the same release across polls; the enclosure URL is the Source the grab
+// hands to KindHTTP, held as a secret.Value because a private feed's enclosure
+// can carry a token exactly as a private tracker's magnet does.
+func directReleaseCandidate(
+	src catalog.StoredSource, item catalog.Item, fi followed.FeedItem, enclosure string,
+) acquisition.ReleaseCandidate {
+	return acquisition.ReleaseCandidate{
+		ID:       item.ItemKey,
+		Title:    fi.Title,
+		Provider: string(src.Type),
+		Source:   secret.Value(enclosure),
+	}
 }
 
 // enqueuePollReconcile kicks a fresh want's reconciliation now rather than

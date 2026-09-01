@@ -83,11 +83,12 @@ func AuthSchemeOf(k Kind) AuthScheme {
 		// cookie from them); the CREDENTIAL an operator supplies is the same
 		// basic pair, and how it goes on the wire is the client's business.
 		return AuthBasic
-	case KindHTTP:
-		// A plain-HTTP download fetches a public direct link; it authenticates
-		// with nothing. A URL behind a credential is a later scheme, not this
-		// slice — and AuthNone means configuration refuses a credential here
-		// rather than accepting one that would never be sent.
+	case KindHTTP, KindPodcast:
+		// A plain-HTTP download fetches a public direct link, and a podcast RSS
+		// feed is a public URL; both authenticate with nothing. A feed or link
+		// behind a credential is a later scheme, not this slice — and AuthNone
+		// means configuration refuses a credential here rather than accepting one
+		// that would never be sent.
 		return AuthNone
 	case KindFake:
 		return AuthNone

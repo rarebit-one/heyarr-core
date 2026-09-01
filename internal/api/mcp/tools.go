@@ -119,9 +119,9 @@ func (s *Server) registerTools() {
 		ReadOnly: false,
 		Description: "Subscribe to a source and archive everything it emits, forever — a " +
 			"STANDING subscription, distinct from want_content, which gets one thing once. " +
-			"Give a content intent (which series) and an identity (a url, or a tvdb_id); the " +
-			"type is inferred, you never name a source or a provider. Phase 1 follows TV " +
-			"series only.",
+			"Give a content intent (which series or podcast) and an identity (a url, or a " +
+			"tvdb_id); the type is inferred, you never name a source or a provider. A TVDB id " +
+			"or URL is a TV series; any other http(s) feed URL is a podcast.",
 		InputSchema: schemaFollowSource,
 		Handler:     s.followSource,
 	})
