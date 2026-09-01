@@ -112,10 +112,13 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			// declines this value, so a real service token keeps its exact path,
 			// metrics and error mapping, and only an otherwise-rejected bearer value
 			// is ever offered to the broker. On a hit the browser or TV acts as the
-			// pinned user its device approved for, read-scoped like a device.
+			// pinned user its device approved for, read-scoped like a device —
+			// unless the approving device holds a follow-management grant (ADR-0061),
+			// which lifts this session to write. The grant lookup fails closed: an
+			// error keeps the session on the read floor rather than opening it.
 			if s.sessions != nil {
 				if p, ok := s.sessions.Session(raw); ok {
-					next.ServeHTTP(w, s.withIdentity(r, sessionIdentity(p)))
+					next.ServeHTTP(w, s.withIdentity(r, sessionIdentity(p, s.managementAuthorized(r.Context(), p.DeviceKey))))
 					return
 				}
 			}
@@ -176,6 +179,23 @@ func (s *Server) authenticateDevice(ctx context.Context, credential string) (aut
 			Scopes:      []auth.Scope{auth.ScopeRead},
 		},
 	}, nil
+}
+
+// managementAuthorized resolves whether an approving device key carries a
+// follow-management grant (ADR-0061). It fails closed: with no authorizer wired,
+// or on a lookup error, a session stays on the read floor. A blank device key is
+// never authorised — only a real approving device can be granted.
+func (s *Server) managementAuthorized(ctx context.Context, deviceKey string) bool {
+	if s.mgmtAuth == nil || deviceKey == "" {
+		return false
+	}
+	ok, err := s.mgmtAuth.ManagementAuthorized(ctx, deviceKey)
+	if err != nil {
+		s.log.Warn("could not resolve a follow-management grant; keeping the session read-only",
+			"error", err)
+		return false
+	}
+	return ok
 }
 
 // withIdentity puts the identity where handlers read it, and also into the slot

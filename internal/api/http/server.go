@@ -71,6 +71,13 @@ type Options struct {
 	// only after Verifier declines a bearer credential, so a real service token
 	// keeps its exact path and never reaches the broker.
 	SessionValidator SessionValidator
+	// ManagementAuthorizer resolves whether a web-login session's approving device
+	// carries a follow-management grant (ADR-0061), lifting that session from the
+	// read floor to write. Nil means no device is ever management-authorized —
+	// the read-only-by-default state — so a session stays read-scoped exactly as
+	// before the grant existed. It is consulted only on the session path, never
+	// for a service token or a device credential.
+	ManagementAuthorizer ManagementAuthorizer
 	// Events reports the log's head sequence for GET /api/v1/system. Required:
 	// the alternative is a server that reports head 0 because it was wired
 	// without a log, which is indistinguishable from an empty log and would
@@ -143,6 +150,7 @@ type Server struct {
 	verifier *auth.Verifier
 	deviceV  DeviceVerifier
 	sessions SessionValidator
+	mgmtAuth ManagementAuthorizer
 	events   EventHead
 	media    []ToolInfo
 	build    buildinfo.Info
@@ -215,6 +223,7 @@ func New(opts Options) (*Server, error) {
 		verifier: opts.Verifier,
 		deviceV:  opts.DeviceVerifier,
 		sessions: opts.SessionValidator,
+		mgmtAuth: opts.ManagementAuthorizer,
 		events:   opts.Events,
 		// Normalised so the JSON shape is stable: a nil slice marshals as
 		// null, and a client parsing `media` should not have to handle both

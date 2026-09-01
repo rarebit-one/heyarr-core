@@ -464,23 +464,40 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
+	// The follow-management authorizer (ADR-0061): the same catalog the resource
+	// endpoints write grants through, read here to resolve a web-login session's
+	// scope. It reads only the session_management_grants table, so a second
+	// catalog instance is harmless — the state it consults is on disk, not in
+	// memory — and it keeps the interim write-authorization path off the read
+	// floor without threading the resource API back out of mounts. It is consulted
+	// only on the session path, so a node with no broker (sessions == nil) pays it
+	// nothing.
+	grantAuthorizer, err := catalog.New(catalog.Options{
+		DB: db, Events: eventLog,
+		PeerName: c.cfg.Peer.Name, PeerSite: c.cfg.Peer.Site, Logger: c.log,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: opening the management-grant store: %w", err)
+	}
+
 	srv, err := httpapi.New(httpapi.Options{
-		Config:             c.cfg,
-		Logger:             c.log,
-		DB:                 db,
-		Verifier:           verifier,
-		DeviceVerifier:     deviceIdentities,
-		SessionValidator:   sessions,
-		Events:             eventLog,
-		Media:              mediaInfo(toolchain),
-		Build:              buildinfo.Get(),
-		SchemaVersion:      schemaVersion,
-		KnownSchemaVersion: knownSchema,
-		CASRoot:            c.cfg.CAS.Root,
-		Mount:              mounts,
-		MountPublic:        publicMounts,
-		PeerMembership:     members,
-		PeerLiveness:       liveness(peerHealth),
+		Config:               c.cfg,
+		Logger:               c.log,
+		DB:                   db,
+		Verifier:             verifier,
+		DeviceVerifier:       deviceIdentities,
+		SessionValidator:     sessions,
+		ManagementAuthorizer: grantAuthorizer,
+		Events:               eventLog,
+		Media:                mediaInfo(toolchain),
+		Build:                buildinfo.Get(),
+		SchemaVersion:        schemaVersion,
+		KnownSchemaVersion:   knownSchema,
+		CASRoot:              c.cfg.CAS.Root,
+		Mount:                mounts,
+		MountPublic:          publicMounts,
+		PeerMembership:       members,
+		PeerLiveness:         liveness(peerHealth),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)

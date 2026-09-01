@@ -321,6 +321,13 @@ func (a *API) Mount(r chi.Router) {
 	// the caller gives a content intent and an identity, and the type is inferred.
 	a.mountFollowedSources(r)
 
+	// The session surface (ADR-0061, M12). GET /session lets a browser/TV client
+	// read its own authority; the management-grant routes are the interim,
+	// operator-issued path that lifts a trusted personal device's web-login
+	// session from the read floor to write, before device-cert enrolment
+	// (ADR-0048) converges the surface.
+	a.mountSession(r)
+
 	// Content-intent search (§55, M12, #396). A POST because the intent travels
 	// in a body, under the read floor the router already requires — the same
 	// reasoning as /quality-profiles/{id}/evaluate. No source parameter: the

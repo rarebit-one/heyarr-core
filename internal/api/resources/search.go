@@ -40,6 +40,15 @@ type WorkSummary struct {
 	ContentType string `json:"content_type"`
 	Title       string `json:"title"`
 	Year        int    `json:"year,omitempty"`
+	// TVDBID is the work's stored TVDB external id (ADR-0050), when it has one —
+	// the feed identity follow_source takes as tvdb_id, so a client can follow a
+	// search result in ONE step rather than by a title that might create a second
+	// work. It is the value the metadata provider resolved when the work entered
+	// the library; a work with no stored tvdb id omits it, and the client then
+	// asks the operator for one (decision 2, M12). This surfaces an id already in
+	// the library — it is NOT a live TVDB discovery search for series the library
+	// does not yet hold, which is a separate future metadata-search mode.
+	TVDBID string `json:"tvdb_id,omitempty"`
 }
 
 const (
@@ -76,8 +85,16 @@ func (a *API) SearchContent(ctx context.Context, req SearchContentRequest) ([]Wo
 	}
 	args = append(args, limit)
 
+	// The tvdb id is a correlated subquery rather than a JOIN so the result stays
+	// one row per work: a work could in principle carry more than one tvdb row,
+	// and a JOIN would multiply it. LIMIT 1 takes the lexically-first, which is
+	// deterministic; the common case is zero or one row (ADR-0050, decision 2).
 	//nolint:gosec // assembled only from the literal fragments above; every value is bound
-	stmt := `SELECT id, content_type, title, year FROM works WHERE ` +
+	stmt := `SELECT id, content_type, title, year,
+		(SELECT value FROM external_ids
+		 WHERE entity_type = 'work' AND entity_id = works.id AND source = 'tvdb'
+		 ORDER BY value LIMIT 1) AS tvdb_id
+		FROM works WHERE ` +
 		strings.Join(where, " AND ") + ` ORDER BY sort_title, id LIMIT ?`
 
 	rows, err := a.reader.QueryContext(ctx, stmt, args...)
@@ -89,14 +106,18 @@ func (a *API) SearchContent(ctx context.Context, req SearchContentRequest) ([]Wo
 	out := []WorkSummary{}
 	for rows.Next() {
 		var (
-			w    WorkSummary
-			year sql.NullInt64
+			w      WorkSummary
+			year   sql.NullInt64
+			tvdbID sql.NullString
 		)
-		if err := rows.Scan(&w.WorkID, &w.ContentType, &w.Title, &year); err != nil {
+		if err := rows.Scan(&w.WorkID, &w.ContentType, &w.Title, &year, &tvdbID); err != nil {
 			return nil, err
 		}
 		if year.Valid {
 			w.Year = int(year.Int64)
+		}
+		if tvdbID.Valid {
+			w.TVDBID = tvdbID.String
 		}
 		out = append(out, w)
 	}

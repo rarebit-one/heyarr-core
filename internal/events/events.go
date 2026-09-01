@@ -128,6 +128,16 @@ const (
 	TypeDeviceEnrolled = "identity.device.enrolled"
 	TypeDeviceRevoked  = "identity.device.revoked"
 
+	// A follow-management grant (ADR-0061, M12) is the interim, operator-issued
+	// authorization that lifts a web-login session (ADR-0053) from the read floor
+	// to write, so a trusted personal device can manage followed sources before
+	// device-cert enrolment (ADR-0048) converges the browser/TV surface. It
+	// authorises a specific approving device key, so it is an identity.device.*
+	// transition beside enrolment and revocation: "who became able to WRITE here,
+	// and when?". Granting is a durable state transition, so it emits (invariant 7).
+	TypeDeviceManagementGranted = "identity.device.management_granted"
+	TypeDeviceManagementRevoked = "identity.device.management_revoked"
+
 	// lease.* is the Milestone 8 cross-site access lease (§54, ADR-0048, #285):
 	// a signed, expiring grant this peer issued, and its revocation. These are
 	// durable STATE transitions (invariant 7). Honouring and refusing a lease

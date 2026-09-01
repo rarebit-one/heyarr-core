@@ -2935,6 +2935,120 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/v1/session:
+    get:
+      tags: [session]
+      operationId: getSession
+      summary: The calling credential's own authority.
+      description: |
+        A caller's own identity and effective authority (ADR-0061, M12) — the one
+        endpoint a browser/TV client reads to decide whether to show management UI
+        and, when it may not yet, which device key an operator must authorise.
+
+        A web-login session (ADR-0053) is read-only by default, so `POST`/`DELETE
+        /followed-sources` 403 from it. The interim path to write is a
+        **follow-management grant**: an operator authorises the session's approving
+        `device_key`, and the session then carries `write`. A client drives it as:
+        read `/session` → if `can_write` is false, show `device_key` and prompt the
+        operator → operator issues `POST /session/management-grants` → read
+        `/session` again, now `can_write`. Device-cert enrolment (ADR-0048) is the
+        eventual convergence that binds authority to the surface itself.
+
+        A read under the router's read floor; every authenticated caller may read
+        its own identity.
+      responses:
+        "200":
+          description: This caller's identity and authority.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/session/management-grants:
+    get:
+      tags: [session]
+      operationId: listManagementGrants
+      summary: The devices authorised to manage followed sources.
+      description: |
+        Every follow-management grant (ADR-0061) — the approving device keys an
+        operator has authorised to hold `write` in their web-login sessions.
+        Listing a credential operation's state is an **admin** action, like listing
+        tokens.
+      responses:
+        "200":
+          description: The authorised devices, newest grant first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [management_grants]
+                properties:
+                  management_grants:
+                    type: array
+                    items: { $ref: "#/components/schemas/ManagementGrant" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [session]
+      operationId: createManagementGrant
+      summary: Authorise a device to manage followed sources.
+      description: |
+        The operator's explicit consent step (ADR-0061): authorise a specific
+        approving `device_key` so every web-login session that device approves
+        carries `write`. This is the interim, non-gated path a trusted personal
+        device takes to manage followed sources before device-cert enrolment
+        (ADR-0048) converges the surface.
+
+        Idempotent: re-granting an already authorised device updates its note
+        rather than failing. Issuing a grant elevates a device's authority, so it
+        is an **admin** action, like minting a token.
+
+        The default — no grant — is read-only, so a shared surface (a TV) stays
+        read-only until its approver is explicitly authorised. The sharp edge is
+        honest and recorded in ADR-0061: the grant follows the approving device,
+        not the surface.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManagementGrantRequest" }
+      responses:
+        "201":
+          description: The device is authorised.
+          headers:
+            Location:
+              description: The created grant.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagementGrant" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/session/management-grants/{device_key}:
+    delete:
+      tags: [session]
+      operationId: deleteManagementGrant
+      summary: Revoke a device's follow-management authorization.
+      description: |
+        Remove a device's `write` authorization (ADR-0061). Its web-login sessions
+        return to the read floor on their next request — the grant lookup is per
+        request, so revocation is not deferred to a token expiry. An **admin**
+        action; a revoke of a device that was never granted is a 404, not a silent
+        success.
+      parameters:
+        - name: device_key
+          in: path
+          required: true
+          description: The approving device key to revoke ("ed25519:<hex>").
+          schema: { type: string }
+      responses:
+        "204": { description: Revoked. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/providers:
     get:
       tags: [providers]
@@ -7208,6 +7322,76 @@ components:
         content_type: { type: string }
         title: { type: string }
         year: { type: integer }
+        tvdb_id:
+          type: string
+          description: |
+            The work's stored TVDB external id (ADR-0050), when it has one — the
+            feed identity `follow_source` takes as `tvdb_id`, so a client can
+            follow a search result in ONE step rather than by a title that might
+            create a second work (decision 2, M12). Omitted for a work with no
+            stored tvdb id; the client then asks the operator for one. This
+            surfaces an id already in the library — not a live TVDB discovery
+            search for series the library does not yet hold.
+
+    SessionView:
+      type: object
+      description: A caller's own identity and effective authority (ADR-0061).
+      required: [kind, scopes, can_write, management_authorized]
+      properties:
+        kind:
+          type: string
+          enum: [session, device, service, anonymous]
+          description: |
+            How the caller authenticated: `session` (web-login/QR, ADR-0053),
+            `device` (device cert, ADR-0048), `service` (a bearer token), or
+            `anonymous` (authentication disabled on a loopback listener).
+        principal_id:
+          type: string
+          description: The identity the caller acts as ("ed25519:<hex>" for a user); empty for the anonymous identity.
+        device_key:
+          type: string
+          description: The approving/authenticated device key for a session or device caller — the value an operator names to grant management. Absent otherwise.
+        scopes:
+          type: array
+          items: { type: string, enum: [read, write, admin] }
+          description: The effective authority this credential carries.
+        can_write:
+          type: boolean
+          description: Whether `scopes` admits write — i.e. whether follow/unfollow will succeed for this caller as it stands.
+        management_authorized:
+          type: boolean
+          description: |
+            True when this is a session whose approving device holds a
+            follow-management grant (ADR-0061) — the reason a session can write.
+            False for a read-only session and for a service token (whose write
+            authority, when it has it, is its own scope, not a grant).
+
+    ManagementGrant:
+      type: object
+      description: One device authorised to manage followed sources from a web-login session (ADR-0061).
+      required: [device_key, reason, granted_at]
+      properties:
+        device_key:
+          type: string
+          description: The authorised approving device key ("ed25519:<hex>").
+        reason:
+          type: string
+          description: A free-text operator note; may be empty.
+        granted_at:
+          type: string
+          format: date-time
+
+    ManagementGrantRequest:
+      type: object
+      description: The operator's consent that a device may manage followed sources (ADR-0061).
+      required: [device_key]
+      properties:
+        device_key:
+          type: string
+          description: The approving device key to authorise, as GET /session reports it for that device ("ed25519:<hex>").
+        reason:
+          type: string
+          description: A free-text operator note ("the operator's phone"). Optional.
 
     Providers:
       type: object
