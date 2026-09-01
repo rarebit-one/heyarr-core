@@ -76,8 +76,16 @@ func (s *Server) searchContent(ctx context.Context, raw json.RawMessage) (any, e
 	}
 	sqlArgs = append(sqlArgs, limit+1)
 
+	// The tvdb id is a correlated subquery (ADR-0050, decision 2), the same shape
+	// the REST /search takes: one row per work, the stored TVDB id surfaced so an
+	// agent can follow_source a hit in one step. A JOIN could multiply the row; a
+	// work with no tvdb id yields NULL and the field is omitted.
 	//nolint:gosec // assembled only from the literal fragments above; every value is bound
-	stmt := `SELECT id, content_type, title, year FROM works WHERE ` +
+	stmt := `SELECT id, content_type, title, year,
+		(SELECT value FROM external_ids
+		 WHERE entity_type = 'work' AND entity_id = works.id AND source = 'tvdb'
+		 ORDER BY value LIMIT 1) AS tvdb_id
+		FROM works WHERE ` +
 		strings.Join(where, " AND ") + ` ORDER BY sort_title, id LIMIT ?`
 
 	rows, err := s.reader.QueryContext(ctx, stmt, sqlArgs...)
@@ -91,6 +99,7 @@ func (s *Server) searchContent(ctx context.Context, raw json.RawMessage) (any, e
 		ContentType string `json:"content_type"`
 		Title       string `json:"title"`
 		Year        *int64 `json:"year,omitempty"`
+		TVDBID      string `json:"tvdb_id,omitempty"`
 	}
 	out := struct {
 		truncatable
@@ -98,10 +107,14 @@ func (s *Server) searchContent(ctx context.Context, raw json.RawMessage) (any, e
 	}{Works: []work{}}
 
 	for rows.Next() {
-		var w work
-		if err := rows.Scan(&w.WorkID, &w.ContentType, &w.Title, &w.Year); err != nil {
+		var (
+			w      work
+			tvdbID sql.NullString
+		)
+		if err := rows.Scan(&w.WorkID, &w.ContentType, &w.Title, &w.Year, &tvdbID); err != nil {
 			return nil, err
 		}
+		w.TVDBID = tvdbID.String
 		out.Works = append(out.Works, w)
 	}
 	if err := rows.Err(); err != nil {

@@ -40,7 +40,9 @@ func (s *Server) registerTools() {
 		Description: "Find works already in the library by title. Use this to resolve " +
 			"what someone means before wanting it — a work found here can be wanted by " +
 			"id, which is exact, rather than by description, which may create a second " +
-			"work if it does not match what a scan would have produced.",
+			"work if it does not match what a scan would have produced. A tv_series hit " +
+			"that carries a stored tvdb_id can be followed in one step by passing that id " +
+			"to follow_source; a hit without one omits it.",
 		InputSchema: schemaSearchContent,
 		Handler:     s.searchContent,
 	})

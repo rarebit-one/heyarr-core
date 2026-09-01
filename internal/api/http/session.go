@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"context"
+
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 )
 
@@ -41,19 +43,42 @@ type SessionValidator interface {
 	Session(token string) (SessionPrincipal, bool)
 }
 
+// ManagementAuthorizer answers whether an approving device key carries a
+// follow-management grant (ADR-0061) — the interim, operator-issued
+// authorization that lifts a web-login session from the read floor to write.
+//
+// It is optional, like SessionValidator and DeviceVerifier. A nil one means no
+// device is ever management-authorized, which is the read-only-by-default state:
+// every web-login session stays at the read floor, exactly as before the grant
+// existed. Only when it is wired does a session for a granted approving device
+// carry write — and a shared surface (a TV) whose approver was never granted
+// still reads read-only, which is the whole point.
+type ManagementAuthorizer interface {
+	// ManagementAuthorized reports whether deviceKey is authorised for write. An
+	// error is treated by the caller as "not authorised": a grant lookup that
+	// cannot be answered must fail closed to the read floor, never open to write.
+	ManagementAuthorized(ctx context.Context, deviceKey string) (bool, error)
+}
+
 // sessionIdentity is what a valid web-login session token authenticates as: the
-// pinned user the approving device acts for, carrying only the baseline read
-// scope — the same authority an authenticated user device holds (see
-// authenticateDevice). A browser or television that logged in by QR gets to
-// browse and stream; anything finer is a capability grant (internal/grant), not
-// a scope.
-func sessionIdentity(p SessionPrincipal) auth.Identity {
+// pinned user the approving device acts for. It carries the read floor by
+// default — a browser or television that logged in by QR gets to browse and
+// stream — and write only when the approving device holds a follow-management
+// grant (authorized, ADR-0061), the interim path a trusted personal device takes
+// to manage followed sources before device-cert enrolment (ADR-0048) converges
+// the surface. Anything finer than write is a capability grant (internal/grant),
+// not a scope.
+func sessionIdentity(p SessionPrincipal, authorized bool) auth.Identity {
+	scopes := []auth.Scope{auth.ScopeRead}
+	if authorized {
+		scopes = []auth.Scope{auth.ScopeRead, auth.ScopeWrite}
+	}
 	return auth.Identity{
 		Principal: auth.Principal{ID: p.UserID, Kind: "user", Name: "session:" + p.DeviceKey},
 		Token: auth.Token{
 			Name:        "session:" + p.DeviceKey,
 			PrincipalID: p.UserID,
-			Scopes:      []auth.Scope{auth.ScopeRead},
+			Scopes:      scopes,
 		},
 	}
 }
