@@ -69,7 +69,20 @@ func Migrate(ctx context.Context, db *DB) error {
 			ErrSchemaNewerThanBinary, current, known)
 	}
 
-	if err := goose.UpContext(ctx, db.Writer(), "migrations"); err != nil {
+	// AllowMissing is required, not optional, because this project deliberately
+	// fills reserved gaps in the migration numbering rather than always
+	// appending (see 00021_release_candidate_source.sql's own note: a gap "reads
+	// as a DELETED migration", so the lowest free number is taken instead). That
+	// policy MINTS out-of-order migrations by design — a migration numbered below
+	// a version some database has already passed. Stock goose refuses those
+	// ("found N missing migrations before current version"), which turns the
+	// policy into an upgrade that fails on exactly the databases that skipped the
+	// gap. Allowing missing migrations makes the migrator honour the numbering
+	// policy: a gap-filler is applied wherever a database has not yet seen it,
+	// and appended migrations behave exactly as before. It is safe here because
+	// migrations are independent DDL keyed by version, not a linear replay that
+	// assumes strict order.
+	if err := goose.UpContext(ctx, db.Writer(), "migrations", goose.WithAllowMissing()); err != nil {
 		return fmt.Errorf("sqlite: applying migrations: %w", err)
 	}
 
