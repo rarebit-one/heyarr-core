@@ -133,13 +133,14 @@ var schemaMonitorContent = obj(map[string]any{
 
 // schemaFollowSource is source-agnostic on purpose (#396): there is no `source`,
 // `provider` or `feed_type` field. The caller gives a content intent (which
-// series) and an identity (a URL or an explicit id), and the type is inferred.
+// series or podcast) and an identity (a URL or an explicit id), and the type is
+// inferred.
 var schemaFollowSource = obj(map[string]any{
 	"url": map[string]any{
 		"type": "string",
-		"description": "A URL identifying the source to follow. Phase 1 understands a " +
-			"TVDB series URL. The type is inferred from it — you do not name a source or a " +
-			"provider.",
+		"description": "A URL identifying the source to follow — a TVDB series URL, or any " +
+			"other http(s) feed URL (a podcast RSS feed). The type is inferred from it — you " +
+			"do not name a source or a provider.",
 	},
 	"tvdb_id": map[string]any{
 		"type": "string",
@@ -148,18 +149,18 @@ var schemaFollowSource = obj(map[string]any{
 	},
 	"work_id": map[string]any{
 		"type": "string",
-		"description": "An existing series work, from search_content. Give this or title, " +
-			"never both.",
+		"description": "An existing series or podcast work, from search_content. Give this " +
+			"or title, never both.",
 	},
 	"title": map[string]any{
 		"type": "string",
-		"description": "The series title, for a series the library has never seen. The work " +
-			"is created from it the same way want_content does, so a follow and a later scan " +
-			"converge on one work.",
+		"description": "The series or podcast title, for a work the library has never seen. " +
+			"The work is created from it the same way want_content does, so a follow and a " +
+			"later scan converge on one work.",
 	},
 	"year": map[string]any{
 		"type":        "integer",
-		"description": "Part of the series identity when known.",
+		"description": "Part of the work's identity when known.",
 	},
 	"quality_profile": map[string]any{
 		"type": "string",

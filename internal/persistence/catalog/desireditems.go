@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -140,6 +141,36 @@ func IsDuplicateWant(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "unique constraint failed") ||
 		strings.Contains(msg, "constraint failed: unique")
+}
+
+// DesiredItemForItem returns the id of the item-scoped want for an item under a
+// profile, and whether one exists.
+//
+// It is the read a re-poll needs to RESUME a direct release (§64, M12 Phase 2):
+// CreateDesiredItem returns the duplicate-want error without the existing want's
+// id, so a poll that crashed after creating the want but before recording its
+// enclosure release could not find the want to finish it. This closes that
+// window — the poll looks the want up and re-attempts the (idempotent) direct
+// release, so invariant 9 holds across the crash.
+//
+// Keyed on (item, profile) because that is a want's identity at item scope
+// (SameWant): a source archives at one profile, so this returns that source's
+// want for the item and not another profile's.
+func (c *Catalog) DesiredItemForItem(
+	ctx context.Context, itemID, profileID string,
+) (string, bool, error) {
+	var id string
+	err := c.db.Reader().QueryRowContext(ctx,
+		`SELECT id FROM desired_items
+		 WHERE scope = 'item' AND item_id = ? AND quality_profile_id = ?`,
+		itemID, profileID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("catalog: looking up an item's want: %w", err)
+	}
+	return id, true, nil
 }
 
 func insertDesiredItem(ctx context.Context, tx *sql.Tx, item desired.Item, now time.Time) error {

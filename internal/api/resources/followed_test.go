@@ -60,8 +60,10 @@ func TestFollowASeriesByTitleInfersTVSeries(t *testing.T) {
 	}
 }
 
-// A TVDB URL carrying a numeric series id is accepted; a non-TVDB URL is refused
-// with the Phase-1 message rather than stored unpolled.
+// The type is inferred from the identity: a TVDB URL with a numeric series id is
+// a tv_series (feed_ref = the id); any other http(s) feed URL is a podcast
+// (feed_ref = the URL itself); an identity that is neither a tvdb id nor an
+// http(s) URL is refused rather than stored unpolled.
 func TestFollowInfersFromAURL(t *testing.T) {
 	h := newHarness(t).seed()
 
@@ -74,13 +76,29 @@ func TestFollowInfersFromAURL(t *testing.T) {
 	if v.FeedRef != "98765" {
 		t.Errorf("feed_ref = %q, want 98765 parsed from the URL", v.FeedRef)
 	}
-
-	bad := follow(h, `{"url":"https://youtube.com/@someone","title":"X","quality_profile":"living-room"}`)
-	if bad.StatusCode != http.StatusBadRequest {
-		t.Fatalf("a non-TVDB source should be refused in Phase 1: %d", bad.StatusCode)
+	if v.Type != "tv_series" {
+		t.Errorf("type = %q, want tv_series", v.Type)
 	}
-	if !strings.Contains(string(h.body(bad)), "Phase 1 follows tv_series only") {
-		t.Error("the refusal should name the Phase-1 limit")
+
+	pod := follow(h, `{"url":"https://feeds.example.com/show.xml","title":"A Show","quality_profile":"living-room"}`)
+	if pod.StatusCode != http.StatusCreated {
+		t.Fatalf("a podcast feed URL should be followed: %d %s", pod.StatusCode, h.body(pod))
+	}
+	var pv followedView
+	_ = json.Unmarshal(h.body(pod), &pv)
+	if pv.Type != "podcast" {
+		t.Errorf("type = %q, want podcast", pv.Type)
+	}
+	if pv.FeedRef != "https://feeds.example.com/show.xml" {
+		t.Errorf("feed_ref = %q, want the feed URL itself", pv.FeedRef)
+	}
+
+	bad := follow(h, `{"url":"not-a-url","title":"X","quality_profile":"living-room"}`)
+	if bad.StatusCode != http.StatusBadRequest {
+		t.Fatalf("an identity that is neither a tvdb id nor an http(s) url should be refused: %d", bad.StatusCode)
+	}
+	if !strings.Contains(string(h.body(bad)), "http(s) feed url") {
+		t.Errorf("the refusal should name the expected shape, said: %s", h.body(bad))
 	}
 }
 
