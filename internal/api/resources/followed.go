@@ -47,10 +47,20 @@ import (
 // follow_source: subscribe to a source, archiving everything it emits.
 type FollowSourceRequest struct {
 	// The feed identity — where to poll. Give a URL or an explicit external id;
-	// the system infers the type. A TVDB id or URL is a TV series; any other
-	// http(s) feed URL is a podcast.
+	// the system infers the type where it can. A TVDB id or URL is a TV series; a
+	// youtube.com channel-feed URL is a youtube_channel; any other http(s) feed
+	// URL defaults to a podcast.
 	URL    string `json:"url"`
 	TVDBID string `json:"tvdb_id"`
+
+	// Type optionally names the source type explicitly, for the cases inference
+	// cannot resolve from the URL alone: a podcast RSS feed and an article RSS
+	// feed are the same shape at the URL, so following an rss_feed (Phase 4)
+	// requires the caller to say so. When given it is authoritative and must be an
+	// implemented type consistent with the identity (e.g. not "podcast" for a
+	// tvdb_id). When empty the type is inferred, and a plain feed URL stays a
+	// podcast for backward compatibility.
+	Type string `json:"type"`
 
 	// The work identity — which series or podcast the items belong to, resolved
 	// exactly as want_content resolves a work: an existing WorkID, or a Title
@@ -111,24 +121,55 @@ var (
 	reTVDBPathID  = regexp.MustCompile(`series/(\d+)`)
 	reTVDBQueryID = regexp.MustCompile(`[?&]id=(\d+)`)
 	reAllDigits   = regexp.MustCompile(`^\d+$`)
+	// A YouTube channel id is UC followed by 22 url-safe base64 chars; it appears
+	// in a channel-feed URL's channel_id= query or as a /channel/<id> path
+	// segment. A slug or @handle URL has no id without a lookup, handled like a
+	// TVDB slug: refused with a pointer to the canonical feed URL.
+	reYouTubeChannelID = regexp.MustCompile(`(?:channel_id=|/channel/)(UC[0-9A-Za-z_-]{22})`)
 )
 
+// youtubeFeedURL is the canonical channel-feed URL yt feeds live at. Built from
+// the channel id so the stored feed_ref is the plain form the adapter fetches,
+// whatever URL shape the caller passed.
+func youtubeFeedURL(channelID string) string {
+	return "https://www.youtube.com/feeds/videos.xml?channel_id=" + channelID
+}
+
 // inferFeed turns a caller's identity into the feed_ref a followed source stores
-// AND the source type it implies, without the caller naming a type (#396). A
-// TVDB id or thetvdb.com URL is a tv_series; any other http(s) URL is a podcast
-// RSS feed, whose feed_ref is the URL itself — the two implemented source shapes.
-// YouTube and generic RSS get their own, earlier-matching branches when their
-// phases land, so the podcast fall-through does not misclaim them silently: it is
-// the general "a feed URL" case, and today the only feed URL heyarr follows is a
-// podcast's.
-func inferFeed(rawURL, tvdbID string) (feedRef string, typ followed.Type, err error) {
+// AND the source type (#396, #415). It resolves the type from the identity where
+// it can — a TVDB id/URL is tv_series, a youtube.com channel-feed URL is
+// youtube_channel — and takes an explicit hint for the case inference cannot
+// resolve: a podcast RSS feed and an article RSS feed are the same shape at the
+// URL, so following an rss_feed needs the caller to say so. An empty hint keeps a
+// plain feed URL a podcast, the backward-compatible default.
+//
+// A given hint is authoritative but must be consistent with the identity: a
+// tvdb_id is a tv_series and saying otherwise is a caller error, refused by name
+// rather than silently ignored.
+func inferFeed(rawURL, tvdbID, typeHint string) (feedRef string, typ followed.Type, err error) {
 	tvdbID = strings.TrimSpace(tvdbID)
 	rawURL = strings.TrimSpace(rawURL)
+
+	hint, err := parseTypeHint(typeHint)
+	if err != nil {
+		return "", "", err
+	}
+	// checkHint refuses a hint that contradicts an inferred type.
+	checkHint := func(inferred followed.Type) error {
+		if hint != "" && hint != inferred {
+			return &badRequest{fmt.Errorf(
+				"type %q contradicts the identity, which is a %s", hint, inferred)}
+		}
+		return nil
+	}
 
 	if tvdbID != "" {
 		if !reAllDigits.MatchString(tvdbID) {
 			return "", "", &badRequest{fmt.Errorf(
 				"tvdb_id must be a numeric TVDB series id, not %q", tvdbID)}
+		}
+		if err := checkHint(followed.TypeTVSeries); err != nil {
+			return "", "", err
 		}
 		return tvdbID, followed.TypeTVSeries, nil
 	}
@@ -139,6 +180,9 @@ func inferFeed(rawURL, tvdbID string) (feedRef string, typ followed.Type, err er
 
 	lower := strings.ToLower(rawURL)
 	if strings.Contains(lower, "thetvdb.com") {
+		if err := checkHint(followed.TypeTVSeries); err != nil {
+			return "", "", err
+		}
 		if m := reTVDBQueryID.FindStringSubmatch(rawURL); m != nil {
 			return m[1], followed.TypeTVSeries, nil
 		}
@@ -150,26 +194,80 @@ func inferFeed(rawURL, tvdbID string) (feedRef string, typ followed.Type, err er
 				"(a slug URL cannot be resolved without a lookup)")}
 	}
 
-	// Not a TVDB reference — a podcast RSS feed, whose feed_ref is the URL the
-	// adapter fetches per poll. It must be an http(s) URL: a bare host or a
-	// mistyped scheme would be stored and then fail every enumeration, looking
-	// like a dead feed rather than a typo.
+	// A YouTube channel is recognised from the URL alone — the feed URL or a
+	// /channel/<id> URL both carry the channel id — so it needs no hint, and its
+	// feed_ref is normalised to the canonical channel-feed URL.
+	if strings.Contains(lower, "youtube.com") || strings.Contains(lower, "youtu.be") {
+		if err := checkHint(followed.TypeYouTubeChannel); err != nil {
+			return "", "", err
+		}
+		if m := reYouTubeChannelID.FindStringSubmatch(rawURL); m != nil {
+			return youtubeFeedURL(m[1]), followed.TypeYouTubeChannel, nil
+		}
+		return "", "", &badRequest{errors.New(
+			"that YouTube URL has no channel id — pass the channel-feed URL " +
+				"(youtube.com/feeds/videos.xml?channel_id=UC…) or a /channel/UC… URL " +
+				"(an @handle or custom URL cannot be resolved without a lookup)")}
+	}
+
+	// A plain feed URL, whose feed_ref is the URL the adapter fetches per poll. It
+	// must be an http(s) URL: a bare host or a mistyped scheme would be stored and
+	// then fail every enumeration, looking like a dead feed rather than a typo.
 	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
 		return "", "", &badRequest{fmt.Errorf(
-			"a followed source's url must be an http(s) feed url (a podcast RSS feed), not %q", rawURL)}
+			"a followed source's url must be an http(s) feed url, not %q", rawURL)}
 	}
-	return rawURL, followed.TypePodcast, nil
+	// Podcast and article feeds are indistinguishable here, so the hint decides;
+	// with no hint it stays a podcast, the type this fall-through has always meant.
+	switch hint {
+	case followed.TypeRSSFeed:
+		return rawURL, followed.TypeRSSFeed, nil
+	case "", followed.TypePodcast:
+		return rawURL, followed.TypePodcast, nil
+	default:
+		// A youtube_channel or tv_series hint on a plain feed URL is a mismatch —
+		// those types are recognised from their own URL shapes above, so a hint
+		// naming one here contradicts the identity the caller actually gave.
+		return "", "", &badRequest{fmt.Errorf(
+			"type %q does not match a plain feed url — that url is followed as a podcast or rss_feed", hint)}
+	}
+}
+
+// parseTypeHint validates an optional explicit source type. Empty is "infer".
+// An unknown or not-yet-implemented type is refused by name rather than ignored,
+// for the reason ParseType gives: a silently dropped type produces a source that
+// is configured, healthy and never usefully polled.
+func parseTypeHint(s string) (followed.Type, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil
+	}
+	t, err := followed.ParseType(s)
+	if err != nil {
+		return "", &badRequest{err}
+	}
+	if !t.Implemented() {
+		return "", &badRequest{fmt.Errorf("source type %q is not implemented yet", t)}
+	}
+	return t, nil
 }
 
 // workContentType is the §12 content type a source's items belong to, so a
 // follow and a later scan converge on ONE work (resolveWorkDescriptor). A TV
-// series' items are episodes under a series work; a podcast's are episodes under
-// a podcast work.
+// series' items are episodes under a series work; a podcast's episodes under a
+// podcast work; a channel's videos under a video work; an article feed's entries
+// under a document work.
 func workContentType(t followed.Type) string {
-	if t == followed.TypePodcast {
+	switch t {
+	case followed.TypePodcast:
 		return "podcast"
+	case followed.TypeYouTubeChannel:
+		return "video"
+	case followed.TypeRSSFeed:
+		return "document"
+	default:
+		return "series"
 	}
-	return "series"
 }
 
 // FollowSource creates a subscription from an intent (§55). Exported and shared
@@ -194,7 +292,7 @@ func (a *API) FollowSource(ctx context.Context, req FollowSourceRequest) (Follow
 			"name the quality profile with either quality_profile_id or quality_profile, not both")}
 	}
 
-	feedRef, srcType, err := inferFeed(req.URL, req.TVDBID)
+	feedRef, srcType, err := inferFeed(req.URL, req.TVDBID, req.Type)
 	if err != nil {
 		return FollowedSourceView{}, err
 	}

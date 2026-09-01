@@ -107,6 +107,42 @@ func newFollowHarnessOf(
 	return h
 }
 
+// The poll routes a source to the adapter that serves its type, not to whichever
+// metadata provider is first (#415): with a TVDB adapter and a podcast adapter
+// both configured, a podcast source must reach the podcast adapter.
+func TestFeedProviderForRoutesByType(t *testing.T) {
+	tv := providers.NewFake("tv", providers.CapabilityMetadata).ServingTypes(followed.TypeTVSeries)
+	pod := providers.NewFake("pod", providers.CapabilityMetadata).ServingTypes(followed.TypePodcast)
+	reg := providers.New(nil)
+	for _, f := range []*providers.Fake{tv, pod} {
+		if err := reg.Register(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, tc := range []struct {
+		typ  followed.Type
+		want string
+	}{
+		{followed.TypeTVSeries, "tv"},
+		{followed.TypePodcast, "pod"},
+	} {
+		got, err := feedProviderFor(reg, tc.typ)
+		if err != nil {
+			t.Fatalf("routing %s: %v", tc.typ, err)
+		}
+		if got.Name() != tc.want {
+			t.Errorf("routing %s reached %q, want %q", tc.typ, got.Name(), tc.want)
+		}
+	}
+
+	// No adapter serves youtube here, so routing it is an error the poll sees —
+	// not a silent enumeration through the wrong adapter.
+	if _, err := feedProviderFor(reg, followed.TypeYouTubeChannel); err == nil {
+		t.Error("a source type no configured adapter serves must be an error, not feeds[0]")
+	}
+}
+
 func (h *followHarness) exec(t *testing.T, query string, args ...any) {
 	t.Helper()
 	if _, err := h.db.Writer().Exec(query, args...); err != nil {

@@ -96,6 +96,9 @@ func (c *Client) Capabilities() []providers.Capability {
 	return []providers.Capability{providers.CapabilityMetadata}
 }
 
+// ServesType reports that this adapter enumerates rss_feed sources.
+func (c *Client) ServesType(t followed.Type) bool { return t == followed.TypeRSSFeed }
+
 // Check reports the adapter ready. Like the podcast and youtube adapters there
 // is no central service and no credential to exercise: a feed's address is the
 // followed source's own FeedRef, checked per poll when Enumerate fetches it.

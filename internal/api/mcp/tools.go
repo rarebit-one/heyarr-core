@@ -426,6 +426,7 @@ func (s *Server) followSource(ctx context.Context, raw json.RawMessage) (any, er
 	var args struct {
 		URL            string `json:"url"`
 		TVDBID         string `json:"tvdb_id"`
+		Type           string `json:"type"`
 		WorkID         string `json:"work_id"`
 		Title          string `json:"title"`
 		Year           int    `json:"year"`
@@ -438,7 +439,7 @@ func (s *Server) followSource(ctx context.Context, raw json.RawMessage) (any, er
 		return nil, err
 	}
 	out, err := s.resources.FollowSource(ctx, resources.FollowSourceRequest{
-		URL: args.URL, TVDBID: args.TVDBID,
+		URL: args.URL, TVDBID: args.TVDBID, Type: args.Type,
 		WorkID: args.WorkID, Title: args.Title, Year: args.Year,
 		QualityProfile: args.QualityProfile,
 		Monitor:        args.Monitor, Backfill: args.Backfill, Reason: args.Reason,

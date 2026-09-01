@@ -102,6 +102,85 @@ func TestFollowInfersFromAURL(t *testing.T) {
 	}
 }
 
+// A YouTube channel is recognised from the URL alone (#415): both the channel-
+// feed URL and a /channel/<id> URL carry the channel id, and the stored feed_ref
+// is normalised to the canonical feed URL either way.
+func TestFollowInfersYouTube(t *testing.T) {
+	h := newHarness(t).seed()
+
+	// Both URL forms carry the id and normalise to the canonical feed URL. Two
+	// distinct channels, so the normalisation assertion is not confounded by the
+	// dedupe that makes two URLs for the SAME channel one subscription.
+	for _, tc := range []struct{ url, wantFeed string }{
+		{
+			"https://www.youtube.com/feeds/videos.xml?channel_id=UCaaaaaaaaaaaaaaaaaaaaaa",
+			"https://www.youtube.com/feeds/videos.xml?channel_id=UCaaaaaaaaaaaaaaaaaaaaaa",
+		},
+		{
+			"https://www.youtube.com/channel/UCbbbbbbbbbbbbbbbbbbbbbb",
+			"https://www.youtube.com/feeds/videos.xml?channel_id=UCbbbbbbbbbbbbbbbbbbbbbb",
+		},
+	} {
+		body := `{"url":"` + tc.url + `","title":"Channel ` + tc.url + `","quality_profile":"living-room"}`
+		ok := follow(h, body)
+		if ok.StatusCode != http.StatusCreated {
+			t.Fatalf("a youtube URL (%s) should be followed: %d %s", tc.url, ok.StatusCode, h.body(ok))
+		}
+		var v followedView
+		_ = json.Unmarshal(h.body(ok), &v)
+		if v.Type != "youtube_channel" {
+			t.Errorf("url %s: type = %q, want youtube_channel", tc.url, v.Type)
+		}
+		if v.FeedRef != tc.wantFeed {
+			t.Errorf("url %s: feed_ref = %q, want the canonical feed URL %q", tc.url, v.FeedRef, tc.wantFeed)
+		}
+	}
+
+	// A handle URL has no id without a lookup — refused, not guessed.
+	handle := follow(h, `{"url":"https://www.youtube.com/@sometv","title":"H","quality_profile":"living-room"}`)
+	if handle.StatusCode != http.StatusBadRequest {
+		t.Errorf("a youtube @handle URL has no channel id and must be refused: %d", handle.StatusCode)
+	}
+}
+
+// An explicit type disambiguates a plain feed URL (#415): a podcast RSS feed and
+// an article RSS feed are identical at the URL, so type=rss_feed is how a caller
+// follows a feed's articles rather than treat it as a podcast. And a type that
+// contradicts the identity is refused by name.
+func TestFollowTypeHint(t *testing.T) {
+	h := newHarness(t).seed()
+
+	rss := follow(h, `{"url":"https://blog.example.com/rss.xml","type":"rss_feed","title":"A Blog","quality_profile":"living-room"}`)
+	if rss.StatusCode != http.StatusCreated {
+		t.Fatalf("type=rss_feed on a feed URL should be followed: %d %s", rss.StatusCode, h.body(rss))
+	}
+	var rv followedView
+	_ = json.Unmarshal(h.body(rss), &rv)
+	if rv.Type != "rss_feed" {
+		t.Errorf("type = %q, want rss_feed (the caller named it)", rv.Type)
+	}
+
+	// The same URL with no hint stays a podcast (backward compatible).
+	pod := follow(h, `{"url":"https://blog.example.com/other.xml","title":"Another","quality_profile":"living-room"}`)
+	var pv followedView
+	_ = json.Unmarshal(h.body(pod), &pv)
+	if pv.Type != "podcast" {
+		t.Errorf("no hint: type = %q, want podcast (the backward-compatible default)", pv.Type)
+	}
+
+	// A hint that contradicts the identity is a caller error.
+	conflict := follow(h, `{"tvdb_id":"12345","type":"podcast","title":"X","quality_profile":"living-room"}`)
+	if conflict.StatusCode != http.StatusBadRequest {
+		t.Errorf("type=podcast with a tvdb_id contradicts the identity and must be refused: %d", conflict.StatusCode)
+	}
+
+	// A not-yet-implemented / unknown type is refused by name.
+	bad := follow(h, `{"url":"https://x.example.com/f.xml","type":"nonsense","title":"X","quality_profile":"living-room"}`)
+	if bad.StatusCode != http.StatusBadRequest {
+		t.Errorf("an unknown type must be refused: %d", bad.StatusCode)
+	}
+}
+
 func TestFollowRefusesMissingAndConflictingInputs(t *testing.T) {
 	h := newHarness(t).seed()
 

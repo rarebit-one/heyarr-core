@@ -131,21 +131,31 @@ var schemaMonitorContent = obj(map[string]any{
 	},
 }, "desired_item_id", "monitor")
 
-// schemaFollowSource is source-agnostic on purpose (#396): there is no `source`,
-// `provider` or `feed_type` field. The caller gives a content intent (which
-// series or podcast) and an identity (a URL or an explicit id), and the type is
-// inferred.
+// schemaFollowSource is source-agnostic on purpose (#396): there is no `source`
+// or `provider` field. The caller gives a content intent (which series, podcast,
+// channel or feed) and an identity (a URL or an explicit id), and the type is
+// inferred where the URL allows it. `type` is the one exception (#415): a podcast
+// RSS feed and an article RSS feed are the same shape at the URL, so following an
+// rss_feed needs it named — it is not a routing knob, it disambiguates identity.
 var schemaFollowSource = obj(map[string]any{
 	"url": map[string]any{
 		"type": "string",
-		"description": "A URL identifying the source to follow — a TVDB series URL, or any " +
-			"other http(s) feed URL (a podcast RSS feed). The type is inferred from it — you " +
-			"do not name a source or a provider.",
+		"description": "A URL identifying the source to follow — a TVDB series URL, a " +
+			"youtube.com channel-feed URL, or any other http(s) feed URL (a podcast or " +
+			"article RSS feed). The type is inferred from it where possible — you do not name " +
+			"a source or a provider.",
 	},
 	"tvdb_id": map[string]any{
 		"type": "string",
 		"description": "A TVDB series id, as an alternative to url when you have the id " +
 			"directly. Numeric.",
+	},
+	"type": map[string]any{
+		"type": "string",
+		"enum": []any{"tv_series", "podcast", "youtube_channel", "rss_feed"},
+		"description": "Only when the URL cannot say it on its own: a podcast RSS feed and an " +
+			"article feed look identical, so pass rss_feed to archive a feed's articles rather " +
+			"than treat it as a podcast. Leave empty to infer (a plain feed URL is a podcast).",
 	},
 	"work_id": map[string]any{
 		"type": "string",

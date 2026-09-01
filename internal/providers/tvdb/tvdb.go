@@ -113,6 +113,9 @@ func (c *Client) Capabilities() []providers.Capability {
 	return []providers.Capability{providers.CapabilityMetadata}
 }
 
+// ServesType reports that this adapter enumerates tv_series sources.
+func (c *Client) ServesType(t followed.Type) bool { return t == followed.TypeTVSeries }
+
 // Check exercises the provider by logging in, and reports what it found. It
 // EXERCISES rather than asserts (providers.Provider): a key that is configured
 // but rejected must report unhealthy so work does not route to it and then fail.
