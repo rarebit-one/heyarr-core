@@ -12,27 +12,31 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 )
 
-// The session surface (ADR-0061, M12) — how a browser/TV client discovers its
-// own authority, and how an operator lifts a trusted personal device from the
-// read floor to write.
+// The session surface (ADR-0061, ADR-0065, M12) — how a browser/TV/device client
+// discovers its own authority, and how an operator authorises a trusted enrolled
+// device from the read floor to write.
 //
-// # The interim write-authorization path, in one place
+// # Write is a device-credential action (ADR-0065's subsume)
 //
-// A web-login session (ADR-0053) is minted read-only, so POST/DELETE
-// /followed-sources 403 from a browser or TV. Device-cert enrolment (ADR-0048)
-// is the eventual convergence that gives the surface its own authenticated
-// identity; until the voidbind-client artifact lands, a follow-management grant
-// is the interim, non-gated path: an operator authorises a specific approving
-// device key, and every web-login session that device approves then carries
-// `write`. The default — no grant — is read-only, so a shared surface stays
-// read-only until its approver is explicitly authorised.
+// A web-login session (ADR-0053) is a replayable bearer token, so it is minted
+// read-only and STAYS read-only: POST/DELETE /followed-sources 403 from a browser
+// or TV, always. Write is earned by a DEVICE presenting its per-request device
+// credential (ADR-0048) once an admin has authorised that device — the durable
+// convergence that subsumed ADR-0061's interim session-lift rather than
+// coexisting beside it (a replayable session opening the same door would cap the
+// floor at the weaker credential). The default — an unauthorised device — is
+// read-only, so a shared surface stays read-only until it is explicitly
+// authorised. The admin-scoped bearer token (ADR-0011) is the break-glass and
+// how the first device is authorised, so this never locks an operator out.
 //
 // A client drives it with two reads and one operator action:
-//  1. GET /session — learn this session's scope and its approving device_key.
+//  1. GET /session — learn this caller's kind, scope and device_key.
 //  2. If can_write is false, show the device_key and prompt the operator to
 //     authorise this device.
 //  3. The operator issues POST /session/management-grants {device_key} (admin).
-//  4. GET /session again — can_write is now true; follow/unfollow succeed.
+//  4. The authorised DEVICE, presenting its device credential, now carries write;
+//     follow/unfollow succeed. (A web-login session stays read-only — management
+//     happens from the authorised device, not by lifting the session.)
 
 // SessionView is a caller's own authority, as GET /session reports it. It is the
 // one endpoint a client reads to decide whether to show management UI, and — when
@@ -53,19 +57,20 @@ type SessionView struct {
 	// CanWrite is the convenience a client wires on: whether Scopes admits write,
 	// i.e. whether follow/unfollow will succeed for this caller as it stands.
 	CanWrite bool `json:"can_write"`
-	// ManagementAuthorized is true when this is a session whose approving device
-	// holds a follow-management grant (ADR-0061) — the reason a session, unusually,
-	// can write. It is false for a read-only session, and for a service token
-	// (whose write authority, when it has it, is its own scope, not a grant).
+	// ManagementAuthorized is true when this is a DEVICE whose key an admin has
+	// authorised for write (ADR-0065) — the reason a device, beyond the read
+	// floor, can write. It is false for a web-login session (which never lifts to
+	// write) and for a service token (whose write authority, when it has it, is
+	// its own scope, not an authorization).
 	ManagementAuthorized bool `json:"management_authorized"`
 }
 
-// ManagementGrantRequest issues a follow-management grant (ADR-0061) — the
-// operator's explicit consent that a specific approving device may manage
-// followed sources from a web-login session.
+// ManagementGrantRequest authorises a device for write (ADR-0065, subsuming
+// ADR-0061) — the admin's explicit consent that a specific enrolled device may
+// manage the library when it presents its device credential.
 type ManagementGrantRequest struct {
-	// DeviceKey is the approving device key to authorise, as GET /session reports
-	// it for that device ("ed25519:<hex>").
+	// DeviceKey is the device key to authorise, as GET /session reports it for
+	// that device ("ed25519:<hex>").
 	DeviceKey string `json:"device_key"`
 	// Reason is a free-text operator note ("the operator's phone"). Optional.
 	Reason string `json:"reason"`
@@ -90,7 +95,7 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		DeviceKey:            deviceKey,
 		Scopes:               scopeStrings(id.Token.Scopes),
 		CanWrite:             id.Allows(auth.ScopeWrite),
-		ManagementAuthorized: kind == "session" && id.Allows(auth.ScopeWrite),
+		ManagementAuthorized: kind == "device" && id.Allows(auth.ScopeWrite),
 	}
 	a.write(w, r, http.StatusOK, view)
 }

@@ -112,13 +112,12 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			// declines this value, so a real service token keeps its exact path,
 			// metrics and error mapping, and only an otherwise-rejected bearer value
 			// is ever offered to the broker. On a hit the browser or TV acts as the
-			// pinned user its device approved for, read-scoped like a device —
-			// unless the approving device holds a follow-management grant (ADR-0061),
-			// which lifts this session to write. The grant lookup fails closed: an
-			// error keeps the session on the read floor rather than opening it.
+			// pinned user its device approved for, at the READ floor — always. A
+			// session is a replayable bearer token and never lifts to write; write
+			// is a device-credential action (ADR-0065, subsuming ADR-0061).
 			if s.sessions != nil {
 				if p, ok := s.sessions.Session(raw); ok {
-					next.ServeHTTP(w, s.withIdentity(r, sessionIdentity(p, s.managementAuthorized(r.Context(), p.DeviceKey))))
+					next.ServeHTTP(w, s.withIdentity(r, sessionIdentity(p)))
 					return
 				}
 			}
@@ -163,28 +162,39 @@ func (s *Server) rejectCredential(w http.ResponseWriter, r *http.Request, reason
 
 // authenticateDevice resolves a device credential into the identity of the user
 // it acts as. No token is issued: the identity is the device key and a
-// user-signed cert, verified offline against a pinned key. The synthetic Token
-// carries only the baseline read scope an authenticated user device holds;
-// anything finer is a capability grant (internal/grant, #304), not a scope.
+// user-signed cert, verified offline against a pinned key.
+//
+// The device holds the read floor by default and WRITE when its key is
+// authorised (ADR-0065). This is the subsume: write is earned by a device that
+// is both enrolled — proven by the credential verifying at all — and authorised
+// by an admin, so it rests on a hardware-held key and a per-request possession
+// proof rather than a replayable session token. The authorization lookup fails
+// CLOSED: an error keeps the device on the read floor rather than opening it,
+// the same stance the session lift took. Anything finer than write is a
+// capability grant (internal/grant, #304), not a scope.
 func (s *Server) authenticateDevice(ctx context.Context, credential string) (auth.Identity, error) {
 	a, err := s.deviceV.Verify(ctx, credential, s.now())
 	if err != nil {
 		return auth.Identity{}, err
+	}
+	scopes := []auth.Scope{auth.ScopeRead}
+	if s.managementAuthorized(ctx, a.DeviceKey) {
+		scopes = []auth.Scope{auth.ScopeRead, auth.ScopeWrite}
 	}
 	return auth.Identity{
 		Principal: auth.Principal{ID: a.PrincipalID, Kind: "user", Name: a.PrincipalName},
 		Token: auth.Token{
 			Name:        "device:" + a.DeviceKey,
 			PrincipalID: a.PrincipalID,
-			Scopes:      []auth.Scope{auth.ScopeRead},
+			Scopes:      scopes,
 		},
 	}, nil
 }
 
-// managementAuthorized resolves whether an approving device key carries a
-// follow-management grant (ADR-0061). It fails closed: with no authorizer wired,
-// or on a lookup error, a session stays on the read floor. A blank device key is
-// never authorised — only a real approving device can be granted.
+// managementAuthorized resolves whether a device key is authorised for write
+// (ADR-0065, subsuming ADR-0061). It fails closed: with no authorizer wired, or
+// on a lookup error, the device stays on the read floor. A blank device key is
+// never authorised — only a real enrolled device can be.
 func (s *Server) managementAuthorized(ctx context.Context, deviceKey string) bool {
 	if s.mgmtAuth == nil || deviceKey == "" {
 		return false
