@@ -69,12 +69,14 @@ func PollSourceHandler(
 			return err
 		}
 
-		provider, err := feedProviderFor(reg)
+		provider, err := feedProviderFor(reg, src.Type)
 		if err != nil {
-			// No feed adapter at all should be unreachable — the job is capability-
-			// routed on `metadata`, so a node with none never claims it (ADR-0025).
-			// If it happens anyway, fail so the queue retries rather than silently
-			// recording a poll that never looked.
+			// No adapter for this source's type. A node with NO metadata adapter
+			// should be unreachable — the job is capability-routed on `metadata`,
+			// so a node with none never claims it (ADR-0025) — and a node missing
+			// only THIS type's adapter is the misrouted-job case. Either way, fail
+			// so the queue retries rather than silently recording a poll that never
+			// looked.
 			return fmt.Errorf("worker: polling %s: %w", payload.SourceID, err)
 		}
 
@@ -153,24 +155,36 @@ func PollSourceHandler(
 	}
 }
 
-// feedProviderFor resolves the metadata provider a source's feed is enumerated
-// through.
+// feedProviderFor resolves the metadata provider a source of the given type is
+// enumerated through — the adapter that ServesType(t), in routing order.
 //
-// # Phase 1 routes to the single configured metadata provider
+// # It routes by source type, not to whichever adapter is first
 //
-// A source's Type (tv_series) is what SHOULD choose the adapter, but providers
-// declare a capability, not which source types they serve, and Phase 1 ships one
-// metadata implementation (TVDB). So this takes the first CapabilityMetadata
-// provider in routing order. Routing a source type to one of several metadata
-// providers is a later-phase concern — declared here as the seam it will fill,
-// not smuggled in early — and until then a deployment configures one feed
-// adapter, exactly as it configures its indexers.
-func feedProviderFor(reg *providers.Registry) (providers.FeedProvider, error) {
+// Now that four source types are implemented (tv_series, podcast,
+// youtube_channel, rss_feed) a deployment can configure more than one metadata
+// adapter, so "the first CapabilityMetadata provider" is no longer a safe
+// shortcut: it would enumerate a podcast feed through the TVDB adapter, which
+// answers nothing and presents as a dead feed. Each adapter declares which type
+// it serves (providers.FeedProvider.ServesType), and this returns the one that
+// serves this source's type. With a single adapter configured the match is
+// trivially that adapter's own type; the routing earns its place the moment
+// there are two.
+//
+// A source whose type no adapter serves is an error the poll must see, not an
+// empty enumeration: it means the node polling this source has no adapter for it
+// (a misrouted job, or an adapter removed from config), and failing lets the
+// queue retry elsewhere rather than silently recording a poll that never looked.
+func feedProviderFor(reg *providers.Registry, t followed.Type) (providers.FeedProvider, error) {
 	feeds := reg.FeedProviders()
 	if len(feeds) == 0 {
 		return nil, fmt.Errorf("%w: %s", providers.ErrNoProvider, providers.CapabilityMetadata)
 	}
-	return feeds[0], nil
+	for _, fp := range feeds {
+		if fp.ServesType(t) {
+			return fp, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: no metadata adapter serves %q", providers.ErrNoProvider, t)
 }
 
 // shouldProject decides whether an enumerated item becomes a want now, honouring

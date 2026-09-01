@@ -98,6 +98,9 @@ func (c *Client) Capabilities() []providers.Capability {
 	return []providers.Capability{providers.CapabilityMetadata}
 }
 
+// ServesType reports that this adapter enumerates youtube_channel sources.
+func (c *Client) ServesType(t followed.Type) bool { return t == followed.TypeYouTubeChannel }
+
 // Check reports the adapter ready.
 //
 // As with the podcast adapter there is no central service and no credential to

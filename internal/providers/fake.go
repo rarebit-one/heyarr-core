@@ -55,7 +55,11 @@ type Fake struct {
 	// enumerations counts Enumerate calls, so a test can assert the poll loop
 	// actually reached the adapter rather than inferring it from projected wants.
 	enumerations int
-	now          func() time.Time
+	// servesTypes, when non-nil, restricts which followed types this fake claims
+	// to serve (see ServingTypes, ServesType). Nil means it serves ANY type,
+	// which keeps the many single-fake follow tests routing to it unchanged.
+	servesTypes map[followed.Type]bool
+	now         func() time.Time
 }
 
 // NewFake builds an inert provider with the given capabilities.
@@ -168,6 +172,31 @@ func (f *Fake) OfferFeed(ref string, items ...followed.FeedItem) *Fake {
 	defer f.mu.Unlock()
 	f.feeds[normaliseRef(ref)] = items
 	return f
+}
+
+// ServingTypes restricts the followed types this fake serves, for the routing
+// tests that configure more than one metadata fake. Unset (the default), a fake
+// serves ANY type, so a single-fake follow test routes to it without ceremony.
+func (f *Fake) ServingTypes(types ...followed.Type) *Fake {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.servesTypes = map[followed.Type]bool{}
+	for _, t := range types {
+		f.servesTypes[t] = true
+	}
+	return f
+}
+
+// ServesType implements FeedProvider. A fake with no configured types serves any
+// (the common single-adapter case); one configured with ServingTypes serves only
+// those, so a test can prove the poll routes to the RIGHT adapter.
+func (f *Fake) ServesType(t followed.Type) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.servesTypes == nil {
+		return true
+	}
+	return f.servesTypes[t]
 }
 
 // Enumerations is how many times Enumerate was called.

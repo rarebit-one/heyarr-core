@@ -87,6 +87,9 @@ func (c *Client) Capabilities() []providers.Capability {
 	return []providers.Capability{providers.CapabilityMetadata}
 }
 
+// ServesType reports that this adapter enumerates podcast sources.
+func (c *Client) ServesType(t followed.Type) bool { return t == followed.TypePodcast }
+
 // Check reports the adapter ready.
 //
 // Unlike TVDB there is no central service and no credential to exercise: a

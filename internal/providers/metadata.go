@@ -48,4 +48,17 @@ type FeedProvider interface {
 	// the loop decides the hold-off, and folding "unreachable" into an empty
 	// slice would silently report a source as having emitted nothing.
 	Enumerate(ctx context.Context, ref string) ([]followed.FeedItem, error)
+
+	// ServesType reports whether this adapter is the one that enumerates a source
+	// of the given followed type. It is how the poll routes a source to the
+	// RIGHT feed adapter rather than to whichever happens to be first: a TVDB
+	// adapter serves tv_series, a podcast adapter podcast, a youtube adapter
+	// youtube_channel, a webfeed adapter rss_feed. With one metadata provider
+	// configured this is trivially true for that provider's own type; it earns
+	// its place the moment a deployment configures two, where routing a podcast
+	// poll to the TVDB adapter would enumerate nothing and look like a dead feed.
+	// Declared on the interface, not inferred from the provider Kind, because the
+	// registry holds providers as this interface and the mapping belongs with the
+	// adapter that knows its own source shape.
+	ServesType(t followed.Type) bool
 }

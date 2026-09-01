@@ -167,8 +167,18 @@
             "description": "A TVDB series id, as an alternative to url when you have the id directly. Numeric.",
             "type": "string"
           },
+          "type": {
+            "description": "Only when the URL cannot say it on its own: a podcast RSS feed and an article feed look identical, so pass rss_feed to archive a feed's articles rather than treat it as a podcast. Leave empty to infer (a plain feed URL is a podcast).",
+            "enum": [
+              "tv_series",
+              "podcast",
+              "youtube_channel",
+              "rss_feed"
+            ],
+            "type": "string"
+          },
           "url": {
-            "description": "A URL identifying the source to follow — a TVDB series URL, or any other http(s) feed URL (a podcast RSS feed). The type is inferred from it — you do not name a source or a provider.",
+            "description": "A URL identifying the source to follow — a TVDB series URL, a youtube.com channel-feed URL, or any other http(s) feed URL (a podcast or article RSS feed). The type is inferred from it where possible — you do not name a source or a provider.",
             "type": "string"
           },
           "work_id": {
