@@ -201,7 +201,7 @@ func (s *Server) managementAuthorized(ctx context.Context, deviceKey string) boo
 	}
 	ok, err := s.mgmtAuth.ManagementAuthorized(ctx, deviceKey)
 	if err != nil {
-		s.log.Warn("could not resolve a follow-management grant; keeping the session read-only",
+		s.log.Warn("could not resolve a device write authorization; keeping the device on the read floor",
 			"error", err)
 		return false
 	}

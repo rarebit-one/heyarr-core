@@ -28,7 +28,7 @@ func (s stubSessions) Session(token string) (httpapi.SessionPrincipal, bool) {
 }
 
 // stubMgmt is a ManagementAuthorizer over a fixed set of authorised device keys —
-// the interim follow-management grant (ADR-0061), proven at the middleware seam
+// the ADR-0065 device write authorizer, proven at the middleware seam
 // without standing up the catalog-backed grant store.
 type stubMgmt map[string]bool
 
