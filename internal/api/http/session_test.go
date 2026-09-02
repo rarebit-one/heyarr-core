@@ -178,35 +178,23 @@ func TestSessionTokenIsReadOnlyByDefault(t *testing.T) {
 	}
 }
 
-// A follow-management grant (ADR-0061) on the approving device lifts that
-// device's session to write: the SAME session token now passes the write route.
-// A different, ungranted approving device stays read-only — the grant is
-// per-approving-device, not global.
-func TestSessionTokenWritesWithManagementGrant(t *testing.T) {
+// A web-login session STAYS read-only even when its approving device is
+// authorised for write (ADR-0065's subsume): a session is a replayable bearer
+// token and never lifts, so a write route 403s regardless of the authorizer.
+// Write is a device-credential action — proven in deviceauth_test.go
+// (TestAuthorizedDeviceWritesOverHTTP), not here. This is the security property
+// the subsume buys: the weaker credential cannot open the write door.
+func TestSessionStaysReadOnlyEvenWhenApproverAuthorized(t *testing.T) {
 	t.Parallel()
-	const granted, ungranted = "granted-token", "ungranted-token"
-	sessions := stubSessions{
-		granted:   {UserID: "ed25519:aa", DeviceKey: "ed25519:phone"},
-		ungranted: {UserID: "ed25519:aa", DeviceKey: "ed25519:other"},
-	}
+	const token = "session-token-abc"
+	sessions := stubSessions{token: {UserID: "ed25519:aa", DeviceKey: "ed25519:phone"}}
+	// The approving device key IS authorised — yet the session must still not write.
 	ts := newSessionHarnessWithAuth(t, sessions, stubMgmt{"ed25519:phone": true})
 
-	if code := postProbe(t, ts, "Bearer "+granted); code != http.StatusCreated {
-		t.Fatalf("a granted device's session should write (201), got %d", code)
+	if code := getProbe(t, ts, "Bearer "+token); code != http.StatusOK {
+		t.Fatalf("a session should read, got %d", code)
 	}
-	if code := postProbe(t, ts, "Bearer "+ungranted); code != http.StatusForbidden {
-		t.Fatalf("an ungranted device's session should stay read-only, got %d", code)
-	}
-	// The grant lifts to write, not admin: an admin route still 403s.
-	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/probe", nil)
-	req.Header.Set("Authorization", "Bearer "+granted)
-	resp, err := ts.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("a management grant must not confer admin, got %d", resp.StatusCode)
+	if code := postProbe(t, ts, "Bearer "+token); code != http.StatusForbidden {
+		t.Fatalf("a session must NOT lift to write even when its approver is authorised, got %d", code)
 	}
 }

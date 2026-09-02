@@ -34,6 +34,13 @@ type deviceAuthHarness struct {
 }
 
 func newDeviceAuthHarness(t *testing.T) *deviceAuthHarness {
+	return newDeviceAuthHarnessWithMgmt(t, nil)
+}
+
+// newDeviceAuthHarnessWithMgmt is newDeviceAuthHarness with a ManagementAuthorizer
+// wired, so a test can authorise a specific enrolled device key and prove its
+// device credential then carries write (ADR-0065).
+func newDeviceAuthHarnessWithMgmt(t *testing.T, mgmt httpapi.ManagementAuthorizer) *deviceAuthHarness {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -75,16 +82,17 @@ func newDeviceAuthHarness(t *testing.T) *deviceAuthHarness {
 	}
 
 	srv, err := httpapi.New(httpapi.Options{
-		Config:             cfg,
-		DB:                 db,
-		Verifier:           verifier,
-		DeviceVerifier:     devStore,
-		Events:             eventLog,
-		Build:              buildinfo.Info{Version: "test", Commit: "abc123", Date: "2026-08-20T00:00:00Z"},
-		SchemaVersion:      1,
-		KnownSchemaVersion: 1,
-		CASRoot:            casDir,
-		Mount:              []httpapi.MountFunc{testRoutes}, // GET /probe requires read scope
+		Config:               cfg,
+		DB:                   db,
+		Verifier:             verifier,
+		DeviceVerifier:       devStore,
+		ManagementAuthorizer: mgmt,
+		Events:               eventLog,
+		Build:                buildinfo.Info{Version: "test", Commit: "abc123", Date: "2026-08-20T00:00:00Z"},
+		SchemaVersion:        1,
+		KnownSchemaVersion:   1,
+		CASRoot:              casDir,
+		Mount:                []httpapi.MountFunc{testRoutes}, // GET /probe read, POST write, DELETE admin
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -201,6 +209,44 @@ func TestDeviceCredentialForUnenrolledUserIsRefusedOverHTTP(t *testing.T) {
 	}
 	if code := h.get(t, "Device "+cert+"~"+proof); code != http.StatusUnauthorized {
 		t.Fatalf("an unenrolled user should be 401, got %d", code)
+	}
+}
+
+// ADR-0065's subsume: an enrolled device whose key an admin has authorised
+// carries WRITE via its own device credential — the durable convergence that
+// replaced ADR-0061's session-lift. An enrolled but unauthorised device stays on
+// the read floor, and an authorisation never confers admin.
+func TestAuthorizedDeviceWritesOverHTTP(t *testing.T) {
+	t.Parallel()
+	// A mutable authorizer (a map, held by reference) so the device key can be
+	// authorised AFTER enrolment mints it.
+	mgmt := stubMgmt{}
+	h := newDeviceAuthHarnessWithMgmt(t, mgmt)
+	deviceKey, credential := h.enrolledDevice(t)
+
+	// Enrolled but not authorised: reads, but a write route 403s (the floor).
+	if code := postProbe(t, h.ts, "Device "+credential()); code != http.StatusForbidden {
+		t.Fatalf("an unauthorised device must 403 on write, got %d", code)
+	}
+
+	// Authorise exactly this device key — its credential now carries write.
+	mgmt[deviceKey] = true
+	if code := postProbe(t, h.ts, "Device "+credential()); code != http.StatusCreated {
+		t.Fatalf("an authorised device should write (201), got %d", code)
+	}
+
+	// Write, not admin: an admin route still 403s — the authorisation lifts to
+	// write only, exactly as the retired session-lift did.
+	req, _ := http.NewRequest(http.MethodDelete, h.ts.URL+"/api/v1/probe", nil)
+	req.Header.Set("Authorization", "Device "+credential())
+	resp, err := h.ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("a device authorisation must not confer admin, got %d", resp.StatusCode)
 	}
 }
 

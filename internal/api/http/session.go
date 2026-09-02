@@ -43,42 +43,48 @@ type SessionValidator interface {
 	Session(token string) (SessionPrincipal, bool)
 }
 
-// ManagementAuthorizer answers whether an approving device key carries a
-// follow-management grant (ADR-0061) — the interim, operator-issued
-// authorization that lifts a web-login session from the read floor to write.
+// ManagementAuthorizer answers whether a device key is authorised for write —
+// the admin-issued, durable authorization that lifts an enrolled device from the
+// read floor to write (ADR-0065, subsuming ADR-0061's interim grant).
+//
+// It authorises a DEVICE, and it is the device credential path that consults it
+// (authenticateDevice), not the session path: a web-login session never lifts
+// (see sessionIdentity). The authorization is inherently gated on enrolment
+// because only an enrolled device can present the credential this lifts — an
+// authorization for a device key that is not enrolled is inert, never a way in.
 //
 // It is optional, like SessionValidator and DeviceVerifier. A nil one means no
-// device is ever management-authorized, which is the read-only-by-default state:
-// every web-login session stays at the read floor, exactly as before the grant
-// existed. Only when it is wired does a session for a granted approving device
-// carry write — and a shared surface (a TV) whose approver was never granted
-// still reads read-only, which is the whole point.
+// device is ever authorised for write, the read-only-by-default state: every
+// device authenticates at the read floor, exactly as before the grant existed.
+// Break-glass write does not depend on it at all — an admin-scoped bearer token
+// (ADR-0011) always carries write and is how the first device is authorised, so
+// removing the session-lift can never lock an operator out.
 type ManagementAuthorizer interface {
 	// ManagementAuthorized reports whether deviceKey is authorised for write. An
-	// error is treated by the caller as "not authorised": a grant lookup that
-	// cannot be answered must fail closed to the read floor, never open to write.
+	// error is treated by the caller as "not authorised": a lookup that cannot be
+	// answered must fail closed to the read floor, never open to write.
 	ManagementAuthorized(ctx context.Context, deviceKey string) (bool, error)
 }
 
 // sessionIdentity is what a valid web-login session token authenticates as: the
-// pinned user the approving device acts for. It carries the read floor by
-// default — a browser or television that logged in by QR gets to browse and
-// stream — and write only when the approving device holds a follow-management
-// grant (authorized, ADR-0061), the interim path a trusted personal device takes
-// to manage followed sources before device-cert enrolment (ADR-0048) converges
-// the surface. Anything finer than write is a capability grant (internal/grant),
-// not a scope.
-func sessionIdentity(p SessionPrincipal, authorized bool) auth.Identity {
-	scopes := []auth.Scope{auth.ScopeRead}
-	if authorized {
-		scopes = []auth.Scope{auth.ScopeRead, auth.ScopeWrite}
-	}
+// pinned user the approving device acts for, at the READ floor — a browser or
+// television that logged in by QR gets to browse and stream, and nothing more.
+//
+// A session token is a replayable bearer credential (ADR-0053), so it never
+// carries write: that is the whole of ADR-0065's subsume. Write is earned by a
+// DEVICE presenting its per-request, non-replayable device credential (ADR-0048)
+// — the strong path that superseded the interim session-lift (ADR-0061), rather
+// than coexisting beside it and capping the floor at the weaker credential. A
+// browser or TV that needs to manage sources does so from an authorised device,
+// not by lifting its own session. Anything finer than write is a capability
+// grant (internal/grant), not a scope.
+func sessionIdentity(p SessionPrincipal) auth.Identity {
 	return auth.Identity{
 		Principal: auth.Principal{ID: p.UserID, Kind: "user", Name: "session:" + p.DeviceKey},
 		Token: auth.Token{
 			Name:        "session:" + p.DeviceKey,
 			PrincipalID: p.UserID,
-			Scopes:      scopes,
+			Scopes:      []auth.Scope{auth.ScopeRead},
 		},
 	}
 }
