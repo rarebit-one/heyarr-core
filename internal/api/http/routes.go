@@ -33,6 +33,15 @@ const RenderPrefix = "/render"
 // credential adds no authority to anyone — it is a rendezvous, not a resource.
 const RelayPrefix = "/pair"
 
+// RelayV1Prefix is where the Voidbind relay — voidbind-go's relay.Server, the
+// protocol the voidbind CLI and the phone (voidbind-kmp) speak — is mounted
+// (ADR-0066). It sits beside the legacy relay above, not in place of it. A
+// Voidbind client is given "<node>/pair" (RelayPrefix) as its relay BASE — the
+// client appends the /v1/... paths itself, as it would against a standalone
+// `voidbind relay` — and so lands here. Public for the same reason RelayPrefix
+// is.
+const RelayV1Prefix = RelayPrefix + "/v1"
+
 // routes builds the whole handler.
 //
 // The middleware order is the design, not an accident:
