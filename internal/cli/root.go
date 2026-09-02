@@ -75,7 +75,7 @@ One logical library, multiple complete sovereign peers.`,
 		// administration: they manage the key of the person at the keyboard,
 		// in that person's own config directory (§40, ADR-0032). They take no
 		// --config on purpose.
-		newDeviceCommand(opts),
+		newDeviceCommand(opts, &configPath),
 		// The identity commands sit beside the device commands and for the same
 		// reason: they manage the key of the person at the keyboard — here the
 		// user identity that vouches for device keys (§40, ADR-0048) — in that

@@ -84,6 +84,13 @@ type Device struct {
 	RevokedAt     *time.Time
 }
 
+// Admission parses the device's admitting op (Cert) — who admitted it, citing
+// what, and the op's hash. It re-verifies the op's own signature, nothing
+// about authority: the view is the evaluation's answer, this is its provenance.
+func (d Device) Admission() (enrolment.Op, error) {
+	return enrolment.VerifyOp(d.Cert)
+}
+
 // Active reports whether the device may authenticate at t.
 func (d Device) Active(t time.Time) error {
 	if d.RevokedAt != nil {

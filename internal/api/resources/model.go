@@ -253,19 +253,28 @@ type IdentityUser struct {
 }
 
 // IdentityDevice is a device key a user has vouched for (§40, ADR-0048). The
-// enrolment cert is deliberately NOT on the wire: authentication re-verifies the
-// presented cert live against the pinned user key rather than trusting a stored
-// copy, so the stored token is an implementation detail, not a field a client
-// reads. RevokedAt is set once revoked; the row is kept so a re-presented cert
-// for a revoked key is refused rather than silently re-enrolled.
+// admitting op token is deliberately NOT on the wire: authentication evaluates
+// the presented op live against the identity's op log rather than trusting a
+// stored copy, so the stored token is an implementation detail, not a field a
+// client reads — but WHO admitted the device is (ADR-0068): AdmittedBy is the
+// signer of its admitting op (the genesis key, or a member device's key) and
+// AdmittingOp is that op's hash, what the device cites as its own admission.
+// EncryptionKey is the X25519 key the admission bound, the recipient a space
+// key is wrapped for (ADR-0049) — what an operator revoking the device needs
+// to re-key its spaces. RevokedAt is set once revoked (by the admin, or by a
+// member's remove op); the row is kept so a re-presented op for a revoked key
+// is refused rather than silently re-enrolled.
 type IdentityDevice struct {
-	ID         string     `json:"id"`
-	UserID     string     `json:"user_id"`
-	DeviceKey  string     `json:"device_key"`
-	Name       string     `json:"name"`
-	EnrolledAt time.Time  `json:"enrolled_at"`
-	ExpiresAt  time.Time  `json:"expires_at"`
-	RevokedAt  *time.Time `json:"revoked_at"`
+	ID            string     `json:"id"`
+	UserID        string     `json:"user_id"`
+	DeviceKey     string     `json:"device_key"`
+	EncryptionKey string     `json:"encryption_key,omitempty"`
+	Name          string     `json:"name"`
+	AdmittedBy    string     `json:"admitted_by"`
+	AdmittingOp   string     `json:"admitting_op"`
+	EnrolledAt    time.Time  `json:"enrolled_at"`
+	ExpiresAt     time.Time  `json:"expires_at"`
+	RevokedAt     *time.Time `json:"revoked_at"`
 }
 
 // ---------------------------------------------------------------------------

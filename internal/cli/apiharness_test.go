@@ -20,15 +20,18 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
+	personalstateapi "github.com/rarebit-one/heyarr-core/internal/api/personalstate"
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
 
@@ -102,6 +105,7 @@ type apiHarness struct {
 	jobs       *jobs.Queue
 	events     *events.Log
 	tokens     *auth.Store
+	identities *deviceauth.Store
 	cas        *cas.FS
 	clock      *testClock
 	configPath string
@@ -206,11 +210,18 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 		t.Fatal(err)
 	}
 
+	identities, err := deviceauth.New(deviceauth.Options{
+		Writer: db.Writer(), Reader: db.Reader(), Events: eventLog, Clock: clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	api, err := resources.New(resources.Options{
 		DB:              db,
 		Jobs:            queue,
 		Events:          eventLog,
 		Tokens:          store,
+		Identities:      identities,
 		Membership:      members,
 		Logger:          slog.New(slog.DiscardHandler),
 		Now:             clock.Now,
@@ -222,6 +233,16 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 		t.Fatal(err)
 	}
 	blobHandler, err := blobs.New(blobs.Options{Store: store2, Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The encrypted personal-state surface (/spaces), which `device revoke`
+	// sweeps for spaces wrapped for the revoked device (ADR-0049, ADR-0068).
+	psStore, err := psstore.New(psstore.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
+	if err != nil {
+		t.Fatal(err)
+	}
+	psAPI, err := personalstateapi.New(personalstateapi.Options{Store: psStore})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,13 +272,13 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 		// deliberately.
 		KnownSchemaVersion: harnessKnownSchemaVersion,
 		CASRoot:            store2.Root(),
-		Mount:              []httpapi.MountFunc{api.Mount, blobHandler.Mount},
+		Mount:              []httpapi.MountFunc{api.Mount, blobHandler.Mount, psAPI.Mount},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	h := &apiHarness{
-		t: t, db: db, jobs: queue, events: eventLog, tokens: store,
+		t: t, db: db, jobs: queue, events: eventLog, tokens: store, identities: identities,
 		cas: store2, clock: clock, dataDir: dir, bound: ho.bind,
 	}
 

@@ -101,13 +101,19 @@ func TestEnrolUserThenDeviceThenRevoke(t *testing.T) {
 		t.Fatalf("enrol device: status = %d, want 201 (body: %s)", resp.StatusCode, h.body(resp))
 	}
 	var device struct {
-		DeviceKey string `json:"device_key"`
+		DeviceKey   string `json:"device_key"`
+		AdmittedBy  string `json:"admitted_by"`
+		AdmittingOp string `json:"admitting_op"`
 	}
 	if err := json.Unmarshal(h.body(resp), &device); err != nil {
 		t.Fatal(err)
 	}
 	if device.DeviceKey != deviceKey {
 		t.Fatalf("enrolled device key = %q, want %q", device.DeviceKey, deviceKey)
+	}
+	// Provenance (ADR-0068): a cert-era admission is by the genesis key.
+	if device.AdmittedBy != userKey || device.AdmittingOp != enrolment.OpHash(cert) {
+		t.Fatalf("admitted_by = %q admitting_op = %q, want %q / %q", device.AdmittedBy, device.AdmittingOp, userKey, enrolment.OpHash(cert))
 	}
 
 	// The device is listed under its user.
