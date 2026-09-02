@@ -105,9 +105,15 @@ func New(opts Options) (*Handler, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
+	// The broker evaluates an approving device's membership over the SAME op log
+	// the Device scheme does (ADR-0068): a device a member has removed can no
+	// longer approve a login, and an approval carrying the ops of a device this
+	// node has never met is judged with them. The admin's local tombstone
+	// (RevokeDevice) is not an op and is not consulted here — see userTrust.
 	broker, err := weblogin.NewBroker(weblogin.BrokerOptions{
-		Trust:    userTrust{store: opts.Identities},
-		Audience: opts.Base,
+		Trust:      userTrust{store: opts.Identities},
+		Membership: opts.Identities.Membership(context.Background()),
+		Audience:   opts.Base,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("weblogin: building the broker: %w", err)
@@ -162,7 +168,7 @@ func New(opts Options) (*Handler, error) {
 		base:      opts.Base,
 		signin:    page,
 		log:       log,
-		subRoutes: SubscriptionRoutes(store, trust, nil),
+		subRoutes: SubscriptionRoutes(store, trust, opts.Identities.Membership(context.Background()), nil),
 		push:      push,
 	}, nil
 }
@@ -219,11 +225,14 @@ func (s brokerSessions) Session(token string) (httpapi.SessionPrincipal, bool) {
 // which key". A user the store does not know is refused (ok=false → the broker
 // reports rp.ErrUnknownUser): enrol before trust, exactly as for a device cert.
 //
-// Note (ADR-0053): this pins on the USER, like All Thing's rp trust — it does not
-// consult the device-revocation table, so a revoked device whose user is still
-// pinned can still approve a QR login until its user is unpinned. The token it
-// mints is short-lived and read-only; binding weblogin approval to device
-// revocation is a tracked follow-up.
+// Note (ADR-0053, ADR-0068): this pins on the USER, like All Thing's rp trust.
+// The broker's membership evaluation now honours a member-signed REMOVE, so a
+// device removed through the op log cannot approve a login; what it still does
+// not consult is the admin's local tombstone (deviceauth.RevokeDevice), which is
+// not an op, so an admin-revoked device whose user is still pinned can approve
+// a QR login until its user is unpinned or a member removes it. The token it
+// mints is short-lived and read-only; binding weblogin approval to the tombstone
+// is a tracked follow-up.
 type userTrust struct{ store *deviceauth.Store }
 
 func (t userTrust) PinnedUserKey(userID string) (ed25519.PublicKey, bool) {

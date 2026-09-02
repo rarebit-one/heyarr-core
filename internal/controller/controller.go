@@ -427,6 +427,15 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: opening device identity store: %w", err)
 	}
+	// ADR-0068: a device enrolled before the op log existed holds a v1/v2 cert,
+	// which IS a genesis-signed add. Record those once so the log speaks for
+	// every enrolled device from the first start, not only after each device
+	// next authenticates. Idempotent; zero on every start after the first.
+	if n, err := deviceIdentities.BackfillLegacyCerts(ctx); err != nil {
+		return nil, nil, fmt.Errorf("controller: recording legacy device certs as membership ops: %w", err)
+	} else if n > 0 {
+		c.log.Info("recorded legacy device certs as membership ops", "count", n)
+	}
 	mounts, publicMounts, err := c.mounts(ctx, db, store, verifier, blobStore, eventLog, members, deviceIdentities, selfPeerID, material)
 	if err != nil {
 		return nil, nil, err

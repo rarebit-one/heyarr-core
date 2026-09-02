@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rarebit-one/voidbind-go/enrolment"
+	"github.com/rarebit-one/voidbind-go/identity"
 	"github.com/rarebit-one/voidbind-go/pairflow"
 	"github.com/rarebit-one/voidbind-go/pairing"
 	vbrelay "github.com/rarebit-one/voidbind-go/relay"
@@ -60,25 +61,27 @@ func TestVoidbindPairflowCompletesThroughTheNode(t *testing.T) {
 	}
 	// The invite is what the initiator shows the phone as a QR: it must carry the
 	// node's /pair/v1 base intact so the phone dials the node, not a standalone relay.
-	invite, err := pairflow.EncodeInvite(base, session, salt)
+	u, userPriv, err := enrolment.GenerateUserIdentity()
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotBase, gotSession, gotSalt, err := pairflow.DecodeInvite(invite)
-	if err != nil || gotBase != base || gotSession != session || string(gotSalt) != string(salt) {
-		t.Fatalf("invite round trip: base=%q session=%q err=%v", gotBase, gotSession, err)
+	// The invite (v3, ADR-0007) also names the identity the phone will join.
+	invite, err := pairflow.EncodeInvite(base, session, salt, u.UserID())
+	if err != nil {
+		t.Fatal(err)
 	}
+	inv, err := pairflow.DecodeInvite(invite)
+	if err != nil || inv.RelayBase != base || inv.Session != session || string(inv.Salt) != string(salt) || inv.User != u.UserID() {
+		t.Fatalf("invite round trip: %+v err=%v", inv, err)
+	}
+	gotBase, gotSession, gotSalt := inv.RelayBase, inv.Session, inv.Salt
 
-	_, userPriv, err := enrolment.GenerateUserIdentity()
-	if err != nil {
-		t.Fatal(err)
-	}
 	now := time.Now().UTC()
 	in, err := pairflow.NewInitiator(userPriv, salt, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := pairflow.NewResponder(gotSalt, now)
+	resp, err := pairflow.NewResponder(inv.User, gotSalt, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,11 +117,11 @@ func TestVoidbindPairflowCompletesThroughTheNode(t *testing.T) {
 		err  error
 	}, 1)
 	go func() {
-		c, err := resp.Receive(ctx, respT)
+		enr, err := resp.Receive(ctx, respT)
 		certCh <- struct {
 			cert string
 			err  error
-		}{c, err}
+		}{enr.Op, err}
 	}()
 	if err := in.Authorise(ctx, initT); err != nil {
 		t.Fatalf("initiator authorise: %v", err)
@@ -127,12 +130,17 @@ func TestVoidbindPairflowCompletesThroughTheNode(t *testing.T) {
 	if got.err != nil {
 		t.Fatalf("responder receive: %v", got.err)
 	}
-	cert, err := enrolment.VerifyCert(got.cert, userPriv.Public().(ed25519.PublicKey), now)
+	// What the responder receives is its admitting op (ADR-0007): a genesis-signed
+	// add, which the user key verifies and which names the responder's keys.
+	op, err := enrolment.VerifyOp(got.cert)
 	if err != nil {
-		t.Fatalf("the received cert does not verify against the user key: %v", err)
+		t.Fatalf("the received op does not verify: %v", err)
 	}
-	if cert.Device != resp.DeviceID() || cert.DeviceEnc != resp.DeviceEncID() {
-		t.Fatalf("cert binds %s/%s, responder is %s/%s", cert.Device, cert.DeviceEnc, resp.DeviceID(), resp.DeviceEncID())
+	if op.Kind != enrolment.OpAdd || op.By != identity.FormatPublicKey(userPriv.Public().(ed25519.PublicKey)) {
+		t.Fatalf("received op is %s by %s, want a genesis add", op.Kind, op.By)
+	}
+	if op.Device != resp.DeviceID() || op.DeviceEnc != resp.DeviceEncID() {
+		t.Fatalf("op binds %s/%s, responder is %s/%s", op.Device, op.DeviceEnc, resp.DeviceID(), resp.DeviceEncID())
 	}
 	// And the cert is a possession-proof-able device credential — the Device
 	// scheme's exact input — so what pairing produced is what /enrol consumes.

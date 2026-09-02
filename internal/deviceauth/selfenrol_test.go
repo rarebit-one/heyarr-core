@@ -81,7 +81,7 @@ func TestSelfEnrol(t *testing.T) {
 	}
 	for _, tc := range refused {
 		t.Run("refuses "+tc.name, func(t *testing.T) {
-			_, err := store.SelfEnrol(ctx, tc.cert, tc.proof, "phone")
+			_, err := store.SelfEnrol(ctx, tc.cert, tc.proof, "phone", nil)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want %v", err, tc.want)
 			}
@@ -91,7 +91,7 @@ func TestSelfEnrol(t *testing.T) {
 		})
 	}
 
-	first, err := store.SelfEnrol(ctx, cert, proof(devicePriv, cert), "phone")
+	first, err := store.SelfEnrol(ctx, cert, proof(devicePriv, cert), "phone", nil)
 	if err != nil || !first.Created {
 		t.Fatalf("first self-enrol: %+v err=%v", first, err)
 	}
@@ -101,11 +101,11 @@ func TestSelfEnrol(t *testing.T) {
 	}
 	// The device now authenticates through the ordinary path, at nothing more
 	// than "this user" — scope is the HTTP layer's, and stays the read floor.
-	if a, err := store.Verify(ctx, cert+"~"+proof(devicePriv, cert), at); err != nil || a.DeviceKey != dev.DeviceKey {
+	if a, err := store.Verify(ctx, cert+"~"+proof(devicePriv, cert), nil, at); err != nil || a.DeviceKey != dev.DeviceKey {
 		t.Fatalf("verify after self-enrol: %+v %v", a, err)
 	}
 
-	again, err := store.SelfEnrol(ctx, cert, proof(devicePriv, cert), "renamed")
+	again, err := store.SelfEnrol(ctx, cert, proof(devicePriv, cert), "renamed", nil)
 	if err != nil || again.Created {
 		t.Fatalf("second self-enrol: %+v err=%v", again, err)
 	}
@@ -120,7 +120,7 @@ func TestSelfEnrol(t *testing.T) {
 	if _, err := store.RevokeDevice(ctx, dev.DeviceKey); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SelfEnrol(ctx, cert, proof(devicePriv, cert), "phone"); !errors.Is(err, deviceauth.ErrDeviceRevoked) {
+	if _, err := store.SelfEnrol(ctx, cert, proof(devicePriv, cert), "phone", nil); !errors.Is(err, deviceauth.ErrDeviceRevoked) {
 		t.Fatalf("revoked device re-enrolled itself: %v", err)
 	}
 }

@@ -107,17 +107,18 @@ func (p *pushNotifier) NotifyLogin(ctx context.Context, loginID string) (int, er
 }
 
 // SubscriptionRoutes returns the notify plane's device-facing HTTP surface —
-// POST/DELETE /v1/subscriptions — bound to the given subscription store and the
-// RP's pinned trust set. Registration and unsubscription are authenticated by the
-// device's enrolment cert against trust (the plane's own Registry does the
-// verify), so this reuses the exact trust set that backs the device authenticator
+// POST/DELETE /v1/subscriptions — bound to the given subscription store, the
+// RP's pinned trust set and its membership op log (ADR-0068). Registration and
+// unsubscription are authenticated by the device's admitting op, evaluated
+// against trust and membership (the plane's own Registry does the verify), so
+// this reuses the exact trust set and op log that back the device authenticator
 // and the login broker.
 //
 // now supplies the verification clock; nil means time.Now (production). It is
-// injectable so a test can pin the cert-verification instant against a
-// frozen-window cert.
-func SubscriptionRoutes(store notify.Store, trust rp.TrustStore, now func() time.Time) http.Handler {
-	h := &notify.Handler{Registry: notify.Registry{Store: store, Trust: trust, Now: now}}
+// injectable so a test can pin the verification instant against a
+// frozen-window op.
+func SubscriptionRoutes(store notify.Store, trust rp.TrustStore, membership rp.Membership, now func() time.Time) http.Handler {
+	h := &notify.Handler{Registry: notify.Registry{Store: store, Trust: trust, Membership: membership, Now: now}}
 	return h.Routes()
 }
 

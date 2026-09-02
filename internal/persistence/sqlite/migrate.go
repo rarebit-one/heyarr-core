@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
@@ -58,7 +59,7 @@ func Migrate(ctx context.Context, db *DB) error {
 
 	// goose creates its bookkeeping table on first use, so a database with no
 	// version yet is version 0 rather than an error.
-	current, err := goose.GetDBVersionContext(ctx, db.Writer())
+	current, err := SchemaVersion(ctx, db)
 	if err != nil {
 		return fmt.Errorf("sqlite: reading schema version: %w", err)
 	}
@@ -86,7 +87,7 @@ func Migrate(ctx context.Context, db *DB) error {
 		return fmt.Errorf("sqlite: applying migrations: %w", err)
 	}
 
-	applied, err := goose.GetDBVersionContext(ctx, db.Writer())
+	applied, err := SchemaVersion(ctx, db)
 	if err != nil {
 		return fmt.Errorf("sqlite: reading schema version after migrating: %w", err)
 	}
@@ -107,12 +108,32 @@ func MigrateDown(ctx context.Context, db *DB) error {
 	return nil
 }
 
-// SchemaVersion reports the version currently applied to the database.
+// SchemaVersion reports the HIGHEST migration applied to the database, which is
+// the number the drift check (#150) and the newer-than-binary guard compare
+// against KnownSchemaVersion.
+//
+// It is deliberately not goose's own GetDBVersion, which answers "the most
+// RECENTLY applied migration". The two agree until a gap-filler lands: the
+// numbering policy above mints out-of-order migrations, and a database at 42
+// that then applies 00022 has 22 as its most recent row while its schema is
+// every migration through 42. Reporting 22 there would make GET /api/v1/system
+// call a fully migrated node twenty migrations "behind" (seen on the reference
+// host with 00022_membership_ops). A database with no goose table yet is at 0.
 func SchemaVersion(ctx context.Context, db *DB) (int64, error) {
 	if err := configureGoose(); err != nil {
 		return 0, err
 	}
-	return goose.GetDBVersionContext(ctx, db.Writer())
+	// GetDBVersion creates the version table when it is missing, which is the
+	// side effect a fresh database needs before the MAX below can be asked.
+	if _, err := goose.GetDBVersionContext(ctx, db.Writer()); err != nil {
+		return 0, err
+	}
+	var v sql.NullInt64
+	if err := db.Writer().QueryRowContext(ctx,
+		`SELECT MAX(version_id) FROM `+goose.TableName()+` WHERE is_applied = 1`).Scan(&v); err != nil {
+		return 0, fmt.Errorf("sqlite: reading the highest applied migration: %w", err)
+	}
+	return v.Int64, nil
 }
 
 // KnownSchemaVersion is the highest migration compiled into this binary.

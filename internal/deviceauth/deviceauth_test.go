@@ -28,6 +28,7 @@ var now = time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 type fixture struct {
 	store *deviceauth.Store
 	clock *fixedClock
+	db    *sqlite.DB
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -52,7 +53,7 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &fixture{store: store, clock: clock}
+	return &fixture{store: store, clock: clock, db: db}
 }
 
 // a user identity and a device, with helpers to mint a cert and a full device
@@ -114,7 +115,7 @@ func TestDeviceAuthenticatesAsItsUser(t *testing.T) {
 	a := newActor(t)
 	f.enrol(t, a)
 
-	got, err := f.store.Verify(context.Background(), a.credential(t, now), now)
+	got, err := f.store.Verify(context.Background(), a.credential(t, now), nil, now)
 	if err != nil {
 		t.Fatalf("a valid device was refused: %v", err)
 	}
@@ -137,7 +138,7 @@ func TestSameDeviceAuthenticatesAtEitherPeer(t *testing.T) {
 	peerB.enrol(t, a)
 
 	for name, f := range map[string]*fixture{"peer-a": peerA, "peer-b": peerB} {
-		got, err := f.store.Verify(context.Background(), a.credential(t, now), now)
+		got, err := f.store.Verify(context.Background(), a.credential(t, now), nil, now)
 		if err != nil {
 			t.Fatalf("%s refused a valid device: %v", name, err)
 		}
@@ -157,7 +158,7 @@ func TestVerifyRefusalsAreDistinct(t *testing.T) {
 	t.Run("unknown user", func(t *testing.T) {
 		f := newFixture(t)
 		a := newActor(t) // never enrolled
-		_, err := f.store.Verify(ctx, a.credential(t, now), now)
+		_, err := f.store.Verify(ctx, a.credential(t, now), nil, now)
 		if !errors.Is(err, deviceauth.ErrUnknownUser) {
 			t.Fatalf("want ErrUnknownUser, got %v", err)
 		}
@@ -169,7 +170,7 @@ func TestVerifyRefusalsAreDistinct(t *testing.T) {
 		f.enrol(t, a)
 		// enrolment.CertLifetime past issue.
 		later := now.Add(enrolment.CertLifetime + time.Hour)
-		_, err := f.store.Verify(ctx, a.credential(t, later), later)
+		_, err := f.store.Verify(ctx, a.credential(t, later), nil, later)
 		if !errors.Is(err, enrolment.ErrExpired) {
 			t.Fatalf("want enrolment.ErrExpired, got %v", err)
 		}
@@ -191,22 +192,56 @@ func TestVerifyRefusalsAreDistinct(t *testing.T) {
 		// Repoint its user field to a's user id so lookup finds a's pinned key.
 		forged = repointCertUser(t, forged, a.userKey)
 		proof, _ := enrolment.SignPossession(a.devicePriv, forged, now, 0)
-		_, err = f.store.Verify(ctx, forged+"~"+proof, now)
+		_, err = f.store.Verify(ctx, forged+"~"+proof, nil, now)
 		if !errors.Is(err, enrolment.ErrBadSignature) {
 			t.Fatalf("want enrolment.ErrBadSignature, got %v", err)
 		}
 	})
 
-	t.Run("device not enrolled", func(t *testing.T) {
+	t.Run("device not yet enrolled is a member on first contact", func(t *testing.T) {
+		// ADR-0068: the pin is the trust root and the genesis-signed add IS the
+		// admission, so a device nobody enrolled here authenticates on first
+		// contact and the view materialises its (unnamed) row. Before ADR-0068
+		// this was ErrUnknownDevice; what still refuses is the admin's tombstone
+		// (the "device revoked" case below) and an unpinned user.
 		f := newFixture(t)
 		a := newActor(t)
 		if _, err := f.store.EnrolUser(ctx, a.userKey, "alice"); err != nil {
 			t.Fatal(err)
 		}
-		// User pinned, device never enrolled.
-		_, err := f.store.Verify(ctx, a.credential(t, now), now)
-		if !errors.Is(err, deviceauth.ErrUnknownDevice) {
-			t.Fatalf("want ErrUnknownDevice, got %v", err)
+		got, err := f.store.Verify(ctx, a.credential(t, now), nil, now)
+		if err != nil {
+			t.Fatalf("first contact: %v", err)
+		}
+		if got.DeviceKey != a.deviceKey || got.AdmittedBy != enrolment.OpHash(a.cert) {
+			t.Fatalf("authenticated = %+v", got)
+		}
+		d, err := f.store.LookupDevice(ctx, a.deviceKey)
+		if err != nil || d.Name != "" || d.Cert != a.cert {
+			t.Fatalf("materialised row = %+v, err = %v", d, err)
+		}
+		ops, err := f.store.Ops(ctx, a.userKey)
+		if err != nil || len(ops) != 1 || ops[0] != a.cert {
+			t.Fatalf("recorded ops = %v, err = %v", ops, err)
+		}
+	})
+
+	t.Run("leaked op without the key leaves nothing behind", func(t *testing.T) {
+		f := newFixture(t)
+		a := newActor(t)
+		if _, err := f.store.EnrolUser(ctx, a.userKey, "alice"); err != nil {
+			t.Fatal(err)
+		}
+		_, impostor, _ := ed25519.GenerateKey(nil)
+		badProof, _ := enrolment.SignPossession(impostor, a.cert, now, 0)
+		if _, err := f.store.Verify(ctx, a.cert+"~"+badProof, nil, now); !errors.Is(err, enrolment.ErrPossessionSignature) {
+			t.Fatalf("want ErrPossessionSignature, got %v", err)
+		}
+		if _, err := f.store.LookupDevice(ctx, a.deviceKey); !errors.Is(err, deviceauth.ErrUnknownDevice) {
+			t.Fatalf("a refused credential materialised a row: %v", err)
+		}
+		if ops, _ := f.store.Ops(ctx, a.userKey); len(ops) != 0 {
+			t.Fatalf("a refused credential recorded ops: %v", ops)
 		}
 	})
 
@@ -217,7 +252,7 @@ func TestVerifyRefusalsAreDistinct(t *testing.T) {
 		if _, err := f.store.RevokeDevice(ctx, a.deviceKey); err != nil {
 			t.Fatal(err)
 		}
-		_, err := f.store.Verify(ctx, a.credential(t, now), now)
+		_, err := f.store.Verify(ctx, a.credential(t, now), nil, now)
 		if !errors.Is(err, deviceauth.ErrDeviceRevoked) {
 			t.Fatalf("want ErrDeviceRevoked, got %v", err)
 		}
@@ -227,7 +262,7 @@ func TestVerifyRefusalsAreDistinct(t *testing.T) {
 		f := newFixture(t)
 		a := newActor(t)
 		f.enrol(t, a)
-		_, err := f.store.Verify(ctx, a.cert, now) // no "~<proof>"
+		_, err := f.store.Verify(ctx, a.cert, nil, now) // no "~<proof>"
 		if !errors.Is(err, deviceauth.ErrMalformedCredential) {
 			t.Fatalf("want ErrMalformedCredential, got %v", err)
 		}
@@ -239,7 +274,7 @@ func TestVerifyRefusalsAreDistinct(t *testing.T) {
 		f.enrol(t, a)
 		_, impostor, _ := ed25519.GenerateKey(nil)
 		badProof, _ := enrolment.SignPossession(impostor, a.cert, now, 0)
-		_, err := f.store.Verify(ctx, a.cert+"~"+badProof, now)
+		_, err := f.store.Verify(ctx, a.cert+"~"+badProof, nil, now)
 		if !errors.Is(err, enrolment.ErrPossessionSignature) {
 			t.Fatalf("want ErrPossessionSignature, got %v", err)
 		}
@@ -252,7 +287,7 @@ func TestVerifyRefusalsAreDistinct(t *testing.T) {
 		// A proof minted at `now` but verified after PossessionTTL.
 		cred := a.credential(t, now)
 		later := now.Add(enrolment.PossessionTTL + time.Minute)
-		_, err := f.store.Verify(ctx, cred, later)
+		_, err := f.store.Verify(ctx, cred, nil, later)
 		if !errors.Is(err, enrolment.ErrPossessionExpired) {
 			t.Fatalf("want ErrPossessionExpired, got %v", err)
 		}
@@ -270,7 +305,7 @@ func TestRevokeUserCascades(t *testing.T) {
 	if _, err := f.store.RevokeUser(ctx, a.userKey); err != nil {
 		t.Fatalf("revoke user: %v", err)
 	}
-	if _, err := f.store.Verify(ctx, a.credential(t, now), now); !errors.Is(err, deviceauth.ErrUnknownUser) {
+	if _, err := f.store.Verify(ctx, a.credential(t, now), nil, now); !errors.Is(err, deviceauth.ErrUnknownUser) {
 		t.Fatalf("after user revocation want ErrUnknownUser, got %v", err)
 	}
 	// The device row went with it (cascade), so the device is unknown too.

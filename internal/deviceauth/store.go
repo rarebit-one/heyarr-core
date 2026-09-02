@@ -78,7 +78,7 @@ type Device struct {
 	// Empty for a device enrolled by a v1 cert (no encryption key bound).
 	EncryptionKey string
 	Name          string
-	Cert          string // the user-signed enrolment cert token
+	Cert          string // the admitting membership op token (a user-signed cert, or a member-signed add — ADR-0068)
 	EnrolledAt    time.Time
 	ExpiresAt     time.Time
 	RevokedAt     *time.Time
@@ -186,67 +186,51 @@ func (s *Store) EnrolUser(ctx context.Context, publicKey, name string) (User, er
 	return User{ID: id, PrincipalID: principalID, PublicKey: rendered, Name: name, EnrolledAt: now}, nil
 }
 
-// EnrolDevice records a device under the user its cert names. The cert is
-// verified against the pinned user key first, so a device cannot be enrolled
-// under a user who did not sign for it, and an unpinned user is refused
-// ErrUnknownUser (enrol the user before its devices).
-func (s *Store) EnrolDevice(ctx context.Context, certToken, name string) (Device, error) {
+// EnrolDevice records a device under the user its admitting op names — the
+// admin path. The op (a user-signed cert, or since ADR-0068 an add signed by
+// any current member) is evaluated against the pinned identity's op log
+// exactly as authentication evaluates it, so a device cannot be enrolled under
+// a user nobody in that identity signed for, and an unpinned user is refused
+// ErrUnknownUser (enrol the user before its devices). A device the view
+// already holds is ErrDeviceExists.
+func (s *Store) EnrolDevice(ctx context.Context, opToken, name string) (Device, error) {
 	now := s.clock.Now().UTC()
 
-	// Read the cert's claimed user without trusting it, then verify against the
-	// pinned key for that user.
-	claimedUser, err := enrolment.CertUser(certToken)
+	op, err := enrolment.VerifyOp(opToken)
 	if err != nil {
 		return Device{}, fmt.Errorf("%w: %s", ErrCertMismatch, err.Error())
 	}
-	user, err := s.LookupUser(ctx, claimedUser)
+	if _, err := s.LookupDevice(ctx, op.Device); err == nil {
+		return Device{}, fmt.Errorf("%w: %s", ErrDeviceExists, op.Device)
+	} else if !errors.Is(err, ErrUnknownDevice) {
+		return Device{}, err
+	}
+	// The evaluation records the op and materialises the row (RecordOps).
+	user, auth, err := s.verifyMembership(ctx, opToken, nil, now)
+	switch {
+	case errors.Is(err, ErrUnknownUser):
+		return Device{}, err
+	case err != nil:
+		return Device{}, fmt.Errorf("%w: %s", ErrCertMismatch, err.Error())
+	}
+	device, err := s.memberDevice(ctx, user, auth.DeviceKey)
 	if err != nil {
 		return Device{}, err
 	}
-	pinned, err := identity.ParsePublicKey(user.PublicKey)
-	if err != nil {
-		return Device{}, fmt.Errorf("%w: pinned user key: %s", ErrMalformedKey, err.Error())
+	if err := s.setDeviceName(ctx, device.ID, name); err != nil {
+		return Device{}, err
 	}
-	cert, err := enrolment.VerifyCert(certToken, pinned, now)
-	if err != nil {
-		return Device{}, fmt.Errorf("%w: %s", ErrCertMismatch, err.Error())
-	}
+	device.Name = name
+	return device, nil
+}
 
-	tx, err := s.writer.BeginTx(ctx, nil)
-	if err != nil {
-		return Device{}, fmt.Errorf("deviceauth: beginning transaction: %w", err)
+// setDeviceName names a device row. A name is display state, not identity: it
+// carries no event of its own (the materialisation already emitted enrolment).
+func (s *Store) setDeviceName(ctx context.Context, id, name string) error {
+	if _, err := s.writer.ExecContext(ctx, `UPDATE device_identities SET name = ? WHERE id = ?`, name, id); err != nil {
+		return fmt.Errorf("deviceauth: naming device: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-
-	var existing string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM device_identities WHERE device_key = ?`, cert.Device).Scan(&existing)
-	switch {
-	case err == nil:
-		return Device{}, fmt.Errorf("%w: %s", ErrDeviceExists, cert.Device)
-	case !errors.Is(err, sql.ErrNoRows):
-		return Device{}, fmt.Errorf("deviceauth: checking for an existing device: %w", err)
-	}
-
-	id := uuid.Must(uuid.NewV7()).String()
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO device_identities (id, user_id, device_key, encryption_key, name, cert, enrolled_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, user.ID, cert.Device, cert.DeviceEnc, name, certToken, now.Format(timeFormat), cert.ExpiresAt.UTC().Format(timeFormat)); err != nil {
-		return Device{}, fmt.Errorf("deviceauth: enrolling device: %w", err)
-	}
-	ev, err := s.events.EmitTx(ctx, tx, events.TypeDeviceEnrolled, "device_identity", id,
-		map[string]any{"device_key": cert.Device, "user_id": user.ID, "name": name})
-	if err != nil {
-		return Device{}, fmt.Errorf("deviceauth: recording enrolment: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return Device{}, fmt.Errorf("deviceauth: committing: %w", err)
-	}
-	s.events.Publish(ev)
-	return Device{
-		ID: id, UserID: user.ID, DeviceKey: cert.Device, EncryptionKey: cert.DeviceEnc,
-		Name: name, Cert: certToken, EnrolledAt: now, ExpiresAt: cert.ExpiresAt.UTC(),
-	}, nil
+	return nil
 }
 
 // LookupUser returns the pinned user for a rendered public key. It joins the

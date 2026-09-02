@@ -11,14 +11,27 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/enrolment"
+	"github.com/rarebit-one/voidbind-go/rp"
 )
 
-// DeviceVerifier authenticates a device credential (ADR-0048): a user-signed
-// enrolment cert plus a proof the caller holds the device key, resolved offline
-// against a pinned user key. It is an interface so the server can be wired
-// without the identity store in tests, mirroring PeerMembership.
+// DeviceVerifier authenticates a device credential (ADR-0048, ADR-0068): the
+// device's admitting membership op plus a proof the caller holds the device
+// key, evaluated offline against a pinned genesis key and the identity's op
+// log merged with the ops the device presented (the Voidbind-Membership
+// header). It is an interface so the server can be wired without the identity
+// store in tests, mirroring PeerMembership.
 type DeviceVerifier interface {
-	Verify(ctx context.Context, credential string, now time.Time) (deviceauth.Authenticated, error)
+	Verify(ctx context.Context, credential string, presented []string, now time.Time) (deviceauth.Authenticated, error)
+}
+
+// presentedMembership reads the ops a device sent beside its credential
+// (rp.MembershipHeader, ADR-0068) so a device admitted by a member this node
+// has never met is judged with the evidence it carries. Absent is no ops; over
+// rp.MaxPresentedOps is a refusal, not a truncation — a device that sends more
+// than the cap is misbehaving, and silently dropping some of its ops could turn
+// an authorised admission into an unjudgeable one.
+func presentedMembership(r *http.Request) ([]string, error) {
+	return rp.ParseMembershipHeader(r.Header.Get(rp.MembershipHeader))
 }
 
 // deviceCredential extracts the value presented under the "Device" scheme, the
@@ -44,7 +57,8 @@ func deviceCredential(r *http.Request) (string, bool) {
 // caller.
 func deviceFailureReason(err error) string {
 	switch {
-	case errors.Is(err, deviceauth.ErrMalformedCredential), errors.Is(err, enrolment.ErrMalformed):
+	case errors.Is(err, deviceauth.ErrMalformedCredential), errors.Is(err, enrolment.ErrMalformed),
+		errors.Is(err, deviceauth.ErrMalformedOp):
 		return "device_malformed"
 	case errors.Is(err, deviceauth.ErrUnknownUser):
 		return "device_unknown_user"
@@ -54,6 +68,12 @@ func deviceFailureReason(err error) string {
 		return "device_revoked"
 	case errors.Is(err, deviceauth.ErrCertMismatch):
 		return "device_cert_mismatch"
+	case errors.Is(err, rp.ErrRemoved):
+		return "device_removed"
+	case errors.Is(err, rp.ErrNotMember):
+		return "device_not_member"
+	case errors.Is(err, rp.ErrTooManyOps):
+		return "device_too_many_ops"
 	case errors.Is(err, enrolment.ErrExpired):
 		return "device_cert_expired"
 	case errors.Is(err, enrolment.ErrNotYetValid):
@@ -130,7 +150,12 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		// nothing to authenticate against, and a device credential falls through
 		// to the 401 any unrecognised credential gets.
 		if cred, ok := deviceCredential(r); ok && s.deviceV != nil {
-			id, err := s.authenticateDevice(r.Context(), cred)
+			presented, err := presentedMembership(r)
+			if err != nil {
+				s.rejectCredential(w, r, deviceFailureReason(err))
+				return
+			}
+			id, err := s.authenticateDevice(r.Context(), cred, presented)
 			if err != nil {
 				s.rejectCredential(w, r, deviceFailureReason(err))
 				return
@@ -172,8 +197,8 @@ func (s *Server) rejectCredential(w http.ResponseWriter, r *http.Request, reason
 // CLOSED: an error keeps the device on the read floor rather than opening it,
 // the same stance the session lift took. Anything finer than write is a
 // capability grant (internal/grant, #304), not a scope.
-func (s *Server) authenticateDevice(ctx context.Context, credential string) (auth.Identity, error) {
-	a, err := s.deviceV.Verify(ctx, credential, s.now())
+func (s *Server) authenticateDevice(ctx context.Context, credential string, presented []string) (auth.Identity, error) {
+	a, err := s.deviceV.Verify(ctx, credential, presented, s.now())
 	if err != nil {
 		return auth.Identity{}, err
 	}

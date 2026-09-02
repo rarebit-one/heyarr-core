@@ -128,6 +128,15 @@ const (
 	TypeDeviceEnrolled = "identity.device.enrolled"
 	TypeDeviceRevoked  = "identity.device.revoked"
 
+	// ADR-0068 (voidbind-go ADR-0007): an identity is a set of device keys
+	// evolved by member-signed ops. Recording ops this node had not seen is a
+	// state transition of the op log; a device the evaluation removes is
+	// tombstoned exactly as an admin revocation is, but by a member's signed
+	// word rather than the admin's, so it is a distinct type — "who removed this
+	// device?" has two answers and the log tells them apart.
+	TypeMembershipRecorded = "identity.membership.recorded"
+	TypeDeviceRemoved      = "identity.device.removed"
+
 	// A follow-management grant (ADR-0061, M12) is the interim, operator-issued
 	// authorization that lifts a web-login session (ADR-0053) from the read floor
 	// to write, so a trusted personal device can manage followed sources before

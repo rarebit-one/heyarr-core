@@ -20,6 +20,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/voidbind-go/rp"
 )
 
 // This proves the acceptance sentence's first half at the HTTP boundary: a
@@ -259,5 +260,65 @@ func TestSchemesDoNotCrossOver(t *testing.T) {
 
 	if code := h.get(t, "Bearer "+credential()); code != http.StatusUnauthorized {
 		t.Fatalf("a device credential under Bearer should be 401, got %d", code)
+	}
+}
+
+// ADR-0068 meets ADR-0065: a device admitted by ANOTHER device (not genesis)
+// authenticates on first contact with the ops it presents, and write scope is
+// keyed on ITS OWN admitted key — authorising it lifts it and nobody else,
+// and the device that admitted it stays on the floor.
+func TestMemberAdmittedDeviceEarnsWriteOnItsOwnKey(t *testing.T) {
+	t.Parallel()
+	mgmt := stubMgmt{}
+	h := newDeviceAuthHarnessWithMgmt(t, mgmt)
+
+	u, genesisPriv, err := enrolment.GenerateUserIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.EnrolUser(context.Background(), u.UserID(), "owner"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	pubA, privA, _ := ed25519.GenerateKey(nil)
+	pubB, privB, _ := ed25519.GenerateKey(nil)
+	devA, devB := identity.FormatPublicKey(pubA), identity.FormatPublicKey(pubB)
+	addA, err := enrolment.SignOp(genesisPriv, u.UserID(), enrolment.OpAdd, devA, "", nil, now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addB, err := enrolment.SignOp(privA, u.UserID(), enrolment.OpAdd, devB, "", []string{enrolment.OpHash(addA)}, now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(op string, priv ed25519.PrivateKey, presented ...string) int {
+		t.Helper()
+		proof, err := enrolment.SignPossession(priv, op, time.Now().UTC(), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, _ := http.NewRequest(http.MethodPost, h.ts.URL+"/api/v1/probe", nil)
+		req.Header.Set("Authorization", "Device "+op+"~"+proof)
+		if len(presented) > 0 {
+			req.Header.Set(rp.MembershipHeader, rp.FormatMembershipHeader(presented))
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// B's first contact, carrying A's admission: authenticated, on the floor.
+	if code := post(addB, privB, addA); code != http.StatusForbidden {
+		t.Fatalf("B first contact on a write route: want 403 (authenticated, floor), got %d", code)
+	}
+	mgmt[devB] = true
+	if code := post(addB, privB); code != http.StatusCreated {
+		t.Fatalf("B authorised: want 201, got %d", code)
+	}
+	if code := post(addA, privA); code != http.StatusForbidden {
+		t.Fatalf("A (admitted B, never authorised): want 403, got %d", code)
 	}
 }
