@@ -317,3 +317,42 @@ func TestMigrationsUpgradeAMilestoneOneEraDatabase(t *testing.T) {
 	// more than a comment.
 	migrateAllTheWayDown(t, db)
 }
+
+// A gap-filler applied out of order (00022 on a database already at 42) must
+// leave the reported schema version at the HIGHEST applied migration, not the
+// most recently applied one: otherwise a fully migrated node reports itself
+// twenty migrations behind (#150's drift check, seen on the reference host).
+func TestSchemaVersionIsTheHighestAppliedMigration(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	db := openTestDB(t)
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	known, err := KnownSchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Forge the state the reference host was in: every migration but the
+	// gap-filler applied.
+	if _, err := db.Writer().ExecContext(ctx, `DROP TABLE membership_ops`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Writer().ExecContext(ctx, `DELETE FROM goose_db_version WHERE version_id = 22`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("applying the gap-filler out of order: %v", err)
+	}
+	var n int
+	if err := db.Reader().QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE name = 'membership_ops'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("membership_ops after the out-of-order apply: n=%d err=%v", n, err)
+	}
+	got, err := SchemaVersion(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != known {
+		t.Fatalf("SchemaVersion = %d after applying 00022 out of order, want %d (the highest applied)", got, known)
+	}
+}
