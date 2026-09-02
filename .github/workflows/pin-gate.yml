@@ -1,0 +1,34 @@
+name: Pin Gate
+
+# Thin caller for the org-shared Actions-pinning gate (zizmor + pinact) in
+# rarebit-one/.github. Fails a PR that introduces a third-party action referenced
+# by a mutable tag or branch instead of a full commit SHA.
+#
+# The reusable was written to be copied into every repo -- its caller header says
+# so -- but this repo had never adopted it, so its workflows drifted to mutable
+# tags (@v4/@v7/@v9). Verified before adding: pinact has just pinned every
+# third-party action on the default branch, so this gate is green on day one
+# rather than reding every open PR. First-party `rarebit-one/.github@main`
+# references are ignored by the gate's synthesized config.
+#
+# GHA-012 (github-actions-homelab-migration deep-audit).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: pin-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pin-check:
+    permissions:
+      contents: read
+    uses: rarebit-one/.github/.github/workflows/pin-check.yml@main
+    # NOT routed to the homelab, deliberately: this gate installs zizmor with
+    # `pipx`, which GitHub-hosted images ship and the homelab agents do not, so
+    # a homelab run dies with `pipx: command not found` (exit 127) -- a red gate
+    # for a missing tool, not a real finding, which is how a gate stops being read.
