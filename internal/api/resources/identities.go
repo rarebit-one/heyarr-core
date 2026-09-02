@@ -39,17 +39,24 @@ func identityUserFromStore(u deviceauth.User) IdentityUser {
 }
 
 // identityDeviceFromStore renders an enrolled device as the wire shape, minus
-// the cert (see IdentityDevice).
+// the admitting op token but with its provenance (see IdentityDevice). A row
+// whose op no longer parses — which cannot authenticate either — renders with
+// empty provenance rather than failing the listing that would show it.
 func identityDeviceFromStore(d deviceauth.Device) IdentityDevice {
-	return IdentityDevice{
-		ID:         d.ID,
-		UserID:     d.UserID,
-		DeviceKey:  d.DeviceKey,
-		Name:       d.Name,
-		EnrolledAt: d.EnrolledAt.UTC(),
-		ExpiresAt:  d.ExpiresAt.UTC(),
-		RevokedAt:  utcPtr(d.RevokedAt),
+	out := IdentityDevice{
+		ID:            d.ID,
+		UserID:        d.UserID,
+		DeviceKey:     d.DeviceKey,
+		EncryptionKey: d.EncryptionKey,
+		Name:          d.Name,
+		EnrolledAt:    d.EnrolledAt.UTC(),
+		ExpiresAt:     d.ExpiresAt.UTC(),
+		RevokedAt:     utcPtr(d.RevokedAt),
 	}
+	if op, err := d.Admission(); err == nil {
+		out.AdmittedBy, out.AdmittingOp = op.By, op.Hash
+	}
+	return out
 }
 
 // enrolUserRequest is the POST /identities/users body. The public key is the

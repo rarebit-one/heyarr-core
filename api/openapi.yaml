@@ -6427,26 +6427,46 @@ components:
     IdentityDevice:
       type: object
       description: |
-        A device key a user has vouched for (§40, ADR-0048). The enrolment cert
-        is deliberately absent: authentication re-verifies the presented cert
-        against the pinned user key rather than trusting a stored copy.
-      required: [id, user_id, device_key, name, enrolled_at, expires_at]
+        A device key a user has vouched for (§40, ADR-0048, ADR-0068). The
+        admitting op token is deliberately absent: authentication evaluates
+        the presented op against the identity's op log rather than trusting a
+        stored copy. Its provenance is present: who admitted the device, and
+        which op.
+      required: [id, user_id, device_key, name, admitted_by, admitting_op, enrolled_at, expires_at]
       properties:
         id: { type: string }
         user_id: { type: string }
         device_key:
           type: string
           description: The device's key, `ed25519:<64 hex characters>`.
+        encryption_key:
+          type: string
+          description: |
+            The device's X25519 encryption key, `x25519:<hex>`, when its
+            admission bound one — the recipient a space key is wrapped for
+            (ADR-0049), and what `heyarr device revoke` re-keys away from.
         name: { type: string }
+        admitted_by:
+          type: string
+          description: |
+            The signer of the device's admitting op: the identity's genesis key
+            (`ed25519:<hex>`, equal to the user's key) for a cert-era or
+            first-device admission, or the key of the member device that
+            admitted it (ADR-0068). Empty only for a row whose op no longer parses.
+        admitting_op:
+          type: string
+          description: The hash (`sha256:<hex>`) of the admitting op.
         enrolled_at: { type: string, format: date-time }
         expires_at:
           type: string
           format: date-time
-          description: The cert's expiry, for listing and pruning.
+          description: The admitting op's expiry, for listing and pruning.
         revoked_at:
           type: [string, "null"]
           format: date-time
-          description: Set once revoked; the row is kept so a re-presented cert is refused.
+          description: |
+            Set once revoked — by the admin (`DELETE`), or by a member's remove
+            op the evaluation honoured; the row is kept so a re-presented op is refused.
 
     SystemInfo:
       type: object

@@ -580,62 +580,13 @@ space may re-key it), and at least one recipient must remain.`,
 				return fmt.Errorf("name at least one recipient to revoke with --revoke")
 			}
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				mgr, err := openSpace(ctx, c, *deviceDir, spaceID)
+				view, err := rotateSpace(ctx, c, *deviceDir, spaceID, revoke)
 				if err != nil {
 					return err
 				}
-				// Materialise the current state under the OLD key BEFORE rotating —
-				// after Rotate the manager holds the new key and cannot read the old
-				// changes. The snapshot below re-encrypts this state under the new key.
-				st, changes, _, err := materialise(ctx, c, mgr, spaceID)
-				if err != nil {
-					return err
-				}
-				keys, err := c.WrappedKeys(ctx, spaceID)
-				if err != nil {
-					return err
-				}
-				remaining, revoked, err := partitionRecipients(keys, revoke)
-				if err != nil {
-					return err
-				}
-				wrapped, err := mgr.Rotate(spaceID, remaining)
-				if err != nil {
-					return err
-				}
-				inputs := make([]apiclient.WrappedKeyInput, 0, len(wrapped))
-				for _, w := range wrapped {
-					inputs = append(inputs, apiclient.WrappedKeyInput{Recipient: w.Recipient, Wrapped: w.Wrapped})
-				}
-				if err := c.RewrapKeys(ctx, spaceID, inputs); err != nil {
-					return err
-				}
-				for _, r := range revoked {
-					if err := c.RevokeKey(ctx, spaceID, r); err != nil {
-						return err
-					}
-				}
-				// A snapshot of the current state under the NEW key, so remaining
-				// devices reach it without the old key; then compact the old,
-				// now-unreadable changes the snapshot subsumes.
-				snap, err := statesync.EncodeSnapshot(mgr, spaceID, protocol.Heads(changes), st)
-				if err != nil {
-					return err
-				}
-				snapID, err := c.PushSnapshot(ctx, snap)
-				if err != nil {
-					return err
-				}
-				dropped, err := c.Compact(ctx, spaceID, snap.Frontier)
-				if err != nil {
-					return err
-				}
-				remainIDs := recipientIDs(remaining)
+				revoked, remainIDs, snapID, dropped := view.Revoked, view.Remaining, view.SnapshotID, view.Dropped
 				if flags.asJSON {
-					return emitJSON(cmd.OutOrStdout(), spaceRotateView{
-						SpaceID: spaceID, Revoked: revoked, Remaining: remainIDs,
-						SnapshotID: snapID, Dropped: dropped,
-					})
+					return emitJSON(cmd.OutOrStdout(), view)
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "space %s re-keyed\n\n  revoked %d recipient(s):\n", spaceID, len(revoked))
 				for _, r := range revoked {
@@ -650,6 +601,69 @@ space may re-key it), and at least one recipient must remain.`,
 	flags.register(cmd)
 	cmd.Flags().StringArrayVar(&revoke, "revoke", nil, "a recipient (x25519:<hex>) to revoke; repeatable")
 	return cmd
+}
+
+// rotateSpace is the whole of `space rotate` (§41, ADR-0049, #361) as a
+// function, so that revoking a device (`device revoke`, ADR-0068) can re-key
+// each space that device could read without a second copy of the sequence:
+// materialise under the OLD key, mint a fresh one, re-wrap for the remaining
+// recipients, delete the revoked copies, snapshot under the new key, compact.
+// This device must itself be a current recipient of the space.
+func rotateSpace(ctx context.Context, c *apiclient.Client, deviceDir, spaceID string, revoke []string) (spaceRotateView, error) {
+	mgr, err := openSpace(ctx, c, deviceDir, spaceID)
+	if err != nil {
+		return spaceRotateView{}, err
+	}
+	// Materialise the current state under the OLD key BEFORE rotating — after
+	// Rotate the manager holds the new key and cannot read the old changes. The
+	// snapshot below re-encrypts this state under the new key.
+	st, changes, _, err := materialise(ctx, c, mgr, spaceID)
+	if err != nil {
+		return spaceRotateView{}, err
+	}
+	keys, err := c.WrappedKeys(ctx, spaceID)
+	if err != nil {
+		return spaceRotateView{}, err
+	}
+	remaining, revoked, err := partitionRecipients(keys, revoke)
+	if err != nil {
+		return spaceRotateView{}, err
+	}
+	wrapped, err := mgr.Rotate(spaceID, remaining)
+	if err != nil {
+		return spaceRotateView{}, err
+	}
+	inputs := make([]apiclient.WrappedKeyInput, 0, len(wrapped))
+	for _, w := range wrapped {
+		inputs = append(inputs, apiclient.WrappedKeyInput{Recipient: w.Recipient, Wrapped: w.Wrapped})
+	}
+	if err := c.RewrapKeys(ctx, spaceID, inputs); err != nil {
+		return spaceRotateView{}, err
+	}
+	for _, r := range revoked {
+		if err := c.RevokeKey(ctx, spaceID, r); err != nil {
+			return spaceRotateView{}, err
+		}
+	}
+	// A snapshot of the current state under the NEW key, so remaining devices
+	// reach it without the old key; then compact the old, now-unreadable
+	// changes the snapshot subsumes.
+	snap, err := statesync.EncodeSnapshot(mgr, spaceID, protocol.Heads(changes), st)
+	if err != nil {
+		return spaceRotateView{}, err
+	}
+	snapID, err := c.PushSnapshot(ctx, snap)
+	if err != nil {
+		return spaceRotateView{}, err
+	}
+	dropped, err := c.Compact(ctx, spaceID, snap.Frontier)
+	if err != nil {
+		return spaceRotateView{}, err
+	}
+	return spaceRotateView{
+		SpaceID: spaceID, Revoked: revoked, Remaining: recipientIDs(remaining),
+		SnapshotID: snapID, Dropped: dropped,
+	}, nil
 }
 
 // partitionRecipients splits a space's current wrapped-key recipients into those

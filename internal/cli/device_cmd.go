@@ -25,7 +25,7 @@ import (
 // directory belongs to the service account. Reading the server's configuration
 // here would be the first step towards putting the key in it (§38, §40,
 // ADR-0032).
-func newDeviceCommand(opts Options) *cobra.Command {
+func newDeviceCommand(opts Options, configPath *string) *cobra.Command {
 	var dir string
 	cmd := &cobra.Command{
 		Use:   "device",
@@ -50,6 +50,7 @@ token scope (ADR-0011) until Milestone 8. The key exists now so that Milestone
 		newDeviceListCommand(opts, &dir),
 		newDeviceShowCommand(opts, &dir),
 		newDeviceRemoveCommand(opts, &dir),
+		newDeviceRevokeCommand(opts, configPath, &dir),
 		newDeviceMCPCommand(opts, &dir),
 		newDeviceGatewayCommand(opts, &dir),
 	)
