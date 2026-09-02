@@ -1,0 +1,52 @@
+{
+  "name": "foreign-usr",
+  "description": "an op naming another identity is rejected even though its signature verifies",
+  "usr": "ed25519:f947b10c8089aa8fed2d435fae069d0ca1513b33691955ae963dfe8bc5b398c4",
+  "now": 1788267600,
+  "keys": {
+    "A": {
+      "sign_seed": "5a855e9adc99a1ed10fbe04f44132d9d04885edf1a92e2e16828f825ea167d06",
+      "enc_seed": "99e1e58af901d759e6969fefe3c3fa47d9cdef954ab64e21fc990c5bae45d35c",
+      "id": "ed25519:44f255376bd10821f82b0f9f568504caaf6c1583c65e685d66d05ec3aac3d789"
+    },
+    "B": {
+      "sign_seed": "9493d01d80c72ec0770529a5125cd60fd4bfc19b75662b2ca9ff45a417b344f2",
+      "enc_seed": "32338a06d4f67a664fcaabbf1e98c1e46f2b5750f2270bd4af127355ed560619",
+      "id": "ed25519:ce9c83f13c6a06666665e0471d45c0b4d4107d892e8ddb4de7ac27520e36f37d"
+    },
+    "genesis": {
+      "sign_seed": "c24bb87672097fd3292251030126197ba061ffb69b9b67b0786318f627fb132c",
+      "id": "ed25519:f947b10c8089aa8fed2d435fae069d0ca1513b33691955ae963dfe8bc5b398c4"
+    }
+  },
+  "ops": [
+    {
+      "label": "add-B-foreign",
+      "token": "eyJ2IjozLCJ1c3IiOiJlZDI1NTE5OjQxODBhM2IzMGY3YTQwNjA1MTY2YzJhMWM3NTQ4NWFiNDg5YThiNmM2NmFjMzBiZTZkM2M5MTExOGMxNDBmZDQiLCJvcCI6ImFkZCIsImRldiI6ImVkMjU1MTk6Y2U5YzgzZjEzYzZhMDY2NjY2NjVlMDQ3MWQ0NWMwYjRkNDEwN2Q4OTJlOGRkYjRkZTdhYzI3NTIwZTM2ZjM3ZCIsImRlbmMiOiJ4MjU1MTk6MzIzMzhhMDZkNGY2N2E2NjRmY2FhYmJmMWU5OGMxZTQ2ZjJiNTc1MGYyMjcwYmQ0YWYxMjczNTVlZDU2MDYxOSIsImJ5IjoiZWQyNTUxOTo0MTgwYTNiMzBmN2E0MDYwNTE2NmMyYTFjNzU0ODVhYjQ4OWE4YjZjNjZhYzMwYmU2ZDNjOTExMThjMTQwZmQ0IiwicHJldiI6W10sImlhdCI6MTc4ODI2NDAwMCwiZXhwIjoxNzk2MDQwMDAwfQ.sEHGH74_mM3HKQIG5qrb1KUl4hmCK4qK9Dq2rBfajWda5XKWadEcr1F-rRqmw4RqwK90obeQa5EGfClAAPgEBg",
+      "hash": "sha256:82706853b91d88d4df2308db39f6468b4753c4ca367605cb422804595428f4a1"
+    },
+    {
+      "label": "add-A",
+      "token": "eyJ2IjozLCJ1c3IiOiJlZDI1NTE5OmY5NDdiMTBjODA4OWFhOGZlZDJkNDM1ZmFlMDY5ZDBjYTE1MTNiMzM2OTE5NTVhZTk2M2RmZThiYzViMzk4YzQiLCJvcCI6ImFkZCIsImRldiI6ImVkMjU1MTk6NDRmMjU1Mzc2YmQxMDgyMWY4MmIwZjlmNTY4NTA0Y2FhZjZjMTU4M2M2NWU2ODVkNjZkMDVlYzNhYWMzZDc4OSIsImRlbmMiOiJ4MjU1MTk6OTllMWU1OGFmOTAxZDc1OWU2OTY5ZmVmZTNjM2ZhNDdkOWNkZWY5NTRhYjY0ZTIxZmM5OTBjNWJhZTQ1ZDM1YyIsImJ5IjoiZWQyNTUxOTpmOTQ3YjEwYzgwODlhYThmZWQyZDQzNWZhZTA2OWQwY2ExNTEzYjMzNjkxOTU1YWU5NjNkZmU4YmM1YjM5OGM0IiwicHJldiI6W10sImlhdCI6MTc4ODI2NDAwMCwiZXhwIjoxNzk2MDQwMDAwfQ._6NQ53HSNPWvzQQVNbB2mEnGBwI__2fDvZ50OOMbiNGoFDPLPDSunF4ntlIvf3xnexcx8YAqCShYTszzC7KcDw",
+      "hash": "sha256:9646b491b73e060c51bdd9e3b69b89ea83fc2e5a66c3b35141ec1e0c578a8fc7"
+    }
+  ],
+  "expect": {
+    "members": {
+      "ed25519:44f255376bd10821f82b0f9f568504caaf6c1583c65e685d66d05ec3aac3d789": {
+        "admitted_by": "sha256:9646b491b73e060c51bdd9e3b69b89ea83fc2e5a66c3b35141ec1e0c578a8fc7",
+        "denc": "x25519:99e1e58af901d759e6969fefe3c3fa47d9cdef954ab64e21fc990c5bae45d35c",
+        "admitted_at": 1788264000,
+        "expires": 1796040000
+      }
+    },
+    "removed": [],
+    "heads": [
+      "sha256:9646b491b73e060c51bdd9e3b69b89ea83fc2e5a66c3b35141ec1e0c578a8fc7"
+    ],
+    "rejected": {
+      "sha256:82706853b91d88d4df2308db39f6468b4753c4ca367605cb422804595428f4a1": "foreign_usr"
+    },
+    "ineffective": {}
+  }
+}

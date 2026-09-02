@@ -1,14 +1,19 @@
 // Package enrol serves POST /enrol — a paired device enrolling itself at a peer
-// on the strength of its own credential (ADR-0067).
+// on the strength of its own credential (ADR-0067) — and the membership routes
+// beside it, GET/POST /membership/{usr}, through which devices and the node
+// exchange the signed ops an identity's device set is evaluated from
+// (ADR-0068).
 //
-// After pairing (ADR-0022; the Voidbind relay, ADR-0066) a phone holds a cert
-// the user signed for its key. Before this route the peer honoured that cert
-// only after an ADMIN posted it to /api/v1/identities/devices — a CLI or curl
-// step in the middle of what should be one tap. The cert already proves the
-// pinned user vouched for the device, and a possession proof proves the caller
-// holds the key; together they are exactly what the Device scheme verifies on
-// every request. So the route verifies them the same way, through the same
-// code (deviceauth.Store.SelfEnrol), and records the device.
+// After pairing (ADR-0022; the Voidbind relay, ADR-0066) a phone holds its
+// admitting op: a cert the user signed for its key or, since ADR-0068, an add
+// signed by any current member of the identity. Before this route the peer
+// honoured that only after an ADMIN posted it to /api/v1/identities/devices —
+// a CLI or curl step in the middle of what should be one tap. The op, evaluated
+// with the ops the device knows, already proves a member of the pinned identity
+// vouched for the device, and a possession proof proves the caller holds the
+// key; together they are exactly what the Device scheme verifies on every
+// request. So the route verifies them the same way, through the same code
+// (deviceauth.Store.SelfEnrol), and names the device.
 //
 // It adds no authority. ADR-0032's enrol-before-trust gate is the USER pin,
 // and it holds: a cert from a user this peer has not pinned is refused. The
@@ -38,12 +43,17 @@ import (
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
+	"github.com/rarebit-one/heyarr-core/internal/enrolment"
+	"github.com/rarebit-one/voidbind-go/rp"
 )
 
-// maxRequestBody bounds the body. A cert is a few hundred bytes and a proof
-// under two hundred; 16 KiB is generous headroom and refuses anything abusive,
-// on a route that, being unauthenticated, must not buffer what it is sent.
-const maxRequestBody = 16 << 10
+// maxRequestBody bounds the body of every route here. An op is under a
+// kilobyte, a proof under two hundred bytes, and a device presents at most
+// rp.MaxPresentedOps (64) ops beside its own, so 96 KiB holds the largest
+// honest request with headroom and refuses anything abusive — on routes that,
+// being unauthenticated, must not buffer what they are sent. (ADR-0067's
+// 16 KiB held one cert and one proof; ADR-0068 added the op list.)
+const maxRequestBody = 96 << 10
 
 // rejectedDetail is the one thing a refused caller learns — the same sentence
 // the authenticate middleware uses, so the two routes cannot be told apart by
@@ -77,28 +87,53 @@ func New(opts Options) (*Handler, error) {
 	return &Handler{identities: opts.Identities, log: log.With("component", "enrol")}, nil
 }
 
-// Mount registers the route on an unauthenticated router (an httpapi.MountFunc).
+// Mount registers the routes on an unauthenticated router (an httpapi.MountFunc).
 func (h *Handler) Mount(r chi.Router) {
 	r.Post(httpapi.EnrolPath, h.handle)
+	r.Get(httpapi.MembershipPrefix+"/{usr}", h.getMembership)
+	r.Post(httpapi.MembershipPrefix+"/{usr}", h.postMembership)
 }
 
-// request is the POST /enrol body: the user-signed cert, a fresh possession
-// proof over it (enrolment.SignPossession — the same proof the Device scheme
-// takes after the "~"), and a display name for the device.
+// request is the POST /enrol body: the device's admitting op — under `op`, or
+// under `cert` as ADR-0067 clients send it (a v2 cert IS a genesis add, and
+// either field carries either token) — a fresh possession proof over it
+// (enrolment.SignPossession — the same proof the Device scheme takes after the
+// "~"), a display name for the device, and optionally the membership ops the
+// device knows (`ops`), merged into the evaluation exactly as the
+// Voidbind-Membership header is on an authenticated request. A device admitted
+// by a member this node has never met MUST send that member's admission here
+// (or in the header), or its own admission cites a past the node cannot judge.
 type request struct {
-	Cert  string `json:"cert"`
-	Proof string `json:"proof"`
-	Name  string `json:"name"`
+	Cert  string   `json:"cert,omitempty"`
+	Op    string   `json:"op,omitempty"`
+	Proof string   `json:"proof"`
+	Name  string   `json:"name"`
+	Ops   []string `json:"ops,omitempty"`
+}
+
+// credential resolves the admitting op from whichever field carried it. Both
+// set and different is a malformed request: the proof binds to exactly one.
+func (b request) credential() (string, error) {
+	switch {
+	case b.Op != "" && b.Cert != "" && b.Op != b.Cert:
+		return "", errors.New(`"op" and "cert" name different tokens; send the admitting op under one of them`)
+	case b.Op != "":
+		return b.Op, nil
+	default:
+		return b.Cert, nil
+	}
 }
 
 // Enrolled is the response: the device as the peer now knows it. It is the same
 // shape /api/v1/identities/devices renders, so a client has one device record
-// to understand.
+// to understand, plus the hash of the op that admitted it (ADR-0068) — what a
+// device cites as its own admission.
 type Enrolled struct {
 	DeviceKey     string    `json:"device_key"`
 	EncryptionKey string    `json:"encryption_key,omitempty"`
 	Name          string    `json:"name"`
 	User          string    `json:"user"`
+	AdmittedBy    string    `json:"admitted_by"`
 	EnrolledAt    time.Time `json:"enrolled_at"`
 	ExpiresAt     time.Time `json:"expires_at"`
 }
@@ -113,7 +148,23 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = "device"
 	}
-	res, err := h.identities.SelfEnrol(r.Context(), body.Cert, body.Proof, name)
+	opToken, err := body.credential()
+	if err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	presented, err := rp.ParseMembershipHeader(r.Header.Get(rp.MembershipHeader))
+	if err == nil && len(body.Ops) > 0 {
+		presented = enrolment.Merge(presented, body.Ops)
+		if len(presented) > rp.MaxPresentedOps {
+			err = rp.ErrTooManyOps
+		}
+	}
+	if err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(fmt.Sprintf("at most %d membership ops may be presented", rp.MaxPresentedOps)))
+		return
+	}
+	res, err := h.identities.SelfEnrol(r.Context(), opToken, body.Proof, name, presented)
 	if err != nil {
 		h.log.Warn("rejected a self-enrolment",
 			"request_id", httpapi.RequestIDFrom(r.Context()),
@@ -135,6 +186,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		EncryptionKey: device.EncryptionKey,
 		Name:          device.Name,
 		User:          user.PublicKey,
+		AdmittedBy:    enrolment.OpHash(device.Cert),
 		EnrolledAt:    device.EnrolledAt,
 		ExpiresAt:     device.ExpiresAt,
 	})

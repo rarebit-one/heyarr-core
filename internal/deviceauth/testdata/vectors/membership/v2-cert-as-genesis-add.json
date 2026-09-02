@@ -1,0 +1,72 @@
+{
+  "name": "v2-cert-as-genesis-add",
+  "description": "a v2 cert (and a v1) is a genesis add with no prev: its device is a member and can admit",
+  "usr": "ed25519:f947b10c8089aa8fed2d435fae069d0ca1513b33691955ae963dfe8bc5b398c4",
+  "now": 1788267600,
+  "keys": {
+    "A": {
+      "sign_seed": "5a855e9adc99a1ed10fbe04f44132d9d04885edf1a92e2e16828f825ea167d06",
+      "enc_seed": "99e1e58af901d759e6969fefe3c3fa47d9cdef954ab64e21fc990c5bae45d35c",
+      "id": "ed25519:44f255376bd10821f82b0f9f568504caaf6c1583c65e685d66d05ec3aac3d789"
+    },
+    "B": {
+      "sign_seed": "9493d01d80c72ec0770529a5125cd60fd4bfc19b75662b2ca9ff45a417b344f2",
+      "enc_seed": "32338a06d4f67a664fcaabbf1e98c1e46f2b5750f2270bd4af127355ed560619",
+      "id": "ed25519:ce9c83f13c6a06666665e0471d45c0b4d4107d892e8ddb4de7ac27520e36f37d"
+    },
+    "C": {
+      "sign_seed": "a033afa007a178f308cdbc9313e532c516b3e5704fb83d3f82f499e3913779b2",
+      "enc_seed": "4f70736b2be19d280929efa3c73cf442243bffe7f77e61ba866947ac125f96f4",
+      "id": "ed25519:222058a87e08796d0668cb203921c831c1b307271092bf0577b351b892287f14"
+    },
+    "genesis": {
+      "sign_seed": "c24bb87672097fd3292251030126197ba061ffb69b9b67b0786318f627fb132c",
+      "id": "ed25519:f947b10c8089aa8fed2d435fae069d0ca1513b33691955ae963dfe8bc5b398c4"
+    }
+  },
+  "ops": [
+    {
+      "label": "add-C",
+      "token": "eyJ2IjozLCJ1c3IiOiJlZDI1NTE5OmY5NDdiMTBjODA4OWFhOGZlZDJkNDM1ZmFlMDY5ZDBjYTE1MTNiMzM2OTE5NTVhZTk2M2RmZThiYzViMzk4YzQiLCJvcCI6ImFkZCIsImRldiI6ImVkMjU1MTk6MjIyMDU4YTg3ZTA4Nzk2ZDA2NjhjYjIwMzkyMWM4MzFjMWIzMDcyNzEwOTJiZjA1NzdiMzUxYjg5MjI4N2YxNCIsImRlbmMiOiJ4MjU1MTk6NGY3MDczNmIyYmUxOWQyODA5MjllZmEzYzczY2Y0NDIyNDNiZmZlN2Y3N2U2MWJhODY2OTQ3YWMxMjVmOTZmNCIsImJ5IjoiZWQyNTUxOTo0NGYyNTUzNzZiZDEwODIxZjgyYjBmOWY1Njg1MDRjYWFmNmMxNTgzYzY1ZTY4NWQ2NmQwNWVjM2FhYzNkNzg5IiwicHJldiI6WyJzaGEyNTY6YTVhMTk5OGJkNjNmNDdmNWNiNGY0ZmNkYmRmZDAzNzlmNTZlZDFiNjAzZTAwNzRmZGRlNTlhMWQ1Y2M4MzI2ZCJdLCJpYXQiOjE3ODgyNjQzMDAsImV4cCI6MTc5NjA0MDMwMH0.H8c308xTYwVmcDpEdHomBAxoS8-D5KcXUdhR5Xpp_sS_o8PhF1nORFgtFUL7PeSSExPKZDViilKCLWPtGmEPAg",
+      "hash": "sha256:90471d6555a18c90df8540a6b0ac3576393b3eadaf625e9f9e0754ca297186ee"
+    },
+    {
+      "label": "cert-B-v1",
+      "token": "eyJ2IjoxLCJ1c3IiOiJlZDI1NTE5OmY5NDdiMTBjODA4OWFhOGZlZDJkNDM1ZmFlMDY5ZDBjYTE1MTNiMzM2OTE5NTVhZTk2M2RmZThiYzViMzk4YzQiLCJkZXYiOiJlZDI1NTE5OmNlOWM4M2YxM2M2YTA2NjY2NjY1ZTA0NzFkNDVjMGI0ZDQxMDdkODkyZThkZGI0ZGU3YWMyNzUyMGUzNmYzN2QiLCJpYXQiOjE3ODgyNjQwMDAsImV4cCI6MTc5NjA0MDAwMH0.RoEg7ek8e5a6Gg84Jt9q5ruMEnZEgJ4xBt3xvajGEWCno3TnAi19KpBscjQcr6E-GCK4KbLQFBVYFvIFbFvPDQ",
+      "hash": "sha256:efb621748beac7358e2cba1aa9a3cf3cfd2fd621af6080c2a9b78ebd34eb5863"
+    },
+    {
+      "label": "cert-A-v2",
+      "token": "eyJ2IjoyLCJ1c3IiOiJlZDI1NTE5OmY5NDdiMTBjODA4OWFhOGZlZDJkNDM1ZmFlMDY5ZDBjYTE1MTNiMzM2OTE5NTVhZTk2M2RmZThiYzViMzk4YzQiLCJkZXYiOiJlZDI1NTE5OjQ0ZjI1NTM3NmJkMTA4MjFmODJiMGY5ZjU2ODUwNGNhYWY2YzE1ODNjNjVlNjg1ZDY2ZDA1ZWMzYWFjM2Q3ODkiLCJkZW5jIjoieDI1NTE5Ojk5ZTFlNThhZjkwMWQ3NTllNjk2OWZlZmUzYzNmYTQ3ZDljZGVmOTU0YWI2NGUyMWZjOTkwYzViYWU0NWQzNWMiLCJpYXQiOjE3ODgyNjQwMDAsImV4cCI6MTc5NjA0MDAwMH0.zDJ0MqGZ4oZSyyegG_Fvquo0SHMaf-hWEG6XGrNSdM5iUkjSqIw6TieyRMwddlSNPLEdk5v68lMu1VlXPGs1Cg",
+      "hash": "sha256:a5a1998bd63f47f5cb4f4fcdbdfd0379f56ed1b603e0074fdde59a1d5cc8326d"
+    }
+  ],
+  "expect": {
+    "members": {
+      "ed25519:222058a87e08796d0668cb203921c831c1b307271092bf0577b351b892287f14": {
+        "admitted_by": "sha256:90471d6555a18c90df8540a6b0ac3576393b3eadaf625e9f9e0754ca297186ee",
+        "denc": "x25519:4f70736b2be19d280929efa3c73cf442243bffe7f77e61ba866947ac125f96f4",
+        "admitted_at": 1788264300,
+        "expires": 1796040300
+      },
+      "ed25519:44f255376bd10821f82b0f9f568504caaf6c1583c65e685d66d05ec3aac3d789": {
+        "admitted_by": "sha256:a5a1998bd63f47f5cb4f4fcdbdfd0379f56ed1b603e0074fdde59a1d5cc8326d",
+        "denc": "x25519:99e1e58af901d759e6969fefe3c3fa47d9cdef954ab64e21fc990c5bae45d35c",
+        "admitted_at": 1788264000,
+        "expires": 1796040000
+      },
+      "ed25519:ce9c83f13c6a06666665e0471d45c0b4d4107d892e8ddb4de7ac27520e36f37d": {
+        "admitted_by": "sha256:efb621748beac7358e2cba1aa9a3cf3cfd2fd621af6080c2a9b78ebd34eb5863",
+        "admitted_at": 1788264000,
+        "expires": 1796040000
+      }
+    },
+    "removed": [],
+    "heads": [
+      "sha256:90471d6555a18c90df8540a6b0ac3576393b3eadaf625e9f9e0754ca297186ee",
+      "sha256:efb621748beac7358e2cba1aa9a3cf3cfd2fd621af6080c2a9b78ebd34eb5863"
+    ],
+    "rejected": {},
+    "ineffective": {}
+  }
+}

@@ -50,6 +50,14 @@ const RelayV1Prefix = RelayPrefix + "/v1"
 // floor, and write stays an admin authorisation (ADR-0065).
 const EnrolPath = "/enrol"
 
+// MembershipPrefix is where an identity's membership op log is read and pushed
+// (ADR-0068): GET /membership/{usr} returns the ops this node holds, POST
+// /membership/{usr} records ops a device pushes (a remove, typically). Public
+// for the same reason EnrolPath is: an op is self-authenticating — signed by a
+// member of a pinned identity, evaluated before it is recorded — and the
+// device pushing a remove may be the one that no longer authenticates.
+const MembershipPrefix = "/membership"
+
 // routes builds the whole handler.
 //
 // The middleware order is the design, not an accident:

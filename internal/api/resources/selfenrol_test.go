@@ -82,10 +82,28 @@ func TestPhoneSelfEnrolsAndReadsButDoesNotWrite(t *testing.T) {
 		return resp
 	}
 
-	// Before enrolment the very same credential is refused: the cert alone is
-	// not trust (ADR-0048 step 4).
-	if resp := withDevice(http.MethodGet, "/api/v1/works", nil); resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("unenrolled device read: status = %d, want 401", resp.StatusCode)
+	// A cert from a user this node has NOT pinned is refused: the pin is the
+	// trust root (ADR-0032, ADR-0068). (A pinned user's genesis-signed cert, by
+	// contrast, authenticates on first contact — membership_test.go.)
+	_, unpinnedPriv, err := enrolment.GenerateUserIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unpinnedCert, err := enrolment.SignCert(unpinnedPriv, devicePub, "", fixedTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	{
+		req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/api/v1/works", nil)
+		req.Header.Set("Authorization", "Device "+unpinnedCert+"~"+proof(devicePriv, unpinnedCert))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = resp.Body.Close() })
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("unpinned user's device read: status = %d, want 401", resp.StatusCode)
+		}
 	}
 
 	// Self-enrol. No Authorization header: the request IS the credential.

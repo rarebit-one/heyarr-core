@@ -79,7 +79,7 @@ func TestVoidbindReproducesGoldenCert(t *testing.T) {
 // A cert minted by PRE-migration heyarr verifies via voidbind-go's relying-party
 // surface, against the pinned user key, and resolves the right device.
 func TestPreMigrationCertVerifiesViaVoidbindRP(t *testing.T) {
-	auth, err := vrp.Verifier{Trust: vrp.MemTrust{goldenUserID: userPub()}}.Verify(goldenCert, verifyNow)
+	auth, err := vrp.Verifier{Trust: vrp.MemTrust{goldenUserID: userPub()}, Membership: vrp.NewMemMembership()}.Verify(goldenCert, nil, verifyNow)
 	if err != nil {
 		t.Fatalf("voidbind-go/rp refused a pre-migration heyarr cert: %v", err)
 	}

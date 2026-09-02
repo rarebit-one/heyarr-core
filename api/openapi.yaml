@@ -1221,52 +1221,76 @@ paths:
       tags: [pairing]
       operationId: selfEnrolDevice
       security: []
-      summary: A paired device enrols itself at this peer (ADR-0067).
+      summary: A paired device enrols itself at this peer (ADR-0067, ADR-0068).
       description: >-
-        The step after pairing. A device that holds a cert the user signed for
-        its key (what `/pair` or `/pair/v1` hands a phone) presents that cert
+        The step after pairing. A device that holds its admitting membership op
+        — a cert the user's genesis key signed for its key, or (ADR-0068) an
+        `add` signed by any current member of the identity — presents that op
         and a fresh possession proof over it — the exact two halves of the
         `Device` credential — and is recorded under its pinned user, with no
         admin call to `/api/v1/identities/devices` in between.
 
 
-        It is public because the device is, by definition, not yet enrolled
-        and so cannot authenticate; it grants nothing because the cert already
-        proves the pinned user vouched for the device and the proof proves the
-        caller holds the key. Verification is the same code the `Device`
-        scheme runs on every request: the cert's user must be PINNED here
-        (ADR-0032's gate holds — an unknown user's cert is refused), the cert
-        must verify against that pinned key and be unexpired, and the proof
-        must be signed by the cert's device key over this cert and be fresh.
+        It is public because the device may not yet be known here and so
+        cannot authenticate; it grants nothing because the op, evaluated with
+        the identity's op log (voidbind-go ADR-0007), already proves a member
+        vouched for the device and the proof proves the caller holds the key.
+        Verification is the same code the `Device` scheme runs on every
+        request: the op's user must be PINNED here (ADR-0032's gate holds — an
+        unknown user's op is refused), the possession proof must be signed by
+        the op's device key over this op and be fresh, and the membership
+        evaluated over the ops this node holds plus `ops` must admit the
+        device. A device admitted by a member this node has never met MUST
+        send that member's admission in `ops` (or the `Voidbind-Membership`
+        header), or its own admission cites a past the node cannot judge.
         The enrolled device authenticates at the READ floor; write remains an
         admin authorisation of the device key (ADR-0065).
 
 
-        Idempotent on the device key: a re-submission returns the existing
-        device with a 200. A REVOKED device is not re-enrolled, and a cert
-        naming a different user than the row holds is refused. Every refusal
-        is the same opaque 401 the `Device` scheme returns; the reason is
-        logged, not disclosed.
+        Under ADR-0068 the evaluation itself materialises the device's row
+        (a member authenticates on first contact); what this route adds is
+        the NAME and the created/existing answer. Idempotent on the device
+        key: a re-submission returns the existing device with a 200. A
+        REVOKED device is not re-enrolled, and an op naming a different user
+        than the row holds is refused. Every refusal is the same opaque 401
+        the `Device` scheme returns; the reason is logged, not disclosed.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [cert, proof]
+              required: [proof]
               properties:
+                op:
+                  type: string
+                  description: >-
+                    The device's admitting membership op token (a v3 `add`, or
+                    a v1/v2 cert — the same slot). Exactly one of `op` and
+                    `cert` is required; both is accepted when they are equal.
                 cert:
                   type: string
-                  description: The user-signed enrolment cert token.
+                  description: >-
+                    The ADR-0067 spelling of `op`, kept for clients that send a
+                    user-signed cert; it carries a v3 op just as well.
                 proof:
                   type: string
                   description: >-
-                    A fresh possession proof over `cert` (the value after the
-                    `~` in a `Device` credential): `{"v":2,"crt":base64url(sha256(cert)),"iat","exp"}`
+                    A fresh possession proof over the op (the value after the
+                    `~` in a `Device` credential): `{"v":2,"crt":base64url(sha256(op)),"iat","exp"}`
                     signed by the device key, `exp - iat` of 120 seconds.
                 name:
                   type: string
                   description: A display name for the device; defaults to `device`.
+                ops:
+                  type: array
+                  items: { type: string }
+                  maxItems: 64
+                  description: >-
+                    Membership op tokens the device knows (ADR-0068), merged
+                    into the evaluation exactly as the `Voidbind-Membership`
+                    header is on an authenticated request. At most 64 in total
+                    across body and header.
       responses:
         '201':
           description: The device was enrolled.
@@ -1285,12 +1309,90 @@ paths:
               schema:
                 $ref: '#/components/schemas/SelfEnrolledDevice'
         '400':
-          description: The body is not a single JSON object of the documented fields, or is too large.
+          description: The body is not a single JSON object of the documented fields, is too large, or presents more than 64 ops.
         '401':
           description: >-
             The credential was rejected — for any reason (unpinned user, bad
-            signature, expired cert, wrong or stale proof, revoked device). The
+            signature, expired add, an admission citing ops this node cannot
+            see, a removed device, wrong or stale proof, revoked device). The
             detail is the same in every case.
+  /membership/{usr}:
+    parameters:
+      - name: usr
+        in: path
+        required: true
+        schema: { type: string }
+        description: The identity — its genesis public key, `ed25519:<hex>`.
+    get:
+      tags: [pairing]
+      operationId: getMembership
+      security: []
+      summary: The membership ops this node holds for an identity (ADR-0068).
+      description: >-
+        Every membership op token (voidbind-go ADR-0007: `add` / `remove`,
+        signed by a member or by the genesis key) this node has recorded for
+        the identity, oldest issued first. A device merges them with its own
+        and evaluates; the node does not pre-chew a view, because a view is a
+        function of the ops and the reader's clock. This is how a device
+        learns that a member removed it, or another device, while it was
+        offline. Public: an op carries its own authority and the node adds
+        none by serving it; the identity's genesis key is not guessable, so
+        there is nothing to enumerate.
+      responses:
+        '200':
+          description: The recorded ops.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Membership'
+        '400':
+          description: "`usr` is not a rendered Ed25519 public key."
+        '404':
+          description: No such identity is pinned here.
+    post:
+      tags: [pairing]
+      operationId: pushMembership
+      security: []
+      summary: Push membership ops to this node (ADR-0068).
+      description: >-
+        Records ops a device signed or learned — a `remove`, typically — so the
+        node evaluates them from now on. The ops are evaluated merged with the
+        log first and recorded only if EVERY one is structurally valid for
+        this identity (parses, verifies under its signer, names this identity,
+        cites ops the node can see): junk anywhere in the body is one opaque
+        401 and nothing is written. A valid but ineffective op (an
+        unauthorised signer, an outranked remove, a re-add of a removed
+        device) IS recorded — it is part of the state — and evaluation is what
+        decides it changes nothing. Idempotent by op hash. A device the
+        evaluation removes is tombstoned in the node's view at once, exactly as
+        an admin revocation is.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ops]
+              properties:
+                ops:
+                  type: array
+                  items: { type: string }
+                  minItems: 1
+                  maxItems: 64
+                  description: Membership op tokens.
+      responses:
+        '200':
+          description: The ops were evaluated and the new ones recorded; the whole log follows.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Membership'
+        '400':
+          description: "The body is not a single JSON object of the documented fields, is too large, has no ops, or has more than 64; or `usr` is not a key."
+        '401':
+          description: At least one op was rejected. The detail is the same in every case; the reason is logged.
+        '404':
+          description: No such identity is pinned here.
   /pair/v1/sessions:
     post:
       tags: [pairing]
@@ -5327,7 +5429,7 @@ components:
     SelfEnrolledDevice:
       type: object
       description: A device as this peer now knows it, after self-enrolment (ADR-0067).
-      required: [device_key, name, user, enrolled_at, expires_at]
+      required: [device_key, name, user, admitted_by, enrolled_at, expires_at]
       properties:
         device_key:
           type: string
@@ -5343,10 +5445,30 @@ components:
         enrolled_at:
           type: string
           format: date-time
+        admitted_by:
+          type: string
+          description: >-
+            The hash (`sha256:<hex>`) of the op that admitted the device — what
+            the device cites as its own admission (ADR-0068).
         expires_at:
           type: string
           format: date-time
-          description: When the cert expires; the device must re-pair before then.
+          description: When the admitting op expires; any member may re-add the device before then.
+    Membership:
+      type: object
+      description: An identity's membership op log as this node holds it (ADR-0068).
+      required: [usr, ops]
+      properties:
+        usr:
+          type: string
+          description: The identity's genesis public key, `ed25519:<hex>`.
+        ops:
+          type: array
+          items: { type: string }
+          description: Every recorded op token, oldest issued first. Empty is `[]`, never null.
+        recorded:
+          type: integer
+          description: On a push, how many of the posted ops this node had not seen. Absent on a GET.
     EncryptedSpace:
       type: object
       description: |

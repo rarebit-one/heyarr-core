@@ -59,7 +59,7 @@ func TestMalformedCredentialShapes(t *testing.T) {
 					t.Fatalf("credential %d panicked: %v", i, r)
 				}
 			}()
-			if _, err := f.store.Verify(ctx, cred, now); err == nil {
+			if _, err := f.store.Verify(ctx, cred, nil, now); err == nil {
 				t.Fatalf("credential %d was accepted: %q", i, cred)
 			}
 		}()
@@ -81,7 +81,7 @@ func TestPossessionMustBeByTheCertsDeviceKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.Verify(ctx, a.cert+"~"+badProof, now); !errors.Is(err, enrolment.ErrPossessionSignature) {
+	if _, err := f.store.Verify(ctx, a.cert+"~"+badProof, nil, now); !errors.Is(err, enrolment.ErrPossessionSignature) {
 		t.Fatalf("possession by the wrong key must fail, got %v", err)
 	}
 }
@@ -108,7 +108,7 @@ func TestOneUsersDeviceCannotBorrowAnothersCert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.Verify(ctx, bob.cert+"~"+proof, now); !errors.Is(err, enrolment.ErrPossessionSignature) {
+	if _, err := f.store.Verify(ctx, bob.cert+"~"+proof, nil, now); !errors.Is(err, enrolment.ErrPossessionSignature) {
 		t.Fatalf("borrowing another user's cert must fail possession, got %v", err)
 	}
 }
@@ -127,7 +127,7 @@ func TestPossessionCannotBeReplayedAcrossCerts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.Verify(ctx, a.cert+"~"+proof, now); !errors.Is(err, enrolment.ErrPossessionCert) {
+	if _, err := f.store.Verify(ctx, a.cert+"~"+proof, nil, now); !errors.Is(err, enrolment.ErrPossessionCert) {
 		t.Fatalf("a proof bound to another cert must be refused, got %v", err)
 	}
 }
@@ -141,13 +141,13 @@ func TestCredentialDiesWithTheUser(t *testing.T) {
 	f.enrol(t, a)
 	ctx := context.Background()
 
-	if _, err := f.store.Verify(ctx, a.credential(t, now), now); err != nil {
+	if _, err := f.store.Verify(ctx, a.credential(t, now), nil, now); err != nil {
 		t.Fatalf("precondition: valid credential works, got %v", err)
 	}
 	if _, err := f.store.RevokeUser(ctx, a.userKey); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.Verify(ctx, a.credential(t, now), now); !errors.Is(err, deviceauth.ErrUnknownUser) {
+	if _, err := f.store.Verify(ctx, a.credential(t, now), nil, now); !errors.Is(err, deviceauth.ErrUnknownUser) {
 		t.Fatalf("a revoked user's credential must be refused unknown_user, got %v", err)
 	}
 }
@@ -166,7 +166,7 @@ func TestStalePossessionIsRefusedWhileTheCertStillLives(t *testing.T) {
 	cred := a.credential(t, now) // possession minted at now
 	later := now.Add(enrolment.PossessionTTL + time.Minute)
 	// The cert (90 days) is still valid at `later`, but the possession is stale.
-	if _, err := f.store.Verify(ctx, cred, later); !errors.Is(err, enrolment.ErrPossessionExpired) {
+	if _, err := f.store.Verify(ctx, cred, nil, later); !errors.Is(err, enrolment.ErrPossessionExpired) {
 		t.Fatalf("a stale possession must be refused even under a live cert, got %v", err)
 	}
 }
