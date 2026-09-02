@@ -1216,6 +1216,81 @@ paths:
           description: A malformed session id.
         '404':
           description: Nothing is stored at this slot yet, or the session has expired.
+  /enrol:
+    post:
+      tags: [pairing]
+      operationId: selfEnrolDevice
+      security: []
+      summary: A paired device enrols itself at this peer (ADR-0067).
+      description: >-
+        The step after pairing. A device that holds a cert the user signed for
+        its key (what `/pair` or `/pair/v1` hands a phone) presents that cert
+        and a fresh possession proof over it — the exact two halves of the
+        `Device` credential — and is recorded under its pinned user, with no
+        admin call to `/api/v1/identities/devices` in between.
+
+
+        It is public because the device is, by definition, not yet enrolled
+        and so cannot authenticate; it grants nothing because the cert already
+        proves the pinned user vouched for the device and the proof proves the
+        caller holds the key. Verification is the same code the `Device`
+        scheme runs on every request: the cert's user must be PINNED here
+        (ADR-0032's gate holds — an unknown user's cert is refused), the cert
+        must verify against that pinned key and be unexpired, and the proof
+        must be signed by the cert's device key over this cert and be fresh.
+        The enrolled device authenticates at the READ floor; write remains an
+        admin authorisation of the device key (ADR-0065).
+
+
+        Idempotent on the device key: a re-submission returns the existing
+        device with a 200. A REVOKED device is not re-enrolled, and a cert
+        naming a different user than the row holds is refused. Every refusal
+        is the same opaque 401 the `Device` scheme returns; the reason is
+        logged, not disclosed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cert, proof]
+              properties:
+                cert:
+                  type: string
+                  description: The user-signed enrolment cert token.
+                proof:
+                  type: string
+                  description: >-
+                    A fresh possession proof over `cert` (the value after the
+                    `~` in a `Device` credential): `{"v":2,"crt":base64url(sha256(cert)),"iat","exp"}`
+                    signed by the device key, `exp - iat` of 120 seconds.
+                name:
+                  type: string
+                  description: A display name for the device; defaults to `device`.
+      responses:
+        '201':
+          description: The device was enrolled.
+          headers:
+            Location:
+              schema: { type: string }
+              description: The device's admin resource under `/api/v1/identities/devices/{key}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SelfEnrolledDevice'
+        '200':
+          description: The device was already enrolled; this is its existing record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SelfEnrolledDevice'
+        '400':
+          description: The body is not a single JSON object of the documented fields, or is too large.
+        '401':
+          description: >-
+            The credential was rejected — for any reason (unpinned user, bad
+            signature, expired cert, wrong or stale proof, revoked device). The
+            detail is the same in every case.
   /pair/v1/sessions:
     post:
       tags: [pairing]
@@ -5249,6 +5324,29 @@ components:
           schema: { $ref: "#/components/schemas/Problem" }
 
   schemas:
+    SelfEnrolledDevice:
+      type: object
+      description: A device as this peer now knows it, after self-enrolment (ADR-0067).
+      required: [device_key, name, user, enrolled_at, expires_at]
+      properties:
+        device_key:
+          type: string
+          description: The device's Ed25519 signing key, `ed25519:<hex>`.
+        encryption_key:
+          type: string
+          description: The device's X25519 encryption key, `x25519:<hex>`, when the cert binds one.
+        name:
+          type: string
+        user:
+          type: string
+          description: The pinned user the device is enrolled under, `ed25519:<hex>`.
+        enrolled_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          description: When the cert expires; the device must re-pair before then.
     EncryptedSpace:
       type: object
       description: |

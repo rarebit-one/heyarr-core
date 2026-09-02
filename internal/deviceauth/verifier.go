@@ -62,29 +62,7 @@ func (s *Store) Verify(ctx context.Context, credential string, now time.Time) (A
 		return Authenticated{}, ErrMalformedCredential
 	}
 
-	claimedUser, err := enrolment.CertUser(certToken)
-	if err != nil {
-		return Authenticated{}, err
-	}
-	user, err := s.LookupUser(ctx, claimedUser)
-	if err != nil {
-		return Authenticated{}, err
-	}
-	// Steps 1 and 3 — the claimed user is a hint, and the cert must verify against
-	// the pinned key and be unexpired — are exactly voidbind-go/rp's pure
-	// verifier: the shared trust core All Thing and heyarr hold in common
-	// (ADR-0048, generalised from this very method). We back it with the single
-	// key we just resolved from the device store, pinned under the same claimed
-	// user, so it reports the identical enrolment.* refusals this method always
-	// has. Step 2's ErrUnknownUser stays LookupUser's above — the pin is present
-	// by construction here, so rp never reaches its own unknown-user gate. The
-	// possession proof and the device-revocation checks below are heyarr's
-	// DB-backed half and stay here.
-	pinned, err := identity.ParsePublicKey(user.PublicKey)
-	if err != nil {
-		return Authenticated{}, err
-	}
-	auth, err := rp.Verifier{Trust: rp.MemTrust{claimedUser: pinned}}.Verify(certToken, now)
+	user, auth, err := s.verifyCert(ctx, certToken, now)
 	if err != nil {
 		return Authenticated{}, err
 	}
@@ -104,11 +82,7 @@ func (s *Store) Verify(ctx context.Context, credential string, now time.Time) (A
 		return Authenticated{}, ErrCertMismatch
 	}
 
-	devicePub, err := identity.ParsePublicKey(auth.DeviceKey)
-	if err != nil {
-		return Authenticated{}, err
-	}
-	if err := enrolment.VerifyPossession(proof, devicePub, certToken, now); err != nil {
+	if err := verifyPossession(proof, auth.DeviceKey, certToken, now); err != nil {
 		return Authenticated{}, err
 	}
 
@@ -119,4 +93,49 @@ func (s *Store) Verify(ctx context.Context, credential string, now time.Time) (A
 		UserKey:       user.PublicKey,
 		DeviceKey:     auth.DeviceKey,
 	}, nil
+}
+
+// verifyCert is steps 1–3 of Verify: the cert's claimed user is a hint to find
+// the pinned key, the user must be pinned here, and the cert must verify
+// against that pinned key and be unexpired. It is shared with self-enrolment
+// (ADR-0067) so the cert a device enrols with is judged by exactly the rule it
+// will later authenticate under — one verifier, not two that can drift.
+//
+// Steps 1 and 3 are exactly voidbind-go/rp's pure verifier: the shared trust
+// core All Thing and heyarr hold in common (ADR-0048, generalised from this
+// very method). We back it with the single key we just resolved from the
+// device store, pinned under the same claimed user, so it reports the
+// identical enrolment.* refusals this method always has. Step 2's
+// ErrUnknownUser stays LookupUser's — the pin is present by construction here,
+// so rp never reaches its own unknown-user gate.
+func (s *Store) verifyCert(ctx context.Context, certToken string, now time.Time) (User, rp.Authenticated, error) {
+	claimedUser, err := enrolment.CertUser(certToken)
+	if err != nil {
+		return User{}, rp.Authenticated{}, err
+	}
+	user, err := s.LookupUser(ctx, claimedUser)
+	if err != nil {
+		return User{}, rp.Authenticated{}, err
+	}
+	pinned, err := identity.ParsePublicKey(user.PublicKey)
+	if err != nil {
+		return User{}, rp.Authenticated{}, err
+	}
+	auth, err := rp.Verifier{Trust: rp.MemTrust{claimedUser: pinned}}.Verify(certToken, now)
+	if err != nil {
+		return User{}, rp.Authenticated{}, err
+	}
+	return user, auth, nil
+}
+
+// verifyPossession is step 5 of Verify: the proof must be signed by the cert's
+// device key and bound to this cert — the caller HOLDS the key, it did not
+// merely copy the cert. Shared with self-enrolment for the same reason
+// verifyCert is.
+func verifyPossession(proof, deviceKey, certToken string, now time.Time) error {
+	devicePub, err := identity.ParsePublicKey(deviceKey)
+	if err != nil {
+		return err
+	}
+	return enrolment.VerifyPossession(proof, devicePub, certToken, now)
 }
