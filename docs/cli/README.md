@@ -29,6 +29,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr device list`](heyarr_device_list.md) | List this machine's device keys |
 | [`heyarr device mcp`](heyarr_device_mcp.md) | Run the Personal MCP for this machine's device key and personal state (§73) |
 | [`heyarr device remove`](heyarr_device_remove.md) | Remove a device key |
+| [`heyarr device revoke`](heyarr_device_revoke.md) | Revoke a device at this peer and re-key the spaces it could read (ADR-0068, ADR-0049) |
 | [`heyarr device show`](heyarr_device_show.md) | Show one device key |
 | [`heyarr device`](heyarr_device.md) | Manage this machine's device key (§40, ADR-0032) |
 | [`heyarr events tail`](heyarr_events_tail.md) | Print events as they happen |
