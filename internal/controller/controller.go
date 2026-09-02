@@ -10,6 +10,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	"github.com/rarebit-one/heyarr-core/internal/api/dlna"
 	"github.com/rarebit-one/heyarr-core/internal/api/enrol"
@@ -28,9 +30,12 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/downloads"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/indexers"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
+	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
+	"github.com/rarebit-one/heyarr-core/internal/media/probe"
 	"github.com/rarebit-one/heyarr-core/internal/pairrelay"
 	"github.com/rarebit-one/heyarr-core/internal/peer/health"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
@@ -436,7 +441,28 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	} else if n > 0 {
 		c.log.Info("recorded legacy device certs as membership ops", "count", n)
 	}
-	mounts, publicMounts, err := c.mounts(ctx, db, store, verifier, blobStore, eventLog, members, deviceIdentities, selfPeerID, material)
+	// The device-aware streaming leg's arms (ADR-0069): ffmpeg for the
+	// repackage and ffprobe for an on-demand probe, each only when this node
+	// resolved it. Absent, the plan still answers and says why (ADR-0023).
+	var streamer *ffmpeg.Streamer
+	if toolchain.FFmpeg.Available {
+		streamer, err = ffmpeg.NewStreamer(ffmpeg.StreamerOptions{
+			FFmpegPath: toolchain.FFmpeg.Path, MaxConcurrent: c.cfg.Media.StreamConcurrency, Logger: c.log,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("controller: %w", err)
+		}
+	}
+	var prober *probe.Prober
+	if toolchain.FFprobe.Available {
+		prober, err = probe.New(probe.Options{FFprobePath: toolchain.FFprobe.Path, Logger: c.log})
+		if err != nil {
+			return nil, nil, fmt.Errorf("controller: %w", err)
+		}
+	}
+	legs := streamLegs{streamer: streamer, prober: prober}
+
+	mounts, publicMounts, err := c.mounts(ctx, db, store, verifier, blobStore, eventLog, members, deviceIdentities, selfPeerID, material, legs)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -531,7 +557,37 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
+	if streamer != nil {
+		// The active-streams gauge (ADR-0069), on the server's own registry so
+		// it rides /metrics behind the same credential as everything else.
+		if err := srv.Registry().Register(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Namespace: "heyarr", Subsystem: "playback", Name: "streams_active",
+			Help: "On-the-fly repackage streams running now, one ffmpeg each.",
+		}, func() float64 { return float64(streamer.Active()) })); err != nil {
+			return nil, nil, fmt.Errorf("controller: registering the stream gauge: %w", err)
+		}
+	}
 	return srv, members, nil
+}
+
+// streamLegs carries the streaming leg's optional arms into mounts. Either
+// may be nil; the resource API treats nil as "this node cannot".
+type streamLegs struct {
+	streamer *ffmpeg.Streamer
+	prober   *probe.Prober
+}
+
+// casBlobLocator hands the resource API a blob's local path (ADR-0069). The
+// same shape the worker's remux store has, kept here rather than imported from
+// the worker because roles share nothing in-process (invariant 4).
+type casBlobLocator struct{ store cas.Store }
+
+func (l casBlobLocator) SourcePath(ctx context.Context, blobHash string) (string, error) {
+	h, err := hashing.Parse(blobHash)
+	if err != nil {
+		return "", err
+	}
+	return l.store.LocalPath(ctx, h)
 }
 
 // mounts is the API surface this controller serves.
@@ -549,7 +605,7 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 // different trust roots, and a mix-up in either direction is severe: an API
 // route mounted publicly is the library given away, and the renderer route
 // mounted privately is a 401 for every television.
-func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Store, verifier *auth.Verifier, blobStore cas.Store, eventLog *events.Log, members *membership.Store, identities *deviceauth.Store, selfPeerID string, material *mtls.Material) (apiMounts, publicMounts []httpapi.MountFunc, err error) {
+func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Store, verifier *auth.Verifier, blobStore cas.Store, eventLog *events.Log, members *membership.Store, identities *deviceauth.Store, selfPeerID string, material *mtls.Material, legs streamLegs) (apiMounts, publicMounts []httpapi.MountFunc, err error) {
 	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
@@ -591,7 +647,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
-	api, err := resources.New(resources.Options{
+	apiOpts := resources.Options{
 		DB:         db,
 		Jobs:       queue,
 		Events:     eventLog,
@@ -605,7 +661,18 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		RenderSecret:  secret,
 		RenderBaseURL: renderBaseURL(c.cfg),
 		SelfPeerID:    selfPeerID,
-	})
+
+		Blobs: casBlobLocator{store: blobStore},
+	}
+	// Typed nils must not become non-nil interfaces: "no streamer" has to
+	// stay nil all the way down (ADR-0069).
+	if legs.streamer != nil {
+		apiOpts.Streamer = legs.streamer
+	}
+	if legs.prober != nil {
+		apiOpts.Prober = legs.prober
+	}
+	api, err := resources.New(apiOpts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}

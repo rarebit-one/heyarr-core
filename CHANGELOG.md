@@ -11,6 +11,20 @@ stable.
 
 ### Added
 
+- **Device-aware streaming leg (ADR-0069, #432).** `POST /api/v1/playback/plan`
+  accepts `client: {containers, video, audio, max_height}` and answers `mode`
+  (`direct` | `stream` | `unplayable`), `url`, `mime`, `reason` and `source`
+  beside the decision. `stream` is a new `GET /api/v1/playback/stream/{token}`:
+  fragmented MP4 produced by one ffmpeg per request — video copied where the
+  client decodes it, audio re-encoded to stereo AAC where it does not, the
+  container rewrapped when that is the problem, video re-encoded and capped
+  only when the client cannot decode the picture. The token is signed, bound
+  to the blob, the repackage and the credential that planned it, and lives an
+  hour. `media.stream_concurrency` caps live streams (default 2; 429 past it);
+  ffmpeg is killed on disconnect; `heyarr_playback_streams_active` gauges what
+  runs. A blob nothing has probed is probed on demand when the node has ffprobe
+  and the result cached in `blob_probes`. No seeking in v1 — `?start=<seconds>`
+  restarts the stream. A node with no ffmpeg answers `direct` and says why.
 **Milestone 1 — Local Heyarr.** One machine, one peer, real bytes. Heyarr scans
 a library, brings its files under management, serves them over HTTP with byte
 ranges, and reports what it did. `make demo` verifies a build end to end in

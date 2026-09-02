@@ -33,6 +33,22 @@ A configured path that does not work is a **startup failure**, not a silent
 fall back to `PATH`. That is deliberate: naming a binary and quietly getting a
 different one is worse than not starting.
 
+## The streaming leg
+
+With ffmpeg resolved, a client that declares what it can decode and cannot
+decode a file is served an on-the-fly repackage instead of the raw blob
+([ADR-0069](../adr/0069-a-client-that-cannot-decode-the-source-gets-an-on-the-fly-repackage.md)).
+Each stream is one ffmpeg; one that re-encodes video is a core. Cap them:
+
+```yaml
+media:
+  stream_concurrency: 2   # the default; a client past the cap gets 429 + Retry-After
+```
+
+`heyarr_playback_streams_active` on `/metrics` is how many are running.
+Without ffmpeg the plan still answers — `direct`, with the reason and a note
+that this node cannot repackage.
+
 ## Not installing it at all
 
 Also supported, and tested on every build. Leave both paths empty and put

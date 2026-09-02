@@ -657,3 +657,27 @@ func parseInt(s string) int64 {
 	}
 	return v
 }
+
+// ProbePath describes a local file, for the one caller that has a path rather
+// than a URL: the controller answering a playback plan for a blob nothing has
+// probed yet (ADR-0069). It is ffprobe over the file, with no proxy, no Range
+// accounting and no fallback — there is nothing to fall back from. The Stats
+// say so: nothing was read over HTTP and nothing was materialised.
+func (p *Prober) ProbePath(ctx context.Context, path string) (Result, Stats, error) {
+	if path == "" {
+		return Result{}, Stats{}, errors.New("probe: a path is required")
+	}
+	ctx, cancel := context.WithTimeout(ctx, p.timeout)
+	defer cancel()
+	started := time.Now()
+	out, err := p.runFFprobe(ctx, path)
+	stats := Stats{Elapsed: time.Since(started)}
+	if err != nil {
+		return Result{}, stats, err
+	}
+	result, err := parseAndCheck(out)
+	if err != nil {
+		return Result{}, stats, fmt.Errorf("%w: %w", ErrProbeFailed, err)
+	}
+	return result, stats, nil
+}
