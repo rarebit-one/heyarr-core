@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/heyarr-core/internal/api/enrol"
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
@@ -209,16 +210,29 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		t.Fatal(err)
 	}
 
+	// The public self-enrolment route (ADR-0067), over the same identity store
+	// the Device scheme verifies against — so the acceptance test can walk pair →
+	// enrol → authenticate through one router, as a phone does.
+	enrolHandler, err := enrol.New(enrol.Options{Identities: identities})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	srv, err := httpapi.New(httpapi.Options{
 		Config:             cfg,
 		Logger:             slog.New(slog.DiscardHandler),
 		DB:                 db,
 		Verifier:           verifier,
+		DeviceVerifier:     identities,
 		Events:             eventLog,
 		Build:              buildinfo.Info{Version: "test", Commit: "abc123", Date: "2026-08-20T00:00:00Z"},
 		SchemaVersion:      4,
 		KnownSchemaVersion: 4,
-		Mount:              []httpapi.MountFunc{api.Mount},
+		// The server's clock is the fixed one, so a device credential minted at
+		// fixedTime verifies at fixedTime rather than at the wall clock.
+		Now:         clock.Now,
+		Mount:       []httpapi.MountFunc{api.Mount},
+		MountPublic: []httpapi.MountFunc{enrolHandler.Mount},
 	})
 	if err != nil {
 		t.Fatal(err)

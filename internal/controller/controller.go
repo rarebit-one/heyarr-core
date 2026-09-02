@@ -12,6 +12,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	"github.com/rarebit-one/heyarr-core/internal/api/dlna"
+	"github.com/rarebit-one/heyarr-core/internal/api/enrol"
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/mcp"
 	"github.com/rarebit-one/heyarr-core/internal/api/opds"
@@ -430,6 +431,17 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	if err != nil {
 		return nil, nil, err
 	}
+	// Device self-enrolment (ADR-0067): a paired device presents its user-signed
+	// cert and a possession proof and is recorded under its pinned user, with no
+	// admin step. It is a public mount for the same reason the relay is — the
+	// device is not yet enrolled, so it cannot authenticate — and it is judged by
+	// the SAME store the Device scheme verifies against. Unconditional, unlike
+	// the web login below: it needs no dial-back origin.
+	enrolHandler, err := enrol.New(enrol.Options{Identities: deviceIdentities, Logger: c.log})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: standing up device self-enrolment: %w", err)
+	}
+	publicMounts = append(publicMounts, enrolHandler.Mount)
 	// The Voidbind QR web-login (ADR-0053), stood up here rather than inside
 	// mounts because it is a distinct trust root — a browser/TV that holds no
 	// device cert, logging in through a device that does — and it feeds TWO of

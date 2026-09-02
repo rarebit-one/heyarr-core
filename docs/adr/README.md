@@ -73,3 +73,4 @@ An ADR that merely describes the code is not worth having.
 | [0063](0063-a-followed-article-is-archived-as-a-self-contained-single-file.md) | A followed article is archived as a self-contained single file | Accepted |
 | [0064](0064-a-followed-source-is-routed-to-its-adapter-by-type.md) | A followed source is routed to its adapter by type | Accepted |
 | [0066](0066-the-node-hosts-the-voidbind-relay-beside-its-legacy-pair-relay.md) | The node hosts the Voidbind relay beside its legacy pair relay | Accepted |
+| [0067](0067-a-paired-device-enrols-itself-and-earns-only-the-read-floor.md) | A paired device enrols itself, and earns only the read floor | Accepted |

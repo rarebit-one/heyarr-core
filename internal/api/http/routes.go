@@ -42,6 +42,14 @@ const RelayPrefix = "/pair"
 // is.
 const RelayV1Prefix = RelayPrefix + "/v1"
 
+// EnrolPath is where a paired device enrols itself (ADR-0067): POST {cert,
+// proof, name}. Like RelayPrefix it is deliberately OUTSIDE APIPrefix and its
+// authenticated group — the device presenting the cert is, by definition, not
+// yet enrolled, so the Device scheme would refuse it — and it grants nothing the
+// cert does not already prove: the device authenticates afterwards at the read
+// floor, and write stays an admin authorisation (ADR-0065).
+const EnrolPath = "/enrol"
+
 // routes builds the whole handler.
 //
 // The middleware order is the design, not an accident:
