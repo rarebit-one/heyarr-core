@@ -16,6 +16,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/mcp"
 	"github.com/rarebit-one/heyarr-core/internal/api/opds"
 	personalstateapi "github.com/rarebit-one/heyarr-core/internal/api/personalstate"
+	"github.com/rarebit-one/heyarr-core/internal/api/relay"
 	"github.com/rarebit-one/heyarr-core/internal/api/render"
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
 	"github.com/rarebit-one/heyarr-core/internal/api/subsonic"
@@ -642,6 +643,10 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// because a device being paired has no credential and the relay grants no
 	// authority (see internal/pairrelay).
 	relayHandler := pairrelay.NewHandler(pairrelay.HandlerOptions{Logger: c.log})
+	// The Voidbind relay beside it (ADR-0066): the protocol the voidbind CLI and
+	// the phone actually speak, so this node is the rendezvous for its own
+	// devices without a separately-run `voidbind relay`. Same caps, same stance.
+	relayV1Handler := relay.New(relay.Options{Logger: c.log})
 
 	// The encrypted personal-state plane's device-facing API (§38, §42,
 	// ADR-0049). It stores the opaque things a device pushes — a space, the
@@ -724,7 +729,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	}
 
 	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, mcpServer.Mount, psAPI.Mount},
-		[]httpapi.MountFunc{renderHandler.Mount, relayHandler.Mount, subsonicHandler.Mount, opdsHandler.Mount, dlnaHandler.Mount}, nil
+		[]httpapi.MountFunc{renderHandler.Mount, relayHandler.Mount, relayV1Handler.Mount, subsonicHandler.Mount, opdsHandler.Mount, dlnaHandler.Mount}, nil
 }
 
 // liveness converts a possibly-absent tracker into the interface the HTTP

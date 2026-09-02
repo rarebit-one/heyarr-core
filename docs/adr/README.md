@@ -68,3 +68,8 @@ An ADR that merely describes the code is not worth having.
 | [0058](0058-the-feed-provider-is-capability-metadata-tvdb-first.md) | The feed adapter is a CapabilityMetadata provider; TVDB is the first, TMDB is pluggable | Accepted |
 | [0059](0059-the-poll-outcome-is-stored-and-a-want-is-created-through-one-path.md) | The poll outcome is stored (not derived), and a want is created through one shared path | Accepted |
 | [0060](0060-a-direct-release-acquires-a-non-search-source.md) | A direct release acquires a non-search source (podcast enclosures) | Accepted |
+| [0061](0061-a-follow-management-grant-is-the-interim-web-login-write-path.md) | A follow-management grant is the interim web-login write path | Accepted |
+| [0062](0062-a-followed-youtube-video-is-acquired-by-a-tagged-subprocess-transport.md) | A followed YouTube video is acquired by a tagged subprocess transport | Accepted |
+| [0063](0063-a-followed-article-is-archived-as-a-self-contained-single-file.md) | A followed article is archived as a self-contained single file | Accepted |
+| [0064](0064-a-followed-source-is-routed-to-its-adapter-by-type.md) | A followed source is routed to its adapter by type | Accepted |
+| [0066](0066-the-node-hosts-the-voidbind-relay-beside-its-legacy-pair-relay.md) | The node hosts the Voidbind relay beside its legacy pair relay | Accepted |

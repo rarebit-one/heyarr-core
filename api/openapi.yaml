@@ -1216,6 +1216,112 @@ paths:
           description: A malformed session id.
         '404':
           description: Nothing is stored at this slot yet, or the session has expired.
+  /pair/v1/sessions:
+    post:
+      tags: [pairing]
+      operationId: createVoidbindPairSession
+      security: []
+      summary: Open a Voidbind pairing session (ADR-0066).
+      description: >-
+        The Voidbind relay — voidbind-go's `relay` protocol, which the
+        `voidbind` CLI (`pair-initiate` / `pair-join`) and the phone client
+        speak — mounted beside the legacy `/pair` relay so this node can be
+        the rendezvous for its own devices. A Voidbind client is pointed at
+        `<node>/pair` as its relay BASE (the client appends `/v1/...` itself,
+        exactly as against a standalone `voidbind relay`) and lands here.
+
+
+        Like `/pair` it is public and grants nothing: an in-memory, write-once,
+        opaque blob store addressed by (session, role, type) that never parses
+        a payload and holds no key. What crosses it is either public (two
+        commitments, two revealed public keys) or ciphertext it cannot open
+        (the enrolment cert, sealed to the new device's X25519 key). The
+        initiator — the machine holding the user identity — opens the session
+        and shares its id and a salt with the new device out of band (the
+        invite QR).
+      responses:
+        '200':
+          description: The session was opened.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session_id]
+                properties:
+                  session_id:
+                    type: string
+                    description: The rendezvous label both devices dial; not a secret.
+        '503':
+          description: Too many live sessions; try again once some expire.
+  /pair/v1/sessions/{id}/{role}/{type}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The session id returned when the session was opened.
+        schema:
+          type: string
+      - name: role
+        in: path
+        required: true
+        description: >-
+          Whose slot: `initiator` (the existing, authorising device) or
+          `responder` (the new device). Each role writes only its own slots
+          and reads only the peer's.
+        schema:
+          type: string
+          enum: [initiator, responder]
+      - name: type
+        in: path
+        required: true
+        description: >-
+          The message slot: `commit` (a commitment over the keys about to be
+          revealed), `reveal` (the revealed public keys, JSON), or `cert` (the
+          sealed enrolment cert, initiator only).
+        schema:
+          type: string
+          enum: [commit, reveal, cert]
+    put:
+      tags: [pairing]
+      operationId: putVoidbindPairSlot
+      security: []
+      summary: Store one role's message in a Voidbind pairing session (ADR-0066).
+      description: >-
+        Write-once: a second PUT of a slot is a 409 whatever the value, so a
+        confused or hostile participant cannot replace its own commitment
+        after the peer has read it. The same per-message byte cap, live-session
+        cap and ten-minute TTL as the legacy relay bound the abuse surface.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        '204':
+          description: The message was stored.
+        '404':
+          description: An unknown role or type, or no such (or an expired) session.
+        '409':
+          description: The slot is already written; slots are write-once.
+        '413':
+          description: The message is larger than the per-message cap.
+    get:
+      tags: [pairing]
+      operationId: getVoidbindPairSlot
+      security: []
+      summary: Read one role's message from a Voidbind pairing session.
+      description: >-
+        The peer polls the slot it is waiting on until it appears. Returns the
+        opaque bytes the named role stored, or a 404 while the slot is still
+        empty (the ordinary "keep waiting") or once the session has expired.
+      responses:
+        '200':
+          description: The stored message.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '404':
+          description: Not yet written, an unknown role or type, or no such session.
   /rest/{method}:
     parameters:
       - name: method
