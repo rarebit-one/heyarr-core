@@ -3156,6 +3156,27 @@ paths:
           $ref: "#/components/responses/Conflict"
 
   /api/v1/followed-sources/{id}:
+    get:
+      tags: [desired]
+      operationId: getFollowedSource
+      summary: One followed source.
+      description: |
+        A detail screen otherwise re-reads the whole list and picks its id out
+        of it (#430).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The subscription.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FollowedSource" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
     delete:
       tags: [desired]
       operationId: deleteFollowedSource
@@ -3175,6 +3196,50 @@ paths:
           schema: { type: string, enum: ["true", "false"] }
       responses:
         "204": { description: Unfollowed. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/followed-sources/{id}/items:
+    get:
+      tags: [desired]
+      operationId: listFollowedSourceItems
+      summary: What this source has archived, and what it merely knows about.
+      description: |
+        The Items the source's feed has yielded (ADR-0056), each with the
+        item-scoped want the source projected for it and that want's
+        acquisition axes (ADR-0057/0059) — the archive a person reads to answer
+        "what has this subscription actually got me" (#430).
+
+        `want` is **null** for an item no want was projected for: a
+        `backfill=from_now` source knows about back-catalogue episodes it
+        deliberately did not ask for, and reporting them rather than omitting
+        them is what makes this an archive and not a queue.
+
+        Paged by `item_key`, the source-stable identity the feed is stable on,
+        so a re-poll that inserts an older episode cannot shuffle the pages
+        under a reader.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+      responses:
+        "200":
+          description: A page of the source's items.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/FollowedItem" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -7627,11 +7692,17 @@ components:
         A followed source as the API presents it — the subscription plus the
         derived counts and health a caller reads to answer "is this working".
       required:
-        [id, work_id, type, feed_ref, quality_profile_id, monitor, backfill,
+        [id, work_id, title, type, feed_ref, quality_profile_id, monitor, backfill,
          items_known, items_archived, health, created_at]
       properties:
         id: { type: string }
         work_id: { type: string }
+        title:
+          type: string
+          description: |
+            The followed work's human name, inlined so a list of subscriptions
+            reads as titles rather than as work ids a client must join against
+            `/works` (#430). Empty when the work is gone.
         type:
           type: string
           description: The inferred source type. Reported, never a request field.
@@ -7658,6 +7729,61 @@ components:
         created_at: { type: string, format: date-time }
         last_polled_at: { type: string, format: date-time }
         next_poll_at: { type: string, format: date-time }
+
+    FollowedItem:
+      type: object
+      description: |
+        One Item a followed source's feed yielded (ADR-0056), with what heyarr
+        did about it.
+      required: [id, work_id, item_key, title, attributes, want, archived, created_at]
+      properties:
+        id: { type: string }
+        work_id: { type: string }
+        edition_id:
+          type: string
+          description: |
+            The grouping the item belongs to — a season, for a series. Absent
+            for a source type that has none.
+        item_key:
+          type: string
+          description: |
+            The source-stable identity the feed adapter supplied — an "S02E05",
+            a podcast GUID, a video id. It dedupes the item across polls and is
+            this listing's sort key.
+        title: { type: string }
+        published_at:
+          type: string
+          format: date-time
+          description: |
+            When the source said it emitted the item. Absent when the source did
+            not say — a real and distinct answer from any particular instant.
+        attributes:
+          type: object
+          description: Per-item, per-type facts (a season/episode number, a duration).
+        want:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/FollowedItemWant"
+          description: |
+            The item-scoped want this source projected, or null when it has
+            projected none.
+        archived:
+          type: boolean
+          description: |
+            heyarr holds bytes for this item that satisfy the source's profile.
+            Derived from the want's content axis, so a client need not know
+            §64's vocabulary to render a tick.
+        created_at: { type: string, format: date-time }
+
+    FollowedItemWant:
+      type: object
+      description: The projected want's id and §64's three axes.
+      required: [desired_item_id, phase, content, placement]
+      properties:
+        desired_item_id: { type: string }
+        phase: { type: string }
+        content: { type: string }
+        placement: { type: string }
 
     WorkSummary:
       type: object
