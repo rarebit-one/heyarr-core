@@ -352,3 +352,32 @@ type WorkAsset struct {
 	BlobSize *int64  `json:"blob_size"`
 	BlobMIME *string `json:"blob_mime"`
 }
+
+// WorkDetail is one work as GET /api/v1/works/{id} presents it: the Work plus
+// the external identifiers it is known by outside heyarr (ADR-0050, #431).
+//
+// It is a separate type rather than a field on Work because the identifiers are
+// a per-item read — a joined subquery per row — and putting them on Work would
+// either cost one lookup per row of every listing or render as a null nobody
+// can distinguish from "this work has none".
+type WorkDetail struct {
+	Work
+	// ExternalIDs maps a source ("tmdb", "imdb", "tvdb") to the identifier this
+	// entity carries there. Read-only: ADR-0050 is deliberately the read floor,
+	// and nothing here writes an identifier.
+	//
+	// A map rather than a list because a caller reads it by source
+	// (`external_ids.tvdb`), which is the whole reason it is exposed. The schema
+	// permits more than one row per (entity, source); the projection takes the
+	// lexically-first value, the same determinism rule /search's tvdb_id takes.
+	// Always present, `{}` when the work carries none.
+	ExternalIDs map[string]string `json:"external_ids"`
+}
+
+// EditionDetail is GET /api/v1/editions/{id}: an Edition and its external ids,
+// the sibling of WorkDetail. external_ids rows are keyed by (entity_type,
+// entity_id), and an edition is the other entity type they may name.
+type EditionDetail struct {
+	Edition
+	ExternalIDs map[string]string `json:"external_ids"`
+}
