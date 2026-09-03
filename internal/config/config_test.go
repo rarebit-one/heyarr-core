@@ -194,6 +194,18 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		{"relative library root", func(c *Config) {
 			c.Libraries = []Library{{Name: "films", ContentType: "movie", Roots: []string{"media"}}}
 		}, "must be an absolute path"},
+		{"tls cert without key", func(c *Config) {
+			c.HTTP.TLS = TLS{CertFile: "/etc/heyarr/tls.crt"}
+		}, "both cert_file and key_file or neither"},
+		{"tls key without cert", func(c *Config) {
+			c.HTTP.TLS = TLS{KeyFile: "/etc/heyarr/tls.key"}
+		}, "both cert_file and key_file or neither"},
+		{"public origin without scheme", func(c *Config) {
+			c.HTTP.PublicOrigin = "heyarr.example.com"
+		}, "absolute http(s) origin"},
+		{"public origin with bad scheme", func(c *Config) {
+			c.HTTP.PublicOrigin = "ftp://heyarr.example.com"
+		}, "absolute http(s) origin"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -207,6 +219,43 @@ func TestValidateRejectsBadValues(t *testing.T) {
 				t.Errorf("error = %q, want it to mention %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// TLS is all-or-nothing (ADR-0072): both files set turns it on, neither leaves
+// plain HTTP, and only the half-set states are refused (covered above).
+func TestTLSBothOrNeitherIsAccepted(t *testing.T) {
+	t.Run("neither is plain HTTP, the default", func(t *testing.T) {
+		cfg := Defaults()
+		if cfg.HTTP.TLS.Enabled() {
+			t.Error("the default has TLS on")
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate rejected the plain default: %v", err)
+		}
+	})
+	t.Run("both turns TLS on", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.HTTP.TLS = TLS{CertFile: "/etc/heyarr/tls.crt", KeyFile: "/etc/heyarr/tls.key"}
+		if !cfg.HTTP.TLS.Enabled() {
+			t.Error("both files set but TLS is not enabled")
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate rejected a complete TLS pair: %v", err)
+		}
+	})
+}
+
+// A public origin, when a valid absolute http(s) URL, is accepted and drives
+// the login/session origin (the override itself is proven in the controller's
+// renderbase test).
+func TestPublicOriginAcceptsAnAbsoluteOrigin(t *testing.T) {
+	for _, o := range []string{"https://heyarr.example.com", "http://192.168.16.5:7777", "https://heyarr.example.com/"} {
+		cfg := Defaults()
+		cfg.HTTP.PublicOrigin = o
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate rejected public_origin %q: %v", o, err)
+		}
 	}
 }
 

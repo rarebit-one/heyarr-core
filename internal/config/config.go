@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -116,7 +117,38 @@ type HTTP struct {
 	// UnixSocket is the preferred local transport; empty disables it.
 	UnixSocket string `koanf:"unix_socket"`
 	Auth       Auth   `koanf:"auth"`
+	// TLS optionally serves the TCP client API over HTTPS (ADR-0072). Both files
+	// set → the TCP listener is served with ServeTLS; neither → plain HTTP as
+	// before (the default); exactly one → a startup error. The unix socket is
+	// never wrapped: it is the local IPC transport the CLI and workers dial.
+	TLS TLS `koanf:"tls"`
+	// PublicOrigin is the external origin clients reach this node at — the
+	// scheme, host and any port a browser or television types, e.g.
+	// "https://heyarr.example.com". It is what the login/session rp origin and
+	// the rendered base URL use when set, because a listener derives an IP:port
+	// (renderBaseURL) and a Voidbind login needs the https HOSTNAME behind the
+	// reverse proxy or TLS listener, not the address the socket bound. Empty
+	// keeps today's derived behaviour (ADR-0072).
+	PublicOrigin string `koanf:"public_origin"`
 }
+
+// TLS points at the certificate and key that serve the client API over HTTPS.
+//
+// The two are all-or-nothing: both set turns TLS on, neither leaves the plain
+// HTTP behaviour untouched, and exactly one is refused at startup rather than
+// falling silently back to plaintext on a listener the operator believed was
+// encrypted (ADR-0072). The process only READS these files; issuing and
+// renewing the certificate is an out-of-process concern (a systemd + lego
+// DNS-01 timer), and a renewal is picked up on the next restart or SIGHUP.
+type TLS struct {
+	CertFile string `koanf:"cert_file"`
+	KeyFile  string `koanf:"key_file"`
+}
+
+// Enabled reports whether both halves are set, which is the one state that
+// turns TLS on. A method rather than a resolved field so the zero HTTP means
+// "plain", the same as an unmentioned key.
+func (t TLS) Enabled() bool { return t.CertFile != "" && t.KeyFile != "" }
 
 // Auth configures API authentication.
 type Auth struct {
@@ -409,6 +441,29 @@ func (c Config) Validate() error {
 	if c.Peer.Listen != "" {
 		if _, _, err := net.SplitHostPort(c.Peer.Listen); err != nil {
 			return fmt.Errorf("config: peer.listen %q is not a valid listen address: %w", c.Peer.Listen, err)
+		}
+	}
+
+	// TLS is all-or-nothing (ADR-0072). Exactly one half set is the dangerous
+	// state — a listener the operator believed was encrypted, quietly serving
+	// plaintext, or a key with no certificate — so it is refused here rather
+	// than falling back. Both-set and neither-set are the two supported shapes.
+	if (c.HTTP.TLS.CertFile == "") != (c.HTTP.TLS.KeyFile == "") {
+		return fmt.Errorf(
+			"config: http.tls needs both cert_file and key_file or neither — "+
+				"got cert_file=%q key_file=%q; set both to serve HTTPS or clear both to serve plain HTTP",
+			c.HTTP.TLS.CertFile, c.HTTP.TLS.KeyFile)
+	}
+
+	// A public origin, when set, must be an absolute http(s) URL with a host —
+	// it becomes the login/session rp origin, and an origin that is merely
+	// plausible produces a browser that cannot complete a login, which reads as
+	// Heyarr being broken rather than as a misconfiguration.
+	if o := strings.TrimSpace(c.HTTP.PublicOrigin); o != "" {
+		u, err := url.Parse(o)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf(
+				"config: http.public_origin %q is not an absolute http(s) origin (e.g. https://heyarr.example.com)", o)
 		}
 	}
 

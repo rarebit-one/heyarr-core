@@ -20,6 +20,17 @@ import (
 // ContentURL and a token, and simply carries no renderer URL — the same shape
 // as a node with no signing secret.
 func renderBaseURL(cfg config.Config) string {
+	// An explicit public origin is the operator's statement of the external
+	// scheme+host clients reach this node at — the https hostname behind a TLS
+	// listener or reverse proxy (ADR-0072). It is the most authoritative source
+	// there is, so it beats both the peer endpoint and anything derived from the
+	// listener address, and it is exactly what a Voidbind login rp origin needs:
+	// a hostname, not the IP:port a socket happened to bind. Validated at config
+	// load, so it is an absolute http(s) origin by the time it reaches here.
+	if origin := strings.TrimSpace(cfg.HTTP.PublicOrigin); origin != "" {
+		return strings.TrimRight(origin, "/")
+	}
+
 	// A configured peer endpoint is the operator's own statement of how this
 	// node is reached, which beats anything derivable. It is skipped only when
 	// it names a transport a renderer cannot dial.
