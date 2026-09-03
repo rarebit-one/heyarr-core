@@ -9,5 +9,9 @@
     "director": "Villeneuve"
   },
   "created_at": "2026-08-01T00:00:00Z",
-  "updated_at": "2026-08-01T00:00:00Z"
+  "updated_at": "2026-08-01T00:00:00Z",
+  "external_ids": {
+    "imdb": "tt2543164",
+    "tmdb": "329865"
+  }
 }

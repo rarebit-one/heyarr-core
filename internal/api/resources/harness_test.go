@@ -557,6 +557,15 @@ func (h *harness) seed() *harness {
 		(?, 'book', 'dune|1965', 'Dune', 'dune', 1965, '{}', ?, ?)`,
 		work1ID, seedTime, seedTime, work2ID, seedTime, seedTime, work3ID, seedTime, seedTime)
 
+	// External identifiers for the first work and its edition (ADR-0050, #431).
+	// Two sources on the work and one on the edition, so the detail shapes show
+	// both entity types rather than only the one that happened to be wired.
+	h.exec(`INSERT INTO external_ids (id, entity_type, entity_id, source, value) VALUES
+		('01990000-0000-7000-8000-0000000000x1', 'work', ?, 'tmdb', '329865'),
+		('01990000-0000-7000-8000-0000000000x2', 'work', ?, 'imdb', 'tt2543164'),
+		('01990000-0000-7000-8000-0000000000x3', 'edition', ?, 'tvdb', '424242')`,
+		work1ID, work1ID, edition1ID)
+
 	h.exec(`INSERT INTO editions (id, work_id, label, edition_type, language, attributes, created_at) VALUES
 		(?, ?, '2160p', 'remux', 'en', '{"hdr":"dv"}', ?),
 		(?, ?, '1080p', 'web', 'en', '{}', ?),

@@ -105,14 +105,58 @@ func (a *API) listWorks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) getWork(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
 	row := a.reader.QueryRowContext(r.Context(),
-		`SELECT `+workColumns+` FROM works WHERE id = ?`, chi.URLParam(r, "id"))
+		`SELECT `+workColumns+` FROM works WHERE id = ?`, id)
 	work, err := scanWork(row)
 	if err != nil {
 		a.fail(w, r, "work", err)
 		return
 	}
-	a.write(w, r, http.StatusOK, work)
+	ids, err := a.externalIDs(r.Context(), "work", id)
+	if err != nil {
+		a.fail(w, r, "work", err)
+		return
+	}
+	a.write(w, r, http.StatusOK, WorkDetail{Work: work, ExternalIDs: ids})
+}
+
+// externalIDs projects the external_ids rows for one entity (ADR-0050, #431).
+//
+// Read-only, and empty rather than absent when nothing matches: ADR-0025's
+// "a missing capability degrades to no match, never an error" applies to a
+// catalogue identifier the same way, so a work nobody has reconciled yet
+// answers `{}` and a caller can probe cheaply.
+//
+// The rows are ordered by (source, value) and the FIRST value for a source
+// wins. The schema's UNIQUE (source, value, entity_type) does not forbid two
+// tmdb rows on one work, and picking the lexically-first is the same
+// determinism rule /search's tvdb_id projection takes — an arbitrary but
+// STABLE answer beats one that moves with the physical row order.
+func (a *API) externalIDs(ctx context.Context, entityType, entityID string) (map[string]string, error) {
+	rows, err := a.reader.QueryContext(ctx,
+		`SELECT source, value FROM external_ids
+		 WHERE entity_type = ? AND entity_id = ? ORDER BY source, value`,
+		entityType, entityID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := map[string]string{}
+	for rows.Next() {
+		var source, value string
+		if err := rows.Scan(&source, &value); err != nil {
+			return nil, err
+		}
+		if _, seen := out[source]; !seen {
+			out[source] = value
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -136,14 +180,20 @@ func scanEdition(row interface{ Scan(...any) error }) (Edition, error) {
 }
 
 func (a *API) getEdition(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
 	row := a.reader.QueryRowContext(r.Context(),
-		`SELECT `+editionColumns+` FROM editions WHERE id = ?`, chi.URLParam(r, "id"))
+		`SELECT `+editionColumns+` FROM editions WHERE id = ?`, id)
 	edition, err := scanEdition(row)
 	if err != nil {
 		a.fail(w, r, "edition", err)
 		return
 	}
-	a.write(w, r, http.StatusOK, edition)
+	ids, err := a.externalIDs(r.Context(), "edition", id)
+	if err != nil {
+		a.fail(w, r, "edition", err)
+		return
+	}
+	a.write(w, r, http.StatusOK, EditionDetail{Edition: edition, ExternalIDs: ids})
 }
 
 // ---------------------------------------------------------------------------

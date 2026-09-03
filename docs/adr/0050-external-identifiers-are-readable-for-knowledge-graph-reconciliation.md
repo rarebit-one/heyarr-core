@@ -1,6 +1,10 @@
 # 0050. External identifiers are readable, for knowledge-graph reconciliation
 
-**Status:** Accepted (2026-08-27) — **MCP tool only** (maintainer sign-off received; REST twin deferred until a REST consumer exists)
+**Status:** Accepted (2026-08-27) — **MCP tool, plus the REST read this record's
+revisit clause anticipated** (2026-09-03, #431: `external_ids` inlined on `GET
+/works/{id}` and `GET /editions/{id}` once heyarr-mobile became the non-MCP
+consumer. Additive and read-only, so no decision here re-opens; the shape is a
+source-keyed object rather than the reverse lookup, which stays MCP-only)
 **Date:** 2026-08-27
 
 ## Context
@@ -118,7 +122,12 @@ Read-only projection of rows heyarr already owns. Lands with a boundary test
   and out of scope here; this ADR is deliberately the read-only floor.
 - **Add the REST twins** (`GET /api/v1/works/{id}/external-ids` + reverse) the day
   a non-MCP consumer needs them — additive, no decision to re-open, just the
-  hand-written OpenAPI + contract test of ADR-0015.
+  hand-written OpenAPI + contract test of ADR-0015. **Done, forward direction
+  only (2026-09-03, #431):** the identifiers are inlined on the two detail reads
+  as `external_ids: {source: value}` rather than mounted as a sub-resource — a
+  work-detail screen reads the work and its ids in one request, which is the
+  consumer that asked. The REVERSE lookup (source+value → entity) has no REST
+  consumer yet and stays `get_external_ids`.
 
 ---
 
