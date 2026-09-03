@@ -31,6 +31,9 @@ type Work struct {
 	Attributes  json.RawMessage `json:"attributes"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
+	// ExternalIDs is present on the detail read only (ADR-0050): source → id,
+	// never null there; absent on listings.
+	ExternalIDs map[string]string `json:"external_ids,omitempty"`
 }
 
 // Edition is one concrete form of a Work.
@@ -42,6 +45,8 @@ type Edition struct {
 	Language    *string         `json:"language"`
 	Attributes  json.RawMessage `json:"attributes"`
 	CreatedAt   time.Time       `json:"created_at"`
+	// ExternalIDs mirrors Work.ExternalIDs on the edition detail read.
+	ExternalIDs map[string]string `json:"external_ids,omitempty"`
 }
 
 // Asset is a file belonging to an Edition. BlobHash is null for a `linked`

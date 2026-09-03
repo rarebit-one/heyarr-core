@@ -239,14 +239,14 @@ paths:
     get:
       tags: [content]
       operationId: getWork
-      summary: One work.
+      summary: One work, with its external identifiers.
       parameters: [{ $ref: "#/components/parameters/id" }]
       responses:
         "200":
           description: The work.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Work" }
+              schema: { $ref: "#/components/schemas/WorkDetail" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -293,14 +293,14 @@ paths:
     get:
       tags: [content]
       operationId: getEdition
-      summary: One edition.
+      summary: One edition, with its external identifiers.
       parameters: [{ $ref: "#/components/parameters/id" }]
       responses:
         "200":
           description: The edition.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Edition" }
+              schema: { $ref: "#/components/schemas/EditionDetail" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -5783,6 +5783,37 @@ components:
             that registering a fourth content type is not a migration.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    ExternalIDs:
+      type: object
+      additionalProperties: { type: string }
+      description: |
+        The identifiers this entity is known by outside heyarr, keyed by source
+        (`tmdb`, `imdb`, `tvdb`) — ADR-0050's REST twin, read-only (#431).
+        `{}` when nothing has been reconciled: an absent identifier is "no
+        match", never an error (ADR-0025).
+
+        Where the catalog holds more than one identifier for one source, the
+        lexically-first value is reported — an arbitrary but STABLE answer,
+        the same determinism rule `/search`'s `tvdb_id` takes.
+
+    WorkDetail:
+      description: A work with its external identifiers. Returned by `GET /works/{id}`.
+      allOf:
+        - $ref: "#/components/schemas/Work"
+        - type: object
+          required: [external_ids]
+          properties:
+            external_ids: { $ref: "#/components/schemas/ExternalIDs" }
+
+    EditionDetail:
+      description: An edition with its external identifiers. Returned by `GET /editions/{id}`.
+      allOf:
+        - $ref: "#/components/schemas/Edition"
+        - type: object
+          required: [external_ids]
+          properties:
+            external_ids: { $ref: "#/components/schemas/ExternalIDs" }
 
     Edition:
       type: object
