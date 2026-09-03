@@ -55,7 +55,7 @@ policy refusal below) carries no header at all. The client contract becomes:
 **re-mint and retry once when the header is present; treat a bare 401 as
 terminal.**
 
-**A possession proof may not grant itself more than ten minutes.**
+**A possession proof may not grant itself more than ten minutes** (raised to one hour on 2026-09-03 until the phone client can re-mint without a biometric — heyarr-core #444 — then back to ten).
 `deviceauth.MaxPossessionTTL = 10m`, checked on `exp - iat` — the window the
 device CLAIMED — inside `verifyPossession`, after the signature is verified, so
 both the authentication path and self-enrolment (ADR-0067) inherit it and neither

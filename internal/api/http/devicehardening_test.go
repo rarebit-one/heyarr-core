@@ -114,9 +114,9 @@ func TestPossessionTTLCapReadsTheClaimedWindowNotTheRemainder(t *testing.T) {
 
 	// Signed an hour ago for an hour: a minute of it is left, which is well
 	// inside the cap, and it must still be refused.
-	over := h.credentialAt(t, time.Now().UTC().Add(-59*time.Minute), time.Hour)
+	over := h.credentialAt(t, time.Now().UTC().Add(-59*time.Minute), 2*deviceauth.MaxPossessionTTL)
 	if code := h.get(t, "Device "+over); code != http.StatusUnauthorized {
-		t.Errorf("an hour-long proof with a minute left = %d, want 401", code)
+		t.Errorf("a proof twice the cap with a minute left = %d, want 401", code)
 	}
 }
 

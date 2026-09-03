@@ -218,12 +218,17 @@ func verifyPossession(proof, deviceKey, opToken string, now time.Time) error {
 // a biometric prompt each time — so the answer is a CEILING a client may batch
 // beneath rather than a fixed value that would force a prompt per request.
 //
-// Ten minutes is that ceiling: five times the reference TTL, so batching is
-// genuinely useful, and short enough that a stolen proof is stale before anyone
-// notices it is worth stealing. It is checked on `exp - iat` — the window the
-// device CLAIMED — rather than on the time remaining, because the remaining time
-// of an hour-long proof looks perfectly ordinary nine minutes before it expires.
-const MaxPossessionTTL = 10 * time.Minute
+// One hour is that ceiling for now. ADR-0070 chose ten minutes and said to
+// revisit if a client appeared for which that was too short; heyarr-mobile was
+// that client on day one (2026-09-03): its sealed key demands a fresh biometric
+// per signature, so it mints hour-long proofs and every read was refused with
+// device_possession_ttl_too_long. The right fix is on the client — a sealed
+// key whose user-auth window outlives the proof, so ten-minute proofs cost
+// nothing (heyarr-core #444) — after which this drops back to ten minutes. It
+// is checked on `exp - iat` — the window the device CLAIMED — rather than on
+// the time remaining, because the remaining time of a long proof looks
+// perfectly ordinary a few minutes before it expires.
+const MaxPossessionTTL = time.Hour
 
 // ErrPossessionTTLTooLong is a proof whose own window exceeds MaxPossessionTTL.
 // It is distinct from ErrPossessionExpired because it means the opposite thing:
