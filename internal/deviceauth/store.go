@@ -427,3 +427,21 @@ func scanDevice(row rowScanner) (Device, error) {
 	}
 	return d, nil
 }
+
+// DeviceActive reports whether a device key is still a member here: enrolled,
+// and not revoked. It answers nil when it is, and the store's own refusal —
+// ErrUnknownDevice or ErrDeviceRevoked — when it is not.
+//
+// It exists for the web-login path (#420, ADR-0053): a session pins the device
+// key that approved it, and until now nothing re-read that pin, so revoking a
+// device left its already-minted sessions authenticating until they expired. It
+// is the same question Verify asks in passing, exposed on its own so a caller
+// that holds only a device key — which is all a session principal carries — can
+// ask it without a credential to verify.
+func (s *Store) DeviceActive(ctx context.Context, deviceKey string) error {
+	device, err := s.LookupDevice(ctx, deviceKey)
+	if err != nil {
+		return err
+	}
+	return device.Active(s.clock.Now())
+}

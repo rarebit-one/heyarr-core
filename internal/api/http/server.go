@@ -63,6 +63,11 @@ type Options struct {
 	// unrecognised credential. It is never a substitute for Verifier: the two
 	// schemes coexist, bearer for services and device for users.
 	DeviceVerifier DeviceVerifier
+	// DeviceMembership re-checks, on every web-login session request, that the
+	// device which approved that session is still enrolled and unrevoked
+	// (#420). Optional: a nil one leaves the session path exactly as it was,
+	// which is the right state where no identity store exists to revoke in.
+	DeviceMembership DeviceMembership
 	// SessionValidator authenticates an opaque web-login session token presented
 	// under the "Bearer" scheme — the credential a browser or TV holds after a
 	// Voidbind QR login the broker approved (ADR-0053). Nil disables the scheme,
@@ -144,20 +149,21 @@ type Options struct {
 
 // Server is the HTTP API.
 type Server struct {
-	cfg      config.Config
-	log      *slog.Logger
-	db       *sqlite.DB
-	verifier *auth.Verifier
-	deviceV  DeviceVerifier
-	sessions SessionValidator
-	mgmtAuth ManagementAuthorizer
-	events   EventHead
-	media    []ToolInfo
-	build    buildinfo.Info
-	schema   int64
-	known    int64
-	casRoot  string
-	now      func() time.Time
+	cfg           config.Config
+	log           *slog.Logger
+	db            *sqlite.DB
+	verifier      *auth.Verifier
+	deviceV       DeviceVerifier
+	sessions      SessionValidator
+	deviceMembers DeviceMembership
+	mgmtAuth      ManagementAuthorizer
+	events        EventHead
+	media         []ToolInfo
+	build         buildinfo.Info
+	schema        int64
+	known         int64
+	casRoot       string
+	now           func() time.Time
 
 	peers        PeerMembership
 	peerLiveness PeerLiveness
@@ -217,14 +223,15 @@ func New(opts Options) (*Server, error) {
 	}
 
 	s := &Server{
-		cfg:      opts.Config,
-		log:      log.With("component", "http"),
-		db:       opts.DB,
-		verifier: opts.Verifier,
-		deviceV:  opts.DeviceVerifier,
-		sessions: opts.SessionValidator,
-		mgmtAuth: opts.ManagementAuthorizer,
-		events:   opts.Events,
+		cfg:           opts.Config,
+		log:           log.With("component", "http"),
+		db:            opts.DB,
+		verifier:      opts.Verifier,
+		deviceV:       opts.DeviceVerifier,
+		sessions:      opts.SessionValidator,
+		deviceMembers: opts.DeviceMembership,
+		mgmtAuth:      opts.ManagementAuthorizer,
+		events:        opts.Events,
 		// Normalised so the JSON shape is stable: a nil slice marshals as
 		// null, and a client parsing `media` should not have to handle both
 		// null and [] for the same "nothing here".
