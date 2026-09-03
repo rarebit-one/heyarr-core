@@ -80,7 +80,18 @@ const (
 	// content.* rather than desired.* deliberately: a Work appearing is a fact
 	// about the catalog, and a subscriber watching the catalog grow should see
 	// it whichever path created it. The payload says which.
-	TypeWorkCreated      = "content.work.created"
+	TypeWorkCreated = "content.work.created"
+	// TypeWorkUpdated is a work's catalogue facts being corrected — its title,
+	// year or content type (#428). It is a separate type from the creation
+	// rather than a re-emitted creation, because a subscriber that built an
+	// index from content.work.created needs to know the difference between a
+	// work appearing and a work being renamed.
+	TypeWorkUpdated = "content.work.updated"
+	// TypeWorkDeleted is a work leaving the catalog, with its editions, assets
+	// and wants (#428). Logical, like every deletion here (ADR-0018): no byte
+	// is unlinked, and the payload says so — the blobs the removed assets
+	// referenced are the GC sweeper's to reclaim once nothing references them.
+	TypeWorkDeleted      = "content.work.deleted"
 	TypeLibraryCreated   = "content.library.created"
 	TypeLibraryRootAdded = "content.library_root.added"
 	TypeAssetMissing     = "content.asset.missing"
