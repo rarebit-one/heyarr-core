@@ -250,44 +250,6 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-
-  /api/v1/works/{id}/assets:
-    get:
-      tags: [content]
-      operationId: listWorkAssets
-      summary: The files belonging to one work.
-      description: |
-        Joined through the work's editions, with the edition label and the
-        blob's size and media type inlined — the two extra reads a work-detail
-        screen would otherwise make per asset (#429).
-
-        An unknown work is a 404, never an empty page: "this work has no files"
-        and "there is no such work" are different answers.
-      parameters:
-        - $ref: "#/components/parameters/id"
-        - $ref: "#/components/parameters/cursor"
-        - $ref: "#/components/parameters/limit"
-        - name: state
-          in: query
-          schema: { type: string, enum: [present, missing] }
-          description: The same filter `GET /assets` takes.
-      responses:
-        "200":
-          description: A page of the work's files.
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/Page"
-                  - type: object
-                    properties:
-                      items:
-                        type: array
-                        items: { $ref: "#/components/schemas/WorkAsset" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
     patch:
       tags: [content]
       operationId: patchWork
@@ -354,6 +316,44 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+
+  /api/v1/works/{id}/assets:
+    get:
+      tags: [content]
+      operationId: listWorkAssets
+      summary: The files belonging to one work.
+      description: |
+        Joined through the work's editions, with the edition label and the
+        blob's size and media type inlined — the two extra reads a work-detail
+        screen would otherwise make per asset (#429).
+
+        An unknown work is a 404, never an empty page: "this work has no files"
+        and "there is no such work" are different answers.
+      parameters:
+        - $ref: "#/components/parameters/id"
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+        - name: state
+          in: query
+          schema: { type: string, enum: [present, missing] }
+          description: The same filter `GET /assets` takes.
+      responses:
+        "200":
+          description: A page of the work's files.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/WorkAsset" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/editions/{id}:
     get:
       tags: [content]
