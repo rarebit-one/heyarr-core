@@ -2346,6 +2346,30 @@ paths:
         with no ffprobe (ADR-0023), which cannot transcode either — so
         planning TRANSCODE there would make the entire library unplayable,
         while DIRECT makes most of it work and fails visibly when it does not.
+
+        **A client that says what it can decode gets the leg (ADR-0069).**
+        Send `client` — the containers, video and audio codecs it decodes and
+        a height ceiling — instead of, or as well as, `device_id`, and the
+        answer additionally carries `mode`, `url`, `mime`, `reason` and
+        `source`:
+
+        - `mode: direct` — fetch `url`, which is the ordinary blob endpoint.
+        - `mode: stream` — fetch `url`, which is
+          `GET /api/v1/playback/stream/{token}`: an on-the-fly fragmented MP4
+          with the video copied where the client decodes it and the audio
+          re-encoded to stereo AAC where it does not (the AC-3 and MP2
+          cases), the whole thing re-wrapped when the container is the
+          problem (AVI), and the video re-encoded and capped to `max_height`
+          only when the client cannot decode the picture. `reason` says which.
+        - `mode: unplayable` — no peer holds the bytes; `reason` is routing's.
+
+        With `client`, media nothing has probed is **probed now** when this
+        node has ffprobe and holds the bytes, and the result is cached in
+        `blob_probes` exactly as a worker's probe would be. A stream is
+        produced only by the node holding the replica; a controller routing
+        to another peer answers `direct` on that peer and says why. A node
+        with no ffmpeg answers `direct` with the reason and the note that it
+        cannot repackage — the bytes and the truth, not a black player.
       requestBody:
         required: true
         content:
@@ -2361,6 +2385,77 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/playback/stream/{token}:
+    get:
+      tags: [playback]
+      operationId: streamPlayback
+      summary: The on-the-fly repackage a `stream` plan points at (ADR-0069).
+      description: |
+        Fragmented MP4 (`video/mp4`), produced by one ffmpeg per request from
+        the blob the token names, written as it is made. The token is what
+        `POST /playback/plan` returned in `url` for `mode: stream`: signed by
+        this node, bound to the blob, to the repackage the planner decided
+        (copy or re-encode, per stream, and the height cap), and to the
+        **credential that asked for the plan** — present it with any other
+        credential and it is refused. It is good for an hour from planning;
+        the stream itself is not cut off at expiry, only its start is.
+
+        **No ranges, no `Content-Length`, no seeking in v1.** The bytes do not
+        exist until ffmpeg produces them, so a `Range` header is ignored and
+        the response is a `200` with no length. A player treats this as a
+        live, unseekable stream — Media3 does, given fragmented MP4 with no
+        Range support. To seek, re-request with `?start=<seconds>`: a new
+        request restarts ffmpeg with an input seek from that instant.
+
+        The node runs at most `media.stream_concurrency` of these at once
+        (default two — each is an ffmpeg, and one re-encoding video is a
+        core). Past the cap the answer is `429` with `Retry-After`, never a
+        queue: a client waiting on a stream that has not started is a black
+        player. When the client disconnects, ffmpeg is killed at once.
+
+        Every refusal of the token — bad signature, expired, another
+        credential's, a blob this node does not hold — is the same opaque
+        `404`; the reason goes to the log under a bounded label.
+
+        Same authentication as everything else under `/api/v1`: `read` scope,
+        Bearer or Device.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+        - name: start
+          in: query
+          required: false
+          description: Restart the stream from this many seconds into the source.
+          schema: { type: number, minimum: 0 }
+      responses:
+        "200":
+          description: "Fragmented MP4, streamed. No `Content-Length`; `Accept-Ranges: none`."
+          headers:
+            Cache-Control:
+              schema: { type: string }
+              description: "`no-store` — the bytes are produced per request."
+          content:
+            video/mp4:
+              schema: { type: string, format: binary }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: |
+            The token does not verify, has expired, was planned for another
+            credential, or names bytes this node does not hold. Deliberately
+            one answer for all four.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429":
+          description: Every stream slot on this node is in use. `Retry-After` is set.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /api/v1/consumption/sessions:
     get:
@@ -6780,10 +6875,57 @@ components:
 
     PlanRequest:
       type: object
-      required: [asset_id, device_id]
+      required: [asset_id]
       properties:
         asset_id: { type: string }
-        device_id: { type: string }
+        device_id:
+          type: string
+          description: |
+            A registered device. Required unless `client` is given; when both
+            are given the device's profile decides and `client` decides the leg.
+        client:
+          allOf: [{ $ref: "#/components/schemas/ClientCapabilities" }]
+          description: |
+            What the caller can decode (ADR-0069). Present, the answer carries
+            the leg — `mode`, `url`, `mime`, `reason`, `source` — and
+            `device_id` may be omitted.
+
+    ClientCapabilities:
+      type: object
+      description: |
+        A client's decoders, in ffprobe's codec vocabulary (`h264`, `hevc`,
+        `av1`, `vp9`, `aac`, `ac3`, `eac3`, `opus`, `mp3`, `mp2`) and the
+        ordinary container names (`mp4`, `mkv`, `webm`, `avi`). A client that
+        declares nothing at all is handed the bytes.
+      properties:
+        containers:
+          type: array
+          items: { type: string }
+        video:
+          type: array
+          items: { type: string }
+        audio:
+          type: array
+          items: { type: string }
+        max_height:
+          type: integer
+          minimum: 0
+          description: The tallest picture the client will take. Zero or absent means no limit.
+      example:
+        containers: [mp4, mkv, webm]
+        video: [h264, hevc, vp9, av1]
+        audio: [aac, opus, mp3, eac3]
+        max_height: 1080
+
+    PlaybackSource:
+      type: object
+      description: What the probe found — the first video and audio stream.
+      properties:
+        container: { type: string, description: "ffprobe's format_name, verbatim." }
+        video: { type: string }
+        audio: { type: string }
+        width: { type: integer }
+        height: { type: integer }
 
     PlaybackPlan:
       type: object
@@ -6834,6 +6976,35 @@ components:
             refusal. "Unavailable" with nothing after it cannot tell a peer that
             is down from a peer that never had the bytes, and those have
             different fixes.
+        mode:
+          type: string
+          enum: [direct, stream, unplayable]
+          description: |
+            The leg, present only when the request carried `client`
+            (ADR-0069). `direct` — fetch `url`, the ordinary blob endpoint.
+            `stream` — fetch `url`, the on-the-fly repackage. `unplayable` —
+            nothing holds the bytes.
+        url:
+          type: string
+          description: |
+            What to fetch for `mode`: `/api/v1/blobs/{hash}/content` for
+            direct, `/api/v1/playback/stream/{token}` for stream. Relative,
+            like `content_url`; for a direct plan on another peer it is
+            absolute on that peer.
+        mime:
+          type: string
+          description: "`video/mp4` for a stream; the asset's declared type for direct."
+        reason:
+          type: string
+          description: |
+            One sentence saying why the mode is not a clean direct — e.g.
+            `audio ac3 not decodable by client`, `container avi not playable
+            by client; audio mp2 not decodable by client`, `video 2160p
+            exceeds client max_height 1080 (transcoding video)`. Empty for a
+            clean direct. The same facts are in `reasons` as stable codes.
+        source:
+          allOf: [{ $ref: "#/components/schemas/PlaybackSource" }]
+          description: What the probe found, when anything has probed the bytes.
 
     RoutingDecision:
       type: object

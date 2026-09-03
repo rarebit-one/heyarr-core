@@ -221,6 +221,11 @@ type Log struct {
 type Media struct {
 	FFprobePath string `koanf:"ffprobe_path"`
 	FFmpegPath  string `koanf:"ffmpeg_path"`
+	// StreamConcurrency caps the on-the-fly repackages a node runs at once
+	// (ADR-0069). Each is one ffmpeg, and one that re-encodes video is a
+	// core. Zero means the default of two; a client past the cap is told to
+	// retry rather than queued.
+	StreamConcurrency int `koanf:"stream_concurrency"`
 }
 
 // PeerEndpoint is how another role reaches this node's API.
@@ -273,7 +278,7 @@ func Defaults() Config {
 		Log:      Log{Level: "info", Format: "auto"},
 		CAS:      CAS{},
 		Database: Database{},
-		Media:    Media{},
+		Media:    Media{StreamConcurrency: 2},
 		Backup:   Backup{Interval: "5m"},
 	}
 }
@@ -391,6 +396,9 @@ func (c Config) Validate() error {
 	}
 	if c.Peer.Name == "" {
 		return errors.New("config: peer.name must be set")
+	}
+	if c.Media.StreamConcurrency < 0 {
+		return fmt.Errorf("config: media.stream_concurrency must be zero or more, got %d", c.Media.StreamConcurrency)
 	}
 	// The peer surface's address is checked for shape only. There is
 	// deliberately no loopback rule here and no equivalent of ADR-0011's

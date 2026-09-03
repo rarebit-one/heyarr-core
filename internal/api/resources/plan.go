@@ -23,8 +23,14 @@ import (
 
 // PlanRequest is the POST /playback/plan body.
 type PlanRequest struct {
-	AssetID  string `json:"asset_id"`
+	AssetID string `json:"asset_id"`
+	// DeviceID names a registered device. Required unless Client is given.
 	DeviceID string `json:"device_id"`
+	// Client is what the CALLER can decode, for a client that is not a
+	// registered device — a phone, a browser (ADR-0069). When present the
+	// answer carries the leg (mode, url, mime, reason, source) as well as the
+	// decision, and device_id may be omitted.
+	Client *ClientCaps `json:"client,omitempty"`
 }
 
 // PlanResponse is the planner's answer, rendered.
@@ -50,6 +56,19 @@ type PlanResponse struct {
 	// to diagnose, because it cannot tell a peer that is down from a peer that
 	// never had the bytes, and those have different fixes.
 	Routing *RoutingResponse `json:"routing,omitempty"`
+
+	// The leg, present only when the request carried `client` (ADR-0069).
+	//
+	// Mode is direct, stream or unplayable; URL is what to fetch — the blob
+	// endpoint or the stream route — and MIME is what it will be served as.
+	// Reason is one sentence saying why the mode is not a clean direct.
+	Mode   string `json:"mode,omitempty"`
+	URL    string `json:"url,omitempty"`
+	MIME   string `json:"mime,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	// Source is what the probe found, so a client can show "AC-3 5.1" next
+	// to the reason it is being served a stream.
+	Source *SourceInfo `json:"source,omitempty"`
 }
 
 // RoutingResponse is the source selection, rendered (§32).
@@ -84,13 +103,19 @@ func (a *API) planPlayback(w http.ResponseWriter, r *http.Request) {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	}
-	for _, f := range []struct{ name, value string }{
-		{"asset_id", body.AssetID}, {"device_id", body.DeviceID},
-	} {
-		if err := required(f.name, f.value); err != nil {
-			httpapi.Fail(w, r, problem.BadRequest(err.Error()))
-			return
-		}
+	if err := required("asset_id", body.AssetID); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	// A client that says what it can decode gets the leg as well as the
+	// decision, and need not be a registered device (ADR-0069).
+	if body.Client != nil {
+		a.planForClient(w, r, body)
+		return
+	}
+	if err := required("device_id", body.DeviceID); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
 	}
 
 	device, err := a.deviceProfile(r.Context(), body.DeviceID)

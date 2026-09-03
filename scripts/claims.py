@@ -57,6 +57,11 @@ class Claim:
     why: str = ""
     issue: str = ""
     evidence: str = ""
+    # needs names a machine capability (ffmpeg, ffprobe, ...) the evidence
+    # cannot appear without. A proven claim is then exempt on a run whose
+    # epilogue records that capability as absent — and ONLY then. See the
+    # ledger header.
+    needs: str = ""
     problems: list[str] = field(default_factory=list)
 
 
@@ -68,7 +73,7 @@ def parse(text: str) -> list[Claim]:
     as a missing feature — sending somebody to look at working code.
     """
     claims: list[Claim] = []
-    known = {"state", "ref", "why", "issue", "evidence"}
+    known = {"state", "ref", "why", "issue", "evidence", "needs"}
     for number, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -128,11 +133,23 @@ def main(argv: list[str]) -> int:
     head, marker, _ = transcript.partition(EPILOGUE_MARKER)
     body = head if marker else transcript
 
-    missing = [c for c in claims if c.state == PROVEN and c.evidence not in transcript]
+    # A claim that needs a capability this machine lacks is exempt, but only
+    # on the strength of the epilogue's own capability ledger saying so —
+    # the line scripts/acceptance.sh prints for every not_exercised block.
+    # Absent that line, the claim is judged like any other: a run on an
+    # equipped machine that stops producing the evidence still fails.
+    def unavailable(c: Claim) -> bool:
+        return bool(c.needs) and f"absent capability: {c.needs} " in transcript
+
+    missing = [
+        c
+        for c in claims
+        if c.state == PROVEN and c.evidence not in transcript and not unavailable(c)
+    ]
     narrated = [
         c
         for c in claims
-        if c.state == PROVEN and c not in missing and c.evidence not in body
+        if c.state == PROVEN and c.evidence in transcript and c.evidence not in body
     ]
     pending = [c for c in claims if c.state == PENDING]
     # A pending claim whose evidence HAS appeared is not a failure — it is the
