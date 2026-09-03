@@ -91,7 +91,13 @@ const (
 	// and wants (#428). Logical, like every deletion here (ADR-0018): no byte
 	// is unlinked, and the payload says so — the blobs the removed assets
 	// referenced are the GC sweeper's to reclaim once nothing references them.
-	TypeWorkDeleted      = "content.work.deleted"
+	TypeWorkDeleted = "content.work.deleted"
+	// TypeEditionDeleted is one edition leaving the catalog, with its assets,
+	// its byte-less items and the wants scoped beneath it (#439 follow-up). Its
+	// parent work stays; only this grouping goes. Logical, like every deletion
+	// here (ADR-0018): no byte is unlinked, and the payload says so — a rescan
+	// re-derives the edition from the files that remain.
+	TypeEditionDeleted   = "content.edition.deleted"
 	TypeLibraryCreated   = "content.library.created"
 	TypeLibraryRootAdded = "content.library_root.added"
 	TypeAssetMissing     = "content.asset.missing"
