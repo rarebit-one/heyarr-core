@@ -77,3 +77,4 @@ An ADR that merely describes the code is not worth having.
 | [0068](0068-membership-ops-replace-root-only-certs.md) | Membership ops replace root-only certs | Accepted |
 | [0069](0069-a-client-that-cannot-decode-the-source-gets-an-on-the-fly-repackage.md) | A client that cannot decode the source gets an on-the-fly repackage | Accepted |
 | [0070](0070-a-device-refusal-hints-only-at-a-clock.md) | A device refusal hints only at a clock, a proof's life is capped, and a session dies with its approver | Accepted |
+| [0071](0071-an-edition-is-deletable-and-a-followed-work-refuses-it.md) | An edition is deletable, logically, and a followed work refuses it | Accepted |

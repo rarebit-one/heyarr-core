@@ -323,6 +323,11 @@ func (a *API) Mount(r chi.Router) {
 	// logical in ADR-0018's sense: catalog rows go, bytes stay.
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Patch("/works/{id}", a.patchWork)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Delete("/works/{id}", a.deleteWork)
+	// Removing an edition (#439 follow-up). The same class of library
+	// management as removing a work or an asset — so `write`, not `admin`.
+	// Logical in ADR-0018's sense: catalog rows go, bytes stay, the parent
+	// work is untouched.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Delete("/editions/{id}", a.deleteEdition)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/jobs/{id}/retry", a.retryJob)
 	// Registering a device is a write, not an admin action: a television
 	// announcing what it can play is ordinary client traffic, and requiring an
