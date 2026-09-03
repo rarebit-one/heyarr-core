@@ -376,3 +376,109 @@ func (c *Catalog) MetadataHealth(ctx context.Context) (map[string]providers.Heal
 	}
 	return out, rows.Err()
 }
+
+// ProjectedItem is one Item a followed source's feed yielded, together with the
+// item-scoped want the source projected for it and that want's acquisition axes
+// (§56, ADR-0057/0059) — the "archive" a person reads when they ask what a
+// subscription has actually got them.
+//
+// The want is a POINTER because it is genuinely optional: an Item exists the
+// moment the feed names it, and a want is projected under the source's policy —
+// a backfill=from_now source knows about back-catalogue episodes it deliberately
+// did not ask for. Reporting those as "not archived yet" rather than omitting
+// them is what makes the listing an archive rather than a queue.
+type ProjectedItem struct {
+	ID          string
+	WorkID      string
+	EditionID   string
+	ItemKey     string
+	Title       string
+	PublishedAt time.Time
+	Attributes  json.RawMessage
+	CreatedAt   time.Time
+
+	// Want is the projected item-scoped desired_item, empty when none exists.
+	Want ProjectedWant
+}
+
+// ProjectedWant is the acquisition half of a ProjectedItem: the want's id and
+// §64's three axes, or the zero value when the source has projected no want for
+// this item yet.
+type ProjectedWant struct {
+	DesiredItemID string
+	Phase         string
+	Content       string
+	Placement     string
+}
+
+// Projected reports whether a want exists for the item.
+func (w ProjectedWant) Projected() bool { return w.DesiredItemID != "" }
+
+// ProjectedItems lists the Items of a source's Work with their projected want,
+// in feed-stable key order, from an exclusive item_key cursor.
+//
+// Scoped by WORK rather than by source id, for the reason FollowStats is: an
+// Item anchors to the work, not to the subscription that discovered it (§11,
+// ADR-0056), and follow_sources is unique on (work_id, feed_ref) so a work
+// followed through one feed has exactly one source. Two feeds over one work
+// would each report the whole work's items, which is honest — they are items of
+// that work — and is the shape a followed_source_id on items would change; that
+// is a schema decision with no caller yet, so it is not made here.
+//
+// The joins are LEFT for the same reason the item's want is optional: an item
+// with no want, and a want with no acquisition_state row yet, must both still
+// appear.
+func (c *Catalog) ProjectedItems(
+	ctx context.Context, workID, afterKey string, limit int,
+) ([]ProjectedItem, error) {
+	rows, err := c.db.Reader().QueryContext(ctx, `
+		SELECT i.id, i.work_id, coalesce(i.edition_id, ''), i.item_key, i.title,
+		       coalesce(i.published_at, ''), i.attributes, i.created_at,
+		       coalesce(d.id, ''), coalesce(a.phase, ''), coalesce(a.content, ''),
+		       coalesce(a.placement, '')
+		FROM items i
+		LEFT JOIN desired_items d ON d.item_id = i.id AND d.scope = 'item'
+		LEFT JOIN acquisition_state a ON a.desired_item_id = d.id
+		WHERE i.work_id = ? AND i.item_key > ?
+		ORDER BY i.item_key ASC
+		LIMIT ?`, workID, afterKey, limit)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: listing a followed source's items: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []ProjectedItem
+	for rows.Next() {
+		var it ProjectedItem
+		var published, attributes, created string
+		if err := rows.Scan(&it.ID, &it.WorkID, &it.EditionID, &it.ItemKey, &it.Title,
+			&published, &attributes, &created,
+			&it.Want.DesiredItemID, &it.Want.Phase, &it.Want.Content, &it.Want.Placement); err != nil {
+			return nil, fmt.Errorf("catalog: reading a followed source's item: %w", err)
+		}
+		if published != "" {
+			it.PublishedAt, _ = time.Parse(timestampFormat, published)
+		}
+		it.CreatedAt, _ = time.Parse(timestampFormat, created)
+		it.Attributes = json.RawMessage(attributes)
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// WorkTitle is the human name of a work, for the surfaces that hold a work id
+// and owe a person something readable. Empty string and no error when the work
+// is gone: a title is decoration, and a missing one must not fail the listing it
+// decorates.
+func (c *Catalog) WorkTitle(ctx context.Context, workID string) (string, error) {
+	var title string
+	err := c.db.Reader().QueryRowContext(ctx,
+		`SELECT title FROM works WHERE id = ?`, workID).Scan(&title)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("catalog: reading a work's title: %w", err)
+	}
+	return title, nil
+}

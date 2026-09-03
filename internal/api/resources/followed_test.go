@@ -19,6 +19,7 @@ func follow(h *harness, body string) *http.Response {
 type followedView struct {
 	ID               string `json:"id"`
 	WorkID           string `json:"work_id"`
+	Title            string `json:"title"`
 	Type             string `json:"type"`
 	FeedRef          string `json:"feed_ref"`
 	QualityProfileID string `json:"quality_profile_id"`
