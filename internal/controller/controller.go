@@ -239,6 +239,15 @@ func (c *Controller) Run(ctx context.Context) error {
 
 	srv, members, err := c.newServer(ctx, db, blobStore, version, peerHealth, self.PeerID, material)
 	if err != nil {
+		// Shutdown may have been requested while the server was being built — its
+		// startup steps run on the shutdown context, so a cancel there (the
+		// device-cert backfill, or any sibling added later) surfaces as an error.
+		// That is a clean stop, the same as the schema-work check above, not a
+		// startup failure.
+		if ctx.Err() != nil {
+			c.log.Info("controller stopped during startup", "schema_version", version)
+			return nil
+		}
 		return err
 	}
 	if err := srv.Start(); err != nil {
@@ -437,6 +446,14 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	// every enrolled device from the first start, not only after each device
 	// next authenticates. Idempotent; zero on every start after the first.
 	if n, err := deviceIdentities.BackfillLegacyCerts(ctx); err != nil {
+		// A cancel landing while this query runs is a shutdown request, not a
+		// failure: the backfill is idempotent and the next start redoes it. Surface
+		// the context error so Run treats it as the clean stop it is (the same shape
+		// as the schema-work check in Run), rather than wrapping it as a startup
+		// error a reader would take for a broken database.
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
 		return nil, nil, fmt.Errorf("controller: recording legacy device certs as membership ops: %w", err)
 	} else if n > 0 {
 		c.log.Info("recorded legacy device certs as membership ops", "count", n)
