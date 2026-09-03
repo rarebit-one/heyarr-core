@@ -251,6 +251,44 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/works/{id}/assets:
+    get:
+      tags: [content]
+      operationId: listWorkAssets
+      summary: The files belonging to one work.
+      description: |
+        Joined through the work's editions, with the edition label and the
+        blob's size and media type inlined — the two extra reads a work-detail
+        screen would otherwise make per asset (#429).
+
+        An unknown work is a 404, never an empty page: "this work has no files"
+        and "there is no such work" are different answers.
+      parameters:
+        - $ref: "#/components/parameters/id"
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+        - name: state
+          in: query
+          schema: { type: string, enum: [present, missing] }
+          description: The same filter `GET /assets` takes.
+      responses:
+        "200":
+          description: A page of the work's files.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/WorkAsset" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/editions/{id}:
     get:
       tags: [content]
@@ -5785,6 +5823,24 @@ components:
           description: Set when the source path vanished. Not a deletion.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    WorkAsset:
+      description: |
+        An asset of a work, with its edition labelled and its blob's facts
+        inlined (#429).
+      allOf:
+        - $ref: "#/components/schemas/Asset"
+        - type: object
+          required: [edition_label, edition_type, blob_size, blob_mime]
+          properties:
+            edition_label: { type: string }
+            edition_type: { type: string }
+            blob_size:
+              type: [integer, "null"]
+              description: |
+                Null for a `linked` asset, which has no blob at all (ADR-0020) —
+                the same null `blob_hash` carries.
+            blob_mime: { type: [string, "null"] }
 
     Blob:
       type: object

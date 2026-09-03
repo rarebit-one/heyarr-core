@@ -346,3 +346,135 @@ func (a *API) getBlob(w http.ResponseWriter, r *http.Request) {
 	b.FirstSeenAt = parseTime(firstSeen)
 	a.write(w, r, http.StatusOK, b)
 }
+
+// ---------------------------------------------------------------------------
+// A work's files (#429)
+// ---------------------------------------------------------------------------
+
+// listWorkAssets pages the assets belonging to one work, joined through its
+// editions and with the blob facts inlined (#429).
+//
+// The sort key is the asset id alone — a UUIDv7, and therefore already in
+// creation order (ADR-0017) — which is the key /assets pages by, so the two
+// listings order identically.
+//
+// An unknown work is a 404 and never an empty page. A work with no files and a
+// work that does not exist are different answers, and a client cannot tell them
+// apart if both are `{"items": []}`: it is the difference between "add
+// something" and "you asked for the wrong thing".
+func (a *API) listWorkAssets(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	q, err := parseQuery(r, "work-assets", 1)
+	if err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	state, err := oneOf(r, "state", "present", "missing")
+	if err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+
+	var exists int
+	if err := a.reader.QueryRowContext(r.Context(),
+		`SELECT 1 FROM works WHERE id = ?`, id).Scan(&exists); err != nil {
+		a.fail(w, r, "work", err)
+		return
+	}
+
+	where := []string{"e.work_id = ?"}
+	args := []any{id}
+	switch state {
+	case "present":
+		where = append(where, "assets.missing_since IS NULL")
+	case "missing":
+		where = append(where, "assets.missing_since IS NOT NULL")
+	}
+	if q.cursor != nil {
+		where = append(where, "assets.id > ?")
+		args = append(args, q.cursor[0])
+	}
+	args = append(args, q.limit+1)
+
+	// The blobs join is LEFT because a `linked` asset has no blob at all
+	// (ADR-0020): an INNER join would silently drop every linked file from a
+	// work's listing, which is the one place a person is counting the files.
+	//nolint:gosec // the query is assembled only from the literal fragments above; every value is bound
+	stmt := `SELECT ` + prefixed(assetColumns, "assets") + `, e.label, e.edition_type, b.size, b.mime
+		FROM assets
+		JOIN editions e ON e.id = assets.edition_id
+		LEFT JOIN blobs b ON b.hash = assets.blob_hash
+		WHERE ` + strings.Join(where, " AND ") + `
+		ORDER BY assets.id ASC LIMIT ?`
+
+	rows, err := a.reader.QueryContext(r.Context(), stmt, args...)
+	if err != nil {
+		a.fail(w, r, "asset", err)
+		return
+	}
+	defer func() { _ = rows.Close() }()
+
+	var assets []WorkAsset
+	for rows.Next() {
+		item, err := scanWorkAsset(rows)
+		if err != nil {
+			a.fail(w, r, "asset", err)
+			return
+		}
+		assets = append(assets, item)
+	}
+	if err := rows.Err(); err != nil {
+		a.fail(w, r, "asset", err)
+		return
+	}
+
+	a.write(w, r, http.StatusOK, newPage(assets, q.limit,
+		func(x WorkAsset) []string { return []string{x.ID} }, "work-assets"))
+}
+
+// scanWorkAsset reads an asset row followed by the four joined columns.
+//
+// It reuses scanAsset for the asset half rather than restating thirteen
+// columns: a column added to assetColumns is then scanned here too, instead of
+// this listing silently misaligning the day the asset shape grows.
+func scanWorkAsset(rows *sql.Rows) (WorkAsset, error) {
+	var item WorkAsset
+	var size sql.NullInt64
+	var blobMIME sql.NullString
+	asset, err := scanAsset(appendedScan{rows: rows, extra: []any{
+		&item.EditionLabel, &item.EditionType, &size, &blobMIME,
+	}})
+	if err != nil {
+		return WorkAsset{}, err
+	}
+	item.Asset = asset
+	if size.Valid {
+		v := size.Int64
+		item.BlobSize = &v
+	}
+	item.BlobMIME = nullString(blobMIME)
+	return item, nil
+}
+
+// appendedScan lets a scanner written for one row shape read a WIDER row: it
+// passes the caller's destinations through and appends its own. That is what
+// keeps scanAsset the single definition of how an asset row is read.
+type appendedScan struct {
+	rows  *sql.Rows
+	extra []any
+}
+
+func (a appendedScan) Scan(dest ...any) error {
+	return a.rows.Scan(append(dest, a.extra...)...)
+}
+
+// prefixed qualifies a bare column list with a table alias, so the shared
+// assetColumns constant can be used in a join without every column becoming
+// ambiguous. It is a build-time constant fold over a literal, never over input.
+func prefixed(columns, table string) string {
+	parts := strings.Split(columns, ",")
+	for i, p := range parts {
+		parts[i] = table + "." + strings.TrimSpace(p)
+	}
+	return strings.Join(parts, ", ")
+}

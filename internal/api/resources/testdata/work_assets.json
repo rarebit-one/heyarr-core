@@ -1,0 +1,23 @@
+{
+  "items": [
+    {
+      "id": "01990000-0000-7000-8000-0000000000a1",
+      "edition_id": "01990000-0000-7000-8000-0000000000e1",
+      "library_id": "01990000-0000-7000-8000-0000000000l1",
+      "source_class": "managed",
+      "blob_hash": "blake3:1111111111111111111111111111111111111111111111111111111111111111",
+      "source_path": "/srv/films/Arrival.mkv",
+      "role": "primary",
+      "filename": "Arrival.mkv",
+      "mime": "video/x-matroska",
+      "identification_source": "path",
+      "missing_since": null,
+      "created_at": "2026-08-01T00:00:00Z",
+      "updated_at": "2026-08-01T00:00:00Z",
+      "edition_label": "2160p",
+      "edition_type": "remux",
+      "blob_size": 42949672960,
+      "blob_mime": "video/x-matroska"
+    }
+  ]
+}

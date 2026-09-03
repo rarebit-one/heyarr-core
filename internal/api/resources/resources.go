@@ -278,6 +278,11 @@ func (a *API) Mount(r chi.Router) {
 	// Reads. The router already requires `read`, so these declare nothing.
 	r.Get("/works", a.listWorks)
 	r.Get("/works/{id}", a.getWork)
+	// A work's files, joined through its editions with the blob size and media
+	// type inlined (#429). Without it a client answers "which files does this
+	// work have" by paging every asset in the library and reading an edition
+	// and a blob per row.
+	r.Get("/works/{id}/assets", a.listWorkAssets)
 	r.Get("/editions/{id}", a.getEdition)
 	r.Get("/assets", a.listAssets)
 	r.Get("/assets/{id}", a.getAsset)
