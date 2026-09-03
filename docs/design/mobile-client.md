@@ -182,7 +182,7 @@ A client should **re-mint and retry once** when that header is present, and trea
 a 401 WITHOUT it as terminal — a revoked device or a wrong cert is not a clock
 problem, and retrying it is noise against a server that will never say yes.
 
-**The proof's TTL is capped server-side at 1 hour for now (10 minutes once #444 lands)** (`deviceauth.MaxPossessionTTL`,
+**The proof's TTL is capped server-side at 10 minutes** (`deviceauth.MaxPossessionTTL`,
 #420). The proof's own window is its replay window, so the server refuses one that
 granted itself longer, judged on `exp - iat` rather than on the time remaining.
 Signing costs a biometric on a sealed key, so a client MAY batch requests under
