@@ -221,7 +221,7 @@ func TestLegacyRelayStillServesBesideIt(t *testing.T) {
 		t.Fatal("the v1 mount answered a legacy-shaped path")
 	}
 	// The same per-message cap as the legacy relay.
-	big := strings.Repeat("a", pairrelay.MaxSlotBytes+1)
+	big := strings.Repeat("a", relay.MaxMessageBytes+1)
 	if code := put(ts.URL+httpapi.RelayV1Prefix+"/sessions/"+session+"/responder/reveal", big); code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("v1 oversized PUT: %d, want 413", code)
 	}
