@@ -43,6 +43,26 @@ func newSessionHarness(t *testing.T, sessions httpapi.SessionValidator) *httptes
 
 func newSessionHarnessWithAuth(t *testing.T, sessions httpapi.SessionValidator, mgmt httpapi.ManagementAuthorizer) *httptest.Server {
 	t.Helper()
+	return newSessionHarnessFull(t, sessions, mgmt, nil)
+}
+
+// newSessionHarnessWithMembership wires the DeviceMembership check the session
+// path consults (#420), so a test can revoke the device that approved a session
+// without standing up a real identity store.
+func newSessionHarnessWithMembership(
+	t *testing.T, sessions httpapi.SessionValidator, members httpapi.DeviceMembership,
+) *httptest.Server {
+	t.Helper()
+	return newSessionHarnessFull(t, sessions, nil, members)
+}
+
+func newSessionHarnessFull(
+	t *testing.T,
+	sessions httpapi.SessionValidator,
+	mgmt httpapi.ManagementAuthorizer,
+	members httpapi.DeviceMembership,
+) *httptest.Server {
+	t.Helper()
 	ctx := t.Context()
 	dir := t.TempDir()
 
@@ -80,6 +100,7 @@ func newSessionHarnessWithAuth(t *testing.T, sessions httpapi.SessionValidator, 
 		Verifier:             verifier,
 		SessionValidator:     sessions,
 		ManagementAuthorizer: mgmt,
+		DeviceMembership:     members,
 		Events:               eventLog,
 		Build:                buildinfo.Info{Version: "test", Commit: "abc123", Date: "2026-08-20T00:00:00Z"},
 		SchemaVersion:        1,

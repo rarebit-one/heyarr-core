@@ -505,12 +505,17 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	}
 
 	srv, err := httpapi.New(httpapi.Options{
-		Config:               c.cfg,
-		Logger:               c.log,
-		DB:                   db,
-		Verifier:             verifier,
-		DeviceVerifier:       deviceIdentities,
-		SessionValidator:     sessions,
+		Config:           c.cfg,
+		Logger:           c.log,
+		DB:               db,
+		Verifier:         verifier,
+		DeviceVerifier:   deviceIdentities,
+		SessionValidator: sessions,
+		// The same store, asked a different question: is the device that
+		// approved this session still a member (#420). Wired here rather than
+		// left nil so a revoked device's live sessions stop on the next
+		// request rather than at their own expiry.
+		DeviceMembership:     deviceIdentities,
 		ManagementAuthorizer: grantAuthorizer,
 		Events:               eventLog,
 		Media:                mediaInfo(toolchain),

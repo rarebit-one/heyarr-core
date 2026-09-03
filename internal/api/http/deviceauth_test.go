@@ -32,6 +32,10 @@ import (
 type deviceAuthHarness struct {
 	ts    *httptest.Server
 	store *deviceauth.Store
+	// The last enrolled device's signing key and cert, so a test can mint a
+	// credential with a window of its choosing (#420).
+	devicePriv ed25519.PrivateKey
+	deviceCert string
 }
 
 func newDeviceAuthHarness(t *testing.T) *deviceAuthHarness {
@@ -126,6 +130,7 @@ func (h *deviceAuthHarness) enrolledDevice(t *testing.T) (deviceKey string, cred
 	if _, err := h.store.EnrolDevice(ctx, cert, "phone"); err != nil {
 		t.Fatalf("enrol device: %v", err)
 	}
+	h.devicePriv, h.deviceCert = devicePriv, cert
 	return identity.FormatPublicKey(devicePub), func() string {
 		proof, err := enrolment.SignPossession(devicePriv, cert, time.Now().UTC(), 0)
 		if err != nil {
@@ -133,6 +138,37 @@ func (h *deviceAuthHarness) enrolledDevice(t *testing.T) (deviceKey string, cred
 		}
 		return cert + "~" + proof
 	}
+}
+
+// credentialAt mints a credential for the enrolled device with an explicit
+// issue time and TTL, which is what the clock-window and TTL-cap refusals need
+// to be driven deliberately rather than by waiting.
+func (h *deviceAuthHarness) credentialAt(t *testing.T, at time.Time, ttl time.Duration) string {
+	t.Helper()
+	proof, err := enrolment.SignPossession(h.devicePriv, h.deviceCert, at, ttl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h.deviceCert + "~" + proof
+}
+
+// probe issues the request and returns the whole response, for the assertions
+// that are about a header rather than a status.
+func (h *deviceAuthHarness) probe(t *testing.T, authHeader string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, h.ts.URL+"/api/v1/probe", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+	resp, err := h.ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp
 }
 
 func (h *deviceAuthHarness) get(t *testing.T, authHeader string) int {

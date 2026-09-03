@@ -43,6 +43,29 @@ type SessionValidator interface {
 	Session(token string) (SessionPrincipal, bool)
 }
 
+// DeviceMembership reports whether a device key is STILL a member — enrolled
+// here and not revoked. It is the revocation check the web-login path was
+// missing (#420, ADR-0053).
+//
+// A session pins the device key that approved it, and that pin was only ever
+// carried, never re-checked: a session minted before its approving device was
+// revoked went on authenticating until it expired. Post-ADR-0065 that exposure
+// is read-scope for the session's remaining life, which is small and is not
+// nothing — revoking a device is the one action an operator takes when they
+// believe it is in someone else's hands, and it should not leave a live
+// credential behind it.
+//
+// It is a separate, optional interface rather than a method on
+// SessionValidator because the broker mints sessions and the identity store
+// owns membership; asking the broker would make it re-derive an answer another
+// component already holds. deviceauth.Store satisfies it.
+type DeviceMembership interface {
+	// DeviceActive returns nil when deviceKey is enrolled and unrevoked, and an
+	// error otherwise — including "no such device", which a removed pin
+	// produces.
+	DeviceActive(ctx context.Context, deviceKey string) error
+}
+
 // ManagementAuthorizer answers whether a device key is authorised for write —
 // the admin-issued, durable authorization that lifts an enrolled device from the
 // read floor to write (ADR-0065, subsuming ADR-0061's interim grant).

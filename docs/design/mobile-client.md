@@ -162,14 +162,43 @@ Authorization: Device <enrolment-cert>~<possession-proof>
 ```
 
 - `<enrolment-cert>` is the long-lived user-signed cert (`internal/enrolment`).
-- `<possession-proof>` is a **short-lived** signature by the device key over the
-  cert, **re-minted on wake** — never fail hard on `expired`/`not_yet_valid`,
-  re-sign and retry (constraint 2 above; `enrolment.SignPossession`).
+- `<possession-proof>` is a **short-lived** signature by the device key over a
+  **JSON body carrying `sha256(cert)`** — `{v, crt, iat, exp}`, base64url,
+  `<body>.<sig>` — not over the cert bytes themselves. It is **re-minted on
+  wake**: never fail hard on `expired`/`not_yet_valid`, re-sign and retry
+  (constraint 2 above; `enrolment.SignPossession`).
 
-Enrolment itself: `POST /api/v1/devices` registers a device (write scope);
-`GET /api/v1/devices`, `GET /api/v1/devices/{id}` list/inspect. Pairing exchanges
-public values through the dumb relay at `PUT|GET /pair/sessions/{session}/slots/{slot}`
-(ADR-0022, unauthenticated — it carries only commitments and public keys).
+**Which 401s are worth retrying (#420).** The 401 body is deliberately opaque —
+"no such user" and "bad signature" must look identical, or an unauthorised caller
+gets free reconnaissance. The two CLOCK refusals are the exception, because they
+disclose nothing about identity, and they are announced in a header:
+
+```
+WWW-Authenticate: Device error="expired"
+WWW-Authenticate: Device error="not_yet_valid"
+```
+
+A client should **re-mint and retry once** when that header is present, and treat
+a 401 WITHOUT it as terminal — a revoked device or a wrong cert is not a clock
+problem, and retrying it is noise against a server that will never say yes.
+
+**The proof's TTL is capped server-side at 10 minutes** (`deviceauth.MaxPossessionTTL`,
+#420). The proof's own window is its replay window, so the server refuses one that
+granted itself longer, judged on `exp - iat` rather than on the time remaining.
+Signing costs a biometric on a sealed key, so a client MAY batch requests under
+one proof — up to that ceiling, not beyond it. The refusal is a plain opaque 401
+with no hint: it is a policy refusal, not a clock one, and re-minting the same
+over-long proof would loop.
+
+Enrolment itself: **`POST /api/v1/identities/devices`** records a device under a
+pinned user (admin scope), and **`POST /enrol`** is the public route a paired
+device self-enrols through, presenting its own cert and possession proof
+(ADR-0067). `POST /api/v1/devices` is NOT enrolment — it is the playback
+renderer upsert (§68), a different resource that happens to be called a device.
+`GET /api/v1/identities/users/{key}/devices` lists what a user has vouched for.
+Pairing exchanges public values through the dumb relay at
+`PUT|GET /pair/sessions/{session}/slots/{slot}` (ADR-0022, unauthenticated — it
+carries only commitments and public keys).
 
 ### 1b. QR web-login → session token (bootstrap / credential-less fallback, ADR-0053)
 
@@ -185,7 +214,10 @@ standing key (a browser, a TV). Public routes, no credential to start:
 | `GET /signin` | a static browser page that drives the above |
 
 On `approved`, carry the minted token as `Authorization: Bearer <token>` on
-`/api/v1`. It is **read-scoped** and short-lived. The **approving** half (fetch
+`/api/v1`. It is **read-scoped** and short-lived, and it dies with its approver:
+the session pins the approving device key, and that pin is re-checked on every
+request — revoking the device that approved a session refuses that session on
+the next request rather than at its own expiry (#420). The **approving** half (fetch
 challenge → hardware-gated sign → approve) is the `voidbind-kmp` authenticator's
 existing `LoginApproval` flow — `heyarr-mobile` reuses it verbatim.
 
