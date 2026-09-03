@@ -93,6 +93,17 @@ type harnessConfig struct {
 	// none configured", which is the supported degrade path (ADR-0025) and the
 	// default for every test that is not about providers.
 	providers *providers.Registry
+	// streamer, blobs and prober are the streaming leg's arms (ADR-0069).
+	// Nil is the node with no toolchain, which is the default here for the
+	// same reason providers is: every other test is not about streaming.
+	streamer resources.PlaybackStreamer
+	blobs    resources.BlobLocator
+	prober   resources.PathProber
+}
+
+// withStreamLeg wires the streaming leg's arms into the harness.
+func withStreamLeg(streamer resources.PlaybackStreamer, blobs resources.BlobLocator, prober resources.PathProber) harnessOption {
+	return func(hc *harnessConfig) { hc.streamer, hc.blobs, hc.prober = streamer, blobs, prober }
 }
 
 // withProviders gives the harness a provider registry, for the tests that are
@@ -205,6 +216,9 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		// long enough that it is not the thing under test.
 		StreamHeartbeat: 50 * time.Millisecond,
 		StreamBuffer:    hc.streamBuffer,
+		Streamer:        hc.streamer,
+		Blobs:           hc.blobs,
+		Prober:          hc.prober,
 	})
 	if err != nil {
 		t.Fatal(err)
