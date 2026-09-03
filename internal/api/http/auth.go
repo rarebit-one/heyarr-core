@@ -88,6 +88,8 @@ func deviceFailureReason(err error) string {
 		return "device_possession_bad_signature"
 	case errors.Is(err, enrolment.ErrPossessionCert):
 		return "device_possession_wrong_cert"
+	case errors.Is(err, deviceauth.ErrPossessionTTLTooLong):
+		return "device_possession_ttl_too_long"
 	default:
 		return "device_error"
 	}
@@ -137,6 +139,10 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			// is a device-credential action (ADR-0065, subsuming ADR-0061).
 			if s.sessions != nil {
 				if p, ok := s.sessions.Session(raw); ok {
+					if err := s.approverStillAMember(r.Context(), p.DeviceKey); err != nil {
+						s.rejectCredential(w, r, sessionFailureReason(err))
+						return
+					}
 					next.ServeHTTP(w, s.withIdentity(r, sessionIdentity(p)))
 					return
 				}
@@ -182,7 +188,40 @@ func (s *Server) rejectCredential(w http.ResponseWriter, r *http.Request, reason
 		"request_id", RequestIDFrom(r.Context()),
 		"reason", reason,
 		"path", r.URL.Path)
+	if hint := clockWindowHint(reason); hint != "" {
+		w.Header().Set("WWW-Authenticate", `Device error="`+hint+`"`)
+	}
 	Fail(w, r, problem.Unauthorized("the presented credential was rejected"))
+}
+
+// clockWindowHint is the ONE thing a rejected device credential is told, and
+// only for the two refusals that are about a clock (#420).
+//
+// The opaque 401 exists so an unauthorised caller cannot map the system by
+// probing it: "no such user" and "bad signature" must be indistinguishable,
+// because the difference is free reconnaissance. `expired` and `not_yet_valid`
+// are the exception, and the reason is that they disclose NOTHING about
+// identity: the caller already knows the window it signed, so it learns only
+// that this server's clock disagrees with its own — a fact it can derive by
+// looking at its own watch.
+//
+// It is worth telling, because without it a client cannot tell a recoverable
+// refusal from a hopeless one. docs/design/mobile-client.md §1a tells a phone to
+// re-mint on wake and never fail hard, so a client seeing an undifferentiated
+// 401 re-mints and retries on EVERY 401 — including a revoked device and a wrong
+// cert, where retrying is pure noise against a server that will never say yes.
+//
+// Everything else — including a proof whose TTL is over the cap, which is a
+// policy refusal and not a clock one — gets no hint at all.
+func clockWindowHint(reason string) string {
+	switch reason {
+	case "device_cert_expired", "device_possession_expired":
+		return "expired"
+	case "device_cert_not_yet_valid", "device_possession_not_yet_valid":
+		return "not_yet_valid"
+	default:
+		return ""
+	}
 }
 
 // authenticateDevice resolves a device credential into the identity of the user
@@ -214,6 +253,57 @@ func (s *Server) authenticateDevice(ctx context.Context, credential string, pres
 			Scopes:      scopes,
 		},
 	}, nil
+}
+
+// approverStillAMember re-checks, on every request, that the device which
+// approved this session is still enrolled and unrevoked (#420).
+//
+// The session pins the approving DeviceKey (ADR-0053) and nothing re-read it, so
+// revoking a device left its already-minted sessions authenticating until they
+// expired. A session is a replayable bearer credential; the pin is the only
+// thing tying it to a device an operator can take away, and a pin nobody checks
+// is decoration.
+//
+// It fails CLOSED on a lookup error, which is the opposite of
+// managementAuthorized's direction, and deliberately so: that one decides
+// whether to GRANT more than the floor, so an unanswerable question keeps the
+// device at the floor; this one decides whether the credential is valid at all,
+// and an unanswerable question there must not be resolved in the caller's
+// favour.
+//
+// With no membership checker wired it admits the session unchanged — the state
+// every deployment that predates this was already in, and one where there is no
+// revocation to enforce because there is no store to revoke in.
+func (s *Server) approverStillAMember(ctx context.Context, deviceKey string) error {
+	if s.deviceMembers == nil {
+		return nil
+	}
+	if deviceKey == "" {
+		// A session whose principal names no approving device cannot be checked
+		// against membership at all, and the safe reading of "I cannot check" is
+		// not "therefore fine".
+		return errNoApprovingDevice
+	}
+	return s.deviceMembers.DeviceActive(ctx, deviceKey)
+}
+
+// errNoApprovingDevice is a session principal that names no approving device.
+var errNoApprovingDevice = errors.New("httpapi: the session names no approving device")
+
+// sessionFailureReason is the closed label set for a session refused on
+// membership grounds. Kept apart from deviceFailureReason because the SUBJECT
+// differs — a session is being refused because of something about a device, not
+// a device being refused — and one label set that meant both would make the
+// metric unable to answer which happened.
+func sessionFailureReason(err error) string {
+	switch {
+	case errors.Is(err, deviceauth.ErrDeviceRevoked):
+		return "session_device_revoked"
+	case errors.Is(err, deviceauth.ErrUnknownDevice), errors.Is(err, errNoApprovingDevice):
+		return "session_device_unknown"
+	default:
+		return "session_device_error"
+	}
 }
 
 // managementAuthorized resolves whether a device key is authorised for write

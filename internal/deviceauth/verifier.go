@@ -2,6 +2,8 @@ package deviceauth
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -196,5 +198,72 @@ func verifyPossession(proof, deviceKey, opToken string, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	return enrolment.VerifyPossession(proof, devicePub, opToken, now)
+	if err := enrolment.VerifyPossession(proof, devicePub, opToken, now); err != nil {
+		return err
+	}
+	// The window the proof gave ITSELF is checked only after the signature is,
+	// so a caller learns nothing from an unsigned proof, and so the TTL check
+	// can trust the numbers it reads.
+	return withinMaxPossessionTTL(proof)
+}
+
+// MaxPossessionTTL is the longest life this node honours on a possession proof,
+// whatever the device signed (#420).
+//
+// The proof's window IS its replay window: it is stateless by design, so a proof
+// captured off a compromised channel is reusable until it expires, and until now
+// nothing rejected a proof a device chose to make valid for an hour. The
+// reference signer uses enrolment.PossessionTTL (two minutes); a real client has
+// a reason to want longer — heyarr-mobile re-signs on a sealed key, which costs
+// a biometric prompt each time — so the answer is a CEILING a client may batch
+// beneath rather than a fixed value that would force a prompt per request.
+//
+// Ten minutes is that ceiling: five times the reference TTL, so batching is
+// genuinely useful, and short enough that a stolen proof is stale before anyone
+// notices it is worth stealing. It is checked on `exp - iat` — the window the
+// device CLAIMED — rather than on the time remaining, because the remaining time
+// of an hour-long proof looks perfectly ordinary nine minutes before it expires.
+const MaxPossessionTTL = 10 * time.Minute
+
+// ErrPossessionTTLTooLong is a proof whose own window exceeds MaxPossessionTTL.
+// It is distinct from ErrPossessionExpired because it means the opposite thing:
+// the proof is not stale, it was minted to live too long.
+var ErrPossessionTTLTooLong = errors.New("deviceauth: possession proof lives longer than this node accepts")
+
+// possessionWindow is the {iat, exp} a proof carries. The proof body is
+// voidbind-go's, and its payload type is unexported there, so the two fields
+// this node has a policy about are re-read here rather than the package being
+// forked for a getter. Only these two are read: everything else about the proof
+// — the version, the binding, the signature — is VerifyPossession's business and
+// has already been judged by the time this runs.
+type possessionWindow struct {
+	IssuedAt int64 `json:"iat"`
+	Expires  int64 `json:"exp"`
+}
+
+// withinMaxPossessionTTL refuses a proof that granted itself more than
+// MaxPossessionTTL.
+func withinMaxPossessionTTL(proof string) error {
+	bodyEnc, _, ok := strings.Cut(proof, ".")
+	if !ok {
+		return enrolment.ErrPossessionMalformed
+	}
+	body, err := base64.RawURLEncoding.DecodeString(bodyEnc)
+	if err != nil {
+		return enrolment.ErrPossessionMalformed
+	}
+	var w possessionWindow
+	if err := json.Unmarshal(body, &w); err != nil {
+		return enrolment.ErrPossessionMalformed
+	}
+	// A window that ends before it starts is not a short proof, it is a
+	// malformed one — VerifyPossession has no opinion about the ordering, so it
+	// is refused here rather than passing as "well within the cap".
+	if w.Expires < w.IssuedAt {
+		return enrolment.ErrPossessionMalformed
+	}
+	if time.Duration(w.Expires-w.IssuedAt)*time.Second > MaxPossessionTTL {
+		return ErrPossessionTTLTooLong
+	}
+	return nil
 }

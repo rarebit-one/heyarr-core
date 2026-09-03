@@ -115,6 +115,18 @@ type Options struct {
 	// replica is one this node can actually mint for. A capability is only
 	// valid at the peer that signed it (ADR-0040).
 	SelfPeerID string
+	// Streamer produces the on-the-fly repackage behind
+	// GET /playback/stream/{token} (ADR-0069). Nil means this node has no
+	// ffmpeg: a plan that would need a stream answers direct and says why,
+	// and the stream route refuses every token. That is a supported node
+	// (ADR-0023), not a wiring error.
+	Streamer PlaybackStreamer
+	// Blobs locates a blob's bytes on this node's filesystem, for the
+	// streamer and the on-demand probe. Nil disables both.
+	Blobs BlobLocator
+	// Prober probes a blob nothing has probed when a client asks for a plan,
+	// so the answer is a finding rather than a guess. Optional.
+	Prober PathProber
 	// StreamHeartbeat is how often the SSE stream writes a keep-alive comment.
 	// Zero means the default.
 	StreamHeartbeat time.Duration
@@ -145,6 +157,13 @@ type API struct {
 	renderSecret  []byte
 	renderBaseURL string
 	selfPeerID    string
+
+	// streamKey signs stream tokens (ADR-0069); streamer, blobs and prober
+	// are the leg's arms. See playbackstream.go.
+	streamKey []byte
+	streamer  PlaybackStreamer
+	blobs     BlobLocator
+	prober    PathProber
 
 	// rendererCache and rendererClient are the renderer control lane
 	// (§68). Nil cache means this node does not drive renderers, which is
@@ -210,6 +229,16 @@ func New(opts Options) (*API, error) {
 	if buffer <= 0 {
 		buffer = subscriberBuffer
 	}
+	// One secret on disk, two keys (see streamtoken.go). A node with no
+	// render secret gets a per-process one: its stream tokens then survive
+	// only this process, which is one re-plan on restart.
+	streamSecret := opts.RenderSecret
+	if len(streamSecret) == 0 {
+		var err error
+		if streamSecret, err = newStreamSecret(); err != nil {
+			return nil, err
+		}
+	}
 	return &API{
 		db:         opts.DB,
 		reader:     opts.DB.Reader(),
@@ -229,6 +258,10 @@ func New(opts Options) (*API, error) {
 		renderSecret:   opts.RenderSecret,
 		renderBaseURL:  strings.TrimRight(opts.RenderBaseURL, "/"),
 		selfPeerID:     opts.SelfPeerID,
+		streamKey:      streamKey(streamSecret),
+		streamer:       opts.Streamer,
+		blobs:          opts.Blobs,
+		prober:         opts.Prober,
 		heartbeat:      heartbeat,
 		streamPoll:     streamPoll,
 		buffer:         buffer,
@@ -366,6 +399,10 @@ func (a *API) Mount(r chi.Router) {
 	// because it changes anything: it opens no session and writes nothing. It
 	// needs only `read`, which the router already requires.
 	r.Post("/playback/plan", a.planPlayback)
+	// The repackaged stream (ADR-0069). A read, under the floor: the token in
+	// the path names one blob and one credential, and the middleware has
+	// already established the caller is that credential.
+	r.Get("/playback/stream/{token}", a.streamPlayback)
 	// Starting a playback opens a session and mints a credential, so it is a
 	// write even though the bytes it points at are read-only.
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/playback", a.startPlayback)

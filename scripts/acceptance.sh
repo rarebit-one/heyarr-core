@@ -1812,6 +1812,77 @@ YAML
     not_exercised ffprobe "a device that cannot take the codec is refused, and the refusal opens no session"
   fi
 
+  note "  the streaming leg (§33, ADR-0069)"
+  # A client that says what it decodes and cannot decode the source is handed
+  # a repackaged stream rather than the raw blob (#432). This is the join the
+  # unit tests cannot make: a real plan, a real token, a real ffmpeg behind a
+  # real socket, and the bytes that came back probed by ffprobe. The claim is
+  # a-client-that-cannot-decode-gets-a-repackage; its evidence is the captured
+  # bytes being H.264 + AAC in MP4, not the plan having said "stream".
+  local leg_json leg_mode leg_url leg_capture leg_shape
+  # A container the client cannot open — flac — over a video file, so the leg
+  # must be a stream whatever the file's own container is. The streams
+  # themselves (h264/aac) are ones the client decodes, so the repackage is a
+  # rewrap: both copied, and ffprobe on the result says so.
+  leg_json=$(api /api/v1/playback/plan -X POST -H 'Content-Type: application/json' \
+    -d "{\"asset_id\":\"$play_asset\",\"client\":{\"containers\":[\"flac\"],\"video\":[\"h264\"],\"audio\":[\"aac\"],\"max_height\":1080}}")
+  leg_mode=$(jq -r '.mode' <<<"$leg_json")
+  leg_url=$(jq -r '.url' <<<"$leg_json")
+  if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+    assert_eq "$leg_mode" "stream" \
+      "a client that cannot open the container is planned a stream"
+    assert_contains "$leg_url" "/api/v1/playback/stream/" \
+      "the stream URL is the stream route, not the blob endpoint"
+    assert_contains "$(jq -r '.reason' <<<"$leg_json")" "not playable by client" \
+      "the plan says why the client is being served a stream"
+    assert_eq "$(jq -r '.mime' <<<"$leg_json")" "video/mp4" \
+      "the stream is fragmented MP4"
+    # Fetch it with the credential that asked for the plan — the token is
+    # bound to it (ADR-0069), and the plan above was asked for with $TOKEN.
+    # The fixture is a second long, so the whole stream arrives well inside
+    # the timeout; a bigger file would simply be cut, which is what a player
+    # hanging up looks like.
+    leg_capture="$WORK/stream-capture.mp4"
+    curl -sS --max-time 20 --unix-socket "$SOCK" -H "Authorization: Bearer $TOKEN" \
+      -o "$leg_capture" "http://heyarr$leg_url" || true
+    if [[ -s "$leg_capture" ]]; then
+      leg_shape=$(ffprobe -v error -show_entries format=format_name:stream=codec_name \
+        -of default=nw=1:nk=1 "$leg_capture" 2>/dev/null | tr '\n' ' ')
+      assert_contains "$leg_shape" "h264" "the captured stream carries H.264 video"
+      assert_contains "$leg_shape" "aac" "the captured stream carries AAC audio"
+      assert_contains "$leg_shape" "mp4" "the captured stream is MP4"
+      if [[ "$leg_shape" == *h264* && "$leg_shape" == *aac* && "$leg_shape" == *mp4* ]]; then
+        pass "a client that could not open the container was served a repackaged stream"
+      else
+        fail "the captured stream probes as '$leg_shape', not H.264 + AAC in MP4"
+      fi
+    else
+      fail "the stream URL returned no bytes"
+    fi
+    # The token is the plan: a tampered one is an opaque 404, and the same
+    # token presented by another credential is too (unit-proven; here the
+    # tamper is what a socket can show).
+    assert_eq "$(curl -sS --unix-socket "$SOCK" -H "Authorization: Bearer $TOKEN" \
+      -o /dev/null -w '%{http_code}' "http://heyarr${leg_url}x")" "404" \
+      "a tampered stream token is refused opaquely"
+    # And a client that CAN open the container is handed the bytes.
+    assert_eq "$(api /api/v1/playback/plan -X POST -H 'Content-Type: application/json' \
+      -d "{\"asset_id\":\"$play_asset\",\"client\":{\"containers\":[\"mp4\",\"mkv\"],\"video\":[\"h264\"],\"audio\":[\"aac\"]}}" \
+      | jq -r '.mode')" "direct" \
+      "a client that decodes the source is planned direct"
+  else
+    # Without a toolchain nothing has probed the file either, so the plan
+    # cannot know the client will fail: it hands over the bytes and declares
+    # the guess (ADR-0023's stance, one route over). The "no ffmpeg" note
+    # only appears on a KNOWN incompatibility, which needs a probe — that
+    # branch is unit-proven (TestWithoutFFmpegThePlanIsDirectAndSaysWhy).
+    assert_eq "$leg_mode" "direct" \
+      "without a toolchain a client that cannot decode the source is still handed the bytes"
+    assert_contains "$(jq -r '[.reasons[].code] | join(",")' <<<"$leg_json")" "no_probe" \
+      "and the plan declares it is a guess, because nothing probed the file"
+    not_exercised ffmpeg "the streaming leg: a plan for a container the client cannot open, the stream fetched, and the captured bytes probed as H.264 + AAC in MP4 (claim a-client-that-cannot-decode-gets-a-repackage)"
+  fi
+
   note "  the playback planner (§68)"
   # The planner is a pure function, exhaustively table-tested. What this adds
   # is the join: real probe rows, real device profiles and real replicas, over

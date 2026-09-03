@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -90,6 +91,11 @@ type FollowSourceRequest struct {
 type FollowedSourceView struct {
 	ID     string `json:"id"`
 	WorkID string `json:"work_id"`
+	// Title is the followed work's human name, inlined so a list of
+	// subscriptions reads as titles rather than as work ids a client has to
+	// join against /works to render (#430). Empty when the work is gone —
+	// decoration must not fail the listing it decorates.
+	Title string `json:"title"`
 	// Type is the inferred source type — reported, never a request field.
 	Type             string `json:"type"`
 	FeedRef          string `json:"feed_ref"`
@@ -417,6 +423,14 @@ func (a *API) followViewFor(ctx context.Context, s catalog.StoredSource, health 
 		a.log.Warn("could not count a followed source's items", "source_id", s.ID, "error", err)
 	}
 	view.ItemsKnown, view.ItemsArchived = known, archived
+	title, err := a.catalog.WorkTitle(ctx, s.WorkID)
+	if err != nil {
+		// Same stance as the counts: a title that cannot be read leaves the
+		// subscription listed and unnamed, rather than failing the request.
+		a.log.Warn("could not read a followed source's work title",
+			"source_id", s.ID, "error", err)
+	}
+	view.Title = title
 	return view
 }
 
@@ -488,6 +502,130 @@ func (a *API) listFollowedSources(w http.ResponseWriter, r *http.Request) {
 	a.write(w, r, http.StatusOK, map[string]any{"followed_sources": out})
 }
 
+// FollowedItemView is one Item a subscription's feed yielded, as the API
+// presents it: what the source emitted, and what heyarr did about it (#430,
+// ADR-0056/0057/0059).
+//
+// The acquisition half is a POINTER because it is genuinely absent for an item
+// the source has not projected a want for — a backfill=from_now source knows
+// about back-catalogue episodes it deliberately did not ask for. Reporting
+// those with a null want, rather than omitting them, is what makes this listing
+// an ARCHIVE (what the source has emitted) rather than a queue (what is being
+// fetched).
+type FollowedItemView struct {
+	ID     string `json:"id"`
+	WorkID string `json:"work_id"`
+	// EditionID is the grouping the item belongs to — a season, for a series —
+	// and is absent for a source type that has none (ADR-0056).
+	EditionID string `json:"edition_id,omitempty"`
+	// ItemKey is the source-stable identity the feed adapter supplied: an
+	// "S02E05", a podcast GUID, a video id. It is what dedupes the item across
+	// polls, and it is the listing's sort key.
+	ItemKey string `json:"item_key"`
+	Title   string `json:"title"`
+	// PublishedAt is when the source said it emitted the item, absent when the
+	// source did not say — a real and distinct answer from any instant.
+	PublishedAt *time.Time      `json:"published_at,omitempty"`
+	Attributes  json.RawMessage `json:"attributes"`
+	CreatedAt   time.Time       `json:"created_at"`
+
+	// Want is the item-scoped want this source projected, null when none.
+	Want *FollowedItemWant `json:"want"`
+	// Archived says the plain thing a person is asking: heyarr holds bytes for
+	// this item that satisfy the source's profile. Derived from the want's
+	// content axis so a client need not know §64's vocabulary to render a tick.
+	Archived bool `json:"archived"`
+}
+
+// FollowedItemWant is the projected want's id and §64's three axes.
+type FollowedItemWant struct {
+	DesiredItemID string `json:"desired_item_id"`
+	Phase         string `json:"phase"`
+	Content       string `json:"content"`
+	Placement     string `json:"placement"`
+}
+
+// getFollowedSource is GET /api/v1/followed-sources/{id} (#430). A detail
+// screen had to re-read the whole list and pick its id out of it.
+func (a *API) getFollowedSource(w http.ResponseWriter, r *http.Request) {
+	src, err := a.followedSource(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		a.fail(w, r, "followed source", err)
+		return
+	}
+	a.write(w, r, http.StatusOK, a.followViewFor(r.Context(), src, a.metadataHealthLabel()))
+}
+
+// followedSource reads one subscription, mapping the catalog's own not-found
+// sentinel onto sql.ErrNoRows so `fail` renders the 404 every other item route
+// renders. Without it a missing subscription would be a 500.
+func (a *API) followedSource(ctx context.Context, id string) (catalog.StoredSource, error) {
+	src, err := a.catalog.FollowSource(ctx, id)
+	if errors.Is(err, catalog.ErrNoFollowSource) {
+		return catalog.StoredSource{}, sql.ErrNoRows
+	}
+	return src, err
+}
+
+// listFollowedSourceItems is GET /api/v1/followed-sources/{id}/items (#430):
+// what this source has archived, and what it merely knows about.
+//
+// Paged by item_key rather than by id, because item_key is what the feed is
+// stable on and what the (work_id, item_key) index orders — so the page
+// boundary is the same order a person reads the feed in, and a re-poll that
+// inserts an older episode does not shuffle the pages under them.
+func (a *API) listFollowedSourceItems(w http.ResponseWriter, r *http.Request) {
+	q, err := parseQuery(r, "followed-source-items", 1)
+	if err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	src, err := a.followedSource(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		a.fail(w, r, "followed source", err)
+		return
+	}
+	after := ""
+	if q.cursor != nil {
+		after = q.cursor[0]
+	}
+	items, err := a.catalog.ProjectedItems(r.Context(), src.WorkID, after, q.limit+1)
+	if err != nil {
+		a.fail(w, r, "followed source", err)
+		return
+	}
+
+	views := make([]FollowedItemView, 0, len(items))
+	for _, it := range items {
+		views = append(views, followedItemView(it))
+	}
+	a.write(w, r, http.StatusOK, newPage(views, q.limit,
+		func(x FollowedItemView) []string { return []string{x.ItemKey} },
+		"followed-source-items"))
+}
+
+// followedItemView is the wire projection of one stored item and its want.
+func followedItemView(it catalog.ProjectedItem) FollowedItemView {
+	view := FollowedItemView{
+		ID: it.ID, WorkID: it.WorkID, EditionID: it.EditionID, ItemKey: it.ItemKey,
+		Title: it.Title, Attributes: it.Attributes, CreatedAt: it.CreatedAt,
+	}
+	if !it.PublishedAt.IsZero() {
+		t := it.PublishedAt
+		view.PublishedAt = &t
+	}
+	if it.Want.Projected() {
+		view.Want = &FollowedItemWant{
+			DesiredItemID: it.Want.DesiredItemID,
+			Phase:         it.Want.Phase,
+			Content:       it.Want.Content,
+			Placement:     it.Want.Placement,
+		}
+		view.Archived = it.Want.Content == "satisfied"
+	}
+	return view
+}
+
 // deleteFollowedSource is DELETE /api/v1/followed-sources/{id}. keep_archive is
 // a query parameter defaulting to true.
 func (a *API) deleteFollowedSource(w http.ResponseWriter, r *http.Request) {
@@ -546,6 +684,11 @@ func FollowClientFault(err error) (string, bool) {
 // traffic, so writes need `write` rather than `admin`.
 func (a *API) mountFollowedSources(r chi.Router) {
 	r.Get("/followed-sources", a.listFollowedSources)
+	r.Get("/followed-sources/{id}", a.getFollowedSource)
+	// What the subscription has actually got: the items its feed yielded, each
+	// with the want it projected and that want's acquisition axes (#430). A
+	// read, under the floor the router already requires.
+	r.Get("/followed-sources/{id}/items", a.listFollowedSourceItems)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/followed-sources", a.createFollowedSource)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Delete("/followed-sources/{id}", a.deleteFollowedSource)
 }

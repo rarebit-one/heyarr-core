@@ -54,6 +54,14 @@
 # reason: an assertion whose subject is absent does not fail and does not skip.
 # It quietly passes and reads as coverage.
 #
+# A proven claim may name `needs <capability>` when its evidence cannot exist
+# without a binary the machine may lack (ADR-0023: the toolchain is optional,
+# and one CI leg deliberately runs bare). It is exempt on a run ONLY when the
+# epilogue's capability ledger records that capability as absent — the line
+# `not_exercised` prints — so a run on an equipped machine that stops
+# producing the evidence still fails. The bare leg is not a loophole: it says
+# what it did not run, and this key is how the ledger reads that.
+#
 # **This is a ledger and not a proof.** It catches the claims somebody wrote
 # down, exactly as `make hygiene` catches the name shapes somebody thought of.
 # Its value is that adding a mechanism now has a place where its absence is
@@ -174,8 +182,15 @@ claim clients-are-served-hls
 state pending
 issue 202
 ref   §33, §70
-why   §33 opens by saying clients continue to consume standard HTTP/HLS, and nothing in the tree produces a playlist. Milestone 10 is built on that sentence.
+why   §33 opens by saying clients continue to consume standard HTTP/HLS, and nothing in the tree produces a playlist. Milestone 10 is built on that sentence. ADR-0069 adds a repackaged fragmented-MP4 stream for a client that cannot decode the source (the claim below); a playlist is still unproduced, and the device decision stays with #202.
 evidence an HLS playlist was served
+
+claim a-client-that-cannot-decode-gets-a-repackage
+state proven
+needs ffmpeg
+ref   §33, §68, ADR-0069, #432, #202
+why   A client that declares its decoders and cannot decode the source is handed GET /playback/stream/{token} rather than the raw blob: one ffmpeg per request writes fragmented MP4 with the video copied and the audio re-encoded to AAC. Before this the planner could say TRANSCODE and nothing could serve it — the phone streamed the blob and played picture with no sound, the sixth mechanism-with-no-caller this ledger names. The evidence is the captured bytes: the demo asks for a plan with a container the client cannot open, fetches the stream URL it is given with a real ffmpeg behind it, and ffprobe on what arrived says H.264 and AAC in MP4. On a node without ffmpeg the same plan answers direct and says why, and the block is recorded as unexercised rather than passing vacuously.
+evidence a client that could not open the container was served a repackaged stream
 
 claim control-plane-backup-and-restore
 state proven

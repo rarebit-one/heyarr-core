@@ -75,3 +75,5 @@ An ADR that merely describes the code is not worth having.
 | [0066](0066-the-node-hosts-the-voidbind-relay-beside-its-legacy-pair-relay.md) | The node hosts the Voidbind relay beside its legacy pair relay | Accepted |
 | [0067](0067-a-paired-device-enrols-itself-and-earns-only-the-read-floor.md) | A paired device enrols itself, and earns only the read floor | Accepted |
 | [0068](0068-membership-ops-replace-root-only-certs.md) | Membership ops replace root-only certs | Accepted |
+| [0069](0069-a-client-that-cannot-decode-the-source-gets-an-on-the-fly-repackage.md) | A client that cannot decode the source gets an on-the-fly repackage | Accepted |
+| [0070](0070-a-device-refusal-hints-only-at-a-clock.md) | A device refusal hints only at a clock, a proof's life is capped, and a session dies with its approver | Accepted |
