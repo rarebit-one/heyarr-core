@@ -250,6 +250,72 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [content]
+      operationId: patchWork
+      summary: Correct a work's catalogue facts.
+      description: |
+        Changes the title, year or content type (#428). Every field is optional;
+        omitting one leaves it alone, and `"year": 0` clears the year — the two
+        are different requests.
+
+        **`work_key` is deliberately not recomputed.** It is the normalised
+        identity a rescan converges on, derived from the title a SCANNER sees,
+        not from the one a person prefers to read. Re-deriving it on a rename
+        would make the next scan create a second work instead of finding this
+        one. `sort_title` does follow the title, because it is the listing's
+        sort key.
+
+        The title is stored as typed, not passed through the scanner's display
+        normaliser — that normaliser would read "(Extended)" as a release tag
+        and drop it.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkPatch" }
+      responses:
+        "200":
+          description: The corrected work.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Work" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [content]
+      operationId: deleteWork
+      summary: Remove a work, its editions, its assets and its wants.
+      description: |
+        **Logical, in ADR-0018's sense: no byte is unlinked.** The catalog rows
+        go — the work, its editions, the asset rows beneath them, and every want
+        anchored to it — and the blobs stay. The existing `gc_blobs` sweeper
+        reclaims a blob no asset references any more, behind its grace window.
+        The emitted events say `bytes_removed: false` in as many words.
+
+        **Wants are cascade-cancelled; a followed source refuses the delete.**
+        A want is a one-off intent that deleting its target supersedes. A
+        followed source is standing configuration that will keep producing
+        wants, so a work that is still followed answers `409` naming the fix
+        (`DELETE /followed-sources/{id}`, which also decides what happens to the
+        archive) rather than silently dropping the subscription.
+
+        Emits `content.asset.deleted` per removed asset — the same type and
+        payload the per-asset route emits, so a subscriber need not special-case
+        "unless the whole work went" — a `desired.removed` per cancelled want,
+        and one `content.work.deleted`.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "204": { description: Removed. Bytes untouched. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
 
   /api/v1/works/{id}/assets:
     get:
@@ -288,7 +354,6 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-
   /api/v1/editions/{id}:
     get:
       tags: [content]
@@ -5814,6 +5879,22 @@ components:
           required: [external_ids]
           properties:
             external_ids: { $ref: "#/components/schemas/ExternalIDs" }
+
+    WorkPatch:
+      type: object
+      description: |
+        The catalogue facts an operator may correct on a work (#428). Every
+        field is optional; an omitted field is left alone.
+      properties:
+        title:
+          type: string
+          description: Stored as typed (trimmed). Blank is refused.
+        year:
+          type: integer
+          description: "`0` clears the year, which is not the same as omitting the field."
+        content_type:
+          type: string
+          description: Must be a content type this node knows.
 
     Edition:
       type: object
