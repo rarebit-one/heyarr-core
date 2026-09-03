@@ -327,3 +327,28 @@ func emptyToNil(s string) *string {
 	}
 	return &s
 }
+
+// WorkAsset is one file of a work as GET /api/v1/works/{id}/assets presents it
+// (#429): the Asset, plus the two facts a work-detail screen would otherwise
+// have to fetch separately.
+//
+// An Asset names its EDITION, not its work, so "which files does this work
+// have?" — the first question a detail screen asks — used to be answered by
+// paging the whole /assets collection, reading /editions/{id} per distinct
+// edition to filter by work, and then /blobs/{hash} per asset for the size.
+// That is O(assets in the library) reads for one screen. This route is the
+// join, done once in SQL.
+type WorkAsset struct {
+	Asset
+	// The edition this asset belongs to, labelled — a screen groups by it, and
+	// an id alone is not something a person can read.
+	EditionLabel string `json:"edition_label"`
+	EditionType  string `json:"edition_type"`
+	// The blob's size in bytes and its recorded media type. Null for a `linked`
+	// asset, which has no blob at all (ADR-0020) — the same null Asset.blob_hash
+	// carries, for the same reason. Null also for a blob_hash the blobs table has
+	// no row for, which is a torn catalog rather than a normal state, but is
+	// reported as "unknown size" rather than failing the whole listing.
+	BlobSize *int64  `json:"blob_size"`
+	BlobMIME *string `json:"blob_mime"`
+}

@@ -44,6 +44,11 @@ func TestResponseShapes(t *testing.T) {
 		{"assets in a library", "/api/v1/assets?library_id=" + libFilmsID, "assets_by_library.json"},
 		{"missing assets", "/api/v1/assets?state=missing", "assets_missing.json"},
 		{"one asset", "/api/v1/assets/" + asset3ID, "asset_linked.json"},
+		{"a work's assets", "/api/v1/works/" + work1ID + "/assets", "work_assets.json"},
+		{
+			"a work's assets, none of which have a blob",
+			"/api/v1/works/" + work3ID + "/assets", "work_assets_linked.json",
+		},
 		{"libraries", "/api/v1/libraries", "libraries_list.json"},
 		{"one library", "/api/v1/libraries/" + libFilmsID, "library.json"},
 		{"one blob", "/api/v1/blobs/" + blob1Hash, "blob.json"},
