@@ -290,12 +290,17 @@ func (s *Server) Start() error {
 		return err
 	}
 
+	// The TCP listener is the one that may be served over TLS; the unix socket
+	// never is. Remembering it lets the serve loop below pick ServeTLS for this
+	// one connection source and plain Serve for the local socket.
+	var tcpListener net.Listener
 	if addr := s.cfg.HTTP.Addr; addr != "" {
 		l, err := net.Listen("tcp", addr)
 		if err != nil {
 			return fail(fmt.Errorf("httpapi: listening on %s: %w", addr, err))
 		}
 		s.tcpAddr = l.Addr().String()
+		tcpListener = l
 		listeners = append(listeners, l)
 	}
 	if path := s.cfg.HTTP.UnixSocket; path != "" {
@@ -321,22 +326,35 @@ func (s *Server) Start() error {
 		return errors.New("httpapi: neither http.addr nor http.unix_socket is set — the API would be unreachable")
 	}
 
+	tlsOn := s.cfg.HTTP.TLS.Enabled()
 	for _, l := range listeners {
+		// Only the TCP listener is wrapped in TLS. The unix socket is the local
+		// IPC transport the CLI and workers dial and stays plain; wrapping it
+		// would break every in-process caller for no gain, since it never leaves
+		// the host. ServeTLS reads the cert and key on each call, so a renewal
+		// out of process is picked up on the next start (ADR-0072).
+		serveTLS := tlsOn && l == tcpListener
 		s.wg.Add(1)
-		go func(l net.Listener) {
+		go func(l net.Listener, useTLS bool) {
 			defer s.wg.Done()
-			if err := s.http.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			var err error
+			if useTLS {
+				err = s.http.ServeTLS(l, s.cfg.HTTP.TLS.CertFile, s.cfg.HTTP.TLS.KeyFile)
+			} else {
+				err = s.http.Serve(l)
+			}
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				select {
 				case s.errc <- fmt.Errorf("httpapi: serving on %s: %w", l.Addr(), err):
 				default:
 				}
 			}
-		}(l)
+		}(l, serveTLS)
 	}
 
 	s.log.Info("http listening",
 		"addr", s.tcpAddr, "unix_socket", s.socketPath,
-		"auth_enabled", s.cfg.HTTP.Auth.Enabled)
+		"auth_enabled", s.cfg.HTTP.Auth.Enabled, "tls", tlsOn)
 	return nil
 }
 
