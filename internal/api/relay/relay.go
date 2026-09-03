@@ -52,14 +52,23 @@ type Handler struct {
 	log    *slog.Logger
 }
 
-// New builds the relay with the legacy relay's caps.
+// MaxMessageBytes bounds one relay slot. The legacy relay's 4 KiB was sized for
+// a bare commit/reveal; since ADR-0068 the sealed `cert` slot carries the
+// admitting op AND the initiator's known membership ops (up to
+// rp.MaxPresentedOps of ~700 B each), and a phone with a few devices overflowed
+// it with a 413 mid-pairing. voidbind-go's own relay default (64 KiB) is the
+// wire's stated bound, so the node uses the same number.
+const MaxMessageBytes = vbrelay.DefaultMaxMessageBytes
+
+// New builds the relay with the legacy relay's session caps and the
+// voidbind-go relay's slot cap.
 func New(opts Options) *Handler {
 	log := opts.Logger
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
 	srv := vbrelay.NewServer(vbrelay.Options{
-		MaxMessageBytes: pairrelay.MaxSlotBytes,
+		MaxMessageBytes: MaxMessageBytes,
 		MaxSessions:     pairrelay.MaxSessions,
 		SessionTTL:      pairrelay.SessionTTL,
 		Now:             opts.Now,
