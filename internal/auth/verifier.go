@@ -17,6 +17,13 @@ type Identity struct {
 	// Anonymous marks the synthetic identity used when authentication is
 	// disabled — which configuration only permits on a loopback listener.
 	Anonymous bool
+	// Guest marks the anonymous, read-only browse identity admitted when guest
+	// mode is enabled and a caller presents no credential (ADR-0074). It holds
+	// only `read`, so scope already keeps it off every write and admin route;
+	// the marker exists for the read routes a scope check cannot distinguish —
+	// per-identity state a Guest must not see even though it may read the
+	// shared library (RefuseGuest).
+	Guest bool
 }
 
 // Allows reports whether this identity may perform an action requiring want.

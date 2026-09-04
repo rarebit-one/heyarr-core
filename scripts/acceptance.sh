@@ -1472,6 +1472,24 @@ providers:
     path_map:
       - remote: /downloads/complete
         local: $FULLDATA/downloads
+  # A third REAL download client, and the first USENET one — SABnzbd (§58, M11) —
+  # configured and pointing at nothing (port 9 refuses everywhere). What it proves
+  # is the same narrow, worth-having fact as the qBittorrent entry: the registry
+  # now constructs a REAL SABnzbd client for the kind, and the health beat reaches
+  # real client code — an authenticated read it cannot complete — and reports what
+  # happened, which is the difference between a placeholder and a client. It also
+  # exercises the AuthToken credential path (an api_key resolved and handed to the
+  # client), where qBittorrent exercises AuthBasic. A real transfer is NOT asserted
+  # here: ADR-0026 keeps a download daemon out of CI, and unlike qBittorrent there
+  # is no harness leg either (a real usenet transfer needs a real news server), so
+  # the transfer path is proven by the fake at the unit level and by TestLiveSABnzbd.
+  - name: acceptance-sabnzbd
+    type: sabnzbd
+    endpoint: http://127.0.0.1:9
+    api_key: demo-sabnzbd-key
+    path_map:
+      - remote: /downloads/complete
+        local: $FULLDATA/downloads
 YAML
 
   # Mint the token BEFORE anything starts. It migrates the database itself, so
@@ -2616,6 +2634,35 @@ YAML
     "an unreachable qBittorrent is reported unhealthy, not pretended healthy"
   assert_not_contains "$(jq -r '.detail' <<<"$qb_entry")" "credential" \
     "an unreachable qBittorrent is not misreported as a credential problem"
+
+  note "  a third download client, and the first usenet one: SABnzbd (§58, M11)"
+  # The same honest-without-a-daemon proof as qBittorrent (ADR-0026 keeps a daemon
+  # out of CI, and there is no harness leg for usenet at all): the registry
+  # constructs a REAL SABnzbd client for its kind, it is registered with the
+  # download capability, and the health beat reaches its real Check code — an
+  # authenticated read against an endpoint that refuses — and reports unhealthy
+  # rather than pretending. A real transfer is proven by the fake (unit) and
+  # TestLiveSABnzbd (opt-in), never here.
+  local sab_entry
+  sab_entry=$(wait_for_health_check acceptance-sabnzbd)
+
+  assert_eq "$(jq -r '. != null' <<<"$sab_entry")" "true" \
+    "a configured SABnzbd client is reported — a REAL client, not an unimplemented placeholder"
+  assert_eq "$(jq -r '.capabilities | join(",")' <<<"$sab_entry")" "download" \
+    "the SABnzbd client advertises the download capability, so poll jobs can route to it"
+  # The health beat reached real SABnzbd Check code: a client with no caller would
+  # have no observation to show. checked_at proves the caller exists.
+  if [[ "$(jq -r '.checked_at // "never"' <<<"$sab_entry")" == "never" ]]; then
+    fail "no health check ever ran on the SABnzbd client — nothing reached the real client code"
+  else
+    pass "the health beat checked the SABnzbd client — a real caller reaching real client code"
+  fi
+  assert_eq "$(jq -r '.healthy' <<<"$sab_entry")" "false" \
+    "an unreachable SABnzbd is reported unhealthy, not pretended healthy"
+  # An unreachable instance is a connection failure, not a rejected credential —
+  # so the api_key it was configured with must not be misreported as the problem.
+  assert_not_contains "$(jq -r '.detail' <<<"$sab_entry")" "credential" \
+    "an unreachable SABnzbd is not misreported as a credential problem"
 
   note "  Torznab, a real indexer client (§59, ADR-0028, M3-09)"
   # Placed here with the download client's assertions because this section

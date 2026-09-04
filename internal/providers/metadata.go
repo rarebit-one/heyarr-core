@@ -62,3 +62,64 @@ type FeedProvider interface {
 	// adapter that knows its own source shape.
 	ServesType(t followed.Type) bool
 }
+
+// DiscoveryCandidate is one work a discovery search resolved from the metadata
+// service — a work that may NOT be in the library yet (#451).
+//
+// It is the counterpart to Enumerate's followed.FeedItem: a neutral,
+// provider-agnostic value so a TMDB implementation later returns the SAME shape
+// a TVDB one does, and the caller never couples to either service's JSON. Where
+// FeedItem is one item WITHIN a source (an episode), a candidate is the source
+// itself — a series a caller could go on to follow.
+type DiscoveryCandidate struct {
+	// Title is the work's name as the metadata service knows it.
+	Title string
+	// Year is the first-aired/release year, zero when the service did not give
+	// one — a real and distinct answer from any year.
+	Year int
+	// ExternalID is the source-native identity the caller would follow this
+	// candidate by: a TVDB series id, which follow_source takes as tvdb_id. It
+	// is the whole point of discovery — a free-text query resolved to an id a
+	// follow can act on in one step, rather than a title that might create a
+	// second work.
+	ExternalID string
+	// Type is the followed source type this candidate would be followed as
+	// (tv_series for a TVDB series), so a caller knows which follow flow applies
+	// without inferring it from the id's shape.
+	Type followed.Type
+	// Overview is a short human description, when the service supplies one, so a
+	// person choosing between two same-named series has something to choose on.
+	// Empty is fine — it is decoration, never an identity.
+	Overview string
+}
+
+// DiscoverySearcher is an OPTIONAL capability a metadata provider may also
+// satisfy: resolving a free-text query into candidate works, INCLUDING ones the
+// library does not hold (#451).
+//
+// # Why it is a separate interface, not a method on FeedProvider
+//
+// Enumerate answers "which items does this KNOWN source have"; Discover answers
+// "which sources match this text at all". They are different questions, and not
+// every FeedProvider can answer the second: a podcast or RSS adapter is handed a
+// feed URL and has nothing to search, while a webfeed adapter has no catalogue
+// behind it. Folding Discover into FeedProvider would force those adapters to
+// carry a method that could only refuse. So it is an extra interface a provider
+// declares by implementing, and the registry surfaces the ones that do — the
+// same "optional capability by type assertion" shape Indexer and Downloader use
+// beside the base Provider.
+//
+// A provider that implements this still advertises CapabilityMetadata; discovery
+// is a facet of being a metadata provider, not a fifth capability, so routing and
+// health stay unchanged and a node's "what can search for new content" answer is
+// "the metadata providers that also know how to look themselves up".
+type DiscoverySearcher interface {
+	Provider
+
+	// Discover resolves a free-text query to candidate works. An empty result is
+	// a modelled outcome — the query matched nothing — not an error; an error is
+	// reserved for a call that could not be made (the service was unreachable, or
+	// the credential was rejected), which the caller must see rather than read as
+	// "nothing matched".
+	Discover(ctx context.Context, query string) ([]DiscoveryCandidate, error)
+}

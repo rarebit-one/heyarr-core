@@ -55,6 +55,16 @@ type Fake struct {
 	// enumerations counts Enumerate calls, so a test can assert the poll loop
 	// actually reached the adapter rather than inferring it from projected wants.
 	enumerations int
+	// discovery is what Discover returns, per lower-cased query — so a fake
+	// metadata provider can drive the discovery door (#451) without a network,
+	// the same reason feeds exists for Enumerate. A query with no staged answer
+	// returns an empty slice, which is the "matched nothing" outcome — distinct
+	// from an error, and distinct from a registry with no discovery searcher at
+	// all.
+	discovery map[string][]DiscoveryCandidate
+	// discoverCalls counts Discover calls, so a test can assert the door reached
+	// the adapter rather than inferring it from an empty result.
+	discoverCalls int
 	// servesTypes, when non-nil, restricts which followed types this fake claims
 	// to serve (see ServingTypes, ServesType). Nil means it serves ANY type,
 	// which keeps the many single-fake follow tests routing to it unchanged.
@@ -69,6 +79,7 @@ func NewFake(name string, caps ...Capability) *Fake {
 		caps:       sortCapabilities(caps),
 		candidates: map[string][]acquisition.ReleaseCandidate{},
 		feeds:      map[string][]followed.FeedItem{},
+		discovery:  map[string][]DiscoveryCandidate{},
 		now:        func() time.Time { return time.Now().UTC() },
 	}
 }
@@ -221,6 +232,39 @@ func (f *Fake) Enumerate(_ context.Context, ref string) ([]followed.FeedItem, er
 	return append([]followed.FeedItem(nil), found...), nil
 }
 
+// OfferDiscovery makes a set of candidates the answer Discover gives for a
+// query, so a fake metadata provider can drive the discovery door without a
+// network — the counterpart to OfferFeed for Enumerate (#451).
+func (f *Fake) OfferDiscovery(query string, candidates ...DiscoveryCandidate) *Fake {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.discovery[normaliseTitle(query)] = candidates
+	return f
+}
+
+// Discoveries is how many times Discover was called.
+func (f *Fake) Discoveries() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.discoverCalls
+}
+
+// Discover implements DiscoverySearcher. It returns whatever OfferDiscovery
+// staged for the query, so the discovery door and its projection to the wire are
+// exercisable end to end without a metadata service. A query with no staged
+// answer returns an empty slice — the "matched nothing" outcome — while FailWith
+// makes it fail, so the door's unreachable-service path is reachable too.
+func (f *Fake) Discover(_ context.Context, query string) ([]DiscoveryCandidate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.discoverCalls++
+	if f.failWith != nil {
+		return nil, f.failWith
+	}
+	found := f.discovery[normaliseTitle(query)]
+	return append([]DiscoveryCandidate(nil), found...), nil
+}
+
 func normaliseTitle(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
@@ -232,8 +276,9 @@ func normaliseRef(s string) string {
 // Compile-time proof that a Fake really is substitutable for the real thing. If
 // the interface grows a method, this breaks here rather than in the demo.
 var (
-	_ Provider     = (*Fake)(nil)
-	_ Indexer      = (*Fake)(nil)
-	_ Downloader   = (*Fake)(nil)
-	_ FeedProvider = (*Fake)(nil)
+	_ Provider          = (*Fake)(nil)
+	_ Indexer           = (*Fake)(nil)
+	_ Downloader        = (*Fake)(nil)
+	_ FeedProvider      = (*Fake)(nil)
+	_ DiscoverySearcher = (*Fake)(nil)
 )

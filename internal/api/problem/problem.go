@@ -42,7 +42,13 @@ const (
 	// has.
 	TypeNoChunkManifest = TypeBase + "no-chunk-manifest"
 	TypeConflict        = TypeBase + "conflict"
-	TypeInternal        = TypeBase + "internal"
+	// TypeServiceUnavailable is a capability this node cannot answer right now
+	// because nothing is configured or reachable to answer it — distinct from a
+	// bad request (the caller did nothing wrong) and from an internal error (the
+	// server did not fail; it has nothing to serve). Discovery search returns it
+	// when no metadata provider can look content up (#451).
+	TypeServiceUnavailable = TypeBase + "service-unavailable"
+	TypeInternal           = TypeBase + "internal"
 )
 
 // Problem is an RFC 9457 problem document.
@@ -96,6 +102,14 @@ func NotFound(detail string) *Problem {
 // Conflict reports a request that contradicts current state (409).
 func Conflict(detail string) *Problem {
 	return New(http.StatusConflict, TypeConflict, "Conflict", detail)
+}
+
+// ServiceUnavailable reports a capability this node cannot serve right now
+// because nothing is configured or reachable to serve it (503). It is neither
+// the caller's fault (400) nor a failure (500): the request was well-formed and
+// nothing broke, there is simply no provider to answer it.
+func ServiceUnavailable(detail string) *Problem {
+	return New(http.StatusServiceUnavailable, TypeServiceUnavailable, "Service Unavailable", detail)
 }
 
 // Internal reports a server-side failure (500).

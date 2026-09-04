@@ -118,6 +118,15 @@ type SystemInfo struct {
 	Events        EventsInfo     `json:"events"`
 	Media         []ToolInfo     `json:"media"`
 	AuthEnabled   bool           `json:"auth_enabled"`
+	Guest         GuestInfo      `json:"guest"`
+}
+
+// GuestInfo tells a client whether anonymous read-only browse is available
+// (ADR-0074). A client boots into Guest by reading the API with no credential;
+// this field lets an operator, or an already-authenticated client, see the
+// mode is on without having to infer it from a 200-versus-401.
+type GuestInfo struct {
+	Enabled bool `json:"enabled"`
 }
 
 // PeerInfo identifies this node within the instance (ADR-0010). There is
@@ -280,6 +289,7 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 		Events:        eventsInfo,
 		Media:         s.media,
 		AuthEnabled:   s.cfg.HTTP.Auth.Enabled,
+		Guest:         GuestInfo{Enabled: s.cfg.HTTP.Guest.Enabled},
 	})
 }
 

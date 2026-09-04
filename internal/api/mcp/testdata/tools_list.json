@@ -60,6 +60,28 @@
         "heyarr/requiredScope": "read",
         "readOnlyHint": true
       },
+      "description": "Find content the library does NOT already hold. Where search_content looks only in the library, this asks the metadata provider (TVDB) for candidate series matching a free-text title, whether or not they are catalogued — the \"search then follow\" door. Each result carries a tvdb_id you pass straight to follow_source (or want_content by title) to bring it in. Use this when search_content came back empty and someone wants something new. Needs a metadata provider configured; a node without one says so rather than returning nothing.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "description": "The title to look up. Sent to the metadata provider as free text, so it need not match anything already in the library — that is the point.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "discover_content",
+      "title": "Discover new content"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
       "description": "Score one or more releases against a quality profile and return the reasons — every rule considered, whether it passed, failed, scored, missed or could not be determined. Writes nothing, so it is safe to use for answering \"would this be accepted?\" before anything is acquired. An attribute left out is reported as undetermined rather than as a failure, which is a different thing and sends you to a different place.",
       "inputSchema": {
         "additionalProperties": false,

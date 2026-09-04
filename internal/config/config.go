@@ -117,6 +117,12 @@ type HTTP struct {
 	// UnixSocket is the preferred local transport; empty disables it.
 	UnixSocket string `koanf:"unix_socket"`
 	Auth       Auth   `koanf:"auth"`
+	// Guest optionally admits a credential-less caller as an anonymous,
+	// read-only Guest over the shared library (ADR-0074). It defaults off: with
+	// it disabled a request that presents no credential is refused exactly as
+	// before. Enabling it on a non-loopback listener is a deliberate decision to
+	// let anyone who can reach the listener read the shared library.
+	Guest Guest `koanf:"guest"`
 	// TLS optionally serves the TCP client API over HTTPS (ADR-0072). Both files
 	// set → the TCP listener is served with ServeTLS; neither → plain HTTP as
 	// before (the default); exactly one → a startup error. The unix socket is
@@ -152,6 +158,14 @@ func (t TLS) Enabled() bool { return t.CertFile != "" && t.KeyFile != "" }
 
 // Auth configures API authentication.
 type Auth struct {
+	Enabled bool `koanf:"enabled"`
+}
+
+// Guest configures anonymous read-only browse (ADR-0074). Disabled by default:
+// the zero value is off, so an unmentioned key leaves the safe stance — a
+// credential-less request is refused — untouched. Enabled admits such a request
+// as a first-class Guest identity holding only the read scope.
+type Guest struct {
 	Enabled bool `koanf:"enabled"`
 }
 

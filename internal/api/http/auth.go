@@ -11,6 +11,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/enrolment"
+	"github.com/rarebit-one/heyarr-core/internal/guest"
 	"github.com/rarebit-one/voidbind-go/rp"
 )
 
@@ -170,10 +171,50 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			return
 		}
 
-		// No credential at all, or a scheme this server does not handle, is not
-		// a failure worth a metric spike or a log line of its own: it is what
-		// every first request from a browser looks like. RequireScope turns it
-		// into a 401.
+		// No credential at all, or a scheme this server does not handle.
+		//
+		// When guest mode is enabled (ADR-0074), a request that presents no
+		// credential is admitted as a first-class, read-only Guest over the
+		// shared library rather than falling through to the 401 RequireScope
+		// produces. This is reached only after every credential path above has
+		// declined THIS request, so a REJECTED credential — a bad or revoked
+		// token, a refused device — never lands here: those already returned a
+		// 401 and are never quietly downgraded to a Guest.
+		if s.cfg.HTTP.Guest.Enabled {
+			next.ServeHTTP(w, s.withIdentity(r, guest.Identity()))
+			return
+		}
+
+		// With guest mode off this is not a failure worth a metric spike or a
+		// log line of its own: it is what every first request from a browser
+		// looks like. RequireScope turns it into a 401.
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RefuseGuest rejects a Guest identity (ADR-0074) with 403, and passes every
+// other caller through untouched. It guards the read routes a Guest must not
+// reach even though a Guest holds the read scope: per-identity history
+// (ADR-0024) and encrypted personal spaces (the M9 surface) are somebody's, and
+// a Guest is nobody.
+//
+// It is a separate middleware from RequireScope because the distinction it
+// draws is one a scope cannot: a Guest and an enrolled reader both hold `read`,
+// so no scope requirement tells them apart. Write and admin routes need none of
+// this — a Guest is already excluded from them by scope. This is only for the
+// read routes that expose per-identity state.
+//
+// It fails safe by construction: with no identity on the request (a route that
+// forgot to authenticate) there is no Guest to refuse, and RequireScope's own
+// deny-by-default still applies. Applied only where an identity is already
+// resolved, that is never the case.
+func RefuseGuest(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if id, ok := IdentityFrom(r.Context()); ok && id.Guest {
+			Fail(w, r, problem.Forbidden(
+				"a guest session may read the shared library but not per-identity or personal state; sign in to reach it"))
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
