@@ -80,3 +80,4 @@ An ADR that merely describes the code is not worth having.
 | [0071](0071-an-edition-is-deletable-and-a-followed-work-refuses-it.md) | An edition is deletable, logically, and a followed work refuses it | Accepted |
 | [0072](0072-opt-in-native-tls-on-the-client-api.md) | Opt-in native TLS on the client API, and an explicit public origin | Accepted |
 | [0073](0073-the-catalog-converges-by-an-editorial-op-log-over-a-re-derivable-base.md) | The catalog converges by an editorial op-log over a re-derivable base | Proposed |
+| [0074](0074-guest-is-a-first-class-read-only-browse-mode.md) | Guest is a first-class read-only browse mode over the shared library | Accepted |
