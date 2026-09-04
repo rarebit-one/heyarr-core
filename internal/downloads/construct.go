@@ -32,7 +32,8 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 	if r.Kind == providers.KindWebCapture {
 		return webCaptureFromConfig(r, now)
 	}
-	if r.Kind != providers.KindTransmission && r.Kind != providers.KindQBittorrent {
+	if r.Kind != providers.KindTransmission && r.Kind != providers.KindQBittorrent &&
+		r.Kind != providers.KindSABnzbd {
 		return nil, false, nil
 	}
 
@@ -52,6 +53,29 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 	endpoint := ""
 	if r.Endpoint != nil {
 		endpoint = r.Endpoint.String()
+	}
+
+	// SABnzbd authenticates with an api key (AuthToken), not a username and
+	// password, so its credential leaves the wrapper through Token() rather than
+	// credentialFor's Basic() — reaching for the wrong accessor would yield an
+	// empty key and a client that 401s an hour later, the quiet failure ADR-0031
+	// exists to prevent. It is a usenet client whose completed files land on the
+	// daemon's disk, so like the torrent clients it takes a path map.
+	if r.Kind == providers.KindSABnzbd {
+		token, _ := r.Credential.Token()
+		client, err := NewSABnzbd(SABOptions{
+			Name:         r.Name,
+			Endpoint:     endpoint,
+			APIKey:       token.Reveal(),
+			PathMap:      pathMap,
+			Label:        r.Label,
+			Capabilities: r.Capabilities,
+			Now:          now,
+		})
+		if err != nil {
+			return nil, true, err
+		}
+		return client, true, nil
 	}
 
 	// The credential comes out of its wrapper in credentialFor, which is the
