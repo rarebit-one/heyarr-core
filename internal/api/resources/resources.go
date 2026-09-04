@@ -307,8 +307,12 @@ func (a *API) Mount(r chi.Router) {
 	// a write, because it changes what is happening in somebody's living room.
 	r.Get("/renderers", a.listRenderers)
 	r.Get("/renderers/{udn}/status", a.rendererStatus)
-	r.Get("/consumption/sessions", a.listSessions)
-	r.Get("/consumption/sessions/{id}", a.getSession)
+	// Consumption history is per-identity (ADR-0024) — it records who watched
+	// what — so it is closed to a Guest (ADR-0074), which keeps no history and
+	// is entitled to read no one else's. The `read` floor cannot express this:
+	// a Guest holds `read`, so RefuseGuest is the guard.
+	r.With(httpapi.RefuseGuest).Get("/consumption/sessions", a.listSessions)
+	r.With(httpapi.RefuseGuest).Get("/consumption/sessions/{id}", a.getSession)
 	r.Get("/jobs", a.listJobs)
 	r.Get("/jobs/{id}", a.getJob)
 	r.Get("/events", a.streamEvents)
@@ -381,6 +385,12 @@ func (a *API) Mount(r chi.Router) {
 	// reasoning as /quality-profiles/{id}/evaluate. No source parameter: the
 	// question is what a work IS, not which service to ask.
 	r.Post("/search", a.searchContentRoute)
+	// Discovery search (§55, M12, #451). The "not-yet-in-library" door beside
+	// /search: a live metadata-provider lookup that returns candidate works the
+	// library may not hold, each followable by id in one step. A POST under the
+	// read floor for the same reason /search is — the intent travels in a body
+	// and it writes nothing.
+	r.Post("/discover", a.discoverRoute)
 	// Satisfaction explains §56's two axes for one want. Mounted only when a
 	// catalog was supplied — see Options.Catalog.
 	if a.catalog != nil {

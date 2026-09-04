@@ -58,6 +58,14 @@ var schemaSearchContent = obj(map[string]any{
 	},
 })
 
+var schemaDiscoverContent = obj(map[string]any{
+	"query": map[string]any{
+		"type": "string",
+		"description": "The title to look up. Sent to the metadata provider as free text, " +
+			"so it need not match anything already in the library — that is the point.",
+	},
+}, "query")
+
 var schemaGetExternalIDs = obj(map[string]any{
 	"work_id": map[string]any{
 		"type": "string",

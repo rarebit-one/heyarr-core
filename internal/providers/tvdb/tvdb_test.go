@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 	"github.com/rarebit-one/heyarr-core/internal/providers/fixtures"
 )
@@ -140,6 +141,58 @@ func TestEnumerateRefusesEmptyRef(t *testing.T) {
 	c := newClient(t, "http://example.invalid")
 	if _, err := c.Enumerate(context.Background(), "  "); err == nil {
 		t.Fatal("an empty series id must be refused")
+	}
+}
+
+// A TVDB client is also a DiscoverySearcher (#451): the discovery door routes to
+// it by that interface, and a TMDB implementation later slots in behind the same
+// one.
+func TestClientSatisfiesDiscoverySearcher(t *testing.T) {
+	var _ providers.DiscoverySearcher = (*Client)(nil)
+}
+
+// Discover logs in, asks /search for series matching the query, and maps each
+// hit to a neutral candidate carrying the tvdb id a follow acts on — skipping a
+// hit with no id, which no follow could use.
+func TestDiscover(t *testing.T) {
+	srv := loadCorpus(t).Server()
+	defer srv.Close()
+	c := newClient(t, srv.URL)
+	c.http = srv.Client()
+
+	got, err := c.Discover(context.Background(), "test")
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	// Three hits in the corpus, one with no tvdb id — so two candidates.
+	if len(got) != 2 {
+		t.Fatalf("got %d candidates, want 2 (the id-less hit is skipped)", len(got))
+	}
+	if got[0].ExternalID != "100" || got[0].Title != "A Test Series" {
+		t.Errorf("first candidate = %+v", got[0])
+	}
+	if got[0].Year != 2011 {
+		t.Errorf("first candidate year = %d, want 2011", got[0].Year)
+	}
+	if got[0].Type != followed.TypeTVSeries {
+		t.Errorf("candidate type = %q, want tv_series", got[0].Type)
+	}
+	if got[0].Overview == "" {
+		t.Error("the first candidate lost its overview")
+	}
+	// The second hit has an empty overview and a year — both survive as their
+	// honest values rather than being dropped.
+	if got[1].ExternalID != "200" || got[1].Year != 2019 || got[1].Overview != "" {
+		t.Errorf("second candidate = %+v", got[1])
+	}
+}
+
+// A query is required — an empty query cannot search for anything, and the
+// refusal is local rather than an HTTP round trip that would waste a login.
+func TestDiscoverRefusesEmptyQuery(t *testing.T) {
+	c := newClient(t, "http://example.invalid")
+	if _, err := c.Discover(context.Background(), "  "); err == nil {
+		t.Fatal("an empty query must be refused")
 	}
 }
 

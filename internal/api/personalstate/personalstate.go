@@ -88,10 +88,17 @@ func New(opts Options) (*API, error) {
 // STORE ciphertext, and a `read` token lets it FETCH ciphertext — neither lets it
 // READ the plaintext, which needs a wrapped key no token conveys.
 func (a *API) Mount(r chi.Router) {
-	r.Get("/spaces", a.listSpaces)
-	r.Get("/spaces/{id}/keys", a.listWrappedKeys)
-	r.Get("/spaces/{id}/changes", a.listChanges)
-	r.Get("/spaces/{id}/snapshot", a.getSnapshot)
+	// The reads carry the `read` floor the router already requires, but they are
+	// closed to a Guest (ADR-0074): a personal space is somebody's encrypted
+	// state, and a Guest is nobody. RefuseGuest is what a scope check cannot do —
+	// a Guest and an enrolled reader both hold `read`. (The confidentiality of
+	// ADR-0049 still holds regardless: a read token fetches ciphertext, never
+	// plaintext. RefuseGuest is the coarser "an anonymous browser has no business
+	// here at all".)
+	r.With(httpapi.RefuseGuest).Get("/spaces", a.listSpaces)
+	r.With(httpapi.RefuseGuest).Get("/spaces/{id}/keys", a.listWrappedKeys)
+	r.With(httpapi.RefuseGuest).Get("/spaces/{id}/changes", a.listChanges)
+	r.With(httpapi.RefuseGuest).Get("/spaces/{id}/snapshot", a.getSnapshot)
 
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces", a.createSpace)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces/{id}/changes", a.putChange)
