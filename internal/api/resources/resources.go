@@ -381,6 +381,12 @@ func (a *API) Mount(r chi.Router) {
 	// reasoning as /quality-profiles/{id}/evaluate. No source parameter: the
 	// question is what a work IS, not which service to ask.
 	r.Post("/search", a.searchContentRoute)
+	// Discovery search (§55, M12, #451). The "not-yet-in-library" door beside
+	// /search: a live metadata-provider lookup that returns candidate works the
+	// library may not hold, each followable by id in one step. A POST under the
+	// read floor for the same reason /search is — the intent travels in a body
+	// and it writes nothing.
+	r.Post("/discover", a.discoverRoute)
 	// Satisfaction explains §56's two axes for one want. Mounted only when a
 	// catalog was supplied — see Options.Catalog.
 	if a.catalog != nil {

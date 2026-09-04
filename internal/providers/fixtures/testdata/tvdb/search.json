@@ -1,0 +1,20 @@
+{
+  "name": "search",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tvdb",
+    "version": "v4",
+    "captured_at": "2026-09-04T00:00:00Z",
+    "procedure": "GET /search?query=test&type=series&limit=25 with a Bearer token; synthesised from the published v4 /search contract (ADR-0026). Regenerate with scripts/capture-fixtures.sh tvdb search against a real key.",
+    "note": "Synthesised: TheTVDB v4 /search returns hits under a flat data array. type=series scopes the search to what the follow flow can act on. The client reads only tvdb_id (a STRING), name, year (a STRING, sometimes absent) and overview, tolerating the many other fields. The third hit deliberately carries no tvdb_id, to prove the client skips a hit it could not turn into a follow rather than surfacing an unfollowable row."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/search?query=test&type=series&limit=25"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "body": "{\"status\":\"success\",\"data\":[{\"objectID\":\"series-100\",\"tvdb_id\":\"100\",\"name\":\"A Test Series\",\"type\":\"series\",\"year\":\"2011\",\"overview\":\"A series used to exercise discovery.\"},{\"objectID\":\"series-200\",\"tvdb_id\":\"200\",\"name\":\"Test Two\",\"type\":\"series\",\"year\":\"2019\",\"overview\":\"\"},{\"objectID\":\"series-noid\",\"name\":\"A Series Without An Id\",\"type\":\"series\",\"year\":\"2000\"}]}"
+  }
+}

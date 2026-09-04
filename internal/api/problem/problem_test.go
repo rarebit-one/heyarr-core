@@ -69,6 +69,10 @@ func TestTypeURIsAreStableAndDistinct(t *testing.T) {
 		"not found":    problem.TypeNotFound,
 		"conflict":     problem.TypeConflict,
 		"internal":     problem.TypeInternal,
+		// A capability nothing is configured to answer (#451): the request was
+		// fine and nothing broke, there is just no provider — a different action
+		// (configure one) from a 400 or a 500.
+		"service unavailable": problem.TypeServiceUnavailable,
 		// M5-05's 404 that is not "no such thing": the node holds the blob and
 		// has no chunk manifest for it. A destination takes a DIFFERENT action
 		// on each, so they must not collapse.
