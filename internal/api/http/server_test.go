@@ -148,6 +148,12 @@ func testRoutes(r chi.Router) {
 	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Delete("/probe", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
+	// A read route that a Guest must not reach even at the read floor (ADR-0074),
+	// standing in for the per-identity read surface (personal spaces, consumption
+	// history) that RefuseGuest guards for real.
+	r.With(httpapi.RefuseGuest).Get("/personal", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
 	r.Get("/boom", func(_ http.ResponseWriter, _ *http.Request) {
 		panic("the handler exploded, and the stack must not reach the client")
 	})

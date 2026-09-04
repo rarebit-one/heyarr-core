@@ -6866,6 +6866,14 @@ components:
             other half of that picture.
           items: { $ref: "#/components/schemas/ToolInfo" }
         auth_enabled: { type: boolean }
+        guest:
+          type: object
+          description: |
+            Whether anonymous read-only browse (ADR-0074) is available on this
+            node. A client boots into Guest by reading the API with no
+            credential; this reports whether that is enabled.
+          properties:
+            enabled: { type: boolean }
 
     DriftStatus:
       type: string

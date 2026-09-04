@@ -13,8 +13,35 @@ import (
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/guest"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
+
+// guestAssetFilter is the guest content boundary (ADR-0074) as a SQL predicate.
+//
+// When the caller is a Guest, an asset listing is restricted to the
+// guest-visible source classes — the same allowlist guest.Visible enforces per
+// item — pushed into the WHERE clause so keyset pagination stays exact (dropping
+// rows from an already-fetched page would let a page of hidden assets truncate
+// the listing). For any other caller it adds nothing.
+//
+// col is the column reference to filter on, so a query that aliases the assets
+// table (`assets.source_class`) and one that does not (`source_class`) can share
+// this. It has nothing to hide today — every asset written is `managed` — but it
+// is where the vault boundary bites once personal content exists.
+func guestAssetFilter(r *http.Request, col string) (string, []any) {
+	id, ok := httpapi.IdentityFrom(r.Context())
+	if !ok || !id.Guest {
+		return "", nil
+	}
+	classes := guest.VisibleClasses()
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(classes)), ",")
+	args := make([]any, len(classes))
+	for i, c := range classes {
+		args[i] = c
+	}
+	return col + " IN (" + placeholders + ")", args
+}
 
 // ---------------------------------------------------------------------------
 // Works
@@ -257,6 +284,10 @@ func (a *API) listAssets(w http.ResponseWriter, r *http.Request) {
 	case "missing":
 		where = append(where, "missing_since IS NOT NULL")
 	}
+	if frag, fargs := guestAssetFilter(r, "source_class"); frag != "" {
+		where = append(where, frag)
+		args = append(args, fargs...)
+	}
 	if q.cursor != nil {
 		where = append(where, "id > ?")
 		args = append(args, q.cursor[0])
@@ -296,6 +327,14 @@ func (a *API) getAsset(w http.ResponseWriter, r *http.Request) {
 	asset, err := a.loadAsset(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		a.fail(w, r, "asset", err)
+		return
+	}
+	// The guest content boundary (ADR-0074): a non-guest-visible asset does not
+	// exist for a Guest — a 404, the same answer as an unknown id, so a Guest
+	// cannot even confirm a hidden asset is there. Inert today (every asset is
+	// `managed`); the vault boundary once personal content lands.
+	if id, ok := httpapi.IdentityFrom(r.Context()); ok && id.Guest && !guest.Visible(asset.SourceClass) {
+		httpapi.Fail(w, r, problem.NotFound("no asset is recorded with the id "+asset.ID))
 		return
 	}
 	a.write(w, r, http.StatusOK, asset)
@@ -439,6 +478,10 @@ func (a *API) listWorkAssets(w http.ResponseWriter, r *http.Request) {
 		where = append(where, "assets.missing_since IS NULL")
 	case "missing":
 		where = append(where, "assets.missing_since IS NOT NULL")
+	}
+	if frag, fargs := guestAssetFilter(r, "assets.source_class"); frag != "" {
+		where = append(where, frag)
+		args = append(args, fargs...)
 	}
 	if q.cursor != nil {
 		where = append(where, "assets.id > ?")
