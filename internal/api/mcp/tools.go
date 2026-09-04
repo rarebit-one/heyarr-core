@@ -48,6 +48,22 @@ func (s *Server) registerTools() {
 	})
 
 	s.tools.register(Tool{
+		Name:     "discover_content",
+		Title:    "Discover new content",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "Find content the library does NOT already hold. Where search_content " +
+			"looks only in the library, this asks the metadata provider (TVDB) for candidate " +
+			"series matching a free-text title, whether or not they are catalogued — the " +
+			"\"search then follow\" door. Each result carries a tvdb_id you pass straight to " +
+			"follow_source (or want_content by title) to bring it in. Use this when " +
+			"search_content came back empty and someone wants something new. Needs a metadata " +
+			"provider configured; a node without one says so rather than returning nothing.",
+		InputSchema: schemaDiscoverContent,
+		Handler:     s.discoverContent,
+	})
+
+	s.tools.register(Tool{
 		Name:     "get_external_ids",
 		Title:    "Get external identifiers",
 		Scope:    auth.ScopeRead,
@@ -448,6 +464,39 @@ func (s *Server) followSource(ctx context.Context, raw json.RawMessage) (any, er
 		return nil, classifyFollow(err)
 	}
 	return out, nil
+}
+
+// discoverContent is #451's discover_content — the "not-yet-in-library" search,
+// shared with POST /api/v1/discover through resources.Discover so the MCP door
+// and the REST door cannot drift. Unlike search_content (a raw library read that
+// hits s.reader directly), discovery needs the provider registry, which lives
+// behind the resource API — so it delegates there, the same as list_followed.
+func (s *Server) discoverContent(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args struct {
+		Query string `json:"query"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(args.Query) == "" {
+		return nil, invalidParams("give me a query to discover on")
+	}
+	out, err := s.resources.Discover(ctx, resources.DiscoverRequest{Query: args.Query})
+	if err != nil {
+		return nil, classifyDiscover(err)
+	}
+	return map[string]any{"count": len(out), "results": out}, nil
+}
+
+// classifyDiscover turns a Discover error into a JSON-RPC error, the sibling of
+// classify/classifyFollow: a caller's fault (an empty query) and a "no provider
+// configured" both render as invalidParams — each is quotable and actionable —
+// while a provider's own call failure stays ours.
+func classifyDiscover(err error) error {
+	if msg, isClient := resources.DiscoverClientFault(err); isClient {
+		return invalidParams("%s", msg)
+	}
+	return err
 }
 
 // listFollowed is §55's list_followed, shared with GET /api/v1/followed-sources.

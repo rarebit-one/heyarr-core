@@ -26,6 +26,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
 const stamp = "2026-08-01T00:00:00Z"
@@ -49,6 +50,14 @@ type harness struct {
 // dispatch, the scope middleware and the shared write intents, and a mock would
 // assert that the test's idea of that interaction is self-consistent.
 func newHarness(t *testing.T, authEnabled bool) *harness {
+	return newHarnessWith(t, authEnabled, nil)
+}
+
+// newHarnessWith is newHarness with a provider registry, for the tools that
+// reach the providers through the resource API — discover_content (#451) is the
+// first. newHarness passes nil, which the resource API treats as "this node has
+// none configured" (ADR-0025), so every existing test is unchanged.
+func newHarnessWith(t *testing.T, authEnabled bool, reg *providers.Registry) *harness {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -100,7 +109,8 @@ func newHarness(t *testing.T, authEnabled bool) *harness {
 
 	api, err := resources.New(resources.Options{
 		DB: db, Jobs: queue, Events: eventLog, Tokens: store, Catalog: cat,
-		Logger: slog.New(slog.DiscardHandler), Now: clock.Now,
+		Providers: reg,
+		Logger:    slog.New(slog.DiscardHandler), Now: clock.Now,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -3514,6 +3514,58 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/v1/discover:
+    post:
+      tags: [content]
+      operationId: discoverContent
+      summary: Find content the library does not already hold.
+      description: |
+        A live metadata-provider search for candidate works, INCLUDING ones the
+        library has never seen (§55, #451) — the "not-yet-in-library" door beside
+        `POST /search`. Where `/search` is an offline `LIKE` over the library's
+        `works`, this asks the configured metadata provider (TVDB, ADR-0050/0058)
+        for series matching a free-text title, and returns each with the
+        `tvdb_id` a client passes straight to `POST /followed-sources` to bring it
+        in — "search then follow" in one step.
+
+        A `POST` under the read floor, because the intent travels in a body and it
+        writes nothing — a discovery search enters nothing into the library, it
+        only reports what a follow WOULD name.
+
+        `503` when this node has no metadata provider that can look content up:
+        the request was well-formed and nothing failed, there is simply nothing
+        configured to answer — distinct from a `400` (bad request) and a `500`
+        (server failure).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string }
+      responses:
+        "200":
+          description: The candidate works that matched, deduplicated across providers.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: "#/components/schemas/DiscoveryResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503":
+          description: No metadata provider is configured that can search for new content.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /api/v1/session:
     get:
       tags: [session]
@@ -8184,6 +8236,31 @@ components:
             stored tvdb id; the client then asks the operator for one. This
             surfaces an id already in the library — not a live TVDB discovery
             search for series the library does not yet hold.
+
+    DiscoveryResult:
+      type: object
+      description: |
+        One candidate work a discovery search returned (#451) — a work that may
+        NOT be in the library yet, resolved live from the metadata provider.
+      required: [title, type]
+      properties:
+        title: { type: string }
+        year: { type: integer }
+        type:
+          type: string
+          description: |
+            The followed source type this candidate would be followed as
+            (`tv_series` today), so a client picks the right follow flow without
+            inferring it from the id's shape.
+        tvdb_id:
+          type: string
+          description: |
+            The candidate's TVDB series id — the value `POST /followed-sources`
+            takes as `tvdb_id`, so a client follows a discovery result in ONE
+            step. Present for a `tv_series` candidate.
+        overview:
+          type: string
+          description: A short human description when the provider supplied one.
 
     SessionView:
       type: object

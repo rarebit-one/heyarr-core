@@ -226,6 +226,28 @@ func (r *Registry) FeedProviders() []FeedProvider {
 	return out
 }
 
+// DiscoverySearchers is every metadata provider that can ALSO resolve a
+// free-text query to candidate works not yet in the library (#451), in routing
+// order.
+//
+// It is FeedProviders' narrower sibling: discovery is an optional facet of the
+// metadata capability, so the routing accessor is the same — walk the metadata
+// providers — and the type assertion picks out those that implement the extra
+// DiscoverySearcher interface rather than only Enumerate. A metadata provider
+// that cannot search itself (a podcast or RSS adapter handed a feed URL) is
+// simply absent from this slice, which is what lets a discovery caller answer
+// "no provider can do this" from an empty result rather than by iterating and
+// casting at the call site.
+func (r *Registry) DiscoverySearchers() []DiscoverySearcher {
+	var out []DiscoverySearcher
+	for _, p := range r.Route(CapabilityMetadata) {
+		if ds, ok := p.(DiscoverySearcher); ok {
+			out = append(out, ds)
+		}
+	}
+	return out
+}
+
 // Health returns what the last check found for one provider.
 func (r *Registry) Health(name string) (Health, bool) {
 	r.mu.RLock()
