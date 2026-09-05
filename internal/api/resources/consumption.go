@@ -457,7 +457,12 @@ func (a *API) listContinue(w http.ResponseWriter, r *http.Request) {
 			httpapi.Fail(w, r, problem.BadRequest("limit must be a positive integer"))
 			return
 		}
-		limit = int(min(*n, continueMaxLimit))
+		// Bounded before the narrowing conversion, so the cap is the only value
+		// that can ever reach int (go/incorrect-integer-conversion).
+		limit = continueMaxLimit
+		if *n < continueMaxLimit {
+			limit = int(*n)
+		}
 	}
 
 	ctx := r.Context()
