@@ -328,3 +328,62 @@ func workIDs(t *testing.T, body []byte) []string {
 	}
 	return out
 }
+
+// The recent order stays exact under writes, embeds included: walking every page
+// while newer rows keep landing repeats nothing and skips nothing that existed
+// when the walk began — the same guarantee the title order's stability test makes,
+// on the order a shelf actually uses.
+func TestRecentOrderWithEmbedsIsStableWhileTheTableIsWrittenTo(t *testing.T) {
+	h := newHarness(t).seed().seedBrowse()
+
+	before := workIDs(t, h.body(h.get("/api/v1/works?sort=recent&limit=200")))
+
+	var walked []string
+	cursor := ""
+	page := 0
+	for {
+		path := "/api/v1/works?sort=recent&limit=2&include=artwork,primary_asset"
+		if cursor != "" {
+			path += "&cursor=" + cursor
+		}
+		var pg struct {
+			Items []struct {
+				ID      string          `json:"id"`
+				Artwork json.RawMessage `json:"artwork"`
+			} `json:"items"`
+			NextCursor string `json:"next_cursor"`
+		}
+		if err := json.Unmarshal(h.body(h.get(path)), &pg); err != nil {
+			t.Fatal(err)
+		}
+		for _, it := range pg.Items {
+			if len(it.Artwork) == 0 {
+				t.Fatalf("page %d: the embed vanished on %s", page, it.ID)
+			}
+			walked = append(walked, it.ID)
+		}
+		// A newer work lands between every page.
+		page++
+		h.exec(`INSERT INTO works (id, content_type, work_key, title, sort_title, year, attributes, created_at, updated_at)
+			VALUES (?, 'movie', ?, 'Newer', 'newer', 2026, '{}', ?, ?)`,
+			"01990000-0000-7000-8000-0000000000n"+string(rune('0'+page)), "newer|"+string(rune('0'+page)),
+			"2026-09-0"+string(rune('0'+page))+"T00:00:00Z", seedTime)
+		if pg.NextCursor == "" {
+			break
+		}
+		cursor = pg.NextCursor
+	}
+
+	seen := map[string]int{}
+	for _, id := range walked {
+		seen[id]++
+		if seen[id] > 1 {
+			t.Fatalf("%s was returned twice", id)
+		}
+	}
+	for _, id := range before {
+		if seen[id] == 0 {
+			t.Fatalf("%s existed before the walk and was never returned", id)
+		}
+	}
+}
