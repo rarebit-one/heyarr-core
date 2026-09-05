@@ -448,7 +448,9 @@ const (
 //
 // Per-identity history (ADR-0024), so RefuseGuest guards the mount.
 func (a *API) listContinue(w http.ResponseWriter, r *http.Request) {
-	limit := continueDefaultLimit
+	// The limit stays int64 all the way to the bind: there is no narrowing
+	// conversion for a bound check to guard (go/incorrect-integer-conversion).
+	var limit int64 = continueDefaultLimit
 	if n, err := parseIntFilter(r, "limit"); err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
@@ -457,12 +459,7 @@ func (a *API) listContinue(w http.ResponseWriter, r *http.Request) {
 			httpapi.Fail(w, r, problem.BadRequest("limit must be a positive integer"))
 			return
 		}
-		// Bounded before the narrowing conversion, so the cap is the only value
-		// that can ever reach int (go/incorrect-integer-conversion).
-		limit = continueMaxLimit
-		if *n < continueMaxLimit {
-			limit = int(*n)
-		}
+		limit = min(*n, continueMaxLimit)
 	}
 
 	ctx := r.Context()
