@@ -288,6 +288,10 @@ func (a *API) Mount(r chi.Router) {
 	// vault poster is a 404 to a Guest, as the asset itself is.
 	r.Get("/works/{id}/artwork", a.getWorkArtwork)
 	r.Head("/works/{id}/artwork", a.getWorkArtwork)
+	// Artists and authors are groupings over works, not entities (ADR-0075):
+	// the name the identifier wrote, a count, a representative cover.
+	r.Get("/artists", a.listGrouped("artist", "music", "artists"))
+	r.Get("/authors", a.listGrouped("author", "book", "authors"))
 	r.Get("/editions/{id}", a.getEdition)
 	r.Get("/assets", a.listAssets)
 	r.Get("/assets/{id}", a.getAsset)
@@ -318,6 +322,9 @@ func (a *API) Mount(r chi.Router) {
 	// a Guest holds `read`, so RefuseGuest is the guard.
 	r.With(httpapi.RefuseGuest).Get("/consumption/sessions", a.listSessions)
 	r.With(httpapi.RefuseGuest).Get("/consumption/sessions/{id}", a.getSession)
+	// The continue rail (ADR-0075): the newest unfinished session per work, with
+	// the work, edition and asset inlined. History, so closed to a Guest too.
+	r.With(httpapi.RefuseGuest).Get("/consumption/continue", a.listContinue)
 	r.Get("/jobs", a.listJobs)
 	r.Get("/jobs/{id}", a.getJob)
 	r.Get("/events", a.streamEvents)

@@ -1,0 +1,20 @@
+{
+  "works": [
+    {
+      "work_id": "01990000-0000-7000-8000-0000000000w1",
+      "content_type": "movie",
+      "title": "Arrival",
+      "year": 2016,
+      "attributes": {
+        "director": "Villeneuve"
+      },
+      "artwork": {
+        "asset_id": "01990000-0000-7000-8000-0000000000a5",
+        "blob_hash": "blake3:3333333333333333333333333333333333333333333333333333333333333333",
+        "mime": "image/jpeg",
+        "content_url": "/api/v1/blobs/blake3:3333333333333333333333333333333333333333333333333333333333333333/content"
+      }
+    }
+  ],
+  "episodes": []
+}

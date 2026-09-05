@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -51,27 +52,36 @@ const artworkRank = `CASE
 // not a poster a client can fetch. The guest boundary (ADR-0074) applies here
 // exactly as it does on the asset listings — a Guest never learns a vault
 // poster exists, not even as a redirect target.
-func artworkPick(r *http.Request, workRef string) pick {
-	return assetPick(r, workRef, "artwork", artworkRank)
+func artworkPick(ctx context.Context, workRef string) pick {
+	return assetPick(ctx, "e2.work_id = "+workRef, "artwork", artworkRank)
 }
 
 // primaryPick selects the one file a card tap should play: the first
 // `primary`-role asset of the work, in creation order. A work with several
 // editions has several; the first is an arbitrary but STABLE answer, and a
 // client that wants to choose lists the work's assets.
-func primaryPick(r *http.Request, workRef string) pick {
-	return assetPick(r, workRef, "primary", "")
+func primaryPick(ctx context.Context, workRef string) pick {
+	return assetPick(ctx, "e2.work_id = "+workRef, "primary", "")
 }
 
-func assetPick(r *http.Request, workRef, role, rank string) pick {
+// editionPrimaryPick is primaryPick scoped to ONE edition (editionRef is a
+// column reference, e.g. `e.id`) — an episode's file, for a search hit.
+func editionPrimaryPick(ctx context.Context, editionRef string) pick {
+	return assetPick(ctx, "a2.edition_id = "+editionRef, "primary", "")
+}
+
+// assetPick is the shared correlated subquery: scope is the literal predicate
+// that ties the asset to its owner (a work through its editions, or an edition
+// directly); role and rank choose and order among the candidates.
+func assetPick(ctx context.Context, scope, role, rank string) pick {
 	where := []string{
-		"e2.work_id = " + workRef,
+		scope,
 		"a2.role = ?",
 		"a2.blob_hash IS NOT NULL",
 		"a2.missing_since IS NULL",
 	}
 	args := []any{role}
-	if frag, fargs := guestAssetFilter(r, "a2.source_class"); frag != "" {
+	if frag, fargs := guestAssetFilterCtx(ctx, "a2.source_class"); frag != "" {
 		where = append(where, frag)
 		args = append(args, fargs...)
 	}
@@ -106,12 +116,12 @@ const (
 // The returned args are the picker bindings, which come BEFORE any WHERE
 // bindings the caller appends: SQLite binds positionally in textual order,
 // and the pickers live in the join clauses.
-func cardQuery(r *http.Request, withArtwork, withPrimary bool) (string, []any) {
+func cardQuery(ctx context.Context, withArtwork, withPrimary bool) (string, []any) {
 	cols := prefixed(workColumns, "works") + ", works.created_at"
 	from := ` FROM works`
 	var args []any
 	if withArtwork {
-		p := artworkPick(r, "works.id")
+		p := artworkPick(ctx, "works.id")
 		cols += ", " + artworkColumns
 		from += ` LEFT JOIN assets art ON art.id = ` + p.sql
 		args = append(args, p.args...)
@@ -119,16 +129,61 @@ func cardQuery(r *http.Request, withArtwork, withPrimary bool) (string, []any) {
 		cols += ", " + nullArtwork
 	}
 	if withPrimary {
-		p := primaryPick(r, "works.id")
+		p := primaryPick(ctx, "works.id")
 		cols += ", " + primaryColumns
-		from += ` LEFT JOIN assets pa ON pa.id = ` + p.sql +
-			` LEFT JOIN blobs pb ON pb.hash = pa.blob_hash` +
-			` LEFT JOIN blob_probes pp ON pp.blob_hash = pa.blob_hash`
+		from += primaryJoins(p)
 		args = append(args, p.args...)
 	} else {
 		cols += ", " + nullPrimary
 	}
 	return `SELECT ` + cols + from, args
+}
+
+// primaryJoins are the three LEFT JOINs that resolve a picked primary asset
+// (alias pa) with its blob (pb) and probe (pp). Shared with the search reads.
+func primaryJoins(p pick) string {
+	return ` LEFT JOIN assets pa ON pa.id = ` + p.sql +
+		` LEFT JOIN blobs pb ON pb.hash = pa.blob_hash` +
+		` LEFT JOIN blob_probes pp ON pp.blob_hash = pa.blob_hash`
+}
+
+// scanPrimary reads the primaryColumns into a ref, or nil when the pick found
+// nothing. dest is the scanner's six destinations, in primaryColumns order.
+type primaryScan struct {
+	id, edition, blob, mime sql.NullString
+	size                    sql.NullInt64
+	duration                sql.NullFloat64
+}
+
+func (p *primaryScan) dests() []any {
+	return []any{&p.id, &p.edition, &p.blob, &p.mime, &p.size, &p.duration}
+}
+
+func (p *primaryScan) ref() *PrimaryAssetRef {
+	if !p.id.Valid || !p.blob.Valid {
+		return nil
+	}
+	out := &PrimaryAssetRef{
+		AssetID: p.id.String, EditionID: p.edition.String, BlobHash: p.blob.String,
+		MIME: nullString(p.mime), Size: nullInt(p.size), ContentURL: blobContentURL(p.blob.String),
+	}
+	if p.duration.Valid {
+		d := p.duration.Float64
+		out.DurationSeconds = &d
+	}
+	return out
+}
+
+// artworkScan is scanPrimary's sibling for artworkColumns.
+type artworkScan struct{ id, blob, mime sql.NullString }
+
+func (a *artworkScan) dests() []any { return []any{&a.id, &a.blob, &a.mime} }
+
+func (a *artworkScan) ref() *ArtworkRef {
+	if !a.id.Valid || !a.blob.Valid {
+		return nil
+	}
+	return &ArtworkRef{AssetID: a.id.String, BlobHash: a.blob.String, MIME: nullString(a.mime), ContentURL: blobContentURL(a.blob.String)}
 }
 
 // cardRow is one scanned card: the work, the raw created_at the recent-first
@@ -201,7 +256,7 @@ func blobContentURL(hash string) string {
 // a client sizes the poster it fetches. ADR-0075 records the revisit trigger.
 func (a *API) getWorkArtwork(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	p := artworkPick(r, "works.id")
+	p := artworkPick(r.Context(), "works.id")
 	args := append(p.args, id)
 	var blob sql.NullString
 	//nolint:gosec // the query is assembled only from the literal fragments above; every value is bound
@@ -251,4 +306,97 @@ func parseInclude(r *http.Request, allowed ...string) (map[string]bool, error) {
 		out[name] = true
 	}
 	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Groupings: artists, authors (ADR-0075)
+// ---------------------------------------------------------------------------
+
+// GroupSummary is one artist (or author): a grouping over works keyed by the
+// name the identifier wrote into `attributes`, not an entity. The albums (or
+// books) are `GET /works?content_type=…&artist=<name>` (or `author=`).
+type GroupSummary struct {
+	Name      string `json:"name"`
+	WorkCount int64  `json:"work_count"`
+	// Artwork is the poster of the group's first work (by year, then title) —
+	// an album cover standing in for the artist, a book cover for the author —
+	// or null when none of them has one the caller may see.
+	Artwork *ArtworkRef `json:"artwork"`
+}
+
+// listGrouped pages the distinct non-empty values of one attribute across the
+// works of one content type, with a count and a representative poster.
+//
+// Keyset on the lower-cased name (arity 1, under its own collection so a
+// works cursor is refused). `q` is a substring filter on the name. The
+// grouping is a CTE so the representative-artwork pick runs once per GROUP,
+// not once per work.
+func (a *API) listGrouped(attr, contentType, collection string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q, err := parseQuery(r, collection, 1)
+		if err != nil {
+			httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+			return
+		}
+		ctx := r.Context()
+		// The representative work: the group's first by year then title, whose
+		// poster stands in for the group. Its id feeds the ordinary artwork pick.
+		rep := `(SELECT w2.id FROM works w2 WHERE w2.content_type = ?
+			AND json_extract(w2.attributes, '$.` + attr + `') = g.name
+			ORDER BY w2.year, w2.sort_title, w2.id LIMIT 1)`
+		art := artworkPick(ctx, rep)
+
+		where := []string{"w.content_type = ?", "name IS NOT NULL", "trim(name) <> ''"}
+		args := []any{contentType}
+		if term := r.URL.Query().Get("q"); term != "" {
+			where = append(where, `lower(name) LIKE ? ESCAPE '\'`)
+			args = append(args, strings.ToLower(likePattern(term)))
+		}
+		having := "1 = 1"
+		if q.cursor != nil {
+			having = "lower(name) > ?"
+			args = append(args, q.cursor[0])
+		}
+		// Bind order follows textual order: the CTE's WHERE/HAVING, then the
+		// representative subquery's content type, then the artwork pick.
+		args = append(args, contentType)
+		args = append(args, art.args...)
+		args = append(args, q.limit+1)
+
+		//nolint:gosec // attr is one of two package literals; every value is bound
+		stmt := `WITH g AS (
+				SELECT json_extract(w.attributes, '$.` + attr + `') AS name, COUNT(*) AS n
+				FROM works w
+				WHERE ` + strings.Join(where, " AND ") + `
+				GROUP BY name HAVING ` + having + `
+			)
+			SELECT g.name, g.n, ` + artworkColumns + `
+			FROM g LEFT JOIN assets art ON art.id = ` + art.sql + `
+			ORDER BY lower(g.name), g.name LIMIT ?`
+
+		rows, err := a.reader.QueryContext(ctx, stmt, args...)
+		if err != nil {
+			a.fail(w, r, collection, err)
+			return
+		}
+		defer func() { _ = rows.Close() }()
+
+		var groups []GroupSummary
+		for rows.Next() {
+			var g GroupSummary
+			var as artworkScan
+			if err := rows.Scan(append([]any{&g.Name, &g.WorkCount}, as.dests()...)...); err != nil {
+				a.fail(w, r, collection, err)
+				return
+			}
+			g.Artwork = as.ref()
+			groups = append(groups, g)
+		}
+		if err := rows.Err(); err != nil {
+			a.fail(w, r, collection, err)
+			return
+		}
+		a.write(w, r, http.StatusOK, newPage(groups, q.limit,
+			func(g GroupSummary) []string { return []string{strings.ToLower(g.Name)} }, collection))
+	}
 }
