@@ -372,6 +372,71 @@ type WorkDetail struct {
 	// lexically-first value, the same determinism rule /search's tvdb_id takes.
 	// Always present, `{}` when the work carries none.
 	ExternalIDs map[string]string `json:"external_ids"`
+	// Artwork and PrimaryAsset are the browse projections (ADR-0075): the
+	// poster to show and the file a tap plays. Always present on the detail
+	// read — one row, two cheap lookups — and null when the work has none.
+	Artwork      *ArtworkRef      `json:"artwork"`
+	PrimaryAsset *PrimaryAssetRef `json:"primary_asset"`
+}
+
+// ArtworkRef points a client at a work's poster (ADR-0075).
+//
+// It names the asset and its blob rather than carrying bytes or a work-keyed
+// image URL: the bytes live behind the blob route (ADR-0013), whose immutable
+// cache headers are correct only because the URL is the hash. ContentURL is
+// that route, pre-assembled; `GET /works/{id}/artwork` redirects to the same
+// place for a client that has only the work id.
+type ArtworkRef struct {
+	AssetID  string `json:"asset_id"`
+	BlobHash string `json:"blob_hash"`
+	// MIME is the asset's recorded media type (the blob route declares
+	// octet-stream, so a client that wants to know it is an image reads it
+	// here). Null when the scan recorded none.
+	MIME       *string `json:"mime"`
+	ContentURL string  `json:"content_url"`
+}
+
+// PrimaryAssetRef is the one file a card tap plays (ADR-0075): the first
+// `primary`-role asset of the work that holds bytes. Enough to hand straight
+// to `POST /playback/plan` or the blob route without a second read; a client
+// that wants to choose between editions lists the work's assets instead.
+type PrimaryAssetRef struct {
+	AssetID   string  `json:"asset_id"`
+	EditionID string  `json:"edition_id"`
+	BlobHash  string  `json:"blob_hash"`
+	MIME      *string `json:"mime"`
+	Size      *int64  `json:"size"`
+	// DurationSeconds is the probed duration when the blob has been probed,
+	// else null — a progress bar needs it, and the probe table already holds it.
+	DurationSeconds *float64 `json:"duration_seconds"`
+	ContentURL      string   `json:"content_url"`
+}
+
+// WorkCard is a listing row with the browse embeds a caller asked for via
+// `include=` (ADR-0075). An embed that was not requested is ABSENT from the
+// JSON; one that was requested and has nothing is `null`. Those are different
+// answers — "I did not ask" and "there is no poster" — and omitzero on the
+// embed wrapper is what keeps them apart. With no `include` at all the
+// listing renders plain Work rows, byte-identical to before.
+type WorkCard struct {
+	Work
+	Artwork      embed[ArtworkRef]      `json:"artwork,omitzero"`
+	PrimaryAsset embed[PrimaryAssetRef] `json:"primary_asset,omitzero"`
+}
+
+// embed is a requested-or-not, present-or-null projection field.
+type embed[T any] struct {
+	included bool
+	value    *T
+}
+
+func (e embed[T]) IsZero() bool { return !e.included }
+
+func (e embed[T]) MarshalJSON() ([]byte, error) {
+	if e.value == nil {
+		return []byte("null"), nil
+	}
+	return marshal(e.value)
 }
 
 // EditionDetail is GET /api/v1/editions/{id}: an Edition and its external ids,

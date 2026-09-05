@@ -1,0 +1,44 @@
+{
+  "items": [
+    {
+      "id": "01990000-0000-7000-8000-0000000000w7",
+      "content_type": "book",
+      "work_key": "a-second-book|1999",
+      "title": "A Second Book",
+      "sort_title": "second book",
+      "year": 1999,
+      "attributes": {
+        "author": "Author A"
+      },
+      "created_at": "2026-08-05T00:00:00Z",
+      "updated_at": "2026-08-01T00:00:00Z"
+    },
+    {
+      "id": "01990000-0000-7000-8000-0000000000w6",
+      "content_type": "music",
+      "work_key": "artist-b|album-three",
+      "title": "Album Three",
+      "sort_title": "album three",
+      "year": 2010,
+      "attributes": {
+        "artist": "Artist B"
+      },
+      "created_at": "2026-08-04T00:00:00Z",
+      "updated_at": "2026-08-01T00:00:00Z"
+    },
+    {
+      "id": "01990000-0000-7000-8000-0000000000w5",
+      "content_type": "music",
+      "work_key": "artist-a|album-two",
+      "title": "Album Two",
+      "sort_title": "album two",
+      "year": 2004,
+      "attributes": {
+        "artist": "Artist A"
+      },
+      "created_at": "2026-08-03T00:00:00Z",
+      "updated_at": "2026-08-01T00:00:00Z"
+    }
+  ],
+  "next_cursor": "eyJ2IjoxLCJjIjoid29ya3MtcmVjZW50IiwiayI6WyIyMDI2LTA4LTAzVDAwOjAwOjAwWiIsIjAxOTkwMDAwLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwMDB3NSJdfQ"
+}

@@ -283,6 +283,11 @@ func (a *API) Mount(r chi.Router) {
 	// work have" by paging every asset in the library and reading an edition
 	// and a blob per row.
 	r.Get("/works/{id}/assets", a.listWorkAssets)
+	// A work's poster, by redirect to its blob (ADR-0075). Under the read
+	// floor and guest-visible: the picker applies the guest boundary, so a
+	// vault poster is a 404 to a Guest, as the asset itself is.
+	r.Get("/works/{id}/artwork", a.getWorkArtwork)
+	r.Head("/works/{id}/artwork", a.getWorkArtwork)
 	r.Get("/editions/{id}", a.getEdition)
 	r.Get("/assets", a.listAssets)
 	r.Get("/assets/{id}", a.getAsset)

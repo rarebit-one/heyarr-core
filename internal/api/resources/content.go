@@ -66,21 +66,56 @@ func scanWork(row interface{ Scan(...any) error }) (Work, error) {
 
 // listWorks pages the catalog.
 //
-// The sort key is (sort_title, id). sort_title alone is not unique — a library
-// with two editions of the same title is the normal case, not a contrived one —
-// and a non-unique keyset boundary is exactly as lossy as OFFSET: rows sharing
-// the boundary value are skipped or repeated. The id breaks the tie.
+// The default sort key is (sort_title, id). sort_title alone is not unique — a
+// library with two editions of the same title is the normal case, not a
+// contrived one — and a non-unique keyset boundary is exactly as lossy as
+// OFFSET: rows sharing the boundary value are skipped or repeated. The id
+// breaks the tie. `sort=recent` keys on (created_at DESC, id DESC) under its
+// own cursor collection, so a title-order cursor is refused there rather than
+// read as a position in a different order.
+//
+// `include=artwork,primary_asset` adds the browse embeds (ADR-0075) to each
+// row; without it the rows are plain works, byte-for-byte as before.
 func (a *API) listWorks(w http.ResponseWriter, r *http.Request) {
-	q, err := parseQuery(r, "works", 2)
+	sortBy, err := oneOf(r, "sort", "title", "recent")
+	if err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	collection := "works"
+	if sortBy == "recent" {
+		collection = "works-recent"
+	}
+	q, err := parseQuery(r, collection, 2)
+	if err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	include, err := parseInclude(r, "artwork", "primary_asset")
+	if err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	year, err := parseIntFilter(r, "year")
+	if err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	yearFrom, err := parseIntFilter(r, "year_from")
+	if err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	yearTo, err := parseIntFilter(r, "year_to")
 	if err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	}
 
+	head, args := cardQuery(r, include["artwork"], include["primary_asset"])
 	where := []string{"1 = 1"}
-	args := []any{}
 	if ct := r.URL.Query().Get("content_type"); ct != "" {
-		where = append(where, "content_type = ?")
+		where = append(where, "works.content_type = ?")
 		args = append(args, ct)
 	}
 	if lib := r.URL.Query().Get("library_id"); lib != "" {
@@ -93,19 +128,49 @@ func (a *API) listWorks(w http.ResponseWriter, r *http.Request) {
 		args = append(args, lib)
 	}
 	if term := r.URL.Query().Get("q"); term != "" {
-		where = append(where, `sort_title LIKE ? ESCAPE '\'`)
+		where = append(where, `works.sort_title LIKE ? ESCAPE '\'`)
 		args = append(args, likePattern(term))
 	}
-	if q.cursor != nil {
-		where = append(where, "(sort_title, id) > (?, ?)")
+	if year != nil {
+		where = append(where, "works.year = ?")
+		args = append(args, *year)
+	}
+	if yearFrom != nil {
+		where = append(where, "works.year >= ?")
+		args = append(args, *yearFrom)
+	}
+	if yearTo != nil {
+		where = append(where, "works.year <= ?")
+		args = append(args, *yearTo)
+	}
+	// The grouping facets (ADR-0075): an artist's albums, an author's books.
+	// Exact match on the attribute the scanner wrote, which is what the
+	// grouping reads hand back as the key.
+	if artist := r.URL.Query().Get("artist"); artist != "" {
+		where = append(where, "json_extract(works.attributes, '$.artist') = ?")
+		args = append(args, artist)
+	}
+	if author := r.URL.Query().Get("author"); author != "" {
+		where = append(where, "json_extract(works.attributes, '$.author') = ?")
+		args = append(args, author)
+	}
+	order := ` ORDER BY works.sort_title ASC, works.id ASC`
+	if sortBy == "recent" {
+		order = ` ORDER BY works.created_at DESC, works.id DESC`
+		if q.cursor != nil {
+			where = append(where, "(works.created_at, works.id) < (?, ?)")
+			args = append(args, q.cursor[0], q.cursor[1])
+		}
+	} else if q.cursor != nil {
+		where = append(where, "(works.sort_title, works.id) > (?, ?)")
 		args = append(args, q.cursor[0], q.cursor[1])
 	}
 	args = append(args, q.limit+1)
 
 	//nolint:gosec // the query is assembled only from the literal fragments above; every value is bound
-	stmt := `SELECT ` + workColumns + ` FROM works WHERE ` + strings.Join(where, " AND ") +
-		` ORDER BY sort_title ASC, id ASC LIMIT ?`
+	stmt := head + ` WHERE ` + strings.Join(where, " AND ") + order + ` LIMIT ?`
 
+	//nolint:gosec // see above: literal fragments only, every value bound
 	rows, err := a.reader.QueryContext(r.Context(), stmt, args...)
 	if err != nil {
 		a.fail(w, r, "work", err)
@@ -113,29 +178,60 @@ func (a *API) listWorks(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = rows.Close() }()
 
-	var works []Work
+	var cards []cardRow
 	for rows.Next() {
-		work, err := scanWork(rows)
+		card, err := scanCard(rows)
 		if err != nil {
 			a.fail(w, r, "work", err)
 			return
 		}
-		works = append(works, work)
+		cards = append(cards, card)
 	}
 	if err := rows.Err(); err != nil {
 		a.fail(w, r, "work", err)
 		return
 	}
 
-	a.write(w, r, http.StatusOK, newPage(works, q.limit,
-		func(x Work) []string { return []string{x.SortTitle, x.ID} }, "works"))
+	// The cursor is derived from the cards, whichever shape is rendered: the
+	// recent order keys on the stored created_at text, which only the card row
+	// carries (re-rendering a parsed time can differ from the stored text, and
+	// a keyset boundary must be the stored text).
+	next := ""
+	if len(cards) > q.limit {
+		cards = cards[:q.limit]
+		last := cards[len(cards)-1]
+		if sortBy == "recent" {
+			next = encodeCursor(collection, last.createdRaw, last.ID)
+		} else {
+			next = encodeCursor(collection, last.SortTitle, last.ID)
+		}
+	}
+	if len(include) == 0 {
+		works := make([]Work, 0, len(cards))
+		for _, c := range cards {
+			works = append(works, c.Work)
+		}
+		a.write(w, r, http.StatusOK, page[Work]{Items: works, NextCursor: next})
+		return
+	}
+	out := make([]WorkCard, 0, len(cards))
+	for _, c := range cards {
+		out = append(out, WorkCard{
+			Work:         c.Work,
+			Artwork:      embed[ArtworkRef]{included: include["artwork"], value: c.artwork},
+			PrimaryAsset: embed[PrimaryAssetRef]{included: include["primary_asset"], value: c.primary},
+		})
+	}
+	a.write(w, r, http.StatusOK, page[WorkCard]{Items: out, NextCursor: next})
 }
 
 func (a *API) getWork(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	row := a.reader.QueryRowContext(r.Context(),
-		`SELECT `+workColumns+` FROM works WHERE id = ?`, id)
-	work, err := scanWork(row)
+	head, args := cardQuery(r, true, true)
+	args = append(args, id)
+	//nolint:gosec // the query is assembled only from the literal fragments above; every value is bound
+	row := a.reader.QueryRowContext(r.Context(), head+` WHERE works.id = ?`, args...)
+	card, err := scanCard(row)
 	if err != nil {
 		a.fail(w, r, "work", err)
 		return
@@ -145,7 +241,9 @@ func (a *API) getWork(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, "work", err)
 		return
 	}
-	a.write(w, r, http.StatusOK, WorkDetail{Work: work, ExternalIDs: ids})
+	a.write(w, r, http.StatusOK, WorkDetail{
+		Work: card.Work, ExternalIDs: ids, Artwork: card.artwork, PrimaryAsset: card.primary,
+	})
 }
 
 // externalIDs projects the external_ids rows for one entity (ADR-0050, #431).
@@ -553,7 +651,7 @@ func scanWorkAsset(rows *sql.Rows) (WorkAsset, error) {
 // passes the caller's destinations through and appends its own. That is what
 // keeps scanAsset the single definition of how an asset row is read.
 type appendedScan struct {
-	rows  *sql.Rows
+	rows  interface{ Scan(...any) error }
 	extra []any
 }
 

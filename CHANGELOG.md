@@ -11,6 +11,17 @@ stable.
 
 ### Added
 
+- **Browse projections (ADR-0075, #456).** `GET /api/v1/works` gains
+  `sort=title|recent` (each order under its own cursor), `year`, `year_from`,
+  `year_to`, `artist` and `author` filters, and `include=artwork,primary_asset`
+  — the poster to show and the file a tap plays, embedded per row. An embed not
+  asked for is absent; one asked for that the work lacks is `null`; without
+  `include` the rows are unchanged. `GET /api/v1/works/{id}` carries both
+  embeds always. `GET /api/v1/works/{id}/artwork` answers `307` to the poster's
+  blob route — a `poster`/`cover` before an unnamed image before
+  `fanart`/`backdrop`, holding bytes and not missing — with no resizing. The
+  guest boundary (ADR-0074) applies to every projection.
+
 - **Device-aware streaming leg (ADR-0069, #432).** `POST /api/v1/playback/plan`
   accepts `client: {containers, video, audio, max_height}` and answers `mode`
   (`direct` | `stream` | `unplayable`), `url`, `mime`, `reason` and `source`

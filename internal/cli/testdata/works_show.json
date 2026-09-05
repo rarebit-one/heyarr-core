@@ -9,5 +9,14 @@
     "director": "Villeneuve"
   },
   "created_at": "<timestamp>",
-  "updated_at": "<timestamp>"
+  "updated_at": "<timestamp>",
+  "primary_asset": {
+    "asset_id": "<uuid>",
+    "edition_id": "<uuid>",
+    "blob_hash": "blake3:1111111111111111111111111111111111111111111111111111111111111111",
+    "mime": "video/x-matroska",
+    "size": 42949672960,
+    "duration_seconds": null,
+    "content_url": "/api/v1/blobs/blake3:1111111111111111111111111111111111111111111111111111111111111111/content"
+  }
 }
