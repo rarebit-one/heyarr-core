@@ -3,6 +3,7 @@ package catalogop_test
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,8 +74,10 @@ func TestVerifyRejectsTamperedPayload(t *testing.T) {
 	p := newPeer(t)
 	tok := p.del("movie", "alien-1979", nil, iat)
 
-	// Corrupt the signature half.
-	if _, err := catalogop.Verify(tok[:len(tok)-2] + "AA"); err == nil {
+	// Corrupt the signature half — by flipping a character to one it is not,
+	// so the tamper is never a no-op (overwriting the tail with "AA" left the
+	// token intact whenever the signature's last byte was already zero).
+	if _, err := catalogop.Verify(flipSignatureChar(tok)); err == nil {
 		t.Error("expected a bad signature to be refused")
 	}
 	// Not an op at all.
@@ -295,4 +298,16 @@ func permutations(in []string) [][]string {
 	}
 	rec(nil, in)
 	return out
+}
+
+// flipSignatureChar changes one character in the middle of the signature half
+// of a token to a different valid base64url character.
+func flipSignatureChar(tok string) string {
+	dot := strings.IndexByte(tok, '.')
+	i := dot + 1 + (len(tok)-dot-1)/2
+	c := byte('A')
+	if tok[i] == 'A' {
+		c = 'B'
+	}
+	return tok[:i] + string(c) + tok[i+1:]
 }

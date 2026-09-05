@@ -126,6 +126,21 @@ func oneOf(r *http.Request, name string, allowed ...string) (string, error) {
 	return "", fmt.Errorf("%s must be one of %s, not %q", name, strings.Join(allowed, ", "), v)
 }
 
+// parseIntFilter reads an optional integer filter. Absent is nil; present and
+// not an integer is a 400, for the reason oneOf gives — a client that asked
+// for year=2O16 believes the unfiltered answer it would otherwise get.
+func parseIntFilter(r *http.Request, name string) (*int64, error) {
+	v := r.URL.Query().Get(name)
+	if v == "" {
+		return nil, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be an integer, not %q", name, v)
+	}
+	return &n, nil
+}
+
 // page is the envelope every collection returns.
 //
 // NextCursor is absent — not null, not empty-but-present — on the last page, so

@@ -81,3 +81,4 @@ An ADR that merely describes the code is not worth having.
 | [0072](0072-opt-in-native-tls-on-the-client-api.md) | Opt-in native TLS on the client API, and an explicit public origin | Accepted |
 | [0073](0073-the-catalog-converges-by-an-editorial-op-log-over-a-re-derivable-base.md) | The catalog converges by an editorial op-log over a re-derivable base | Proposed |
 | [0074](0074-guest-is-a-first-class-read-only-browse-mode.md) | Guest is a first-class read-only browse mode over the shared library | Accepted |
+| [0075](0075-browse-is-a-projection-over-the-catalog.md) | Browse is a projection over the catalog | Accepted |

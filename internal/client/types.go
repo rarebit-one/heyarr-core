@@ -34,6 +34,31 @@ type Work struct {
 	// ExternalIDs is present on the detail read only (ADR-0050): source → id,
 	// never null there; absent on listings.
 	ExternalIDs map[string]string `json:"external_ids,omitempty"`
+	// Artwork and PrimaryAsset are the browse projections (ADR-0075): always
+	// present on the detail read (null when the work has none), and on a
+	// listing only when `include=` asked for them.
+	Artwork      *ArtworkRef      `json:"artwork,omitempty"`
+	PrimaryAsset *PrimaryAssetRef `json:"primary_asset,omitempty"`
+}
+
+// ArtworkRef points at a work's poster: the ranked artwork asset and its blob
+// (ADR-0075). ContentURL is the ordinary blob route.
+type ArtworkRef struct {
+	AssetID    string  `json:"asset_id"`
+	BlobHash   string  `json:"blob_hash"`
+	MIME       *string `json:"mime"`
+	ContentURL string  `json:"content_url"`
+}
+
+// PrimaryAssetRef is the one file a card tap plays (ADR-0075).
+type PrimaryAssetRef struct {
+	AssetID         string   `json:"asset_id"`
+	EditionID       string   `json:"edition_id"`
+	BlobHash        string   `json:"blob_hash"`
+	MIME            *string  `json:"mime"`
+	Size            *int64   `json:"size"`
+	DurationSeconds *float64 `json:"duration_seconds"`
+	ContentURL      string   `json:"content_url"`
 }
 
 // Edition is one concrete form of a Work.

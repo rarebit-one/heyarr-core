@@ -218,9 +218,51 @@ paths:
           in: query
           schema: { type: string }
           description: Case-insensitive substring match over `sort_title`.
+        - name: sort
+          in: query
+          schema: { type: string, enum: [title, recent], default: title }
+          description: |
+            `title` is `(sort_title, id)` ascending. `recent` is
+            `(created_at, id)` descending — the "recently added" shelf
+            (ADR-0075). Each order has its own cursor: a cursor from one is
+            refused by the other rather than read as a position in a
+            different order.
+        - name: year
+          in: query
+          schema: { type: integer }
+          description: Exactly this year.
+        - name: year_from
+          in: query
+          schema: { type: integer }
+          description: This year or later.
+        - name: year_to
+          in: query
+          schema: { type: integer }
+          description: This year or earlier.
+        - name: artist
+          in: query
+          schema: { type: string }
+          description: |
+            Works whose `attributes.artist` is exactly this — an artist's
+            albums, keyed by the name `GET /artists` reports (ADR-0075).
+        - name: author
+          in: query
+          schema: { type: string }
+          description: |
+            Works whose `attributes.author` is exactly this — an author's
+            books, keyed by the name `GET /authors` reports (ADR-0075).
+        - name: include
+          in: query
+          schema: { type: string }
+          description: |
+            Comma-separated browse embeds to add to each row (ADR-0075):
+            `artwork` (the poster) and `primary_asset` (the file a tap plays).
+            An embed not asked for is absent; one asked for that the work
+            lacks is `null`. With no `include` the rows are plain `Work`s. An
+            unknown name is a 400.
       responses:
         "200":
-          description: A page of works.
+          description: A page of works — plain, or cards when `include` was given.
           content:
             application/json:
               schema:
@@ -230,10 +272,67 @@ paths:
                     properties:
                       items:
                         type: array
-                        items: { $ref: "#/components/schemas/Work" }
+                        items:
+                          oneOf:
+                            - $ref: "#/components/schemas/Work"
+                            - $ref: "#/components/schemas/WorkCard"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/works/{id}/artwork:
+    get:
+      tags: [content]
+      operationId: getWorkArtwork
+      summary: A work's poster, by redirect to its blob.
+      description: |
+        Answers `307` with a `Location` of the ordinary blob route for the
+        work's representative artwork asset (ADR-0075) — a `poster`/`cover`
+        before an unnamed image before `fanart`/`backdrop`/`banner`, the id
+        breaking ties, and only an asset that holds bytes and is not missing.
+
+        A redirect rather than a second byte route on purpose: the blob route
+        is the one contract for bytes (ADR-0013), and its immutable cache
+        headers are correct only because the URL is the hash. A work's poster
+        can change, so this work-keyed URL carries a short private `max-age`
+        and the target carries the immutable one. `307`, not `302`, so a
+        `HEAD` stays a `HEAD`.
+
+        No resizing: the node has no image library and no thumbnail cache. A
+        client that already holds the `artwork` embed can skip this route and
+        fetch `artwork.content_url` directly.
+
+        The guest boundary applies (ADR-0074): a `vault` poster is a 404 to a
+        Guest, as the asset itself is.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "307":
+          description: Redirect to the blob route.
+          headers:
+            Location:
+              schema: { type: string }
+              description: "`/api/v1/blobs/{hash}/content`"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: No such work, or the work has no artwork (the detail says which).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+    head:
+      tags: [content]
+      operationId: headWorkArtwork
+      summary: The artwork redirect, headers only.
+      description: >-
+        Identical to `get`: a `307` with the same `Location`, so a client can
+        learn whether a poster exists without following the redirect. A 307
+        preserves the method, which is why the redirect is not a 302.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "307": { description: Redirect to the blob route. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: No such work, or the work has no artwork. }
 
   /api/v1/works/{id}:
     get:
@@ -5948,13 +6047,80 @@ components:
         the same determinism rule `/search`'s `tvdb_id` takes.
 
     WorkDetail:
-      description: A work with its external identifiers. Returned by `GET /works/{id}`.
+      description: |
+        A work with its external identifiers and its browse embeds (ADR-0075).
+        Returned by `GET /works/{id}`. The embeds are always present here —
+        one row, two cheap lookups — and `null` when the work has none.
       allOf:
         - $ref: "#/components/schemas/Work"
         - type: object
-          required: [external_ids]
+          required: [external_ids, artwork, primary_asset]
           properties:
             external_ids: { $ref: "#/components/schemas/ExternalIDs" }
+            artwork:
+              oneOf:
+                - $ref: "#/components/schemas/ArtworkRef"
+                - type: "null"
+            primary_asset:
+              oneOf:
+                - $ref: "#/components/schemas/PrimaryAssetRef"
+                - type: "null"
+
+    WorkCard:
+      description: |
+        A listing row with the browse embeds `include=` asked for (ADR-0075).
+        An embed not asked for is absent from the object; one asked for that
+        the work lacks is `null`. Those are different answers — "I did not
+        ask" and "there is no poster".
+      allOf:
+        - $ref: "#/components/schemas/Work"
+        - type: object
+          properties:
+            artwork:
+              oneOf:
+                - $ref: "#/components/schemas/ArtworkRef"
+                - type: "null"
+            primary_asset:
+              oneOf:
+                - $ref: "#/components/schemas/PrimaryAssetRef"
+                - type: "null"
+
+    ArtworkRef:
+      type: object
+      description: |
+        A work's representative poster (ADR-0075): the `artwork`-role asset
+        that ranks first — `poster`/`cover`/`folder`/`front` before an unnamed
+        image before `fanart`/`backdrop`/`banner` — among those that hold
+        bytes and are not missing. `content_url` is the ordinary blob route
+        (ADR-0013); `GET /works/{id}/artwork` redirects to the same place.
+      required: [asset_id, blob_hash, mime, content_url]
+      properties:
+        asset_id: { type: string }
+        blob_hash: { type: string }
+        mime:
+          type: [string, "null"]
+          description: The asset's recorded media type; the blob route itself declares octet-stream.
+        content_url: { type: string }
+
+    PrimaryAssetRef:
+      type: object
+      description: |
+        The one file a card tap plays (ADR-0075): the first `primary`-role
+        asset of the work that holds bytes and is not missing — an arbitrary
+        but stable choice among a work's editions. Enough to hand to
+        `POST /playback/plan` or the blob route without a second read; a
+        client that wants to choose lists `GET /works/{id}/assets`.
+      required: [asset_id, edition_id, blob_hash, mime, size, duration_seconds, content_url]
+      properties:
+        asset_id: { type: string }
+        edition_id: { type: string }
+        blob_hash: { type: string }
+        mime: { type: [string, "null"] }
+        size: { type: [integer, "null"], format: int64 }
+        duration_seconds:
+          type: [number, "null"]
+          description: From the blob's probe when one has been taken, else null.
+        content_url: { type: string }
 
     EditionDetail:
       description: An edition with its external identifiers. Returned by `GET /editions/{id}`.
