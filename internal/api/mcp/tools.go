@@ -42,7 +42,10 @@ func (s *Server) registerTools() {
 			"id, which is exact, rather than by description, which may create a second " +
 			"work if it does not match what a scan would have produced. A tv_series hit " +
 			"that carries a stored tvdb_id can be followed in one step by passing that id " +
-			"to follow_source; a hit without one omits it.",
+			"to follow_source; a hit without one omits it. Each work carries its " +
+			"attributes and its artwork (null when it has none); `episodes` lists the " +
+			"parts of a work that matched by their own title — a scanned episode with " +
+			"its file, or an item a followed source projected.",
 		InputSchema: schemaSearchContent,
 		Handler:     s.searchContent,
 	})

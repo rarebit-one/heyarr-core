@@ -46,7 +46,10 @@ type truncatable struct {
 	Truncated bool `json:"truncated"`
 }
 
-// searchContent finds works already in the library.
+// searchContent finds works — and episodes — already in the library. It is a
+// shell over resources.SearchContent, the same function POST /search calls
+// (ADR-0075), so the two doors cannot drift; only the truncatable envelope is
+// this door's own.
 func (s *Server) searchContent(ctx context.Context, raw json.RawMessage) (any, error) {
 	var args struct {
 		Query       string `json:"query"`
@@ -56,72 +59,28 @@ func (s *Server) searchContent(ctx context.Context, raw json.RawMessage) (any, e
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(args.Query) == "" && args.ContentType == "" {
+	if strings.TrimSpace(args.Query) == "" && strings.TrimSpace(args.ContentType) == "" {
 		return nil, invalidParams("give me a query or a content_type to search on")
 	}
 	limit := clampLimit(args.Limit)
 
-	where := []string{"1 = 1"}
-	sqlArgs := []any{}
-	if q := strings.TrimSpace(args.Query); q != "" {
-		// Matched against sort_title, which is the normalised form the scanner
-		// records — so "the conversation" finds "The Conversation" without the
-		// caller knowing how identification normalises anything.
-		where = append(where, "sort_title LIKE ?")
-		sqlArgs = append(sqlArgs, "%"+strings.ToLower(q)+"%")
-	}
-	if ct := strings.TrimSpace(args.ContentType); ct != "" {
-		where = append(where, "content_type = ?")
-		sqlArgs = append(sqlArgs, strings.ToLower(ct))
-	}
-	sqlArgs = append(sqlArgs, limit+1)
-
-	// The tvdb id is a correlated subquery (ADR-0050, decision 2), the same shape
-	// the REST /search takes: one row per work, the stored TVDB id surfaced so an
-	// agent can follow_source a hit in one step. A JOIN could multiply the row; a
-	// work with no tvdb id yields NULL and the field is omitted.
-	//nolint:gosec // assembled only from the literal fragments above; every value is bound
-	stmt := `SELECT id, content_type, title, year,
-		(SELECT value FROM external_ids
-		 WHERE entity_type = 'work' AND entity_id = works.id AND source = 'tvdb'
-		 ORDER BY value LIMIT 1) AS tvdb_id
-		FROM works WHERE ` +
-		strings.Join(where, " AND ") + ` ORDER BY sort_title, id LIMIT ?`
-
-	rows, err := s.reader.QueryContext(ctx, stmt, sqlArgs...)
+	res, err := s.resources.SearchContent(ctx, resources.SearchContentRequest{
+		Query: args.Query, ContentType: args.ContentType, Limit: limit + 1,
+	})
 	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	type work struct {
-		WorkID      string `json:"work_id"`
-		ContentType string `json:"content_type"`
-		Title       string `json:"title"`
-		Year        *int64 `json:"year,omitempty"`
-		TVDBID      string `json:"tvdb_id,omitempty"`
+		return nil, classify(err)
 	}
 	out := struct {
 		truncatable
-		Works []work `json:"works"`
-	}{Works: []work{}}
-
-	for rows.Next() {
-		var (
-			w      work
-			tvdbID sql.NullString
-		)
-		if err := rows.Scan(&w.WorkID, &w.ContentType, &w.Title, &w.Year, &tvdbID); err != nil {
-			return nil, err
-		}
-		w.TVDBID = tvdbID.String
-		out.Works = append(out.Works, w)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
+		Works    []resources.WorkSummary `json:"works"`
+		Episodes []resources.EpisodeHit  `json:"episodes"`
+	}{Works: res.Works, Episodes: res.Episodes}
 	if len(out.Works) > limit {
 		out.Works = out.Works[:limit]
+		out.Truncated = true
+	}
+	if len(out.Episodes) > limit {
+		out.Episodes = out.Episodes[:limit]
 		out.Truncated = true
 	}
 	out.Count = len(out.Works)

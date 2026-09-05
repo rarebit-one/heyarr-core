@@ -30,7 +30,13 @@ import (
 // this. It has nothing to hide today — every asset written is `managed` — but it
 // is where the vault boundary bites once personal content exists.
 func guestAssetFilter(r *http.Request, col string) (string, []any) {
-	id, ok := httpapi.IdentityFrom(r.Context())
+	return guestAssetFilterCtx(r.Context(), col)
+}
+
+// guestAssetFilterCtx is guestAssetFilter over a context, for the shared reads
+// (search) that the MCP door calls without an *http.Request.
+func guestAssetFilterCtx(ctx context.Context, col string) (string, []any) {
+	id, ok := httpapi.IdentityFrom(ctx)
 	if !ok || !id.Guest {
 		return "", nil
 	}
@@ -112,7 +118,7 @@ func (a *API) listWorks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	head, args := cardQuery(r, include["artwork"], include["primary_asset"])
+	head, args := cardQuery(r.Context(), include["artwork"], include["primary_asset"])
 	where := []string{"1 = 1"}
 	if ct := r.URL.Query().Get("content_type"); ct != "" {
 		where = append(where, "works.content_type = ?")
@@ -227,7 +233,7 @@ func (a *API) listWorks(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) getWork(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	head, args := cardQuery(r, true, true)
+	head, args := cardQuery(r.Context(), true, true)
 	args = append(args, id)
 	//nolint:gosec // the query is assembled only from the literal fragments above; every value is bound
 	row := a.reader.QueryRowContext(r.Context(), head+` WHERE works.id = ?`, args...)
@@ -396,6 +402,7 @@ func (a *API) listAssets(w http.ResponseWriter, r *http.Request) {
 	stmt := `SELECT ` + assetColumns + ` FROM assets WHERE ` + strings.Join(where, " AND ") +
 		` ORDER BY id ASC LIMIT ?`
 
+	//nolint:gosec // see above: literal fragments only, every value bound
 	rows, err := a.reader.QueryContext(r.Context(), stmt, args...)
 	if err != nil {
 		a.fail(w, r, "asset", err)
@@ -598,6 +605,7 @@ func (a *API) listWorkAssets(w http.ResponseWriter, r *http.Request) {
 		WHERE ` + strings.Join(where, " AND ") + `
 		ORDER BY assets.id ASC LIMIT ?`
 
+	//nolint:gosec // see above: literal fragments only, every value bound
 	rows, err := a.reader.QueryContext(r.Context(), stmt, args...)
 	if err != nil {
 		a.fail(w, r, "asset", err)

@@ -334,6 +334,78 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { description: No such work, or the work has no artwork. }
 
+  /api/v1/artists:
+    get:
+      tags: [content]
+      operationId: listArtists
+      summary: Page the artists — a grouping over music works.
+      description: |
+        An artist is not an entity (ADR-0075): it is the distinct
+        `attributes.artist` the music identifier wrote, with how many works
+        carry it and the cover of the first of them (by year, then title) as
+        its picture. An artist's albums are
+        `GET /works?content_type=music&artist=<name>&include=artwork,primary_asset`.
+
+        Ordered by name (case-insensitively), under its own cursor. A name is
+        exact: the day a metadata provider supplies artist identifiers, an
+        artist entity that merges spellings is justified — not before.
+      parameters:
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Case-insensitive substring match over the name.
+      responses:
+        "200":
+          description: A page of artists.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/GroupSummary" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/authors:
+    get:
+      tags: [content]
+      operationId: listAuthors
+      summary: Page the authors — a grouping over book works.
+      description: |
+        The book-shaped sibling of `GET /artists` (ADR-0075): the distinct
+        `attributes.author`, a count, and the cover of the first book. An
+        author's books are `GET /works?content_type=book&author=<name>`.
+      parameters:
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/limit"
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Case-insensitive substring match over the name.
+      responses:
+        "200":
+          description: A page of authors.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/GroupSummary" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /api/v1/works/{id}:
     get:
       tags: [content]
@@ -3600,15 +3672,59 @@ paths:
                 limit: { type: integer }
       responses:
         "200":
-          description: The works that matched.
+          description: |
+            The works that matched, each with its attributes and poster, and the
+            parts of a work that matched by their own title (ADR-0075): a
+            scanned episode with its file, or an item a followed source
+            projected. Both lists are always present, `[]` when empty. A
+            `content_type`-only search lists works and looks for no episodes.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/consumption/continue:
+    get:
+      tags: [playback]
+      operationId: listContinue
+      summary: The continue rail — the newest unfinished session per work.
+      description: |
+        "Continue watching / listening / reading" as a client draws it
+        (ADR-0075): for every work with a session that holds a position and is
+        not finished (`playing`, `paused` or `stopped` with a recorded locator),
+        the NEWEST such session, with the work and its poster, the edition
+        (season/episode for a series) and the asset with its probed duration
+        inlined — everything a card and a resume need in one read.
+
+        Distinct from `GET /consumption/sessions?state=resumable`, which is the
+        state machine's non-terminal set (`created`, `playing`, `paused`) and
+        lists every session: a rail includes a `stopped` session someone walked
+        away from, excludes a `created` one that never recorded anything, and
+        shows one card per work.
+
+        History is per-identity (ADR-0024), so a Guest is refused (ADR-0074).
+      parameters:
+        - name: device_id
+          in: query
+          schema: { type: string }
+          description: Only sessions on this device.
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 50 }
+      responses:
+        "200":
+          description: The rail, newest first.
           content:
             application/json:
               schema:
                 type: object
+                required: [items]
                 properties:
-                  works:
+                  items:
                     type: array
-                    items: { $ref: "#/components/schemas/WorkSummary" }
+                    items: { $ref: "#/components/schemas/ContinueEntry" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -6085,6 +6201,21 @@ components:
                 - $ref: "#/components/schemas/PrimaryAssetRef"
                 - type: "null"
 
+    GroupSummary:
+      type: object
+      description: |
+        One artist or author (ADR-0075): a grouping over works keyed by the
+        name the identifier wrote, never an entity with an id.
+      required: [name, work_count, artwork]
+      properties:
+        name: { type: string }
+        work_count: { type: integer }
+        artwork:
+          oneOf:
+            - $ref: "#/components/schemas/ArtworkRef"
+            - type: "null"
+          description: The cover of the group's first work (by year, then title), or null.
+
     ArtworkRef:
       type: object
       description: |
@@ -8383,15 +8514,87 @@ components:
         content: { type: string }
         placement: { type: string }
 
+    SearchResult:
+      type: object
+      description: What `POST /search` returns (ADR-0075). Neither list is ever null.
+      required: [works, episodes]
+      properties:
+        works:
+          type: array
+          items: { $ref: "#/components/schemas/WorkSummary" }
+        episodes:
+          type: array
+          items: { $ref: "#/components/schemas/EpisodeHit" }
+
+    EpisodeHit:
+      type: object
+      description: |
+        A part of a work that matched by its own title (ADR-0075): `edition` is
+        an episode a series scan produced, carrying its file; `item` is an entry
+        a followed source projected (ADR-0056), which has no file of its own.
+      required: [kind, id, work_id, work_title, content_type, title, season, episode]
+      properties:
+        kind: { type: string, enum: [edition, item] }
+        id: { type: string }
+        work_id: { type: string }
+        work_title: { type: string }
+        content_type: { type: string }
+        title: { type: string }
+        season: { type: [integer, "null"] }
+        episode: { type: [integer, "null"] }
+        primary_asset:
+          $ref: "#/components/schemas/PrimaryAssetRef"
+          description: Present on an `edition` hit that holds bytes the caller may see.
+
+    ContinueEntry:
+      type: object
+      description: One card of the continue rail (ADR-0075).
+      required: [session, work, edition, asset]
+      properties:
+        session: { $ref: "#/components/schemas/ConsumptionSession" }
+        work:
+          type: object
+          required: [id, content_type, title, year, artwork]
+          properties:
+            id: { type: string }
+            content_type: { type: string }
+            title: { type: string }
+            year: { type: [integer, "null"] }
+            artwork:
+              oneOf:
+                - $ref: "#/components/schemas/ArtworkRef"
+                - type: "null"
+        edition:
+          type: object
+          required: [id, label, attributes]
+          properties:
+            id: { type: string }
+            label: { type: string }
+            attributes:
+              type: object
+              description: The edition's per-type facts — season and episode, for a series.
+        asset:
+          $ref: "#/components/schemas/PrimaryAssetRef"
+          description: |
+            The asset the session is on. For a session on a blob-less (linked)
+            asset only `asset_id` and `edition_id` are set.
+
     WorkSummary:
       type: object
-      description: One work a content-intent search returned.
-      required: [work_id, content_type, title]
+      description: |
+        One work a content-intent search returned, with its per-type attributes
+        and its poster (ADR-0075) — what a result row draws.
+      required: [work_id, content_type, title, attributes, artwork]
       properties:
         work_id: { type: string }
         content_type: { type: string }
         title: { type: string }
         year: { type: integer }
+        attributes: { type: object }
+        artwork:
+          oneOf:
+            - $ref: "#/components/schemas/ArtworkRef"
+            - type: "null"
         tvdb_id:
           type: string
           description: |

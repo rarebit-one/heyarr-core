@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -400,6 +401,145 @@ func (a *API) listSessions(w http.ResponseWriter, r *http.Request) {
 		func(s ConsumptionSession) []string {
 			return []string{s.UpdatedAt.Format(timeFormat), s.ID}
 		}, "consumption_sessions"))
+}
+
+// ContinueEntry is one row of the continue rail (ADR-0075): the newest
+// session per work that holds a position and is not finished, with what a
+// client needs to draw the card and resume — the work (and its poster), the
+// edition (season/episode for a series), and the asset with its duration.
+type ContinueEntry struct {
+	Session ConsumptionSession `json:"session"`
+	Work    ContinueWork       `json:"work"`
+	Edition ContinueEdition    `json:"edition"`
+	Asset   PrimaryAssetRef    `json:"asset"`
+}
+
+// ContinueWork is the work half of a ContinueEntry.
+type ContinueWork struct {
+	ID          string      `json:"id"`
+	ContentType string      `json:"content_type"`
+	Title       string      `json:"title"`
+	Year        *int64      `json:"year"`
+	Artwork     *ArtworkRef `json:"artwork"`
+}
+
+// ContinueEdition is the edition half of a ContinueEntry.
+type ContinueEdition struct {
+	ID         string          `json:"id"`
+	Label      string          `json:"label"`
+	Attributes json.RawMessage `json:"attributes"`
+}
+
+const (
+	continueDefaultLimit = 20
+	continueMaxLimit     = 50
+)
+
+// listContinue is GET /consumption/continue — the "continue watching" rail,
+// folded per work (ADR-0075).
+//
+// It is a new read rather than a state filter on /sessions because it asks a
+// different question. `resumable` is the state machine's non-terminal set
+// (created, playing, paused); a rail wants "has a position and is not
+// finished" — which includes a `stopped` session someone walked away from and
+// excludes a `created` one that never recorded anything — and it wants ONE
+// row per work: the newest, not every pause ever. The window function is the
+// first in this codebase; SQLite has had them since 3.25.
+//
+// Per-identity history (ADR-0024), so RefuseGuest guards the mount.
+func (a *API) listContinue(w http.ResponseWriter, r *http.Request) {
+	limit := continueDefaultLimit
+	if n, err := parseIntFilter(r, "limit"); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	} else if n != nil {
+		if *n <= 0 {
+			httpapi.Fail(w, r, problem.BadRequest("limit must be a positive integer"))
+			return
+		}
+		limit = int(min(*n, continueMaxLimit))
+	}
+
+	ctx := r.Context()
+	art := artworkPick(ctx, "w.id")
+	where := []string{"s.state IN ('playing', 'paused', 'stopped')", "s.progress_locator <> ''"}
+	var rankArgs []any
+	if v := r.URL.Query().Get("device_id"); v != "" {
+		where = append(where, "s.device_id = ?")
+		rankArgs = append(rankArgs, v)
+	}
+	args := append(append([]any{}, rankArgs...), art.args...)
+	args = append(args, limit)
+
+	//nolint:gosec // assembled only from the literal fragments above; every value is bound
+	stmt := `WITH ranked AS (
+			SELECT s.id AS session_id,
+			       ROW_NUMBER() OVER (PARTITION BY e.work_id ORDER BY s.updated_at DESC, s.id DESC) AS rn
+			FROM consumption_sessions s
+			JOIN assets a ON a.id = s.asset_id
+			JOIN editions e ON e.id = a.edition_id
+			WHERE ` + strings.Join(where, " AND ") + `
+		)
+		SELECT ` + prefixed(sessionColumns, "s") + `,
+		       w.id, w.content_type, w.title, w.year,
+		       e.id, e.label, e.attributes,
+		       a.id, a.edition_id, a.blob_hash, COALESCE(a.mime, b.mime), b.size, p.duration_seconds,
+		       ` + artworkColumns + `
+		FROM ranked r
+		JOIN consumption_sessions s ON s.id = r.session_id
+		JOIN assets a ON a.id = s.asset_id
+		LEFT JOIN blobs b ON b.hash = a.blob_hash
+		LEFT JOIN blob_probes p ON p.blob_hash = a.blob_hash
+		JOIN editions e ON e.id = a.edition_id
+		JOIN works w ON w.id = e.work_id
+		LEFT JOIN assets art ON art.id = ` + art.sql + `
+		WHERE r.rn = 1
+		ORDER BY s.updated_at DESC, s.id DESC LIMIT ?`
+
+	rows, err := a.reader.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		a.fail(w, r, "consumption session", err)
+		return
+	}
+	defer func() { _ = rows.Close() }()
+
+	items := []ContinueEntry{}
+	for rows.Next() {
+		var (
+			entry ContinueEntry
+			year  sql.NullInt64
+			attrs string
+			ps    primaryScan
+			as    artworkScan
+		)
+		extra := []any{
+			&entry.Work.ID, &entry.Work.ContentType, &entry.Work.Title, &year,
+			&entry.Edition.ID, &entry.Edition.Label, &attrs,
+		}
+		extra = append(append(extra, ps.dests()...), as.dests()...)
+		sess, err := scanSessionRow(appendedScan{rows: rows, extra: extra})
+		if err != nil {
+			a.fail(w, r, "consumption session", err)
+			return
+		}
+		entry.Session = renderSession(sess)
+		entry.Work.Year = nullInt(year)
+		entry.Work.Artwork = as.ref()
+		entry.Edition.Attributes = json.RawMessage(attrs)
+		if ref := ps.ref(); ref != nil {
+			entry.Asset = *ref
+		} else {
+			// A session on a blob-less (linked) asset: keep the ids so the client
+			// can still name what was being read; nothing to stream.
+			entry.Asset = PrimaryAssetRef{AssetID: sess.AssetID, EditionID: entry.Edition.ID}
+		}
+		items = append(items, entry)
+	}
+	if err := rows.Err(); err != nil {
+		a.fail(w, r, "consumption session", err)
+		return
+	}
+	a.write(w, r, http.StatusOK, map[string]any{"items": items})
 }
 
 // isForeignKeyViolation reports whether an error is a FOREIGN KEY constraint

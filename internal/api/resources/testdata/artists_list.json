@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "name": "Artist A",
+      "work_count": 2,
+      "artwork": {
+        "asset_id": "01990000-0000-7000-8000-000000000a10",
+        "blob_hash": "blake3:9999999999999999999999999999999999999999999999999999999999999999",
+        "mime": "image/jpeg",
+        "content_url": "/api/v1/blobs/blake3:9999999999999999999999999999999999999999999999999999999999999999/content"
+      }
+    },
+    {
+      "name": "Artist B",
+      "work_count": 1,
+      "artwork": null
+    }
+  ]
+}
