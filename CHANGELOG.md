@@ -21,6 +21,20 @@ stable.
   blob route — a `poster`/`cover` before an unnamed image before
   `fanart`/`backdrop`, holding bytes and not missing — with no resizing. The
   guest boundary (ADR-0074) applies to every projection.
+- **Continue rail and episode search (ADR-0075, #456).**
+  `GET /api/v1/consumption/continue` folds consumption sessions to the newest
+  unfinished one per work — a position recorded, not completed — with the
+  work and its poster, the edition and the asset's probed duration inlined;
+  refused to a Guest, as history is. `POST /api/v1/search` now returns each
+  work's `attributes` and `artwork`, and an `episodes` list of the parts of a
+  work that matched by their own title: a scanned episode with its file, or an
+  item a followed source projected. The MCP `search_content` tool calls the
+  same function, and reports `episodes` too.
+- **Artists and authors (ADR-0075, #456).** `GET /api/v1/artists` and
+  `GET /api/v1/authors` page the distinct `attributes.artist` / `.author`
+  across music / book works — name, count, and the cover of the first work as
+  the group's picture — under their own cursors with a `q` name filter. A
+  grouping, not an entity: the albums are `GET /works?artist=<name>`.
 
 - **Device-aware streaming leg (ADR-0069, #432).** `POST /api/v1/playback/plan`
   accepts `client: {containers, video, audio, max_height}` and answers `mode`
