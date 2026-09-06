@@ -1,0 +1,176 @@
+#!/bin/bash
+# Run a command inside heyarr-core's devcontainer from the host.
+# Usage: bin/devcontainer-exec <command> [args...]
+# Example: bin/devcontainer-exec go test ./...
+#
+# heyarr-core builds locally on none of our laptops — the devcontainer (ADR-0023,
+# the pinned FFmpeg) is the build environment. So by default this ALWAYS runs on
+# the remote host that hosts the container (mac-mini-1 / lamia-1): it rsyncs the
+# working tree there, execs the command in the container, and syncs results back.
+#
+# Worktrees: when invoked from a linked worktree under .worktrees/, the worktree
+# is synced to its mirror path on the remote and the command runs in the matching
+# /workspaces/heyarr-core/.worktrees/<name> directory inside the container.
+#
+# Config (env, all optional — defaults target mac-mini-1):
+#   DEVCONTAINER_REMOTE_HOST   SSH host holding the container   (default: mac-mini-1)
+#   DEVCONTAINER_REMOTE_PATH   checkout path on that host        (default: ~/Workspace/rarebit-one/heyarr-core)
+#   DEVCONTAINER_REMOTE_PATHDIRS  dirs to prepend to remote PATH (default: /opt/homebrew/bin:/opt/podman/bin)
+#   DEVCONTAINER_LOCAL=1       force local runtime, skip SSH-through (for running ON the remote)
+#   RAREBIT_MODULE_TOKEN       read token for private go modules (default: `gh auth token`), used only when provisioning
+set -e
+
+CONTAINER_WORKDIR_BASE_DEFAULT="/workspaces"
+
+# --- Locate the worktree / main repo, and the in-container working directory ---
+CURRENT_WORKTREE=$(git rev-parse --show-toplevel 2>/dev/null)
+if [[ -z "$CURRENT_WORKTREE" ]]; then
+  echo "ERROR: Not in a git repository" >&2
+  exit 1
+fi
+
+# An outer SSH-through invocation passes these so the remote (which received the
+# worktree via rsync, not `git worktree add`) does not re-derive paths wrongly.
+if [[ -n "${DEVCONTAINER_PROJECT_ROOT:-}" && -n "${DEVCONTAINER_CONTAINER_WORKDIR:-}" ]]; then
+  PROJECT_ROOT="$DEVCONTAINER_PROJECT_ROOT"
+  CONTAINER_WORKDIR="$DEVCONTAINER_CONTAINER_WORKDIR"
+else
+  GIT_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null)
+  CONTAINER_BASE="${CONTAINER_WORKDIR_BASE_DEFAULT}/$(basename "$CURRENT_WORKTREE" 2>/dev/null)"
+  if [[ "$GIT_COMMON_DIR" == ".git" ]]; then
+    PROJECT_ROOT="$CURRENT_WORKTREE"
+    CONTAINER_WORKDIR="${CONTAINER_WORKDIR_BASE_DEFAULT}/$(basename "$PROJECT_ROOT")"
+  else
+    PROJECT_ROOT=$(cd "$(dirname "$GIT_COMMON_DIR")" && pwd)
+    CONTAINER_BASE="${CONTAINER_WORKDIR_BASE_DEFAULT}/$(basename "$PROJECT_ROOT")"
+    if [[ "$CURRENT_WORKTREE" == "$PROJECT_ROOT" ]]; then
+      CONTAINER_WORKDIR="$CONTAINER_BASE"
+    else
+      RELATIVE_PATH="${CURRENT_WORKTREE#$PROJECT_ROOT/}"
+      CONTAINER_WORKDIR="${CONTAINER_BASE}/${RELATIVE_PATH}"
+    fi
+  fi
+fi
+
+# Refuse to run from inside the container.
+if [[ -f /.dockerenv ]] || [[ -f /run/.containerenv ]] || [[ "$CURRENT_WORKTREE" == /workspaces/* ]]; then
+  echo "ERROR: Already inside the devcontainer. Run the command directly (e.g. go test ./...)." >&2
+  exit 1
+fi
+
+if [[ $# -eq 0 ]]; then
+  echo "Usage: bin/devcontainer-exec <command> [args...]" >&2
+  echo "Example: bin/devcontainer-exec go test ./..." >&2
+  exit 1
+fi
+
+# rsync excludes shared by every leg. .git so the remote keeps its own HEAD;
+# .toolchain because it holds the container-built, linux/arch-specific FFmpeg
+# binaries (a --delete push from a laptop that has no .toolchain would wipe the
+# remote's, breaking every build); .worktrees is handled leg-by-leg below.
+RSYNC_EXCLUDES=(--exclude='.git' --exclude='.toolchain')
+
+# ============================ SSH-through mode ============================
+if [[ "${DEVCONTAINER_LOCAL:-}" != "1" && "${DEVCONTAINER_SSH_THROUGH:-}" != "1" ]]; then
+  REMOTE_HOST="${DEVCONTAINER_REMOTE_HOST:-mac-mini-1}"
+  REMOTE_PATH="${DEVCONTAINER_REMOTE_PATH:-~/Workspace/rarebit-one/heyarr-core}"
+  REMOTE_PATHDIRS="${DEVCONTAINER_REMOTE_PATHDIRS:-/opt/homebrew/bin:/opt/podman/bin}"
+
+  SSH_TRANSPORT="ssh -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=3"
+
+  # Resolve REMOTE_PATH to an ABSOLUTE path once. Modern rsync protects remote
+  # args from the remote shell, so a remote ~ or $HOME is NOT expanded — passing
+  # one silently creates a literal "$HOME" directory. The podman label filter and
+  # `devcontainer up --workspace-folder` need the real absolute path anyway. One
+  # cheap ssh call settles it for every leg below.
+  if [[ "$REMOTE_PATH" == "~/"* || "$REMOTE_PATH" == '$HOME/'* ]]; then
+    REMOTE_HOME=$($SSH_TRANSPORT "$REMOTE_HOST" 'printf %s "$HOME"')
+    [[ -z "$REMOTE_HOME" ]] && { echo "ERROR: could not resolve remote home on $REMOTE_HOST" >&2; exit 1; }
+    REMOTE_PATH="${REMOTE_HOME}/${REMOTE_PATH#*/}"
+  fi
+
+  ESCAPED_ARGS=()
+  for arg in "$@"; do ESCAPED_ARGS+=("$(printf '%q' "$arg")"); done
+
+  if [[ "$CURRENT_WORKTREE" != "$PROJECT_ROOT" ]]; then
+    WORKTREE_RELPATH="${CURRENT_WORKTREE#$PROJECT_ROOT/}"
+    REMOTE_CD_PATH="${REMOTE_PATH}/${WORKTREE_RELPATH}"
+  else
+    WORKTREE_RELPATH=""
+    REMOTE_CD_PATH="${REMOTE_PATH}"
+  fi
+
+  # Push the main checkout (never the sibling worktrees).
+  echo "📡 Syncing to ${REMOTE_HOST}..." >&2
+  rsync -az --delete --timeout=30 -e "$SSH_TRANSPORT" \
+    "${RSYNC_EXCLUDES[@]}" --exclude='.worktrees' \
+    "${PROJECT_ROOT}/" "${REMOTE_HOST}:${REMOTE_PATH}/"
+
+  # Push the active worktree to its mirror path.
+  if [[ -n "$WORKTREE_RELPATH" ]]; then
+    echo "📡 Syncing worktree ${WORKTREE_RELPATH}..." >&2
+    $SSH_TRANSPORT "$REMOTE_HOST" "mkdir -p \"${REMOTE_PATH}/${WORKTREE_RELPATH}\""
+    rsync -az --delete --timeout=30 -e "$SSH_TRANSPORT" \
+      "${RSYNC_EXCLUDES[@]}" \
+      "${CURRENT_WORKTREE}/" "${REMOTE_HOST}:${REMOTE_PATH}/${WORKTREE_RELPATH}/"
+  fi
+
+  echo "🔗 Running on ${REMOTE_HOST}..." >&2
+  SSH_OPTS=(-o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=3)
+  [[ -t 0 && -t 1 ]] && SSH_OPTS+=(-tt)
+  EXIT_CODE=0
+  REMOTE_CONTAINER_WORKDIR="/workspaces/$(basename "$REMOTE_PATH")${WORKTREE_RELPATH:+/${WORKTREE_RELPATH}}"
+  ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" \
+    "cd ${REMOTE_CD_PATH} && PATH=${REMOTE_PATHDIRS}:\$PATH DEVCONTAINER_SSH_THROUGH=1 DEVCONTAINER_PROJECT_ROOT=${REMOTE_PATH} DEVCONTAINER_CONTAINER_WORKDIR=${REMOTE_CONTAINER_WORKDIR} ${REMOTE_CD_PATH}/scripts/devcontainer-exec ${ESCAPED_ARGS[*]}" \
+    || EXIT_CODE=$?
+
+  # Sync results back (build/test outputs, go.sum/go.mod updates, generated files).
+  rsync -az --delete --timeout=30 -e "$SSH_TRANSPORT" \
+    "${RSYNC_EXCLUDES[@]}" --exclude='.worktrees' \
+    "${REMOTE_HOST}:${REMOTE_PATH}/" "${PROJECT_ROOT}/"
+  if [[ -n "$WORKTREE_RELPATH" ]]; then
+    rsync -az --delete --timeout=30 -e "$SSH_TRANSPORT" \
+      "${RSYNC_EXCLUDES[@]}" \
+      "${REMOTE_HOST}:${REMOTE_PATH}/${WORKTREE_RELPATH}/" "${CURRENT_WORKTREE}/"
+  fi
+  exit "$EXIT_CODE"
+fi
+
+# ===================== Local runtime (on the container host) =====================
+if ! command -v podman &>/dev/null; then
+  echo "ERROR: podman not found on $(hostname). This half runs on the container host." >&2
+  exit 1
+fi
+
+CONTAINER=$(podman ps -q --filter "label=devcontainer.local_folder=${PROJECT_ROOT}" | head -1)
+
+# Bring the container up if it isn't running. Provisioning (postCreateCommand)
+# fetches the private voidbind-go module, so hand `devcontainer up` a read token
+# via env only — never written to disk, never echoed.
+if [[ -z "$CONTAINER" ]]; then
+  echo "Container not running. Starting devcontainer..." >&2
+  MOD_TOKEN="${RAREBIT_MODULE_TOKEN:-$(gh auth token 2>/dev/null || true)}"
+  UP_ENV=()
+  if [[ -n "$MOD_TOKEN" ]]; then
+    UP_ENV=(--remote-env "GOPRIVATE=github.com/rarebit-one/*"
+            --remote-env "GIT_TERMINAL_PROMPT=0"
+            --remote-env "GIT_CONFIG_COUNT=1"
+            --remote-env "GIT_CONFIG_KEY_0=url.https://x-access-token:${MOD_TOKEN}@github.com/rarebit-one/.insteadOf"
+            --remote-env "GIT_CONFIG_VALUE_0=https://github.com/rarebit-one/")
+  else
+    echo "WARN: no module token (RAREBIT_MODULE_TOKEN / gh auth token); private deps may fail." >&2
+  fi
+  devcontainer up --workspace-folder "$PROJECT_ROOT" "${UP_ENV[@]}" >&2 || exit 1
+  for i in {1..30}; do
+    CONTAINER=$(podman ps -q --filter "label=devcontainer.local_folder=${PROJECT_ROOT}" | head -1)
+    [[ -n "$CONTAINER" ]] && break
+    [[ $i -lt 30 ]] && sleep 2
+  done
+  [[ -z "$CONTAINER" ]] && { echo "ERROR: timed out waiting for container" >&2; exit 1; }
+fi
+
+EXEC_CMD=(podman exec -w "$CONTAINER_WORKDIR")
+if [[ -t 0 && -t 1 ]]; then EXEC_CMD+=(-it); elif [[ -t 0 ]]; then EXEC_CMD+=(-i); elif [[ -t 1 ]]; then EXEC_CMD+=(-t); fi
+# Ensure the pinned FFmpeg toolchain is on PATH, as devcontainer.json's remoteEnv does.
+EXEC_CMD+=(-e "PATH=${CONTAINER_WORKDIR%%/.worktrees/*}/.toolchain/bin:/usr/local/go/bin:/go/bin:/usr/local/bin:/usr/bin:/bin")
+exec "${EXEC_CMD[@]}" "$CONTAINER" "$@"
