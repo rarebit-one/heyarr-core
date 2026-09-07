@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -179,6 +180,11 @@ type Server struct {
 	socketPath string
 	tcpAddr    string
 
+	// renderHTTP serves the optional plain-HTTP render listener (ADR-0079):
+	// the same router behind a gate that admits only the capability mount.
+	renderHTTP *http.Server
+	renderAddr string
+
 	errc     chan error
 	wg       sync.WaitGroup
 	stopOnce sync.Once
@@ -261,7 +267,32 @@ func New(opts Options) (*Server, error) {
 		// deadline that made sense for a JSON response would truncate one.
 		// Bounding a slow reader is the client's connection to lose.
 	}
+	if opts.Config.HTTP.RenderAddr != "" {
+		s.renderHTTP = &http.Server{
+			Handler:           RenderOnly(s.handler),
+			ReadHeaderTimeout: readHeaderTimeout,
+			ErrorLog:          slog.NewLogLogger(s.log.With("listener", "render").Handler(), slog.LevelWarn),
+		}
+	}
 	return s, nil
+}
+
+// RenderOnly gates a router so that only the capability mount (RenderPrefix,
+// ADR-0040) is reachable through it. The plain-HTTP render listener
+// (ADR-0079) exists for televisions that cannot speak TLS; everything else the
+// router knows — the bearer API, the login, the relays — stays behind the TLS
+// listener, and a request for any of it here is answered 404 before the router
+// sees it. Refusing at the door rather than relying on each mount's own auth
+// keeps the plaintext surface exactly one route wide.
+func RenderOnly(router http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == RenderPrefix || strings.HasPrefix(r.URL.Path, RenderPrefix+"/") {
+			router.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		http.Error(w, "not found", http.StatusNotFound)
+	})
 }
 
 // Handler exposes the fully wired router, so tests can drive the real
@@ -326,6 +357,27 @@ func (s *Server) Start() error {
 		return errors.New("httpapi: neither http.addr nor http.unix_socket is set — the API would be unreachable")
 	}
 
+	// The render listener is its own server: plain HTTP by definition, and a
+	// handler that admits one mount. It is bound after the API listeners so a
+	// failure here does not leave a half-started API behind.
+	if s.renderHTTP != nil {
+		l, err := net.Listen("tcp", s.cfg.HTTP.RenderAddr)
+		if err != nil {
+			return fail(fmt.Errorf("httpapi: listening for renderers on %s: %w", s.cfg.HTTP.RenderAddr, err))
+		}
+		s.renderAddr = l.Addr().String()
+		s.wg.Add(1)
+		go func(l net.Listener) {
+			defer s.wg.Done()
+			if err := s.renderHTTP.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				select {
+				case s.errc <- fmt.Errorf("httpapi: serving renderers on %s: %w", l.Addr(), err):
+				default:
+				}
+			}
+		}(l)
+	}
+
 	tlsOn := s.cfg.HTTP.TLS.Enabled()
 	for _, l := range listeners {
 		// Only the TCP listener is wrapped in TLS. The unix socket is the local
@@ -354,9 +406,14 @@ func (s *Server) Start() error {
 
 	s.log.Info("http listening",
 		"addr", s.tcpAddr, "unix_socket", s.socketPath,
-		"auth_enabled", s.cfg.HTTP.Auth.Enabled, "tls", tlsOn)
+		"auth_enabled", s.cfg.HTTP.Auth.Enabled, "tls", tlsOn,
+		"render_addr", s.renderAddr)
 	return nil
 }
+
+// RenderAddr is the plain-HTTP render listener actually bound, or empty when
+// none is configured.
+func (s *Server) RenderAddr() string { return s.renderAddr }
 
 // Err delivers the first fatal serving error. Nothing is sent on a clean
 // shutdown.
@@ -375,6 +432,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	var err error
 	s.stopOnce.Do(func() {
 		err = s.http.Shutdown(ctx)
+		if s.renderHTTP != nil {
+			err = errors.Join(err, s.renderHTTP.Shutdown(ctx))
+		}
 		s.wg.Wait()
 		// The socket file outlives the process that made it. Leaving it behind
 		// is how the next start finds a path that exists, refuses to bind, and

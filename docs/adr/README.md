@@ -85,3 +85,4 @@ An ADR that merely describes the code is not worth having.
 | [0076](0076-heyarr-resolves-the-torrent-and-hands-the-client-metainfo.md) | Heyarr resolves the .torrent and hands the client the metainfo | Accepted |
 | [0077](0077-a-second-metadata-provider-drops-in-and-non-feed-works-are-deferred.md) | A second metadata provider (TMDB) drops in behind the same interface; non-feed works (movies, music, books) are deferred | Accepted |
 | [0078](0078-an-on-demand-poll-reuses-the-poll-job-and-never-reschedules.md) | An on-demand poll reuses the poll job and never reschedules | Accepted |
+| [0079](0079-renderers-get-a-plain-http-origin-of-their-own.md) | Renderers get a plain-HTTP origin of their own | Accepted |

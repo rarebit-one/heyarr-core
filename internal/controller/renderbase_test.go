@@ -57,3 +57,22 @@ func TestRenderBaseURLHonoursThePublicOrigin(t *testing.T) {
 		})
 	}
 }
+
+// A plain-HTTP render listener (ADR-0079) is what RENDERERS are handed, and only
+// them: the login/session origin browsers use is still the public origin. A DLNA
+// renderer fetches without TLS, so the https origin is one it cannot play from.
+func TestRendererBaseURLPrefersThePlainRenderListener(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.HTTP.Addr = "192.168.16.5:7777"
+	cfg.HTTP.PublicOrigin = "https://heyarr.br.example.com"
+	if got, want := rendererBaseURL(cfg), "https://heyarr.br.example.com"; got != want {
+		t.Fatalf("without a render listener renderers get the public origin: got %q want %q", got, want)
+	}
+	cfg.HTTP.RenderAddr = "192.168.16.5:7778"
+	if got, want := rendererBaseURL(cfg), "http://192.168.16.5:7778"; got != want {
+		t.Fatalf("with a render listener renderers get it, plain: got %q want %q", got, want)
+	}
+	if got, want := renderBaseURL(cfg), "https://heyarr.br.example.com"; got != want {
+		t.Fatalf("the login origin must not move to the plain listener: got %q want %q", got, want)
+	}
+}
