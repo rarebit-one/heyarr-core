@@ -281,6 +281,21 @@ record independently agreeing on the bytes.
 
 ### Fixed
 
+- **A grab no longer depends on the download client reaching the indexer**
+  (ADR-0076, #492). The Transmission client handed `torrent-add` the indexer's
+  `.torrent` download URL as `filename`, which made Transmission fetch it — and
+  a loopback-bound Prowlarr the host-native Heyarr can reach is unreachable from
+  the client's own container network namespace, so its fetch returned "No
+  Response" and every grab parked at SELECTED forever. Heyarr now fetches the
+  `.torrent` itself over the same path that reached the indexer and hands the
+  client the bytes as base64 `metainfo`, so the client is never asked to reach
+  the indexer. A `magnet:` source is still passed through unchanged, and
+  fetch-then-metainfo preserves a private tracker's passkey embedded in the
+  `.torrent` — which converting to a bare magnet from the infohash would drop.
+  The download URL is a secret and stays out of every log line and error. The
+  same exposure remains on the qBittorrent client, whose upload needs a
+  multipart path first; it is a noted follow-up.
+
 - **Binding the local socket no longer poisons the content-addressed store**
   (#151). The unix socket was made owner-only by lowering the process umask to
   `0o177` across the bind. umask is per-process, not per-goroutine, and `heyarr

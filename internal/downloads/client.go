@@ -98,6 +98,13 @@ type Client struct {
 	rpc     *transport
 	now     func() time.Time
 
+	// httpc fetches an indexer's .torrent so Transmission is handed the bytes
+	// rather than a URL it may be unable to reach (Add, fetchTorrent, #492). It
+	// is the same transport the RPC uses, but reached directly here so the RPC
+	// basic-auth credential is NOT sent to the indexer — the fetch builds its
+	// own request and adds nothing to it.
+	httpc *http.Client
+
 	// session is what the last successful session-get reported. It is a cache
 	// of facts that change only when the daemon is reconfigured, and it is
 	// refreshed by every health check.
@@ -160,6 +167,7 @@ func New(opts Options) (*Client, error) {
 		pathMap: opts.PathMap,
 		label:   label,
 		now:     now,
+		httpc:   httpc,
 		rpc: &transport{
 			endpoint: rpcURL(opts.Endpoint),
 			user:     opts.Username,

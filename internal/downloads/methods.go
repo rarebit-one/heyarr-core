@@ -2,8 +2,11 @@ package downloads
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"path"
 	"strings"
 
@@ -207,15 +210,24 @@ func (c *Client) resolvePath(t torrent) string {
 // the duplicate grab this whole design exists to prevent.
 func (c *Client) Add(ctx context.Context, source secret.Value) (providers.Transfer, error) {
 	// Reveal() here and nowhere else in this method: this is the point the
-	// value goes on the wire to Transmission. It must not reach the error
-	// below, the labels branch, or any log line — on a private tracker it
-	// carries a passkey that identifies a person.
-	filename := strings.TrimSpace(source.Reveal())
-	if filename == "" {
+	// value goes on the wire — to the indexer as a .torrent fetch, or to
+	// Transmission as a magnet. It must not reach the error below, the labels
+	// branch, or any log line — on a private tracker it carries a passkey that
+	// identifies a person.
+	source0 := strings.TrimSpace(source.Reveal())
+	if source0 == "" {
 		return providers.Transfer{}, errors.New("downloads: nothing to add")
 	}
 
-	args := map[string]any{"filename": filename}
+	// Who fetches the .torrent — Heyarr or Transmission — is the whole of #492.
+	// See addSource: an http(s) URL is fetched HERE and handed over as base64
+	// metainfo, because the download client may not be able to reach the
+	// indexer (a loopback-bound Prowlarr, a container network namespace). A
+	// magnet has nothing to fetch and is passed through as filename.
+	args, err := c.addSource(ctx, source0)
+	if err != nil {
+		return providers.Transfer{}, err
+	}
 	if c.session.SupportsLabels() {
 		args["labels"] = []string{c.label}
 	} else {
@@ -225,24 +237,119 @@ func (c *Client) Add(ctx context.Context, source secret.Value) (providers.Transf
 		args["download-dir"] = path.Join(c.downloadDir(), c.label)
 	}
 
-	var raw struct {
+	var res struct {
 		Added     *torrent `json:"torrent-added"`
 		Duplicate *torrent `json:"torrent-duplicate"`
 	}
-	if err := c.rpc.call(ctx, "torrent-add", args, &raw); err != nil {
+	if err := c.rpc.call(ctx, "torrent-add", args, &res); err != nil {
 		return providers.Transfer{}, err
 	}
 	switch {
-	case raw.Added != nil:
-		return c.toTransfer(*raw.Added), nil
-	case raw.Duplicate != nil:
+	case res.Added != nil:
+		return c.toTransfer(*res.Added), nil
+	case res.Duplicate != nil:
 		// Already there. The caller gets the same value it would have got the
 		// first time, so a re-run is indistinguishable from the original.
-		return c.toTransfer(*raw.Duplicate), nil
+		return c.toTransfer(*res.Duplicate), nil
 	default:
 		return providers.Transfer{}, fmt.Errorf(
 			"%w: torrent-add reported success but named no transfer", ErrRPCFailure)
 	}
+}
+
+// addSource decides how the release reaches Transmission's torrent-add, and is
+// where #492 is actually fixed.
+//
+// Transmission's torrent-add takes EITHER a `filename` — which it fetches
+// itself, whether that is a magnet, a local path or an http(s) URL — OR a
+// base64 `metainfo`, the .torrent bytes handed to it directly. The two are
+// alternatives, and choosing between them is choosing WHO fetches the .torrent:
+//
+//   - A magnet has no file to fetch: the bytes come from the swarm via DHT and
+//     trackers, so it is passed through as `filename` unchanged. Nothing Heyarr
+//     could do would help, and rewriting it would only risk dropping a tracker.
+//
+//   - An http(s) URL is the indexer's .torrent download link, and letting
+//     Transmission fetch it is the bug: the indexer here is a loopback-bound
+//     Prowlarr that Heyarr (host-native) can reach but Transmission (in its own
+//     container network namespace) cannot, so its fetch returns "No Response"
+//     and every grab parks at SELECTED forever. Heyarr CAN reach the indexer,
+//     so Heyarr fetches the .torrent and hands over its bytes as `metainfo`.
+//
+//     Fetch-then-metainfo is deliberately not "convert to a bare magnet from
+//     the infohash": a private tracker embeds a passkey in the .torrent, and a
+//     magnet built from the infohash alone would DROP it, so the transfer would
+//     never announce. Preserving the bytes preserves the passkey.
+//
+// Anything else — a local file path an operator configured — is left as
+// `filename`, the pre-#492 behaviour, because Transmission opening a local file
+// never depended on reaching the indexer.
+func (c *Client) addSource(ctx context.Context, source string) (map[string]any, error) {
+	if !isHTTPURL(source) {
+		return map[string]any{"filename": source}, nil
+	}
+	blob, err := c.fetchTorrent(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"metainfo": base64.StdEncoding.EncodeToString(blob)}, nil
+}
+
+// isHTTPURL reports whether source is an http(s) URL — the shape Heyarr fetches
+// itself rather than hand to Transmission.
+//
+// The test is the SCHEME, not a `.torrent` suffix: a Torznab indexer's download
+// link routinely has none — Prowlarr's is `/<n>/download?apikey=…` — and the
+// only reason a torrent client is ever handed an http(s) link is a .torrent
+// behind it. A magnet, which starts `magnet:`, is not one and falls through to
+// `filename`.
+func isHTTPURL(source string) bool {
+	lower := strings.ToLower(source)
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+}
+
+// maxTorrentBytes bounds one .torrent fetch.
+//
+// A .torrent is metadata — names, sizes and one SHA-1 per piece — so even a
+// large multi-file release is a few megabytes of it. This is generous enough
+// never to be met in practice and a bound on what a misbehaving or hostile
+// endpoint at a configured URL can make this process allocate.
+const maxTorrentBytes = 16 << 20
+
+// fetchTorrent retrieves a .torrent from the indexer over Heyarr's own HTTP
+// path, which is the point of #492: Heyarr can reach the indexer.
+//
+// The credential rides in the URL — a Torznab download link carries its own
+// apikey/passkey query, the same self-contained link the plain-HTTP client
+// fetches — so the request is issued verbatim and adds no Transmission
+// credential of its own. The URL is never named in an error: it is a secret
+// that reaches an operator's log through registry.Grab, exactly as source is.
+func (c *Client) fetchTorrent(ctx context.Context, rawURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, &rpcError{Detail: "building the .torrent fetch request", err: err}
+	}
+	resp, err := c.httpc.Do(req)
+	if err != nil {
+		// The URL is NOT named: it carries a passkey. "the indexer" is enough
+		// to say where the fetch went without disclosing the link.
+		return nil, &rpcError{Detail: "could not fetch the .torrent from the indexer", err: err}
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, &rpcError{
+			Status: resp.StatusCode,
+			Detail: fmt.Sprintf("the indexer answered %d fetching the .torrent", resp.StatusCode),
+		}
+	}
+	blob, err := io.ReadAll(io.LimitReader(resp.Body, maxTorrentBytes))
+	if err != nil {
+		return nil, &rpcError{Detail: "reading the .torrent from the indexer", err: err}
+	}
+	if len(blob) == 0 {
+		return nil, &rpcError{Detail: "the indexer returned an empty .torrent"}
+	}
+	return blob, nil
 }
 
 // Remove takes a transfer out of the client.
