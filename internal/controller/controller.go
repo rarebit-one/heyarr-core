@@ -677,7 +677,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		Logger:     c.log,
 
 		RenderSecret:  secret,
-		RenderBaseURL: renderBaseURL(c.cfg),
+		RenderBaseURL: rendererBaseURL(c.cfg),
 		SelfPeerID:    selfPeerID,
 
 		Blobs: casBlobLocator{store: blobStore},

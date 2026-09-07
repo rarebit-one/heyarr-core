@@ -128,6 +128,17 @@ type HTTP struct {
 	// before (the default); exactly one → a startup error. The unix socket is
 	// never wrapped: it is the local IPC transport the CLI and workers dial.
 	TLS TLS `koanf:"tls"`
+	// RenderAddr optionally binds a SECOND TCP listener, always plain HTTP,
+	// that serves only the capability mount (/render, ADR-0040) and nothing
+	// else — no API, no login, no relay. It exists for the televisions: a DLNA
+	// renderer fetches the URL it is handed without TLS (a Samsung QN85B opens
+	// a plaintext connection to an https:// URL and gives up), so a node whose
+	// client API is served over HTTPS needs a plain origin to hand renderers.
+	// When set, renderers are handed http://<render_addr>/render/…; browsers
+	// and phones keep PublicOrigin. It must name a concrete, non-loopback
+	// address — the URL minted from it has to be one a device on the LAN can
+	// dial — and it is refused otherwise (ADR-0079).
+	RenderAddr string `koanf:"render_addr"`
 	// PublicOrigin is the external origin clients reach this node at — the
 	// scheme, host and any port a browser or television types, e.g.
 	// "https://heyarr.example.com". It is what the login/session rp origin and
@@ -478,6 +489,24 @@ func (c Config) Validate() error {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return fmt.Errorf(
 				"config: http.public_origin %q is not an absolute http(s) origin (e.g. https://heyarr.example.com)", o)
+		}
+	}
+
+	// A render listener must be an address a television can dial: a concrete
+	// host and port, neither wildcard nor loopback (ADR-0079). A wildcard names
+	// no address to mint a URL from, and loopback would hand every renderer a
+	// link to itself.
+	if a := strings.TrimSpace(c.HTTP.RenderAddr); a != "" {
+		host, port, err := net.SplitHostPort(a)
+		if err != nil || port == "" || port == "0" {
+			return fmt.Errorf("config: http.render_addr %q is not a host:port with a fixed port (e.g. 192.168.16.5:7778)", a)
+		}
+		switch host {
+		case "", "0.0.0.0", "::", "[::]":
+			return fmt.Errorf("config: http.render_addr %q must name one address, not a wildcard — a renderer is handed a URL built from it", a)
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			return fmt.Errorf("config: http.render_addr %q is loopback, which no renderer can reach", a)
 		}
 	}
 

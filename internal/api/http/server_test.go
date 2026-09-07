@@ -1507,3 +1507,29 @@ func TestNewRequiresTheSchemaVersionThisBinaryKnows(t *testing.T) {
 		t.Fatal("a server was built with no known schema version, so its drift check compares nothing")
 	}
 }
+
+// The plain-HTTP render listener (ADR-0079) is exactly one mount wide: the
+// capability route passes through to the router, and everything else the router
+// knows — the bearer API, login, relays, metrics — is refused at the door with a
+// 404, so a plaintext listener never exposes them.
+func TestRenderOnlyAdmitsOnlyTheCapabilityMount(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	h := httpapi.RenderOnly(inner)
+	for path, want := range map[string]int{
+		httpapi.RenderPrefix + "/v1.abc/stream.mp4": http.StatusTeapot,
+		httpapi.RenderPrefix:                        http.StatusTeapot,
+		httpapi.APIPrefix + "/works":                http.StatusNotFound,
+		"/login":                                    http.StatusNotFound,
+		"/metrics":                                  http.StatusNotFound,
+		"/renderx":                                  http.StatusNotFound,
+		"/":                                         http.StatusNotFound,
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != want {
+			t.Errorf("%s: got %d want %d", path, rec.Code, want)
+		}
+	}
+}

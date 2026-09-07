@@ -19,6 +19,18 @@ import (
 // Empty is a supported answer. POST /playback still works, still returns
 // ContentURL and a token, and simply carries no renderer URL — the same shape
 // as a node with no signing secret.
+// rendererBaseURL is the origin a RENDERER is handed for its capability URL
+// (ADR-0040). It is renderBaseURL — the same public origin browsers use —
+// unless the operator bound a plain-HTTP render listener (http.render_addr,
+// ADR-0079), in which case the television gets that: a DLNA renderer fetches
+// its URL without TLS, and an https:// origin is one it cannot play from.
+func rendererBaseURL(cfg config.Config) string {
+	if addr := strings.TrimSpace(cfg.HTTP.RenderAddr); addr != "" {
+		return "http://" + addr
+	}
+	return renderBaseURL(cfg)
+}
+
 func renderBaseURL(cfg config.Config) string {
 	// An explicit public origin is the operator's statement of the external
 	// scheme+host clients reach this node at — the https hostname behind a TLS

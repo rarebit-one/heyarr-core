@@ -420,3 +420,23 @@ func TestEnsureDataDirIsSafeUnderConcurrentStart(t *testing.T) {
 		t.Errorf("concurrent starts left %d files behind: %v", len(entries), entries)
 	}
 }
+
+// A render listener (ADR-0079) must be an address a television can dial: a
+// concrete non-loopback host and a fixed port. Wildcards and loopback are refused
+// because the URL minted from them would send a renderer nowhere useful.
+func TestRenderAddrMustBeAConcreteReachableAddress(t *testing.T) {
+	for _, ok := range []string{"192.168.16.5:7778", "[fd00::5]:7778", "render-host.example:7778"} {
+		cfg := Defaults()
+		cfg.HTTP.RenderAddr = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate rejected render_addr %q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"0.0.0.0:7778", ":7778", "127.0.0.1:7778", "[::1]:7778", "192.168.16.5", "192.168.16.5:0"} {
+		cfg := Defaults()
+		cfg.HTTP.RenderAddr = bad
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("Validate accepted render_addr %q", bad)
+		}
+	}
+}
