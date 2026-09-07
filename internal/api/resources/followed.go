@@ -545,15 +545,51 @@ type FollowedItemWant struct {
 	Placement     string `json:"placement"`
 }
 
+// FollowedSourceDetail reads one subscription's view — the intent behind GET
+// /followed-sources/{id} and the MCP followed_source_items tool, so the two
+// doors cannot drift. A missing subscription is sql.ErrNoRows, which both doors
+// render as a not-found rather than a failure.
+func (a *API) FollowedSourceDetail(ctx context.Context, id string) (FollowedSourceView, error) {
+	src, err := a.followedSource(ctx, id)
+	if err != nil {
+		return FollowedSourceView{}, err
+	}
+	return a.followViewFor(ctx, src, a.metadataHealthLabel()), nil
+}
+
+// FollowedSourceItems pages the items one subscription has archived and merely
+// knows about — the intent behind GET /followed-sources/{id}/items and the MCP
+// followed_source_items tool. Paged by item_key (the feed-stable identity), so
+// a re-poll inserting an older episode does not shuffle the pages. after is the
+// previous page's last item_key, empty for the first page.
+func (a *API) FollowedSourceItems(ctx context.Context, id, after string, limit int) ([]FollowedItemView, string, error) {
+	src, err := a.followedSource(ctx, id)
+	if err != nil {
+		return nil, "", err
+	}
+	items, err := a.catalog.ProjectedItems(ctx, src.WorkID, after, limit+1)
+	if err != nil {
+		return nil, "", err
+	}
+	views := make([]FollowedItemView, 0, len(items))
+	for _, it := range items {
+		views = append(views, followedItemView(it))
+	}
+	p := newPage(views, limit,
+		func(x FollowedItemView) []string { return []string{x.ItemKey} },
+		"followed-source-items")
+	return p.Items, p.NextCursor, nil
+}
+
 // getFollowedSource is GET /api/v1/followed-sources/{id} (#430). A detail
 // screen had to re-read the whole list and pick its id out of it.
 func (a *API) getFollowedSource(w http.ResponseWriter, r *http.Request) {
-	src, err := a.followedSource(r.Context(), chi.URLParam(r, "id"))
+	view, err := a.FollowedSourceDetail(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		a.fail(w, r, "followed source", err)
 		return
 	}
-	a.write(w, r, http.StatusOK, a.followViewFor(r.Context(), src, a.metadataHealthLabel()))
+	a.write(w, r, http.StatusOK, view)
 }
 
 // followedSource reads one subscription, mapping the catalog's own not-found
@@ -580,28 +616,16 @@ func (a *API) listFollowedSourceItems(w http.ResponseWriter, r *http.Request) {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	}
-	src, err := a.followedSource(r.Context(), chi.URLParam(r, "id"))
-	if err != nil {
-		a.fail(w, r, "followed source", err)
-		return
-	}
 	after := ""
 	if q.cursor != nil {
 		after = q.cursor[0]
 	}
-	items, err := a.catalog.ProjectedItems(r.Context(), src.WorkID, after, q.limit+1)
+	views, next, err := a.FollowedSourceItems(r.Context(), chi.URLParam(r, "id"), after, q.limit)
 	if err != nil {
 		a.fail(w, r, "followed source", err)
 		return
 	}
-
-	views := make([]FollowedItemView, 0, len(items))
-	for _, it := range items {
-		views = append(views, followedItemView(it))
-	}
-	a.write(w, r, http.StatusOK, newPage(views, q.limit,
-		func(x FollowedItemView) []string { return []string{x.ItemKey} },
-		"followed-source-items"))
+	a.write(w, r, http.StatusOK, page[FollowedItemView]{Items: views, NextCursor: next})
 }
 
 // followedItemView is the wire projection of one stored item and its want.

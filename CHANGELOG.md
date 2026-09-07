@@ -35,6 +35,15 @@ stable.
   across music / book works — name, count, and the cover of the first work as
   the group's picture — under their own cursors with a `q` name filter. A
   grouping, not an entity: the albums are `GET /works?artist=<name>`.
+- **MCP read tools for the browse surface (ADR-0019, ADR-0075).** The controller
+  MCP grows the read side the HTTP API already had: `browse_library` over
+  `GET /api/v1/works` (the ADR-0075 `sort`, filters and `include`), `list_artists`
+  and `list_authors` over the grouping endpoints, `continue_rail` over
+  `GET /api/v1/consumption/continue`, `followed_source_items` over a followed
+  source's yielded items, and `get_provider_status` over `GET /api/v1/providers`
+  (indexer and download-client health). Each is read-scope and read-only and calls
+  the same handler its route does. Personal state stays out (§72): none of these
+  reaches a playlist, rating, reading position or history.
 
 - **Device-aware streaming leg (ADR-0069, #432).** `POST /api/v1/playback/plan`
   accepts `client: {containers, video, audio, max_height}` and answers `mode`

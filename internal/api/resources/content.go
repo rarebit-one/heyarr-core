@@ -118,117 +118,38 @@ func (a *API) listWorks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	head, args := cardQuery(r.Context(), include["artwork"], include["primary_asset"])
-	where := []string{"1 = 1"}
-	if ct := r.URL.Query().Get("content_type"); ct != "" {
-		where = append(where, "works.content_type = ?")
-		args = append(args, ct)
-	}
-	if lib := r.URL.Query().Get("library_id"); lib != "" {
-		// "Works with something of theirs in this library". Expressed as EXISTS
-		// rather than a join so that a work with twenty assets in the library
-		// is one row, not twenty.
-		where = append(where, `EXISTS (SELECT 1 FROM editions e
-			JOIN assets a ON a.edition_id = e.id
-			WHERE e.work_id = works.id AND a.library_id = ?)`)
-		args = append(args, lib)
-	}
-	if term := r.URL.Query().Get("q"); term != "" {
-		where = append(where, `works.sort_title LIKE ? ESCAPE '\'`)
-		args = append(args, likePattern(term))
-	}
-	if year != nil {
-		where = append(where, "works.year = ?")
-		args = append(args, *year)
-	}
-	if yearFrom != nil {
-		where = append(where, "works.year >= ?")
-		args = append(args, *yearFrom)
-	}
-	if yearTo != nil {
-		where = append(where, "works.year <= ?")
-		args = append(args, *yearTo)
-	}
-	// The grouping facets (ADR-0075): an artist's albums, an author's books.
-	// Exact match on the attribute the scanner wrote, which is what the
-	// grouping reads hand back as the key.
-	if artist := r.URL.Query().Get("artist"); artist != "" {
-		where = append(where, "json_extract(works.attributes, '$.artist') = ?")
-		args = append(args, artist)
-	}
-	if author := r.URL.Query().Get("author"); author != "" {
-		where = append(where, "json_extract(works.attributes, '$.author') = ?")
-		args = append(args, author)
-	}
-	order := ` ORDER BY works.sort_title ASC, works.id ASC`
-	if sortBy == "recent" {
-		order = ` ORDER BY works.created_at DESC, works.id DESC`
-		if q.cursor != nil {
-			where = append(where, "(works.created_at, works.id) < (?, ?)")
-			args = append(args, q.cursor[0], q.cursor[1])
-		}
-	} else if q.cursor != nil {
-		where = append(where, "(works.sort_title, works.id) > (?, ?)")
-		args = append(args, q.cursor[0], q.cursor[1])
-	}
-	args = append(args, q.limit+1)
-
-	//nolint:gosec // the query is assembled only from the literal fragments above; every value is bound
-	stmt := head + ` WHERE ` + strings.Join(where, " AND ") + order + ` LIMIT ?`
-
-	//nolint:gosec // see above: literal fragments only, every value bound
-	rows, err := a.reader.QueryContext(r.Context(), stmt, args...)
+	result, err := a.BrowseWorks(r.Context(), BrowseWorksRequest{
+		ContentType:    r.URL.Query().Get("content_type"),
+		LibraryID:      r.URL.Query().Get("library_id"),
+		Query:          r.URL.Query().Get("q"),
+		Artist:         r.URL.Query().Get("artist"),
+		Author:         r.URL.Query().Get("author"),
+		Year:           year,
+		YearFrom:       yearFrom,
+		YearTo:         yearTo,
+		Recent:         sortBy == "recent",
+		Cursor:         q.cursor,
+		Limit:          q.limit,
+		IncludeArtwork: include["artwork"],
+		IncludePrimary: include["primary_asset"],
+	})
 	if err != nil {
 		a.fail(w, r, "work", err)
 		return
 	}
-	defer func() { _ = rows.Close() }()
 
-	var cards []cardRow
-	for rows.Next() {
-		card, err := scanCard(rows)
-		if err != nil {
-			a.fail(w, r, "work", err)
-			return
-		}
-		cards = append(cards, card)
-	}
-	if err := rows.Err(); err != nil {
-		a.fail(w, r, "work", err)
-		return
-	}
-
-	// The cursor is derived from the cards, whichever shape is rendered: the
-	// recent order keys on the stored created_at text, which only the card row
-	// carries (re-rendering a parsed time can differ from the stored text, and
-	// a keyset boundary must be the stored text).
-	next := ""
-	if len(cards) > q.limit {
-		cards = cards[:q.limit]
-		last := cards[len(cards)-1]
-		if sortBy == "recent" {
-			next = encodeCursor(collection, last.createdRaw, last.ID)
-		} else {
-			next = encodeCursor(collection, last.SortTitle, last.ID)
-		}
-	}
+	// With no `include` the listing renders plain Work rows, byte-identical to
+	// before the embeds existed; the embed wrappers on the card are irrelevant
+	// there because only the Work half is written.
 	if len(include) == 0 {
-		works := make([]Work, 0, len(cards))
-		for _, c := range cards {
+		works := make([]Work, 0, len(result.Cards))
+		for _, c := range result.Cards {
 			works = append(works, c.Work)
 		}
-		a.write(w, r, http.StatusOK, page[Work]{Items: works, NextCursor: next})
+		a.write(w, r, http.StatusOK, page[Work]{Items: works, NextCursor: result.NextCursor})
 		return
 	}
-	out := make([]WorkCard, 0, len(cards))
-	for _, c := range cards {
-		out = append(out, WorkCard{
-			Work:         c.Work,
-			Artwork:      embed[ArtworkRef]{included: include["artwork"], value: c.artwork},
-			PrimaryAsset: embed[PrimaryAssetRef]{included: include["primary_asset"], value: c.primary},
-		})
-	}
-	a.write(w, r, http.StatusOK, page[WorkCard]{Items: out, NextCursor: next})
+	a.write(w, r, http.StatusOK, page[WorkCard]{Items: result.Cards, NextCursor: result.NextCursor})
 }
 
 func (a *API) getWork(w http.ResponseWriter, r *http.Request) {

@@ -29,6 +29,100 @@
     },
     {
       "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "Walk the catalog the way a shelf presents it, rather than resolving one title. Filter by content_type, year (exact or a from/to range), library, artist or author, and sort A–Z or newest-added first; each work carries its poster and the one file a tap would play (null when it has none). Reach for this to answer \"what do we have\" and \"what is new\"; use search_content when you already know the title.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "artist": {
+            "description": "Only this artist's works — the exact name list_artists returns. Pair with content_type=music.",
+            "type": "string"
+          },
+          "author": {
+            "description": "Only this author's works — the exact name list_authors returns. Pair with content_type=book.",
+            "type": "string"
+          },
+          "content_type": {
+            "description": "Narrow to one kind: movie, series, music, book.",
+            "type": "string"
+          },
+          "include_artwork": {
+            "description": "Attach each work's poster (null when it has none). Defaults to true.",
+            "type": "boolean"
+          },
+          "include_primary_asset": {
+            "description": "Attach the one file a card tap would play, with its size and duration when known (null when the work holds no file). Defaults to true.",
+            "type": "boolean"
+          },
+          "library_id": {
+            "description": "Only works with something of theirs in this library.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "How many works at most. Defaults to the maximum.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "q": {
+            "description": "Part of a title. Matched against the normalised form the scanner records, so case and leading articles do not matter.",
+            "type": "string"
+          },
+          "sort": {
+            "description": "title (the default) is A–Z by the normalised title; recent is newest-added first.",
+            "enum": [
+              "title",
+              "recent"
+            ],
+            "type": "string"
+          },
+          "year": {
+            "description": "Only works of exactly this year.",
+            "type": "integer"
+          },
+          "year_from": {
+            "description": "Only works of this year or later (inclusive).",
+            "type": "integer"
+          },
+          "year_to": {
+            "description": "Only works of this year or earlier (inclusive).",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "browse_library",
+      "title": "Browse the library"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "List the newest not-finished session per work that has a position — the \"continue\" rail a client draws to resume where playback stopped. Each row carries the work, the part (season and episode for a series), the file with its duration, and the stored position. These are resume points the node keeps server-side; the encrypted user artifacts this server cannot decrypt stay in the separate device-side surface.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "device_id": {
+            "description": "Only sessions on this renderer, from get_peer_status's siblings. Omit for all.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "How many works at most. Defaults to the maximum.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "continue_rail",
+      "title": "Pick up where it stopped"
+    },
+    {
+      "annotations": {
         "heyarr/requiredScope": "write",
         "readOnlyHint": false
       },
@@ -225,6 +319,34 @@
         "heyarr/requiredScope": "read",
         "readOnlyHint": true
       },
+      "description": "Detail ONE followed source: the subscription itself plus every item its feed has yielded — what is archived and what it merely knows about, each with the want it projected and that want's state. Where list_followed answers \"is this working\" across all subscriptions, this answers \"what has this one got\" for a single source.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "How many items at most, oldest feed-key first. Defaults to the maximum.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "source_id": {
+            "description": "The followed source whose items to list, from list_followed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id"
+        ],
+        "type": "object"
+      },
+      "name": "followed_source_items",
+      "title": "What a followed source has"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
       "description": "Explain one want: whether the library holds bytes the profile accepts, whether those bytes are on every peer that should hold them, and WHICH RULE rejected each asset that did not qualify. This is the tool to reach for when someone says \"I have this, why does Heyarr say it is missing\".",
       "inputSchema": {
         "additionalProperties": false,
@@ -320,6 +442,27 @@
         "heyarr/requiredScope": "read",
         "readOnlyHint": true
       },
+      "description": "Report the configured indexers and download clients (and metadata providers), what each can do, whether the last check found it usable and which version it reported. This is the read behind \"why is nothing being acquired\": a node with none configured is a supported deployment and says so with an empty list. No credential is ever reported.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "How many rows at most. Defaults to the maximum.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "get_provider_status",
+      "title": "Indexer and download-client status"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
       "description": "Report which peers hold a blob and whether their copy is verified. A copy that is pending or corrupt is NOT a copy for placement purposes.",
       "inputSchema": {
         "additionalProperties": false,
@@ -357,6 +500,56 @@
       },
       "name": "get_upgrade_candidates",
       "title": "What could be better"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "List the artists the music library groups by, with how many works each has and a representative cover. An artist is a grouping over what a scan wrote, not an entity — pass a name back to browse_library as `artist` to get that artist's albums.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "How many names at most. Defaults to the maximum.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "q": {
+            "description": "Part of the name to narrow to. Case-insensitive substring.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_artists",
+      "title": "List artists"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "List the authors the book library groups by, with how many works each has and a representative cover. An author is a grouping over what a scan wrote, not an entity — pass a name back to browse_library as `author` to get that author's books.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "How many names at most. Defaults to the maximum.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "q": {
+            "description": "Part of the name to narrow to. Case-insensitive substring.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_authors",
+      "title": "List authors"
     },
     {
       "annotations": {
