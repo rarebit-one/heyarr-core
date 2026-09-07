@@ -217,6 +217,14 @@ var schemaUnfollow = obj(map[string]any{
 	},
 }, "source_id")
 
+// schemaPollSource forces one followed source to poll now.
+var schemaPollSource = obj(map[string]any{
+	"source_id": map[string]any{
+		"type":        "string",
+		"description": "The followed source to poll now, from list_followed.",
+	},
+}, "source_id")
+
 var schemaDesiredItemID = obj(map[string]any{
 	"desired_item_id": map[string]any{
 		"type":        "string",

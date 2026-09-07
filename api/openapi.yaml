@@ -3647,6 +3647,80 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/followed-sources/poll:
+    post:
+      tags: [desired]
+      operationId: pollAllFollowedSources
+      summary: Poll every followed source now.
+      description: |
+        Force every followed source to poll now rather than waiting for each
+        one's scheduled `next_poll_at` (ADR-0078) — the bulk sibling of
+        `POST /followed-sources/{id}/poll`, useful for refreshing many feeds at
+        once or after a controller was down.
+
+        **Enqueues** the follow beat's own `poll_source` job per source (§55,
+        invariant 4/ADR-0002); it does not poll inline. Best-effort per source:
+        one source failing to enqueue is skipped rather than failing the sweep.
+        Deduped per source, so a source already carrying a queued poll is not
+        polled twice, and no source's schedule is advanced — these are **extra**
+        polls, not reschedules. An empty library is a valid, empty sweep.
+      responses:
+        "202":
+          description: A poll was queued for each source; the ids queued are returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  count: { type: integer }
+                  queued_source_ids:
+                    type: array
+                    items: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/followed-sources/{id}/poll:
+    post:
+      tags: [desired]
+      operationId: pollFollowedSource
+      summary: Poll this followed source now.
+      description: |
+        Force one followed source to poll now rather than waiting for its
+        scheduled `next_poll_at`, which the `feed-poll` cadence puts up to six
+        hours out (§55, ADR-0078). Reach for it right after following something,
+        or when a feed is known to have just posted.
+
+        **Enqueues** the follow beat's own `poll_source` job — the same job the
+        follow door queues at follow time and the beat queues on the tick — and
+        answers `202` rather than pretending to be the worker (invariant 4,
+        ADR-0002). Deduped per source, so asking again while a poll is still
+        queued returns the same live job rather than a second one; harmless to
+        call repeatedly.
+
+        This is an **extra** poll, not a reschedule: the source's `next_poll_at`
+        is left exactly as it was (ADR-0078). On a node with **no feed adapter**
+        the job stays *pending and visible* rather than failing (ADR-0025).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "202":
+          description: Queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source_id: { type: string }
+                  job_id: { type: string }
+                  status: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/search:
     post:
       tags: [content]
