@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
-	"html"
 	"net/http"
 	"strconv"
 	"strings"
@@ -228,10 +227,10 @@ func didl(url, title, mime string) string {
 	b.WriteString(` xmlns:dc="http://purl.org/dc/elements/1.1/"`)
 	b.WriteString(` xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">`)
 	b.WriteString(`<item id="1" parentID="0" restricted="1">`)
-	fmt.Fprintf(&b, `<dc:title>%s</dc:title>`, html.EscapeString(title))
+	fmt.Fprintf(&b, `<dc:title>%s</dc:title>`, xmlEscape(title))
 	fmt.Fprintf(&b, `<upnp:class>%s</upnp:class>`, class)
 	fmt.Fprintf(&b, `<res protocolInfo="http-get:*:%s:*">%s</res>`,
-		html.EscapeString(mime), html.EscapeString(url))
+		xmlEscape(mime), xmlEscape(url))
 	b.WriteString(`</item></DIDL-Lite>`)
 	return b.String()
 }

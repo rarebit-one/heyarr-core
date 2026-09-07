@@ -37,8 +37,9 @@ func soapCall(ctx context.Context, client *http.Client, svc Service, action stri
 	for _, a := range args {
 		fmt.Fprintf(&body, "<%s>", a.Name)
 		// Values are escaped because one of them is a URL with a query string
-		// and another is DIDL-Lite, which is XML inside an XML element.
-		_ = xml.EscapeText(&body, []byte(a.Value))
+		// and another is DIDL-Lite, which is XML inside an XML element. Named
+		// entities, never numeric ones — see xmlEscape.
+		body.WriteString(xmlEscape(a.Value))
 		fmt.Fprintf(&body, "</%s>", a.Name)
 	}
 	fmt.Fprintf(&body, `</u:%s></s:Body></s:Envelope>`, action)
@@ -89,4 +90,36 @@ func parseFault(body []byte) (code, description string, ok bool) {
 		fault.Description = "no description given"
 	}
 	return fault.Code, fault.Description, true
+}
+
+// xmlEscape escapes text for an element body with NAMED entities only.
+//
+// encoding/xml's EscapeText and html.EscapeString both write a double quote as
+// the numeric reference &#34; (and an apostrophe as &#39;). That is valid XML,
+// and a Samsung QN85B refuses it: SetAVTransportURI with CurrentURIMetaData
+// containing &#34; is answered with "402 Invalid Args", while the same document
+// with &quot; is accepted and played. The DIDL-Lite in that argument is full of
+// quoted attributes, so the choice of entity decides whether the television
+// plays anything at all. Named entities are what every other DLNA controller
+// sends, and no renderer has been seen to refuse them.
+func xmlEscape(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 16)
+	for _, r := range s {
+		switch r {
+		case '&':
+			b.WriteString("&amp;")
+		case '<':
+			b.WriteString("&lt;")
+		case '>':
+			b.WriteString("&gt;")
+		case '"':
+			b.WriteString("&quot;")
+		case '\'':
+			b.WriteString("&apos;")
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

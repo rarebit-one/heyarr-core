@@ -303,3 +303,33 @@ func TestDIDLClassFollowsTheMediaType(t *testing.T) {
 		})
 	}
 }
+
+// A Samsung QN85B answers "402 Invalid Args" to a SetAVTransportURI whose
+// CurrentURIMetaData carries a numeric character reference (&#34;) — which is
+// exactly what encoding/xml and html.EscapeString emit for a double quote. The
+// envelope must use named entities so the quoted DIDL-Lite attributes survive.
+func TestSetURIEscapesWithNamedEntitiesOnly(t *testing.T) {
+	var captured string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		captured = string(b)
+		_, _ = w.Write([]byte(`<s:Envelope><s:Body><u:SetAVTransportURIResponse/></s:Body></s:Envelope>`))
+	}))
+	defer srv.Close()
+	c := &Controller{client: srv.Client(), renderer: Renderer{AVTransport: Service{Type: "urn:schemas-upnp-org:service:AVTransport:1", ControlURL: srv.URL}}}
+	if err := c.SetURI(context.Background(), "http://n/stream.mp4?a=1&b=2", `Dutton's "Yellowstone"`, "video/mp4"); err != nil {
+		t.Fatalf("SetURI: %v", err)
+	}
+	for _, bad := range []string{"&#34;", "&#39;", "&#x22;"} {
+		if strings.Contains(captured, bad) {
+			t.Fatalf("envelope carries a numeric reference %q, which a Samsung refuses:\n%s", bad, captured)
+		}
+	}
+	// DIDL attribute quotes are escaped once (by the envelope); quotes inside a
+	// DIDL text value twice (by didl, then the envelope) — named both times.
+	for _, want := range []string{`protocolInfo=&quot;`, `&amp;quot;Yellowstone&amp;quot;`, `Dutton&amp;apos;s`, `?a=1&amp;amp;b=2&lt;/res&gt;`} {
+		if !strings.Contains(captured, want) {
+			t.Fatalf("envelope missing %q:\n%s", want, captured)
+		}
+	}
+}
