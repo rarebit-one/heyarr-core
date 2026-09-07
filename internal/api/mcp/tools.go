@@ -172,6 +172,22 @@ func (s *Server) registerTools() {
 	})
 
 	s.tools.register(Tool{
+		Name:     "poll_source",
+		Title:    "Poll a source now",
+		Scope:    auth.ScopeWrite,
+		ReadOnly: false,
+		Description: "Poll one followed source now instead of waiting for its next scheduled " +
+			"round, which can be up to six hours out. Reach for it after following something and " +
+			"not wanting to wait, or when a feed just posted. It QUEUES the poll and returns a job " +
+			"— a feed host can be slow, so nothing holds while it runs — and leaves the source's " +
+			"schedule alone: this is an EXTRA poll, not a reschedule. Idempotent: asking again while " +
+			"a poll is still queued collapses to the one job. Read list_followed afterwards to see " +
+			"when it last polled and what it found.",
+		InputSchema: schemaPollSource,
+		Handler:     s.pollSource,
+	})
+
+	s.tools.register(Tool{
 		Name:     "get_missing_content",
 		Title:    "What is not satisfied",
 		Scope:    auth.ScopeRead,
@@ -617,6 +633,27 @@ func (s *Server) unfollow(ctx context.Context, raw json.RawMessage) (any, error)
 		return nil, classifyFollow(err)
 	}
 	return map[string]any{"source_id": args.SourceID, "status": "unfollowed; the archive was kept"}, nil
+}
+
+// pollSource is poll_source, shared with POST /api/v1/followed-sources/{id}/poll
+// through resources.PollSource — the same enqueue the follow door and the follow
+// beat use, so an on-demand poll and a scheduled one cannot drift. It queues the
+// poll and says so; an unknown id is a not-found the agent can quote.
+func (s *Server) pollSource(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args struct {
+		SourceID string `json:"source_id"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if args.SourceID == "" {
+		return nil, invalidParams("source_id is required — the source to poll, from list_followed")
+	}
+	out, err := s.resources.PollSource(ctx, args.SourceID)
+	if err != nil {
+		return nil, classifyFollow(err)
+	}
+	return out, nil
 }
 
 // classifyFollow maps a follow op's error onto a JSON-RPC code the way classify

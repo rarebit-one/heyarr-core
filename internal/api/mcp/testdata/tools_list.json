@@ -662,6 +662,28 @@
     },
     {
       "annotations": {
+        "heyarr/requiredScope": "write",
+        "readOnlyHint": false
+      },
+      "description": "Poll one followed source now instead of waiting for its next scheduled round, which can be up to six hours out. Reach for it after following something and not wanting to wait, or when a feed just posted. It QUEUES the poll and returns a job — a feed host can be slow, so nothing holds while it runs — and leaves the source's schedule alone: this is an EXTRA poll, not a reschedule. Idempotent: asking again while a poll is still queued collapses to the one job. Read list_followed afterwards to see when it last polled and what it found.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "source_id": {
+            "description": "The followed source to poll now, from list_followed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id"
+        ],
+        "type": "object"
+      },
+      "name": "poll_source",
+      "title": "Poll a source now"
+    },
+    {
+      "annotations": {
         "heyarr/requiredScope": "read",
         "readOnlyHint": true
       },

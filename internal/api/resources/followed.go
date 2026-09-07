@@ -398,6 +398,76 @@ func (a *API) Unfollow(ctx context.Context, id string, keepArchive bool) error {
 	return nil
 }
 
+// PollSource enqueues an immediate poll for one followed source, shared by
+// POST /followed-sources/{id}/poll and MCP's poll_source. It reuses the exact
+// enqueue the follow door runs at follow time (FollowSource) and the follow
+// beat runs on the tick (followScheduler.dispatch) — the same job type, the
+// same dedupe key, the same worker — rather than reimplementing a poll, so an
+// on-demand poll and a scheduled one cannot come to mean different things.
+//
+// Idempotent by the same mechanism those two paths rely on: the dedupe key
+// (ADR-0008) means a source that already has a poll queued gets that live job
+// back rather than a second one, so asking twice cannot double-poll. And it is
+// deliberately an EXTRA poll — the source's scheduled next_poll_at is left
+// untouched. Forcing a poll now is not evidence about when the next scheduled
+// poll is due, and the worker's RecordPollOutcome still owns that schedule; a
+// forced poll that also rescheduled would let an operator refreshing a feed
+// quietly push its regular cadence around. A missing source is sql.ErrNoRows,
+// which both doors render as a not-found.
+func (a *API) PollSource(ctx context.Context, id string) (map[string]string, error) {
+	src, err := a.followedSource(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	job, err := a.jobs.Enqueue(ctx, jobs.EnqueueOptions{
+		Type:      followed.PollSourceJobType,
+		Payload:   followed.PollSourcePayload{SourceID: src.ID},
+		DedupeKey: followed.PollDedupeKey(src.ID),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		"source_id": src.ID,
+		"job_id":    job.ID,
+		"status":    "queued",
+	}, nil
+}
+
+// PollAllSources enqueues an immediate poll for every followed source, behind
+// POST /followed-sources/poll — the "poll everything now" an operator reaches
+// for to refresh many feeds at once, or after a controller was down. It reuses
+// the per-source enqueue PollSource does, so it inherits the same dedupe
+// idempotency (a source already carrying a queued poll is not polled twice) and
+// the same leave-the-schedule-alone stance (these are extra polls).
+//
+// Best-effort per source, the same stance followScheduler.dispatch takes: one
+// source failing to enqueue is logged and skipped rather than failing the whole
+// sweep, so a single bad row does not deny the operator the rest of the refresh.
+func (a *API) PollAllSources(ctx context.Context) (map[string]any, error) {
+	sources, err := a.catalog.ListFollowSources(ctx)
+	if err != nil {
+		return nil, err
+	}
+	queued := make([]string, 0, len(sources))
+	for _, s := range sources {
+		if _, err := a.jobs.Enqueue(ctx, jobs.EnqueueOptions{
+			Type:      followed.PollSourceJobType,
+			Payload:   followed.PollSourcePayload{SourceID: s.ID},
+			DedupeKey: followed.PollDedupeKey(s.ID),
+		}); err != nil {
+			a.log.Warn("could not enqueue a source poll", "source_id", s.ID, "error", err)
+			continue
+		}
+		queued = append(queued, s.ID)
+	}
+	return map[string]any{
+		"status":            "queued",
+		"count":             len(queued),
+		"queued_source_ids": queued,
+	}, nil
+}
+
 // followViewFor builds the wire view for one stored source, filling the counts
 // and the shared health label.
 func (a *API) followViewFor(ctx context.Context, s catalog.StoredSource, health string) FollowedSourceView {
@@ -669,6 +739,32 @@ func (a *API) deleteFollowedSource(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// pollFollowedSource is POST /api/v1/followed-sources/{id}/poll — force one
+// source to poll now rather than waiting for its scheduled next_poll_at. It
+// enqueues and returns 202 Accepted, the same shape a manual want search takes,
+// because the poll is a job the worker runs afterwards, not this request. The
+// source's schedule is left as-is (this is an extra poll, not a reschedule).
+func (a *API) pollFollowedSource(w http.ResponseWriter, r *http.Request) {
+	out, err := a.PollSource(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		a.fail(w, r, "followed source", err)
+		return
+	}
+	a.write(w, r, http.StatusAccepted, out)
+}
+
+// pollAllFollowedSources is POST /api/v1/followed-sources/poll — force every
+// followed source to poll now. The bulk sibling of pollFollowedSource; it never
+// 404s (an empty library is a valid, empty sweep) and leaves each schedule as-is.
+func (a *API) pollAllFollowedSources(w http.ResponseWriter, r *http.Request) {
+	out, err := a.PollAllSources(r.Context())
+	if err != nil {
+		a.fail(w, r, "followed source", err)
+		return
+	}
+	a.write(w, r, http.StatusAccepted, out)
+}
+
 // failFollowWrite renders a write failure, mapping the (work, feed) uniqueness
 // violation to a 409 the way failDesiredWrite maps a duplicate want.
 func (a *API) failFollowWrite(w http.ResponseWriter, r *http.Request, err error) {
@@ -715,4 +811,10 @@ func (a *API) mountFollowedSources(r chi.Router) {
 	r.Get("/followed-sources/{id}/items", a.listFollowedSourceItems)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/followed-sources", a.createFollowedSource)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Delete("/followed-sources/{id}", a.deleteFollowedSource)
+	// Force a poll now instead of waiting for the ~6h next_poll_at. The bulk
+	// route is a static sibling of the per-source one, so chi's static-over-param
+	// precedence routes /followed-sources/poll here and /followed-sources/{id}/poll
+	// to the per-source handler. Both are extra polls that leave the schedule as-is.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/followed-sources/poll", a.pollAllFollowedSources)
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/followed-sources/{id}/poll", a.pollFollowedSource)
 }

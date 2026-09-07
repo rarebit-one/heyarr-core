@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/rarebit-one/heyarr-core/internal/auth"
 )
 
 // Followed sources over the real HTTP surface (§55, M12). The follow op and its
@@ -275,6 +277,135 @@ func TestListAndUnfollow(t *testing.T) {
 	// A second delete is a 404 — nothing there.
 	if again := h.doStable(http.MethodDelete, "/api/v1/followed-sources/"+v.ID, nil); again.StatusCode != http.StatusNotFound {
 		t.Fatalf("deleting a gone source = %d, want 404", again.StatusCode)
+	}
+}
+
+// Forcing a poll enqueues a poll_source job now, rather than waiting for the
+// ~6h next_poll_at. The follow door already queued one at follow time, so it is
+// cleared first — otherwise this would pass whether or not the poll route
+// enqueued anything, which is a test that cannot fail.
+func TestPollASourceNow(t *testing.T) {
+	h := newHarness(t).seed()
+	create := follow(h, `{"tvdb_id":"901","title":"Pollable","quality_profile":"living-room"}`)
+	if create.StatusCode != http.StatusCreated {
+		t.Fatalf("follow = %d", create.StatusCode)
+	}
+	var v followedView
+	_ = json.Unmarshal(h.body(create), &v)
+
+	// Clear the follow-door poll so the enqueue under test is the only thing
+	// that can put a poll_source job in the table.
+	h.exec(`DELETE FROM jobs WHERE type = 'poll_source'`)
+
+	// The forced poll is an EXTRA poll, not a reschedule: next_poll_at is read
+	// before and after and must not move.
+	before := h.get("/api/v1/followed-sources/" + v.ID)
+	var beforeView struct {
+		NextPollAt *string `json:"next_poll_at"`
+	}
+	_ = json.Unmarshal(h.body(before), &beforeView)
+
+	resp := h.doStable(http.MethodPost, "/api/v1/followed-sources/"+v.ID+"/poll", nil)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("poll = %d, want 202: %s", resp.StatusCode, h.body(resp))
+	}
+	var got map[string]string
+	if err := json.Unmarshal(h.body(resp), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["status"] != "queued" || got["source_id"] != v.ID {
+		t.Errorf("poll response = %v, want queued with the source id", got)
+	}
+	// The returned job_id names a real poll_source row for this source — this is
+	// what fails if the route stops enqueuing.
+	if n := h.countRows(t,
+		`SELECT count(*) FROM jobs WHERE type = 'poll_source' AND id = ?`, got["job_id"]); n != 1 {
+		t.Errorf("the returned job_id %q does not name a queued poll_source job", got["job_id"])
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM jobs WHERE type = 'poll_source'`); n != 1 {
+		t.Errorf("%d poll_source jobs, want exactly 1", n)
+	}
+
+	// Idempotent: asking again while the poll is still queued returns the same
+	// live job rather than a second one (the dedupe key).
+	again := h.doStable(http.MethodPost, "/api/v1/followed-sources/"+v.ID+"/poll", nil)
+	var got2 map[string]string
+	_ = json.Unmarshal(h.body(again), &got2)
+	if got2["job_id"] != got["job_id"] {
+		t.Errorf("a second poll returned job %q, want the same live job %q (deduped)", got2["job_id"], got["job_id"])
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM jobs WHERE type = 'poll_source'`); n != 1 {
+		t.Errorf("%d poll_source jobs after polling twice, want 1 (the dedupe key collapses them)", n)
+	}
+
+	after := h.get("/api/v1/followed-sources/" + v.ID)
+	var afterView struct {
+		NextPollAt *string `json:"next_poll_at"`
+	}
+	_ = json.Unmarshal(h.body(after), &afterView)
+	if (beforeView.NextPollAt == nil) != (afterView.NextPollAt == nil) ||
+		(beforeView.NextPollAt != nil && *beforeView.NextPollAt != *afterView.NextPollAt) {
+		t.Errorf("next_poll_at moved on a forced poll: before=%v after=%v; it must be an extra poll, not a reschedule",
+			beforeView.NextPollAt, afterView.NextPollAt)
+	}
+}
+
+// Polling an unknown source is a 404, the same not-found every other per-source
+// followed route renders.
+func TestPollingAnUnknownSourceIs404(t *testing.T) {
+	h := newHarness(t).seed()
+	resp := h.doStable(http.MethodPost, "/api/v1/followed-sources/nope/poll", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("poll of an unknown source = %d, want 404", resp.StatusCode)
+	}
+}
+
+// The bulk route polls every followed source at once, and returns the ids it
+// queued. Two distinct subscriptions, each already carrying its follow-door
+// poll, so the sweep dedupes to two live jobs rather than four.
+func TestPollAllSources(t *testing.T) {
+	h := newHarness(t).seed()
+	for _, body := range []string{
+		`{"tvdb_id":"111","title":"First","quality_profile":"living-room"}`,
+		`{"tvdb_id":"222","title":"Second","quality_profile":"living-room"}`,
+	} {
+		if r := follow(h, body); r.StatusCode != http.StatusCreated {
+			t.Fatalf("follow = %d", r.StatusCode)
+		}
+	}
+	// Clear the two follow-door polls so the job count after the sweep is the
+	// sweep's own work, not the follows'.
+	h.exec(`DELETE FROM jobs WHERE type = 'poll_source'`)
+	resp := h.doStable(http.MethodPost, "/api/v1/followed-sources/poll", nil)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("bulk poll = %d, want 202: %s", resp.StatusCode, h.body(resp))
+	}
+	var got struct {
+		Status          string   `json:"status"`
+		Count           int      `json:"count"`
+		QueuedSourceIDs []string `json:"queued_source_ids"`
+	}
+	if err := json.Unmarshal(h.body(resp), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "queued" || got.Count != 2 || len(got.QueuedSourceIDs) != 2 {
+		t.Errorf("bulk poll response = %+v, want queued with two source ids", got)
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM jobs WHERE type = 'poll_source'`); n != 2 {
+		t.Errorf("%d poll_source jobs, want 2 (one per source, deduped against the follow-door polls)", n)
+	}
+}
+
+// Forcing a poll changes what will be fetched, so both routes need `write`; a
+// read token is refused before the handler runs.
+func TestPollScopes(t *testing.T) {
+	h := newHarness(t, withAuth).seed()
+	reader := h.mint("reader", auth.ScopeRead)
+	for _, path := range []string{"/followed-sources/anything/poll", "/followed-sources/poll"} {
+		resp := h.do(http.MethodPost, "/api/v1"+path, reader.Secret, nil)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("POST %s with a read token = %d, want 403", path, resp.StatusCode)
+		}
 	}
 }
 

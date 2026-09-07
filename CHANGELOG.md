@@ -25,6 +25,17 @@ stable.
   generalisation each needs. Fixture-tested (ADR-0026); a key is needed only at
   deploy time (themoviedb.org signup), never in CI.
 
+- **Poll a followed source now (ADR-0078).** `POST /api/v1/followed-sources/{id}/poll`
+  forces one followed source to poll immediately instead of waiting for its
+  scheduled `next_poll_at` (up to six hours out), and `POST /api/v1/followed-sources/poll`
+  does it for every source at once. Both enqueue the follow beat's own
+  `poll_source` job — the same enqueue the follow door and the beat use, not a
+  reimplemented poll — so they inherit its dedupe idempotency (asking twice while
+  a poll is queued collapses to one job) and its routing (no feed adapter leaves
+  the job pending and visible, ADR-0025). A forced poll is an **extra** poll, not
+  a reschedule: the source's `next_poll_at` is left as-is. Both need `write`; an
+  unknown source id is a `404`. The MCP controller gains a matching `poll_source`
+  write tool over the same `resources.PollSource`.
 - **Browse projections (ADR-0075, #456).** `GET /api/v1/works` gains
   `sort=title|recent` (each order under its own cursor), `year`, `year_from`,
   `year_to`, `artist` and `author` filters, and `include=artwork,primary_asset`
