@@ -1,0 +1,20 @@
+{
+  "name": "search",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tmdb",
+    "version": "v3",
+    "captured_at": "2026-09-07T00:00:00Z",
+    "procedure": "GET /search/tv?query=test&page=1 with an Authorization: Bearer <v4 read access token>; synthesised from the published TMDB v3 /search/tv contract (ADR-0026) because CI has no token and none may be committed. Regenerate against a real token with scripts/capture-fixtures.sh tmdb search.",
+    "note": "Synthesised: TMDB v3 /search/tv returns hits under a flat results array. The client reads only id (a NUMBER, unlike TVDB's string), name, first_air_date (\"YYYY-MM-DD\", sometimes empty) and overview, tolerating the many other fields. The token travels in the Authorization header, never the query, so the matched path carries no secret. The third hit deliberately carries no id, to prove the client skips a hit it could not turn into a follow rather than surfacing an unfollowable row."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/search/tv?query=test&page=1"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "body": "{\"page\":1,\"results\":[{\"id\":100,\"name\":\"A Test Series\",\"first_air_date\":\"2011-09-19\",\"overview\":\"A series used to exercise discovery.\",\"popularity\":12.3},{\"id\":200,\"name\":\"Test Two\",\"first_air_date\":\"2019-03-01\",\"overview\":\"\"},{\"name\":\"A Series Without An Id\",\"first_air_date\":\"2000-01-01\"}],\"total_pages\":1,\"total_results\":3}"
+  }
+}

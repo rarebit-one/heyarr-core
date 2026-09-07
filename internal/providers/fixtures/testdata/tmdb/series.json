@@ -1,0 +1,20 @@
+{
+  "name": "series",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tmdb",
+    "version": "v3",
+    "captured_at": "2026-09-07T00:00:00Z",
+    "procedure": "GET /tv/12345 with an Authorization: Bearer <v4 read access token>; synthesised from the published TMDB v3 /tv/{id} contract (ADR-0026). Regenerate against a real token with scripts/capture-fixtures.sh tmdb series.",
+    "note": "Synthesised: TMDB has no single 'all episodes' endpoint, so the series detail is the index Enumerate walks — the client reads only the seasons array (each season_number), then fetches each season for its episodes. The seasons are listed HERE out of order (season 2 before season 1) on purpose, to prove the client enumerates in season-number order rather than in the order the service happened to list them. Fields beyond season_number are omitted deliberately — the client tolerates extra fields but the corpus should only assert what it consumes."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/tv/12345"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "body": "{\"id\":12345,\"name\":\"A Test Series\",\"number_of_seasons\":2,\"seasons\":[{\"season_number\":2,\"episode_count\":2,\"name\":\"Season 2\"},{\"season_number\":1,\"episode_count\":2,\"name\":\"Season 1\"}]}"
+  }
+}

@@ -82,6 +82,23 @@ const (
 	// this names the service the way `transmission` does, because the v4 API has
 	// no second implementation to abstract over (ADR-0028).
 	KindTVDB Kind = "tvdb"
+	// KindTMDB is a metadata provider speaking The Movie Database (TMDB) v3 (§59,
+	// M12, ADR-0058/0077): it discovers TV series and enumerates a series'
+	// episodes and air dates so a followed source can project a want per episode.
+	// It is the pluggable second CapabilityMetadata kind ADR-0058 promised behind
+	// the same FeedProvider interface as KindTVDB — a deployment discovers and
+	// follows TV series through TMDB when TheTVDB is unavailable
+	// (thetvdb/v4-api#382), with no change to the poll loop or the projection.
+	//
+	// Like KindTVDB it has one well-known v3 base URL the client defaults to, so
+	// an operator supplies a token, not an address, and its credential is one
+	// opaque secret (AuthToken): a TMDB v4 read access token this adapter sends as
+	// an Authorization: Bearer header against the v3 endpoints — a header, not a
+	// query api_key, so the secret never travels in a URL. It names the service
+	// the way `tvdb` does, because the v3 API has no second implementation to
+	// abstract over (ADR-0028). Movies are out of scope — heyarr's follow model
+	// has no movie source type (ADR-0077).
+	KindTMDB Kind = "tmdb"
 	// KindPodcast is a metadata provider that parses a podcast RSS feed (§59,
 	// M12 Phase 2): it enumerates a feed's <item> entries so a followed source
 	// can project a want per episode, each carrying the entry's <enclosure> URL
@@ -159,7 +176,7 @@ const (
 
 // Kinds lists every kind, in a stable order.
 func Kinds() []Kind {
-	return []Kind{KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindSABnzbd, KindHTTP, KindTVDB, KindPodcast, KindYoutube, KindYtDlp, KindWebFeed, KindWebCapture, KindFake}
+	return []Kind{KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindSABnzbd, KindHTTP, KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindYtDlp, KindWebFeed, KindWebCapture, KindFake}
 }
 
 // ParseKind validates a kind from configuration.
@@ -190,7 +207,7 @@ func DefaultCapabilities(k Kind) []Capability {
 		return []Capability{CapabilityIndexer}
 	case KindTransmission, KindQBittorrent, KindSABnzbd, KindHTTP, KindYtDlp, KindWebCapture:
 		return []Capability{CapabilityDownload}
-	case KindTVDB, KindPodcast, KindYoutube, KindWebFeed:
+	case KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindWebFeed:
 		return []Capability{CapabilityMetadata}
 	default:
 		// A fake declares nothing by default: what it stands in for is the
@@ -217,9 +234,12 @@ func DefaultCapabilities(k Kind) []Capability {
 // watch URL handed to it per grab (like the plain-HTTP client). Webfeed and
 // web-capture are the seventh and eighth, for those same two reasons: a web feed
 // has no well-known base URL (its FeedRef is the feed URL), and the web-capture
-// client's "endpoint" is the article URL handed to it per grab.
+// client's "endpoint" is the article URL handed to it per grab. TMDB is the
+// ninth, for TVDB's reason: one well-known v3 base URL the client defaults to,
+// so an operator supplies a token, not an address (an endpoint is accepted, so
+// tests can point it at a fixture server, but not required).
 func needsEndpoint(k Kind) bool {
-	return k != KindFake && k != KindHTTP && k != KindTVDB && k != KindPodcast &&
+	return k != KindFake && k != KindHTTP && k != KindTVDB && k != KindTMDB && k != KindPodcast &&
 		k != KindYoutube && k != KindYtDlp && k != KindWebFeed && k != KindWebCapture
 }
 
@@ -232,7 +252,9 @@ func needsEndpoint(k Kind) bool {
 // Transmission does NOT: an operator running it on a trusted network with
 // authentication off is an ordinary, supported deployment, and refusing to
 // start would be Heyarr insisting on a policy the operator already declined.
-func needsCredential(k Kind) bool { return k == KindTorznab || k == KindNewznab || k == KindTVDB }
+func needsCredential(k Kind) bool {
+	return k == KindTorznab || k == KindNewznab || k == KindTVDB || k == KindTMDB
+}
 
 // Offer is a canned answer a fake indexer gives to one search title.
 type Offer struct {

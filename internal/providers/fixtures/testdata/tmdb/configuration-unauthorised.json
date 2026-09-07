@@ -1,0 +1,20 @@
+{
+  "name": "configuration-unauthorised",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tmdb",
+    "version": "v3",
+    "captured_at": "2026-09-07T00:00:00Z",
+    "procedure": "GET /configuration with a bad token; synthesised from the TMDB v3 contract (ADR-0026).",
+    "note": "Synthesised: TMDB answers a rejected token with HTTP 401 and a JSON status body (status_code 7). Used via Exchange.ServeOne so the status, not the routing, is the subject — it shares method+path with the happy-path configuration fixture."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/configuration"
+  },
+  "response": {
+    "status": 401,
+    "headers": { "Content-Type": "application/json" },
+    "body": "{\"success\":false,\"status_code\":7,\"status_message\":\"Invalid API key: You must be granted a valid key.\"}"
+  }
+}

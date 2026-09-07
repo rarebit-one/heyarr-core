@@ -11,6 +11,20 @@ stable.
 
 ### Added
 
+- **TMDB metadata provider (ADR-0077, ADR-0058).** A second `metadata` provider
+  kind, `tmdb`, discovers TV series and enumerates their episodes and air dates
+  from The Movie Database v3 — a drop-in behind the same `FeedProvider` /
+  `DiscoverySearcher` interfaces as TVDB, so `POST /api/v1/discover`, MCP
+  `discover_content`, and `follow_source` work through it with no other change.
+  It unblocks discovery on nodes that cannot register with TheTVDB
+  (thetvdb/v4-api#382): configure it with a TMDB v4 read access token (its auth
+  is one opaque `token`, sent as a bearer header, never in a URL), and it needs
+  no endpoint. Serves `tv_series` only — movies, and the music/book units a
+  MusicBrainz or Open Library provider would want, are deferred because heyarr's
+  follow model has no non-feed source type; ADR-0077 records the exact
+  generalisation each needs. Fixture-tested (ADR-0026); a key is needed only at
+  deploy time (themoviedb.org signup), never in CI.
+
 - **Browse projections (ADR-0075, #456).** `GET /api/v1/works` gains
   `sort=title|recent` (each order under its own cursor), `year`, `year_from`,
   `year_to`, `artist` and `author` filters, and `include=artwork,primary_asset`

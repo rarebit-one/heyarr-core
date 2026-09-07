@@ -1,0 +1,20 @@
+{
+  "name": "season-1",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tmdb",
+    "version": "v3",
+    "captured_at": "2026-09-07T00:00:00Z",
+    "procedure": "GET /tv/12345/season/1 with an Authorization: Bearer <v4 read access token>; synthesised from the published TMDB v3 /tv/{id}/season/{n} contract (ADR-0026). Regenerate against a real token with scripts/capture-fixtures.sh tmdb season-1.",
+    "note": "Synthesised: a two-episode first season in episode order. The client reads season_number, episode_number, name, air_date and id, mapping each to a FeedItem keyed S01E01, S01E02 with its air date and season/episode attributes."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/tv/12345/season/1"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "body": "{\"id\":90001,\"season_number\":1,\"name\":\"Season 1\",\"episodes\":[{\"id\":1001,\"season_number\":1,\"episode_number\":1,\"name\":\"Pilot\",\"air_date\":\"2026-01-05\"},{\"id\":1002,\"season_number\":1,\"episode_number\":2,\"name\":\"The Second One\",\"air_date\":\"2026-01-12\"}]}"
+  }
+}
