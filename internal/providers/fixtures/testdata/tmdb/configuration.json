@@ -1,0 +1,20 @@
+{
+  "name": "configuration",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tmdb",
+    "version": "v3",
+    "captured_at": "2026-09-07T00:00:00Z",
+    "procedure": "GET /configuration with an Authorization: Bearer <v4 read access token>; synthesised from the published TMDB v3 /configuration contract (ADR-0026). Regenerate against a real token with scripts/capture-fixtures.sh tmdb configuration.",
+    "note": "Synthesised: TMDB's public /configuration is the cheapest authenticated GET, so the health Check uses it to EXERCISE the token — a 200 proves the token was accepted. Nothing in the body is read; a concrete decode target keeps the check honest rather than discarding the body."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/configuration"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "body": "{\"images\":{\"base_url\":\"http://image.tmdb.org/t/p/\",\"secure_base_url\":\"https://image.tmdb.org/t/p/\"},\"change_keys\":[\"air_date\",\"name\",\"overview\"]}"
+  }
+}

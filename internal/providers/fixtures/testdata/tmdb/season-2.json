@@ -1,0 +1,20 @@
+{
+  "name": "season-2",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tmdb",
+    "version": "v3",
+    "captured_at": "2026-09-07T00:00:00Z",
+    "procedure": "GET /tv/12345/season/2 with an Authorization: Bearer <v4 read access token>; synthesised from the published TMDB v3 /tv/{id}/season/{n} contract (ADR-0026). Regenerate against a real token with scripts/capture-fixtures.sh tmdb season-2.",
+    "note": "Synthesised: a second season whose second entry deliberately omits episode_number — an episode that cannot be given a stable S..E.. key. It proves the client SKIPS such an entry rather than mis-keying it, so this season yields exactly S02E01. The kept episode also carries an empty air_date, proving PublishedAt is the zero time when the source does not say."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/tv/12345/season/2"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "body": "{\"id\":90002,\"season_number\":2,\"name\":\"Season 2\",\"episodes\":[{\"id\":2001,\"season_number\":2,\"episode_number\":1,\"name\":\"The Return\",\"air_date\":\"\"},{\"id\":2002,\"season_number\":2,\"name\":\"An Unnumbered Special\",\"air_date\":\"2027-02-01\"}]}"
+  }
+}

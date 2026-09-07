@@ -83,3 +83,4 @@ An ADR that merely describes the code is not worth having.
 | [0074](0074-guest-is-a-first-class-read-only-browse-mode.md) | Guest is a first-class read-only browse mode over the shared library | Accepted |
 | [0075](0075-browse-is-a-projection-over-the-catalog.md) | Browse is a projection over the catalog | Accepted |
 | [0076](0076-heyarr-resolves-the-torrent-and-hands-the-client-metainfo.md) | Heyarr resolves the .torrent and hands the client the metainfo | Accepted |
+| [0077](0077-a-second-metadata-provider-drops-in-and-non-feed-works-are-deferred.md) | A second metadata provider (TMDB) drops in behind the same interface; non-feed works (movies, music, books) are deferred | Accepted |
