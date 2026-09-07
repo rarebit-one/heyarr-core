@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -79,14 +80,33 @@ type ProvidersResponse struct {
 // unhealthy. That is honest on a node whose worker has not run a pass yet, and
 // it is the same distinction §56's satisfaction axes make.
 func (a *API) listProviders(w http.ResponseWriter, r *http.Request) {
+	out, err := a.ProvidersStatus(r.Context())
+	if err != nil {
+		a.fail(w, r, "provider", err)
+		return
+	}
+	a.write(w, r, http.StatusOK, out)
+}
+
+// ProvidersStatus reports what is configured, what each provider can do and
+// whether it works — the intent behind GET /providers and the MCP
+// get_provider_status tool (§59, ADR-0025/0026), so the two doors cannot drift.
+// A node with no registry is a supported, tested configuration (ADR-0025): it
+// reports an empty set rather than failing, which is how "why is nothing being
+// acquired" gets an answer instead of a stack trace. No credential leaves here.
+func (a *API) ProvidersStatus(ctx context.Context) (ProvidersResponse, error) {
+	if a.providers == nil {
+		// A degraded node (ADR-0025): nothing configured, so nothing to report.
+		// Empty slices, never null, so a client's range is not a nil surprise.
+		return ProvidersResponse{Providers: []ProviderStatus{}, Capabilities: []string{}}, nil
+	}
 	statuses := a.providers.Statuses()
 
 	observed := map[string]providers.Health{}
 	if a.catalog != nil {
-		found, err := a.catalog.ProviderHealth(r.Context())
+		found, err := a.catalog.ProviderHealth(ctx)
 		if err != nil {
-			a.fail(w, r, "provider", err)
-			return
+			return ProvidersResponse{}, err
 		}
 		observed = found
 	}
@@ -122,5 +142,5 @@ func (a *API) listProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		out.Providers = append(out.Providers, status)
 	}
-	a.write(w, r, http.StatusOK, out)
+	return out, nil
 }

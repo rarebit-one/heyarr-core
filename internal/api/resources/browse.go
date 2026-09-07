@@ -243,6 +243,152 @@ func blobContentURL(hash string) string {
 	return httpapi.APIPrefix + "/blobs/" + hash + "/content"
 }
 
+// BrowseWorksRequest is the intent behind GET /works (ADR-0075): a filtered,
+// sorted, paged listing of the catalog, with the browse embeds a caller asked
+// for. Its fields are already parsed and validated — the HTTP door reads them
+// off the query string, the MCP door off the tool arguments — so this is the
+// ONE place the card query is assembled and neither door reimplements the
+// filters, the sort or the keyset.
+type BrowseWorksRequest struct {
+	ContentType string
+	LibraryID   string
+	// Query is a substring matched against the normalised sort_title.
+	Query string
+	// Artist and Author are the ADR-0075 grouping facets — an exact match on the
+	// attribute the scanner wrote, which the grouping reads hand back as the key.
+	Artist string
+	Author string
+	Year   *int64
+	// YearFrom and YearTo bound an inclusive range.
+	YearFrom *int64
+	YearTo   *int64
+	// Recent switches the sort to (created_at DESC, id DESC); the default is
+	// (sort_title, id). The two keyset orders live under different cursor
+	// collections, so a cursor from one is refused on the other.
+	Recent bool
+	// Cursor is the decoded keyset position (arity 2), nil for the first page.
+	Cursor []string
+	Limit  int
+	// IncludeArtwork and IncludePrimary add the poster and the playable file to
+	// each card (ADR-0075). Neither embed set renders plain Work rows.
+	IncludeArtwork bool
+	IncludePrimary bool
+}
+
+// BrowseWorksResult is one page of the catalog: the cards, each carrying the
+// embeds the caller asked for, and the opaque cursor for the next page (empty
+// on the last). A caller that asked for no embed reads Cards[i].Work.
+type BrowseWorksResult struct {
+	Cards      []WorkCard
+	NextCursor string
+}
+
+// BrowseWorks runs the catalog listing behind GET /works and the MCP
+// browse_library tool (ADR-0075), so the two doors cannot drift. The guest
+// boundary rides the context: a Guest's cards carry no vault poster and no
+// vault file, because the artwork and primary picks filter on source_class.
+func (a *API) BrowseWorks(ctx context.Context, req BrowseWorksRequest) (BrowseWorksResult, error) {
+	head, args := cardQuery(ctx, req.IncludeArtwork, req.IncludePrimary)
+	where := []string{"1 = 1"}
+	if req.ContentType != "" {
+		where = append(where, "works.content_type = ?")
+		args = append(args, req.ContentType)
+	}
+	if req.LibraryID != "" {
+		// "Works with something of theirs in this library". Expressed as EXISTS
+		// rather than a join so that a work with twenty assets in the library is
+		// one row, not twenty.
+		where = append(where, `EXISTS (SELECT 1 FROM editions e
+			JOIN assets a ON a.edition_id = e.id
+			WHERE e.work_id = works.id AND a.library_id = ?)`)
+		args = append(args, req.LibraryID)
+	}
+	if req.Query != "" {
+		where = append(where, `works.sort_title LIKE ? ESCAPE '\'`)
+		args = append(args, likePattern(req.Query))
+	}
+	if req.Year != nil {
+		where = append(where, "works.year = ?")
+		args = append(args, *req.Year)
+	}
+	if req.YearFrom != nil {
+		where = append(where, "works.year >= ?")
+		args = append(args, *req.YearFrom)
+	}
+	if req.YearTo != nil {
+		where = append(where, "works.year <= ?")
+		args = append(args, *req.YearTo)
+	}
+	if req.Artist != "" {
+		where = append(where, "json_extract(works.attributes, '$.artist') = ?")
+		args = append(args, req.Artist)
+	}
+	if req.Author != "" {
+		where = append(where, "json_extract(works.attributes, '$.author') = ?")
+		args = append(args, req.Author)
+	}
+	collection := "works"
+	order := ` ORDER BY works.sort_title ASC, works.id ASC`
+	if req.Recent {
+		collection = "works-recent"
+		order = ` ORDER BY works.created_at DESC, works.id DESC`
+		if req.Cursor != nil {
+			where = append(where, "(works.created_at, works.id) < (?, ?)")
+			args = append(args, req.Cursor[0], req.Cursor[1])
+		}
+	} else if req.Cursor != nil {
+		where = append(where, "(works.sort_title, works.id) > (?, ?)")
+		args = append(args, req.Cursor[0], req.Cursor[1])
+	}
+	args = append(args, req.Limit+1)
+
+	//nolint:gosec // the query is assembled only from the literal fragments above; every value is bound
+	stmt := head + ` WHERE ` + strings.Join(where, " AND ") + order + ` LIMIT ?`
+
+	//nolint:gosec // see above: literal fragments only, every value bound
+	rows, err := a.reader.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return BrowseWorksResult{}, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var cards []cardRow
+	for rows.Next() {
+		card, err := scanCard(rows)
+		if err != nil {
+			return BrowseWorksResult{}, err
+		}
+		cards = append(cards, card)
+	}
+	if err := rows.Err(); err != nil {
+		return BrowseWorksResult{}, err
+	}
+
+	// The cursor is derived from the cards: the recent order keys on the stored
+	// created_at text, which only the card row carries (re-rendering a parsed
+	// time can differ from the stored text, and a keyset boundary must be the
+	// stored text).
+	next := ""
+	if len(cards) > req.Limit {
+		cards = cards[:req.Limit]
+		last := cards[len(cards)-1]
+		if req.Recent {
+			next = encodeCursor(collection, last.createdRaw, last.ID)
+		} else {
+			next = encodeCursor(collection, last.SortTitle, last.ID)
+		}
+	}
+	out := make([]WorkCard, 0, len(cards))
+	for _, c := range cards {
+		out = append(out, WorkCard{
+			Work:         c.Work,
+			Artwork:      embed[ArtworkRef]{included: req.IncludeArtwork, value: c.artwork},
+			PrimaryAsset: embed[PrimaryAssetRef]{included: req.IncludePrimary, value: c.primary},
+		})
+	}
+	return BrowseWorksResult{Cards: out, NextCursor: next}, nil
+}
+
 // getWorkArtwork answers a work's poster by REDIRECTING to its blob.
 //
 // It is a redirect and not a second byte route on purpose. The blob route is
@@ -324,13 +470,84 @@ type GroupSummary struct {
 	Artwork *ArtworkRef `json:"artwork"`
 }
 
-// listGrouped pages the distinct non-empty values of one attribute across the
-// works of one content type, with a count and a representative poster.
-//
-// Keyset on the lower-cased name (arity 1, under its own collection so a
-// works cursor is refused). `q` is a substring filter on the name. The
-// grouping is a CTE so the representative-artwork pick runs once per GROUP,
-// not once per work.
+// ListGroupedRequest is a parsed grouping query: a substring filter on the
+// name, a decoded keyset cursor (arity 1, on the lower-cased name), and a
+// limit. Both doors fill it — the HTTP door from the query string, MCP from
+// the tool arguments.
+type ListGroupedRequest struct {
+	Query  string
+	Cursor []string
+	Limit  int
+}
+
+// ListGrouped pages the distinct non-empty values of one attribute across the
+// works of one content type, with a count and a representative poster — the
+// intent behind GET /artists and GET /authors and the MCP list_artists /
+// list_authors tools (ADR-0075), so the two doors cannot drift. attr and
+// contentType are package-chosen (artist/music, author/book); collection names
+// the cursor scope so a works cursor is refused. The grouping is a CTE so the
+// representative-artwork pick runs once per GROUP, not once per work.
+func (a *API) ListGrouped(ctx context.Context, attr, contentType, collection string, req ListGroupedRequest) ([]GroupSummary, string, error) {
+	// The representative work: the group's first by year then title, whose
+	// poster stands in for the group. Its id feeds the ordinary artwork pick.
+	rep := `(SELECT w2.id FROM works w2 WHERE w2.content_type = ?
+		AND json_extract(w2.attributes, '$.` + attr + `') = g.name
+		ORDER BY w2.year, w2.sort_title, w2.id LIMIT 1)`
+	art := artworkPick(ctx, rep)
+
+	where := []string{"w.content_type = ?", "name IS NOT NULL", "trim(name) <> ''"}
+	args := []any{contentType}
+	if req.Query != "" {
+		where = append(where, `lower(name) LIKE ? ESCAPE '\'`)
+		args = append(args, strings.ToLower(likePattern(req.Query)))
+	}
+	having := "1 = 1"
+	if req.Cursor != nil {
+		having = "lower(name) > ?"
+		args = append(args, req.Cursor[0])
+	}
+	// Bind order follows textual order: the CTE's WHERE/HAVING, then the
+	// representative subquery's content type, then the artwork pick.
+	args = append(args, contentType)
+	args = append(args, art.args...)
+	args = append(args, req.Limit+1)
+
+	//nolint:gosec // attr is one of two package literals; every value is bound
+	stmt := `WITH g AS (
+			SELECT json_extract(w.attributes, '$.` + attr + `') AS name, COUNT(*) AS n
+			FROM works w
+			WHERE ` + strings.Join(where, " AND ") + `
+			GROUP BY name HAVING ` + having + `
+		)
+		SELECT g.name, g.n, ` + artworkColumns + `
+		FROM g LEFT JOIN assets art ON art.id = ` + art.sql + `
+		ORDER BY lower(g.name), g.name LIMIT ?`
+
+	rows, err := a.reader.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var groups []GroupSummary
+	for rows.Next() {
+		var g GroupSummary
+		var as artworkScan
+		if err := rows.Scan(append([]any{&g.Name, &g.WorkCount}, as.dests()...)...); err != nil {
+			return nil, "", err
+		}
+		g.Artwork = as.ref()
+		groups = append(groups, g)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	p := newPage(groups, req.Limit,
+		func(g GroupSummary) []string { return []string{strings.ToLower(g.Name)} }, collection)
+	return p.Items, p.NextCursor, nil
+}
+
+// listGrouped is the HTTP shell over ListGrouped for GET /artists and /authors.
 func (a *API) listGrouped(attr, contentType, collection string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q, err := parseQuery(r, collection, 1)
@@ -338,65 +555,13 @@ func (a *API) listGrouped(attr, contentType, collection string) http.HandlerFunc
 			httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 			return
 		}
-		ctx := r.Context()
-		// The representative work: the group's first by year then title, whose
-		// poster stands in for the group. Its id feeds the ordinary artwork pick.
-		rep := `(SELECT w2.id FROM works w2 WHERE w2.content_type = ?
-			AND json_extract(w2.attributes, '$.` + attr + `') = g.name
-			ORDER BY w2.year, w2.sort_title, w2.id LIMIT 1)`
-		art := artworkPick(ctx, rep)
-
-		where := []string{"w.content_type = ?", "name IS NOT NULL", "trim(name) <> ''"}
-		args := []any{contentType}
-		if term := r.URL.Query().Get("q"); term != "" {
-			where = append(where, `lower(name) LIKE ? ESCAPE '\'`)
-			args = append(args, strings.ToLower(likePattern(term)))
-		}
-		having := "1 = 1"
-		if q.cursor != nil {
-			having = "lower(name) > ?"
-			args = append(args, q.cursor[0])
-		}
-		// Bind order follows textual order: the CTE's WHERE/HAVING, then the
-		// representative subquery's content type, then the artwork pick.
-		args = append(args, contentType)
-		args = append(args, art.args...)
-		args = append(args, q.limit+1)
-
-		//nolint:gosec // attr is one of two package literals; every value is bound
-		stmt := `WITH g AS (
-				SELECT json_extract(w.attributes, '$.` + attr + `') AS name, COUNT(*) AS n
-				FROM works w
-				WHERE ` + strings.Join(where, " AND ") + `
-				GROUP BY name HAVING ` + having + `
-			)
-			SELECT g.name, g.n, ` + artworkColumns + `
-			FROM g LEFT JOIN assets art ON art.id = ` + art.sql + `
-			ORDER BY lower(g.name), g.name LIMIT ?`
-
-		rows, err := a.reader.QueryContext(ctx, stmt, args...)
+		items, next, err := a.ListGrouped(r.Context(), attr, contentType, collection, ListGroupedRequest{
+			Query: r.URL.Query().Get("q"), Cursor: q.cursor, Limit: q.limit,
+		})
 		if err != nil {
 			a.fail(w, r, collection, err)
 			return
 		}
-		defer func() { _ = rows.Close() }()
-
-		var groups []GroupSummary
-		for rows.Next() {
-			var g GroupSummary
-			var as artworkScan
-			if err := rows.Scan(append([]any{&g.Name, &g.WorkCount}, as.dests()...)...); err != nil {
-				a.fail(w, r, collection, err)
-				return
-			}
-			g.Artwork = as.ref()
-			groups = append(groups, g)
-		}
-		if err := rows.Err(); err != nil {
-			a.fail(w, r, collection, err)
-			return
-		}
-		a.write(w, r, http.StatusOK, newPage(groups, q.limit,
-			func(g GroupSummary) []string { return []string{strings.ToLower(g.Name)} }, collection))
+		a.write(w, r, http.StatusOK, page[GroupSummary]{Items: items, NextCursor: next})
 	}
 }

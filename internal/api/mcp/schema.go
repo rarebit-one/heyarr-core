@@ -288,6 +288,105 @@ var schemaExplainRelease = obj(map[string]any{
 	},
 }, "quality_profile", "releases")
 
+// schemaBrowseLibrary is browse_library's input (ADR-0075). Every field is an
+// optional filter; with none it is the whole catalog, newest or A–Z. It is the
+// browsing counterpart to search_content: search_content resolves a title,
+// this walks a shelf.
+var schemaBrowseLibrary = obj(map[string]any{
+	"content_type": map[string]any{
+		"type":        "string",
+		"description": "Narrow to one kind: movie, series, music, book.",
+	},
+	"library_id": map[string]any{
+		"type":        "string",
+		"description": "Only works with something of theirs in this library.",
+	},
+	"q": map[string]any{
+		"type": "string",
+		"description": "Part of a title. Matched against the normalised form the scanner " +
+			"records, so case and leading articles do not matter.",
+	},
+	"artist": map[string]any{
+		"type": "string",
+		"description": "Only this artist's works — the exact name list_artists returns. " +
+			"Pair with content_type=music.",
+	},
+	"author": map[string]any{
+		"type": "string",
+		"description": "Only this author's works — the exact name list_authors returns. " +
+			"Pair with content_type=book.",
+	},
+	"year": map[string]any{
+		"type":        "integer",
+		"description": "Only works of exactly this year.",
+	},
+	"year_from": map[string]any{
+		"type":        "integer",
+		"description": "Only works of this year or later (inclusive).",
+	},
+	"year_to": map[string]any{
+		"type":        "integer",
+		"description": "Only works of this year or earlier (inclusive).",
+	},
+	"sort": map[string]any{
+		"type": "string",
+		"enum": []any{"title", "recent"},
+		"description": "title (the default) is A–Z by the normalised title; recent is " +
+			"newest-added first.",
+	},
+	"include_artwork": map[string]any{
+		"type":        "boolean",
+		"description": "Attach each work's poster (null when it has none). Defaults to true.",
+	},
+	"include_primary_asset": map[string]any{
+		"type": "boolean",
+		"description": "Attach the one file a card tap would play, with its size and " +
+			"duration when known (null when the work holds no file). Defaults to true.",
+	},
+	"limit": map[string]any{
+		"type": "integer", "minimum": 1, "maximum": maxRows,
+		"description": "How many works at most. Defaults to the maximum.",
+	},
+})
+
+// schemaGrouping is shared by list_artists and list_authors: a name substring
+// filter and a limit. The grouping is over the attribute a scan wrote, not an
+// entity, so there is nothing else to ask for.
+var schemaGrouping = obj(map[string]any{
+	"q": map[string]any{
+		"type":        "string",
+		"description": "Part of the name to narrow to. Case-insensitive substring.",
+	},
+	"limit": map[string]any{
+		"type": "integer", "minimum": 1, "maximum": maxRows,
+		"description": "How many names at most. Defaults to the maximum.",
+	},
+})
+
+// schemaContinueRail is continue_rail's input (ADR-0075).
+var schemaContinueRail = obj(map[string]any{
+	"device_id": map[string]any{
+		"type":        "string",
+		"description": "Only sessions on this renderer, from get_peer_status's siblings. Omit for all.",
+	},
+	"limit": map[string]any{
+		"type": "integer", "minimum": 1, "maximum": maxRows,
+		"description": "How many works at most. Defaults to the maximum.",
+	},
+})
+
+// schemaFollowedSourceItems is followed_source_items' input (#430).
+var schemaFollowedSourceItems = obj(map[string]any{
+	"source_id": map[string]any{
+		"type":        "string",
+		"description": "The followed source whose items to list, from list_followed.",
+	},
+	"limit": map[string]any{
+		"type": "integer", "minimum": 1, "maximum": maxRows,
+		"description": "How many items at most, oldest feed-key first. Defaults to the maximum.",
+	},
+}, "source_id")
+
 // schemaSearchReleases is search_releases' input (§71).
 var schemaSearchReleases = obj(map[string]any{
 	"desired_item_id": map[string]any{

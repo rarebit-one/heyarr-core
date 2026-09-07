@@ -462,16 +462,38 @@ func (a *API) listContinue(w http.ResponseWriter, r *http.Request) {
 		limit = min(*n, continueMaxLimit)
 	}
 
-	ctx := r.Context()
+	items, err := a.ContinueRail(r.Context(), ContinueRailRequest{
+		DeviceID: r.URL.Query().Get("device_id"), Limit: limit,
+	})
+	if err != nil {
+		a.fail(w, r, "consumption session", err)
+		return
+	}
+	a.write(w, r, http.StatusOK, map[string]any{"items": items})
+}
+
+// ContinueRailRequest is a parsed continue-rail query: an optional device
+// filter and an already-bounded limit. Both doors fill it.
+type ContinueRailRequest struct {
+	DeviceID string
+	Limit    int64
+}
+
+// ContinueRail folds the newest non-terminal, positioned session per work into
+// the "continue" rail (ADR-0075) — the intent behind GET /consumption/continue
+// and the MCP continue_rail tool, so the two doors cannot drift. It reports
+// resume points the node holds server-side (ADR-0024); it is NOT the encrypted
+// personal history §72 keeps in the Personal MCP.
+func (a *API) ContinueRail(ctx context.Context, req ContinueRailRequest) ([]ContinueEntry, error) {
 	art := artworkPick(ctx, "w.id")
 	where := []string{"s.state IN ('playing', 'paused', 'stopped')", "s.progress_locator <> ''"}
 	var rankArgs []any
-	if v := r.URL.Query().Get("device_id"); v != "" {
+	if req.DeviceID != "" {
 		where = append(where, "s.device_id = ?")
-		rankArgs = append(rankArgs, v)
+		rankArgs = append(rankArgs, req.DeviceID)
 	}
 	args := append(append([]any{}, rankArgs...), art.args...)
-	args = append(args, limit)
+	args = append(args, req.Limit)
 
 	//nolint:gosec // assembled only from the literal fragments above; every value is bound
 	stmt := `WITH ranked AS (
@@ -500,8 +522,7 @@ func (a *API) listContinue(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := a.reader.QueryContext(ctx, stmt, args...)
 	if err != nil {
-		a.fail(w, r, "consumption session", err)
-		return
+		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -521,8 +542,7 @@ func (a *API) listContinue(w http.ResponseWriter, r *http.Request) {
 		extra = append(append(extra, ps.dests()...), as.dests()...)
 		sess, err := scanSessionRow(appendedScan{rows: rows, extra: extra})
 		if err != nil {
-			a.fail(w, r, "consumption session", err)
-			return
+			return nil, err
 		}
 		entry.Session = renderSession(sess)
 		entry.Work.Year = nullInt(year)
@@ -538,10 +558,9 @@ func (a *API) listContinue(w http.ResponseWriter, r *http.Request) {
 		items = append(items, entry)
 	}
 	if err := rows.Err(); err != nil {
-		a.fail(w, r, "consumption session", err)
-		return
+		return nil, err
 	}
-	a.write(w, r, http.StatusOK, map[string]any{"items": items})
+	return items, nil
 }
 
 // isForeignKeyViolation reports whether an error is a FOREIGN KEY constraint
