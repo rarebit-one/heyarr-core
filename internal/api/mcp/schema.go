@@ -298,7 +298,7 @@ var schemaBrowseLibrary = obj(map[string]any{
 		"description": "Narrow to one kind: movie, series, music, book.",
 	},
 	"library_id": map[string]any{
-		"type": "string",
+		"type":        "string",
 		"description": "Only works with something of theirs in this library.",
 	},
 	"q": map[string]any{
@@ -335,7 +335,7 @@ var schemaBrowseLibrary = obj(map[string]any{
 			"newest-added first.",
 	},
 	"include_artwork": map[string]any{
-		"type": "boolean",
+		"type":        "boolean",
 		"description": "Attach each work's poster (null when it has none). Defaults to true.",
 	},
 	"include_primary_asset": map[string]any{
