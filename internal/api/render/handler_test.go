@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,6 +201,100 @@ func TestHeadIsAnswered(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); got != "audio/mpeg" {
 		t.Errorf("Content-Type = %q, want audio/mpeg", got)
 	}
+}
+
+// TestOffersACaptionInfoHeader pins the Samsung out-of-band caption mechanism.
+// A video capability that carries a sidecar makes the serve side emit a
+// CaptionInfo.sec header, and the URL it names is a caption capability of OURS
+// — it verifies back to the sidecar's blob and a canonical subtitle type. That
+// is the proof there is no reflected-header hole: the value written is one we
+// signed, not one the caller supplied. A capability with no sidecar emits no
+// header, and a handler with no base URL cannot build one so stays silent too.
+func TestOffersACaptionInfoHeader(t *testing.T) {
+	t.Parallel()
+
+	store, err := cas.OpenFS(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc, err := store.Put(context.Background(), bytes.NewReader(bytes.Repeat([]byte{7}, 4<<10)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobHandler, err := blobs.New(blobs.Options{Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const base = "https://heyarr.example.com"
+	h, err := New(Options{
+		Blobs: blobHandler, Secret: testSecret,
+		Now: func() time.Time { return testNow }, RenderBaseURL: base + "/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	h.Mount(router)
+
+	capBlob := "blake3:" + strings.Repeat("e", 64)
+	videoTok := mustSign(t, Capability{
+		BlobHash: desc.Hash.String(), ExpiresAt: testNow.Add(time.Hour), MIME: "video/mp4",
+		CaptionBlob: capBlob, CaptionMIME: "application/x-subrip",
+	}, testSecret)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, Path(videoTok), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	// Read by ranging the map, not Get and not a literal index: Get would
+	// canonicalise the lookup to "Captioninfo.sec" and miss the deliberately
+	// mixed-case name (which is why the handler assigns the map key directly,
+	// so the wire keeps the "CaptionInfo.sec" spelling a Samsung set reads),
+	// and a literal non-canonical index is an SA1008 the linter rejects.
+	hdr, ok := rawHeader(rec.Header(), "CaptionInfo.sec")
+	if !ok {
+		t.Fatal("no CaptionInfo.sec header — a Samsung set will not fetch the subtitle")
+	}
+	if !strings.HasPrefix(hdr, base+Path("")) {
+		t.Fatalf("CaptionInfo.sec = %q, want it under %q", hdr, base+Path(""))
+	}
+	if !strings.HasSuffix(hdr, "/captions.srt") {
+		t.Errorf("CaptionInfo.sec = %q, want a .srt trailing name a set can sniff", hdr)
+	}
+	rest := strings.TrimPrefix(hdr, base+Path(""))
+	tok := rest[:strings.IndexByte(rest, '/')]
+	got, err := Verify(testSecret, tok, testNow)
+	if err != nil {
+		t.Fatalf("the CaptionInfo.sec token does not verify — it is not one we signed: %v", err)
+	}
+	if got.BlobHash != capBlob {
+		t.Errorf("caption token blob = %q, want %q", got.BlobHash, capBlob)
+	}
+	if got.MIME != "application/x-subrip" {
+		t.Errorf("caption token MIME = %q, want application/x-subrip", got.MIME)
+	}
+
+	// A plain video capability (no sidecar) emits no header.
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, Path(token(t, desc.Hash, "video/mp4")), nil))
+	if got2, ok := rawHeader(rec2.Header(), "CaptionInfo.sec"); ok {
+		t.Errorf("a captionless cast emitted CaptionInfo.sec = %q, want none", got2)
+	}
+}
+
+// rawHeader returns the value stored under exactly key (case-sensitive),
+// bypassing http.Header.Get's canonicalisation — the whole point being that the
+// handler stores a deliberately non-canonical, mixed-case key that a Samsung
+// set reads. Ranges rather than indexes so the linter does not read it as an
+// SA1008 non-canonical lookup, and so the exact wire spelling is asserted.
+func rawHeader(h http.Header, key string) (string, bool) {
+	for k, v := range h {
+		if k == key && len(v) > 0 {
+			return v[0], true
+		}
+	}
+	return "", false
 }
 
 func TestEnsureSecret(t *testing.T) {

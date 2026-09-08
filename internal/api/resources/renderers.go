@@ -401,6 +401,15 @@ func (a *API) startForRendererCtx(ctx context.Context, assetID, udn string, rend
 		if blob, m := a.captionForRenderer(ctx, assetID); blob != "" {
 			if u := a.captionURL(ctx, blob, m, a.now()); u != "" {
 				subURL, subMIME = u, m
+				// Carry the SAME sidecar inside the video capability too, so the
+				// serve side can advertise it in the CaptionInfo.sec response
+				// header a Samsung set reads — the other half of the DIDL sec:
+				// tags, needed because some Tizen firmwares ignore those. A
+				// failure here loses the header, never the cast: the original
+				// video URL stands.
+				if v := a.videoURLWithCaption(started.RenderURL, blob, m); v != "" {
+					started.RenderURL = v
+				}
 			}
 		}
 	}
@@ -453,6 +462,11 @@ func (a *API) captionForRenderer(ctx context.Context, assetID string) (blobHash,
 			return b.String, m.String
 		}
 	}
+	// A scan that ended in an error yields no caption, like every other read
+	// failure here: a caption is a bonus on a cast, never worth failing it.
+	if err := rows.Err(); err != nil {
+		return "", ""
+	}
 	return "", ""
 }
 
@@ -491,6 +505,56 @@ func (a *API) captionURL(ctx context.Context, blobHash, mime string, now time.Ti
 		return ""
 	}
 	return a.renderBaseURL + render.Path(token) + "/" + captionFilename(mime)
+}
+
+// videoURLWithCaption re-mints a video render URL to carry a caption sidecar
+// (its blob and MIME) inside the capability, leaving the video blob, type and
+// expiry the URL already had exactly as they were. The serve side reads those
+// two extra fields to advertise the sidecar in the CaptionInfo.sec header.
+//
+// It re-verifies the URL's own token rather than re-deriving the video blob
+// from the asset, so the re-minted capability cannot drift from the one the
+// playback lane chose — same bytes, same expiry, two fields added. Returns ""
+// and changes nothing on any failure, so a caption never costs the cast.
+func (a *API) videoURLWithCaption(videoURL, capBlob, capMIME string) string {
+	if len(a.renderSecret) == 0 || a.renderBaseURL == "" || capBlob == "" {
+		return ""
+	}
+	token, name := renderTokenFromURL(a.renderBaseURL, videoURL)
+	if token == "" {
+		return ""
+	}
+	vcap, err := render.Verify(a.renderSecret, token, a.now())
+	if err != nil {
+		return ""
+	}
+	vcap.CaptionBlob = capBlob
+	vcap.CaptionMIME = capMIME
+	signed, err := vcap.Sign(a.renderSecret)
+	if err != nil {
+		a.log.Warn("re-signing a video capability with its caption", "error", err)
+		return ""
+	}
+	u := a.renderBaseURL + render.Path(signed)
+	if name != "" {
+		u += "/" + name
+	}
+	return u
+}
+
+// renderTokenFromURL pulls the capability token, and any cosmetic trailing
+// name, out of a render URL this peer minted against base. Empty token when the
+// URL is not one of ours, so a caller treats it as unmintable rather than
+// guessing.
+func renderTokenFromURL(base, url string) (token, name string) {
+	rest, ok := strings.CutPrefix(url, base+render.Path(""))
+	if !ok {
+		return "", ""
+	}
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		return rest[:i], rest[i+1:]
+	}
+	return rest, ""
 }
 
 // captionFilename is a plausible last path segment for a renderer that sniffs
