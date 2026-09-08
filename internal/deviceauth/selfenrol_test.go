@@ -24,7 +24,7 @@ func TestSelfEnrol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.EnrolUser(ctx, u.UserID(), "owner"); err != nil {
+	if _, err := store.EnrolUser(ctx, u.UserID(), "owner", ""); err != nil {
 		t.Fatal(err)
 	}
 	_, strangerPriv, err := enrolment.GenerateUserIdentity()

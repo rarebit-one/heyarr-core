@@ -5,7 +5,10 @@
 package resources_test
 
 import (
+	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +20,7 @@ import (
 	"github.com/rarebit-one/voidbind-go/enrolment"
 
 	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
 // TestPhoneSelfEnrolsAndReadsButDoesNotWrite is the acceptance for ADR-0067,
@@ -198,5 +202,109 @@ func TestPhoneSelfEnrolsAndReadsButDoesNotWrite(t *testing.T) {
 	// A body that is not a credential at all is a 400, not a 401.
 	if resp := h.do(http.MethodPost, "/enrol", "", strings.NewReader(`{"cert":"x","proof":"y","typo":1}`)); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("unknown field: status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestEnrolmentCarriesRecoveryEncryptionKey is the acceptance for part 2 of
+// rarebit-one/heyarr-mobile#41 (Option A): the device-enrolment response carries
+// the user identity's X25519 recovery encryption PUBLIC key so the enrolling
+// device can wrap new personal-state spaces for recovery. The key is registered
+// when the operator pins the user; the paper recovery SECRET never enters the
+// server, and this test asserts the response carries the public recipient and
+// nothing derived from a secret.
+func TestEnrolmentCarriesRecoveryEncryptionKey(t *testing.T) {
+	h := newHarness(t, withAuth)
+	admin := h.mint("admin", auth.ScopeAdmin)
+
+	// A recovery encryption key pair. Only the PUBLIC half is ever given to the
+	// server (as the person's paper recovery secret would be, out of band); the
+	// private half stands in for that secret and must never surface on the wire.
+	recovPriv, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryPub := encryption.FormatPublicKey(recovPriv.PublicKey().Bytes())
+	recoverySecretHex := hex.EncodeToString(recovPriv.Bytes())
+
+	// enrol pins a user (optionally with a recovery encryption key), then
+	// self-enrols a fresh device under it and returns the decoded response plus
+	// its raw body.
+	enrol := func(t *testing.T, name, recovery string) (map[string]any, string) {
+		t.Helper()
+		u, userPriv, err := enrolment.GenerateUserIdentity()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var pinBody string
+		if recovery == "" {
+			pinBody = fmt.Sprintf(`{"public_key":%q,"name":%q}`, u.UserID(), name)
+		} else {
+			pinBody = fmt.Sprintf(`{"public_key":%q,"recovery_encryption_key":%q,"name":%q}`, u.UserID(), recovery, name)
+		}
+		resp := h.do(http.MethodPost, "/api/v1/identities/users", admin.Secret, strings.NewReader(pinBody))
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("pin user: status = %d (body: %s)", resp.StatusCode, h.body(resp))
+		}
+		devicePub, devicePriv, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert, err := enrolment.SignCert(userPriv, devicePub, "", fixedTime, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proof, err := enrolment.SignPossession(devicePriv, cert, fixedTime, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := fmt.Sprintf(`{"cert":%q,"proof":%q,"name":"phone"}`, cert, proof)
+		resp = h.do(http.MethodPost, "/enrol", "", strings.NewReader(body))
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("POST /enrol: status = %d, want 201 (body: %s)", resp.StatusCode, h.body(resp))
+		}
+		raw := string(h.body(resp))
+		var out map[string]any
+		if err := json.Unmarshal([]byte(raw), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out, raw
+	}
+
+	// With a recovery key registered, the response carries the PUBLIC key verbatim.
+	out, raw := enrol(t, "owner-with-recovery", recoveryPub)
+	if got := out["recovery_encryption_key"]; got != recoveryPub {
+		t.Fatalf("recovery_encryption_key = %v, want %q", got, recoveryPub)
+	}
+	if !strings.HasPrefix(recoveryPub, "x25519:") {
+		t.Fatalf("recovery key %q is not an x25519 public recipient", recoveryPub)
+	}
+	// The secret must NEVER appear anywhere in the response body — not as the field
+	// value, not smuggled into another field.
+	if strings.Contains(raw, recoverySecretHex) {
+		t.Fatalf("the recovery SECRET leaked into the enrolment response: %s", raw)
+	}
+
+	// Without a recovery key, the field is omitted entirely (omitempty) — an
+	// identity that predates recovery-wrap carries none.
+	out, raw = enrol(t, "owner-no-recovery", "")
+	if got, ok := out["recovery_encryption_key"]; ok {
+		t.Fatalf("recovery_encryption_key present without a registered key: %v (body: %s)", got, raw)
+	}
+}
+
+// TestEnrolUserRejectsMalformedRecoveryKey asserts a non-empty recovery
+// encryption key that is not a well-formed x25519 public key is a 400, so garbage
+// never reaches the enrolment response.
+func TestEnrolUserRejectsMalformedRecoveryKey(t *testing.T) {
+	h := newHarness(t, withAuth)
+	admin := h.mint("admin", auth.ScopeAdmin)
+	u, _, err := enrolment.GenerateUserIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"public_key":%q,"recovery_encryption_key":"ed25519:abc","name":"owner"}`, u.UserID())
+	resp := h.do(http.MethodPost, "/api/v1/identities/users", admin.Secret, strings.NewReader(body))
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("malformed recovery key: status = %d, want 400 (body: %s)", resp.StatusCode, h.body(resp))
 	}
 }

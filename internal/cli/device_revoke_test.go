@@ -28,7 +28,7 @@ func TestDeviceRevokeTombstonesAndReportsRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.identities.EnrolUser(ctx, u.UserID(), "owner"); err != nil {
+	if _, err := h.identities.EnrolUser(ctx, u.UserID(), "owner", ""); err != nil {
 		t.Fatal(err)
 	}
 	pub, _, _ := ed25519.GenerateKey(nil)

@@ -17,6 +17,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/transporterr"
 )
 
 // defaultTimeout bounds one call to an indexer.
@@ -253,8 +254,12 @@ func (c *Client) detailFor(err error) string {
 		return "the indexer answered with a server error"
 	}
 	// Deliberately NOT err.Error(): a transport error's text can contain the
-	// request URL, and the request URL carries the API key.
-	return "unreachable"
+	// request URL, and the request URL carries the API key. Classification
+	// reads the error's TYPE, never its text, so a firewall denial, a timeout,
+	// a refused connection and a name that will not resolve each get their own
+	// actionable word — and "unreachable" stays the fallback for what genuinely
+	// cannot be told apart (#242).
+	return transporterr.Classify(err)
 }
 
 // capabilities performs the t=caps handshake.

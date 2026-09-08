@@ -111,7 +111,7 @@ func fixtureAt(t *testing.T, v vector) (*fixture, time.Time) {
 	f := newFixture(t)
 	at := time.Unix(v.Now, 0).UTC()
 	f.clock.t = at
-	if _, err := f.store.EnrolUser(context.Background(), v.User, v.Name); err != nil {
+	if _, err := f.store.EnrolUser(context.Background(), v.User, v.Name, ""); err != nil {
 		t.Fatal(err)
 	}
 	return f, at

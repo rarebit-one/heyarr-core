@@ -83,7 +83,7 @@ func (h *harness) enrolledDevice(t *testing.T) (cert string, devicePriv ed25519.
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := h.store.EnrolUser(ctx, u.UserID(), "alice"); err != nil {
+	if _, err := h.store.EnrolUser(ctx, u.UserID(), "alice", ""); err != nil {
 		t.Fatalf("enrol user: %v", err)
 	}
 	if _, err := h.store.EnrolDevice(ctx, cert, "phone"); err != nil {

@@ -129,13 +129,20 @@ func (b request) credential() (string, error) {
 // to understand, plus the hash of the op that admitted it (ADR-0068) — what a
 // device cites as its own admission.
 type Enrolled struct {
-	DeviceKey     string    `json:"device_key"`
-	EncryptionKey string    `json:"encryption_key,omitempty"`
-	Name          string    `json:"name"`
-	User          string    `json:"user"`
-	AdmittedBy    string    `json:"admitted_by"`
-	EnrolledAt    time.Time `json:"enrolled_at"`
-	ExpiresAt     time.Time `json:"expires_at"`
+	DeviceKey     string `json:"device_key"`
+	EncryptionKey string `json:"encryption_key,omitempty"`
+	// RecoveryEncryptionKey is the user identity's X25519 recovery encryption
+	// PUBLIC key ("x25519:<hex>"), carried here so the enrolling device can wrap
+	// new personal-state spaces for recovery from the moment it enrols (§41,
+	// Option A; rarebit-one/heyarr-mobile#41). It is a public recipient — only the
+	// paper recovery secret decrypts, and that secret never transits. Empty when
+	// the identity has none (it predates recovery-wrap, or was pinned without one).
+	RecoveryEncryptionKey string    `json:"recovery_encryption_key,omitempty"`
+	Name                  string    `json:"name"`
+	User                  string    `json:"user"`
+	AdmittedBy            string    `json:"admitted_by"`
+	EnrolledAt            time.Time `json:"enrolled_at"`
+	ExpiresAt             time.Time `json:"expires_at"`
 }
 
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
@@ -182,13 +189,14 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Location", httpapi.APIPrefix+"/identities/devices/"+device.DeviceKey)
 	out, err := json.Marshal(Enrolled{
-		DeviceKey:     device.DeviceKey,
-		EncryptionKey: device.EncryptionKey,
-		Name:          device.Name,
-		User:          user.PublicKey,
-		AdmittedBy:    enrolment.OpHash(device.Cert),
-		EnrolledAt:    device.EnrolledAt,
-		ExpiresAt:     device.ExpiresAt,
+		DeviceKey:             device.DeviceKey,
+		EncryptionKey:         device.EncryptionKey,
+		RecoveryEncryptionKey: user.RecoveryEncryptionKey,
+		Name:                  device.Name,
+		User:                  user.PublicKey,
+		AdmittedBy:            enrolment.OpHash(device.Cert),
+		EnrolledAt:            device.EnrolledAt,
+		ExpiresAt:             device.ExpiresAt,
 	})
 	if err != nil {
 		httpapi.Fail(w, r, problem.Internal())

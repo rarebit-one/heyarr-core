@@ -14,6 +14,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/transporterr"
 )
 
 // The qBittorrent download client, behind the provider registry's Downloader
@@ -533,7 +534,7 @@ func qbShort(err error) string {
 	if errors.As(err, &qe) {
 		return qe.detail
 	}
-	return "unreachable"
+	return transporterr.Classify(err)
 }
 
 // login mints a session cookie from the operator's credential.
