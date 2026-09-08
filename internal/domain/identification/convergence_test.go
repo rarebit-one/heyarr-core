@@ -18,6 +18,20 @@ type equivalenceClass struct {
 
 var equivalenceClasses = []equivalenceClass{
 	{
+		// The library's own tree and every shape a download client leaves
+		// behind for one season: one Work, however the folder is named (ADR-0081).
+		Name:        "series/library-tree-and-download-folders",
+		LibraryType: Series,
+		Key:         "series:show name:2018",
+		Paths: []string{
+			"Show Name (2018)/Season 04/Show Name - S04E04.mkv",
+			"Show Name (2018) Season 4 Mp4 1080p/Show Name S04E04.mp4",
+			"Show.Name.2018.S04.Complete.1080p.WEB/Show.Name.2018.S04E02.1080p.WEB.mkv",
+			"Show.Name.2018.S04E03.1080p.WEB-DL/Show.Name.2018.S04E03.1080p.WEB-DL.mkv",
+			"Show Name (2018) Season 4 Complete/05 - Title.mkv",
+		},
+	},
+	{
 		Name:        "movie/separators-and-release-noise",
 		LibraryType: Movie,
 		Key:         "movie:movie title:2019",
@@ -162,6 +176,9 @@ func TestDistinctWorksStayDistinct(t *testing.T) {
 		{Movie, "The Matrix Reloaded (2003)/The Matrix Reloaded (2003).mkv"},
 		{Series, "The Expanse (2015)/Season 01/S01E01.mkv"},
 		{Series, "The Wire (2002)/Season 01/S01E01.mkv"},
+		{Series, "Season of the Witch/Season 01/S01E01.mkv"},
+		{Series, "Show Name/Season 01/S01E01.mkv"},
+		{Series, "Show Name 2/Season 01/S01E01.mkv"},
 		{Music, "Radiohead/OK Computer (1997)/01 - Airbag.flac"},
 		{Music, "Radiohead/Kid A (2000)/01 - Everything in Its Right Place.flac"},
 		{Music, "Placebo/OK Computer (1997)/01 - Airbag.flac"},

@@ -109,6 +109,16 @@ var seriesCases = []string{
 	"Show/Season 02/Show - S02E05 - Title - Bluray-1080p.mkv",
 	"Show/Specials/Show - S00E03 - Extra.mkv",
 	"The Expanse (2015)/Season 02/The Expanse - S02E05 - Home.mkv",
+	// Download folders: the series and the season named together, then noise.
+	"Show Name Season 4 Mp4 1080p/Show Name S04E04.mp4",
+	"Show Name (2018) Season 4 1080p WEB-DL/Show Name S04E01.mkv",
+	"Show.Name.S04.Complete.1080p.WEB/Show.Name.S04E02.1080p.WEB.mkv",
+	"Show.Name.S04E03.1080p.WEB-DL/Show.Name.S04E03.1080p.WEB-DL.mkv",
+	"Show Name Season 4 Complete/05 - Title.mkv",
+	"Show Name Season 4 Mp4 1080p/poster.jpg",
+	"Show Name Staffel 2 German 720p/Show Name S02E01.mkv",
+	"TV/Show Name Season 4 Mp4 1080p/poster.jpg",
+	"TV/Show Name (2018)/poster.jpg",
 }
 
 var musicCases = []string{
