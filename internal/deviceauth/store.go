@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,6 +26,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
 const timeFormat = time.RFC3339Nano
@@ -62,8 +64,17 @@ type User struct {
 	ID          string
 	PrincipalID string
 	PublicKey   string // rendered "ed25519:<hex>"
-	Name        string
-	EnrolledAt  time.Time
+	// RecoveryEncryptionKey is the identity's X25519 recovery encryption PUBLIC
+	// key ("x25519:<hex>"), the recipient new personal-state spaces are wrapped
+	// for so the paper recovery secret can open them (§41, ADR-0049). It is a
+	// public key — a recipient anyone may encrypt to; only the paper secret
+	// decrypts — registered when the user is pinned (EnrolUser), because the
+	// server has no other source for it. Empty for an identity pinned before
+	// recovery-wrap, or by an operator who supplied no key. The SECRET never
+	// enters the server.
+	RecoveryEncryptionKey string
+	Name                  string
+	EnrolledAt            time.Time
 }
 
 // Device is a device key a user has vouched for.
@@ -143,12 +154,28 @@ func (s *Store) Now() time.Time { return s.clock.Now() }
 // EnrolUser pins a user public key, creating its principal (kind 'user') in the
 // same transaction. This is the ADR-0032 gate: nothing a user signs is honoured
 // until the user is pinned here, out of band.
-func (s *Store) EnrolUser(ctx context.Context, publicKey, name string) (User, error) {
+//
+// recoveryEncryptionKey is the identity's X25519 recovery encryption PUBLIC key
+// ("x25519:<hex>"), registered alongside the signing key so the device-enrolment
+// response can carry it to an enrolling device (§41; rarebit-one/heyarr-mobile#41).
+// It is a public recipient only — never the paper recovery secret. Empty is
+// allowed (an identity that predates recovery-wrap); a non-empty value that is
+// not a well-formed x25519 public key is refused ErrMalformedKey, and is stored
+// in its canonical rendering.
+func (s *Store) EnrolUser(ctx context.Context, publicKey, name, recoveryEncryptionKey string) (User, error) {
 	pub, err := identity.ParsePublicKey(publicKey)
 	if err != nil {
 		return User{}, fmt.Errorf("%w: %s", ErrMalformedKey, err.Error())
 	}
 	rendered := identity.FormatPublicKey(pub)
+	recoveryKey := ""
+	if strings.TrimSpace(recoveryEncryptionKey) != "" {
+		encPub, err := encryption.ParsePublicKey(recoveryEncryptionKey)
+		if err != nil {
+			return User{}, fmt.Errorf("%w: recovery encryption key: %s", ErrMalformedKey, err.Error())
+		}
+		recoveryKey = encryption.FormatPublicKey(encPub.Bytes())
+	}
 	if name == "" {
 		name = "user-" + rendered[len(rendered)-8:]
 	}
@@ -177,8 +204,8 @@ func (s *Store) EnrolUser(ctx context.Context, publicKey, name string) (User, er
 	}
 	id := uuid.Must(uuid.NewV7()).String()
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO user_identities (id, principal_id, public_key, enrolled_at) VALUES (?, ?, ?, ?)`,
-		id, principalID, rendered, now.Format(timeFormat)); err != nil {
+		`INSERT INTO user_identities (id, principal_id, public_key, recovery_encryption_key, enrolled_at) VALUES (?, ?, ?, ?, ?)`,
+		id, principalID, rendered, recoveryKey, now.Format(timeFormat)); err != nil {
 		return User{}, fmt.Errorf("deviceauth: pinning user: %w", err)
 	}
 	ev, err := s.events.EmitTx(ctx, tx, events.TypeUserEnrolled, "user_identity", id,
@@ -190,7 +217,7 @@ func (s *Store) EnrolUser(ctx context.Context, publicKey, name string) (User, er
 		return User{}, fmt.Errorf("deviceauth: committing: %w", err)
 	}
 	s.events.Publish(ev)
-	return User{ID: id, PrincipalID: principalID, PublicKey: rendered, Name: name, EnrolledAt: now}, nil
+	return User{ID: id, PrincipalID: principalID, PublicKey: rendered, RecoveryEncryptionKey: recoveryKey, Name: name, EnrolledAt: now}, nil
 }
 
 // EnrolDevice records a device under the user its admitting op names — the
@@ -245,12 +272,12 @@ func (s *Store) setDeviceName(ctx context.Context, id, name string) error {
 // round trip on the read pool — this is the per-request hot path.
 func (s *Store) LookupUser(ctx context.Context, publicKey string) (User, error) {
 	row := s.reader.QueryRowContext(ctx,
-		`SELECT u.id, u.principal_id, u.public_key, u.enrolled_at, p.name
+		`SELECT u.id, u.principal_id, u.public_key, u.recovery_encryption_key, u.enrolled_at, p.name
 		 FROM user_identities u JOIN principals p ON p.id = u.principal_id
 		 WHERE u.public_key = ?`, publicKey)
 	var u User
 	var enrolled string
-	err := row.Scan(&u.ID, &u.PrincipalID, &u.PublicKey, &enrolled, &u.Name)
+	err := row.Scan(&u.ID, &u.PrincipalID, &u.PublicKey, &u.RecoveryEncryptionKey, &enrolled, &u.Name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, fmt.Errorf("%w: %s", ErrUnknownUser, publicKey)
 	}
@@ -268,7 +295,7 @@ func (s *Store) LookupUser(ctx context.Context, publicKey string) (User, error) 
 // trusts and copy a key out to revoke — the read counterpart of EnrolUser.
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := s.reader.QueryContext(ctx,
-		`SELECT u.id, u.principal_id, u.public_key, u.enrolled_at, p.name
+		`SELECT u.id, u.principal_id, u.public_key, u.recovery_encryption_key, u.enrolled_at, p.name
 		 FROM user_identities u JOIN principals p ON p.id = u.principal_id
 		 ORDER BY u.enrolled_at DESC, u.id DESC`)
 	if err != nil {
@@ -279,7 +306,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	for rows.Next() {
 		var u User
 		var enrolled string
-		if err := rows.Scan(&u.ID, &u.PrincipalID, &u.PublicKey, &enrolled, &u.Name); err != nil {
+		if err := rows.Scan(&u.ID, &u.PrincipalID, &u.PublicKey, &u.RecoveryEncryptionKey, &enrolled, &u.Name); err != nil {
 			return nil, fmt.Errorf("deviceauth: reading user: %w", err)
 		}
 		if u.EnrolledAt, err = time.Parse(timeFormat, enrolled); err != nil {

@@ -1,0 +1,32 @@
+-- +goose Up
+-- The user identity's recovery ENCRYPTION key: §41 pins, beside a user's pinned
+-- Ed25519 signing key, the X25519 recovery encryption PUBLIC key that new
+-- personal-state spaces are wrapped for so the paper recovery secret can open
+-- them (ADR-0049, ADR-0082; rarebit-one/heyarr-mobile#41).
+--
+-- user_identities (00034) records a user's Ed25519 SIGNING key — the trust root
+-- a device's enrolment cert is verified against. A space key is wrapped FOR the
+-- recovery recipient, which is key agreement, not signing, and needs a different
+-- primitive: the X25519 recovery encryption key `recovery.DeriveUserEncryptionSeed`
+-- derives from the paper secret. Its PUBLIC half is a recipient anyone may
+-- encrypt to; only the paper secret decrypts. The secret NEVER enters the server
+-- — this column holds the public recipient only, the mirror of device_identities'
+-- encryption_key (00036).
+--
+-- It is registered when the user is pinned (deviceauth.EnrolUser): the server has
+-- no other source for it — it derives locally from the paper secret and reaches
+-- no route otherwise — so the operator who pins the user supplies the public key
+-- alongside the signing key. Once pinned it rides the device-enrolment response
+-- to the enrolling device, which wraps new spaces for recovery from that moment.
+--
+-- A NOT NULL column defaulting to '' rather than a nullable one, exactly as
+-- 00036 did for the device key: an identity pinned before recovery-wrap (or by an
+-- operator who did not supply the key) simply has none, and '' says so without a
+-- NULL to special-case. The empty default is also what lets this ALTER run
+-- against existing user_identities rows without a backfill.
+ALTER TABLE user_identities ADD COLUMN recovery_encryption_key TEXT NOT NULL DEFAULT '';
+
+-- +goose Down
+-- SQLite before 3.35 could not DROP COLUMN; the pinned pure-Go driver supports
+-- it, and the column is additive, so the down is a plain drop.
+ALTER TABLE user_identities DROP COLUMN recovery_encryption_key;

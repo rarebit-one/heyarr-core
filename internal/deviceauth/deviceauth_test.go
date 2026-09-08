@@ -101,7 +101,7 @@ func (a *actor) credential(t *testing.T, at time.Time) string {
 func (f *fixture) enrol(t *testing.T, a *actor) {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := f.store.EnrolUser(ctx, a.userKey, "alice"); err != nil {
+	if _, err := f.store.EnrolUser(ctx, a.userKey, "alice", ""); err != nil {
 		t.Fatalf("enrol user: %v", err)
 	}
 	if _, err := f.store.EnrolDevice(ctx, a.cert, "phone"); err != nil {
@@ -179,7 +179,7 @@ func TestVerifyRefusalsAreDistinct(t *testing.T) {
 	t.Run("cert signed by the wrong key", func(t *testing.T) {
 		f := newFixture(t)
 		a := newActor(t)
-		if _, err := f.store.EnrolUser(ctx, a.userKey, "alice"); err != nil {
+		if _, err := f.store.EnrolUser(ctx, a.userKey, "alice", ""); err != nil {
 			t.Fatal(err)
 		}
 		// A cert that CLAIMS a's user but is signed by an impostor.
@@ -206,7 +206,7 @@ func TestVerifyRefusalsAreDistinct(t *testing.T) {
 		// (the "device revoked" case below) and an unpinned user.
 		f := newFixture(t)
 		a := newActor(t)
-		if _, err := f.store.EnrolUser(ctx, a.userKey, "alice"); err != nil {
+		if _, err := f.store.EnrolUser(ctx, a.userKey, "alice", ""); err != nil {
 			t.Fatal(err)
 		}
 		got, err := f.store.Verify(ctx, a.credential(t, now), nil, now)
@@ -229,7 +229,7 @@ func TestVerifyRefusalsAreDistinct(t *testing.T) {
 	t.Run("leaked op without the key leaves nothing behind", func(t *testing.T) {
 		f := newFixture(t)
 		a := newActor(t)
-		if _, err := f.store.EnrolUser(ctx, a.userKey, "alice"); err != nil {
+		if _, err := f.store.EnrolUser(ctx, a.userKey, "alice", ""); err != nil {
 			t.Fatal(err)
 		}
 		_, impostor, _ := ed25519.GenerateKey(nil)
@@ -323,7 +323,7 @@ func TestEnrolIsIdempotentlyRefused(t *testing.T) {
 	a := newActor(t)
 	f.enrol(t, a)
 
-	if _, err := f.store.EnrolUser(ctx, a.userKey, "alice-again"); !errors.Is(err, deviceauth.ErrUserExists) {
+	if _, err := f.store.EnrolUser(ctx, a.userKey, "alice-again", ""); !errors.Is(err, deviceauth.ErrUserExists) {
 		t.Fatalf("re-pinning a user want ErrUserExists, got %v", err)
 	}
 	if _, err := f.store.EnrolDevice(ctx, a.cert, "phone-again"); !errors.Is(err, deviceauth.ErrDeviceExists) {
@@ -345,7 +345,7 @@ func TestEnrolUserRefusesMalformedKey(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
-	if _, err := f.store.EnrolUser(ctx, "not-a-key", "x"); !errors.Is(err, deviceauth.ErrMalformedKey) {
+	if _, err := f.store.EnrolUser(ctx, "not-a-key", "x", ""); !errors.Is(err, deviceauth.ErrMalformedKey) {
 		t.Fatalf("want ErrMalformedKey, got %v", err)
 	}
 }
@@ -408,7 +408,7 @@ func TestEnrolDevicePinsTheEncryptionKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := f.store.EnrolUser(ctx, u.UserID(), "alice"); err != nil {
+	if _, err := f.store.EnrolUser(ctx, u.UserID(), "alice", ""); err != nil {
 		t.Fatalf("enrol user: %v", err)
 	}
 	enrolled, err := f.store.EnrolDevice(ctx, cert, "phone")
