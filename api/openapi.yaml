@@ -1094,6 +1094,50 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
 
   /api/v1/libraries/{id}/roots/{rootID}:
+    patch:
+      tags: [content]
+      operationId: updateLibraryRoot
+      summary: Change an existing root's ingest mode. Requires `write`.
+      description: |
+        Change how a root materialises ingested bytes without tearing it down
+        and rebuilding it (#222). The mode governs how the NEXT ingest
+        materialises, so blobs already in the store keep the inode they arrived
+        with — safe to run on a live root. The root is addressed under its own
+        library, so a root id belonging to another library is a `404`, never a
+        cross-library edit. The body must change something: an omitted
+        `ingest_mode` is a `400`, as is an empty or unknown one.
+      parameters:
+        - $ref: "#/components/parameters/id"
+        - name: rootID
+          in: path
+          required: true
+          schema: { type: string }
+          description: The root's id, as `library list` shows it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                ingest_mode:
+                  type: string
+                  enum: [reflink, hardlink, copy, link]
+                  description: |
+                    How ingest materialises bytes into the CAS (ADR-0014).
+                    `link` catalogues files where they are and never copies them
+                    (ADR-0020).
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LibraryRoot" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
     delete:
       tags: [content]
       operationId: deleteLibraryRoot

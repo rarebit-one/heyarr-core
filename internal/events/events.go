@@ -113,6 +113,12 @@ const (
 	// library, never a root — so nothing is orphaned and no byte is unlinked;
 	// only the root's scanned-file records go with it.
 	TypeLibraryRootRemoved = "content.library_root.removed"
+	// TypeLibraryRootUpdated is a change to an existing root's ingest
+	// configuration — today its materialisation mode (#222). It carries the
+	// old and new mode so a reader can see what changed. It touches no bytes:
+	// the mode governs how FUTURE ingests materialise, so blobs already in the
+	// store are unaffected and nothing is unlinked (ADR-0014, ADR-0018).
+	TypeLibraryRootUpdated = "content.library_root.updated"
 	TypeAssetMissing       = "content.asset.missing"
 	TypeAssetDeleted       = "content.asset.deleted"
 	// #nosec G101 -- an event type name, not a credential

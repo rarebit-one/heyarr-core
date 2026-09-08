@@ -45,6 +45,37 @@ func TestLibraryRootAddRemoveAndLibraryRm(t *testing.T) {
 	}
 }
 
+// Changing a root's ingest mode after creation, end to end through the CLI
+// (#222): a root added on the reflink default is switched to hardlink in place,
+// the supported way to stop a byte copy on a filesystem that cannot block-clone.
+func TestLibraryRootSetIngestMode(t *testing.T) {
+	h := newAPIHarness(t)
+	h.mustRun("library", "add", "shows", "--content-type", "movie", "--root", "/srv/a")
+
+	// The seeded root defaults to reflink; flip it.
+	out := h.mustRun("library", "root", "set-ingest-mode", "shows", "/srv/a", "hardlink", "--json")
+	var updated client.LibraryRoot
+	if err := json.Unmarshal([]byte(out), &updated); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if updated.IngestMode != "hardlink" {
+		t.Fatalf("set-ingest-mode returned %q, want hardlink", updated.IngestMode)
+	}
+
+	// And it is the persisted state a later ingest would read, not just the echo.
+	libs := listLibraries(t, h)
+	if len(libs) != 1 || len(libs[0].Roots) != 1 || libs[0].Roots[0].IngestMode != "hardlink" {
+		t.Fatalf("after set-ingest-mode: roots %v (want one root, hardlink)", libs)
+	}
+
+	// An unknown mode is a clean error, not a 500 from the CHECK constraint.
+	if _, stderr, err := h.run("library", "root", "set-ingest-mode", "shows", "/srv/a", "symlink"); err == nil {
+		t.Error("an unknown ingest mode succeeded")
+	} else if !strings.Contains(err.Error()+stderr, "ingest_mode") {
+		t.Errorf("error does not name the field: err=%v stderr=%s", err, stderr)
+	}
+}
+
 // Naming a root or a library that is not there is a clear error, not a panic.
 func TestLibraryRootRmUnknownRoot(t *testing.T) {
 	h := newAPIHarness(t)

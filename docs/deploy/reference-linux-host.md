@@ -74,7 +74,21 @@ settings:
 Putting both on one dataset makes both worse, which is the whole reason to split
 them. Block cloning additionally needs `zpool set feature@block_cloning=enabled`
 and ZFS ≥ 2.2; without it, ingest degrades to hardlink exactly as it does on
-ext4 today and nothing else changes.
+ext4 today and nothing else changes — *provided* the store and the bytes it
+adopts share one mount, so the hardlink rung is reachable at all.
+
+If you would rather a root ingest as a hardlink outright than lean on the
+reflink rung degrading — the surer choice on a pool with block cloning off,
+where reflink buys nothing — set its mode without recreating it:
+
+```
+heyarr library root set-ingest-mode <library> <root> hardlink
+```
+
+The mode governs how the NEXT ingest materialises, so this stops the copy for
+everything adopted from then on; blobs already in the store keep the inode they
+arrived with. This is the lever [#222](https://github.com/rarebit-one/heyarr-core/issues/222)
+pins for a co-located CAS and incoming directory whose pool cannot block-clone.
 
 ## The one thing to get right: where the CAS lives
 
