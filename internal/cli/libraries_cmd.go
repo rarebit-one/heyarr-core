@@ -78,7 +78,54 @@ content already ingested through it (#228).`,
 	cmd.AddCommand(
 		newLibraryRootAddCommand(opts, configPath),
 		newLibraryRootRmCommand(opts, configPath),
+		newLibraryRootSetIngestModeCommand(opts, configPath),
 	)
+	return cmd
+}
+
+func newLibraryRootSetIngestModeCommand(_ Options, configPath *string) *cobra.Command {
+	var flags clientFlags
+	cmd := &cobra.Command{
+		Use:   "set-ingest-mode <library> <root> <mode>",
+		Short: "Change how an existing root materialises ingested bytes",
+		Long: `Change a root's ingest mode after it was created, without tearing the root
+down and rebuilding it.
+
+The mode is one of reflink, hardlink, copy or link (ADR-0014, ADR-0020). It
+governs how the NEXT ingest materialises; bytes already in the store keep the
+inode they arrived with, so this is safe to run on a live root.
+
+Why you would: a store created on the reflink default lands a full byte COPY on
+a filesystem that cannot block-clone but could hardlink — a ZFS pool with block
+cloning off is the case #222 pins. Switching such a root to hardlink stops the
+copy for everything ingested from then on.`,
+		Args: cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				lib, err := resolveLibrary(ctx, c, args[0])
+				if err != nil {
+					return err
+				}
+				rootID, err := resolveRoot(lib, args[1])
+				if err != nil {
+					return err
+				}
+				mode := args[2]
+				var updated client.LibraryRoot
+				if err := c.Patch(ctx, "/libraries/"+lib.ID+"/roots/"+rootID,
+					client.UpdateRootRequest{IngestMode: &mode}, &updated); err != nil {
+					return err
+				}
+				if flags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), updated)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "root %s of %s now ingests as %s: %s\n",
+					updated.ID, lib.Name, updated.IngestMode, updated.Path)
+				return nil
+			})
+		},
+	}
+	flags.register(cmd)
 	return cmd
 }
 

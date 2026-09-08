@@ -319,6 +319,97 @@ func (a *API) createLibraryRoot(w http.ResponseWriter, r *http.Request) {
 	a.write(w, r, http.StatusCreated, root)
 }
 
+// updateRootRequest is the PATCH /libraries/{id}/roots/{rootID} body.
+//
+// IngestMode is a pointer so "absent" and "empty" are distinguishable: a patch
+// that names no field changes nothing and is refused, rather than silently
+// resetting the root to a default.
+type updateRootRequest struct {
+	IngestMode *string `json:"ingest_mode"`
+}
+
+// updateLibraryRoot changes an existing root's ingest configuration (#222).
+//
+// # Why this exists at all
+//
+// A root's materialisation mode was settable only at creation, so a store that
+// shipped on the `reflink` default and later needed `hardlink` — the exact case
+// #222 pins, where a ZFS pool without block cloning degrades reflink to a full
+// byte copy — could be corrected only by deleting the root or reaching past the
+// API into SQLite. Neither is a supported surface, and the CLI writes through
+// the API precisely so it works against a controller on another host. POST and
+// DELETE a root but never amend it was an asymmetry, not a decision.
+//
+// # It touches no bytes
+//
+// The mode governs how the NEXT ingest materialises; blobs already in the store
+// keep the inode they arrived with. So this is safe to run at any time and on a
+// live root — the worst case is that already-copied files stay copied until
+// they are re-adopted, which is a separate operation and not this one's job.
+func (a *API) updateLibraryRoot(w http.ResponseWriter, r *http.Request) {
+	libraryID := chi.URLParam(r, "id")
+	rootID := chi.URLParam(r, "rootID")
+
+	var body updateRootRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	if body.IngestMode == nil {
+		httpapi.Fail(w, r, problem.BadRequest(
+			"a root patch must change something — ingest_mode"))
+		return
+	}
+	// An explicit empty or unknown mode is an error here, not a silent reset to
+	// reflink the way an omitted field is at creation. required() rejects the
+	// empty string, so inSet's empty-defaulting branch is never reached and its
+	// fallback is inert.
+	if err := required("ingest_mode", *body.IngestMode); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	mode, err := inSet("ingest_mode", *body.IngestMode, *body.IngestMode,
+		"reflink", "hardlink", "copy", "link")
+	if err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+
+	var (
+		updated LibraryRoot
+		ev      events.Event
+	)
+	err = a.db.InTx(r.Context(), func(tx *sql.Tx) error {
+		// Scoped to the library named in the path: a root id belonging to
+		// another library reads as a 404 here, never a cross-library edit.
+		before, err := scanRootRow(tx.QueryRowContext(r.Context(),
+			`SELECT `+rootColumns+` FROM library_roots WHERE id = ? AND library_id = ?`,
+			rootID, libraryID))
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(r.Context(),
+			`UPDATE library_roots SET ingest_mode = ? WHERE id = ?`, mode, rootID); err != nil {
+			return err
+		}
+		updated = before
+		updated.IngestMode = mode
+		ev, err = a.events.EmitTx(r.Context(), tx, events.TypeLibraryRootUpdated, "library", libraryID,
+			map[string]any{
+				"library_id": libraryID, "root_id": rootID, "path": before.Path,
+				"ingest_mode": mode, "previous_ingest_mode": before.IngestMode,
+			})
+		return err
+	})
+	if err != nil {
+		a.fail(w, r, "library root", err)
+		return
+	}
+	a.events.Publish(ev)
+
+	a.write(w, r, http.StatusOK, updated)
+}
+
 func (a *API) libraryExists(ctx context.Context, id string) error {
 	var found string
 	return a.reader.QueryRowContext(ctx, `SELECT id FROM libraries WHERE id = ?`, id).Scan(&found)

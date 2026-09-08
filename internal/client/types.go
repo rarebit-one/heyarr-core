@@ -252,6 +252,12 @@ type CreateRootRequest struct {
 	Enabled    *bool  `json:"enabled,omitempty"`
 }
 
+// UpdateRootRequest is the PATCH /libraries/{id}/roots/{rootID} body. A field
+// is a pointer so an omitted one leaves that setting untouched.
+type UpdateRootRequest struct {
+	IngestMode *string `json:"ingest_mode,omitempty"`
+}
+
 // CreateQualityProfileRequest is the POST /quality-profiles body.
 //
 // Accept, Prefer and Terminal are carried as raw JSON so the CLI passes an

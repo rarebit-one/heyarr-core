@@ -332,6 +332,11 @@ func (a *API) Mount(r chi.Router) {
 	// Writes.
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/libraries", a.createLibrary)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/libraries/{id}/roots", a.createLibraryRoot)
+	// Amend an existing root's ingest configuration in place — today its
+	// materialisation mode (#222), so a store that shipped on `reflink` and
+	// needs `hardlink` need not be torn down and rebuilt. `write`, like the rest
+	// of library management; it touches no bytes.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Patch("/libraries/{id}/roots/{rootID}", a.updateLibraryRoot)
 	// Removing a library or one of its roots (#228). Ordinary library
 	// management, the same class as removing a work — so `write`, not `admin`.
 	// Logical in ADR-0018's sense: catalog rows go, bytes stay. A library that

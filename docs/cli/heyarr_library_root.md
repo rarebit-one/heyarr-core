@@ -19,3 +19,4 @@ content already ingested through it (#228).
 * [heyarr library](heyarr_library.md)	 - Manage libraries and their roots
 * [heyarr library root add](heyarr_library_root_add.md)	 - Add a root to an existing library
 * [heyarr library root rm](heyarr_library_root_rm.md)	 - Remove a root from a library
+* [heyarr library root set-ingest-mode](heyarr_library_root_set-ingest-mode.md)	 - Change how an existing root materialises ingested bytes
