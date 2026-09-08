@@ -11,9 +11,11 @@ heyarr works list [flags]
 ```
       --addr string           where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
       --content-type string   only works of this content type
+      --device-dir string     where this machine's device key lives, used with --peer (default: your config directory; VOIDBIND_DEVICE_DIR overrides)
       --json                  emit machine-readable JSON
       --library string        only works with an asset in this library (id or name)
       --limit int             stop after this many rows (default: every row, following pagination cursors)
+      --peer string           read from a REMOTE peer as this machine's enrolled device (ADR-0048): a fresh possession proof is minted per request, never a cached token. The value is the peer's http(s):// URL. Mutually exclusive with --token
       --q string              only works whose sort title contains this
       --timeout duration      how long one request may take; streaming reads and the event stream are exempt (default 30s)
       --token string          bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)

@@ -75,6 +75,7 @@ func newWorksListCommand(_ Options, configPath *string) *cobra.Command {
 		},
 	}
 	flags.register(cmd)
+	flags.registerPeer(cmd)
 	list.register(cmd)
 	cmd.Flags().StringVar(&contentType, "content-type", "", "only works of this content type")
 	cmd.Flags().StringVar(&library, "library", "", "only works with an asset in this library (id or name)")
@@ -116,6 +117,7 @@ func newWorksShowCommand(_ Options, configPath *string) *cobra.Command {
 		},
 	}
 	flags.register(cmd)
+	flags.registerPeer(cmd)
 	return cmd
 }
 
@@ -182,6 +184,7 @@ func newAssetsListCommand(_ Options, configPath *string) *cobra.Command {
 		},
 	}
 	flags.register(cmd)
+	flags.registerPeer(cmd)
 	list.register(cmd)
 	cmd.Flags().StringVar(&library, "library", "", "only assets in this library (id or name)")
 	cmd.Flags().StringVar(&contentType, "content-type", "", "only assets whose work is of this content type")

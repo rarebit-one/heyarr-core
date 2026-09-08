@@ -5845,6 +5845,15 @@ paths:
                 public_key:
                   type: string
                   description: The user's public key, `ed25519:<64 hex characters>`.
+                recovery_encryption_key:
+                  type: string
+                  description: >-
+                    The identity's X25519 recovery encryption PUBLIC key,
+                    `x25519:<hex>` (§41, ADR-0049). Registered here so the
+                    device-enrolment response can carry it to an enrolling
+                    device, which wraps new personal-state spaces for recovery.
+                    A public recipient only — the paper recovery SECRET never
+                    enters the server. Optional; omit for an identity with none.
                 name: { type: string }
       responses:
         "201":
@@ -6166,6 +6175,15 @@ components:
         encryption_key:
           type: string
           description: The device's X25519 encryption key, `x25519:<hex>`, when the cert binds one.
+        recovery_encryption_key:
+          type: string
+          description: >-
+            The user identity's X25519 recovery encryption PUBLIC key,
+            `x25519:<hex>` (§41, ADR-0049; rarebit-one/heyarr-mobile#41). Carried
+            so the enrolling device can wrap new personal-state spaces for
+            recovery from the moment it enrols. A public recipient — only the
+            paper recovery secret decrypts, and that secret never transits.
+            Absent when the identity has none.
         name:
           type: string
         user:
@@ -7297,6 +7315,13 @@ components:
         public_key:
           type: string
           description: The pinned key, `ed25519:<64 hex characters>`.
+        recovery_encryption_key:
+          type: string
+          description: >-
+            The identity's X25519 recovery encryption PUBLIC key, `x25519:<hex>`
+            (§41), registered when the user was pinned — the recipient new
+            personal-state spaces are wrapped for. A public recipient only; the
+            paper recovery secret never enters the server. Absent when none.
         name: { type: string }
         enrolled_at: { type: string, format: date-time }
 

@@ -17,7 +17,7 @@ import (
 func enrolActor(t *testing.T, f *fixture, a *actor) {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := f.store.EnrolUser(ctx, a.userKey, ""); err != nil {
+	if _, err := f.store.EnrolUser(ctx, a.userKey, "", ""); err != nil {
 		t.Fatalf("enrol user: %v", err)
 	}
 	if _, err := f.store.EnrolDevice(ctx, a.cert, "phone"); err != nil {

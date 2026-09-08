@@ -8080,6 +8080,30 @@ YAML
   assert_eq "$count_b" "0" \
     "the revoked device's wrapped copy of the key is deleted from the peer"
 
+  # THE FORWARD-ONLY BOUNDARY (§41, ADR-0022, ADR-0049, #321). Revocation protects
+  # the FUTURE, not the past. A writes a change AFTER the revocation: the surviving
+  # device reads it — the new key is live — while the revoked device cannot, so
+  # future content is put beyond it. But the change the revoked device ALREADY
+  # decrypted ("midnight-jazz", read above while it was still a recipient) stays
+  # its to keep: revocation is forward-looking, not retroactive. This is the
+  # honesty ADR-0022 owes and #321 asked to make visible rather than gloss — a
+  # rotation that retroactively locked the past would be a promise the mechanism
+  # cannot keep, and one that left the future readable would be no revocation.
+  # The claim that the HELD change still decrypts under the old key after the peer
+  # has dropped both the key copy and the change itself is proven end to end in
+  # internal/personalstate/scenario (TestRevocationIsForwardOnly), where the
+  # revoked device really decrypts it; here the boundary is made visible on the
+  # real binary.
+  "${base[@]}" space put "$space_id" --device-dir "$A" --item "after-revocation-track" >/dev/null
+  local c_future
+  c_future=$("${base[@]}" space read "$space_id" --device-dir "$C" --json | jq -r '.items | contains(["after-revocation-track"])')
+  assert_eq "$c_future" "true" \
+    "a surviving device reads content written AFTER the revocation — the new key is live and forward writes land under it"
+  assert_refuses "the revoked device cannot read the post-revocation change either — only future content is put beyond it, under the new key" \
+    "cannot read space" "${base[@]}" space read "$space_id" --device-dir "$B"
+  assert_eq "$b_before" "midnight-jazz" \
+    "the revoked device keeps the pre-revocation change it already decrypted — forward-only revocation, only future content is protected"
+
   kill -TERM "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
 }

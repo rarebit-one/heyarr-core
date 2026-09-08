@@ -11,6 +11,20 @@ stable.
 
 ### Added
 
+- **Device enrolment carries the identity's recovery encryption public key
+  (§41, rarebit-one/heyarr-mobile#41 part 2).** The device-enrolment response
+  (`POST /enrol`) now includes `recovery_encryption_key`, the user identity's
+  X25519 recovery encryption **public** key (`x25519:<hex>`), so an enrolling
+  device can wrap new personal-state spaces for the paper recovery recipient
+  from the moment it enrols — no separate route, no manual QR/paste
+  (mobile#41's Option A). The key is a public recipient only; the paper recovery
+  **secret** never enters the server. Because the server has no other source for
+  it, the operator registers it when pinning the user: `POST
+  /api/v1/identities/users` gains an optional `recovery_encryption_key` (a
+  malformed value is refused `400`), stored on `user_identities` (migration
+  `00044`) beside the signing key, and surfaced on both the enrolment response
+  and `IdentityUser`. `omitempty`/`""` when the identity has none (it predates
+  recovery-wrap, or was pinned without one).
 - **A library and a root can be removed (ADR-0083, #228).**
   `DELETE /api/v1/libraries/{id}` removes an **empty** library and its roots
   (`library_roots` is `ON DELETE CASCADE`); a library that still holds assets is
