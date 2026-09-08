@@ -84,7 +84,11 @@ install_one() {
   tmp=$(mktemp)
   trap 'rm -f "$tmp"' RETURN
   echo "toolchain: fetching $tool $version for $GOOS/$GOARCH" >&2
-  curl -fsSL --retry 3 -o "$tmp" "$url" || die "downloading $url failed"
+  # --retry-all-errors: curl's default retry set is timeouts/408/429/5xx, which does
+  # NOT include a mid-transfer "Connection reset by peer" (#268) or a refused
+  # connect; add both so an unrelated network blip fetching a pinned asset does
+  # not fail a whole acceptance leg. The SHA-256 check below still guards integrity.
+  curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --retry-connrefused -o "$tmp" "$url" || die "downloading $url failed"
 
   got=$(sha256_of "$tmp")
   if [ "$got" != "$want" ]; then
