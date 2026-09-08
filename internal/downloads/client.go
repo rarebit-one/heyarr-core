@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/transporterr"
 )
 
 // The Transmission download client, behind the provider registry's Downloader
@@ -267,5 +268,5 @@ func shortError(err error) string {
 	if errors.As(err, &rpcErr) {
 		return rpcErr.Detail
 	}
-	return "unreachable"
+	return transporterr.Classify(err)
 }

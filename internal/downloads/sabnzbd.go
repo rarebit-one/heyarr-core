@@ -15,6 +15,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/transporterr"
 )
 
 // The SABnzbd download client, behind the provider registry's Downloader
@@ -524,7 +525,7 @@ func sabShort(err error) string {
 	if errors.As(err, &se) {
 		return se.detail
 	}
-	return "unreachable"
+	return transporterr.Classify(err)
 }
 
 // call issues one API request and returns the raw body, having first turned
