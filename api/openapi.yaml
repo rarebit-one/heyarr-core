@@ -1036,6 +1036,25 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [content]
+      operationId: deleteLibrary
+      summary: Remove an empty library and its roots. Requires `write`.
+      description: |
+        Removes the library and its roots (`library_roots` is `ON DELETE
+        CASCADE`). The library must hold no assets: a library that still has
+        content is refused `409`, naming the fix (delete its works first via
+        `DELETE /api/v1/works/{id}`), because `assets.library_id` is `ON DELETE
+        SET NULL` and a raw delete would silently orphan a whole library's
+        content rather than refuse (#228, ADR-0083). Logical in ADR-0018's
+        sense: catalog rows go, bytes stay for the GC sweep.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "204": { description: Removed. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /api/v1/libraries/{id}/roots:
     post:
@@ -1073,6 +1092,30 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/libraries/{id}/roots/{rootID}:
+    delete:
+      tags: [content]
+      operationId: deleteLibraryRoot
+      summary: Remove one root from a library. Requires `write`.
+      description: |
+        Heyarr stops scanning that directory. Always safe: an asset references
+        its library, never a root, so no ingested content is orphaned — only the
+        root's scanned-file records go with it (#228, ADR-0083). The root is
+        addressed under its own library, so a root id belonging to another
+        library is a `404`, never a cross-library delete.
+      parameters:
+        - $ref: "#/components/parameters/id"
+        - name: rootID
+          in: path
+          required: true
+          schema: { type: string }
+          description: The root's id, as `library list` shows it.
+      responses:
+        "204": { description: Removed. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /api/v1/libraries/{id}/scan:
     post:

@@ -89,3 +89,4 @@ An ADR that merely describes the code is not worth having.
 | [0080](0080-document-is-a-first-class-content-type.md) | `document` is a first-class content type, not a reuse of `book` | Accepted |
 | [0081](0081-a-folder-that-names-a-season-is-a-season-of-its-series.md) | A folder that names a season is a season of its series | Accepted |
 | [0082](0082-acquisition-strategy-per-content-type.md) | Acquisition strategy is chosen per content type | Accepted |
+| [0083](0083-a-library-and-a-root-are-deletable-a-non-empty-library-refuses.md) | A library and a root are deletable; a non-empty library refuses | Accepted |

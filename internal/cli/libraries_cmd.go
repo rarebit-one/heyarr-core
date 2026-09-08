@@ -26,8 +26,157 @@ through the API, so they work against a controller on another host.`,
 	cmd.AddCommand(
 		newLibraryAddCommand(opts, configPath),
 		newLibraryListCommand(opts, configPath),
+		newLibraryRmCommand(opts, configPath),
+		newLibraryRootCommand(opts, configPath),
 	)
 	return cmd
+}
+
+func newLibraryRmCommand(_ Options, configPath *string) *cobra.Command {
+	var flags clientFlags
+	cmd := &cobra.Command{
+		Use:     "rm <library>",
+		Aliases: []string{"remove"},
+		Short:   "Remove an empty library and its roots",
+		Long: `Remove a library, named by id or name (#228).
+
+The library must hold no content: remove its works first
+(DELETE /api/v1/works/{id}) — the empty library then goes with its roots.
+Logical in ADR-0018's sense: catalog rows go, the bytes stay for the GC sweep.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				lib, err := resolveLibrary(ctx, c, args[0])
+				if err != nil {
+					return err
+				}
+				if err := c.Delete(ctx, "/libraries/"+lib.ID); err != nil {
+					return err
+				}
+				if flags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), map[string]string{
+						"id": lib.ID, "name": lib.Name, "status": "removed",
+					})
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "removed library %s (%s)\n", lib.Name, lib.ID)
+				return nil
+			})
+		},
+	}
+	flags.register(cmd)
+	return cmd
+}
+
+func newLibraryRootCommand(opts Options, configPath *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "root",
+		Short: "Add or remove a library's roots",
+		Long: `A root is one directory a library is scanned from (§10). A library can
+gain a root at any time, not only at creation, and lose one without losing the
+content already ingested through it (#228).`,
+	}
+	cmd.AddCommand(
+		newLibraryRootAddCommand(opts, configPath),
+		newLibraryRootRmCommand(opts, configPath),
+	)
+	return cmd
+}
+
+func newLibraryRootAddCommand(_ Options, configPath *string) *cobra.Command {
+	var (
+		flags      clientFlags
+		ingestMode string
+		disabled   bool
+	)
+	cmd := &cobra.Command{
+		Use:   "add <library> <path>",
+		Short: "Add a root to an existing library",
+		Long: `Add a directory for an existing library to scan.
+
+The second root of a library, and every one after it, is added here rather than
+by creating a second library over the same tree — two libraries over one tree
+are a different statement about the content than one library with two roots
+(#228).`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				lib, err := resolveLibrary(ctx, c, args[0])
+				if err != nil {
+					return err
+				}
+				enabled := !disabled
+				var created client.LibraryRoot
+				if err := c.Post(ctx, "/libraries/"+lib.ID+"/roots", client.CreateRootRequest{
+					Path:       args[1],
+					IngestMode: ingestMode,
+					Enabled:    &enabled,
+				}, &created); err != nil {
+					return err
+				}
+				if flags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), created)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "added root to %s: %s  %s\n",
+					lib.Name, created.IngestMode, created.Path)
+				return nil
+			})
+		},
+	}
+	flags.register(cmd)
+	cmd.Flags().StringVar(&ingestMode, "ingest-mode", "reflink",
+		"how bytes are materialised for this root: reflink, hardlink, copy or link (ADR-0014, ADR-0020)")
+	cmd.Flags().BoolVar(&disabled, "disabled", false, "add the root but do not scan it yet")
+	return cmd
+}
+
+func newLibraryRootRmCommand(_ Options, configPath *string) *cobra.Command {
+	var flags clientFlags
+	cmd := &cobra.Command{
+		Use:     "rm <library> <root>",
+		Aliases: []string{"remove"},
+		Short:   "Remove a root from a library",
+		Long: `Stop scanning one of a library's roots, named by its id or its exact path.
+
+Assets already ingested through the root are unaffected — an asset belongs to
+its library, not to a root — so this stops future scans of the directory
+without removing content (#228).`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				lib, err := resolveLibrary(ctx, c, args[0])
+				if err != nil {
+					return err
+				}
+				rootID, err := resolveRoot(lib, args[1])
+				if err != nil {
+					return err
+				}
+				if err := c.Delete(ctx, "/libraries/"+lib.ID+"/roots/"+rootID); err != nil {
+					return err
+				}
+				if flags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), map[string]string{
+						"library_id": lib.ID, "root_id": rootID, "status": "removed",
+					})
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "removed root %s from %s\n", rootID, lib.Name)
+				return nil
+			})
+		},
+	}
+	flags.register(cmd)
+	return cmd
+}
+
+// resolveRoot finds a root of the library by its id or its exact path, so a
+// caller can name the root the way `heyarr library list` shows it.
+func resolveRoot(lib client.Library, ref string) (string, error) {
+	for _, rt := range lib.Roots {
+		if rt.ID == ref || rt.Path == ref {
+			return rt.ID, nil
+		}
+	}
+	return "", fmt.Errorf("no root %q in library %s — `heyarr library list` shows its roots", ref, lib.Name)
 }
 
 func newLibraryAddCommand(_ Options, configPath *string) *cobra.Command {
