@@ -65,6 +65,18 @@ type Options struct {
 	// Token is the bearer credential. Empty is legitimate: authentication can
 	// be disabled on a loopback-only deployment (ADR-0011).
 	Token string
+	// Device, when set, authenticates as this machine's enrolled device under
+	// the Device scheme (ADR-0048) instead of with a bearer token: a FRESH
+	// possession proof is minted per request and never cached. It is mutually
+	// exclusive with Token — the CLI enforces the flag exclusivity, and a set
+	// Token is ignored here when Device is present, because there is no bearer
+	// token in the device flow.
+	Device Credentialer
+	// Clock is the time source the device transport mints proofs for. Zero means
+	// time.Now (UTC). It is injectable so a demo or test can advance it past
+	// enrolment.PossessionTTL and prove per-request minting. Ignored unless
+	// Device is set.
+	Clock func() time.Time
 	// UserAgent identifies the caller in the server's access log.
 	UserAgent string
 	// Timeout bounds non-streaming requests. Zero means DefaultTimeout.
@@ -80,6 +92,9 @@ type Client struct {
 	httpc  *http.Client
 	// stream is the same transport with no timeout, for SSE and blob content.
 	stream *http.Client
+	// deviceAuth records that this client authenticates as a device, so a 401 is
+	// rendered as the device-scheme refusal it is rather than a bare bearer 401.
+	deviceAuth bool
 }
 
 // target describes where and how to connect, kept so that error messages can
@@ -134,16 +149,34 @@ func New(opts Options) (*Client, error) {
 		base = "https://" + tgt.address
 	}
 
+	// The device scheme wraps the transport so a fresh possession proof is minted
+	// per request; the bearer token is not carried in that flow. Both the timed
+	// and the streaming client share the one RoundTripper, so a blob read mints
+	// exactly as a list does.
+	var rt http.RoundTripper = transport
+	token := opts.Token
+	deviceAuth := false
+	if opts.Device != nil {
+		now := opts.Clock
+		if now == nil {
+			now = func() time.Time { return time.Now().UTC() }
+		}
+		rt = &deviceAuthTransport{base: transport, cred: opts.Device, now: now}
+		token = ""
+		deviceAuth = true
+	}
+
 	return &Client{
-		base:   base,
-		target: tgt,
-		token:  opts.Token,
-		agent:  agent,
-		httpc:  &http.Client{Transport: transport, Timeout: timeout},
+		base:       base,
+		target:     tgt,
+		token:      token,
+		agent:      agent,
+		deviceAuth: deviceAuth,
+		httpc:      &http.Client{Transport: rt, Timeout: timeout},
 		// No timeout. A range read of a 20 GB remux (ADR-0013) and an event
 		// stream that is idle for an hour are both correct, and a client-side
 		// deadline would turn each into a truncated file or a lost stream.
-		stream: &http.Client{Transport: transport},
+		stream: &http.Client{Transport: rt},
 	}, nil
 }
 
@@ -256,10 +289,17 @@ type Error struct {
 	// Body is the raw response when it was not a problem document at all —
 	// which happens when something in front of Heyarr answered instead.
 	Body string
+	// DeviceAdvice is the actionable sentence a device-authenticated client adds
+	// to a 401, standing in for the peer's opaque refusal. Empty for every other
+	// caller and every other status.
+	DeviceAdvice string
 }
 
 // Error renders the server's own explanation.
 func (e *Error) Error() string {
+	if e.DeviceAdvice != "" {
+		return e.DeviceAdvice
+	}
 	if e.Problem != nil && e.Problem.Detail != "" {
 		return e.Problem.Detail
 	}
@@ -313,6 +353,14 @@ func (c *Client) problemError(req *http.Request, resp *http.Response) error {
 		if err := json.Unmarshal(raw, &p); err == nil && (p.Title != "" || p.Detail != "") {
 			out.Problem = &p
 		}
+	}
+	// A device-authenticated client that is refused gets a device-scheme sentence,
+	// not the peer's deliberately opaque "the presented credential was rejected".
+	// The peer keeps revoked-device and unpinned-user indistinguishable on
+	// purpose; the client says what an operator can act on instead of leaving a
+	// raw 401. See deviceAuthAdvice.
+	if c.deviceAuth {
+		out.DeviceAdvice = deviceAuthAdvice(resp)
 	}
 	return out
 }

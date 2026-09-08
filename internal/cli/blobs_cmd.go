@@ -62,6 +62,7 @@ func newBlobsStatCommand(_ Options, configPath *string) *cobra.Command {
 		},
 	}
 	flags.register(cmd)
+	flags.registerPeer(cmd)
 	return cmd
 }
 
@@ -126,6 +127,7 @@ stream would produce neither.`,
 		},
 	}
 	flags.register(cmd)
+	flags.registerPeer(cmd)
 	cmd.Flags().StringVarP(&output, "output", "o", "", "write to this file instead of stdout")
 	cmd.Flags().BoolVar(&resume, "resume", false, "continue an interrupted transfer into --output")
 	return cmd
@@ -233,5 +235,6 @@ It exits non-zero when the bytes do not match, so it can be a cron job.`,
 		},
 	}
 	flags.register(cmd)
+	flags.registerPeer(cmd)
 	return cmd
 }
