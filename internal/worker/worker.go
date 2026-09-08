@@ -525,6 +525,36 @@ func (w *Worker) Run(ctx context.Context) error {
 			MaxConcurrent: 1,
 		})
 		w.log.Info("remuxing is available", "ffmpeg", toolchain.FFmpeg.Version)
+
+		// Embedded-subtitle extraction (ADR-0084). It needs BOTH binaries —
+		// ffprobe to enumerate the tracks, ffmpeg to lift each out — so it is
+		// registered only when both resolved. On a node with ffmpeg but no
+		// ffprobe the job stays pending, visibly, rather than failing at
+		// runtime; the same degrade discipline as the two handlers above.
+		if toolchain.FFprobe.Available {
+			extractor, err := ffmpeg.NewExtractor(ffmpeg.ExtractorOptions{
+				FFmpegPath:  toolchain.FFmpeg.Path,
+				FFprobePath: toolchain.FFprobe.Path,
+				WorkDir:     w.cfg.DataDir,
+				Logger:      w.log,
+			})
+			if err != nil {
+				return fmt.Errorf("worker: building the subtitle extractor: %w", err)
+			}
+			registry.Register(ffmpeg.ExtractJobType, Registration{
+				RequiredCapability: ffmpeg.Capability,
+				Handler: ExtractSubsHandler(ExtractSubsHandlerOptions{
+					Extractor: extractor,
+					Store:     NewCASRemuxStore(store),
+					Recorder:  cat,
+					Logger:    w.log,
+				}),
+				// One at a time, like the remux beside it: extraction is a
+				// subprocess reading a whole video off the same spindle.
+				MaxConcurrent: 1,
+			})
+			w.log.Info("subtitle extraction is available", "ffmpeg", toolchain.FFmpeg.Version, "ffprobe", toolchain.FFprobe.Version)
+		}
 	}
 
 	workerID := owner()
