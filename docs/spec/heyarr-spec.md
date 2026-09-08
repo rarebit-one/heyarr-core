@@ -1577,10 +1577,26 @@ Heyarr manages:
 Potential adapters:
 
   OpenSubsonic → music
-  OPDS                → publications
+  OPDS         → publications
+  DLNA/UPnP    → video and audio, to a TV or speaker that speaks it natively
 
 
 Neither protocol defines Heyarr's canonical data model.
+
+The DLNA adapter is a read-only ContentDirectory projection: its `res` URLs are
+render capabilities (ADR-0040), byte-served by the ordinary blob route, so it
+BYPASSES ConsumptionSession (§67) and the playback planner (§68) — it advertises
+the stored bytes and makes no DIRECT/REMUX/TRANSCODE decision. That decision
+lives elsewhere: a client that declares its decoders and cannot open a container
+is instead served a repackaged fragmented-MP4 stream at
+/playback/stream/{token} (ADR-0069), a comprehensible substitution rather than a
+silent failure.
+
+So §33's "HTTP/HLS" means, today, plain HTTP with byte-range over the blob route
+— including a blob that has not finished arriving (progressive partial content,
+ADR-0044). No HLS playlist is produced. The vendor-neutral HLS path stays a
+later option, gated on encode planning against fleet capability, and is not a
+prerequisite for the two devices this section's video adapter targets.
 
 71. MCP
 MCP exposes semantic actions.
