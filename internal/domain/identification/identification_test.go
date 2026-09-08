@@ -255,18 +255,66 @@ func TestAnUnknownLibraryTypeChangesWhatContentIsIdentifiedAs(t *testing.T) {
 }
 
 // The vocabulary is closed, and `unknown` is not part of it.
-func TestOnlyTheFourContentTypesAreAccepted(t *testing.T) {
+func TestOnlyTheKnownContentTypesAreAccepted(t *testing.T) {
 	for _, ct := range ContentTypes() {
 		if !IsContentType(ct) {
 			t.Errorf("%q is in ContentTypes() and is not accepted", ct)
 		}
 	}
-	for _, ct := range []string{"show", "album", "tv", "film", "", "unknown", "Movie", " movie"} {
+	// document joined the set (ADR-0080); it must be accepted and be exactly the
+	// literal the follow path writes to works.content_type.
+	if !IsContentType(Document) || Document != "document" {
+		t.Errorf("document must be an accepted content type spelled %q, got %q accepted=%v",
+			"document", Document, IsContentType(Document))
+	}
+	for _, ct := range []string{"show", "album", "tv", "film", "", "unknown", "Movie", " movie", "documents", "Document"} {
 		if IsContentType(ct) {
 			t.Errorf("%q is accepted as a content type", ct)
 		}
 	}
-	if len(ContentTypes()) != 4 {
-		t.Errorf("%d content types, want §12's four", len(ContentTypes()))
+	if len(ContentTypes()) != 5 {
+		t.Errorf("%d content types, want §12's five (movie, series, music, book, document)", len(ContentTypes()))
+	}
+}
+
+// A document library scanned from disk must not fall through to the movie-first
+// fallback (#227): a captured .html on a document shelf is a document Work.
+//
+// The capture path itself never reaches these rules — the item-scoped want
+// overrides identification (ADR-0063) — so this is the OTHER path the document
+// rules exist for.
+func TestADocumentPageIsIdentifiedAsADocument(t *testing.T) {
+	r := Default()
+
+	got := r.Identify("The Publication/An Article Title.html", Document)
+	if got.ContentType != Document {
+		t.Fatalf("a .html in a document library identified as %q, want %q (rule %q)",
+			got.ContentType, Document, got.Rule)
+	}
+	if got.Title != "An Article Title" {
+		t.Errorf("title = %q, want %q", got.Title, "An Article Title")
+	}
+	if got.WorkKey == "" {
+		t.Error("a document must produce a stable work key so a rescan converges")
+	}
+	if !got.Identified {
+		t.Error("a matched document rule marks the candidate identified")
+	}
+	if pub, _ := got.WorkAttributes["publisher"].(string); pub != "The Publication" {
+		t.Errorf("publisher = %q, want %q", pub, "The Publication")
+	}
+
+	// A bare titled page with no directory still identifies as a document.
+	flat := r.Identify("Just A Title.html", Document)
+	if flat.ContentType != Document {
+		t.Errorf("a bare .html identified as %q, want %q", flat.ContentType, Document)
+	}
+
+	// The document extension must not be claimed by the video/audio/book rules
+	// when the library type does not bias toward document either.
+	unbiased := r.Identify("Just A Title.html", "")
+	if unbiased.ContentType != Document {
+		t.Errorf("an unbiased .html identified as %q, want %q — movie rules must not claim it",
+			unbiased.ContentType, Document)
 	}
 }

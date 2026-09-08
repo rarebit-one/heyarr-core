@@ -523,6 +523,68 @@ func TestNoLibraryForTheContentType(t *testing.T) {
 	}
 }
 
+// The load-bearing test of ADR-0080, and the inverse of the one above.
+//
+// A followed RSS article is typed `document`. Before `document` was a
+// registered content type, a `document` library could not be created, so the
+// SAME RootForContentType lookup that succeeds for a movie here raised
+// ErrNoRootForContent on every article ingest — the diagnosed gap. With a
+// `document` library configured, a captured article's bytes must find that root
+// and land as a managed asset rather than being blocked.
+//
+// The want reaches VERIFYING through the ordinary grab flow, exactly as the
+// movie tests do — how it got to a completed download on disk is not this
+// test's subject. What IS the subject is the routing: a document-typed Work
+// resolving to a document library root on ingest.
+func TestADocumentAcquisitionLandsInItsLibrary(t *testing.T) {
+	h := newIngestHarness(t)
+
+	// The library and the wanted Work are `document`, as a followed feed makes
+	// them. RootForContentType keys on the Work's content type, so both must be
+	// document for the article's blob to have somewhere to go.
+	h.exec(t, `UPDATE libraries SET content_type = 'document' WHERE id = 'lib1'`)
+	h.exec(t, `UPDATE works SET content_type = 'document' WHERE id = 'w1'`)
+
+	// A captured article is a self-contained single-file .html (ADR-0063).
+	h.selectAndComplete(t, "an-article.html", []byte("<html><body>the captured article</body></html>"))
+
+	if err := h.ingest(t); err != nil {
+		t.Fatalf("a document ingest must succeed once a document library exists: %v", err)
+	}
+
+	// Not blocked: the whole point is that RootForContentType now finds a root
+	// instead of raising ErrNoRootForContent.
+	blocked, err := h.cat.BlockedFor(t.Context(), h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 0 {
+		t.Fatalf("%d blocked, want 0 — a document library exists, so nothing should block: %+v",
+			len(blocked), blocked)
+	}
+
+	state := h.state(t)
+	if !state.Managed {
+		t.Error("after an ingest Heyarr holds bytes for the article")
+	}
+	if got := state.Name(); got != "AVAILABLE" {
+		t.Fatalf("state = %s, want AVAILABLE", got)
+	}
+	if n := h.count(t, `SELECT count(*) FROM assets`); n != 1 {
+		t.Errorf("%d assets, want 1", n)
+	}
+	// The asset attached to a document Work, not a phantom of another type.
+	if ct := h.scalar(t, `SELECT w.content_type FROM works w
+		JOIN editions e ON e.work_id = w.id
+		JOIN assets a ON a.edition_id = e.id LIMIT 1`); ct != "document" {
+		t.Errorf("the asset's work is %q, want document", ct)
+	}
+	// The captured HTML carries a media type, so OPDS can advertise it (ADR-0080).
+	if mime := h.scalar(t, `SELECT COALESCE(mime, '') FROM assets LIMIT 1`); mime != "text/html" {
+		t.Errorf("asset mime = %q, want text/html", mime)
+	}
+}
+
 func mustRemove(t *testing.T, path string) {
 	t.Helper()
 	if err := os.RemoveAll(path); err != nil {

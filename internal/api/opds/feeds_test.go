@@ -68,37 +68,60 @@ func TestPublicationsFeed(t *testing.T) {
 	}
 	f := parseFeed(t, resp)
 
-	// Exactly one entry: The Long Survey. Marginalia's only format is linked
-	// (no blob) so it is not acquirable and has no entry; the movie is not a
-	// publication.
-	if len(f.Entries) != 1 {
-		t.Fatalf("acquisition feed has %d entries, want 1 (%+v)", len(f.Entries), entryTitles(f))
-	}
-	e := f.Entries[0]
-	if e.Title != "The Long Survey" {
-		t.Errorf("entry title = %q, want The Long Survey", e.Title)
-	}
-	if len(e.Authors) != 1 || e.Authors[0].Name != "Ada Prentice" {
-		t.Errorf("entry author = %+v, want Ada Prentice", e.Authors)
+	// Two entries: The Long Survey (a book) and A Captured Article (a document,
+	// ADR-0080). Marginalia's only format is linked (no blob) so it is not
+	// acquirable and has no entry; the movie is not a publication.
+	if len(f.Entries) != 2 {
+		t.Fatalf("acquisition feed has %d entries, want 2 — book + document (%+v)", len(f.Entries), entryTitles(f))
 	}
 
-	// Two acquisition links, one per streamable format, each with its media type.
-	got := map[string]string{}
-	for _, l := range e.Links {
-		if l.Rel != "http://opds-spec.org/acquisition" {
-			t.Errorf("unexpected link rel %q", l.Rel)
-			continue
+	// The book: two acquisition links, one per streamable format, each with its
+	// media type; and its author.
+	var sawSurvey, sawArticle bool
+	for _, e := range f.Entries {
+		switch e.Title {
+		case "The Long Survey":
+			sawSurvey = true
+			if len(e.Authors) != 1 || e.Authors[0].Name != "Ada Prentice" {
+				t.Errorf("entry author = %+v, want Ada Prentice", e.Authors)
+			}
+			got := map[string]string{}
+			for _, l := range e.Links {
+				if l.Rel != "http://opds-spec.org/acquisition" {
+					t.Errorf("unexpected link rel %q", l.Rel)
+					continue
+				}
+				got[l.Href] = l.Type
+			}
+			if len(got) != 2 {
+				t.Fatalf("acquisition links = %+v, want 2", got)
+			}
+			if got["/opds/download/ea1"] != "application/epub+zip" {
+				t.Errorf("epub link type = %q", got["/opds/download/ea1"])
+			}
+			if got["/opds/download/ea2"] != "application/x-cbz" {
+				t.Errorf("cbz link type = %q", got["/opds/download/ea2"])
+			}
+
+		case "A Captured Article":
+			// The captured article surfaces beside the book, with an html
+			// acquisition link carrying its text/html media type (ADR-0080).
+			// Without registering document and widening the feed's WHERE clause
+			// it would be invisible here.
+			sawArticle = true
+			if len(e.Links) != 1 || e.Links[0].Href != "/opds/download/ed1" {
+				t.Fatalf("document acquisition links = %+v, want one to /opds/download/ed1", e.Links)
+			}
+			if e.Links[0].Type != "text/html" {
+				t.Errorf("document link type = %q, want text/html", e.Links[0].Type)
+			}
 		}
-		got[l.Href] = l.Type
 	}
-	if len(got) != 2 {
-		t.Fatalf("acquisition links = %+v, want 2", got)
+	if !sawSurvey {
+		t.Errorf("the book is missing from the feed (%+v)", entryTitles(f))
 	}
-	if got["/opds/download/ea1"] != "application/epub+zip" {
-		t.Errorf("epub link type = %q", got["/opds/download/ea1"])
-	}
-	if got["/opds/download/ea2"] != "application/x-cbz" {
-		t.Errorf("cbz link type = %q", got["/opds/download/ea2"])
+	if !sawArticle {
+		t.Errorf("the document does not surface on the acquisition feed (%+v)", entryTitles(f))
 	}
 }
 
