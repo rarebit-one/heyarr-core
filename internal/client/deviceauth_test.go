@@ -156,7 +156,7 @@ func enrolledDevice(t *testing.T, p *peer, clock *testClock, pin bool) (*device.
 	}
 	if pin {
 		ctx := context.Background()
-		if _, err := p.store.EnrolUser(ctx, user.UserID(), "alice"); err != nil {
+		if _, err := p.store.EnrolUser(ctx, user.UserID(), "alice", ""); err != nil {
 			t.Fatalf("pin user: %v", err)
 		}
 		if _, err := p.store.EnrolDevice(ctx, cert, "phone"); err != nil {
