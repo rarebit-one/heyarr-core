@@ -403,12 +403,18 @@ func (a *API) Unfollow(ctx context.Context, id string, keepArchive bool) error {
 }
 
 // RepointRequest is the intent behind PATCH /followed-sources/{id} and MCP's
-// set_source_profile: change which quality profile a subscription — and every
-// want it has projected — is judged against (ADR-0082). Exactly one of the two
-// ways to name the profile is given, the same rule follow and want take.
+// set_source_profile: change a subscription's strategy in place (ADR-0082) —
+// which quality profile it and every want it has projected are judged against,
+// and/or how much back-catalogue its polls project (backfill). At least one is
+// given; the profile is named by exactly one of id or name, the same rule
+// follow and want take; a field left empty is left as it is.
 type RepointRequest struct {
 	QualityProfileID string `json:"quality_profile_id"`
 	QualityProfile   string `json:"quality_profile"`
+	// Backfill is from_now or full. Moving a source to full is how an operator
+	// asks for the back-catalogue a from_now follow deliberately skipped: the
+	// next poll projects every item, and RepointSource enqueues that poll.
+	Backfill string `json:"backfill"`
 }
 
 // RepointSource changes a subscription's quality profile in place, shared by
@@ -433,28 +439,52 @@ func (a *API) RepointSource(ctx context.Context, id string, req RepointRequest) 
 		return FollowedSourceView{}, &badRequest{errors.New(
 			"name the quality profile with either quality_profile_id or quality_profile, not both")}
 	}
-	if req.QualityProfileID == "" && req.QualityProfile == "" {
+	backfill := followed.Backfill(strings.TrimSpace(req.Backfill))
+	wantsProfile := req.QualityProfileID != "" || req.QualityProfile != ""
+	if !wantsProfile && backfill == "" {
 		return FollowedSourceView{}, &badRequest{errors.New(
-			"a repoint must name the quality profile to move to, by quality_profile_id or quality_profile")}
+			"a repoint must change something: name a quality profile (quality_profile_id or " +
+				"quality_profile), a backfill (from_now or full), or both")}
+	}
+	if backfill != "" && backfill != followed.BackfillFromNow && backfill != followed.BackfillFull {
+		return FollowedSourceView{}, &badRequest{fmt.Errorf(
+			"backfill must be %q or %q, not %q", followed.BackfillFromNow, followed.BackfillFull, req.Backfill)}
 	}
 
-	// Resolve the profile name to an id, with no content-type default: a repoint
-	// is an explicit act, so an empty profile is refused rather than guessed.
+	// Resolve a named profile to an id, with no content-type default: a repoint
+	// is an explicit act, so a profile is either named or left alone, never
+	// guessed.
 	var profileID string
-	if err := a.db.InTx(ctx, func(tx *sql.Tx) error {
-		var e error
-		profileID, e = a.resolveProfile(ctx, tx, req.QualityProfileID, req.QualityProfile, "")
-		return e
-	}); err != nil {
-		return FollowedSourceView{}, err
+	if wantsProfile {
+		if err := a.db.InTx(ctx, func(tx *sql.Tx) error {
+			var e error
+			profileID, e = a.resolveProfile(ctx, tx, req.QualityProfileID, req.QualityProfile, "")
+			return e
+		}); err != nil {
+			return FollowedSourceView{}, err
+		}
 	}
 
-	wants, err := a.catalog.RepointFollowedSource(ctx, id, profileID)
+	wants, err := a.catalog.RepointFollowedSource(ctx, id, profileID, string(backfill))
 	if errors.Is(err, catalog.ErrNoFollowSource) {
 		return FollowedSourceView{}, sql.ErrNoRows
 	}
 	if err != nil {
 		return FollowedSourceView{}, err
+	}
+
+	// A backfill change is only felt on the next poll (shouldProject), so kick
+	// one now — the same immediacy FollowSource gives a new subscription, and the
+	// same idempotent enqueue PollSource uses, so a poll already queued is reused
+	// rather than doubled. Best-effort for the reason the reconcile below is.
+	if backfill != "" {
+		if _, e := a.jobs.Enqueue(ctx, jobs.EnqueueOptions{
+			Type:      followed.PollSourceJobType,
+			Payload:   followed.PollSourcePayload{SourceID: id},
+			DedupeKey: followed.PollDedupeKey(id),
+		}); e != nil {
+			a.log.Warn("could not enqueue a poll for a repointed source", "source_id", id, "error", e)
+		}
 	}
 
 	for _, wantID := range wants {

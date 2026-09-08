@@ -192,12 +192,15 @@ func (s *Server) registerTools() {
 		Title:    "Repoint a source at a quality profile",
 		Scope:    auth.ScopeWrite,
 		ReadOnly: false,
-		Description: "Change which quality profile a followed source — and every item it has " +
-			"already archived — is judged against, IN PLACE, without unfollowing it. Reach for it " +
-			"when a feed is on the wrong profile: an article or podcast feed on a video profile " +
-			"never counts as archived, because a captured page has no resolution for the video " +
-			"profile's gate to pass. Move it to \"published\" and its held items are re-judged and " +
-			"become archived at once. Name the profile as a person would, the same as follow_source.",
+		Description: "Change a followed source's strategy IN PLACE, without unfollowing it: which " +
+			"quality profile it — and every item it has already archived — is judged against, " +
+			"and/or its backfill. Reach for the profile when a feed is on the wrong one: an article " +
+			"or podcast feed on a video profile never counts as archived, because a captured page " +
+			"has no resolution for the video profile's gate to pass; move it to \"published\" and its " +
+			"held items are re-judged and become archived at once. Reach for backfill=full when a " +
+			"from_now follow should now archive its whole back-catalogue: the poll it queues " +
+			"projects every item the feed has ever listed — a real capacity commitment. Give at " +
+			"least one of the two. Name the profile as a person would, the same as follow_source.",
 		InputSchema: schemaSetSourceProfile,
 		Handler:     s.setSourceProfile,
 	})
@@ -678,6 +681,7 @@ func (s *Server) setSourceProfile(ctx context.Context, raw json.RawMessage) (any
 	var args struct {
 		SourceID       string `json:"source_id"`
 		QualityProfile string `json:"quality_profile"`
+		Backfill       string `json:"backfill"`
 	}
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
@@ -685,11 +689,12 @@ func (s *Server) setSourceProfile(ctx context.Context, raw json.RawMessage) (any
 	if args.SourceID == "" {
 		return nil, invalidParams("source_id is required — the source to repoint, from list_followed")
 	}
-	if args.QualityProfile == "" {
-		return nil, invalidParams("quality_profile is required — the profile to move to, by name")
+	if args.QualityProfile == "" && args.Backfill == "" {
+		return nil, invalidParams("give quality_profile (the profile to move to, by name), " +
+			"backfill (from_now or full), or both — a repoint must change something")
 	}
 	out, err := s.resources.RepointSource(ctx, args.SourceID,
-		resources.RepointRequest{QualityProfile: args.QualityProfile})
+		resources.RepointRequest{QualityProfile: args.QualityProfile, Backfill: args.Backfill})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, invalidParams("there is no followed source with that id")
