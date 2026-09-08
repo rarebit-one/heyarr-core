@@ -185,6 +185,12 @@ ref   §33, §84, ADR-0043, #29
 why   The local peer prioritises the pieces near the playback window (§33), so a player's next bytes arrive next rather than whenever the swarm converges on them. The reader publishes where it is stalled (a byte offset), the store carries it across the role boundary invariant 4 allows, and the driver converts it to a piece index and fetches that window before falling back to rarest-first. Without a demo the mechanism is invisible: the driver would adopt a playhead nothing wrote, or write one nothing reads — the same mechanism-with-no-caller shape M6 hit. Here a node is given a playback window before it joins the swarm and its transfer logs that it prioritised the piece at that offset, proving the whole chain ran.
 evidence the transfer fetched the playback window first
 
+claim ensure-transfer-on-get
+state proven
+ref   §33, §56, §75, ADR-0030, ADR-0044, #371
+why   M10 served a blob already in flight but 404'd one a node DESIRED and did not hold with no transfer running: progressive playback optimised a transfer some other trigger had started, and nothing started one on demand. #371 (Option A) closes that. A client GET for a desired-but-absent blob ensures the replicate_blob transfer itself — idempotently and THROUGH THE JOB TABLE (invariant 4, the API role never reaches into the worker; invariant 9, keyed on blob + destination exactly as reconcile_peer keys it, so concurrent GETs and a racing reconcile cycle collapse onto one job) — then block-then-serves off it as bytes land. The gate is load-bearing: only a blob a live asset still names is ensured, so a GET can never make the node fetch arbitrary content the way a fetch-on-request route would — a hash nobody desires still 404s and starts nothing. Without a demo it is a route nobody proves reaches the queue: the swarm section deletes a desired blob from one node with no reconcile, shows the GET is the ONLY thing that enqueues its transfer, that a second GET collapses onto the same job (two GETs, one job), and that the bytes serve once the ensured transfer lands — while a GET for a blob no asset references 404s and enqueues nothing.
+evidence the GET ensured a transfer through the job table
+
 claim clients-are-served-hls
 state pending
 issue 202

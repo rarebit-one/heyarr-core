@@ -66,6 +66,19 @@ type Options struct {
 	// role-legal notification is the record the worker rewrites on disk
 	// (invariant 4). Ignored when Partial is nil.
 	PollInterval time.Duration
+	// Ensure lets a GET for a blob this node DESIRES but does not hold start the
+	// transfer that fetches it, then block-then-serve off it as bytes land (§33,
+	// #371 Option A). It is optional and, like Partial, wired only by the CLIENT
+	// surface — the peer content route leaves it nil and keeps its untouched
+	// whole-blob contract (ADR-0042). When nil, an absent blob with no transfer
+	// in flight is a 404 exactly as before. The gate that stops this becoming
+	// fetch-on-request lives behind the interface (TransferEnsurer).
+	Ensure TransferEnsurer
+	// EnsureTimeout bounds an ensure-on-GET request: how long the route waits for
+	// the transfer it started to make the blob servable — whole, or in flight as
+	// a partial — before answering "still fetching" rather than hanging (#371).
+	// Defaults to defaultEnsureTimeout. Ignored when Ensure is nil.
+	EnsureTimeout time.Duration
 }
 
 // defaultPollInterval paces a blocked partial read. Pieces land on network
@@ -74,14 +87,28 @@ type Options struct {
 // making a busy loop of a disk read.
 const defaultPollInterval = 200 * time.Millisecond
 
+// defaultEnsureTimeout bounds an ensure-on-GET wait (#371).
+//
+// It is the wait for a JUST-STARTED transfer to become servable — long enough
+// that a worker leases the replicate_blob job and either completes a small blob
+// or stages the geometry a piece transfer streams from, short enough that a
+// blob whose source is unavailable answers "still fetching" rather than hanging.
+// It bounds only the pre-serve wait: once the route is streaming a partial or a
+// finished blob it rides the request's own context, so a healthy large transfer
+// is never cut off at this bound — the client simply retries a 503 that says so.
+const defaultEnsureTimeout = 30 * time.Second
+
 // Handler serves blob content.
 type Handler struct {
 	store   cas.Store
 	log     *slog.Logger
 	partial PartialSource
+	ensurer TransferEnsurer
 	// wait blocks a partial read for one poll interval, or until the request's
 	// context ends. Built from PollInterval, replaced in tests for determinism.
 	wait func(context.Context) error
+	// ensureTimeout bounds the ensure-on-GET pre-serve wait (#371).
+	ensureTimeout time.Duration
 }
 
 // New builds the handler. It returns an error rather than panicking so that a
@@ -98,11 +125,17 @@ func New(opts Options) (*Handler, error) {
 	if interval <= 0 {
 		interval = defaultPollInterval
 	}
+	ensureTimeout := opts.EnsureTimeout
+	if ensureTimeout <= 0 {
+		ensureTimeout = defaultEnsureTimeout
+	}
 	return &Handler{
-		store:   opts.Store,
-		log:     log.With("component", "blobs"),
-		partial: opts.Partial,
-		wait:    pollWait(interval),
+		store:         opts.Store,
+		log:           log.With("component", "blobs"),
+		partial:       opts.Partial,
+		ensurer:       opts.Ensure,
+		wait:          pollWait(interval),
+		ensureTimeout: ensureTimeout,
 	}, nil
 }
 
@@ -218,6 +251,14 @@ func (h *Handler) ContentAs(w http.ResponseWriter, r *http.Request, mime string)
 		// exactly as before — a partial has none of the whole-blob promises that
 		// route makes (ADR-0042).
 		if h.serveIfPartial(w, r, hash, mime) {
+			return
+		}
+		// Nothing in flight. If this is the client route (Ensure wired) and the
+		// blob is DESIRED, start the transfer that fetches it and block-then-serve
+		// off it as bytes land — "press play on not-yet-here content" (§33, #371
+		// Option A). A blob nobody desires starts nothing and falls through to the
+		// 404 below: the gate is what keeps this from being fetch-on-request.
+		if h.ensureAndServe(w, r, hash, mime) {
 			return
 		}
 		httpapi.Fail(w, r, problem.NotFound("this peer holds no blob "+hash.String()))

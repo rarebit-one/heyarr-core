@@ -711,7 +711,19 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	if pr, ok := blobStore.(partialStore); ok {
 		partialSource = piecePartialSource{store: pr, log: c.log}
 	}
-	blobHandler, err := blobs.New(blobs.Options{Store: blobStore, Logger: c.log, Partial: partialSource})
+	// A GET for a blob this node DESIRES but does not hold, with no transfer in
+	// flight, ensures one — idempotently, through the job table — and block-then-
+	// serves off it (§33, #371 Option A). Wired only here, on the client route:
+	// the gate (a want/replica intent already exists) keeps it from becoming
+	// fetch-on-request, and the peer surface builds its own handler with neither
+	// this nor Partial, so its whole-blob contract is untouched (ADR-0042).
+	ensurer := blobTransferEnsurer{cat: cat, queue: queue, log: c.log}
+	blobHandler, err := blobs.New(blobs.Options{
+		Store:   blobStore,
+		Logger:  c.log,
+		Partial: partialSource,
+		Ensure:  ensurer,
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
