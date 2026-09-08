@@ -58,7 +58,7 @@ func TestStartLoadsThenPlays(t *testing.T) {
 
 	rec := newRecorder(t)
 	c := rec.controller(t, "1")
-	if err := c.Start(context.Background(), "http://peer/render/tok/stream.mp4", "Big Buck Bunny", "video/mp4"); err != nil {
+	if err := c.Start(context.Background(), "http://peer/render/tok/stream.mp4", "Big Buck Bunny", "video/mp4", Subtitle{}); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
@@ -297,10 +297,43 @@ func TestDIDLClassFollowsTheMediaType(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.mime, func(t *testing.T) {
 			t.Parallel()
-			if got := didl("http://peer/x", "t", tc.mime); !strings.Contains(got, tc.want) {
+			if got := didl("http://peer/x", "t", tc.mime, Subtitle{}); !strings.Contains(got, tc.want) {
 				t.Errorf("didl(%q) has no %s: %s", tc.mime, tc.want, got)
 			}
 		})
+	}
+}
+
+// A caption sidecar is offered three ways (a subtitle <res>, and Samsung's
+// sec:CaptionInfoEx/CaptionInfo), the sec namespace is declared, and the srt
+// type is named — and an item WITHOUT a caption is byte-identical to before, so
+// the change is inert for content that has none.
+func TestDIDLCaptions(t *testing.T) {
+	t.Parallel()
+
+	sub := Subtitle{URL: "http://peer/render/subtok/captions.srt", MIME: "application/x-subrip"}
+	got := didl("http://peer/v/stream.mp4", "Ep", "video/mp4", sub)
+	for _, want := range []string{
+		`xmlns:sec="http://www.sec.co.kr/"`,
+		`<res protocolInfo="http-get:*:text/srt:*">http://peer/render/subtok/captions.srt</res>`,
+		`<sec:CaptionInfoEx sec:type="srt">http://peer/render/subtok/captions.srt</sec:CaptionInfoEx>`,
+		`<sec:CaptionInfo sec:type="srt">http://peer/render/subtok/captions.srt</sec:CaptionInfo>`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("caption DIDL missing %q:\n%s", want, got)
+		}
+	}
+
+	// No caption → no sec namespace, no caption tags, exactly as before.
+	none := didl("http://peer/v/stream.mp4", "Ep", "video/mp4", Subtitle{})
+	if strings.Contains(none, "sec:") || strings.Contains(none, "sec.co.kr") {
+		t.Errorf("captionless DIDL leaked a sec element: %s", none)
+	}
+
+	// A caption is only offered for video — an audio item never gets one.
+	audio := didl("http://peer/a/stream.mp3", "Song", "audio/mpeg", sub)
+	if strings.Contains(audio, "sec:") {
+		t.Errorf("audio DIDL should carry no captions: %s", audio)
 	}
 }
 
@@ -317,7 +350,7 @@ func TestSetURIEscapesWithNamedEntitiesOnly(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := &Controller{client: srv.Client(), renderer: Renderer{AVTransport: Service{Type: "urn:schemas-upnp-org:service:AVTransport:1", ControlURL: srv.URL}}}
-	if err := c.SetURI(context.Background(), "http://n/stream.mp4?a=1&b=2", `Dutton's "Yellowstone"`, "video/mp4"); err != nil {
+	if err := c.SetURI(context.Background(), "http://n/stream.mp4?a=1&b=2", `Dutton's "Yellowstone"`, "video/mp4", Subtitle{}); err != nil {
 		t.Fatalf("SetURI: %v", err)
 	}
 	for _, bad := range []string{"&#34;", "&#39;", "&#x22;"} {

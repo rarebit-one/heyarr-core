@@ -144,6 +144,12 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 	// devices and is never scriptable.
 	mime, ok := CanonicalMIME(granted.MIME)
 	if !ok {
+		// A caption capability names a subtitle type, which the video/audio
+		// table does not carry — try the (separate) caption whitelist before
+		// falling back. Same constant-from-a-table guarantee.
+		mime, ok = CanonicalCaptionMIME(granted.MIME)
+	}
+	if !ok {
 		mime = blobs.OctetStream
 	}
 	// Declared up front rather than corrected afterwards. This used to wrap

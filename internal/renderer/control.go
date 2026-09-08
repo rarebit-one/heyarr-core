@@ -90,6 +90,15 @@ func NewController(client *http.Client, r Renderer) (*Controller, error) {
 // the others: the responder is an appliance on a LAN Heyarr does not run.
 const maxControlResponse = 256 << 10
 
+// Subtitle is an optional external caption sidecar to offer alongside the
+// video. Empty when the item has none, in which case the DIDL is exactly what
+// it was before. URL must be renderer-fetchable without an Authorization
+// header — a render capability (ADR-0040), the same trust root as the video.
+type Subtitle struct {
+	URL  string
+	MIME string // application/x-subrip, text/vtt, text/x-ssa, …
+}
+
 // Start loads a URL and plays it.
 //
 // # Why the metadata is not optional
@@ -98,19 +107,19 @@ const maxControlResponse = 256 << 10
 // whether it will even attempt the content, and what it shows on screen while
 // it buffers. A renderer handed an empty metadata string will often accept the
 // URI and then refuse to play it, with no error at either end.
-func (c *Controller) Start(ctx context.Context, url, title, mime string) error {
-	if err := c.SetURI(ctx, url, title, mime); err != nil {
+func (c *Controller) Start(ctx context.Context, url, title, mime string, sub Subtitle) error {
+	if err := c.SetURI(ctx, url, title, mime, sub); err != nil {
 		return err
 	}
 	return c.Play(ctx)
 }
 
 // SetURI loads content without playing it.
-func (c *Controller) SetURI(ctx context.Context, url, title, mime string) error {
+func (c *Controller) SetURI(ctx context.Context, url, title, mime string, sub Subtitle) error {
 	_, err := c.act(ctx, "SetAVTransportURI",
 		Argument{Name: "InstanceID", Value: "0"},
 		Argument{Name: "CurrentURI", Value: url},
-		Argument{Name: "CurrentURIMetaData", Value: didl(url, title, mime)},
+		Argument{Name: "CurrentURIMetaData", Value: didl(url, title, mime, sub)},
 	)
 	return err
 }
@@ -211,7 +220,7 @@ func (c *Controller) act(ctx context.Context, action string, args ...Argument) (
 // one is worse than none: the renderer believes it and then fails on content
 // that does not match. Verified against a Samsung QN85B, which plays content
 // offered as `http-get:*:video/mp4:*`.
-func didl(url, title, mime string) string {
+func didl(url, title, mime string, sub Subtitle) string {
 	if title == "" {
 		title = "Heyarr"
 	}
@@ -222,17 +231,68 @@ func didl(url, title, mime string) string {
 	if mime == "" {
 		mime = "application/octet-stream"
 	}
+	hasSub := sub.URL != "" && strings.HasPrefix(mime, "video/")
 	var b strings.Builder
 	b.WriteString(`<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"`)
 	b.WriteString(` xmlns:dc="http://purl.org/dc/elements/1.1/"`)
-	b.WriteString(` xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">`)
+	b.WriteString(` xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"`)
+	if hasSub {
+		// Samsung's own namespace, carrying the caption extension the TV reads.
+		// Declared only when there is a caption, so an item without one is
+		// byte-identical to what shipped before.
+		b.WriteString(` xmlns:sec="http://www.sec.co.kr/"`)
+	}
+	b.WriteString(`>`)
 	b.WriteString(`<item id="1" parentID="0" restricted="1">`)
 	fmt.Fprintf(&b, `<dc:title>%s</dc:title>`, xmlEscape(title))
 	fmt.Fprintf(&b, `<upnp:class>%s</upnp:class>`, class)
 	fmt.Fprintf(&b, `<res protocolInfo="http-get:*:%s:*">%s</res>`,
 		xmlEscape(mime), xmlEscape(url))
+	if hasSub {
+		// Three ways the same subtitle URL is offered, because renderers do not
+		// agree on one: a secondary <res> with a subtitle protocolInfo (the DLNA
+		// way), and Samsung's <sec:CaptionInfoEx>/<sec:CaptionInfo> (what the TVs
+		// this was written against actually read). A device ignores the ones it
+		// does not understand. type= is "srt"/"vtt"/"smi", which the TV keys on.
+		typ := captionType(sub.MIME)
+		fmt.Fprintf(&b, `<res protocolInfo="http-get:*:%s:*">%s</res>`,
+			xmlEscape(captionResMIME(sub.MIME)), xmlEscape(sub.URL))
+		fmt.Fprintf(&b, `<sec:CaptionInfoEx sec:type="%s">%s</sec:CaptionInfoEx>`,
+			xmlEscape(typ), xmlEscape(sub.URL))
+		fmt.Fprintf(&b, `<sec:CaptionInfo sec:type="%s">%s</sec:CaptionInfo>`,
+			xmlEscape(typ), xmlEscape(sub.URL))
+	}
 	b.WriteString(`</item></DIDL-Lite>`)
 	return b.String()
+}
+
+// captionType is the short token Samsung's sec:type wants for a subtitle MIME.
+func captionType(mime string) string {
+	switch {
+	case strings.Contains(mime, "vtt"):
+		return "vtt"
+	case strings.Contains(mime, "ssa"), strings.Contains(mime, "ass"):
+		return "ssa"
+	case strings.Contains(mime, "smi"):
+		return "smi"
+	default:
+		return "srt"
+	}
+}
+
+// captionResMIME is the media type named in the subtitle's <res> protocolInfo.
+// Samsung expects text/srt here (not application/x-subrip), so map to it.
+func captionResMIME(mime string) string {
+	switch captionType(mime) {
+	case "vtt":
+		return "text/vtt"
+	case "ssa":
+		return "text/ssa"
+	case "smi":
+		return "smi/caption"
+	default:
+		return "text/srt"
+	}
 }
 
 // formatDuration renders H:MM:SS, which is what UPnP's time type is.
