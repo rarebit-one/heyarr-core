@@ -1,6 +1,6 @@
 ## heyarr quality-profile
 
-Inspect the quality profiles a want is measured against
+Author and inspect the quality profiles a want is measured against
 
 ### Synopsis
 
@@ -13,7 +13,7 @@ A quality profile says three different KINDS of thing (§62):
 A profile with no terminal rules is never finished, which is legal and is what
 the seeded "archival" profile is.
 
-Authoring profiles is an API operation; these commands read them.
+Use "create" to author one and "list" to read them.
 
 ### Options inherited from parent commands
 
@@ -24,4 +24,5 @@ Authoring profiles is an API operation; these commands read them.
 ### See also
 
 * [heyarr](heyarr.md)	 - Self-hosted content lifecycle, replication and consumption
+* [heyarr quality-profile create](heyarr_quality-profile_create.md)	 - Author a quality profile (§62)
 * [heyarr quality-profile list](heyarr_quality-profile_list.md)	 - List the quality profiles
