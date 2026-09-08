@@ -242,14 +242,18 @@ type CreatedToken struct {
 
 // IdentityUser is a pinned user identity (§40, ADR-0048): the trust root a peer
 // checks a device's enrolment cert against. It carries no secret — a user
-// identity's private key is the person's and never enters the server (ADR-0032)
-// — and no cert; the pin is the public key, and that is all this shape holds.
+// identity's private key is the person's and never enters the server (ADR-0032).
+// RecoveryEncryptionKey is the one public key beside the pin: the X25519 recovery
+// encryption PUBLIC key new personal-state spaces are wrapped for (§41, ADR-0049),
+// registered when the user is pinned and empty when the identity has none. It is a
+// public recipient only — the paper recovery secret never enters the server.
 type IdentityUser struct {
-	ID          string    `json:"id"`
-	PrincipalID string    `json:"principal_id"`
-	PublicKey   string    `json:"public_key"`
-	Name        string    `json:"name"`
-	EnrolledAt  time.Time `json:"enrolled_at"`
+	ID                    string    `json:"id"`
+	PrincipalID           string    `json:"principal_id"`
+	PublicKey             string    `json:"public_key"`
+	RecoveryEncryptionKey string    `json:"recovery_encryption_key,omitempty"`
+	Name                  string    `json:"name"`
+	EnrolledAt            time.Time `json:"enrolled_at"`
 }
 
 // IdentityDevice is a device key a user has vouched for (§40, ADR-0048). The

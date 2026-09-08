@@ -30,11 +30,12 @@ import (
 // subsequent list cannot disagree about the same user.
 func identityUserFromStore(u deviceauth.User) IdentityUser {
 	return IdentityUser{
-		ID:          u.ID,
-		PrincipalID: u.PrincipalID,
-		PublicKey:   u.PublicKey,
-		Name:        u.Name,
-		EnrolledAt:  u.EnrolledAt.UTC(),
+		ID:                    u.ID,
+		PrincipalID:           u.PrincipalID,
+		PublicKey:             u.PublicKey,
+		RecoveryEncryptionKey: u.RecoveryEncryptionKey,
+		Name:                  u.Name,
+		EnrolledAt:            u.EnrolledAt.UTC(),
 	}
 }
 
@@ -60,11 +61,15 @@ func identityDeviceFromStore(d deviceauth.Device) IdentityDevice {
 }
 
 // enrolUserRequest is the POST /identities/users body. The public key is the
-// whole request: a user identity IS its key (ADR-0048), and a body without one
-// would be a request to pin nothing.
+// heart of the request: a user identity IS its key (ADR-0048), and a body without
+// one would be a request to pin nothing. RecoveryEncryptionKey is the optional
+// X25519 recovery encryption PUBLIC key registered alongside it (§41), which the
+// device-enrolment response then carries to an enrolling device; it is a public
+// recipient only — never the paper recovery secret.
 type enrolUserRequest struct {
-	PublicKey string `json:"public_key"`
-	Name      string `json:"name"`
+	PublicKey             string `json:"public_key"`
+	RecoveryEncryptionKey string `json:"recovery_encryption_key"`
+	Name                  string `json:"name"`
 }
 
 func (a *API) enrolUser(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +83,7 @@ func (a *API) enrolUser(w http.ResponseWriter, r *http.Request) {
 			err.Error()+"; a user identity is pinned by its public key (ADR-0048)"))
 		return
 	}
-	user, err := a.identities.EnrolUser(r.Context(), body.PublicKey, body.Name)
+	user, err := a.identities.EnrolUser(r.Context(), body.PublicKey, body.Name, body.RecoveryEncryptionKey)
 	if err != nil {
 		a.failIdentity(w, r, err)
 		return

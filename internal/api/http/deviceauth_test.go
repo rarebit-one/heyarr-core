@@ -124,7 +124,7 @@ func (h *deviceAuthHarness) enrolledDevice(t *testing.T) (deviceKey string, cred
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := h.store.EnrolUser(ctx, u.UserID(), "alice"); err != nil {
+	if _, err := h.store.EnrolUser(ctx, u.UserID(), "alice", ""); err != nil {
 		t.Fatalf("enrol user: %v", err)
 	}
 	if _, err := h.store.EnrolDevice(ctx, cert, "phone"); err != nil {
@@ -312,7 +312,7 @@ func TestMemberAdmittedDeviceEarnsWriteOnItsOwnKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.store.EnrolUser(context.Background(), u.UserID(), "owner"); err != nil {
+	if _, err := h.store.EnrolUser(context.Background(), u.UserID(), "owner", ""); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
