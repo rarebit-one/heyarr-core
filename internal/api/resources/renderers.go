@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
+	"github.com/rarebit-one/heyarr-core/internal/api/render"
 	"github.com/rarebit-one/heyarr-core/internal/domain/playback"
 	"github.com/rarebit-one/heyarr-core/internal/renderer"
 )
@@ -231,7 +233,8 @@ func (a *API) playOnRenderer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := ctrl.Start(r.Context(), started.RenderURL, started.Title, started.MIME); err != nil {
+	if err := ctrl.Start(r.Context(), started.RenderURL, started.Title, started.MIME,
+		renderer.Subtitle{URL: started.SubtitleURL, MIME: started.SubtitleMIME}); err != nil {
 		// The renderer refused. That is the device's answer and belongs to the
 		// caller verbatim — "714 Illegal MIME-type" is a different problem
 		// from "701 Transition not available" and they need different fixes.
@@ -356,6 +359,11 @@ type startedPlayback struct {
 	Title             string
 	MIME              string
 	Decision          string
+	// SubtitleURL is a render capability for the episode's caption sidecar, when
+	// it has one and this peer can mint one; empty otherwise. SubtitleMIME is its
+	// type. Offered to the renderer in the DIDL so a television can show captions.
+	SubtitleURL  string
+	SubtitleMIME string
 }
 
 // startForRenderer registers the renderer as a Device and begins a playback
@@ -386,6 +394,16 @@ func (a *API) startForRendererCtx(ctx context.Context, assetID, udn string, rend
 	}
 
 	title, mime := a.assetTitle(ctx, assetID)
+	// Offer captions only once we know the video itself will be served — a
+	// caption URL with no video URL is nothing to hang it on.
+	subURL, subMIME := "", ""
+	if started.RenderURL != "" {
+		if blob, m := a.captionForRenderer(ctx, assetID); blob != "" {
+			if u := a.captionURL(ctx, blob, m, a.now()); u != "" {
+				subURL, subMIME = u, m
+			}
+		}
+	}
 	return startedPlayback{
 		SessionID:         started.SessionID,
 		RenderURL:         started.RenderURL,
@@ -393,7 +411,99 @@ func (a *API) startForRendererCtx(ctx context.Context, assetID, udn string, rend
 		Title:             title,
 		MIME:              mime,
 		Decision:          started.Decision,
+		SubtitleURL:       subURL,
+		SubtitleMIME:      subMIME,
 	}, nil
+}
+
+// captionForRenderer finds the caption sidecar to offer with a cast video: a
+// subtitle asset in the same edition whose filename stem matches the video's
+// (the sidecar convention — "Episode.mkv" ↔ "Episode.en.srt"). Returns the
+// blob hash and MIME, or empty when there is none. Tolerant by construction:
+// any read failure yields no caption rather than a failed cast.
+func (a *API) captionForRenderer(ctx context.Context, assetID string) (blobHash, mime string) {
+	var editionID, vPath, vFile sql.NullString
+	if err := a.reader.QueryRowContext(ctx,
+		`SELECT edition_id, source_path, filename FROM assets WHERE id = ?`, assetID,
+	).Scan(&editionID, &vPath, &vFile); err != nil || !editionID.Valid {
+		return "", ""
+	}
+	vStem := fileStem(vFile.String, vPath.String)
+	if vStem == "" {
+		return "", ""
+	}
+	rows, err := a.reader.QueryContext(ctx,
+		`SELECT blob_hash, mime, source_path, filename FROM assets
+		 WHERE edition_id = ? AND role = 'subtitle' AND blob_hash IS NOT NULL`, editionID.String)
+	if err != nil {
+		return "", ""
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var b, m, sp, fn sql.NullString
+		if err := rows.Scan(&b, &m, &sp, &fn); err != nil {
+			continue
+		}
+		if !b.Valid || b.String == "" || !render.CaptionMIME(m.String) {
+			continue
+		}
+		// The sidecar's stem starts with the video's ("Episode" is a prefix of
+		// "Episode.en"). First match wins — releases ship one per episode.
+		if strings.HasPrefix(fileStem(fn.String, sp.String), vStem) {
+			return b.String, m.String
+		}
+	}
+	return "", ""
+}
+
+// fileStem is the basename with its final extension removed, from the filename
+// if present, else the source path.
+func fileStem(filename, sourcePath string) string {
+	base := filename
+	if base == "" {
+		base = sourcePath
+	}
+	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
+		base = base[i+1:]
+	}
+	if dot := strings.LastIndexByte(base, '.'); dot > 0 {
+		base = base[:dot]
+	}
+	return base
+}
+
+// captionURL mints a render capability for a caption sidecar — the caption twin
+// of renderURL. It bypasses renderURL's audio/video PlayableMIME gate (a
+// subtitle is neither) and checks the caption whitelist instead; the serve side
+// (internal/api/render) recognises the same set.
+func (a *API) captionURL(ctx context.Context, blobHash, mime string, now time.Time) string {
+	if len(a.renderSecret) == 0 || a.renderBaseURL == "" || blobHash == "" || !render.CaptionMIME(mime) {
+		return ""
+	}
+	token, err := render.Capability{
+		BlobHash:  blobHash,
+		ExpiresAt: now.Add(renderCapabilityTTL),
+		MIME:      mime,
+	}.Sign(a.renderSecret)
+	if err != nil {
+		a.log.Warn("signing a caption capability",
+			"request_id", httpapi.RequestIDFrom(ctx), "error", err)
+		return ""
+	}
+	return a.renderBaseURL + render.Path(token) + "/" + captionFilename(mime)
+}
+
+// captionFilename is a plausible last path segment for a renderer that sniffs
+// one from the URL before it will fetch a caption.
+func captionFilename(mime string) string {
+	switch {
+	case strings.Contains(mime, "vtt"):
+		return "captions.vtt"
+	case strings.Contains(mime, "ssa"), strings.Contains(mime, "ass"):
+		return "captions.ssa"
+	default:
+		return "captions.srt"
+	}
 }
 
 // upsertRendererDevice records a discovered renderer as a Device, returning its id.
@@ -524,7 +634,8 @@ func (a *API) PlayOnRenderer(ctx context.Context, udn, assetID string) (map[stri
 		return nil, errors.New(cmpOr(started.RenderUnavailable,
 			"this peer cannot serve these bytes to a renderer"))
 	}
-	if err := ctrl.Start(ctx, started.RenderURL, started.Title, started.MIME); err != nil {
+	if err := ctrl.Start(ctx, started.RenderURL, started.Title, started.MIME,
+		renderer.Subtitle{URL: started.SubtitleURL, MIME: started.SubtitleMIME}); err != nil {
 		return nil, err
 	}
 	return map[string]any{
