@@ -2,6 +2,8 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
@@ -148,6 +150,44 @@ func (c *Catalog) canonicalBlobs(ctx context.Context) ([]string, error) {
 		out = append(out, hash)
 	}
 	return out, rows.Err()
+}
+
+// IsBlobDesired reports whether this node still accounts for a blob through a
+// live asset — §19's canonical blob set membership, asked for one hash rather
+// than materialised as a set.
+//
+// # It is the load-bearing gate on ensure-on-GET (#371)
+//
+// A client GET for a blob this node desires but does not hold may idempotently
+// start the transfer that fetches it (Option A, the decision on #371). The DoS
+// this opens if left ungated is a GET that makes a node fetch ARBITRARY content
+// by asking for it, so the enqueue is allowed ONLY when this returns true: the
+// node is starting the fetch of a thing it had already decided it wants, at the
+// moment a player reaches for it — not fetching on request. A hash nobody
+// desires still 404s and starts nothing.
+//
+// # It reuses canonicalBlobs's exact predicate, and that is the point
+//
+// The same rule that puts a blob in the replication desired set — a live asset
+// (`blob_hash` naming it, ADR-0020's linked assets excluded by construction),
+// whose bytes have not gone missing — is the rule that lets a GET start its
+// transfer. Asking the question for one hash rather than diffing the whole set
+// keeps the two from ever drifting: the gate and the set answer out of one
+// predicate, so a blob a reconcile cycle would replicate is exactly a blob a GET
+// may ensure, and no third notion of "desired" can grow between them.
+func (c *Catalog) IsBlobDesired(ctx context.Context, blobHash string) (bool, error) {
+	var one int
+	err := c.db.Reader().QueryRowContext(ctx, `
+		SELECT 1 FROM assets
+		 WHERE blob_hash = ? AND missing_since IS NULL
+		 LIMIT 1`, blobHash).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("catalog: checking whether a blob is desired: %w", err)
+	}
+	return true, nil
 }
 
 // presentReplicas is what every peer is known to hold.

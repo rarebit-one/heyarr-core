@@ -7333,6 +7333,80 @@ YAML
   assert_eq "$("$GEN" -hash "$root/pp-hole.bin")" "$("$GEN" -hash "$root/pp-hole-expect.bin")" \
     "and those bytes are the true content too, once the piece that carried them landed"
 
+  # -------------------------------------------------------------------------
+  note "  🔴 ensure-on-GET: a client reaches for a DESIRED blob nobody is transferring, and the GET starts the fetch (§33, #371)"
+  # -------------------------------------------------------------------------
+  #
+  # Everything above served a blob already held, arriving, or staged. #371 is the
+  # case none of those cover: a player presses play on content this node has
+  # DECIDED it wants — a live asset names it — but does not hold, with no transfer
+  # running. Before this the client route 404'd; the fetch had to be started by
+  # some other trigger first. Now the GET ensures one, through the job table
+  # (invariant 4), gated on the blob being desired so a GET can never make the
+  # node fetch arbitrary content (the DoS #371 names).
+  #
+  # $blob is converged onto A and B. Delete it from A's disk ALONE — the asset row
+  # stays, so A still DESIRES it — and do not reconcile. A now desires a blob it
+  # does not hold with nothing in flight: exactly the state the route must turn
+  # into a transfer.
+  local selfA
+  selfA=$(cli_sa peers list --json | jq -r '.[] | select(.is_self) | .id')
+  find "$root/a/data/cas/blobs" -name "${blob#blake3:}" -type f -delete
+  assert_eq "$(peer_holds "$root/a/data/cas" "$blob")" "0" \
+    "node A no longer holds the desired blob, and nothing is fetching it"
+
+  # Live A-destined replicate_blob transfers for these bytes, right now. Zero: the
+  # convergence jobs succeeded and freed their dedupe key, and the reconcile beat's
+  # only pass ran while A still held the blob. So the sole thing that can create
+  # one below is the GET.
+  ensure_live_jobs() { # blob-hash -> count of live (pending|leased) A-destined replicate_blob jobs
+    sw_a "/api/v1/jobs?type=replicate_blob" | jq --arg b "$1" --arg p "$selfA" \
+      '[.items[] | select(.payload.blob_hash == $b and .payload.destination_peer_id == $p
+        and (.state == "pending" or .state == "leased"))] | length'
+  }
+  ensure_blob_held_on_a() { [[ "$(peer_holds "$root/a/data/cas" "$1")" == "1" ]]; }
+
+  assert_eq "$(ensure_live_jobs "$blob")" "0" \
+    "no transfer runs for the desired-but-absent blob before any client asks — the GET is the only trigger below"
+
+  # The GET. It block-then-serves off the transfer it starts, which for a 32 MiB
+  # reassembly can outlast one request — a bounded "still fetching" a client
+  # retries, never a hang (#371). So the request is capped and its code ignored:
+  # what it PROVES is server-side — that asking ensured a transfer.
+  sw_a "/api/v1/blobs/$blob/content" --max-time 3 -o /dev/null >/dev/null 2>&1 || true
+  assert_eq "$(ensure_live_jobs "$blob")" "1" \
+    "the GET ensured a transfer through the job table: one replicate_blob job now targets A for the blob it desires"
+
+  # A SECOND GET must not stack a second transfer. The enqueue is keyed on
+  # blob + destination — the key reconcile_peer uses — so it collapses onto the
+  # one already in flight (invariant 9).
+  sw_a "/api/v1/blobs/$blob/content" --max-time 3 -o /dev/null >/dev/null 2>&1 || true
+  assert_eq "$(ensure_live_jobs "$blob")" "1" \
+    "a second GET created no second transfer: the idempotent enqueue collapsed both onto one job (two GETs → one job)"
+
+  # And it ENDS UP SERVED: the ensured transfer completes in the worker and the
+  # same route returns the true bytes.
+  wait_for "node A never re-assembled the blob the GET asked for — the ensured transfer did not complete" \
+    1800 ensure_blob_held_on_a "$blob"
+  local ensure_got="$root/ensure-got.bin" ensure_code
+  ensure_code=$(sw_a "/api/v1/blobs/$blob/content" -o "$ensure_got" -w '%{http_code}')
+  assert_eq "$ensure_code" "200" \
+    "once the ensured transfer landed, the same GET serves the blob — press-play-on-not-yet-here content, end to end"
+  assert_eq "$("$GEN" -hash "$ensure_got")" "$blob" \
+    "and the served bytes are exactly the blob's content, not a partial or a hole"
+
+  # THE GATE, the load-bearing negative: a GET for a blob NOBODY desires still
+  # 404s and starts nothing. This is what keeps ensure-on-GET from being
+  # fetch-on-request.
+  printf 'ensure-on-get-nobody-desires-these-bytes-%s' "$RANDOM$RANDOM$$" > "$root/nd.bin"
+  local nd nd_code
+  nd=$("$GEN" -hash "$root/nd.bin")
+  nd_code=$(sw_a "/api/v1/blobs/$nd/content" --max-time 3 -o /dev/null -w '%{http_code}')
+  assert_eq "$nd_code" "404" \
+    "a GET for a blob no asset references is a plain 404 — the gate refused to fetch it"
+  assert_eq "$(ensure_live_jobs "$nd")" "0" \
+    "and it started no transfer: a hash nobody desires cannot be pulled by asking for it (the DoS gate holds)"
+
   local p
   for p in "${PEER_PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done
   for p in "${PEER_PIDS[@]:-}"; do wait "$p" 2>/dev/null || true; done
