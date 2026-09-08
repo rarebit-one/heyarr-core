@@ -271,6 +271,40 @@ func PlayableMIME(mime string) bool {
 	return ok
 }
 
+// servableCaptionMIME is every subtitle type this route will name in a response.
+//
+// Kept SEPARATE from servableMIME on purpose: a renderer's caption sidecar is a
+// companion to the audio/video it plays, not something you cast on its own, so
+// adding these must not make PlayableMIME (the video/audio boundary) answer yes
+// for a subtitle. The same table-of-constants discipline applies — the value
+// written to the header is a literal here, never the caller's string — so no
+// reflected-XSS hole opens. And unlike the images that block excluded, these are
+// inert text formats (SubRip / WebVTT / SSA / plain): none is scriptable the way
+// text/html or SVG is, which is why they are safe to name where images are not.
+var servableCaptionMIME = map[string]string{
+	"application/x-subrip": "application/x-subrip",
+	"text/srt":             "application/x-subrip",
+	"application/x-srt":    "application/x-subrip",
+	"text/vtt":             "text/vtt",
+	"text/x-ssa":           "text/x-ssa",
+	"text/x-ass":           "text/x-ssa",
+	"text/plain":           "text/plain",
+}
+
+// CanonicalCaptionMIME maps a subtitle media type onto the constant this route
+// serves for it, or reports that there is none. Same contract as CanonicalMIME.
+func CanonicalCaptionMIME(mime string) (string, bool) {
+	canonical, ok := servableCaptionMIME[strings.ToLower(strings.TrimSpace(mime))]
+	return canonical, ok
+}
+
+// CaptionMIME reports whether this route will name a subtitle type in a response
+// — the mint-time check for a caption capability.
+func CaptionMIME(mime string) bool {
+	_, ok := CanonicalCaptionMIME(mime)
+	return ok
+}
+
 func encode(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 func decode(s string) ([]byte, error) { return base64.RawURLEncoding.DecodeString(s) }
