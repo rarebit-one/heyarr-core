@@ -87,3 +87,4 @@ An ADR that merely describes the code is not worth having.
 | [0078](0078-an-on-demand-poll-reuses-the-poll-job-and-never-reschedules.md) | An on-demand poll reuses the poll job and never reschedules | Accepted |
 | [0079](0079-renderers-get-a-plain-http-origin-of-their-own.md) | Renderers get a plain-HTTP origin of their own | Accepted |
 | [0080](0080-document-is-a-first-class-content-type.md) | `document` is a first-class content type, not a reuse of `book` | Accepted |
+| [0081](0081-a-folder-that-names-a-season-is-a-season-of-its-series.md) | A folder that names a season is a season of its series | Accepted |

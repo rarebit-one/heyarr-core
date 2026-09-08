@@ -1126,5 +1126,208 @@
       "Rule": "series/sxxexx",
       "Identified": true
     }
+  },
+  {
+    "path": "Show Name Season 4 Mp4 1080p/Show Name S04E04.mp4",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show name",
+      "Title": "Show Name",
+      "SortTitle": "show name",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 4,
+        "season": 4
+      },
+      "EditionKey": "season-04",
+      "EditionLabel": "Season 04",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show Name (2018) Season 4 1080p WEB-DL/Show Name S04E01.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show name:2018",
+      "Title": "Show Name",
+      "SortTitle": "show name",
+      "Year": 2018,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "season": 4
+      },
+      "EditionKey": "season-04",
+      "EditionLabel": "Season 04",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show.Name.S04.Complete.1080p.WEB/Show.Name.S04E02.1080p.WEB.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show name",
+      "Title": "Show Name",
+      "SortTitle": "show name",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 2,
+        "season": 4
+      },
+      "EditionKey": "season-04",
+      "EditionLabel": "Season 04",
+      "EditionType": "web-dl",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show.Name.S04E03.1080p.WEB-DL/Show.Name.S04E03.1080p.WEB-DL.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show name",
+      "Title": "Show Name",
+      "SortTitle": "show name",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 3,
+        "season": 4
+      },
+      "EditionKey": "season-04",
+      "EditionLabel": "Season 04",
+      "EditionType": "web-dl",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show Name Season 4 Complete/05 - Title.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show name",
+      "Title": "Show Name",
+      "SortTitle": "show name",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 5,
+        "episode_title": "Title",
+        "season": 4
+      },
+      "EditionKey": "season-04",
+      "EditionLabel": "Season 04",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/season-dir",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show Name Season 4 Mp4 1080p/poster.jpg",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show name",
+      "Title": "Show Name",
+      "SortTitle": "show name",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "season": 4
+      },
+      "EditionKey": "season-04",
+      "EditionLabel": "Season 04",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "artwork",
+      "Source": "path-heuristic",
+      "Rule": "series/show",
+      "Identified": true
+    }
+  },
+  {
+    "path": "Show Name Staffel 2 German 720p/Show Name S02E01.mkv",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show name",
+      "Title": "Show Name",
+      "SortTitle": "show name",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "episode": 1,
+        "season": 2
+      },
+      "EditionKey": "season-02",
+      "EditionLabel": "Season 02",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "primary",
+      "Source": "path-heuristic",
+      "Rule": "series/sxxexx",
+      "Identified": true
+    }
+  },
+  {
+    "path": "TV/Show Name Season 4 Mp4 1080p/poster.jpg",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show name",
+      "Title": "Show Name",
+      "SortTitle": "show name",
+      "Year": 0,
+      "WorkAttributes": {},
+      "EditionAttributes": {
+        "season": 4
+      },
+      "EditionKey": "season-04",
+      "EditionLabel": "Season 04",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "artwork",
+      "Source": "path-heuristic",
+      "Rule": "series/show",
+      "Identified": true
+    }
+  },
+  {
+    "path": "TV/Show Name (2018)/poster.jpg",
+    "candidate": {
+      "ContentType": "series",
+      "WorkKey": "series:show name:2018",
+      "Title": "Show Name",
+      "SortTitle": "show name",
+      "Year": 2018,
+      "WorkAttributes": {},
+      "EditionAttributes": {},
+      "EditionKey": "default",
+      "EditionLabel": "",
+      "EditionType": "",
+      "Language": "",
+      "AssetRole": "artwork",
+      "Source": "path-heuristic",
+      "Rule": "series/show",
+      "Identified": true
+    }
   }
 ]
