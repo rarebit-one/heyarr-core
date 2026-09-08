@@ -17,6 +17,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/desired"
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
+	"github.com/rarebit-one/heyarr-core/internal/domain/strategy"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 )
@@ -384,7 +385,14 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (DesiredI
 	var profileID, workID string
 	if err := a.db.InTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		profileID, err = a.resolveProfile(ctx, tx, req.QualityProfileID, req.QualityProfile)
+		// A descriptor carries its content type, so a want minted from one can
+		// inherit that type's default profile (ADR-0082); a want naming an
+		// existing work by id does not, and keeps the "name a profile" refusal.
+		var contentType string
+		if req.Work != nil {
+			contentType = req.Work.ContentType
+		}
+		profileID, err = a.resolveProfile(ctx, tx, req.QualityProfileID, req.QualityProfile, contentType)
 		if err != nil {
 			return err
 		}
@@ -476,7 +484,15 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 
 // resolveProfile turns a profile id or name into an id, refusing both an
 // unknown id and an unknown name by name.
-func (a *API) resolveProfile(ctx context.Context, tx *sql.Tx, id, name string) (string, error) {
+// resolveProfile turns a caller's profile id or name into a stored id. When it
+// is given neither, it falls back to the content type's default profile
+// (ADR-0082): a `document` follow inherits `published` rather than being refused
+// or, worse, inheriting a video profile whose resolution gate a document can
+// never pass. contentType may be "" — a caller that does not know it, or a type
+// with no default (music, book, whose satisfaction attributes do not exist yet)
+// — in which case the original refusal stands, because "this should exist" with
+// no statement of what would count as existing genuinely cannot be evaluated.
+func (a *API) resolveProfile(ctx context.Context, tx *sql.Tx, id, name, contentType string) (string, error) {
 	switch {
 	case id != "":
 		var found string
@@ -487,18 +503,34 @@ func (a *API) resolveProfile(ctx context.Context, tx *sql.Tx, id, name string) (
 		}
 		return found, err
 	case name != "":
-		var found string
-		err := tx.QueryRowContext(ctx,
-			`SELECT id FROM quality_profiles WHERE name = ?`, name).Scan(&found)
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", &badRequest{fmt.Errorf("there is no quality profile called %q", name)}
-		}
-		return found, err
+		return a.profileIDByName(ctx, tx, name)
 	default:
+		if contentType != "" {
+			if def := strategy.For(contentType).DefaultProfile; def != "" {
+				// The default is a seeded profile (policy.Defaults()), so a missing
+				// row here is not the caller's fault but a seeding failure, and
+				// profileIDByName renders sql.ErrNoRows as a bad-request naming the
+				// profile — which is the right shape of message even for that case:
+				// it names exactly what is absent.
+				return a.profileIDByName(ctx, tx, def)
+			}
+		}
 		return "", &badRequest{errors.New("a desired item must name a quality profile — " +
 			"\"this should exist\" with no statement of what would count as existing " +
 			"cannot be evaluated (§56)")}
 	}
+}
+
+// profileIDByName resolves a profile name to its stored id, rendering an unknown
+// name as a bad request that names it.
+func (a *API) profileIDByName(ctx context.Context, tx *sql.Tx, name string) (string, error) {
+	var found string
+	err := tx.QueryRowContext(ctx,
+		`SELECT id FROM quality_profiles WHERE name = ?`, name).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", &badRequest{fmt.Errorf("there is no quality profile called %q", name)}
+	}
+	return found, err
 }
 
 // resolveWorkDescriptor finds or creates the Work a descriptor names.
@@ -594,7 +626,9 @@ func (a *API) UpdateDesired(ctx context.Context, id string, req UpdateDesiredReq
 			if req.QualityProfile != nil {
 				wantName = *req.QualityProfile
 			}
-			profileID, err := a.resolveProfile(ctx, tx, wantID, wantName)
+			// An explicit id or name is always present here (this block is guarded
+			// on one being set), so no content-type default is needed.
+			profileID, err := a.resolveProfile(ctx, tx, wantID, wantName, "")
 			if err != nil {
 				return err
 			}

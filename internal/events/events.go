@@ -313,6 +313,11 @@ const (
 	// path the projection reuses.
 	TypeFollowSourceCreated = "desired.source.followed"
 	TypeFollowSourceRemoved = "desired.source.unfollowed"
+	// TypeFollowSourceRepointed is a followed source's quality profile being
+	// changed in place (ADR-0082) — a real state transition, unlike a poll: the
+	// standard every item this source archives is judged against is now a
+	// different one, and every want it has projected was re-judged with it.
+	TypeFollowSourceRepointed = "desired.source.repointed"
 
 	// TypeItemDiscovered is a byte-less Item appearing in the catalog (ADR-0056,
 	// M12) — a single episode a feed adapter enumerated, before any bytes for it

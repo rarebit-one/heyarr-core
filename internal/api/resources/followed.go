@@ -17,6 +17,7 @@ import (
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
@@ -318,7 +319,10 @@ func (a *API) FollowSource(ctx context.Context, req FollowSourceRequest) (Follow
 	var profileID, workID string
 	if err := a.db.InTx(ctx, func(tx *sql.Tx) error {
 		var e error
-		profileID, e = a.resolveProfile(ctx, tx, req.QualityProfileID, req.QualityProfile)
+		// A follow that names no profile inherits the source's content-type
+		// default (ADR-0082): an rss_feed is a `document` and inherits `published`,
+		// never the video profile that would reject its captured articles.
+		profileID, e = a.resolveProfile(ctx, tx, req.QualityProfileID, req.QualityProfile, workContentType(srcType))
 		if e != nil {
 			return e
 		}
@@ -396,6 +400,75 @@ func (a *API) Unfollow(ctx context.Context, id string, keepArchive bool) error {
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// RepointRequest is the intent behind PATCH /followed-sources/{id} and MCP's
+// set_source_profile: change which quality profile a subscription — and every
+// want it has projected — is judged against (ADR-0082). Exactly one of the two
+// ways to name the profile is given, the same rule follow and want take.
+type RepointRequest struct {
+	QualityProfileID string `json:"quality_profile_id"`
+	QualityProfile   string `json:"quality_profile"`
+}
+
+// RepointSource changes a subscription's quality profile in place, shared by
+// PATCH /followed-sources/{id} and MCP's set_source_profile (ADR-0082).
+//
+// It exists because follow and unfollow were the only doors onto a subscription
+// (ADR-0057), so "this feed is on the wrong profile" forced an unfollow and
+// refollow — which strands the refollowed wants behind their own already-done,
+// content-addressed captures. This is the door that was missing: strategy is a
+// property of the subscription an operator can correct, not only a thing chosen
+// once at follow time.
+//
+// The repoint moves the source AND its wants together (RepointFollowedSource),
+// then reconciles each moved want at once, so an asset the library already holds
+// is re-judged against the new profile now rather than on the next sweep — the
+// captured article that the old video profile refused becomes satisfied the
+// moment this returns. The reconcile enqueue is best-effort and idempotent (the
+// dedupe key): a briefly-unavailable queue costs latency, not correctness,
+// because the reconcile beat re-judges everything regardless.
+func (a *API) RepointSource(ctx context.Context, id string, req RepointRequest) (FollowedSourceView, error) {
+	if req.QualityProfileID != "" && req.QualityProfile != "" {
+		return FollowedSourceView{}, &badRequest{errors.New(
+			"name the quality profile with either quality_profile_id or quality_profile, not both")}
+	}
+	if req.QualityProfileID == "" && req.QualityProfile == "" {
+		return FollowedSourceView{}, &badRequest{errors.New(
+			"a repoint must name the quality profile to move to, by quality_profile_id or quality_profile")}
+	}
+
+	// Resolve the profile name to an id, with no content-type default: a repoint
+	// is an explicit act, so an empty profile is refused rather than guessed.
+	var profileID string
+	if err := a.db.InTx(ctx, func(tx *sql.Tx) error {
+		var e error
+		profileID, e = a.resolveProfile(ctx, tx, req.QualityProfileID, req.QualityProfile, "")
+		return e
+	}); err != nil {
+		return FollowedSourceView{}, err
+	}
+
+	wants, err := a.catalog.RepointFollowedSource(ctx, id, profileID)
+	if errors.Is(err, catalog.ErrNoFollowSource) {
+		return FollowedSourceView{}, sql.ErrNoRows
+	}
+	if err != nil {
+		return FollowedSourceView{}, err
+	}
+
+	for _, wantID := range wants {
+		if _, e := a.jobs.Enqueue(ctx, jobs.EnqueueOptions{
+			Type:      acquisition.ReconcileJobType,
+			Payload:   acquisition.ReconcilePayload{DesiredItemID: wantID},
+			DedupeKey: acquisition.ReconcileDedupeKey + ":" + wantID,
+		}); e != nil {
+			a.log.Warn("could not enqueue reconciliation for a repointed want",
+				"desired_item_id", wantID, "error", e)
+		}
+	}
+
+	return a.FollowedSourceDetail(ctx, id)
 }
 
 // PollSource enqueues an immediate poll for one followed source, shared by
@@ -765,6 +838,25 @@ func (a *API) pollAllFollowedSources(w http.ResponseWriter, r *http.Request) {
 	a.write(w, r, http.StatusAccepted, out)
 }
 
+// patchFollowedSource is PATCH /api/v1/followed-sources/{id} — repoint a
+// subscription at a different quality profile in place (ADR-0082), the door that
+// spares an operator an unfollow-and-refollow to correct a strategy. It returns
+// the updated detail, with items_archived already reflecting the re-judged
+// wants.
+func (a *API) patchFollowedSource(w http.ResponseWriter, r *http.Request) {
+	var body RepointRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	out, err := a.RepointSource(r.Context(), chi.URLParam(r, "id"), body)
+	if err != nil {
+		a.failFollowWrite(w, r, err)
+		return
+	}
+	a.write(w, r, http.StatusOK, out)
+}
+
 // failFollowWrite renders a write failure, mapping the (work, feed) uniqueness
 // violation to a 409 the way failDesiredWrite maps a duplicate want.
 func (a *API) failFollowWrite(w http.ResponseWriter, r *http.Request, err error) {
@@ -811,6 +903,9 @@ func (a *API) mountFollowedSources(r chi.Router) {
 	r.Get("/followed-sources/{id}/items", a.listFollowedSourceItems)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/followed-sources", a.createFollowedSource)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Delete("/followed-sources/{id}", a.deleteFollowedSource)
+	// Repoint a subscription at a different quality profile in place (ADR-0082) —
+	// change its strategy without unfollowing. Ordinary operator write traffic.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Patch("/followed-sources/{id}", a.patchFollowedSource)
 	// Force a poll now instead of waiting for the ~6h next_poll_at. The bulk
 	// route is a static sibling of the per-source one, so chi's static-over-param
 	// precedence routes /followed-sources/poll here and /followed-sources/{id}/poll
