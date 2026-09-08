@@ -72,6 +72,19 @@ type Capability struct {
 	// because a blob has no type — bytes are identity (ADR-0006) — and the
 	// endpoint that serves them must not learn about Assets to find one.
 	MIME string
+	// CaptionBlob and CaptionMIME name a subtitle sidecar that rides WITH a
+	// video capability, so the serve side can advertise it to a television in
+	// the `CaptionInfo.sec` response header — the out-of-band mechanism a
+	// Samsung set uses IN ADDITION to the DIDL sec: tags, which do not reach
+	// some firmwares on their own. Both empty on an ordinary capability, and on
+	// a caption's own capability, which has no caption of its own; when they are
+	// set the payload carries two more fields, and the same signature covers
+	// them, so a device cannot swap in a different sidecar. The serve side never
+	// writes CaptionBlob into a header directly — it re-mints a caption
+	// capability from it (an HMAC of ours), exactly as MIME is only ever
+	// returned as a constant, so no reflected-header hole opens.
+	CaptionBlob string
+	CaptionMIME string
 }
 
 // NewSecret generates a signing secret.
@@ -110,12 +123,22 @@ func (c Capability) Sign(secret []byte) (string, error) {
 }
 
 func (c Capability) payload() string {
-	return strings.Join([]string{
+	fields := []string{
 		capabilityVersion,
 		encode([]byte(c.BlobHash)),
 		strconv.FormatInt(c.ExpiresAt.Unix(), 10),
 		encode([]byte(c.MIME)),
-	}, ".")
+	}
+	// A caption sidecar, when there is one, appends exactly two more fields.
+	// Absent it, the payload is byte-identical to the four-field one that
+	// shipped before, so an ordinary capability's token does not change shape.
+	if c.CaptionBlob != "" {
+		fields = append(fields,
+			encode([]byte(c.CaptionBlob)),
+			encode([]byte(c.CaptionMIME)),
+		)
+	}
+	return strings.Join(fields, ".")
 }
 
 // Verify checks a token and returns what it permits.
@@ -145,7 +168,9 @@ func Verify(secret []byte, token string, now time.Time) (Capability, error) {
 	}
 
 	fields := strings.Split(payload, ".")
-	if len(fields) != 4 || fields[0] != capabilityVersion {
+	// Four fields is a plain capability; six carries a caption sidecar (see
+	// payload). No other length is a capability this code ever signed.
+	if (len(fields) != 4 && len(fields) != 6) || fields[0] != capabilityVersion {
 		return Capability{}, ErrMalformed
 	}
 	blob, err := decode(fields[1])
@@ -165,6 +190,18 @@ func Verify(secret []byte, token string, now time.Time) (Capability, error) {
 		BlobHash:  string(blob),
 		ExpiresAt: time.Unix(unix, 0),
 		MIME:      string(mime),
+	}
+	if len(fields) == 6 {
+		capBlob, err := decode(fields[4])
+		if err != nil {
+			return Capability{}, ErrMalformed
+		}
+		capMIME, err := decode(fields[5])
+		if err != nil {
+			return Capability{}, ErrMalformed
+		}
+		c.CaptionBlob = string(capBlob)
+		c.CaptionMIME = string(capMIME)
 	}
 	if !now.Before(c.ExpiresAt) {
 		return Capability{}, ErrExpired
@@ -303,6 +340,26 @@ func CanonicalCaptionMIME(mime string) (string, bool) {
 func CaptionMIME(mime string) bool {
 	_, ok := CanonicalCaptionMIME(mime)
 	return ok
+}
+
+// CaptionFilename is a plausible last URL segment for a caption of this MIME.
+//
+// A renderer that sniffs a type from the path before it will fetch wants the
+// extension to look right; it decides nothing (the type and bytes come from
+// the capability), so a returned constant is enough. Kept beside the caption
+// MIME table it keys off, and used by the serve side when it builds the
+// CaptionInfo.sec header URL — the same shape internal/api/resources gives a
+// caption's own URL.
+func CaptionFilename(mime string) string {
+	canonical, _ := CanonicalCaptionMIME(mime)
+	switch {
+	case strings.Contains(canonical, "vtt"):
+		return "captions.vtt"
+	case strings.Contains(canonical, "ssa"):
+		return "captions.ssa"
+	default:
+		return "captions.srt"
+	}
 }
 
 func encode(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }

@@ -73,6 +73,61 @@ func TestCapabilityRoundTrip(t *testing.T) {
 	}
 }
 
+// TestCapabilityCarriesACaption pins the two optional fields a video capability
+// uses to advertise its subtitle sidecar (the CaptionInfo.sec header): they
+// round-trip, the one signature covers them so a swapped sidecar is rejected
+// exactly as a swapped video blob is, and a capability WITHOUT them is the
+// same four-field token that shipped before captions existed.
+func TestCapabilityCarriesACaption(t *testing.T) {
+	t.Parallel()
+
+	video := Capability{
+		BlobHash:    "blake3:" + strings.Repeat("a", 64),
+		ExpiresAt:   testNow.Add(time.Hour),
+		MIME:        "video/mp4",
+		CaptionBlob: "blake3:" + strings.Repeat("e", 64),
+		CaptionMIME: "application/x-subrip",
+	}
+	token := mustSign(t, video, testSecret)
+
+	got, err := Verify(testSecret, token, testNow)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if got.CaptionBlob != video.CaptionBlob {
+		t.Errorf("CaptionBlob = %q, want %q", got.CaptionBlob, video.CaptionBlob)
+	}
+	if got.CaptionMIME != video.CaptionMIME {
+		t.Errorf("CaptionMIME = %q, want %q", got.CaptionMIME, video.CaptionMIME)
+	}
+
+	// A different sidecar grafted under this token's good signature must fail:
+	// the signature covers the caption fields, not only the video ones.
+	other := mustSign(t, Capability{
+		BlobHash: video.BlobHash, ExpiresAt: video.ExpiresAt, MIME: video.MIME,
+		CaptionBlob: "blake3:" + strings.Repeat("f", 64), CaptionMIME: video.CaptionMIME,
+	}, testSecret)
+	oh, f := strings.Split(other, "."), strings.Split(token, ".")
+	swapped := strings.Join(append(oh[:6:6], f[6]), ".")
+	if _, err := Verify(testSecret, swapped, testNow); !errors.Is(err, ErrSignature) {
+		t.Fatalf("a swapped caption blob must be ErrSignature, got %v", err)
+	}
+
+	// No caption is the four-field token, byte-unchanged; its caption fields
+	// come back empty rather than as some default.
+	plain := mustSign(t, Capability{BlobHash: video.BlobHash, ExpiresAt: video.ExpiresAt, MIME: video.MIME}, testSecret)
+	if n := len(strings.Split(plain, ".")); n != 5 {
+		t.Fatalf("a captionless token has %d segments, want 5 (four fields + signature)", n)
+	}
+	pv, err := Verify(testSecret, plain, testNow)
+	if err != nil {
+		t.Fatalf("Verify plain: %v", err)
+	}
+	if pv.CaptionBlob != "" || pv.CaptionMIME != "" {
+		t.Errorf("captionless capability must have empty caption fields, got %q/%q", pv.CaptionBlob, pv.CaptionMIME)
+	}
+}
+
 // TestCapabilityRejects is the security surface of ADR-0040 in one table. Each
 // row is a way somebody could try to turn a capability for one blob into a
 // capability for something else.
