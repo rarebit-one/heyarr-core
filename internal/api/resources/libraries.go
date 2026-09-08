@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -410,4 +411,123 @@ func isUniqueViolation(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "unique constraint failed") ||
 		strings.Contains(msg, "constraint failed: unique")
+}
+
+// errLibraryNotEmpty is the refusal a library that still holds assets gets. It
+// is a sentinel rather than a database error because the database would not
+// refuse the delete: assets.library_id is ON DELETE SET NULL, so a raw delete
+// silently orphans a whole library's content from the library it belonged to.
+var errLibraryNotEmpty = errors.New("resources: the library still holds assets")
+
+// deleteLibrary removes an empty library and its roots (#228).
+//
+// The library must hold no assets. That is a deliberate refusal, not a cascade:
+// "remove the library, keep the content" (the schema's ON DELETE SET NULL) and
+// "remove the library and everything it brought in" are different operations,
+// and overloading one verb with both is how content disappears by surprise
+// (ADR-0083). The operation this route performs is the safe, unambiguous one —
+// an empty library, whose content was already removed per-work via
+// DELETE /works/{id}, goes together with its roots (library_roots is ON DELETE
+// CASCADE). Logical in ADR-0018's sense: catalog rows go, not one byte is
+// unlinked, and the event says so.
+func (a *API) deleteLibrary(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	var (
+		ev    events.Event
+		name  string
+		roots int
+	)
+	err := a.db.InTx(r.Context(), func(tx *sql.Tx) error {
+		// A missing library is ErrNoRows here, which a.fail turns into a 404.
+		if err := tx.QueryRowContext(r.Context(),
+			`SELECT name FROM libraries WHERE id = ?`, id).Scan(&name); err != nil {
+			return err
+		}
+		var assets int
+		if err := tx.QueryRowContext(r.Context(),
+			`SELECT count(*) FROM assets WHERE library_id = ?`, id).Scan(&assets); err != nil {
+			return err
+		}
+		if assets > 0 {
+			return errLibraryNotEmpty
+		}
+		if err := tx.QueryRowContext(r.Context(),
+			`SELECT count(*) FROM library_roots WHERE library_id = ?`, id).Scan(&roots); err != nil {
+			return err
+		}
+		// One statement. The library's roots are ON DELETE CASCADE, so the
+		// database removes them; the empty-check above proved there are no
+		// assets for the SET NULL to orphan.
+		if _, err := tx.ExecContext(r.Context(), `DELETE FROM libraries WHERE id = ?`, id); err != nil {
+			return err
+		}
+		var emitErr error
+		ev, emitErr = a.events.EmitTx(r.Context(), tx, events.TypeLibraryDeleted, "library", id,
+			map[string]any{
+				"library_id": id,
+				"name":       name,
+				"roots":      roots,
+				// The first question anyone reading the log will have; ADR-0018.
+				"bytes_removed": false,
+			})
+		return emitErr
+	})
+	if err != nil {
+		if errors.Is(err, errLibraryNotEmpty) {
+			httpapi.Fail(w, r, problem.Conflict(fmt.Sprintf(
+				"the library %q still holds content — remove its works first "+
+					"(DELETE /api/v1/works/{id}), then the empty library can go", name)))
+			return
+		}
+		a.fail(w, r, "library", err)
+		return
+	}
+	a.events.Publish(ev)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteLibraryRoot removes one root from a library (#228): Heyarr stops
+// scanning that directory.
+//
+// Unconditional and always safe. An asset references its library, never a root
+// — there is no root_id on assets — so removing a root orphans no ingested
+// content; only the root's scanned_files records go with it (ON DELETE
+// CASCADE), which a rescan of a remaining root would rebuild anyway. Logical in
+// ADR-0018's sense: no byte is unlinked.
+func (a *API) deleteLibraryRoot(w http.ResponseWriter, r *http.Request) {
+	libraryID := chi.URLParam(r, "id")
+	rootID := chi.URLParam(r, "rootID")
+
+	var (
+		ev   events.Event
+		path string
+	)
+	err := a.db.InTx(r.Context(), func(tx *sql.Tx) error {
+		// Scoped to the library named in the path: a root id belonging to
+		// another library reads as a 404 here, never a cross-library delete.
+		if err := tx.QueryRowContext(r.Context(),
+			`SELECT path FROM library_roots WHERE id = ? AND library_id = ?`, rootID, libraryID).
+			Scan(&path); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(r.Context(),
+			`DELETE FROM library_roots WHERE id = ?`, rootID); err != nil {
+			return err
+		}
+		var emitErr error
+		ev, emitErr = a.events.EmitTx(r.Context(), tx, events.TypeLibraryRootRemoved, "library", libraryID,
+			map[string]any{
+				"library_id": libraryID,
+				"root_id":    rootID,
+				"path":       path,
+			})
+		return emitErr
+	})
+	if err != nil {
+		a.fail(w, r, "library root", err)
+		return
+	}
+	a.events.Publish(ev)
+	w.WriteHeader(http.StatusNoContent)
 }

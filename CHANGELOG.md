@@ -11,6 +11,24 @@ stable.
 
 ### Added
 
+- **A library and a root can be removed (ADR-0083, #228).**
+  `DELETE /api/v1/libraries/{id}` removes an **empty** library and its roots
+  (`library_roots` is `ON DELETE CASCADE`); a library that still holds assets is
+  refused with `409` naming the fix (`DELETE /api/v1/works/{id}` first), because
+  `assets.library_id` is `ON DELETE SET NULL` and a raw delete would silently
+  orphan a whole library's content rather than refuse. `DELETE
+  /api/v1/libraries/{id}/roots/{rootID}` removes one root — always safe, since an
+  asset references its library and never a root, so Heyarr just stops scanning
+  that directory. Both are `write` (ordinary library management, the same class
+  as the work and edition deletes), logical in ADR-0018's sense (catalog rows go,
+  bytes stay for GC), and each emits its event (`content.library.deleted`,
+  `content.library_root.removed`) with `bytes_removed: false`. The CLI catches
+  up: `heyarr library rm`, `heyarr library root add` (a second root without a
+  second library over the same tree) and `heyarr library root rm`. Deliberately
+  not built: an implicit cascade of a library's *content*, and
+  `quality-profile create` from the CLI (#228 item 3) — both left as their own
+  follow-ups.
+
 - **`document` is a first-class content type (ADR-0080, ADR-0063).** A followed
   RSS/Atom article, captured as a self-contained single-file HTML, now has
   somewhere to land: `document` joins movie, series, music and book in the

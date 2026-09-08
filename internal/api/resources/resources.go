@@ -332,6 +332,14 @@ func (a *API) Mount(r chi.Router) {
 	// Writes.
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/libraries", a.createLibrary)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/libraries/{id}/roots", a.createLibraryRoot)
+	// Removing a library or one of its roots (#228). Ordinary library
+	// management, the same class as removing a work — so `write`, not `admin`.
+	// Logical in ADR-0018's sense: catalog rows go, bytes stay. A library that
+	// still holds assets is refused (409): its content is removed first,
+	// per-work, so the delete never orphans an asset from its library
+	// (ADR-0083).
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Delete("/libraries/{id}", a.deleteLibrary)
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Delete("/libraries/{id}/roots/{rootID}", a.deleteLibraryRoot)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/libraries/{id}/scan", a.scanLibrary)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Delete("/assets/{id}", a.deleteAsset)
 	// Editing and removing a work (#428). Ordinary library management — the

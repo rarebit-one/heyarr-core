@@ -100,8 +100,21 @@ const (
 	TypeEditionDeleted   = "content.edition.deleted"
 	TypeLibraryCreated   = "content.library.created"
 	TypeLibraryRootAdded = "content.library_root.added"
-	TypeAssetMissing     = "content.asset.missing"
-	TypeAssetDeleted     = "content.asset.deleted"
+	// TypeLibraryDeleted is a library leaving the catalog with its roots
+	// (#228). It is emitted only for an EMPTY library: a library that still
+	// holds assets is refused, its content removed first per-work, so this
+	// records the removal of an empty collection and never a cascade of
+	// content. Logical, like every deletion here (ADR-0018, ADR-0083): no byte
+	// is unlinked, and the payload says so.
+	TypeLibraryDeleted = "content.library.deleted"
+	// TypeLibraryRootRemoved is one root leaving a library (#228): Heyarr stops
+	// scanning that directory. The counterpart to content.library_root.added.
+	// Assets ingested through the root are unaffected — an asset references its
+	// library, never a root — so nothing is orphaned and no byte is unlinked;
+	// only the root's scanned-file records go with it.
+	TypeLibraryRootRemoved = "content.library_root.removed"
+	TypeAssetMissing       = "content.asset.missing"
+	TypeAssetDeleted       = "content.asset.deleted"
 	// #nosec G101 -- an event type name, not a credential
 	TypeTokenCreated = "system.token.created"
 	TypeTokenRevoked = "system.token.revoked"
