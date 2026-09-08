@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -26,14 +27,21 @@ type Options struct {
 	Logger *slog.Logger
 	// Now is injected so expiry is testable without sleeping.
 	Now func() time.Time
+	// RenderBaseURL is the public origin a renderer fetches from — the same one
+	// the DIDL URLs are built against. The serve side needs it to build the
+	// absolute CaptionInfo.sec URL a Samsung set fetches (a relative one is
+	// not). Empty on a node that mints no such URLs; the header is simply not
+	// offered then.
+	RenderBaseURL string
 }
 
 // Handler serves blobs to devices that can only fetch a URL.
 type Handler struct {
-	blobs  *blobs.Handler
-	secret []byte
-	log    *slog.Logger
-	now    func() time.Time
+	blobs   *blobs.Handler
+	secret  []byte
+	log     *slog.Logger
+	now     func() time.Time
+	baseURL string
 }
 
 // New builds the handler, refusing a mis-wired one at construction.
@@ -52,7 +60,13 @@ func New(opts Options) (*Handler, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Handler{blobs: opts.Blobs, secret: opts.Secret, log: log.With("component", "render"), now: now}, nil
+	return &Handler{
+		blobs:   opts.Blobs,
+		secret:  opts.Secret,
+		log:     log.With("component", "render"),
+		now:     now,
+		baseURL: strings.TrimRight(opts.RenderBaseURL, "/"),
+	}, nil
 }
 
 // Mount registers the renderer route on an UNAUTHENTICATED router.
@@ -130,6 +144,37 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 		mode = "Streaming"
 	}
 	w.Header()["transferMode.dlna.org"] = []string{mode}
+
+	// Samsung's out-of-band caption mechanism. A set that supports it sends
+	// `getCaptionInfo.sec: 1` on the video GET and will only show an external
+	// subtitle if the response carries `CaptionInfo.sec: <url>` — the DIDL
+	// sec:CaptionInfoEx tags do not reach some Tizen firmwares on their own
+	// (MEASURED absent on a QN85BA that showed nothing with the tags alone).
+	// The sidecar rides IN the video capability, signed; we re-mint a caption
+	// capability of our OWN from it here, so the URL written to the header is
+	// built from an HMAC we compute over server-held fields — nothing from the
+	// request path is echoed into a response header. That is the same defence
+	// the Content-Type has (see CanonicalMIME: "returning a constant ends the
+	// argument"); here the constant is replaced by a value we sign, not one the
+	// caller supplied. Offered unconditionally when a sidecar is present rather
+	// than gated on the request header, because a set that does not understand
+	// it ignores an unknown header, and one that does may not send its probe
+	// until it has seen the offer. Set via the header map directly to preserve
+	// the mixed-case name, as contentFeatures.dlna.org is above.
+	if granted.CaptionBlob != "" && h.baseURL != "" {
+		if cmime, ok := CanonicalCaptionMIME(granted.CaptionMIME); ok {
+			token, err := Capability{
+				BlobHash:  granted.CaptionBlob,
+				ExpiresAt: granted.ExpiresAt,
+				MIME:      cmime,
+			}.Sign(h.secret)
+			if err == nil {
+				w.Header()["CaptionInfo.sec"] = []string{
+					h.baseURL + Path(token) + "/" + CaptionFilename(cmime),
+				}
+			}
+		}
+	}
 
 	// The blob handler reads its subject from the route, so the verified hash
 	// is put where it looks. Doing it this way rather than reaching into the

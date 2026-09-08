@@ -755,6 +755,9 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		Blobs:  blobHandler,
 		Secret: secret,
 		Logger: c.log,
+		// The same public origin the DIDL URLs use, so the serve side can build
+		// an absolute CaptionInfo.sec URL for a Samsung set (ADR-0040).
+		RenderBaseURL: rendererBaseURL(c.cfg),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
