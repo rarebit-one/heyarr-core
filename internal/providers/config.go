@@ -67,6 +67,14 @@ const (
 	// a real instance — never a daemon in CI (ADR-0026). NZBGet, the other usenet
 	// client, is a later kind behind the same Downloader contract (#379).
 	KindSABnzbd Kind = "sabnzbd"
+	// KindNZBGet is the other USENET download client, speaking the NZBGet
+	// JSON-RPC API (§58, §59, M11, #379). Like SABnzbd it takes .nzb sources and
+	// refuses the rest, so the two compose behind the same Downloader contract
+	// and an operator picks whichever usenet daemon they run. What differs from
+	// SABnzbd is only the wire (JSON-RPC over POST, HTTP basic auth); like every
+	// download client its live exercise is opt-in against a real instance, never
+	// a daemon in CI (ADR-0026).
+	KindNZBGet Kind = "nzbget"
 	// KindHTTP is a plain-HTTP download client (§58): the release's source is a
 	// direct http(s) URL and HEYARR is the client that fetches it, so unlike
 	// Transmission there is no daemon to reach and no per-instance endpoint —
@@ -176,7 +184,7 @@ const (
 
 // Kinds lists every kind, in a stable order.
 func Kinds() []Kind {
-	return []Kind{KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindSABnzbd, KindHTTP, KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindYtDlp, KindWebFeed, KindWebCapture, KindFake}
+	return []Kind{KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindSABnzbd, KindNZBGet, KindHTTP, KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindYtDlp, KindWebFeed, KindWebCapture, KindFake}
 }
 
 // ParseKind validates a kind from configuration.
@@ -205,7 +213,7 @@ func DefaultCapabilities(k Kind) []Capability {
 	switch k {
 	case KindTorznab, KindNewznab:
 		return []Capability{CapabilityIndexer}
-	case KindTransmission, KindQBittorrent, KindSABnzbd, KindHTTP, KindYtDlp, KindWebCapture:
+	case KindTransmission, KindQBittorrent, KindSABnzbd, KindNZBGet, KindHTTP, KindYtDlp, KindWebCapture:
 		return []Capability{CapabilityDownload}
 	case KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindWebFeed:
 		return []Capability{CapabilityMetadata}

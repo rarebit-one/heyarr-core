@@ -1490,6 +1490,23 @@ providers:
     path_map:
       - remote: /downloads/complete
         local: $FULLDATA/downloads
+  # A fourth REAL download client, and the second USENET one — NZBGet (§58, M11,
+  # #379) — configured and pointing at nothing (port 9 refuses everywhere). It
+  # proves the same narrow, worth-having fact as the SABnzbd entry: the registry
+  # now constructs a REAL NZBGet client for the kind, and the health beat reaches
+  # real client code — a JSON-RPC read it cannot complete — and reports what
+  # happened, which is the difference between a placeholder and a client. Where
+  # SABnzbd exercises the AuthToken path, NZBGet exercises AuthBasic (like
+  # qBittorrent). A real transfer is NOT asserted here: ADR-0026 keeps a download
+  # daemon out of CI, and like SABnzbd there is no harness leg either (a real
+  # usenet transfer needs a real news server), so the transfer path is proven by
+  # the fake at the unit level and by TestLiveNZBGet.
+  - name: acceptance-nzbget
+    type: nzbget
+    endpoint: http://127.0.0.1:9
+    path_map:
+      - remote: /downloads/complete
+        local: $FULLDATA/downloads
 YAML
 
   # Mint the token BEFORE anything starts. It migrates the database itself, so
@@ -2663,6 +2680,33 @@ YAML
   # so the api_key it was configured with must not be misreported as the problem.
   assert_not_contains "$(jq -r '.detail' <<<"$sab_entry")" "credential" \
     "an unreachable SABnzbd is not misreported as a credential problem"
+
+  note "  a fourth download client, and the second usenet one: NZBGet (§58, M11, #379)"
+  # The same honest-without-a-daemon proof as SABnzbd (ADR-0026 keeps a daemon out
+  # of CI, and there is no harness leg for usenet at all): the registry constructs
+  # a REAL NZBGet client for its kind, it is registered with the download
+  # capability, and the health beat reaches its real Check code — a JSON-RPC read
+  # against an endpoint that refuses — and reports unhealthy rather than
+  # pretending. A real transfer is proven by the fake (unit) and TestLiveNZBGet
+  # (opt-in), never here.
+  local nzb_entry
+  nzb_entry=$(wait_for_health_check acceptance-nzbget)
+
+  assert_eq "$(jq -r '. != null' <<<"$nzb_entry")" "true" \
+    "a configured NZBGet client is reported — a REAL client, not an unimplemented placeholder"
+  assert_eq "$(jq -r '.capabilities | join(",")' <<<"$nzb_entry")" "download" \
+    "the NZBGet client advertises the download capability, so poll jobs can route to it"
+  # The health beat reached real NZBGet Check code: a client with no caller would
+  # have no observation to show. checked_at proves the caller exists.
+  if [[ "$(jq -r '.checked_at // "never"' <<<"$nzb_entry")" == "never" ]]; then
+    fail "no health check ever ran on the NZBGet client — nothing reached the real client code"
+  else
+    pass "the health beat checked the NZBGet client — a real caller reaching real client code"
+  fi
+  assert_eq "$(jq -r '.healthy' <<<"$nzb_entry")" "false" \
+    "an unreachable NZBGet is reported unhealthy, not pretended healthy"
+  assert_not_contains "$(jq -r '.detail' <<<"$nzb_entry")" "credential" \
+    "an unreachable NZBGet is not misreported as a credential problem"
 
   note "  Torznab, a real indexer client (§59, ADR-0028, M3-09)"
   # Placed here with the download client's assertions because this section
