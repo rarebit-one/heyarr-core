@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
 	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
 	"github.com/rarebit-one/heyarr-core/internal/media/probe"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
@@ -111,6 +113,13 @@ func IngestHandler(p *ingest.Pipeline, probes ProbeEnqueuer) HandlerFunc {
 		// then rolled back is a job that can only fail.
 		if probes != nil {
 			enqueueProbe(ctx, probes, res, payload.RelPath)
+			// §66's pipeline, one step further: a video may carry its subtitles
+			// inside the container, invisible to the caption path until they are
+			// lifted into their own assets. Enqueued as a job for the same reason
+			// a probe is — it needs the ffmpeg capability this worker may not
+			// have, and a node without it just leaves the job pending (ADR-0023),
+			// never failing the ingest.
+			enqueueExtractSubtitles(ctx, probes, res, payload.MIME)
 		}
 		return nil
 	}
@@ -148,6 +157,32 @@ func enqueueProbe(ctx context.Context, probes ProbeEnqueuer, res ingest.Result, 
 		RequiredCapability: probe.Capability,
 	}); err != nil {
 		// Deliberately not returned. See above.
+		_ = err
+	}
+}
+
+// enqueueExtractSubtitles queues an embedded-subtitle extraction for freshly
+// ingested video bytes. A failure to enqueue is logged-and-swallowed for the
+// same reason enqueueProbe's is: the asset is under management, and the next
+// scan re-enqueues.
+//
+// Only videos: an audio file or a cover image has no subtitle tracks, and a
+// deduplicated blob has been extracted already (or has a job pending under the
+// same dedupe key) — either way there is nothing to add.
+func enqueueExtractSubtitles(ctx context.Context, q ProbeEnqueuer, res ingest.Result, mime string) {
+	if !strings.HasPrefix(mime, "video/") {
+		return
+	}
+	if res.Deduplicated {
+		return
+	}
+	if _, err := q.Enqueue(ctx, jobs.EnqueueOptions{
+		Type:               ffmpeg.ExtractJobType,
+		Payload:            ffmpeg.ExtractPayload{BlobHash: res.BlobHash, AssetID: res.AssetID},
+		DedupeKey:          ffmpeg.ExtractDedupeKey(res.BlobHash),
+		RequiredCapability: ffmpeg.Capability,
+	}); err != nil {
+		// Deliberately not returned. See enqueueProbe.
 		_ = err
 	}
 }
