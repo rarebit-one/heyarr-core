@@ -17,6 +17,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/device"
 )
 
 // The client commands.
@@ -49,6 +50,11 @@ type clientFlags struct {
 	tokenFile string
 	timeout   time.Duration
 	asJSON    bool
+	// peer and deviceDir are set only on the browse commands that call
+	// registerPeer (works/assets/blobs). An empty peer keeps the ordinary
+	// bearer/socket path; a set one selects the device-auth transport.
+	peer      string
+	deviceDir string
 }
 
 // register adds the shared flags to a command.
@@ -63,6 +69,26 @@ func (f *clientFlags) register(cmd *cobra.Command) {
 	cmd.Flags().DurationVar(&f.timeout, "timeout", client.DefaultTimeout,
 		"how long one request may take; streaming reads and the event stream are exempt")
 	cmd.Flags().BoolVar(&f.asJSON, "json", false, "emit machine-readable JSON")
+}
+
+// registerPeer adds the --peer/--device-dir flags to a browse command, turning
+// it into one that can read from a REMOTE peer as this machine's enrolled device
+// (ADR-0048, ADR-0032, #329). It is only on the browse commands — works, assets,
+// blobs — because browsing is one operation whether local or remote; the
+// difference is the transport and the auth, which this one flag captures.
+//
+// --peer selects the device-auth transport and is mutually exclusive with
+// --token: there is no bearer token in the device flow. cobra enforces the
+// exclusivity, so it must run after register has added --token to the command.
+func (f *clientFlags) registerPeer(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&f.peer, "peer", "",
+		"read from a REMOTE peer as this machine's enrolled device (ADR-0048): a fresh possession "+
+			"proof is minted per request, never a cached token. The value is the peer's http(s):// URL. "+
+			"Mutually exclusive with --token")
+	cmd.Flags().StringVar(&f.deviceDir, "device-dir", "",
+		"where this machine's device key lives, used with --peer (default: your config directory; "+
+			device.EnvDir+" overrides)")
+	cmd.MarkFlagsMutuallyExclusive("peer", "token")
 }
 
 // listFlags are the flags a paginated listing adds.
@@ -104,6 +130,12 @@ func (f *clientFlags) newClient(configPath string) (*client.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	// --peer routes to a remote peer and authenticates as this device: a
+	// different transport and credential, and no bearer token or socket in the
+	// flow, so it is its own path rather than a token resolved from four places.
+	if f.peer != "" {
+		return f.newDeviceClient()
+	}
 	token, err := f.resolveToken(cfg)
 	if err != nil {
 		return nil, err
@@ -118,6 +150,30 @@ func (f *clientFlags) newClient(configPath string) (*client.Client, error) {
 		Token:      token,
 		Timeout:    f.timeout,
 		UserAgent:  "heyarr-cli/" + buildinfo.Get().Version,
+	})
+}
+
+// newDeviceClient builds a client that authenticates to --peer as this machine's
+// enrolled device (ADR-0048). It holds the device store, which mints a fresh
+// possession proof per request; the store never yields the device key.
+//
+// It checks the device is enrolled up front, so an un-enrolled machine gets the
+// enrolment hint here rather than a mint failure on the first request. The check
+// mints and discards one throwaway proof — a possession proof is cheap to sign
+// and carries no state, so signing one to fail fast costs nothing.
+func (f *clientFlags) newDeviceClient() (*client.Client, error) {
+	store, err := openDeviceStore(f.deviceDir)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := store.Credential(time.Now().UTC(), 0); err != nil {
+		return nil, fmt.Errorf("this device cannot authenticate to a peer: %w", err)
+	}
+	return client.New(client.Options{
+		Addr:      f.peer,
+		Device:    store,
+		Timeout:   f.timeout,
+		UserAgent: "heyarr-cli/" + buildinfo.Get().Version,
 	})
 }
 
