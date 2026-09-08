@@ -4,12 +4,25 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"testing"
 
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
+
+// x25519Pub renders an X25519 public key the way encryption.FormatPublicKey does
+// ("x25519:<hex>"), spelled out here so this deviceauth test does not import
+// internal/personalstate/encryption — the package on the personal-state side of
+// the Invariant-6 boundary that deviceauth must not reach (§42, ADR-0049).
+func x25519Pub(t *testing.T) string {
+	t.Helper()
+	priv, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "x25519:" + hex.EncodeToString(priv.PublicKey().Bytes())
+}
 
 // The recovery encryption PUBLIC key registered at EnrolUser round-trips through
 // the store: it is what LookupUser and ListUsers return, it is the recipient the
@@ -21,11 +34,7 @@ func TestEnrolUserStoresRecoveryEncryptionKey(t *testing.T) {
 	f := newFixture(t)
 	a := newActor(t)
 
-	recovPriv, err := ecdh.X25519().GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	recoveryPub := encryption.FormatPublicKey(recovPriv.PublicKey().Bytes())
+	recoveryPub := x25519Pub(t)
 
 	user, err := f.store.EnrolUser(ctx, a.userKey, "alice", recoveryPub)
 	if err != nil {

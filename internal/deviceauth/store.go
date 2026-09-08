@@ -16,6 +16,7 @@ package deviceauth
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -26,7 +27,19 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
+)
+
+// recoveryEncryptionAlgorithm and recoveryEncryptionKeyBytes describe the
+// X25519 recovery encryption PUBLIC key rendering (encryption.FormatPublicKey:
+// "x25519:<hex>", 32 raw bytes). They are restated here rather than imported
+// because internal/personalstate/encryption is on the personal-state side of the
+// Invariant-6 boundary (§42, ADR-0049) and deviceauth is transitively imported by
+// the peer surface and replication, which must read no personal state. The check
+// this enables is a plain format validation of a PUBLIC key — it touches no space
+// key and no ciphertext — so the constants, not the package, are what belongs here.
+const (
+	recoveryEncryptionAlgorithm = "x25519"
+	recoveryEncryptionKeyBytes  = 32
 )
 
 const timeFormat = time.RFC3339Nano
@@ -168,13 +181,9 @@ func (s *Store) EnrolUser(ctx context.Context, publicKey, name, recoveryEncrypti
 		return User{}, fmt.Errorf("%w: %s", ErrMalformedKey, err.Error())
 	}
 	rendered := identity.FormatPublicKey(pub)
-	recoveryKey := ""
-	if strings.TrimSpace(recoveryEncryptionKey) != "" {
-		encPub, err := encryption.ParsePublicKey(recoveryEncryptionKey)
-		if err != nil {
-			return User{}, fmt.Errorf("%w: recovery encryption key: %s", ErrMalformedKey, err.Error())
-		}
-		recoveryKey = encryption.FormatPublicKey(encPub.Bytes())
+	recoveryKey, err := parseRecoveryEncryptionKey(recoveryEncryptionKey)
+	if err != nil {
+		return User{}, err
 	}
 	if name == "" {
 		name = "user-" + rendered[len(rendered)-8:]
@@ -218,6 +227,37 @@ func (s *Store) EnrolUser(ctx context.Context, publicKey, name, recoveryEncrypti
 	}
 	s.events.Publish(ev)
 	return User{ID: id, PrincipalID: principalID, PublicKey: rendered, RecoveryEncryptionKey: recoveryKey, Name: name, EnrolledAt: now}, nil
+}
+
+// parseRecoveryEncryptionKey validates and canonicalises the X25519 recovery
+// encryption PUBLIC key registered with a user identity. An empty input is
+// allowed (an identity that predates recovery-wrap) and returns "". A non-empty
+// value must be exactly "x25519:<64 lowercase hex characters>" decoding to 32
+// bytes — the encryption.FormatPublicKey rendering, checked here without
+// importing that package (see the constants above for why). Mixed-case hex is
+// refused rather than lowercased, the same as encryption.ParsePublicKey: two
+// spellings of one key would compare unequal as strings and equal as bytes.
+// Every malformed value is ErrMalformedKey, which the API maps to 400.
+func parseRecoveryEncryptionKey(s string) (string, error) {
+	text := strings.TrimSpace(s)
+	if text == "" {
+		return "", nil
+	}
+	algo, hexed, ok := strings.Cut(text, ":")
+	if !ok || algo != recoveryEncryptionAlgorithm {
+		return "", fmt.Errorf("%w: recovery encryption key %q is not an %s public key", ErrMalformedKey, text, recoveryEncryptionAlgorithm)
+	}
+	if hexed != strings.ToLower(hexed) {
+		return "", fmt.Errorf("%w: recovery encryption key %q is not lowercase hex", ErrMalformedKey, text)
+	}
+	raw, err := hex.DecodeString(hexed)
+	if err != nil {
+		return "", fmt.Errorf("%w: recovery encryption key %q is not hex: %s", ErrMalformedKey, text, err.Error())
+	}
+	if len(raw) != recoveryEncryptionKeyBytes {
+		return "", fmt.Errorf("%w: recovery encryption key %q is %d bytes, want %d", ErrMalformedKey, text, len(raw), recoveryEncryptionKeyBytes)
+	}
+	return text, nil
 }
 
 // EnrolDevice records a device under the user its admitting op names — the
