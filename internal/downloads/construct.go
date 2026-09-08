@@ -33,7 +33,7 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 		return webCaptureFromConfig(r, now)
 	}
 	if r.Kind != providers.KindTransmission && r.Kind != providers.KindQBittorrent &&
-		r.Kind != providers.KindSABnzbd {
+		r.Kind != providers.KindSABnzbd && r.Kind != providers.KindNZBGet {
 		return nil, false, nil
 	}
 
@@ -79,8 +79,30 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 	}
 
 	// The credential comes out of its wrapper in credentialFor, which is the
-	// one place in this package where it does.
+	// one place in this package where it does. NZBGet, qBittorrent and
+	// Transmission all authenticate with a basic pair, so they share it; SABnzbd
+	// took Token() above precisely because it does not.
 	user, pass := credentialFor(r)
+
+	// NZBGet is a usenet client whose completed files land on the daemon's disk,
+	// so like the torrent clients it takes a path map; its credential is basic,
+	// so it comes from credentialFor, not the Token() SABnzbd used.
+	if r.Kind == providers.KindNZBGet {
+		client, err := NewNZBGet(NZBGetOptions{
+			Name:         r.Name,
+			Endpoint:     endpoint,
+			Username:     user,
+			Password:     pass,
+			PathMap:      pathMap,
+			Label:        r.Label,
+			Capabilities: r.Capabilities,
+			Now:          now,
+		})
+		if err != nil {
+			return nil, true, err
+		}
+		return client, true, nil
+	}
 
 	// Both torrent clients are configured the same way; only the constructor
 	// differs, because the difference between them is the wire, not the config.

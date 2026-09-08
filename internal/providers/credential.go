@@ -82,10 +82,13 @@ func AuthSchemeOf(k Kind) AuthScheme {
 		// token goes on the wire is the client's business, and the CREDENTIAL an
 		// operator supplies is one opaque secret.
 		return AuthToken
-	case KindTransmission, KindQBittorrent:
+	case KindTransmission, KindQBittorrent, KindNZBGet:
 		// qBittorrent's Web API is a username+password login (it mints a session
 		// cookie from them); the CREDENTIAL an operator supplies is the same
 		// basic pair, and how it goes on the wire is the client's business.
+		// NZBGet is the same shape: its JSON-RPC control interface is HTTP basic
+		// auth, a username+password pair — unlike SABnzbd's single api_key, which
+		// is why NZBGet is here and not in the AuthToken case above.
 		return AuthBasic
 	case KindHTTP, KindPodcast:
 		// A plain-HTTP download fetches a public direct link, and a podcast RSS
