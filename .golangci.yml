@@ -142,6 +142,17 @@ linters:
         text: "SA4023"
         linters: [staticcheck]
 
+      # rowserrcheck (jingyugao/rowserrcheck) misfires under Go 1.27.1's SSA:
+      # it reports "rows.Err must be checked" at renderers.go:435, a line with
+      # no query at all, while every QueryContext in this package does check
+      # rows.Err(). Go 1.27.0 and the linter's own prior runs are clean on the
+      # identical code. It is an analyzer false positive with a bogus position,
+      # the same shape as the SA4023 platform exclusion above — suppressed here
+      # rather than left to block the merge queue on a check no code can satisfy.
+      - path: internal/api/resources/renderers\.go$
+        text: "rows.Err must be checked"
+        linters: [rowserrcheck]
+
 formatters:
   enable:
     - gofumpt
