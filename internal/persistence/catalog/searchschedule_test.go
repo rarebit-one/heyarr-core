@@ -40,6 +40,50 @@ func TestAWantWithNoRowIsDueImmediately(t *testing.T) {
 	}
 }
 
+// A direct-route want — a document, a podcast — is never returned by
+// DueSearches, whatever its state (ADR-0082). Its bytes are taken from the feed
+// that named them; an indexer is never asked. This is the fix for a followed
+// feed's articles being handed to the search beat and rate-limiting an indexer
+// for content it could never have had.
+//
+// The harness's own want is a `movie`, which IS searched, so this asserts the
+// two are separated by their work's content type and not by anything else: the
+// movie want is due and the document want, set up identically, is not.
+func TestADocumentWantIsNeverDueASearch(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+
+	// A document work and a want on it — set up exactly like the harness's movie
+	// want except for the content type, since it is the content type the route
+	// turns on (the item-scope columns are irrelevant to that and left out).
+	h.exec(t, `INSERT INTO works
+		(id, content_type, work_key, title, sort_title, year, attributes, created_at, updated_at)
+		VALUES ('wdoc', 'document', 'document:an-article', 'An Article', 'an article', NULL, '{}', ?, ?)`,
+		stamp, stamp)
+	h.exec(t, `INSERT INTO desired_items
+		(id, scope, work_id, edition_id, quality_profile_id, monitor, reason, created_at, updated_at)
+		VALUES ('want-doc', 'work', 'wdoc', NULL, 'q1', 1, '', ?, ?)`, stamp, stamp)
+
+	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.cat.StartAcquisition(ctx, "want-doc"); err != nil {
+		t.Fatal(err)
+	}
+
+	due, err := h.cat.DueSearches(ctx, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 1 {
+		t.Fatalf("%d wants are due, want 1 — the movie is searched and the document is not", len(due))
+	}
+	if due[0].DesiredItemID != h.want {
+		t.Errorf("due want = %q, want the movie %q — the document want must not be searched",
+			due[0].DesiredItemID, h.want)
+	}
+}
+
 // The hazard sortableTimestamp exists for. RFC3339Nano TRIMS trailing zeros,
 // so "…:00Z" and "…:00.000000001Z" compare in the wrong order as TEXT — and
 // the due query is exactly that comparison.

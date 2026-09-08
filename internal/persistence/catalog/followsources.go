@@ -209,6 +209,99 @@ func (c *Catalog) DeleteFollowSource(ctx context.Context, id string) (bool, erro
 	return existed, nil
 }
 
+// RepointFollowedSource changes a subscription's quality profile in place
+// (ADR-0082) and re-points every item-scoped want it has projected at the same
+// profile, in one transaction. It returns the ids of the wants that were
+// re-pointed so the caller can reconcile them at once — an already-held asset
+// must be re-judged against the new profile now, not on the next sweep.
+//
+// # Why the wants move too, and not only the source
+//
+// A want copies its source's profile at projection time (the follow path
+// resolves one id and hands it to both the source and each ProjectWant). So
+// changing only the source would leave every already-projected want judged by
+// the old profile and only new items by the new one — which is precisely the
+// split that made "repoint" necessary. The two must move together or the
+// subscription means two different standards at once.
+//
+// A missing source is sql.ErrNoRows surfaced as ErrNoFollowSource, the same not
+// found the poll and unfollow doors give.
+func (c *Catalog) RepointFollowedSource(
+	ctx context.Context, sourceID, newProfileID string,
+) (repointed []string, err error) {
+	var ev events.Event
+	err = c.db.InTx(ctx, func(tx *sql.Tx) error {
+		var workID, oldProfileID string
+		row := tx.QueryRowContext(ctx,
+			`SELECT work_id, quality_profile_id FROM follow_sources WHERE id = ?`, sourceID)
+		if e := row.Scan(&workID, &oldProfileID); errors.Is(e, sql.ErrNoRows) {
+			return ErrNoFollowSource
+		} else if e != nil {
+			return e
+		}
+
+		now := c.clock.Now().UTC().Format(timestampFormat)
+		if _, e := tx.ExecContext(ctx,
+			`UPDATE follow_sources SET quality_profile_id = ?, updated_at = ? WHERE id = ?`,
+			newProfileID, now, sourceID); e != nil {
+			return fmt.Errorf("catalog: repointing a followed source: %w", e)
+		}
+
+		// The item-scoped wants this source projects are exactly those on its work
+		// at item scope (the shape FollowStats counts). Collect their ids before
+		// the update so the caller can reconcile them; the ids do not change.
+		wants, e := itemWantIDsForWork(ctx, tx, workID)
+		if e != nil {
+			return e
+		}
+		repointed = wants
+
+		if _, e := tx.ExecContext(ctx,
+			`UPDATE desired_items SET quality_profile_id = ? WHERE work_id = ? AND scope = 'item'`,
+			newProfileID, workID); e != nil {
+			return fmt.Errorf("catalog: repointing a source's wants: %w", e)
+		}
+
+		ev, e = c.events.EmitTx(ctx, tx, events.TypeFollowSourceRepointed,
+			"follow_source", sourceID, map[string]any{
+				"follow_source_id":       sourceID,
+				"work_id":                workID,
+				"quality_profile_id":     newProfileID,
+				"old_quality_profile_id": oldProfileID,
+				"wants_repointed":        len(repointed),
+			})
+		return e
+	})
+	if err != nil {
+		return nil, err
+	}
+	c.events.Publish(ev)
+	return repointed, nil
+}
+
+// itemWantIDsForWork lists the ids of the item-scoped wants on a work — the
+// wants a followed source projects. Its own function so the rows are read and
+// closed in the canonical pattern before RepointFollowedSource issues the update
+// on the same transaction.
+func itemWantIDsForWork(ctx context.Context, tx *sql.Tx, workID string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id FROM desired_items WHERE work_id = ? AND scope = 'item'`, workID)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: listing a source's wants to repoint: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("catalog: reading a source's wants to repoint: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // DueSource is one subscription the follow beat should poll now.
 type DueSource struct {
 	SourceID string

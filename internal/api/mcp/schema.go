@@ -225,6 +225,20 @@ var schemaPollSource = obj(map[string]any{
 	},
 }, "source_id")
 
+// schemaSetSourceProfile repoints a subscription at a different quality profile.
+var schemaSetSourceProfile = obj(map[string]any{
+	"source_id": map[string]any{
+		"type":        "string",
+		"description": "The followed source to repoint, from list_followed.",
+	},
+	"quality_profile": map[string]any{
+		"type": "string",
+		"description": "The quality profile to move to, named as a person would: " +
+			"\"published\" for articles and podcasts, \"everyday\" for video. Every want this " +
+			"source has projected is re-judged against it at once.",
+	},
+}, "source_id", "quality_profile")
+
 var schemaDesiredItemID = obj(map[string]any{
 	"desired_item_id": map[string]any{
 		"type":        "string",

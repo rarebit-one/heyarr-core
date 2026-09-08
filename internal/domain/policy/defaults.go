@@ -90,5 +90,35 @@ func Defaults() []Profile {
 			},
 			// No Terminal. Deliberate, and asserted.
 		},
+		{
+			// The profile for content taken DIRECTLY from the feed that publishes
+			// it — a captured web article, a podcast episode (ADR-0082). The other
+			// three profiles are video profiles: their accept gate is a resolution
+			// floor, which a document or an audio file has no answer for, so it
+			// evaluates to `undetermined` and the asset is refused with a blob
+			// sitting on disk. This one judges on the evidence such content
+			// actually carries.
+			Name: "published",
+			Description: "Content taken directly from the source that publishes it — a " +
+				"web article, a podcast episode. The published copy is definitive: accept " +
+				"it and stop looking.",
+			Accept: []Rule{
+				// A cam/telesync/workprint is a leaked video and never what a feed
+				// legitimately publishes; everything else — html, and any audio or
+				// document source — is admitted. Stated as a gate, not a penalty, so
+				// a rejection names the reason (§63).
+				{Attribute: AttrSource, Op: OpNotIn, Value: Texts("cam", "telesync", "workprint")},
+			},
+			// No Prefer: there is no "better" copy of a page the feed handed over,
+			// so nothing to rank one candidate above another by.
+			Terminal: []Rule{
+				// Any bytes at all is as good as it gets. A captured article is not
+				// improved by capturing it again, so the want goes terminal the
+				// moment it holds something — the upgrade loop must not re-examine
+				// it forever (which, on the video profiles, is what `archival` does
+				// on purpose and this must not do by accident).
+				{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)},
+			},
+		},
 	}
 }

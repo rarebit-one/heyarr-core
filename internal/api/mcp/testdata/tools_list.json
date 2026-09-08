@@ -738,6 +738,33 @@
         "heyarr/requiredScope": "write",
         "readOnlyHint": false
       },
+      "description": "Change which quality profile a followed source — and every item it has already archived — is judged against, IN PLACE, without unfollowing it. Reach for it when a feed is on the wrong profile: an article or podcast feed on a video profile never counts as archived, because a captured page has no resolution for the video profile's gate to pass. Move it to \"published\" and its held items are re-judged and become archived at once. Name the profile as a person would, the same as follow_source.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "quality_profile": {
+            "description": "The quality profile to move to, named as a person would: \"published\" for articles and podcasts, \"everyday\" for video. Every want this source has projected is re-judged against it at once.",
+            "type": "string"
+          },
+          "source_id": {
+            "description": "The followed source to repoint, from list_followed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "quality_profile"
+        ],
+        "type": "object"
+      },
+      "name": "set_source_profile",
+      "title": "Repoint a source at a quality profile"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "write",
+        "readOnlyHint": false
+      },
       "description": "Ask this instance to reconcile the desired blob set against what a peer is known to hold, now, rather than waiting for the next scheduled cycle. Queues work rather than doing it: the diff enqueues a transfer per gap and the bytes move afterwards, so this reply says only that the cycle was accepted. It is the on-demand half of the reconciliation §57 asks for on a beat and on demand — useful straight after enrolling a peer or restoring one, and pointless to call in a loop.",
       "inputSchema": {
         "additionalProperties": false,

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/strategy"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
@@ -82,10 +83,12 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 	// of pass that is fine until the first time it matters.
 	rows, err := c.db.Reader().QueryContext(ctx, `
 		SELECT d.id, d.monitor, a.phase, a.managed, a.content, a.placement,
+		       coalesce(w.content_type, ''),
 		       coalesce(s.schedule, ''), coalesce(s.fruitless, 0),
 		       coalesce(s.next_search_at, '')
 		FROM desired_items d
 		JOIN acquisition_state a ON a.desired_item_id = d.id
+		JOIN works w ON w.id = d.work_id
 		LEFT JOIN search_schedule s ON s.desired_item_id = d.id
 		WHERE a.phase = 'idle'
 		  AND (s.next_search_at IS NULL OR s.next_search_at <= ?)
@@ -100,11 +103,12 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 	for rows.Next() {
 		var (
 			id, phase, content, placement string
+			contentType                   string
 			storedSchedule, storedNext    string
 			monitor, managed, fruitless   int
 		)
 		if err := rows.Scan(&id, &monitor, &phase, &managed, &content, &placement,
-			&storedSchedule, &fruitless, &storedNext); err != nil {
+			&contentType, &storedSchedule, &fruitless, &storedNext); err != nil {
 			return nil, fmt.Errorf("catalog: reading wants due a search: %w", err)
 		}
 		state := acquisition.State{
@@ -113,9 +117,14 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 			Content:   acquisition.Satisfaction(content),
 			Placement: acquisition.Satisfaction(placement),
 		}
-		schedule, wanted := acquisition.ScheduleFor(state, monitor == 1)
+		// The route is the want's content-type strategy (ADR-0082): a direct-route
+		// want — a document, a podcast — is taken from its feed and never asked of
+		// an indexer, so ScheduleFor refuses it whatever its state.
+		route := strategy.For(contentType).Route
+		schedule, wanted := acquisition.ScheduleFor(state, monitor == 1, route)
 		if !wanted {
-			// Satisfied and unmonitored: finished, and not the scheduler's
+			// Not on any search schedule: a direct-route want, or one that is
+			// satisfied and unmonitored — finished, and not the scheduler's
 			// business. Filtered here rather than in SQL because the mapping
 			// from a state to a schedule is policy and lives in exactly one
 			// place (see ScheduleFor); a WHERE clause that encoded it would be

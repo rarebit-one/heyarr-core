@@ -3602,6 +3602,48 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [desired]
+      operationId: repointFollowedSource
+      summary: Repoint a followed source at a different quality profile.
+      description: |
+        Change which quality profile a subscription — and every want it has
+        already projected — is judged against, in place, without unfollowing it
+        (ADR-0082). The held wants are re-judged against the new profile at once,
+        so an article feed moved from a video profile to `published` has its
+        captured articles counted as archived immediately.
+
+        Name the profile with exactly one of `quality_profile_id` or
+        `quality_profile`; an empty body is refused (a repoint is an explicit
+        act, not a reset to a default).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quality_profile_id:
+                  type: string
+                  description: The profile to move to, by id. Give this or quality_profile, not both.
+                quality_profile:
+                  type: string
+                  description: The profile to move to, by name (e.g. "published"). Give this or quality_profile_id, not both.
+      responses:
+        "200":
+          description: The repointed subscription, with items_archived reflecting the re-judged wants.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FollowedSource" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /api/v1/followed-sources/{id}/items:
     get:

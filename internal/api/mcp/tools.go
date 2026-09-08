@@ -188,6 +188,21 @@ func (s *Server) registerTools() {
 	})
 
 	s.tools.register(Tool{
+		Name:     "set_source_profile",
+		Title:    "Repoint a source at a quality profile",
+		Scope:    auth.ScopeWrite,
+		ReadOnly: false,
+		Description: "Change which quality profile a followed source — and every item it has " +
+			"already archived — is judged against, IN PLACE, without unfollowing it. Reach for it " +
+			"when a feed is on the wrong profile: an article or podcast feed on a video profile " +
+			"never counts as archived, because a captured page has no resolution for the video " +
+			"profile's gate to pass. Move it to \"published\" and its held items are re-judged and " +
+			"become archived at once. Name the profile as a person would, the same as follow_source.",
+		InputSchema: schemaSetSourceProfile,
+		Handler:     s.setSourceProfile,
+	})
+
+	s.tools.register(Tool{
 		Name:     "get_missing_content",
 		Title:    "What is not satisfied",
 		Scope:    auth.ScopeRead,
@@ -651,6 +666,34 @@ func (s *Server) pollSource(ctx context.Context, raw json.RawMessage) (any, erro
 	}
 	out, err := s.resources.PollSource(ctx, args.SourceID)
 	if err != nil {
+		return nil, classifyFollow(err)
+	}
+	return out, nil
+}
+
+// setSourceProfile is set_source_profile, shared with PATCH
+// /api/v1/followed-sources/{id}. It reuses the exact repoint RepointSource runs,
+// so the two doors move a subscription's strategy the same way (ADR-0082).
+func (s *Server) setSourceProfile(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args struct {
+		SourceID       string `json:"source_id"`
+		QualityProfile string `json:"quality_profile"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if args.SourceID == "" {
+		return nil, invalidParams("source_id is required — the source to repoint, from list_followed")
+	}
+	if args.QualityProfile == "" {
+		return nil, invalidParams("quality_profile is required — the profile to move to, by name")
+	}
+	out, err := s.resources.RepointSource(ctx, args.SourceID,
+		resources.RepointRequest{QualityProfile: args.QualityProfile})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, invalidParams("there is no followed source with that id")
+		}
 		return nil, classifyFollow(err)
 	}
 	return out, nil

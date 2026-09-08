@@ -53,20 +53,30 @@ func TestScheduleForMapsStateToPolicy(t *testing.T) {
 		name      string
 		state     State
 		monitored bool
+		route     Route  // "" means RouteSearch, the ordinary case
 		want      string // the schedule name, or "" for none
 	}{
-		{"a fresh want nobody has looked for", missing, true, "missing"},
-		{"an unmonitored want with nothing held", missing, false, "missing"},
-		{"bytes held that the profile refuses", available, true, "missing"},
-		{"a satisfied, monitored want", satisfied, true, "upgrade"},
-		{"a satisfied, unmonitored want", satisfied, false, ""},
-		{"a search already in flight", State{Phase: PhaseSearching}, true, ""},
-		{"a download in flight", State{Phase: PhaseDownloading, Managed: false}, true, ""},
-		{"ingesting", State{Phase: PhaseIngesting}, true, ""},
+		{"a fresh want nobody has looked for", missing, true, "", "missing"},
+		{"an unmonitored want with nothing held", missing, false, "", "missing"},
+		{"bytes held that the profile refuses", available, true, "", "missing"},
+		{"a satisfied, monitored want", satisfied, true, "", "upgrade"},
+		{"a satisfied, unmonitored want", satisfied, false, "", ""},
+		{"a search already in flight", State{Phase: PhaseSearching}, true, "", ""},
+		{"a download in flight", State{Phase: PhaseDownloading, Managed: false}, true, "", ""},
+		{"ingesting", State{Phase: PhaseIngesting}, true, "", ""},
+		// A direct-route want (a document, a podcast) is never searched — not
+		// even fresh-and-missing, the most urgent search there otherwise is
+		// (ADR-0082). The route is a fact about the content, not the lifecycle.
+		{"a direct-route want, missing", missing, true, RouteDirect, ""},
+		{"a direct-route want, satisfied and monitored", satisfied, true, RouteDirect, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := ScheduleFor(tc.state, tc.monitored)
+			route := tc.route
+			if route == "" {
+				route = RouteSearch
+			}
+			got, ok := ScheduleFor(tc.state, tc.monitored, route)
 			if tc.want == "" {
 				if ok {
 					t.Fatalf("scheduled %q; this want must not be searched", got.Name)
