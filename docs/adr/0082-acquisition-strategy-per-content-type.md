@@ -122,13 +122,20 @@ ends immediately rather than re-examining it forever. This is the satisfaction
 
 ### 5. A subscription's strategy can be changed in place
 
-`PATCH /api/v1/followed-sources/{id}` (and MCP `set_source_profile`) repoints a
-followed source at a different quality profile without unfollowing it:
-`catalog.RepointFollowedSource` updates the source and every item-scoped want it
-projects, in one transaction, and re-reconciles them so an already-held asset is
-re-judged against the new profile at once. This is the door ADR-0057 did not
-have — strategy is a property of the subscription an operator can correct, not
-only a thing chosen once at follow time.
+`PATCH /api/v1/followed-sources/{id}` (and MCP `set_source_profile`) changes a
+followed source's strategy without unfollowing it — its quality profile, its
+backfill, or both. `catalog.RepointFollowedSource` updates the source in one
+transaction; a profile change also moves every item-scoped want the source
+projects and re-reconciles them, so an already-held asset is re-judged against
+the new profile at once. A backfill change moves no want — what it changes is
+which items the *next* poll projects (`shouldProject`) — so the door queues that
+poll instead, the same immediacy a fresh follow gets. That second half matters
+in practice: a `from_now` follow's back-catalogue has wants that exist but that
+no driver ever touches (the poll skips pre-follow items before acquisition, and
+the search beat now correctly ignores direct-route wants), and moving the
+source to `full` is how an operator asks for it. This is the door ADR-0057 did
+not have — strategy is a property of the subscription an operator can correct,
+not only a thing chosen once at follow time.
 
 ## Consequences
 

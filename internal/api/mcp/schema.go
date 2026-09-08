@@ -235,9 +235,16 @@ var schemaSetSourceProfile = obj(map[string]any{
 		"type": "string",
 		"description": "The quality profile to move to, named as a person would: " +
 			"\"published\" for articles and podcasts, \"everyday\" for video. Every want this " +
-			"source has projected is re-judged against it at once.",
+			"source has projected is re-judged against it at once. Optional if backfill is given.",
 	},
-}, "source_id", "quality_profile")
+	"backfill": map[string]any{
+		"type": "string",
+		"enum": []string{"from_now", "full"},
+		"description": "How much back-catalogue polls project from now on. full makes the " +
+			"next poll (queued for you) project every item the feed has ever listed — the " +
+			"whole archive, a real capacity commitment. Optional if quality_profile is given.",
+	},
+}, "source_id")
 
 var schemaDesiredItemID = obj(map[string]any{
 	"desired_item_id": map[string]any{

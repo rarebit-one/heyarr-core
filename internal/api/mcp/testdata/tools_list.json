@@ -738,12 +738,20 @@
         "heyarr/requiredScope": "write",
         "readOnlyHint": false
       },
-      "description": "Change which quality profile a followed source — and every item it has already archived — is judged against, IN PLACE, without unfollowing it. Reach for it when a feed is on the wrong profile: an article or podcast feed on a video profile never counts as archived, because a captured page has no resolution for the video profile's gate to pass. Move it to \"published\" and its held items are re-judged and become archived at once. Name the profile as a person would, the same as follow_source.",
+      "description": "Change a followed source's strategy IN PLACE, without unfollowing it: which quality profile it — and every item it has already archived — is judged against, and/or its backfill. Reach for the profile when a feed is on the wrong one: an article or podcast feed on a video profile never counts as archived, because a captured page has no resolution for the video profile's gate to pass; move it to \"published\" and its held items are re-judged and become archived at once. Reach for backfill=full when a from_now follow should now archive its whole back-catalogue: the poll it queues projects every item the feed has ever listed — a real capacity commitment. Give at least one of the two. Name the profile as a person would, the same as follow_source.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "backfill": {
+            "description": "How much back-catalogue polls project from now on. full makes the next poll (queued for you) project every item the feed has ever listed — the whole archive, a real capacity commitment. Optional if quality_profile is given.",
+            "enum": [
+              "from_now",
+              "full"
+            ],
+            "type": "string"
+          },
           "quality_profile": {
-            "description": "The quality profile to move to, named as a person would: \"published\" for articles and podcasts, \"everyday\" for video. Every want this source has projected is re-judged against it at once.",
+            "description": "The quality profile to move to, named as a person would: \"published\" for articles and podcasts, \"everyday\" for video. Every want this source has projected is re-judged against it at once. Optional if backfill is given.",
             "type": "string"
           },
           "source_id": {
@@ -752,8 +760,7 @@
           }
         },
         "required": [
-          "source_id",
-          "quality_profile"
+          "source_id"
         ],
         "type": "object"
       },

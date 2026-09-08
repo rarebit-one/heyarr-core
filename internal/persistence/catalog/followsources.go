@@ -209,11 +209,15 @@ func (c *Catalog) DeleteFollowSource(ctx context.Context, id string) (bool, erro
 	return existed, nil
 }
 
-// RepointFollowedSource changes a subscription's quality profile in place
-// (ADR-0082) and re-points every item-scoped want it has projected at the same
-// profile, in one transaction. It returns the ids of the wants that were
-// re-pointed so the caller can reconcile them at once — an already-held asset
-// must be re-judged against the new profile now, not on the next sweep.
+// RepointFollowedSource changes a subscription's strategy in place (ADR-0082):
+// its quality profile, its backfill policy, or both. An empty newProfileID or
+// newBackfill leaves that half as it is. A profile change also re-points every
+// item-scoped want the source has projected at the new profile, in the same
+// transaction, and returns those wants' ids so the caller can reconcile them at
+// once — an already-held asset must be re-judged against the new profile now,
+// not on the next sweep. A backfill change touches no want: what it changes is
+// which items the NEXT poll projects (shouldProject), so the caller's follow-up
+// is a poll, not a reconcile, and the returned ids are nil.
 //
 // # Why the wants move too, and not only the source
 //
@@ -227,47 +231,66 @@ func (c *Catalog) DeleteFollowSource(ctx context.Context, id string) (bool, erro
 // A missing source is sql.ErrNoRows surfaced as ErrNoFollowSource, the same not
 // found the poll and unfollow doors give.
 func (c *Catalog) RepointFollowedSource(
-	ctx context.Context, sourceID, newProfileID string,
+	ctx context.Context, sourceID, newProfileID, newBackfill string,
 ) (repointed []string, err error) {
+	if newProfileID == "" && newBackfill == "" {
+		return nil, fmt.Errorf("catalog: repointing a followed source needs a profile or a backfill to move to")
+	}
 	var ev events.Event
 	err = c.db.InTx(ctx, func(tx *sql.Tx) error {
-		var workID, oldProfileID string
+		var workID, oldProfileID, oldBackfill string
 		row := tx.QueryRowContext(ctx,
-			`SELECT work_id, quality_profile_id FROM follow_sources WHERE id = ?`, sourceID)
-		if e := row.Scan(&workID, &oldProfileID); errors.Is(e, sql.ErrNoRows) {
+			`SELECT work_id, quality_profile_id, backfill FROM follow_sources WHERE id = ?`, sourceID)
+		if e := row.Scan(&workID, &oldProfileID, &oldBackfill); errors.Is(e, sql.ErrNoRows) {
 			return ErrNoFollowSource
 		} else if e != nil {
 			return e
 		}
 
+		// Resolve "" to "unchanged" once, so the UPDATE below is one statement
+		// whatever combination the caller asked for, and idempotent on a repeat.
+		profileID, backfill := newProfileID, newBackfill
+		if profileID == "" {
+			profileID = oldProfileID
+		}
+		if backfill == "" {
+			backfill = oldBackfill
+		}
+
 		now := c.clock.Now().UTC().Format(timestampFormat)
 		if _, e := tx.ExecContext(ctx,
-			`UPDATE follow_sources SET quality_profile_id = ?, updated_at = ? WHERE id = ?`,
-			newProfileID, now, sourceID); e != nil {
+			`UPDATE follow_sources SET quality_profile_id = ?, backfill = ?, updated_at = ? WHERE id = ?`,
+			profileID, backfill, now, sourceID); e != nil {
 			return fmt.Errorf("catalog: repointing a followed source: %w", e)
 		}
 
-		// The item-scoped wants this source projects are exactly those on its work
-		// at item scope (the shape FollowStats counts). Collect their ids before
-		// the update so the caller can reconcile them; the ids do not change.
-		wants, e := itemWantIDsForWork(ctx, tx, workID)
-		if e != nil {
-			return e
-		}
-		repointed = wants
+		if newProfileID != "" {
+			// The item-scoped wants this source projects are exactly those on its
+			// work at item scope (the shape FollowStats counts). Collect their ids
+			// before the update so the caller can reconcile them; the ids do not
+			// change.
+			wants, e := itemWantIDsForWork(ctx, tx, workID)
+			if e != nil {
+				return e
+			}
+			repointed = wants
 
-		if _, e := tx.ExecContext(ctx,
-			`UPDATE desired_items SET quality_profile_id = ? WHERE work_id = ? AND scope = 'item'`,
-			newProfileID, workID); e != nil {
-			return fmt.Errorf("catalog: repointing a source's wants: %w", e)
+			if _, e := tx.ExecContext(ctx,
+				`UPDATE desired_items SET quality_profile_id = ? WHERE work_id = ? AND scope = 'item'`,
+				newProfileID, workID); e != nil {
+				return fmt.Errorf("catalog: repointing a source's wants: %w", e)
+			}
 		}
 
+		var e error
 		ev, e = c.events.EmitTx(ctx, tx, events.TypeFollowSourceRepointed,
 			"follow_source", sourceID, map[string]any{
 				"follow_source_id":       sourceID,
 				"work_id":                workID,
-				"quality_profile_id":     newProfileID,
+				"quality_profile_id":     profileID,
 				"old_quality_profile_id": oldProfileID,
+				"backfill":               backfill,
+				"old_backfill":           oldBackfill,
 				"wants_repointed":        len(repointed),
 			})
 		return e

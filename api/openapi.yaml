@@ -3613,9 +3613,12 @@ paths:
         so an article feed moved from a video profile to `published` has its
         captured articles counted as archived immediately.
 
-        Name the profile with exactly one of `quality_profile_id` or
-        `quality_profile`; an empty body is refused (a repoint is an explicit
-        act, not a reset to a default).
+        Change the profile, the backfill, or both; a field left out is left as
+        it is, and a body that changes nothing is refused (a repoint is an
+        explicit act, not a reset to a default). Name the profile with exactly
+        one of `quality_profile_id` or `quality_profile`. Moving `backfill` to
+        `full` queues a poll at once, so the back-catalogue a `from_now` follow
+        skipped is projected without waiting for the next scheduled round.
       parameters:
         - name: id
           in: path
@@ -3634,6 +3637,10 @@ paths:
                 quality_profile:
                   type: string
                   description: The profile to move to, by name (e.g. "published"). Give this or quality_profile_id, not both.
+                backfill:
+                  type: string
+                  enum: [from_now, full]
+                  description: How much back-catalogue polls project from now on. `full` queues a poll immediately.
       responses:
         "200":
           description: The repointed subscription, with items_archived reflecting the re-judged wants.
