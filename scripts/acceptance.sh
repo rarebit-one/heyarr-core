@@ -7355,33 +7355,41 @@ YAML
   assert_eq "$(peer_holds "$root/a/data/cas" "$blob")" "0" \
     "node A no longer holds the desired blob, and nothing is fetching it"
 
-  # Live A-destined replicate_blob transfers for these bytes, right now. Zero: the
-  # convergence jobs succeeded and freed their dedupe key, and the reconcile beat's
-  # only pass ran while A still held the blob. So the sole thing that can create
-  # one below is the GET.
-  ensure_live_jobs() { # blob-hash -> count of live (pending|leased) A-destined replicate_blob jobs
-    sw_a "/api/v1/jobs?type=replicate_blob" | jq --arg b "$1" --arg p "$selfA" \
-      '[.items[] | select(.payload.blob_hash == $b and .payload.destination_peer_id == $p
-        and (.state == "pending" or .state == "leased"))] | length'
+  # ALL-STATE count of A-destined replicate_blob jobs for a blob. All-state, not
+  # just live: a 32 MiB local reassembly can COMPLETE inside a request, so a "live
+  # jobs" count races the transfer finishing (the first CI run failed exactly
+  # there — a job already succeeded read as zero). Counting every state and
+  # asserting on the DELTA is immune: a succeeded job still counts, so two GETs
+  # that collapse to one job read as one whether it is still running or already
+  # done. limit=200 keeps the whole set on one page.
+  count_repl() { # blob-hash -> number of A-destined replicate_blob jobs, any state
+    sw_a "/api/v1/jobs?type=replicate_blob&limit=200" | jq --arg b "$1" --arg p "$selfA" \
+      '[.items[] | select(.payload.blob_hash == $b and .payload.destination_peer_id == $p)] | length'
   }
   ensure_blob_held_on_a() { [[ "$(peer_holds "$root/a/data/cas" "$1")" == "1" ]]; }
 
-  assert_eq "$(ensure_live_jobs "$blob")" "0" \
-    "no transfer runs for the desired-but-absent blob before any client asks — the GET is the only trigger below"
+  # The baseline: the convergence transfer that put $blob on A before we deleted
+  # it. Whatever it is, the GET below must add exactly one to it.
+  local repl_before repl_after1 repl_after2
+  repl_before=$(count_repl "$blob")
 
   # The GET. It block-then-serves off the transfer it starts, which for a 32 MiB
   # reassembly can outlast one request — a bounded "still fetching" a client
   # retries, never a hang (#371). So the request is capped and its code ignored:
-  # what it PROVES is server-side — that asking ensured a transfer.
+  # what it PROVES is server-side — that asking ensured a transfer through the job
+  # table.
   sw_a "/api/v1/blobs/$blob/content" --max-time 3 -o /dev/null >/dev/null 2>&1 || true
-  assert_eq "$(ensure_live_jobs "$blob")" "1" \
-    "the GET ensured a transfer through the job table: one replicate_blob job now targets A for the blob it desires"
+  repl_after1=$(count_repl "$blob")
+  assert_eq "$repl_after1" "$(( repl_before + 1 ))" \
+    "the GET ensured a transfer through the job table: exactly one new replicate_blob job targets A for the blob it desires"
 
   # A SECOND GET must not stack a second transfer. The enqueue is keyed on
   # blob + destination — the key reconcile_peer uses — so it collapses onto the
-  # one already in flight (invariant 9).
+  # one already accounted for, whether that job is still running or has completed
+  # and the blob is now whole (invariant 9).
   sw_a "/api/v1/blobs/$blob/content" --max-time 3 -o /dev/null >/dev/null 2>&1 || true
-  assert_eq "$(ensure_live_jobs "$blob")" "1" \
+  repl_after2=$(count_repl "$blob")
+  assert_eq "$repl_after2" "$repl_after1" \
     "a second GET created no second transfer: the idempotent enqueue collapsed both onto one job (two GETs → one job)"
 
   # And it ENDS UP SERVED: the ensured transfer completes in the worker and the
@@ -7404,7 +7412,7 @@ YAML
   nd_code=$(sw_a "/api/v1/blobs/$nd/content" --max-time 3 -o /dev/null -w '%{http_code}')
   assert_eq "$nd_code" "404" \
     "a GET for a blob no asset references is a plain 404 — the gate refused to fetch it"
-  assert_eq "$(ensure_live_jobs "$nd")" "0" \
+  assert_eq "$(count_repl "$nd")" "0" \
     "and it started no transfer: a hash nobody desires cannot be pulled by asking for it (the DoS gate holds)"
 
   local p
