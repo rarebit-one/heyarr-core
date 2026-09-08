@@ -16,6 +16,10 @@ const (
 	Music = "music"
 	// Book is a book, comic or audiobook.
 	Book = "book"
+	// Document is a web article or page, captured as a self-contained
+	// single-file HTML (ADR-0063). The Work is the article; a followed feed
+	// names it, so it is not filename-identified on the capture path.
+	Document = "document"
 	// Unknown is the content type of the synthetic Unidentified Work, and the
 	// value a caller passes to Identify when the owning library's type should
 	// not bias rule selection.
@@ -251,14 +255,15 @@ func (r *Registry) ordered(ct string) []Rule {
 	return out
 }
 
-// Default returns a Registry with the built-in movie, series, music and book
-// rules, most specific first.
+// Default returns a Registry with the built-in movie, series, music, book and
+// document rules, most specific first.
 func Default() *Registry {
 	r := NewRegistry()
 	r.Register(seriesRules()...)
 	r.Register(movieRules()...)
 	r.Register(musicRules()...)
 	r.Register(bookRules()...)
+	r.Register(documentRules()...)
 	r.Register(fallbackRules()...)
 	return r
 }
@@ -274,7 +279,7 @@ func Identify(relPath, libraryContentType string) Candidate {
 // Exported because they are a VOCABULARY and not this package's private
 // business: a library declares one, a want declares one, and until #227 nothing
 // checked that what was declared is one of these.
-func ContentTypes() []string { return []string{Movie, Series, Music, Book} }
+func ContentTypes() []string { return []string{Movie, Series, Music, Book, Document} }
 
 // IsContentType reports whether ct is one Heyarr understands.
 //

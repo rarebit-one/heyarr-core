@@ -127,6 +127,9 @@ func (h *harness) exec(query string, args ...any) {
 //	Ada Prentice — The Long Survey   epub + cbz  (both streamable)
 //	Bex Coombs   — Marginalia         one LINKED format only (no blob):
 //	                                   must never be offered as acquirable.
+//	A Captured Article                 a document (html), streamable — a
+//	                                   captured web article surfaces beside books
+//	                                   on the same acquisition feed (ADR-0080).
 func (h *harness) seed(ctx context.Context, store cas.Store) {
 	h.t.Helper()
 	h.exec(`INSERT INTO libraries (id, name, content_type, enabled, created_at)
@@ -134,12 +137,19 @@ func (h *harness) seed(ctx context.Context, store cas.Store) {
 
 	h.book("wa", "The Long Survey", "the long survey", 2019, "Ada Prentice")
 	h.book("wb", "Marginalia", "marginalia", 2022, "Bex Coombs")
-	// A non-book work, to prove the acquisition feed only ever sees books.
+	// A non-book, non-document work (a movie), to prove the acquisition feed
+	// sees book-shaped content only and never an AV Work.
 	h.exec(`INSERT INTO works (id, content_type, work_key, title, sort_title, year, attributes, created_at, updated_at)
 		VALUES ('wm', 'movie', 'movie:wm', 'Arrival', 'arrival', 2016, '{}', ?, ?)`, stamp, stamp)
+	// A document Work: a captured web article (ADR-0063). It is book-like — a
+	// titled Work whose bytes a reader downloads — so ADR-0080 surfaces it on
+	// this same feed.
+	h.exec(`INSERT INTO works (id, content_type, work_key, title, sort_title, year, attributes, created_at, updated_at)
+		VALUES ('wd', 'document', 'document:wd', 'A Captured Article', 'a captured article', 2024, '{}', ?, ?)`, stamp, stamp)
 
 	h.edition(ctx, store, "wa", "ea1", "epub", "application/epub+zip", []byte("epub-bytes-of-the-long-survey-0123456789"))
 	h.edition(ctx, store, "wa", "ea2", "cbz", "application/x-cbz", []byte("cbz-bytes-of-the-long-survey"))
+	h.edition(ctx, store, "wd", "ed1", "html", "text/html", []byte("<html><body>a self-contained captured article</body></html>"))
 
 	// A linked edition on Marginalia: an asset with NO blob (ADR-0020). It is in
 	// the catalogue but cannot be downloaded, so it must have no entry at all.

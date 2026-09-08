@@ -22,6 +22,8 @@ var mimeByFormat = map[string]string{
 	"fb2":  "application/x-fictionbook+xml",
 	"pdb":  "application/vnd.palm",
 	"lit":  "application/x-ms-reader",
+	"html": "text/html",
+	"htm":  "text/html",
 }
 
 const octetStream = "application/octet-stream"
@@ -39,14 +41,18 @@ func acquisitionMediaType(storedMIME, format string) string {
 	return octetStream
 }
 
-// handlePublications is the acquisition feed: every book with at least one
-// streamable format, one Atom entry each, an acquisition link per format.
+// handlePublications is the acquisition feed: every book or document with at
+// least one streamable format, one Atom entry each, an acquisition link per
+// format.
 //
-// A publication is a book Work; a format is an Edition; the bytes are the
-// Asset. Only editions with a managed or vault blob are offered — a linked
-// asset has no blob (ADR-0020) and nothing to download, so advertising it would
-// be an acquisition link that 404s. A book whose only formats are linked has no
-// entry at all rather than an entry a reader cannot acquire from.
+// A publication is a book or document Work; a format is an Edition; the bytes
+// are the Asset. A captured article is book-like — a titled Work whose bytes a
+// reader downloads — so it surfaces through the same shelf the navigation feed
+// already promises ("every book, comic and document"), rather than a parallel
+// feed. Only editions with a managed or vault blob are offered — a linked asset
+// has no blob (ADR-0020) and nothing to download, so advertising it would be an
+// acquisition link that 404s. A work whose only formats are linked has no entry
+// at all rather than an entry a reader cannot acquire from.
 func (h *Handler) handlePublications(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.reader.QueryContext(r.Context(), `
 		SELECT w.id, w.title, COALESCE(json_extract(w.attributes, '$.author'), ''),
@@ -58,7 +64,7 @@ func (h *Handler) handlePublications(w http.ResponseWriter, r *http.Request) {
 			WHERE a2.edition_id = e.id AND a2.blob_hash IS NOT NULL
 			ORDER BY a2.id LIMIT 1)
 		JOIN blobs b ON b.hash = a.blob_hash
-		WHERE w.content_type = 'book'
+		WHERE w.content_type IN ('book', 'document')
 		ORDER BY w.sort_title, w.id, e.edition_type, e.id
 		LIMIT 5000`)
 	if err != nil {

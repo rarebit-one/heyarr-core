@@ -11,6 +11,23 @@ stable.
 
 ### Added
 
+- **`document` is a first-class content type (ADR-0080, ADR-0063).** A followed
+  RSS/Atom article, captured as a self-contained single-file HTML, now has
+  somewhere to land: `document` joins movie, series, music and book in the
+  identification registry, so `POST /api/v1/libraries` accepts a `document`
+  library, `IsContentType("document")` is true, and a completed web-capture
+  acquisition routes to that library's root instead of being blocked with
+  *"no enabled library root for that content type"*. Captured `.html` bytes get
+  a `text/html` media type on ingest, and a document Work surfaces on the OPDS
+  acquisition feed beside books (the navigation feed already promised "every
+  book, comic and document"). A captured article is attached to its known Work
+  by the item-scoped want (ADR-0063), not by filename, so the document
+  identifier is deliberately minimal — it exists only to keep a `document`
+  library scanned from disk from falling through to the movie-first fallback
+  (#227). Deliberately NOT wired into the Torznab search categories or the DLNA
+  AV classes: a document is neither searched by indexer nor rendered as audio or
+  video, and both already treat an unknown type gracefully.
+
 - **TMDB metadata provider (ADR-0077, ADR-0058).** A second `metadata` provider
   kind, `tmdb`, discovers TV series and enumerates their episodes and air dates
   from The Movie Database v3 — a drop-in behind the same `FeedProvider` /

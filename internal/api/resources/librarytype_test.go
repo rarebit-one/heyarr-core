@@ -31,7 +31,7 @@ func TestALibraryCannotBeCreatedWithATypeHeyarrDoesNotKnow(t *testing.T) {
 			// The refusal names the vocabulary, or the operator has to guess
 			// what Heyarr wanted — and guessing is how `show` happened.
 			body := string(h.body(resp))
-			for _, want := range []string{"movie", "series", "music", "book"} {
+			for _, want := range []string{"movie", "series", "music", "book", "document"} {
 				if !strings.Contains(body, want) {
 					t.Errorf("the refusal does not offer %q: %s", want, body)
 				}
@@ -40,11 +40,16 @@ func TestALibraryCannotBeCreatedWithATypeHeyarrDoesNotKnow(t *testing.T) {
 	}
 }
 
-// And the four it does know are accepted, or the guard is just an outage.
-func TestTheFourContentTypesAreStillAccepted(t *testing.T) {
+// And the ones it does know are accepted, or the guard is just an outage.
+//
+// `document` is here because it is the whole point of ADR-0080: a followed RSS
+// article is typed `document`, and until it was a registered content type a
+// `document` library could not be created — so every article ingest hit
+// ErrNoRootForContent with nowhere to land.
+func TestTheKnownContentTypesAreStillAccepted(t *testing.T) {
 	h := newHarness(t).seed()
 
-	for _, ct := range []string{"movie", "series", "music", "book"} {
+	for _, ct := range []string{"movie", "series", "music", "book", "document"} {
 		t.Run(ct, func(t *testing.T) {
 			resp := h.doStable(http.MethodPost, "/api/v1/libraries",
 				strings.NewReader(`{"name":"ok-`+ct+`","content_type":"`+ct+`"}`))

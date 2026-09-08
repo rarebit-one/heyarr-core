@@ -497,6 +497,12 @@ var mimeByExtension = map[string]string{
 	".cbz": "application/vnd.comicbook+zip", ".cbr": "application/vnd.comicbook-rar",
 	".txt": "text/plain",
 
+	// A captured web article is a self-contained single-file HTML (ADR-0063);
+	// without this its managed blob would carry an empty media type and OPDS
+	// would advertise it with no way for a reader to know what it is.
+	".html": "text/html", ".htm": "text/html", ".xhtml": "application/xhtml+xml",
+	".mhtml": "multipart/related", ".mht": "multipart/related",
+
 	".srt": "application/x-subrip", ".ass": "text/x-ssa", ".ssa": "text/x-ssa",
 	".vtt": "text/vtt", ".sub": "text/plain", ".idx": "text/plain",
 
