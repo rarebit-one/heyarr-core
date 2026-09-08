@@ -331,7 +331,7 @@ given as a JSON array of rules — the same shape the API takes:
 
   heyarr quality-profile create living-room \
     --accept  '[{"attribute":"resolution","op":"gte","value":1080}]' \
-    --prefer  '[{"attribute":"codec","op":"eq","value":"hevc","weight":20}]'
+    --prefer  '[{"attribute":"video_codec","op":"eq","value":"hevc","weight":20}]'
 
 An omitted group is left empty; a profile with no terminal rules is never
 "finished", which is legal — that is what the seeded "archival" profile is.
