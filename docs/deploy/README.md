@@ -4,6 +4,14 @@ Heyarr ships as a single static binary, a hardened systemd unit, and a
 distroless container image. Pick one; they install the same thing in the same
 places.
 
+**Platform support is asymmetric, and it is stated here so nobody discovers it
+by deploying (#204).** Linux is the supported deployment target — the hardened
+`systemd` unit is where the confinement §74 expects actually lives. macOS is a
+first-class **build and test** target (the release binary, the CI matrix and the
+storage fabric all cover `darwin/arm64`) but a **second-class deployment**
+target: it gets a supervised `launchd` unit and nothing below it. A site that
+needs the containment the systemd unit provides should be a Linux peer.
+
 - **[`reference-linux-host.md`](reference-linux-host.md)** — the reference
   deployment, measured on a real host rather than assumed: filesystem layout,
   the service account/group/ACL model from §74, the recorded
@@ -14,6 +22,11 @@ places.
   look missing are absent on purpose.
 - **[`../../deploy/docker/Dockerfile`](../../deploy/docker/Dockerfile)** — the
   image. No shell, no package manager, runs as uid 65532.
+- **[`macos-launchd.md`](macos-launchd.md)** and
+  **[`../../deploy/launchd/one.rarebit.heyarr.plist`](../../deploy/launchd/one.rarebit.heyarr.plist)** —
+  a supervised macOS peer. Read the doc first: it is deliberately weaker than the
+  systemd unit and says exactly where, so no one deploys a Mac expecting parity
+  (#204).
 - **[`toolchain.md`](toolchain.md)** — FFmpeg and ffprobe: optional, pinned by
   digest, and what a node without them can still do (ADR-0023).
 

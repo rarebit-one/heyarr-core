@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  A macOS launchd unit for a Heyarr peer, installed to
+  /Library/LaunchDaemons/one.rarebit.heyarr.plist and loaded with
+  `sudo launchctl bootstrap system ...` (see docs/deploy/macos-launchd.md).
+
+  Read that document before this file: macOS is a first-class BUILD and TEST
+  target and a second-class DEPLOYMENT target (#204), and this unit is
+  DELIBERATELY WEAKER than deploy/systemd/heyarr.service. launchd has no
+  ProtectSystem=strict, no ReadWritePaths, no MemoryMax, no NoNewPrivileges —
+  so the confinement the systemd unit scores on `systemd-analyze security` has
+  no equivalent here and this file does not pretend otherwise. What it does
+  provide is a dedicated service account, restart-on-failure, and survival
+  across logout and sleep. The rest is the operator's job on this platform, and
+  the doc says which parts.
+-->
+<plist version="1.0">
+<dict>
+  <!-- Reverse-DNS label under the org that owns this repo. It is the handle
+       `launchctl` uses (`launchctl print system/one.rarebit.heyarr`), so it
+       must match the plist filename. -->
+  <key>Label</key>
+  <string>one.rarebit.heyarr</string>
+
+  <!-- Type=exec's counterpart: launchd execs the binary directly. Heyarr does
+       not speak launchd's own readiness protocol, so there is no
+       EnableTransactions / sd_notify equivalent claimed — "running" means the
+       binary is running, exactly as the systemd unit uses Type=exec. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/heyarr</string>
+    <string>--config</string>
+    <string>/usr/local/etc/heyarr/config.yaml</string>
+    <string>all</string>
+  </array>
+
+  <!-- The service account. `_heyarr` follows the macOS convention of an
+       underscore-prefixed system user; the doc creates it with a role account
+       (`dscl`) that owns the data directory and reads the library through
+       group membership, NOT by owning it — the same §74 rule the systemd unit
+       enforces with User=/SupplementaryGroups=. There is no macOS equivalent
+       of dropping to it AND forbidding privilege re-escalation
+       (NoNewPrivileges); the account itself being unprivileged is the whole of
+       the containment here. -->
+  <key>UserName</key>
+  <string>_heyarr</string>
+  <key>GroupName</key>
+  <string>_heyarr</string>
+
+  <!-- Start at boot and keep it up. KeepAlive=true is launchd's
+       Restart=on-failure AND then some: it also restarts a clean exit, which
+       is correct for a peer meant to survive unattended (ADR-0038) — a peer
+       that exited is a site that went dark. SuccessfulExit=false would only
+       restart failures; a supervised peer wants both. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Don't let a crash-loop spin. 5s matches the systemd unit's RestartSec.
+       launchd's own floor is 10s if a job exits faster than this; the value is
+       stated so the intent is on the page rather than left to the default. -->
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+
+  <!-- Shutdown drains in-flight jobs. Heyarr handles SIGTERM (its default
+       stop signal under launchd) and the supervisor's own grace period bounds
+       the drain; this ceiling must be LONGER than that grace or launchd
+       SIGKILLs mid-drain and the work is retried rather than finished — the
+       same reasoning as the systemd unit's TimeoutStopSec=120. -->
+  <key>ExitTimeOut</key>
+  <integer>120</integer>
+
+  <!-- The data directory, and where relative paths resolve. On macOS the
+       store lives here rather than under /var/lib; the doc explains the APFS
+       clone story, which is the same ADR-0014 ladder as Linux (Clonefile,
+       degrading to hardlink then copy) but with none of the ZFS/recordsize
+       tuning that does not exist on APFS. -->
+  <key>WorkingDirectory</key>
+  <string>/usr/local/var/heyarr</string>
+
+  <!-- App Nap and idle sleep are the macOS-specific hazard a Linux operator
+       does not expect: a backgrounded process can be throttled and a Mac can
+       sleep out from under a peer that is meant to stay reachable. LowPriorityIO
+       is set false so ingest is not deprioritised into invisibility; the doc
+       covers the sleep half (`pmset`/`caffeinate`), which a plist cannot
+       express. -->
+  <key>LowPriorityIO</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <!-- Heyarr logs to stdout/stderr; launchd has no journal, so name the files.
+       They are under the data dir the service account owns. Rotation is the
+       operator's job here (newsyslog), noted in the doc — another thing the
+       systemd journal did for free. -->
+  <key>StandardOutPath</key>
+  <string>/usr/local/var/heyarr/heyarr.log</string>
+  <key>StandardErrorPath</key>
+  <string>/usr/local/var/heyarr/heyarr.log</string>
+
+  <!-- A minimal, explicit environment rather than the launchd default. HOME is
+       set because the account is a role account with no login home, and some
+       library code reaches for it. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/usr/local/var/heyarr</string>
+  </dict>
+</dict>
+</plist>
