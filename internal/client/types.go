@@ -252,6 +252,21 @@ type CreateRootRequest struct {
 	Enabled    *bool  `json:"enabled,omitempty"`
 }
 
+// CreateQualityProfileRequest is the POST /quality-profiles body.
+//
+// Accept, Prefer and Terminal are carried as raw JSON so the CLI passes an
+// operator's rule arrays straight through to the server's own validation
+// (§62), rather than re-declaring the rule model here. An omitted group is
+// left empty — a profile may legally have no rules of a kind (the seeded
+// "archival" profile has no terminal rules).
+type CreateQualityProfileRequest struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Accept      json.RawMessage `json:"accept,omitempty"`
+	Prefer      json.RawMessage `json:"prefer,omitempty"`
+	Terminal    json.RawMessage `json:"terminal,omitempty"`
+}
+
 // DesiredItem is content that should exist, whether or not it does (§55).
 //
 // It anchors to a Work — the semantic entity, which exists whether or not any
