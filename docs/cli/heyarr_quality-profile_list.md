@@ -25,4 +25,4 @@ heyarr quality-profile list [flags]
 
 ### See also
 
-* [heyarr quality-profile](heyarr_quality-profile.md)	 - Inspect the quality profiles a want is measured against
+* [heyarr quality-profile](heyarr_quality-profile.md)	 - Author and inspect the quality profiles a want is measured against

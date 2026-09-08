@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -312,10 +313,75 @@ func newQualityProfileCommand(_ Options, configPath *string) *cobra.Command {
 	flags.register(listCmd)
 	list.register(listCmd)
 
+	var (
+		createFlags                           clientFlags
+		description, accept, prefer, terminal string
+	)
+	createCmd := &cobra.Command{
+		Use:   "create <name>",
+		Short: "Author a quality profile (§62)",
+		Long: `Create a quality profile from its accept/prefer/terminal rules.
+
+The three groups are three different KINDS of statement (§62), and each is
+given as a JSON array of rules — the same shape the API takes:
+
+  accept    a GATE  — fail it and a candidate is rejected outright
+  prefer    a SCORE — a weighted preference; missing all of them is still acceptable
+  terminal  a STOP  — the point at which the upgrade workflow stops looking
+
+  heyarr quality-profile create living-room \
+    --accept  '[{"attribute":"resolution","op":"gte","value":1080}]' \
+    --prefer  '[{"attribute":"video_codec","op":"eq","value":"hevc","weight":20}]'
+
+An omitted group is left empty; a profile with no terminal rules is never
+"finished", which is legal — that is what the seeded "archival" profile is.
+Authoring is deliberate: a name that already exists is reported as a conflict,
+never silently replaced.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return createFlags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				req := client.CreateQualityProfileRequest{Name: args[0], Description: description}
+				// Reject malformed JSON here so a typo is a local error that
+				// names the flag, rather than a 400 the operator has to decode.
+				for _, g := range []struct {
+					name string
+					raw  string
+					dst  *json.RawMessage
+				}{
+					{"accept", accept, &req.Accept},
+					{"prefer", prefer, &req.Prefer},
+					{"terminal", terminal, &req.Terminal},
+				} {
+					if strings.TrimSpace(g.raw) == "" {
+						continue
+					}
+					if !json.Valid([]byte(g.raw)) {
+						return fmt.Errorf("--%s is not valid JSON", g.name)
+					}
+					*g.dst = json.RawMessage(g.raw)
+				}
+				var out client.QualityProfile
+				if err := c.Post(ctx, "/quality-profiles", req, &out); err != nil {
+					return err
+				}
+				if createFlags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), out)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "created quality profile %s (%s)\n", out.Name, out.ID)
+				return nil
+			})
+		},
+	}
+	createFlags.register(createCmd)
+	createCmd.Flags().StringVar(&description, "description", "", "a human description of what the profile is for")
+	createCmd.Flags().StringVar(&accept, "accept", "", "gate rules as a JSON array — a candidate failing any is rejected")
+	createCmd.Flags().StringVar(&prefer, "prefer", "", "scoring rules as a JSON array — weighted preferences, never gates")
+	createCmd.Flags().StringVar(&terminal, "terminal", "", "stop rules as a JSON array — when the upgrade workflow stops looking")
+
 	cmd := &cobra.Command{
 		Use:     "quality-profile",
 		Aliases: []string{"profile"},
-		Short:   "Inspect the quality profiles a want is measured against",
+		Short:   "Author and inspect the quality profiles a want is measured against",
 		Long: `A quality profile says three different KINDS of thing (§62):
 
   accept    a GATE  — fail it and a candidate is rejected outright
@@ -325,8 +391,9 @@ func newQualityProfileCommand(_ Options, configPath *string) *cobra.Command {
 A profile with no terminal rules is never finished, which is legal and is what
 the seeded "archival" profile is.
 
-Authoring profiles is an API operation; these commands read them.`,
+Use "create" to author one and "list" to read them.`,
 	}
 	cmd.AddCommand(listCmd)
+	cmd.AddCommand(createCmd)
 	return cmd
 }
