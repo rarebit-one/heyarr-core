@@ -247,6 +247,12 @@ func (c *Client) detailFor(err error) string {
 	if errors.Is(err, ErrNotTorznab) {
 		return "the endpoint did not answer with Torznab XML — check the URL"
 	}
+	// Before the bare ErrRateLimited check, because a RateLimitError unwraps to
+	// it: a 429 that named its reason should show the reason (#129).
+	var rle *RateLimitError
+	if errors.As(err, &rle) {
+		return "the indexer is rate limiting: " + rle.Description
+	}
 	if errors.Is(err, ErrRateLimited) {
 		return "the indexer is rate limiting"
 	}
@@ -583,6 +589,33 @@ var ErrUpstream = errors.New("the indexer failed upstream")
 // should be retried later rather than reported as broken.
 var ErrRateLimited = errors.New("the indexer is rate limiting")
 
+// RateLimitError is a 429 that arrived WITH a Torznab <error> document, so the
+// server said WHY in words worth showing.
+//
+// Measured (#129): an indexer manager answers a 429 not with a bare status but
+// with `<error code="429" description="Indexer is disabled till … due to recent
+// failures." />` — and it answers in milliseconds where a successful search
+// takes a hundred seconds. That is a different thing from an upstream tracker's
+// rate limit: the MANAGER has decided the indexer is unhealthy and is
+// short-circuiting, and flattening it to the bare "rate limiting" throws away
+// the one sentence an operator could act on.
+//
+// It Unwraps to ErrRateLimited on purpose, so every existing caller —
+// retryable(), the health classifier — treats it exactly as a rate limit still
+// (backoff and retry are unchanged; whether a manager-level disable should be
+// retried DIFFERENTLY is a separate question this deliberately does not decide,
+// #129). All this adds is the reason.
+type RateLimitError struct {
+	// Description is the server's own wording, never a credential.
+	Description string
+}
+
+func (e *RateLimitError) Error() string {
+	return "the indexer is rate limiting: " + e.Description
+}
+
+func (e *RateLimitError) Unwrap() error { return ErrRateLimited }
+
 // call performs one request, with retries, and returns the parsed document.
 func (c *Client) call(ctx context.Context, params url.Values, attempts int) (any, error) {
 	// The credential is added HERE, at the point the request is built, and
@@ -666,10 +699,22 @@ func (c *Client) attempt(ctx context.Context, target string) (any, error) {
 		return nil, fmt.Errorf("reading the indexer's response failed: %w", scrub(err, c.apiKey))
 	}
 
-	// 429 is read BEFORE the body, because a rate limiter is entitled to
-	// answer with anything at all — an HTML page, nothing — and none of it is
-	// a parse failure worth reporting.
+	// 429 does NOT require a body: a rate limiter is entitled to answer with
+	// anything at all — an HTML page, nothing — and none of it is a parse
+	// failure worth reporting. But when the body IS a Torznab <error> document,
+	// it carries a human-readable reason (an indexer manager disabling an
+	// indexer for an hour after repeated failures is one real shape, #129), and
+	// discarding it flattens every 429 to a bare "rate limiting". So the body is
+	// read best-effort: its reason is surfaced when present, and its absence
+	// leaves the bare signal exactly as before. Either way ErrRateLimited stays
+	// underneath, so backoff and retry are unchanged.
 	if resp.StatusCode == http.StatusTooManyRequests {
+		if _, perr := parse(resp.StatusCode, body); perr != nil {
+			var pe *ProtocolError
+			if errors.As(perr, &pe) && strings.TrimSpace(pe.Description) != "" {
+				return nil, &RateLimitError{Description: strings.TrimSpace(pe.Description)}
+			}
+		}
 		return nil, ErrRateLimited
 	}
 

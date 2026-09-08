@@ -44,6 +44,54 @@ reachable with real data. But it means the positive cases live in
 coverage of Torznab's real attribute variance. Claiming otherwise would be the
 false confidence ADR-0026 exists to prevent.
 
+### It is not one tracker's quirk — it is what discovery can know (#129)
+
+Measured against a **second, unrelated** real indexer carrying actual film (an
+Internet Archive endpoint, via the same manager), the per-item attributes were
+identical to the Linux-ISO tracker's: `category`, `seeders`, `grabs`, `infohash`
+and the volume factors — **no `resolution`, `video_codec`, `source`,
+`audio_channels` or `hdr`**. So this generalises past the corpus: against a real
+indexer, discovery determines **size and identity, nothing else**.
+
+The asymmetry that makes this a design position rather than a gap: the SAME
+release, once its bytes are held and probed, has every attribute determined —
+resolution, codec, source, HDR and audio channels all resolve to `pass`/`fail`/
+`bonus` against a §62 profile. So a quality attribute is knowable, but only
+*after* acquisition (`ffprobe`), never at discovery.
+
+| | resolution | codec | source | hdr | audio | size |
+|---|---|---|---|---|---|---|
+| **candidate**, from a real indexer | undetermined | undetermined | undetermined | undetermined | undetermined | determined |
+| **held asset**, once probed | determined | determined | determined | determined | determined | determined |
+
+The sharp consequence, worth stating because §62 profiles read as though the
+indexer will tell us what a release is: an `undetermined` **accept** gate fails
+closed, so a profile that gates acquisition on `resolution` makes **no candidate
+ever acceptable against any real indexer** — acquisition is structurally
+unreachable, presenting as "nothing is ever acquired" with no error anywhere. A
+profile that gates only on `size_bytes` acquires and then satisfies. This is the
+concrete case for treating the indexer as a release LOCATOR (size + identity)
+and leaving quality to the probe (§60 upgrades) and to #107's metadata
+providers — the seeded profiles gating on `resolution` in `accept` contradict
+it.
+
+### The real `429` is a manager disabling an indexer, not a tracker rate limit
+
+Captured live, the shape a constructed sequence would not guess:
+
+```
+http=429   <error code="429" description="Indexer is disabled till <time> due to recent failures." />
+```
+
+It answers in **milliseconds** where a successful search takes ~100 s, because
+this is the indexer MANAGER short-circuiting on its own account — a different
+thing from an upstream tracker asking for room, with the same status code. The
+client now surfaces that `description` (`RateLimitError`, `internal/indexers`)
+instead of flattening every 429 to "rate limiting", while still treating it as a
+rate limit for backoff. A synthesised fixture would capture the shape; the real
+one depends on first provoking a failure, so it is a sequence rather than a
+response.
+
 ## Capturing
 
 ```sh
