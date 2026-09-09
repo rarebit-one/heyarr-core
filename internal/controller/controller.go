@@ -335,6 +335,14 @@ func (c *Controller) Run(ctx context.Context) error {
 	startStatePlaneReplication(ctx, db, reconcileEvents, backupInterval,
 		self.PeerID, c.log, material, members)
 
+	// The editorial catalog op-log converges between the two controllers of an
+	// active-active pair by default (ADR-0073, #449): this beat runs the same
+	// /peer/v1/catalog/ops exchange the route runs on demand, on a cadence, so a
+	// work deleted at one site reaches the other without an operator. It shares
+	// the backup cadence for the reason the state beat does — both are peer-sync
+	// RPO intervals — and is a no-op on a single-site node with no peer surface.
+	startCatalogOpsSync(ctx, db, backupInterval, self.PeerID, c.log, material, members)
+
 	// "started" is logged only after every listener is bound. A start line
 	// printed before the socket exists is a lie that costs someone an
 	// afternoon: the supervisor, the acceptance script and an operator tailing
