@@ -7320,8 +7320,22 @@ YAML
   assert_eq "$(sw_a "/api/v1/blobs/$blob/content" -o /dev/null -w '%{http_code}')" "200" \
     "and the whole blob streams to a client that asked for no range at all"
 
-  assert_eq "$(( $(ctrl_blob_bytes "$(sw_a /metrics)") - ctrl_before ))" "2" \
-    "the client API counted both of those reads: the instrument the absence below is measured against is live"
+  # >= 2, not == 2, and the difference is the whole of #274. ctrl_blob_bytes sums
+  # heyarr_http_requests_total for the blob-content ROUTE across the whole node,
+  # not for this blob — so a background probe self-read (a worker with ffprobe
+  # fetches a blob's bytes over this exact route to hand them to ffprobe, see
+  # peer_blob_reads and the drift note above ctrl_blob_bytes) can land in the
+  # window between ctrl_before and here and make the delta 3. On a runner that
+  # has ffprobe that is ordinary traffic, not a fault, and it is what flaked the
+  # ubuntu acceptance run — a red on a docs-only branch, six consequences of one
+  # extra read. The control only has to prove the counter MOVED by at least the
+  # two reads this test just did, so the "pieces did not move" assertion below is
+  # measured against a live instrument rather than a dead one; == 2 additionally
+  # asserted a quiet node, which this node is not and need not be. The same >=
+  # idiom this file uses for every other live-instrument control (the piece-served
+  # control four lines up is >= 1 for exactly this reason).
+  assert_eq "$(( $(ctrl_blob_bytes "$(sw_a /metrics)") - ctrl_before >= 2 ))" "1" \
+    "the client API counted at least both of those reads: the instrument the absence below is measured against is live"
   pieces_after=$(piece_served_count "$log_a" "$blob")
   assert_eq "$pieces_after" "$pieces_before" \
     "AND THE PIECE RECORD DID NOT MOVE: a client asking for bytes over HTTP causes no piece anywhere, which is what keeps M6 an internal optimisation rather than a client requirement (§33, §85)"
