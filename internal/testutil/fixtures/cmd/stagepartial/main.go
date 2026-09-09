@@ -37,10 +37,18 @@ import (
 
 func main() {
 	casRoot := flag.String("cas", "", "CAS root to stage into (required)")
-	size := flag.Int64("size", 0, "blob size in bytes (required unless --playhead-only)")
+	size := flag.Int64("size", 0, "blob size in bytes (required unless --content-in or --playhead)")
 	landedCSV := flag.String("landed", "", "comma-separated piece indices to write and record")
 	seed := flag.Int64("seed", 20260828, "seed for the deterministic content")
 	contentOut := flag.String("content-out", "", "write the full content bytes here (optional)")
+	// Stage pieces of a REAL, already-existing blob rather than of synthetic
+	// content. The bytes are read from this file and the digest is theirs, so the
+	// staged partial addresses the SAME blob a running fabric is fetching — which
+	// is what lets one node be pre-staged as a deterministic piece source for
+	// another in a swarm, instead of racing the live transfer to have pieces
+	// ready. --size is then derived from the file. Mutually exclusive with --seed
+	// (which only shapes synthetic content).
+	contentIn := flag.String("content-in", "", "stage pieces of the real bytes in this file, keeping their digest, instead of synthetic content")
 	// Playhead-only mode: record where a consumer is reading in an EXTERNALLY
 	// named blob, without staging any bytes. Used to demonstrate time-critical
 	// priority (§33, §84) against a blob a running node is about to fetch.
@@ -56,7 +64,7 @@ func main() {
 		return
 	}
 
-	if err := run(*casRoot, *size, *landedCSV, *seed, *contentOut); err != nil {
+	if err := run(*casRoot, *size, *landedCSV, *seed, *contentOut, *contentIn); err != nil {
 		fmt.Fprintf(os.Stderr, "stagepartial: %v\n", err)
 		os.Exit(1)
 	}
@@ -83,24 +91,45 @@ func writePlayhead(casRoot, blobHex string, offset int64) error {
 	return nil
 }
 
-func run(casRoot string, size int64, landedCSV string, seed int64, contentOut string) error {
-	if casRoot == "" || size <= 0 {
-		return fmt.Errorf("--cas and a positive --size are required")
+func run(casRoot string, size int64, landedCSV string, seed int64, contentOut, contentIn string) error {
+	if casRoot == "" {
+		return fmt.Errorf("--cas is required")
 	}
 	landed, err := parseIndices(landedCSV)
 	if err != nil {
 		return err
 	}
 
-	// Deterministic, non-zero content: a hole reads back as zeroes, so content
-	// that is never zero is content a hole cannot be mistaken for.
-	data := make([]byte, size)
-	rng := rand.New(rand.NewSource(seed)) //nolint:gosec // deterministic fixture, not a credential
-	_, _ = rng.Read(data)
-	for i, b := range data {
-		if b == 0 {
-			data[i] = 1
+	var data []byte
+	if contentIn != "" {
+		// Real bytes of an existing blob: read them, and let the digest be
+		// theirs. --size, if given, must agree — a mismatch means staging pieces
+		// of a different blob than the caller thinks under the same geometry.
+		data, err = os.ReadFile(contentIn) //nolint:gosec // a test fixture path from the demo
+		if err != nil {
+			return fmt.Errorf("reading --content-in: %w", err)
 		}
+		if size > 0 && int64(len(data)) != size {
+			return fmt.Errorf("--content-in is %d bytes but --size says %d", len(data), size)
+		}
+		size = int64(len(data))
+	} else {
+		if size <= 0 {
+			return fmt.Errorf("a positive --size is required unless --content-in is given")
+		}
+		// Deterministic, non-zero content: a hole reads back as zeroes, so content
+		// that is never zero is content a hole cannot be mistaken for.
+		data = make([]byte, size)
+		rng := rand.New(rand.NewSource(seed)) //nolint:gosec // deterministic fixture, not a credential
+		_, _ = rng.Read(data)
+		for i, b := range data {
+			if b == 0 {
+				data[i] = 1
+			}
+		}
+	}
+	if size <= 0 {
+		return fmt.Errorf("--content-in is empty; there is nothing to stage")
 	}
 	if contentOut != "" {
 		if werr := os.WriteFile(contentOut, data, 0o600); werr != nil {
