@@ -18,3 +18,4 @@ whichever exists.
 
 * [heyarr](heyarr.md)	 - Self-hosted content lifecycle, replication and consumption
 * [heyarr subtitles backfill](heyarr_subtitles_backfill.md)	 - Extract embedded subtitles from already-ingested video
+* [heyarr subtitles want](heyarr_subtitles_want.md)	 - Request subtitles for held content that has none

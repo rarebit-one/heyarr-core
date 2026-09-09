@@ -2795,6 +2795,52 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/v1/subtitles/want:
+    post:
+      tags: [subtitles]
+      operationId: requestSubtitles
+      summary: Request subtitles for held content that has none (ADR-0085).
+      description: |
+        Creates a subtitle want for every managed video in scope that holds no
+        subtitle in the requested language. The fetch driver then acquires each
+        from a subtitle provider.
+
+        This is the door for a subtitle that exists NOWHERE — neither shipped
+        beside the video nor embedded in its container (`/subtitles/backfill`
+        covers those). A `language` is required — a subtitle want is for a
+        language and there is no default to fetch — and a scope is required
+        (`library_id`, `work_id`, or `all`) so "this one show" is never one
+        forgotten flag from "every video on the node".
+
+        Idempotent: a video that already holds a subtitle of the language is
+        skipped, and a want that already exists is left alone, so a re-run only
+        creates the genuinely-missing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [language]
+              properties:
+                language: { type: string, description: 'ISO-639-1 code, e.g. en' }
+                library_id: { type: string }
+                work_id: { type: string }
+                all: { type: boolean }
+      responses:
+        "202":
+          description: The subtitle wants were created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  candidates: { type: integer }
+                  created: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /api/v1/playback/plan:
     post:
       tags: [playback]
@@ -3807,6 +3853,13 @@ paths:
                   type: string
                   enum: [from_now, full]
                   description: How much back-catalogue polls project from now on. `full` queues a poll immediately.
+                want_subtitles:
+                  type: array
+                  items: { type: string }
+                  description: |
+                    Replace the subtitle languages (ISO-639-1) this source projects a
+                    subtitle want for (ADR-0085). Omit to leave them unchanged; an empty
+                    array wants none. Like backfill, felt on the next poll (queued now).
       responses:
         "200":
           description: The repointed subscription, with items_archived reflecting the re-judged wants.
@@ -8800,6 +8853,14 @@ components:
         reason:
           type: string
           description: A free-text note, never interpreted.
+        want_subtitles:
+          type: array
+          items: { type: string }
+          description: |
+            Languages (ISO-639-1 codes) to want a subtitle in for every projected
+            episode (ADR-0085). Each poll projects a subtitle want per language;
+            the fetch driver acquires each once the episode's video is held. Empty
+            wants none.
         retention:
           type: string
           description: Reserved. Phase 1 keeps everything; a non-empty value is refused.
@@ -8832,6 +8893,10 @@ components:
         monitor: { type: boolean }
         backfill: { type: string, enum: [from_now, full] }
         reason: { type: string }
+        want_subtitles:
+          type: array
+          items: { type: string }
+          description: Languages this source projects a subtitle want for (ADR-0085); omitted when none.
         items_known:
           type: integer
           description: How many items the feed has yielded.

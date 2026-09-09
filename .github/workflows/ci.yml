@@ -95,6 +95,16 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         go: [stable, oldstable]
+        # -race is the slow half of this job (~20m vs ~5m plain) and the four
+        # -race runs are essentially all of PR CI's wall-clock. Run -race on the
+        # primary combo only (ubuntu + stable); the other three run plain go
+        # test. A data race is rarely OS- or Go-version-specific, and the FULL
+        # -race matrix still runs nightly on main (race-nightly.yml) — so this
+        # takes the long tail off the merge path without dropping the coverage.
+        include:
+          - os: ubuntu-latest
+            go: stable
+            race: "-race"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
@@ -123,12 +133,14 @@ jobs:
               exit 1
             fi
           fi
-      # -timeout=20m, not the default 10m per package: internal/api/resources
-      # can approach the default under -race plus coverage on a loaded runner,
-      # and a per-package test timeout is only a hang reported as a failure if
-      # the bound is generous enough to be reached solely when something is
-      # genuinely wedged. The job's own timeout-minutes: 25 stays the outer stop.
-      - run: go test -race -count=1 -timeout=20m -coverprofile=coverage.out ./...
+      # matrix.race is "-race" on the primary combo (ubuntu + stable) and empty
+      # elsewhere — see the matrix note above. -timeout=20m, not the default 10m
+      # per package: internal/api/resources can approach the default under -race
+      # plus coverage on a loaded runner, and a per-package test timeout is only
+      # a hang reported as a failure if the bound is generous enough to be
+      # reached solely when something is genuinely wedged. It is harmless on the
+      # plain runs. The job's own timeout-minutes: 25 stays the outer stop.
+      - run: go test ${{ matrix.race }} -count=1 -timeout=20m -coverprofile=coverage.out ./...
       - name: the toolchain tests ran rather than skipping
         if: runner.os == 'Linux'
         run: |
