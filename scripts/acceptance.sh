@@ -7122,34 +7122,34 @@ YAML
   cli_sa peers report-inventory swarm-a --json >/dev/null
   cli_sb peers report-inventory swarm-b --json >/dev/null
 
-  # Make cooperation STRUCTURAL rather than raced (#274). Each peer is pre-staged
-  # with a DISTINCT third of the blob's REAL pieces, and the last third is left
-  # to the external source alone: node A holds pieces [0, T), node B holds
-  # [T, 2T), and only the web seed holds [2T, 3T). When both then reconcile,
-  # PullPieces surveys every member and fetches rarest-first PER SOURCE
-  # (internal/peer/transfer): the web-seed-only third is rarity 1 and is served
-  # by the web seed, while A's third is rarity 2 and A's own worker serves it — so
-  # B takes A's third FROM A and A takes B's third FROM B, deterministically. It
-  # no longer depends on which peer the scheduler favours or on catching one
-  # mid-transfer, which is the coin toss #274 rode: the external source used to be
-  # able to serve a joining peer its whole copy before that peer ever surveyed the
-  # other with pieces to offer.
+  # Make cooperation STRUCTURAL rather than raced (#274). The coin toss was that
+  # node A held NOTHING at the instant it started, so a joining node B could
+  # survey a peer with nothing to offer and pull its whole copy from the fast web
+  # seed before A had landed a single piece. So node A is pre-staged with the
+  # first HALF of the blob's REAL pieces — a guaranteed piece source the moment B
+  # surveys it.
   #
-  # The bytes are the blob's OWN, pulled from the external source (the one
-  # complete copy) and staged under its real digest via `stagepartial
-  # --content-in`, so the pieces A and B advertise are the very pieces the fabric
-  # is transferring — not a synthetic stand-in.
-  local swarm_bytes pieces_total third
+  # Node B starts empty, as before. When both reconcile, PullPieces surveys every
+  # member and fetches rarest-first PER SOURCE (internal/peer/transfer): the pieces
+  # only the web seed holds ([H, N)) are rarity 1 and go to the web seed, while
+  # A's half ([0, H)) is rarity 2 and A's own worker serves it — so B takes A's
+  # half FROM A, deterministically, whatever the scheduler or machine speed. Only
+  # A is staged, not B, so B still fetches from empty and its playback-window
+  # priority (piece 20, below) is exercised exactly as before.
+  #
+  # The bytes are the blob's OWN, pulled from the external source (the one complete
+  # copy) and staged under its real digest via `stagepartial --content-in`, so the
+  # pieces A advertises are the very pieces the fabric is transferring — not a
+  # synthetic stand-in.
+  local swarm_bytes pieces_total half
   swarm_bytes=$WORK/swarm-blob.bin
   sw_o "/api/v1/blobs/$blob/content" -o "$swarm_bytes"
   # 256 KiB pieces at this geometry (5 MiB is piece 20, staged below), so the
-  # 32 MiB blob is 128 pieces. Split into three near-equal runs.
+  # 32 MiB blob is 128 pieces. Stage node A with the first half.
   pieces_total=$(( size / 262144 ))
-  third=$(( pieces_total / 3 ))
+  half=$(( pieces_total / 2 ))
   "$STAGEPARTIAL" --cas "$root/a/data/cas" --content-in "$swarm_bytes" \
-    --landed "$(seq -s, 0 $(( third - 1 )))" >/dev/null
-  "$STAGEPARTIAL" --cas "$root/b/data/cas" --content-in "$swarm_bytes" \
-    --landed "$(seq -s, "$third" $(( 2 * third - 1 )))" >/dev/null
+    --landed "$(seq -s, 0 $(( half - 1 )))" >/dev/null
 
   # The precondition the whole section rests on is asserted AFTER the fact, from
   # the log, rather than before it from a route that does not exist: the swarm
@@ -7161,39 +7161,40 @@ YAML
   note "  🔴 both peers converge, from an external source and from each other (§23)"
   # -------------------------------------------------------------------------
   #
-  # Both peers start, each already holding a DISTINCT third of the blob (staged
-  # above) and each needing the other two thirds. Cooperation is therefore
-  # structural, not a race: see the pre-stage comment for why rarest-first steers
-  # B to take A's third from A and A to take B's third from B, deterministically.
+  # Both peers start together. Node A already holds half the blob (staged above),
+  # node B holds nothing — so A is a piece source B can use the moment it surveys,
+  # and B fetches A's half from A while the web seed serves the half only it has.
+  # Cooperation is therefore structural, not a race: see the pre-stage comment for
+  # why rarest-first steers B to take A's half from A, deterministically.
   #
   # # Why this replaced "node B joins a transfer in progress"
   #
-  # That earlier shape started A first and had B join while A was mid-transfer,
-  # to create overlap. But whether B then took any piece FROM A rather than
-  # wholly from the fast external source was a coin toss: A holds no pieces at the
-  # instant it starts, so B could survey a peer with nothing and pull its entire
-  # copy from the web seed before A had anything to offer. Measured, that reversed
-  # run to run and sometimes produced ZERO peer-to-peer bytes — which is #274. The
-  # pre-staged split removes the timing entirely: each peer holds real pieces the
-  # other lacks before either starts, so there is always something to exchange.
+  # That earlier shape started A first and had B join while A was mid-transfer, to
+  # create overlap. But whether B then took any piece FROM A rather than wholly
+  # from the fast external source was a coin toss: A held no pieces at the instant
+  # it started, so B could survey a peer with nothing and pull its entire copy from
+  # the web seed before A had anything to offer. Measured, that reversed run to run
+  # and sometimes produced ZERO peer-to-peer bytes — which is #274. Pre-staging A
+  # removes the timing: A always has something to serve before B looks.
 
-  # Neither peer holds the WHOLE blob before it starts — a distinct third is a
-  # partial, which never reaches the blob tree (invariant 1). So this is two
-  # incomplete peers converging, which is what makes it a swarm and not a queue.
+  # Node A holds only its half before converging, not the whole blob — a half is a
+  # partial, which never reaches the blob tree (invariant 1). Node B holds nothing
+  # yet. So this is an incomplete peer and an empty one converging with the source,
+  # which is what makes it a swarm and not a queue.
   assert_eq "$(peer_holds "$root/a/data/cas" "$blob")" "0" \
-    "node A holds only its third before converging, not the whole blob"
+    "node A holds only its half before converging, not the whole blob"
   assert_eq "$(peer_holds "$root/b/data/cas" "$blob")" "0" \
-    "and node B holds only its third: two incomplete peers, not one complete one seeding another"
+    "and node B holds nothing yet: it will assemble its copy from A and the source"
 
   # Give node B a playback window (§33, §84 — time-critical priority). A player
   # reading a partial records where it is, and the transfer fetches the pieces
   # there FIRST rather than in survey order. 5 MiB is piece 20, which falls in
-  # NODE A's third — so honouring the window also means B takes that piece from
-  # A, the very cooperation being demonstrated.
+  # NODE A's half — so honouring the window also means B takes that piece from A,
+  # the very cooperation being demonstrated.
   "$STAGEPARTIAL" --cas "$root/b/data/cas" --blob "$blob" --playhead 5242880
 
-  # Both reconcile; there is no staggering and none is needed now that the split
-  # makes cooperation structural rather than dependent on catching A mid-flight.
+  # Both reconcile; there is no staggering and none is needed now that pre-staging
+  # A makes cooperation structural rather than dependent on catching A mid-flight.
   sw_a "/api/v1/peers/swarm-a/reconcile" -X POST -o /dev/null
   sw_b "/api/v1/peers/swarm-b/reconcile" -X POST -o /dev/null
 
