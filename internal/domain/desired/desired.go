@@ -65,6 +65,57 @@ func ParseScope(s string) (Scope, error) {
 	return "", fmt.Errorf("scope must be one of work, edition, item, not %q", s)
 }
 
+// Aspect is which facet of a want's target it is about (ADR-0085).
+//
+// Almost every want is about the target's own content — the video, the audio,
+// the document. A subtitle is a companion facet of that same target: not a thing
+// a source emitted (an Item, ADR-0056), but a caption for the video an Item
+// already is. Modelling a wanted subtitle as an aspect of a want over the
+// existing target, rather than a fifth axis on acquisition.State, is ADR-0085's
+// core decision — content and placement are two questions about ONE blob, and a
+// subtitle is a DIFFERENT asset acquired by a different subsystem at a different
+// time, so it is a different WANT, distinguished from the primary want on the
+// same target by this aspect.
+type Aspect string
+
+const (
+	// AspectPrimary is the target's own content. It is the default, and what
+	// every want made before ADR-0085 is.
+	AspectPrimary Aspect = "primary"
+	// AspectSubtitle is a subtitle for the target's video, in the want's
+	// Language. It is satisfied by a role='subtitle' asset of that language on
+	// the target's edition, fetched direct from a subtitle provider — never
+	// searched on an indexer (ADR-0085 routes it RouteDirect regardless of the
+	// work's content type).
+	AspectSubtitle Aspect = "subtitle"
+)
+
+// Aspects lists every aspect, in a stable order.
+func Aspects() []Aspect { return []Aspect{AspectPrimary, AspectSubtitle} }
+
+// ParseAspect validates an aspect from the wire. An empty string is the primary
+// aspect, so a caller that knows nothing of aspects keeps working unchanged.
+func ParseAspect(s string) (Aspect, error) {
+	if s == "" {
+		return AspectPrimary, nil
+	}
+	for _, v := range Aspects() {
+		if string(v) == s {
+			return v, nil
+		}
+	}
+	return "", fmt.Errorf("aspect must be one of primary, subtitle, not %q", s)
+}
+
+// normAspect treats the empty aspect as primary, so a want stored before
+// ADR-0085 (no aspect column) and one written as "primary" are one want.
+func normAspect(a Aspect) Aspect {
+	if a == "" {
+		return AspectPrimary
+	}
+	return a
+}
+
 // Item is a DesiredItem: this content should exist under these conditions.
 type Item struct {
 	ID string
@@ -81,6 +132,17 @@ type Item struct {
 	// points at (ADR-0056). The item's own edition grouping lives on the Item
 	// row, not here, so an item-scoped want never also carries an EditionID.
 	ItemID string
+
+	// Aspect is which facet of the target this want is about (ADR-0085).
+	// AspectPrimary (the default) is the content itself; AspectSubtitle is a
+	// caption for the target's video, in Language. It is part of the want's
+	// identity, so the primary want and the subtitle want over one target with
+	// one profile are two distinct wants.
+	Aspect Aspect
+	// Language is the subtitle language as an ISO-639-1 code (e.g. "en"), set
+	// only when Aspect is AspectSubtitle. It too is part of identity: the English
+	// subtitle and the German subtitle of one episode are two wants.
+	Language string
 
 	// QualityProfileID is the standard this want is measured against (§62).
 	// Required: "this should exist" with no statement of what would count as
@@ -125,11 +187,16 @@ func (i *Item) Validate() error {
 	i.ItemID = strings.TrimSpace(i.ItemID)
 	i.QualityProfileID = strings.TrimSpace(i.QualityProfileID)
 	i.Reason = strings.TrimSpace(i.Reason)
+	i.Language = strings.ToLower(strings.TrimSpace(i.Language))
 
 	if i.Scope == "" {
 		i.Scope = ScopeWork
 	}
 	if _, err := ParseScope(string(i.Scope)); err != nil {
+		return err
+	}
+	i.Aspect = normAspect(i.Aspect)
+	if _, err := ParseAspect(string(i.Aspect)); err != nil {
 		return err
 	}
 	if i.WorkID == "" {
@@ -177,6 +244,29 @@ func (i *Item) Validate() error {
 		}
 	}
 
+	// The aspect and its language must agree, and a subtitle must point at
+	// something with concrete video bytes to caption (ADR-0085).
+	switch i.Aspect {
+	case AspectSubtitle:
+		if i.Language == "" {
+			return errors.New("a subtitle want must name a language — " +
+				"the English subtitle and the German subtitle of one target are two wants")
+		}
+		if i.Scope == ScopeWork {
+			// A work is a series or a film, not a concrete releasable video. A
+			// subtitle captions one edition or one item; a "subtitles for the
+			// whole series" intent is the completeness fold over per-item subtitle
+			// wants, not a single work-scoped one.
+			return errors.New("a subtitle want must be scoped to an item or an edition, " +
+				"not the whole work — a work has no single video to caption")
+		}
+	default:
+		if i.Language != "" {
+			return errors.New("only a subtitle want carries a language; " +
+				"a primary want must not name one")
+		}
+	}
+
 	if len(i.Reason) > maxReason {
 		return fmt.Errorf("the reason is %d characters, past the limit of %d",
 			len(i.Reason), maxReason)
@@ -194,5 +284,8 @@ func (i *Item) Validate() error {
 func SameWant(a, b Item) bool {
 	aKind, aID := a.Target()
 	bKind, bID := b.Target()
-	return aKind == bKind && aID == bID && a.QualityProfileID == b.QualityProfileID
+	return aKind == bKind && aID == bID &&
+		a.QualityProfileID == b.QualityProfileID &&
+		normAspect(a.Aspect) == normAspect(b.Aspect) &&
+		a.Language == b.Language
 }
