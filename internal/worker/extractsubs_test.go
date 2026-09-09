@@ -138,6 +138,27 @@ func TestExtractSubsSkipsATrackThatCannotBeExtracted(t *testing.T) {
 	}
 }
 
+func TestExtractSubsSkipsABlobItCannotEnumerate(t *testing.T) {
+	t.Parallel()
+	// ffprobe failing to enumerate a blob is permanent, not transient: a corrupt
+	// or truncated file, or bytes whose extension lied about being a video (the
+	// job is enqueued by extension). The job must SUCCEED as a skip rather than
+	// returning an error and retrying forever — that retry storm respawns ffprobe
+	// on the same dead bytes and starves the single extraction slot.
+	store := &fakeSubStore{adopt: func() (string, int64, error) { return "blake3:x", 1, nil }}
+	rec := &fakeSubRecorder{}
+	h := ExtractSubsHandler(ExtractSubsHandlerOptions{
+		Extractor: &fakeExtractor{listErr: errors.New("ffprobe: Invalid data found when processing input")},
+		Store:     store, Recorder: rec,
+	})
+	if err := h(context.Background(), extractJob(t, "blake3:v", "asset-1")); err != nil {
+		t.Fatalf("an unprobeable blob must be skipped, not retried, got %v", err)
+	}
+	if len(rec.recorded) != 0 || store.adopted != 0 {
+		t.Errorf("an unprobeable blob must adopt/record nothing, got adopted=%d recorded=%d", store.adopted, len(rec.recorded))
+	}
+}
+
 func TestExtractSubsRetriesOnInfrastructureFailure(t *testing.T) {
 	t.Parallel()
 	// Adopt (the store) failing is transient — the job must return an error so

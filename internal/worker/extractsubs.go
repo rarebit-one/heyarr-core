@@ -83,7 +83,20 @@ func ExtractSubsHandler(opts ExtractSubsHandlerOptions) HandlerFunc {
 
 		streams, err := opts.Extractor.List(ctx, src)
 		if err != nil {
-			return fmt.Errorf("extract-subs: enumerating tracks of %s: %w", payload.BlobHash, err)
+			// A blob ffprobe cannot enumerate is a permanent condition, not the
+			// transient kind a retry is for: a corrupt or truncated download, or
+			// bytes whose extension lied about being a video — ingest enqueues
+			// this job by extension (§66), so a non-video that happens to be
+			// named .mkv reaches here. Returning an error would retry it forever,
+			// respawning ffprobe on the same dead bytes and holding the single
+			// extraction slot against everything else on the node. Log and skip
+			// — the same disposition a per-track Extract failure gets below, and
+			// a subtitle-less video gets next. A genuinely transient
+			// infrastructure failure, the source bytes being missing, is caught
+			// by SourcePath above and still returned.
+			log.Warn("skipping a blob whose subtitle tracks could not be enumerated",
+				"blob", payload.BlobHash, "error", err)
+			return nil
 		}
 		if len(streams) == 0 {
 			log.Info("no embedded text subtitle tracks to extract", "blob", payload.BlobHash)
