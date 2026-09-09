@@ -46,6 +46,17 @@ const (
 	// would have to be reopened for the third, which is the shape §59 exists
 	// to prevent.
 	CapabilityMetadata Capability = "metadata"
+	// CapabilitySubtitle fetches a subtitle for content the library already
+	// holds but has no caption for — neither a shipped sidecar nor an embedded
+	// track (ADR-0085). OpenSubtitles is the first (M12 Phase 5).
+	//
+	// It is its OWN capability rather than a facet of metadata, because a
+	// subtitle provider answers a different question — "which subtitle files
+	// exist for this exact release" — and a metadata provider (TVDB, TMDB)
+	// answers none of it. The open-set argument capability.go was built on
+	// (§59) is what lets it land as one more const plus one more routing
+	// accessor, not a registry reopening.
+	CapabilitySubtitle Capability = "subtitle"
 )
 
 // Capabilities lists every capability Heyarr knows, in a stable order.
@@ -53,7 +64,7 @@ const (
 // Stable because it appears in error messages and in API responses, and an
 // order that depends on map iteration is one nobody can diff.
 func Capabilities() []Capability {
-	return []Capability{CapabilityIndexer, CapabilityDownload, CapabilityMetadata}
+	return []Capability{CapabilityIndexer, CapabilityDownload, CapabilityMetadata, CapabilitySubtitle}
 }
 
 // ParseCapability validates a capability from configuration or the wire.

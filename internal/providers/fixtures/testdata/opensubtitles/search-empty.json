@@ -1,0 +1,22 @@
+{
+  "name": "search-empty",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "opensubtitles",
+    "version": "v1",
+    "captured_at": "2026-09-09T00:00:00Z",
+    "procedure": "synthesised by hand from the opensubtitles.com REST API v1 documentation (https://opensubtitles.stoplight.io); no live key, none committed",
+    "note": "A search that matched no subtitle \u2014 the modelled empty outcome, which the adapter returns as no candidates and no error."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/subtitles?imdb_id=9999999&languages=en"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"total_pages\":1,\"total_count\":0,\"page\":1,\"data\":[]}"
+  }
+}

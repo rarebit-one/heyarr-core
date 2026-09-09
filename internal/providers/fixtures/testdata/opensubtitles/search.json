@@ -1,0 +1,22 @@
+{
+  "name": "search",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "opensubtitles",
+    "version": "v1",
+    "captured_at": "2026-09-09T00:00:00Z",
+    "procedure": "synthesised by hand from the opensubtitles.com REST API v1 documentation (https://opensubtitles.stoplight.io); no live key, none committed",
+    "note": "Two English subtitles for one episode: a clean 1080p upload and a hearing-impaired 720p one, so a test asserts the ranking signals (hearing_impaired, download_count) map through. Trimmed to the fields the adapter reads."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/subtitles?episode_number=1&imdb_id=0944947&languages=en&season_number=1"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"total_pages\":1,\"total_count\":2,\"page\":1,\"data\":[{\"id\":\"7061\",\"type\":\"subtitle\",\"attributes\":{\"subtitle_id\":\"7061\",\"language\":\"en\",\"download_count\":1200,\"hearing_impaired\":false,\"hd\":true,\"format\":\"srt\",\"release\":\"Show.S01E01.1080p.WEB-DL\",\"files\":[{\"file_id\":312,\"file_name\":\"Show.S01E01.en.srt\"}]}},{\"id\":\"7062\",\"type\":\"subtitle\",\"attributes\":{\"subtitle_id\":\"7062\",\"language\":\"en\",\"download_count\":40,\"hearing_impaired\":true,\"hd\":false,\"format\":\"srt\",\"release\":\"Show.S01E01.720p.HDTV\",\"files\":[{\"file_id\":313,\"file_name\":\"Show.S01E01.en.hi.srt\"}]}}]}"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "unauthorised",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "opensubtitles",
+    "version": "v1",
+    "captured_at": "2026-09-09T00:00:00Z",
+    "procedure": "synthesised by hand from the opensubtitles.com REST API v1 documentation (https://opensubtitles.stoplight.io); no live key, none committed",
+    "note": "A rejected Api-Key answers 401. Used via ServeOne to force the failure path Check reports as 'the API key was rejected'."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/infos/languages"
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"message\":\"Invalid or expired token\",\"status\":401}"
+  }
+}
