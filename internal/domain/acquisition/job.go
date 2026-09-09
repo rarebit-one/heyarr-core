@@ -92,6 +92,28 @@ type SearchPayload struct {
 	DesiredItemID string `json:"desired_item_id"`
 }
 
+// FetchSubtitleJobType fetches a subtitle for a subtitle-aspect want from a
+// subtitle provider (ADR-0085).
+//
+// A subtitle want is direct-route — its bytes come from a provider, never an
+// indexer — so it is never searched. This is its counterpart to the search job:
+// the fetch beat enqueues it for a due subtitle want, and a worker with a
+// CapabilitySubtitle provider runs it. On a node with no such provider it stays
+// PENDING AND VISIBLE (ADR-0025), the same degrade discipline as the search job.
+const FetchSubtitleJobType = "fetch_subtitle"
+
+// FetchSubtitleDedupeKey makes the fetch idempotent per want, for the reason
+// SearchDedupeKey is per want: two subtitle wants should be fetched
+// concurrently, and one live fetch per want is enough.
+func FetchSubtitleDedupeKey(desiredItemID string) string { return "fetch-subtitle:" + desiredItemID }
+
+// FetchSubtitlePayload is what a fetch_subtitle job carries: the want, with
+// everything else (its language, external ids, the source video) read from the
+// database at handling time so nothing goes stale between enqueue and run.
+type FetchSubtitlePayload struct {
+	DesiredItemID string `json:"desired_item_id"`
+}
+
 // IngestJobType brings a completed acquisition under management (§65, M3-13).
 //
 // A separate job from poll_downloads, and deliberately so. Polling asks a
