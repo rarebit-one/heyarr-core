@@ -1,0 +1,51 @@
+name: race-nightly
+
+# The FULL -race matrix, deliberately OFF the merge path — the same discipline
+# daemon-acceptance.yml uses. PR CI (ci.yml) runs -race only on the primary combo
+# (ubuntu + stable) so the merge path stays fast; this restores -race on macOS and
+# oldstable on a nightly cadence, so a platform- or Go-version-specific data race
+# is still caught — as a scheduled-run diff rather than a slow gate on every PR.
+on:
+  schedule:
+    # 04:00 UTC, after daemon-acceptance.yml's 03:30 so the two do not overlap.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# voidbind-go is a private module in this org (see ci.yml): GOPRIVATE keeps its
+# path off the public proxy/sumdb; the private-modules action supplies the token.
+env:
+  GOPRIVATE: github.com/rarebit-one/*
+
+concurrency:
+  group: race-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  race:
+    name: race
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        go: [stable, oldstable]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/private-modules
+        with:
+          token: ${{ secrets.AUTOLAND_PAT }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+      - name: install the pinned media toolchain
+        if: runner.os == 'Linux'
+        # Linux carries the pinned FFmpeg; macOS deliberately does not (ci.yml).
+        run: ./scripts/toolchain.sh >> "$GITHUB_PATH"
+      # -timeout=20m for the same reason ci.yml pins it: internal/api/resources
+      # can approach the 10m default under -race on a loaded runner.
+      - run: go test -race -count=1 -timeout=20m ./...
