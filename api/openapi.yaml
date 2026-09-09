@@ -2716,6 +2716,49 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /api/v1/subtitles/backfill:
+    post:
+      tags: [subtitles]
+      operationId: backfillSubtitles
+      summary: Extract embedded subtitles from already-ingested video (ADR-0084).
+      description: |
+        Queues an `extract_subtitles` job for every managed video in scope whose
+        Edition has no subtitle yet.
+
+        Extraction otherwise runs at ingest, so a video ingested before ADR-0084
+        — or before this node had ffmpeg — has embedded tracks that were never
+        lifted out, and a rescan does not fix it: the bytes are unchanged, the
+        ingest deduplicates, and nothing re-enqueues. This is the operator's
+        lever to reprocess that existing content once.
+
+        A scope is required — `library_id`, `work_id`, or `all` — so "this one
+        show" is never one forgotten flag from "every video on the node". Only
+        videos with no subtitle are touched, and the extract job is a no-op on a
+        video with no embedded text tracks, so a re-run is cheap and safe.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                library_id: { type: string }
+                work_id: { type: string }
+                all: { type: boolean }
+      responses:
+        "202":
+          description: The extractions were queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  candidates: { type: integer }
+                  enqueued: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /api/v1/playback/plan:
     post:
       tags: [playback]
