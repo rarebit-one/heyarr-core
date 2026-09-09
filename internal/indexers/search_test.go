@@ -2,6 +2,7 @@ package indexers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -478,6 +479,74 @@ func TestARateLimitThatNeverClearsGivesUp(t *testing.T) {
 	}
 	if got := searches.Load(); got != maxAttempts {
 		t.Errorf("want exactly %d attempts, got %d", maxAttempts, got)
+	}
+}
+
+// A 429 that arrives WITH a Torznab <error> document shows its reason, rather
+// than flattening every rate limit to the same three words (#129). An indexer
+// MANAGER disabling an indexer for an hour after repeated failures answers
+// exactly this shape, and its `description` is the one sentence an operator can
+// act on — so the health detail must carry it.
+func TestA429WithAnErrorDocumentShowsItsReason(t *testing.T) {
+	const body = `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<error code="429" description="Indexer is disabled till 08/24/2026 18:28:25 due to recent failures." />`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := New(Options{Name: "an-indexer", Endpoint: srv.URL, APIKey: "REDACTED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := client.Check(t.Context())
+	if h.Healthy {
+		t.Fatal("a rate-limited indexer is not healthy")
+	}
+	if !strings.Contains(h.Detail, "disabled till") {
+		t.Errorf("the health detail dropped the reason the server gave: %q", h.Detail)
+	}
+	if !strings.Contains(h.Detail, "rate limiting") {
+		t.Errorf("it stopped naming the state as a rate limit: %q", h.Detail)
+	}
+}
+
+// The reason-carrying 429 must remain a rate limit for every existing caller —
+// retried with backoff, never reclassified. RateLimitError unwraps to
+// ErrRateLimited precisely so this stays true; the whole point of #129 is to add
+// the reason WITHOUT changing when a 429 is retried.
+func TestARateLimitErrorIsStillARateLimit(t *testing.T) {
+	err := &RateLimitError{Description: "disabled for an hour"}
+	if !errors.Is(err, ErrRateLimited) {
+		t.Error("a RateLimitError stopped being an ErrRateLimited — the retry path will not see it")
+	}
+	if !retryable(err) {
+		t.Error("a rate limit that named its reason became non-retryable")
+	}
+}
+
+// A bare 429 with a body that is NOT a Torznab error document — an HTML page
+// from a reverse proxy, nothing at all — stays the plain rate limit it always
+// was. The reason is surfaced only when the server actually gave one.
+func TestABare429StaysAPlainRateLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("<html><body>Too Many Requests</body></html>"))
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := New(Options{Name: "an-indexer", Endpoint: srv.URL, APIKey: "REDACTED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := client.Check(t.Context())
+	if h.Healthy {
+		t.Fatal("a rate-limited indexer is not healthy")
+	}
+	if h.Detail != "the indexer is rate limiting" {
+		t.Errorf("a bodyless rate limit grew a reason it was never given: %q", h.Detail)
 	}
 }
 
