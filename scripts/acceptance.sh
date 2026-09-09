@@ -6885,7 +6885,15 @@ the corruption may be the operator's own file (ADR-0018)"
   # authority the whole way. Without it, B's next scan of the same bytes would
   # rebuild exactly what A removed: the delete-then-rebuild churn ADR-0071
   # refuses inside one node, now refused across the pair.
-  local conv_id conv_del conv_sync
+  #
+  # The recovery arc above restarted node B on a FRESH port (listen: 127.0.0.1:0)
+  # and only re-proved B -> A. This exchange dials A -> B, so refresh A's endpoint
+  # for B first: registering the same key moves the endpoint and keeps the
+  # identity (peers add is an upsert on the key). Without this the dial lands on
+  # the dead old port and the sibling is merely deferred.
+  local conv_id conv_del conv_sync conv_addr_b
+  conv_addr_b=$(peer_listen_addr "$log_b") || { fail "convergence: node B is not listening on a peer surface"; return 1; }
+  cli_a peers add --name site-b --public-key "$key_b" --endpoint "https://$conv_addr_b" --json >/dev/null
   conv_id=$(api_a /api/v1/works | jq -r '.items[] | select(.title == "Cold Harbour") | .id')
   [[ -n "$conv_id" ]] || { fail "convergence: node A has no 'Cold Harbour' work to delete"; return 1; }
   assert_eq "$(api_b /api/v1/works | jq -r '[.items[] | select(.title == "Cold Harbour")] | length')" "1" \
