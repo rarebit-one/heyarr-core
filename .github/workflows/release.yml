@@ -28,7 +28,12 @@ jobs:
           token: ${{ secrets.AUTOLAND_PAT }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: stable, cache: true }
-      - run: go test -race -count=1 ./...
+      # -timeout=20m, not the default 10m per package: internal/api/resources'
+      # peer/harness tests run long under -race and blow the 10m default, timing
+      # out the whole gate (exactly what ci.yml pins this against). This gate is
+      # what a release blocks on, so it must never be tighter than the CI it
+      # mirrors — the v0.1.0 tag failed here on precisely this gap.
+      - run: go test -race -count=1 -timeout=20m ./...
       - run: make demo
 
   release:
