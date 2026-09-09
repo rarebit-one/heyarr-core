@@ -1,6 +1,6 @@
 # 0073. The catalog converges by an editorial op-log over a re-derivable base
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-09-04
 **Builds on:** ADR-0038 (each peer is authoritative for its own site), ADR-0068
 (membership ops are a state-based CRDT), ADR-0003 (the control plane is
@@ -226,19 +226,52 @@ hazard.
 
 ## Open questions
 
-1. **The stable id.** `works.id` / `editions.id` are per-site UUIDv7 (ADR-0017),
-   so two sites mint different ids for the same film — they cannot key a
-   cross-site op. `works` has `work_key` (`UNIQUE (content_type, work_key)`) and
-   that is the natural candidate; **editions have no cross-site-unique natural
-   key** beyond `(work, label, edition_type, language)`, and `external_ids` are
-   too sparse to rely on. Do we key on `work_key`, synthesize a deterministic
-   edition key, or add a `stable_key` column (a schema change, out of scope
-   here but flagged)?
-2. **Who signs a catalog op.** Membership is deliberately server-opaque — the
-   node evaluates but never authors (ADR-0068). A catalog fact is a *node/library*
-   fact, so the peer probably *does* sign with its ADR-0012 identity — a
-   different trust model from membership. Or does the writing device sign under
-   its ADR-0065 write scope? This must be decided before Phase 1.
+**Accepted 2026-09-09 (#449).** The decision above — the editorial op-log overlay
+(Option A) — is adopted. The two questions that block **Phase 1** are resolved
+inline below (the stable id, and who signs); the rest are scoped to the phase
+that first needs them and are resolved when that phase is built (Q3 scanner
+determinism verified before any base row is trusted to re-derive; Q4 tombstone
+lifetime with Phase 1; Q5 `attributes` granularity with Phase 3; Q6 the §52
+snapshot and Q7 `items` projection with Phase 2). Accepting the model does not
+require answering the later phases' questions now — it requires that Phase 1 can
+start, which the two resolutions below permit.
+
+1. **The stable id. — RESOLVED (2026-09-09): key on the natural key, no schema
+   change.** A work op is keyed by `work_key` (`UNIQUE (content_type,
+   work_key)`), which both sites already derive identically from the same bytes.
+   An edition op is keyed by the deterministic composite
+   `(work_key, label, edition_type, language)` — the same tuple ADR-0071's
+   recreatable identity already re-derives, so both sites regenerate the same key
+   from the files without coordination. A `stable_key` column is deferred: it
+   buys nothing Phase 1 needs and adds migration churn to every catalog table,
+   which is exactly the churn Option C was rejected for. `external_ids` stay too
+   sparse to key on and are addressed as *values* in Phase 3, not as keys.
+   (Original open question retained below for provenance.)
+
+   > `works.id` / `editions.id` are per-site UUIDv7 (ADR-0017),
+   > so two sites mint different ids for the same film — they cannot key a
+   > cross-site op. `works` has `work_key` (`UNIQUE (content_type, work_key)`) and
+   > that is the natural candidate; **editions have no cross-site-unique natural
+   > key** beyond `(work, label, edition_type, language)`, and `external_ids` are
+   > too sparse to rely on. Do we key on `work_key`, synthesize a deterministic
+   > edition key, or add a `stable_key` column (a schema change, out of scope
+   > here but flagged)?
+2. **Who signs a catalog op. — RESOLVED (2026-09-09): the peer signs with its
+   ADR-0012 pinned identity.** A catalog fact is a node/library fact, not a
+   personal one, so it is authored by the peer that accepted the write, signed
+   with the same pinned Ed25519 identity that already verifies membership and
+   (M7-05, #285) access leases. Convergence then verifies against one trust root
+   — the enrolled-peer set — with no second trust model beside it, and no
+   dependency on device keys (an M8 concern, ADR-0032). A device's ADR-0065 write
+   *scope* still gates whether a write is accepted at the ingress; it is the peer,
+   not the device, that then authors the resulting op. (Original open question
+   retained below for provenance.)
+
+   > Membership is deliberately server-opaque — the
+   > node evaluates but never authors (ADR-0068). A catalog fact is a *node/library*
+   > fact, so the peer probably *does* sign with its ADR-0012 identity — a
+   > different trust model from membership. Or does the writing device sign under
+   > its ADR-0065 write scope? This must be decided before Phase 1.
 3. **Scanner determinism.** The overlay assumes the base re-derives *identically*
    at both sites (same identifier, same `work_key` normalisation). If
    identification is nondeterministic across sites, the base itself diverges and
