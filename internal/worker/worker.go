@@ -436,6 +436,28 @@ func (w *Worker) Run(ctx context.Context) error {
 		})
 	}
 
+	// The subtitle fetch handler (ADR-0085), registered only when this worker has
+	// a subtitle provider — the same degrade discipline as the search and poll
+	// handlers. A node with no CapabilitySubtitle provider never advertises it, so
+	// a fetch_subtitle job stays PENDING AND VISIBLE rather than being claimed and
+	// failed (ADR-0025). Not MaxConcurrent 1: each fetch is scoped to one want, a
+	// small download, and two contend over nothing — but the provider's own rate
+	// limiter (in the adapter) paces the calls.
+	if providerRegistry.Has(providers.CapabilitySubtitle) {
+		w.log.Info("a subtitle provider is available",
+			"providers", strings.Join(subtitleProviderNames(providerRegistry), ", "))
+		registry.Register(acquisition.FetchSubtitleJobType, Registration{
+			Handler: FetchSubsHandler(FetchSubsHandlerOptions{
+				Providers:  providerRegistry.SubtitleProviders(),
+				Recorder:   cat,
+				Store:      NewCASSubtitleStore(store),
+				Downloader: NewHTTPSubtitleDownloader(),
+				Logger:     w.log,
+			}),
+			RequiredCapability: providers.CapabilitySubtitle.JobCapability(),
+		})
+	}
+
 	// Ingest of completed acquisitions (§65, M3-13).
 	//
 	// Registered UNCONDITIONALLY, unlike the poll above, and the asymmetry is

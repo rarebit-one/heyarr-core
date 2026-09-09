@@ -312,6 +312,12 @@ func (c *Controller) Run(ctx context.Context) error {
 	// differs (the poll outcome is stored, not derived from a resting state).
 	startFollowBeat(ctx, beatCatalog, reconcileQueue, c.log)
 
+	// The subtitle fetch beat (ADR-0085). A direct-route sibling of the search
+	// beat: it enqueues a provider fetch for each subtitle want whose video is
+	// held but whose caption is missing, on a quota-respecting cadence the fetch
+	// job itself paces. See subtitlebeat.go.
+	startSubtitleBeat(ctx, beatCatalog, reconcileQueue, c.log)
+
 	// The download poll beat (#247). Same queue and the same serving context.
 	// See downloadbeat.go for why fifteen seconds rather than the health
 	// beat's minute, why the startup pass is the important one, and why this
