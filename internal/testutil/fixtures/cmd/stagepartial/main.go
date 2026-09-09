@@ -105,7 +105,10 @@ func run(casRoot string, size int64, landedCSV string, seed int64, contentOut, c
 		// Real bytes of an existing blob: read them, and let the digest be
 		// theirs. --size, if given, must agree — a mismatch means staging pieces
 		// of a different blob than the caller thinks under the same geometry.
-		data, err = os.ReadFile(contentIn) //nolint:gosec // a test fixture path from the demo
+		// #nosec G304,G703 -- contentIn is a fixture path from the demo, not
+		// attacker input; this is a dev-only helper (ADR-0002 ships only
+		// ./cmd/heyarr).
+		data, err = os.ReadFile(contentIn)
 		if err != nil {
 			return fmt.Errorf("reading --content-in: %w", err)
 		}
@@ -132,7 +135,7 @@ func run(casRoot string, size int64, landedCSV string, seed int64, contentOut, c
 		return fmt.Errorf("--content-in is empty; there is nothing to stage")
 	}
 	if contentOut != "" {
-		if werr := os.WriteFile(contentOut, data, 0o600); werr != nil {
+		if werr := os.WriteFile(contentOut, data, 0o600); werr != nil { //nolint:gosec // a fixture output path from the demo, not attacker input
 			return fmt.Errorf("writing content-out: %w", werr)
 		}
 	}
