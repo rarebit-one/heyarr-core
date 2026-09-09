@@ -66,10 +66,10 @@ func (c *Catalog) RecordExtractedSubtitle(
 	var pending []events.Event
 
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
-		var editionID, libraryID, sourceName sql.NullString
+		var editionID, libraryID, sourceName, sourceItem sql.NullString
 		if err := tx.QueryRowContext(ctx,
-			`SELECT edition_id, library_id, filename FROM assets WHERE id = ?`, sourceAssetID).
-			Scan(&editionID, &libraryID, &sourceName); err != nil {
+			`SELECT edition_id, library_id, filename, item_id FROM assets WHERE id = ?`, sourceAssetID).
+			Scan(&editionID, &libraryID, &sourceName, &sourceItem); err != nil {
 			return fmt.Errorf("catalog: the source video for an extracted subtitle is gone: %w", err)
 		}
 		if !editionID.Valid {
@@ -102,14 +102,18 @@ func (c *Catalog) RecordExtractedSubtitle(
 			return err
 		}
 		assetID := uuid.Must(uuid.NewV7()).String()
+		// item_id is carried over from the source video (ADR-0086): an extracted
+		// caption belongs to the same episode as the video it came out of, so it
+		// is linked to the same Item with no new knowledge — NULL when the source
+		// video has none (a film, or a pre-ADR-0086 asset).
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash,
 				source_path, role, filename, mime, identification_source, attributes,
-				created_at, updated_at)
-			VALUES (?, ?, ?, 'managed', ?, NULL, ?, ?, ?, 'extracted', ?, ?, ?)`,
+				item_id, created_at, updated_at)
+			VALUES (?, ?, ?, 'managed', ?, NULL, ?, ?, ?, 'extracted', ?, ?, ?, ?)`,
 			assetID, editionID.String, nullableString(libraryID), sub.BlobHash,
 			extractedSubtitleRole, extractedSubtitleFilename(sourceName.String, sub), subRipMIME,
-			attrs, stamp, stamp); err != nil {
+			attrs, nullableString(sourceItem), stamp, stamp); err != nil {
 			return err
 		}
 

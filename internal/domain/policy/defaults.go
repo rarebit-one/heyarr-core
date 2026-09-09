@@ -120,5 +120,27 @@ func Defaults() []Profile {
 				{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)},
 			},
 		},
+		{
+			// The profile for a fetched subtitle (ADR-0085). It cannot be judged
+			// on any of the video vocabulary the other profiles rank — a subtitle
+			// has no resolution, source or codec — and `published`'s `source NOT
+			// IN (...)` gate would evaluate to `undetermined` for it and refuse a
+			// perfectly good caption. This one accepts on the single attribute a
+			// subtitle actually has, its size, and is terminal there too: the
+			// subtitle provider already chose the best file it had (the ranking
+			// is the adapter's, ADR-0060 §3), so a held subtitle is definitive and
+			// the upgrade loop must end rather than re-fetch forever.
+			Name: "subtitle",
+			Description: "A fetched subtitle. Accepts any subtitle bytes and stops " +
+				"looking: the provider chose the file, so the held caption is definitive.",
+			Accept: []Rule{
+				{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)},
+			},
+			// No Prefer: the adapter ranked the candidates and named one file; a
+			// quality profile does not re-rank a subtitle.
+			Terminal: []Rule{
+				{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)},
+			},
+		},
 	}
 }

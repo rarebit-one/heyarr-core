@@ -162,7 +162,8 @@ func (c *Catalog) DesiredItemForItem(
 	var id string
 	err := c.db.Reader().QueryRowContext(ctx,
 		`SELECT id FROM desired_items
-		 WHERE scope = 'item' AND item_id = ? AND quality_profile_id = ?`,
+		 WHERE scope = 'item' AND item_id = ? AND quality_profile_id = ?
+		   AND aspect = 'primary'`,
 		itemID, profileID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
@@ -171,6 +172,30 @@ func (c *Catalog) DesiredItemForItem(
 		return "", false, fmt.Errorf("catalog: looking up an item's want: %w", err)
 	}
 	return id, true, nil
+}
+
+// DesiredItemTarget reports a want's scope, the item it points at (empty unless
+// item-scoped), and its aspect and language (ADR-0085/0086). It is what the
+// acquisition ingest needs to link the created asset to its Item (SetAssetItem)
+// and, for a subtitle want, to attach the fetched file under the right role and
+// language.
+func (c *Catalog) DesiredItemTarget(
+	ctx context.Context, desiredItemID string,
+) (scope, itemID, aspect, language string, err error) {
+	var item sql.NullString
+	err = c.db.Reader().QueryRowContext(ctx,
+		`SELECT scope, item_id, aspect, language FROM desired_items WHERE id = ?`,
+		desiredItemID).Scan(&scope, &item, &aspect, &language)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", "", "", fmt.Errorf("catalog: no desired item %s: %w", desiredItemID, err)
+	}
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("catalog: reading a want's target: %w", err)
+	}
+	if item.Valid {
+		itemID = item.String
+	}
+	return scope, itemID, aspect, language, nil
 }
 
 func insertDesiredItem(ctx context.Context, tx *sql.Tx, item desired.Item, now time.Time) error {
@@ -186,13 +211,17 @@ func insertDesiredItem(ctx context.Context, tx *sql.Tx, item desired.Item, now t
 		monitor = 1
 	}
 	stamp := now.Format(timestampFormat)
+	aspect := item.Aspect
+	if aspect == "" {
+		aspect = desired.AspectPrimary
+	}
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO desired_items
-			(id, scope, work_id, edition_id, item_id, quality_profile_id, monitor,
-			 reason, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		item.ID, string(item.Scope), item.WorkID, edition, itemID, item.QualityProfileID,
-		monitor, item.Reason, stamp, stamp)
+			(id, scope, work_id, edition_id, item_id, aspect, language,
+			 quality_profile_id, monitor, reason, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		item.ID, string(item.Scope), item.WorkID, edition, itemID, string(aspect), item.Language,
+		item.QualityProfileID, monitor, item.Reason, stamp, stamp)
 	if err != nil {
 		return fmt.Errorf("catalog: inserting a desired item: %w", err)
 	}

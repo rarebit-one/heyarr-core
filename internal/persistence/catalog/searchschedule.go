@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/desired"
 	"github.com/rarebit-one/heyarr-core/internal/domain/strategy"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
@@ -83,7 +84,7 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 	// of pass that is fine until the first time it matters.
 	rows, err := c.db.Reader().QueryContext(ctx, `
 		SELECT d.id, d.monitor, a.phase, a.managed, a.content, a.placement,
-		       coalesce(w.content_type, ''),
+		       coalesce(w.content_type, ''), d.aspect,
 		       coalesce(s.schedule, ''), coalesce(s.fruitless, 0),
 		       coalesce(s.next_search_at, '')
 		FROM desired_items d
@@ -103,12 +104,12 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 	for rows.Next() {
 		var (
 			id, phase, content, placement string
-			contentType                   string
+			contentType, aspect           string
 			storedSchedule, storedNext    string
 			monitor, managed, fruitless   int
 		)
 		if err := rows.Scan(&id, &monitor, &phase, &managed, &content, &placement,
-			&contentType, &storedSchedule, &fruitless, &storedNext); err != nil {
+			&contentType, &aspect, &storedSchedule, &fruitless, &storedNext); err != nil {
 			return nil, fmt.Errorf("catalog: reading wants due a search: %w", err)
 		}
 		state := acquisition.State{
@@ -121,6 +122,12 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 		// want — a document, a podcast — is taken from its feed and never asked of
 		// an indexer, so ScheduleFor refuses it whatever its state.
 		route := strategy.For(contentType).Route
+		// A subtitle want is direct whatever the video's content type (ADR-0085):
+		// its bytes come from a subtitle provider, never a torznab indexer, so the
+		// aspect overrides the content-type route before the schedule is decided.
+		if aspect == string(desired.AspectSubtitle) {
+			route = acquisition.RouteDirect
+		}
 		schedule, wanted := acquisition.ScheduleFor(state, monitor == 1, route)
 		if !wanted {
 			// Not on any search schedule: a direct-route want, or one that is

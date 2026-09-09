@@ -301,7 +301,7 @@ func ingestArtifact(
 	// The SAME pipeline the scanner uses. What this handler tells it that a
 	// walk could not is which root to land in — and which Work, because unlike
 	// a walk it was asked for something specific.
-	return pipeline.Ingest(ctx, ingest.Request{
+	res, err := pipeline.Ingest(ctx, ingest.Request{
 		RootID:     root.ID,
 		SourcePath: a.Path,
 		RelPath:    a.RelPath,
@@ -313,6 +313,26 @@ func ingestArtifact(
 			Year:        dw.Year,
 		},
 	})
+	if err != nil {
+		return ingest.Result{}, err
+	}
+
+	// Link the asset to the Item the want points at (ADR-0086). The item is a
+	// fact this want asserts, not one the file reveals, so it is recorded here —
+	// on the asset the pipeline just produced — rather than threaded through the
+	// path heuristic. Only item-scoped wants carry one; a work- or edition-scoped
+	// grab leaves it unset. A link failure must not undo a good ingest, so it is
+	// logged and the ingest still counts.
+	if res.AssetID != "" {
+		if _, itemID, _, _, terr := cat.DesiredItemTarget(ctx, desiredItemID); terr != nil {
+			return ingest.Result{}, terr
+		} else if itemID != "" {
+			if err := cat.SetAssetItem(ctx, res.AssetID, itemID); err != nil {
+				return ingest.Result{}, fmt.Errorf("linking the ingested asset to its item: %w", err)
+			}
+		}
+	}
+	return res, nil
 }
 
 // failAcquisition takes the failure edge and blocks the release.
