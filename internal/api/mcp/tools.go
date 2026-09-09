@@ -559,16 +559,17 @@ func (s *Server) acquireRelease(ctx context.Context, raw json.RawMessage) (any, 
 // through resources.FollowSource, so the two doors cannot drift.
 func (s *Server) followSource(ctx context.Context, raw json.RawMessage) (any, error) {
 	var args struct {
-		URL            string `json:"url"`
-		TVDBID         string `json:"tvdb_id"`
-		Type           string `json:"type"`
-		WorkID         string `json:"work_id"`
-		Title          string `json:"title"`
-		Year           int    `json:"year"`
-		QualityProfile string `json:"quality_profile"`
-		Monitor        *bool  `json:"monitor"`
-		Backfill       string `json:"backfill"`
-		Reason         string `json:"reason"`
+		URL            string   `json:"url"`
+		TVDBID         string   `json:"tvdb_id"`
+		Type           string   `json:"type"`
+		WorkID         string   `json:"work_id"`
+		Title          string   `json:"title"`
+		Year           int      `json:"year"`
+		QualityProfile string   `json:"quality_profile"`
+		Monitor        *bool    `json:"monitor"`
+		Backfill       string   `json:"backfill"`
+		Reason         string   `json:"reason"`
+		WantSubtitles  []string `json:"want_subtitles"`
 	}
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
@@ -578,6 +579,7 @@ func (s *Server) followSource(ctx context.Context, raw json.RawMessage) (any, er
 		WorkID: args.WorkID, Title: args.Title, Year: args.Year,
 		QualityProfile: args.QualityProfile,
 		Monitor:        args.Monitor, Backfill: args.Backfill, Reason: args.Reason,
+		WantSubtitles: args.WantSubtitles,
 	})
 	if err != nil {
 		return nil, classifyFollow(err)
@@ -679,9 +681,10 @@ func (s *Server) pollSource(ctx context.Context, raw json.RawMessage) (any, erro
 // so the two doors move a subscription's strategy the same way (ADR-0082).
 func (s *Server) setSourceProfile(ctx context.Context, raw json.RawMessage) (any, error) {
 	var args struct {
-		SourceID       string `json:"source_id"`
-		QualityProfile string `json:"quality_profile"`
-		Backfill       string `json:"backfill"`
+		SourceID       string    `json:"source_id"`
+		QualityProfile string    `json:"quality_profile"`
+		Backfill       string    `json:"backfill"`
+		WantSubtitles  *[]string `json:"want_subtitles"`
 	}
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
@@ -689,12 +692,12 @@ func (s *Server) setSourceProfile(ctx context.Context, raw json.RawMessage) (any
 	if args.SourceID == "" {
 		return nil, invalidParams("source_id is required — the source to repoint, from list_followed")
 	}
-	if args.QualityProfile == "" && args.Backfill == "" {
+	if args.QualityProfile == "" && args.Backfill == "" && args.WantSubtitles == nil {
 		return nil, invalidParams("give quality_profile (the profile to move to, by name), " +
-			"backfill (from_now or full), or both — a repoint must change something")
+			"backfill (from_now or full), or want_subtitles (the subtitle languages) — a repoint must change something")
 	}
 	out, err := s.resources.RepointSource(ctx, args.SourceID,
-		resources.RepointRequest{QualityProfile: args.QualityProfile, Backfill: args.Backfill})
+		resources.RepointRequest{QualityProfile: args.QualityProfile, Backfill: args.Backfill, WantSubtitles: args.WantSubtitles})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, invalidParams("there is no followed source with that id")

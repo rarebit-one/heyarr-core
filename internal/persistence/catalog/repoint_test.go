@@ -47,7 +47,7 @@ func TestRepointingTheProfileMovesTheSourceAndItsWants(t *testing.T) {
 	ctx := t.Context()
 	src, want := seedSubscription(t, h)
 
-	moved, err := h.cat.RepointFollowedSource(ctx, src, "q2", "")
+	moved, err := h.cat.RepointFollowedSource(ctx, src, "q2", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestRepointingTheBackfillMovesOnlyTheSource(t *testing.T) {
 	ctx := t.Context()
 	src, want := seedSubscription(t, h)
 
-	moved, err := h.cat.RepointFollowedSource(ctx, src, "", "full")
+	moved, err := h.cat.RepointFollowedSource(ctx, src, "", "full", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestRepointingBothMovesBoth(t *testing.T) {
 	ctx := t.Context()
 	src, want := seedSubscription(t, h)
 
-	moved, err := h.cat.RepointFollowedSource(ctx, src, "q2", "full")
+	moved, err := h.cat.RepointFollowedSource(ctx, src, "q2", "full", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestRepointingBothMovesBoth(t *testing.T) {
 func TestARepointThatChangesNothingIsRefused(t *testing.T) {
 	h := newHarness(t)
 	src, _ := seedSubscription(t, h)
-	if _, err := h.cat.RepointFollowedSource(t.Context(), src, "", ""); err == nil {
+	if _, err := h.cat.RepointFollowedSource(t.Context(), src, "", "", nil); err == nil {
 		t.Fatal("a repoint naming neither a profile nor a backfill was accepted; it must be refused " +
 			"rather than silently touching updated_at and nothing else")
 	}
@@ -134,7 +134,7 @@ func TestARepointThatChangesNothingIsRefused(t *testing.T) {
 
 func TestRepointingAMissingSourceIsNotFound(t *testing.T) {
 	h := newHarness(t)
-	_, err := h.cat.RepointFollowedSource(t.Context(), "nope", "q1", "")
+	_, err := h.cat.RepointFollowedSource(t.Context(), "nope", "q1", "", nil)
 	if err == nil || err.Error() != catalog.ErrNoFollowSource.Error() {
 		t.Fatalf("err = %v, want ErrNoFollowSource", err)
 	}

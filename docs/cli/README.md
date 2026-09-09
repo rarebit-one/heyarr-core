@@ -91,6 +91,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr space snapshot`](heyarr_space_snapshot.md) | Take an encrypted snapshot at the current causal point (§44) |
 | [`heyarr space`](heyarr_space.md) | Create and read encrypted personal-state spaces (§38, §42, ADR-0049) |
 | [`heyarr subtitles backfill`](heyarr_subtitles_backfill.md) | Extract embedded subtitles from already-ingested video |
+| [`heyarr subtitles want`](heyarr_subtitles_want.md) | Request subtitles for held content that has none |
 | [`heyarr subtitles`](heyarr_subtitles.md) | Subtitle operations |
 | [`heyarr system drift`](heyarr_system_drift.md) | Report how far a running instance has drifted from what was expected |
 | [`heyarr system info`](heyarr_system_info.md) | Print what the instance is running |
