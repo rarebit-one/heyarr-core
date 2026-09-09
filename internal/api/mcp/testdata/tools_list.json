@@ -297,6 +297,13 @@
             "description": "A URL identifying the source to follow — a TVDB series URL, a youtube.com channel-feed URL, or any other http(s) feed URL (a podcast or article RSS feed). The type is inferred from it where possible — you do not name a source or a provider.",
             "type": "string"
           },
+          "want_subtitles": {
+            "description": "Languages (ISO-639-1 codes, e.g. [\"en\"]) to want a subtitle in for every episode this source projects. Each poll projects a subtitle want per language; the fetch driver acquires each once the episode's video is held. Optional; empty wants none.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "work_id": {
             "description": "An existing series or podcast work, from search_content. Give this or title, never both.",
             "type": "string"
@@ -757,6 +764,13 @@
           "source_id": {
             "description": "The followed source to repoint, from list_followed.",
             "type": "string"
+          },
+          "want_subtitles": {
+            "description": "Replace the subtitle languages (ISO-639-1 codes, e.g. [\"en\"]) this source wants a subtitle in for every episode. Felt on the next poll (queued for you). Omit to leave unchanged; an empty array wants none. Optional.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "required": [
