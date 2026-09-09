@@ -57,6 +57,21 @@ const (
 	// (§59) is what lets it land as one more const plus one more routing
 	// accessor, not a registry reopening.
 	CapabilitySubtitle Capability = "subtitle"
+	// CapabilityEnrich fills in what a Work already in the library IS — its
+	// canonical ids and its cover — keyed on the Work itself (ADR-0087, M12
+	// Phase 6). MusicBrainz (music) and Open Library (books) are the first
+	// (M12 Phase 6).
+	//
+	// It is its OWN capability rather than a facet of metadata for the reason
+	// subtitle is: a metadata provider (TVDB, TMDB) is routed by
+	// ServesType(followed.Type) for the poll loop, and enrichment routes by a
+	// held Work's CONTENT type — two routing modes on one capability is the
+	// overload ADR-0085 refused. An enrich provider answers a question no other
+	// capability does: "given a Work — its content type and the identity
+	// attributes ingest parsed — what is its canonical id, and where is its
+	// cover." The open-set argument (§59) is what lets it land as one more const
+	// plus one more routing accessor, not a registry reopening.
+	CapabilityEnrich Capability = "enrich"
 )
 
 // Capabilities lists every capability Heyarr knows, in a stable order.
@@ -64,7 +79,7 @@ const (
 // Stable because it appears in error messages and in API responses, and an
 // order that depends on map iteration is one nobody can diff.
 func Capabilities() []Capability {
-	return []Capability{CapabilityIndexer, CapabilityDownload, CapabilityMetadata, CapabilitySubtitle}
+	return []Capability{CapabilityIndexer, CapabilityDownload, CapabilityMetadata, CapabilitySubtitle, CapabilityEnrich}
 }
 
 // ParseCapability validates a capability from configuration or the wire.

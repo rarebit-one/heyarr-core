@@ -29,6 +29,8 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/musicbrainz"
+	"github.com/rarebit-one/heyarr-core/internal/providers/openlibrary"
 	"github.com/rarebit-one/heyarr-core/internal/providers/opensubtitles"
 	"github.com/rarebit-one/heyarr-core/internal/providers/podcast"
 	"github.com/rarebit-one/heyarr-core/internal/providers/tmdb"
@@ -340,7 +342,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		return fmt.Errorf("worker: %w", err)
 	}
 	providerRegistry, err := providers.BuildWith(resolvedProviders, w.log, nil,
-		providers.Chain(indexers.Constructor, downloads.Constructor, tvdb.Constructor, tmdb.Constructor, podcast.Constructor, youtube.Constructor, webfeed.Constructor, opensubtitles.Constructor))
+		providers.Chain(indexers.Constructor, downloads.Constructor, tvdb.Constructor, tmdb.Constructor, podcast.Constructor, youtube.Constructor, webfeed.Constructor, opensubtitles.Constructor, musicbrainz.Constructor, openlibrary.Constructor))
 	if err != nil {
 		return fmt.Errorf("worker: building the provider registry: %w", err)
 	}
@@ -455,6 +457,25 @@ func (w *Worker) Run(ctx context.Context) error {
 				Logger:     w.log,
 			}),
 			RequiredCapability: providers.CapabilitySubtitle.JobCapability(),
+		})
+	}
+
+	// The enrich handler (ADR-0087), registered only when this worker has an
+	// enrich provider — the same degrade discipline as the subtitle handler. A node
+	// with no CapabilityEnrich provider never advertises it, so an enrich_work job
+	// stays PENDING AND VISIBLE rather than being claimed and failed (ADR-0025).
+	if providerRegistry.Has(providers.CapabilityEnrich) {
+		w.log.Info("an enrich provider is available",
+			"providers", strings.Join(enrichProviderNames(providerRegistry), ", "))
+		registry.Register(acquisition.EnrichWorkJobType, Registration{
+			Handler: EnrichHandler(EnrichHandlerOptions{
+				Providers: providerRegistry.EnrichProviders(),
+				Recorder:  cat,
+				Store:     NewCASArtworkStore(store),
+				Fetcher:   NewHTTPArtworkFetcher(),
+				Logger:    w.log,
+			}),
+			RequiredCapability: providers.CapabilityEnrich.JobCapability(),
 		})
 	}
 

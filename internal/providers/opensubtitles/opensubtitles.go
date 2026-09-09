@@ -54,6 +54,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/ratelimit"
 )
 
 // defaultEndpoint is opensubtitles.com's REST base URL. Overridden by
@@ -130,7 +131,7 @@ type Client struct {
 	http      *http.Client
 	now       func() time.Time
 
-	limiter *rateLimiter
+	limiter *ratelimit.RateLimiter
 	cache   *searchCache
 
 	// jwtMu guards the lazily-minted download token. login sets it; a rejected
@@ -177,7 +178,7 @@ func New(o Options) (*Client, error) {
 		userAgent: userAgent,
 		http:      httpClient,
 		now:       now,
-		limiter:   newRateLimiter(interval, now, o.sleep),
+		limiter:   ratelimit.New(interval, now, o.sleep),
 		cache:     newSearchCache(ttl, now),
 	}, nil
 }
@@ -357,7 +358,7 @@ func (c *Client) ensureToken(ctx context.Context, force bool) (string, error) {
 // in the Api-Key header, never in path, so an error rendering the request URL
 // cannot leak it.
 func (c *Client) get(ctx context.Context, path, op string, into any) error {
-	if err := c.limiter.wait(ctx); err != nil {
+	if err := c.limiter.Wait(ctx); err != nil {
 		return err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
@@ -371,7 +372,7 @@ func (c *Client) get(ctx context.Context, path, op string, into any) error {
 // post performs a rate-limited POST with a JSON body. A non-empty bearer adds
 // the JWT the /download endpoint needs beside the Api-Key; /login passes "".
 func (c *Client) post(ctx context.Context, path, op string, reqBody []byte, bearer string, into any) error {
-	if err := c.limiter.wait(ctx); err != nil {
+	if err := c.limiter.Wait(ctx); err != nil {
 		return err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, path, bytes.NewReader(reqBody))
