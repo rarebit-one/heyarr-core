@@ -7148,8 +7148,11 @@ YAML
   # 32 MiB blob is 128 pieces. Stage node A with the first half.
   pieces_total=$(( size / 262144 ))
   half=$(( pieces_total / 2 ))
+  # `seq 0 N | paste -sd,` rather than `seq -s, 0 N`: BSD seq (macOS) appends a
+  # TRAILING separator to -s, which stagepartial then reads as an empty piece
+  # index. paste joins with no trailer on both GNU and BSD.
   "$STAGEPARTIAL" --cas "$root/a/data/cas" --content-in "$swarm_bytes" \
-    --landed "$(seq -s, 0 $(( half - 1 )))" >/dev/null
+    --landed "$(seq 0 $(( half - 1 )) | paste -sd, -)" >/dev/null
 
   # The precondition the whole section rests on is asserted AFTER the fact, from
   # the log, rather than before it from a route that does not exist: the swarm

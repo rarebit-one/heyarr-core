@@ -188,7 +188,13 @@ func parseIndices(csv string) ([]int, error) {
 	}
 	var out []int
 	for _, f := range strings.Split(csv, ",") {
-		n, err := strconv.Atoi(strings.TrimSpace(f))
+		f = strings.TrimSpace(f)
+		if f == "" {
+			// Tolerate an empty field — a trailing or doubled comma, e.g. from a
+			// shell `seq` that terminates its separator. It names no piece.
+			continue
+		}
+		n, err := strconv.Atoi(f)
 		if err != nil {
 			return nil, fmt.Errorf("bad piece index %q: %w", f, err)
 		}
