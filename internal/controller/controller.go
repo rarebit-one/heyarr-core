@@ -26,6 +26,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
+	"github.com/rarebit-one/heyarr-core/internal/catalogtomb"
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/downloads"
@@ -666,6 +667,21 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
+	// The editorial catalog op log a work's deletion emits to (ADR-0073, #449).
+	// The store is stateless over the pools, so the peer surface constructs its
+	// own; both write the same tables through the single writer. The signer is
+	// this peer's identity key — load-failure is not fatal: a node with no
+	// identity yet simply deletes locally, and emitWorkDeleteOp skips the op.
+	catalogTomb, err := catalogtomb.New(catalogtomb.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: opening the catalog-tombstone store: %w", err)
+	}
+	catalogSigner, err := identity.Signer(c.cfg.DataDir)
+	if err != nil {
+		c.log.Debug("no identity key for catalog delete ops; deletes stay local", "error", err)
+		catalogSigner = nil
+	}
+
 	apiOpts := resources.Options{
 		DB:         db,
 		Jobs:       queue,
@@ -676,6 +692,9 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		Membership: members,
 		Identities: identities,
 		Logger:     c.log,
+
+		CatalogTombstones: catalogTomb,
+		CatalogSigner:     catalogSigner,
 
 		RenderSecret:  secret,
 		RenderBaseURL: rendererBaseURL(c.cfg),

@@ -151,6 +151,11 @@ type Result struct {
 	AssetID        string
 	AssetCreated   bool
 	ReplicaCreated bool
+	// Tombstoned reports that the recording resolved to a work another site
+	// logically deleted (ADR-0073, #449), so nothing was recorded: no work,
+	// edition, asset or replica. It is a skip, not a failure — the scan counts
+	// it and moves on rather than retrying.
+	Tombstoned bool
 }
 
 // ByteStore materialises a source file into content-addressed storage. The
@@ -199,6 +204,10 @@ type Catalog interface {
 	// Record commits the blob, work, edition, asset, replica and the resulting
 	// events atomically, and is safely re-runnable.
 	Record(ctx context.Context, rec Recording) (Result, error)
+	// Tombstoned reports whether a work (content_type, work_key) is logically
+	// deleted (ADR-0073, #449). The pipeline consults it before moving bytes so
+	// a work a sibling deleted is not re-materialised by this site's scan.
+	Tombstoned(ctx context.Context, contentType, workKey string) (bool, error)
 }
 
 // Clock is injected so ingest is testable without wall time (ADR-0017).
@@ -352,6 +361,22 @@ func (p *Pipeline) Ingest(ctx context.Context, req Request) (Result, error) {
 	// Request.Work — this is the whole of #224.
 	if req.Work != nil {
 		candidate = applyWorkOverride(candidate, *req.Work)
+	}
+
+	// Before the bytes move: a work another site logically deleted is not
+	// re-ingested here (ADR-0073, #449). Consulting the tombstone ahead of
+	// materialisation means a deleted work costs a single indexed lookup, not a
+	// file copy this pipeline would only roll back and leave for the GC.
+	tombstoned, err := p.cat.Tombstoned(ctx, candidate.ContentType, candidate.WorkKey)
+	if err != nil {
+		return Result{}, fmt.Errorf("ingest: checking tombstone for %s: %w", req.SourcePath, err)
+	}
+	if tombstoned {
+		p.logger.Info("skipped: work is tombstoned",
+			"source_path", req.SourcePath,
+			"content_type", candidate.ContentType,
+			"work_key", candidate.WorkKey)
+		return Result{Tombstoned: true}, nil
 	}
 
 	peerID, err := p.cat.SelfPeer(ctx)
