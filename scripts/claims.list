@@ -205,6 +205,13 @@ ref   §33, §68, ADR-0069, #432, #202
 why   A client that declares its decoders and cannot decode the source is handed GET /playback/stream/{token} rather than the raw blob: one ffmpeg per request writes fragmented MP4 with the video copied and the audio re-encoded to AAC. Before this the planner could say TRANSCODE and nothing could serve it — the phone streamed the blob and played picture with no sound, the sixth mechanism-with-no-caller this ledger names. The evidence is the captured bytes: the demo asks for a plan with a container the client cannot open, fetches the stream URL it is given with a real ffmpeg behind it, and ffprobe on what arrived says H.264 and AAC in MP4. On a node without ffmpeg the same plan answers direct and says why, and the block is recorded as unexercised rather than passing vacuously.
 evidence a client that could not open the container was served a repackaged stream
 
+claim an-embedded-subtitle-track-becomes-its-own-asset
+state proven
+needs ffmpeg
+ref   §66, ADR-0040, ADR-0084, #490
+why   A title whose subtitles live INSIDE the container — mov_text in an .mp4, SubRip or ASS in an .mkv — has no role='subtitle' asset, so every caption consumer (the in-app players, the DLNA CaptionInfo.sec header of ADR-0040) sees a video with no subtitle and the television shows nothing. ADR-0084 lifts each embedded TEXT track out at ingest into its own SubRip asset on the video's edition, byte-identical in shape to a shipped .srt sidecar, so captions work with zero consumer changes. The demo ingests a real MKV carrying one SubRip track and reads the extraction's own record from the node log — the line is written only after the asset has landed on the edition, so it is that having happened rather than a claim about it. On a node without ffmpeg the job stays pending and the block is recorded unexercised rather than passing vacuously.
+evidence an embedded TEXT track was lifted out of the container into its own asset
+
 claim control-plane-backup-and-restore
 state proven
 ref   §49, §50, §51, §82, ADR-0044
