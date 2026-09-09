@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/desired"
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 )
 
@@ -162,21 +163,27 @@ type desiredWant struct {
 	scope            string
 	workID           string
 	editionID        string
+	itemID           string
+	aspect           string
+	language         string
 	qualityProfileID string
 }
 
 func (c *Catalog) desiredForReconcile(ctx context.Context, id string) (desiredWant, error) {
 	var w desiredWant
-	var edition sql.NullString
+	var edition, item sql.NullString
 	err := c.db.Reader().QueryRowContext(ctx, `
-		SELECT id, scope, work_id, edition_id, quality_profile_id
+		SELECT id, scope, work_id, edition_id, item_id, aspect, language, quality_profile_id
 		FROM desired_items WHERE id = ?`, id).
-		Scan(&w.id, &w.scope, &w.workID, &edition, &w.qualityProfileID)
+		Scan(&w.id, &w.scope, &w.workID, &edition, &item, &w.aspect, &w.language, &w.qualityProfileID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return desiredWant{}, fmt.Errorf("catalog: no desired item %s: %w", id, err)
 	}
 	if edition.Valid {
 		w.editionID = edition.String
+	}
+	if item.Valid {
+		w.itemID = item.String
 	}
 	return w, err
 }
@@ -218,6 +225,10 @@ func (c *Catalog) profileForReconcile(ctx context.Context, id string) (policy.Pr
 // node with no toolchain report "I cannot tell whether this satisfies you"
 // rather than "this does not satisfy you", which are different problems.
 func (c *Catalog) assetsForWant(ctx context.Context, w desiredWant) ([]acquisition.AssetView, error) {
+	if w.aspect == string(desired.AspectSubtitle) {
+		return c.subtitleAssetsForWant(ctx, w)
+	}
+
 	where := "e.work_id = ?"
 	args := []any{w.workID}
 	if w.scope == "edition" {
@@ -277,6 +288,79 @@ func (c *Catalog) assetsForWant(ctx context.Context, w desiredWant) ([]acquisiti
 		}
 		if streamsJSON.Valid {
 			applyProbeAttributes(view.Attributes, streamsJSON.String)
+		}
+		out = append(out, view)
+	}
+	return out, rows.Err()
+}
+
+// subtitleAssetsForWant gathers the subtitle assets that could satisfy a
+// subtitle-aspect want (ADR-0085/0086): a role='subtitle' asset of the want's
+// language, on the target it points at.
+//
+// The target is precise: an item-scoped want (a series episode) matches by the
+// asset's item_id (ADR-0086), so one episode's caption does not satisfy another
+// on the same season edition; an edition-scoped want (a film) matches by
+// edition. Language is read from the canonical attributes.language an extracted
+// (ADR-0084) or fetched subtitle carries, with the sidecar filename convention
+// "<stem>.<lang>." as a fallback for a shipped .srt whose language never reached
+// the attributes. A subtitle whose language is encoded some other way is not
+// matched and would prompt a redundant fetch — a duplicate caption, the same
+// simplification ADR-0084 already carries, not a wrong one.
+//
+// The evaluator scores these against the want's `subtitle` profile, which
+// accepts on the one attribute a subtitle has — its size — so only `size` is
+// read; a subtitle carries none of the video vocabulary a quality profile ranks.
+func (c *Catalog) subtitleAssetsForWant(ctx context.Context, w desiredWant) ([]acquisition.AssetView, error) {
+	where := "a.item_id = ?"
+	args := []any{w.itemID}
+	if w.scope == "edition" {
+		where = "a.edition_id = ?"
+		args = []any{w.editionID}
+	}
+	// The want's language is already lower-cased (desired.Item.Validate). Match
+	// the canonical attribute, or the sidecar filename convention.
+	args = append(args, w.language, "%."+w.language+".%")
+
+	//nolint:gosec // assembled only from the literal fragments above; every value is bound
+	stmt := `
+		SELECT a.id, a.source_class, a.blob_hash, b.size
+		FROM assets a
+		LEFT JOIN blobs b ON b.hash = a.blob_hash
+		WHERE ` + where + `
+		  AND a.role = 'subtitle'
+		  AND a.missing_since IS NULL
+		  AND (
+		        lower(coalesce(json_extract(a.attributes, '$.language'), '')) = ?
+		     OR lower(coalesce(a.filename, '')) LIKE ?
+		  )
+		ORDER BY a.id`
+
+	rows, err := c.db.Reader().QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: reading the subtitle assets for %s: %w", w.id, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []acquisition.AssetView
+	for rows.Next() {
+		var (
+			id, sourceClass string
+			blobHash        sql.NullString
+			size            sql.NullInt64
+		)
+		if err := rows.Scan(&id, &sourceClass, &blobHash, &size); err != nil {
+			return nil, err
+		}
+		view := acquisition.AssetView{
+			ID: id, SourceClass: sourceClass,
+			Attributes: acquisition.Attributes{},
+		}
+		if blobHash.Valid {
+			view.BlobHash = blobHash.String
+		}
+		if size.Valid {
+			view.Attributes[policy.AttrSizeBytes] = policy.Num(size.Int64)
 		}
 		out = append(out, view)
 	}

@@ -1,0 +1,22 @@
+{
+  "name": "login",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "opensubtitles",
+    "version": "v1",
+    "captured_at": "2026-09-09T00:00:00Z",
+    "procedure": "synthesised by hand from the opensubtitles.com REST API v1 documentation (https://opensubtitles.stoplight.io); no live key, none committed",
+    "note": "A successful login: the token is what /download authenticates with. base_url is echoed as the service sends it (this adapter keeps using the configured endpoint)."
+  },
+  "request": {
+    "method": "POST",
+    "path": "/login"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"user\":{\"allowed_downloads\":100,\"level\":\"Sub leecher\",\"user_id\":42,\"vip\":false},\"token\":\"test-jwt-token\",\"status\":200,\"base_url\":\"api.opensubtitles.com\"}"
+  }
+}

@@ -11,7 +11,13 @@
 # a second build that happens to look similar.
 FROM gcr.io/distroless/static-debian12:nonroot
 
-COPY heyarr /usr/local/bin/heyarr
+# goreleaser's dockers_v2 stages the binaries into the buildx context under a
+# per-platform directory ($TARGETPLATFORM = linux/amd64, linux/arm64, …), not at
+# the context root — a bare `COPY heyarr` finds nothing and the multi-arch build
+# fails with `"/heyarr": not found`. TARGETPLATFORM is set automatically by
+# buildx for each platform's stage, so this copies the right binary per arch.
+ARG TARGETPLATFORM
+COPY $TARGETPLATFORM/heyarr /usr/local/bin/heyarr
 
 # The data directory must be a volume or a bind mount. The image is read-only
 # apart from it, which is the point.

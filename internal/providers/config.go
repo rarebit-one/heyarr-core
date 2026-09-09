@@ -167,6 +167,22 @@ const (
 	// and refuses everything else, so it composes with the http, torrent and
 	// yt-dlp clients rather than competing for their transfers.
 	KindWebCapture Kind = "web-capture"
+	// KindOpenSubtitles is a subtitle provider (ADR-0085, M12 Phase 5): it
+	// fetches a subtitle for content the library holds but has no caption for,
+	// from opensubtitles.com's REST API. It is the first CapabilitySubtitle kind.
+	//
+	// It names the vendor for the reason the Kind doc gives: the .com REST API
+	// has no second implementation to abstract over (ADR-0028), so `opensubtitles`
+	// is the honest name of the thing an operator configures. Like KindTVDB and
+	// KindTMDB it has one well-known base URL the client defaults to, so an
+	// operator supplies credentials, not an address.
+	//
+	// Its auth is the reason AuthTokenBasic exists (credential.go): search
+	// authenticates with an Api-Key header, but the /download endpoint that mints
+	// a file's fetch URL — and spends the account's daily quota — needs a JWT the
+	// client obtains from a username+password login. Two secrets, one provider,
+	// declared as one scheme.
+	KindOpenSubtitles Kind = "opensubtitles"
 	// KindFake is an in-process provider that talks to nothing.
 	//
 	// It is a first-class kind rather than a test-only construct because the
@@ -184,7 +200,7 @@ const (
 
 // Kinds lists every kind, in a stable order.
 func Kinds() []Kind {
-	return []Kind{KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindSABnzbd, KindNZBGet, KindHTTP, KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindYtDlp, KindWebFeed, KindWebCapture, KindFake}
+	return []Kind{KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindSABnzbd, KindNZBGet, KindHTTP, KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindYtDlp, KindWebFeed, KindWebCapture, KindOpenSubtitles, KindFake}
 }
 
 // ParseKind validates a kind from configuration.
@@ -217,6 +233,8 @@ func DefaultCapabilities(k Kind) []Capability {
 		return []Capability{CapabilityDownload}
 	case KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindWebFeed:
 		return []Capability{CapabilityMetadata}
+	case KindOpenSubtitles:
+		return []Capability{CapabilitySubtitle}
 	default:
 		// A fake declares nothing by default: what it stands in for is the
 		// whole of what a test or the demo is configuring, so it must say.
@@ -245,10 +263,15 @@ func DefaultCapabilities(k Kind) []Capability {
 // client's "endpoint" is the article URL handed to it per grab. TMDB is the
 // ninth, for TVDB's reason: one well-known v3 base URL the client defaults to,
 // so an operator supplies a token, not an address (an endpoint is accepted, so
-// tests can point it at a fixture server, but not required).
+// tests can point it at a fixture server, but not required). OpenSubtitles is
+// the tenth, for TVDB's and TMDB's reason: one well-known .com base URL the
+// client defaults to, so an operator supplies credentials, not an address (an
+// endpoint is accepted, so tests can point it at a fixture server, but not
+// required).
 func needsEndpoint(k Kind) bool {
 	return k != KindFake && k != KindHTTP && k != KindTVDB && k != KindTMDB && k != KindPodcast &&
-		k != KindYoutube && k != KindYtDlp && k != KindWebFeed && k != KindWebCapture
+		k != KindYoutube && k != KindYtDlp && k != KindWebFeed && k != KindWebCapture &&
+		k != KindOpenSubtitles
 }
 
 // needsCredential reports whether a kind must be given one.
@@ -261,7 +284,8 @@ func needsEndpoint(k Kind) bool {
 // authentication off is an ordinary, supported deployment, and refusing to
 // start would be Heyarr insisting on a policy the operator already declined.
 func needsCredential(k Kind) bool {
-	return k == KindTorznab || k == KindNewznab || k == KindTVDB || k == KindTMDB
+	return k == KindTorznab || k == KindNewznab || k == KindTVDB || k == KindTMDB ||
+		k == KindOpenSubtitles
 }
 
 // Offer is a canned answer a fake indexer gives to one search title.

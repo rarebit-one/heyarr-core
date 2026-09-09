@@ -1,0 +1,22 @@
+{
+  "name": "download",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "opensubtitles",
+    "version": "v1",
+    "captured_at": "2026-09-09T00:00:00Z",
+    "procedure": "synthesised by hand from the opensubtitles.com REST API v1 documentation (https://opensubtitles.stoplight.io); no live key, none committed",
+    "note": "A successful download-link mint: link is the temporary per-fetch URL (a secret), remaining/reset_time_utc are the quota counters the want's cadence reads."
+  },
+  "request": {
+    "method": "POST",
+    "path": "/download"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"link\":\"https://dl.opensubtitles.com/download/abc123/Show.S01E01.en.srt\",\"file_name\":\"Show.S01E01.en.srt\",\"requests\":3,\"remaining\":97,\"message\":\"Your quota will be renewed in 20 hours\",\"reset_time\":\"20 hours\",\"reset_time_utc\":\"2026-09-09T20:00:00.000Z\"}"
+  }
+}
