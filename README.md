@@ -63,6 +63,20 @@ tree: [`docs/cli/`](docs/cli/).
 Clients consume ordinary HTTP/HLS. BitTorrent, where used, is an *internal transfer
 optimisation* — never something a client needs to speak.
 
+## Platforms
+
+**Linux is the supported deployment target.** Its hardened `systemd` unit is
+where the OS-level containment §74 expects actually lives.
+
+**macOS is a first-class build and test target, and a second-class deployment
+target.** The release binary, the CI matrix and the storage fabric all cover
+`darwin/arm64`, and a peer runs there — but the `launchd` unit it ships with is
+deliberately weaker than the systemd one, with no equivalent of
+`ProtectSystem=strict`, `ReadWritePaths`, `MemoryMax` or syscall filtering. A
+site that needs that confinement should be a Linux peer. See
+[`docs/deploy/`](docs/deploy/) — the asymmetry is written down there so it is met
+before a deployment, not after (#204).
+
 ## Verifying a build
 
 ```bash
