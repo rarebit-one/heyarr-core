@@ -3817,6 +3817,13 @@ paths:
                   type: string
                   enum: [from_now, full]
                   description: How much back-catalogue polls project from now on. `full` queues a poll immediately.
+                want_subtitles:
+                  type: array
+                  items: { type: string }
+                  description: |
+                    Replace the subtitle languages (ISO-639-1) this source projects a
+                    subtitle want for (ADR-0085). Omit to leave them unchanged; an empty
+                    array wants none. Like backfill, felt on the next poll (queued now).
       responses:
         "200":
           description: The repointed subscription, with items_archived reflecting the re-judged wants.
@@ -8735,6 +8742,14 @@ components:
         reason:
           type: string
           description: A free-text note, never interpreted.
+        want_subtitles:
+          type: array
+          items: { type: string }
+          description: |
+            Languages (ISO-639-1 codes) to want a subtitle in for every projected
+            episode (ADR-0085). Each poll projects a subtitle want per language;
+            the fetch driver acquires each once the episode's video is held. Empty
+            wants none.
         retention:
           type: string
           description: Reserved. Phase 1 keeps everything; a non-empty value is refused.
@@ -8767,6 +8782,10 @@ components:
         monitor: { type: boolean }
         backfill: { type: string, enum: [from_now, full] }
         reason: { type: string }
+        want_subtitles:
+          type: array
+          items: { type: string }
+          description: Languages this source projects a subtitle want for (ADR-0085); omitted when none.
         items_known:
           type: integer
           description: How many items the feed has yielded.

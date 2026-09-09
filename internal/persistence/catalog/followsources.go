@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -63,11 +64,12 @@ func (c *Catalog) CreateFollowSource(ctx context.Context, src followed.Source) (
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO follow_sources
 				(id, work_id, type, feed_ref, quality_profile_id, monitor, backfill,
-				 reason, poll_schedule, poll_fruitless, last_polled_at, next_poll_at,
+				 reason, want_subtitles, poll_schedule, poll_fruitless, last_polled_at, next_poll_at,
 				 created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?)`,
 			src.ID, src.WorkID, string(src.Type), src.FeedRef, src.QualityProfileID,
-			monitor, string(src.Backfill), src.Reason, followed.FeedPoll().Name, stamp, stamp); err != nil {
+			monitor, string(src.Backfill), src.Reason, encodeLanguages(src.WantSubtitles),
+			followed.FeedPoll().Name, stamp, stamp); err != nil {
 			return fmt.Errorf("catalog: inserting a followed source: %w", err)
 		}
 		var err error
@@ -90,21 +92,70 @@ func (c *Catalog) CreateFollowSource(ctx context.Context, src followed.Source) (
 	return StoredSource{Source: src, CreatedAt: now, UpdatedAt: now}, nil
 }
 
+// encodeLanguages stores a source's wanted subtitle languages as a JSON array,
+// "[]" for none — the column is NOT NULL DEFAULT '[]', so a value always round
+// trips and an empty set is not confused with a NULL nobody set.
+func encodeLanguages(langs []string) string {
+	if len(langs) == 0 {
+		return "[]"
+	}
+	b, err := json.Marshal(langs)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+// decodeLanguages reads the JSON array back. A malformed or empty value is no
+// languages, not an error: a source with a corrupt column is one that wants no
+// subtitles, which is the safe default, not a read that fails the whole list.
+func decodeLanguages(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "[]" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// normaliseWantSubtitles lower-cases, trims, drops blanks and dedupes a set of
+// language codes before it is stored — the same shape followed.Source.Validate
+// gives them on the create path, applied here for the in-place change so the two
+// doors store identically.
+func normaliseWantSubtitles(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, l := range in {
+		l = strings.ToLower(strings.TrimSpace(l))
+		if l == "" || seen[l] {
+			continue
+		}
+		seen[l] = true
+		out = append(out, l)
+	}
+	return out
+}
+
 const followSourceColumns = `id, work_id, type, feed_ref, quality_profile_id, monitor,
-	backfill, reason, poll_fruitless, coalesce(last_polled_at, ''),
+	backfill, reason, want_subtitles, poll_fruitless, coalesce(last_polled_at, ''),
 	coalesce(next_poll_at, ''), created_at, updated_at`
 
 func scanFollowSource(row interface{ Scan(...any) error }) (StoredSource, error) {
 	var (
 		s                        StoredSource
 		monitor                  int
+		wantSubtitles            string
 		last, next, created, upd string
 	)
 	if err := row.Scan(&s.ID, &s.WorkID, &s.Type, &s.FeedRef, &s.QualityProfileID,
-		&monitor, &s.Backfill, &s.Reason, &s.Fruitless, &last, &next, &created, &upd); err != nil {
+		&monitor, &s.Backfill, &s.Reason, &wantSubtitles, &s.Fruitless, &last, &next, &created, &upd); err != nil {
 		return StoredSource{}, err
 	}
 	s.Monitor = monitor == 1
+	s.WantSubtitles = decodeLanguages(wantSubtitles)
 	if last != "" {
 		s.LastPolledAt, _ = time.Parse(timestampFormat, last)
 	}
@@ -230,11 +281,18 @@ func (c *Catalog) DeleteFollowSource(ctx context.Context, id string) (bool, erro
 //
 // A missing source is sql.ErrNoRows surfaced as ErrNoFollowSource, the same not
 // found the poll and unfollow doors give.
+//
+// A want_subtitles change (newWantSubtitles non-nil, empty or not) is the third
+// axis, and it behaves like backfill, not like a profile change: it moves no
+// existing want — a subtitle want already projected is left as it is — because
+// what it changes is which wants the NEXT poll projects. So the caller queues a
+// poll after a want_subtitles-only change, the same follow-up a backfill change
+// gets. nil means "leave the languages as they are".
 func (c *Catalog) RepointFollowedSource(
-	ctx context.Context, sourceID, newProfileID, newBackfill string,
+	ctx context.Context, sourceID, newProfileID, newBackfill string, newWantSubtitles *[]string,
 ) (repointed []string, err error) {
-	if newProfileID == "" && newBackfill == "" {
-		return nil, fmt.Errorf("catalog: repointing a followed source needs a profile or a backfill to move to")
+	if newProfileID == "" && newBackfill == "" && newWantSubtitles == nil {
+		return nil, fmt.Errorf("catalog: repointing a followed source needs a profile, a backfill, or subtitle languages to move to")
 	}
 	var ev events.Event
 	err = c.db.InTx(ctx, func(tx *sql.Tx) error {
@@ -264,6 +322,18 @@ func (c *Catalog) RepointFollowedSource(
 			return fmt.Errorf("catalog: repointing a followed source: %w", e)
 		}
 
+		// The subtitle languages move on their own axis: a set (nil means leave
+		// alone) replaces the stored array. It touches no existing want — the next
+		// poll projects the new set — which is why the caller's follow-up to this
+		// is a poll, like a backfill change.
+		if newWantSubtitles != nil {
+			if _, e := tx.ExecContext(ctx,
+				`UPDATE follow_sources SET want_subtitles = ?, updated_at = ? WHERE id = ?`,
+				encodeLanguages(normaliseWantSubtitles(*newWantSubtitles)), now, sourceID); e != nil {
+				return fmt.Errorf("catalog: changing a source's subtitle languages: %w", e)
+			}
+		}
+
 		if newProfileID != "" {
 			// The item-scoped wants this source projects are exactly those on its
 			// work at item scope (the shape FollowStats counts). Collect their ids
@@ -276,7 +346,7 @@ func (c *Catalog) RepointFollowedSource(
 			repointed = wants
 
 			if _, e := tx.ExecContext(ctx,
-				`UPDATE desired_items SET quality_profile_id = ? WHERE work_id = ? AND scope = 'item'`,
+				`UPDATE desired_items SET quality_profile_id = ? WHERE work_id = ? AND scope = 'item' AND aspect = 'primary'`,
 				newProfileID, workID); e != nil {
 				return fmt.Errorf("catalog: repointing a source's wants: %w", e)
 			}
@@ -307,8 +377,11 @@ func (c *Catalog) RepointFollowedSource(
 // closed in the canonical pattern before RepointFollowedSource issues the update
 // on the same transaction.
 func itemWantIDsForWork(ctx context.Context, tx *sql.Tx, workID string) ([]string, error) {
+	// Only the PRIMARY item wants: a profile repoint moves the video profile, and
+	// a subtitle want is judged by the `subtitle` profile, not the video one
+	// (ADR-0085). Repointing must leave subtitle wants alone.
 	rows, err := tx.QueryContext(ctx,
-		`SELECT id FROM desired_items WHERE work_id = ? AND scope = 'item'`, workID)
+		`SELECT id FROM desired_items WHERE work_id = ? AND scope = 'item' AND aspect = 'primary'`, workID)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: listing a source's wants to repoint: %w", err)
 	}

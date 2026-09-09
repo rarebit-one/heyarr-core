@@ -201,6 +201,13 @@ var schemaFollowSource = obj(map[string]any{
 		"type":        "string",
 		"description": "A note for whoever reads this in six months — \"Kate watches this\". Never interpreted.",
 	},
+	"want_subtitles": map[string]any{
+		"type":  "array",
+		"items": map[string]any{"type": "string"},
+		"description": "Languages (ISO-639-1 codes, e.g. [\"en\"]) to want a subtitle in for every " +
+			"episode this source projects. Each poll projects a subtitle want per language; the " +
+			"fetch driver acquires each once the episode's video is held. Optional; empty wants none.",
+	},
 }, "quality_profile")
 
 // schemaUnfollow stops a subscription. keep_archive defaults to true — stop
@@ -243,6 +250,13 @@ var schemaSetSourceProfile = obj(map[string]any{
 		"description": "How much back-catalogue polls project from now on. full makes the " +
 			"next poll (queued for you) project every item the feed has ever listed — the " +
 			"whole archive, a real capacity commitment. Optional if quality_profile is given.",
+	},
+	"want_subtitles": map[string]any{
+		"type":  "array",
+		"items": map[string]any{"type": "string"},
+		"description": "Replace the subtitle languages (ISO-639-1 codes, e.g. [\"en\"]) this " +
+			"source wants a subtitle in for every episode. Felt on the next poll (queued for " +
+			"you). Omit to leave unchanged; an empty array wants none. Optional.",
 	},
 }, "source_id")
 

@@ -16,6 +16,10 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
+// subtitleProfileName is the seeded profile a projected subtitle want is judged
+// by (ADR-0085) — a subtitle is accepted on its bytes, not a video quality bar.
+const subtitleProfileName = "subtitle"
+
 // The poll_source job (§55, M12) — one feed round-trip for one followed source.
 //
 // # It enumerates and projects, and archives nothing itself
@@ -89,6 +93,25 @@ func PollSourceHandler(
 			return fmt.Errorf("worker: enumerating source %s: %w", payload.SourceID, err)
 		}
 
+		// Resolve the subtitle profile once, only when this source wants subtitles
+		// (ADR-0085 §6). Its absence is not a poll failure — a node whose profiles
+		// have not seeded yet should still archive the primary items — so a missing
+		// profile logs and disables subtitle projection for this pass rather than
+		// failing the whole poll.
+		subtitleProfileID := ""
+		if len(src.WantSubtitles) > 0 {
+			id, ok, perr := cat.ProfileIDByName(ctx, subtitleProfileName)
+			if perr != nil {
+				return fmt.Errorf("worker: resolving the subtitle profile for source %s: %w", payload.SourceID, perr)
+			}
+			if ok {
+				subtitleProfileID = id
+			} else {
+				log.Warn("a followed source wants subtitles but the subtitle profile is not seeded; skipping subtitle projection",
+					"source_id", payload.SourceID)
+			}
+		}
+
 		now := time.Now().UTC()
 		var discovered, projected int
 		for _, fi := range items {
@@ -131,6 +154,20 @@ func PollSourceHandler(
 			default:
 				return fmt.Errorf("worker: projecting a want for source %s: %w",
 					payload.SourceID, err)
+			}
+
+			// Beside the primary want, project a subtitle want per configured
+			// language (ADR-0085 §6). Idempotent on re-poll (a duplicate is an
+			// already-projected want, skipped); the fetch driver acquires each once
+			// this episode's video is held. No acquisition kick-off here — a
+			// subtitle want is direct-route and driven by the subtitle beat.
+			if subtitleProfileID != "" {
+				for _, sub := range src.ProjectSubtitleWants(item.ID, subtitleProfileID) {
+					if _, serr := cat.CreateDesiredItem(ctx, sub); serr != nil && !catalog.IsDuplicateWant(serr) {
+						return fmt.Errorf("worker: projecting a subtitle want for source %s: %w",
+							payload.SourceID, serr)
+					}
+				}
 			}
 
 			if err := startAcquisition(ctx, cat, grabs, src, item, fi, wantID, log); err != nil {
