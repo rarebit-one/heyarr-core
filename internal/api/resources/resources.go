@@ -452,6 +452,9 @@ func (a *API) Mount(r chi.Router) {
 	// write even though the bytes it points at are read-only.
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/playback", a.startPlayback)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/playback/remux", a.enqueueRemux)
+	// Reprocess already-ingested video for embedded subtitles (ADR-0084): a
+	// write, because it queues work.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/subtitles/backfill", a.backfillSubtitles)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/consumption/sessions", a.createSession)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).
 		Post("/consumption/sessions/{id}/transitions", a.applyTransition)

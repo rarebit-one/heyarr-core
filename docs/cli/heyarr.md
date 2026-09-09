@@ -41,6 +41,7 @@ One logical library, multiple complete sovereign peers.
 * [heyarr renderers](heyarr_renderers.md)	 - Find media renderers on the local network (§68)
 * [heyarr scan](heyarr_scan.md)	 - Scan a library's roots, optionally waiting for the scan to finish
 * [heyarr space](heyarr_space.md)	 - Create and read encrypted personal-state spaces (§38, §42, ADR-0049)
+* [heyarr subtitles](heyarr_subtitles.md)	 - Subtitle operations
 * [heyarr system](heyarr_system.md)	 - Report what a running instance is and how far behind it has drifted
 * [heyarr token](heyarr_token.md)	 - Manage API tokens (ADR-0011)
 * [heyarr version](heyarr_version.md)	 - Print build information
