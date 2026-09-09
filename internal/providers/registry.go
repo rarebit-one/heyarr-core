@@ -226,6 +226,22 @@ func (r *Registry) FeedProviders() []FeedProvider {
 	return out
 }
 
+// SubtitleProviders is every provider that can fetch a subtitle, in routing
+// order (ADR-0085, M12 Phase 5). It is the subtitle capability's routing
+// accessor, the sibling of Indexers, Downloaders and FeedProviders: the
+// acquisition path asks the registry "which providers answer for `subtitle`"
+// rather than iterating and casting at the call site, so the cast that could
+// silently drop a mis-declared provider lives in one place.
+func (r *Registry) SubtitleProviders() []SubtitleProvider {
+	var out []SubtitleProvider
+	for _, p := range r.Route(CapabilitySubtitle) {
+		if sp, ok := p.(SubtitleProvider); ok {
+			out = append(out, sp)
+		}
+	}
+	return out
+}
+
 // DiscoverySearchers is every metadata provider that can ALSO resolve a
 // free-text query to candidate works not yet in the library (#451), in routing
 // order.

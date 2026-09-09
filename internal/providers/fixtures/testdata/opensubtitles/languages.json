@@ -1,0 +1,22 @@
+{
+  "name": "languages",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "opensubtitles",
+    "version": "v1",
+    "captured_at": "2026-09-09T00:00:00Z",
+    "procedure": "synthesised by hand from the opensubtitles.com REST API v1 documentation (https://opensubtitles.stoplight.io); no live key, none committed",
+    "note": "Check exercises /infos/languages: it needs the Api-Key, so a 200 proves the key was accepted. Body trimmed to two languages."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/infos/languages"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"data\":{\"languages\":[{\"language_code\":\"en\",\"language_name\":\"English\"},{\"language_code\":\"de\",\"language_name\":\"German\"}]}}"
+  }
+}

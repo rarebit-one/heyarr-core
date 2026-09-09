@@ -60,10 +60,26 @@ const (
 	// AuthBasic is a username and a password, per RFC 7617. Transmission's RPC
 	// is the first, and it is why this type exists.
 	AuthBasic AuthScheme = "basic"
+	// AuthTokenBasic is an opaque api-key AND a username+password login,
+	// together. OpenSubtitles is the first (ADR-0085): its Api-Key header
+	// authenticates a search, but the /download endpoint that mints a file's
+	// fetch URL needs a JWT the client obtains from a username+password login, so
+	// neither secret alone is a working credential.
+	//
+	// This is the shape the "more than one shape" the file's header promises was
+	// written for: there is still exactly one credential concept in the registry,
+	// and a provider whose protocol needs two secrets declares this scheme rather
+	// than the registry growing a per-service field. It composes the token and
+	// basic halves rather than inventing new fields — CredentialEntry already
+	// carries token, username and password, so configuration reads naturally and
+	// only the resolution learns the new scheme.
+	AuthTokenBasic AuthScheme = "token-basic"
 )
 
 // AuthSchemes lists every scheme, in a stable order.
-func AuthSchemes() []AuthScheme { return []AuthScheme{AuthNone, AuthToken, AuthBasic} }
+func AuthSchemes() []AuthScheme {
+	return []AuthScheme{AuthNone, AuthToken, AuthBasic, AuthTokenBasic}
+}
 
 // AuthSchemeOf is the scheme a KIND declares.
 //
@@ -73,6 +89,14 @@ func AuthSchemes() []AuthScheme { return []AuthScheme{AuthNone, AuthToken, AuthB
 // the shape from what it was given.
 func AuthSchemeOf(k Kind) AuthScheme {
 	switch k {
+	case KindOpenSubtitles:
+		// OpenSubtitles needs BOTH an api-key (search) and a username+password
+		// login (a JWT for /download), so neither AuthToken nor AuthBasic alone
+		// describes it — it is the first AuthTokenBasic provider (ADR-0085). The
+		// two halves go on the wire differently (an Api-Key header, and a bearer
+		// token minted from the login), which is the client's business; the
+		// CREDENTIAL an operator supplies is the pair.
+		return AuthTokenBasic
 	case KindTorznab, KindNewznab, KindTVDB, KindTMDB, KindSABnzbd:
 		// TheTVDB v4 authenticates with one API key it exchanges for a bearer
 		// token — one opaque secret, sent however the protocol says, which is
@@ -137,7 +161,16 @@ func defaultUsername(k Kind) string {
 type Credential struct {
 	scheme   AuthScheme
 	username string
-	secret   Secret
+	// secret is the scheme's primary secret: the token for AuthToken, the
+	// password for AuthBasic, and the password half for AuthTokenBasic.
+	secret Secret
+	// apiKey is the SECOND secret an AuthTokenBasic credential carries — the
+	// opaque api-key that authenticates a search, beside the username+password
+	// that mint a download token. Empty (and unread) for every other scheme. It
+	// is a distinct field rather than a second Credential because the two secrets
+	// belong to one provider and one configuration block; the scheme-gated
+	// accessor keeps a caller from reading it out of a token or basic credential.
+	apiKey Secret
 }
 
 // NoCredential is the credential of a provider that authenticates with
@@ -159,6 +192,13 @@ func BasicCredential(username string, password Secret) Credential {
 	return Credential{scheme: AuthBasic, username: username, secret: password}
 }
 
+// TokenBasicCredential is an api-key together with a username and password
+// (ADR-0085). The api-key authenticates one thing (an OpenSubtitles search),
+// the pair another (a download token); both are needed, so both are held.
+func TokenBasicCredential(token Secret, username string, password Secret) Credential {
+	return Credential{scheme: AuthTokenBasic, username: username, secret: password, apiKey: token}
+}
+
 // Scheme is which shape this credential has.
 func (c Credential) Scheme() AuthScheme {
 	if c.scheme == "" {
@@ -173,7 +213,9 @@ func (c Credential) Scheme() AuthScheme {
 // defaulted in: Transmission with authentication switched off is an ordinary
 // supported deployment, and "there is a username because we made one up" must
 // not read as "the operator configured authentication".
-func (c Credential) IsZero() bool { return c.secret.IsZero() && c.username == "" }
+func (c Credential) IsZero() bool {
+	return c.secret.IsZero() && c.username == "" && c.apiKey.IsZero()
+}
 
 // Token returns the opaque secret, and false if this is not a token
 // credential.
@@ -198,6 +240,22 @@ func (c Credential) Basic() (username string, password Secret, ok bool) {
 		return "", "", false
 	}
 	return c.username, c.secret, true
+}
+
+// TokenBasic returns the api-key, username and password, and false if this is
+// not a token-basic credential (ADR-0085).
+//
+// The boolean is the same guard Token and Basic carry: a caller that read these
+// out of a token or basic credential would send an empty api-key or authenticate
+// as nobody and get a 401 that looks like a service fault. An empty password or
+// api-key with ok=true means the operator configured the block incompletely,
+// which resolveCredential already refuses at startup — a caller reaching here has
+// a complete pair.
+func (c Credential) TokenBasic() (token Secret, username string, password Secret, ok bool) {
+	if c.Scheme() != AuthTokenBasic {
+		return "", "", "", false
+	}
+	return c.apiKey, c.username, c.secret, true
 }
 
 // String redacts. Covers %v, %s and errors built with %v.
@@ -358,6 +416,8 @@ func resolveCredential(name string, kind Kind, e Entry) (Credential, error) {
 		return TokenCredential(""), nil
 	case AuthBasic:
 		return BasicCredential("", ""), nil
+	case AuthTokenBasic:
+		return TokenBasicCredential("", "", ""), nil
 	case AuthNone:
 		return NoCredential(), nil
 	default:
@@ -404,6 +464,30 @@ func credentialFromBlock(
 		// syntax.
 		return BasicCredential(username, block.Password), nil
 
+	case AuthTokenBasic:
+		// An api-key AND a username+password login, together (ADR-0085). All
+		// three keys are read, and both secrets are required: the api-key alone
+		// authenticates a search but cannot mint the download token, and the
+		// login alone has no api-key to send — either half missing is a
+		// credential that 401s on the half it cannot do, which is the quiet
+		// failure a startup error exists to prevent.
+		if block.Token.IsZero() {
+			return Credential{}, fmt.Errorf(
+				"provider %q: credential.token (the api-key) is empty, and a %s provider "+
+					"needs it to authenticate a search", name, scheme)
+		}
+		if block.Password.IsZero() {
+			return Credential{}, fmt.Errorf(
+				"provider %q: credential.password is empty, and a %s provider needs a "+
+					"username and password to obtain a download token — the api-key alone "+
+					"cannot fetch a subtitle", name, scheme)
+		}
+		// The username may be empty: OpenSubtitles has no default account, so
+		// there is nothing to default to, and a login with an empty username
+		// fails loudly at the service rather than silently here. The password
+		// and api-key are taken exactly as written, colons and all.
+		return TokenBasicCredential(block.Token, strings.TrimSpace(block.Username), block.Password), nil
+
 	case AuthNone:
 		return NoCredential(), nil
 	default:
@@ -434,6 +518,19 @@ func credentialFromShorthand(
 				name, scheme)
 		}
 		return BasicCredential(defaultUsername(kind), key), nil
+
+	case AuthTokenBasic:
+		// The api_key shorthand is one secret, and a token-basic provider needs
+		// two (an api-key AND a login). There is no honest way to read a username
+		// and password out of a single value — the colon-splitting that produced
+		// #102's silent corruption is exactly what this file exists to refuse — so
+		// the shorthand cannot express this scheme and says so, with the full
+		// block in the message.
+		return Credential{}, fmt.Errorf(
+			"provider %q: api_key is a single secret, and a %s provider needs an api-key "+
+				"AND a username and password. Write the full block instead:\n"+
+				"    credential:\n      token: <api-key>\n      username: <user>\n      password: <password>",
+			name, scheme)
 
 	case AuthNone:
 		return NoCredential(), nil

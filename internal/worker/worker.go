@@ -29,6 +29,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/opensubtitles"
 	"github.com/rarebit-one/heyarr-core/internal/providers/podcast"
 	"github.com/rarebit-one/heyarr-core/internal/providers/tmdb"
 	"github.com/rarebit-one/heyarr-core/internal/providers/tvdb"
@@ -339,7 +340,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		return fmt.Errorf("worker: %w", err)
 	}
 	providerRegistry, err := providers.BuildWith(resolvedProviders, w.log, nil,
-		providers.Chain(indexers.Constructor, downloads.Constructor, tvdb.Constructor, tmdb.Constructor, podcast.Constructor, youtube.Constructor, webfeed.Constructor))
+		providers.Chain(indexers.Constructor, downloads.Constructor, tvdb.Constructor, tmdb.Constructor, podcast.Constructor, youtube.Constructor, webfeed.Constructor, opensubtitles.Constructor))
 	if err != nil {
 		return fmt.Errorf("worker: building the provider registry: %w", err)
 	}
