@@ -108,6 +108,14 @@ type harnessConfig struct {
 	// signer so a work deletion emits a signed delete op (ADR-0073, #449). Nil
 	// is the single-site default: deletes stay local, as they did before #449.
 	catalogSigner ed25519.PrivateKey
+	// catalogSyncTrigger, when non-nil, backs POST /api/v1/catalog/sync (#449).
+	catalogSyncTrigger resources.CatalogSyncTrigger
+}
+
+// withCatalogSyncTrigger wires the on-demand catalog-sync trigger behind
+// POST /api/v1/catalog/sync (ADR-0073, #449).
+func withCatalogSyncTrigger(trigger resources.CatalogSyncTrigger) harnessOption {
+	return func(hc *harnessConfig) { hc.catalogSyncTrigger = trigger }
 }
 
 // withCatalogConvergence wires the editorial catalog op store and the signing
@@ -235,6 +243,7 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		Identities:        identities,
 		CatalogTombstones: catalogTomb,
 		CatalogSigner:     hc.catalogSigner,
+		CatalogSync:       hc.catalogSyncTrigger,
 		Logger:            slog.New(slog.DiscardHandler),
 		Now:               clock.Now,
 		NewID:             ids.next,

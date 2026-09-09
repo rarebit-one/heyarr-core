@@ -2468,6 +2468,42 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/catalog/sync:
+    post:
+      tags: [fabric]
+      operationId: syncCatalog
+      summary: Force two-site catalog convergence now (§49, ADR-0073).
+      description: |
+        Runs one pass of the editorial catalog op-log exchange with every
+        sibling, immediately, rather than waiting for the beat: this node offers
+        its ops to each sibling over the pinned peer link and records the merged
+        G-set each answers with, so a delete made here reaches the other site
+        now (ADR-0073, #449).
+
+        Unlike `/api/v1/peers/{id}/reconcile`, this RUNS the exchange rather than
+        enqueueing a job — the exchange is a bounded RPC, not bulk byte movement
+        — so it answers `200` with what converged, not `202`. Idempotent: the
+        op-log is a G-set, and an unreachable sibling is deferred, not an error.
+
+        `write`, not `admin`: it propagates ops already recorded, changing
+        nothing about who is trusted. A single-site node with no sibling answers
+        `503`.
+      responses:
+        "200":
+          description: The pass ran; how many siblings converged and how many deferred.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [synced, deferred]
+                properties:
+                  synced: { type: integer }
+                  deferred: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503":
+          description: This node converges a catalog with no sibling.
+
   /api/v1/replicas:
     get:
       tags: [fabric]

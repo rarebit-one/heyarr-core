@@ -38,6 +38,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
 	"github.com/rarebit-one/heyarr-core/internal/media/probe"
 	"github.com/rarebit-one/heyarr-core/internal/pairrelay"
+	"github.com/rarebit-one/heyarr-core/internal/peer/catalogsync"
 	"github.com/rarebit-one/heyarr-core/internal/peer/health"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
@@ -689,6 +690,17 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		c.log.Debug("no identity key for catalog delete ops; deletes stay local", "error", err)
 		catalogSigner = nil
 	}
+	// The on-demand force-sync behind POST /api/v1/catalog/sync. It needs the
+	// peer surface's certificate to dial a sibling, so it is wired only when this
+	// node has one; without it the route answers 503 (a single-site node).
+	var catalogSync resources.CatalogSyncTrigger
+	if material != nil {
+		catalogSync = catalogsync.NewSyncer(
+			catalogTomb,
+			catalogsync.NewClient(material, c.log),
+			catalogSiblings{members: members, self: selfPeerID},
+			c.log)
+	}
 
 	apiOpts := resources.Options{
 		DB:         db,
@@ -703,6 +715,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 
 		CatalogTombstones: catalogTomb,
 		CatalogSigner:     catalogSigner,
+		CatalogSync:       catalogSync,
 
 		RenderSecret:  secret,
 		RenderBaseURL: rendererBaseURL(c.cfg),

@@ -106,7 +106,11 @@ type Options struct {
 	// the catalog delete op so a sibling can verify it came from a pinned peer.
 	// Optional alongside CatalogTombstones; both or neither.
 	CatalogSigner ed25519.PrivateKey
-	Logger        *slog.Logger
+	// CatalogSync runs one on-demand catalog-ops convergence pass behind POST
+	// /api/v1/catalog/sync (ADR-0073, #449). Optional: nil leaves the route
+	// answering 503, a single-site node with no sibling to converge with.
+	CatalogSync CatalogSyncTrigger
+	Logger      *slog.Logger
 	// Now and NewID are injected so that a created resource's timestamp and
 	// identifier are fixed values in a test, which is what lets the response
 	// shapes be golden files rather than a regex (ADR-0017).
@@ -167,9 +171,12 @@ type API struct {
 	// deletion records (ADR-0073, #449). Both nil ⇒ deletes stay local (no op).
 	catalogTombstones *catalogtomb.Store
 	catalogSigner     ed25519.PrivateKey
-	log               *slog.Logger
-	now               func() time.Time
-	newID             func() string
+	// catalogSync runs an on-demand convergence pass (POST /catalog/sync). Nil on
+	// a single-site node.
+	catalogSync CatalogSyncTrigger
+	log         *slog.Logger
+	now         func() time.Time
+	newID       func() string
 
 	renderSecret  []byte
 	renderBaseURL string
@@ -269,6 +276,7 @@ func New(opts Options) (*API, error) {
 
 		catalogTombstones: opts.CatalogTombstones,
 		catalogSigner:     opts.CatalogSigner,
+		catalogSync:       opts.CatalogSync,
 
 		log:   log.With("component", "api"),
 		now:   now,
@@ -504,6 +512,13 @@ func (a *API) Mount(r chi.Router) {
 		r.With(httpapi.RequireScope(auth.ScopeWrite)).
 			Post("/peers/{id}/reconcile", a.reconcilePeer)
 	}
+
+	// Two-site catalog convergence on demand (§49, ADR-0073, #449): force the
+	// op-log exchange the beat runs on a cadence, so a delete made here reaches
+	// the sibling now. `write`, like peers/reconcile: it changes no trust, only
+	// asks the pair to converge now what the beat would within the interval. The
+	// handler answers 503 on a single-site node with no sibling to reach.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/catalog/sync", a.syncCatalog)
 
 	// Device identity (§40, ADR-0048, ADR-0032). Admin in both directions, and
 	// for the same reason peer enrolment is: pinning a user identity decides
