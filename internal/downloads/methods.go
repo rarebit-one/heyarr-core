@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 
@@ -290,9 +291,53 @@ func (c *Client) addSource(ctx context.Context, source string) (map[string]any, 
 	}
 	blob, err := c.fetchTorrent(ctx, source)
 	if err != nil {
+		// An http(s) download link that redirects to a magnet is a magnet
+		// source in disguise — how a magnet-only tracker behind Prowlarr
+		// answers its /download link (a 301 to `magnet:`, not a .torrent).
+		// There is nothing to fetch: hand the magnet to Transmission as
+		// `filename`, exactly the path a bare magnet already takes.
+		var mr *magnetRedirect
+		if errors.As(err, &mr) {
+			return map[string]any{"filename": mr.magnet}, nil
+		}
 		return nil, err
 	}
 	return map[string]any{"metainfo": base64.StdEncoding.EncodeToString(blob)}, nil
+}
+
+// magnetRedirect signals that an http(s) .torrent link resolved, via a
+// redirect, to a magnet URI. addSource turns it into a `filename` for
+// Transmission rather than an error.
+//
+// It carries the magnet, which on a private tracker embeds a passkey — so its
+// Error() names neither the magnet nor the link, and addSource consumes the
+// value rather than letting it reach a log line.
+type magnetRedirect struct{ magnet string }
+
+func (e *magnetRedirect) Error() string { return "the .torrent link redirected to a magnet" }
+
+// maxTorrentRedirects bounds the redirect chain a .torrent fetch will follow.
+// An indexer that needs more than a couple of hops to answer a download link is
+// misconfigured; the cap stops a redirect loop from hanging the fetch.
+const maxTorrentRedirects = 5
+
+// isMagnet reports whether a redirect Location is a magnet URI.
+func isMagnet(loc string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(loc)), "magnet:")
+}
+
+// resolveRedirect resolves a (possibly relative) Location against the URL it
+// came from, as an http client would.
+func resolveRedirect(base, loc string) (string, error) {
+	b, err := url.Parse(base)
+	if err != nil {
+		return "", err
+	}
+	l, err := url.Parse(loc)
+	if err != nil {
+		return "", err
+	}
+	return b.ResolveReference(l).String(), nil
 }
 
 // isHTTPURL reports whether source is an http(s) URL — the shape Heyarr fetches
@@ -325,31 +370,72 @@ const maxTorrentBytes = 16 << 20
 // credential of its own. The URL is never named in an error: it is a secret
 // that reaches an operator's log through registry.Grab, exactly as source is.
 func (c *Client) fetchTorrent(ctx context.Context, rawURL string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, &rpcError{Detail: "building the .torrent fetch request", err: err}
+	// Redirects are followed BY HAND rather than by the http client, for one
+	// reason: a Prowlarr /download link for a magnet-only tracker answers with a
+	// 301 to a `magnet:` URI, which the default client tries to follow and fails
+	// on ("unsupported protocol scheme"). Inspecting each hop lets a magnet be
+	// caught (returned as *magnetRedirect for addSource to hand to Transmission)
+	// while an ordinary http(s) redirect to the actual .torrent is still
+	// followed. Transport and Timeout are inherited; only the redirect policy
+	// differs, so an injected test client's Transport still routes.
+	client := &http.Client{Transport: c.httpc.Transport, Timeout: c.httpc.Timeout}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
 	}
-	resp, err := c.httpc.Do(req)
-	if err != nil {
-		// The URL is NOT named: it carries a passkey. "the indexer" is enough
-		// to say where the fetch went without disclosing the link.
-		return nil, &rpcError{Detail: "could not fetch the .torrent from the indexer", err: err}
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, &rpcError{
-			Status: resp.StatusCode,
-			Detail: fmt.Sprintf("the indexer answered %d fetching the .torrent", resp.StatusCode),
+
+	current := rawURL
+	for hop := 0; hop <= maxTorrentRedirects; hop++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, current, nil)
+		if err != nil {
+			return nil, &rpcError{Detail: "building the .torrent fetch request", err: err}
 		}
+		resp, err := client.Do(req)
+		if err != nil {
+			// The URL is NOT named: it carries a passkey. "the indexer" is
+			// enough to say where the fetch went without disclosing the link.
+			return nil, &rpcError{Detail: "could not fetch the .torrent from the indexer", err: err}
+		}
+
+		if resp.StatusCode >= 300 && resp.StatusCode <= 399 {
+			loc := resp.Header.Get("Location")
+			_ = resp.Body.Close()
+			if loc == "" {
+				return nil, &rpcError{
+					Status: resp.StatusCode,
+					Detail: "the indexer redirected the .torrent fetch with no location",
+				}
+			}
+			// The destination is a magnet, not another link to fetch.
+			if isMagnet(loc) {
+				return nil, &magnetRedirect{magnet: loc}
+			}
+			next, err := resolveRedirect(current, loc)
+			if err != nil {
+				return nil, &rpcError{Detail: "the indexer redirected the .torrent fetch to an unreadable location", err: err}
+			}
+			current = next
+			continue
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
+			_ = resp.Body.Close()
+			return nil, &rpcError{
+				Status: resp.StatusCode,
+				Detail: fmt.Sprintf("the indexer answered %d fetching the .torrent", resp.StatusCode),
+			}
+		}
+
+		blob, err := io.ReadAll(io.LimitReader(resp.Body, maxTorrentBytes))
+		_ = resp.Body.Close()
+		if err != nil {
+			return nil, &rpcError{Detail: "reading the .torrent from the indexer", err: err}
+		}
+		if len(blob) == 0 {
+			return nil, &rpcError{Detail: "the indexer returned an empty .torrent"}
+		}
+		return blob, nil
 	}
-	blob, err := io.ReadAll(io.LimitReader(resp.Body, maxTorrentBytes))
-	if err != nil {
-		return nil, &rpcError{Detail: "reading the .torrent from the indexer", err: err}
-	}
-	if len(blob) == 0 {
-		return nil, &rpcError{Detail: "the indexer returned an empty .torrent"}
-	}
-	return blob, nil
+	return nil, &rpcError{Detail: "the indexer redirected the .torrent fetch too many times"}
 }
 
 // Remove takes a transfer out of the client.
