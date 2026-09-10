@@ -114,6 +114,27 @@ type FetchSubtitlePayload struct {
 	DesiredItemID string `json:"desired_item_id"`
 }
 
+// EnrichWorkJobType fills in a held music/book Work's canonical ids and cover
+// from a keyed lookup (ADR-0087, M12 Phase 6).
+//
+// It is a JOB over a held Work, not a want (ADR-0087 §6): the enrich beat
+// enqueues it for a due, under-enriched Work, and a worker with a
+// CapabilityEnrich provider runs it. On a node with no such provider it stays
+// PENDING AND VISIBLE (ADR-0025), the same degrade discipline as the search and
+// subtitle-fetch jobs.
+const EnrichWorkJobType = "enrich_work"
+
+// EnrichWorkDedupeKey makes an enrich idempotent per Work: two Works should be
+// enriched concurrently, and one live enrich per Work is enough.
+func EnrichWorkDedupeKey(workID string) string { return "enrich-work:" + workID }
+
+// EnrichWorkPayload is what an enrich_work job carries: the Work, with everything
+// else (its content type, identity attributes, fruitless streak) read from the
+// database at handling time so nothing goes stale between enqueue and run.
+type EnrichWorkPayload struct {
+	WorkID string `json:"work_id"`
+}
+
 // IngestJobType brings a completed acquisition under management (§65, M3-13).
 //
 // A separate job from poll_downloads, and deliberately so. Polling asks a

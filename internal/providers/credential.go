@@ -114,12 +114,15 @@ func AuthSchemeOf(k Kind) AuthScheme {
 		// auth, a username+password pair — unlike SABnzbd's single api_key, which
 		// is why NZBGet is here and not in the AuthToken case above.
 		return AuthBasic
-	case KindHTTP, KindPodcast:
+	case KindHTTP, KindPodcast, KindMusicBrainz, KindOpenLibrary:
 		// A plain-HTTP download fetches a public direct link, and a podcast RSS
-		// feed is a public URL; both authenticate with nothing. A feed or link
-		// behind a credential is a later scheme, not this slice — and AuthNone
-		// means configuration refuses a credential here rather than accepting one
-		// that would never be sent.
+		// feed is a public URL; both authenticate with nothing. MusicBrainz, the
+		// Cover Art Archive and Open Library are public keyless enrich sources
+		// (ADR-0087) — an operator supplies no secret, only (at most) a
+		// User-Agent — so they belong here too. A feed or source behind a
+		// credential is a later scheme, not this slice — and AuthNone means
+		// configuration refuses a credential here rather than accepting one that
+		// would never be sent.
 		return AuthNone
 	case KindFake:
 		return AuthNone

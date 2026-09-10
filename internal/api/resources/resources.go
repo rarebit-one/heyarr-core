@@ -488,6 +488,13 @@ func (a *API) Mount(r chi.Router) {
 	// creates a want per video, which the fetch driver then acquires. A write, it
 	// creates desired state.
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/subtitles/want", a.requestSubtitles)
+	// Enrich held music/book works now, ignoring the beat's backoff schedule
+	// (ADR-0087): a write, it queues work. The beat enriches on its own cadence;
+	// this is the operator's "do it now" lever for a scope.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/enrich/backfill", a.backfillEnrich)
+	// What the enrich backlog looks like — how many held music/book works still
+	// lack a cover or a canonical id. A read.
+	r.Get("/enrich/status", a.enrichStatus)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/consumption/sessions", a.createSession)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).
 		Post("/consumption/sessions/{id}/transitions", a.applyTransition)

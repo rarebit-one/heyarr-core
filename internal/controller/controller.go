@@ -48,6 +48,8 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/replication"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/musicbrainz"
+	"github.com/rarebit-one/heyarr-core/internal/providers/openlibrary"
 	"github.com/rarebit-one/heyarr-core/internal/providers/opensubtitles"
 	"github.com/rarebit-one/heyarr-core/internal/providers/podcast"
 	"github.com/rarebit-one/heyarr-core/internal/providers/tmdb"
@@ -319,6 +321,12 @@ func (c *Controller) Run(ctx context.Context) error {
 	// held but whose caption is missing, on a quota-respecting cadence the fetch
 	// job itself paces. See subtitlebeat.go.
 	startSubtitleBeat(ctx, beatCatalog, reconcileQueue, c.log)
+
+	// The enrich beat (ADR-0087): it enqueues an enrich_work job for each held
+	// music/book Work that is under-enriched (no cover and/or no canonical id), on
+	// a gentle cadence the enrich job itself paces via a backoff schedule. See
+	// enrichbeat.go.
+	startEnrichBeat(ctx, beatCatalog, reconcileQueue, c.log)
 
 	// The download poll beat (#247). Same queue and the same serving context.
 	// See downloadbeat.go for why fifteen seconds rather than the health
@@ -670,7 +678,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 	providerRegistry, err := providers.BuildWith(resolvedProviders, c.log, nil,
-		providers.Chain(indexers.Constructor, downloads.Constructor, tvdb.Constructor, tmdb.Constructor, podcast.Constructor, youtube.Constructor, webfeed.Constructor, opensubtitles.Constructor))
+		providers.Chain(indexers.Constructor, downloads.Constructor, tvdb.Constructor, tmdb.Constructor, podcast.Constructor, youtube.Constructor, webfeed.Constructor, opensubtitles.Constructor, musicbrainz.Constructor, openlibrary.Constructor))
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: building the provider registry: %w", err)
 	}
