@@ -383,6 +383,12 @@ func describe(rule policy.Rule, actual policy.Value, held bool) string {
 	b.WriteString(string(rule.Attribute))
 	b.WriteString(" ")
 	b.WriteString(actual.String())
+	if actual.Derived {
+		// ADR-0091: a value read from the release title, not asserted by the
+		// indexer. Named at every gate it touches so §63's explanation stays
+		// honest about which facts came from the tracker and which from the name.
+		b.WriteString(" (read from the release name)")
+	}
 	b.WriteString(", which ")
 	b.WriteString(verb)
 	b.WriteString(" ")

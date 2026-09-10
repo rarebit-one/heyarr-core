@@ -28,11 +28,23 @@ type Value struct {
 	Texts []string
 	// Flag is set when Kind is KindFlag.
 	Flag bool
+	// Derived marks a candidate's attribute value that was read from the
+	// release TITLE rather than asserted by the indexer (ADR-0091). It is
+	// meaningful only on an attribute value, never on a rule operand, and
+	// defaults false — so every constructor here, and every structured
+	// assertion, is asserted unless AsDerived() says otherwise. §63's reason
+	// rendering reads it and names a derived value as such, which is what keeps
+	// title parsing from being the "invisible extraction" §63 warned about.
+	Derived bool
 	// set distinguishes a zero Value from an absent one. A rule with no
 	// operand at all is a different mistake from a rule whose operand is 0,
 	// and they need different messages.
 	set bool
 }
+
+// AsDerived marks this value as read from a release title rather than asserted
+// by the indexer (ADR-0091). Returns a copy; the receiver is unchanged.
+func (v Value) AsDerived() Value { v.Derived = true; return v }
 
 // Num builds an integer operand.
 func Num(n int64) Value { return Value{Kind: KindInt, Num: n, set: true} }
