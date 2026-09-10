@@ -2805,6 +2805,71 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/v1/enrich/backfill:
+    post:
+      tags: [enrich]
+      operationId: backfillEnrich
+      summary: Enrich held music/book works now (ADR-0087).
+      description: |
+        Queues an `enrich_work` job for every held music/book work in scope that
+        still lacks a cover or a canonical id, ignoring the enrich beat's backoff
+        schedule.
+
+        Enrichment otherwise runs on a background beat. This is the operator's
+        lever to enrich a scope now — after wiring an enrich provider, or after
+        ingesting a shelf of books. A scope is required — `library_id`, `work_id`,
+        `author`, or `all` — so "this one author" is never one forgotten flag
+        from "every book on the node". Only under-enriched works are touched and
+        the enrich job is idempotent, so a re-run is cheap and safe. Refused with
+        400 when the node has no enrich provider configured (the jobs would never
+        run).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                library_id: { type: string }
+                work_id: { type: string }
+                author: { type: string }
+                all: { type: boolean }
+      responses:
+        "202":
+          description: The enrich jobs were queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  candidates: { type: integer }
+                  enqueued: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/enrich/status:
+    get:
+      tags: [enrich]
+      operationId: enrichStatus
+      summary: How many held music/book works still need enrichment (ADR-0087).
+      description: |
+        Reports the enrich backlog: how many held music/book works still lack a
+        cover or a canonical id, out of the total held, so a person can watch a
+        backfill drain.
+      responses:
+        "200":
+          description: The enrich backlog.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  under_enriched: { type: integer }
+                  total: { type: integer }
+                  enriched: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /api/v1/playback/plan:
     post:
       tags: [playback]
