@@ -210,7 +210,7 @@ jobs:
             exit 0
           fi
           echo "shard $SHARD_INDEX/$SHARD_TOTAL packages:"
-          echo "$pkgs" | sed 's/^/  /'
+          echo "$pkgs"
           # No -coverprofile: see the job header. $pkgs is intentionally
           # unquoted — each line is one package argument to go test.
           # shellcheck disable=SC2086
