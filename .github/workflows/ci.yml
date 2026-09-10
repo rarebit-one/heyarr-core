@@ -93,28 +93,18 @@ jobs:
   # serves. A unit test cannot make that claim about a whole process tree.
   test:
     runs-on: ${{ matrix.os }}
-    # The ubuntu/stable leg runs -race + coverage (~24m wall incl. build and the
-    # pinned-toolchain fetch), which brushed the old 25m cap and was cancelled
-    # mid-run on a slow runner — a green test reported as a red timeout. 35m
-    # gives the -race half headroom without hiding a genuine hang: the go test
-    # -timeout=20m below is the real per-run bound, and this is only the outer
-    # stop for a wedged job.
-    timeout-minutes: 35
+    # No leg here runs -race any more: the race detector moved to the dedicated
+    # `test-race` job below, which shards the full suite across parallel runners
+    # so it no longer sits on the merge critical path. What remains is the plain
+    # go test across the os/go matrix, ~5m wall incl. build and the pinned-
+    # toolchain fetch. The go test -timeout=20m below is the real per-run bound;
+    # this is only the outer stop for a wedged job.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         go: [stable, oldstable]
-        # -race is the slow half of this job (~20m vs ~5m plain) and the four
-        # -race runs are essentially all of PR CI's wall-clock. Run -race on the
-        # primary combo only (ubuntu + stable); the other three run plain go
-        # test. A data race is rarely OS- or Go-version-specific, and the FULL
-        # -race matrix still runs nightly on main (race-nightly.yml) — so this
-        # takes the long tail off the merge path without dropping the coverage.
-        include:
-          - os: ubuntu-latest
-            go: stable
-            race: "-race"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
@@ -143,14 +133,13 @@ jobs:
               exit 1
             fi
           fi
-      # matrix.race is "-race" on the primary combo (ubuntu + stable) and empty
-      # elsewhere — see the matrix note above. -timeout=20m, not the default 10m
-      # per package: internal/api/resources can approach the default under -race
-      # plus coverage on a loaded runner, and a per-package test timeout is only
-      # a hang reported as a failure if the bound is generous enough to be
-      # reached solely when something is genuinely wedged. It is harmless on the
-      # plain runs. The job's own timeout-minutes: 35 stays the outer stop.
-      - run: go test ${{ matrix.race }} -count=1 -timeout=20m -coverprofile=coverage.out ./...
+      # -timeout=20m, not the default 10m per package: internal/api/resources
+      # can approach the default under load on a busy runner, and a per-package
+      # test timeout is only a hang reported as a failure if the bound is
+      # generous enough to be reached solely when something is genuinely wedged.
+      # The job's own timeout-minutes stays the outer stop. coverage.out is still
+      # written here, unchanged; the race detector now lives in `test-race`.
+      - run: go test -count=1 -timeout=20m -coverprofile=coverage.out ./...
       - name: the toolchain tests ran rather than skipping
         if: runner.os == 'Linux'
         run: |
@@ -167,6 +156,83 @@ jobs:
             grep -B2 -- '--- SKIP' /tmp/media.log >&2
             exit 1
           fi
+
+  # The race detector, sharded. Until now the ubuntu/stable `test` leg ran
+  # `go test -race ./...` over the whole module in a single job — ~24m, and the
+  # entire PR critical path (every other job finishes in ≤6m). The detector's
+  # cost is per-package and embarrassingly parallel, so this partitions
+  # `go list ./...` deterministically across N runners by line index, runs -race
+  # on each subset, and the aggregating `race` gate below turns the shards back
+  # into one status. The SAME package set runs under -race as before, at ~1/N
+  # the wall time. The full os/go -race matrix still runs nightly on main
+  # (race-nightly.yml).
+  #
+  # Coverage is deliberately NOT collected here: coverage.out was never uploaded
+  # or gated anywhere (dead output), and the instrumentation only slows the
+  # detector. The plain `test` job still writes coverage.out exactly as before.
+  test-race:
+    name: test-race
+    runs-on: ubuntu-latest
+    # ~1/4 of the suite under -race is well under 10m incl. build and toolchain
+    # fetch; 25m is a generous outer stop, kept above the go test -timeout=20m
+    # inner bound so a genuine per-package hang fails as a test timeout first.
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    env:
+      SHARD_INDEX: ${{ matrix.shard }}
+      SHARD_TOTAL: 4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/private-modules
+        with:
+          token: ${{ secrets.AUTOLAND_PAT }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version: stable, cache: true }
+      - name: install the pinned media toolchain
+        # The same toolchain the ubuntu `test` leg installs: some packages' tests
+        # need ffprobe, and under -race a skipped test is as invisible as a
+        # passing one. The `test` job asserts the pinned version on every run, so
+        # this only needs the binaries on PATH.
+        run: ./scripts/toolchain.sh >> "$GITHUB_PATH"
+      - name: run this shard's packages under -race
+        run: |
+          # Deterministic partition: `go list ./...` is sorted, and awk assigns
+          # each package to exactly one shard by line index (NR % SHARD_TOTAL).
+          # The union over shards 0..SHARD_TOTAL-1 is the full list, no gaps and
+          # no overlap. An empty shard (fewer packages than shards) is a no-op
+          # success, never a failure.
+          pkgs=$(go list ./... | awk -v idx="$SHARD_INDEX" -v n="$SHARD_TOTAL" 'NR % n == idx')
+          if [ -z "$pkgs" ]; then
+            echo "shard $SHARD_INDEX/$SHARD_TOTAL has no packages; nothing to test"
+            exit 0
+          fi
+          echo "shard $SHARD_INDEX/$SHARD_TOTAL packages:"
+          echo "$pkgs" | sed 's/^/  /'
+          # No -coverprofile: see the job header. $pkgs is intentionally
+          # unquoted — each line is one package argument to go test.
+          # shellcheck disable=SC2086
+          go test -race -count=1 -timeout=20m $pkgs
+
+  # Aggregate the race shards into one status a maintainer can require, exactly
+  # as `ci` does for the pipeline as a whole. if: always() plus the toJSON check
+  # means a failed OR cancelled shard fails this gate rather than leaving it
+  # skipped — a skipped job would slip through `ci`'s failure check below.
+  race:
+    name: race (all shards)
+    if: always()
+    needs: [test-race]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: fail if any race shard failed
+        run: |
+          if echo '${{ toJSON(needs) }}' | grep -q '"result": *"\(failure\|cancelled\)"'; then
+            echo "one or more race shards failed"; exit 1
+          fi
+          echo "all race shards passed"
 
   # Chunk boundaries must be identical on every platform, and this is the only
   # job that can say so.
@@ -307,7 +373,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [lint, hygiene, generate-check, test, chunking-determinism, build, acceptance, acceptance-degraded]
+    needs: [lint, hygiene, generate-check, test, race, chunking-determinism, build, acceptance, acceptance-degraded]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
