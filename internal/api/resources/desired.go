@@ -95,6 +95,14 @@ type AcquisitionView struct {
 	Placement string `json:"placement"`
 	// Detail is why the last pipeline move happened, when it was a failure.
 	Detail string `json:"detail,omitempty"`
+	// BytesTotal and BytesDone are the download client's progress for a transfer
+	// in flight, refreshed every poll (poll_downloads persists them on the
+	// acquisition row — the fact that "makes 'stuck since Tuesday' visible").
+	// Zero total means the client has not said yet; both omitted when there is
+	// no transfer, so a satisfied or idle want stays clean in a listing. They
+	// let a client show how far a download has got without a second request.
+	BytesTotal int64 `json:"bytes_total,omitempty"`
+	BytesDone  int64 `json:"bytes_done,omitempty"`
 }
 
 // AcquisitionView carries only the STATE. The reasons behind the content axis —
@@ -156,10 +164,15 @@ type UpdateDesiredRequest struct {
 // whose acquisition row is missing must still be readable — the API says
 // nothing about its state rather than hiding the want.
 const desiredColumns = `d.id, d.scope, d.work_id, d.edition_id, d.quality_profile_id,
-	d.monitor, d.reason, d.created_at, d.updated_at, ` + acquisitionSelect
+	d.monitor, d.reason, d.created_at, d.updated_at, ` + acquisitionSelect +
+	`, acq.bytes_total, acq.bytes_done`
 
+// acquisition_state carries the derived §64 axes; the acquisitions row carries
+// the in-flight transfer's byte counts. Both are one-per-want (desired_item_id
+// UNIQUE on acquisitions), so a LEFT JOIN of each keeps the page one query.
 const desiredFrom = ` FROM desired_items d
-	LEFT JOIN acquisition_state a ON a.desired_item_id = d.id`
+	LEFT JOIN acquisition_state a ON a.desired_item_id = d.id
+	LEFT JOIN acquisitions acq ON acq.desired_item_id = d.id`
 
 func scanDesiredItem(row interface{ Scan(...any) error }) (DesiredItem, error) {
 	var d DesiredItem
@@ -167,13 +180,13 @@ func scanDesiredItem(row interface{ Scan(...any) error }) (DesiredItem, error) {
 	var monitor int
 	var created, updated string
 	var phase, content, placement, detail sql.NullString
-	var managed sql.NullInt64
+	var managed, bytesTotal, bytesDone sql.NullInt64
 	if err := row.Scan(&d.ID, &d.Scope, &d.WorkID, &edition, &d.QualityProfileID,
 		&monitor, &d.Reason, &created, &updated,
-		&phase, &managed, &content, &placement, &detail); err != nil {
+		&phase, &managed, &content, &placement, &detail, &bytesTotal, &bytesDone); err != nil {
 		return DesiredItem{}, err
 	}
-	d.Acquisition = scanAcquisitionView(phase, managed, content, placement, detail)
+	d.Acquisition = scanAcquisitionView(phase, managed, content, placement, detail, bytesTotal, bytesDone)
 	if edition.Valid {
 		d.EditionID = edition.String
 	}
@@ -316,6 +329,7 @@ const acquisitionSelect = `a.phase, a.managed, a.content, a.placement, a.detail`
 func scanAcquisitionView(
 	phase sql.NullString, managed sql.NullInt64,
 	content, placement, detail sql.NullString,
+	bytesTotal, bytesDone sql.NullInt64,
 ) *AcquisitionView {
 	if !phase.Valid {
 		// No acquisition row. Possible only for a want created before this
@@ -330,12 +344,14 @@ func scanAcquisitionView(
 		Placement: acquisition.Satisfaction(placement.String),
 	}
 	return &AcquisitionView{
-		State:     state.Name(),
-		Phase:     phase.String,
-		Managed:   state.Managed,
-		Content:   content.String,
-		Placement: placement.String,
-		Detail:    detail.String,
+		State:      state.Name(),
+		Phase:      phase.String,
+		Managed:    state.Managed,
+		Content:    content.String,
+		Placement:  placement.String,
+		Detail:     detail.String,
+		BytesTotal: bytesTotal.Int64,
+		BytesDone:  bytesDone.Int64,
 	}
 }
 
