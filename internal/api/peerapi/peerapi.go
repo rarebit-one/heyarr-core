@@ -207,6 +207,10 @@ type Options struct {
 	// ahead of an outage (§54, ADR-0048, #285). Nil on a node that issues no
 	// leases — the route is still mounted and answers 503, like the others.
 	Leases LeaseSource
+	// CatalogOps is the editorial catalog op log a sibling reads and pushes to,
+	// so a two-site pair converges on logical deletes (ADR-0073, #449). Nil on a
+	// node not converging a catalog — the routes mount and answer 503.
+	CatalogOps CatalogOpSource
 	// State is the encrypted personal-state sync backend (§42, §44, ADR-0049):
 	// opaque spaces' heads and changes, moved as ciphertext. Nil on a node that
 	// keeps no personal state — the routes are still mounted and answer 503, like
@@ -256,6 +260,9 @@ type Server struct {
 	// leases serves this peer's access leases for a sibling to cache (§54,
 	// #285). Nil on a node that issues none.
 	leases LeaseSource
+	// catalogOps is the editorial catalog op log a sibling converges with (§49,
+	// ADR-0073, #449). Nil on a node not converging a catalog.
+	catalogOps CatalogOpSource
 	// state is the encrypted personal-state sync backend (§42, §44). Nil on a
 	// node that keeps none.
 	state StateStore
@@ -315,6 +322,7 @@ func New(opts Options) (*Server, error) {
 		webSeedOnly:   opts.WebSeedOnly,
 		controlBackup: opts.ControlBackup,
 		leases:        opts.Leases,
+		catalogOps:    opts.CatalogOps,
 		state:         opts.State,
 	}
 	s.handler = s.routes()
@@ -368,6 +376,14 @@ func (s *Server) routes() http.Handler {
 		// disk holds, here the controller tells the peer what the catalogue
 		// holds. Neither lets a peer write control state (ADR-0029).
 		r.Get("/catalog/snapshot", s.handleCatalogSnapshot)
+		// The editorial catalog op log the two sites converge on (ADR-0073,
+		// #449). GET returns this node's ops for a sibling to merge; POST
+		// records a sibling's ops and answers with the merged set, so one
+		// exchange converges both directions. A G-set: idempotent, order-free,
+		// each op signed and re-verified — a member push writes no control state
+		// it could not already have signed for itself.
+		r.Get("/catalog/ops", s.handleCatalogOps)
+		r.Post("/catalog/ops", s.handleCatalogOpsPush)
 		// Byte serving (§21, ADR-0013, ADR-0030, M4-09). This is the hop
 		// replication actually travels: the destination opens this connection,
 		// reads these bytes and verifies them itself. The controller is not

@@ -2468,6 +2468,42 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/catalog/sync:
+    post:
+      tags: [fabric]
+      operationId: syncCatalog
+      summary: Force two-site catalog convergence now (§49, ADR-0073).
+      description: |
+        Runs one pass of the editorial catalog op-log exchange with every
+        sibling, immediately, rather than waiting for the beat: this node offers
+        its ops to each sibling over the pinned peer link and records the merged
+        G-set each answers with, so a delete made here reaches the other site
+        now (ADR-0073, #449).
+
+        Unlike `/api/v1/peers/{id}/reconcile`, this RUNS the exchange rather than
+        enqueueing a job — the exchange is a bounded RPC, not bulk byte movement
+        — so it answers `200` with what converged, not `202`. Idempotent: the
+        op-log is a G-set, and an unreachable sibling is deferred, not an error.
+
+        `write`, not `admin`: it propagates ops already recorded, changing
+        nothing about who is trusted. A single-site node with no sibling answers
+        `503`.
+      responses:
+        "200":
+          description: The pass ran; how many siblings converged and how many deferred.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [synced, deferred]
+                properties:
+                  synced: { type: integer }
+                  deferred: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503":
+          description: This node converges a catalog with no sibling.
+
   /api/v1/replicas:
     get:
       tags: [fabric]
@@ -2804,6 +2840,71 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/enrich/backfill:
+    post:
+      tags: [enrich]
+      operationId: backfillEnrich
+      summary: Enrich held music/book works now (ADR-0087).
+      description: |
+        Queues an `enrich_work` job for every held music/book work in scope that
+        still lacks a cover or a canonical id, ignoring the enrich beat's backoff
+        schedule.
+
+        Enrichment otherwise runs on a background beat. This is the operator's
+        lever to enrich a scope now — after wiring an enrich provider, or after
+        ingesting a shelf of books. A scope is required — `library_id`, `work_id`,
+        `author`, or `all` — so "this one author" is never one forgotten flag
+        from "every book on the node". Only under-enriched works are touched and
+        the enrich job is idempotent, so a re-run is cheap and safe. Refused with
+        400 when the node has no enrich provider configured (the jobs would never
+        run).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                library_id: { type: string }
+                work_id: { type: string }
+                author: { type: string }
+                all: { type: boolean }
+      responses:
+        "202":
+          description: The enrich jobs were queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  candidates: { type: integer }
+                  enqueued: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/enrich/status:
+    get:
+      tags: [enrich]
+      operationId: enrichStatus
+      summary: How many held music/book works still need enrichment (ADR-0087).
+      description: |
+        Reports the enrich backlog: how many held music/book works still lack a
+        cover or a canonical id, out of the total held, so a person can watch a
+        backfill drain.
+      responses:
+        "200":
+          description: The enrich backlog.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  under_enriched: { type: integer }
+                  total: { type: integer }
+                  enriched: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   /api/v1/playback/plan:
     post:
@@ -4864,6 +4965,81 @@ paths:
                     items: { type: string }
         "503":
           description: This node issues no access leases to cache.
+
+  /peer/v1/catalog/ops:
+    get:
+      tags: [peer]
+      operationId: listCatalogOps
+      summary: The editorial catalog op log, for a sibling to converge (§49, ADR-0073).
+      description: |
+        Returns every editorial catalog op this node holds — the signed
+        delete/restore ops the two sites of an active-active pair converge on so
+        one site does not rebuild a work the other logically deleted (ADR-0073,
+        #449). A sibling merges them into its own log; the set is a G-set, so the
+        merge is order-independent and idempotent.
+
+        **Each op carries its own authority.** An op is signed by the peer that
+        issued it (ADR-0012) and re-verified on every evaluation; a sibling
+        checks it against the key it already pinned, never against the connection
+        that served it. Serving them to a member therefore discloses nothing a
+        member could not already read, which is why the route needs no
+        authorisation beyond membership.
+      security:
+        - peerCertificate: []
+      responses:
+        "200":
+          description: The op tokens this node holds (possibly empty).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ops]
+                properties:
+                  ops:
+                    type: array
+                    items: { type: string }
+        "503":
+          description: This node does not converge a catalog with a sibling.
+    post:
+      tags: [peer]
+      operationId: pushCatalogOps
+      summary: Push editorial catalog ops, and receive the merged log (§49, ADR-0073).
+      description: |
+        Records the catalog ops a sibling pushes and answers with this node's
+        full log, so one exchange converges both directions: the pushed ops land
+        here and the response carries anything the pusher was missing. The G-set
+        makes this safe to repeat — recording is idempotent by op hash, and an op
+        whose signature does not verify is refused with 400 without recording any
+        op in the batch.
+      security:
+        - peerCertificate: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ops]
+              properties:
+                ops:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200":
+          description: The merged op set this node now holds (possibly empty).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ops]
+                properties:
+                  ops:
+                    type: array
+                    items: { type: string }
+        "400":
+          description: A pushed op did not verify, or the body was malformed.
+        "503":
+          description: This node does not converge a catalog with a sibling.
 
   /peer/v1/state/{space}/heads:
     parameters:

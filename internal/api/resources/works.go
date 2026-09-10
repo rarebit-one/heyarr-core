@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
+	"github.com/rarebit-one/heyarr-core/internal/catalogop"
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 )
@@ -179,10 +181,10 @@ func (a *API) deleteWork(w http.ResponseWriter, r *http.Request) {
 		followers int
 	)
 	err := a.db.InTx(r.Context(), func(tx *sql.Tx) error {
-		var title, contentType string
+		var title, contentType, workKey string
 		if err := tx.QueryRowContext(r.Context(),
-			`SELECT title, content_type FROM works WHERE id = ?`, id).
-			Scan(&title, &contentType); err != nil {
+			`SELECT title, content_type, work_key FROM works WHERE id = ?`, id).
+			Scan(&title, &contentType, &workKey); err != nil {
 			return err
 		}
 		if err := tx.QueryRowContext(r.Context(),
@@ -214,6 +216,18 @@ func (a *API) deleteWork(w http.ResponseWriter, r *http.Request) {
 		// rather than this handler re-deriving the graph and eventually missing
 		// a table somebody added later.
 		if _, err := tx.ExecContext(r.Context(), `DELETE FROM works WHERE id = ?`, id); err != nil {
+			return err
+		}
+
+		// The delete is also an editorial op the two sites converge on, so the
+		// OTHER site does not rebuild this work on its next scan (ADR-0073, #449).
+		// Keyed by the natural key, not this site's id, because that is what a
+		// rescan converges on; signed by this peer's identity (ADR-0012) so the
+		// sibling can verify it. Recorded in THIS transaction so the work and the
+		// op that supersedes it commit together. A node with no signer/store
+		// (single-site) skips it and the delete stays local — the behaviour that
+		// shipped before #449.
+		if err := a.emitWorkDeleteOp(r.Context(), tx, contentType, workKey); err != nil {
 			return err
 		}
 
@@ -275,6 +289,29 @@ func (a *API) deleteWork(w http.ResponseWriter, r *http.Request) {
 		a.events.Publish(ev)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// emitWorkDeleteOp records, in the caller's transaction, the editorial delete op
+// a work's deletion emits so a two-site pair converges on the removal instead of
+// the sibling rebuilding the work on its next scan (ADR-0073, #449). The op is
+// keyed by the natural key (content_type, work_key) — what a rescan converges on,
+// not this site's per-site id — and signed by this peer's identity (ADR-0012) so
+// the sibling honours it as coming from a pinned peer. It is a no-op on a node
+// with no tombstone store or no signer, which is a single-site deployment: a
+// local delete there needs no op, and this stays the behaviour that predates #449.
+func (a *API) emitWorkDeleteOp(ctx context.Context, tx *sql.Tx, contentType, workKey string) error {
+	if a.catalogTombstones == nil || len(a.catalogSigner) != ed25519.PrivateKeySize {
+		return nil
+	}
+	heads, err := a.catalogTombstones.Heads(ctx)
+	if err != nil {
+		return fmt.Errorf("resources: reading catalog-op heads: %w", err)
+	}
+	token, err := catalogop.Sign(a.catalogSigner, catalogop.OpDelete, contentType, workKey, heads, a.now())
+	if err != nil {
+		return fmt.Errorf("resources: signing catalog delete op: %w", err)
+	}
+	return a.catalogTombstones.RecordOpsTx(ctx, tx, []string{token})
 }
 
 // errWorkIsFollowed is the refusal a followed work's deletion gets.

@@ -26,6 +26,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
+	"github.com/rarebit-one/heyarr-core/internal/catalogtomb"
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/downloads"
@@ -37,6 +38,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
 	"github.com/rarebit-one/heyarr-core/internal/media/probe"
 	"github.com/rarebit-one/heyarr-core/internal/pairrelay"
+	"github.com/rarebit-one/heyarr-core/internal/peer/catalogsync"
 	"github.com/rarebit-one/heyarr-core/internal/peer/health"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
@@ -46,6 +48,8 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/replication"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/musicbrainz"
+	"github.com/rarebit-one/heyarr-core/internal/providers/openlibrary"
 	"github.com/rarebit-one/heyarr-core/internal/providers/opensubtitles"
 	"github.com/rarebit-one/heyarr-core/internal/providers/podcast"
 	"github.com/rarebit-one/heyarr-core/internal/providers/tmdb"
@@ -318,6 +322,12 @@ func (c *Controller) Run(ctx context.Context) error {
 	// job itself paces. See subtitlebeat.go.
 	startSubtitleBeat(ctx, beatCatalog, reconcileQueue, c.log)
 
+	// The enrich beat (ADR-0087): it enqueues an enrich_work job for each held
+	// music/book Work that is under-enriched (no cover and/or no canonical id), on
+	// a gentle cadence the enrich job itself paces via a backoff schedule. See
+	// enrichbeat.go.
+	startEnrichBeat(ctx, beatCatalog, reconcileQueue, c.log)
+
 	// The download poll beat (#247). Same queue and the same serving context.
 	// See downloadbeat.go for why fifteen seconds rather than the health
 	// beat's minute, why the startup pass is the important one, and why this
@@ -339,6 +349,14 @@ func (c *Controller) Run(ctx context.Context) error {
 	// (a dedicated interval knob is a follow-up if the two need to diverge).
 	startStatePlaneReplication(ctx, db, reconcileEvents, backupInterval,
 		self.PeerID, c.log, material, members)
+
+	// The editorial catalog op-log converges between the two controllers of an
+	// active-active pair by default (ADR-0073, #449): this beat runs the same
+	// /peer/v1/catalog/ops exchange the route runs on demand, on a cadence, so a
+	// work deleted at one site reaches the other without an operator. It shares
+	// the backup cadence for the reason the state beat does — both are peer-sync
+	// RPO intervals — and is a no-op on a single-site node with no peer surface.
+	startCatalogOpsSync(ctx, db, backupInterval, self.PeerID, c.log, material, members)
 
 	// "started" is logged only after every listener is bound. A start line
 	// printed before the socket exists is a lie that costs someone an
@@ -660,7 +678,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 	providerRegistry, err := providers.BuildWith(resolvedProviders, c.log, nil,
-		providers.Chain(indexers.Constructor, downloads.Constructor, tvdb.Constructor, tmdb.Constructor, podcast.Constructor, youtube.Constructor, webfeed.Constructor, opensubtitles.Constructor))
+		providers.Chain(indexers.Constructor, downloads.Constructor, tvdb.Constructor, tmdb.Constructor, podcast.Constructor, youtube.Constructor, webfeed.Constructor, opensubtitles.Constructor, musicbrainz.Constructor, openlibrary.Constructor))
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: building the provider registry: %w", err)
 	}
@@ -670,6 +688,32 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	secret, err := render.EnsureSecret(c.cfg.DataDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
+	}
+
+	// The editorial catalog op log a work's deletion emits to (ADR-0073, #449).
+	// The store is stateless over the pools, so the peer surface constructs its
+	// own; both write the same tables through the single writer. The signer is
+	// this peer's identity key — load-failure is not fatal: a node with no
+	// identity yet simply deletes locally, and emitWorkDeleteOp skips the op.
+	catalogTomb, err := catalogtomb.New(catalogtomb.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: opening the catalog-tombstone store: %w", err)
+	}
+	catalogSigner, err := identity.Signer(c.cfg.DataDir)
+	if err != nil {
+		c.log.Debug("no identity key for catalog delete ops; deletes stay local", "error", err)
+		catalogSigner = nil
+	}
+	// The on-demand force-sync behind POST /api/v1/catalog/sync. It needs the
+	// peer surface's certificate to dial a sibling, so it is wired only when this
+	// node has one; without it the route answers 503 (a single-site node).
+	var catalogSync resources.CatalogSyncTrigger
+	if material != nil {
+		catalogSync = catalogsync.NewSyncer(
+			catalogTomb,
+			catalogsync.NewClient(material, c.log),
+			catalogSiblings{members: members, self: selfPeerID},
+			c.log)
 	}
 
 	apiOpts := resources.Options{
@@ -682,6 +726,10 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		Membership: members,
 		Identities: identities,
 		Logger:     c.log,
+
+		CatalogTombstones: catalogTomb,
+		CatalogSigner:     catalogSigner,
+		CatalogSync:       catalogSync,
 
 		RenderSecret:  secret,
 		RenderBaseURL: rendererBaseURL(c.cfg),

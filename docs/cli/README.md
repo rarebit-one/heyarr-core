@@ -32,6 +32,9 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr device revoke`](heyarr_device_revoke.md) | Revoke a device at this peer and re-key the spaces it could read (ADR-0068, ADR-0049) |
 | [`heyarr device show`](heyarr_device_show.md) | Show one device key |
 | [`heyarr device`](heyarr_device.md) | Manage this machine's device key (§40, ADR-0032) |
+| [`heyarr enrich backfill`](heyarr_enrich_backfill.md) | Enrich held music/book works now, ignoring the background cadence |
+| [`heyarr enrich status`](heyarr_enrich_status.md) | Show how many held music/book works still lack a cover or id |
+| [`heyarr enrich`](heyarr_enrich.md) | Enrich held music and book works with covers and canonical ids |
 | [`heyarr events tail`](heyarr_events_tail.md) | Print events as they happen |
 | [`heyarr events`](heyarr_events.md) | Follow the event log |
 | [`heyarr fsck`](heyarr_fsck.md) | Check stored bytes against the catalog (§57, ADR-0018) |

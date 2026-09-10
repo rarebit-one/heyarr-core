@@ -97,7 +97,11 @@ func AuthSchemeOf(k Kind) AuthScheme {
 		// token minted from the login), which is the client's business; the
 		// CREDENTIAL an operator supplies is the pair.
 		return AuthTokenBasic
-	case KindTorznab, KindNewznab, KindTVDB, KindTMDB, KindSABnzbd:
+	case KindTorznab, KindNewznab, KindProwlarr, KindTVDB, KindTMDB, KindSABnzbd:
+		// Prowlarr authenticates with one api_key, sent as its `X-Api-Key`
+		// header — one opaque secret, exactly AuthToken (ADR-0090); how it goes
+		// on the wire (a header rather than Torznab's apikey query param) is the
+		// client's business.
 		// TheTVDB v4 authenticates with one API key it exchanges for a bearer
 		// token — one opaque secret, sent however the protocol says, which is
 		// exactly AuthToken (M12). TMDB is the same shape: one opaque secret (a v4
@@ -114,12 +118,15 @@ func AuthSchemeOf(k Kind) AuthScheme {
 		// auth, a username+password pair — unlike SABnzbd's single api_key, which
 		// is why NZBGet is here and not in the AuthToken case above.
 		return AuthBasic
-	case KindHTTP, KindPodcast:
+	case KindHTTP, KindPodcast, KindMusicBrainz, KindOpenLibrary:
 		// A plain-HTTP download fetches a public direct link, and a podcast RSS
-		// feed is a public URL; both authenticate with nothing. A feed or link
-		// behind a credential is a later scheme, not this slice — and AuthNone
-		// means configuration refuses a credential here rather than accepting one
-		// that would never be sent.
+		// feed is a public URL; both authenticate with nothing. MusicBrainz, the
+		// Cover Art Archive and Open Library are public keyless enrich sources
+		// (ADR-0087) — an operator supplies no secret, only (at most) a
+		// User-Agent — so they belong here too. A feed or source behind a
+		// credential is a later scheme, not this slice — and AuthNone means
+		// configuration refuses a credential here rather than accepting one that
+		// would never be sent.
 		return AuthNone
 	case KindFake:
 		return AuthNone

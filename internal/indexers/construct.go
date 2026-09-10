@@ -20,6 +20,30 @@ import (
 // constructors compose, and an unrecognised kind still falls through to the
 // registry's honest "configured, not implemented" report.
 func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider, bool, error) {
+	// Prowlarr is an indexer AGGREGATOR (ADR-0090), a different wire format from
+	// Torznab (JSON over `/api/v1`, an X-Api-Key header) — so a different client,
+	// built here because it shares the package's ReleaseCandidate mapping and
+	// credential handling and belongs beside the indexer it aggregates.
+	if r.Kind == providers.KindProwlarr {
+		endpoint := ""
+		if r.Endpoint != nil {
+			endpoint = r.Endpoint.String()
+		}
+		// One opaque token (ADR-0031/ADR-0090); Token() is the accessor that
+		// fits, revealed exactly at the point it is handed to the client.
+		token, _ := r.Credential.Token()
+		client, err := NewProwlarr(ProwlarrOptions{
+			Name:     r.Name,
+			Endpoint: endpoint,
+			APIKey:   token.Reveal(),
+			Now:      now,
+		})
+		if err != nil {
+			return nil, true, err
+		}
+		return client, true, nil
+	}
+
 	// Torznab and Newznab are one wire protocol (ADR-0028): the same client
 	// serves both, because Torznab is Newznab plus a torrent extension and this
 	// package implements the protocol, not the product. A newznab-kind provider

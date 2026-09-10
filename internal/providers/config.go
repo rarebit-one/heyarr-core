@@ -51,6 +51,15 @@ const (
 	// matters at runtime is the release's source, which routes on its own; the
 	// search is identical.
 	KindNewznab Kind = "newznab"
+	// KindProwlarr is an indexer AGGREGATOR — one Prowlarr instance standing in
+	// for every indexer it manages (ADR-0090). Unlike KindTorznab, which points
+	// at ONE indexer's Torznab feed (Prowlarr's per-indexer `/{id}/api`), a
+	// KindProwlarr provider speaks Prowlarr's own `/api/v1` and fans a search
+	// across all of them, so heyarr's searchable set tracks Prowlarr's live —
+	// add or remove an indexer in Prowlarr and the next search reflects it, with
+	// no per-indexer heyarr config. One endpoint (Prowlarr's base URL), one
+	// api_key (its X-Api-Key). KindTorznab stays the single-feed door.
+	KindProwlarr Kind = "prowlarr"
 	// KindTransmission is the initial acquisition transport (§58).
 	// Implemented in M3-10.
 	KindTransmission Kind = "transmission"
@@ -183,6 +192,30 @@ const (
 	// client obtains from a username+password login. Two secrets, one provider,
 	// declared as one scheme.
 	KindOpenSubtitles Kind = "opensubtitles"
+	// KindMusicBrainz is an enrich provider speaking the MusicBrainz WS/2 API
+	// (ADR-0087, M12 Phase 6): given a held music Work — its artist and album — it
+	// returns the release's MBID and, via the linked Cover Art Archive, its cover.
+	// It is the first CapabilityEnrich kind for music.
+	//
+	// It is KEYLESS: MusicBrainz and the Cover Art Archive are public and need no
+	// operator secret (AuthNone), so unlike the video and subtitle providers it
+	// takes no credential and no sops secret — configuring it is at most an
+	// endpoint (defaulted) and a User-Agent. MusicBrainz REQUIRES a descriptive
+	// User-Agent and enforces ~1 req/s, which the client respects via the shared
+	// proactive rate limiter (internal/providers/ratelimit, ADR-0085). Like
+	// KindTVDB it has one well-known base URL the client defaults to.
+	KindMusicBrainz Kind = "musicbrainz"
+	// KindOpenLibrary is an enrich provider speaking the Open Library search API
+	// (ADR-0087, M12 Phase 6): given a held book Work — its author and title — it
+	// returns the OLID and the cover URL (covers.openlibrary.org), and the
+	// canonical title+author a confident match corrects the Work's display
+	// identity from (ADR-0088). It is the first CapabilityEnrich kind for books.
+	//
+	// It is KEYLESS (AuthNone) for KindMusicBrainz's reason — Open Library is
+	// public — so it takes no credential and no sops secret. It respects the
+	// shared rate limiter as a courtesy to a free public service. Like KindTVDB it
+	// has one well-known base URL the client defaults to.
+	KindOpenLibrary Kind = "openlibrary"
 	// KindFake is an in-process provider that talks to nothing.
 	//
 	// It is a first-class kind rather than a test-only construct because the
@@ -200,7 +233,7 @@ const (
 
 // Kinds lists every kind, in a stable order.
 func Kinds() []Kind {
-	return []Kind{KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindSABnzbd, KindNZBGet, KindHTTP, KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindYtDlp, KindWebFeed, KindWebCapture, KindOpenSubtitles, KindFake}
+	return []Kind{KindTorznab, KindNewznab, KindProwlarr, KindTransmission, KindQBittorrent, KindSABnzbd, KindNZBGet, KindHTTP, KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindYtDlp, KindWebFeed, KindWebCapture, KindOpenSubtitles, KindMusicBrainz, KindOpenLibrary, KindFake}
 }
 
 // ParseKind validates a kind from configuration.
@@ -227,7 +260,7 @@ func ParseKind(s string) (Kind, error) {
 // that Prowlarr is an indexer is ceremony that teaches nothing.
 func DefaultCapabilities(k Kind) []Capability {
 	switch k {
-	case KindTorznab, KindNewznab:
+	case KindTorznab, KindNewznab, KindProwlarr:
 		return []Capability{CapabilityIndexer}
 	case KindTransmission, KindQBittorrent, KindSABnzbd, KindNZBGet, KindHTTP, KindYtDlp, KindWebCapture:
 		return []Capability{CapabilityDownload}
@@ -235,6 +268,8 @@ func DefaultCapabilities(k Kind) []Capability {
 		return []Capability{CapabilityMetadata}
 	case KindOpenSubtitles:
 		return []Capability{CapabilitySubtitle}
+	case KindMusicBrainz, KindOpenLibrary:
+		return []Capability{CapabilityEnrich}
 	default:
 		// A fake declares nothing by default: what it stands in for is the
 		// whole of what a test or the demo is configuring, so it must say.
@@ -271,7 +306,7 @@ func DefaultCapabilities(k Kind) []Capability {
 func needsEndpoint(k Kind) bool {
 	return k != KindFake && k != KindHTTP && k != KindTVDB && k != KindTMDB && k != KindPodcast &&
 		k != KindYoutube && k != KindYtDlp && k != KindWebFeed && k != KindWebCapture &&
-		k != KindOpenSubtitles
+		k != KindOpenSubtitles && k != KindMusicBrainz && k != KindOpenLibrary
 }
 
 // needsCredential reports whether a kind must be given one.
@@ -284,7 +319,7 @@ func needsEndpoint(k Kind) bool {
 // authentication off is an ordinary, supported deployment, and refusing to
 // start would be Heyarr insisting on a policy the operator already declined.
 func needsCredential(k Kind) bool {
-	return k == KindTorznab || k == KindNewznab || k == KindTVDB || k == KindTMDB ||
+	return k == KindTorznab || k == KindNewznab || k == KindProwlarr || k == KindTVDB || k == KindTMDB ||
 		k == KindOpenSubtitles
 }
 

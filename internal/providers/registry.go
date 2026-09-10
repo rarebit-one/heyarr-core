@@ -242,6 +242,22 @@ func (r *Registry) SubtitleProviders() []SubtitleProvider {
 	return out
 }
 
+// EnrichProviders is every provider that can enrich a held Work, in routing
+// order (ADR-0087, M12 Phase 6). It is the enrich capability's routing accessor,
+// the sibling of Indexers, Downloaders, FeedProviders and SubtitleProviders: the
+// enrich worker asks the registry "which providers answer for `enrich`" rather
+// than iterating and casting at the call site, so the cast that could silently
+// drop a mis-declared provider lives in one place.
+func (r *Registry) EnrichProviders() []EnrichProvider {
+	var out []EnrichProvider
+	for _, p := range r.Route(CapabilityEnrich) {
+		if ep, ok := p.(EnrichProvider); ok {
+			out = append(out, ep)
+		}
+	}
+	return out
+}
+
 // DiscoverySearchers is every metadata provider that can ALSO resolve a
 // free-text query to candidate works not yet in the library (#451), in routing
 // order.
