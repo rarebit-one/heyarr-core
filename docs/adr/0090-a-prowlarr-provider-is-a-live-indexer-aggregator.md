@@ -76,9 +76,9 @@ heyarr at **one** Torznab/Newznab feed directly — a single tracker, or a Prowl
 indexer you deliberately want isolated (its own health line, its own grading
 scope). `prowlarr` is the *aggregate* door; `torznab` is the *single-feed* door.
 An operator uses one, the other, or both (a `prowlarr` Entry beside a standalone
-`torznab` Entry is fine — they are distinct sources). The two existing hyperion-1
-entries can collapse into one `prowlarr` Entry, or stay as-is; nothing forces the
-migration.
+`torznab` Entry is fine — they are distinct sources). A deployment that already
+lists one `torznab` Entry per Prowlarr indexer can collapse them into one
+`prowlarr` Entry, or stay as-is; nothing forces the migration.
 
 ### 4. Attribution and categories
 
