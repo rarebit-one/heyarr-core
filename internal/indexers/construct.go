@@ -33,10 +33,11 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 		// fits, revealed exactly at the point it is handed to the client.
 		token, _ := r.Credential.Token()
 		client, err := NewProwlarr(ProwlarrOptions{
-			Name:     r.Name,
-			Endpoint: endpoint,
-			APIKey:   token.Reveal(),
-			Now:      now,
+			Name:        r.Name,
+			Endpoint:    endpoint,
+			APIKey:      token.Reveal(),
+			ParseTitles: r.ParseTitles,
+			Now:         now,
 		})
 		if err != nil {
 			return nil, true, err
@@ -79,6 +80,7 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 		Endpoint:     endpoint,
 		APIKey:       token.Reveal(),
 		Capabilities: r.Capabilities,
+		ParseTitles:  r.ParseTitles,
 		Now:          now,
 	})
 	if err != nil {

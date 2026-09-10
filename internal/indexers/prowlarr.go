@@ -63,6 +63,12 @@ type ProwlarrOptions struct {
 	Endpoint string
 	// APIKey is Prowlarr's api key, sent as the `X-Api-Key` header.
 	APIKey string
+	// ParseTitles opts this aggregator into reading quality from a release
+	// TITLE for the attributes it does not assert (ADR-0091). Off by default.
+	// It matters more here than for a raw torznab feed: Prowlarr normalises
+	// SIZE and nothing else across its indexers, so without this every quality
+	// rule is undetermined on a prowlarr candidate.
+	ParseTitles bool
 	// HTTPClient is injected by tests. Nil means a client of this package's own
 	// making — callers outside a test have no business supplying one.
 	HTTPClient *http.Client
@@ -72,11 +78,12 @@ type ProwlarrOptions struct {
 
 // prowlarrClient is one Prowlarr instance, aggregating every indexer it manages.
 type prowlarrClient struct {
-	name     string
-	endpoint string
-	apiKey   string
-	http     *http.Client
-	now      func() time.Time
+	name        string
+	endpoint    string
+	apiKey      string
+	parseTitles bool
+	http        *http.Client
+	now         func() time.Time
 }
 
 // Compile-time proof that this satisfies the registry's contracts.
@@ -97,11 +104,12 @@ func NewProwlarr(o ProwlarrOptions) (*prowlarrClient, error) {
 		return nil, fmt.Errorf("indexers: prowlarr %q has an endpoint that is not a URL: %w", o.Name, err)
 	}
 	c := &prowlarrClient{
-		name:     o.Name,
-		endpoint: strings.TrimRight(strings.TrimRight(o.Endpoint, "/"), "?&"),
-		apiKey:   o.APIKey,
-		http:     o.HTTPClient,
-		now:      o.Now,
+		name:        o.Name,
+		endpoint:    strings.TrimRight(strings.TrimRight(o.Endpoint, "/"), "?&"),
+		apiKey:      o.APIKey,
+		parseTitles: o.ParseTitles,
+		http:        o.HTTPClient,
+		now:         o.Now,
 	}
 	if c.http == nil {
 		c.http = &http.Client{Timeout: prowlarrSearchTimeout}
@@ -213,7 +221,7 @@ func (c *prowlarrClient) Search(ctx context.Context, q providers.Query) ([]acqui
 	if err := json.Unmarshal(body, &releases); err != nil {
 		return nil, fmt.Errorf("prowlarr: the search answer was not a release list: %w", err)
 	}
-	return prowlarrCandidates(c.name, releases), nil
+	return prowlarrCandidates(c.name, releases, c.parseTitles), nil
 }
 
 // prowlarrCategories maps §12's content type onto Torznab category ids, which
@@ -240,7 +248,7 @@ func prowlarrCategories(contentType string) string {
 // Mirrors indexers.candidates: skip the nameless, derive a stable id that is not
 // a position in the response, carry only what the release actually asserts, and
 // sort by id so §63's tie-breaks are deterministic.
-func prowlarrCandidates(provider string, releases []prowlarrRelease) []acquisition.ReleaseCandidate {
+func prowlarrCandidates(provider string, releases []prowlarrRelease, parseTitles bool) []acquisition.ReleaseCandidate {
 	out := make([]acquisition.ReleaseCandidate, 0, len(releases))
 	for _, r := range releases {
 		title := strings.TrimSpace(r.Title)
@@ -253,7 +261,7 @@ func prowlarrCandidates(provider string, releases []prowlarrRelease) []acquisiti
 			ID:         prowlarrCandidateID(r),
 			Title:      title,
 			Provider:   provider,
-			Attributes: prowlarrAttributes(r),
+			Attributes: prowlarrAttributes(r, parseTitles),
 			Source:     prowlarrSource(r),
 		})
 	}
@@ -298,18 +306,27 @@ func prowlarrSource(r prowlarrRelease) secret.Value {
 	return ""
 }
 
-// prowlarrAttributes is everything the release actually asserted.
+// prowlarrAttributes is everything the release asserted, plus — when parseTitles
+// is on (ADR-0091) — what its title asserts about its own quality.
 //
-// SIZE and nothing else — the same honest state the Torznab client reaches
-// (attributes.go): Prowlarr normalises size across its indexers, but does not
-// assert a structured resolution/codec, and a title is a filename written by a
-// stranger, not evidence. So a quality rule evaluates to `undetermined` here too,
-// which is the truthful report rather than a guess.
-func prowlarrAttributes(r prowlarrRelease) acquisition.Attributes {
-	if r.Size == nil || *r.Size < 0 {
+// Prowlarr normalises SIZE across its indexers and asserts no structured
+// resolution/codec, so with parseTitles OFF a quality rule evaluates to
+// `undetermined` here (the same honest state attributes.go reaches) and that is
+// the truthful report rather than a guess. With it ON, the title's quality
+// tokens fill the attributes Prowlarr left out — marked Derived, and only where
+// nothing was asserted (which, for everything but size, is everywhere).
+func prowlarrAttributes(r prowlarrRelease, parseTitles bool) acquisition.Attributes {
+	attrs := acquisition.Attributes{}
+	if r.Size != nil && *r.Size >= 0 {
+		attrs[policy.AttrSizeBytes] = policy.Num(*r.Size)
+	}
+	if parseTitles {
+		fillAbsent(attrs, titleAttributes(r.Title))
+	}
+	if len(attrs) == 0 {
 		return nil
 	}
-	return acquisition.Attributes{policy.AttrSizeBytes: policy.Num(*r.Size)}
+	return attrs
 }
 
 // get performs one GET against a Prowlarr `/api/v1` route with the api key on the

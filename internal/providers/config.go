@@ -405,6 +405,10 @@ type Entry struct {
 	Credential *CredentialEntry `koanf:"credential"`
 	// Capabilities overrides the kind's defaults. Empty means the defaults.
 	Capabilities []string `koanf:"capabilities"`
+	// ParseTitles opts an indexer into reading release quality from the release
+	// TITLE for attributes it does not assert structurally (ADR-0091). Off by
+	// default and meaningful only for an indexer kind; ignored elsewhere.
+	ParseTitles bool `koanf:"parse_titles"`
 	// PathMap translates the download client's filesystem namespace into
 	// Heyarr's. Meaningful only for a download provider.
 	//
@@ -475,6 +479,9 @@ type Resolved struct {
 	PathMap      []PathMapping
 	Label        string
 	Enabled      bool
+	// ParseTitles is the resolved parse_titles flag (ADR-0091), carried to the
+	// indexer constructor. False for every non-indexer provider.
+	ParseTitles bool
 	// Offers is a fake indexer's canned answers, already converted into domain
 	// candidates so nothing downstream has to parse configuration.
 	Offers map[string][]acquisition.ReleaseCandidate
@@ -565,6 +572,7 @@ func Validate(entries []Entry) ([]Resolved, error) {
 			PathMap:      e.PathMap,
 			Label:        strings.TrimSpace(e.Label),
 			Enabled:      enabled,
+			ParseTitles:  e.ParseTitles,
 			Offers:       offers,
 		})
 	}
