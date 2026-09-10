@@ -564,11 +564,17 @@ type downloadResponse struct {
 
 // languagesResponse is /infos/languages, read only so Check's decode is honest;
 // nothing in it is used beyond proving the api-key was accepted.
+//
+// The live API returns `data` as a FLAT ARRAY — {"data":[{"language_code":"en",…}]}
+// — NOT an object with a nested `languages` field. The original struct
+// (data.languages[]) was synthesised from the stoplight docs, not a live response,
+// so against the real endpoint json.Unmarshal hit an array-into-struct type
+// mismatch; do() returned that decode error and authDetail masked it as the
+// generic "could not reach OpenSubtitles" (verified live 2026-09-10 from
+// hyperion-1: the request is 200, only the decode failed).
 type languagesResponse struct {
-	Data struct {
-		Languages []struct {
-			LanguageCode string `json:"language_code"`
-		} `json:"languages"`
+	Data []struct {
+		LanguageCode string `json:"language_code"`
 	} `json:"data"`
 }
 
