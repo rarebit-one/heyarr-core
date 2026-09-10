@@ -51,6 +51,15 @@ const (
 	// matters at runtime is the release's source, which routes on its own; the
 	// search is identical.
 	KindNewznab Kind = "newznab"
+	// KindProwlarr is an indexer AGGREGATOR — one Prowlarr instance standing in
+	// for every indexer it manages (ADR-0090). Unlike KindTorznab, which points
+	// at ONE indexer's Torznab feed (Prowlarr's per-indexer `/{id}/api`), a
+	// KindProwlarr provider speaks Prowlarr's own `/api/v1` and fans a search
+	// across all of them, so heyarr's searchable set tracks Prowlarr's live —
+	// add or remove an indexer in Prowlarr and the next search reflects it, with
+	// no per-indexer heyarr config. One endpoint (Prowlarr's base URL), one
+	// api_key (its X-Api-Key). KindTorznab stays the single-feed door.
+	KindProwlarr Kind = "prowlarr"
 	// KindTransmission is the initial acquisition transport (§58).
 	// Implemented in M3-10.
 	KindTransmission Kind = "transmission"
@@ -224,7 +233,7 @@ const (
 
 // Kinds lists every kind, in a stable order.
 func Kinds() []Kind {
-	return []Kind{KindTorznab, KindNewznab, KindTransmission, KindQBittorrent, KindSABnzbd, KindNZBGet, KindHTTP, KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindYtDlp, KindWebFeed, KindWebCapture, KindOpenSubtitles, KindMusicBrainz, KindOpenLibrary, KindFake}
+	return []Kind{KindTorznab, KindNewznab, KindProwlarr, KindTransmission, KindQBittorrent, KindSABnzbd, KindNZBGet, KindHTTP, KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindYtDlp, KindWebFeed, KindWebCapture, KindOpenSubtitles, KindMusicBrainz, KindOpenLibrary, KindFake}
 }
 
 // ParseKind validates a kind from configuration.
@@ -251,7 +260,7 @@ func ParseKind(s string) (Kind, error) {
 // that Prowlarr is an indexer is ceremony that teaches nothing.
 func DefaultCapabilities(k Kind) []Capability {
 	switch k {
-	case KindTorznab, KindNewznab:
+	case KindTorznab, KindNewznab, KindProwlarr:
 		return []Capability{CapabilityIndexer}
 	case KindTransmission, KindQBittorrent, KindSABnzbd, KindNZBGet, KindHTTP, KindYtDlp, KindWebCapture:
 		return []Capability{CapabilityDownload}
@@ -310,7 +319,7 @@ func needsEndpoint(k Kind) bool {
 // authentication off is an ordinary, supported deployment, and refusing to
 // start would be Heyarr insisting on a policy the operator already declined.
 func needsCredential(k Kind) bool {
-	return k == KindTorznab || k == KindNewznab || k == KindTVDB || k == KindTMDB ||
+	return k == KindTorznab || k == KindNewznab || k == KindProwlarr || k == KindTVDB || k == KindTMDB ||
 		k == KindOpenSubtitles
 }
 

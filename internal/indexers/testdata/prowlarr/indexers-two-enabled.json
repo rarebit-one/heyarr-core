@@ -1,0 +1,5 @@
+[
+  {"name": "LinuxTracker", "enable": true},
+  {"name": "Internet Archive", "enable": true},
+  {"name": "Disabled One", "enable": false}
+]

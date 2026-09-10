@@ -97,7 +97,11 @@ func AuthSchemeOf(k Kind) AuthScheme {
 		// token minted from the login), which is the client's business; the
 		// CREDENTIAL an operator supplies is the pair.
 		return AuthTokenBasic
-	case KindTorznab, KindNewznab, KindTVDB, KindTMDB, KindSABnzbd:
+	case KindTorznab, KindNewznab, KindProwlarr, KindTVDB, KindTMDB, KindSABnzbd:
+		// Prowlarr authenticates with one api_key, sent as its `X-Api-Key`
+		// header — one opaque secret, exactly AuthToken (ADR-0090); how it goes
+		// on the wire (a header rather than Torznab's apikey query param) is the
+		// client's business.
 		// TheTVDB v4 authenticates with one API key it exchanges for a bearer
 		// token — one opaque secret, sent however the protocol says, which is
 		// exactly AuthToken (M12). TMDB is the same shape: one opaque secret (a v4
