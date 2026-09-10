@@ -93,7 +93,13 @@ jobs:
   # serves. A unit test cannot make that claim about a whole process tree.
   test:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    # The ubuntu/stable leg runs -race + coverage (~24m wall incl. build and the
+    # pinned-toolchain fetch), which brushed the old 25m cap and was cancelled
+    # mid-run on a slow runner — a green test reported as a red timeout. 35m
+    # gives the -race half headroom without hiding a genuine hang: the go test
+    # -timeout=20m below is the real per-run bound, and this is only the outer
+    # stop for a wedged job.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -143,7 +149,7 @@ jobs:
       # plus coverage on a loaded runner, and a per-package test timeout is only
       # a hang reported as a failure if the bound is generous enough to be
       # reached solely when something is genuinely wedged. It is harmless on the
-      # plain runs. The job's own timeout-minutes: 25 stays the outer stop.
+      # plain runs. The job's own timeout-minutes: 35 stays the outer stop.
       - run: go test ${{ matrix.race }} -count=1 -timeout=20m -coverprofile=coverage.out ./...
       - name: the toolchain tests ran rather than skipping
         if: runner.os == 'Linux'
