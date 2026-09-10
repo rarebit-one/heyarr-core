@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
@@ -95,11 +98,18 @@ func newIngestHarness(t *testing.T) *ingestHarness {
 
 // selectAndComplete drives the want to VERIFYING with a real file on disk,
 // which is the state an ingest job actually finds.
-func (h *ingestHarness) selectAndComplete(t *testing.T, filename string, contents []byte) string {
+// offerID names the candidate the search selects; it defaults to "good" (a
+// movie want accepts any title), and a series test passes an episode id like
+// "S01E01" so the offer clears ADR-0093's episode-containment gate.
+func (h *ingestHarness) selectAndComplete(t *testing.T, filename string, contents []byte, offerID ...string) string {
 	t.Helper()
 	ctx := t.Context()
 
-	h.fake.Offer("Arrival", offer("good", 2160, "hevc"))
+	id := "good"
+	if len(offerID) > 0 {
+		id = offerID[0]
+	}
+	h.fake.Offer("Arrival", offer(id, 2160, "hevc"))
 	if err := h.run(t); err != nil {
 		t.Fatal(err)
 	}
@@ -253,17 +263,24 @@ func TestVerificationRefusals(t *testing.T) {
 			want: "is empty",
 		},
 		{
-			// A multi-file release. Ingesting it as one artifact would produce
-			// a plausible blob of the wrong thing.
-			name: "the transfer is a directory",
+			// A directory is a multi-file release and is now ingestable
+			// (ADR-0093) — but an EMPTY one has nothing to ingest, and one with
+			// no video files is the same. It fails cleanly with a reason rather
+			// than panicking on a directory the walk found nothing in.
+			name: "the transfer is a directory with no video files",
 			prepare: func(t *testing.T, path string) {
 				t.Helper()
 				mustRemove(t, path)
 				if err := os.MkdirAll(path, 0o750); err != nil {
 					t.Fatal(err)
 				}
+				// A stray .nfo — present, but not a video file to ingest.
+				if err := os.WriteFile(filepath.Join(path, "release.nfo"),
+					[]byte("scene notes"), 0o600); err != nil {
+					t.Fatal(err)
+				}
 			},
-			want: "multi-file release",
+			want: "no ingestable video files",
 		},
 	}
 
@@ -582,6 +599,317 @@ func TestADocumentAcquisitionLandsInItsLibrary(t *testing.T) {
 	// The captured HTML carries a media type, so OPDS can advertise it (ADR-0080).
 	if mime := h.scalar(t, `SELECT COALESCE(mime, '') FROM assets LIMIT 1`); mime != "text/html" {
 		t.Errorf("asset mime = %q, want text/html", mime)
+	}
+}
+
+// Season-pack ingest (ADR-0093, the slice after the containment gate).
+//
+// A pack is one download that holds a whole season. Ingesting it must produce
+// one asset per episode file and map each to the episode item its name parses
+// to, so a single grab satisfies every episode the pack contains — not only the
+// want that triggered it.
+
+// setupSeries turns the harness's movie fixture into a series with `episodes`
+// enumerated items (S01E01…), and rewrites the harness want into the item-scoped
+// S01E01 want that triggers the grab. The other episodes get their own
+// item-scoped wants, each started, so a reconcile can find them. It returns the
+// item_key → want-id map.
+func (h *ingestHarness) setupSeries(t *testing.T, episodes int) map[string]string {
+	t.Helper()
+	ctx := t.Context()
+	stamp := time.Now().UTC().Format(time.RFC3339Nano)
+
+	// The library and the wanted Work become series; the title stays "Arrival"
+	// so the fake indexer's offer still matches the search that reaches SELECTED.
+	h.exec(t, `UPDATE libraries SET content_type = 'series' WHERE id = 'lib1'`)
+	h.exec(t, `UPDATE works SET content_type = 'series' WHERE id = 'w1'`)
+	h.exec(t, `INSERT INTO editions (id, work_id, label, edition_type, language, attributes, created_at)
+		VALUES ('e-s01', 'w1', 'Season 01', 'web-dl', 'en', '{}', ?)`, stamp)
+
+	wants := make(map[string]string, episodes)
+	for e := 1; e <= episodes; e++ {
+		key := fmt.Sprintf("S01E%02d", e)
+		itemID := "it-" + strings.ToLower(key)
+		h.exec(t, `INSERT INTO items (id, work_id, edition_id, item_key, title, attributes, created_at, updated_at)
+			VALUES (?, 'w1', 'e-s01', ?, ?, '{}', ?, ?)`, itemID, key, key, stamp, stamp)
+
+		if e == 1 {
+			// Reuse the harness want (already started) as the triggering want.
+			h.exec(t, `UPDATE desired_items
+				SET scope = 'item', item_id = ?, edition_id = NULL, aspect = 'primary', language = ''
+				WHERE id = ?`, itemID, h.want)
+			wants[key] = h.want
+			continue
+		}
+		wantID := uuid.Must(uuid.NewV7()).String()
+		h.exec(t, `INSERT INTO desired_items
+			(id, scope, work_id, edition_id, item_id, aspect, language,
+			 quality_profile_id, monitor, reason, created_at, updated_at)
+			VALUES (?, 'item', 'w1', NULL, ?, 'primary', '', 'q1', 1, '', ?, ?)`,
+			wantID, itemID, stamp, stamp)
+		if _, err := h.cat.StartAcquisition(ctx, wantID); err != nil {
+			t.Fatal(err)
+		}
+		wants[key] = wantID
+	}
+	return wants
+}
+
+// selectAndCompletePack drives the triggering want to VERIFYING with a
+// multi-file release (a directory) on disk, which is the state an ingest job
+// finds for a season pack. `files` are release-relative paths → contents.
+func (h *ingestHarness) selectAndCompletePack(t *testing.T, dirName string, files map[string][]byte) string {
+	t.Helper()
+	ctx := t.Context()
+
+	h.fake.Offer("Arrival", offer("S01E01", 2160, "hevc"))
+	if err := h.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.state(t).Name(); got != "SELECTED" {
+		t.Fatalf("setup: want is %s, expected SELECTED", got)
+	}
+
+	dir := filepath.Join(h.downloads, dirName)
+	var total int64
+	for name, contents := range files {
+		full := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, contents, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		total += int64(len(contents))
+	}
+
+	if _, err := h.cat.RecordAcquisition(ctx, catalog.Acquisition{
+		ID: NewAcquisitionID(), DesiredItemID: h.want,
+		Provider: "fake-downloader", ExternalID: "infohash-pack",
+		ExternalName: dirName, RemotePath: dir, LocalPath: dir,
+		BytesTotal: total, BytesDone: total,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tr := range []acquisition.Transition{
+		acquisition.TransitionQueue,
+		acquisition.TransitionStartDownload,
+		acquisition.TransitionDownloaded,
+	} {
+		if _, err := h.cat.AdvanceAcquisition(ctx, h.want, tr, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := h.state(t).Phase; got != acquisition.PhaseVerifying {
+		t.Fatalf("setup: phase is %s, expected verifying", got)
+	}
+	return dir
+}
+
+// linkedItemKey returns the item_key an asset is linked to, or "" for an
+// unlinked asset, keyed by the asset's source filename base.
+func (h *ingestHarness) assetItemKeys(t *testing.T) map[string]string {
+	t.Helper()
+	rows, err := h.db.Reader().Query(`
+		SELECT a.source_path, COALESCE(i.item_key, '')
+		FROM assets a LEFT JOIN items i ON i.id = a.item_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]string{}
+	for rows.Next() {
+		var src, key string
+		if err := rows.Scan(&src, &key); err != nil {
+			t.Fatal(err)
+		}
+		out[filepath.Base(src)] = key
+	}
+	return out
+}
+
+// THE season-pack test: six episode files, six assets, each mapped to its item.
+func TestASeasonPackIngestsEveryEpisodeAndLinksEachToItsItem(t *testing.T) {
+	h := newIngestHarness(t)
+	h.setupSeries(t, 6)
+
+	files := map[string][]byte{}
+	for e := 1; e <= 6; e++ {
+		name := fmt.Sprintf("Arrival.S01E%02d.1080p.WEB-DL.DDP5.1.H.264-NTb.mkv", e)
+		files[name] = []byte(fmt.Sprintf("episode %d distinct bytes", e))
+	}
+	h.selectAndCompletePack(t, "Arrival.S01.1080p.WEB-DL.DDP5.1.H.264-NTb", files)
+
+	if err := h.ingest(t); err != nil {
+		t.Fatalf("a season pack must ingest, not be refused as multi-file: %v", err)
+	}
+
+	// One asset and one blob per episode file — the pack is not hashed whole.
+	if n := h.count(t, `SELECT count(*) FROM assets`); n != 6 {
+		t.Errorf("%d assets, want 6 — one per episode file", n)
+	}
+	if n := h.count(t, `SELECT count(*) FROM blobs`); n != 6 {
+		t.Errorf("%d blobs, want 6", n)
+	}
+
+	// Each episode item has exactly one asset linked to it, by item_key.
+	for e := 1; e <= 6; e++ {
+		key := fmt.Sprintf("S01E%02d", e)
+		n := h.count(t,
+			`SELECT count(*) FROM assets a JOIN items i ON i.id = a.item_id WHERE i.item_key = ?`, key)
+		if n != 1 {
+			t.Errorf("item %s has %d assets linked, want 1", key, n)
+		}
+	}
+
+	// The triggering want holds bytes.
+	if !h.state(t).Managed {
+		t.Error("the triggering want holds no bytes after its pack ingested")
+	}
+}
+
+// The fan-out: a pack triggered by ONE want satisfies every episode want. Each
+// sibling want, after a reconcile, finds the asset the single download produced
+// — one transfer, one blob per file, many wants served.
+func TestASeasonPackSatisfiesEverySiblingEpisodeWant(t *testing.T) {
+	h := newIngestHarness(t)
+	wants := h.setupSeries(t, 6)
+
+	files := map[string][]byte{}
+	for e := 1; e <= 6; e++ {
+		files[fmt.Sprintf("Arrival.S01E%02d.1080p.WEB-DL.mkv", e)] = []byte(fmt.Sprintf("episode %d distinct bytes", e))
+	}
+	h.selectAndCompletePack(t, "Arrival.S01.1080p.WEB-DL", files)
+	if err := h.ingest(t); err != nil {
+		t.Fatal(err)
+	}
+
+	// Only the triggering want went through the handler; the siblings are
+	// served by reconciliation over the shared assets (§3.2, ADR-0093).
+	for key, wantID := range wants {
+		res, err := h.cat.ReconcileDesired(t.Context(), wantID)
+		if err != nil {
+			t.Fatalf("reconciling %s: %v", key, err)
+		}
+		if !res.State.Managed {
+			t.Errorf("episode want %s holds no bytes after the pack ingested — "+
+				"the single download did not fan out to it", key)
+		}
+	}
+}
+
+// A file the pack parser cannot place — no season/episode in the name — is
+// ingested but left UNLINKED, never guessed onto an episode.
+func TestAnUnparseablePackFileIsLeftUnlinked(t *testing.T) {
+	h := newIngestHarness(t)
+	h.setupSeries(t, 2)
+
+	h.selectAndCompletePack(t, "Arrival.S01.WEB-DL", map[string][]byte{
+		"Arrival.S01E01.1080p.WEB-DL.mkv": []byte("the pilot bytes"),
+		"bonus-featurette.mkv":            []byte("something unparseable"),
+	})
+	if err := h.ingest(t); err != nil {
+		t.Fatal(err)
+	}
+
+	keys := h.assetItemKeys(t)
+	if got := keys["Arrival.S01E01.1080p.WEB-DL.mkv"]; got != "S01E01" {
+		t.Errorf("the pilot linked to %q, want S01E01", got)
+	}
+	if got := keys["bonus-featurette.mkv"]; got != "" {
+		t.Errorf("the unplaceable file linked to %q — it must be left unlinked, "+
+			"not guessed onto an episode", got)
+	}
+}
+
+// A file for a season the work has no item for is ingested but left unlinked —
+// the same safe direction, so an S02 file never lands on an S01 episode.
+func TestAWrongSeasonPackFileIsLeftUnlinked(t *testing.T) {
+	h := newIngestHarness(t)
+	h.setupSeries(t, 2) // only S01E01, S01E02 exist as items
+
+	h.selectAndCompletePack(t, "Arrival.S01.WEB-DL", map[string][]byte{
+		"Arrival.S01E01.1080p.WEB-DL.mkv": []byte("the pilot bytes"),
+		"Arrival.S02E01.1080p.WEB-DL.mkv": []byte("a stray next-season file"),
+	})
+	if err := h.ingest(t); err != nil {
+		t.Fatal(err)
+	}
+
+	keys := h.assetItemKeys(t)
+	if got := keys["Arrival.S01E01.1080p.WEB-DL.mkv"]; got != "S01E01" {
+		t.Errorf("the pilot linked to %q, want S01E01", got)
+	}
+	if got := keys["Arrival.S02E01.1080p.WEB-DL.mkv"]; got != "" {
+		t.Errorf("the S02 file linked to %q — a wrong-season file must be left unlinked", got)
+	}
+	// And both files still became assets: an unplaceable file is ingested, not dropped.
+	if n := h.count(t, `SELECT count(*) FROM assets`); n != 2 {
+		t.Errorf("%d assets, want 2 — an unlinked file is still ingested", n)
+	}
+}
+
+// A nested season folder, where only the directory names the season
+// ("Show S01/Season 01/E01 - Pilot.mkv"), still maps each file to its item.
+func TestASeasonPackWithNestedSeasonFolders(t *testing.T) {
+	h := newIngestHarness(t)
+	h.setupSeries(t, 2)
+
+	h.selectAndCompletePack(t, "Arrival S01", map[string][]byte{
+		"Season 01/E01 - Pilot.mkv":    []byte("pilot bytes"),
+		"Season 01/E02 - Handover.mkv": []byte("second bytes"),
+	})
+	if err := h.ingest(t); err != nil {
+		t.Fatal(err)
+	}
+
+	keys := h.assetItemKeys(t)
+	if got := keys["E01 - Pilot.mkv"]; got != "S01E01" {
+		t.Errorf("the pilot linked to %q, want S01E01 (season from the folder)", got)
+	}
+	if got := keys["E02 - Handover.mkv"]; got != "S01E02" {
+		t.Errorf("episode 2 linked to %q, want S01E02", got)
+	}
+}
+
+// A sample clip beside the episodes is not ingested as content.
+func TestASeasonPackIgnoresSamples(t *testing.T) {
+	h := newIngestHarness(t)
+	h.setupSeries(t, 1)
+
+	h.selectAndCompletePack(t, "Arrival.S01.WEB-DL", map[string][]byte{
+		"Arrival.S01E01.1080p.WEB-DL.mkv":        []byte("the real pilot"),
+		"Arrival.S01E01.1080p.WEB-DL.sample.mkv": []byte("a 30-second sample"),
+		"Sample/clip.mkv":                        []byte("a sample in its own directory"),
+		"release.nfo":                            []byte("scene notes"),
+	})
+	if err := h.ingest(t); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := h.count(t, `SELECT count(*) FROM assets`); n != 1 {
+		t.Errorf("%d assets, want 1 — only the real episode, not the samples or the .nfo", n)
+	}
+}
+
+// A single-file series episode is unchanged: its one asset links to the item the
+// WANT asserts (ADR-0086), via the download's item, not by parsing the filename.
+func TestASingleEpisodeStillLinksViaTheWantsItem(t *testing.T) {
+	h := newIngestHarness(t)
+	h.setupSeries(t, 2)
+
+	// A lone file, not a directory — the single-file path. The series want is
+	// item-scoped S01E01, so the offer must name that episode to clear the gate.
+	h.selectAndComplete(t, "Arrival.S01E01.1080p.WEB-DL.mkv", []byte("the pilot bytes"), "S01E01")
+	if err := h.ingest(t); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := h.count(t, `SELECT count(*) FROM assets`); n != 1 {
+		t.Fatalf("%d assets, want 1", n)
+	}
+	if got := h.assetItemKeys(t)["Arrival.S01E01.1080p.WEB-DL.mkv"]; got != "S01E01" {
+		t.Errorf("the single episode linked to %q, want S01E01", got)
 	}
 }
 
