@@ -16,6 +16,7 @@
 package resources
 
 import (
+	"crypto/ed25519"
 	"database/sql"
 	"errors"
 	"log/slog"
@@ -29,6 +30,7 @@ import (
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/catalogtomb"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
@@ -93,7 +95,22 @@ type Options struct {
 	// this store is what an operator writes through to pin the users it checks
 	// against.
 	Identities *deviceauth.Store
-	Logger     *slog.Logger
+	// CatalogTombstones records the editorial delete op a work's deletion emits,
+	// so a two-site pair converges on the removal instead of one site rebuilding
+	// it on the next scan (ADR-0073, #449). Optional: nil (or a nil CatalogSigner)
+	// makes DELETE /works/{id} a local delete with no op, which is exactly the
+	// single-site behaviour that shipped before this — correct, just not
+	// convergent.
+	CatalogTombstones *catalogtomb.Store
+	// CatalogSigner is this peer's Ed25519 identity key (ADR-0012), which signs
+	// the catalog delete op so a sibling can verify it came from a pinned peer.
+	// Optional alongside CatalogTombstones; both or neither.
+	CatalogSigner ed25519.PrivateKey
+	// CatalogSync runs one on-demand catalog-ops convergence pass behind POST
+	// /api/v1/catalog/sync (ADR-0073, #449). Optional: nil leaves the route
+	// answering 503, a single-site node with no sibling to converge with.
+	CatalogSync CatalogSyncTrigger
+	Logger      *slog.Logger
 	// Now and NewID are injected so that a created resource's timestamp and
 	// identifier are fixed values in a test, which is what lets the response
 	// shapes be golden files rather than a regex (ADR-0017).
@@ -150,9 +167,16 @@ type API struct {
 	membership *membership.Store
 	identities *deviceauth.Store
 	providers  *providers.Registry
-	log        *slog.Logger
-	now        func() time.Time
-	newID      func() string
+	// catalogTombstones + catalogSigner emit the editorial delete op a work's
+	// deletion records (ADR-0073, #449). Both nil ⇒ deletes stay local (no op).
+	catalogTombstones *catalogtomb.Store
+	catalogSigner     ed25519.PrivateKey
+	// catalogSync runs an on-demand convergence pass (POST /catalog/sync). Nil on
+	// a single-site node.
+	catalogSync CatalogSyncTrigger
+	log         *slog.Logger
+	now         func() time.Time
+	newID       func() string
 
 	renderSecret  []byte
 	renderBaseURL string
@@ -249,9 +273,14 @@ func New(opts Options) (*API, error) {
 		identities: opts.Identities,
 		catalog:    opts.Catalog,
 		providers:  registryOrEmpty(opts.Providers),
-		log:        log.With("component", "api"),
-		now:        now,
-		newID:      newID,
+
+		catalogTombstones: opts.CatalogTombstones,
+		catalogSigner:     opts.CatalogSigner,
+		catalogSync:       opts.CatalogSync,
+
+		log:   log.With("component", "api"),
+		now:   now,
+		newID: newID,
 
 		rendererCache:  &rendererCache{},
 		rendererClient: &http.Client{Timeout: 15 * time.Second},
@@ -494,6 +523,13 @@ func (a *API) Mount(r chi.Router) {
 		r.With(httpapi.RequireScope(auth.ScopeWrite)).
 			Post("/peers/{id}/reconcile", a.reconcilePeer)
 	}
+
+	// Two-site catalog convergence on demand (§49, ADR-0073, #449): force the
+	// op-log exchange the beat runs on a cadence, so a delete made here reaches
+	// the sibling now. `write`, like peers/reconcile: it changes no trust, only
+	// asks the pair to converge now what the beat would within the interval. The
+	// handler answers 503 on a single-site node with no sibling to reach.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/catalog/sync", a.syncCatalog)
 
 	// Device identity (§40, ADR-0048, ADR-0032). Admin in both directions, and
 	// for the same reason peer enrolment is: pinning a user identity decides

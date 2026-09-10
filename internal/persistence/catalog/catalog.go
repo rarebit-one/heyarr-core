@@ -428,6 +428,13 @@ func (c *Catalog) Record(ctx context.Context, rec ingest.Recording) (ingest.Resu
 		return c.injectFault("commit")
 	})
 	if err != nil {
+		// A recording that resolves to a tombstoned work is not a failure to
+		// retry: the transaction rolled back (any bytes linked ahead of it are
+		// the orphan shape the GC already reclaims, ADR-0018), and the caller
+		// gets a skip it can count, not an error.
+		if errors.Is(err, errWorkTombstoned) {
+			return ingest.Result{BlobHash: rec.Blob.Hash, BlobSize: rec.Blob.Size, Tombstoned: true}, nil
+		}
 		return ingest.Result{}, err
 	}
 
@@ -462,6 +469,23 @@ func (c *Catalog) recordBlob(ctx context.Context, tx *sql.Tx, rec ingest.Recordi
 }
 
 func (c *Catalog) resolveWork(ctx context.Context, tx *sql.Tx, cand identification.Candidate, now string) (string, bool, error) {
+	// A work another site logically deleted must not be re-materialised by this
+	// site's next scan (ADR-0073, #449). The tombstone is keyed by the natural
+	// key a rescan converges on — (content_type, work_key) — precisely so it can
+	// suppress a get-or-create that never learned the per-site id. This is the
+	// chokepoint every ingest path shares, so guarding it here covers the scan
+	// pipeline and the backup-distribute path alike; the caller turns the
+	// sentinel into a clean skip, not an ingest failure.
+	var tombstoned int
+	switch err := tx.QueryRowContext(ctx,
+		`SELECT 1 FROM work_tombstones WHERE content_type = ? AND work_key = ?`,
+		cand.ContentType, cand.WorkKey).Scan(&tombstoned); {
+	case err == nil:
+		return "", false, errWorkTombstoned
+	case !errors.Is(err, sql.ErrNoRows):
+		return "", false, fmt.Errorf("catalog: checking tombstone for %s/%s: %w", cand.ContentType, cand.WorkKey, err)
+	}
+
 	attrs, err := encodeAttributes(cand.WorkAttributes)
 	if err != nil {
 		return "", false, err
@@ -492,6 +516,31 @@ func (c *Catalog) resolveWork(ctx context.Context, tx *sql.Tx, cand identificati
 		return "", false, fmt.Errorf("catalog: re-reading work %s/%s: %w", cand.ContentType, cand.WorkKey, err)
 	}
 	return existing, false, nil
+}
+
+// errWorkTombstoned reports that a recording resolves to a work the catalog
+// tombstones (ADR-0073). It is a control signal, not a failure: Record turns it
+// into a skipped ingest.Result, because a scan of a deleted work is a no-op, not
+// an error to retry.
+var errWorkTombstoned = errors.New("catalog: work is tombstoned")
+
+// Tombstoned reports whether the work (content_type, work_key) is currently
+// tombstoned. The scan pipeline consults it BEFORE moving bytes, so a work a
+// sibling deleted is skipped without materialising the file it would only roll
+// back (ADR-0073, #449). It reads the materialised view off the write path — a
+// single indexed lookup, not a re-evaluation of the op log.
+func (c *Catalog) Tombstoned(ctx context.Context, contentType, workKey string) (bool, error) {
+	var one int
+	switch err := c.db.Reader().QueryRowContext(ctx,
+		`SELECT 1 FROM work_tombstones WHERE content_type = ? AND work_key = ?`,
+		contentType, workKey).Scan(&one); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	default:
+		return false, fmt.Errorf("catalog: reading tombstone for %s/%s: %w", contentType, workKey, err)
+	}
 }
 
 // resolveEdition gets or creates the edition. Its attributes stay empty in

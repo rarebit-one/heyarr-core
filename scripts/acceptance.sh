@@ -6870,6 +6870,47 @@ the corruption may be the operator's own file (ADR-0018)"
   assert_eq "$(cli_a peers list --json | jq -r '.[] | select(.name == "site-b") | .public_key')" "$key_b" \
     "and node A still pins the key it first enrolled — nothing about the survivor was reconfigured"
 
+  # -------------------------------------------------------------------------
+  note "  a delete at one site converges to the other (§49, ADR-0073, #449)"
+  # -------------------------------------------------------------------------
+  #
+  # Both nodes ingested the SAME library, so both hold "Cold Harbour" under the
+  # same work_key — content addressing, not a copy of one catalogue into the
+  # other (invariant 1). Cold Harbour is the fixture nothing wants or follows,
+  # so deleting it disturbs no earlier assertion.
+  #
+  # Delete it on A and force the editorial op-log exchange: A offers the signed
+  # delete op to B over the pinned mTLS link, and B honours it because it pinned
+  # A's key (ADR-0012) — nobody tells B directly, the op carries its own
+  # authority the whole way. Without it, B's next scan of the same bytes would
+  # rebuild exactly what A removed: the delete-then-rebuild churn ADR-0071
+  # refuses inside one node, now refused across the pair.
+  #
+  # The recovery arc above restarted node B on a FRESH port (listen: 127.0.0.1:0)
+  # and only re-proved B -> A. This exchange dials A -> B, so refresh A's endpoint
+  # for B first: registering the same key moves the endpoint and keeps the
+  # identity (peers add is an upsert on the key). Without this the dial lands on
+  # the dead old port and the sibling is merely deferred.
+  local conv_id conv_del conv_sync conv_addr_b
+  conv_addr_b=$(peer_listen_addr "$log_b") || { fail "convergence: node B is not listening on a peer surface"; return 1; }
+  cli_a peers add --name site-b --public-key "$key_b" --endpoint "https://$conv_addr_b" --json >/dev/null
+  conv_id=$(api_a /api/v1/works | jq -r '.items[] | select(.title == "Cold Harbour") | .id')
+  [[ -n "$conv_id" ]] || { fail "convergence: node A has no 'Cold Harbour' work to delete"; return 1; }
+  assert_eq "$(api_b /api/v1/works | jq -r '[.items[] | select(.title == "Cold Harbour")] | length')" "1" \
+    "the work exists on node B before the delete — both nodes ingested the same library"
+
+  conv_del=$(api_a "/api/v1/works/$conv_id" -X DELETE -o /dev/null -w '%{http_code}')
+  assert_eq "$conv_del" "204" "the work deletes cleanly on node A (nothing follows it)"
+
+  # The force-sync the beat runs on a cadence, run now so the demo need not wait
+  # (§49). It is synchronous: when it returns, B has recorded and applied the op.
+  conv_sync=$(api_a "/api/v1/catalog/sync" -X POST)
+  assert_eq "$(jq -r '.synced' <<<"$conv_sync")" "1" \
+    "the on-demand catalog sync converged with the one sibling (§49, ADR-0073)"
+
+  assert_eq "$(api_b /api/v1/works | jq -r '[.items[] | select(.title == "Cold Harbour")] | length')" "0" \
+    "the delete made on node A converged to node B: a work deleted at one site does not survive at the other (#449)"
+
   local p
   for p in "${PEER_PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done
   for p in "${PEER_PIDS[@]:-}"; do wait "$p" 2>/dev/null || true; done

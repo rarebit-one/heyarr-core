@@ -7,6 +7,7 @@ package resources_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -23,6 +24,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
+	"github.com/rarebit-one/heyarr-core/internal/catalogtomb"
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/events"
@@ -58,6 +60,9 @@ type harness struct {
 	clock  *fixedClock
 	// ids hands out deterministic identifiers for created resources.
 	ids *idSequence
+	// catalogTomb is the editorial op store, non-nil only when a test opted in
+	// with withCatalogConvergence — the emit path a work deletion drives (#449).
+	catalogTomb *catalogtomb.Store
 	// requests counts every request the CONTROLLER served.
 	//
 	// It exists for one assertion that cannot be made any other way: §32 says
@@ -99,6 +104,24 @@ type harnessConfig struct {
 	streamer resources.PlaybackStreamer
 	blobs    resources.BlobLocator
 	prober   resources.PathProber
+	// catalogSigner, when non-nil, wires the catalog-tombstone store + this
+	// signer so a work deletion emits a signed delete op (ADR-0073, #449). Nil
+	// is the single-site default: deletes stay local, as they did before #449.
+	catalogSigner ed25519.PrivateKey
+	// catalogSyncTrigger, when non-nil, backs POST /api/v1/catalog/sync (#449).
+	catalogSyncTrigger resources.CatalogSyncTrigger
+}
+
+// withCatalogSyncTrigger wires the on-demand catalog-sync trigger behind
+// POST /api/v1/catalog/sync (ADR-0073, #449).
+func withCatalogSyncTrigger(trigger resources.CatalogSyncTrigger) harnessOption {
+	return func(hc *harnessConfig) { hc.catalogSyncTrigger = trigger }
+}
+
+// withCatalogConvergence wires the editorial catalog op store and the signing
+// key a work deletion uses, so the emit path is exercised (ADR-0073, #449).
+func withCatalogConvergence(signer ed25519.PrivateKey) harnessOption {
+	return func(hc *harnessConfig) { hc.catalogSigner = signer }
 }
 
 // withStreamLeg wires the streaming leg's arms into the harness.
@@ -199,19 +222,31 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The editorial catalog op store, only when a test opted in. Built over the
+	// same db so the emit and the assertion see one table.
+	var catalogTomb *catalogtomb.Store
+	if hc.catalogSigner != nil {
+		catalogTomb, err = catalogtomb.New(catalogtomb.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	api, err := resources.New(resources.Options{
-		DB:         db,
-		Jobs:       queue,
-		Events:     eventLog,
-		Tokens:     store,
-		Catalog:    cat,
-		Providers:  hc.providers,
-		Membership: members,
-		Identities: identities,
-		Logger:     slog.New(slog.DiscardHandler),
-		Now:        clock.Now,
-		NewID:      ids.next,
+		DB:                db,
+		Jobs:              queue,
+		Events:            eventLog,
+		Tokens:            store,
+		Catalog:           cat,
+		Providers:         hc.providers,
+		Membership:        members,
+		Identities:        identities,
+		CatalogTombstones: catalogTomb,
+		CatalogSigner:     hc.catalogSigner,
+		CatalogSync:       hc.catalogSyncTrigger,
+		Logger:            slog.New(slog.DiscardHandler),
+		Now:               clock.Now,
+		NewID:             ids.next,
 		// Short enough that an idle stream heartbeats within a test's patience,
 		// long enough that it is not the thing under test.
 		StreamHeartbeat: 50 * time.Millisecond,
@@ -263,6 +298,7 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	return &harness{
 		t: t, db: db, server: srv, http: ts, store: store,
 		jobs: queue, events: eventLog, clock: clock, ids: ids, requests: &requests,
+		catalogTomb: catalogTomb,
 	}
 }
 
