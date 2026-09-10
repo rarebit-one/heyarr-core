@@ -7163,77 +7163,83 @@ YAML
   cli_sa peers report-inventory swarm-a --json >/dev/null
   cli_sb peers report-inventory swarm-b --json >/dev/null
 
+  # Make cooperation STRUCTURAL rather than raced (#274). The coin toss was that
+  # node A held NOTHING at the instant it started, so a joining node B could
+  # survey a peer with nothing to offer and pull its whole copy from the fast web
+  # seed before A had landed a single piece. So node A is pre-staged with the
+  # first HALF of the blob's REAL pieces — a guaranteed piece source the moment B
+  # surveys it.
+  #
+  # Node B starts empty, as before. When both reconcile, PullPieces surveys every
+  # member and fetches rarest-first PER SOURCE (internal/peer/transfer): the pieces
+  # only the web seed holds ([H, N)) are rarity 1 and go to the web seed, while
+  # A's half ([0, H)) is rarity 2 and A's own worker serves it — so B takes A's
+  # half FROM A, deterministically, whatever the scheduler or machine speed. Only
+  # A is staged, not B, so B still fetches from empty and its playback-window
+  # priority (piece 20, below) is exercised exactly as before.
+  #
+  # The bytes are the blob's OWN, pulled from the external source (the one complete
+  # copy) and staged under its real digest via `stagepartial --content-in`, so the
+  # pieces A advertises are the very pieces the fabric is transferring — not a
+  # synthetic stand-in.
+  local swarm_bytes pieces_total half
+  swarm_bytes=$WORK/swarm-blob.bin
+  sw_o "/api/v1/blobs/$blob/content" -o "$swarm_bytes"
+  # 256 KiB pieces at this geometry (5 MiB is piece 20, staged below), so the
+  # 32 MiB blob is 128 pieces. Stage node A with the first half.
+  pieces_total=$(( size / 262144 ))
+  half=$(( pieces_total / 2 ))
+  # `seq 0 N | paste -sd,` rather than `seq -s, 0 N`: BSD seq (macOS) appends a
+  # TRAILING separator to -s, which stagepartial then reads as an empty piece
+  # index. paste joins with no trailer on both GNU and BSD.
+  "$STAGEPARTIAL" --cas "$root/a/data/cas" --content-in "$swarm_bytes" \
+    --landed "$(seq 0 $(( half - 1 )) | paste -sd, -)" >/dev/null
+
   # The precondition the whole section rests on is asserted AFTER the fact, from
   # the log, rather than before it from a route that does not exist: the swarm
   # branch and the streamed pull write different lines, and which one ran is the
   # only form of this claim that cannot be satisfied by a system that took the
-  # other path. See the two assertions below the wait.
+  # other path. See the two "took the PIECE path" assertions below.
 
   # -------------------------------------------------------------------------
   note "  🔴 both peers converge, from an external source and from each other (§23)"
   # -------------------------------------------------------------------------
   #
-  # Node A starts, and node B JOINS A TRANSFER ALREADY IN PROGRESS. The two
-  # overlap — A is nowhere near done, and that is asserted below — but they do
-  # not start in the same instant.
+  # Both peers start together. Node A already holds half the blob (staged above),
+  # node B holds nothing — so A is a piece source B can use the moment it surveys,
+  # and B fetches A's half from A while the web seed serves the half only it has.
+  # Cooperation is therefore structural, not a race: see the pre-stage comment for
+  # why rarest-first steers B to take A's half from A, deterministically.
   #
-  # # Why not both at once, which is what this did first
+  # # Why this replaced "node B joins a transfer in progress"
   #
-  # Because two peers fetching the same blob at the same rate from the same
-  # source hold almost the same pieces at every moment, so there is very little
-  # either can give the other, and how much there is depends on which one the
-  # scheduler happens to favour. Measured across two runs of the simultaneous
-  # version on one machine: the external source carried 78% of two copies in one
-  # and 95% in the other, and the direction REVERSED — node A seeded node B in
-  # the first run and node B seeded node A in the second. An assertion that each
-  # peer served the other would have been a coin toss, and one on the share
-  # would have been worse.
-  #
-  # A peer joining a swarm that is already running is not a thumb on the scale;
-  # it is §23's ordinary case, and the one where cooperation is structural
-  # rather than accidental. Both peers are still fetching from the external
-  # source at the same time, which is the "while also" the section is about.
-  sw_a "/api/v1/peers/swarm-a/reconcile" -X POST -o /dev/null
+  # That earlier shape started A first and had B join while A was mid-transfer, to
+  # create overlap. But whether B then took any piece FROM A rather than wholly
+  # from the fast external source was a coin toss: A held no pieces at the instant
+  # it started, so B could survey a peer with nothing and pull its entire copy from
+  # the web seed before A had anything to offer. Measured, that reversed run to run
+  # and sometimes produced ZERO peer-to-peer bytes — which is #274. Pre-staging A
+  # removes the timing: A always has something to serve before B looks.
 
-  # The wait is on an OBSERVED fact rather than a sleep: the external source's
-  # own record of what it has served to node A. A sleep would be a guess about a
-  # machine, and it would be wrong on the slowest runner, which is the one that
-  # matters.
-  # Measured on the external source's CONTENT route, because the external
-  # source is a web seed and serves no pieces at all (#266). This wait read its
-  # PIECE record when the source was still a piece peer, and turning it into a
-  # web seed made the count permanently zero — the wait then ran to its full
-  # budget and let node B start after node A had finished, which is the
-  # sequential shape this section exists to replace. It passed everything below.
-  #
-  # Unfiltered by peer, deliberately: the record names a peer by the ID `peers
-  # add` generated rather than by the name this script typed, and node B is the
-  # only other fetcher and has not been told to start yet. So bytes served for
-  # THIS blob are bytes served to node A.
-  #
-  # Two megabytes is eight pieces' worth at this geometry — enough that node A
-  # has something worth having and far short of the thirty-two it needs.
-  swarm_a_has_started() {
-    (( $(peer_served_bytes "$log_o" "$blob") >= 2097152 ))
-  }
-  wait_for "node A never fetched a piece from the external source, so there was never a swarm for node B to join" \
-    900 swarm_a_has_started
-
-  # THE OVERLAP, asserted rather than assumed. If node A had finished, what
-  # follows would be `A, then B` — the sequential shape this milestone replaces
-  # — and every assertion below would still pass.
+  # Node A holds only its half before converging, not the whole blob — a half is a
+  # partial, which never reaches the blob tree (invariant 1). Node B holds nothing
+  # yet. So this is an incomplete peer and an empty one converging with the source,
+  # which is what makes it a swarm and not a queue.
   assert_eq "$(peer_holds "$root/a/data/cas" "$blob")" "0" \
-    "node A is still mid-transfer when node B joins: the two overlap, which is what makes this a swarm and not a queue"
+    "node A holds only its half before converging, not the whole blob"
+  assert_eq "$(peer_holds "$root/b/data/cas" "$blob")" "0" \
+    "and node B holds nothing yet: it will assemble its copy from A and the source"
 
-  # Give node B a playback window before it joins (§33, §84 — time-critical
-  # priority). A player reading a partial records where it is, and the transfer
-  # fetches the pieces there FIRST rather than in survey order. Written as a
-  # client would write it — a byte offset in the CAS the transfer reads (invariant
-  # 4's role-legal channel) — for the blob B is about to assemble from pieces. 5
-  # MiB is piece 20 at this 256 KiB geometry, well past the front, so a driver
-  # honouring it is visibly not just fetching from zero.
+  # Give node B a playback window (§33, §84 — time-critical priority). A player
+  # reading a partial records where it is, and the transfer fetches the pieces
+  # there FIRST rather than in survey order. 5 MiB is piece 20, which falls in
+  # NODE A's half — so honouring the window also means B takes that piece from A,
+  # the very cooperation being demonstrated.
   "$STAGEPARTIAL" --cas "$root/b/data/cas" --blob "$blob" --playhead 5242880
 
+  # Both reconcile; there is no staggering and none is needed now that pre-staging
+  # A makes cooperation structural rather than dependent on catching A mid-flight.
+  sw_a "/api/v1/peers/swarm-a/reconcile" -X POST -o /dev/null
   sw_b "/api/v1/peers/swarm-b/reconcile" -X POST -o /dev/null
 
   swarm_converged() {
