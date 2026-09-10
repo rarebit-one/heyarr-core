@@ -408,16 +408,16 @@ func (c *Client) Search(ctx context.Context, q providers.Query) ([]acquisition.R
 		return nil, err
 	}
 
+	// The query term is composed once, on the Query (SearchTerm): the title,
+	// the year appended when known, or "<Title> SxxEyy" for an episode search
+	// (ADR-0093 §1). It goes into `q` rather than season/ep parameters because
+	// the captured servers advertise supportedParams="q" and nothing else, so a
+	// separate season parameter would be silently ignored by one and honoured
+	// by another — a difference in results nobody could see. The season/episode
+	// gate, not the query, is the correctness boundary.
 	params := url.Values{
 		"t": []string{function},
-		"q": []string{q.Title},
-	}
-	if q.Year > 0 {
-		// Appended to the query rather than sent as its own parameter: the
-		// captured servers advertise supportedParams="q" and nothing else, so
-		// a year parameter would be silently ignored by one and honoured by
-		// another — which is a difference in results nobody could see.
-		params.Set("q", fmt.Sprintf("%s %d", q.Title, q.Year))
+		"q": []string{q.SearchTerm()},
 	}
 	if q.Limit > 0 {
 		params.Set("limit", fmt.Sprint(q.Limit))
