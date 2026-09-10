@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 )
@@ -511,6 +512,71 @@ func TestSearchContextCarriesTheQueryAndTheProfile(t *testing.T) {
 	}
 	if sc.State.Phase != acquisition.PhaseIdle {
 		t.Errorf("phase = %s, want idle", sc.State.Phase)
+	}
+	// A work-scoped movie want is not an episode search (ADR-0093).
+	if sc.IsEpisode {
+		t.Errorf("a movie want must not be an episode search: %+v", sc)
+	}
+}
+
+// ADR-0093: an item-scoped want reads the season and episode from its item, so
+// the search can be scoped to the episode and the containment gate can run.
+func TestSearchContextReadsTheItemsSeasonAndEpisode(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	it, _, err := h.cat.UpsertItem(ctx, "w1", followed.FeedItem{
+		Key: "S01E01", Title: "First",
+		Attributes: map[string]string{"season": "1", "episode": "1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := followed.Source{
+		WorkID: "w1", Type: followed.TypeTVSeries, FeedRef: "feed",
+		QualityProfileID: "q1", Monitor: true, Reason: "test",
+	}.ProjectWant(it.ID)
+	rec, err := h.cat.CreateDesiredItem(ctx, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sc, err := h.cat.SearchContextFor(ctx, rec.Item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sc.IsEpisode || sc.Season != 1 || sc.Episode != 1 {
+		t.Errorf("episode target = {episode:%v s:%d e:%d}, want S01E01", sc.IsEpisode, sc.Season, sc.Episode)
+	}
+}
+
+// The item_key is the fallback when the structured attributes do not carry a
+// numeric season/episode — parsed by the same scanner parser a release title
+// uses, so the want and the release read by one vocabulary (ADR-0093).
+func TestSearchContextFallsBackToTheItemKey(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	// No usable attributes: the key is the only source of the season/episode.
+	it, _, err := h.cat.UpsertItem(ctx, "w1", followed.FeedItem{Key: "S03E04", Title: "Later"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := followed.Source{
+		WorkID: "w1", Type: followed.TypeTVSeries, FeedRef: "feed",
+		QualityProfileID: "q1", Monitor: true, Reason: "test",
+	}.ProjectWant(it.ID)
+	rec, err := h.cat.CreateDesiredItem(ctx, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sc, err := h.cat.SearchContextFor(ctx, rec.Item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sc.IsEpisode || sc.Season != 3 || sc.Episode != 4 {
+		t.Errorf("episode target = {episode:%v s:%d e:%d}, want S03E04", sc.IsEpisode, sc.Season, sc.Episode)
 	}
 }
 
