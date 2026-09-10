@@ -1,0 +1,30 @@
+[
+  {
+    "title": "Ubuntu 24.04 LTS Desktop amd64",
+    "size": 6231920640,
+    "guid": "https://linuxtracker.example/torrent/1",
+    "infoHash": "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+    "downloadUrl": "https://linuxtracker.example/download/1.torrent?passkey=SECRETKEY",
+    "magnetUrl": "magnet:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01&dn=ubuntu",
+    "indexer": "LinuxTracker",
+    "indexerId": 1,
+    "categories": [{"id": 4000, "name": "PC"}]
+  },
+  {
+    "title": "Big Buck Bunny 2008 1080p BluRay",
+    "size": 355856384,
+    "guid": "https://archive.example/details/bbb",
+    "downloadUrl": "https://archive.example/download/bbb.torrent",
+    "indexer": "Internet Archive",
+    "indexerId": 2,
+    "categories": [{"id": 2000, "name": "Movies"}]
+  },
+  {
+    "title": "",
+    "size": 100,
+    "guid": "https://archive.example/details/nameless",
+    "indexer": "Internet Archive",
+    "indexerId": 2,
+    "categories": []
+  }
+]
