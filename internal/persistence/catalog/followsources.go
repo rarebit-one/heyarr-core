@@ -183,6 +183,23 @@ func (c *Catalog) FollowSource(ctx context.Context, id string) (StoredSource, er
 	return s, nil
 }
 
+// FollowSourceForWork reads the tv_series subscription anchored on a work, if
+// one exists. It is how the want door (ADR-0089) stays idempotent: wanting a
+// series that is already followed converges on the existing subscription rather
+// than minting a second. Reports whether one was found.
+func (c *Catalog) FollowSourceForWork(ctx context.Context, workID string) (StoredSource, bool, error) {
+	s, err := scanFollowSource(c.db.Reader().QueryRowContext(ctx,
+		`SELECT `+followSourceColumns+` FROM follow_sources WHERE work_id = ? AND type = ? ORDER BY created_at LIMIT 1`,
+		workID, string(followed.TypeTVSeries)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return StoredSource{}, false, nil
+	}
+	if err != nil {
+		return StoredSource{}, false, fmt.Errorf("catalog: reading a followed source for a work: %w", err)
+	}
+	return s, true, nil
+}
+
 // ListFollowSources lists every subscription, oldest first.
 func (c *Catalog) ListFollowSources(ctx context.Context) ([]StoredSource, error) {
 	rows, err := c.db.Reader().QueryContext(ctx,

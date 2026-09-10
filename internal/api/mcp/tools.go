@@ -447,11 +447,16 @@ func (s *Server) wantContent(ctx context.Context, raw json.RawMessage) (any, err
 		}
 	}
 
-	item, err := s.resources.WantContent(ctx, req)
+	out, err := s.resources.WantContent(ctx, req)
 	if err != nil {
 		return nil, classify(err)
 	}
-	return item, nil
+	// A whole-series want establishes a follow instead of a one-off want
+	// (ADR-0089); return whichever the intent produced.
+	if out.Followed != nil {
+		return out.Followed, nil
+	}
+	return out.Desired, nil
 }
 
 // monitorContent is the other write intent, shared with PATCH /desired/{id}.
