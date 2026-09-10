@@ -571,7 +571,7 @@ type downloadResponse struct {
 // so against the real endpoint json.Unmarshal hit an array-into-struct type
 // mismatch; do() returned that decode error and authDetail masked it as the
 // generic "could not reach OpenSubtitles" (verified live 2026-09-10 from
-// hyperion-1: the request is 200, only the decode failed).
+// the reference host: the request is 200, only the decode failed).
 type languagesResponse struct {
 	Data []struct {
 		LanguageCode string `json:"language_code"`

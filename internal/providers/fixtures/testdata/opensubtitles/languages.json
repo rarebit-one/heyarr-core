@@ -5,7 +5,7 @@
     "service": "opensubtitles",
     "version": "v1",
     "captured_at": "2026-09-09T00:00:00Z",
-    "procedure": "shape corrected from a LIVE GET /infos/languages against api.opensubtitles.com (hyperion-1, 2026-09-10): `data` is a flat array, not an object with a nested `languages` field; the earlier hand-synthesised-from-docs shape (data.languages[]) did not match the API and broke Check's decode. No key committed; the values are a trimmed sample, not a captured secret.",
+    "procedure": "shape corrected from a LIVE GET /infos/languages against api.opensubtitles.com (the reference host, 2026-09-10): `data` is a flat array, not an object with a nested `languages` field; the earlier hand-synthesised-from-docs shape (data.languages[]) did not match the API and broke Check's decode. No key committed; the values are a trimmed sample, not a captured secret.",
     "note": "Check exercises /infos/languages only to prove the decode succeeds; `data` is a flat array of languages, confirmed live 2026-09-10 (the earlier data.languages[] shape was synthesised from the docs and did not match, breaking Check). A trimmed two-language sample; no api-key or secret is involved in this endpoint's body."
   },
   "request": {
