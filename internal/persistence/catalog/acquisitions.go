@@ -67,6 +67,27 @@ func (c *Catalog) RecordAcquisition(ctx context.Context, a Acquisition) (bool, e
 	var created bool
 
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		// A want holds ONE acquisition (acquisitions.desired_item_id is UNIQUE).
+		// When a want re-grabs a DIFFERENT release — its selected candidate
+		// changed, so the transfer it points at changes — the row for the old
+		// transfer must give way, or the insert below collides on
+		// desired_item_id and the grab wedges forever retrying (the transfer is
+		// already handed to the client, but its row can never be written). The
+		// upsert's ON CONFLICT is keyed on (provider, external_id), so it does
+		// NOT catch this: the new transfer has a new external_id, so there is no
+		// conflict to update — it is a fresh insert, and it is the UNIQUE on
+		// desired_item_id that rejects it. Clear the want's prior row first.
+		//
+		// A poll re-observing the SAME transfer keeps its row: provider AND
+		// external_id match, so the NOT (…) is false and this deletes nothing;
+		// the ON CONFLICT update below then carries it as before.
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM acquisitions
+			 WHERE desired_item_id = ? AND NOT (provider = ? AND external_id = ?)`,
+			a.DesiredItemID, a.Provider, a.ExternalID); err != nil {
+			return err
+		}
+
 		// Existence is checked INSIDE the transaction rather than inferred
 		// afterwards.
 		//

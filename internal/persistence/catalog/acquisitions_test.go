@@ -131,8 +131,14 @@ func TestTheInfohashSurvivesAClientRestart(t *testing.T) {
 	}
 }
 
-// One in-flight acquisition per want, enforced by the database rather than by
-// the caller remembering.
+// One in-flight acquisition per want. When a want re-grabs — its selection
+// moved to a different release — the new transfer REPLACES the old one rather
+// than being refused. Two things downloading for one want would be wasted
+// bandwidth, so the invariant holds; but refusing the second outright wedged
+// grab_release in a permanent retry loop: the client already had the transfer,
+// yet its row could never be written because desired_item_id is UNIQUE and the
+// upsert only reconciles (provider, external_id). Replacing keeps exactly one
+// row — the newer transfer — and lets the grab complete.
 func TestOneAcquisitionPerWant(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -141,14 +147,31 @@ func TestOneAcquisitionPerWant(t *testing.T) {
 		"acq-1", h.want, "acquire", transfer(infohash, "First.mkv"), "/local/1")); err != nil {
 		t.Fatal(err)
 	}
-	// A different transfer for the same want. Two things downloading for one
-	// want means one of them is wasted bandwidth and neither is obviously the
-	// right one.
-	_, err := h.cat.RecordAcquisition(ctx, catalog.TransferToAcquisition(
-		"acq-2", h.want, "acquire",
-		transfer("ffffffffffffffffffffffffffffffffffffffff", "Second.mkv"), "/local/2"))
-	if err == nil {
-		t.Fatal("a second in-flight acquisition for one want was accepted")
+	// A different transfer for the same want: the want re-grabbed a new release.
+	const second = "ffffffffffffffffffffffffffffffffffffffff"
+	created, err := h.cat.RecordAcquisition(ctx, catalog.TransferToAcquisition(
+		"acq-2", h.want, "acquire", transfer(second, "Second.mkv"), "/local/2"))
+	if err != nil {
+		t.Fatalf("re-grabbing a new release for the want was refused: %v", err)
+	}
+	if !created {
+		t.Error("the replacing transfer is a new transfer — created should be true")
+	}
+
+	// Exactly one row for the want, and it is the second transfer.
+	all, err := h.cat.Acquisitions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("%d acquisition rows for one want, want exactly 1", len(all))
+	}
+	got, err := h.cat.AcquisitionFor(ctx, h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ExternalID != second {
+		t.Errorf("the want points at %q, want the second transfer %q", got.ExternalID, second)
 	}
 }
 
