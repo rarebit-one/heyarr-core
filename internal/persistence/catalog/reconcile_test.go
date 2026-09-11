@@ -82,6 +82,72 @@ func TestReconcileFindsAnAssetThatSatisfies(t *testing.T) {
 	}
 }
 
+// An item-scoped want (a series episode, ADR-0086) is satisfied ONLY by an
+// asset linked to its own item — never by a sibling episode's asset of the
+// same work. Before this, assetsForWant matched item wants by work_id, so one
+// downloaded episode falsely satisfied every episode of the series (and
+// acquisition then stopped for the rest).
+func TestItemWantIsSatisfiedOnlyByItsOwnItemsAsset(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.setProfile(t, gate1080)
+
+	// Turn the movie fixture into a two-episode series, each episode an
+	// item-scoped 'primary' want.
+	h.exec(t, `UPDATE works SET content_type = 'series' WHERE id = 'w1'`)
+	h.exec(t, `INSERT INTO editions (id, work_id, label, edition_type, language, attributes, created_at)
+		VALUES ('e-season', 'w1', 'Season 1', 'web-dl', 'en', '{}', ?)`, stamp)
+	for _, ep := range []struct{ item, key, want string }{
+		{"it-e01", "S01E01", "want-e01"},
+		{"it-e02", "S01E02", "want-e02"},
+	} {
+		h.exec(t, `INSERT INTO items (id, work_id, edition_id, item_key, title, attributes, created_at, updated_at)
+			VALUES (?, 'w1', 'e-season', ?, ?, '{}', ?, ?)`, ep.item, ep.key, ep.key, stamp, stamp)
+		h.exec(t, `INSERT INTO desired_items
+			(id, scope, work_id, edition_id, item_id, aspect, language, quality_profile_id,
+			 monitor, reason, created_at, updated_at)
+			VALUES (?, 'item', 'w1', NULL, ?, 'primary', '', 'q1', 1, '', ?, ?)`,
+			ep.want, ep.item, stamp, stamp)
+		if _, err := h.cat.StartAcquisition(ctx, ep.want); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// One downloaded episode: a satisfying primary asset linked to E01's item.
+	hash := "blake3:" + repeat("b", 64)
+	h.exec(t, `INSERT INTO blobs (hash, size, mime, first_seen_at)
+		VALUES (?, 8589934592, 'video/x-matroska', ?)`, hash, stamp)
+	h.exec(t, `INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash,
+			source_path, role, filename, mime, identification_source, item_id, created_at, updated_at)
+		VALUES ('a-e01', 'e-season', NULL, 'managed', ?, '/srv/e01.mkv', 'primary', 'e01.mkv',
+			'video/x-matroska', 'path', 'it-e01', ?, ?)`, hash, stamp, stamp)
+	h.exec(t, `INSERT INTO blob_probes
+			(blob_hash, container, format_long, duration_seconds, bitrate_bps, streams, bytes_read, materialised, probed_at)
+		VALUES (?, 'matroska,webm', '', 7200.0, 8000000, ?, 1024, 0, ?)`,
+		hash, `[{"type":"video","codec":"h264","height":1080,"profile":"High"},`+
+			`{"type":"audio","codec":"aac","channels":6}]`, stamp)
+
+	// E01 holds its bytes.
+	e01, err := h.cat.ReconcileDesired(ctx, "want-e01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e01.Content.Satisfaction != acquisition.SatisfactionSatisfied {
+		t.Fatalf("E01 content = %s, want satisfied by its own asset", e01.Content.Satisfaction)
+	}
+
+	// E02 does NOT — the only asset is E01's, and one episode's file must not
+	// satisfy a different episode.
+	e02, err := h.cat.ReconcileDesired(ctx, "want-e02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e02.Content.Satisfaction == acquisition.SatisfactionSatisfied {
+		t.Fatal("E02 was satisfied by E01's asset — one episode file must not " +
+			"satisfy a different episode (ADR-0086 item scope)")
+	}
+}
+
 // The distinction that makes the upgrade workflow reachable, through the real
 // query path: an asset that exists and does not meet the profile.
 func TestReconcileReportsPresentButUnsatisfying(t *testing.T) {
