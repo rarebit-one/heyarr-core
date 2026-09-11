@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
@@ -177,6 +179,58 @@ func (c *Catalog) Acquisitions(ctx context.Context) ([]Acquisition, error) {
 			return nil, err
 		}
 		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// OrphanedDownload is a want stuck in an in-flight download phase whose transfer
+// the download client no longer reports — a torrent removed out from under
+// Heyarr (in the client's UI, by another tool, by a data-loss restart). Its
+// acquisition row has not been refreshed by a poll for at least the grace
+// window, so the transfer was not present the last time its client answered.
+type OrphanedDownload struct {
+	DesiredItemID string
+	Provider      string
+	ExternalID    string
+	ExternalName  string
+	Phase         acquisition.Phase
+}
+
+// OrphanedDownloads lists wants in QUEUED or DOWNLOADING whose acquisition row
+// has not been seen (last_seen_at refreshed) for at least `grace`.
+//
+// Every present transfer refreshes last_seen_at on the poll pass that observes
+// it (RecordAcquisition), so at the end of a pass a still-running download has
+// last_seen_at == now and can never appear here. A row that IS stale was absent
+// from its client's queue — either the torrent is gone, or that client did not
+// answer this pass. The caller distinguishes those: it only fails orphans whose
+// client actually responded, so an unreachable client does not strand its wants.
+// The grace absorbs a single transient read that omits a transfer that still
+// exists; it should exceed a couple of poll intervals.
+func (c *Catalog) OrphanedDownloads(ctx context.Context, grace time.Duration) ([]OrphanedDownload, error) {
+	cutoff := c.clock.Now().Add(-grace).Format(timestampFormat)
+	rows, err := c.db.Reader().QueryContext(ctx, `
+		SELECT a.desired_item_id, a.provider, a.external_id, a.external_name, s.phase
+		FROM acquisitions a
+		JOIN acquisition_state s ON s.desired_item_id = a.desired_item_id
+		WHERE s.phase IN (?, ?) AND a.last_seen_at < ?
+		ORDER BY a.created_at, a.id`,
+		string(acquisition.PhaseQueued), string(acquisition.PhaseDownloading), cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: listing orphaned downloads: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []OrphanedDownload
+	for rows.Next() {
+		var o OrphanedDownload
+		var phase string
+		if err := rows.Scan(&o.DesiredItemID, &o.Provider, &o.ExternalID,
+			&o.ExternalName, &phase); err != nil {
+			return nil, err
+		}
+		o.Phase = acquisition.Phase(phase)
+		out = append(out, o)
 	}
 	return out, rows.Err()
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -12,6 +13,14 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
+
+// orphanDownloadGrace is how long a QUEUED/DOWNLOADING want may go unseen in its
+// download client before the poll concludes the transfer is gone and fails the
+// want back to idle (so it can be re-acquired). It must exceed a couple of poll
+// intervals: a still-running download refreshes its row every pass, so it never
+// goes stale, and the window only absorbs a single transient read that omits a
+// transfer that still exists.
+const orphanDownloadGrace = 5 * time.Minute
 
 // PollDownloadsHandler asks every download client what it is doing and drives
 // §64's pipeline from the answer (§58, M3-10).
@@ -47,6 +56,12 @@ func PollDownloadsHandler(
 		}
 
 		var advanced, failed int
+		// The clients that actually answered this pass. A want is only concluded
+		// gone if the client that owns it answered and did not list it: an
+		// unreachable client's transfers go unrefreshed but still exist, and
+		// failing them because we could not ask would be the outage inventing a
+		// loss.
+		responded := make(map[string]bool, len(clients))
 		for _, client := range clients {
 			if ctx.Err() != nil {
 				// The lease is tied to this context. Stopping mid-pass is safe
@@ -62,6 +77,7 @@ func PollDownloadsHandler(
 					"provider", client.Name(), "error", err)
 				continue
 			}
+			responded[client.Name()] = true
 
 			for _, t := range transfers {
 				n, err := reconcileTransfer(ctx, cat, ingests, client.Name(), t, log)
@@ -74,6 +90,16 @@ func PollDownloadsHandler(
 				advanced += n
 			}
 		}
+
+		// A want stuck in QUEUED/DOWNLOADING whose transfer the client no longer
+		// reports is a download removed out from under Heyarr: the client's
+		// completion events never arrive, so nothing else moves it. Fail it back
+		// to idle so it becomes eligible to re-acquire, instead of leaving it
+		// parked forever. Runs after the present transfers are recorded above, so
+		// every still-running download already has a fresh last_seen_at.
+		a, f := sweepOrphanedDownloads(ctx, cat, responded, log)
+		advanced += a
+		failed += f
 
 		// Logged only when something happened. A pass over a steady queue is
 		// the normal case and should be invisible.
@@ -124,6 +150,59 @@ func reconcileTransfer(
 	}
 
 	return advancePipeline(ctx, cat, ingests, existing.DesiredItemID, t, log)
+}
+
+// sweepOrphanedDownloads fails wants whose transfer has vanished from a client
+// that answered this pass, returning them to idle so a fresh search can run.
+//
+// Without this, a torrent removed in the client's own UI (or lost to a restart)
+// left the want in DOWNLOADING forever: PollDownloadsHandler only ever iterates
+// the transfers a client currently reports, so a transfer that is simply gone is
+// never the subject of any transition, and no other loop looks for wants whose
+// download disappeared.
+//
+// The catalog restricts candidates to rows unseen for orphanDownloadGrace, so a
+// still-running download (refreshed every pass) is never a candidate; this only
+// adds the gate that the owning client actually answered this pass.
+func sweepOrphanedDownloads(
+	ctx context.Context, cat *catalog.Catalog, responded map[string]bool, log *slog.Logger,
+) (advanced, failed int) {
+	if len(responded) == 0 {
+		return 0, 0
+	}
+	orphans, err := cat.OrphanedDownloads(ctx, orphanDownloadGrace)
+	if err != nil {
+		log.Warn("could not list orphaned downloads", "error", err)
+		return 0, 1
+	}
+	for _, o := range orphans {
+		if ctx.Err() != nil {
+			return advanced, failed
+		}
+		if !responded[o.Provider] {
+			// Its client did not answer this pass; we cannot tell a removed
+			// transfer from an unreachable client, so leave it for a pass that can.
+			continue
+		}
+		if _, err := cat.AdvanceAcquisition(ctx, o.DesiredItemID,
+			acquisition.TransitionFail, "transfer absent from download client"); err != nil {
+			failed++
+			log.Warn("could not fail an orphaned download",
+				"desired_item_id", o.DesiredItemID, "provider", o.Provider, "error", err)
+			continue
+		}
+		if err := cat.DropAcquisition(ctx, o.DesiredItemID); err != nil {
+			// The want already moved to idle; a lingering acquisition row is
+			// harmless (the next grab replaces it) but worth a line.
+			log.Warn("failed an orphaned download but could not drop its row",
+				"desired_item_id", o.DesiredItemID, "error", err)
+		}
+		advanced++
+		log.Info("failed a want whose transfer left the download client",
+			"desired_item_id", o.DesiredItemID, "provider", o.Provider,
+			"external_id", o.ExternalID, "name", o.ExternalName, "phase", string(o.Phase))
+	}
+	return advanced, failed
 }
 
 // advancePipeline applies the §64 transition this transfer's state implies.
