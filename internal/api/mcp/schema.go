@@ -267,6 +267,25 @@ var schemaDesiredItemID = obj(map[string]any{
 	},
 }, "desired_item_id")
 
+var schemaListJobs = obj(map[string]any{
+	"state": map[string]any{
+		"type": "string",
+		"enum": []any{"pending", "leased", "succeeded", "failed", "dead"},
+		"description": "Only jobs in this state. `failed` is a spent attempt the queue " +
+			"will retry with backoff; `dead` is terminal until an operator retries it. " +
+			"Omit for any state.",
+	},
+	"type": map[string]any{
+		"type": "string",
+		"description": "Only jobs of this type, e.g. search_release, grab_release, " +
+			"poll_downloads, ingest_acquisition. Omit for any type.",
+	},
+	"limit": map[string]any{
+		"type": "integer", "minimum": 1, "maximum": maxRows,
+		"description": "How many jobs at most, most recent first. Defaults to the maximum.",
+	},
+})
+
 var schemaBlobHash = obj(map[string]any{
 	"blob_hash": map[string]any{
 		"type":        "string",
