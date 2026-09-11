@@ -69,6 +69,10 @@ type SourceInfo struct {
 	Audio     string `json:"audio,omitempty"`
 	Width     int    `json:"width,omitempty"`
 	Height    int    `json:"height,omitempty"`
+	// Duration is the source's full runtime in seconds. The client uses it as
+	// the scrubber total for a `stream` plan, whose transcode cannot report its
+	// own length until it finishes producing.
+	Duration float64 `json:"duration_seconds,omitempty"`
 }
 
 // Mode values on a plan answered for a client.
@@ -147,7 +151,7 @@ func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanReq
 	if media.Known {
 		out.Source = &SourceInfo{
 			Container: media.Container, Video: media.VideoCodec, Audio: media.AudioCodec,
-			Width: media.Width, Height: media.Height,
+			Width: media.Width, Height: media.Height, Duration: media.DurationSec,
 		}
 	}
 
@@ -229,7 +233,7 @@ func (a *API) probeOnDemand(ctx context.Context, blobHash string) (playback.Medi
 // a stored row. The two must agree, which is why both take the FIRST stream of
 // each type and read HDR off the profile name the same way.
 func profileFromProbe(result probe.Result) playback.MediaProfile {
-	media := playback.MediaProfile{Known: true, Container: result.Container, BitrateBPS: result.BitrateBPS}
+	media := playback.MediaProfile{Known: true, Container: result.Container, BitrateBPS: result.BitrateBPS, DurationSec: result.DurationSec}
 	if v, ok := result.VideoStream(); ok {
 		media.VideoCodec, media.Width, media.Height = v.Codec, v.Width, v.Height
 		media.HDR = strings.Contains(strings.ToLower(v.Profile), "hdr")

@@ -88,6 +88,11 @@ type MediaProfile struct {
 	AudioCodec string
 	Channels   int
 	BitrateBPS int64
+	// DurationSec is the source's full runtime in seconds (0 when unprobed). A
+	// live transcode stream cannot advertise its own total — it is produced as
+	// it plays — so the client needs this to render a stable scrubber instead of
+	// one that grows with what has been encoded so far.
+	DurationSec float64
 }
 
 // DeviceProfile is what a device declared it can play (§68, M2-05).

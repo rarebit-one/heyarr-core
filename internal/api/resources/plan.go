@@ -256,6 +256,9 @@ func (a *API) mediaProfile(ctx context.Context, assetID string) (playback.MediaP
 	if bitrate.Valid {
 		media.BitrateBPS = bitrate.Int64
 	}
+	if duration.Valid {
+		media.DurationSec = duration.Float64
+	}
 	for _, s := range parsed {
 		switch s.Type {
 		case "video":
