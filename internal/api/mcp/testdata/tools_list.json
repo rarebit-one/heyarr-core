@@ -638,6 +638,10 @@
             "description": "The asset to play. Resolve it with search_content first.",
             "type": "string"
           },
+          "force_direct": {
+            "description": "Cast anyway when the device's declared codecs would otherwise refuse the plan. Only for a device you KNOW decodes more than it advertises (a TV that decodes Dolby Digital Plus but under-declares it over DLNA). The bytes are sent as-is; if the device truly cannot decode them, it plays nothing. Off by default — try without it first and read the refusal.",
+            "type": "boolean"
+          },
           "renderer": {
             "description": "Which device, by name or id. A partial name is matched against what each device calls itself, so \"living\" finds \"Samsung QN85BA 55\" only if that is what it is called — prefer list_renderers when unsure.",
             "type": "string"
