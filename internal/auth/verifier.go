@@ -24,6 +24,26 @@ type Identity struct {
 	// per-identity state a Guest must not see even though it may read the
 	// shared library (RefuseGuest).
 	Guest bool
+	// Capabilities are the HEYARR-side capability names this identity carries
+	// beyond its coarse scope (ADR-0094) — for a Guest, the [browse, play,
+	// subtitle] set of the access lease it was minted from. They are the finer
+	// grain a scope cannot express: a Guest holds only `read`, yet its `play`
+	// capability is what lets it reach POST /playback while every other
+	// write-scoped route stays closed to it. Empty for an ordinary token, whose
+	// scope is the whole of its authority.
+	Capabilities []string
+}
+
+// HasCapability reports whether this identity carries the named capability. The
+// name is compared verbatim (grant.Verify's own exact-string match), so a caller
+// passes a defined constant, never a typed-in string.
+func (i Identity) HasCapability(name string) bool {
+	for _, c := range i.Capabilities {
+		if c == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Allows reports whether this identity may perform an action requiring want.

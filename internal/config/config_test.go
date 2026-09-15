@@ -440,3 +440,61 @@ func TestRenderAddrMustBeAConcreteReachableAddress(t *testing.T) {
 		}
 	}
 }
+
+// The guest tier is off by default — the safe stance — but its allow-list is
+// pre-populated with the private + loopback ranges, so flipping the mode on
+// against a single LAN needs no further configuration (ADR-0094). The concrete
+// estate ranges are supplied by the homelab-ops infrastructure.
+func TestGuestDefaultsOffWithPrivateAllowList(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.HTTP.Guest.Enabled {
+		t.Error("guest mode is on by default")
+	}
+	nets, err := cfg.HTTP.Guest.ParsedNets()
+	if err != nil {
+		t.Fatalf("default trusted nets do not parse: %v", err)
+	}
+	if len(nets) == 0 {
+		t.Fatal("the default guest allow-list is empty")
+	}
+	// A private LAN address is trusted by default; a documentation range standing
+	// in for raw internet is not.
+	if !cfg.HTTP.Guest.TrustsSource("192.168.1.50") {
+		t.Error("a private LAN address is not in the default allow-list")
+	}
+	if cfg.HTTP.Guest.TrustsSource("203.0.113.7") {
+		t.Error("an off-estate address is trusted by default")
+	}
+}
+
+// A malformed CIDR is a startup error, named, even with guest mode off: a range
+// nobody can parse is a mistake worth catching before the mode is later enabled.
+func TestGuestAllowListRejectsAMalformedCIDR(t *testing.T) {
+	cfg := Defaults()
+	cfg.HTTP.Guest.TrustedNets = []string{"not-a-cidr"}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a malformed guest CIDR was accepted")
+	}
+	if !strings.Contains(err.Error(), "trusted_nets") {
+		t.Errorf("the error does not name the setting: %v", err)
+	}
+}
+
+// An empty allow-list is legal — it simply turns the tier off — and TrustsSource
+// then matches nobody, loopback included.
+func TestGuestEmptyAllowListValidatesAndTrustsNobody(t *testing.T) {
+	cfg := Defaults()
+	cfg.HTTP.Guest.TrustedNets = nil
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("an empty guest allow-list was refused: %v", err)
+	}
+	for _, host := range []string{"127.0.0.1", "192.168.1.1", "203.0.113.7", "", "unix"} {
+		if cfg.HTTP.Guest.TrustsSource(host) {
+			t.Errorf("an empty allow-list trusts %q", host)
+		}
+	}
+}
