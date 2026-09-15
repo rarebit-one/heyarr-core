@@ -244,6 +244,35 @@ func (s *Server) registerTools() {
 	})
 
 	s.tools.register(Tool{
+		Name:     "get_acquisition_status",
+		Title:    "What a want is downloading right now",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "Report where a want is in the acquisition pipeline (idle, searching, " +
+			"selected, queued, downloading, verifying, ingesting) and, when a download is in " +
+			"flight, the transfer behind it: which release was chosen — its name carries the " +
+			"resolution and size — how far it has downloaded, and any trouble the client " +
+			"reported. This is the read for \"what is this want actually doing\" and \"why is " +
+			"it still not here\", without opening the download client.",
+		InputSchema: schemaDesiredItemID,
+		Handler:     s.getAcquisitionStatus,
+	})
+
+	s.tools.register(Tool{
+		Name:     "list_jobs",
+		Title:    "Inspect the durable work queue",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "List the durable jobs Heyarr runs — searches, grabs, download polls, " +
+			"ingests — filtered by state and/or type, most recent first, each with its last " +
+			"error. This is the read behind \"why is nothing being acquired\": a search that " +
+			"found nothing, a grab the download client refused, a poll that failed. A `failed` " +
+			"job will retry with backoff; a `dead` one is terminal until an operator retries it.",
+		InputSchema: schemaListJobs,
+		Handler:     s.listJobs,
+	})
+
+	s.tools.register(Tool{
 		Name:     "explain_release",
 		Title:    "Explain a release against a profile",
 		Scope:    auth.ScopeRead,
