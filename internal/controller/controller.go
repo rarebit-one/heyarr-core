@@ -879,7 +879,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 			fullPeerLister{members: members, self: selfPeerID},
 			eventLog, c.log)
 	}
-	psAPI, err := personalstateapi.New(personalstateapi.Options{Store: psStore, Replicator: replicator, Logger: c.log})
+	psAPI, err := personalstateapi.New(personalstateapi.Options{Store: psStore, Replicator: replicator, Authorizer: identities, Logger: c.log})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
