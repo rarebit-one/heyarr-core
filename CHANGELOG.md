@@ -11,6 +11,27 @@ stable.
 
 ### Added
 
+- **Guest mode is an M7 access lease, gated by a trusted-source allow-list
+  (ADR-0094, phase 1).** A credential-less request from an allow-listed source
+  address is now admitted as an anonymous `guest` principal minted as a
+  short-lived access lease (`internal/leases`, the store's first non-device
+  principal) carrying exactly the `browse`, `play` and `subtitle` capabilities —
+  browse the shared library, resolve/stream content, fetch subtitles — with a
+  1h life well under `grant.MaxTTL`. `http.guest.trusted_nets` is the new
+  source-address CIDR allow-list (the site LANs and WireGuard estate client
+  nets, the same ranges the deployment's systemd `IPAddressAllow` admits); it
+  defaults to the private + loopback ranges and an **empty list turns the tier
+  off** regardless of `http.guest.enabled`. A request from off the estate is not
+  a guest — it must enrol (`401`). A guest still cannot create wants/acquire,
+  follow, rate, monitor, or read/write any personal state (playlists, resume,
+  ratings, history); every such write is refused `403` with the stable,
+  machine-readable `capability_denied` code (reused verbatim from the grant
+  layer). The one write-scoped route a guest's `play` capability reaches is
+  `POST /playback`; nothing else write-scoped becomes reachable. The ADR-0074
+  content-class visibility seam (managed + linked visible, vault never) is
+  unchanged. Problem documents gain an optional `code` extension member for the
+  machine-readable reason.
+
 - **Device enrolment carries the identity's recovery encryption public key
   (§41, rarebit-one/heyarr-mobile#41 part 2).** The device-enrolment response
   (`POST /enrol`) now includes `recovery_encryption_key`, the user identity's
