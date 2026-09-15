@@ -354,6 +354,28 @@
         "heyarr/requiredScope": "read",
         "readOnlyHint": true
       },
+      "description": "Report where a want is in the acquisition pipeline (idle, searching, selected, queued, downloading, verifying, ingesting) and, when a download is in flight, the transfer behind it: which release was chosen — its name carries the resolution and size — how far it has downloaded, and any trouble the client reported. This is the read for \"what is this want actually doing\" and \"why is it still not here\", without opening the download client.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "desired_item_id": {
+            "description": "The want to explain.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "desired_item_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_acquisition_status",
+      "title": "What a want is downloading right now"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
       "description": "Explain one want: whether the library holds bytes the profile accepts, whether those bytes are on every peer that should hold them, and WHICH RULE rejected each asset that did not qualify. This is the tool to reach for when someone says \"I have this, why does Heyarr say it is missing\".",
       "inputSchema": {
         "additionalProperties": false,
@@ -578,6 +600,42 @@
       },
       "name": "list_followed",
       "title": "What is followed"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "List the durable jobs Heyarr runs — searches, grabs, download polls, ingests — filtered by state and/or type, most recent first, each with its last error. This is the read behind \"why is nothing being acquired\": a search that found nothing, a grab the download client refused, a poll that failed. A `failed` job will retry with backoff; a `dead` one is terminal until an operator retries it.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "How many jobs at most, most recent first. Defaults to the maximum.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "description": "Only jobs in this state. `failed` is a spent attempt the queue will retry with backoff; `dead` is terminal until an operator retries it. Omit for any state.",
+            "enum": [
+              "pending",
+              "leased",
+              "succeeded",
+              "failed",
+              "dead"
+            ],
+            "type": "string"
+          },
+          "type": {
+            "description": "Only jobs of this type, e.g. search_release, grab_release, poll_downloads, ingest_acquisition. Omit for any type.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_jobs",
+      "title": "Inspect the durable work queue"
     },
     {
       "annotations": {
