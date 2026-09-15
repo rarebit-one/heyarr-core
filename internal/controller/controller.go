@@ -23,6 +23,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/render"
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
 	"github.com/rarebit-one/heyarr-core/internal/api/subsonic"
+	"github.com/rarebit-one/heyarr-core/internal/api/vaultblob"
 	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
@@ -824,6 +825,20 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
+	// The vault content ingest path (ADR-0021, ADR-0096): a client uploads a
+	// pre-encrypted ciphertext blob, and the peer stores it and pins it to itself
+	// so GC retains it (a vault blob has no assets row). Reads ride the shared
+	// blobs GET route; only the write is vault-specific.
+	vaultBlobHandler, err := vaultblob.New(vaultblob.Options{
+		Store:    blobStore,
+		Pinner:   cat,
+		SelfPeer: selfPeerID,
+		Logger:   c.log,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: %w", err)
+	}
+
 	// MCP mounts on the SAME authenticated router (§71, ADR-0019), so it
 	// inherits the middleware chain, the request correlation and the `read`
 	// scope floor rather than standing up a second server that would have to
@@ -950,7 +965,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
-	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, mcpServer.Mount, psAPI.Mount},
+	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, vaultBlobHandler.Mount, mcpServer.Mount, psAPI.Mount},
 		[]httpapi.MountFunc{renderHandler.Mount, relayHandler.Mount, relayV1Handler.Mount, subsonicHandler.Mount, opdsHandler.Mount, dlnaHandler.Mount}, nil
 }
 
