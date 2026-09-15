@@ -17,24 +17,51 @@ jobs:
   # The release must not be the first place the gate runs. A tag that fails
   # acceptance has already been pushed, and an immutable tag pointing at a build
   # nobody verified is worse than a delayed release.
+  #
+  # The gate re-ran the full CI (-race + make demo) here, ~25 min every release,
+  # to re-establish that. But ci.yml already ran that exact suite when the tag's
+  # commit landed on main (push: branches: [main]) or on its PR — its aggregate
+  # `ci` check pins every job (lint, race, acceptance, build, ...). A tag only
+  # ever points at a commit already on main, so the answer the gate needs
+  # already exists on that commit. Verify it instead of recomputing it: same
+  # backstop ("don't release an unvalidated tag"), minutes instead of half an
+  # hour. If the tag lands before that CI run finishes, we wait for it.
   gate:
     name: gate
     runs-on: ubuntu-latest
+    permissions:
+      checks: read # read the tag commit's check-runs
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { fetch-depth: 0 }
-      - uses: ./.github/actions/private-modules
-        with:
-          token: ${{ secrets.AUTOLAND_PAT }}
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version: stable, cache: true }
-      # -timeout=20m, not the default 10m per package: internal/api/resources'
-      # peer/harness tests run long under -race and blow the 10m default, timing
-      # out the whole gate (exactly what ci.yml pins this against). This gate is
-      # what a release blocks on, so it must never be tighter than the CI it
-      # mirrors — the v0.1.0 tag failed here on precisely this gap.
-      - run: go test -race -count=1 -timeout=20m ./...
-      - run: make demo
+      - name: require ci green for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        # Pass if any `ci` check-run on this commit concluded success (a red run
+        # later re-run green still means the commit is green). Fail only once
+        # every `ci` run on the commit has completed and none succeeded — an
+        # in-progress or not-yet-created run is waited on, up to the deadline,
+        # so tagging a just-merged commit races the CI it mirrors rather than
+        # losing to it. No `ci` run at all by the deadline is a failure too:
+        # nothing validated this commit, which is exactly what the gate guards.
+        run: |
+          set -euo pipefail
+          deadline=$(( SECONDS + 1500 )) # 25m: cover a full CI run still in flight
+          while :; do
+            runs=$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs" \
+              -q '.check_runs[] | select(.name=="ci") | "\(.status):\(.conclusion // "")"')
+            if echo "$runs" | grep -q '^completed:success$'; then
+              echo "ci is green for ${SHA}"; exit 0
+            fi
+            if [ -n "$runs" ] && ! echo "$runs" | grep -qv '^completed:'; then
+              echo "ci ran for ${SHA} but did not pass:"; echo "$runs"; exit 1
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "timed out waiting for ci to complete for ${SHA}"
+              echo "check-runs seen: ${runs:-<none>}"; exit 1
+            fi
+            echo "waiting for ci on ${SHA} (seen: ${runs:-<none>})"; sleep 20
+          done
 
   release:
     needs: gate
