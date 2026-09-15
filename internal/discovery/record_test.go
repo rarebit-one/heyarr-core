@@ -61,8 +61,8 @@ func TestMessageRejectsUnreachableAdvertisements(t *testing.T) {
 // nothing host- or person-identifying is on the wire.
 func TestMessageContents(t *testing.T) {
 	p := Params{Port: 7777, TLS: true, APIPath: "/api/v1"}
-	v4 := net.ParseIP("192.0.2.10")           // TEST-NET-1 (RFC 5737)
-	v6 := net.ParseIP("2001:db8::1")          // documentation prefix (RFC 3849)
+	v4 := net.ParseIP("192.0.2.10")  // TEST-NET-1 (RFC 5737)
+	v6 := net.ParseIP("2001:db8::1") // documentation prefix (RFC 3849)
 	packed, err := p.Message([]net.IP{v4, v6}, 0)
 	if err != nil {
 		t.Fatalf("Message: %v", err)
@@ -72,7 +72,7 @@ func TestMessageContents(t *testing.T) {
 	if err := msg.Unpack(packed); err != nil {
 		t.Fatalf("Unpack: %v", err)
 	}
-	if !msg.Header.Response || !msg.Header.Authoritative {
+	if !msg.Response || !msg.Authoritative {
 		t.Error("announcement must be an authoritative response")
 	}
 	if len(msg.Questions) != 0 {
