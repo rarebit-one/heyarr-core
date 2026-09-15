@@ -7,12 +7,11 @@ package crdt
 // The encoding is deterministic (paths and writes sorted), so two converged drives
 // snapshot to byte-identical output, safe to content-address (ADR-0095, ADR-0021).
 //
-// NOTE(#538): a drive snapshot is NOT yet bridged for replication. The statesync
-// snapshot bridge (internal/personalstate/statesync/snapshot.go) is pinned to the
-// playlist *State; W2 must either generalise EncodeSnapshot/DecodeSnapshot behind a
-// { Snapshot() ([]byte, error) } interface or add EncodeDriveSnapshot /
-// DecodeDriveSnapshot. Drive CHANGES already ride the generic bridge
-// (statesync.EncodeChange[DriveChange]) with no new code.
+// The drive snapshot is bridged for replication (W2/#538): the statesync snapshot
+// bridge was generalised behind a { Snapshot() ([]byte, error) } interface, and
+// statesync.EncodeDriveSnapshot / DecodeDriveSnapshot pin it to *Drive — the drive
+// counterparts of the playlist EncodeSnapshot / DecodeSnapshot. Drive CHANGES
+// already ride the generic change bridge (statesync.EncodeChange[DriveChange]).
 
 import (
 	"encoding/json"

@@ -2,8 +2,33 @@ package crdt
 
 import (
 	"math/rand"
+	"strings"
 	"testing"
 )
+
+// Deterministic, canonical blake3 blob ids for the tests — distinct 64-hex
+// digests so blob-id validation (task W2/#538) accepts them.
+var (
+	blobA = hexBlob("a1")
+	blobB = hexBlob("b2")
+	blobX = hexBlob("c3")
+	blobY = hexBlob("d4")
+)
+
+// hexBlob returns a canonical "blake3:<64 hex>" id built by repeating a two-hex
+// pair, so each test blob is a well-formed, distinct id.
+func hexBlob(pair string) string { return "blake3:" + strings.Repeat(pair, 32) }
+
+// mustPut is Put that fails the test on a rejected (malformed) blob — every blob
+// the tests write is valid, so this only guards against a broken helper.
+func mustPut(t *testing.T, d *Drive, p, blob string, size, mtime int64) DriveChange {
+	t.Helper()
+	c, err := d.Put(p, blob, size, mtime)
+	if err != nil {
+		t.Fatalf("Put(%q, %q): %v", p, blob, err)
+	}
+	return c
+}
 
 // buildDriveChangeset returns a deterministic set of drive writes exercising the
 // three shapes the skeleton implements — a linear successor (edit), a genuine
@@ -16,16 +41,16 @@ func buildDriveChangeset(t *testing.T) (changes []DriveChange, want *Drive) {
 	// Device A: create then edit the same path (a clean successor), and delete a
 	// second path.
 	a := NewDrive()
-	c1 := a.Put("Docs/tax.pdf", "blobA", 10, 1)
-	c2 := a.Put("Docs/tax.pdf", "blobB", 20, 2) // observed blobA -> Base = c1's key
+	c1 := mustPut(t, a, "Docs/tax.pdf", blobA, 10, 1)
+	c2 := mustPut(t, a, "Docs/tax.pdf", blobB, 20, 2) // observed blobA -> Base = c1's key
 	c3 := a.Delete("notes.txt")
 
 	// Devices B and D, offline, write different blobs to one fresh path with no
 	// live head observed (Base zero on both) — a genuine concurrent divergence.
 	b := NewDrive()
-	c4 := b.Put("photo.jpg", "blobX", 30, 3)
+	c4 := mustPut(t, b, "photo.jpg", blobX, 30, 3)
 	d := NewDrive()
-	c5 := d.Put("photo.jpg", "blobY", 40, 4)
+	c5 := mustPut(t, d, "photo.jpg", blobY, 40, 4)
 
 	changes = []DriveChange{c1, c2, c3, c4, c5}
 
@@ -88,10 +113,10 @@ func TestDriveIsIdempotent(t *testing.T) {
 func TestDriveLinearSuccessorKeepsHistory(t *testing.T) {
 	_, d := buildDriveChangeset(t)
 	e, ok := d.Get("Docs/tax.pdf")
-	if !ok || e.Blob != "blobB" || e.Conflicted {
+	if !ok || e.Blob != blobB || e.Conflicted {
 		t.Fatalf("want blobB current and not conflicted, got %+v ok=%v", e, ok)
 	}
-	if v := d.Versions("Docs/tax.pdf"); len(v) != 1 || v[0] != "blobA" {
+	if v := d.Versions("Docs/tax.pdf"); len(v) != 1 || v[0] != blobA {
 		t.Fatalf("want [blobA] in history, got %v", v)
 	}
 }
@@ -153,7 +178,7 @@ func TestNormalisePath(t *testing.T) {
 	}
 	// Two spellings of one path address the same entry.
 	d := NewDrive()
-	d.Put("/Docs/tax.pdf", "blobA", 1, 1)
+	mustPut(t, d, "/Docs/tax.pdf", blobA, 1, 1)
 	if _, ok := d.Get("Docs/./tax.pdf"); !ok {
 		t.Fatal("normalised spellings should address the same entry")
 	}
