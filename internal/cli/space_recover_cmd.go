@@ -11,24 +11,31 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spacerecover"
+	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/recovery"
 )
 
 // spaceRecoverResult is the outcome of a space-key recovery. It deliberately
-// carries NO key material — only which spaces were opened — so a recovery can be
-// logged and scripted without ever writing a plaintext key to a terminal or file.
+// carries NO key material — only which spaces were opened (and, with --rewrap, how
+// many were re-sealed for this device) — so a recovery can be logged and scripted
+// without ever writing a plaintext key to a terminal or file.
 type spaceRecoverResult struct {
 	Recipient string   `json:"recipient"`
 	Recovered int      `json:"recovered"`
 	SpaceIDs  []string `json:"space_ids"`
+	Rewrapped int      `json:"rewrapped,omitempty"`
+	Device    string   `json:"device,omitempty"`
 }
 
-func newSpaceRecoverCommand(_ Options, configPath *string) *cobra.Command {
+func newSpaceRecoverCommand(_ Options, configPath, deviceDir *string) *cobra.Command {
 	var (
 		secretStr  string
 		secretFile string
+		rewrap     bool
 		asJSON     bool
 	)
 	cmd := &cobra.Command{
@@ -44,27 +51,31 @@ and unwraps those copies from THIS node's control database. It is distinct from
 ` + "`heyarr identity recover`" + ` (which rebuilds your signing identity): this
 one recovers the ability to READ vault content.
 
-The whole flow is offline: it reads the secret and the wrapped bytes and derives
-the key, touching no server. Key material is never printed — only which spaces
-were opened — so the output is safe to log. Re-wrapping the recovered keys for a
-fresh device (so this machine can keep reading the spaces) is the next step (see
-issue #545).
+With --rewrap it also re-seals each recovered key for THIS machine's device key
+(ADR-0022's recovery tail), so the recovered machine keeps reading the spaces
+without the paper secret. That writes to the control database, so run it with the
+controller stopped; the device must be enrolled first (` + "`heyarr identity recover`" + `
+does that).
+
+The whole flow is offline. Key material is never printed — only which spaces were
+opened — so the output is safe to log.
 
 The secret is read from --secret-file, or from --secret, or from standard input
 — prefer a file or a pipe, since a secret in argv is visible in ps and shell
 history.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runSpaceRecover(cmd.Context(), cmd, *configPath, secretStr, secretFile, asJSON)
+			return runSpaceRecover(cmd.Context(), cmd, *configPath, *deviceDir, secretStr, secretFile, rewrap, asJSON)
 		},
 	}
 	cmd.Flags().StringVar(&secretStr, "secret", "", "the recovery secret (prefer --secret-file or stdin; argv is visible in ps)")
 	cmd.Flags().StringVar(&secretFile, "secret-file", "", "read the recovery secret from this file")
+	cmd.Flags().BoolVar(&rewrap, "rewrap", false, "also re-seal the recovered keys for THIS machine's device so it keeps reading the spaces (writes the control DB; run with the controller stopped)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
 	return cmd
 }
 
-func runSpaceRecover(ctx context.Context, cmd *cobra.Command, configPath, secretStr, secretFile string, asJSON bool) error {
+func runSpaceRecover(ctx context.Context, cmd *cobra.Command, configPath, deviceDir, secretStr, secretFile string, rewrap, asJSON bool) error {
 	raw, err := readRecoverySecret(cmd, secretStr, secretFile)
 	if err != nil {
 		return err
@@ -109,6 +120,16 @@ func runSpaceRecover(ctx context.Context, cmd *cobra.Command, configPath, secret
 	sort.Strings(ids)
 
 	res := spaceRecoverResult{Recipient: recID, Recovered: len(ids), SpaceIDs: ids}
+
+	if rewrap && len(keys) > 0 {
+		device, err := rewrapForThisDevice(ctx, db, deviceDir, keys, ids)
+		if err != nil {
+			return err
+		}
+		res.Rewrapped = len(ids)
+		res.Device = device
+	}
+
 	if asJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
@@ -116,6 +137,41 @@ func runSpaceRecover(ctx context.Context, cmd *cobra.Command, configPath, secret
 	}
 	printSpaceRecover(cmd.OutOrStdout(), res)
 	return nil
+}
+
+// rewrapForThisDevice re-seals each recovered space key for this machine's device
+// encryption key and stores the wrapped copies (ADR-0022's recovery tail), so the
+// device reads the spaces going forward. It writes the control DB, so it is an
+// offline step (controller stopped). Returns the device recipient id it wrapped for.
+func rewrapForThisDevice(ctx context.Context, db *sqlite.DB, deviceDir string, keys map[string]encryption.SpaceKey, ids []string) (string, error) {
+	devPriv, err := loadDeviceEncKey(deviceDir)
+	if err != nil {
+		return "", fmt.Errorf("loading this machine's device key to re-wrap for (enrol it first with `heyarr identity recover`): %w", err)
+	}
+	deviceID := encryption.FormatPublicKey(devPriv.PublicKey().Bytes())
+
+	rewrapped, err := spacerecover.RewrapForDevice(keys, deviceID)
+	if err != nil {
+		return "", err
+	}
+
+	if err := sqlite.Migrate(ctx, db); err != nil {
+		return "", fmt.Errorf("migrating the control database: %w", err)
+	}
+	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		return "", err
+	}
+	st, err := psstore.New(psstore.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
+	if err != nil {
+		return "", err
+	}
+	for _, id := range ids {
+		if _, err := st.PutWrappedKey(ctx, id, deviceID, rewrapped[id]); err != nil {
+			return "", fmt.Errorf("storing the re-wrapped key for space %q: %w", id, err)
+		}
+	}
+	return deviceID, nil
 }
 
 // wrappedKeysForRecipient reads, offline, the wrapped copy of every space's key
@@ -150,5 +206,8 @@ func printSpaceRecover(out io.Writer, res spaceRecoverResult) {
 	fmt.Fprintf(out, "Recovered %d space key(s) offline for recipient %s:\n", res.Recovered, res.Recipient)
 	for _, id := range res.SpaceIDs {
 		fmt.Fprintf(out, "  %s\n", id)
+	}
+	if res.Rewrapped > 0 {
+		fmt.Fprintf(out, "Re-wrapped %d key(s) for this device (%s); it can now read the spaces.\n", res.Rewrapped, res.Device)
 	}
 }
