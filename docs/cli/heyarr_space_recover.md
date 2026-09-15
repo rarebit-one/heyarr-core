@@ -14,11 +14,14 @@ and unwraps those copies from THIS node's control database. It is distinct from
 `heyarr identity recover` (which rebuilds your signing identity): this
 one recovers the ability to READ vault content.
 
-The whole flow is offline: it reads the secret and the wrapped bytes and derives
-the key, touching no server. Key material is never printed — only which spaces
-were opened — so the output is safe to log. Re-wrapping the recovered keys for a
-fresh device (so this machine can keep reading the spaces) is the next step (see
-issue #545).
+With --rewrap it also re-seals each recovered key for THIS machine's device key
+(ADR-0022's recovery tail), so the recovered machine keeps reading the spaces
+without the paper secret. That writes to the control database, so run it with the
+controller stopped; the device must be enrolled first (`heyarr identity recover`
+does that).
+
+The whole flow is offline. Key material is never printed — only which spaces were
+opened — so the output is safe to log.
 
 The secret is read from --secret-file, or from --secret, or from standard input
 — prefer a file or a pipe, since a secret in argv is visible in ps and shell
@@ -32,6 +35,7 @@ heyarr space recover [flags]
 
 ```
       --json                 emit machine-readable JSON
+      --rewrap               also re-seal the recovered keys for THIS machine's device so it keeps reading the spaces (writes the control DB; run with the controller stopped)
       --secret string        the recovery secret (prefer --secret-file or stdin; argv is visible in ps)
       --secret-file string   read the recovery secret from this file
 ```

@@ -70,3 +70,29 @@ func UnwrapAll(secret recovery.Secret, wrapped map[string][]byte) (map[string]en
 	}
 	return out, nil
 }
+
+// RewrapForDevice seals each recovered space key for a device's X25519 encryption
+// public key ("x25519:<hex>"), returning the wrapped bytes a peer stores so that
+// device can read the space going forward. It is the re-wrap tail of ADR-0022's
+// recovery chain (secret -> unwrap the copies the peers hold -> re-wrap for the
+// new device): a machine recovered from the paper secret alone re-seals the keys
+// for its own fresh device key and regains standing access.
+//
+// The device must be an enrolled, pinned device (ADR-0049 enrol-before-wrap); that
+// is the caller's to guarantee — in the offline recovery flow the device was just
+// enrolled by `identity recover`.
+func RewrapForDevice(keys map[string]encryption.SpaceKey, deviceEncPub string) (map[string][]byte, error) {
+	pub, err := encryption.ParsePublicKey(deviceEncPub)
+	if err != nil {
+		return nil, fmt.Errorf("spacerecover: parsing the device encryption key: %w", err)
+	}
+	out := make(map[string][]byte, len(keys))
+	for id, sk := range keys {
+		w, err := encryption.Seal(sk, pub)
+		if err != nil {
+			return nil, fmt.Errorf("spacerecover: re-wrapping the key for space %q: %w", id, err)
+		}
+		out[id] = w
+	}
+	return out, nil
+}

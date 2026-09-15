@@ -91,6 +91,53 @@ func TestUnwrapAllRecoversOffline(t *testing.T) {
 	}
 }
 
+// TestRewrapForDeviceLetsTheDeviceRead: after recovering a space key from the
+// secret, re-wrapping it for a fresh device key lets THAT device open the space —
+// the recovery chain's tail (ADR-0022), proven by the device unwrapping and
+// decrypting what the original key encrypted.
+func TestRewrapForDeviceLetsTheDeviceRead(t *testing.T) {
+	secret, err := recovery.GenerateSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, wrapped := sealForRecovery(t, secret)
+
+	recovered, err := spacerecover.UnwrapAll(secret, map[string][]byte{"space-1": wrapped})
+	if err != nil {
+		t.Fatalf("UnwrapAll: %v", err)
+	}
+
+	// A fresh device keypair, as a recovered machine would generate.
+	devPriv, err := encryption.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	devPub := encryption.FormatPublicKey(devPriv.PublicKey().Bytes())
+
+	rewrapped, err := spacerecover.RewrapForDevice(recovered, devPub)
+	if err != nil {
+		t.Fatalf("RewrapForDevice: %v", err)
+	}
+
+	// The device unwraps its new copy and it is the same key.
+	sk, err := encryption.Unwrap(rewrapped["space-1"], devPriv)
+	if err != nil {
+		t.Fatalf("device unwrap: %v", err)
+	}
+	plaintext := []byte("a vault change")
+	ct, err := encryption.EncryptChange(original, plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pt, err := encryption.DecryptChange(sk, ct)
+	if err != nil {
+		t.Fatalf("device decrypt: %v", err)
+	}
+	if !bytes.Equal(pt, plaintext) {
+		t.Fatalf("the re-wrapped key did not open the space: got %q", pt)
+	}
+}
+
 // TestWrongSecretIsRefused: a different secret derives a different key that cannot
 // open the wrapped copy, and it fails loudly rather than returning a wrong key.
 func TestWrongSecretIsRefused(t *testing.T) {
