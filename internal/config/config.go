@@ -147,6 +147,12 @@ type HTTP struct {
 	// reverse proxy or TLS listener, not the address the socket bound. Empty
 	// keeps today's derived behaviour (ADR-0072).
 	PublicOrigin string `koanf:"public_origin"`
+	// Discovery advertises this node over mDNS / DNS-SD so a client on a trusted
+	// network can FIND it without being told an address (ADR-0094 §Discovery,
+	// Phase 2). It is the client-facing sibling of the SSDP the renderer package
+	// speaks to find televisions: there the node is the searcher, here it is the
+	// one announcing itself. See Discovery.
+	Discovery Discovery `koanf:"discovery"`
 }
 
 // TLS points at the certificate and key that serve the client API over HTTPS.
@@ -172,13 +178,100 @@ type Auth struct {
 	Enabled bool `koanf:"enabled"`
 }
 
-// Guest configures anonymous read-only browse (ADR-0074). Disabled by default:
-// the zero value is off, so an unmentioned key leaves the safe stance — a
-// credential-less request is refused — untouched. Enabled admits such a request
-// as a first-class Guest identity holding only the read scope.
+// Guest configures anonymous read-only browse (ADR-0074, ADR-0094). Disabled by
+// default: the zero value is off, so an unmentioned key leaves the safe stance —
+// a credential-less request is refused — untouched. Enabled admits such a
+// request as a first-class Guest, backed by a short-lived M7 access lease
+// (principal="guest"), but ONLY when its source address falls inside
+// TrustedNets.
 type Guest struct {
 	Enabled bool `koanf:"enabled"`
+	// TrustedNets is the source-address allow-list (ADR-0094): the CIDRs a
+	// credential-less caller may be admitted as a Guest from. It is the trust
+	// boundary — the site LANs and the WireGuard estate client nets, the same
+	// ranges the deployment's systemd IPAddressAllow admits — and raw internet is
+	// deliberately NOT on it: an off-estate caller must enrol, not browse
+	// anonymously.
+	//
+	// An EMPTY list turns the tier OFF regardless of Enabled: a guest mode that
+	// admits nobody is safer than one that admits everybody by omission, so the
+	// allow-list is required rather than defaulted-open. The defaults below are
+	// the RFC 1918 private ranges plus loopback and IPv6 unique-local as
+	// stand-ins; the CONCRETE estate ranges are supplied by the homelab-ops
+	// infrastructure (the systemd IPAddressAllow list), not hardcoded here.
+	TrustedNets []string `koanf:"trusted_nets"`
 }
+
+// TrustsSource reports whether host — a bare IP, as internal/api/http.remoteHost
+// yields — falls inside any of the configured trusted networks. A blank or
+// unparseable host, and the empty allow-list, are never trusted: the tier is off
+// by construction rather than open by accident.
+//
+// It parses on each call; callers on a hot path pre-resolve TrustedNets once
+// (see internal/api/http.Server). It is here so config owns the meaning of its
+// own field, and so a test can assert the boundary without standing up a server.
+func (g Guest) TrustsSource(host string) bool {
+	nets, err := g.ParsedNets()
+	if err != nil || len(nets) == 0 {
+		return false
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return false
+	}
+	for _, n := range nets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// ParsedNets parses TrustedNets into CIDR networks, reporting the first that is
+// not a valid CIDR. It is the one parser both Validate (at load) and the server
+// (at startup) use, so a value that loads is a value the server can resolve.
+func (g Guest) ParsedNets() ([]*net.IPNet, error) {
+	out := make([]*net.IPNet, 0, len(g.TrustedNets))
+	for _, c := range g.TrustedNets {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a CIDR (e.g. 192.168.0.0/16): %w", c, err)
+		}
+		out = append(out, n)
+	}
+	return out, nil
+}
+
+// Discovery configures mDNS / DNS-SD advertisement of this node (ADR-0094
+// §Discovery, Phase 2). The node advertises the `_heyarr._tcp` service so a
+// client discovers it, else falls back to the split-horizon DNS name, else to
+// manual entry.
+//
+// It deliberately carries no allow-list of its own: the interfaces it may
+// announce on ARE the guest trust boundary (HTTP.Guest.TrustedNets). Discovery
+// only ever tells a client "there is a heyarr here" on a network heyarr already
+// treats as trusted, and never on the raw internet — the same boundary, stated
+// once. An empty guest trusted-net set therefore turns advertisement off too:
+// a node that trusts no network announces itself to none.
+type Discovery struct {
+	// Disabled turns advertisement OFF even where a trusted interface exists. It
+	// is the independent off-switch (ADR-0094): the default — unmentioned — is to
+	// advertise on every trusted, multicast-capable, non-loopback interface, and
+	// setting this true suppresses that without touching the guest boundary the
+	// gating reuses. It is phrased as "disabled" rather than "enabled" so the
+	// zero value is the useful one: a client can find a node out of the box.
+	Disabled bool `koanf:"disabled"`
+}
+
+// Advertises reports whether the node should announce itself, given whether any
+// trusted interface exists. The trusted-set emptiness is decided by the caller
+// (the advertiser resolves interfaces against HTTP.Guest.TrustedNets); this is
+// only the operator's explicit off-switch.
+func (d Discovery) Advertises() bool { return !d.Disabled }
 
 // Peer identifies this node within the Heyarr instance. A peer row exists from
 // Milestone 1 even though there is only one (ADR-0010).
@@ -329,8 +422,24 @@ type Library struct {
 // authentication on.
 func Defaults() Config {
 	return Config{
-		DataDir:  "/var/lib/heyarr",
-		HTTP:     HTTP{Addr: "127.0.0.1:7777", Auth: Auth{Enabled: true}},
+		DataDir: "/var/lib/heyarr",
+		HTTP: HTTP{
+			Addr: "127.0.0.1:7777",
+			Auth: Auth{Enabled: true},
+			// The guest trust boundary defaults to the private + loopback ranges
+			// (ADR-0094). It is inert until http.guest.enabled is set; the concrete
+			// estate ranges are supplied by homelab-ops infra (IPAddressAllow), and
+			// these documentation-safe defaults are what a single-LAN deployment
+			// flips guest on against without further configuration.
+			Guest: Guest{TrustedNets: []string{
+				"127.0.0.0/8",    // loopback (the node itself)
+				"::1/128",        // loopback (IPv6)
+				"10.0.0.0/8",     // RFC 1918
+				"172.16.0.0/12",  // RFC 1918
+				"192.168.0.0/16", // RFC 1918
+				"fd00::/8",       // RFC 4193 unique-local (the WireGuard estate net)
+			}},
+		},
 		Peer:     Peer{Name: "local"},
 		Log:      Log{Level: "info", Format: "auto"},
 		CAS:      CAS{},
@@ -456,6 +565,13 @@ func (c Config) Validate() error {
 	}
 	if c.Media.StreamConcurrency < 0 {
 		return fmt.Errorf("config: media.stream_concurrency must be zero or more, got %d", c.Media.StreamConcurrency)
+	}
+	// The guest allow-list is checked for CIDR shape even when guest mode is off:
+	// a malformed range is a mistake worth naming at startup, not on the first
+	// credential-less request after the mode is later enabled (ADR-0094). An
+	// empty list is legal — it simply turns the tier off.
+	if _, err := c.HTTP.Guest.ParsedNets(); err != nil {
+		return fmt.Errorf("config: http.guest.trusted_nets: %w", err)
 	}
 	// The peer surface's address is checked for shape only. There is
 	// deliberately no loopback rule here and no equivalent of ADR-0011's

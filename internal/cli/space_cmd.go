@@ -60,6 +60,7 @@ it.`,
 		newSpaceSnapshotCommand(opts, configPath, &deviceDir),
 		newSpaceRotateCommand(opts, configPath, &deviceDir),
 		newSpaceCompactCommand(opts, configPath),
+		newSpaceRecoverCommand(opts, configPath, &deviceDir),
 	)
 	return cmd
 }

@@ -11,7 +11,57 @@
 // route enforcement live in the HTTP layer that imports this package.
 package guest
 
-import "github.com/rarebit-one/heyarr-core/internal/auth"
+import (
+	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/grant"
+)
+
+// The HEYARR-side capabilities a guest access lease carries (ADR-0094). They are
+// defined over grant.Capability — the bare string type voidbind-go re-exports —
+// but they are OURS: the dependency knows only `read`/`write`, and coupling a
+// browse/play/subtitle vocabulary into it was rejected. A guest lease grants
+// exactly these three and nothing else.
+const (
+	// CapBrowse is reading the shared library: works, editions, assets, search,
+	// discovery — the read floor the router already requires.
+	CapBrowse grant.Capability = "browse"
+	// CapPlay is resolving and streaming content: planning a playback, fetching a
+	// stream, and — the one write-scoped route a guest's play capability opens —
+	// starting a playback session (POST /playback).
+	CapPlay grant.Capability = "play"
+	// CapSubtitle is fetching subtitles for playable content. Fetching is a read,
+	// already under the browse floor; WANTING or backfilling subtitles is a write
+	// and stays closed to a guest.
+	CapSubtitle grant.Capability = "subtitle"
+)
+
+// Principal is the lease principal a guest acts as (ADR-0094) — the lease store's
+// first non-device principal. Free-form by the store's contract; "guest" is the
+// value grant.Verify matches on exactly.
+const Principal = "guest"
+
+// ReasonCapabilityDenied is the stable, machine-readable code a guest capability
+// refusal reports (ADR-0094), reused verbatim from the grant layer so a client
+// branches on the same value whether the check was a lease verification or the
+// HTTP capability gate. It is a code, not prose — the §63 Reason.Rule convention.
+const ReasonCapabilityDenied = string(grant.ReasonCapabilityDenied)
+
+// Capabilities is the capability set every guest lease is minted with, in a
+// stable order. It is the single source of truth for what a guest may do, the
+// capability analogue of visibleClasses.
+func Capabilities() []grant.Capability {
+	return []grant.Capability{CapBrowse, CapPlay, CapSubtitle}
+}
+
+// capabilityStrings renders capabilities for auth.Identity, whose Capabilities
+// field is bare strings so the auth package need not import grant.
+func capabilityStrings(caps []grant.Capability) []string {
+	out := make([]string, len(caps))
+	for i, c := range caps {
+		out[i] = string(c)
+	}
+	return out
+}
 
 // Source classes an asset can carry (ADR-0020). Only managed is ever written
 // today; linked and vault are declared but unimplemented. They are named here
@@ -45,13 +95,23 @@ var visibleClasses = map[string]bool{
 // web-login `session` identity (which acts as a pinned user at the read floor).
 // A Guest is neither: it is nobody, at the read floor.
 func Identity() auth.Identity {
+	return identityWith(Capabilities())
+}
+
+// identityWith builds the guest identity carrying the capabilities of the lease
+// it was minted from (ADR-0094). The scope stays exactly `read` — a guest never
+// carries write — so scope alone still refuses every write route; the
+// capabilities are the finer grain the route gate consults to let the `play`
+// capability through to POST /playback and nothing else.
+func identityWith(caps []grant.Capability) auth.Identity {
 	return auth.Identity{
 		Guest:     true,
-		Principal: auth.Principal{Kind: "guest", Name: "guest"},
+		Principal: auth.Principal{Kind: "guest", Name: Principal},
 		Token: auth.Token{
-			Name:   "guest",
+			Name:   Principal,
 			Scopes: []auth.Scope{auth.ScopeRead},
 		},
+		Capabilities: capabilityStrings(caps),
 	}
 }
 

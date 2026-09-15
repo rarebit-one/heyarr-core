@@ -65,6 +65,25 @@ fail() {
 }
 note() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
+# ps_enrol_device pins a device as an enrolled recipient so a space key may be
+# wrapped for it (enrol-before-wrap, ADR-0049): it generates a user identity in
+# the device's own dir, self-signs the device's cert (binding its X25519
+# encryption key), and enrols both on the node at sock. Args: sock token dir name.
+ps_enrol_device() {
+  local sock="$1" token="$2" dir="$3" nm="$4" cl uk cert
+  cl=( env "VOIDBIND_IDENTITY_DIR=$dir" "VOIDBIND_DEVICE_DIR=$dir" "$BIN" )
+  "${cl[@]}" identity generate --name "$nm" >/dev/null 2>&1
+  "${cl[@]}" identity enrol >/dev/null 2>&1
+  uk=$("${cl[@]}" identity show --json | jq -r .public_key)
+  cert=$("${cl[@]}" identity credential | cut -d'~' -f1)
+  curl -sS --unix-socket "$sock" -H "Authorization: Bearer $token" -X POST \
+    -H 'Content-Type: application/json' -d "{\"public_key\":\"$uk\",\"name\":\"$nm\"}" \
+    -o /dev/null "http://heyarr/api/v1/identities/users"
+  curl -sS --unix-socket "$sock" -H "Authorization: Bearer $token" -X POST \
+    -H 'Content-Type: application/json' -d "{\"cert\":\"$cert\",\"name\":\"$nm\"}" \
+    -o /dev/null "http://heyarr/api/v1/identities/devices"
+}
+
 assert_contains() { # haystack needle description
   if [[ "$1" == *"$2"* ]]; then pass "$3"; else
     fail "$3"; printf '       wanted to find: %s\n       in: %s\n' "$2" "$1"
@@ -8042,13 +8061,22 @@ YAML
   "$BIN" device generate --device-dir "$B" --name devb >/dev/null 2>&1
   "$BIN" device generate --device-dir "$C" --name devc >/dev/null 2>&1
 
-  local bpub base
+  local bpub cpub base
   bpub=$("$BIN" device show --device-dir "$B" --json | jq -r .encryption_public_key)
+  cpub=$("$BIN" device show --device-dir "$C" --json | jq -r .encryption_public_key)
   base=( env "HEYARR_TOKEN=$token" "$BIN" --config "$cfg" )
 
+  # Enrol A and B so their encryption keys are PINNED recipients (enrol-before-wrap,
+  # ADR-0049): a space key may be wrapped only for an enrolled device or recovery
+  # key. C is left unenrolled on purpose — the stranger, and the negative below.
+  ps_enrol_device "$sock" "$token" "$A" deva
+  ps_enrol_device "$sock" "$token" "$B" devb
+
   # Device A mints a space, wrapping its key for itself (--self, default) and B.
+  # --recovery=false: these devices' local recovery keys are not pinned here, and
+  # this demo is about device recipients, not recovery (that is space_recovery_demo).
   local create space_id recips
-  create=$("${base[@]}" space create --device-dir "$A" --kind personal --recipient "$bpub" --json)
+  create=$("${base[@]}" space create --device-dir "$A" --kind personal --recipient "$bpub" --recovery=false --json)
   space_id=$(jq -r .id <<<"$create")
   recips=$(jq -r '.recipients | length' <<<"$create")
   assert_eq "$recips" "2" \
@@ -8086,6 +8114,12 @@ YAML
   # fails, and it fails before any change is fetched (the confidentiality gate).
   assert_refuses "a device the space was not wrapped for cannot read it — a decrypt without the key fails" \
     "cannot read space" "${base[@]}" space read "$space_id" --device-dir "$C"
+
+  # ENROL-BEFORE-WRAP (ADR-0049): a space key cannot be wrapped for an unenrolled
+  # recipient. C was never enrolled, so wrapping a new space for its key is refused
+  # at the create path — a key issued and immediately wrapped-for is unspellable.
+  assert_refuses "a space key cannot be wrapped for an unenrolled recipient (enrol-before-wrap, ADR-0049)" \
+    "not an enrolled device" "${base[@]}" space create --device-dir "$A" --kind personal --recipient "$cpub" --recovery=false --json
 
   kill -TERM "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
@@ -8141,6 +8175,13 @@ YAML
   bpub=$("$BIN" device show --device-dir "$B" --json | jq -r .encryption_public_key)
   cpub=$("$BIN" device show --device-dir "$C" --json | jq -r .encryption_public_key)
   base=( env "HEYARR_TOKEN=$token" "$BIN" --config "$cfg" )
+
+  # Enrol all three so their keys are pinned recipients (enrol-before-wrap,
+  # ADR-0049): the create wraps for A, B and C, and the rotation re-wraps for the
+  # remaining two — every one of them must be an enrolled device.
+  ps_enrol_device "$sock" "$token" "$A" reva
+  ps_enrol_device "$sock" "$token" "$B" revb
+  ps_enrol_device "$sock" "$token" "$C" revc
 
   # A mints a space wrapped for A, B and C (no recovery key in this demo).
   local create space_id recips
@@ -8293,9 +8334,14 @@ YAML
   "$BIN" device generate --device-dir "$dy" --name device-y >/dev/null 2>&1
   ypub=$("$BIN" device show --device-dir "$dy" --json | jq -r .encryption_public_key)
 
+  # Both devices are enrolled on node A, where the space is created — a space key
+  # may be wrapped only for pinned recipients (enrol-before-wrap, ADR-0049).
+  ps_enrol_device "$sock_a" "$token_a" "$dx" device-x
+  ps_enrol_device "$sock_a" "$token_a" "$dy" device-y
+
   # Device X creates a space on A, wrapped for X (self) and Y, and writes one item.
   local create space_id
-  create=$("${base_a[@]}" space create --device-dir "$dx" --kind shared --recipient "$ypub" --json)
+  create=$("${base_a[@]}" space create --device-dir "$dx" --kind shared --recipient "$ypub" --recovery=false --json)
   space_id=$(jq -r .id <<<"$create")
   "${base_a[@]}" space put "$space_id" --device-dir "$dx" --item "x-first" >/dev/null
 
@@ -8391,7 +8437,10 @@ YAML
   base=( env "HEYARR_TOKEN=$token" "$BIN" --config "$cfg" )
   sapi() { curl -sS --unix-socket "$sock" -H "Authorization: Bearer $token" "${@:2}" "http://heyarr$1"; }
 
-  space_id=$("${base[@]}" space create --device-dir "$dev" --kind personal --json | jq -r .id)
+  # The device is enrolled so its key is a pinned recipient (enrol-before-wrap, ADR-0049).
+  ps_enrol_device "$sock" "$token" "$dev" snap-dev
+
+  space_id=$("${base[@]}" space create --device-dir "$dev" --kind personal --recovery=false --json | jq -r .id)
   "${base[@]}" space put "$space_id" --device-dir "$dev" --item one >/dev/null
   "${base[@]}" space put "$space_id" --device-dir "$dev" --item two >/dev/null
   "${base[@]}" space put "$space_id" --device-dir "$dev" --item three >/dev/null

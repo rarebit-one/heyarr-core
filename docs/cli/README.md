@@ -90,6 +90,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr space list`](heyarr_space_list.md) | List the encrypted spaces the controller holds (metadata only) |
 | [`heyarr space put`](heyarr_space_put.md) | Add an item to a space's playlist (encrypted client-side, then pushed) |
 | [`heyarr space read`](heyarr_space_read.md) | Read a space's playlist on an authorised device (decrypts and merges locally) |
+| [`heyarr space recover`](heyarr_space_recover.md) | Recover vault space keys from your recovery secret, offline (ADR-0022, ADR-0049) |
 | [`heyarr space rotate`](heyarr_space_rotate.md) | Revoke recipients from a space by rotating its key (§41, #361) |
 | [`heyarr space snapshot`](heyarr_space_snapshot.md) | Take an encrypted snapshot at the current causal point (§44) |
 | [`heyarr space`](heyarr_space.md) | Create and read encrypted personal-state spaces (§38, §42, ADR-0049) |
