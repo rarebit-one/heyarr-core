@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -360,6 +361,17 @@ func streamRefusalReason(err error) string {
 	}
 }
 
+// streamStallTimeout bounds how long ONE write may block on a client that has
+// stopped reading. A peer whose TCP connection stays ESTABLISHED but drains
+// nothing — a crashed or wedged reader whose kernel still ACKs, so the request
+// context never cancels and keepalive never fires — would otherwise pin ffmpeg
+// and its stream slot until the process restarts. (Observed: a dead client with
+// a 2.28 MB send queue holding a transcode for minutes.) It is reset on every
+// write, so a client draining at ANY rate is never interrupted; a player's own
+// read-ahead cache absorbs ordinary pauses well within it. It complements the
+// hard kill on a clean disconnect (ADR-0069) — this catches the UNCLEAN one.
+const streamStallTimeout = 2 * time.Minute
+
 // streamWriter writes the headers with the first byte and flushes every
 // write, so a player sees fragments as ffmpeg produces them rather than when
 // a buffer fills.
@@ -380,6 +392,13 @@ func (s *streamWriter) Write(p []byte) (int, error) {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Content-Disposition", `inline; filename="stream.mp4"`)
 		s.w.WriteHeader(http.StatusOK)
+	}
+	// Arm the stall timeout before every write. If the client accepts nothing for
+	// this long the write fails, which unwinds Stream and kills ffmpeg, freeing the
+	// slot — the defence against a stuck reader whose connection never closes. Best
+	// effort: a ResponseWriter without a deadline just keeps the prior behaviour.
+	if s.rc != nil {
+		_ = s.rc.SetWriteDeadline(time.Now().Add(streamStallTimeout))
 	}
 	n, err := s.w.Write(p)
 	if err != nil {
