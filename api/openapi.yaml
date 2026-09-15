@@ -8821,6 +8821,20 @@ components:
         detail:
           type: string
           description: Why the last pipeline move happened, when it was a failure.
+        bytes_total:
+          type: integer
+          format: int64
+          description: |
+            Total bytes of the transfer in flight, as the download client last
+            reported it. Omitted when there is no transfer; zero when the client
+            has not said the size yet.
+        bytes_done:
+          type: integer
+          format: int64
+          description: |
+            Bytes fetched so far of the transfer in flight, refreshed on every
+            download poll. With `bytes_total`, this is how far a download has
+            got — omitted when there is no transfer.
 
     CreateDesired:
       type: object

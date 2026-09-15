@@ -78,6 +78,21 @@ func prowlarrClientFor(t *testing.T, endpoint, key string) *prowlarrClient {
 	return c
 }
 
+// ADR-0093 §1: an episode-scoped want asks Prowlarr for "<Title> SxxEyy" rather
+// than the bare series title, so the aggregate search returns the episode rather
+// than every season's packs.
+func TestProwlarrEpisodeSearchQueriesTheEpisode(t *testing.T) {
+	h := newProwlarrHarness(t, "search-with-results.json", "indexers-two-enabled.json", "", 0)
+	_, err := prowlarrClientFor(t, h.srv.URL, "").Search(t.Context(),
+		providers.Query{Title: "Slow Horses", ContentType: "series", Season: 1, Episode: 1})
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	if !strings.Contains(h.lastQuery, "query=Slow+Horses+S01E01") {
+		t.Errorf("episode search should query the episode, query was %q", h.lastQuery)
+	}
+}
+
 // A real aggregate search answer becomes candidates: named releases only, with a
 // stable id, credited to the provider, size carried, a fetchable source.
 func TestProwlarrSearchBecomesCandidates(t *testing.T) {

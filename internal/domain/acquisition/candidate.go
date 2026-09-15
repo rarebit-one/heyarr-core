@@ -176,14 +176,19 @@ func (e Evaluation) Reason(rule string) (Reason, bool) {
 
 // RejectedBy returns the gates that rejected this candidate.
 //
-// Scoped to the accept section as well as to ResultFail. Only accept rules can
-// produce a fail today, so the section check cannot currently fire — it is
-// kept because "rejected by" has one meaning and a future result that reused
-// the word would silently widen it.
+// Scoped to ResultFail in a GATE section. There are two gate sections: §62's
+// accept (a quality gate) and ADR-0093's match (a season/episode containment
+// gate). "Rejected by" means "the gates that refused this", and both refuse —
+// the Section field is what tells a wrong-resolution rejection from a
+// wrong-season one, which is exactly the distinction ADR-0093 keeps. A prefer
+// or terminal rule never produces a fail, so it never appears here.
 func (e Evaluation) RejectedBy() []Reason {
 	var out []Reason
 	for _, r := range e.Reasons {
-		if r.Result == ResultFail && r.Section == string(policy.SectionAccept) {
+		if r.Result != ResultFail {
+			continue
+		}
+		if r.Section == string(policy.SectionAccept) || r.Section == SectionMatch {
 			out = append(out, r)
 		}
 	}
@@ -446,8 +451,23 @@ func EvaluateAll(candidates []ReleaseCandidate, p policy.Profile) []Ranked {
 	for _, c := range candidates {
 		out = append(out, Ranked{Candidate: c, Evaluation: Evaluate(c, p)})
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		a, b := out[i], out[j]
+	SortRanked(out)
+	return out
+}
+
+// SortRanked orders a set of already-evaluated candidates into §63's TOTAL,
+// DETERMINISTIC order in place: accepted before rejected, then by score
+// descending, then by candidate ID ascending.
+//
+// Exposed so a caller that has evaluated some candidates itself — ADR-0093's
+// season/episode gate rejects a candidate with a match reason BEFORE it is
+// scored, so its Ranked is built rather than produced by Evaluate — can merge
+// its entries into the same one total order the scorer uses, rather than a
+// second ordering that could disagree with it. See EvaluateAll's own comment
+// for why the ID tie-break is what makes this total rather than partial.
+func SortRanked(ranked []Ranked) {
+	sort.SliceStable(ranked, func(i, j int) bool {
+		a, b := ranked[i], ranked[j]
 		if a.Evaluation.Accepted != b.Evaluation.Accepted {
 			return a.Evaluation.Accepted
 		}
@@ -456,7 +476,6 @@ func EvaluateAll(candidates []ReleaseCandidate, p policy.Profile) []Ranked {
 		}
 		return a.Candidate.ID < b.Candidate.ID
 	})
-	return out
 }
 
 // Best returns the highest-ranked ACCEPTED candidate, if any.

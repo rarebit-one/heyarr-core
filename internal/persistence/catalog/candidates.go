@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/desired"
+	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/events"
@@ -359,6 +363,15 @@ type SearchContext struct {
 	ContentType   string
 	Profile       policy.Profile
 	State         acquisition.State
+	// Season and Episode target one episode of a series (ADR-0093), read from
+	// the want's item — its structured attributes when present, its item_key
+	// ("S01E01") otherwise. IsEpisode reports whether this is an episode-scoped
+	// search; when false the search is exactly today's and the containment gate
+	// does not run. Episode is 1-based, so a work- or season-scoped want and
+	// every non-series want leave IsEpisode false.
+	Season    int
+	Episode   int
+	IsEpisode bool
 	// Incumbent is the evaluation of what this want ALREADY holds, and its
 	// AssetID is empty when it holds nothing acceptable.
 	//
@@ -387,13 +400,23 @@ func (c *Catalog) SearchContextFor(ctx context.Context, desiredItemID string) (S
 		out       SearchContext
 		year      sql.NullInt64
 		profileID string
+		scope     string
+		itemKey   sql.NullString
+		itemAttrs sql.NullString
 	)
+	// LEFT JOIN items so an item-scoped want reads the season/episode it points
+	// at (ADR-0093). The join is null for every other want — a work- or
+	// season-scoped one, or any non-series content type — and then the episode
+	// fields stay absent and the query is exactly what it was.
 	err := c.db.Reader().QueryRowContext(ctx, `
-		SELECT d.id, w.title, w.year, w.content_type, d.quality_profile_id
+		SELECT d.id, w.title, w.year, w.content_type, d.quality_profile_id,
+		       d.scope, i.item_key, i.attributes
 		FROM desired_items d
 		JOIN works w ON w.id = d.work_id
+		LEFT JOIN items i ON i.id = d.item_id
 		WHERE d.id = ?`, desiredItemID).
-		Scan(&out.DesiredItemID, &out.Title, &year, &out.ContentType, &profileID)
+		Scan(&out.DesiredItemID, &out.Title, &year, &out.ContentType, &profileID,
+			&scope, &itemKey, &itemAttrs)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SearchContext{}, fmt.Errorf("catalog: no desired item %s: %w", desiredItemID, err)
 	}
@@ -402,6 +425,11 @@ func (c *Catalog) SearchContextFor(ctx context.Context, desiredItemID string) (S
 	}
 	if year.Valid {
 		out.Year = int(year.Int64)
+	}
+	if scope == string(desired.ScopeItem) && itemKey.Valid {
+		if season, episode, ok := episodeTarget(itemKey.String, itemAttrs.String); ok {
+			out.Season, out.Episode, out.IsEpisode = season, episode, true
+		}
 	}
 
 	profile, err := c.profileForReconcile(ctx, profileID)
@@ -427,6 +455,46 @@ func (c *Catalog) SearchContextFor(ctx context.Context, desiredItemID string) (S
 		out.Incumbent, out.IncumbentID = incumbent, incumbentID
 	}
 	return out, nil
+}
+
+// episodeTarget reads the season and episode an item-scoped want points at
+// (ADR-0093), and reports whether both could be determined.
+//
+// The structured attributes a feed adapter records — {"season":"1",
+// "episode":"1"} — are the authoritative source and are read first. The
+// item_key ("S01E01") is the fallback, parsed by the SAME scanner parser that
+// reads a release title, so the want's episode and a candidate's episode are
+// read by one vocabulary and cannot drift. An episode is 1-based, so a zero (or
+// absent) episode is "not an episode want" — a podcast GUID or a video id keyed
+// item, which carries no season/episode, simply leaves ok false.
+func episodeTarget(itemKey, attrsJSON string) (season, episode int, ok bool) {
+	if s, e, got := episodeFromAttributes(attrsJSON); got {
+		return s, e, true
+	}
+	parsed := identification.ParseReleaseSeasonEpisode(itemKey)
+	if !parsed.Determined || len(parsed.Episodes) == 0 || parsed.Episodes[0] <= 0 {
+		return 0, 0, false
+	}
+	return parsed.Season, parsed.Episodes[0], true
+}
+
+// episodeFromAttributes reads season/episode from an item's stored attributes,
+// which a feed adapter writes as decimal strings (tmdb/tvdb). Both must be
+// present and the episode positive for this to be an episode want.
+func episodeFromAttributes(attrsJSON string) (season, episode int, ok bool) {
+	if attrsJSON == "" {
+		return 0, 0, false
+	}
+	var attrs map[string]string
+	if err := json.Unmarshal([]byte(attrsJSON), &attrs); err != nil {
+		return 0, 0, false
+	}
+	s, serr := strconv.Atoi(strings.TrimSpace(attrs["season"]))
+	e, eerr := strconv.Atoi(strings.TrimSpace(attrs["episode"]))
+	if serr != nil || eerr != nil || e <= 0 || s < 0 {
+		return 0, 0, false
+	}
+	return s, e, true
 }
 
 // PruneCandidates removes candidate sets older than a cutoff.

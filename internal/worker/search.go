@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -112,12 +113,19 @@ func SearchHandler(
 			return err
 		}
 
-		result, err := reg.Search(ctx, providers.Query{
+		query := providers.Query{
 			Title:       sc.Title,
 			Year:        sc.Year,
 			ContentType: sc.ContentType,
 			Limit:       candidateLimit,
-		})
+		}
+		if sc.IsEpisode {
+			// An item-scoped series want carries the season/episode into the
+			// search, so the indexer is asked for the episode rather than the
+			// series (ADR-0093 §1). The gate below is what actually enforces it.
+			query.Season, query.Episode = sc.Season, sc.Episode
+		}
+		result, err := reg.Search(ctx, query)
 		if err != nil {
 			// No indexer at all should be unreachable — the job is
 			// capability-routed on `indexer`, so a node with none never claims
@@ -230,8 +238,29 @@ func SearchHandler(
 			return nil
 		}
 
-		// §63's scorer, and nothing else decides.
-		ranked := acquisition.EvaluateAll(considered, sc.Profile)
+		// The season/episode containment gate (ADR-0093 §2), before §63's
+		// scorer and in the same spirit as excludeBlocked: it decides membership
+		// in the running, not quality. For an episode want it keeps only the
+		// releases that could contain the wanted episode — the exact episode, or
+		// a pack for that season — and rejects a different season, a different
+		// episode and a whole-series pack WITH a durable reason rather than
+		// dropping them, so an operator can read why. Only survivors reach the
+		// scorer; quality never again decides across seasons.
+		var ranked []acquisition.Ranked
+		if sc.IsEpisode {
+			survivors, rejected := gateSeasonEpisode(considered, sc.Season, sc.Episode)
+			if len(rejected) > 0 {
+				log.Info("a search rejected releases that cannot contain the wanted episode",
+					"desired_item_id", payload.DesiredItemID,
+					"season", sc.Season, "episode", sc.Episode, "rejected", len(rejected))
+			}
+			ranked = acquisition.EvaluateAll(survivors, sc.Profile)
+			ranked = append(ranked, rejected...)
+			acquisition.SortRanked(ranked)
+		} else {
+			// §63's scorer, and nothing else decides.
+			ranked = acquisition.EvaluateAll(considered, sc.Profile)
+		}
 
 		outcome, err := cat.RecordSearch(ctx, payload.DesiredItemID, ranked, sc.Held())
 		if err != nil {
@@ -295,6 +324,36 @@ func excludeBlocked(
 		out = append(out, c)
 	}
 	return out, skipped
+}
+
+// gateSeasonEpisode keeps only the candidates that could contain the wanted
+// episode and returns the rest as rejected rankings that carry a durable match
+// reason (ADR-0093 §2).
+//
+// It reuses the scanner's parser to read each release title's season/episode —
+// one reading of a title, not a second — and hands the numbers to the domain's
+// GateEpisode, which owns the verdict and the reason codes so the gate and its
+// tests share one vocabulary. The parse lives here rather than in the
+// acquisition package because candidate.go's boundary is that a release title
+// is never parsed there (ADR-0091).
+//
+// A rejected candidate is REPORTED, not dropped: it becomes a Ranked whose
+// evaluation is not accepted and carries the one match reason, so it is stored
+// alongside the quality rejections and "why was an S03 pack refused for an
+// S01E01 want" has an answer. It is never scored and never selectable.
+func gateSeasonEpisode(
+	candidates []acquisition.ReleaseCandidate, season, episode int,
+) (survivors []acquisition.ReleaseCandidate, rejected []acquisition.Ranked) {
+	for _, c := range candidates {
+		rel := identification.ParseReleaseSeasonEpisode(c.Title)
+		reason, kept := acquisition.GateEpisode(season, episode, rel.Determined, rel.Season, rel.Episodes)
+		if kept {
+			survivors = append(survivors, c)
+			continue
+		}
+		rejected = append(rejected, acquisition.RejectedByMatch(c, reason))
+	}
+	return survivors, rejected
 }
 
 // noCandidatesDetail is what a want durably records when a search found

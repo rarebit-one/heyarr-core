@@ -195,16 +195,15 @@ func (c *prowlarrClient) Search(ctx context.Context, q providers.Query) ([]acqui
 		return nil, err
 	}
 
+	// The query term is composed once, on the Query, so this client and the
+	// Torznab client cannot spell it differently: the title, with the year
+	// appended when known, or "<Title> SxxEyy" for an episode search (ADR-0093
+	// §1). The aggregate `search` type takes a free-text query, and a separate
+	// year or season parameter would be honoured or ignored per underlying
+	// indexer — a difference in results nobody could see.
 	params := url.Values{
-		"query": []string{q.Title},
+		"query": []string{q.SearchTerm()},
 		"type":  []string{"search"},
-	}
-	if q.Year > 0 {
-		// Appended to the query, as the Torznab client does (search_test): the
-		// aggregate `search` type takes a free-text query, and a separate year
-		// parameter would be honoured or ignored per underlying indexer — a
-		// difference in results nobody could see.
-		params.Set("query", fmt.Sprintf("%s %d", q.Title, q.Year))
 	}
 	if cats := prowlarrCategories(q.ContentType); cats != "" {
 		params.Set("categories", cats)

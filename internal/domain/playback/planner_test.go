@@ -336,3 +336,45 @@ func TestDemuxerNamesAreMatchedAgainstTheNamesDevicesUse(t *testing.T) {
 		})
 	}
 }
+
+// TestForceDirectOverridesButKeepsTheReasons is the "cast anyway" escape hatch:
+// a plan the planner honestly refused can be sent DIRECT at the caller's word,
+// WITHOUT the refusal's reasons being erased — the override is a decision, not a
+// capability claim. Shaped on the real case: a device declaring aac (not eac3).
+func TestForceDirectOverridesButKeepsTheReasons(t *testing.T) {
+	media := h264MP4()
+	media.AudioCodec = "eac3" // limited() declares aac only, so this needs a transcode
+	plan := playback.Choose(media, limited(), localOnly)
+	if plan.Decision != playback.DecisionTranscode {
+		t.Fatalf("setup: expected TRANSCODE, got %q", plan.Decision)
+	}
+	if _, ok := plan.Reason(playback.ReasonAudioCodecUnsupported); !ok {
+		t.Fatalf("setup: expected the audio reason, got %+v", plan.Reasons)
+	}
+
+	forced := plan.ForceDirect()
+	if !forced.Direct() {
+		t.Fatalf("ForceDirect should make it DIRECT, got %q", forced.Decision)
+	}
+	if _, ok := forced.Reason(playback.ReasonForcedDirect); !ok {
+		t.Errorf("a forced plan must record forced_direct: %+v", forced.Reasons)
+	}
+	// The honesty property: the original reason survives.
+	if _, ok := forced.Reason(playback.ReasonAudioCodecUnsupported); !ok {
+		t.Errorf("a forced plan must KEEP the original reason: %+v", forced.Reasons)
+	}
+
+	// An already-DIRECT plan is untouched.
+	clean := playback.Choose(h264MP4(), limited(), localOnly)
+	if clean.Decision != playback.DecisionDirect {
+		t.Fatalf("setup: expected DIRECT, got %q", clean.Decision)
+	}
+	if forcedClean := clean.ForceDirect(); len(forcedClean.Reasons) != len(clean.Reasons) {
+		t.Errorf("ForceDirect must not touch an already-DIRECT plan: %+v", forcedClean.Reasons)
+	}
+
+	// An UNPLAYABLE plan has no bytes to force, so it stays UNPLAYABLE.
+	if got := playback.Choose(media, limited(), nil).ForceDirect(); got.Decision != playback.DecisionUnplayable {
+		t.Errorf("ForceDirect must not resurrect an UNPLAYABLE plan, got %q", got.Decision)
+	}
+}

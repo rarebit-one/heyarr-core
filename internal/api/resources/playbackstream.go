@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -69,6 +70,10 @@ type SourceInfo struct {
 	Audio     string `json:"audio,omitempty"`
 	Width     int    `json:"width,omitempty"`
 	Height    int    `json:"height,omitempty"`
+	// Duration is the source's full runtime in seconds. The client uses it as
+	// the scrubber total for a `stream` plan, whose transcode cannot report its
+	// own length until it finishes producing.
+	Duration float64 `json:"duration_seconds,omitempty"`
 }
 
 // Mode values on a plan answered for a client.
@@ -147,7 +152,7 @@ func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanReq
 	if media.Known {
 		out.Source = &SourceInfo{
 			Container: media.Container, Video: media.VideoCodec, Audio: media.AudioCodec,
-			Width: media.Width, Height: media.Height,
+			Width: media.Width, Height: media.Height, Duration: media.DurationSec,
 		}
 	}
 
@@ -229,7 +234,7 @@ func (a *API) probeOnDemand(ctx context.Context, blobHash string) (playback.Medi
 // a stored row. The two must agree, which is why both take the FIRST stream of
 // each type and read HDR off the profile name the same way.
 func profileFromProbe(result probe.Result) playback.MediaProfile {
-	media := playback.MediaProfile{Known: true, Container: result.Container, BitrateBPS: result.BitrateBPS}
+	media := playback.MediaProfile{Known: true, Container: result.Container, BitrateBPS: result.BitrateBPS, DurationSec: result.DurationSec}
 	if v, ok := result.VideoStream(); ok {
 		media.VideoCodec, media.Width, media.Height = v.Codec, v.Width, v.Height
 		media.HDR = strings.Contains(strings.ToLower(v.Profile), "hdr")
@@ -356,6 +361,17 @@ func streamRefusalReason(err error) string {
 	}
 }
 
+// streamStallTimeout bounds how long ONE write may block on a client that has
+// stopped reading. A peer whose TCP connection stays ESTABLISHED but drains
+// nothing — a crashed or wedged reader whose kernel still ACKs, so the request
+// context never cancels and keepalive never fires — would otherwise pin ffmpeg
+// and its stream slot until the process restarts. (Observed: a dead client with
+// a 2.28 MB send queue holding a transcode for minutes.) It is reset on every
+// write, so a client draining at ANY rate is never interrupted; a player's own
+// read-ahead cache absorbs ordinary pauses well within it. It complements the
+// hard kill on a clean disconnect (ADR-0069) — this catches the UNCLEAN one.
+const streamStallTimeout = 2 * time.Minute
+
 // streamWriter writes the headers with the first byte and flushes every
 // write, so a player sees fragments as ffmpeg produces them rather than when
 // a buffer fills.
@@ -376,6 +392,13 @@ func (s *streamWriter) Write(p []byte) (int, error) {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Content-Disposition", `inline; filename="stream.mp4"`)
 		s.w.WriteHeader(http.StatusOK)
+	}
+	// Arm the stall timeout before every write. If the client accepts nothing for
+	// this long the write fails, which unwinds Stream and kills ffmpeg, freeing the
+	// slot — the defence against a stuck reader whose connection never closes. Best
+	// effort: a ResponseWriter without a deadline just keeps the prior behaviour.
+	if s.rc != nil {
+		_ = s.rc.SetWriteDeadline(time.Now().Add(streamStallTimeout))
 	}
 	n, err := s.w.Write(p)
 	if err != nil {

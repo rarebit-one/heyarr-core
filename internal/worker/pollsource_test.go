@@ -458,11 +458,18 @@ func TestAProjectedEpisodeFlowsIntoTheSearchPipeline(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A fake indexer offers a release for the SERIES title — an item-scoped want
-	// searches on its work's title, so the existing search context resolves it
-	// without knowing an episode is involved.
+	// A fake indexer offers a release FOR THE EPISODE and a higher-resolution
+	// pack for the WRONG season — the exact shape ADR-0093 saw live, where an
+	// S03 pack outscored the episode want and was selected. The item-scoped want
+	// now carries S02E01 into the containment gate, so the S03 pack is rejected
+	// as unable to contain the episode and the S02E01 release is selected, even
+	// though it is the lower resolution. Quality never decides across seasons.
+	episodeRelease := offer("good", 1080, "h264")
+	episodeRelease.Title = "The Series S02E01 1080p WEB-DL H264-GROUP"
+	wrongSeasonPack := offer("wrong-season", 2160, "hevc")
+	wrongSeasonPack.Title = "The Series S03 COMPLETE 2160p WEB-DL x265-GROUP"
 	indexer := providers.NewFake("fake-indexer", providers.CapabilityIndexer)
-	indexer.Offer("The Series", offer("good", 2160, "hevc"))
+	indexer.Offer("The Series", episodeRelease, wrongSeasonPack)
 	if err := h.reg.Register(indexer); err != nil {
 		t.Fatal(err)
 	}
@@ -485,6 +492,6 @@ func TestAProjectedEpisodeFlowsIntoTheSearchPipeline(t *testing.T) {
 		t.Fatal(err)
 	}
 	if sel.CandidateID != "good" {
-		t.Errorf("selected %s, want good", sel.CandidateID)
+		t.Errorf("selected %s, want good — the wrong-season pack must never win an episode want", sel.CandidateID)
 	}
 }

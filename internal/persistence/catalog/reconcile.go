@@ -229,11 +229,24 @@ func (c *Catalog) assetsForWant(ctx context.Context, w desiredWant) ([]acquisiti
 		return c.subtitleAssetsForWant(ctx, w)
 	}
 
+	// The scope of the want decides which assets can satisfy it. An item-scoped
+	// want (a series episode, ADR-0086) is satisfied ONLY by an asset linked to
+	// its item — NOT by any asset of the work. Without this case an item want
+	// falls through to work scope and one episode's file satisfies every
+	// episode of the series, which is both wrong (the other episodes hold no
+	// bytes) and self-defeating (acquisition stops for a series after one file).
+	// A season pack still satisfies many episodes: its ingest links one asset
+	// per episode file to that episode's item (§66), so each episode want finds
+	// its own.
 	where := "e.work_id = ?"
 	args := []any{w.workID}
-	if w.scope == "edition" {
+	switch w.scope {
+	case "edition":
 		where = "a.edition_id = ?"
 		args = []any{w.editionID}
+	case "item":
+		where = "a.item_id = ?"
+		args = []any{w.itemID}
 	}
 
 	//nolint:gosec // assembled only from the literal fragments above; every value is bound
