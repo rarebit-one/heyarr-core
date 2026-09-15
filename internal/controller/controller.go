@@ -274,6 +274,16 @@ func (c *Controller) Run(ctx context.Context) error {
 		return err
 	}
 
+	// mDNS / DNS-SD advertisement (ADR-0094 §Discovery, Phase 2). The client-
+	// facing sibling of the renderer package's SSDP: it announces `_heyarr._tcp`
+	// on the trusted interfaces so a client finds this node without being told an
+	// address. It is started after srv.Start() because it advertises the port the
+	// TCP listener actually bound, and it is inert unless there is a trusted,
+	// multicast-capable interface AND a reachable port — a socket-only or
+	// loopback-only node names nothing a device on the LAN could dial, exactly as
+	// it mints no renderer URL.
+	advertiser := c.startDiscovery(ctx, srv.Addr())
+
 	// Reconciliation runs on the SERVING context, not the startup one: it is
 	// ongoing work rather than schema-shaped setup, and it must stop when the
 	// controller does.
@@ -394,6 +404,10 @@ func (c *Controller) Run(ctx context.Context) error {
 	// finishing.
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancelShutdown()
+	// Stop announcing before the listeners drain: a client that heard the last
+	// announcement must not then find the port closed. Stop is a no-op when
+	// advertisement was inert.
+	advertiser.Stop()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		c.log.Error("the http server did not shut down cleanly", "error", err)
 	}
