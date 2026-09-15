@@ -2264,6 +2264,55 @@ paths:
         '416':
           description: The requested range lies outside the blob.
 
+  /api/v1/vault/blobs/{hash}:
+    parameters:
+      - name: hash
+        in: path
+        required: true
+        description: The BLAKE3 digest that names the ciphertext blob, as `blake3:<64 lowercase hex characters>`.
+        schema:
+          type: string
+          pattern: '^blake3:[0-9a-f]{64}$'
+    put:
+      tags: [personal-state]
+      operationId: uploadVaultBlob
+      summary: Upload a client-encrypted, content-addressed vault blob and pin it. Requires `write`.
+      description: >-
+        The vault content ingest path (ADR-0021, ADR-0096), deliberately separate
+        from scan-ingest and from the read-only blob GET contract. The client
+        encrypts the bytes into fixed frames (ADR-0097) and uploads the ciphertext
+        under the digest that names it; the server verifies the bytes hash to
+        `{hash}`, stores them, and records a placement pin so garbage collection
+        retains them — a vault blob has no catalog reference the control plane can
+        see. The server never holds plaintext. Reads use `GET /blobs/{hash}/content`.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: The blob was stored and pinned.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [hash, size]
+                additionalProperties: false
+                properties:
+                  hash:
+                    type: string
+                    description: The `blake3:<hex>` id the blob was stored under.
+                  size:
+                    type: integer
+                    format: int64
+                    description: The ciphertext byte length stored.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /api/v1/peers:
     get:
       tags: [fabric]
