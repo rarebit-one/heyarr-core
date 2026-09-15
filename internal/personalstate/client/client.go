@@ -207,6 +207,16 @@ func (m *Manager) IsOpen(spaceID string) bool {
 	return ok
 }
 
+// SpaceKey returns an open space's key so the vault content path
+// (internal/personalstate/vaultframe, vaultread) can seal and open fixed
+// ciphertext frames directly under it, rather than through the change-oriented
+// [Manager.Encrypt]/[Manager.Decrypt]. ok is false when this device does not hold
+// the key — it was never created here or opened from a wrapped copy. The key stays
+// in memory on this device (§40): a caller must not persist it or hand it to a peer.
+func (m *Manager) SpaceKey(spaceID string) (key encryption.SpaceKey, ok bool) {
+	return m.key(spaceID)
+}
+
 // Close forgets a space's key — on lock, or when this device is revoked from the
 // space. The wrapped copies the peer holds are untouched; this only drops the
 // in-memory key.

@@ -90,6 +90,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr space list`](heyarr_space_list.md) | List the encrypted spaces the controller holds (metadata only) |
 | [`heyarr space put`](heyarr_space_put.md) | Add an item to a space's playlist (encrypted client-side, then pushed) |
 | [`heyarr space read`](heyarr_space_read.md) | Read a space's playlist on an authorised device (decrypts and merges locally) |
+| [`heyarr space recover`](heyarr_space_recover.md) | Recover vault space keys from your recovery secret, offline (ADR-0022, ADR-0049) |
 | [`heyarr space rotate`](heyarr_space_rotate.md) | Revoke recipients from a space by rotating its key (§41, #361) |
 | [`heyarr space snapshot`](heyarr_space_snapshot.md) | Take an encrypted snapshot at the current causal point (§44) |
 | [`heyarr space`](heyarr_space.md) | Create and read encrypted personal-state spaces (§38, §42, ADR-0049) |
@@ -103,6 +104,10 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr token list`](heyarr_token_list.md) | List API tokens |
 | [`heyarr token revoke`](heyarr_token_revoke.md) | Revoke an API token |
 | [`heyarr token`](heyarr_token.md) | Manage API tokens (ADR-0011) |
+| [`heyarr vault ls`](heyarr_vault_ls.md) | List the live files in a vault |
+| [`heyarr vault pull`](heyarr_vault_pull.md) | Read a file from the vault, decrypting it on this device |
+| [`heyarr vault push`](heyarr_vault_push.md) | Seal a local file into the vault and record it at a vault path |
+| [`heyarr vault`](heyarr_vault.md) | Push, pull and list files in an encrypted media vault (ADR-0021, ADR-0095) |
 | [`heyarr version`](heyarr_version.md) | Print build information |
 | [`heyarr worker`](heyarr_worker.md) | Execute leased jobs |
 | [`heyarr works list`](heyarr_works_list.md) | List works |

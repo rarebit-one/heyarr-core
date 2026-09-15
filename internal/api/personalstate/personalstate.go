@@ -41,6 +41,7 @@ import (
 type API struct {
 	store      *store.Store
 	replicator Replicator
+	authorizer RecipientAuthorizer
 	log        *slog.Logger
 }
 
@@ -55,6 +56,18 @@ type Replicator interface {
 	ReconcileAll(ctx context.Context) (replicated, deferred int, err error)
 }
 
+// RecipientAuthorizer reports the set of encryption keys a space key may be
+// wrapped for — enrol-before-wrap (ADR-0049): a recipient must be an enrolled
+// device's key or a recovery key. The API imports only this interface, not the
+// device store, so the Invariant-6 boundary above holds — it learns which keys
+// are pinned, never any ciphertext or plaintext. *deviceauth.Store satisfies it.
+//
+// nil is legitimate: with no authorizer wired the check is off (the pre-M9
+// behaviour). A controller always wires one; the acceptance demo proves it is on.
+type RecipientAuthorizer interface {
+	AllowedWrapRecipients(ctx context.Context) (map[string]bool, error)
+}
+
 // Options configure the API.
 type Options struct {
 	// Store is the peer-side opaque store (spaces, wrapped keys, changes).
@@ -63,6 +76,9 @@ type Options struct {
 	// Replicator drives on-demand replication to Full Peers. Optional: nil leaves
 	// POST /state/replicate answering 503 (a node with no peers).
 	Replicator Replicator
+	// Authorizer enforces enrol-before-wrap on the create/rewrap paths (ADR-0049).
+	// Optional: nil leaves the check off (pre-M9 behaviour). A controller wires it.
+	Authorizer RecipientAuthorizer
 	Logger     *slog.Logger
 }
 
@@ -76,7 +92,31 @@ func New(opts Options) (*API, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &API{store: opts.Store, replicator: opts.Replicator, log: log.With("component", "personalstate-api")}, nil
+	return &API{store: opts.Store, replicator: opts.Replicator, authorizer: opts.Authorizer, log: log.With("component", "personalstate-api")}, nil
+}
+
+// recipientsAllowed enforces enrol-before-wrap (ADR-0049): every wrap recipient
+// must be a pinned device or recovery key. It writes the failure and returns
+// false when a recipient is not, or the authorizer errors; true when the wrap may
+// proceed (including when no authorizer is wired, which leaves the check off).
+func (a *API) recipientsAllowed(w http.ResponseWriter, r *http.Request, keys []wrappedKeyInput) bool {
+	if a.authorizer == nil {
+		return true
+	}
+	allowed, err := a.authorizer.AllowedWrapRecipients(r.Context())
+	if err != nil {
+		a.log.Error("checking wrap recipients", "error", err)
+		httpapi.Fail(w, r, problem.Internal())
+		return false
+	}
+	for _, k := range keys {
+		if !allowed[k.Recipient] {
+			httpapi.Fail(w, r, problem.Forbidden(
+				"recipient "+k.Recipient+" is not an enrolled device or recovery key — a space key is wrapped only for pinned recipients (enrol-before-wrap, ADR-0049)"))
+			return false
+		}
+	}
+	return true
 }
 
 // Mount registers the routes on the authenticated /api/v1 router. The scope on
@@ -229,6 +269,9 @@ func (a *API) createSpace(w http.ResponseWriter, r *http.Request) {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	}
+	if !a.recipientsAllowed(w, r, req.WrappedKeys) {
+		return
+	}
 	sp, err := a.store.PutSpace(r.Context(), req.ID, spaces.Kind(req.Kind))
 	if err != nil {
 		a.failStore(w, r, "recording a space", err)
@@ -288,6 +331,9 @@ func (a *API) rewrapKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.WrappedKeys) == 0 {
 		httpapi.Fail(w, r, problem.BadRequest("a re-wrap needs at least one wrapped key"))
+		return
+	}
+	if !a.recipientsAllowed(w, r, req.WrappedKeys) {
 		return
 	}
 	for _, k := range req.WrappedKeys {
