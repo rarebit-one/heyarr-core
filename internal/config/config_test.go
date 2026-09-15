@@ -117,6 +117,28 @@ func TestEnvironmentOverridesFile(t *testing.T) {
 	}
 }
 
+func TestDiscoveryAdvertisesByDefaultAndTogglesOff(t *testing.T) {
+	// Unmentioned: the zero value advertises, so a client can find a node out of
+	// the box (ADR-0094 §Discovery). The guest trust boundary still gates WHERE.
+	cfg, err := Load(writeConfig(t, "data_dir: /srv/heyarr\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.HTTP.Discovery.Advertises() {
+		t.Error("discovery should advertise by default")
+	}
+
+	// The independent off-switch suppresses advertisement without touching the
+	// guest boundary the gating reuses.
+	off, err := Load(writeConfig(t, "http:\n  discovery:\n    disabled: true\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if off.HTTP.Discovery.Advertises() {
+		t.Error("http.discovery.disabled=true should stop advertisement")
+	}
+}
+
 func TestMissingConfigFileNamesThePath(t *testing.T) {
 	_, err := Load("/nonexistent/heyarr.yaml")
 	if err == nil {

@@ -32,6 +32,24 @@ stable.
   unchanged. Problem documents gain an optional `code` extension member for the
   machine-readable reason.
 
+- **The node advertises itself over mDNS / DNS-SD so a client can find it
+  (ADR-0094, phase 2).** A controller now announces the `_heyarr._tcp` service
+  over mDNS (`224.0.0.251:5353`, `ff02::fb`) — the client-facing sibling of the
+  SSDP the renderer already speaks to *find* televisions, here the node
+  *announcing itself*. `internal/discovery` builds the DNS-SD records (PTR, SRV,
+  TXT `{txtvers=1, path=/api/v1, tls=0|1}`, and per-interface A/AAAA) as a pure,
+  unit-tested function and multicasts them on a cadence. Advertisement is gated
+  to **trusted interfaces only**: it reuses the guest trust boundary
+  (`http.guest.trusted_nets`) and announces solely on up, multicast-capable,
+  non-loopback interfaces whose address falls inside it — never on the raw
+  internet — so an empty boundary advertises to nobody, mirroring the guest
+  tier's "empty allow-list = off". It advertises the TLS endpoint (the bound
+  client-API port) and is inert on a socket-only or loopback-only node that names
+  no LAN-reachable port. New `http.discovery.disabled` is the independent
+  off-switch; advertisement is on by default where a trusted interface exists.
+  Split-horizon DNS (`heyarr.thesim.family`, mechanism 1) is untouched: the app
+  stays unaware of that name.
+
 - **Device enrolment carries the identity's recovery encryption public key
   (§41, rarebit-one/heyarr-mobile#41 part 2).** The device-enrolment response
   (`POST /enrol`) now includes `recovery_encryption_key`, the user identity's
