@@ -40,7 +40,7 @@ heyarr events tail [flags]
 ### Options inherited from parent commands
 
 ```
-  -c, --config string   path to the configuration file (default: built-in defaults plus HEYARR_ environment)
+  -c, --config string   path to the configuration file (default: $HEYARR_CONFIG, else /etc/heyarr/config.yaml if present, else built-in defaults plus HEYARR_ environment)
 ```
 
 ### See also

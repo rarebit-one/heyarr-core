@@ -34,7 +34,7 @@ heyarr space rotate <space-id> --revoke <recipient> [flags]
 ### Options inherited from parent commands
 
 ```
-  -c, --config string       path to the configuration file (default: built-in defaults plus HEYARR_ environment)
+  -c, --config string       path to the configuration file (default: $HEYARR_CONFIG, else /etc/heyarr/config.yaml if present, else built-in defaults plus HEYARR_ environment)
       --device-dir string   where this machine's device key lives (default: your config directory; VOIDBIND_DEVICE_DIR overrides)
 ```
 
