@@ -91,3 +91,4 @@ An ADR that merely describes the code is not worth having.
 | [0082](0082-acquisition-strategy-per-content-type.md) | Acquisition strategy is chosen per content type | Accepted |
 | [0083](0083-a-library-and-a-root-are-deletable-a-non-empty-library-refuses.md) | A library and a root are deletable; a non-empty library refuses | Accepted |
 | [0084](0084-embedded-subtitles-are-extracted-to-sidecar-assets.md) | Embedded subtitle tracks are extracted to sidecar assets on ingest | Accepted |
+| [0094](0094-a-guest-on-a-trusted-network-watches-without-an-identity.md) | A guest on a trusted network watches without an identity | Proposed |
