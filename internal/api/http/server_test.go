@@ -8,6 +8,7 @@ package httpapi_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +33,8 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/drift"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/guest"
+	"github.com/rarebit-one/heyarr-core/internal/leases"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
@@ -117,6 +120,22 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		t.Fatal(err)
 	}
 
+	// Guest mode is backed by an access lease (ADR-0094), so a harness that turns
+	// the mode on needs a lease issuer. It is the real internal/leases store over
+	// the same database, signed with an ephemeral test identity — nothing mocked,
+	// the same stance as the credential store above — and wired unconditionally
+	// since the server ignores it unless guest mode is enabled.
+	_, signer, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaseStore, err := leases.New(leases.Options{
+		Writer: db.Writer(), Reader: db.Reader(), Events: eventLog, Signer: signer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	logs := &syncBuffer{}
 	srv, err := httpapi.New(httpapi.Options{
 		Config:             cfg,
@@ -124,6 +143,7 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		DB:                 db,
 		Verifier:           verifier,
 		Events:             eventLog,
+		GuestLeases:        guest.NewMinter(leaseStore, guest.DefaultTTL),
 		Build:              buildinfo.Info{Version: "test", Commit: "abc123", Date: "2026-08-20T00:00:00Z"},
 		SchemaVersion:      4,
 		KnownSchemaVersion: 4,

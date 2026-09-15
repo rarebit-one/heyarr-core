@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/grant"
 	"github.com/rarebit-one/heyarr-core/internal/guest"
 )
 
@@ -64,5 +65,39 @@ func TestVisibleClassesIsTheSameAllowlistAsVisible(t *testing.T) {
 	}
 	if guest.Visible(guest.ClassVault) {
 		t.Error("vault must not be visible")
+	}
+}
+
+func TestIdentityCarriesTheLeaseCapabilities(t *testing.T) {
+	id := guest.Identity()
+	for _, cap := range []string{
+		string(guest.CapBrowse), string(guest.CapPlay), string(guest.CapSubtitle),
+	} {
+		if !id.HasCapability(cap) {
+			t.Errorf("a guest identity does not carry the %q capability", cap)
+		}
+	}
+	// And nothing beyond the three: a guest is browse, play and subtitle, not
+	// write in any spelling.
+	if id.HasCapability("write") || id.HasCapability("acquire") {
+		t.Error("a guest identity carries a capability it must not")
+	}
+	if len(id.Capabilities) != 3 {
+		t.Errorf("a guest carries %d capabilities, want 3", len(id.Capabilities))
+	}
+}
+
+func TestCapabilitiesAreStableAndOrdered(t *testing.T) {
+	caps := guest.Capabilities()
+	want := []grant.Capability{guest.CapBrowse, guest.CapPlay, guest.CapSubtitle}
+	if !reflect.DeepEqual(caps, want) {
+		t.Fatalf("Capabilities() = %v, want %v", caps, want)
+	}
+}
+
+func TestReasonCapabilityDeniedReusesTheGrantCode(t *testing.T) {
+	if guest.ReasonCapabilityDenied != string(grant.ReasonCapabilityDenied) {
+		t.Errorf("guest reason %q is not the grant code %q",
+			guest.ReasonCapabilityDenied, grant.ReasonCapabilityDenied)
 	}
 }

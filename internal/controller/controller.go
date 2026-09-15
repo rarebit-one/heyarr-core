@@ -31,9 +31,11 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/downloads"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/guest"
 	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/indexers"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/leases"
 	"github.com/rarebit-one/heyarr-core/internal/media"
 	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
 	"github.com/rarebit-one/heyarr-core/internal/media/probe"
@@ -573,11 +575,36 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 		return nil, nil, fmt.Errorf("controller: opening the management-grant store: %w", err)
 	}
 
+	// The guest access-lease issuer (ADR-0094): when guest mode is enabled, a
+	// credential-less caller from inside the trusted-net boundary is admitted as a
+	// guest backed by a short-lived M7 lease. It is the SAME access_leases table,
+	// signer and event log the peer surface's lease store uses — a second handle
+	// over one store of record, the pattern the personal-state and catalog stores
+	// already follow here — so a guest lease is listable and revocable exactly as
+	// a cross-site lease is. Built only when the mode is on, so a node that never
+	// serves guests loads no lease signer for it.
+	var guestLeases httpapi.GuestLeaseIssuer
+	if c.cfg.HTTP.Guest.Enabled {
+		leaseSigner, err := identity.Signer(c.cfg.DataDir)
+		if err != nil {
+			return nil, nil, fmt.Errorf("controller: loading the identity key for guest leases: %w", err)
+		}
+		guestLeaseStore, err := leases.New(leases.Options{
+			Writer: db.Writer(), Reader: db.Reader(), Events: eventLog,
+			Signer: leaseSigner, Siblings: siblingKeys{store: members},
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("controller: opening the guest access-lease store: %w", err)
+		}
+		guestLeases = guest.NewMinter(guestLeaseStore, guest.DefaultTTL)
+	}
+
 	srv, err := httpapi.New(httpapi.Options{
 		Config:           c.cfg,
 		Logger:           c.log,
 		DB:               db,
 		Verifier:         verifier,
+		GuestLeases:      guestLeases,
 		DeviceVerifier:   deviceIdentities,
 		SessionValidator: sessions,
 		// The same store, asked a different question: is the device that

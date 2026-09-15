@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -173,16 +174,33 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 
 		// No credential at all, or a scheme this server does not handle.
 		//
-		// When guest mode is enabled (ADR-0074), a request that presents no
-		// credential is admitted as a first-class, read-only Guest over the
-		// shared library rather than falling through to the 401 RequireScope
-		// produces. This is reached only after every credential path above has
-		// declined THIS request, so a REJECTED credential — a bad or revoked
-		// token, a refused device — never lands here: those already returned a
-		// 401 and are never quietly downgraded to a Guest.
-		if s.cfg.HTTP.Guest.Enabled {
-			next.ServeHTTP(w, s.withIdentity(r, guest.Identity()))
-			return
+		// When guest mode is enabled (ADR-0074, ADR-0094) AND the request's source
+		// address is inside the trusted-net boundary, a request that presents no
+		// credential is admitted as a first-class Guest — minted as a short-lived
+		// M7 access lease (principal="guest", browse+play+subtitle) — rather than
+		// falling through to the 401 RequireScope produces. This is reached only
+		// after every credential path above has declined THIS request, so a
+		// REJECTED credential — a bad or revoked token, a refused device — never
+		// lands here: those already returned a 401 and are never quietly
+		// downgraded to a Guest.
+		//
+		// A source OUTSIDE the boundary — raw internet — is not a guest: it falls
+		// through to the 401 below and must enrol. An empty allow-list matches no
+		// source, so it turns the tier off however Enabled is set.
+		if s.cfg.HTTP.Guest.Enabled && s.guestSourceTrusted(remoteHost(r)) {
+			id, err := s.guestLeases.GuestLease(r.Context(), remoteHost(r), s.now())
+			if err != nil {
+				// The lease could not be minted (the store is unreachable, or its
+				// signer is missing). A guest is a convenience over the shared
+				// library, not a fallback for a broken control plane: rather than
+				// invent an unbacked guest, decline the admission and let the
+				// request fall through to the ordinary 401.
+				s.log.Warn("could not mint a guest lease; declining the guest admission",
+					"request_id", RequestIDFrom(r.Context()), "error", err)
+			} else {
+				next.ServeHTTP(w, s.withIdentity(r, id))
+				return
+			}
 		}
 
 		// With guest mode off this is not a failure worth a metric spike or a
@@ -190,6 +208,26 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		// looks like. RequireScope turns it into a 401.
 		next.ServeHTTP(w, r)
 	})
+}
+
+// guestSourceTrusted reports whether host — the request's source address as
+// remoteHost yields it — falls inside the configured guest trust boundary
+// (ADR-0094). The nets were parsed once at construction, so this is a
+// containment test, not a re-parse. The local unix socket ("unix") and any
+// unparseable host are never trusted: a guest is admitted by a routable source
+// inside the estate, and the socket is the local IPC path the CLI and workers
+// already reach with real credentials.
+func (s *Server) guestSourceTrusted(host string) bool {
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return false
+	}
+	for _, n := range s.guestNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // RefuseGuest rejects a Guest identity (ADR-0074) with 403, and passes every
@@ -455,10 +493,65 @@ func RequireScope(want auth.Scope) func(http.Handler) http.Handler {
 				return
 			}
 			if !id.Allows(want) {
+				// A guest lacking the scope is refused with the SAME stable,
+				// machine-readable code every guest capability refusal carries
+				// (ADR-0094), so a client branches on the code rather than on which
+				// route it happened to hit. An ordinary read token gets the plain
+				// scope refusal it always did.
+				if id.Guest {
+					Fail(w, r, guestCapabilityRefusal(want))
+					return
+				}
 				Fail(w, r, problem.Forbidden("this token does not carry the "+string(want)+" scope"))
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// guestCapabilityRefusal is the 403 a guest gets on a route its capabilities do
+// not reach (ADR-0094): a write it may not perform (want/acquire, follow, rate,
+// monitor, subtitle want/backfill, enrich), or the play gate when it somehow
+// carries no play capability. It quotes the grant reason code verbatim so the
+// refusal is inspectable the same way a §63 evaluation is, and names the way out.
+func guestCapabilityRefusal(want auth.Scope) *problem.Problem {
+	return problem.Forbidden(
+		"a guest session may browse, play and fetch subtitles for the shared library, " +
+			"but not " + string(want) + "-scoped actions; sign in to reach them").
+		WithCode(guest.ReasonCapabilityDenied)
+}
+
+// RequireWriteOrGuestPlay guards POST /playback (ADR-0094). Starting a playback
+// session is write-scoped — it opens a session and mints a stream credential —
+// so an ordinary caller still needs `write`. The one exception is a guest whose
+// lease carries the `play` capability: playing the shared library is the whole
+// point of the guest tier, so its play capability reaches EXACTLY this route.
+// Nothing else write-scoped becomes reachable — this middleware guards one route
+// and the rest keep RequireScope(write).
+//
+// A read-only token that is not a guest is refused as before: `play` is a guest
+// capability, not a scope any bearer token carries.
+func RequireWriteOrGuestPlay(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := IdentityFrom(r.Context())
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="heyarr"`)
+			Fail(w, r, problem.Unauthorized("this endpoint requires a bearer token"))
+			return
+		}
+		if id.Allows(auth.ScopeWrite) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if id.Guest && id.HasCapability(string(guest.CapPlay)) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if id.Guest {
+			Fail(w, r, guestCapabilityRefusal(auth.ScopeWrite))
+			return
+		}
+		Fail(w, r, problem.Forbidden("this token does not carry the "+string(auth.ScopeWrite)+" scope"))
+	})
 }

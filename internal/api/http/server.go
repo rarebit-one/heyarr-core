@@ -44,6 +44,17 @@ type EventHead interface {
 	Latest(ctx context.Context) (int64, error)
 }
 
+// GuestLeaseIssuer admits a credential-less caller from a trusted source as a
+// guest (ADR-0094): it mints or reuses the short-lived M7 access lease that
+// backs the session and returns the identity that lease grants. internal/guest's
+// Minter satisfies it. It is required whenever http.guest.enabled is set —
+// guest mode IS the lease, so a server that could not mint one must not claim to
+// offer the mode. The interface keeps this package off the leases and grant
+// imports: it hands back a resolved identity, nothing lower.
+type GuestLeaseIssuer interface {
+	GuestLease(ctx context.Context, source string, now time.Time) (auth.Identity, error)
+}
+
 // Options configure a Server.
 type Options struct {
 	// Config supplies the listen addresses and the auth switch. The server
@@ -144,6 +155,10 @@ type Options struct {
 	// injectable so the revocation behaviour can be driven by a test without
 	// standing up mTLS, which M4-05 owns.
 	PresentedPeerKey PresentedPeerKey
+	// GuestLeases mints the access lease that backs an admitted guest (ADR-0094).
+	// Required when Config.HTTP.Guest.Enabled is set; ignored otherwise. See
+	// GuestLeaseIssuer.
+	GuestLeases GuestLeaseIssuer
 	// Now is injected so expiry and durations are testable.
 	Now func() time.Time
 }
@@ -159,6 +174,8 @@ type Server struct {
 	deviceMembers DeviceMembership
 	mgmtAuth      ManagementAuthorizer
 	events        EventHead
+	guestLeases   GuestLeaseIssuer
+	guestNets     []*net.IPNet
 	media         []ToolInfo
 	build         buildinfo.Info
 	schema        int64
@@ -213,6 +230,18 @@ func New(opts Options) (*Server, error) {
 			"without it the drift check reports \"unknown\" forever, which is indistinguishable " +
 			"from a fleet that has never drifted")
 	}
+	// Guest mode IS the access lease (ADR-0094): admitting a guest means minting
+	// one, so a server that offers the mode without a way to mint is a
+	// misconfiguration, refused here the same way an auth-enabled server with no
+	// verifier is. The trusted-net allow-list is parsed once, at construction, so
+	// the per-request check is a containment test rather than a re-parse.
+	if opts.Config.HTTP.Guest.Enabled && opts.GuestLeases == nil {
+		return nil, errors.New("httpapi: http.guest.enabled is set but no guest lease issuer was supplied")
+	}
+	guestNets, err := opts.Config.HTTP.Guest.ParsedNets()
+	if err != nil {
+		return nil, fmt.Errorf("httpapi: http.guest.trusted_nets: %w", err)
+	}
 	log := opts.Logger
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -238,6 +267,8 @@ func New(opts Options) (*Server, error) {
 		deviceMembers: opts.DeviceMembership,
 		mgmtAuth:      opts.ManagementAuthorizer,
 		events:        opts.Events,
+		guestLeases:   opts.GuestLeases,
+		guestNets:     guestNets,
 		// Normalised so the JSON shape is stable: a nil slice marshals as
 		// null, and a client parsing `media` should not have to handle both
 		// null and [] for the same "nothing here".
