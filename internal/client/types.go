@@ -273,6 +273,23 @@ type CreateQualityProfileRequest struct {
 	Terminal    json.RawMessage `json:"terminal,omitempty"`
 }
 
+// UpdateQualityProfileRequest is the PUT /quality-profiles/{id} body.
+//
+// The rule groups are pointers, not plain arrays, because the endpoint
+// distinguishes two things a plain array cannot: a group the caller OMITS is
+// left as it was, and a group sent as an explicit `[]` is CLEARED. Collapsing
+// those would make "leave the terminal rules alone" and "remove the terminal
+// rules" the same request. A nil pointer is omitted from the body; a pointer
+// to `[]` clears; a pointer to rules replaces. Name and Description replace
+// only when non-empty.
+type UpdateQualityProfileRequest struct {
+	Name        string           `json:"name,omitempty"`
+	Description string           `json:"description,omitempty"`
+	Accept      *json.RawMessage `json:"accept,omitempty"`
+	Prefer      *json.RawMessage `json:"prefer,omitempty"`
+	Terminal    *json.RawMessage `json:"terminal,omitempty"`
+}
+
 // DesiredItem is content that should exist, whether or not it does (§55).
 //
 // It anchors to a Work — the semantic entity, which exists whether or not any
