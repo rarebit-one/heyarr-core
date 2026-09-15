@@ -168,7 +168,11 @@ func SearchHandler(
 			}
 			log.Warn("a search could not reach any indexer",
 				"desired_item_id", payload.DesiredItemID, "tried", result.Consulted)
-			return fmt.Errorf("worker: searching for %s: %s", payload.DesiredItemID, detail)
+			// An outage, not a dead end (§557): every indexer being unreachable
+			// is a property of the moment, so mark it transient and let the
+			// queue retry patiently rather than spending the attempt cap on a
+			// blip and stranding the want until someone runs `jobs retry`.
+			return fmt.Errorf("%w: worker: searching for %s: %s", jobs.ErrTransient, payload.DesiredItemID, detail)
 		}
 
 		if len(result.Candidates) == 0 {
