@@ -87,7 +87,14 @@ jobs:
       - name: read the image digest
         id: image
         run: |
-          digest=$(jq -r '[.[] | select(.type == "Docker Manifest")] | .[0].extra.Digest // empty' dist/artifacts.json)
+          # goreleaser records our multi-arch image as a single "Docker Image"
+          # artifact carrying the manifest-list digest and both platforms — it
+          # is not a separate "Docker Manifest" entry (that type only appears
+          # when per-platform images are stitched by a docker_manifests block).
+          # Accept either, so the attestation binds to the digest goreleaser
+          # actually pushed. Both the :VERSION and :latest entries share one
+          # digest, so .[0] is unambiguous.
+          digest=$(jq -r '[.[] | select(.type == "Docker Image" or .type == "Docker Manifest")] | .[0].extra.Digest // empty' dist/artifacts.json)
           if [[ -z "$digest" ]]; then
             echo "no image digest in dist/artifacts.json — attestation would be a no-op" >&2
             exit 1
