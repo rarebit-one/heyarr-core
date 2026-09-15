@@ -147,6 +147,12 @@ type HTTP struct {
 	// reverse proxy or TLS listener, not the address the socket bound. Empty
 	// keeps today's derived behaviour (ADR-0072).
 	PublicOrigin string `koanf:"public_origin"`
+	// Discovery advertises this node over mDNS / DNS-SD so a client on a trusted
+	// network can FIND it without being told an address (ADR-0094 §Discovery,
+	// Phase 2). It is the client-facing sibling of the SSDP the renderer package
+	// speaks to find televisions: there the node is the searcher, here it is the
+	// one announcing itself. See Discovery.
+	Discovery Discovery `koanf:"discovery"`
 }
 
 // TLS points at the certificate and key that serve the client API over HTTPS.
@@ -239,6 +245,33 @@ func (g Guest) ParsedNets() ([]*net.IPNet, error) {
 	}
 	return out, nil
 }
+
+// Discovery configures mDNS / DNS-SD advertisement of this node (ADR-0094
+// §Discovery, Phase 2). The node advertises the `_heyarr._tcp` service so a
+// client discovers it, else falls back to the split-horizon DNS name, else to
+// manual entry.
+//
+// It deliberately carries no allow-list of its own: the interfaces it may
+// announce on ARE the guest trust boundary (HTTP.Guest.TrustedNets). Discovery
+// only ever tells a client "there is a heyarr here" on a network heyarr already
+// treats as trusted, and never on the raw internet — the same boundary, stated
+// once. An empty guest trusted-net set therefore turns advertisement off too:
+// a node that trusts no network announces itself to none.
+type Discovery struct {
+	// Disabled turns advertisement OFF even where a trusted interface exists. It
+	// is the independent off-switch (ADR-0094): the default — unmentioned — is to
+	// advertise on every trusted, multicast-capable, non-loopback interface, and
+	// setting this true suppresses that without touching the guest boundary the
+	// gating reuses. It is phrased as "disabled" rather than "enabled" so the
+	// zero value is the useful one: a client can find a node out of the box.
+	Disabled bool `koanf:"disabled"`
+}
+
+// Advertises reports whether the node should announce itself, given whether any
+// trusted interface exists. The trusted-set emptiness is decided by the caller
+// (the advertiser resolves interfaces against HTTP.Guest.TrustedNets); this is
+// only the operator's explicit off-switch.
+func (d Discovery) Advertises() bool { return !d.Disabled }
 
 // Peer identifies this node within the Heyarr instance. A peer row exists from
 // Milestone 1 even though there is only one (ADR-0010).
