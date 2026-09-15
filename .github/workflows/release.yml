@@ -55,7 +55,7 @@ jobs:
         with: { go-version: stable, cache: true }
 
       # Multi-architecture images without an arm64 runner.
-      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
@@ -87,7 +87,14 @@ jobs:
       - name: read the image digest
         id: image
         run: |
-          digest=$(jq -r '[.[] | select(.type == "Docker Manifest")] | .[0].extra.Digest // empty' dist/artifacts.json)
+          # goreleaser records our multi-arch image as a single "Docker Image"
+          # artifact carrying the manifest-list digest and both platforms — it
+          # is not a separate "Docker Manifest" entry (that type only appears
+          # when per-platform images are stitched by a docker_manifests block).
+          # Accept either, so the attestation binds to the digest goreleaser
+          # actually pushed. Both the :VERSION and :latest entries share one
+          # digest, so .[0] is unambiguous.
+          digest=$(jq -r '[.[] | select(.type == "Docker Image" or .type == "Docker Manifest")] | .[0].extra.Digest // empty' dist/artifacts.json)
           if [[ -z "$digest" ]]; then
             echo "no image digest in dist/artifacts.json — attestation would be a no-op" >&2
             exit 1

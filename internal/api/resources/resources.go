@@ -478,8 +478,11 @@ func (a *API) Mount(r chi.Router) {
 	// already established the caller is that credential.
 	r.Get("/playback/stream/{token}", a.streamPlayback)
 	// Starting a playback opens a session and mints a credential, so it is a
-	// write even though the bytes it points at are read-only.
-	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/playback", a.startPlayback)
+	// write even though the bytes it points at are read-only. The one exception
+	// is a guest whose lease carries the `play` capability (ADR-0094): playing the
+	// shared library is the whole point of the guest tier, so its play capability
+	// reaches EXACTLY this route — nothing else write-scoped becomes reachable.
+	r.With(httpapi.RequireWriteOrGuestPlay).Post("/playback", a.startPlayback)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/playback/remux", a.enqueueRemux)
 	// Reprocess already-ingested video for embedded subtitles (ADR-0084): a
 	// write, because it queues work.

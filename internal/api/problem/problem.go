@@ -63,6 +63,13 @@ type Problem struct {
 	Detail    string `json:"detail,omitempty"`
 	Instance  string `json:"instance,omitempty"`
 	RequestID string `json:"request_id,omitempty"`
+	// Code is an optional stable, machine-readable reason code — the same kind of
+	// value §63's Reason.Rule carries, so a client branches on the code rather
+	// than on the prose Detail (which is free to improve). It is an extension
+	// member and omitempty: an ordinary refusal sets none, so no existing
+	// response shape changes; a guest capability refusal (ADR-0094) sets it to
+	// the grant reason the check yielded.
+	Code string `json:"code,omitempty"`
 }
 
 // Error lets a Problem be returned as an ordinary error and rendered later.
@@ -121,6 +128,10 @@ func Internal() *Problem {
 	return New(http.StatusInternalServerError, TypeInternal, "Internal Server Error",
 		"the server failed to handle this request; see the server log for the request id")
 }
+
+// WithCode stamps a stable, machine-readable reason code on the problem and
+// returns it, so a caller can branch on the code rather than the prose Detail.
+func (p *Problem) WithCode(code string) *Problem { p.Code = code; return p }
 
 // WithInstance records the URI this problem occurred at.
 func (p *Problem) WithInstance(uri string) *Problem { p.Instance = uri; return p }

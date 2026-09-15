@@ -28,7 +28,9 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/guest"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/leases"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
@@ -267,6 +269,20 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		t.Fatal(err)
 	}
 
+	// The guest access-lease issuer (ADR-0094), on the harness's fixed clock so a
+	// minted lease's expiry is a golden fact rather than the wall clock. It is the
+	// real lease store over the same database, signed with an ephemeral identity.
+	_, guestSigner, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guestLeaseStore, err := leases.New(leases.Options{
+		Writer: db.Writer(), Reader: db.Reader(), Events: eventLog, Signer: guestSigner, Clock: clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	srv, err := httpapi.New(httpapi.Options{
 		Config:             cfg,
 		Logger:             slog.New(slog.DiscardHandler),
@@ -274,6 +290,7 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		Verifier:           verifier,
 		DeviceVerifier:     identities,
 		Events:             eventLog,
+		GuestLeases:        guest.NewMinter(guestLeaseStore, guest.DefaultTTL),
 		Build:              buildinfo.Info{Version: "test", Commit: "abc123", Date: "2026-08-20T00:00:00Z"},
 		SchemaVersion:      4,
 		KnownSchemaVersion: 4,
