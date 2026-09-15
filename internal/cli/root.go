@@ -112,6 +112,12 @@ One logical library, multiple complete sovereign peers.`,
 		// machine's device key like a device command — the controller stores the
 		// ciphertext and only this device holds the key that opens it.
 		newSpaceCommand(opts, &configPath),
+		// The vault media client (ADR-0021, ADR-0095, ADR-0096, ADR-0097). A
+		// hybrid like `space`: it talks to the controller over /api/v1 and holds
+		// this machine's device key — the peer stores ciphertext blobs, encrypted
+		// drive changes and opaque placement pins, and this device alone holds the
+		// key that seals a file into frames and opens them back.
+		newVaultCommand(opts, &configPath),
 		newPeersCommand(opts, &configPath),
 		newEventsCommand(opts, &configPath),
 		newSystemCommand(opts, &configPath),
