@@ -21,6 +21,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr controller`](heyarr_controller.md) | Own coordinated mutable state: catalog, policy, jobs, API |
 | [`heyarr desired add`](heyarr_desired_add.md) | Want something |
 | [`heyarr desired list`](heyarr_desired_list.md) | List what should exist |
+| [`heyarr desired reingest`](heyarr_desired_reingest.md) | Re-drive a wedged ingest — a finished download that never imported |
 | [`heyarr desired rm`](heyarr_desired_rm.md) | Stop wanting something |
 | [`heyarr desired set`](heyarr_desired_set.md) | Change the conditions, the monitoring or the note |
 | [`heyarr desired`](heyarr_desired.md) | Say what should exist, whether or not it does yet |

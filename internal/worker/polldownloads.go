@@ -22,6 +22,13 @@ import (
 // transfer that still exists.
 const orphanDownloadGrace = 5 * time.Minute
 
+// stuckIngestGrace is how long a want may sit in VERIFYING or INGESTING before
+// the watchdog re-drives its ingest. It must comfortably exceed a legitimate
+// verify-and-import of a large file (minutes, even under contention), because a
+// genuine ingest that IS running holds its dedupe key live throughout — so the
+// re-enqueue is a no-op for those and only reaches wants with no job at all.
+const stuckIngestGrace = 20 * time.Minute
+
 // PollDownloadsHandler asks every download client what it is doing and drives
 // §64's pipeline from the answer (§58, M3-10).
 //
@@ -101,11 +108,16 @@ func PollDownloadsHandler(
 		advanced += a
 		failed += f
 
+		// The other end of the pipeline: wants whose download finished but whose
+		// ingest wedged. Independent of whether any client answered this pass —
+		// the bytes are already local — so it runs unconditionally.
+		reingested := sweepStuckIngests(ctx, cat, ingests, log)
+
 		// Logged only when something happened. A pass over a steady queue is
 		// the normal case and should be invisible.
-		if advanced > 0 || failed > 0 {
+		if advanced > 0 || failed > 0 || reingested > 0 {
 			log.Info("polled download clients",
-				"clients", len(clients), "advanced", advanced, "failed", failed)
+				"clients", len(clients), "advanced", advanced, "failed", failed, "reingested", reingested)
 		}
 		return nil
 	}
@@ -203,6 +215,42 @@ func sweepOrphanedDownloads(
 			"external_id", o.ExternalID, "name", o.ExternalName, "phase", string(o.Phase))
 	}
 	return advanced, failed
+}
+
+// sweepStuckIngests re-drives wants wedged in VERIFYING/INGESTING — a download
+// that finished but whose ingest never completed and is not being retried.
+//
+// The counterpart to sweepOrphanedDownloads at the far end of the pipeline: an
+// orphaned download lost its transfer BEFORE importing and is failed back to
+// idle to re-acquire; a stuck ingest HAS its bytes and just needs the import
+// re-run, so it is re-enqueued rather than failed. The ingest was queued once,
+// on the transition into VERIFYING (see enqueueAcquisitionIngest); if that job
+// was later lost — a crash mid-lease, a node OOM (this host has done both) — the
+// want sits in INGESTING forever with no job. Nothing else looks for that.
+//
+// Re-enqueue is idempotent by construction (ADR-0008's partial-unique index):
+// a still-running verify/ingest holds its dedupe key and the re-enqueue no-ops,
+// while a want whose job is gone gets a fresh one. So this reaches exactly the
+// wedged wants and leaves working ones alone; the grace in StuckIngests keeps it
+// off a verify that is simply slow.
+func sweepStuckIngests(
+	ctx context.Context, cat *catalog.Catalog, ingests ProbeEnqueuer, log *slog.Logger,
+) (reingested int) {
+	stuck, err := cat.StuckIngests(ctx, stuckIngestGrace)
+	if err != nil {
+		log.Warn("could not list stuck ingests", "error", err)
+		return 0
+	}
+	for _, s := range stuck {
+		if ctx.Err() != nil {
+			return reingested
+		}
+		enqueueAcquisitionIngest(ctx, ingests, s.DesiredItemID, log)
+		reingested++
+		log.Info("re-drove a wedged ingest",
+			"desired_item_id", s.DesiredItemID, "phase", string(s.Phase))
+	}
+	return reingested
 }
 
 // advancePipeline applies the §64 transition this transfer's state implies.

@@ -32,8 +32,43 @@ would count as existing, cannot be evaluated.`,
 		newDesiredAddCommand(opts, configPath),
 		newDesiredListCommand(opts, configPath),
 		newDesiredSetCommand(opts, configPath),
+		newDesiredReingestCommand(opts, configPath),
 		newDesiredRemoveCommand(opts, configPath),
 	)
+	return cmd
+}
+
+func newDesiredReingestCommand(_ Options, configPath *string) *cobra.Command {
+	var flags clientFlags
+	cmd := &cobra.Command{
+		Use:   "reingest <id>",
+		Short: "Re-drive a wedged ingest — a finished download that never imported",
+		Long: `Re-run the hash-and-import for a want stuck in VERIFYING or INGESTING.
+
+A download that completed but whose ingest was lost — a worker crash, a node
+OOM, a client that dropped the completed transfer before the ingest ran — sits
+with no job driving it and never advances. This queues that import again; the
+ingest worker re-locates and re-verifies the bytes itself, so nothing else is
+needed. Idempotent: an ingest that is actually running is left alone.
+
+The stuck-ingest watchdog does this automatically once a want has been wedged
+past a grace window; this is the manual lever for doing it now.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				var out map[string]any
+				if err := c.Post(ctx, "/desired/"+args[0]+"/reingest", nil, &out); err != nil {
+					return err
+				}
+				if flags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), out)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "queued a re-ingest for %s (job %v)\n", args[0], out["job_id"])
+				return nil
+			})
+		},
+	}
+	flags.register(cmd)
 	return cmd
 }
 
