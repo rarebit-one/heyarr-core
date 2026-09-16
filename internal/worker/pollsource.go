@@ -47,9 +47,6 @@ const subtitleProfileName = "subtitle"
 // treats as "already projected" rather than an error. So a poll that crashed
 // after some items but before others completes cleanly on its next run.
 
-// PollSourceHandler runs one source's poll. reg resolves the feed adapter, cat
-// stores items and wants, and grabs is the queue a fresh want's reconciliation
-// is enqueued to (nil-tolerant, so a poll is exercisable without one).
 // idNamespaced is a feed adapter whose ref is a stable external-catalogue id (a
 // TMDB or TVDB series id) rather than a URL, reporting which id space it belongs
 // to. The TV metadata adapters implement it so a followed series' ref can be
@@ -59,6 +56,9 @@ type idNamespaced interface {
 	IDNamespace() string
 }
 
+// PollSourceHandler runs one source's poll. reg resolves the feed adapter, cat
+// stores items and wants, and grabs is the queue a fresh want's reconciliation
+// is enqueued to (nil-tolerant, so a poll is exercisable without one).
 func PollSourceHandler(
 	reg *providers.Registry, cat *catalog.Catalog, grabs *jobs.Queue, log *slog.Logger,
 ) HandlerFunc {
