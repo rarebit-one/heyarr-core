@@ -197,6 +197,44 @@ func TestSearchingAnUnknownWantIs404(t *testing.T) {
 	}
 }
 
+// Re-ingest queues the same import job the download poll would, and dedupes per
+// want — the manual lever for a wedged ingest, and what the watchdog does.
+func TestManualReingestQueuesAnIngestJob(t *testing.T) {
+	h := newHarness(t).seed()
+	resp := h.doStable(http.MethodPost, "/api/v1/desired/"+desired1ID+"/reingest", nil)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", resp.StatusCode, h.body(resp))
+	}
+	var got map[string]string
+	if err := json.Unmarshal(h.body(resp), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["job_id"] == "" || got["status"] != "queued" {
+		t.Errorf("response = %v", got)
+	}
+	if n := h.countRows(t,
+		`SELECT count(*) FROM jobs WHERE type = 'ingest_acquisition'`); n != 1 {
+		t.Errorf("%d ingest jobs queued, want 1", n)
+	}
+
+	// Idempotent: a live ingest is left alone, so asking twice yields one job.
+	if r := h.doStable(http.MethodPost, "/api/v1/desired/"+desired1ID+"/reingest", nil); r.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d", r.StatusCode)
+	}
+	if n := h.countRows(t,
+		`SELECT count(*) FROM jobs WHERE type = 'ingest_acquisition'`); n != 1 {
+		t.Errorf("%d ingest jobs after asking twice; the dedupe key should collapse them", n)
+	}
+}
+
+func TestReingestingAnUnknownWantIs404(t *testing.T) {
+	h := newHarness(t).seed()
+	resp := h.doStable(http.MethodPost, "/api/v1/desired/nope/reingest", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
 // The manual override records the disagreement — an override that left no
 // trace would look exactly like an ordinary selection.
 func TestOverrideRecordsWhatTheScorerHadChosen(t *testing.T) {

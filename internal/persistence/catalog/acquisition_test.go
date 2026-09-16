@@ -303,6 +303,63 @@ func TestReconciliationDoesNotResetThePhaseClock(t *testing.T) {
 	}
 }
 
+// A want parked in INGESTING past the grace is a wedged ingest the watchdog must
+// find; one that has just arrived there is not, and neither is one still
+// downloading. StuckIngests is what the re-ingest watchdog reads.
+func TestStuckIngestsFindsWedgedIngestsPastTheGrace(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+		t.Fatal(err)
+	}
+	// Walk to VERIFYING first (downloaded, not yet verified) — must NOT be stuck.
+	for _, tr := range []acquisition.Transition{
+		acquisition.TransitionSearch, acquisition.TransitionCandidatesFound,
+		acquisition.TransitionSelect, acquisition.TransitionQueue,
+		acquisition.TransitionStartDownload, acquisition.TransitionDownloaded,
+	} {
+		if _, err := h.cat.AdvanceAcquisition(ctx, h.want, tr, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := h.cat.StuckIngests(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	} else if len(got) != 0 {
+		t.Fatalf("a want that just entered VERIFYING is not stuck yet: %+v", got)
+	}
+
+	// Verified → INGESTING, still fresh: not stuck within the grace.
+	if _, err := h.cat.AdvanceAcquisition(ctx, h.want, acquisition.TransitionVerified, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.cat.StuckIngests(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	} else if len(got) != 0 {
+		t.Fatalf("a want that just entered INGESTING is not stuck within the grace: %+v", got)
+	}
+
+	// Backdate the phase clock: now it has been wedged well past the grace.
+	h.exec(t, `UPDATE acquisition_state SET phase_entered_at = '2026-07-01T00:00:00Z'
+	            WHERE desired_item_id = ?`, h.want)
+	got, err := h.cat.StuckIngests(ctx, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].DesiredItemID != h.want || got[0].Phase != acquisition.PhaseIngesting {
+		t.Fatalf("StuckIngests should return the wedged INGESTING want, got %+v", got)
+	}
+
+	// A want back at idle (satisfied) is never a stuck ingest.
+	if _, err := h.cat.AdvanceAcquisition(ctx, h.want, acquisition.TransitionIngested, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.cat.StuckIngests(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	} else if len(got) != 0 {
+		t.Fatalf("an idle/satisfied want is not a stuck ingest: %+v", got)
+	}
+}
+
 // A want with no acquisition row is a real state a caller has to handle, and it
 // must be a typed error rather than a bare sql.ErrNoRows leaking out.
 func TestReadingAnAbsentAcquisitionIsTyped(t *testing.T) {

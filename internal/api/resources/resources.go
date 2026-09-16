@@ -459,6 +459,10 @@ func (a *API) Mount(r chi.Router) {
 		r.Get("/desired/{id}/candidates", a.listCandidates)
 		r.With(httpapi.RequireScope(auth.ScopeWrite)).
 			Post("/desired/{id}/search", a.searchDesired)
+		// Re-driving a wedged ingest (a finished download that never imported)
+		// queues work, like a search.
+		r.With(httpapi.RequireScope(auth.ScopeWrite)).
+			Post("/desired/{id}/reingest", a.reingestDesired)
 
 		// Adopting a completed acquisition Heyarr did not poll for (§65).
 		r.With(httpapi.RequireScope(auth.ScopeWrite)).

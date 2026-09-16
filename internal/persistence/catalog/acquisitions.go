@@ -235,6 +235,55 @@ func (c *Catalog) OrphanedDownloads(ctx context.Context, grace time.Duration) ([
 	return out, rows.Err()
 }
 
+// StuckIngest is a want parked in VERIFYING or INGESTING whose phase has not
+// changed for a while — a download that finished but whose hash-and-import
+// never completed and is not being retried.
+type StuckIngest struct {
+	DesiredItemID string
+	Phase         acquisition.Phase
+}
+
+// StuckIngests lists wants in VERIFYING or INGESTING whose phase_entered_at is
+// older than `grace` — a wedged ingest.
+//
+// polldownloads enqueues the ingest exactly once, on the transition into
+// VERIFYING, because queueing it every pass would fill the queue with work that
+// is already done. That is correct while the job survives — but if it does not
+// (a worker crash mid-lease, a node OOM, a download client that dropped the
+// completed transfer before the ingest ran), nothing re-enqueues it and the
+// want sits in INGESTING forever with no job in any state driving it. This is
+// the read behind the watchdog that re-drives them.
+//
+// phase_entered_at (indexed with phase, migration 00014) dates the stall, and
+// the grace absorbs a legitimately slow verify of a large file — a genuine
+// verify/ingest holds its dedupe key live throughout, so re-enqueueing a want
+// found here is idempotent regardless.
+func (c *Catalog) StuckIngests(ctx context.Context, grace time.Duration) ([]StuckIngest, error) {
+	cutoff := c.clock.Now().Add(-grace).Format(timestampFormat)
+	rows, err := c.db.Reader().QueryContext(ctx, `
+		SELECT desired_item_id, phase
+		FROM acquisition_state
+		WHERE phase IN (?, ?) AND phase_entered_at < ?
+		ORDER BY phase_entered_at, desired_item_id`,
+		string(acquisition.PhaseVerifying), string(acquisition.PhaseIngesting), cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: listing stuck ingests: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []StuckIngest
+	for rows.Next() {
+		var s StuckIngest
+		var phase string
+		if err := rows.Scan(&s.DesiredItemID, &phase); err != nil {
+			return nil, err
+		}
+		s.Phase = acquisition.Phase(phase)
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // DropAcquisition removes the link between a want and a transfer.
 //
 // It does NOT touch the download client. Removing a transfer is a separate

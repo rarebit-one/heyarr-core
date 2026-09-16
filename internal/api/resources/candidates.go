@@ -176,6 +176,50 @@ func (a *API) SearchReleases(ctx context.Context, id string) (map[string]string,
 	}, nil
 }
 
+// reingestDesired is POST /api/v1/desired/{id}/reingest.
+//
+// The manual counterpart to the stuck-ingest watchdog: re-drive the import for a
+// want whose download finished but whose ingest never completed (a want wedged
+// in VERIFYING/INGESTING with no job). Like a search it ENQUEUES a job and
+// answers 202, and the enqueue is idempotent — a running ingest is left alone.
+func (a *API) reingestDesired(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if _, err := desiredByID(r.Context(), a.reader, id); err != nil {
+		a.fail(w, r, "desired item", err)
+		return
+	}
+	out, err := a.ReingestAcquisition(r.Context(), id)
+	if err != nil {
+		a.fail(w, r, "job", err)
+		return
+	}
+	a.write(w, r, http.StatusAccepted, out)
+}
+
+// ReingestAcquisition queues the hash-and-import for one want and says so.
+//
+// Exported for the same reason SearchReleases is: MCP's reingest and the HTTP
+// handler are the one action asked for two ways, and a second implementation is
+// how the two come to disagree about what re-ingesting does. It enqueues the
+// same job polldownloads would on a completed transfer; the ingest worker
+// re-locates and re-verifies the bytes itself, so no download-client state is
+// needed. The dedupe key makes it a no-op when an ingest is already live.
+func (a *API) ReingestAcquisition(ctx context.Context, id string) (map[string]string, error) {
+	job, err := a.jobs.Enqueue(ctx, jobs.EnqueueOptions{
+		Type:      acquisition.IngestJobType,
+		Payload:   acquisition.IngestPayload{DesiredItemID: id},
+		DedupeKey: acquisition.IngestDedupeKey(id),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		"desired_item_id": id,
+		"job_id":          job.ID,
+		"status":          "queued",
+	}, nil
+}
+
 // selectCandidate is POST /api/v1/desired/{id}/select — §60's manual override.
 //
 // It refuses a candidate the profile rejected, and that refusal is deliberate.
