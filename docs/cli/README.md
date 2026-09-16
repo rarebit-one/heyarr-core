@@ -73,6 +73,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr play`](heyarr_play.md) | Play an asset on a television, speaker or projector (§68) |
 | [`heyarr quality-profile create`](heyarr_quality-profile_create.md) | Author a quality profile (§62) |
 | [`heyarr quality-profile list`](heyarr_quality-profile_list.md) | List the quality profiles |
+| [`heyarr quality-profile set`](heyarr_quality-profile_set.md) | Change an existing quality profile's rules or description (§62) |
 | [`heyarr quality-profile`](heyarr_quality-profile.md) | Author and inspect the quality profiles a want is measured against |
 | [`heyarr recover`](heyarr_recover.md) | Rebuild this peer's control plane from a surviving peer (§51, §82, M7-04) |
 | [`heyarr renderers discover`](heyarr_renderers_discover.md) | Search the local network for media renderers |

@@ -378,6 +378,94 @@ never silently replaced.`,
 	createCmd.Flags().StringVar(&prefer, "prefer", "", "scoring rules as a JSON array — weighted preferences, never gates")
 	createCmd.Flags().StringVar(&terminal, "terminal", "", "stop rules as a JSON array — when the upgrade workflow stops looking")
 
+	var (
+		setFlags                                                   clientFlags
+		setName, setDescription, setAccept, setPrefer, setTerminal string
+	)
+	setCmd := &cobra.Command{
+		Use:   "set <name|id>",
+		Short: "Change an existing quality profile's rules or description (§62)",
+		Long: `Change a quality profile in place, named the way "list" shows it — by name or id.
+
+Only the parts you pass change. A rule group you OMIT is left as it was; a group
+you pass as an explicit empty array is CLEARED. Those are different intentions —
+"leave the terminal rules alone" and "remove them" are not the same edit:
+
+  # prefer English on everyday, leaving its accept and terminal untouched
+  heyarr quality-profile set everyday \
+    --prefer '[{"attribute":"language","op":"eq","value":"en","weight":50}]'
+
+  # clear a profile's terminal rules (make it never "finished")
+  heyarr quality-profile set archival --terminal '[]'
+
+Rename with --name; --description replaces the description. The new rules take
+effect the next time each want is evaluated — its next search, upgrade scan or
+satisfaction read — not as an immediate mass re-judge.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return setFlags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				// Resolve name-or-id to an id the way an operator names it: the
+				// profile they see in "list", by either column. Profiles are
+				// few, so a list-and-match is cheaper to reason about than a
+				// second by-name lookup route.
+				profiles, err := client.List[client.QualityProfile](ctx, c, "/quality-profiles", client.ListOptions{})
+				if err != nil {
+					return err
+				}
+				id := ""
+				for _, p := range profiles {
+					if p.ID == args[0] || p.Name == args[0] {
+						id = p.ID
+						break
+					}
+				}
+				if id == "" {
+					return fmt.Errorf("no quality profile named or with id %q", args[0])
+				}
+
+				req := client.UpdateQualityProfileRequest{Name: setName, Description: setDescription}
+				// A rule group changes only when its flag was given — a flag
+				// left off means "leave it", which is why Changed is checked
+				// rather than the value being empty. Malformed JSON is a local
+				// error naming the flag, not a 400 to decode.
+				for _, g := range []struct {
+					name string
+					raw  string
+					dst  **json.RawMessage
+				}{
+					{"accept", setAccept, &req.Accept},
+					{"prefer", setPrefer, &req.Prefer},
+					{"terminal", setTerminal, &req.Terminal},
+				} {
+					if !cmd.Flags().Changed(g.name) {
+						continue
+					}
+					if !json.Valid([]byte(g.raw)) {
+						return fmt.Errorf("--%s is not valid JSON (pass a JSON array, or [] to clear)", g.name)
+					}
+					rm := json.RawMessage(g.raw)
+					*g.dst = &rm
+				}
+
+				var out client.QualityProfile
+				if err := c.Put(ctx, "/quality-profiles/"+id, req, &out); err != nil {
+					return err
+				}
+				if setFlags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), out)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "updated quality profile %s (%s)\n", out.Name, out.ID)
+				return nil
+			})
+		},
+	}
+	setFlags.register(setCmd)
+	setCmd.Flags().StringVar(&setName, "name", "", "rename the profile")
+	setCmd.Flags().StringVar(&setDescription, "description", "", "replace the description")
+	setCmd.Flags().StringVar(&setAccept, "accept", "", "replace gate rules (JSON array; [] clears)")
+	setCmd.Flags().StringVar(&setPrefer, "prefer", "", "replace scoring rules (JSON array; [] clears)")
+	setCmd.Flags().StringVar(&setTerminal, "terminal", "", "replace stop rules (JSON array; [] clears)")
+
 	cmd := &cobra.Command{
 		Use:     "quality-profile",
 		Aliases: []string{"profile"},
@@ -391,9 +479,10 @@ never silently replaced.`,
 A profile with no terminal rules is never finished, which is legal and is what
 the seeded "archival" profile is.
 
-Use "create" to author one and "list" to read them.`,
+Use "create" to author one, "set" to change one, and "list" to read them.`,
 	}
 	cmd.AddCommand(listCmd)
 	cmd.AddCommand(createCmd)
+	cmd.AddCommand(setCmd)
 	return cmd
 }
