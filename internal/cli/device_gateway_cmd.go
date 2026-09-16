@@ -17,6 +17,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/device/gateway"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/custody"
 )
 
 // GatewayPasswordEnvVar is where the device password is read from when no file
@@ -91,10 +92,20 @@ credentials are distinct by design.`,
 			if err != nil {
 				return err
 			}
+			cust, err := custody.Select(custody.Options{
+				Backend:       cfg.Vault.Unwrapper,
+				DeviceDir:     *dir,
+				YubiKeySocket: cfg.Vault.YubiKey.Socket,
+				YubiKeyPIN:    yubikeyPINFunc(cfg.Vault.YubiKey.PINFile),
+			})
+			if err != nil {
+				return err
+			}
 
 			srv, err := gateway.New(gateway.Options{
 				Personal: gateway.NewSpaceLibrary(apiClient, *dir).
-					WithRoles(gateway.SpaceRoles{StarredSpace: starredSpace, HistorySpace: historySpace}),
+					WithRoles(gateway.SpaceRoles{StarredSpace: starredSpace, HistorySpace: historySpace}).
+					WithCustody(cust),
 				Controller: gateway.Controller{
 					BaseURL: base,
 					User:    deviceUser,

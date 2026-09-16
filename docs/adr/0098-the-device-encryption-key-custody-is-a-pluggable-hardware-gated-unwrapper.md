@@ -217,6 +217,22 @@ key.
   and a live phone round-trip, gated on a reachable paired phone (as the YubiKey
   backend gated its on-card round-trip).
 
+## Addendum (2026-09-17): backend selection is wired
+
+The "select a backend by configuration, not by code change" this ADR called for
+is now real for the two wired backends. Opening a space takes a `client.Custody`
+— the `Unwrapper` plus the `RecipientID()` a space key is wrapped to — so create
+(the `--self` wrap target) and open (the copy it looks up and the key it unwraps
+with) stay consistent under any backend. `internal/personalstate/custody.Select`
+maps `vault.unwrapper` (config; default `software`, or `yubikey`) to a
+`client.Custody`; `tpm` and `cruciform` are refused at config validation until
+they are wired. Both callers honour it: the vault CLI builds it per command
+(`selectCustody`, reading the same config), and the device gateway takes it via
+`SpaceLibrary.WithCustody`. The YubiKey PIN comes from a pin file or
+`HEYARR_VAULT_YUBIKEY_PIN`, read lazily and never persisted. So the card-proven
+YubiKey backend is now usable end to end by setting one config key; the TPM
+(#570) and cruciform (#571) backends slot into the same selector when they wire.
+
 ## Relationship to existing records
 
 - **ADR-0049** — the device X25519 key and the wrap/seal format this leaves

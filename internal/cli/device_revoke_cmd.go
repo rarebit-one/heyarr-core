@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	apiclient "github.com/rarebit-one/heyarr-core/internal/client"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 )
 
 // deviceRevokeView is the --json shape of `device revoke`.
@@ -64,7 +65,11 @@ away: the devices it admitted are untouched.`,
 				}
 				view := deviceRevokeView{Device: revoked, Rotated: []spaceRotateView{}, Skipped: []skippedSpace{}}
 				if !noRotate && revoked.EncryptionKey != "" {
-					view.Rotated, view.Skipped, err = rotateAwayFrom(ctx, c, *deviceDir, revoked.EncryptionKey)
+					cust, err := selectCustody(configPath, *deviceDir)
+					if err != nil {
+						return err
+					}
+					view.Rotated, view.Skipped, err = rotateAwayFrom(ctx, c, cust, revoked.EncryptionKey)
 					if err != nil {
 						return err
 					}
@@ -103,7 +108,7 @@ away: the devices it admitted are untouched.`,
 // reason the operator can act on — is reported as skipped rather than aborting
 // the sweep: the tombstone already stands, and each remaining space is a
 // separate fact.
-func rotateAwayFrom(ctx context.Context, c *apiclient.Client, deviceDir, recipient string) ([]spaceRotateView, []skippedSpace, error) {
+func rotateAwayFrom(ctx context.Context, c *apiclient.Client, cust client.Custody, recipient string) ([]spaceRotateView, []skippedSpace, error) {
 	spaces, err := c.ListSpaces(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -117,7 +122,7 @@ func rotateAwayFrom(ctx context.Context, c *apiclient.Client, deviceDir, recipie
 		if !wrappedFor(keys, recipient) {
 			continue
 		}
-		view, err := rotateSpace(ctx, c, deviceDir, sp.ID, []string{recipient})
+		view, err := rotateSpace(ctx, c, cust, sp.ID, []string{recipient})
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return nil, nil, err
