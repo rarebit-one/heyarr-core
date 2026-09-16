@@ -66,6 +66,35 @@ type Config struct {
 	// empty configuration is fully supported: the login broker still mounts and
 	// still shows a QR, it simply wakes no device.
 	Notify Notify `koanf:"notify"`
+
+	// Vault selects this device's space-key custody backend (ADR-0098): which
+	// Unwrapper opens the space keys sealed for it. It is a device-side choice
+	// (the gateway and the vault CLI honour it); the default "software" needs no
+	// configuration.
+	Vault Vault `koanf:"vault"`
+}
+
+// Vault configures device-side space-key custody (ADR-0098). The device
+// encryption key is reached only through an Unwrapper, whose custody is a
+// pluggable per-platform backend; this selects it.
+type Vault struct {
+	// Unwrapper selects the custody backend: "software" (default, in-process
+	// ECDH) or "yubikey" (the X25519 agreement runs on an OpenPGP card). The
+	// "tpm" and "cruciform" backends are named in ADR-0098 but not yet selectable.
+	Unwrapper string `koanf:"unwrapper"`
+	// YubiKey configures the on-card backend; used only when unwrapper=yubikey.
+	YubiKey VaultYubiKey `koanf:"yubikey"`
+}
+
+// VaultYubiKey configures the YubiKey-on-card custody backend.
+type VaultYubiKey struct {
+	// Socket is the gpg-agent Assuan socket the backend dials. Empty discovers it
+	// via gpgconf — the usual case.
+	Socket string `koanf:"socket"`
+	// PINFile reads the card User PIN from a file (trimmed). Empty falls back to
+	// the HEYARR_VAULT_YUBIKEY_PIN environment variable. The PIN gates the card;
+	// it is never written back anywhere.
+	PINFile string `koanf:"pin_file"`
 }
 
 // Notify configures the push/wake login channel (ADR-0055). The subscription
@@ -446,6 +475,7 @@ func Defaults() Config {
 		Database: Database{},
 		Media:    Media{StreamConcurrency: 2},
 		Backup:   Backup{Interval: "5m"},
+		Vault:    Vault{Unwrapper: "software"},
 	}
 }
 
@@ -590,6 +620,12 @@ func (c Config) BackupInterval() (time.Duration, error) {
 
 var validLogLevels = []string{"debug", "info", "warn", "error"}
 
+// validVaultUnwrappers is the set of currently SELECTABLE custody backends
+// (ADR-0098). "tpm" and "cruciform" are named in the ADR and partly built, but
+// not yet wired to the callers, so configuring one is refused here rather than
+// failing later at open time.
+var validVaultUnwrappers = []string{"software", "yubikey"}
+
 // Validate reports the first configuration problem, phrased so the operator can
 // act on it without reading the source. Configuration is checked before any
 // role starts: failing at startup is far cheaper than failing on first write.
@@ -614,6 +650,9 @@ func (c Config) Validate() error {
 	}
 	if c.Media.StreamConcurrency < 0 {
 		return fmt.Errorf("config: media.stream_concurrency must be zero or more, got %d", c.Media.StreamConcurrency)
+	}
+	if !slicesContains(validVaultUnwrappers, c.Vault.Unwrapper) {
+		return fmt.Errorf("config: vault.unwrapper %q is not one of %s", c.Vault.Unwrapper, strings.Join(validVaultUnwrappers, ", "))
 	}
 	// The guest allow-list is checked for CIDR shape even when guest mode is off:
 	// a malformed range is a mistake worth naming at startup, not on the first

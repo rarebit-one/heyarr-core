@@ -43,6 +43,20 @@ type Unwrapper interface {
 	Unwrap(wrapped []byte) (encryption.SpaceKey, error)
 }
 
+// Custody is an [Unwrapper] that also knows its own wrap-target id — the
+// "x25519:<hex>" recipient a space key must be sealed to for this backend to open
+// it. Opening a space needs both halves: the id, to pick out the copy the
+// controller wrapped for this device, and the Unwrapper, to open it. Making a
+// per-platform custody backend (ADR-0098) supply both lets the device gateway and
+// the vault CLI SELECT one — software, YubiKey-on-card, TPM-gated, cruciform —
+// without either caller changing, and keeps the create side (which wraps to this
+// same id) consistent with the open side.
+type Custody interface {
+	Unwrapper
+	// RecipientID is the "x25519:<hex>" wrap target this backend can open.
+	RecipientID() string
+}
+
 // KeyUnwrapper is the exportable-key stand-in: the desktop CLI's device key does
 // the ECDH in-process (ADR-0032 — the CLI is the first device). A phone drops in
 // an enclave-backed Unwrapper with the same interface and nothing else changes.
@@ -55,6 +69,14 @@ func NewKeyUnwrapper(priv *ecdh.PrivateKey) *KeyUnwrapper { return &KeyUnwrapper
 func (k *KeyUnwrapper) Unwrap(wrapped []byte) (encryption.SpaceKey, error) {
 	return encryption.Unwrap(wrapped, k.priv)
 }
+
+// RecipientID reports the software key's "x25519:<hex>" id, so KeyUnwrapper is a
+// [Custody].
+func (k *KeyUnwrapper) RecipientID() string {
+	return encryption.FormatPublicKey(k.priv.PublicKey().Bytes())
+}
+
+var _ Custody = (*KeyUnwrapper)(nil)
 
 // A Recipient is an authorised wrap target — a device or the recovery encryption
 // key — by its rendered "x25519:<hex>" id and parsed public key.

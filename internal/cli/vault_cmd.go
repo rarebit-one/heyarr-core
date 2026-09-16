@@ -157,7 +157,11 @@ peer stores ciphertext it cannot open.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			filePath := args[0]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				mgr, err := openSpace(ctx, c, *deviceDir, spaceID)
+				cust, err := selectCustody(configPath, *deviceDir)
+				if err != nil {
+					return err
+				}
+				mgr, err := openSpace(ctx, c, cust, spaceID)
 				if err != nil {
 					return err
 				}
@@ -261,7 +265,11 @@ conflict), is refused rather than guessing which bytes were meant.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID, vaultPath := args[0], args[1]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				mgr, err := openSpace(ctx, c, *deviceDir, spaceID)
+				cust, err := selectCustody(configPath, *deviceDir)
+				if err != nil {
+					return err
+				}
+				mgr, err := openSpace(ctx, c, cust, spaceID)
 				if err != nil {
 					return err
 				}
@@ -321,7 +329,11 @@ file's vault path, plaintext size, and whether the path is currently conflicted
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID := args[0]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				mgr, err := openSpace(ctx, c, *deviceDir, spaceID)
+				cust, err := selectCustody(configPath, *deviceDir)
+				if err != nil {
+					return err
+				}
+				mgr, err := openSpace(ctx, c, cust, spaceID)
 				if err != nil {
 					return err
 				}

@@ -228,6 +228,12 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		{"public origin with bad scheme", func(c *Config) {
 			c.HTTP.PublicOrigin = "ftp://heyarr.example.com"
 		}, "absolute http(s) origin"},
+		{"unknown vault unwrapper", func(c *Config) {
+			c.Vault.Unwrapper = "quantum"
+		}, "vault.unwrapper"},
+		{"not-yet-selectable vault unwrapper", func(c *Config) {
+			c.Vault.Unwrapper = "tpm"
+		}, "vault.unwrapper"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -241,6 +247,21 @@ func TestValidateRejectsBadValues(t *testing.T) {
 				t.Errorf("error = %q, want it to mention %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestVaultUnwrapperSelectable: the default is software, and both wired backends
+// pass validation (ADR-0098). The not-yet-wired ones are refused (covered above).
+func TestVaultUnwrapperSelectable(t *testing.T) {
+	if got := Defaults().Vault.Unwrapper; got != "software" {
+		t.Fatalf("default vault.unwrapper = %q, want software", got)
+	}
+	for _, backend := range []string{"software", "yubikey"} {
+		cfg := Defaults()
+		cfg.Vault.Unwrapper = backend
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate rejected vault.unwrapper %q: %v", backend, err)
+		}
 	}
 }
 

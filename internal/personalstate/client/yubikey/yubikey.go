@@ -54,6 +54,12 @@ func (u *Unwrapper) PublicKey() []byte {
 	return out
 }
 
+// RecipientID reports the card's "x25519:<hex>" wrap-target id, so Unwrapper is a
+// personalstate/client.Custody — selectable at the gateway and vault CLI.
+func (u *Unwrapper) RecipientID() string {
+	return encryption.FormatPublicKey(u.pub)
+}
+
 // Unwrap recovers a space key wrapped to this card, running the ECDH on-card.
 func (u *Unwrapper) Unwrap(wrapped []byte) (encryption.SpaceKey, error) {
 	s, err := dialSCD(u.socket)

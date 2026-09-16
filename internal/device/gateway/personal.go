@@ -9,7 +9,6 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/device"
 	psclient "github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
 )
 
@@ -26,6 +25,10 @@ type SpaceLibrary struct {
 	client    *apiclient.Client
 	deviceDir string
 	roles     SpaceRoles
+	// cust is the selected custody backend (ADR-0098). Nil means the software
+	// default, built lazily from the device key in deviceDir — so a gateway
+	// constructed without WithCustody behaves exactly as before.
+	cust psclient.Custody
 }
 
 // SpaceRoles names which space holds which non-playlist personal-state CRDT. A
@@ -57,6 +60,29 @@ func (l *SpaceLibrary) WithRoles(r SpaceRoles) *SpaceLibrary {
 	return l
 }
 
+// WithCustody selects the space-key custody backend (ADR-0098) — a YubiKey, TPM,
+// or offloaded key in place of the in-process software default — and returns the
+// library for chaining. The backend supplies both the wrap-target id to find the
+// sealed copy and the Unwrapper to open it, so nothing else here changes.
+func (l *SpaceLibrary) WithCustody(c psclient.Custody) *SpaceLibrary {
+	l.cust = c
+	return l
+}
+
+// custody returns the selected backend, or the software default built from this
+// device's key. Software is built per call — a device key file is tiny — while a
+// configured backend (which may hold a card session) is reused.
+func (l *SpaceLibrary) custody() (psclient.Custody, error) {
+	if l.cust != nil {
+		return l.cust, nil
+	}
+	priv, err := l.loadEncKey()
+	if err != nil {
+		return nil, err
+	}
+	return psclient.NewKeyUnwrapper(priv), nil
+}
+
 var _ Library = (*SpaceLibrary)(nil)
 
 // Playlists lists every space this device can decrypt AS A PLAYLIST, each as a
@@ -74,7 +100,7 @@ func (l *SpaceLibrary) Playlists(ctx context.Context) ([]Playlist, error) {
 	if err != nil {
 		return nil, err
 	}
-	priv, err := l.loadEncKey()
+	cust, err := l.custody()
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +109,7 @@ func (l *SpaceLibrary) Playlists(ctx context.Context) ([]Playlist, error) {
 		if l.isNonPlaylistSpace(sp.ID) {
 			continue
 		}
-		items, ok, err := l.materialise(ctx, priv, sp.ID)
+		items, ok, err := l.materialise(ctx, cust, sp.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -109,11 +135,11 @@ func (l *SpaceLibrary) Playlist(ctx context.Context, id string) (Playlist, bool,
 	if l.isNonPlaylistSpace(id) {
 		return Playlist{}, false, nil
 	}
-	priv, err := l.loadEncKey()
+	cust, err := l.custody()
 	if err != nil {
 		return Playlist{}, false, err
 	}
-	items, ok, err := l.materialise(ctx, priv, id)
+	items, ok, err := l.materialise(ctx, cust, id)
 	if err != nil {
 		return Playlist{}, false, err
 	}
@@ -127,8 +153,8 @@ func (l *SpaceLibrary) Playlist(ctx context.Context, id string) (Playlist, bool,
 // changes the controller holds, and folds them into the playlist. ok is false
 // (with no error) when this device holds no wrapped copy of the space's key — the
 // confidentiality gate of ADR-0049, reached here before any change is decrypted.
-func (l *SpaceLibrary) materialise(ctx context.Context, priv *ecdh.PrivateKey, spaceID string) (items []string, ok bool, err error) {
-	mgr, ok, err := l.openWrapped(ctx, priv, spaceID)
+func (l *SpaceLibrary) materialise(ctx context.Context, cust psclient.Custody, spaceID string) (items []string, ok bool, err error) {
+	mgr, ok, err := l.openWrapped(ctx, cust, spaceID)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
@@ -163,8 +189,8 @@ func (l *SpaceLibrary) materialise(ctx context.Context, priv *ecdh.PrivateKey, s
 // the space with it. ok is false (no error) when the controller holds no space of
 // that id, or no copy wrapped for this device — the ADR-0049 confidentiality gate,
 // reached before any change is decrypted. The controller is never handed a key.
-func (l *SpaceLibrary) openWrapped(ctx context.Context, priv *ecdh.PrivateKey, spaceID string) (*psclient.Manager, bool, error) {
-	mine := encryption.FormatPublicKey(priv.PublicKey().Bytes())
+func (l *SpaceLibrary) openWrapped(ctx context.Context, cust psclient.Custody, spaceID string) (*psclient.Manager, bool, error) {
+	mine := cust.RecipientID()
 	keys, err := l.client.WrappedKeys(ctx, spaceID)
 	if err != nil {
 		if apiclient.IsNotFound(err) {
@@ -183,7 +209,7 @@ func (l *SpaceLibrary) openWrapped(ctx context.Context, priv *ecdh.PrivateKey, s
 		return nil, false, nil
 	}
 	mgr := psclient.New()
-	if err := mgr.Open(spaceID, wrapped, psclient.NewKeyUnwrapper(priv)); err != nil {
+	if err := mgr.Open(spaceID, wrapped, cust); err != nil {
 		return nil, false, err
 	}
 	return mgr, true, nil
@@ -268,11 +294,11 @@ func decodeChanges[T any](ctx context.Context, l *SpaceLibrary, spaceID string) 
 	if spaceID == "" {
 		return nil, nil
 	}
-	priv, err := l.loadEncKey()
+	cust, err := l.custody()
 	if err != nil {
 		return nil, err
 	}
-	mgr, ok, err := l.openWrapped(ctx, priv, spaceID)
+	mgr, ok, err := l.openWrapped(ctx, cust, spaceID)
 	if err != nil || !ok {
 		return nil, err
 	}

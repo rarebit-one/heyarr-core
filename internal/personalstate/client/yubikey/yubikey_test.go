@@ -10,8 +10,9 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 )
 
-// The backend implements the client.Unwrapper seam (ADR-0098) — the whole point.
-var _ client.Unwrapper = (*Unwrapper)(nil)
+// The backend implements the client.Custody seam (ADR-0098) — the Unwrapper plus
+// the RecipientID a controller wraps to, so it is selectable at the callers.
+var _ client.Custody = (*Unwrapper)(nil)
 
 func TestParsePubkeyPoint(t *testing.T) {
 	t.Parallel()
