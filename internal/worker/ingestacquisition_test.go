@@ -204,6 +204,45 @@ func TestACompletedAcquisitionBecomesAManagedAsset(t *testing.T) {
 	}
 }
 
+// A resume: a want left in INGESTING holding no bytes — an ingest that verified
+// and advanced, then died before materialising (a crash, a node OOM) — is
+// completed by re-running the job, not no-oped because the phase is past
+// VERIFYING. This is the wedged state the stuck-ingest watchdog and `desired
+// reingest` re-drive; before this fix the re-enqueue succeeded and changed
+// nothing, because the handler only ran from VERIFYING.
+func TestAnIngestResumesFromIngesting(t *testing.T) {
+	h := newIngestHarness(t)
+	h.selectAndComplete(t, "Arrival.2016.2160p.mkv", []byte("the actual bytes of a film"))
+
+	// Simulate the crash: advance VERIFYING→INGESTING but do not materialise.
+	if _, err := h.cat.AdvanceAcquisition(t.Context(), h.want, acquisition.TransitionVerified, ""); err != nil {
+		t.Fatal(err)
+	}
+	setup := h.state(t)
+	if setup.Phase != acquisition.PhaseIngesting || setup.Managed {
+		t.Fatalf("setup: want INGESTING and unmanaged, got phase=%s managed=%v", setup.Phase, setup.Managed)
+	}
+	if n := h.count(t, `SELECT count(*) FROM assets`); n != 0 {
+		t.Fatalf("setup: a wedged ingest holds no asset yet, got %d", n)
+	}
+
+	if err := h.ingest(t); err != nil {
+		t.Fatal(err)
+	}
+
+	state := h.state(t)
+	if state.Phase != acquisition.PhaseIdle || !state.Managed {
+		t.Fatalf("phase = %s managed = %v, want idle + managed: the resume must finish the ingest",
+			state.Phase, state.Managed)
+	}
+	if n := h.count(t, `SELECT count(*) FROM assets`); n != 1 {
+		t.Errorf("%d assets, want 1 after the resume", n)
+	}
+	if n := h.count(t, `SELECT count(*) FROM blobs`); n != 1 {
+		t.Errorf("%d blobs, want 1 after the resume", n)
+	}
+}
+
 // Invariant 1, and the load-bearing test of this issue.
 //
 // Heyarr hashes what ARRIVED. The asset's blob is keyed on the digest Heyarr
