@@ -112,17 +112,56 @@ var (
 	// dead back to pending — because an operator who has fixed the world is
 	// making a different claim than the handler was.
 	ErrPermanent = errors.New("jobs: this will fail the same way every time")
+	// ErrTransient is a handler saying the opposite of ErrPermanent: this
+	// failed for a reason OUTSIDE the input — an indexer that was unreachable,
+	// a download client that was down, a network that was away — and will
+	// succeed once the environment recovers. Wrapping it keeps the job
+	// retrying on a long backoff instead of walking to dead on the ordinary
+	// attempt cap.
+	//
+	// # Why the cap is wrong for these
+	//
+	// The default cap (DefaultMaxAttempts) exists so a job that CANNOT succeed
+	// stops consuming worker slots and becomes visible instead. That is the
+	// right answer for a bug and the wrong one for an outage: an indexer down
+	// for ten minutes, or a download client restarted, fails every queued grab
+	// a handful of times in quick succession and — at five fast attempts —
+	// dies. The content is then stranded until an operator runs `jobs retry`
+	// by hand, for a fault that fixed itself minutes later (#557).
+	//
+	// # What may and may not use it
+	//
+	// Only a failure that is a property of the MOMENT and is expected to
+	// outlast the ordinary attempt window: a provider unreachable, a client
+	// declined/no-response, a 5xx/408/429, a DNS or dial timeout. NOT a
+	// malformed feed, corrupt bytes, a 404, or a rejected credential — those
+	// are properties of the input or the configuration and either die fast
+	// (ErrPermanent) or walk to dead on the cap so an operator sees them.
+	//
+	// Getting it wrong is a real cost in the OTHER direction from ErrPermanent:
+	// a genuinely-broken job wrapped transient retries forever and never
+	// surfaces. When a failure might be either, do NOT wrap — the cap is the
+	// safe default. If a handler contradicts itself and wraps both, permanent
+	// wins: "cannot ever succeed" is the stronger claim (see Fail).
+	ErrTransient = errors.New("jobs: transient failure; will retry until it recovers")
 )
 
 // Defaults.
 const (
-	DefaultMaxAttempts  = 5
-	DefaultPriority     = 100
-	DefaultLeaseTTL     = 60 * time.Second
-	defaultBaseBackoff  = 2 * time.Second
-	defaultMaxBackoff   = 15 * time.Minute
-	timeFormat          = time.RFC3339Nano
-	claimableSelectCols = `id, type, payload, state, priority, coalesce(dedupe_key,''),
+	DefaultMaxAttempts = 5
+	DefaultPriority    = 100
+	DefaultLeaseTTL    = 60 * time.Second
+	defaultBaseBackoff = 2 * time.Second
+	defaultMaxBackoff  = 15 * time.Minute
+	// transientBaseBackoff / transientMaxBackoff pace an ErrTransient retry.
+	// Minutes to hours, not seconds to minutes: an unreachable indexer is not
+	// reached any sooner by asking every two seconds, and a client just coming
+	// back up should not be met by every stranded grab at once. The ceiling is
+	// hours rather than a day so recovery is still noticed promptly.
+	transientBaseBackoff = 1 * time.Minute
+	transientMaxBackoff  = 6 * time.Hour
+	timeFormat           = time.RFC3339Nano
+	claimableSelectCols  = `id, type, payload, state, priority, coalesce(dedupe_key,''),
 		required_capability, run_after, attempts, max_attempts,
 		coalesce(lease_owner,''), coalesce(lease_expires_at,''),
 		coalesce(last_error,''), created_at, updated_at, coalesce(finished_at,'')`
@@ -507,8 +546,14 @@ func (q *Queue) Fail(ctx context.Context, id, owner string, cause error) error {
 	// A handler that says this will fail identically forever is believed, and
 	// the remaining attempts are not spent proving it — see ErrPermanent.
 	permanent := errors.Is(cause, ErrPermanent)
+	// The opposite claim: this failed for a reason outside the input and will
+	// succeed once the environment recovers, so it must not walk to dead on
+	// the attempt cap — a brief outage would otherwise strand the work (#557).
+	// Permanent wins if a handler wraps both: "cannot ever succeed" is a
+	// stronger statement than "cannot succeed yet".
+	transient := !permanent && errors.Is(cause, ErrTransient)
 
-	if permanent || job.Attempts >= job.MaxAttempts {
+	if permanent || (!transient && job.Attempts >= job.MaxAttempts) {
 		return q.inTx(ctx, func(tx *sql.Tx) ([]events.Event, error) {
 			res, err := tx.ExecContext(ctx, `
 				UPDATE jobs SET state = 'dead', lease_owner = NULL, lease_expires_at = NULL,
@@ -542,7 +587,7 @@ func (q *Queue) Fail(ctx context.Context, id, owner string, cause error) error {
 		})
 	}
 
-	retryAt := now.Add(q.backoff(job.Attempts))
+	retryAt := now.Add(q.retryBackoff(transient, job.Attempts))
 	return q.inTx(ctx, func(tx *sql.Tx) ([]events.Event, error) {
 		res, err := tx.ExecContext(ctx, `
 			UPDATE jobs SET state = 'pending', lease_owner = NULL, lease_expires_at = NULL,
@@ -559,7 +604,7 @@ func (q *Queue) Fail(ctx context.Context, id, owner string, cause error) error {
 		// A spent attempt, not an outcome: the job is going to run again, and a
 		// client that treated this as failure would give up early.
 		e, err := q.events.EmitTx(ctx, tx, events.TypeJobFailed, "job", id,
-			transitionPayload(job, map[string]any{"terminal": false, "run_after": format(retryAt)}))
+			transitionPayload(job, map[string]any{"terminal": false, "transient": transient, "run_after": format(retryAt)}))
 		if err != nil {
 			return nil, err
 		}
@@ -567,21 +612,38 @@ func (q *Queue) Fail(ctx context.Context, id, owner string, cause error) error {
 	})
 }
 
-// backoff is exponential with full jitter.
+// retryBackoff picks the schedule a rescheduled job waits on. A transient
+// (ErrTransient) failure is an outage rather than a bug, so it is paced in
+// minutes-to-hours; everything else keeps the ordinary seconds-to-minutes
+// schedule that walks toward the attempt cap.
+func (q *Queue) retryBackoff(transient bool, attempt int) time.Duration {
+	if transient {
+		return q.backoffWithin(attempt, transientBaseBackoff, transientMaxBackoff)
+	}
+	return q.backoff(attempt)
+}
+
+// backoff is the ordinary retry schedule. It stays a named method because at
+// the call site it reads as the thing it is, not as a pair of durations.
+func (q *Queue) backoff(attempt int) time.Duration {
+	return q.backoffWithin(attempt, defaultBaseBackoff, defaultMaxBackoff)
+}
+
+// backoffWithin is exponential with full jitter, between base and ceiling.
 //
 // Full jitter rather than a fixed schedule because the failure that matters is
 // correlated: a provider going down fails every queued job at once, and without
 // jitter they all retry in lockstep and hammer it back down the moment it
 // recovers.
-func (q *Queue) backoff(attempt int) time.Duration {
+func (q *Queue) backoffWithin(attempt int, base, ceiling time.Duration) time.Duration {
 	if attempt < 1 {
 		attempt = 1
 	}
-	d := defaultBaseBackoff << min(attempt-1, 20)
-	if d > defaultMaxBackoff || d <= 0 {
-		d = defaultMaxBackoff
+	d := base << min(attempt-1, 20)
+	if d > ceiling || d <= 0 {
+		d = ceiling
 	}
-	return time.Duration(q.rand.Int64N(int64(d)) + int64(defaultBaseBackoff))
+	return time.Duration(q.rand.Int64N(int64(d)) + int64(base))
 }
 
 // ReapExpiredLeases returns jobs whose lease expired to pending, so a worker
