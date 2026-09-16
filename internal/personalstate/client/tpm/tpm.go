@@ -15,7 +15,6 @@ import (
 	"fmt"
 
 	"github.com/google/go-tpm/tpm2/transport"
-	"github.com/google/go-tpm/tpm2/transport/linuxtpm"
 
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
@@ -27,7 +26,7 @@ import (
 type PINFunc func() (string, error)
 
 // Opener opens a connection to a TPM 2.0. Production uses [OpenDevice]; a test
-// wires a swtpm (or simulator) transport. Unwrap opens per call and closes after,
+// wires the TPM 2.0 reference simulator. Unwrap opens per call and closes after,
 // so the backend never holds the device open.
 type Opener func() (transport.TPMCloser, error)
 
@@ -87,17 +86,15 @@ func (u *Unwrapper) Unwrap(wrapped []byte) (encryption.SpaceKey, error) {
 
 // OpenDevice is the production [Opener]: it opens the kernel TPM resource-manager
 // device (default /dev/tpmrm0), which serialises access so this coexists with
-// other TPM users.
+// other TPM users. TPM device access is Linux-only (open_linux.go); on other
+// platforms the returned opener fails with a clear error, since the fleet's
+// TPM-gated custody is a Linux concern (ADR-0098).
 func OpenDevice(path string) Opener {
 	if path == "" {
 		path = "/dev/tpmrm0"
 	}
 	return func() (transport.TPMCloser, error) {
-		t, err := linuxtpm.Open(path)
-		if err != nil {
-			return nil, fmt.Errorf("tpm: opening %s (is a TPM present?): %w", path, err)
-		}
-		return t, nil
+		return openTPMDevice(path)
 	}
 }
 

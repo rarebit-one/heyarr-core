@@ -246,14 +246,17 @@ point recorded in the sealed-key blob, so selecting the wrapped copy never
 triggers the gate; only `Unwrap` does. Selectable via `vault.unwrapper: tpm`
 (+ `vault.tpm.{sealed_key_file,device,pin_file}` / `HEYARR_VAULT_TPM_PIN`).
 
-Testing: the seal/unseal core is proven against a real TPM 2.0 — **swtpm** on the
-CI Linux leg (an external binary over the pure-Go transport; the hardware-free
-matrix legs skip it), with the hardware-free unit tests (blob codec, RecipientID,
-input validation) everywhere. **Deferred:** the provisioning command that seals a
-device's key and writes the blob (`tpm.Seal` is the primitive; a `heyarr` command
-is a follow-up, as YubiKey's provisioning was separate); and the on-real-fTPM/PTT
-validation, gated on the Framework laptops arriving. Only cruciform (#571) remains
-unwired in the selector now.
+Testing: the seal/unseal core is proven against the **TPM 2.0 reference
+simulator** (go-tpm-tools, in-process), behind a `tpmsim` build tag and run in CI
+by a single `CGO_ENABLED=1` step — the only cgo in the build; the whole matrix
+stays `CGO_ENABLED=0` and the pure-Go legs never compile it. (go-tpm's transport
+targets that reference simulator; swtpm's socket control channel speaks a
+different protocol and is not a drop-in.) The hardware-free unit tests (blob
+codec, RecipientID, input validation) run everywhere. **Deferred:** the
+provisioning command that seals a device's key and writes the blob (`tpm.Seal` is
+the primitive; a `heyarr` command is a follow-up, as YubiKey's provisioning was
+separate); and the on-real-fTPM/PTT validation, gated on the Framework laptops
+arriving. Only cruciform (#571) remains unwired in the selector now.
 
 ## Relationship to existing records
 

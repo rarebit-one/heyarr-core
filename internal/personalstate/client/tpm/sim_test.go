@@ -1,3 +1,16 @@
+//go:build tpmsim
+
+// This file is the LIVE seal/unseal proof, run behind the `tpmsim` build tag
+// against the in-process TPM 2.0 reference simulator (go-tpm-tools, cgo). The tag
+// keeps it — and the shared round-trip body below — out of the default
+// CGO_ENABLED=0 matrix (which cannot build the cgo simulator, and where the body
+// would otherwise read as unused). A dedicated CI step runs it with
+// CGO_ENABLED=1, and a developer can run it locally the same way:
+//
+//	CGO_ENABLED=1 go test -tags tpmsim ./internal/personalstate/client/tpm/
+//
+// go-tpm's transport API targets this reference simulator; swtpm's socket control
+// channel speaks a different protocol and is not a drop-in here.
 package tpm
 
 import (
@@ -5,18 +18,27 @@ import (
 	"crypto/rand"
 	"testing"
 
+	"github.com/google/go-tpm-tools/simulator"
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
-// sealUnsealCanary is the reusable integration body: it seals a fresh X25519 seed
-// to the given TPM, round-trips the blob through disk form, wraps a canary space
-// key to the recorded public point (the controller's job), opens it through the
-// backend, proves the recovered key decrypts the canary, and proves a wrong PIN
-// is refused. It is driven against swtpm in CI (swtpm_test.go) and, locally, can
-// be driven against the cgo simulator behind the `tpmsim` build tag.
+func TestSealUnsealAgainstSimulator(t *testing.T) {
+	sim, err := simulator.Get()
+	if err != nil {
+		t.Fatalf("simulator: %v", err)
+	}
+	tpm := transport.FromReadWriteCloser(sim)
+	defer func() { _ = tpm.Close() }()
+	sealUnsealCanary(t, tpm)
+}
+
+// sealUnsealCanary seals a fresh X25519 seed to the given TPM, round-trips the
+// blob through disk form, wraps a canary space key to the recorded public point
+// (the controller's job), opens it through the backend, proves the recovered key
+// decrypts the canary, and proves a wrong PIN is refused.
 func sealUnsealCanary(t *testing.T, tpm transport.TPM) {
 	t.Helper()
 	seed := make([]byte, 32)
@@ -29,7 +51,6 @@ func sealUnsealCanary(t *testing.T, tpm transport.TPM) {
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
-	// The blob survives the on-disk round-trip unchanged.
 	blob, err = UnmarshalBlob(blob.Marshal())
 	if err != nil {
 		t.Fatalf("blob round-trip: %v", err)
@@ -90,8 +111,7 @@ func sealUnsealCanary(t *testing.T, tpm transport.TPM) {
 }
 
 // noCloseOpener yields an Opener that reuses one open transport across Unwrap
-// calls (which each Close their handle) — for tests where the connection is
-// managed by the test, not the backend.
+// calls (which each Close their handle) — the test manages the connection.
 func noCloseOpener(t transport.TPM) Opener {
 	return func() (transport.TPMCloser, error) { return noClose{t}, nil }
 }
