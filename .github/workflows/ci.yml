@@ -133,6 +133,12 @@ jobs:
               exit 1
             fi
           fi
+      - name: install swtpm (a software TPM 2.0 for the tpm-custody backend test)
+        if: runner.os == 'Linux'
+        # An external binary, not a Go dependency: the pure-Go go-tpm transport
+        # talks to it over a socket, so the CGO_ENABLED=0 build is untouched. This
+        # is what makes the ADR-0098 TPM seal/unseal test a real round-trip.
+        run: sudo apt-get update && sudo apt-get install -y swtpm
       # -timeout=20m, not the default 10m per package: internal/api/resources
       # can approach the default under load on a busy runner, and a per-package
       # test timeout is only a hang reported as a failure if the bound is
@@ -156,6 +162,16 @@ jobs:
             grep -B2 -- '--- SKIP' /tmp/media.log >&2
             exit 1
           fi
+      - name: the TPM-custody seal/unseal ran against swtpm rather than skipping
+        if: runner.os == 'Linux'
+        run: |
+          # swtpm is installed above, so the ADR-0098 live TPM round-trip must run,
+          # not skip — a skipped hardware test looks exactly like a passing one.
+          go test -count=1 -v -run TestSealUnsealAgainstSwtpm ./internal/personalstate/client/tpm/ | tee /tmp/tpm.log
+          grep -q -- '--- PASS: TestSealUnsealAgainstSwtpm' /tmp/tpm.log || {
+            echo "the swtpm TPM seal/unseal test skipped or did not pass" >&2
+            exit 1
+          }
 
   # The race detector, sharded. Until now the ubuntu/stable `test` leg ran
   # `go test -race ./...` over the whole module in a single job — ~24m, and the

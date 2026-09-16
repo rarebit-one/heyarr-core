@@ -9,16 +9,17 @@ package custody
 import (
 	"crypto/ecdh"
 	"fmt"
+	"os"
 
 	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/tpm"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/yubikey"
 )
 
-// The selectable backend names (ADR-0098). Software and YubiKey are wired; TPM
-// (#570) and cruciform-offload (#571) are built or building but not yet
-// selectable, and Select returns a clear error naming why rather than a confusing
-// "unknown backend".
+// The selectable backend names (ADR-0098). Software, YubiKey and TPM are wired;
+// cruciform-offload (#571) is built but not yet selectable, and Select returns a
+// clear error naming why rather than a confusing "unknown backend".
 const (
 	Software  = "software"
 	YubiKey   = "yubikey"
@@ -39,6 +40,16 @@ type Options struct {
 	// YubiKeyPIN supplies the card User PIN the YubiKey backend presents before an
 	// on-card decipher. Required when Backend is YubiKey; never persisted here.
 	YubiKeyPIN yubikey.PINFunc
+
+	// TPMSealedKeyFile is the path to the sealed-key blob the TPM backend unseals
+	// (provisioned by tpm.Seal). Required when Backend is TPM.
+	TPMSealedKeyFile string
+	// TPMDevice is the TPM resource-manager device the backend opens. "" uses
+	// /dev/tpmrm0.
+	TPMDevice string
+	// TPMPIN supplies the policy PIN (the sealed object's authValue). Required when
+	// Backend is TPM; never persisted here.
+	TPMPIN tpm.PINFunc
 }
 
 // Select builds the configured custody backend, or reports why it cannot.
@@ -56,7 +67,21 @@ func Select(opts Options) (client.Custody, error) {
 		}
 		return yubikey.New(opts.YubiKeySocket, opts.YubiKeyPIN)
 	case TPM:
-		return nil, fmt.Errorf("custody: the %q backend is not built yet (#570)", TPM)
+		if opts.TPMPIN == nil {
+			return nil, fmt.Errorf("custody: the tpm backend needs a PIN source")
+		}
+		if opts.TPMSealedKeyFile == "" {
+			return nil, fmt.Errorf("custody: the tpm backend needs a sealed-key file (provision one with tpm.Seal)")
+		}
+		raw, err := os.ReadFile(opts.TPMSealedKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("custody: reading the sealed key %s: %w", opts.TPMSealedKeyFile, err)
+		}
+		blob, err := tpm.UnmarshalBlob(raw)
+		if err != nil {
+			return nil, err
+		}
+		return tpm.New(blob, opts.TPMPIN, tpm.OpenDevice(opts.TPMDevice))
 	case Cruciform:
 		return nil, fmt.Errorf("custody: the %q backend is not selectable yet — its wake/relay transport is not wired (#571)", Cruciform)
 	default:
