@@ -44,6 +44,79 @@ func (h *pollHarness) backdatePhaseEntered(t *testing.T, by time.Duration) {
 // waits out the failed search's backoff AND would re-pick the very release that
 // just failed. The stuck-grab sweep must block that release and clear the want's
 // backoff so a fresh search chooses a different one — the exact wedge E7 hit.
+// A transient tracker error must not abandon a download that is still moving.
+//
+// stall.go surfaces a per-tracker rejection ("info hash is not authorized") as
+// the transfer's Error even while other trackers serve it and bytes flow.
+// Failing on that string alone dropped a viable download to idle, where the
+// transfer then completed in the client but was orphaned — the want never
+// ingested it (Alien Earth E7). A dead tracker among several does not stop a
+// torrent that is still pulling bytes, so a progressing transfer keeps going and
+// a completed one ingests, error string or not.
+func TestATransientTrackerErrorDoesNotAbandonAProgressingDownload(t *testing.T) {
+	h := newPollHarness(t)
+	h.grabAfterSearch(t, "Arrival.2016.2160p.mkv", []byte("the actual bytes of a film"))
+	id := h.transferID(t)
+
+	if err := h.client.Progress(id, 5); err != nil {
+		t.Fatal(err)
+	}
+	h.poll(t)
+	if got := h.state(t).Phase; got != acquisition.PhaseDownloading {
+		t.Fatalf("setup: phase = %s, want downloading", got)
+	}
+
+	// A dead tracker sets an Error, but the transfer is STILL pulling bytes
+	// (12 > 5). It must not be failed to idle for the string.
+	if err := h.client.Fail(id, downloads.TroubleClientError,
+		"info hash is not authorized with this tracker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.client.Progress(id, 12); err != nil {
+		t.Fatal(err)
+	}
+	h.poll(t)
+	if got := h.state(t).Phase; got != acquisition.PhaseDownloading {
+		t.Fatalf("phase = %s, want downloading: a still-moving transfer with a transient "+
+			"tracker error must keep going, not be abandoned to idle", got)
+	}
+
+	// It finishes with the stale error still on it — the completed bytes ingest,
+	// they are not thrown away.
+	if _, err := h.client.Complete(id); err != nil {
+		t.Fatal(err)
+	}
+	h.poll(t)
+	if got := h.state(t).Phase; got == acquisition.PhaseIdle || got == acquisition.PhaseDownloading {
+		t.Fatalf("phase = %s: a completed transfer must reach verifying even with a stale error", got)
+	}
+}
+
+// The control: an errored transfer that is genuinely STUCK — no progress since
+// the last pass — is still failed back to idle, so a fresh search picks another
+// release. Without this, dropping the immediate fail-on-error would strand a
+// dead release in DOWNLOADING forever.
+func TestAStalledTransferWithAnErrorIsStillFailed(t *testing.T) {
+	h := newPollHarness(t)
+	h.grabAfterSearch(t, "Arrival.2016.2160p.mkv", []byte("the actual bytes of a film"))
+	id := h.transferID(t)
+
+	if err := h.client.Progress(id, 8); err != nil {
+		t.Fatal(err)
+	}
+	h.poll(t) // downloading, bytes_done recorded as 8
+
+	// Errored, and NOT progressing (still 8 this pass) — a dead release.
+	if err := h.client.Fail(id, downloads.TroubleClientError,
+		"info hash is not authorized with this tracker"); err != nil {
+		t.Fatal(err)
+	}
+	h.poll(t)
+	if got := h.state(t).Phase; got != acquisition.PhaseIdle {
+		t.Fatalf("phase = %s, want idle: a stalled, errored transfer is a dead release and must be failed", got)
+	}
+}
+
 func TestAWantWhoseGrabIsRejectedIsBlockedAndReDriven(t *testing.T) {
 	h := newPollHarness(t)
 	h.grabAfterSearch(t, "Arrival.2016.2160p.mkv", []byte("the bytes of a film"))

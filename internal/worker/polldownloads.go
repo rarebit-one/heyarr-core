@@ -180,7 +180,10 @@ func reconcileTransfer(
 		return 0, err
 	}
 
-	return advancePipeline(ctx, cat, ingests, existing.DesiredItemID, t, log)
+	// existing.BytesDone is last pass's figure — RecordAcquisition above has
+	// just overwritten the row with this pass's, so it is captured here, before,
+	// to let advancePipeline tell a stuck transfer from one still pulling bytes.
+	return advancePipeline(ctx, cat, ingests, existing.DesiredItemID, t, existing.BytesDone, log)
 }
 
 // sweepOrphanedDownloads fails wants whose transfer has vanished from a client
@@ -356,7 +359,7 @@ func sweepStuckGrabs(
 // and must move it exactly once.
 func advancePipeline(
 	ctx context.Context, cat *catalog.Catalog, ingests ProbeEnqueuer,
-	desiredItemID string, t providers.Transfer, log *slog.Logger,
+	desiredItemID string, t providers.Transfer, prevBytesDone int64, log *slog.Logger,
 ) (int, error) {
 	state, err := cat.Acquisition(ctx, desiredItemID)
 	if err != nil {
@@ -379,15 +382,17 @@ func advancePipeline(
 	var wants []acquisition.Transition
 	var detail string
 	switch {
-	case t.Error != "":
-		// Including the invisible tracker stall, which reached us as an Error
-		// because stall.go read trackerStats. Without that this branch would
-		// never fire for the most common stall there is.
-		wants, detail = []acquisition.Transition{acquisition.TransitionFail}, t.Error
 	case t.Done:
-		// To VERIFYING, never straight to ingest: a download client's claim of
+		// Complete → to VERIFYING, never straight to ingest: a client's claim of
 		// completion is a claim by a third party about bytes it fetched from
-		// strangers (invariant 1).
+		// strangers (invariant 1), which Heyarr hashes for itself.
+		//
+		// This comes BEFORE the error case ON PURPOSE. A finished transfer has
+		// the bytes, and a stale tracker-error string does not un-download them:
+		// a torrent whose one dead tracker set Error while its working trackers
+		// carried it to 100% must ingest, not be thrown away for the string.
+		// Verification is the gate that a completed-but-bad download hits, not
+		// this.
 		//
 		// `start_download` is included and is RECORDED when it applies, even
 		// though nobody watched bytes move. The alternative — skipping it —
@@ -397,9 +402,30 @@ func advancePipeline(
 		wants = []acquisition.Transition{
 			acquisition.TransitionStartDownload, acquisition.TransitionDownloaded,
 		}
+	case t.Error != "" && t.BytesDone <= prevBytesDone:
+		// Errored AND making no progress since the last pass: a transfer that is
+		// genuinely stuck — a dead tracker with no reachable peers, or a release
+		// the client could never start (BytesDone still 0). Fail it back to idle
+		// so a fresh search picks another.
+		//
+		// The `<= prevBytesDone` guard is what stops a TRANSIENT error from
+		// throwing away a download that is still moving. stall.go surfaces a
+		// per-tracker rejection ("info hash is not authorized") as the transfer's
+		// Error even when other trackers are serving it and bytes are flowing;
+		// failing on the string alone abandoned a viable download, and once the
+		// want was at idle the completing transfer was orphaned there and never
+		// ingested (Alien Earth E7). A dead tracker among several does not stop a
+		// torrent that is still pulling bytes, so only a stalled one is failed.
+		wants, detail = []acquisition.Transition{acquisition.TransitionFail}, t.Error
 	case t.BytesDone > 0:
+		// Progress — bytes advanced since the last pass, or arrived for the first
+		// time — with or without a transient error still on the transfer. Keep it
+		// downloading; the error is recorded as trouble on the row (above) but is
+		// not acted on while the bytes move.
 		wants = []acquisition.Transition{acquisition.TransitionStartDownload}
 	default:
+		// Not done, no fresh bytes, and either no error or an error with nothing
+		// yet fetched-and-moving: waiting in the queue. Nothing to apply.
 		return 0, nil
 	}
 
