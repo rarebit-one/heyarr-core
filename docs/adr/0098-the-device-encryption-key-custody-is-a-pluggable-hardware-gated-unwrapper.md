@@ -138,6 +138,85 @@ only narrows who can read *that device's* copy.
 - P-256 becoming the wire primitive (a voidbind decision), which would let the TPM
   and StrongBox compute the agreement natively.
 
+## Addendum (2026-09-17): the cruciform-offload unwrap protocol (#571)
+
+Backend 4 needs a desktop↔phone protocol that the other three do not. This
+addendum records its shape; the desktop-side backend and its authenticated
+protocol codec land in `internal/personalstate/client/cruciform` (unit-tested
+against a fake transport), with the live wiring deferred as noted below.
+
+### Shape: the phone returns the space key, not a raw agreement
+
+Two shapes were considered:
+
+1. **Remote `AgreementFunc`** — the desktop runs `encryption.UnwrapWithAgreement`
+   and offloads only the ECDH: it sends the ephemeral public point to the phone,
+   which computes `ECDH(phone_priv, ephPub)` in its enclave and returns the raw
+   32-byte shared secret; the desktop assembles the key. This mirrors the YubiKey
+   backend most literally.
+2. **Phone returns the space key** (chosen) — the phone unwraps against its own
+   key and returns a fully-formed space key, sealed to a per-unwrap ephemeral key.
+
+Shape 1 is **rejected**: it turns the phone into a general X25519 decryption
+oracle — `agree(X)` returns `ECDH(phone_priv, X)` for *any* X, so anyone who
+reached the phone past its gate could decrypt anything ever wrapped to it. A
+PIN-gated card in a USB port is a safe oracle (backend 3); a phone reachable over
+a network relay is not. Shape 1 gains no confidentiality either — the shared
+secret on the wire is as sensitive as the space key, needing the same envelope
+anyway. Shape 2 narrows the phone to "return a space key for a blob that unwraps
+against my own key," a far smaller capability. So this backend implements
+`client.Unwrapper` via a wake + relay round-trip, **not** via
+`UnwrapWithAgreement` — the agreement *and* the assembly run on the phone.
+
+### The exchange is mutually authenticated over an untrusted relay
+
+The pairing relay (ADR-0002) is opaque but untrusted: it forwards bytes it cannot
+open and could try to substitute them. Two signed, nonce-bound messages close
+that:
+
+- **Request** (desktop → phone): `{wrapped, ephPub, nonce}`, signed by the
+  desktop **transport** key. It carries no secret — `wrapped` is already opaque,
+  `ephPub`/`nonce` are public — so it needs authenticity, not sealing. The
+  signature is the confused-deputy gate a wake-with-no-QR reopens: an attacker who
+  reaches the relay cannot make the phone act as an unwrap oracle.
+- **Response** (phone → desktop): the space key sealed to `ephPub` (the same
+  `encryption.Seal` wrap the controller uses), plus the nonce, **signed by the
+  phone's device key**. The signature is load-bearing: `Seal` is anonymous-sender,
+  so without it a malicious relay could swap in `Seal(attackerKey, ephPub)` and
+  the desktop would trust an attacker-chosen key. The desktop verifies the phone
+  signature and the nonce *before* unsealing, so substitution is caught at the
+  door, not by a later failed frame decrypt. The ephemeral private key is
+  discarded per unwrap, so each exchange is forward-secret against a later relay
+  compromise. The space key lands in desktop RAM — that is this ADR's §4 by
+  design; what offload protects is the long-term *device* key, which never leaves
+  the phone.
+
+### Requester trust: one-time transport pairing, then biometric
+
+The desktop authenticates as a paired **terminal** via a persistent *transport*
+signing key — **not** a device encryption key (this backend holds none). The
+phone pins that transport key once, via a voidbind pairflow SAS number-match
+(ADR-0002); after that, each unwrap needs only the phone's biometric gate, not a
+per-unwrap number-match. The transport key is not a custody key: stolen alone it
+is useless — an attacker still needs the phone and its biometric to get any space
+key.
+
+### Built now vs. deferred
+
+- **Built:** `internal/personalstate/client/cruciform` — the `Unwrapper` backend,
+  the authenticated request/response codec, and the envelope, unit-tested against
+  a fake transport + a reference "phone" that runs the real unwrap/seal. The
+  `Transport` seam (wake + relay round-trip) is an interface here.
+- **Deferred (follow-ups):** extending voidbind-go's relay to accept unwrap
+  message types and its notify plane to carry an opaque `voidbind:unwrap?…` ping
+  (both **voidbind-go-first**, source of truth); the concrete notify+relay
+  `Transport`; the one-time pairing ceremony that pins the transport key; the
+  phone half in **voidbind-kmp** (UnifiedPush receive, biometric gate, in-enclave
+  unwrap, seal); backend **selection** at the two callers (`mgr.Open`, the vault
+  CLI still hardcode `NewKeyUnwrapper` — a prerequisite shared with backends 2/3);
+  and a live phone round-trip, gated on a reachable paired phone (as the YubiKey
+  backend gated its on-card round-trip).
+
 ## Relationship to existing records
 
 - **ADR-0049** — the device X25519 key and the wrap/seal format this leaves
