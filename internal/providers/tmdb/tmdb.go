@@ -164,6 +164,14 @@ func (c *Client) Capabilities() []providers.Capability {
 // source type.
 func (c *Client) ServesType(t followed.Type) bool { return t == followed.TypeTVSeries }
 
+// IDNamespace names the external-id source a TMDB ref belongs to. A followed
+// series' ref is a TMDB series id, so recording it as the work's `tmdb` external
+// id is what lets identification-dependent features — the subtitle fetch's
+// episode lookup (DueSubtitleFetches), episode metadata — find it. TV
+// identification is otherwise TVDB-first (ADR-0058) and leaves the work with no
+// external id when TVDB is not the configured adapter.
+func (c *Client) IDNamespace() string { return "tmdb" }
+
 // Check exercises the provider by fetching TMDB's public /configuration, and
 // reports what it found. It EXERCISES rather than asserts (providers.Provider):
 // a token that is configured but rejected must report unhealthy so work does not
