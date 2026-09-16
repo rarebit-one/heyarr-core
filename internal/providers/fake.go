@@ -69,6 +69,11 @@ type Fake struct {
 	// to serve (see ServingTypes, ServesType). Nil means it serves ANY type,
 	// which keeps the many single-fake follow tests routing to it unchanged.
 	servesTypes map[followed.Type]bool
+	// idNamespace, when non-empty, is the external-id source this fake's ref
+	// belongs to (see WithIDNamespace, IDNamespace) — "tmdb" for a TMDB-style
+	// adapter. Empty (the default) leaves the fake reporting no namespace, so a
+	// poll records no work external id, matching a URL-ref adapter.
+	idNamespace string
 	now         func() time.Time
 }
 
@@ -184,6 +189,19 @@ func (f *Fake) OfferFeed(ref string, items ...followed.FeedItem) *Fake {
 	f.feeds[normaliseRef(ref)] = items
 	return f
 }
+
+// WithIDNamespace makes this fake report the given external-id source for its
+// ref (as the TV metadata adapters do — "tmdb"/"tvdb"), so a poll records the
+// followed series' ref as its work's external id. Left unset, the fake reports
+// none.
+func (f *Fake) WithIDNamespace(ns string) *Fake {
+	f.idNamespace = ns
+	return f
+}
+
+// IDNamespace reports the external-id source this fake's ref belongs to, or ""
+// when unset.
+func (f *Fake) IDNamespace() string { return f.idNamespace }
 
 // ServingTypes restricts the followed types this fake serves, for the routing
 // tests that configure more than one metadata fake. Unset (the default), a fake

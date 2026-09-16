@@ -50,6 +50,15 @@ const subtitleProfileName = "subtitle"
 // PollSourceHandler runs one source's poll. reg resolves the feed adapter, cat
 // stores items and wants, and grabs is the queue a fresh want's reconciliation
 // is enqueued to (nil-tolerant, so a poll is exercisable without one).
+// idNamespaced is a feed adapter whose ref is a stable external-catalogue id (a
+// TMDB or TVDB series id) rather than a URL, reporting which id space it belongs
+// to. The TV metadata adapters implement it so a followed series' ref can be
+// recorded as its work's external id; the podcast/channel/rss adapters, whose
+// ref is a feed URL, do not.
+type idNamespaced interface {
+	IDNamespace() string
+}
+
 func PollSourceHandler(
 	reg *providers.Registry, cat *catalog.Catalog, grabs *jobs.Queue, log *slog.Logger,
 ) HandlerFunc {
@@ -91,6 +100,29 @@ func PollSourceHandler(
 			// backoff, and do NOT advance the poll schedule — a poll that did not
 			// happen must not count as one that found nothing.
 			return fmt.Errorf("worker: enumerating source %s: %w", payload.SourceID, err)
+		}
+
+		// Record the series' catalogue id on its work, so identification-dependent
+		// features can find it. TV identification is TVDB-first (ADR-0058) and
+		// leaves a work with NO external id when TVDB is not the configured
+		// adapter — yet the followed source has carried the id in feed_ref all
+		// along, and the subtitle-fetch (DueSubtitleFetches) gates on the work
+		// having a tmdb/imdb external id, so captions never fetch without it.
+		// The feed adapter names the id space its ref belongs to (tmdb/tvdb); a
+		// podcast or channel adapter, whose ref is a URL, does not and is skipped.
+		// Idempotent (WriteWorkExternalID no-ops on conflict), so it runs every
+		// poll harmlessly and self-heals a source followed before this existed on
+		// that source's next poll.
+		if src.Type == followed.TypeTVSeries {
+			if ns, ok := provider.(idNamespaced); ok {
+				if idSource := ns.IDNamespace(); idSource != "" {
+					if werr := cat.WriteWorkExternalID(ctx, src.WorkID, idSource, src.FeedRef); werr != nil {
+						log.Warn("could not record a series' external id from its follow",
+							"source_id", payload.SourceID, "work", src.WorkID,
+							"id_source", idSource, "error", werr)
+					}
+				}
+			}
 		}
 
 		// Resolve the subtitle profile once, only when this source wants subtitles
