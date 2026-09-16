@@ -1,6 +1,6 @@
 {
-  "name": "cosig-reserved",
-  "description": "a remove carrying a cosig entry parses and preserves it; the fleet never exceeded two devices (high-water 2, k=1), so the primary signature alone is enough and the (here invalid) cosig is moot — honoured exactly as without it",
+  "name": "cosig-below-three",
+  "description": "an identity whose fleet high-water is 2 (only A and B were ever added — it never crossed three): the threshold is k=1, so A's single-signature remove of B is effective without any cosig",
   "usr": "ed25519:f947b10c8089aa8fed2d435fae069d0ca1513b33691955ae963dfe8bc5b398c4",
   "now": 1788267600,
   "keys": {
@@ -21,9 +21,9 @@
   },
   "ops": [
     {
-      "label": "rm-B-cosigned",
-      "token": "eyJ2IjozLCJ1c3IiOiJlZDI1NTE5OmY5NDdiMTBjODA4OWFhOGZlZDJkNDM1ZmFlMDY5ZDBjYTE1MTNiMzM2OTE5NTVhZTk2M2RmZThiYzViMzk4YzQiLCJvcCI6InJlbW92ZSIsImRldiI6ImVkMjU1MTk6Y2U5YzgzZjEzYzZhMDY2NjY2NjVlMDQ3MWQ0NWMwYjRkNDEwN2Q4OTJlOGRkYjRkZTdhYzI3NTIwZTM2ZjM3ZCIsImJ5IjoiZWQyNTUxOTo0NGYyNTUzNzZiZDEwODIxZjgyYjBmOWY1Njg1MDRjYWFmNmMxNTgzYzY1ZTY4NWQ2NmQwNWVjM2FhYzNkNzg5IiwicHJldiI6WyJzaGEyNTY6MzUwM2FlYThjZjEwMTY1ZWEyNDE3NDgzYjY2YjQ1MzYxMGJhMDdhM2MyYTFiODdjNzU4OThlM2JiMTIwMmQwYiJdLCJjb3NpZyI6W3siYnkiOiJlZDI1NTE5OmNlOWM4M2YxM2M2YTA2NjY2NjY1ZTA0NzFkNDVjMGI0ZDQxMDdkODkyZThkZGI0ZGU3YWMyNzUyMGUzNmYzN2QiLCJzaWciOiJBQUFBIn1dLCJpYXQiOjE3ODgyNjQ2MDB9.oYadj8M8NPFXTfotQh-5UW57GUs2e9SCtxfZPU0KYsdOnMqGb9JtYyxX1TYOHcJfhdj7oSHzbPdYrTeQsvq-CA",
-      "hash": "sha256:a12169d79e8d67e64439e0f138e83755f6ab35c5828e1da3872ec2fedd149b2d"
+      "label": "rm-B",
+      "token": "eyJ2IjozLCJ1c3IiOiJlZDI1NTE5OmY5NDdiMTBjODA4OWFhOGZlZDJkNDM1ZmFlMDY5ZDBjYTE1MTNiMzM2OTE5NTVhZTk2M2RmZThiYzViMzk4YzQiLCJvcCI6InJlbW92ZSIsImRldiI6ImVkMjU1MTk6Y2U5YzgzZjEzYzZhMDY2NjY2NjVlMDQ3MWQ0NWMwYjRkNDEwN2Q4OTJlOGRkYjRkZTdhYzI3NTIwZTM2ZjM3ZCIsImJ5IjoiZWQyNTUxOTo0NGYyNTUzNzZiZDEwODIxZjgyYjBmOWY1Njg1MDRjYWFmNmMxNTgzYzY1ZTY4NWQ2NmQwNWVjM2FhYzNkNzg5IiwicHJldiI6WyJzaGEyNTY6MzUwM2FlYThjZjEwMTY1ZWEyNDE3NDgzYjY2YjQ1MzYxMGJhMDdhM2MyYTFiODdjNzU4OThlM2JiMTIwMmQwYiJdLCJpYXQiOjE3ODgyNjQ2MDB9.eKHYL0m4eVn1su1vg07D-ES_vpyVs_mKnDIAB_NpzEiHkOkoWZ5gxlYlQ11HsPsC8oke6_hJvXlaOg4BhL3fDg",
+      "hash": "sha256:9991eb85c9666035e55f6769f853b9583cd55ffc18864ac2411e87864faf1995"
     },
     {
       "label": "add-B",
@@ -49,7 +49,7 @@
       "ed25519:ce9c83f13c6a06666665e0471d45c0b4d4107d892e8ddb4de7ac27520e36f37d"
     ],
     "heads": [
-      "sha256:a12169d79e8d67e64439e0f138e83755f6ab35c5828e1da3872ec2fedd149b2d"
+      "sha256:9991eb85c9666035e55f6769f853b9583cd55ffc18864ac2411e87864faf1995"
     ],
     "rejected": {},
     "ineffective": {

@@ -1,0 +1,80 @@
+{
+  "name": "cosig-minimal-prev-downgrade-refused",
+  "description": "the downgrade the high-water closes: A, B and C all held authorised adds (high-water 3, k=2). A removes C but anchors the remove to the OLD 2-member prev add-B, so its closure holds only {A,B} — under a closure-relative N that would be k=1 and one signature would unseat C. The high-water ignores the prev, so k stays 2: the lone signature is under_threshold and C survives",
+  "usr": "ed25519:f947b10c8089aa8fed2d435fae069d0ca1513b33691955ae963dfe8bc5b398c4",
+  "now": 1788267600,
+  "keys": {
+    "A": {
+      "sign_seed": "5a855e9adc99a1ed10fbe04f44132d9d04885edf1a92e2e16828f825ea167d06",
+      "enc_seed": "99e1e58af901d759e6969fefe3c3fa47d9cdef954ab64e21fc990c5bae45d35c",
+      "id": "ed25519:44f255376bd10821f82b0f9f568504caaf6c1583c65e685d66d05ec3aac3d789"
+    },
+    "B": {
+      "sign_seed": "9493d01d80c72ec0770529a5125cd60fd4bfc19b75662b2ca9ff45a417b344f2",
+      "enc_seed": "32338a06d4f67a664fcaabbf1e98c1e46f2b5750f2270bd4af127355ed560619",
+      "id": "ed25519:ce9c83f13c6a06666665e0471d45c0b4d4107d892e8ddb4de7ac27520e36f37d"
+    },
+    "C": {
+      "sign_seed": "a033afa007a178f308cdbc9313e532c516b3e5704fb83d3f82f499e3913779b2",
+      "enc_seed": "4f70736b2be19d280929efa3c73cf442243bffe7f77e61ba866947ac125f96f4",
+      "id": "ed25519:222058a87e08796d0668cb203921c831c1b307271092bf0577b351b892287f14"
+    },
+    "genesis": {
+      "sign_seed": "c24bb87672097fd3292251030126197ba061ffb69b9b67b0786318f627fb132c",
+      "id": "ed25519:f947b10c8089aa8fed2d435fae069d0ca1513b33691955ae963dfe8bc5b398c4"
+    }
+  },
+  "ops": [
+    {
+      "label": "rm-C-minimal-prev",
+      "token": "eyJ2IjozLCJ1c3IiOiJlZDI1NTE5OmY5NDdiMTBjODA4OWFhOGZlZDJkNDM1ZmFlMDY5ZDBjYTE1MTNiMzM2OTE5NTVhZTk2M2RmZThiYzViMzk4YzQiLCJvcCI6InJlbW92ZSIsImRldiI6ImVkMjU1MTk6MjIyMDU4YTg3ZTA4Nzk2ZDA2NjhjYjIwMzkyMWM4MzFjMWIzMDcyNzEwOTJiZjA1NzdiMzUxYjg5MjI4N2YxNCIsImJ5IjoiZWQyNTUxOTo0NGYyNTUzNzZiZDEwODIxZjgyYjBmOWY1Njg1MDRjYWFmNmMxNTgzYzY1ZTY4NWQ2NmQwNWVjM2FhYzNkNzg5IiwicHJldiI6WyJzaGEyNTY6NjVkNDM2YjcyNDUzYmRmZDU3NTNiNWEwNTI1YTg3OThjZTk3ZTI3ZTdkNDc5MjQzNzZiYjU1YTNjYzEzZTI3NyJdLCJpYXQiOjE3ODgyNjQ2MDB9.I5Ks4XWn4RVD3EpsjOS0ncw75YAVHvex-RFJggHGfsf-Ogv1824gD7UELox3EJaMT2cZBBStFehPs9KNbCYJBg",
+      "hash": "sha256:08a16dece05a9557f60d4b050ad10c61f495bfd5f0be5a4e908537949b90a33e"
+    },
+    {
+      "label": "add-C",
+      "token": "eyJ2IjozLCJ1c3IiOiJlZDI1NTE5OmY5NDdiMTBjODA4OWFhOGZlZDJkNDM1ZmFlMDY5ZDBjYTE1MTNiMzM2OTE5NTVhZTk2M2RmZThiYzViMzk4YzQiLCJvcCI6ImFkZCIsImRldiI6ImVkMjU1MTk6MjIyMDU4YTg3ZTA4Nzk2ZDA2NjhjYjIwMzkyMWM4MzFjMWIzMDcyNzEwOTJiZjA1NzdiMzUxYjg5MjI4N2YxNCIsImRlbmMiOiJ4MjU1MTk6NGY3MDczNmIyYmUxOWQyODA5MjllZmEzYzczY2Y0NDIyNDNiZmZlN2Y3N2U2MWJhODY2OTQ3YWMxMjVmOTZmNCIsImJ5IjoiZWQyNTUxOTo0NGYyNTUzNzZiZDEwODIxZjgyYjBmOWY1Njg1MDRjYWFmNmMxNTgzYzY1ZTY4NWQ2NmQwNWVjM2FhYzNkNzg5IiwicHJldiI6WyJzaGEyNTY6NjVkNDM2YjcyNDUzYmRmZDU3NTNiNWEwNTI1YTg3OThjZTk3ZTI3ZTdkNDc5MjQzNzZiYjU1YTNjYzEzZTI3NyJdLCJpYXQiOjE3ODgyNjQxMjAsImV4cCI6MTc5NjA0MDEyMH0.qeEZ0pBWVv7wmbNzvKYMlwQtwdCfFApmbp67VLsOHDLxMzqLszb3vVQtSfeC-hMyYjh26QLyYA3vU8V3UIJqDA",
+      "hash": "sha256:ef7db563219726367e77bc8ebe19ac1a5f2ed99cdf6e335398e5e7048e823228"
+    },
+    {
+      "label": "add-B",
+      "token": "eyJ2IjozLCJ1c3IiOiJlZDI1NTE5OmY5NDdiMTBjODA4OWFhOGZlZDJkNDM1ZmFlMDY5ZDBjYTE1MTNiMzM2OTE5NTVhZTk2M2RmZThiYzViMzk4YzQiLCJvcCI6ImFkZCIsImRldiI6ImVkMjU1MTk6Y2U5YzgzZjEzYzZhMDY2NjY2NjVlMDQ3MWQ0NWMwYjRkNDEwN2Q4OTJlOGRkYjRkZTdhYzI3NTIwZTM2ZjM3ZCIsImRlbmMiOiJ4MjU1MTk6MzIzMzhhMDZkNGY2N2E2NjRmY2FhYmJmMWU5OGMxZTQ2ZjJiNTc1MGYyMjcwYmQ0YWYxMjczNTVlZDU2MDYxOSIsImJ5IjoiZWQyNTUxOTo0NGYyNTUzNzZiZDEwODIxZjgyYjBmOWY1Njg1MDRjYWFmNmMxNTgzYzY1ZTY4NWQ2NmQwNWVjM2FhYzNkNzg5IiwicHJldiI6WyJzaGEyNTY6OTY0NmI0OTFiNzNlMDYwYzUxYmRkOWUzYjY5Yjg5ZWE4M2ZjMmU1YTY2YzNiMzUxNDFlYzFlMGM1NzhhOGZjNyJdLCJpYXQiOjE3ODgyNjQwNjAsImV4cCI6MTc5NjA0MDA2MH0.zMkqdJZRCmdkp9MxjVNd8yF7ZFJxQXEzyRxQIMk7dqiVvlSm-DgQPNOYVK8zO_lPhIzqWHTBotcRyR2t-M5TBg",
+      "hash": "sha256:65d436b72453bdfd5753b5a0525a8798ce97e27e7d47924376bb55a3cc13e277"
+    },
+    {
+      "label": "add-A",
+      "token": "eyJ2IjozLCJ1c3IiOiJlZDI1NTE5OmY5NDdiMTBjODA4OWFhOGZlZDJkNDM1ZmFlMDY5ZDBjYTE1MTNiMzM2OTE5NTVhZTk2M2RmZThiYzViMzk4YzQiLCJvcCI6ImFkZCIsImRldiI6ImVkMjU1MTk6NDRmMjU1Mzc2YmQxMDgyMWY4MmIwZjlmNTY4NTA0Y2FhZjZjMTU4M2M2NWU2ODVkNjZkMDVlYzNhYWMzZDc4OSIsImRlbmMiOiJ4MjU1MTk6OTllMWU1OGFmOTAxZDc1OWU2OTY5ZmVmZTNjM2ZhNDdkOWNkZWY5NTRhYjY0ZTIxZmM5OTBjNWJhZTQ1ZDM1YyIsImJ5IjoiZWQyNTUxOTpmOTQ3YjEwYzgwODlhYThmZWQyZDQzNWZhZTA2OWQwY2ExNTEzYjMzNjkxOTU1YWU5NjNkZmU4YmM1YjM5OGM0IiwicHJldiI6W10sImlhdCI6MTc4ODI2NDAwMCwiZXhwIjoxNzk2MDQwMDAwfQ._6NQ53HSNPWvzQQVNbB2mEnGBwI__2fDvZ50OOMbiNGoFDPLPDSunF4ntlIvf3xnexcx8YAqCShYTszzC7KcDw",
+      "hash": "sha256:9646b491b73e060c51bdd9e3b69b89ea83fc2e5a66c3b35141ec1e0c578a8fc7"
+    }
+  ],
+  "expect": {
+    "members": {
+      "ed25519:222058a87e08796d0668cb203921c831c1b307271092bf0577b351b892287f14": {
+        "admitted_by": "sha256:ef7db563219726367e77bc8ebe19ac1a5f2ed99cdf6e335398e5e7048e823228",
+        "denc": "x25519:4f70736b2be19d280929efa3c73cf442243bffe7f77e61ba866947ac125f96f4",
+        "admitted_at": 1788264120,
+        "expires": 1796040120
+      },
+      "ed25519:44f255376bd10821f82b0f9f568504caaf6c1583c65e685d66d05ec3aac3d789": {
+        "admitted_by": "sha256:9646b491b73e060c51bdd9e3b69b89ea83fc2e5a66c3b35141ec1e0c578a8fc7",
+        "denc": "x25519:99e1e58af901d759e6969fefe3c3fa47d9cdef954ab64e21fc990c5bae45d35c",
+        "admitted_at": 1788264000,
+        "expires": 1796040000
+      },
+      "ed25519:ce9c83f13c6a06666665e0471d45c0b4d4107d892e8ddb4de7ac27520e36f37d": {
+        "admitted_by": "sha256:65d436b72453bdfd5753b5a0525a8798ce97e27e7d47924376bb55a3cc13e277",
+        "denc": "x25519:32338a06d4f67a664fcaabbf1e98c1e46f2b5750f2270bd4af127355ed560619",
+        "admitted_at": 1788264060,
+        "expires": 1796040060
+      }
+    },
+    "removed": [],
+    "heads": [
+      "sha256:08a16dece05a9557f60d4b050ad10c61f495bfd5f0be5a4e908537949b90a33e",
+      "sha256:ef7db563219726367e77bc8ebe19ac1a5f2ed99cdf6e335398e5e7048e823228"
+    ],
+    "rejected": {},
+    "ineffective": {
+      "sha256:08a16dece05a9557f60d4b050ad10c61f495bfd5f0be5a4e908537949b90a33e": "under_threshold"
+    }
+  }
+}
