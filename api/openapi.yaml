@@ -3640,6 +3640,45 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/desired/{id}/reingest:
+    post:
+      tags: [desired]
+      operationId: reingestDesired
+      summary: Re-drive the import for a want whose ingest wedged.
+      description: |
+        Re-run the hash-and-import for a want stuck in `verifying` or
+        `ingesting` — a download that finished but whose ingest job was lost (a
+        worker crash mid-lease, a node OOM, a client that dropped the completed
+        transfer before it ran), leaving the want with no job driving it.
+
+        **Enqueues** the same `ingest_acquisition` job the download poll would;
+        the ingest worker re-locates and re-verifies the bytes itself, so no
+        download-client state is needed. **Idempotent** — the dedupe key means
+        an ingest already running is left alone, so this answers `202` and
+        reaches only wants with no live ingest.
+
+        The stuck-ingest watchdog does this automatically once a want has been
+        wedged past a grace window; this is the same action on demand.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "202":
+          description: Queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  desired_item_id: { type: string }
+                  job_id: { type: string }
+                  status: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/desired/{id}/select:
     post:
       tags: [desired]
