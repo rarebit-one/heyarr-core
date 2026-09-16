@@ -22,6 +22,13 @@ import (
 // transfer that still exists.
 const orphanDownloadGrace = 5 * time.Minute
 
+// stuckGrabGrace is how long a want may sit at idle carrying a failed transfer
+// before the poll concludes its grab is wedged and re-drives it. It need only
+// outlast the moment of failure — nothing else moves an idle want that holds a
+// troubled row — but a short grace keeps the sweep from racing the same pass
+// that failed it.
+const stuckGrabGrace = 2 * time.Minute
+
 // stuckIngestGrace is how long a want may sit in VERIFYING or INGESTING before
 // the watchdog re-drives its ingest. It must comfortably exceed a legitimate
 // verify-and-import of a large file (minutes, even under contention), because a
@@ -113,11 +120,23 @@ func PollDownloadsHandler(
 		// the bytes are already local — so it runs unconditionally.
 		reingested := sweepStuckIngests(ctx, cat, ingests, log)
 
+		// A grab that never fetched — a tracker that refused the infohash, a
+		// magnet that resolved to nothing — fails the release back to idle but
+		// leaves the want carrying a troubled row and its dead selection, where
+		// no in-flight phase holds it and only the backed-off search beat would
+		// ever look. Re-drive it: block the release and clear its backoff so a
+		// fresh search picks another. Unconditional for the same reason the
+		// ingest sweep is — the failure is settled in the row, not in whether a
+		// client answered this pass.
+		redriven, rf := sweepStuckGrabs(ctx, cat, log)
+		failed += rf
+
 		// Logged only when something happened. A pass over a steady queue is
 		// the normal case and should be invisible.
-		if advanced > 0 || failed > 0 || reingested > 0 {
+		if advanced > 0 || failed > 0 || reingested > 0 || redriven > 0 {
 			log.Info("polled download clients",
-				"clients", len(clients), "advanced", advanced, "failed", failed, "reingested", reingested)
+				"clients", len(clients), "advanced", advanced, "failed", failed,
+				"reingested", reingested, "redriven", redriven)
 		}
 		return nil
 	}
@@ -251,6 +270,82 @@ func sweepStuckIngests(
 			"desired_item_id", s.DesiredItemID, "phase", string(s.Phase))
 	}
 	return reingested
+}
+
+// sweepStuckGrabs re-drives wants stranded at idle after a failed grab — the
+// grab-side analogue of BlockRelease's verify loop (§64, M3-13).
+//
+// A poll fails a release the download client could not fetch (a tracker that
+// refused the infohash, a magnet that resolved to nothing) back to idle
+// (advancePipeline's error branch) but leaves the troubled acquisition row and
+// the selected candidate in place. From idle nothing re-drives the want:
+// reconcile only sets satisfaction, sweepOrphanedDownloads only looks at
+// in-flight phases, and the search beat both waits out the failed search's
+// backoff (up to a day) AND would re-select the very release that just failed.
+// The want sits missing forever, or loops on one dead release — the download
+// counterpart of an ingest wedged with no job.
+//
+// The recovery is BlockRelease's: block the release that would not fetch so the
+// search stops choosing it, drop its transfer row, and clear the search
+// schedule so a fresh search runs now and picks a DIFFERENT candidate. Each
+// failing release is blocked in turn until a fetchable one is found or the want
+// runs out of candidates — convergence, not a loop. StuckGrabs only returns
+// wants that HAVE a selected candidate to block and whose row still carries the
+// trouble, so this reaches exactly the wedged wants and its grace keeps it off a
+// want that only just fell back.
+func sweepStuckGrabs(
+	ctx context.Context, cat *catalog.Catalog, log *slog.Logger,
+) (redriven, failed int) {
+	stuck, err := cat.StuckGrabs(ctx, stuckGrabGrace)
+	if err != nil {
+		log.Warn("could not list stuck grabs", "error", err)
+		return 0, 1
+	}
+	for _, g := range stuck {
+		if ctx.Err() != nil {
+			return redriven, failed
+		}
+		created, err := cat.BlockRelease(ctx, catalog.BlockedRelease{
+			DesiredItemID: g.DesiredItemID,
+			Provider:      g.Provider,
+			CandidateID:   g.CandidateID,
+			Title:         g.Title,
+			Detail:        g.Trouble,
+			Reason:        catalog.BlockGrabFailed,
+		})
+		if err != nil {
+			failed++
+			log.Warn("could not block a stuck grab's release",
+				"desired_item_id", g.DesiredItemID, "candidate_id", g.CandidateID, "error", err)
+			continue
+		}
+		// Drop the failed transfer row either way — it keeps the want out of the
+		// next sweep whether or not this pass wrote the block.
+		if err := cat.DropAcquisition(ctx, g.DesiredItemID); err != nil {
+			log.Warn("blocked a stuck grab's release but could not drop its transfer row",
+				"desired_item_id", g.DesiredItemID, "error", err)
+		}
+		if !created {
+			// The release was already blocked yet came back selected — the
+			// search chose a blocked release, which it must not. Do NOT clear the
+			// backoff: re-driving into the same forbidden pick would hot-loop the
+			// sweep. The dropped row keeps it out of the next pass, and the
+			// anomaly is surfaced rather than papered over.
+			log.Warn("a stuck grab's release was already blocked but was selected again",
+				"desired_item_id", g.DesiredItemID, "provider", g.Provider,
+				"candidate_id", g.CandidateID)
+			continue
+		}
+		if err := cat.ClearSearchSchedule(ctx, g.DesiredItemID); err != nil {
+			log.Warn("blocked a stuck grab's release but could not clear its search schedule",
+				"desired_item_id", g.DesiredItemID, "error", err)
+		}
+		redriven++
+		log.Info("re-drove a want whose grab was wedged at idle",
+			"desired_item_id", g.DesiredItemID, "provider", g.Provider,
+			"candidate_id", g.CandidateID, "title", g.Title, "trouble", g.Trouble)
+	}
+	return redriven, failed
 }
 
 // advancePipeline applies the §64 transition this transfer's state implies.

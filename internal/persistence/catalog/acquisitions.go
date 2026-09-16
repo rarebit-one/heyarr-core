@@ -284,6 +284,67 @@ func (c *Catalog) StuckIngests(ctx context.Context, grace time.Duration) ([]Stuc
 	return out, rows.Err()
 }
 
+// StuckGrab is a want stranded at idle after its grab failed. A poll failed the
+// selected release back to idle — a tracker rejection ("info hash is not
+// authorized"), a fetch that returned nothing — and left a troubled acquisition
+// row behind. Nothing re-drives it on its own: reconcile only sets satisfaction,
+// sweepOrphanedDownloads only looks at in-flight phases, and the search beat is
+// gated by a backoff that can be a day out AND would re-select the very release
+// that just failed. It carries the SELECTED candidate so the caller can block
+// that release before letting a fresh search pick a different one.
+type StuckGrab struct {
+	DesiredItemID string
+	// The selected candidate — the release whose grab failed. Provider and
+	// CandidateID are the INDEXER's, keyed the way blocked_releases and the
+	// search filter are — NOT the download client's provider/infohash carried on
+	// the acquisitions row.
+	Provider    string
+	CandidateID string
+	Title       string
+	// Trouble is what the transfer last reported, recorded as the block's detail.
+	Trouble string
+}
+
+// StuckGrabs lists wants stranded at idle after a failed grab: phase idle, not
+// satisfied, a selected candidate, and a leftover acquisition row that carries a
+// trouble string, entered idle at least `grace` ago.
+//
+// The grace is measured on phase_entered_at — when the fail landed the want at
+// idle — so a want that only just fell back, and might still be moved by the
+// same poll pass, is left for the next one. A want with NO selected candidate is
+// deliberately absent: without the release in hand to block, re-driving would
+// re-pick and re-fail, so those stay the search beat's business.
+func (c *Catalog) StuckGrabs(ctx context.Context, grace time.Duration) ([]StuckGrab, error) {
+	cutoff := c.clock.Now().Add(-grace).Format(timestampFormat)
+	rows, err := c.db.Reader().QueryContext(ctx, `
+		SELECT s.desired_item_id, rc.provider, rc.candidate_id, rc.title, a.trouble
+		FROM acquisition_state s
+		JOIN acquisitions a ON a.desired_item_id = s.desired_item_id
+		JOIN release_candidates rc
+		  ON rc.desired_item_id = s.desired_item_id AND rc.selected = 1
+		WHERE s.phase = ?
+		  AND s.content <> 'satisfied'
+		  AND a.trouble <> ''
+		  AND s.phase_entered_at < ?
+		ORDER BY s.phase_entered_at, s.desired_item_id`,
+		string(acquisition.PhaseIdle), cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: listing stuck grabs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []StuckGrab
+	for rows.Next() {
+		var g StuckGrab
+		if err := rows.Scan(&g.DesiredItemID, &g.Provider, &g.CandidateID,
+			&g.Title, &g.Trouble); err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
 // DropAcquisition removes the link between a want and a transfer.
 //
 // It does NOT touch the download client. Removing a transfer is a separate

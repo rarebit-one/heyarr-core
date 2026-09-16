@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/downloads"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 )
 
@@ -19,6 +20,97 @@ func (h *pollHarness) backdateLastSeen(t *testing.T, by time.Duration) {
 		`UPDATE acquisitions SET last_seen_at = ? WHERE desired_item_id = ?`,
 		old, h.want); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// backdatePhaseEntered ages this want's acquisition_state so its current phase
+// looks as though it was entered `by` ago — the way a want that failed back to
+// idle and then sat there looks once the grace elapses.
+func (h *pollHarness) backdatePhaseEntered(t *testing.T, by time.Duration) {
+	t.Helper()
+	old := time.Now().UTC().Add(-by).Format(time.RFC3339Nano)
+	if _, err := h.db.Writer().ExecContext(t.Context(),
+		`UPDATE acquisition_state SET phase_entered_at = ? WHERE desired_item_id = ?`,
+		old, h.want); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A grab the download client could never fetch — a tracker that refuses the
+// infohash after the add — fails the release back to idle but leaves the want
+// carrying its troubled transfer row and its now-dead selection. Nothing
+// re-drives an idle want on its own: reconcile only sets satisfaction,
+// sweepOrphanedDownloads only looks at in-flight phases, and the search beat
+// waits out the failed search's backoff AND would re-pick the very release that
+// just failed. The stuck-grab sweep must block that release and clear the want's
+// backoff so a fresh search chooses a different one — the exact wedge E7 hit.
+func TestAWantWhoseGrabIsRejectedIsBlockedAndReDriven(t *testing.T) {
+	h := newPollHarness(t)
+	h.grabAfterSearch(t, "Arrival.2016.2160p.mkv", []byte("the bytes of a film"))
+	id := h.transferID(t)
+
+	// The tracker refuses the infohash — the release is unfetchable, not bad
+	// bytes and not a local problem.
+	if err := h.client.Fail(id, downloads.TroubleClientError,
+		"info hash is not authorized with this tracker"); err != nil {
+		t.Fatal(err)
+	}
+	h.poll(t) // advancePipeline fails the want to idle, keeping its row and selection
+	if got := h.state(t).Phase; got != acquisition.PhaseIdle {
+		t.Fatalf("setup: phase is %s, expected idle after the grab failed", got)
+	}
+
+	// Age the idle past the grace, so the sweep treats it as settled rather than
+	// as a want that only just fell back this pass.
+	h.backdatePhaseEntered(t, 2*stuckGrabGrace)
+
+	h.poll(t)
+
+	// The unfetchable release is blocked, so the next search will not pick it.
+	blocked, err := h.cat.BlockedFor(t.Context(), h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 1 || blocked[0].Reason != catalog.BlockGrabFailed {
+		t.Fatalf("blocked = %+v, want one grab_failed entry: the unfetchable release "+
+			"must be blocked so the search stops choosing it", blocked)
+	}
+	// Its transfer row is dropped...
+	if _, err := h.cat.AcquisitionFor(t.Context(), h.want); !errors.Is(err, catalog.ErrNoAcquisitionRow) {
+		t.Fatalf("acquisition row still present (err=%v); the failed transfer should be dropped", err)
+	}
+	// ...and its backoff cleared, so the want is due a search now instead of
+	// sitting out the failed search's exponential wait.
+	if _, found, err := h.cat.SearchSchedule(t.Context(), h.want); err != nil {
+		t.Fatal(err)
+	} else if found {
+		t.Fatal("search schedule still present; a re-driven want must be due a fresh search at once")
+	}
+}
+
+// The guard against racing the pass that failed it: a grab that only just failed
+// is left alone until the grace elapses — its release stays unblocked and its
+// row stays put.
+func TestAJustFailedGrabSurvivesTheGrace(t *testing.T) {
+	h := newPollHarness(t)
+	h.grabAfterSearch(t, "Arrival.2016.2160p.mkv", []byte("the bytes of a film"))
+	id := h.transferID(t)
+	if err := h.client.Fail(id, downloads.TroubleClientError,
+		"info hash is not authorized with this tracker"); err != nil {
+		t.Fatal(err)
+	}
+	h.poll(t) // fails to idle, phase entered just now — inside the grace
+	h.poll(t) // a second pass, still inside the grace
+
+	blocked, err := h.cat.BlockedFor(t.Context(), h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 0 {
+		t.Fatalf("blocked = %+v, want none: a grab that failed inside the grace must not be swept", blocked)
+	}
+	if _, err := h.cat.AcquisitionFor(t.Context(), h.want); err != nil {
+		t.Fatalf("acquisition row gone (err=%v); a within-grace failure should keep it", err)
 	}
 }
 
