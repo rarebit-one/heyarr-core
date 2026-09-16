@@ -204,6 +204,27 @@ func (c *Catalog) RecordSearchScheduled(
 	return n > 0, nil
 }
 
+// ClearSearchSchedule removes a want's search bookkeeping, so it is due a search
+// as of now.
+//
+// DueSearches LEFT JOINs the schedule and treats a missing row as due
+// immediately (a want nobody has looked for is the most urgent kind). Deleting
+// the row is therefore how a caller says "look again now, from a clean streak"
+// without reaching into next_search_at — used when a want has been re-driven out
+// of band (its failed release blocked) and must not sit out the backoff the
+// failed search left behind. Idempotent: deleting an absent row is a no-op.
+func (c *Catalog) ClearSearchSchedule(ctx context.Context, desiredItemID string) error {
+	if desiredItemID == "" {
+		return fmt.Errorf("catalog: clearing a search schedule needs a want")
+	}
+	_, err := c.db.Writer().ExecContext(ctx,
+		`DELETE FROM search_schedule WHERE desired_item_id = ?`, desiredItemID)
+	if err != nil {
+		return fmt.Errorf("catalog: clearing the search schedule for %s: %w", desiredItemID, err)
+	}
+	return nil
+}
+
 // SearchScheduleRow is one want's bookkeeping, for tests and for anything that
 // needs to explain when Heyarr will next look.
 type SearchScheduleRow struct {

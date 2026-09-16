@@ -360,6 +360,61 @@ func TestStuckIngestsFindsWedgedIngestsPastTheGrace(t *testing.T) {
 	}
 }
 
+// A want at idle that holds a selected candidate AND a troubled transfer row is
+// a grab that failed and stranded — the stuck-grab sweep must find it once it is
+// past the grace. A want with no selection, or a clean transfer row, is not one:
+// without the release to block, re-driving would only re-pick and re-fail.
+func TestStuckGrabsFindsIdleWantsWithAFailedTransferAndASelection(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+		t.Fatal(err)
+	}
+	// A search that selected a release ("good" is the best of the three), and a
+	// transfer that then failed — the acquisition row carries the trouble.
+	if _, err := h.cat.RecordSearch(ctx, h.want, rankThree(), acquisition.Incumbent{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.cat.RecordAcquisition(ctx, catalog.Acquisition{
+		ID: "acq-1", DesiredItemID: h.want, Provider: "transmission",
+		ExternalID: "deadbeef", ExternalName: "Arrival.2016.2160p.mkv",
+		Trouble: "client_error: info hash is not authorized with this tracker",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The wedge is a want at idle (a failed grab fell back there), and it has sat
+	// there past the grace.
+	h.exec(t, `UPDATE acquisition_state
+		SET phase = 'idle', phase_entered_at = '2026-07-01T00:00:00Z'
+		WHERE desired_item_id = ?`, h.want)
+
+	got, err := h.cat.StuckGrabs(ctx, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].DesiredItemID != h.want || got[0].CandidateID != "good" {
+		t.Fatalf("StuckGrabs should return the idle want with its selected release, got %+v", got)
+	}
+
+	// Clear the trouble: a clean transfer row at idle is not a failed grab.
+	h.exec(t, `UPDATE acquisitions SET trouble = '' WHERE desired_item_id = ?`, h.want)
+	if got, err := h.cat.StuckGrabs(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	} else if len(got) != 0 {
+		t.Fatalf("an idle want whose transfer carries no trouble is not a stuck grab: %+v", got)
+	}
+
+	// Restore the trouble but drop the selection: with no release to block, the
+	// want is the search beat's business, not the sweep's.
+	h.exec(t, `UPDATE acquisitions SET trouble = 'client_error: x' WHERE desired_item_id = ?`, h.want)
+	h.exec(t, `UPDATE release_candidates SET selected = 0 WHERE desired_item_id = ?`, h.want)
+	if got, err := h.cat.StuckGrabs(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	} else if len(got) != 0 {
+		t.Fatalf("an idle want with no selected candidate is not a stuck grab: %+v", got)
+	}
+}
+
 // A want with no acquisition row is a real state a caller has to handle, and it
 // must be a typed error rather than a bare sql.ErrNoRows leaking out.
 func TestReadingAnAbsentAcquisitionIsTyped(t *testing.T) {
