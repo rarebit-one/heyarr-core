@@ -502,6 +502,55 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// SystemConfigPath is the conventional location of the configuration file on a
+// host install, and the path the packaged systemd unit passes to --config. A
+// CLI command run on the same host as the service resolves it (see ResolvePath)
+// so it targets the SAME data directory — the socket, the database and the
+// token store the service actually uses — rather than the built-in defaults,
+// which describe a directory the service is very likely not using.
+const SystemConfigPath = "/etc/heyarr/config.yaml"
+
+// systemConfigPath is the path ResolvePath actually probes. It is a var, not a
+// direct use of the const, so a test can point discovery at a file it created
+// rather than needing one to exist at the real system path.
+var systemConfigPath = SystemConfigPath
+
+// ConfigPathEnv names the environment variable that supplies the config file
+// path when --config is not given. It is the path analogue of the HEYARR_
+// value overrides: a service manager, or an operator's shell, can point every
+// heyarr invocation at one config without repeating --config.
+const ConfigPathEnv = "HEYARR_CONFIG"
+
+// ResolvePath decides which configuration file to load when the caller did not
+// name one with --config. It is the client half of #556.
+//
+// The built-in defaults (data_dir /var/lib/heyarr, addr 127.0.0.1:7777)
+// describe no running instance. A CLI command that silently falls back to them
+// dials a socket the server never bound; worse, a local-DB command like
+// `token create` opens a database the controller does not read, and a token
+// minted there is later rejected as an invalid credential — a symptom that
+// gives no hint of its cause. So when --config is empty, discover the instance
+// the way the host is set up to describe it, in order:
+//
+//  1. $HEYARR_CONFIG, if set — an explicit choice; a missing file behind it
+//     becomes a loud error from Load, not a silent fallback.
+//  2. SystemConfigPath, if it exists.
+//
+// An empty result means "no file": the built-in defaults, which are still the
+// right answer for a fresh install that has configured nothing yet.
+func ResolvePath(flagPath string) string {
+	if strings.TrimSpace(flagPath) != "" {
+		return flagPath
+	}
+	if env := strings.TrimSpace(os.Getenv(ConfigPathEnv)); env != "" {
+		return env
+	}
+	if _, err := os.Stat(systemConfigPath); err == nil {
+		return systemConfigPath
+	}
+	return ""
+}
+
 // applyDerivedDefaults fills in the paths that hang off DataDir. It runs after
 // loading so that setting data_dir alone moves everything, while setting a path
 // explicitly still wins.

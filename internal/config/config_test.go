@@ -520,3 +520,46 @@ func TestGuestEmptyAllowListValidatesAndTrustsNobody(t *testing.T) {
 		}
 	}
 }
+
+// TestResolvePath covers the config discovery that #556 adds: an explicit flag
+// wins, else $HEYARR_CONFIG, else a present system config, else "" (defaults).
+func TestResolvePath(t *testing.T) {
+	t.Run("flag wins over everything", func(t *testing.T) {
+		t.Setenv(ConfigPathEnv, "/env/config.yaml")
+		if got := ResolvePath("/flag/config.yaml"); got != "/flag/config.yaml" {
+			t.Errorf("flag should win, got %q", got)
+		}
+	})
+
+	// HEYARR_CONFIG is an explicit choice and is returned even when the file is
+	// missing — Load then reports that loudly, which is the intended behaviour.
+	t.Run("env used when no flag", func(t *testing.T) {
+		t.Setenv(ConfigPathEnv, "/env/config.yaml")
+		if got := ResolvePath(""); got != "/env/config.yaml" {
+			t.Errorf("env should be used, got %q", got)
+		}
+	})
+
+	t.Run("system path discovered when present", func(t *testing.T) {
+		t.Setenv(ConfigPathEnv, "")
+		p := writeConfig(t, "peer:\n  name: test\n")
+		old := systemConfigPath
+		systemConfigPath = p
+		t.Cleanup(func() { systemConfigPath = old })
+		if got := ResolvePath(""); got != p {
+			t.Errorf("system path should be discovered, got %q", got)
+		}
+	})
+
+	// Nothing to discover means the built-in defaults, which are correct for a
+	// host that has configured nothing yet.
+	t.Run("empty when nothing to discover", func(t *testing.T) {
+		t.Setenv(ConfigPathEnv, "")
+		old := systemConfigPath
+		systemConfigPath = filepath.Join(t.TempDir(), "absent.yaml")
+		t.Cleanup(func() { systemConfigPath = old })
+		if got := ResolvePath(""); got != "" {
+			t.Errorf("expected empty (defaults), got %q", got)
+		}
+	})
+}
