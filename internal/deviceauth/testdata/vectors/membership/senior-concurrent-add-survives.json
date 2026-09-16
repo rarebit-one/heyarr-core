@@ -1,6 +1,6 @@
 {
   "name": "senior-concurrent-add-survives",
-  "description": "A (senior) admits C while B removes A: C stays; B (junior) admits D while A removes B: D is void. Concurrency is resolved by seniority, history never is",
+  "description": "with high-water N the quorum is a function of the WHOLE fleet, not a remove's own closure: four devices (A, B, C, D) held authorised adds, so k=2 across the board. B's single-signature remove of A no longer downgrades by citing a minimal 2-member prev (under_threshold), and A's single-signature remove of B is under_threshold too — both seniors survive, and their concurrent adds C and D stand. The junior can no longer unseat the senior on one signature",
   "usr": "ed25519:f947b10c8089aa8fed2d435fae069d0ca1513b33691955ae963dfe8bc5b398c4",
   "now": 1788267600,
   "keys": {
@@ -74,20 +74,29 @@
         "denc": "x25519:99e1e58af901d759e6969fefe3c3fa47d9cdef954ab64e21fc990c5bae45d35c",
         "admitted_at": 1788264000,
         "expires": 1796040000
+      },
+      "ed25519:bd4b1c20994458ce950f672eab5c80146a0eed90e6cd8b5d1f90acd5aa26dcef": {
+        "admitted_by": "sha256:e9e9f2280db5b4157378d46ac12500d387812b59e295a9968b3646e5115e6440",
+        "denc": "x25519:aad4b1787de8200c4bc184d80d480b910861424c58ac9a34eb2609f06bfb38e2",
+        "admitted_at": 1788264360,
+        "expires": 1796040360
+      },
+      "ed25519:ce9c83f13c6a06666665e0471d45c0b4d4107d892e8ddb4de7ac27520e36f37d": {
+        "admitted_by": "sha256:65ce1f0e61d6fbc5e3b529bd3f3d222794833aed4e4f64dce54e12d070332144",
+        "denc": "x25519:32338a06d4f67a664fcaabbf1e98c1e46f2b5750f2270bd4af127355ed560619",
+        "admitted_at": 1788264060,
+        "expires": 1796040060
       }
     },
-    "removed": [
-      "ed25519:ce9c83f13c6a06666665e0471d45c0b4d4107d892e8ddb4de7ac27520e36f37d"
-    ],
+    "removed": [],
     "heads": [
       "sha256:226c45a375a51acbe6f2aa47231a722c597ad6e683624e1f1c3c48ea44f7f97e",
       "sha256:e9e9f2280db5b4157378d46ac12500d387812b59e295a9968b3646e5115e6440"
     ],
     "rejected": {},
     "ineffective": {
-      "sha256:65ce1f0e61d6fbc5e3b529bd3f3d222794833aed4e4f64dce54e12d070332144": "removed",
-      "sha256:8990775074e71316e445fe78220c32706b3a6ba27ab3ef8929981328ddf4346a": "outranked",
-      "sha256:e9e9f2280db5b4157378d46ac12500d387812b59e295a9968b3646e5115e6440": "outranked"
+      "sha256:226c45a375a51acbe6f2aa47231a722c597ad6e683624e1f1c3c48ea44f7f97e": "under_threshold",
+      "sha256:8990775074e71316e445fe78220c32706b3a6ba27ab3ef8929981328ddf4346a": "under_threshold"
     }
   }
 }
