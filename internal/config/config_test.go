@@ -232,7 +232,7 @@ func TestValidateRejectsBadValues(t *testing.T) {
 			c.Vault.Unwrapper = "quantum"
 		}, "vault.unwrapper"},
 		{"not-yet-selectable vault unwrapper", func(c *Config) {
-			c.Vault.Unwrapper = "tpm"
+			c.Vault.Unwrapper = "cruciform"
 		}, "vault.unwrapper"},
 	}
 	for _, tt := range tests {
@@ -256,7 +256,7 @@ func TestVaultUnwrapperSelectable(t *testing.T) {
 	if got := Defaults().Vault.Unwrapper; got != "software" {
 		t.Fatalf("default vault.unwrapper = %q, want software", got)
 	}
-	for _, backend := range []string{"software", "yubikey"} {
+	for _, backend := range []string{"software", "yubikey", "tpm"} {
 		cfg := Defaults()
 		cfg.Vault.Unwrapper = backend
 		if err := cfg.Validate(); err != nil {

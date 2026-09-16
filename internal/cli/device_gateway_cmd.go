@@ -93,10 +93,13 @@ credentials are distinct by design.`,
 				return err
 			}
 			cust, err := custody.Select(custody.Options{
-				Backend:       cfg.Vault.Unwrapper,
-				DeviceDir:     *dir,
-				YubiKeySocket: cfg.Vault.YubiKey.Socket,
-				YubiKeyPIN:    yubikeyPINFunc(cfg.Vault.YubiKey.PINFile),
+				Backend:          cfg.Vault.Unwrapper,
+				DeviceDir:        *dir,
+				YubiKeySocket:    cfg.Vault.YubiKey.Socket,
+				YubiKeyPIN:       pinFromFileOrEnv(cfg.Vault.YubiKey.PINFile, VaultYubiKeyPINEnvVar, "vault.yubikey.pin_file"),
+				TPMSealedKeyFile: cfg.Vault.TPM.SealedKeyFile,
+				TPMDevice:        cfg.Vault.TPM.Device,
+				TPMPIN:           pinFromFileOrEnv(cfg.Vault.TPM.PINFile, VaultTPMPINEnvVar, "vault.tpm.pin_file"),
 			})
 			if err != nil {
 				return err

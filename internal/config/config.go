@@ -79,11 +79,14 @@ type Config struct {
 // pluggable per-platform backend; this selects it.
 type Vault struct {
 	// Unwrapper selects the custody backend: "software" (default, in-process
-	// ECDH) or "yubikey" (the X25519 agreement runs on an OpenPGP card). The
-	// "tpm" and "cruciform" backends are named in ADR-0098 but not yet selectable.
+	// ECDH), "yubikey" (the X25519 agreement runs on an OpenPGP card), or "tpm"
+	// (the key is sealed to a TPM under a PCR+PIN policy). "cruciform" is named in
+	// ADR-0098 but not yet selectable.
 	Unwrapper string `koanf:"unwrapper"`
 	// YubiKey configures the on-card backend; used only when unwrapper=yubikey.
 	YubiKey VaultYubiKey `koanf:"yubikey"`
+	// TPM configures the TPM-gated backend; used only when unwrapper=tpm.
+	TPM VaultTPM `koanf:"tpm"`
 }
 
 // VaultYubiKey configures the YubiKey-on-card custody backend.
@@ -94,6 +97,19 @@ type VaultYubiKey struct {
 	// PINFile reads the card User PIN from a file (trimmed). Empty falls back to
 	// the HEYARR_VAULT_YUBIKEY_PIN environment variable. The PIN gates the card;
 	// it is never written back anywhere.
+	PINFile string `koanf:"pin_file"`
+}
+
+// VaultTPM configures the TPM-gated custody backend.
+type VaultTPM struct {
+	// SealedKeyFile is the path to the sealed-key blob the backend unseals
+	// (provisioned by the tpm seal step). Required when unwrapper=tpm.
+	SealedKeyFile string `koanf:"sealed_key_file"`
+	// Device is the TPM resource-manager device to open. Empty uses /dev/tpmrm0.
+	Device string `koanf:"device"`
+	// PINFile reads the policy PIN from a file (trimmed). Empty falls back to the
+	// HEYARR_VAULT_TPM_PIN environment variable. The PIN gates the unseal; it is
+	// never written back anywhere.
 	PINFile string `koanf:"pin_file"`
 }
 
@@ -621,10 +637,10 @@ func (c Config) BackupInterval() (time.Duration, error) {
 var validLogLevels = []string{"debug", "info", "warn", "error"}
 
 // validVaultUnwrappers is the set of currently SELECTABLE custody backends
-// (ADR-0098). "tpm" and "cruciform" are named in the ADR and partly built, but
-// not yet wired to the callers, so configuring one is refused here rather than
-// failing later at open time.
-var validVaultUnwrappers = []string{"software", "yubikey"}
+// (ADR-0098). "cruciform" is named in the ADR and built (#582) but not yet wired
+// to the callers, so configuring it is refused here rather than failing later at
+// open time.
+var validVaultUnwrappers = []string{"software", "yubikey", "tpm"}
 
 // Validate reports the first configuration problem, phrased so the operator can
 // act on it without reading the source. Configuration is checked before any
