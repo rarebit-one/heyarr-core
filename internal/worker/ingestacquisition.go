@@ -98,10 +98,16 @@ func IngestAcquisitionHandler(
 		if err != nil {
 			return err
 		}
-		// Only from VERIFYING. The job is deduped per want and the poll beat
-		// re-enqueues, so arriving late — after another pass already ingested
-		// — is the normal case rather than an error.
-		if state.State.Phase != acquisition.PhaseVerifying {
+		// Ingest runs from VERIFYING, and also RESUMES a want left in INGESTING
+		// holding no bytes — an ingest that verified and advanced, then died in
+		// materialisation (a crash, a node OOM) before it could finish. That
+		// want has no job driving it and sits in INGESTING forever; the
+		// stuck-ingest watchdog (and `desired reingest`) re-enqueue this job,
+		// and resuming here is what actually clears it — re-enqueueing alone did
+		// not, because this handler used to no-op every phase but VERIFYING.
+		phase := state.State.Phase
+		resuming := phase == acquisition.PhaseIngesting && !state.State.Managed
+		if phase != acquisition.PhaseVerifying && !resuming {
 			// LATE and NEVER are different situations and used to share a log
 			// line (#240). "Arrived after the want moved on" describes a second
 			// delivery of a transfer already handled; an operator reading it
@@ -110,17 +116,17 @@ func IngestAcquisitionHandler(
 			//
 			// Managed is what tells them apart: a want holding bytes has been
 			// through this, and one holding none has not. Both are quiet
-			// successes — invariant 9 makes a duplicate ordinary, and the
-			// endpoint now advances a never-started want itself — so what is
-			// at stake is only whether the sentence is true.
+			// successes — invariant 9 makes a duplicate ordinary — so what is
+			// at stake is only whether the sentence is true. (An INGESTING want
+			// holding no bytes is not here: it is a resume, handled above.)
 			if state.State.Managed {
 				log.Info("an acquisition ingest arrived after the want moved on",
 					"desired_item_id", payload.DesiredItemID,
-					"phase", string(state.State.Phase))
+					"phase", string(phase))
 			} else {
 				log.Warn("an acquisition ingest arrived for a want that never reached verifying",
 					"desired_item_id", payload.DesiredItemID,
-					"phase", string(state.State.Phase))
+					"phase", string(phase))
 			}
 			return nil
 		}
@@ -136,9 +142,13 @@ func IngestAcquisitionHandler(
 				catalog.BlockVerificationFailed, verifyErr, log)
 		}
 
-		if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
-			acquisition.TransitionVerified, batch.verifiedDetail()); err != nil {
-			return err
+		// The VERIFYING→INGESTING edge is skipped on a resume: the want is
+		// already there, and re-applying the transition would be illegal.
+		if !resuming {
+			if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
+				acquisition.TransitionVerified, batch.verifiedDetail()); err != nil {
+				return err
+			}
 		}
 
 		results, linked, ingestErr := ingestArtifacts(ctx, cat, roots, pipeline, payload.DesiredItemID, batch)
