@@ -123,6 +123,30 @@ func TestUploadRejectsBadHash(t *testing.T) {
 	}
 }
 
+// TestUploadAcceptsPercentEncodedColon: a spec-conformant client (the JVM's
+// java.net.http, used by the desktop vault-sync daemon) percent-encodes the ':'
+// in a `blake3:<hex>` id to %3A. chi routes on the raw target and hands that
+// encoded value to the handler; httpapi.HashParam must decode it so the id
+// parses and the blob stores under its literal digest — otherwise every daemon
+// upload 400s as a malformed id. A literal ':' is unchanged (TestUploadStoresAndPins).
+func TestUploadAcceptsPercentEncodedColon(t *testing.T) {
+	store := &fakeStore{}
+	pinner := &fakePinner{}
+	// What chi.URLParam returns when the client encoded the colon.
+	encoded := "blake3%3A" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	rec := upload(t, newHandler(t, store, pinner), encoded, []byte("opaque ciphertext frames"))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.gotExpected.String() != goodHash {
+		t.Fatalf("stored under %s, want the decoded %s", store.gotExpected, goodHash)
+	}
+	if pinner.pinnedHash != goodHash {
+		t.Fatalf("pinned %s, want the decoded %s", pinner.pinnedHash, goodHash)
+	}
+}
+
 // TestUploadPinFailureIs500: if the bytes stored but the pin failed, that is a
 // server error (the blob would otherwise be reclaimable) — not a silent success.
 func TestUploadPinFailureIs500(t *testing.T) {
