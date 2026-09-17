@@ -263,6 +263,84 @@ removes it — recovery via the paper secret is unchanged, so this adds no loss
 mode. **Deferred:** the on-real-fTPM/PTT validation, gated on the Framework
 laptops arriving. Only cruciform (#571) remains unwired in the selector now.
 
+## Addendum (2026-09-17): the cruciform-offload live path — rendezvous and approval UX
+
+The "unwrap protocol" addendum above settled the *message-level* exchange (who
+signs what, and how the space key comes back sealed). This settles the layer
+*above* it — how the desktop and phone find each other, and what the approval
+feels like — so the deferred pieces (the notify unwrap-ping, the `Transport`, the
+pairing ceremony, and the phone half) are built to one shape. The offload backend
+landed (#582); this is its live path.
+
+### Two moments, opposite tools
+
+- **Pairing is once, and uses a QR.** Establishing desktop↔phone trust is a
+  one-time act, and voidbind pairing already does it well (ADR-0002 pairflow): the
+  desktop renders a `voidbind:pair?…` QR, the phone scans it off the screen, and a
+  short number-compare (SAS) confirms it. The visual channel is what authenticates
+  the rendezvous, so a network attacker cannot substitute the relay/session/salt.
+  This pins the desktop's **transport key** on the phone — a pairing identity, NOT
+  a custody key (stolen alone it opens nothing without the phone + biometric).
+- **Unwrapping is recurring, and never scans.** A QR per unwrap is unacceptable
+  UX. The recurring path is push/discover + biometric, below.
+
+### Recurring unwrap: LAN-direct first, relay+wake as the away fallback
+
+Two transports behind the STEP-4 `Transport` seam — the same signed message-level
+protocol rides either:
+
+- **Same network (the common homelab case): direct, via mDNS.** heyarr already
+  advertises on the LAN (mDNS); the desktop discovers the paired phone and connects
+  to it directly — no relay, no push, lowest latency. This is the everyday path
+  when the owner is home.
+- **Away (phone on cellular, laptop off-net): relay + wake.** The desktop wakes
+  the phone over the notify plane (ADR-0005) with an opaque **unwrap ping** that
+  carries only the relay session pointer, and the two exchange over the pairing
+  relay (ADR-0002). The ping wakes a sleeping phone; the relay carries the opaque,
+  mutually-signed request/response.
+
+### Binding the approval without a QR: number-matching
+
+A scanned QR proves "this is my desktop in front of me"; a push scans nothing, so
+it loses that binding. voidbind's number-matching (ADR-0006) restores it on the
+relay path: the desktop shows a short code, the phone shows candidates, the human
+taps the match, then approves with biometric — two taps, no scan, and it proves it
+is the owner's desktop. On the LAN-direct path the pinned transport key plus the
+biometric already bind it; whether to also require a number-match there is an open
+knob (below).
+
+### Cadence: once per space-key unwrap, not per file
+
+The phone is consulted once per space / per session / per rotation — after that the
+space key decrypts every frame locally. So the human approves when they sit down to
+work, not on every action. This low frequency is what makes hardware-offload
+usable, and it is why a per-unwrap biometric (rather than a cached credential on the
+desktop) is affordable.
+
+### What each deferred piece is therefore built to
+
+- **notify unwrap-ping (voidbind-go):** a new opaque tuple
+  `voidbind:unwrap?relay=&session=` + an enqueue path, mirroring the login ping —
+  carries only the unguessable relay-session pointer, never a key or challenge.
+- **relay message-types (voidbind-go, PR #39):** the configurable slot names that
+  let the unwrap request/response ride the same dumb relay as pairing.
+- **the heyarr `Transport`:** mDNS LAN-direct with relay+wake as fallback, behind
+  the seam the offload backend already takes.
+- **the pairing ceremony:** the one-time QR pairflow that pins the desktop
+  transport key on the phone.
+- **the voidbind-kmp/cruciform phone half:** scan-to-pair once; then receive a
+  wake (or accept a LAN connection), number-match, biometric, in-enclave unwrap,
+  and reply.
+
+### Open knobs (flagged, not locked)
+
+- Whether the LAN-direct path also requires a number-match, or biometric-only is
+  enough given the pinned transport key.
+- Whether the desktop may cache the space key for a bounded window after an
+  approval, or must re-consult the phone every session — a security/UX trade-off
+  that weakens the "desktop holds nothing" property if cached, so the default is
+  no cache.
+
 ## Relationship to existing records
 
 - **ADR-0049** — the device X25519 key and the wrap/seal format this leaves
