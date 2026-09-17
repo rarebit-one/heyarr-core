@@ -341,6 +341,58 @@ desktop) is affordable.
   that weakens the "desktop holds nothing" property if cached, so the default is
   no cache.
 
+## Addendum (2026-09-17): the offload pairing ceremony is built (desktop half)
+
+The one-time pairing the live-path addendum called for is now built on the
+desktop side — `internal/personalstate/client/cruciform` (`pairing.go`,
+`pairstore.go`) plus `heyarr device pair-offload`. It is unit-tested against a
+reference fake phone, including over a REAL voidbind relay; the actual QR scan is
+phone-gated, exactly as the YubiKey backend gated its on-card round-trip.
+
+**It is not a voidbind membership enrolment.** `pairflow.Initiator` signs an
+`add` op and seals a space key to make the responder a *member*; the offload
+transport key is explicitly NOT a member and holds no encryption key (§4). So the
+ceremony reuses only the lower-level SAS primitives `pairflow` is built on —
+`pairing.Commit`/`Commitment.Open`/`Derive` — over the same dumb relay, and
+*pins* keys instead of enrolling. Like the unwrap protocol, this pairing wire is
+**heyarr-core-local**: the voidbind-kmp/cruciform phone half mirrors THIS, not a
+voidbind-go pairflow variant (the generic pieces it rides — the relay, the SAS
+commit-reveal — are voidbind-go's; the offload-specific shape is here).
+
+The wire contract the phone half mirrors:
+
+- **Invite (QR payload):** `voidbind:offload-pair?v=1&relay=<origin>&session=<id>&salt=<hex>`.
+  The scheme matches voidbind's pairing invite so one QR scanner routes both, but
+  the opaque is `offload-pair`, not `pair`, so the phone dispatches this to the
+  offload-pairing handler rather than device enrolment. (This is the one deviation
+  from the live-path addendum's shorthand "voidbind:pair?…": a distinct opaque is
+  what keeps enrolment and offload-pairing from being confused for one another.)
+- **Handshake** (relay slots `commit`, `reveal`): commit-before-reveal, then OPEN
+  the peer's commitment against its revealed keys (the rushing gate), then DERIVE
+  the SAS. The desktop presents only its transport signing key (encryption key
+  absent, bound by its framed absence); the phone presents its device signing AND
+  encryption keys. `reveal` is JSON `{sign, enc?}` in the system's
+  algorithm-prefixed key encoding.
+- **Confirm** (relay slot `confirm`, only after the human matches the SAS): each
+  side signs a length-framed transcript — domain `heyarr-cruciform-pair-confirm-v1`
+  then `session`, `salt`, and both sides' signing/encryption keys — with its OWN
+  signing key, and verifies the peer's against the peer's revealed signing key.
+  This is both a proof-of-possession (the peer controls the private key behind the
+  pubkey it revealed) and the mutual "the human said yes" gate: a side that never
+  confirms pins nobody. `confirm` is JSON `{sig}` (base64).
+- **What the desktop pins** (`PairConfig`, `cruciform-pairing.json`, 0600, in the
+  device dir): its persistent transport signing key (secret), the phone's device
+  signing key (verifies unwrap *responses*), the phone's X25519 encryption key
+  (the `RecipientID` the sealed space-key copy is looked up by), and the relay.
+- **Relay allow-list:** the ceremony adds the `confirm` slot beyond the pairing
+  defaults (`cruciform.RelayPairTypes`); the node relay mount carries
+  `append(relay.DefaultTypes, append(RelayPairTypes, RelayUnwrapTypes...)...)`.
+
+Still deferred (phone/pairing-gated, as before): the RP wake endpoint the
+desktop's `WakeFunc` calls; the relay mount actually setting those types; the
+cruciform backend **selection** (built from a loaded `PairConfig`); the
+voidbind-kmp/cruciform phone half; and a live round-trip on a real paired phone.
+
 ## Relationship to existing records
 
 - **ADR-0049** — the device X25519 key and the wrap/seal format this leaves
