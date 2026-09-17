@@ -60,6 +60,7 @@ type Handler struct {
 	log       *slog.Logger
 	subRoutes http.Handler  // notify plane's POST/DELETE /v1/subscriptions
 	push      loginNotifier // wakes subscribed devices on a login initiation
+	wake      *unwrapWaker  // cruciform-offload wake: POST /v1/unwrap-wake
 }
 
 // Options configure a Handler.
@@ -170,6 +171,14 @@ func New(opts Options) (*Handler, error) {
 		log:       log,
 		subRoutes: SubscriptionRoutes(store, trust, opts.Identities.Membership(context.Background()), nil),
 		push:      push,
+		// The offload wake endpoint, over the SAME pinned trust and membership the
+		// broker and the subscription registry use, fanning to the same notifier the
+		// login push uses (ADR-0098). It wakes a paired phone for a vault-key unwrap.
+		wake: &unwrapWaker{
+			verifier: rp.Verifier{Trust: trust, Membership: opts.Identities.Membership(context.Background())},
+			notifier: notifier,
+			log:      log,
+		},
 	}, nil
 }
 
@@ -191,6 +200,9 @@ func (h *Handler) Mount(r chi.Router) {
 	// The notify plane's device-facing registry (POST/DELETE /v1/subscriptions),
 	// cert-authenticated by the plane itself against the same pinned trust.
 	r.Handle(SubscriptionsPrefix, h.subRoutes)
+	// The cruciform-offload wake endpoint (POST /v1/unwrap-wake), cert-authenticated
+	// the same way, so a paired desktop can wake its user's phone for an unwrap.
+	r.Handle(UnwrapWakePrefix, h.wake)
 }
 
 func (h *Handler) handleSignin(w http.ResponseWriter, _ *http.Request) {

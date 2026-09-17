@@ -416,12 +416,33 @@ called for):
   half). Config validation accepts `cruciform`; a missing pairing config is
   refused with a pointer to `heyarr device pair-offload`.
 
-**The wake stays nil for now** (`Options.CruciformWake`): the RP wake endpoint the
-desktop calls to push a `voidbind:unwrap?…` ping is the remaining server piece, so
-until it lands (and the phone half exists) an offload unwrap completes only when
-the phone is already reachable (a LAN-direct path, or a phone already polling the
-relay). Still deferred, therefore: that wake endpoint; the voidbind-kmp/cruciform
-phone half; and a live round-trip on a real paired phone.
+**The wake stays nil for now** (`Options.CruciformWake`): until the desktop
+WakeFunc is wired to the wake endpoint (and the phone half exists) an offload
+unwrap completes only when the phone is already reachable (a LAN-direct path, or a
+phone already polling the relay).
+
+## Addendum (2026-09-17): the RP wake endpoint is built
+
+The server half of the away-path wake is now built — `POST /v1/unwrap-wake`
+(`internal/api/weblogin`, mounted beside `/v1/subscriptions`). An enrolled device
+(the offload desktop) posts its enrolment cert plus the `(relay, session)` of the
+unwrap it is attempting; the node verifies the cert against the SAME pinned trust
+and membership the login broker and the subscription registry use (`rp.Verifier`),
+and fans an opaque `voidbind:unwrap?relay=&session=` ping to that user's subscribed
+devices (`notify.EnqueueUnwrap`). The user woken is the cert's user, never a field
+the client claimed, so a device can only wake its own user's phones — this is the
+Option-A auth: **the offload desktop is still an enrolled device with a signing
+identity, even though it offloads its ENCRYPTION custody**; the desktop↔phone
+transport key that authenticates the offload exchange itself is separate and never
+reaches the node. The ping is opaque by construction (it carries only the public
+relay-session pointer), so a node, push server or wake channel learns nothing;
+zero devices woken is a `200 woken:0`, not an error, since the desktop can still
+try the LAN-direct path.
+
+Still deferred (phone-gated): wiring the desktop's `Options.CruciformWake` to call
+this endpoint (it needs the node URL + the device's cert/ops at unwrap time); the
+voidbind-kmp/cruciform phone half (scan-to-pair, receive-wake, number-match,
+biometric, in-enclave unwrap, seal); and a live round-trip on a real paired phone.
 
 ## Relationship to existing records
 
