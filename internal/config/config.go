@@ -79,14 +79,16 @@ type Config struct {
 // pluggable per-platform backend; this selects it.
 type Vault struct {
 	// Unwrapper selects the custody backend: "software" (default, in-process
-	// ECDH), "yubikey" (the X25519 agreement runs on an OpenPGP card), or "tpm"
-	// (the key is sealed to a TPM under a PCR+PIN policy). "cruciform" is named in
-	// ADR-0098 but not yet selectable.
+	// ECDH), "yubikey" (the X25519 agreement runs on an OpenPGP card), "tpm"
+	// (the key is sealed to a TPM under a PCR+PIN policy), or "cruciform" (the
+	// desktop holds no key and offloads each unwrap to the paired phone, ADR-0098).
 	Unwrapper string `koanf:"unwrapper"`
 	// YubiKey configures the on-card backend; used only when unwrapper=yubikey.
 	YubiKey VaultYubiKey `koanf:"yubikey"`
 	// TPM configures the TPM-gated backend; used only when unwrapper=tpm.
 	TPM VaultTPM `koanf:"tpm"`
+	// Cruciform configures the offload backend; used only when unwrapper=cruciform.
+	Cruciform VaultCruciform `koanf:"cruciform"`
 }
 
 // VaultYubiKey configures the YubiKey-on-card custody backend.
@@ -111,6 +113,14 @@ type VaultTPM struct {
 	// HEYARR_VAULT_TPM_PIN environment variable. The PIN gates the unseal; it is
 	// never written back anywhere.
 	PINFile string `koanf:"pin_file"`
+}
+
+// VaultCruciform configures the cruciform-offload custody backend.
+type VaultCruciform struct {
+	// PairFile is the path to the offload pairing config (written by
+	// `heyarr device pair-offload`). Empty resolves to cruciform-pairing.json in
+	// the device directory — the default location the pairing writes.
+	PairFile string `koanf:"pair_file"`
 }
 
 // Notify configures the push/wake login channel (ADR-0055). The subscription
@@ -640,7 +650,7 @@ var validLogLevels = []string{"debug", "info", "warn", "error"}
 // (ADR-0098). "cruciform" is named in the ADR and built (#582) but not yet wired
 // to the callers, so configuring it is refused here rather than failing later at
 // open time.
-var validVaultUnwrappers = []string{"software", "yubikey", "tpm"}
+var validVaultUnwrappers = []string{"software", "yubikey", "tpm", "cruciform"}
 
 // Validate reports the first configuration problem, phrased so the operator can
 // act on it without reading the source. Configuration is checked before any

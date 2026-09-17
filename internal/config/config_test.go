@@ -231,9 +231,6 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		{"unknown vault unwrapper", func(c *Config) {
 			c.Vault.Unwrapper = "quantum"
 		}, "vault.unwrapper"},
-		{"not-yet-selectable vault unwrapper", func(c *Config) {
-			c.Vault.Unwrapper = "cruciform"
-		}, "vault.unwrapper"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -250,13 +247,13 @@ func TestValidateRejectsBadValues(t *testing.T) {
 	}
 }
 
-// TestVaultUnwrapperSelectable: the default is software, and both wired backends
-// pass validation (ADR-0098). The not-yet-wired ones are refused (covered above).
+// TestVaultUnwrapperSelectable: the default is software, and every wired backend
+// passes validation (ADR-0098). An unknown one is refused (covered above).
 func TestVaultUnwrapperSelectable(t *testing.T) {
 	if got := Defaults().Vault.Unwrapper; got != "software" {
 		t.Fatalf("default vault.unwrapper = %q, want software", got)
 	}
-	for _, backend := range []string{"software", "yubikey", "tpm"} {
+	for _, backend := range []string{"software", "yubikey", "tpm", "cruciform"} {
 		cfg := Defaults()
 		cfg.Vault.Unwrapper = backend
 		if err := cfg.Validate(); err != nil {
