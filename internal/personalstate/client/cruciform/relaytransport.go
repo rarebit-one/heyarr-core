@@ -24,6 +24,13 @@ const (
 // append(relay.DefaultTypes, RelayUnwrapTypes...).
 var RelayUnwrapTypes = []string{RelayRequestType, RelayResponseType}
 
+// RelayPairTypes are the relay message-slot names the offload PAIRING ceremony
+// adds beyond the default pairing set (relay.DefaultTypes already carries
+// "commit" and "reveal"; the offload pairing also posts a mutual "confirm"). A
+// node relay that carries the offload live path mounts
+// append(relay.DefaultTypes, append(RelayPairTypes, RelayUnwrapTypes...)...).
+var RelayPairTypes = []string{pairMsgConfirm}
+
 // WakeFunc wakes the paired phone so it opens the given relay session for an
 // unwrap. In production it asks the controller to fan an opaque
 // voidbind:unwrap?relay=&session= ping to the user's devices
