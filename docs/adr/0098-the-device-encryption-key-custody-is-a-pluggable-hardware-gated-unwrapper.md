@@ -393,6 +393,36 @@ desktop's `WakeFunc` calls; the relay mount actually setting those types; the
 cruciform backend **selection** (built from a loaded `PairConfig`); the
 voidbind-kmp/cruciform phone half; and a live round-trip on a real paired phone.
 
+## Addendum (2026-09-17): the offload backend is selectable, and the node relay carries it
+
+Two of the deferred pieces are now wired, so `cruciform` joins the other three
+backends as selectable-by-config (the "all backends by one config key" this ADR
+called for):
+
+- **Relay mount.** The node's voidbind relay (`internal/api/relay`, mounted in
+  the controller) now declares its accepted message slots explicitly: the pairing
+  default set (`commit`/`reveal`/`cert`) **plus** the offload slots — the pairing
+  `confirm` (`cruciform.RelayPairTypes`) and the recurring unwrap request/response
+  (`cruciform.RelayUnwrapTypes`). So one node relay is the rendezvous for both
+  device enrolment and offload unwraps; it stays a dumb, opaque store either way.
+  `relay.Options` grew a `Types` field so `api/relay` stays agnostic to what rides
+  it and the controller composes the set.
+- **Backend selection.** `custody.Select` now builds a `cruciform.Custody` from
+  the pairing config (`vault.unwrapper: cruciform`, `vault.cruciform.pair_file` or
+  the device-dir default): the `RelayTransport` over `PairConfig.RelayBase`, the
+  offload `Unwrapper` from the pinned transport + phone device keys, and —
+  crucially — a `RecipientID()` that is the PHONE's encryption key, so opening a
+  space looks up and unwraps the phone's sealed copy (the desktop holds no private
+  half). Config validation accepts `cruciform`; a missing pairing config is
+  refused with a pointer to `heyarr device pair-offload`.
+
+**The wake stays nil for now** (`Options.CruciformWake`): the RP wake endpoint the
+desktop calls to push a `voidbind:unwrap?…` ping is the remaining server piece, so
+until it lands (and the phone half exists) an offload unwrap completes only when
+the phone is already reachable (a LAN-direct path, or a phone already polling the
+relay). Still deferred, therefore: that wake endpoint; the voidbind-kmp/cruciform
+phone half; and a live round-trip on a real paired phone.
+
 ## Relationship to existing records
 
 - **ADR-0049** — the device X25519 key and the wrap/seal format this leaves

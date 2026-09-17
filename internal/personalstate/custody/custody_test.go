@@ -1,12 +1,15 @@
 package custody
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/cruciform"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
@@ -67,13 +70,56 @@ func TestSelectRejectsUnwiredAndUnknown(t *testing.T) {
 	for _, tc := range []struct {
 		backend, want string
 	}{
-		{Cruciform, "not selectable"},
+		// Cruciform is wired now, but without a pairing config it is refused with a
+		// pointer to the ceremony rather than a confusing "unknown backend".
+		{Cruciform, "pairing config"},
 		{"quantum", "unknown backend"},
 	} {
 		_, err := Select(Options{Backend: tc.backend})
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("Select(%q): got %v, want error mentioning %q", tc.backend, err, tc.want)
 		}
+	}
+}
+
+// Select(cruciform) with a pinned pairing config returns a custody keyed on the
+// PHONE's encryption key — the wrap target a space is sealed to for offload — and
+// a missing config is surfaced with a pointer to the ceremony.
+func TestSelectCruciformFromPairing(t *testing.T) {
+	t.Parallel()
+	_, transportKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	phonePub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	phoneEnc, err := encryption.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &cruciform.PairConfig{
+		TransportKey: transportKey,
+		PhonePub:     phonePub,
+		PhoneEnc:     phoneEnc.PublicKey().Bytes(),
+		RelayBase:    "https://relay.example/pair",
+	}
+	path := filepath.Join(t.TempDir(), cruciform.PairConfigFileName)
+	if err := cruciform.SavePairConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	cust, err := Select(Options{Backend: Cruciform, CruciformPairFile: path})
+	if err != nil {
+		t.Fatalf("Select(cruciform): %v", err)
+	}
+	if got, want := cust.RecipientID(), encryption.FormatPublicKey(phoneEnc.PublicKey().Bytes()); got != want {
+		t.Errorf("RecipientID = %s, want the phone's key %s", got, want)
+	}
+
+	if _, err := Select(Options{Backend: Cruciform, CruciformPairFile: filepath.Join(t.TempDir(), "nope.json")}); err == nil {
+		t.Error("Select(cruciform) with a missing pairing config: want an error")
 	}
 }
 
