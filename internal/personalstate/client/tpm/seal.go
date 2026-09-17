@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -212,6 +214,30 @@ func UnmarshalBlob(raw []byte) (Blob, error) {
 		return Blob{}, fmt.Errorf("tpm: public point is %d bytes, want 32", len(pub))
 	}
 	return Blob{Public: pub, PCRs: *pcrs, SealedPub: *sealedPub, SealedPriv: *sealedPriv}, nil
+}
+
+// WriteFile writes the sealed-key blob to path (owner-only, 0600), creating the
+// parent directory if needed. The blob holds only the public point and TPM
+// ciphertext — safe at rest — but there is no reason to make it world-readable.
+func (b Blob) WriteFile(path string) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("tpm: creating %s: %w", dir, err)
+		}
+	}
+	if err := os.WriteFile(path, b.Marshal(), 0o600); err != nil {
+		return fmt.Errorf("tpm: writing the sealed key %s: %w", path, err)
+	}
+	return nil
+}
+
+// ReadBlobFile reads a sealed-key blob written by [Blob.WriteFile].
+func ReadBlobFile(path string) (Blob, error) {
+	raw, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return Blob{}, fmt.Errorf("tpm: reading the sealed key %s: %w", path, err)
+	}
+	return UnmarshalBlob(raw)
 }
 
 func putField(b *bytes.Buffer, f []byte) {

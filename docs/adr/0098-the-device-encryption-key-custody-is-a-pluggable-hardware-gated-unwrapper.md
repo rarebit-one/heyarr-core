@@ -252,11 +252,16 @@ by a single `CGO_ENABLED=1` step — the only cgo in the build; the whole matrix
 stays `CGO_ENABLED=0` and the pure-Go legs never compile it. (go-tpm's transport
 targets that reference simulator; swtpm's socket control channel speaks a
 different protocol and is not a drop-in.) The hardware-free unit tests (blob
-codec, RecipientID, input validation) run everywhere. **Deferred:** the
-provisioning command that seals a device's key and writes the blob (`tpm.Seal` is
-the primitive; a `heyarr` command is a follow-up, as YubiKey's provisioning was
-separate); and the on-real-fTPM/PTT validation, gated on the Framework laptops
-arriving. Only cruciform (#571) remains unwired in the selector now.
+codec, RecipientID, input validation) run everywhere.
+
+Provisioning: **`heyarr device seal-tpm`** seals the EXISTING device encryption
+key to the local TPM (so the public point — the wrap target the controller holds
+— is unchanged and already-wrapped spaces keep opening) and writes the sealed-key
+blob (`Blob.WriteFile`, 0600). It is non-destructive: it prints how to select the
+backend and then remove the plaintext seed to complete the hardening, but never
+removes it — recovery via the paper secret is unchanged, so this adds no loss
+mode. **Deferred:** the on-real-fTPM/PTT validation, gated on the Framework
+laptops arriving. Only cruciform (#571) remains unwired in the selector now.
 
 ## Relationship to existing records
 
