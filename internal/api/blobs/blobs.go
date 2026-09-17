@@ -227,7 +227,7 @@ func (h *Handler) ContentAs(w http.ResponseWriter, r *http.Request, mime string)
 	if mime == "" {
 		mime = OctetStream
 	}
-	raw := chi.URLParam(r, "hash")
+	raw := httpapi.HashParam(r)
 	hash, err := hashing.Parse(raw)
 	if err != nil {
 		// A malformed hash and an absent blob are different mistakes and get
