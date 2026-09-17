@@ -45,19 +45,28 @@ func selectCustody(configPath *string, deviceDir string) (client.Custody, error)
 			return nil, err
 		}
 	}
-	return custody.Select(custody.Options{
-		Backend:          cfg.Vault.Unwrapper,
-		DeviceDir:        deviceDir,
-		YubiKeySocket:    cfg.Vault.YubiKey.Socket,
-		YubiKeyPIN:       pinFromFileOrEnv(cfg.Vault.YubiKey.PINFile, VaultYubiKeyPINEnvVar, "vault.yubikey.pin_file"),
-		TPMSealedKeyFile: cfg.Vault.TPM.SealedKeyFile,
-		TPMDevice:        cfg.Vault.TPM.Device,
-		TPMPIN:           pinFromFileOrEnv(cfg.Vault.TPM.PINFile, VaultTPMPINEnvVar, "vault.tpm.pin_file"),
-		// The wake (the RP endpoint the desktop calls) is a follow-up; until it is
-		// wired the offload opens only when the phone is already reachable, so the
-		// Options' CruciformWake stays nil here.
+	opts := custody.Options{
+		Backend:           cfg.Vault.Unwrapper,
+		DeviceDir:         deviceDir,
+		YubiKeySocket:     cfg.Vault.YubiKey.Socket,
+		YubiKeyPIN:        pinFromFileOrEnv(cfg.Vault.YubiKey.PINFile, VaultYubiKeyPINEnvVar, "vault.yubikey.pin_file"),
+		TPMSealedKeyFile:  cfg.Vault.TPM.SealedKeyFile,
+		TPMDevice:         cfg.Vault.TPM.Device,
+		TPMPIN:            pinFromFileOrEnv(cfg.Vault.TPM.PINFile, VaultTPMPINEnvVar, "vault.tpm.pin_file"),
 		CruciformPairFile: cruciformPairFile(cfg.Vault.Cruciform.PairFile, deviceDir),
-	})
+	}
+	// For the offload backend, wire the away-path wake so an unwrap can wake the
+	// paired phone via the node (nil for the other backends, and nil when this
+	// device is not enrolled — the offload then opens only when the phone is
+	// already reachable).
+	if opts.Backend == custody.Cruciform {
+		wake, err := buildCruciformWake(cfg, deviceDir)
+		if err != nil {
+			return nil, err
+		}
+		opts.CruciformWake = wake
+	}
+	return custody.Select(opts)
 }
 
 // cruciformPairFile resolves the offload pairing config path: the configured

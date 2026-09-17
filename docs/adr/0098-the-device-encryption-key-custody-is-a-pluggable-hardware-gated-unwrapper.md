@@ -444,6 +444,30 @@ this endpoint (it needs the node URL + the device's cert/ops at unwrap time); th
 voidbind-kmp/cruciform phone half (scan-to-pair, receive-wake, number-match,
 biometric, in-enclave unwrap, seal); and a live round-trip on a real paired phone.
 
+## Addendum (2026-09-17): the desktop wake-client is wired — the server side is complete
+
+The desktop's `Options.CruciformWake` is now wired to the endpoint above
+(`internal/cli`): when the offload transport does an unwrap over the away-path it
+POSTs to the node's `/v1/unwrap-wake` with this device's enrolment cert + membership
+ops (Option A) and the per-unwrap relay session, and the node wakes the paired
+phone. It is built from the same config the API client reads (unix socket or TCP)
+and the device store's cert/ops, and both consumers wire it — the vault CLI
+(`selectCustody`) and the device gateway. An un-enrolled device yields a **nil**
+wake (not an error): the offload then opens only when the phone is already
+reachable, and the away-path wake turns on the moment the device is enrolled.
+Tested against a stub node (request-shape + error surfacing) and the un-enrolled
+degrade.
+
+With this, **every offload piece that does not need the phone is built**: the
+pairing ceremony (desktop), the relay mount, backend selection, the RP wake
+endpoint (server), and the desktop wake-client. What remains is inherently
+phone-gated: the **voidbind-kmp/cruciform phone half** (scan the
+`voidbind:offload-pair` QR, receive the UnifiedPush wake or accept a LAN
+connection, number-match, biometric, in-enclave unwrap, seal + sign the reply —
+mirroring this repo's `pairing.go` + `protocol.go` byte-for-byte); the optional
+mDNS LAN-direct discovery (needs the phone advertising); and a live round-trip on
+a real paired phone.
+
 ## Relationship to existing records
 
 - **ADR-0049** — the device X25519 key and the wrap/seal format this leaves
