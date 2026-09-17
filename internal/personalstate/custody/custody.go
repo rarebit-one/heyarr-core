@@ -9,7 +9,6 @@ package custody
 import (
 	"crypto/ecdh"
 	"fmt"
-	"os"
 
 	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
@@ -71,13 +70,9 @@ func Select(opts Options) (client.Custody, error) {
 			return nil, fmt.Errorf("custody: the tpm backend needs a PIN source")
 		}
 		if opts.TPMSealedKeyFile == "" {
-			return nil, fmt.Errorf("custody: the tpm backend needs a sealed-key file (provision one with tpm.Seal)")
+			return nil, fmt.Errorf("custody: the tpm backend needs a sealed-key file (provision one with `heyarr device seal-tpm`)")
 		}
-		raw, err := os.ReadFile(opts.TPMSealedKeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("custody: reading the sealed key %s: %w", opts.TPMSealedKeyFile, err)
-		}
-		blob, err := tpm.UnmarshalBlob(raw)
+		blob, err := tpm.ReadBlobFile(opts.TPMSealedKeyFile)
 		if err != nil {
 			return nil, err
 		}
