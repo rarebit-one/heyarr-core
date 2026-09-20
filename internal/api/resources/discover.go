@@ -54,6 +54,8 @@ type DiscoverRequest struct {
 // DiscoveryResult is one candidate a discovery search returned — enough to show
 // a person which work it is and to act on it (follow OR want) in one step.
 type DiscoveryResult struct {
+	PosterURL   string `json:"poster_url,omitempty"`
+	BackdropURL string `json:"backdrop_url,omitempty"`
 	// Title and Year name the work as the metadata service knows it.
 	Title string `json:"title"`
 	Year  int    `json:"year,omitempty"`
@@ -148,12 +150,14 @@ func (a *API) Discover(ctx context.Context, req DiscoverRequest) ([]DiscoveryRes
 // WorkSummary and follow_source spell that identity.
 func discoveryResultFor(c providers.DiscoveryCandidate) DiscoveryResult {
 	r := DiscoveryResult{
-		Title:      c.Title,
-		Year:       c.Year,
-		Type:       c.Type,
-		Source:     c.Source,
-		ExternalID: c.ExternalID,
-		Overview:   c.Overview,
+		Title:       c.Title,
+		Year:        c.Year,
+		Type:        c.Type,
+		Source:      c.Source,
+		ExternalID:  c.ExternalID,
+		Overview:    c.Overview,
+		PosterURL:   c.PosterURL,
+		BackdropURL: c.BackdropURL,
 	}
 	if c.Type == "tv_series" {
 		r.TVDBID = c.ExternalID
