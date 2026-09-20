@@ -160,7 +160,8 @@ func TestDiscoverReturnsBookCandidates(t *testing.T) {
 		gotQuery = r.URL.Query().Get("q")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"docs":[
-			{"key":"/works/OL893415W","title":"Dune","author_name":["Frank Herbert"],"first_publish_year":1965},
+			{"key":"/works/OL893415W","title":"Dune","author_name":["Frank Herbert"],"first_publish_year":1965,"cover_i":981711},
+			{"key":"/works/OL46125W","title":"Foundation","author_name":["Isaac Asimov"],"first_publish_year":1951},
 			{"key":"","title":"A Doc With No Work Key","first_publish_year":1999}
 		]}`))
 	}))
@@ -170,9 +171,9 @@ func TestDiscoverReturnsBookCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	// Two docs in the fixture, one with no work key — so one candidate.
-	if len(got) != 1 {
-		t.Fatalf("got %d candidates, want 1 (the key-less doc is skipped): %+v", len(got), got)
+	// Three docs in the fixture, one with no work key — so two candidates.
+	if len(got) != 2 {
+		t.Fatalf("got %d candidates, want 2 (the key-less doc is skipped): %+v", len(got), got)
 	}
 	if gotQuery != "Dune Frank Herbert" {
 		t.Errorf("query = %q, want the exact free-text query, uncleaned", gotQuery)
@@ -186,6 +187,14 @@ func TestDiscoverReturnsBookCandidates(t *testing.T) {
 	}
 	if c.Overview != "by Frank Herbert" {
 		t.Errorf("overview = %q", c.Overview)
+	}
+	if c.PosterURL != "https://covers.openlibrary.org/b/id/981711-M.jpg" {
+		t.Errorf("artwork = %q", c.PosterURL)
+	}
+	// A doc with no cover_i (0, the zero value) stays an empty PosterURL rather
+	// than becoming a URL to a cover id that was never real.
+	if got[1].PosterURL != "" {
+		t.Errorf("a coverless doc's artwork = %q, want \"\"", got[1].PosterURL)
 	}
 }
 

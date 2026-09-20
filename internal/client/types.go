@@ -266,11 +266,12 @@ type UpdateRootRequest struct {
 // left empty — a profile may legally have no rules of a kind (the seeded
 // "archival" profile has no terminal rules).
 type CreateQualityProfileRequest struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Accept      json.RawMessage `json:"accept,omitempty"`
-	Prefer      json.RawMessage `json:"prefer,omitempty"`
-	Terminal    json.RawMessage `json:"terminal,omitempty"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	Accept       json.RawMessage `json:"accept,omitempty"`
+	Prefer       json.RawMessage `json:"prefer,omitempty"`
+	Terminal     json.RawMessage `json:"terminal,omitempty"`
+	ContentTypes []string        `json:"content_types,omitempty"`
 }
 
 // UpdateQualityProfileRequest is the PUT /quality-profiles/{id} body.
@@ -283,11 +284,12 @@ type CreateQualityProfileRequest struct {
 // to `[]` clears; a pointer to rules replaces. Name and Description replace
 // only when non-empty.
 type UpdateQualityProfileRequest struct {
-	Name        string           `json:"name,omitempty"`
-	Description string           `json:"description,omitempty"`
-	Accept      *json.RawMessage `json:"accept,omitempty"`
-	Prefer      *json.RawMessage `json:"prefer,omitempty"`
-	Terminal    *json.RawMessage `json:"terminal,omitempty"`
+	Name         string           `json:"name,omitempty"`
+	Description  string           `json:"description,omitempty"`
+	Accept       *json.RawMessage `json:"accept,omitempty"`
+	Prefer       *json.RawMessage `json:"prefer,omitempty"`
+	Terminal     *json.RawMessage `json:"terminal,omitempty"`
+	ContentTypes *[]string        `json:"content_types,omitempty"`
 }
 
 // DesiredItem is content that should exist, whether or not it does (§55).
@@ -377,7 +379,11 @@ type QualityProfile struct {
 	Accept      json.RawMessage `json:"accept"`
 	Prefer      json.RawMessage `json:"prefer"`
 	Terminal    json.RawMessage `json:"terminal"`
-	Seeded      bool            `json:"seeded"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	// ContentTypes is which works content type(s) this profile is meant to
+	// judge ("movie", "book", …); empty means unrestricted. See
+	// resources.QualityProfile.ContentTypes for the full rationale.
+	ContentTypes []string  `json:"content_types"`
+	Seeded       bool      `json:"seeded"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }

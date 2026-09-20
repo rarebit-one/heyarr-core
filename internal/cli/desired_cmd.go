@@ -329,7 +329,7 @@ func newQualityProfileCommand(_ Options, configPath *string) *cobra.Command {
 				if flags.asJSON {
 					return emitJSON(cmd.OutOrStdout(), profiles)
 				}
-				t := newTable("ID", "NAME", "SEEDED", "TERMINAL", "DESCRIPTION")
+				t := newTable("ID", "NAME", "SEEDED", "TERMINAL", "CONTENT TYPES", "DESCRIPTION")
 				for _, p := range profiles {
 					// "never" is the honest rendering of no terminal rules: it
 					// means there is no condition under which this profile is
@@ -339,7 +339,13 @@ func newQualityProfileCommand(_ Options, configPath *string) *cobra.Command {
 					if body := strings.TrimSpace(string(p.Terminal)); body != "" && body != "[]" && body != "null" {
 						terminal = "yes"
 					}
-					t.add(p.ID, p.Name, strconv.FormatBool(p.Seeded), terminal, p.Description)
+					// "any" is the honest rendering of an empty ContentTypes: usable
+					// for any content type, not "none declared yet".
+					types := "any"
+					if len(p.ContentTypes) > 0 {
+						types = strings.Join(p.ContentTypes, ",")
+					}
+					t.add(p.ID, p.Name, strconv.FormatBool(p.Seeded), terminal, types, p.Description)
 				}
 				return t.render(cmd.OutOrStdout(), "no quality profiles")
 			})
@@ -351,6 +357,7 @@ func newQualityProfileCommand(_ Options, configPath *string) *cobra.Command {
 	var (
 		createFlags                           clientFlags
 		description, accept, prefer, terminal string
+		contentTypes                          []string
 	)
 	createCmd := &cobra.Command{
 		Use:   "create <name>",
@@ -366,16 +373,21 @@ given as a JSON array of rules — the same shape the API takes:
 
   heyarr quality-profile create living-room \
     --accept  '[{"attribute":"resolution","op":"gte","value":1080}]' \
-    --prefer  '[{"attribute":"video_codec","op":"eq","value":"hevc","weight":20}]'
+    --prefer  '[{"attribute":"video_codec","op":"eq","value":"hevc","weight":20}]' \
+    --content-types movie,series
 
 An omitted group is left empty; a profile with no terminal rules is never
 "finished", which is legal — that is what the seeded "archival" profile is.
+--content-types is metadata for a caller deciding which profiles to OFFER for
+a given want (a picker should not offer a video profile for a book) — nothing
+in evaluation reads it, so an omitted or wrong tag never changes what this
+profile accepts. Omitted means unrestricted: usable for any content type.
 Authoring is deliberate: a name that already exists is reported as a conflict,
 never silently replaced.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return createFlags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
-				req := client.CreateQualityProfileRequest{Name: args[0], Description: description}
+				req := client.CreateQualityProfileRequest{Name: args[0], Description: description, ContentTypes: contentTypes}
 				// Reject malformed JSON here so a typo is a local error that
 				// names the flag, rather than a 400 the operator has to decode.
 				for _, g := range []struct {
@@ -412,10 +424,12 @@ never silently replaced.`,
 	createCmd.Flags().StringVar(&accept, "accept", "", "gate rules as a JSON array — a candidate failing any is rejected")
 	createCmd.Flags().StringVar(&prefer, "prefer", "", "scoring rules as a JSON array — weighted preferences, never gates")
 	createCmd.Flags().StringVar(&terminal, "terminal", "", "stop rules as a JSON array — when the upgrade workflow stops looking")
+	createCmd.Flags().StringSliceVar(&contentTypes, "content-types", nil, "which content types this profile is for (e.g. movie,series); omitted means unrestricted")
 
 	var (
 		setFlags                                                   clientFlags
 		setName, setDescription, setAccept, setPrefer, setTerminal string
+		setContentTypes                                            []string
 	)
 	setCmd := &cobra.Command{
 		Use:   "set <name|id>",
@@ -481,6 +495,9 @@ satisfaction read — not as an immediate mass re-judge.`,
 					rm := json.RawMessage(g.raw)
 					*g.dst = &rm
 				}
+				if cmd.Flags().Changed("content-types") {
+					req.ContentTypes = &setContentTypes
+				}
 
 				var out client.QualityProfile
 				if err := c.Put(ctx, "/quality-profiles/"+id, req, &out); err != nil {
@@ -500,6 +517,7 @@ satisfaction read — not as an immediate mass re-judge.`,
 	setCmd.Flags().StringVar(&setAccept, "accept", "", "replace gate rules (JSON array; [] clears)")
 	setCmd.Flags().StringVar(&setPrefer, "prefer", "", "replace scoring rules (JSON array; [] clears)")
 	setCmd.Flags().StringVar(&setTerminal, "terminal", "", "replace stop rules (JSON array; [] clears)")
+	setCmd.Flags().StringSliceVar(&setContentTypes, "content-types", nil, "replace which content types this profile is for (comma-separated; pass an empty value to clear back to unrestricted)")
 
 	cmd := &cobra.Command{
 		Use:     "quality-profile",

@@ -85,7 +85,14 @@ type FeedProvider interface {
 // a candidate is actioned via follow_source (the four feed-shaped kinds) or
 // want_content by title (movie, book, music — a one-off, not a subscription).
 type DiscoveryCandidate struct {
-	// Artwork URLs are provider-owned presentation assets, never content identity.
+	// Artwork URLs are provider-owned presentation assets, never content
+	// identity. PosterURL is a cover/poster image — TMDB's own, or, for a
+	// non-video provider, its nearest equivalent (Open Library's book cover,
+	// MusicBrainz's Cover Art Archive release image). BackdropURL is a wider
+	// scene image; only TMDB has a notion of one, so it stays empty for every
+	// other provider. Neither is ever downloaded or cached here — a caller
+	// renders it as a normal remote image (and may cache the bytes itself),
+	// the same as it would any other URL.
 	PosterURL   string
 	BackdropURL string
 	// Title is the work's name as the metadata service knows it.

@@ -263,6 +263,14 @@ func (c *Client) Discover(ctx context.Context, query string) ([]providers.Discov
 			Source:     "musicbrainz",
 			Type:       "music",
 			Overview:   overview,
+			// The Cover Art Archive URL is deterministic from the MBID alone —
+			// no separate lookup, same as Enrich's CoverURL. -250 is a Cover Art
+			// Archive pre-sized thumbnail (250px), a list-context size; Enrich's
+			// /front serves the full image for a held Work's detail view. Not
+			// every release has cover art, and this is unconditional exactly as
+			// Enrich's is — a release with none 404s, which the caller's normal
+			// "couldn't load this image" handling already covers.
+			PosterURL: fmt.Sprintf("%s/%s/front-250", coverArtBase, mbid),
 		})
 	}
 	return out, nil
