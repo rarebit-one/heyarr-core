@@ -252,6 +252,9 @@ func TestDiscoverIncludesMovies(t *testing.T) {
 	if movies[0].ExternalID != "500" || movies[0].Title != "A Test Movie" {
 		t.Errorf("movie candidate = %+v", movies[0])
 	}
+	if movies[0].PosterURL != "https://image.tmdb.org/t/p/w500/poster.jpg" || movies[0].BackdropURL != "https://image.tmdb.org/t/p/w1280/backdrop.jpg" {
+		t.Errorf("missing artwork: %+v", movies[0])
+	}
 	if movies[0].Year != 2021 {
 		t.Errorf("movie candidate year = %d, want 2021", movies[0].Year)
 	}

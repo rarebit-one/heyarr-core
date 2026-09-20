@@ -16,13 +16,15 @@ import (
 // exercised together, because the seam a client consumes is the route.
 
 type discoveryResult struct {
-	Title      string `json:"title"`
-	Year       int    `json:"year"`
-	Type       string `json:"type"`
-	TVDBID     string `json:"tvdb_id"`
-	Source     string `json:"source"`
-	ExternalID string `json:"external_id"`
-	Overview   string `json:"overview"`
+	Title       string `json:"title"`
+	Year        int    `json:"year"`
+	Type        string `json:"type"`
+	TVDBID      string `json:"tvdb_id"`
+	Source      string `json:"source"`
+	ExternalID  string `json:"external_id"`
+	Overview    string `json:"overview"`
+	PosterURL   string `json:"poster_url"`
+	BackdropURL string `json:"backdrop_url"`
 }
 
 func discover(h *harness, body string) *http.Response {
@@ -38,6 +40,7 @@ func TestDiscoverReturnsCandidatesNotInTheLibrary(t *testing.T) {
 			providers.DiscoveryCandidate{
 				Title: "The Expanse", Year: 2015, ExternalID: "280619", Source: "tvdb",
 				Type: string(followed.TypeTVSeries), Overview: "A political thriller in space.",
+				PosterURL: "https://image.tmdb.org/t/p/w500/poster.jpg", BackdropURL: "https://image.tmdb.org/t/p/w1280/backdrop.jpg",
 			})
 	if err := reg.Register(fake); err != nil {
 		t.Fatal(err)
@@ -58,6 +61,9 @@ func TestDiscoverReturnsCandidatesNotInTheLibrary(t *testing.T) {
 		t.Fatalf("results = %+v, want one candidate", out.Results)
 	}
 	got := out.Results[0]
+	if got.PosterURL != "https://image.tmdb.org/t/p/w500/poster.jpg" || got.BackdropURL != "https://image.tmdb.org/t/p/w1280/backdrop.jpg" {
+		t.Errorf("lost artwork: %+v", got)
+	}
 	if got.Title != "The Expanse" || got.Year != 2015 {
 		t.Errorf("candidate = %+v", got)
 	}
