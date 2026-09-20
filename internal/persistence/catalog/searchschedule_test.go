@@ -1,6 +1,7 @@
 package catalog_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -261,5 +262,55 @@ func TestIndexerHealthIgnoresProvidersThatCannotSearch(t *testing.T) {
 	}
 	if !health["prowlarr"].Healthy {
 		t.Error("the healthy indexer is not reported as healthy")
+	}
+}
+
+// A full batch of feed items must not hide an indexer-searchable want forever.
+// The batch limit applies to eligible searches, not the rows examined.
+func TestDueSearchLimitCountsOnlyEligibleWants(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	for i := range 51 {
+		id := fmt.Sprintf("000-document-%03d", i)
+		h.exec(t, `INSERT INTO works
+   (id, content_type, work_key, title, sort_title, attributes, created_at, updated_at)
+   VALUES (?, 'document', ?, 'Article', 'article', '{}', ?, ?)`, id, id, stamp, stamp)
+		h.exec(t, `INSERT INTO desired_items
+   (id, scope, work_id, quality_profile_id, monitor, reason, created_at, updated_at)
+   VALUES (?, 'work', ?, 'q1', 1, '', ?, ?)`, id, id, stamp, stamp)
+		if _, err := h.cat.StartAcquisition(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.exec(t, `INSERT INTO works
+ (id, content_type, work_key, title, sort_title, attributes, created_at, updated_at)
+ VALUES ('movie-2', 'movie', 'movie:second', 'Second Movie', 'second movie', '{}', ?, ?)`, stamp, stamp)
+
+	h.exec(t, `INSERT INTO desired_items
+  (id, scope, work_id, quality_profile_id, monitor, reason, created_at, updated_at)
+  SELECT 'want-2', scope, 'movie-2', quality_profile_id, monitor, reason, created_at, updated_at
+  FROM desired_items WHERE id = ?`, h.want)
+	for _, id := range []string{h.want, "want-2"} {
+		if _, err := h.cat.StartAcquisition(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct{ limit, count int }{{0, 0}, {1, 1}, {2, 2}, {50, 2}} {
+		t.Run(fmt.Sprintf("limit_%d", tc.limit), func(t *testing.T) {
+			due, err := h.cat.DueSearches(ctx, now, tc.limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(due) != tc.count {
+				t.Fatalf("due=%+v, want %d eligible searches", due, tc.count)
+			}
+			for i, item := range due {
+				want := []string{h.want, "want-2"}[i]
+				if item.DesiredItemID != want {
+					t.Errorf("due[%d]=%q, want %q", i, item.DesiredItemID, want)
+				}
+			}
+		})
 	}
 }
