@@ -316,12 +316,14 @@ func (c *Client) discoverSeries(ctx context.Context, query string) ([]providers.
 			break
 		}
 		out = append(out, providers.DiscoveryCandidate{
-			Title:      strings.TrimSpace(hit.Name),
-			Year:       parseYearFromDate(hit.FirstAirDate),
-			ExternalID: strconv.FormatInt(hit.ID, 10),
-			Source:     "tmdb",
-			Type:       string(followed.TypeTVSeries),
-			Overview:   strings.TrimSpace(hit.Overview),
+			Title:       strings.TrimSpace(hit.Name),
+			Year:        parseYearFromDate(hit.FirstAirDate),
+			ExternalID:  strconv.FormatInt(hit.ID, 10),
+			Source:      "tmdb",
+			Type:        string(followed.TypeTVSeries),
+			Overview:    strings.TrimSpace(hit.Overview),
+			PosterURL:   imageURL(hit.PosterPath, "w500"),
+			BackdropURL: imageURL(hit.BackdropPath, "w1280"),
 		})
 	}
 	return out, nil
@@ -348,12 +350,14 @@ func (c *Client) discoverMovies(ctx context.Context, query string) ([]providers.
 			break
 		}
 		out = append(out, providers.DiscoveryCandidate{
-			Title:      strings.TrimSpace(hit.Title),
-			Year:       parseYearFromDate(hit.ReleaseDate),
-			ExternalID: strconv.FormatInt(hit.ID, 10),
-			Source:     "tmdb",
-			Type:       "movie",
-			Overview:   strings.TrimSpace(hit.Overview),
+			Title:       strings.TrimSpace(hit.Title),
+			Year:        parseYearFromDate(hit.ReleaseDate),
+			ExternalID:  strconv.FormatInt(hit.ID, 10),
+			Source:      "tmdb",
+			Type:        "movie",
+			Overview:    strings.TrimSpace(hit.Overview),
+			PosterURL:   imageURL(hit.PosterPath, "w500"),
+			BackdropURL: imageURL(hit.BackdropPath, "w1280"),
 		})
 	}
 	return out, nil
@@ -469,6 +473,8 @@ type searchResponse struct {
 }
 
 type searchHit struct {
+	PosterPath   string `json:"poster_path"`
+	BackdropPath string `json:"backdrop_path"`
 	// ID is the numeric TMDB series id — the value a follow acts on. TMDB sends
 	// it as a NUMBER (unlike TVDB's string), and this adapter renders it to the
 	// string a DiscoveryCandidate carries.
@@ -488,6 +494,8 @@ type movieSearchResponse struct {
 }
 
 type movieHit struct {
+	PosterPath   string `json:"poster_path"`
+	BackdropPath string `json:"backdrop_path"`
 	// ID is the numeric TMDB movie id, carried for display/cross-reference —
 	// see discoverMovies: a movie is wanted, not followed, so nothing acts on
 	// this id the way follow_source acts on a series id.
@@ -534,4 +542,15 @@ type configurationResponse struct {
 	Images struct {
 		BaseURL string `json:"base_url"`
 	} `json:"images"`
+}
+
+// TMDB image paths are relative to its public CDN; never propagate a supplied host.
+func imageURL(path, size string) string {
+	if !strings.HasPrefix(path, "/") || strings.Contains(path, "..") || strings.ContainsAny(path, "?#\\") || strings.Contains(path[1:], "/") {
+		return ""
+	}
+	if len(path) < 2 {
+		return ""
+	}
+	return "https://image.tmdb.org/t/p/" + size + path
 }

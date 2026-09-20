@@ -85,6 +85,9 @@ type FeedProvider interface {
 // a candidate is actioned via follow_source (the four feed-shaped kinds) or
 // want_content by title (movie, book, music — a one-off, not a subscription).
 type DiscoveryCandidate struct {
+	// Artwork URLs are provider-owned presentation assets, never content identity.
+	PosterURL   string
+	BackdropURL string
 	// Title is the work's name as the metadata service knows it.
 	Title string
 	// Year is the first-aired/release/publish year, zero when the service did
