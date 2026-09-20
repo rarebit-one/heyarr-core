@@ -417,5 +417,7 @@ type searchDoc struct {
 	FirstPublishYear int    `json:"first_publish_year"`
 }
 
-var _ providers.EnrichProvider = (*Client)(nil)
-var _ providers.DiscoverySearcher = (*Client)(nil)
+var (
+	_ providers.EnrichProvider    = (*Client)(nil)
+	_ providers.DiscoverySearcher = (*Client)(nil)
+)

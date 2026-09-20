@@ -414,5 +414,7 @@ func (r release) artistName() string {
 	return strings.Join(parts, " ")
 }
 
-var _ providers.EnrichProvider = (*Client)(nil)
-var _ providers.DiscoverySearcher = (*Client)(nil)
+var (
+	_ providers.EnrichProvider    = (*Client)(nil)
+	_ providers.DiscoverySearcher = (*Client)(nil)
+)
