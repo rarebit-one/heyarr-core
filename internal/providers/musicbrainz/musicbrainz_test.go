@@ -193,6 +193,9 @@ func TestDiscoverReturnsMusicCandidates(t *testing.T) {
 	if c.Overview != "by Brian Eno David Byrne" {
 		t.Errorf("overview = %q", c.Overview)
 	}
+	if c.PosterURL != "https://coverartarchive.org/release/a1b2c3d4-0000-0000-0000-000000000001/front-250" {
+		t.Errorf("artwork = %q", c.PosterURL)
+	}
 }
 
 // An empty query is refused locally — no HTTP round trip for nothing to search.

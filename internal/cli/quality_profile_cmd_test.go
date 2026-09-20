@@ -46,6 +46,40 @@ func TestQualityProfileCreateAndList(t *testing.T) {
 	}
 }
 
+// --content-types is comma-separated on the CLI and round-trips as a JSON
+// array; set replaces it wholesale like the rule groups, distinguishing
+// omitted (leave alone) from an explicit empty value (clear to unrestricted).
+func TestQualityProfileContentTypesCreateAndSet(t *testing.T) {
+	h := newAPIHarness(t)
+
+	out := h.mustRun("quality-profile", "create", "ebook",
+		"--content-types", "book", "--json")
+	var created client.QualityProfile
+	if err := json.Unmarshal([]byte(out), &created); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if len(created.ContentTypes) != 1 || created.ContentTypes[0] != "book" {
+		t.Fatalf("content_types = %v, want [book]", created.ContentTypes)
+	}
+
+	h.mustRun("quality-profile", "set", "ebook", "--content-types", "book,music")
+	got, ok := profileByName(listQualityProfiles(t, h), "ebook")
+	if !ok {
+		t.Fatal("profile vanished after set")
+	}
+	if len(got.ContentTypes) != 2 || got.ContentTypes[0] != "book" || got.ContentTypes[1] != "music" {
+		t.Fatalf("content_types after set = %v, want [book music]", got.ContentTypes)
+	}
+
+	// An empty --content-types clears it back to unrestricted, distinct from
+	// never passing the flag at all.
+	h.mustRun("quality-profile", "set", "ebook", "--content-types", "")
+	got, _ = profileByName(listQualityProfiles(t, h), "ebook")
+	if len(got.ContentTypes) != 0 {
+		t.Fatalf("an empty --content-types must clear to unrestricted, got %v", got.ContentTypes)
+	}
+}
+
 // A gate is not a score (§62): a weighted `accept` rule is refused server-side,
 // and the CLI surfaces that refusal rather than swallowing it.
 func TestQualityProfileCreateRejectsWeightedGate(t *testing.T) {

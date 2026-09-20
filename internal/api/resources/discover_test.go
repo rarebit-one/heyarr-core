@@ -89,6 +89,7 @@ func TestDiscoverReturnsWantScopedCandidates(t *testing.T) {
 			providers.DiscoveryCandidate{
 				Title: "Dune", Year: 1965, ExternalID: "OL893415W", Source: "openlibrary",
 				Type: "book", Overview: "by Frank Herbert",
+				PosterURL: "https://covers.openlibrary.org/b/id/981711-M.jpg",
 			})
 	if err := reg.Register(fake); err != nil {
 		t.Fatal(err)
@@ -117,6 +118,14 @@ func TestDiscoverReturnsWantScopedCandidates(t *testing.T) {
 	}
 	if got.Source != "openlibrary" || got.ExternalID != "OL893415W" {
 		t.Errorf("source/external_id = %q/%q, want openlibrary/OL893415W", got.Source, got.ExternalID)
+	}
+	// PosterURL is a book cover here (Open Library has no notion of a backdrop);
+	// BackdropURL stays empty rather than being invented.
+	if got.PosterURL != "https://covers.openlibrary.org/b/id/981711-M.jpg" {
+		t.Errorf("poster_url = %q", got.PosterURL)
+	}
+	if got.BackdropURL != "" {
+		t.Errorf("backdrop_url = %q, want empty — Open Library has no backdrop", got.BackdropURL)
 	}
 }
 

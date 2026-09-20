@@ -218,9 +218,13 @@ func TestDiscover(t *testing.T) {
 	if got[0].Overview == "" {
 		t.Error("the first candidate lost its overview")
 	}
-	// The second hit has an empty overview and a first_air_date — both survive as
-	// their honest values rather than being dropped.
-	if got[1].ExternalID != "200" || got[1].Year != 2019 || got[1].Overview != "" {
+	if got[0].PosterURL != "https://image.tmdb.org/t/p/w500/vfrQk5IPloGg1v9Rzbh2Eg3VGyM.jpg" || got[0].BackdropURL != "https://image.tmdb.org/t/p/w1280/aCbOj4wc6vQUUVNKppssj2PYUy0.jpg" {
+		t.Errorf("first candidate artwork = %+v", got[0])
+	}
+	// The second hit has an empty overview, a null poster_path, no backdrop_path and
+	// a first_air_date — all survive as their honest values (empty stays empty)
+	// rather than being dropped or turned into a URL to a path that was never real.
+	if got[1].ExternalID != "200" || got[1].Year != 2019 || got[1].Overview != "" || got[1].PosterURL != "" || got[1].BackdropURL != "" {
 		t.Errorf("second candidate = %+v", got[1])
 	}
 }

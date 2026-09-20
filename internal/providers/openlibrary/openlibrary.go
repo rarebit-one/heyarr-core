@@ -252,7 +252,7 @@ func (c *Client) Discover(ctx context.Context, query string) ([]providers.Discov
 		return nil, errors.New("openlibrary: a query is required to discover books")
 	}
 
-	path := fmt.Sprintf("%s/search.json?q=%s&limit=%d&fields=key,title,author_name,first_publish_year",
+	path := fmt.Sprintf("%s/search.json?q=%s&limit=%d&fields=key,title,author_name,first_publish_year,cover_i",
 		c.endpoint, neturl.QueryEscape(query), maxDiscoverDocs)
 	var body searchResponse
 	if err := c.get(ctx, path, "search", &body); err != nil {
@@ -275,6 +275,13 @@ func (c *Client) Discover(ctx context.Context, query string) ([]providers.Discov
 		if len(doc.AuthorName) > 0 {
 			overview = "by " + strings.Join(doc.AuthorName, ", ")
 		}
+		artwork := ""
+		if doc.CoverID > 0 {
+			// -M ("medium") rather than Enrich's -L: a discovery row is a
+			// compact list thumbnail, not the bigger context Enrich's cover
+			// serves a held Work's detail view.
+			artwork = fmt.Sprintf("%s/%d-M.jpg", coverBase, doc.CoverID)
+		}
 		out = append(out, providers.DiscoveryCandidate{
 			Title:      title,
 			Year:       doc.FirstPublishYear,
@@ -282,6 +289,7 @@ func (c *Client) Discover(ctx context.Context, query string) ([]providers.Discov
 			Source:     "openlibrary",
 			Type:       "book",
 			Overview:   overview,
+			PosterURL:  artwork,
 		})
 	}
 	return out, nil
