@@ -38,6 +38,7 @@ import (
 	"io"
 	"net/http"
 	neturl "net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -204,6 +205,85 @@ func (c *Client) Enrich(ctx context.Context, q providers.EnrichQuery) (providers
 	return providers.EnrichResult{}, false, nil
 }
 
+// maxDiscoverReleases is how many release matches Discover asks for — a
+// person picking a release to want reads the first handful, same reasoning as
+// maxReleases for enrichment, tuned separately since the two calls differ.
+const maxDiscoverReleases = 20
+
+// Discover resolves a free-text query to candidate music releases, INCLUDING
+// ones the library does not yet hold (#451, ADR-0077's deferred want-scoped
+// half). It satisfies providers.DiscoverySearcher.
+//
+// Unlike Enrich, which matches artist+album against an already-held Work,
+// Discover runs the query exactly as given — Lucene-escaped as a bare phrase
+// query MusicBrainz's relevance ranking scores across every field, since a
+// free-text discovery query has no separated artist/album to target the way
+// Enrich's does.
+//
+// A release is never followed — no calendar, nothing to poll — so every
+// candidate carries Type "music" and the caller's next step is
+// want_content(title, year, content_type: "music"), same as a book or movie
+// candidate. ExternalID (the release MBID) is carried for display/cross-
+// reference only, same reason.
+//
+// An empty result is the modelled "nothing matched" outcome, not an error; an
+// error is a call that could not be made, which the caller must see rather than
+// read as an empty catalogue.
+func (c *Client) Discover(ctx context.Context, query string) ([]providers.DiscoveryCandidate, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, errors.New("musicbrainz: a query is required to discover music")
+	}
+
+	path := fmt.Sprintf("%s/release/?query=%s&fmt=json&limit=%d",
+		c.endpoint, neturl.QueryEscape(query), maxDiscoverReleases)
+	var body releaseSearchResponse
+	if err := c.get(ctx, path, "search", &body); err != nil {
+		return nil, err
+	}
+
+	out := make([]providers.DiscoveryCandidate, 0, len(body.Releases))
+	for _, rel := range body.Releases {
+		mbid := strings.TrimSpace(rel.ID)
+		if mbid == "" {
+			continue
+		}
+		title := strings.TrimSpace(rel.Title)
+		if title == "" {
+			continue
+		}
+		overview := ""
+		if artist := rel.artistName(); artist != "" {
+			overview = "by " + artist
+		}
+		out = append(out, providers.DiscoveryCandidate{
+			Title:      title,
+			Year:       releaseYear(rel.Date),
+			ExternalID: mbid,
+			Source:     "musicbrainz",
+			Type:       "music",
+			Overview:   overview,
+		})
+	}
+	return out, nil
+}
+
+// releaseYear reads the leading "YYYY" off a MusicBrainz release date, which
+// can be "YYYY", "YYYY-MM" or "YYYY-MM-DD" and is sometimes empty. Zero means
+// the service gave no usable year, the same "did not say" answer Year
+// documents.
+func releaseYear(date string) int {
+	date = strings.TrimSpace(date)
+	if len(date) < 4 {
+		return 0
+	}
+	year, err := strconv.Atoi(date[:4])
+	if err != nil {
+		return 0
+	}
+	return year
+}
+
 // luceneQuery builds the MusicBrainz search query. When an artist is known it is
 // ANDed with the album for precision; with only an album (a Work whose artist
 // ingest did not parse) the album alone is searched. Quotes group multi-word
@@ -302,7 +382,11 @@ type release struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
 	// Score is MusicBrainz's own 0..100 relevance for this hit.
-	Score        int            `json:"score"`
+	Score int `json:"score"`
+	// Date is "YYYY", "YYYY-MM" or "YYYY-MM-DD" and sometimes empty. Enrich
+	// never reads it (a held Work's year comes from ingest); Discover does, for
+	// releaseYear.
+	Date         string         `json:"date"`
 	ArtistCredit []artistCredit `json:"artist-credit"`
 }
 
@@ -331,3 +415,4 @@ func (r release) artistName() string {
 }
 
 var _ providers.EnrichProvider = (*Client)(nil)
+var _ providers.DiscoverySearcher = (*Client)(nil)

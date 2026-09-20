@@ -36,6 +36,12 @@ func TestClientSatisfiesEnrichProvider(t *testing.T) {
 	var _ providers.EnrichProvider = (*Client)(nil)
 }
 
+// An Open Library client is also a DiscoverySearcher (#451, ADR-0077's deferred
+// want-scoped half): the discovery door routes to it beside TVDB/TMDB.
+func TestClientSatisfiesDiscoverySearcher(t *testing.T) {
+	var _ providers.DiscoverySearcher = (*Client)(nil)
+}
+
 func TestCapabilityIsEnrich(t *testing.T) {
 	c := newClient(t, "http://example.invalid")
 	caps := c.Capabilities()
@@ -142,6 +148,69 @@ func TestEnrichWrongType(t *testing.T) {
 	_, ok, err := newClient(t, srv.URL).Enrich(context.Background(), providers.EnrichQuery{ContentType: "music", Title: "An Album"})
 	if err != nil || ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+}
+
+// Discover runs the query exactly as given — no cleanTitle noise-stripping,
+// unlike Enrich — and maps each doc with a usable work key to a neutral "book"
+// candidate a caller wants (there is no follow door for a book).
+func TestDiscoverReturnsBookCandidates(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Get("q")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"docs":[
+			{"key":"/works/OL893415W","title":"Dune","author_name":["Frank Herbert"],"first_publish_year":1965},
+			{"key":"","title":"A Doc With No Work Key","first_publish_year":1999}
+		]}`))
+	}))
+	defer srv.Close()
+
+	got, err := newClient(t, srv.URL).Discover(context.Background(), "Dune Frank Herbert")
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	// Two docs in the fixture, one with no work key — so one candidate.
+	if len(got) != 1 {
+		t.Fatalf("got %d candidates, want 1 (the key-less doc is skipped): %+v", len(got), got)
+	}
+	if gotQuery != "Dune Frank Herbert" {
+		t.Errorf("query = %q, want the exact free-text query, uncleaned", gotQuery)
+	}
+	c := got[0]
+	if c.Title != "Dune" || c.Year != 1965 || c.ExternalID != "OL893415W" {
+		t.Errorf("candidate = %+v", c)
+	}
+	if c.Source != "openlibrary" || c.Type != "book" {
+		t.Errorf("source/type = %q/%q, want openlibrary/book", c.Source, c.Type)
+	}
+	if c.Overview != "by Frank Herbert" {
+		t.Errorf("overview = %q", c.Overview)
+	}
+}
+
+// An empty query is refused locally — no HTTP round trip for nothing to search.
+func TestDiscoverRefusesEmptyQuery(t *testing.T) {
+	c := newClient(t, "http://example.invalid")
+	if _, err := c.Discover(context.Background(), "  "); err == nil {
+		t.Fatal("an empty query must be refused")
+	}
+}
+
+// A query matching nothing is the modelled empty result, not an error.
+func TestDiscoverMatchingNothingIsEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"docs":[]}`))
+	}))
+	defer srv.Close()
+
+	got, err := newClient(t, srv.URL).Discover(context.Background(), "nothing matches this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d candidates, want 0", len(got))
 	}
 }
 

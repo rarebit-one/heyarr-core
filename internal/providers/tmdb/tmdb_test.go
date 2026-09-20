@@ -181,8 +181,55 @@ func TestEnumerateRefusesEmptyRef(t *testing.T) {
 
 // Discover asks /search/tv for series matching the query and maps each hit to a
 // neutral candidate carrying the TMDB id a follow acts on — skipping a hit with
-// no id, which no follow could use.
+// no id, which no follow could use. (It also asks /search/movie — see
+// TestDiscoverIncludesMovies — so this test filters to the tv_series slice.)
 func TestDiscover(t *testing.T) {
+	srv := loadCorpus(t).Server()
+	defer srv.Close()
+	c := newClient(t, srv.URL)
+	c.http = srv.Client()
+
+	all, err := c.Discover(context.Background(), "test")
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	var got []providers.DiscoveryCandidate
+	for _, cand := range all {
+		if cand.Type == string(followed.TypeTVSeries) {
+			got = append(got, cand)
+		}
+	}
+	// Three tv hits in the corpus, one with no id — so two candidates.
+	if len(got) != 2 {
+		t.Fatalf("got %d tv_series candidates, want 2 (the id-less hit is skipped)", len(got))
+	}
+	if got[0].ExternalID != "100" || got[0].Title != "A Test Series" {
+		t.Errorf("first candidate = %+v", got[0])
+	}
+	if got[0].Year != 2011 {
+		t.Errorf("first candidate year = %d, want 2011", got[0].Year)
+	}
+	if got[0].Type != string(followed.TypeTVSeries) {
+		t.Errorf("candidate type = %q, want tv_series", got[0].Type)
+	}
+	if got[0].Source != "tmdb" {
+		t.Errorf("candidate source = %q, want tmdb", got[0].Source)
+	}
+	if got[0].Overview == "" {
+		t.Error("the first candidate lost its overview")
+	}
+	// The second hit has an empty overview and a first_air_date — both survive as
+	// their honest values rather than being dropped.
+	if got[1].ExternalID != "200" || got[1].Year != 2019 || got[1].Overview != "" {
+		t.Errorf("second candidate = %+v", got[1])
+	}
+}
+
+// Discover also asks /search/movie and merges its hits in as Type "movie" —
+// the want-scoped half ADR-0077 deferred. A movie candidate is never followed
+// (no calendar), so it carries no special field the way tv_series does not
+// need one beyond ExternalID/Source; the caller routes it to want_content.
+func TestDiscoverIncludesMovies(t *testing.T) {
 	srv := loadCorpus(t).Server()
 	defer srv.Close()
 	c := newClient(t, srv.URL)
@@ -192,26 +239,24 @@ func TestDiscover(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	// Three hits in the corpus, one with no id — so two candidates.
-	if len(got) != 2 {
-		t.Fatalf("got %d candidates, want 2 (the id-less hit is skipped)", len(got))
+	var movies []providers.DiscoveryCandidate
+	for _, cand := range got {
+		if cand.Type == "movie" {
+			movies = append(movies, cand)
+		}
 	}
-	if got[0].ExternalID != "100" || got[0].Title != "A Test Series" {
-		t.Errorf("first candidate = %+v", got[0])
+	// Two movie hits in the corpus, one with no id — so one candidate.
+	if len(movies) != 1 {
+		t.Fatalf("got %d movie candidates, want 1 (the id-less hit is skipped): %+v", len(movies), movies)
 	}
-	if got[0].Year != 2011 {
-		t.Errorf("first candidate year = %d, want 2011", got[0].Year)
+	if movies[0].ExternalID != "500" || movies[0].Title != "A Test Movie" {
+		t.Errorf("movie candidate = %+v", movies[0])
 	}
-	if got[0].Type != followed.TypeTVSeries {
-		t.Errorf("candidate type = %q, want tv_series", got[0].Type)
+	if movies[0].Year != 2021 {
+		t.Errorf("movie candidate year = %d, want 2021", movies[0].Year)
 	}
-	if got[0].Overview == "" {
-		t.Error("the first candidate lost its overview")
-	}
-	// The second hit has an empty overview and a first_air_date — both survive as
-	// their honest values rather than being dropped.
-	if got[1].ExternalID != "200" || got[1].Year != 2019 || got[1].Overview != "" {
-		t.Errorf("second candidate = %+v", got[1])
+	if movies[0].Source != "tmdb" {
+		t.Errorf("movie candidate source = %q, want tmdb", movies[0].Source)
 	}
 }
 
