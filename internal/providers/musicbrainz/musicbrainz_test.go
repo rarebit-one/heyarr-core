@@ -34,6 +34,12 @@ func TestClientSatisfiesEnrichProvider(t *testing.T) {
 	var _ providers.EnrichProvider = (*Client)(nil)
 }
 
+// A MusicBrainz client is also a DiscoverySearcher (#451, ADR-0077's deferred
+// want-scoped half): the discovery door routes to it beside TVDB/TMDB.
+func TestClientSatisfiesDiscoverySearcher(t *testing.T) {
+	var _ providers.DiscoverySearcher = (*Client)(nil)
+}
+
 func TestCapabilityIsEnrich(t *testing.T) {
 	caps := newClient(t, "http://example.invalid").Capabilities()
 	if len(caps) != 1 || caps[0] != providers.CapabilityEnrich {
@@ -145,5 +151,89 @@ func TestArtistNameJoinsCredit(t *testing.T) {
 	r := release{ArtistCredit: []artistCredit{{Name: "Brian Eno"}, {Name: "David Byrne"}}}
 	if got := r.artistName(); got != "Brian Eno David Byrne" {
 		t.Errorf("artistName = %q", got)
+	}
+}
+
+// Discover runs the query as-is (no artist/album split the way Enrich's
+// luceneQuery does) and maps each release with a usable MBID to a neutral
+// "music" candidate a caller wants (there is no follow door for a release).
+func TestDiscoverReturnsMusicCandidates(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"releases":[
+			{"id":"a1b2c3d4-0000-0000-0000-000000000001","title":"My Life in the Bush of Ghosts","score":100,"date":"1981-02-01","artist-credit":[{"name":"Brian Eno"},{"name":"David Byrne"}]},
+			{"id":"","title":"A Release With No MBID","score":50,"date":"1999"}
+		]}`))
+	}))
+	defer srv.Close()
+
+	got, err := newClient(t, srv.URL).Discover(context.Background(), "bush of ghosts")
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	// Two releases in the fixture, one with no MBID — so one candidate.
+	if len(got) != 1 {
+		t.Fatalf("got %d candidates, want 1 (the id-less release is skipped): %+v", len(got), got)
+	}
+	if gotQuery != "bush of ghosts" {
+		t.Errorf("query = %q, want the exact free-text query", gotQuery)
+	}
+	c := got[0]
+	if c.Title != "My Life in the Bush of Ghosts" || c.Year != 1981 {
+		t.Errorf("candidate = %+v", c)
+	}
+	if c.ExternalID != "a1b2c3d4-0000-0000-0000-000000000001" {
+		t.Errorf("external id = %q", c.ExternalID)
+	}
+	if c.Source != "musicbrainz" || c.Type != "music" {
+		t.Errorf("source/type = %q/%q, want musicbrainz/music", c.Source, c.Type)
+	}
+	if c.Overview != "by Brian Eno David Byrne" {
+		t.Errorf("overview = %q", c.Overview)
+	}
+}
+
+// An empty query is refused locally — no HTTP round trip for nothing to search.
+func TestDiscoverRefusesEmptyQuery(t *testing.T) {
+	c := newClient(t, "http://example.invalid")
+	if _, err := c.Discover(context.Background(), "  "); err == nil {
+		t.Fatal("an empty query must be refused")
+	}
+}
+
+// A query matching nothing is the modelled empty result, not an error.
+func TestDiscoverMatchingNothingIsEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"releases":[]}`))
+	}))
+	defer srv.Close()
+
+	got, err := newClient(t, srv.URL).Discover(context.Background(), "nothing matches this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d candidates, want 0", len(got))
+	}
+}
+
+// releaseYear reads the leading YYYY off MusicBrainz's partial-precision dates,
+// and a date too short or malformed to hold one is the honest "no year" zero.
+func TestReleaseYear(t *testing.T) {
+	cases := map[string]int{
+		"1981-02-01": 1981,
+		"1981-02":    1981,
+		"1981":       1981,
+		"":           0,
+		"81":         0,
+		"abcd-02-01": 0,
+	}
+	for date, want := range cases {
+		if got := releaseYear(date); got != want {
+			t.Errorf("releaseYear(%q) = %d, want %d", date, got, want)
+		}
 	}
 }

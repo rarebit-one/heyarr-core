@@ -174,8 +174,11 @@ func TestDiscover(t *testing.T) {
 	if got[0].Year != 2011 {
 		t.Errorf("first candidate year = %d, want 2011", got[0].Year)
 	}
-	if got[0].Type != followed.TypeTVSeries {
+	if got[0].Type != string(followed.TypeTVSeries) {
 		t.Errorf("candidate type = %q, want tv_series", got[0].Type)
+	}
+	if got[0].Source != "tvdb" {
+		t.Errorf("candidate source = %q, want tvdb", got[0].Source)
 	}
 	if got[0].Overview == "" {
 		t.Error("the first candidate lost its overview")

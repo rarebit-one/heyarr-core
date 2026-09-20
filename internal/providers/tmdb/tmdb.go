@@ -43,16 +43,16 @@
 // supplied at construction (from a credential or an environment reference at the
 // edge) and is never committed.
 //
-// # Movies are deliberately out of scope
+// # Movies: no longer out of scope
 //
-// TMDB indexes movies as well as TV, but heyarr's discovery and following model
-// is feed-shaped: a DiscoveryCandidate.Type is a followed.Type, a FeedProvider
-// enumerates the items WITHIN a followed source over time, and neither has a
-// place for a movie — a one-off want (want_content), not a subscription with a
-// calendar. Emitting a movie candidate would need a new followed.Type and a
-// want-scoped discovery path, which is a catalog/acquisition-side change, not a
-// provider addition (see ADR-0077). So this adapter serves tv_series only, the
-// half that slots in behind the existing interface with no domain change.
+// TMDB indexes movies as well as TV. ADR-0077 originally deferred movie
+// discovery because DiscoveryCandidate.Type was a followed.Type and nothing —
+// no follow flow, no calendar — exists for a movie. That ADR named the fix as
+// "a non-feed, want-scoped discovery candidate": DiscoveryCandidate.Type is now
+// any content-kind string, and a movie candidate from discoverMovies carries
+// Type "movie", which a caller routes to want_content rather than
+// follow_source. FeedProvider/Enumerate is unaffected — a movie is still never
+// enumerated as items within a followed source, because it is not one.
 package tmdb
 
 import (
@@ -251,14 +251,20 @@ func (c *Client) Enumerate(ctx context.Context, ref string) ([]followed.FeedItem
 	return items, nil
 }
 
-// Discover resolves a free-text query to candidate TV series, INCLUDING ones the
-// library does not yet hold (#451). It satisfies providers.DiscoverySearcher.
+// Discover resolves a free-text query to candidate TV series AND movies,
+// INCLUDING ones the library does not yet hold (#451). It satisfies
+// providers.DiscoverySearcher.
 //
-// It asks TMDB v3's /search/tv for series matching the query, mapping each hit
-// to a neutral providers.DiscoveryCandidate carrying the TMDB series id — so a
-// caller turns a title into a follow in one step. /search/tv scopes the search
-// to what this adapter can actually follow: a movie or a person hit would be a
-// candidate no follow flow could act on.
+// It asks TMDB v3's /search/tv and /search/movie for matches and merges both
+// into one neutral candidate list. Series and movies both used to be scoped
+// to /search/tv alone — "a movie... would be a candidate no follow flow could
+// act on", per the original ADR-0077 boundary — but that boundary was about
+// follow_source specifically: a movie is not a feed and never gets a calendar,
+// so it cannot be followed. It CAN be wanted (want_content by title), which is
+// the want-scoped discovery door ADR-0077 named as the fix once it existed
+// (see providers.DiscoveryCandidate's doc). So a movie hit is now surfaced
+// with Type "movie" — a caller routes it to want_content, not follow_source,
+// exactly as it already routes book/music candidates from other providers.
 //
 // An empty result is the modelled "nothing matched" outcome, not an error; an
 // error is a call that could not be made, which the caller must see rather than
@@ -266,9 +272,28 @@ func (c *Client) Enumerate(ctx context.Context, ref string) ([]followed.FeedItem
 func (c *Client) Discover(ctx context.Context, query string) ([]providers.DiscoveryCandidate, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return nil, errors.New("tmdb: a query is required to discover series")
+		return nil, errors.New("tmdb: a query is required to discover series or movies")
 	}
 
+	series, err := c.discoverSeries(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	movies, err := c.discoverMovies(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]providers.DiscoveryCandidate, 0, len(series)+len(movies))
+	out = append(out, series...)
+	out = append(out, movies...)
+	return out, nil
+}
+
+// discoverSeries asks TMDB's /search/tv for series matching query, mapping each
+// hit to a neutral providers.DiscoveryCandidate carrying the TMDB series id — so
+// a caller turns a title into a follow in one step.
+func (c *Client) discoverSeries(ctx context.Context, query string) ([]providers.DiscoveryCandidate, error) {
 	// page=1 only: TMDB returns the most relevant matches first, and a follow
 	// picker reads the first page. api_key is NOT in the query — the token is a
 	// bearer header (see the package doc) — so the query carries only the search.
@@ -294,7 +319,40 @@ func (c *Client) Discover(ctx context.Context, query string) ([]providers.Discov
 			Title:      strings.TrimSpace(hit.Name),
 			Year:       parseYearFromDate(hit.FirstAirDate),
 			ExternalID: strconv.FormatInt(hit.ID, 10),
-			Type:       followed.TypeTVSeries,
+			Source:     "tmdb",
+			Type:       string(followed.TypeTVSeries),
+			Overview:   strings.TrimSpace(hit.Overview),
+		})
+	}
+	return out, nil
+}
+
+// discoverMovies asks TMDB's /search/movie for movie matches — the half of
+// #451/ADR-0077 that was deferred until a want-scoped discovery candidate
+// existed. A movie is never followed (no calendar), so its ExternalID is
+// carried for display/cross-reference; the caller's next step is
+// want_content(title, year, content_type: "movie").
+func (c *Client) discoverMovies(ctx context.Context, query string) ([]providers.DiscoveryCandidate, error) {
+	path := fmt.Sprintf("%s/search/movie?query=%s&page=1", c.endpoint, queryEscape(query))
+	var body movieSearchResponse
+	if err := c.get(ctx, path, "search-movie", &body); err != nil {
+		return nil, err
+	}
+
+	out := make([]providers.DiscoveryCandidate, 0, len(body.Results))
+	for _, hit := range body.Results {
+		if hit.ID == 0 {
+			continue
+		}
+		if len(out) >= maxSearchResults {
+			break
+		}
+		out = append(out, providers.DiscoveryCandidate{
+			Title:      strings.TrimSpace(hit.Title),
+			Year:       parseYearFromDate(hit.ReleaseDate),
+			ExternalID: strconv.FormatInt(hit.ID, 10),
+			Source:     "tmdb",
+			Type:       "movie",
 			Overview:   strings.TrimSpace(hit.Overview),
 		})
 	}
@@ -419,6 +477,25 @@ type searchHit struct {
 	// FirstAirDate is "YYYY-MM-DD" and sometimes empty.
 	FirstAirDate string `json:"first_air_date"`
 	Overview     string `json:"overview"`
+}
+
+// movieSearchResponse is /search/movie's body — the same envelope as
+// searchResponse, but a movie hit's field names differ from a series hit's
+// (title vs name, release_date vs first_air_date), so it gets its own hit type
+// rather than reusing searchHit for fields that would silently stay empty.
+type movieSearchResponse struct {
+	Results []movieHit `json:"results"`
+}
+
+type movieHit struct {
+	// ID is the numeric TMDB movie id, carried for display/cross-reference —
+	// see discoverMovies: a movie is wanted, not followed, so nothing acts on
+	// this id the way follow_source acts on a series id.
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
+	// ReleaseDate is "YYYY-MM-DD" and sometimes empty.
+	ReleaseDate string `json:"release_date"`
+	Overview    string `json:"overview"`
 }
 
 // tvDetail is TMDB v3's /tv/{id} body. Only the season list is read — it is the

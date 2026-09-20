@@ -70,23 +70,41 @@ type FeedProvider interface {
 // provider-agnostic value so a TMDB implementation later returns the SAME shape
 // a TVDB one does, and the caller never couples to either service's JSON. Where
 // FeedItem is one item WITHIN a source (an episode), a candidate is the source
-// itself — a series a caller could go on to follow.
+// itself — a series a caller could go on to follow, OR (ADR-0077's deferred
+// half, now built) a movie/book/music work a caller could go on to WANT.
+//
+// # Type is a content-kind string, not a followed.Type, on purpose
+//
+// ADR-0077 originally typed this field as followed.Type, which structurally
+// could only ever name the four feed-shaped kinds (tv_series, podcast,
+// youtube_channel, rss_feed) — there was nowhere to put a movie, a book or an
+// album, because none of those is a subscription with a calendar. That ADR
+// named the fix: "a non-feed, want-scoped discovery candidate". This is it —
+// Type is now any works.content_type value too (movie, book, music), and the
+// caller (resources.Discover / the MCP door) branches on it to decide whether
+// a candidate is actioned via follow_source (the four feed-shaped kinds) or
+// want_content by title (movie, book, music — a one-off, not a subscription).
 type DiscoveryCandidate struct {
 	// Title is the work's name as the metadata service knows it.
 	Title string
-	// Year is the first-aired/release year, zero when the service did not give
-	// one — a real and distinct answer from any year.
+	// Year is the first-aired/release/publish year, zero when the service did
+	// not give one — a real and distinct answer from any year.
 	Year int
-	// ExternalID is the source-native identity the caller would follow this
-	// candidate by: a TVDB series id, which follow_source takes as tvdb_id. It
-	// is the whole point of discovery — a free-text query resolved to an id a
-	// follow can act on in one step, rather than a title that might create a
-	// second work.
+	// ExternalID is the source-native identity: a TVDB/TMDB series id (follow_source
+	// takes it as tvdb_id), or a provider-native id for a want-scoped kind (a TMDB
+	// movie id, an Open Library OLID, a MusicBrainz MBID). It is the whole point of
+	// discovery — a free-text query resolved to an id the caller can act on, or at
+	// least display, in one step, rather than a title that might create a second work.
 	ExternalID string
-	// Type is the followed source type this candidate would be followed as
-	// (tv_series for a TVDB series), so a caller knows which follow flow applies
-	// without inferring it from the id's shape.
-	Type followed.Type
+	// Source names which metadata service produced this candidate ("tvdb", "tmdb",
+	// "openlibrary", "musicbrainz"), so a caller can tell two providers' ids apart
+	// even when their ExternalID strings could otherwise collide, and can show
+	// where the candidate came from. Never empty — every provider sets its own name.
+	Source string
+	// Type is the content kind this candidate is: one of the four followed.Type
+	// values (followed via follow_source) or a works content type — movie, book,
+	// music (wanted via want_content by title, never followed — see above).
+	Type string
 	// Overview is a short human description, when the service supplies one, so a
 	// person choosing between two same-named series has something to choose on.
 	// Empty is fine — it is decoration, never an identity.

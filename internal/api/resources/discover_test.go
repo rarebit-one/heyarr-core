@@ -16,11 +16,13 @@ import (
 // exercised together, because the seam a client consumes is the route.
 
 type discoveryResult struct {
-	Title    string `json:"title"`
-	Year     int    `json:"year"`
-	Type     string `json:"type"`
-	TVDBID   string `json:"tvdb_id"`
-	Overview string `json:"overview"`
+	Title      string `json:"title"`
+	Year       int    `json:"year"`
+	Type       string `json:"type"`
+	TVDBID     string `json:"tvdb_id"`
+	Source     string `json:"source"`
+	ExternalID string `json:"external_id"`
+	Overview   string `json:"overview"`
 }
 
 func discover(h *harness, body string) *http.Response {
@@ -34,8 +36,8 @@ func TestDiscoverReturnsCandidatesNotInTheLibrary(t *testing.T) {
 	fake := providers.NewFake("fake-tvdb", providers.CapabilityMetadata).
 		OfferDiscovery("the expanse",
 			providers.DiscoveryCandidate{
-				Title: "The Expanse", Year: 2015, ExternalID: "280619",
-				Type: followed.TypeTVSeries, Overview: "A political thriller in space.",
+				Title: "The Expanse", Year: 2015, ExternalID: "280619", Source: "tvdb",
+				Type: string(followed.TypeTVSeries), Overview: "A political thriller in space.",
 			})
 	if err := reg.Register(fake); err != nil {
 		t.Fatal(err)
@@ -67,6 +69,48 @@ func TestDiscoverReturnsCandidatesNotInTheLibrary(t *testing.T) {
 	}
 	if fake.Discoveries() != 1 {
 		t.Errorf("the provider was asked %d times, want 1", fake.Discoveries())
+	}
+}
+
+// A movie/book/music candidate — the want-scoped half ADR-0077 deferred — comes
+// back with no tvdb_id (nothing to follow) but a real source+external_id, so a
+// client can tell it apart from a tv_series result and route it to want_content
+// instead of follow_source.
+func TestDiscoverReturnsWantScopedCandidates(t *testing.T) {
+	reg := providers.New(nil)
+	fake := providers.NewFake("fake-openlibrary", providers.CapabilityEnrich).
+		OfferDiscovery("dune",
+			providers.DiscoveryCandidate{
+				Title: "Dune", Year: 1965, ExternalID: "OL893415W", Source: "openlibrary",
+				Type: "book", Overview: "by Frank Herbert",
+			})
+	if err := reg.Register(fake); err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, withProviders(reg)).seed()
+
+	resp := discover(h, `{"query":"dune"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("discover = %d: %s", resp.StatusCode, h.body(resp))
+	}
+	var out struct {
+		Results []discoveryResult `json:"results"`
+	}
+	if err := json.Unmarshal(h.body(resp), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Results) != 1 {
+		t.Fatalf("results = %+v, want one candidate", out.Results)
+	}
+	got := out.Results[0]
+	if got.Type != "book" {
+		t.Errorf("type = %q, want book", got.Type)
+	}
+	if got.TVDBID != "" {
+		t.Errorf("tvdb_id = %q, want empty — a book has no follow door", got.TVDBID)
+	}
+	if got.Source != "openlibrary" || got.ExternalID != "OL893415W" {
+		t.Errorf("source/external_id = %q/%q, want openlibrary/OL893415W", got.Source, got.ExternalID)
 	}
 }
 
@@ -140,8 +184,8 @@ func TestDiscoverMatchingNothingIsEmpty(t *testing.T) {
 // deduplicates on (type, external id) rather than showing the same series twice.
 func TestDiscoverDeduplicatesAcrossProviders(t *testing.T) {
 	same := providers.DiscoveryCandidate{
-		Title: "The Expanse", Year: 2015, ExternalID: "280619",
-		Type: followed.TypeTVSeries,
+		Title: "The Expanse", Year: 2015, ExternalID: "280619", Source: "tvdb",
+		Type: string(followed.TypeTVSeries),
 	}
 	reg := providers.New(nil)
 	for _, name := range []string{"tvdb-a", "tvdb-b"} {
