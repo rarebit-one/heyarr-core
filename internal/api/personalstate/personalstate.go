@@ -23,6 +23,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -251,6 +252,9 @@ type wrappedKeysView struct {
 type changesView struct {
 	SpaceID string                     `json:"space_id"`
 	Changes []protocol.EncryptedChange `json:"changes"`
+	// Cursor is this peer's arrival position after the last element — what the
+	// device passes as ?since next time. Opaque, per-peer, monotonic.
+	Cursor int64 `json:"cursor"`
 }
 
 // changeStored is the ack for a pushed change: the content-addressed id the peer
@@ -384,14 +388,34 @@ func (a *API) putChange(w http.ResponseWriter, r *http.Request) {
 	a.write(w, r, http.StatusCreated, changeStored{ChangeID: ch.ChangeID})
 }
 
+// listChanges answers GET /spaces/{id}/changes. Without ?since it returns the
+// whole log, as it always has. With ?since=<cursor> it returns only what arrived
+// after that cursor — the incremental pull a syncing device wants, so a steady
+// state costs an empty list instead of the entire history (§44).
+//
+// The response always carries `cursor`, so a device stores it unconditionally
+// and passes it back next time. It is this peer's opaque arrival position: not a
+// timestamp, not a causal frontier, and not meaningful against another peer.
 func (a *API) listChanges(w http.ResponseWriter, r *http.Request) {
 	spaceID := chi.URLParam(r, "id")
-	changes, err := a.store.ChangesFor(r.Context(), spaceID)
+
+	raw := r.URL.Query().Get("since")
+	var since int64
+	if raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || v < 0 {
+			httpapi.Fail(w, r, problem.BadRequest("since must be a non-negative integer cursor"))
+			return
+		}
+		since = v
+	}
+
+	changes, cursor, err := a.store.ChangesSince(r.Context(), spaceID, since)
 	if err != nil {
 		a.failStore(w, r, "listing changes", err)
 		return
 	}
-	a.write(w, r, http.StatusOK, changesView{SpaceID: spaceID, Changes: changes})
+	a.write(w, r, http.StatusOK, changesView{SpaceID: spaceID, Changes: changes, Cursor: cursor})
 }
 
 // --- helpers ------------------------------------------------------------------
