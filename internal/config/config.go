@@ -425,9 +425,6 @@ type Library struct {
 	Roots       []string `koanf:"roots"`
 }
 
-// Defaults returns the configuration Heyarr uses when nothing is specified.
-// The defaults are deliberately safe rather than convenient: loopback only,
-// authentication on.
 // Language is the config surface for the household audio-language preference
 // (§62, #558). It maps 1:1 to policy.LanguageDefault; the split exists so the
 // domain type stays free of koanf tags. The zero value is disabled.
@@ -461,6 +458,9 @@ func (l Language) Policy() policy.LanguageDefault {
 	}
 }
 
+// Defaults returns the configuration Heyarr uses when nothing is specified.
+// The defaults are deliberately safe rather than convenient: loopback only,
+// authentication on.
 func Defaults() Config {
 	return Config{
 		DataDir: "/var/lib/heyarr",
