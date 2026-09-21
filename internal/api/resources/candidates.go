@@ -10,6 +10,7 @@ import (
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/desired"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -143,6 +144,11 @@ func (a *API) searchDesired(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := a.SearchReleases(r.Context(), id)
 	if err != nil {
+		var bad *badRequest
+		if errors.As(err, &bad) {
+			httpapi.Fail(w, r, problem.BadRequest(bad.err.Error()))
+			return
+		}
 		a.fail(w, r, "job", err)
 		return
 	}
@@ -160,7 +166,29 @@ func (a *API) searchDesired(w http.ResponseWriter, r *http.Request) {
 // it may be another process, and an indexer may take thirty seconds to refuse
 // — so the answer is "queued", not the candidates. A caller that wants the
 // result reads the want's candidates afterwards.
+//
+// A subtitle-aspect want is refused rather than enqueued. ADR-0085 makes a
+// subtitle want RouteDirect — its bytes come from a subtitle provider, never an
+// indexer — and DueSearches already honours that by never selecting one for the
+// automated search beat. But this door is a second, independent way onto the
+// SAME search_release/grab_release job chain, reached by a person, the MCP
+// search_releases tool, or an operator script driving every MISSING want it can
+// see — none of which know a want's aspect without asking. Nothing downstream
+// checks it either: SearchHandler and GrabReleaseHandler gate on acquisition
+// phase alone. Let one of those callers through and a subtitle want is driven
+// into a torrent search and left `queued` there — a phase the subtitle fetch
+// beat's DueSubtitleFetches will never see as idle again, so the want is
+// permanently stuck with no OpenSubtitles fetch ever tried.
 func (a *API) SearchReleases(ctx context.Context, id string) (map[string]string, error) {
+	_, _, aspect, _, err := a.catalog.DesiredItemTarget(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if aspect == string(desired.AspectSubtitle) {
+		return nil, &badRequest{errors.New(
+			"this want is for a subtitle, not the content itself — a subtitle is fetched from a " +
+				"subtitle provider (ADR-0085), never searched for on an indexer")}
+	}
 	job, err := a.jobs.Enqueue(ctx, jobs.EnqueueOptions{
 		Type:      acquisition.SearchJobType,
 		Payload:   acquisition.SearchPayload{DesiredItemID: id},

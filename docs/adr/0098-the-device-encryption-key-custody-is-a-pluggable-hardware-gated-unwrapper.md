@@ -252,11 +252,221 @@ by a single `CGO_ENABLED=1` step — the only cgo in the build; the whole matrix
 stays `CGO_ENABLED=0` and the pure-Go legs never compile it. (go-tpm's transport
 targets that reference simulator; swtpm's socket control channel speaks a
 different protocol and is not a drop-in.) The hardware-free unit tests (blob
-codec, RecipientID, input validation) run everywhere. **Deferred:** the
-provisioning command that seals a device's key and writes the blob (`tpm.Seal` is
-the primitive; a `heyarr` command is a follow-up, as YubiKey's provisioning was
-separate); and the on-real-fTPM/PTT validation, gated on the Framework laptops
-arriving. Only cruciform (#571) remains unwired in the selector now.
+codec, RecipientID, input validation) run everywhere.
+
+Provisioning: **`heyarr device seal-tpm`** seals the EXISTING device encryption
+key to the local TPM (so the public point — the wrap target the controller holds
+— is unchanged and already-wrapped spaces keep opening) and writes the sealed-key
+blob (`Blob.WriteFile`, 0600). It is non-destructive: it prints how to select the
+backend and then remove the plaintext seed to complete the hardening, but never
+removes it — recovery via the paper secret is unchanged, so this adds no loss
+mode. **Deferred:** the on-real-fTPM/PTT validation, gated on the Framework
+laptops arriving. Only cruciform (#571) remains unwired in the selector now.
+
+## Addendum (2026-09-17): the cruciform-offload live path — rendezvous and approval UX
+
+The "unwrap protocol" addendum above settled the *message-level* exchange (who
+signs what, and how the space key comes back sealed). This settles the layer
+*above* it — how the desktop and phone find each other, and what the approval
+feels like — so the deferred pieces (the notify unwrap-ping, the `Transport`, the
+pairing ceremony, and the phone half) are built to one shape. The offload backend
+landed (#582); this is its live path.
+
+### Two moments, opposite tools
+
+- **Pairing is once, and uses a QR.** Establishing desktop↔phone trust is a
+  one-time act, and voidbind pairing already does it well (ADR-0002 pairflow): the
+  desktop renders a `voidbind:pair?…` QR, the phone scans it off the screen, and a
+  short number-compare (SAS) confirms it. The visual channel is what authenticates
+  the rendezvous, so a network attacker cannot substitute the relay/session/salt.
+  This pins the desktop's **transport key** on the phone — a pairing identity, NOT
+  a custody key (stolen alone it opens nothing without the phone + biometric).
+- **Unwrapping is recurring, and never scans.** A QR per unwrap is unacceptable
+  UX. The recurring path is push/discover + biometric, below.
+
+### Recurring unwrap: LAN-direct first, relay+wake as the away fallback
+
+Two transports behind the STEP-4 `Transport` seam — the same signed message-level
+protocol rides either:
+
+- **Same network (the common homelab case): direct, via mDNS.** heyarr already
+  advertises on the LAN (mDNS); the desktop discovers the paired phone and connects
+  to it directly — no relay, no push, lowest latency. This is the everyday path
+  when the owner is home.
+- **Away (phone on cellular, laptop off-net): relay + wake.** The desktop wakes
+  the phone over the notify plane (ADR-0005) with an opaque **unwrap ping** that
+  carries only the relay session pointer, and the two exchange over the pairing
+  relay (ADR-0002). The ping wakes a sleeping phone; the relay carries the opaque,
+  mutually-signed request/response.
+
+### Binding the approval without a QR: number-matching
+
+A scanned QR proves "this is my desktop in front of me"; a push scans nothing, so
+it loses that binding. voidbind's number-matching (ADR-0006) restores it on the
+relay path: the desktop shows a short code, the phone shows candidates, the human
+taps the match, then approves with biometric — two taps, no scan, and it proves it
+is the owner's desktop. On the LAN-direct path the pinned transport key plus the
+biometric already bind it; whether to also require a number-match there is an open
+knob (below).
+
+### Cadence: once per space-key unwrap, not per file
+
+The phone is consulted once per space / per session / per rotation — after that the
+space key decrypts every frame locally. So the human approves when they sit down to
+work, not on every action. This low frequency is what makes hardware-offload
+usable, and it is why a per-unwrap biometric (rather than a cached credential on the
+desktop) is affordable.
+
+### What each deferred piece is therefore built to
+
+- **notify unwrap-ping (voidbind-go):** a new opaque tuple
+  `voidbind:unwrap?relay=&session=` + an enqueue path, mirroring the login ping —
+  carries only the unguessable relay-session pointer, never a key or challenge.
+- **relay message-types (voidbind-go, PR #39):** the configurable slot names that
+  let the unwrap request/response ride the same dumb relay as pairing.
+- **the heyarr `Transport`:** mDNS LAN-direct with relay+wake as fallback, behind
+  the seam the offload backend already takes.
+- **the pairing ceremony:** the one-time QR pairflow that pins the desktop
+  transport key on the phone.
+- **the voidbind-kmp/cruciform phone half:** scan-to-pair once; then receive a
+  wake (or accept a LAN connection), number-match, biometric, in-enclave unwrap,
+  and reply.
+
+### Open knobs (flagged, not locked)
+
+- Whether the LAN-direct path also requires a number-match, or biometric-only is
+  enough given the pinned transport key.
+- Whether the desktop may cache the space key for a bounded window after an
+  approval, or must re-consult the phone every session — a security/UX trade-off
+  that weakens the "desktop holds nothing" property if cached, so the default is
+  no cache.
+
+## Addendum (2026-09-17): the offload pairing ceremony is built (desktop half)
+
+The one-time pairing the live-path addendum called for is now built on the
+desktop side — `internal/personalstate/client/cruciform` (`pairing.go`,
+`pairstore.go`) plus `heyarr device pair-offload`. It is unit-tested against a
+reference fake phone, including over a REAL voidbind relay; the actual QR scan is
+phone-gated, exactly as the YubiKey backend gated its on-card round-trip.
+
+**It is not a voidbind membership enrolment.** `pairflow.Initiator` signs an
+`add` op and seals a space key to make the responder a *member*; the offload
+transport key is explicitly NOT a member and holds no encryption key (§4). So the
+ceremony reuses only the lower-level SAS primitives `pairflow` is built on —
+`pairing.Commit`/`Commitment.Open`/`Derive` — over the same dumb relay, and
+*pins* keys instead of enrolling. Like the unwrap protocol, this pairing wire is
+**heyarr-core-local**: the voidbind-kmp/cruciform phone half mirrors THIS, not a
+voidbind-go pairflow variant (the generic pieces it rides — the relay, the SAS
+commit-reveal — are voidbind-go's; the offload-specific shape is here).
+
+The wire contract the phone half mirrors:
+
+- **Invite (QR payload):** `voidbind:offload-pair?v=1&relay=<origin>&session=<id>&salt=<hex>`.
+  The scheme matches voidbind's pairing invite so one QR scanner routes both, but
+  the opaque is `offload-pair`, not `pair`, so the phone dispatches this to the
+  offload-pairing handler rather than device enrolment. (This is the one deviation
+  from the live-path addendum's shorthand "voidbind:pair?…": a distinct opaque is
+  what keeps enrolment and offload-pairing from being confused for one another.)
+- **Handshake** (relay slots `commit`, `reveal`): commit-before-reveal, then OPEN
+  the peer's commitment against its revealed keys (the rushing gate), then DERIVE
+  the SAS. The desktop presents only its transport signing key (encryption key
+  absent, bound by its framed absence); the phone presents its device signing AND
+  encryption keys. `reveal` is JSON `{sign, enc?}` in the system's
+  algorithm-prefixed key encoding.
+- **Confirm** (relay slot `confirm`, only after the human matches the SAS): each
+  side signs a length-framed transcript — domain `heyarr-cruciform-pair-confirm-v1`
+  then `session`, `salt`, and both sides' signing/encryption keys — with its OWN
+  signing key, and verifies the peer's against the peer's revealed signing key.
+  This is both a proof-of-possession (the peer controls the private key behind the
+  pubkey it revealed) and the mutual "the human said yes" gate: a side that never
+  confirms pins nobody. `confirm` is JSON `{sig}` (base64).
+- **What the desktop pins** (`PairConfig`, `cruciform-pairing.json`, 0600, in the
+  device dir): its persistent transport signing key (secret), the phone's device
+  signing key (verifies unwrap *responses*), the phone's X25519 encryption key
+  (the `RecipientID` the sealed space-key copy is looked up by), and the relay.
+- **Relay allow-list:** the ceremony adds the `confirm` slot beyond the pairing
+  defaults (`cruciform.RelayPairTypes`); the node relay mount carries
+  `append(relay.DefaultTypes, append(RelayPairTypes, RelayUnwrapTypes...)...)`.
+
+Still deferred (phone/pairing-gated, as before): the RP wake endpoint the
+desktop's `WakeFunc` calls; the relay mount actually setting those types; the
+cruciform backend **selection** (built from a loaded `PairConfig`); the
+voidbind-kmp/cruciform phone half; and a live round-trip on a real paired phone.
+
+## Addendum (2026-09-17): the offload backend is selectable, and the node relay carries it
+
+Two of the deferred pieces are now wired, so `cruciform` joins the other three
+backends as selectable-by-config (the "all backends by one config key" this ADR
+called for):
+
+- **Relay mount.** The node's voidbind relay (`internal/api/relay`, mounted in
+  the controller) now declares its accepted message slots explicitly: the pairing
+  default set (`commit`/`reveal`/`cert`) **plus** the offload slots — the pairing
+  `confirm` (`cruciform.RelayPairTypes`) and the recurring unwrap request/response
+  (`cruciform.RelayUnwrapTypes`). So one node relay is the rendezvous for both
+  device enrolment and offload unwraps; it stays a dumb, opaque store either way.
+  `relay.Options` grew a `Types` field so `api/relay` stays agnostic to what rides
+  it and the controller composes the set.
+- **Backend selection.** `custody.Select` now builds a `cruciform.Custody` from
+  the pairing config (`vault.unwrapper: cruciform`, `vault.cruciform.pair_file` or
+  the device-dir default): the `RelayTransport` over `PairConfig.RelayBase`, the
+  offload `Unwrapper` from the pinned transport + phone device keys, and —
+  crucially — a `RecipientID()` that is the PHONE's encryption key, so opening a
+  space looks up and unwraps the phone's sealed copy (the desktop holds no private
+  half). Config validation accepts `cruciform`; a missing pairing config is
+  refused with a pointer to `heyarr device pair-offload`.
+
+**The wake stays nil for now** (`Options.CruciformWake`): until the desktop
+WakeFunc is wired to the wake endpoint (and the phone half exists) an offload
+unwrap completes only when the phone is already reachable (a LAN-direct path, or a
+phone already polling the relay).
+
+## Addendum (2026-09-17): the RP wake endpoint is built
+
+The server half of the away-path wake is now built — `POST /v1/unwrap-wake`
+(`internal/api/weblogin`, mounted beside `/v1/subscriptions`). An enrolled device
+(the offload desktop) posts its enrolment cert plus the `(relay, session)` of the
+unwrap it is attempting; the node verifies the cert against the SAME pinned trust
+and membership the login broker and the subscription registry use (`rp.Verifier`),
+and fans an opaque `voidbind:unwrap?relay=&session=` ping to that user's subscribed
+devices (`notify.EnqueueUnwrap`). The user woken is the cert's user, never a field
+the client claimed, so a device can only wake its own user's phones — this is the
+Option-A auth: **the offload desktop is still an enrolled device with a signing
+identity, even though it offloads its ENCRYPTION custody**; the desktop↔phone
+transport key that authenticates the offload exchange itself is separate and never
+reaches the node. The ping is opaque by construction (it carries only the public
+relay-session pointer), so a node, push server or wake channel learns nothing;
+zero devices woken is a `200 woken:0`, not an error, since the desktop can still
+try the LAN-direct path.
+
+Still deferred (phone-gated): wiring the desktop's `Options.CruciformWake` to call
+this endpoint (it needs the node URL + the device's cert/ops at unwrap time); the
+voidbind-kmp/cruciform phone half (scan-to-pair, receive-wake, number-match,
+biometric, in-enclave unwrap, seal); and a live round-trip on a real paired phone.
+
+## Addendum (2026-09-17): the desktop wake-client is wired — the server side is complete
+
+The desktop's `Options.CruciformWake` is now wired to the endpoint above
+(`internal/cli`): when the offload transport does an unwrap over the away-path it
+POSTs to the node's `/v1/unwrap-wake` with this device's enrolment cert + membership
+ops (Option A) and the per-unwrap relay session, and the node wakes the paired
+phone. It is built from the same config the API client reads (unix socket or TCP)
+and the device store's cert/ops, and both consumers wire it — the vault CLI
+(`selectCustody`) and the device gateway. An un-enrolled device yields a **nil**
+wake (not an error): the offload then opens only when the phone is already
+reachable, and the away-path wake turns on the moment the device is enrolled.
+Tested against a stub node (request-shape + error surfacing) and the un-enrolled
+degrade.
+
+With this, **every offload piece that does not need the phone is built**: the
+pairing ceremony (desktop), the relay mount, backend selection, the RP wake
+endpoint (server), and the desktop wake-client. What remains is inherently
+phone-gated: the **voidbind-kmp/cruciform phone half** (scan the
+`voidbind:offload-pair` QR, receive the UnifiedPush wake or accept a LAN
+connection, number-match, biometric, in-enclave unwrap, seal + sign the reply —
+mirroring this repo's `pairing.go` + `protocol.go` byte-for-byte); the optional
+mDNS LAN-direct discovery (needs the phone advertising); and a live round-trip on
+a real paired phone.
 
 ## Relationship to existing records
 

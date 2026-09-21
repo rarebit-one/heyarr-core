@@ -1,0 +1,22 @@
+{
+  "name": "search-movie",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tmdb",
+    "version": "v3",
+    "captured_at": "2026-09-20T00:00:00Z",
+    "procedure": "GET /search/movie?query=test&page=1 with an Authorization: Bearer <v4 read access token>; synthesised from the published TMDB v3 /search/movie contract (ADR-0026) because CI has no token and none may be committed. Regenerate against a real token with scripts/capture-fixtures.sh tmdb search-movie.",
+    "note": "Synthesised: TMDB v3 /search/movie returns hits under a flat results array, shaped like /search/tv but with title (not name) and release_date (not first_air_date). The client reads only id (a NUMBER), title, release_date (\"YYYY-MM-DD\", sometimes empty) and overview, tolerating the many other fields. The second hit deliberately carries no id, to prove the client skips a hit it could not turn into a want rather than surfacing an unreferenceable row."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/search/movie?query=test&page=1"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"page\":1,\"results\":[{\"id\":500,\"title\":\"A Test Movie\",\"release_date\":\"2021-06-11\",\"overview\":\"A movie used to exercise discovery.\",\"popularity\":9.4,\"poster_path\":\"/poster.jpg\",\"backdrop_path\":\"/backdrop.jpg\"},{\"title\":\"A Movie Without An Id\",\"release_date\":\"2000-01-01\"}],\"total_pages\":1,\"total_results\":2}"
+  }
+}

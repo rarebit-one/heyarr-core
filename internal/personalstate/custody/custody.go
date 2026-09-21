@@ -9,10 +9,10 @@ package custody
 import (
 	"crypto/ecdh"
 	"fmt"
-	"os"
 
 	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/cruciform"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/tpm"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/yubikey"
 )
@@ -50,6 +50,15 @@ type Options struct {
 	// TPMPIN supplies the policy PIN (the sealed object's authValue). Required when
 	// Backend is TPM; never persisted here.
 	TPMPIN tpm.PINFunc
+
+	// CruciformPairFile is the path to the offload pairing config (written by
+	// `heyarr device pair-offload`). Required when Backend is Cruciform.
+	CruciformPairFile string
+	// CruciformWake wakes the paired phone for an offload unwrap; nil skips the
+	// wake, for the LAN-direct path or a phone already reachable. The concrete
+	// wake (the RP wake endpoint the desktop calls) is wired by the caller; until
+	// it is, offload opens only when the phone is already reachable.
+	CruciformWake cruciform.WakeFunc
 }
 
 // Select builds the configured custody backend, or reports why it cannot.
@@ -71,19 +80,23 @@ func Select(opts Options) (client.Custody, error) {
 			return nil, fmt.Errorf("custody: the tpm backend needs a PIN source")
 		}
 		if opts.TPMSealedKeyFile == "" {
-			return nil, fmt.Errorf("custody: the tpm backend needs a sealed-key file (provision one with tpm.Seal)")
+			return nil, fmt.Errorf("custody: the tpm backend needs a sealed-key file (provision one with `heyarr device seal-tpm`)")
 		}
-		raw, err := os.ReadFile(opts.TPMSealedKeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("custody: reading the sealed key %s: %w", opts.TPMSealedKeyFile, err)
-		}
-		blob, err := tpm.UnmarshalBlob(raw)
+		blob, err := tpm.ReadBlobFile(opts.TPMSealedKeyFile)
 		if err != nil {
 			return nil, err
 		}
 		return tpm.New(blob, opts.TPMPIN, tpm.OpenDevice(opts.TPMDevice))
 	case Cruciform:
-		return nil, fmt.Errorf("custody: the %q backend is not selectable yet — its wake/relay transport is not wired (#571)", Cruciform)
+		if opts.CruciformPairFile == "" {
+			return nil, fmt.Errorf("custody: the cruciform backend needs a pairing config (run `heyarr device pair-offload` first)")
+		}
+		cfg, err := cruciform.LoadPairConfig(opts.CruciformPairFile)
+		if err != nil {
+			return nil, fmt.Errorf("custody: loading the offload pairing config (run `heyarr device pair-offload` first): %w", err)
+		}
+		transport := &cruciform.RelayTransport{RelayBase: cfg.RelayBase, Wake: opts.CruciformWake}
+		return cruciform.NewCustody(cfg, transport)
 	default:
 		return nil, fmt.Errorf("custody: unknown backend %q", opts.Backend)
 	}

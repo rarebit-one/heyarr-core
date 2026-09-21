@@ -93,8 +93,7 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 		LEFT JOIN search_schedule s ON s.desired_item_id = d.id
 		WHERE a.phase = 'idle'
 		  AND (s.next_search_at IS NULL OR s.next_search_at <= ?)
-		ORDER BY coalesce(s.next_search_at, ''), d.id
-		LIMIT ?`, sortable(now), limit)
+		ORDER BY coalesce(s.next_search_at, ''), d.id`, sortable(now))
 	if err != nil {
 		return nil, fmt.Errorf("catalog: listing wants due a search: %w", err)
 	}
@@ -148,6 +147,13 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 			due.Fruitless = fruitless + 1
 		}
 		out = append(out, due)
+		// Limit eligible searches, not candidate rows. A leading batch of
+		// direct-route or finished wants otherwise hides later wants forever.
+		// Stream candidates so the result remains bounded without duplicating
+		// ScheduleFor's policy in SQL.
+		if len(out) == limit {
+			break
+		}
 	}
 	return out, rows.Err()
 }

@@ -16,6 +16,7 @@ package tpm
 import (
 	"bytes"
 	"crypto/rand"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/go-tpm-tools/simulator"
@@ -33,6 +34,46 @@ func TestSealUnsealAgainstSimulator(t *testing.T) {
 	tpm := transport.FromReadWriteCloser(sim)
 	defer func() { _ = tpm.Close() }()
 	sealUnsealCanary(t, tpm)
+}
+
+// TestSealToFileRoundTrips proves the provisioning artifact: a sealed key written
+// to disk (Blob.WriteFile, as `heyarr device seal-tpm` does) reloads
+// (ReadBlobFile) into a backend that unwraps a space wrapped to it.
+func TestSealToFileRoundTrips(t *testing.T) {
+	sim, err := simulator.Get()
+	if err != nil {
+		t.Fatalf("simulator: %v", err)
+	}
+	tpm := transport.FromReadWriteCloser(sim)
+	defer func() { _ = tpm.Close() }()
+
+	seed := make([]byte, 32)
+	if _, err := rand.Read(seed); err != nil {
+		t.Fatal(err)
+	}
+	blob, err := Seal(tpm, seed, []byte("123456"), PCRSelection(7))
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "nested", "device.sealed")
+	if err := blob.WriteFile(path); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	got, err := ReadBlobFile(path)
+	if err != nil {
+		t.Fatalf("ReadBlobFile: %v", err)
+	}
+
+	sk, _ := encryption.NewSpaceKey()
+	pub, _ := encryption.ParsePublicKey(encryption.FormatPublicKey(got.Public))
+	wrapped, _ := encryption.Seal(sk, pub)
+	u, err := New(got, func() (string, error) { return "123456", nil }, noCloseOpener(tpm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.Unwrap(wrapped); err != nil {
+		t.Fatalf("unwrap with the reloaded sealed key: %v", err)
+	}
 }
 
 // sealUnsealCanary seals a fresh X25519 seed to the given TPM, round-trips the

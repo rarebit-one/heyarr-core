@@ -93,8 +93,19 @@ func (a *API) videosNeedingSubtitleExtraction(ctx context.Context, libraryID, wo
 		"a.source_class = 'managed'",
 		"a.blob_hash IS NOT NULL",
 		"a.mime LIKE 'video/%'",
-		// Not already captioned: no subtitle asset on the same Edition.
-		"NOT EXISTS (SELECT 1 FROM assets s WHERE s.edition_id = a.edition_id AND s.role = 'subtitle')",
+		// Not already captioned, on the SAME target a subtitle would attach to:
+		// by item for an item-linked video (so one episode's caption on a shared
+		// season edition does not hide its siblings — a season pack is many
+		// items on one Edition), by edition otherwise. Mirrors
+		// videosNeedingSubtitleWant's predicate below.
+		`NOT EXISTS (
+			SELECT 1 FROM assets s
+			WHERE s.role = 'subtitle'
+			  AND (
+			        (a.item_id IS NOT NULL AND s.item_id = a.item_id)
+			     OR (a.item_id IS NULL AND s.edition_id = a.edition_id)
+			  )
+		)`,
 	}
 	var args []any
 	if libraryID != "" {

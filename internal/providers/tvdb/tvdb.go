@@ -238,7 +238,8 @@ func (c *Client) Discover(ctx context.Context, query string) ([]providers.Discov
 			Title:      strings.TrimSpace(hit.Name),
 			Year:       parseYear(hit.Year),
 			ExternalID: id,
-			Type:       followed.TypeTVSeries,
+			Source:     "tvdb",
+			Type:       string(followed.TypeTVSeries),
 			Overview:   strings.TrimSpace(hit.Overview),
 		})
 	}

@@ -131,6 +131,30 @@ func TestDueSubtitleFetchesRequiresHeldVideoAndExternalID(t *testing.T) {
 	}
 }
 
+// TestDueSubtitleFetchesMatchesByItemWithoutItemEdition covers an item whose
+// edition grouping has not been discovered yet (items.edition_id is legitimately
+// nullable — 00040_followed_sources_and_items.sql: "the grouping is discovered
+// as the feed is walked rather than required up front"). The episode's video is
+// still held and still linked to the item by item_id; only the item's OWN
+// edition_id is unset. The want must still be due — item_id already identifies
+// the precise episode, and requiring an edition match on top of that starves any
+// item whose grouping lags its video.
+func TestDueSubtitleFetchesMatchesByItemWithoutItemEdition(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	want, itemID := seedSubtitleWant(t, h)
+	seedEpisodeVideo(t, h, itemID)
+	h.exec(t, `UPDATE items SET edition_id = NULL WHERE id = ?`, itemID)
+
+	due, err := h.cat.DueSubtitleFetches(ctx, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 1 || due[0].DesiredItemID != want {
+		t.Fatalf("due = %+v, want just %s (item_id already pins the episode; the item's own edition_id should not gate this)", due, want)
+	}
+}
+
 func TestDueSubtitleFetchesSkipsSatisfiedAndNonSubtitle(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()

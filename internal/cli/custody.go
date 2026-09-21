@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/cruciform"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/custody"
 )
 
@@ -33,15 +35,48 @@ func selectCustody(configPath *string, deviceDir string) (client.Custody, error)
 	if err != nil {
 		return nil, err
 	}
-	return custody.Select(custody.Options{
-		Backend:          cfg.Vault.Unwrapper,
-		DeviceDir:        deviceDir,
-		YubiKeySocket:    cfg.Vault.YubiKey.Socket,
-		YubiKeyPIN:       pinFromFileOrEnv(cfg.Vault.YubiKey.PINFile, VaultYubiKeyPINEnvVar, "vault.yubikey.pin_file"),
-		TPMSealedKeyFile: cfg.Vault.TPM.SealedKeyFile,
-		TPMDevice:        cfg.Vault.TPM.Device,
-		TPMPIN:           pinFromFileOrEnv(cfg.Vault.TPM.PINFile, VaultTPMPINEnvVar, "vault.tpm.pin_file"),
-	})
+	// Resolve the device directory once, so the cruciform pairing file defaults to
+	// the same directory the software backend loads its key from (custody.Select
+	// with a non-empty DeviceDir skips its own resolution, so other backends are
+	// unchanged).
+	if deviceDir == "" {
+		deviceDir, err = device.DefaultDir()
+		if err != nil {
+			return nil, err
+		}
+	}
+	opts := custody.Options{
+		Backend:           cfg.Vault.Unwrapper,
+		DeviceDir:         deviceDir,
+		YubiKeySocket:     cfg.Vault.YubiKey.Socket,
+		YubiKeyPIN:        pinFromFileOrEnv(cfg.Vault.YubiKey.PINFile, VaultYubiKeyPINEnvVar, "vault.yubikey.pin_file"),
+		TPMSealedKeyFile:  cfg.Vault.TPM.SealedKeyFile,
+		TPMDevice:         cfg.Vault.TPM.Device,
+		TPMPIN:            pinFromFileOrEnv(cfg.Vault.TPM.PINFile, VaultTPMPINEnvVar, "vault.tpm.pin_file"),
+		CruciformPairFile: cruciformPairFile(cfg.Vault.Cruciform.PairFile, deviceDir),
+	}
+	// For the offload backend, wire the away-path wake so an unwrap can wake the
+	// paired phone via the node (nil for the other backends, and nil when this
+	// device is not enrolled — the offload then opens only when the phone is
+	// already reachable).
+	if opts.Backend == custody.Cruciform {
+		wake, err := buildCruciformWake(cfg, deviceDir)
+		if err != nil {
+			return nil, err
+		}
+		opts.CruciformWake = wake
+	}
+	return custody.Select(opts)
+}
+
+// cruciformPairFile resolves the offload pairing config path: the configured
+// override, or cruciform-pairing.json in the device directory — the default
+// location `heyarr device pair-offload` writes.
+func cruciformPairFile(configured, deviceDir string) string {
+	if configured != "" {
+		return configured
+	}
+	return filepath.Join(deviceDir, cruciform.PairConfigFileName)
 }
 
 // pinFromFileOrEnv yields a backend PIN from the configured pin file, or from the

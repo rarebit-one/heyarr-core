@@ -129,3 +129,10 @@ than `follow`s), plus, for music/books, the acquisition generalisation above.
   a music/book acquisition path (indexers + quality model for those media). At
   that point a `movie` want-discovery and `music_*` / `book_*` followed types
   become additions behind the same metadata seam this ADR keeps neutral.
+
+**2026-09-20 update:** ADR-0099 built the want-scoped discovery candidate named
+above (and, per the `tvdb_id`-is-a-misnomer consequence, added the `source`
+discriminator), and used both for TMDB movies, Open Library books and
+MusicBrainz music. The music/book acquisition path (indexers + a real quality
+model for those media) is still not built — that half of this ADR's deferral
+stands.

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	vbrelay "github.com/rarebit-one/voidbind-go/relay"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	"github.com/rarebit-one/heyarr-core/internal/api/dlna"
@@ -49,6 +50,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/cruciform"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/replication"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -898,7 +900,13 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// The Voidbind relay beside it (ADR-0066): the protocol the voidbind CLI and
 	// the phone actually speak, so this node is the rendezvous for its own
 	// devices without a separately-run `voidbind relay`. Same caps, same stance.
-	relayV1Handler := relay.New(relay.Options{Logger: c.log})
+	// It carries the pairing default slots plus the cruciform-offload live path's
+	// slots (its one-time pairing `confirm` and the recurring unwrap request/
+	// response), so one node relay is the rendezvous for both device enrolment and
+	// offload unwraps (ADR-0098). The relay stays a dumb, opaque store either way.
+	relayTypes := append(append([]string{}, vbrelay.DefaultTypes...),
+		append(cruciform.RelayPairTypes, cruciform.RelayUnwrapTypes...)...)
+	relayV1Handler := relay.New(relay.Options{Logger: c.log, Types: relayTypes})
 
 	// The encrypted personal-state plane's device-facing API (§38, §42,
 	// ADR-0049). It stores the opaque things a device pushes — a space, the
