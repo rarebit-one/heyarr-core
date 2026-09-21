@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -421,5 +422,103 @@ func TestRevokeOnUnknownSpaceIs404(t *testing.T) {
 		map[string]string{"id": id, "recipient": "x25519:dead"})
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("want 404 revoking on an unknown space, got %d %s", rec.Code, rec.Body)
+	}
+}
+
+// TestListChangesSinceReturnsOnlyTheTail is the bandwidth contract at the API
+// layer: a device that passes back the cursor it was given gets an EMPTY list,
+// not the whole log. Without this, a syncing device re-downloads its entire
+// history on every poll — which is what it did before the cursor existed.
+//
+// SABOTAGE (the reviewer's break): make listChanges ignore ?since and always
+// call ChangesFor — the second pull then returns 2 changes and this fails.
+func TestListChangesSinceReturnsOnlyTheTail(t *testing.T) {
+	api := newAPI(t)
+
+	key, err := encryption.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recip := psclient.Recipient{ID: encryption.FormatPublicKey(key.PublicKey().Bytes()), Key: key.PublicKey()}
+	mgr := psclient.New()
+	sp, wrapped, err := mgr.Create(spaces.KindPersonal, time.Now().UTC(), []psclient.Recipient{recip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := createSpaceRequest{ID: sp.ID, Kind: string(sp.Kind)}
+	for _, w := range wrapped {
+		create.WrappedKeys = append(create.WrappedKeys, wrappedKeyInput{Recipient: w.Recipient, Wrapped: w.Wrapped})
+	}
+	if rec := call(t, api.createSpace, http.MethodPost, "/spaces", create, nil); rec.Code != http.StatusCreated {
+		t.Fatalf("create space: %d %s", rec.Code, rec.Body)
+	}
+
+	push := func(item string) {
+		t.Helper()
+		st := crdt.New()
+		ch := st.Add(item)
+		ec, err := statesync.Encode(mgr, sp.ID, nil, ch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec := call(t, api.putChange, http.MethodPost, "/spaces/"+sp.ID+"/changes", ec, map[string]string{"id": sp.ID}); rec.Code != http.StatusCreated {
+			t.Fatalf("put change: %d %s", rec.Code, rec.Body)
+		}
+	}
+	push("one")
+	push("two")
+
+	// A full pull: both changes, plus a cursor.
+	var full changesView
+	rec := call(t, api.listChanges, http.MethodGet, "/spaces/"+sp.ID+"/changes", nil, map[string]string{"id": sp.ID})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list changes: %d %s", rec.Code, rec.Body)
+	}
+	mustJSON(t, rec, &full)
+	if len(full.Changes) != 2 {
+		t.Fatalf("full pull = %d changes, want 2", len(full.Changes))
+	}
+	if full.Cursor == 0 {
+		t.Fatal("full pull handed back a zero cursor — a device has nothing to resume from")
+	}
+
+	// The contract: caught up costs nothing.
+	var caught changesView
+	target := "/spaces/" + sp.ID + "/changes?since=" + strconv.FormatInt(full.Cursor, 10)
+	rec = call(t, api.listChanges, http.MethodGet, target, nil, map[string]string{"id": sp.ID})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("incremental list: %d %s", rec.Code, rec.Body)
+	}
+	mustJSON(t, rec, &caught)
+	if len(caught.Changes) != 0 {
+		t.Fatalf("a caught-up device was sent %d changes, want 0 — the log is being re-downloaded", len(caught.Changes))
+	}
+	if caught.Cursor != full.Cursor {
+		t.Fatalf("an empty pull moved the cursor: %d -> %d", full.Cursor, caught.Cursor)
+	}
+
+	// A new change: only that one comes back.
+	push("three")
+	var tail changesView
+	rec = call(t, api.listChanges, http.MethodGet, target, nil, map[string]string{"id": sp.ID})
+	mustJSON(t, rec, &tail)
+	if len(tail.Changes) != 1 {
+		t.Fatalf("incremental pull = %d changes, want exactly the 1 new one", len(tail.Changes))
+	}
+	if tail.Cursor <= full.Cursor {
+		t.Fatalf("cursor did not advance: %d -> %d", full.Cursor, tail.Cursor)
+	}
+}
+
+// TestListChangesRejectsABadCursor: a malformed cursor is the caller's 400, not
+// a silent full re-download that would read as success.
+func TestListChangesRejectsABadCursor(t *testing.T) {
+	api := newAPI(t)
+	id := mustUUID(t)
+	for _, bad := range []string{"abc", "-1", "9999999999999999999999"} {
+		rec := call(t, api.listChanges, http.MethodGet, "/spaces/"+id+"/changes?since="+bad, nil, map[string]string{"id": id})
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("since=%q gave %d, want 400", bad, rec.Code)
+		}
 	}
 }
