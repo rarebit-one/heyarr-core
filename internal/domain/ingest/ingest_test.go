@@ -56,6 +56,12 @@ type fakeStore struct {
 	body []byte
 	// openErr makes OpenBlob fail, which must not fail the ingest.
 	openErr error
+	// materialisedAs, when set, is what the store reports actually happened,
+	// whatever was asked for — the ADR-0014 ladder degrading under a
+	// filesystem that would not oblige. degradedBecause is the reason it
+	// carries back with it (#222).
+	materialisedAs  Materialisation
+	degradedBecause string
 }
 
 func (f *fakeStore) OpenBlob(_ context.Context, hash string) (ReaderAtCloser, int64, error) {
@@ -83,6 +89,10 @@ func (f *fakeStore) Link(_ context.Context, sourcePath string, mode Materialisat
 	}
 	b := f.blob
 	b.Materialised = mode
+	if f.materialisedAs != "" {
+		b.Materialised = f.materialisedAs
+		b.DegradedBecause = f.degradedBecause
+	}
 	return b, nil
 }
 

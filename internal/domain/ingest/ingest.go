@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
@@ -298,6 +299,12 @@ type Pipeline struct {
 	ident  Identifier
 	clock  Clock
 	logger *slog.Logger
+	// copiedWarned makes the degrade-to-copy warning fire once per process
+	// rather than once per file. The condition is a property of the
+	// deployment, not of the file, so the second thousand lines say nothing
+	// the first did not — and a warning nobody can read is how #222 stayed
+	// invisible through 63 copies.
+	copiedWarned atomic.Bool
 }
 
 // New constructs a Pipeline.
@@ -388,6 +395,7 @@ func (p *Pipeline) Ingest(ctx context.Context, req Request) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("ingest: materialising %s: %w", req.SourcePath, err)
 	}
+	p.warnIfTheLadderFellToACopy(mode, blob, req.SourcePath)
 
 	filename := Base(req.RelPath)
 	mimeType := req.MIME
@@ -430,22 +438,62 @@ func (p *Pipeline) Ingest(ctx context.Context, req Request) (Result, error) {
 	// implementation carry a field none of them reads.
 	res.DegradedBecause = blob.DegradedBecause
 
-	p.logger.Info("ingested",
+	attrs := []any{
 		"source_path", req.SourcePath,
 		"blob", res.BlobHash,
 		"size", res.BlobSize,
 		"materialised", string(res.Materialised),
-		// Only when there is something to say. A field that is empty on every
-		// healthy ingest would be noise on every line, and this one is meant
-		// to be noticed.
-		slog.String("degraded_because", res.DegradedBecause),
+	}
+	// Only when there is something to say, which is what this always claimed
+	// and did not do: the attribute was emitted unconditionally, so every
+	// healthy ingest carried an empty degraded_because and the field a reader
+	// greps for was on every line whether or not anything degraded.
+	if res.DegradedBecause != "" {
+		attrs = append(attrs, "degraded_because", res.DegradedBecause)
+	}
+	attrs = append(attrs,
 		"deduplicated", res.Deduplicated,
 		"asset", res.AssetID,
 		"asset_created", res.AssetCreated,
 		"work", res.WorkID,
 		"identification", candidate.Source,
 		"rule", candidate.Rule)
+	p.logger.Info("ingested", attrs...)
 	return res, nil
+}
+
+// warnIfTheLadderFellToACopy raises the first copy-where-a-cheap-rung-was-asked
+// -for to a WARNING, once.
+//
+// The per-file record already exists — Result.Materialised and
+// DegradedBecause are on the ingest line — and it was not enough. #222 was 63
+// files that each said `materialised=copy` at INFO, indistinguishable in shape
+// from a healthy line, in a stream nobody reads until something is already
+// wrong. A degrade past the rung the operator configured is not routine: it
+// means this root will consume a second full copy of everything it adopts, and
+// it belongs at the level that says so.
+//
+// Once, because the cause is the deployment rather than the file. The first
+// occurrence names the reason; every subsequent one is still on its own INFO
+// line for anyone counting.
+func (p *Pipeline) warnIfTheLadderFellToACopy(requested Materialisation, blob Blob, sourcePath string) {
+	if blob.Materialised != Copy || requested == Copy {
+		return
+	}
+	if p.copiedWarned.Swap(true) {
+		return
+	}
+	p.logger.Warn("ingest fell back to COPYING bytes rather than sharing them",
+		"requested", string(requested),
+		"materialised", string(blob.Materialised),
+		"degraded_because", blob.DegradedBecause,
+		"source_path", sourcePath,
+		"cost", "every file ingested under this arrangement consumes a second full copy "+
+			"of itself; adopting a library doubles its storage",
+		"fix", "the store and the source must be in the SAME mount for hardlink, and on a "+
+			"filesystem with block cloning for reflink — see ADR-0014 and #222",
+		"note", "reported once per process; every ingest line carries its own "+
+			"materialised and degraded_because")
 }
 
 // examinePublication reads a publication container's own index, or returns nil.

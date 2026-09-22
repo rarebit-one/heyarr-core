@@ -1,15 +1,19 @@
 package controller
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/scanner"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
 
 // The libraries block did nothing at all until M1-12: it parsed, validated and
@@ -103,4 +107,70 @@ func count(t *testing.T, db *sqlite.DB, query string, args ...any) int {
 		t.Fatalf("counting (%s): %v", query, err)
 	}
 	return n
+}
+
+// The startup guard, at the level an operator meets it.
+//
+// The correct layout must be SILENT — a warning that fires on a healthy host
+// is one everybody learns to ignore, and then the real one is ignored too.
+func TestTheIngestGuardIsSilentWhenTheStoreAndTheLibraryCanLink(t *testing.T) {
+	base := t.TempDir()
+	library := filepath.Join(base, "media")
+	casRoot := filepath.Join(base, "media", "heyarr", "cas")
+	for _, d := range []string{library, filepath.Join(casRoot, "tmp")} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatalf("creating %s: %v", d, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(library, "film.mkv"), []byte("bytes"), 0o600); err != nil {
+		t.Fatalf("writing a library file: %v", err)
+	}
+
+	var buf bytes.Buffer
+	warnIfIngestWillCopy(casRoot, library, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	if strings.Contains(buf.String(), "COPY every file") {
+		t.Errorf("warned about a library the store can hardlink from:\n%s", buf.String())
+	}
+}
+
+// And when it cannot link, the warning must fire and say what it is evidence
+// OF. #222's guard was silent on the one host where the problem was real, so
+// "it warns" is not enough on its own: an operator needs to know whether they
+// are reading a measurement or a prediction.
+func TestTheIngestGuardWarnsAndSaysWhichInstrumentSawIt(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("no second filesystem that is reliably present off Linux")
+	}
+	casRoot := t.TempDir()
+	library, err := os.MkdirTemp("/dev/shm", "heyarr-library-*")
+	if err != nil {
+		t.Skipf("cannot create a library on a second filesystem (/dev/shm): %v", err)
+	}
+	defer func() { _ = os.RemoveAll(library) }()
+	if same, known, err := cas.SameFilesystem(casRoot, library); err != nil || !known || same {
+		t.Skipf("the temp dir and /dev/shm are one filesystem here (same=%v known=%v err=%v)", same, known, err)
+	}
+	if err := os.WriteFile(filepath.Join(library, "film.mkv"), []byte("bytes"), 0o600); err != nil {
+		t.Fatalf("writing a library file: %v", err)
+	}
+
+	var buf bytes.Buffer
+	warnIfIngestWillCopy(casRoot, library, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	got := buf.String()
+	for _, want := range []string{
+		"level=WARN",
+		"COPY every file",
+		cas.InstrumentProbe,
+		// The kernel's own words, carried through to the operator.
+		"cross-device",
+		// And the consequence, because "different mounts" means nothing to
+		// somebody who has not read ADR-0014.
+		"second full copy",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the warning does not contain %q:\n%s", want, got)
+		}
+	}
 }

@@ -8,6 +8,10 @@ import (
 )
 
 func deviceOf(path string) (int64, bool, error) {
+	// #nosec G703 -- path is a configured root (cas.root, a library root, a
+	// download path), not a request parameter; and a stat of it reads no
+	// content. The taint arrives from HardlinkOutlook's arguments, which come
+	// from the same configuration.
 	info, err := os.Stat(path)
 	if err != nil {
 		return 0, false, err
