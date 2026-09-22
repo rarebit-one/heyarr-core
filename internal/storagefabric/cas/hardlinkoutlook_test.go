@@ -70,18 +70,10 @@ func TestTheProbeCleansUpAfterItself(t *testing.T) {
 		t.Errorf("the probe left %v behind in the store", names)
 	}
 
-	if runtime.GOOS != "windows" {
-		info, err := os.Stat(source)
-		if err != nil {
-			t.Fatalf("stat %s: %v", source, err)
-		}
-		st, ok := info.Sys().(*syscall.Stat_t)
-		if !ok {
-			t.Skip("no stat_t on this platform, so link counts cannot be read")
-		}
-		if st.Nlink != 1 {
-			t.Errorf("the source has %d names after the probe, want 1 — the probe's link was not removed", st.Nlink)
-		}
+	// Platform-split rather than guarded by runtime.GOOS: syscall.Stat_t does
+	// not exist on Windows at compile time, so a runtime branch still fails vet.
+	if names, known := sourceLinkCount(t, source); known && names != 1 {
+		t.Errorf("the source has %d names after the probe, want 1 — the probe's link was not removed", names)
 	}
 }
 
