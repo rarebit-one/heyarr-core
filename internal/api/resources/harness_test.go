@@ -13,7 +13,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -151,19 +153,69 @@ func withStreamBuffer(n int) harnessOption {
 	return func(hc *harnessConfig) { hc.streamBuffer = n }
 }
 
+// schemaOnce builds the fully-migrated schema once per test binary.
+//
+// Replaying every migration inside each harness is what made this package the
+// slowest in the tree. Measured on this package: sqlite.Open + sqlite.Migrate
+// costs ~47ms normally but ~2.3s under -race — the race detector instruments
+// every access in the pure-Go SQLite engine, so the cost of a migration run is
+// amplified ~49x. At ~300 harnesses that was ~700s of a ~980s package, and it
+// is what walked the race-nightly ubuntu/oldstable cell into its 20m timeout
+// (#602). It also grew with every migration added, silently taxing the whole
+// package.
+//
+// The clone is byte-for-byte, so each test still gets exactly the schema
+// Migrate produces — not a second, differently-built one. DB.Close checkpoints
+// the WAL with TRUNCATE, so the file captured here is complete and needs no
+// sidecar.
+var schemaOnce = sync.OnceValues(func() ([]byte, error) {
+	dir, err := os.MkdirTemp("", "heyarr-schema-*")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	ctx := context.Background()
+	path := filepath.Join(dir, "schema.db")
+	db, err := sqlite.Open(ctx, sqlite.Options{Path: path})
+	if err != nil {
+		return nil, err
+	}
+	if err := sqlite.Migrate(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := db.Close(); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
+})
+
+// migratedSchema returns the bytes of an empty, fully-migrated database. The
+// slice is shared across tests and must only ever be read.
+func migratedSchema(t *testing.T) []byte {
+	t.Helper()
+	b, err := schemaOnce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	path := filepath.Join(dir, "heyarr.db")
+	if err := os.WriteFile(path, migratedSchema(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sqlite.Open(ctx, sqlite.Options{Path: path})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 
 	hc := harnessConfig{cfg: config.Defaults()}
 	hc.cfg.DataDir = dir
