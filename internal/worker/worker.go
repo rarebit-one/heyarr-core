@@ -29,6 +29,8 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/musicbrainz"
+	"github.com/rarebit-one/heyarr-core/internal/providers/openlibrary"
 	"github.com/rarebit-one/heyarr-core/internal/providers/opensubtitles"
 	"github.com/rarebit-one/heyarr-core/internal/providers/podcast"
 	"github.com/rarebit-one/heyarr-core/internal/providers/tmdb"
@@ -340,7 +342,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		return fmt.Errorf("worker: %w", err)
 	}
 	providerRegistry, err := providers.BuildWith(resolvedProviders, w.log, nil,
-		providers.Chain(indexers.Constructor, downloads.Constructor, tvdb.Constructor, tmdb.Constructor, podcast.Constructor, youtube.Constructor, webfeed.Constructor, opensubtitles.Constructor))
+		providers.Chain(indexers.Constructor, downloads.Constructor, tvdb.Constructor, tmdb.Constructor, podcast.Constructor, youtube.Constructor, webfeed.Constructor, opensubtitles.Constructor, musicbrainz.Constructor, openlibrary.Constructor))
 	if err != nil {
 		return fmt.Errorf("worker: building the provider registry: %w", err)
 	}
@@ -433,6 +435,47 @@ func (w *Worker) Run(ctx context.Context) error {
 		registry.Register(acquisition.GrabJobType, Registration{
 			Handler:            GrabReleaseHandler(providerRegistry, cat, w.log),
 			RequiredCapability: providers.CapabilityDownload.JobCapability(),
+		})
+	}
+
+	// The subtitle fetch handler (ADR-0085), registered only when this worker has
+	// a subtitle provider — the same degrade discipline as the search and poll
+	// handlers. A node with no CapabilitySubtitle provider never advertises it, so
+	// a fetch_subtitle job stays PENDING AND VISIBLE rather than being claimed and
+	// failed (ADR-0025). Not MaxConcurrent 1: each fetch is scoped to one want, a
+	// small download, and two contend over nothing — but the provider's own rate
+	// limiter (in the adapter) paces the calls.
+	if providerRegistry.Has(providers.CapabilitySubtitle) {
+		w.log.Info("a subtitle provider is available",
+			"providers", strings.Join(subtitleProviderNames(providerRegistry), ", "))
+		registry.Register(acquisition.FetchSubtitleJobType, Registration{
+			Handler: FetchSubsHandler(FetchSubsHandlerOptions{
+				Providers:  providerRegistry.SubtitleProviders(),
+				Recorder:   cat,
+				Store:      NewCASSubtitleStore(store),
+				Downloader: NewHTTPSubtitleDownloader(),
+				Logger:     w.log,
+			}),
+			RequiredCapability: providers.CapabilitySubtitle.JobCapability(),
+		})
+	}
+
+	// The enrich handler (ADR-0087), registered only when this worker has an
+	// enrich provider — the same degrade discipline as the subtitle handler. A node
+	// with no CapabilityEnrich provider never advertises it, so an enrich_work job
+	// stays PENDING AND VISIBLE rather than being claimed and failed (ADR-0025).
+	if providerRegistry.Has(providers.CapabilityEnrich) {
+		w.log.Info("an enrich provider is available",
+			"providers", strings.Join(enrichProviderNames(providerRegistry), ", "))
+		registry.Register(acquisition.EnrichWorkJobType, Registration{
+			Handler: EnrichHandler(EnrichHandlerOptions{
+				Providers: providerRegistry.EnrichProviders(),
+				Recorder:  cat,
+				Store:     NewCASArtworkStore(store),
+				Fetcher:   NewHTTPArtworkFetcher(),
+				Logger:    w.log,
+			}),
+			RequiredCapability: providers.CapabilityEnrich.JobCapability(),
 		})
 	}
 

@@ -211,6 +211,29 @@ func TestRangeRequestReturnsPartialContent(t *testing.T) {
 	}
 }
 
+// A content-address is `blake3:<hex>` and the ':' is a reserved character. A
+// spec-conformant client (the JVM's java.net.http, used by the desktop
+// vault-sync daemon) percent-encodes it to %3A; chi routes on the raw target,
+// so without httpapi.HashParam decoding the segment the byte route would 400
+// the id as malformed and every daemon PULL would fail. The literal-colon form
+// is covered by every other test here, so this pins the encoded form.
+func TestContentAcceptsPercentEncodedColon(t *testing.T) {
+	t.Parallel()
+	const size = 4096
+	store, data, hash := seededBlob(t, size)
+	h := newHarness(t, store)
+
+	// What a JDK client puts on the wire; Go's client preserves an already-encoded path.
+	encoded := httpapi.APIPrefix + "/blobs/" + strings.Replace(hash.String(), "blake3:", "blake3%3A", 1) + "/content"
+	resp := h.do(t, http.MethodGet, encoded)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (the encoded-colon id must decode to the blob)", resp.StatusCode)
+	}
+	if got := body(t, resp); !bytes.Equal(got, data) {
+		t.Fatalf("served %d bytes, want the %d-byte blob verbatim", len(got), size)
+	}
+}
+
 // The test that actually proves the endpoint. A single range check passes with
 // an off-by-one at a boundary it never crosses; N disjoint ranges reassembled
 // into the original digest does not, because BLAKE3 of the concatenation is

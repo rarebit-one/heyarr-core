@@ -138,22 +138,65 @@ func (s *Store) RecordOps(ctx context.Context, ops []string) error {
 	if len(ops) == 0 {
 		return nil
 	}
-	parsed := make([]catalogop.Op, 0, len(ops))
-	for _, tok := range ops {
-		op, err := catalogop.Verify(tok)
-		if err != nil {
-			return fmt.Errorf("%w: %s", ErrMalformedOp, err.Error())
-		}
-		parsed = append(parsed, op)
+	parsed, err := verifyAll(ops)
+	if err != nil {
+		return err
 	}
-	now := s.clock.Now().UTC()
-
 	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("catalogtomb: beginning transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if err := s.recordInto(ctx, tx, parsed, s.clock.Now().UTC()); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("catalogtomb: committing: %w", err)
+	}
+	return nil
+}
+
+// RecordOpsTx records ops and re-materialises work_tombstones within the
+// caller's transaction, rather than opening its own. A local delete/restore uses
+// it to record the op it just signed in the SAME transaction that removes (or
+// restores) the work, so the works row and the tombstone that supersedes it
+// commit together or not at all — a work must never be gone with no op to say
+// why, nor an op recorded whose delete rolled back. ops must already verify
+// (catalogop.Verify); a token that does not is ErrMalformedOp and nothing in the
+// transaction is written by this call.
+func (s *Store) RecordOpsTx(ctx context.Context, tx *sql.Tx, ops []string) error {
+	if len(ops) == 0 {
+		return nil
+	}
+	parsed, err := verifyAll(ops)
+	if err != nil {
+		return err
+	}
+	return s.recordInto(ctx, tx, parsed, s.clock.Now().UTC())
+}
+
+// verifyAll parses and signature-checks every token, refusing the batch on the
+// first that does not verify. The callers that feed the log — a local write and
+// a peer sync — hand over only tokens they mean to persist, so a malformed one
+// is a bug, not a client's, hence ErrMalformedOp.
+func verifyAll(ops []string) ([]catalogop.Op, error) {
+	parsed := make([]catalogop.Op, 0, len(ops))
+	for _, tok := range ops {
+		op, err := catalogop.Verify(tok)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s", ErrMalformedOp, err.Error())
+		}
+		parsed = append(parsed, op)
+	}
+	return parsed, nil
+}
+
+// recordInto appends the ops idempotently (INSERT OR IGNORE by op hash) and, iff
+// any was fresh, re-materialises work_tombstones from the whole log — all on the
+// provided transaction. Recording and reconciliation share the one transaction
+// so the log and its materialisation never disagree.
+func (s *Store) recordInto(ctx context.Context, tx *sql.Tx, parsed []catalogop.Op, now time.Time) error {
 	fresh := false
 	for _, op := range parsed {
 		prev, err := json.Marshal(normalise(op.Prev))
@@ -173,15 +216,9 @@ func (s *Store) RecordOps(ctx context.Context, ops []string) error {
 		}
 	}
 	if !fresh {
-		return tx.Commit()
+		return nil
 	}
-	if err := s.reconcileTx(ctx, tx, now); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("catalogtomb: committing: %w", err)
-	}
-	return nil
+	return s.reconcileTx(ctx, tx, now)
 }
 
 // Reconcile re-materialises work_tombstones from the whole log. It is what

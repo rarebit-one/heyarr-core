@@ -323,6 +323,71 @@ func (s *Server) getContentSatisfaction(ctx context.Context, raw json.RawMessage
 	return result, nil
 }
 
+// getAcquisitionStatus reports where a want is in the pipeline and the transfer
+// behind it — the read that answers "what is this want doing right now", which
+// otherwise needed a look inside the download client (progress, and the release
+// name that carries its resolution and size).
+func (s *Server) getAcquisitionStatus(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args struct {
+		DesiredItemID string `json:"desired_item_id"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if args.DesiredItemID == "" {
+		return nil, invalidParams("desired_item_id is required")
+	}
+
+	result, err := s.resources.AcquisitionStatus(ctx, args.DesiredItemID)
+	if err != nil {
+		return nil, classify(err)
+	}
+	return result, nil
+}
+
+// listJobsResult is the listing envelope for list_jobs.
+type listJobsResult struct {
+	truncatable
+	Jobs []resources.Job `json:"jobs"`
+}
+
+// listJobs surfaces the durable job queue — the read behind "why is nothing
+// being acquired": a search that found nothing, a grab the client refused, a
+// poll that failed. `failed` will retry with backoff; `dead` is terminal until
+// retried. It shares resources.ListJobs with the HTTP door.
+func (s *Server) listJobs(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args struct {
+		State string `json:"state"`
+		Type  string `json:"type"`
+		Limit int    `json:"limit"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	switch args.State {
+	case "", "pending", "leased", "succeeded", "failed", "dead":
+	default:
+		return nil, invalidParams(
+			"state must be one of pending, leased, succeeded, failed, dead")
+	}
+	limit := args.Limit
+	if limit <= 0 || limit > maxRows {
+		limit = maxRows
+	}
+
+	found, err := s.resources.ListJobs(ctx, args.State, args.Type, limit)
+	if err != nil {
+		return nil, classify(err)
+	}
+	if found == nil {
+		found = []resources.Job{}
+	}
+	return listJobsResult{
+		truncatable: truncatable{Count: len(found), Truncated: len(found) == limit},
+		Jobs:        found,
+	}, nil
+}
+
 // explainRelease scores releases against a profile and returns §63's reasons.
 //
 // The flagship. It writes nothing, so an agent may use it freely to answer

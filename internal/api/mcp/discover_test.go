@@ -17,8 +17,8 @@ func TestDiscoverContentReturnsCandidates(t *testing.T) {
 	fake := providers.NewFake("fake-tvdb", providers.CapabilityMetadata).
 		OfferDiscovery("the expanse",
 			providers.DiscoveryCandidate{
-				Title: "The Expanse", Year: 2015, ExternalID: "280619",
-				Type: followed.TypeTVSeries, Overview: "A political thriller in space.",
+				Title: "The Expanse", Year: 2015, ExternalID: "280619", Source: "tvdb",
+				Type: string(followed.TypeTVSeries), Overview: "A political thriller in space.",
 			})
 	if err := reg.Register(fake); err != nil {
 		t.Fatal(err)

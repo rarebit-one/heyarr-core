@@ -464,6 +464,39 @@ func (s *Store) ListDevices(ctx context.Context, userID string) ([]Device, error
 	return out, rows.Err()
 }
 
+// AllowedWrapRecipients returns the set of encryption keys a space key may be
+// wrapped for — enrol-before-wrap (ADR-0049): every enrolled, non-revoked
+// device's X25519 encryption key, plus every user's recovery encryption key. A
+// recipient outside this set was never pinned, so a wrap for it is refused.
+//
+// The set is deployment-wide (every enrolled user's keys), not scoped to a
+// particular caller: the personal-state write plane is reached by a bearer token
+// that names no device, so "some pinned recipient" is the enforceable shape here.
+// Empty keys (a v1-cert device, a pre-recovery identity) are never admitted.
+func (s *Store) AllowedWrapRecipients(ctx context.Context) (map[string]bool, error) {
+	users, err := s.ListUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	now := s.Now()
+	set := make(map[string]bool)
+	for _, u := range users {
+		if u.RecoveryEncryptionKey != "" {
+			set[u.RecoveryEncryptionKey] = true
+		}
+		devices, err := s.ListDevices(ctx, u.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range devices {
+			if d.EncryptionKey != "" && d.Active(now) == nil {
+				set[d.EncryptionKey] = true
+			}
+		}
+	}
+	return set, nil
+}
+
 // rowScanner is satisfied by both *sql.Row (LookupDevice) and *sql.Rows
 // (ListDevices), so one scanner serves both.
 type rowScanner interface{ Scan(dest ...any) error }

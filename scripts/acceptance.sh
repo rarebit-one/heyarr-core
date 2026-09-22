@@ -65,6 +65,25 @@ fail() {
 }
 note() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
+# ps_enrol_device pins a device as an enrolled recipient so a space key may be
+# wrapped for it (enrol-before-wrap, ADR-0049): it generates a user identity in
+# the device's own dir, self-signs the device's cert (binding its X25519
+# encryption key), and enrols both on the node at sock. Args: sock token dir name.
+ps_enrol_device() {
+  local sock="$1" token="$2" dir="$3" nm="$4" cl uk cert
+  cl=( env "VOIDBIND_IDENTITY_DIR=$dir" "VOIDBIND_DEVICE_DIR=$dir" "$BIN" )
+  "${cl[@]}" identity generate --name "$nm" >/dev/null 2>&1
+  "${cl[@]}" identity enrol >/dev/null 2>&1
+  uk=$("${cl[@]}" identity show --json | jq -r .public_key)
+  cert=$("${cl[@]}" identity credential | cut -d'~' -f1)
+  curl -sS --unix-socket "$sock" -H "Authorization: Bearer $token" -X POST \
+    -H 'Content-Type: application/json' -d "{\"public_key\":\"$uk\",\"name\":\"$nm\"}" \
+    -o /dev/null "http://heyarr/api/v1/identities/users"
+  curl -sS --unix-socket "$sock" -H "Authorization: Bearer $token" -X POST \
+    -H 'Content-Type: application/json' -d "{\"cert\":\"$cert\",\"name\":\"$nm\"}" \
+    -o /dev/null "http://heyarr/api/v1/identities/devices"
+}
+
 assert_contains() { # haystack needle description
   if [[ "$1" == *"$2"* ]]; then pass "$3"; else
     fail "$3"; printf '       wanted to find: %s\n       in: %s\n' "$2" "$1"
@@ -5578,6 +5597,242 @@ pct() { # part whole
   if (( $2 == 0 )); then echo 0; else echo $(( $1 * 100 / $2 )); fi
 }
 
+# ---------------------------------------------------------------------------
+# THE VAULT BLOB THAT REPLICATES BY A PIN, NOT BY AN ASSET (ADR-0096, #540)
+# ---------------------------------------------------------------------------
+#
+# A vault blob is bytes a client encrypted and uploaded (internal/api/vaultblob):
+# it has NO `assets` row, so the canonical blob set — every blob a live asset
+# accounts for — never contains it, and the peer-convergence diff alone would
+# never replicate it or retain it. A placement pin is the other thing that makes
+# a blob belong on a peer, and this scene proves both halves of what the pin buys:
+#
+#   REPLICATION. A blob is pinned to node B through the device placement route
+#   while NO asset on B names it, and it crosses the wire to B when B reconciles —
+#   because the convergence union adds the pin's (blob, peer) to the plan even
+#   though the canonical-set diff does not. It is per-(blob, peer): the blob is
+#   pinned to B and reaches B, and this scene sends it nowhere else.
+#
+#   RETENTION. The same blob on node A has no asset either — its asset is deleted,
+#   which is a vault blob's real condition — so by every measure the first
+#   milestones had it is garbage, and `gc --apply` with a one-nanosecond grace
+#   window SPARES it, because a placement pin counts as a reference. Remove the
+#   pin and the very same sweep reclaims it: the pin was the whole of its retention.
+#
+# It is its own two-peer fabric, isolated under $WORK like the two-peer and swarm
+# arcs, so it shifts no count any other section asserts. Both nodes ingest the one
+# fixture — a peer can only be told a source holds a blob it has a row for, which
+# is content addressing's own rule (a replica of an unknown blob cannot be
+# recorded) — and then node B's asset AND bytes for it are deleted, so that when B
+# pulls it back the ONLY thing marking it desired on B is the pin.
+vault_placement_demo() {
+  local root="$WORK/vaultplacement" lib
+  lib="$root/library"
+  mkdir -p "$lib/movies/Vault Reel (2023)"
+
+  # A small blob — this scene is about a pin, not a transfer's size — and random,
+  # so its digest is not something the fixture generator already knows.
+  local secret="$lib/movies/Vault Reel (2023)/Vault.Reel.2023.1080p.mkv"
+  head -c 262144 /dev/urandom > "$secret"
+
+  local cfg_a="$WORK/vaultplacement-a.yaml" cfg_b="$WORK/vaultplacement-b.yaml"
+  local n
+  for n in a b; do
+    mkdir -p "$root/$n"
+    cat > "$WORK/vaultplacement-$n.yaml" <<YAML
+data_dir: $root/$n/data
+peer:
+  name: site-$n
+  site: site-$n
+  listen: 127.0.0.1:0
+log:
+  level: info
+  format: json
+http:
+  addr: ""
+libraries:
+  - name: films
+    content_type: movie
+    roots: ["$lib/movies"]
+YAML
+  done
+
+  VP_ROOT="$root"
+  local sock_a="$root/a/data/heyarr.sock" sock_b="$root/b/data/heyarr.sock"
+  local log_a="$root/a.log" log_b="$root/b.log"
+  local token_a token_b
+  token_a=$("$BIN" --config "$cfg_a" token create acceptance --scopes admin --json | jq -r .token)
+  token_b=$("$BIN" --config "$cfg_b" token create acceptance --scopes admin --json | jq -r .token)
+  VP_SOCK_B="$sock_b"; VP_TOKEN_B="$token_b"
+
+  start_peer_node "$cfg_a" "$log_a" all
+  start_peer_node "$cfg_b" "$log_b" all
+
+  vp_a() { curl -sS --unix-socket "$sock_a" -H "Authorization: Bearer $token_a" "${@:2}" "http://heyarr$1"; }
+  vp_b() { curl -sS --unix-socket "$sock_b" -H "Authorization: Bearer $token_b" "${@:2}" "http://heyarr$1"; }
+  local vcli_a="$BIN --config $cfg_a --token $token_a"
+  local vcli_b="$BIN --config $cfg_b --token $token_b"
+
+  local s waited
+  for s in "$sock_a" "$sock_b"; do
+    waited=0
+    while (( waited < 600 )); do
+      curl -sf --unix-socket "$s" http://heyarr/readyz >/dev/null 2>&1 && break
+      sleep 0.1; waited=$(( waited + 1 ))
+    done
+    if (( waited >= 600 )); then
+      fail "vault-placement: $s never became ready"; tail -20 "$log_a" "$log_b"; return 1
+    fi
+  done
+
+  local l
+  for l in "$log_a" "$log_b"; do
+    waited=0
+    while (( waited < 900 )); do
+      (( $(grep -c '"msg":"ingested"' "$l" 2>/dev/null || true) >= 1 )) && break
+      sleep 0.1; waited=$(( waited + 1 ))
+    done
+    if (( waited >= 900 )); then
+      fail "vault-placement: $l never ingested the fixture"; tail -20 "$l"; return 1
+    fi
+  done
+
+  local addr_a addr_b
+  addr_a=$(peer_listen_addr "$log_a") || { fail "vault-placement: node A never bound a peer surface"; return 1; }
+  addr_b=$(peer_listen_addr "$log_b") || { fail "vault-placement: node B never bound a peer surface"; return 1; }
+
+  # -------------------------------------------------------------------------
+  note "  a vault blob is uploaded to node A and pins itself there (ADR-0021, ADR-0096)"
+  # -------------------------------------------------------------------------
+  #
+  # The digest is learned from the asset node A made of the fixture — content
+  # addressing means the bytes on disk hash to the id the vault route verifies
+  # against — and the SAME bytes are uploaded through the vault ingest route, which
+  # stores them (idempotently) and pins them to node A itself.
+  VP_BLOB=$(vp_a /api/v1/assets | jq -r '.items[0].blob_hash')
+  assert_contains "$VP_BLOB" "blake3:" "node A hashed the fixture to a blake3 id"
+
+  local up
+  up=$(vp_a "/api/v1/vault/blobs/$VP_BLOB" -X PUT \
+    -H 'Content-Type: application/octet-stream' --data-binary @"$secret")
+  assert_eq "$(jq -r '.hash' <<<"$up")" "$VP_BLOB" \
+    "the vault ingest route stored the ciphertext under the id the client declared"
+
+  # -------------------------------------------------------------------------
+  note "  two peers, enrolled by public key in both directions (§26, ADR-0012)"
+  # -------------------------------------------------------------------------
+  local key_a key_b pid_b self_a
+  key_a=$($vcli_a peers list --json | jq -r '.[] | select(.is_self) | .public_key')
+  key_b=$($vcli_b peers list --json | jq -r '.[] | select(.is_self) | .public_key')
+  self_a=$($vcli_a peers list --json | jq -r '.[] | select(.is_self) | .id')
+  $vcli_a peers add --name site-b --site site-b --mode full \
+    --public-key "$key_b" --endpoint "https://$addr_b" --json >/dev/null 2>&1
+  $vcli_b peers add --name site-a --site site-a --mode full \
+    --public-key "$key_a" --endpoint "https://$addr_a" --json >/dev/null 2>&1
+  $vcli_a peers add --name site-a --public-key "$key_a" --endpoint "https://$addr_a" --json >/dev/null 2>&1
+  $vcli_b peers add --name site-b --public-key "$key_b" --endpoint "https://$addr_b" --json >/dev/null 2>&1
+
+  # The peer id node B knows itself by, which is what the pin must name: the
+  # convergence union matches a pin's peer_id against the Full Peer ids, not a name.
+  pid_b=$($vcli_b peers list --json | jq -r '.[] | select(.is_self) | .id')
+  assert_eq "$(( ${#pid_b} > 0 ))" "1" "node B knows the peer id it converges as"
+
+  # -------------------------------------------------------------------------
+  note "  the device pins the vault blob to node B (POST /api/v1/vault/placements)"
+  # -------------------------------------------------------------------------
+  #
+  # The pin is recorded on the node that will act on it — replication is a
+  # destination pull (ADR-0030), so node B's convergence is what turns the pin
+  # into a transfer. The route is the generic placement route, which (unlike the
+  # self-only pin the vault upload records) takes any peer id the device names.
+  local pin
+  pin=$(vp_b "/api/v1/vault/placements" -X POST -H 'Content-Type: application/json' \
+    -d "{\"blob_hash\":\"$VP_BLOB\",\"peer_id\":\"$pid_b\"}")
+  assert_eq "$(jq -r '.blob_hash' <<<"$pin")" "$VP_BLOB" \
+    "the placement pin was recorded for the pinned blob"
+  assert_eq "$(jq -r '.peer_id' <<<"$pin")" "$pid_b" \
+    "and names the peer it should live on"
+
+  # Now make node B a peer that does NOT hold the blob and has no asset for it:
+  # delete its asset (so the canonical diff cannot desire it) and its bytes (so a
+  # real transfer is needed), and report the loss so the fabric knows. From here,
+  # the ONLY thing marking the blob desired on B is the pin.
+  local bid
+  for bid in $(vp_b /api/v1/assets | jq -r --arg h "$VP_BLOB" '.items[] | select(.blob_hash == $h) | .id'); do
+    vp_b "/api/v1/assets/$bid" -X DELETE -o /dev/null
+  done
+  find "$root/b/data/cas/blobs" -name "${VP_BLOB#blake3:}" -type f -delete
+  $vcli_b peers report-inventory site-b --json >/dev/null
+  $vcli_b peers report-inventory site-a --json >/dev/null
+  # Node A tells node B's controller that A holds the bytes, so B has a source.
+  $vcli_a peers report-inventory site-b --json >/dev/null
+  assert_eq "$(peer_holds "$root/b/data/cas" "$VP_BLOB")" "0" \
+    "node B holds none of the blob, and no asset names it — only the pin marks it desired there"
+
+  # -------------------------------------------------------------------------
+  note "  the pin becomes a transfer: node B pulls the vault blob (convergence union)"
+  # -------------------------------------------------------------------------
+  vp_b "/api/v1/peers/site-b/reconcile" -X POST -o /dev/null
+  wait_for "the pinned vault blob never reached node B — the convergence union did not turn the pin into a transfer" \
+    900 vp_b_replicated
+  assert_eq "$(peer_holds "$root/b/data/cas" "$VP_BLOB")" "1" \
+    "the blob crossed the wire to node B because a pin, not an asset, marked it desired there"
+
+  # Node B tells node A it now holds the bytes, so A has a durable second copy on
+  # record — which the reverse-retention step below relies on: ADR-0018 will not
+  # let A delete a last copy it cannot see elsewhere, and here it can.
+  $vcli_b peers report-inventory site-a --json >/dev/null
+
+  # -------------------------------------------------------------------------
+  note "  and node A's garbage collector SPARES the pinned, asset-less vault blob (retention)"
+  # -------------------------------------------------------------------------
+  #
+  # Node A's asset for the fixture is deleted, so nothing in the catalogue
+  # references the bytes any more — a vault blob's real condition, since it never
+  # had an asset. Node A's self-pin from the vault upload is all that keeps it.
+  local aid
+  for aid in $(vp_a /api/v1/assets | jq -r --arg h "$VP_BLOB" '.items[] | select(.blob_hash == $h) | .id'); do
+    vp_a "/api/v1/assets/$aid" -X DELETE -o /dev/null
+  done
+  assert_eq "$(vp_a /api/v1/assets | jq -r --arg h "$VP_BLOB" '[.items[] | select(.blob_hash == $h)] | length')" "0" \
+    "no asset references the vault blob on node A — by the first milestones' measure it is garbage"
+  assert_eq "$(peer_holds "$root/a/data/cas" "$VP_BLOB")" "1" "and node A still holds the bytes"
+
+  # Two passes at a one-nanosecond grace: a pinned blob is counted referenced, so
+  # it is never even marked, let alone reclaimed.
+  local gc1 gc2
+  gc1=$("$BIN" --config "$cfg_a" gc --apply --grace 1ns --json 2>/dev/null)
+  assert_eq "$(jq -r --arg h "$VP_BLOB" '[.marked[].hash] | index($h) != null' <<<"$gc1")" "false" \
+    "the pinned vault blob is not even marked — a placement pin is a reference (ADR-0096)"
+  gc2=$("$BIN" --config "$cfg_a" gc --apply --grace 1ns --json 2>/dev/null)
+  assert_eq "$(jq -r --arg h "$VP_BLOB" '[.reclaimed[].hash] | index($h) != null' <<<"$gc2")" "false" \
+    "and never reclaimed by the sweep that would reclaim any unpinned, unreferenced blob"
+  assert_eq "$(peer_holds "$root/a/data/cas" "$VP_BLOB")" "1" \
+    "node A kept every byte of the pinned vault blob"
+
+  # Remove node A's self-pin — the device saying the blob may go — and the very
+  # same sweep reclaims it: the pin was the whole of its retention (ADR-0096).
+  vp_a /api/v1/vault/placements -X DELETE -H 'Content-Type: application/json' \
+    -d "{\"blob_hash\":\"$VP_BLOB\",\"peer_id\":\"$self_a\"}" -o /dev/null
+  "$BIN" --config "$cfg_a" gc --apply --grace 1ns --json >/dev/null 2>&1
+  "$BIN" --config "$cfg_a" gc --apply --grace 1ns --json >/dev/null 2>&1
+  assert_eq "$(peer_holds "$root/a/data/cas" "$VP_BLOB")" "0" \
+    "with its last pin gone the blob is reclaimable again — the pin was the whole of its retention"
+
+  local p
+  for p in "${PEER_PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done
+  for p in "${PEER_PIDS[@]:-}"; do wait "$p" 2>/dev/null || true; done
+  PEER_PIDS=()
+}
+
+# vp_b_replicated — 0 once node B has a replicate_blob job in `succeeded`, the last
+# of the things the transfer produces (#207). It reads globals the demo set so
+# wait_for can call it by name.
+vp_b_replicated() {
+  [[ "$(curl -sS --unix-socket "$VP_SOCK_B" -H "Authorization: Bearer $VP_TOKEN_B" \
+    "http://heyarr/api/v1/jobs?type=replicate_blob" | jq -r '[.items[] | select(.state == "succeeded")] | length > 0')" == "true" ]]
+}
+
 two_peer_demo() { # mode
   local mode=$1
   local root="$WORK/twopeer-$mode" lib
@@ -6870,6 +7125,47 @@ the corruption may be the operator's own file (ADR-0018)"
   assert_eq "$(cli_a peers list --json | jq -r '.[] | select(.name == "site-b") | .public_key')" "$key_b" \
     "and node A still pins the key it first enrolled — nothing about the survivor was reconfigured"
 
+  # -------------------------------------------------------------------------
+  note "  a delete at one site converges to the other (§49, ADR-0073, #449)"
+  # -------------------------------------------------------------------------
+  #
+  # Both nodes ingested the SAME library, so both hold "Cold Harbour" under the
+  # same work_key — content addressing, not a copy of one catalogue into the
+  # other (invariant 1). Cold Harbour is the fixture nothing wants or follows,
+  # so deleting it disturbs no earlier assertion.
+  #
+  # Delete it on A and force the editorial op-log exchange: A offers the signed
+  # delete op to B over the pinned mTLS link, and B honours it because it pinned
+  # A's key (ADR-0012) — nobody tells B directly, the op carries its own
+  # authority the whole way. Without it, B's next scan of the same bytes would
+  # rebuild exactly what A removed: the delete-then-rebuild churn ADR-0071
+  # refuses inside one node, now refused across the pair.
+  #
+  # The recovery arc above restarted node B on a FRESH port (listen: 127.0.0.1:0)
+  # and only re-proved B -> A. This exchange dials A -> B, so refresh A's endpoint
+  # for B first: registering the same key moves the endpoint and keeps the
+  # identity (peers add is an upsert on the key). Without this the dial lands on
+  # the dead old port and the sibling is merely deferred.
+  local conv_id conv_del conv_sync conv_addr_b
+  conv_addr_b=$(peer_listen_addr "$log_b") || { fail "convergence: node B is not listening on a peer surface"; return 1; }
+  cli_a peers add --name site-b --public-key "$key_b" --endpoint "https://$conv_addr_b" --json >/dev/null
+  conv_id=$(api_a /api/v1/works | jq -r '.items[] | select(.title == "Cold Harbour") | .id')
+  [[ -n "$conv_id" ]] || { fail "convergence: node A has no 'Cold Harbour' work to delete"; return 1; }
+  assert_eq "$(api_b /api/v1/works | jq -r '[.items[] | select(.title == "Cold Harbour")] | length')" "1" \
+    "the work exists on node B before the delete — both nodes ingested the same library"
+
+  conv_del=$(api_a "/api/v1/works/$conv_id" -X DELETE -o /dev/null -w '%{http_code}')
+  assert_eq "$conv_del" "204" "the work deletes cleanly on node A (nothing follows it)"
+
+  # The force-sync the beat runs on a cadence, run now so the demo need not wait
+  # (§49). It is synchronous: when it returns, B has recorded and applied the op.
+  conv_sync=$(api_a "/api/v1/catalog/sync" -X POST)
+  assert_eq "$(jq -r '.synced' <<<"$conv_sync")" "1" \
+    "the on-demand catalog sync converged with the one sibling (§49, ADR-0073)"
+
+  assert_eq "$(api_b /api/v1/works | jq -r '[.items[] | select(.title == "Cold Harbour")] | length')" "0" \
+    "the delete made on node A converged to node B: a work deleted at one site does not survive at the other (#449)"
+
   local p
   for p in "${PEER_PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done
   for p in "${PEER_PIDS[@]:-}"; do wait "$p" 2>/dev/null || true; done
@@ -7122,77 +7418,83 @@ YAML
   cli_sa peers report-inventory swarm-a --json >/dev/null
   cli_sb peers report-inventory swarm-b --json >/dev/null
 
+  # Make cooperation STRUCTURAL rather than raced (#274). The coin toss was that
+  # node A held NOTHING at the instant it started, so a joining node B could
+  # survey a peer with nothing to offer and pull its whole copy from the fast web
+  # seed before A had landed a single piece. So node A is pre-staged with the
+  # first HALF of the blob's REAL pieces — a guaranteed piece source the moment B
+  # surveys it.
+  #
+  # Node B starts empty, as before. When both reconcile, PullPieces surveys every
+  # member and fetches rarest-first PER SOURCE (internal/peer/transfer): the pieces
+  # only the web seed holds ([H, N)) are rarity 1 and go to the web seed, while
+  # A's half ([0, H)) is rarity 2 and A's own worker serves it — so B takes A's
+  # half FROM A, deterministically, whatever the scheduler or machine speed. Only
+  # A is staged, not B, so B still fetches from empty and its playback-window
+  # priority (piece 20, below) is exercised exactly as before.
+  #
+  # The bytes are the blob's OWN, pulled from the external source (the one complete
+  # copy) and staged under its real digest via `stagepartial --content-in`, so the
+  # pieces A advertises are the very pieces the fabric is transferring — not a
+  # synthetic stand-in.
+  local swarm_bytes pieces_total half
+  swarm_bytes=$WORK/swarm-blob.bin
+  sw_o "/api/v1/blobs/$blob/content" -o "$swarm_bytes"
+  # 256 KiB pieces at this geometry (5 MiB is piece 20, staged below), so the
+  # 32 MiB blob is 128 pieces. Stage node A with the first half.
+  pieces_total=$(( size / 262144 ))
+  half=$(( pieces_total / 2 ))
+  # `seq 0 N | paste -sd,` rather than `seq -s, 0 N`: BSD seq (macOS) appends a
+  # TRAILING separator to -s, which stagepartial then reads as an empty piece
+  # index. paste joins with no trailer on both GNU and BSD.
+  "$STAGEPARTIAL" --cas "$root/a/data/cas" --content-in "$swarm_bytes" \
+    --landed "$(seq 0 $(( half - 1 )) | paste -sd, -)" >/dev/null
+
   # The precondition the whole section rests on is asserted AFTER the fact, from
   # the log, rather than before it from a route that does not exist: the swarm
   # branch and the streamed pull write different lines, and which one ran is the
   # only form of this claim that cannot be satisfied by a system that took the
-  # other path. See the two assertions below the wait.
+  # other path. See the two "took the PIECE path" assertions below.
 
   # -------------------------------------------------------------------------
   note "  🔴 both peers converge, from an external source and from each other (§23)"
   # -------------------------------------------------------------------------
   #
-  # Node A starts, and node B JOINS A TRANSFER ALREADY IN PROGRESS. The two
-  # overlap — A is nowhere near done, and that is asserted below — but they do
-  # not start in the same instant.
+  # Both peers start together. Node A already holds half the blob (staged above),
+  # node B holds nothing — so A is a piece source B can use the moment it surveys,
+  # and B fetches A's half from A while the web seed serves the half only it has.
+  # Cooperation is therefore structural, not a race: see the pre-stage comment for
+  # why rarest-first steers B to take A's half from A, deterministically.
   #
-  # # Why not both at once, which is what this did first
+  # # Why this replaced "node B joins a transfer in progress"
   #
-  # Because two peers fetching the same blob at the same rate from the same
-  # source hold almost the same pieces at every moment, so there is very little
-  # either can give the other, and how much there is depends on which one the
-  # scheduler happens to favour. Measured across two runs of the simultaneous
-  # version on one machine: the external source carried 78% of two copies in one
-  # and 95% in the other, and the direction REVERSED — node A seeded node B in
-  # the first run and node B seeded node A in the second. An assertion that each
-  # peer served the other would have been a coin toss, and one on the share
-  # would have been worse.
-  #
-  # A peer joining a swarm that is already running is not a thumb on the scale;
-  # it is §23's ordinary case, and the one where cooperation is structural
-  # rather than accidental. Both peers are still fetching from the external
-  # source at the same time, which is the "while also" the section is about.
-  sw_a "/api/v1/peers/swarm-a/reconcile" -X POST -o /dev/null
+  # That earlier shape started A first and had B join while A was mid-transfer, to
+  # create overlap. But whether B then took any piece FROM A rather than wholly
+  # from the fast external source was a coin toss: A held no pieces at the instant
+  # it started, so B could survey a peer with nothing and pull its entire copy from
+  # the web seed before A had anything to offer. Measured, that reversed run to run
+  # and sometimes produced ZERO peer-to-peer bytes — which is #274. Pre-staging A
+  # removes the timing: A always has something to serve before B looks.
 
-  # The wait is on an OBSERVED fact rather than a sleep: the external source's
-  # own record of what it has served to node A. A sleep would be a guess about a
-  # machine, and it would be wrong on the slowest runner, which is the one that
-  # matters.
-  # Measured on the external source's CONTENT route, because the external
-  # source is a web seed and serves no pieces at all (#266). This wait read its
-  # PIECE record when the source was still a piece peer, and turning it into a
-  # web seed made the count permanently zero — the wait then ran to its full
-  # budget and let node B start after node A had finished, which is the
-  # sequential shape this section exists to replace. It passed everything below.
-  #
-  # Unfiltered by peer, deliberately: the record names a peer by the ID `peers
-  # add` generated rather than by the name this script typed, and node B is the
-  # only other fetcher and has not been told to start yet. So bytes served for
-  # THIS blob are bytes served to node A.
-  #
-  # Two megabytes is eight pieces' worth at this geometry — enough that node A
-  # has something worth having and far short of the thirty-two it needs.
-  swarm_a_has_started() {
-    (( $(peer_served_bytes "$log_o" "$blob") >= 2097152 ))
-  }
-  wait_for "node A never fetched a piece from the external source, so there was never a swarm for node B to join" \
-    900 swarm_a_has_started
-
-  # THE OVERLAP, asserted rather than assumed. If node A had finished, what
-  # follows would be `A, then B` — the sequential shape this milestone replaces
-  # — and every assertion below would still pass.
+  # Node A holds only its half before converging, not the whole blob — a half is a
+  # partial, which never reaches the blob tree (invariant 1). Node B holds nothing
+  # yet. So this is an incomplete peer and an empty one converging with the source,
+  # which is what makes it a swarm and not a queue.
   assert_eq "$(peer_holds "$root/a/data/cas" "$blob")" "0" \
-    "node A is still mid-transfer when node B joins: the two overlap, which is what makes this a swarm and not a queue"
+    "node A holds only its half before converging, not the whole blob"
+  assert_eq "$(peer_holds "$root/b/data/cas" "$blob")" "0" \
+    "and node B holds nothing yet: it will assemble its copy from A and the source"
 
-  # Give node B a playback window before it joins (§33, §84 — time-critical
-  # priority). A player reading a partial records where it is, and the transfer
-  # fetches the pieces there FIRST rather than in survey order. Written as a
-  # client would write it — a byte offset in the CAS the transfer reads (invariant
-  # 4's role-legal channel) — for the blob B is about to assemble from pieces. 5
-  # MiB is piece 20 at this 256 KiB geometry, well past the front, so a driver
-  # honouring it is visibly not just fetching from zero.
+  # Give node B a playback window (§33, §84 — time-critical priority). A player
+  # reading a partial records where it is, and the transfer fetches the pieces
+  # there FIRST rather than in survey order. 5 MiB is piece 20, which falls in
+  # NODE A's half — so honouring the window also means B takes that piece from A,
+  # the very cooperation being demonstrated.
   "$STAGEPARTIAL" --cas "$root/b/data/cas" --blob "$blob" --playhead 5242880
 
+  # Both reconcile; there is no staggering and none is needed now that pre-staging
+  # A makes cooperation structural rather than dependent on catching A mid-flight.
+  sw_a "/api/v1/peers/swarm-a/reconcile" -X POST -o /dev/null
   sw_b "/api/v1/peers/swarm-b/reconcile" -X POST -o /dev/null
 
   swarm_converged() {
@@ -7995,13 +8297,22 @@ YAML
   "$BIN" device generate --device-dir "$B" --name devb >/dev/null 2>&1
   "$BIN" device generate --device-dir "$C" --name devc >/dev/null 2>&1
 
-  local bpub base
+  local bpub cpub base
   bpub=$("$BIN" device show --device-dir "$B" --json | jq -r .encryption_public_key)
+  cpub=$("$BIN" device show --device-dir "$C" --json | jq -r .encryption_public_key)
   base=( env "HEYARR_TOKEN=$token" "$BIN" --config "$cfg" )
 
+  # Enrol A and B so their encryption keys are PINNED recipients (enrol-before-wrap,
+  # ADR-0049): a space key may be wrapped only for an enrolled device or recovery
+  # key. C is left unenrolled on purpose — the stranger, and the negative below.
+  ps_enrol_device "$sock" "$token" "$A" deva
+  ps_enrol_device "$sock" "$token" "$B" devb
+
   # Device A mints a space, wrapping its key for itself (--self, default) and B.
+  # --recovery=false: these devices' local recovery keys are not pinned here, and
+  # this demo is about device recipients, not recovery (that is space_recovery_demo).
   local create space_id recips
-  create=$("${base[@]}" space create --device-dir "$A" --kind personal --recipient "$bpub" --json)
+  create=$("${base[@]}" space create --device-dir "$A" --kind personal --recipient "$bpub" --recovery=false --json)
   space_id=$(jq -r .id <<<"$create")
   recips=$(jq -r '.recipients | length' <<<"$create")
   assert_eq "$recips" "2" \
@@ -8039,6 +8350,12 @@ YAML
   # fails, and it fails before any change is fetched (the confidentiality gate).
   assert_refuses "a device the space was not wrapped for cannot read it — a decrypt without the key fails" \
     "cannot read space" "${base[@]}" space read "$space_id" --device-dir "$C"
+
+  # ENROL-BEFORE-WRAP (ADR-0049): a space key cannot be wrapped for an unenrolled
+  # recipient. C was never enrolled, so wrapping a new space for its key is refused
+  # at the create path — a key issued and immediately wrapped-for is unspellable.
+  assert_refuses "a space key cannot be wrapped for an unenrolled recipient (enrol-before-wrap, ADR-0049)" \
+    "not an enrolled device" "${base[@]}" space create --device-dir "$A" --kind personal --recipient "$cpub" --recovery=false --json
 
   kill -TERM "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
@@ -8094,6 +8411,13 @@ YAML
   bpub=$("$BIN" device show --device-dir "$B" --json | jq -r .encryption_public_key)
   cpub=$("$BIN" device show --device-dir "$C" --json | jq -r .encryption_public_key)
   base=( env "HEYARR_TOKEN=$token" "$BIN" --config "$cfg" )
+
+  # Enrol all three so their keys are pinned recipients (enrol-before-wrap,
+  # ADR-0049): the create wraps for A, B and C, and the rotation re-wraps for the
+  # remaining two — every one of them must be an enrolled device.
+  ps_enrol_device "$sock" "$token" "$A" reva
+  ps_enrol_device "$sock" "$token" "$B" revb
+  ps_enrol_device "$sock" "$token" "$C" revc
 
   # A mints a space wrapped for A, B and C (no recovery key in this demo).
   local create space_id recips
@@ -8246,9 +8570,14 @@ YAML
   "$BIN" device generate --device-dir "$dy" --name device-y >/dev/null 2>&1
   ypub=$("$BIN" device show --device-dir "$dy" --json | jq -r .encryption_public_key)
 
+  # Both devices are enrolled on node A, where the space is created — a space key
+  # may be wrapped only for pinned recipients (enrol-before-wrap, ADR-0049).
+  ps_enrol_device "$sock_a" "$token_a" "$dx" device-x
+  ps_enrol_device "$sock_a" "$token_a" "$dy" device-y
+
   # Device X creates a space on A, wrapped for X (self) and Y, and writes one item.
   local create space_id
-  create=$("${base_a[@]}" space create --device-dir "$dx" --kind shared --recipient "$ypub" --json)
+  create=$("${base_a[@]}" space create --device-dir "$dx" --kind shared --recipient "$ypub" --recovery=false --json)
   space_id=$(jq -r .id <<<"$create")
   "${base_a[@]}" space put "$space_id" --device-dir "$dx" --item "x-first" >/dev/null
 
@@ -8344,7 +8673,10 @@ YAML
   base=( env "HEYARR_TOKEN=$token" "$BIN" --config "$cfg" )
   sapi() { curl -sS --unix-socket "$sock" -H "Authorization: Bearer $token" "${@:2}" "http://heyarr$1"; }
 
-  space_id=$("${base[@]}" space create --device-dir "$dev" --kind personal --json | jq -r .id)
+  # The device is enrolled so its key is a pinned recipient (enrol-before-wrap, ADR-0049).
+  ps_enrol_device "$sock" "$token" "$dev" snap-dev
+
+  space_id=$("${base[@]}" space create --device-dir "$dev" --kind personal --recovery=false --json | jq -r .id)
   "${base[@]}" space put "$space_id" --device-dir "$dev" --item one >/dev/null
   "${base[@]}" space put "$space_id" --device-dir "$dev" --item two >/dev/null
   "${base[@]}" space put "$space_id" --device-dir "$dev" --item three >/dev/null
@@ -8513,6 +8845,8 @@ else
   snapshot_demo
   note "REVOCATION CUTS ACCESS: a device is revoked by rotating the space key (§41, ADR-0022, ADR-0049, #361)"
   revocation_demo
+  note "THE VAULT PLACEMENT PIN: a vault blob replicates and is retained by a pin, not an asset (ADR-0096, #540)"
+  vault_placement_demo
   note "THE SECOND PEER: placement, proven (§56, §64, M4-11) — heyarr all"
   two_peer_demo all
   note "THE SECOND PEER, again, as separate role processes (ADR-0002, M4-16)"

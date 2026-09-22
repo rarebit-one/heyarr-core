@@ -113,6 +113,23 @@ func (c *Catalog) seedOneProfile(ctx context.Context, p policy.Profile) (bool, e
 	return created, nil
 }
 
+// ProfileIDByName resolves a quality profile's name to its stored id, and
+// whether one exists. The poll's subtitle projection needs it to stamp the
+// seeded `subtitle` profile onto the subtitle wants it creates (ADR-0085 §6) —
+// the worker cannot use the API's resolver, so the lookup lives here.
+func (c *Catalog) ProfileIDByName(ctx context.Context, name string) (string, bool, error) {
+	var id string
+	err := c.db.Reader().QueryRowContext(ctx,
+		`SELECT id FROM quality_profiles WHERE name = ?`, name).Scan(&id)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("catalog: resolving profile %q: %w", name, err)
+	}
+	return id, true, nil
+}
+
 func (c *Catalog) qualityProfileExists(ctx context.Context, name string) (bool, error) {
 	var one int
 	err := c.db.Reader().QueryRowContext(ctx,

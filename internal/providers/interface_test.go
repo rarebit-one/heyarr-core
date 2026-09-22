@@ -92,8 +92,9 @@ func TestTheWholeInterfaceIsExercisedWithoutASocket(t *testing.T) {
 	downloader := NewFake("a-client", CapabilityDownload)
 	metadata := NewFake("a-metadata-service", CapabilityMetadata)
 	subtitle := NewFake("a-subtitle-service", CapabilitySubtitle)
+	enrich := NewFake("an-enrich-service", CapabilityEnrich)
 
-	for _, p := range []*Fake{indexer, downloader, metadata, subtitle} {
+	for _, p := range []*Fake{indexer, downloader, metadata, subtitle, enrich} {
 		if err := reg.Register(p); err != nil {
 			t.Fatal(err)
 		}
@@ -122,7 +123,7 @@ func TestTheWholeInterfaceIsExercisedWithoutASocket(t *testing.T) {
 		t.Errorf("the indexer was asked %d times", indexer.Searches())
 	}
 	// The downloader was not asked. Routing routed.
-	if downloader.Searches() != 0 || metadata.Searches() != 0 || subtitle.Searches() != 0 {
+	if downloader.Searches() != 0 || metadata.Searches() != 0 || subtitle.Searches() != 0 || enrich.Searches() != 0 {
 		t.Error("a search reached a provider that is not an indexer")
 	}
 
@@ -132,13 +133,13 @@ func TestTheWholeInterfaceIsExercisedWithoutASocket(t *testing.T) {
 	}
 
 	// Health, for all four.
-	if got := reg.CheckAll(t.Context()); len(got) != 4 {
+	if got := reg.CheckAll(t.Context()); len(got) != 5 {
 		t.Fatalf("%d checked", len(got))
 	}
 
 	// And what the node therefore advertises.
 	caps := reg.JobCapabilities()
-	if strings.Join(caps, ",") != "indexer,download,metadata,subtitle" {
+	if strings.Join(caps, ",") != "indexer,download,metadata,subtitle,enrich" {
 		t.Errorf("JobCapabilities = %v", caps)
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/desired"
+	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/strategy"
 	"github.com/rarebit-one/heyarr-core/internal/events"
@@ -94,6 +95,14 @@ type AcquisitionView struct {
 	Placement string `json:"placement"`
 	// Detail is why the last pipeline move happened, when it was a failure.
 	Detail string `json:"detail,omitempty"`
+	// BytesTotal and BytesDone are the download client's progress for a transfer
+	// in flight, refreshed every poll (poll_downloads persists them on the
+	// acquisition row — the fact that "makes 'stuck since Tuesday' visible").
+	// Zero total means the client has not said yet; both omitted when there is
+	// no transfer, so a satisfied or idle want stays clean in a listing. They
+	// let a client show how far a download has got without a second request.
+	BytesTotal int64 `json:"bytes_total,omitempty"`
+	BytesDone  int64 `json:"bytes_done,omitempty"`
 }
 
 // AcquisitionView carries only the STATE. The reasons behind the content axis —
@@ -155,10 +164,15 @@ type UpdateDesiredRequest struct {
 // whose acquisition row is missing must still be readable — the API says
 // nothing about its state rather than hiding the want.
 const desiredColumns = `d.id, d.scope, d.work_id, d.edition_id, d.quality_profile_id,
-	d.monitor, d.reason, d.created_at, d.updated_at, ` + acquisitionSelect
+	d.monitor, d.reason, d.created_at, d.updated_at, ` + acquisitionSelect +
+	`, acq.bytes_total, acq.bytes_done`
 
+// acquisition_state carries the derived §64 axes; the acquisitions row carries
+// the in-flight transfer's byte counts. Both are one-per-want (desired_item_id
+// UNIQUE on acquisitions), so a LEFT JOIN of each keeps the page one query.
 const desiredFrom = ` FROM desired_items d
-	LEFT JOIN acquisition_state a ON a.desired_item_id = d.id`
+	LEFT JOIN acquisition_state a ON a.desired_item_id = d.id
+	LEFT JOIN acquisitions acq ON acq.desired_item_id = d.id`
 
 func scanDesiredItem(row interface{ Scan(...any) error }) (DesiredItem, error) {
 	var d DesiredItem
@@ -166,13 +180,13 @@ func scanDesiredItem(row interface{ Scan(...any) error }) (DesiredItem, error) {
 	var monitor int
 	var created, updated string
 	var phase, content, placement, detail sql.NullString
-	var managed sql.NullInt64
+	var managed, bytesTotal, bytesDone sql.NullInt64
 	if err := row.Scan(&d.ID, &d.Scope, &d.WorkID, &edition, &d.QualityProfileID,
 		&monitor, &d.Reason, &created, &updated,
-		&phase, &managed, &content, &placement, &detail); err != nil {
+		&phase, &managed, &content, &placement, &detail, &bytesTotal, &bytesDone); err != nil {
 		return DesiredItem{}, err
 	}
-	d.Acquisition = scanAcquisitionView(phase, managed, content, placement, detail)
+	d.Acquisition = scanAcquisitionView(phase, managed, content, placement, detail, bytesTotal, bytesDone)
 	if edition.Valid {
 		d.EditionID = edition.String
 	}
@@ -315,6 +329,7 @@ const acquisitionSelect = `a.phase, a.managed, a.content, a.placement, a.detail`
 func scanAcquisitionView(
 	phase sql.NullString, managed sql.NullInt64,
 	content, placement, detail sql.NullString,
+	bytesTotal, bytesDone sql.NullInt64,
 ) *AcquisitionView {
 	if !phase.Valid {
 		// No acquisition row. Possible only for a want created before this
@@ -329,12 +344,14 @@ func scanAcquisitionView(
 		Placement: acquisition.Satisfaction(placement.String),
 	}
 	return &AcquisitionView{
-		State:     state.Name(),
-		Phase:     phase.String,
-		Managed:   state.Managed,
-		Content:   content.String,
-		Placement: placement.String,
-		Detail:    detail.String,
+		State:      state.Name(),
+		Phase:      phase.String,
+		Managed:    state.Managed,
+		Content:    content.String,
+		Placement:  placement.String,
+		Detail:     detail.String,
+		BytesTotal: bytesTotal.Int64,
+		BytesDone:  bytesDone.Int64,
 	}
 }
 
@@ -358,18 +375,18 @@ func scanAcquisitionView(
 // status code is the HTTP layer's business, and MCP has to map the same errors
 // onto JSON-RPC codes; a shared implementation that returned HTTP problems
 // would have made the MCP door translate out of a vocabulary it does not speak.
-func (a *API) WantContent(ctx context.Context, req WantContentRequest) (DesiredItem, error) {
+func (a *API) WantContent(ctx context.Context, req WantContentRequest) (WantOutcome, error) {
 	if req.WorkID != "" && req.Work != nil {
-		return DesiredItem{}, &badRequest{errors.New(
+		return WantOutcome{}, &badRequest{errors.New(
 			"name the work with either work_id or work, not both")}
 	}
 	if req.WorkID == "" && req.Work == nil {
-		return DesiredItem{}, &badRequest{errors.New(
+		return WantOutcome{}, &badRequest{errors.New(
 			"a desired item must name a work — by work_id, or by a work descriptor " +
 				"if it does not exist yet")}
 	}
 	if req.QualityProfileID != "" && req.QualityProfile != "" {
-		return DesiredItem{}, &badRequest{errors.New(
+		return WantOutcome{}, &badRequest{errors.New(
 			"name the quality profile with either quality_profile_id or quality_profile, not both")}
 	}
 
@@ -402,7 +419,23 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (DesiredI
 		}
 		return err
 	}); err != nil {
-		return DesiredItem{}, err
+		return WantOutcome{}, err
+	}
+
+	// ADR-0089: wanting a WHOLE SERIES is following it. A work-scoped want on a
+	// series work resolves the series' metadata id and establishes (or converges
+	// on) a tv_series subscription, whose poll enumerates the episodes as
+	// item-scoped wants and monitors for new ones — the follow spine, reached from
+	// the want door. Only whole-series work-scoped wants bridge: an item- or
+	// edition-scoped want (one episode, one season) is a genuine one-off, and a
+	// non-series work is unchanged. If no metadata provider can resolve the series,
+	// it falls back to an ordinary one-off want below (never an error, §2).
+	if req.EditionID == "" && (req.Scope == "" || req.Scope == string(desired.ScopeWork)) {
+		if contentType, title := a.workTypeAndTitle(ctx, workID); contentType == identification.Series {
+			if view, followed := a.establishSeriesFollow(ctx, workID, title, profileID, req.Reason, monitor); followed {
+				return WantOutcome{Followed: &view}, nil
+			}
+		}
 	}
 
 	item := desired.Item{
@@ -420,7 +453,7 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (DesiredI
 	// it must not trust a hand-built caller — but by then a bad want is already
 	// this door's 400 rather than the catalog's raw error.
 	if err := item.Validate(); err != nil {
-		return DesiredItem{}, &badRequest{err}
+		return WantOutcome{}, &badRequest{err}
 	}
 
 	// The row, its resting acquisition state and both events, in one place
@@ -429,7 +462,7 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (DesiredI
 	// about whether a create emits or leaves a want with no acquisition row.
 	rec, err := a.catalog.CreateDesiredItem(ctx, item)
 	if err != nil {
-		return DesiredItem{}, err
+		return WantOutcome{}, err
 	}
 	out := DesiredItem{
 		ID: rec.Item.ID, Scope: string(rec.Item.Scope), WorkID: rec.Item.WorkID,
@@ -463,10 +496,103 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (DesiredI
 		a.log.Warn("could not enqueue reconciliation for a new want",
 			"desired_item_id", out.ID, "error", err)
 	}
-	return out, nil
+	return WantOutcome{Desired: &out}, nil
 }
 
-// createDesired is POST /api/v1/desired — a shell over WantContent.
+// WantOutcome is what wanting content produced. Exactly one field is set:
+// Desired for an ordinary one-off want, or Followed when the want named a whole
+// series and ADR-0089 established (or converged on) a subscription instead —
+// wanting a series IS following it. Both front doors render whichever is present.
+type WantOutcome struct {
+	Desired  *DesiredItem        `json:"desired,omitempty"`
+	Followed *FollowedSourceView `json:"followed,omitempty"`
+}
+
+// workTypeAndTitle reads a work's content type and title, best-effort — an empty
+// content type (a bad work id, a work gone) simply means "not a series", so the
+// want takes its ordinary path rather than failing here. The authoritative
+// refusal for a missing work is CreateDesiredItem's.
+func (a *API) workTypeAndTitle(ctx context.Context, workID string) (contentType, title string) {
+	_ = a.reader.QueryRowContext(ctx,
+		`SELECT content_type, title FROM works WHERE id = ?`, workID).Scan(&contentType, &title)
+	return contentType, title
+}
+
+// establishSeriesFollow is the ADR-0089 bridge: it turns a whole-series want into
+// a follow. Returns (view, true) when it took the want over — by converging on an
+// existing subscription for the series (idempotent, §4) or by resolving the
+// series' metadata id and creating one whose poll enumerates the episodes.
+// Returns (_, false) when nothing could resolve the series — no metadata provider,
+// or no match — so the caller falls back to an ordinary one-off want (§2). It is
+// never an error: a series want must still work on a node without TMDB.
+func (a *API) establishSeriesFollow(
+	ctx context.Context, workID, title, profileID, reason string, monitor bool,
+) (FollowedSourceView, bool) {
+	if src, ok, err := a.catalog.FollowSourceForWork(ctx, workID); err == nil && ok {
+		a.pollFollowNow(ctx, src.ID)
+		return a.followViewFor(ctx, src, a.metadataHealthLabel()), true
+	}
+
+	feedRef := a.resolveSeriesFeedRef(ctx, title)
+	if feedRef == "" {
+		return FollowedSourceView{}, false
+	}
+
+	src, err := a.catalog.CreateFollowSource(ctx, followed.Source{
+		WorkID:           workID,
+		Type:             followed.TypeTVSeries,
+		FeedRef:          feedRef,
+		QualityProfileID: profileID,
+		Monitor:          monitor,
+		Backfill:         followed.BackfillFull, // "I want this series" means all aired episodes (§3)
+		Reason:           reason,
+	})
+	if err != nil {
+		// Resolved but not persisted (e.g. a create race). Keep the want working:
+		// fall back to a one-off want rather than failing the intent (§2).
+		a.log.Warn("could not establish a follow for a series want; falling back to a one-off want",
+			"work_id", workID, "error", err)
+		return FollowedSourceView{}, false
+	}
+	a.pollFollowNow(ctx, src.ID)
+	return a.followViewFor(ctx, src, a.metadataHealthLabel()), true
+}
+
+// resolveSeriesFeedRef finds the metadata id to follow a series by, from its
+// title, via the same discovery providers POST /discover uses. Returns "" when
+// there is no discovery-capable provider or no tv_series match — the signal to
+// fall back to a one-off want (ADR-0089 §2), never surfaced as an error.
+func (a *API) resolveSeriesFeedRef(ctx context.Context, title string) string {
+	if strings.TrimSpace(title) == "" {
+		return ""
+	}
+	results, err := a.Discover(ctx, DiscoverRequest{Query: title})
+	if err != nil {
+		return ""
+	}
+	for _, r := range results {
+		if r.Type == string(followed.TypeTVSeries) && strings.TrimSpace(r.TVDBID) != "" {
+			return r.TVDBID // top-ranked tv_series candidate (§2)
+		}
+	}
+	return ""
+}
+
+// pollFollowNow enqueues an immediate poll of a subscription, best-effort — the
+// same immediacy FollowSource gives a new follow; the beat picks it up regardless.
+func (a *API) pollFollowNow(ctx context.Context, sourceID string) {
+	if _, err := a.jobs.Enqueue(ctx, jobs.EnqueueOptions{
+		Type:      followed.PollSourceJobType,
+		Payload:   followed.PollSourcePayload{SourceID: sourceID},
+		DedupeKey: followed.PollDedupeKey(sourceID),
+	}); err != nil {
+		a.log.Warn("could not enqueue a poll for a series-want follow",
+			"source_id", sourceID, "error", err)
+	}
+}
+
+// createDesired is POST /api/v1/desired — a shell over WantContent. A series want
+// that established a follow (ADR-0089) returns the subscription, at its own path.
 func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 	var body WantContentRequest
 	if err := decodeJSON(w, r, &body); err != nil {
@@ -478,8 +604,13 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 		a.failDesiredWrite(w, r, err)
 		return
 	}
-	w.Header().Set("Location", httpapi.APIPrefix+"/desired/"+out.ID)
-	a.write(w, r, http.StatusCreated, out)
+	if out.Followed != nil {
+		w.Header().Set("Location", httpapi.APIPrefix+"/followed-sources/"+out.Followed.ID)
+		a.write(w, r, http.StatusCreated, out.Followed)
+		return
+	}
+	w.Header().Set("Location", httpapi.APIPrefix+"/desired/"+out.Desired.ID)
+	a.write(w, r, http.StatusCreated, out.Desired)
 }
 
 // resolveProfile turns a profile id or name into an id, refusing both an

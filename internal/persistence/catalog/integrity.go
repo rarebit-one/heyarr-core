@@ -28,6 +28,7 @@ func (c *Catalog) Blobs(ctx context.Context) ([]integrity.Blob, error) {
 	rows, err := c.db.Reader().QueryContext(ctx, `
 		SELECT b.hash, b.size, b.unreferenced_since,
 		       (SELECT count(*) FROM assets a WHERE a.blob_hash = b.hash)
+		       + (SELECT count(*) FROM placement_pins p WHERE p.blob_hash = b.hash)
 		FROM blobs b
 		ORDER BY b.hash`)
 	if err != nil {
@@ -54,6 +55,7 @@ func (c *Catalog) Blob(ctx context.Context, h hashing.Hash) (integrity.Blob, err
 	row := c.db.Reader().QueryRowContext(ctx, `
 		SELECT b.hash, b.size, b.unreferenced_since,
 		       (SELECT count(*) FROM assets a WHERE a.blob_hash = b.hash)
+		       + (SELECT count(*) FROM placement_pins p WHERE p.blob_hash = b.hash)
 		FROM blobs b WHERE b.hash = ?`, h.String())
 	b, err := scanBlob(row)
 	if errors.Is(err, sql.ErrNoRows) {

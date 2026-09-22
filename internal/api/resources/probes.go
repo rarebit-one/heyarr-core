@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
+	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 )
 
 // BlobProbe is what ffprobe said about a blob's bytes (§29).
@@ -52,7 +52,7 @@ type ProbeStream struct {
 // tell them apart cannot decide whether to wait — which is exactly the state a
 // node with no ffprobe leaves every blob in (ADR-0023).
 func (a *API) getBlobProbe(w http.ResponseWriter, r *http.Request) {
-	hash := chi.URLParam(r, "hash")
+	hash := httpapi.HashParam(r)
 
 	var (
 		p            BlobProbe

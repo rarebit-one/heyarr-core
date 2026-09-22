@@ -16,6 +16,10 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
+// subtitleProfileName is the seeded profile a projected subtitle want is judged
+// by (ADR-0085) — a subtitle is accepted on its bytes, not a video quality bar.
+const subtitleProfileName = "subtitle"
+
 // The poll_source job (§55, M12) — one feed round-trip for one followed source.
 //
 // # It enumerates and projects, and archives nothing itself
@@ -42,6 +46,15 @@ import (
 // CreateDesiredItem is refused on a duplicate (target, profile), which the loop
 // treats as "already projected" rather than an error. So a poll that crashed
 // after some items but before others completes cleanly on its next run.
+
+// idNamespaced is a feed adapter whose ref is a stable external-catalogue id (a
+// TMDB or TVDB series id) rather than a URL, reporting which id space it belongs
+// to. The TV metadata adapters implement it so a followed series' ref can be
+// recorded as its work's external id; the podcast/channel/rss adapters, whose
+// ref is a feed URL, do not.
+type idNamespaced interface {
+	IDNamespace() string
+}
 
 // PollSourceHandler runs one source's poll. reg resolves the feed adapter, cat
 // stores items and wants, and grabs is the queue a fresh want's reconciliation
@@ -89,6 +102,48 @@ func PollSourceHandler(
 			return fmt.Errorf("worker: enumerating source %s: %w", payload.SourceID, err)
 		}
 
+		// Record the series' catalogue id on its work, so identification-dependent
+		// features can find it. TV identification is TVDB-first (ADR-0058) and
+		// leaves a work with NO external id when TVDB is not the configured
+		// adapter — yet the followed source has carried the id in feed_ref all
+		// along, and the subtitle-fetch (DueSubtitleFetches) gates on the work
+		// having a tmdb/imdb external id, so captions never fetch without it.
+		// The feed adapter names the id space its ref belongs to (tmdb/tvdb); a
+		// podcast or channel adapter, whose ref is a URL, does not and is skipped.
+		// Idempotent (WriteWorkExternalID no-ops on conflict), so it runs every
+		// poll harmlessly and self-heals a source followed before this existed on
+		// that source's next poll.
+		if src.Type == followed.TypeTVSeries {
+			if ns, ok := provider.(idNamespaced); ok {
+				if idSource := ns.IDNamespace(); idSource != "" {
+					if werr := cat.WriteWorkExternalID(ctx, src.WorkID, idSource, src.FeedRef); werr != nil {
+						log.Warn("could not record a series' external id from its follow",
+							"source_id", payload.SourceID, "work", src.WorkID,
+							"id_source", idSource, "error", werr)
+					}
+				}
+			}
+		}
+
+		// Resolve the subtitle profile once, only when this source wants subtitles
+		// (ADR-0085 §6). Its absence is not a poll failure — a node whose profiles
+		// have not seeded yet should still archive the primary items — so a missing
+		// profile logs and disables subtitle projection for this pass rather than
+		// failing the whole poll.
+		subtitleProfileID := ""
+		if len(src.WantSubtitles) > 0 {
+			id, ok, perr := cat.ProfileIDByName(ctx, subtitleProfileName)
+			if perr != nil {
+				return fmt.Errorf("worker: resolving the subtitle profile for source %s: %w", payload.SourceID, perr)
+			}
+			if ok {
+				subtitleProfileID = id
+			} else {
+				log.Warn("a followed source wants subtitles but the subtitle profile is not seeded; skipping subtitle projection",
+					"source_id", payload.SourceID)
+			}
+		}
+
 		now := time.Now().UTC()
 		var discovered, projected int
 		for _, fi := range items {
@@ -131,6 +186,20 @@ func PollSourceHandler(
 			default:
 				return fmt.Errorf("worker: projecting a want for source %s: %w",
 					payload.SourceID, err)
+			}
+
+			// Beside the primary want, project a subtitle want per configured
+			// language (ADR-0085 §6). Idempotent on re-poll (a duplicate is an
+			// already-projected want, skipped); the fetch driver acquires each once
+			// this episode's video is held. No acquisition kick-off here — a
+			// subtitle want is direct-route and driven by the subtitle beat.
+			if subtitleProfileID != "" {
+				for _, sub := range src.ProjectSubtitleWants(item.ID, subtitleProfileID) {
+					if _, serr := cat.CreateDesiredItem(ctx, sub); serr != nil && !catalog.IsDuplicateWant(serr) {
+						return fmt.Errorf("worker: projecting a subtitle want for source %s: %w",
+							payload.SourceID, serr)
+					}
+				}
 			}
 
 			if err := startAcquisition(ctx, cat, grabs, src, item, fi, wantID, log); err != nil {

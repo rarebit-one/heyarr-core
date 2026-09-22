@@ -103,3 +103,25 @@ func feedProviderNames(reg *providers.Registry) []string {
 	}
 	return out
 }
+
+// subtitleProviderNames is the same, for the subtitle providers a worker will
+// fetch subtitles through, so the startup log says which the node would use
+// (ADR-0085).
+func subtitleProviderNames(reg *providers.Registry) []string {
+	var out []string
+	for _, p := range reg.Route(providers.CapabilitySubtitle) {
+		out = append(out, p.Name())
+	}
+	return out
+}
+
+// enrichProviderNames is the same, for the enrich providers a worker will enrich
+// held Works through, so the startup log says which the node would use
+// (ADR-0087).
+func enrichProviderNames(reg *providers.Registry) []string {
+	var out []string
+	for _, p := range reg.Route(providers.CapabilityEnrich) {
+		out = append(out, p.Name())
+	}
+	return out
+}

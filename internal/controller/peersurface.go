@@ -12,6 +12,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
+	"github.com/rarebit-one/heyarr-core/internal/catalogtomb"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/leases"
@@ -327,6 +328,15 @@ func (c *Controller) newPeerSurface(
 		return nil, fmt.Errorf("controller: opening the personal-state store for the peer surface: %w", err)
 	}
 
+	// The editorial catalog op log a sibling converges with (ADR-0073, #449).
+	// Its own stateless handle over the same pools as the client API's — both
+	// write catalog_ops through the single writer; the G-set converges however
+	// the two instances interleave.
+	catalogTomb, err := catalogtomb.New(catalogtomb.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		return nil, fmt.Errorf("controller: opening the catalog-tombstone store for the peer surface: %w", err)
+	}
+
 	srv, err := peerapi.New(peerapi.Options{
 		Addr:       c.cfg.Peer.Listen,
 		Material:   material,
@@ -366,7 +376,11 @@ func (c *Controller) newPeerSurface(
 		// route serves signed tokens; a sibling verifies each against the
 		// issuer's pinned key, not against this peer that served them.
 		Leases: leaseStore,
-		Logger: c.log,
+		// The editorial catalog op log the two sites converge on (ADR-0073,
+		// #449). GET/POST /catalog/ops exchange the G-set; each op is signed and
+		// re-verified, so a sibling push writes no state it could not sign for.
+		CatalogOps: catalogTomb,
+		Logger:     c.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)

@@ -56,12 +56,17 @@ func (s *Server) registerTools() {
 		Scope:    auth.ScopeRead,
 		ReadOnly: true,
 		Description: "Find content the library does NOT already hold. Where search_content " +
-			"looks only in the library, this asks the metadata provider (TVDB) for candidate " +
-			"series matching a free-text title, whether or not they are catalogued — the " +
-			"\"search then follow\" door. Each result carries a tvdb_id you pass straight to " +
-			"follow_source (or want_content by title) to bring it in. Use this when " +
-			"search_content came back empty and someone wants something new. Needs a metadata " +
-			"provider configured; a node without one says so rather than returning nothing.",
+			"looks only in the library, this asks every configured metadata provider (TVDB/TMDB " +
+			"for series, TMDB for movies, Open Library for books, MusicBrainz for music) for " +
+			"candidate works matching a free-text title, whether or not they are catalogued — " +
+			"the \"search then acquire\" door. A tv_series result carries a tvdb_id you pass " +
+			"straight to follow_source; every result (including movie/book/music) carries " +
+			"source+external_id for reference and a type telling you which: a tv_series/podcast/" +
+			"youtube_channel/rss_feed result is followed (follow_source), a movie/book/music " +
+			"result has no calendar and is wanted instead (want_content by title+year+" +
+			"content_type). Use this when search_content came back empty and someone wants " +
+			"something new. Needs at least one metadata or enrich provider configured; a node " +
+			"without one says so rather than returning nothing.",
 		InputSchema: schemaDiscoverContent,
 		Handler:     s.discoverContent,
 	})
@@ -241,6 +246,35 @@ func (s *Server) registerTools() {
 			"reach for when someone says \"I have this, why does Heyarr say it is missing\".",
 		InputSchema: schemaDesiredItemID,
 		Handler:     s.getContentSatisfaction,
+	})
+
+	s.tools.register(Tool{
+		Name:     "get_acquisition_status",
+		Title:    "What a want is downloading right now",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "Report where a want is in the acquisition pipeline (idle, searching, " +
+			"selected, queued, downloading, verifying, ingesting) and, when a download is in " +
+			"flight, the transfer behind it: which release was chosen — its name carries the " +
+			"resolution and size — how far it has downloaded, and any trouble the client " +
+			"reported. This is the read for \"what is this want actually doing\" and \"why is " +
+			"it still not here\", without opening the download client.",
+		InputSchema: schemaDesiredItemID,
+		Handler:     s.getAcquisitionStatus,
+	})
+
+	s.tools.register(Tool{
+		Name:     "list_jobs",
+		Title:    "Inspect the durable work queue",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "List the durable jobs Heyarr runs — searches, grabs, download polls, " +
+			"ingests — filtered by state and/or type, most recent first, each with its last " +
+			"error. This is the read behind \"why is nothing being acquired\": a search that " +
+			"found nothing, a grab the download client refused, a poll that failed. A `failed` " +
+			"job will retry with backoff; a `dead` one is terminal until an operator retries it.",
+		InputSchema: schemaListJobs,
+		Handler:     s.listJobs,
 	})
 
 	s.tools.register(Tool{
@@ -447,11 +481,16 @@ func (s *Server) wantContent(ctx context.Context, raw json.RawMessage) (any, err
 		}
 	}
 
-	item, err := s.resources.WantContent(ctx, req)
+	out, err := s.resources.WantContent(ctx, req)
 	if err != nil {
 		return nil, classify(err)
 	}
-	return item, nil
+	// A whole-series want establishes a follow instead of a one-off want
+	// (ADR-0089); return whichever the intent produced.
+	if out.Followed != nil {
+		return out.Followed, nil
+	}
+	return out.Desired, nil
 }
 
 // monitorContent is the other write intent, shared with PATCH /desired/{id}.
@@ -559,16 +598,17 @@ func (s *Server) acquireRelease(ctx context.Context, raw json.RawMessage) (any, 
 // through resources.FollowSource, so the two doors cannot drift.
 func (s *Server) followSource(ctx context.Context, raw json.RawMessage) (any, error) {
 	var args struct {
-		URL            string `json:"url"`
-		TVDBID         string `json:"tvdb_id"`
-		Type           string `json:"type"`
-		WorkID         string `json:"work_id"`
-		Title          string `json:"title"`
-		Year           int    `json:"year"`
-		QualityProfile string `json:"quality_profile"`
-		Monitor        *bool  `json:"monitor"`
-		Backfill       string `json:"backfill"`
-		Reason         string `json:"reason"`
+		URL            string   `json:"url"`
+		TVDBID         string   `json:"tvdb_id"`
+		Type           string   `json:"type"`
+		WorkID         string   `json:"work_id"`
+		Title          string   `json:"title"`
+		Year           int      `json:"year"`
+		QualityProfile string   `json:"quality_profile"`
+		Monitor        *bool    `json:"monitor"`
+		Backfill       string   `json:"backfill"`
+		Reason         string   `json:"reason"`
+		WantSubtitles  []string `json:"want_subtitles"`
 	}
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
@@ -578,6 +618,7 @@ func (s *Server) followSource(ctx context.Context, raw json.RawMessage) (any, er
 		WorkID: args.WorkID, Title: args.Title, Year: args.Year,
 		QualityProfile: args.QualityProfile,
 		Monitor:        args.Monitor, Backfill: args.Backfill, Reason: args.Reason,
+		WantSubtitles: args.WantSubtitles,
 	})
 	if err != nil {
 		return nil, classifyFollow(err)
@@ -679,9 +720,10 @@ func (s *Server) pollSource(ctx context.Context, raw json.RawMessage) (any, erro
 // so the two doors move a subscription's strategy the same way (ADR-0082).
 func (s *Server) setSourceProfile(ctx context.Context, raw json.RawMessage) (any, error) {
 	var args struct {
-		SourceID       string `json:"source_id"`
-		QualityProfile string `json:"quality_profile"`
-		Backfill       string `json:"backfill"`
+		SourceID       string    `json:"source_id"`
+		QualityProfile string    `json:"quality_profile"`
+		Backfill       string    `json:"backfill"`
+		WantSubtitles  *[]string `json:"want_subtitles"`
 	}
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
@@ -689,12 +731,12 @@ func (s *Server) setSourceProfile(ctx context.Context, raw json.RawMessage) (any
 	if args.SourceID == "" {
 		return nil, invalidParams("source_id is required — the source to repoint, from list_followed")
 	}
-	if args.QualityProfile == "" && args.Backfill == "" {
+	if args.QualityProfile == "" && args.Backfill == "" && args.WantSubtitles == nil {
 		return nil, invalidParams("give quality_profile (the profile to move to, by name), " +
-			"backfill (from_now or full), or both — a repoint must change something")
+			"backfill (from_now or full), or want_subtitles (the subtitle languages) — a repoint must change something")
 	}
 	out, err := s.resources.RepointSource(ctx, args.SourceID,
-		resources.RepointRequest{QualityProfile: args.QualityProfile, Backfill: args.Backfill})
+		resources.RepointRequest{QualityProfile: args.QualityProfile, Backfill: args.Backfill, WantSubtitles: args.WantSubtitles})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, invalidParams("there is no followed source with that id")

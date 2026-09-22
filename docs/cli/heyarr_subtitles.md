@@ -11,10 +11,11 @@ whichever exists.
 ### Options inherited from parent commands
 
 ```
-  -c, --config string   path to the configuration file (default: built-in defaults plus HEYARR_ environment)
+  -c, --config string   path to the configuration file (default: $HEYARR_CONFIG, else /etc/heyarr/config.yaml if present, else built-in defaults plus HEYARR_ environment)
 ```
 
 ### See also
 
 * [heyarr](heyarr.md)	 - Self-hosted content lifecycle, replication and consumption
 * [heyarr subtitles backfill](heyarr_subtitles_backfill.md)	 - Extract embedded subtitles from already-ingested video
+* [heyarr subtitles want](heyarr_subtitles_want.md)	 - Request subtitles for held content that has none

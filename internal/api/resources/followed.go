@@ -81,6 +81,12 @@ type FollowSourceRequest struct {
 	Backfill string `json:"backfill"`
 	Reason   string `json:"reason"`
 
+	// WantSubtitles is the languages (ISO-639-1 codes) a subtitle should exist in
+	// for every item this source projects (ADR-0085 §6). Empty wants none. When
+	// set, each poll projects a subtitle want per language beside each episode,
+	// and the fetch driver acquires each once the video is held.
+	WantSubtitles []string `json:"want_subtitles"`
+
 	// Retention is reserved. Phase 1 keeps everything a source emits, so a
 	// retention policy that silently did nothing would be the quiet-failure knob
 	// this codebase refuses to ship — a non-empty value is rejected by name.
@@ -104,6 +110,10 @@ type FollowedSourceView struct {
 	Monitor          bool   `json:"monitor"`
 	Backfill         string `json:"backfill"`
 	Reason           string `json:"reason,omitempty"`
+
+	// WantSubtitles is the languages this source projects a subtitle want for
+	// (ADR-0085 §6); empty when it wants none.
+	WantSubtitles []string `json:"want_subtitles,omitempty"`
 
 	// ItemsKnown is how many items the feed has yielded; ItemsArchived how many
 	// of those are held at the profile — the two numbers a person actually wants.
@@ -345,6 +355,7 @@ func (a *API) FollowSource(ctx context.Context, req FollowSourceRequest) (Follow
 		Monitor:          monitor,
 		Backfill:         backfill,
 		Reason:           req.Reason,
+		WantSubtitles:    req.WantSubtitles,
 	})
 	if err != nil {
 		return FollowedSourceView{}, err
@@ -415,6 +426,12 @@ type RepointRequest struct {
 	// asks for the back-catalogue a from_now follow deliberately skipped: the
 	// next poll projects every item, and RepointSource enqueues that poll.
 	Backfill string `json:"backfill"`
+
+	// WantSubtitles changes the source's subtitle languages in place (ADR-0085 §6).
+	// A pointer so "leave them as they are" (nil / field absent) is distinct from
+	// "want none" (an explicit empty array). Like backfill it moves no existing
+	// want — the next poll projects the new set — so RepointSource enqueues a poll.
+	WantSubtitles *[]string `json:"want_subtitles"`
 }
 
 // RepointSource changes a subscription's quality profile in place, shared by
@@ -441,10 +458,10 @@ func (a *API) RepointSource(ctx context.Context, id string, req RepointRequest) 
 	}
 	backfill := followed.Backfill(strings.TrimSpace(req.Backfill))
 	wantsProfile := req.QualityProfileID != "" || req.QualityProfile != ""
-	if !wantsProfile && backfill == "" {
+	if !wantsProfile && backfill == "" && req.WantSubtitles == nil {
 		return FollowedSourceView{}, &badRequest{errors.New(
 			"a repoint must change something: name a quality profile (quality_profile_id or " +
-				"quality_profile), a backfill (from_now or full), or both")}
+				"quality_profile), a backfill (from_now or full), or subtitle languages (want_subtitles)")}
 	}
 	if backfill != "" && backfill != followed.BackfillFromNow && backfill != followed.BackfillFull {
 		return FollowedSourceView{}, &badRequest{fmt.Errorf(
@@ -465,7 +482,7 @@ func (a *API) RepointSource(ctx context.Context, id string, req RepointRequest) 
 		}
 	}
 
-	wants, err := a.catalog.RepointFollowedSource(ctx, id, profileID, string(backfill))
+	wants, err := a.catalog.RepointFollowedSource(ctx, id, profileID, string(backfill), req.WantSubtitles)
 	if errors.Is(err, catalog.ErrNoFollowSource) {
 		return FollowedSourceView{}, sql.ErrNoRows
 	}
@@ -473,11 +490,12 @@ func (a *API) RepointSource(ctx context.Context, id string, req RepointRequest) 
 		return FollowedSourceView{}, err
 	}
 
-	// A backfill change is only felt on the next poll (shouldProject), so kick
-	// one now — the same immediacy FollowSource gives a new subscription, and the
-	// same idempotent enqueue PollSource uses, so a poll already queued is reused
-	// rather than doubled. Best-effort for the reason the reconcile below is.
-	if backfill != "" {
+	// A backfill or want_subtitles change is only felt on the next poll
+	// (shouldProject / ProjectSubtitleWants), so kick one now — the same immediacy
+	// FollowSource gives a new subscription, and the same idempotent enqueue
+	// PollSource uses, so a poll already queued is reused rather than doubled.
+	// Best-effort for the reason the reconcile below is.
+	if backfill != "" || req.WantSubtitles != nil {
 		if _, e := a.jobs.Enqueue(ctx, jobs.EnqueueOptions{
 			Type:      followed.PollSourceJobType,
 			Payload:   followed.PollSourcePayload{SourceID: id},
@@ -578,7 +596,8 @@ func (a *API) followViewFor(ctx context.Context, s catalog.StoredSource, health 
 		ID: s.ID, WorkID: s.WorkID, Type: string(s.Type), FeedRef: s.FeedRef,
 		QualityProfileID: s.QualityProfileID, Monitor: s.Monitor,
 		Backfill: string(s.Backfill), Reason: s.Reason,
-		Health: health, CreatedAt: s.CreatedAt,
+		WantSubtitles: s.WantSubtitles,
+		Health:        health, CreatedAt: s.CreatedAt,
 	}
 	if !s.LastPolledAt.IsZero() {
 		t := s.LastPolledAt

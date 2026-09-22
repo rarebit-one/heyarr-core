@@ -107,6 +107,14 @@ var schemaPlayHere = obj(map[string]any{
 			"what each device calls itself, so \"living\" finds \"Samsung QN85BA 55\" " +
 			"only if that is what it is called — prefer list_renderers when unsure.",
 	},
+	"force_direct": map[string]any{
+		"type": "boolean",
+		"description": "Cast anyway when the device's declared codecs would otherwise " +
+			"refuse the plan. Only for a device you KNOW decodes more than it advertises " +
+			"(a TV that decodes Dolby Digital Plus but under-declares it over DLNA). The " +
+			"bytes are sent as-is; if the device truly cannot decode them, it plays " +
+			"nothing. Off by default — try without it first and read the refusal.",
+	},
 })
 
 var schemaControlPlayback = obj(map[string]any{
@@ -147,8 +155,9 @@ func (s *Server) listRenderers(ctx context.Context, raw json.RawMessage) (any, e
 
 func (s *Server) playHere(ctx context.Context, raw json.RawMessage) (any, error) {
 	var args struct {
-		AssetID  string `json:"asset_id"`
-		Renderer string `json:"renderer"`
+		AssetID     string `json:"asset_id"`
+		Renderer    string `json:"renderer"`
+		ForceDirect bool   `json:"force_direct"`
 	}
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
@@ -160,7 +169,7 @@ func (s *Server) playHere(ctx context.Context, raw json.RawMessage) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	return s.resources.PlayOnRenderer(ctx, udn, args.AssetID)
+	return s.resources.PlayOnRenderer(ctx, udn, args.AssetID, args.ForceDirect)
 }
 
 func (s *Server) controlPlayback(ctx context.Context, raw json.RawMessage) (any, error) {

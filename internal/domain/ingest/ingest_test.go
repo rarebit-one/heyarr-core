@@ -87,14 +87,23 @@ func (f *fakeStore) Link(_ context.Context, sourcePath string, mode Materialisat
 }
 
 type fakeCatalog struct {
-	root     Root
-	rootErr  error
-	peer     string
-	peerErr  error
-	result   Result
-	recErr   error
-	recorded []Recording
-	trace    *[]string
+	root       Root
+	rootErr    error
+	peer       string
+	peerErr    error
+	result     Result
+	recErr     error
+	recorded   []Recording
+	trace      *[]string
+	tombstoned bool
+	tombErr    error
+}
+
+func (f *fakeCatalog) Tombstoned(context.Context, string, string) (bool, error) {
+	if f.trace != nil {
+		*f.trace = append(*f.trace, "catalog.Tombstoned")
+	}
+	return f.tombstoned, f.tombErr
 }
 
 func (f *fakeCatalog) SelfPeer(context.Context) (string, error) {
@@ -180,6 +189,34 @@ func TestBytesAreMaterialisedBeforeAnythingIsRecorded(t *testing.T) {
 	}
 	if link > record {
 		t.Fatalf("bytes were recorded before they were stored: %v", trace)
+	}
+}
+
+// A work a sibling logically deleted is not re-ingested here (ADR-0073, #449):
+// the pipeline consults the tombstone BEFORE moving bytes, so a tombstoned work
+// never reaches store.Link or catalog.Record, and the caller gets a skip rather
+// than a failure to retry.
+func TestATombstonedWorkIsSkippedBeforeAnyBytesMove(t *testing.T) {
+	var trace []string
+	store := &fakeStore{blob: Blob{Hash: "blake3:" + strings.Repeat("a", 64), Size: 42}, trace: &trace}
+	cat := &fakeCatalog{root: enabledRoot(), trace: &trace, tombstoned: true}
+	p := newPipeline(t, store, cat, &fakeIdentifier{})
+
+	res, err := p.Ingest(t.Context(), Request{RootID: "root-1", SourcePath: "/srv/movies/a.mkv", RelPath: "a.mkv"})
+	if err != nil {
+		t.Fatalf("a tombstoned work must be a skip, not an error: %v", err)
+	}
+	if !res.Tombstoned {
+		t.Errorf("result should be flagged Tombstoned, got %+v", res)
+	}
+	if indexOf(trace, "store.Link") >= 0 {
+		t.Errorf("bytes were materialised for a tombstoned work: %v", trace)
+	}
+	if indexOf(trace, "catalog.Record") >= 0 {
+		t.Errorf("a tombstoned work was recorded: %v", trace)
+	}
+	if indexOf(trace, "catalog.Tombstoned") < 0 {
+		t.Errorf("the tombstone was never consulted: %v", trace)
 	}
 }
 

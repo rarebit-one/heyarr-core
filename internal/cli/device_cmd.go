@@ -13,6 +13,7 @@ import (
 	apiclient "github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/device/personalmcp"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
 )
@@ -51,6 +52,8 @@ token scope (ADR-0011) until Milestone 8. The key exists now so that Milestone
 		newDeviceShowCommand(opts, &dir),
 		newDeviceRemoveCommand(opts, &dir),
 		newDeviceRevokeCommand(opts, configPath, &dir),
+		newDeviceSealTPMCommand(opts, configPath, &dir),
+		newDevicePairOffloadCommand(opts, &dir),
 		newDeviceMCPCommand(opts, &dir),
 		newDeviceGatewayCommand(opts, &dir),
 	)
@@ -260,7 +263,11 @@ messages goes to stdout.`,
 				if err != nil {
 					return err
 				}
-				opts.PersonalState = personalStateReader{ctx: cmd.Context(), c: c, deviceDir: *dir}
+				cust, err := selectCustody(&configPath, *dir)
+				if err != nil {
+					return err
+				}
+				opts.PersonalState = personalStateReader{ctx: cmd.Context(), c: c, cust: cust}
 			}
 			srv, err := personalmcp.New(opts)
 			if err != nil {
@@ -283,13 +290,13 @@ messages goes to stdout.`,
 // device's key, decrypts the changes the controller holds, and merges them into
 // the playlist — all locally, so the controller only ever serves ciphertext.
 type personalStateReader struct {
-	ctx       context.Context
-	c         *apiclient.Client
-	deviceDir string
+	ctx  context.Context
+	c    *apiclient.Client
+	cust client.Custody
 }
 
 func (r personalStateReader) Playlist(spaceID string) ([]string, error) {
-	mgr, err := openSpace(r.ctx, r.c, r.deviceDir, spaceID)
+	mgr, err := openSpace(r.ctx, r.c, r.cust, spaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +370,7 @@ func (r personalStateReader) ReadingPositions(spaceID string) ([]personalmcp.Rea
 // opaque changes the controller holds, and decrypt+decode them into CRDT changes
 // of type T ready to fold. The controller only ever serves ciphertext.
 func decodeSpaceChanges[T any](r personalStateReader, spaceID string) ([]T, error) {
-	mgr, err := openSpace(r.ctx, r.c, r.deviceDir, spaceID)
+	mgr, err := openSpace(r.ctx, r.c, r.cust, spaceID)
 	if err != nil {
 		return nil, err
 	}

@@ -13,7 +13,7 @@ One logical library, multiple complete sovereign peers.
 ### Options
 
 ```
-  -c, --config string   path to the configuration file (default: built-in defaults plus HEYARR_ environment)
+  -c, --config string   path to the configuration file (default: $HEYARR_CONFIG, else /etc/heyarr/config.yaml if present, else built-in defaults plus HEYARR_ environment)
 ```
 
 ### See also
@@ -26,6 +26,7 @@ One logical library, multiple complete sovereign peers.
 * [heyarr controller](heyarr_controller.md)	 - Own coordinated mutable state: catalog, policy, jobs, API
 * [heyarr desired](heyarr_desired.md)	 - Say what should exist, whether or not it does yet
 * [heyarr device](heyarr_device.md)	 - Manage this machine's device key (§40, ADR-0032)
+* [heyarr enrich](heyarr_enrich.md)	 - Enrich held music and book works with covers and canonical ids
 * [heyarr events](heyarr_events.md)	 - Follow the event log
 * [heyarr fsck](heyarr_fsck.md)	 - Check stored bytes against the catalog (§57, ADR-0018)
 * [heyarr gc](heyarr_gc.md)	 - Reclaim bytes nothing references (ADR-0018)
@@ -44,6 +45,7 @@ One logical library, multiple complete sovereign peers.
 * [heyarr subtitles](heyarr_subtitles.md)	 - Subtitle operations
 * [heyarr system](heyarr_system.md)	 - Report what a running instance is and how far behind it has drifted
 * [heyarr token](heyarr_token.md)	 - Manage API tokens (ADR-0011)
+* [heyarr vault](heyarr_vault.md)	 - Push, pull and list files in an encrypted media vault (ADR-0021, ADR-0095)
 * [heyarr version](heyarr_version.md)	 - Print build information
 * [heyarr worker](heyarr_worker.md)	 - Execute leased jobs
 * [heyarr works](heyarr_works.md)	 - Browse the catalog

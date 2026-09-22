@@ -147,10 +147,50 @@ type Query struct {
 	// Present because an indexer that can narrow by category returns far less
 	// noise, and absent-means-everything is the safe reading.
 	ContentType string
+	// Season and Episode narrow a series search to one episode (ADR-0093). They
+	// are set only for an item-scoped want whose item spells out a season and
+	// episode; for a movie, a music or book want, and for a work- or
+	// season-scoped series want, they stay absent and the query is exactly the
+	// title search it has always been.
+	//
+	// Episode is the sentinel for "this is an episode search": it is 1-based, so
+	// zero is an unambiguous "not an episode search" even for a Specials episode
+	// (S00E01), whose Season is a legal zero. IsEpisode reads this rule so no
+	// other code has to know it.
+	Season  int
+	Episode int
 	// Limit bounds what a provider returns. Zero means the provider's own
 	// default. It exists so a search cannot be made to return a hundred
 	// thousand candidates for §63 to score.
 	Limit int
+}
+
+// IsEpisode reports whether this query is scoped to one episode of a series.
+//
+// The rule is Episode > 0, not "a season is set": season zero is Specials and
+// perfectly legal, but an episode number is 1-based, so a zero episode is the
+// honest sentinel for a search that is not episode-scoped.
+func (q Query) IsEpisode() bool { return q.Episode > 0 }
+
+// SearchTerm is the free-text term to hand an indexer that only understands a
+// query string — the one place the query's title, year and (for an episode
+// search) season/episode are composed into text, so the Torznab and Prowlarr
+// clients cannot compose it differently.
+//
+// For an episode search the term is "<Title> SxxEyy" (ADR-0093 §1): it narrows
+// the candidate list at the source and drops the year, which SxxEyy already
+// disambiguates. Otherwise it is the title, with the year appended when known —
+// the behaviour both clients had before. This narrowing is a courtesy to the
+// indexer, NOT the correctness boundary: the season/episode gate is, because an
+// indexer's free-text match is not something Heyarr controls or can trust.
+func (q Query) SearchTerm() string {
+	if q.IsEpisode() {
+		return fmt.Sprintf("%s S%02dE%02d", q.Title, q.Season, q.Episode)
+	}
+	if q.Year > 0 {
+		return fmt.Sprintf("%s %d", q.Title, q.Year)
+	}
+	return q.Title
 }
 
 // Validate refuses a query that cannot mean anything.
@@ -163,6 +203,12 @@ func (q Query) Validate() error {
 	}
 	if q.Limit < 0 {
 		return fmt.Errorf("a limit of %d is not a limit", q.Limit)
+	}
+	if q.Season < 0 {
+		return fmt.Errorf("a season of %d is not a season", q.Season)
+	}
+	if q.Episode < 0 {
+		return fmt.Errorf("an episode of %d is not an episode", q.Episode)
 	}
 	return nil
 }

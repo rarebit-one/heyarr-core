@@ -14,7 +14,6 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
@@ -60,6 +59,7 @@ it.`,
 		newSpaceSnapshotCommand(opts, configPath, &deviceDir),
 		newSpaceRotateCommand(opts, configPath, &deviceDir),
 		newSpaceCompactCommand(opts, configPath),
+		newSpaceRecoverCommand(opts, configPath, &deviceDir),
 	)
 	return cmd
 }
@@ -101,7 +101,15 @@ yet; run ` + "`heyarr identity generate`" + ` to enable it, or pass --recovery=f
 			if err != nil {
 				return err
 			}
-			recips, err := resolveRecipients(*deviceDir, recipients, includeSelf, recoveryID)
+			var selfID string
+			if includeSelf {
+				cust, err := selectCustody(configPath, *deviceDir)
+				if err != nil {
+					return err
+				}
+				selfID = cust.RecipientID()
+			}
+			recips, err := resolveRecipients(selfID, recipients, includeSelf, recoveryID)
 			if err != nil {
 				return err
 			}
@@ -325,7 +333,11 @@ never sees the item.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID := args[0]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				mgr, err := openSpace(ctx, c, *deviceDir, spaceID)
+				cust, err := selectCustody(configPath, *deviceDir)
+				if err != nil {
+					return err
+				}
+				mgr, err := openSpace(ctx, c, cust, spaceID)
 				if err != nil {
 					return err
 				}
@@ -381,7 +393,11 @@ and is refused.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID := args[0]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				mgr, err := openSpace(ctx, c, *deviceDir, spaceID)
+				cust, err := selectCustody(configPath, *deviceDir)
+				if err != nil {
+					return err
+				}
+				mgr, err := openSpace(ctx, c, cust, spaceID)
 				if err != nil {
 					return err
 				}
@@ -428,7 +444,11 @@ func loadDeviceEncKey(deviceDir string) (*ecdh.PrivateKey, error) {
 // encryption key when includeSelf is set (the default, so the creating device can
 // read what it just made), the recovery key when recoveryID is non-empty (#360),
 // and the named --recipient keys. Duplicates across the three sources collapse.
-func resolveRecipients(deviceDir string, named []string, includeSelf bool, recoveryID string) ([]client.Recipient, error) {
+// selfID is this device's wrap-target id (the selected custody backend's
+// RecipientID) — so a space created on a machine configured for the YubiKey
+// backend is wrapped to the card, matching what open will later unwrap with. It
+// is required only when includeSelf.
+func resolveRecipients(selfID string, named []string, includeSelf bool, recoveryID string) ([]client.Recipient, error) {
 	seen := make(map[string]bool)
 	var out []client.Recipient
 	add := func(id string) error {
@@ -444,11 +464,10 @@ func resolveRecipients(deviceDir string, named []string, includeSelf bool, recov
 		return nil
 	}
 	if includeSelf {
-		priv, err := loadDeviceEncKey(deviceDir)
-		if err != nil {
-			return nil, fmt.Errorf("resolving this device as a recipient (pass --no-self if this device should not read the space): %w", err)
+		if selfID == "" {
+			return nil, fmt.Errorf("resolving this device as a recipient: no custody key (pass --no-self if this device should not read the space)")
 		}
-		if err := add(encryption.FormatPublicKey(priv.PublicKey().Bytes())); err != nil {
+		if err := add(selfID); err != nil {
 			return nil, err
 		}
 	}
@@ -468,16 +487,15 @@ func resolveRecipients(deviceDir string, named []string, includeSelf bool, recov
 	return out, nil
 }
 
-// openSpace fetches a space's wrapped keys, finds the one sealed for THIS device,
-// unwraps it with the device's encryption key, and returns a manager holding the
-// space key open. A device the space was not wrapped for is refused here, before
-// any change is fetched — the confidentiality gate of ADR-0049.
-func openSpace(ctx context.Context, c *apiclient.Client, deviceDir, spaceID string) (*client.Manager, error) {
-	priv, err := loadDeviceEncKey(deviceDir)
-	if err != nil {
-		return nil, err
-	}
-	mine := encryption.FormatPublicKey(priv.PublicKey().Bytes())
+// openSpace fetches a space's wrapped keys, finds the one sealed for THIS device
+// (the selected custody backend's wrap-target), unwraps it through that backend,
+// and returns a manager holding the space key open. A device the space was not
+// wrapped for is refused here, before any change is fetched — the confidentiality
+// gate of ADR-0049. The custody backend (ADR-0098) is chosen by config; opening
+// takes a client.Custody, not a raw key, so a YubiKey/TPM/offloaded key drops in
+// unchanged.
+func openSpace(ctx context.Context, c *apiclient.Client, cust client.Custody, spaceID string) (*client.Manager, error) {
+	mine := cust.RecipientID()
 	keys, err := c.WrappedKeys(ctx, spaceID)
 	if err != nil {
 		return nil, err
@@ -493,7 +511,7 @@ func openSpace(ctx context.Context, c *apiclient.Client, deviceDir, spaceID stri
 		return nil, fmt.Errorf("this device cannot read space %s: no copy of its key is wrapped for %s", spaceID, mine)
 	}
 	mgr := client.New()
-	if err := mgr.Open(spaceID, wrapped, client.NewKeyUnwrapper(priv)); err != nil {
+	if err := mgr.Open(spaceID, wrapped, cust); err != nil {
 		return nil, err
 	}
 	return mgr, nil
@@ -515,7 +533,11 @@ materialises the state.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID := args[0]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				mgr, err := openSpace(ctx, c, *deviceDir, spaceID)
+				cust, err := selectCustody(configPath, *deviceDir)
+				if err != nil {
+					return err
+				}
+				mgr, err := openSpace(ctx, c, cust, spaceID)
 				if err != nil {
 					return err
 				}
@@ -580,7 +602,11 @@ space may re-key it), and at least one recipient must remain.`,
 				return fmt.Errorf("name at least one recipient to revoke with --revoke")
 			}
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				view, err := rotateSpace(ctx, c, *deviceDir, spaceID, revoke)
+				cust, err := selectCustody(configPath, *deviceDir)
+				if err != nil {
+					return err
+				}
+				view, err := rotateSpace(ctx, c, cust, spaceID, revoke)
 				if err != nil {
 					return err
 				}
@@ -609,8 +635,8 @@ space may re-key it), and at least one recipient must remain.`,
 // materialise under the OLD key, mint a fresh one, re-wrap for the remaining
 // recipients, delete the revoked copies, snapshot under the new key, compact.
 // This device must itself be a current recipient of the space.
-func rotateSpace(ctx context.Context, c *apiclient.Client, deviceDir, spaceID string, revoke []string) (spaceRotateView, error) {
-	mgr, err := openSpace(ctx, c, deviceDir, spaceID)
+func rotateSpace(ctx context.Context, c *apiclient.Client, cust client.Custody, spaceID string, revoke []string) (spaceRotateView, error) {
+	mgr, err := openSpace(ctx, c, cust, spaceID)
 	if err != nil {
 		return spaceRotateView{}, err
 	}

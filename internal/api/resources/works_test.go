@@ -2,13 +2,17 @@
 package resources_test
 
 import (
+	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/catalogop"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 )
 
 // Editing and removing a work (#428).
@@ -157,6 +161,55 @@ func TestDeleteWorkEmitsEveryRemoval(t *testing.T) {
 	// Two wants over this work, both cancelled with it.
 	if n := h.eventsOfType(t, events.TypeDesiredRemoved); n != 2 {
 		t.Errorf("emitted %d desired.removed, want 2", n)
+	}
+}
+
+// On a node wired for two-site convergence, deleting a work emits a signed
+// editorial delete op keyed by the work's NATURAL key, and tombstones it in this
+// node's own store — the record a sibling merges so it does not rebuild the work
+// on its next scan (ADR-0073, #449).
+func TestDeleteWorkEmitsASignedCatalogDeleteOp(t *testing.T) {
+	_, signer, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, withCatalogConvergence(signer)).seed()
+	ctx := context.Background()
+
+	if got := h.doStable(http.MethodDelete, "/api/v1/works/"+work1ID, nil).StatusCode; got != http.StatusNoContent {
+		t.Fatalf("delete = %d", got)
+	}
+
+	// This node tombstones the work by its natural key, not its per-site id.
+	tombstoned, err := h.catalogTomb.Tombstoned(ctx, "movie", "arrival|2016")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tombstoned {
+		t.Fatalf("the deleted work is not tombstoned in the catalog op store")
+	}
+
+	// Exactly one op, a delete for that target, signed by this node's key.
+	ops, err := h.catalogTomb.Ops(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 1 {
+		t.Fatalf("emitted %d catalog ops, want 1", len(ops))
+	}
+	op, err := catalogop.Verify(ops[0])
+	if err != nil {
+		t.Fatalf("the emitted op does not verify: %v", err)
+	}
+	if op.Kind != catalogop.OpDelete {
+		t.Errorf("op kind = %q, want delete", op.Kind)
+	}
+	if op.Target.ContentType != "movie" || op.Target.WorkKey != "arrival|2016" {
+		t.Errorf("op targets %s/%s, want movie/arrival|2016", op.Target.ContentType, op.Target.WorkKey)
+	}
+	wantSigner := identity.FormatPublicKey(signer.Public().(ed25519.PublicKey))
+	if op.By != wantSigner {
+		t.Errorf("op signed by %q, want this node's identity %q", op.By, wantSigner)
 	}
 }
 

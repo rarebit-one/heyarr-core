@@ -157,6 +157,15 @@ type Source struct {
 	// interpreted; carried onto projected wants so a want six months later can
 	// say where it came from.
 	Reason string
+
+	// WantSubtitles is the languages (ISO-639-1 codes) a subtitle should exist in
+	// for every item this source projects (ADR-0085 §6). Empty is the default —
+	// no subtitle is wanted beyond whatever a release ships or a container embeds.
+	// A non-empty set makes the poll project, beside each episode's primary want,
+	// a subtitle want per language; the fetch driver acquires each once the
+	// episode's video is held. It is the standing door: captions-on-arrival for a
+	// followed series, without a per-title request.
+	WantSubtitles []string
 }
 
 // Validate checks a subscription, returning the first problem with enough
@@ -198,7 +207,32 @@ func (s *Source) Validate() error {
 		return fmt.Errorf("the reason is %d characters, past the limit of %d",
 			len(s.Reason), maxReason)
 	}
+
+	// The wanted subtitle languages are normalised the way a subtitle want's own
+	// language is (desired.Item.Validate): lower-cased, trimmed, blanks dropped,
+	// deduped — so ["EN","en",""] is stored once as ["en"] and a re-follow with
+	// the same intent written differently is the same subscription.
+	s.WantSubtitles = normaliseLanguages(s.WantSubtitles)
 	return nil
+}
+
+// normaliseLanguages lower-cases, trims, drops blanks and dedupes a set of
+// language codes, preserving first-seen order so the stored form is stable.
+func normaliseLanguages(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, l := range in {
+		l = strings.ToLower(strings.TrimSpace(l))
+		if l == "" || seen[l] {
+			continue
+		}
+		seen[l] = true
+		out = append(out, l)
+	}
+	return out
 }
 
 // FeedItem is one thing a feed adapter enumerated: the source-stable identity
@@ -310,4 +344,37 @@ func (s Source) ProjectWant(itemID string) desired.Item {
 		Monitor:          s.Monitor,
 		Reason:           s.Reason,
 	}
+}
+
+// ProjectSubtitleWants turns a resolved Item into the per-language subtitle wants
+// this source wants alongside the item's primary want (ADR-0085 §6). One want per
+// configured language, each an item-scoped subtitle want the fetch driver
+// acquires once the episode's video is held.
+//
+// Unlike ProjectWant, these carry the SUBTITLE profile, not the source's video
+// QualityProfileID — a subtitle is judged on its bytes, not on a resolution
+// floor (the seeded `subtitle` profile, ADR-0085). The caller resolves that
+// profile's id and passes it in, because this package cannot read the catalog.
+// Monitor is false: a subtitle is terminal, there is no better copy to keep
+// looking for. An empty subtitleProfileID or no wanted languages yields nothing.
+func (s Source) ProjectSubtitleWants(itemID, subtitleProfileID string) []desired.Item {
+	subtitleProfileID = strings.TrimSpace(subtitleProfileID)
+	itemID = strings.TrimSpace(itemID)
+	if subtitleProfileID == "" || len(s.WantSubtitles) == 0 {
+		return nil
+	}
+	out := make([]desired.Item, 0, len(s.WantSubtitles))
+	for _, lang := range s.WantSubtitles {
+		out = append(out, desired.Item{
+			Scope:            desired.ScopeItem,
+			WorkID:           s.WorkID,
+			ItemID:           itemID,
+			Aspect:           desired.AspectSubtitle,
+			Language:         lang,
+			QualityProfileID: subtitleProfileID,
+			Monitor:          false,
+			Reason:           "subtitles: " + lang + " (followed)",
+		})
+	}
+	return out
 }

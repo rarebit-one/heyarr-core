@@ -88,6 +88,11 @@ type Options struct {
 	APIKey string
 	// Capabilities is what configuration says this provider does.
 	Capabilities []providers.Capability
+	// ParseTitles opts this provider into reading quality (resolution, source,
+	// codec, hdr) from a release TITLE for the attributes it does not assert
+	// structurally (ADR-0091). Off by default: a torznab feed that emits real
+	// <attr> fields needs nothing here.
+	ParseTitles bool
 	// HTTPClient is injected by tests. Nil means a client of this package's
 	// own making — callers outside a test have no business supplying one, and
 	// the registry's contract has no way to.
@@ -100,13 +105,14 @@ type Options struct {
 
 // Client is one Torznab indexer.
 type Client struct {
-	name     string
-	endpoint string
-	apiKey   string
-	caps     []providers.Capability
-	http     *http.Client
-	now      func() time.Time
-	sleep    func(context.Context, time.Duration) error
+	name        string
+	endpoint    string
+	apiKey      string
+	caps        []providers.Capability
+	parseTitles bool
+	http        *http.Client
+	now         func() time.Time
+	sleep       func(context.Context, time.Duration) error
 
 	// capsMu guards the cached handshake below.
 	//
@@ -157,13 +163,14 @@ func New(o Options) (*Client, error) {
 		return nil, fmt.Errorf("indexers: %q has an endpoint that is not a URL: %w", o.Name, err)
 	}
 	c := &Client{
-		name:     o.Name,
-		endpoint: strings.TrimRight(o.Endpoint, "?&"),
-		apiKey:   o.APIKey,
-		caps:     o.Capabilities,
-		http:     o.HTTPClient,
-		now:      o.Now,
-		sleep:    o.Sleep,
+		name:        o.Name,
+		endpoint:    strings.TrimRight(o.Endpoint, "?&"),
+		apiKey:      o.APIKey,
+		caps:        o.Capabilities,
+		parseTitles: o.ParseTitles,
+		http:        o.HTTPClient,
+		now:         o.Now,
+		sleep:       o.Sleep,
 	}
 	if c.http == nil {
 		c.http = &http.Client{Timeout: defaultTimeout}
@@ -401,16 +408,16 @@ func (c *Client) Search(ctx context.Context, q providers.Query) ([]acquisition.R
 		return nil, err
 	}
 
+	// The query term is composed once, on the Query (SearchTerm): the title,
+	// the year appended when known, or "<Title> SxxEyy" for an episode search
+	// (ADR-0093 §1). It goes into `q` rather than season/ep parameters because
+	// the captured servers advertise supportedParams="q" and nothing else, so a
+	// separate season parameter would be silently ignored by one and honoured
+	// by another — a difference in results nobody could see. The season/episode
+	// gate, not the query, is the correctness boundary.
 	params := url.Values{
 		"t": []string{function},
-		"q": []string{q.Title},
-	}
-	if q.Year > 0 {
-		// Appended to the query rather than sent as its own parameter: the
-		// captured servers advertise supportedParams="q" and nothing else, so
-		// a year parameter would be silently ignored by one and honoured by
-		// another — which is a difference in results nobody could see.
-		params.Set("q", fmt.Sprintf("%s %d", q.Title, q.Year))
+		"q": []string{q.SearchTerm()},
 	}
 	if q.Limit > 0 {
 		params.Set("limit", fmt.Sprint(q.Limit))
@@ -487,7 +494,7 @@ func (c *Client) candidates(f *feed) []acquisition.ReleaseCandidate {
 			ID:         candidateID(i),
 			Title:      title,
 			Provider:   c.name,
-			Attributes: attributesOf(i),
+			Attributes: attributesOf(i, title, c.parseTitles),
 			Source:     sourceOf(i),
 		})
 	}

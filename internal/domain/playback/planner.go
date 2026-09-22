@@ -58,6 +58,7 @@ const (
 	ReasonNoProbe               = "no_probe"
 	ReasonRemoteReplicaOnly     = "remote_replica_only"
 	ReasonDeviceDeclaresNothing = "device_declares_nothing"
+	ReasonForcedDirect          = "forced_direct"
 )
 
 // Reason is one contribution to a decision.
@@ -88,6 +89,11 @@ type MediaProfile struct {
 	AudioCodec string
 	Channels   int
 	BitrateBPS int64
+	// DurationSec is the source's full runtime in seconds (0 when unprobed). A
+	// live transcode stream cannot advertise its own total — it is produced as
+	// it plays — so the client needs this to render a stable scrubber instead of
+	// one that grows with what has been encoded so far.
+	DurationSec float64
 }
 
 // DeviceProfile is what a device declared it can play (§68, M2-05).
@@ -154,6 +160,28 @@ type Plan struct {
 
 // Direct reports whether the plan needs no processing.
 func (p Plan) Direct() bool { return p.Decision == DecisionDirect }
+
+// ForceDirect overrides a non-DIRECT plan to DIRECT at the caller's explicit
+// request, sending the stored bytes as they are. It is for a caller who KNOWS a
+// device can decode content the device did not advertise — the common case being
+// a television that decodes Dolby Digital Plus but under-declares its codecs over
+// DLNA, so heyarr honestly planned TRANSCODE and honestly refused (§68).
+//
+// It is deliberately NOT a capability claim: the original reasons are kept, with a
+// [ReasonForcedDirect] prepended, so the record still says exactly what the device
+// did not declare and that the bytes were sent anyway on the caller's word. A plan
+// that is already DIRECT (or UNPLAYABLE — no bytes to force) is returned unchanged.
+func (p Plan) ForceDirect() Plan {
+	if p.Decision == DecisionDirect || p.Decision == DecisionUnplayable {
+		return p
+	}
+	p.Reasons = append([]Reason{{
+		Code:   ReasonForcedDirect,
+		Detail: "sent DIRECT at the caller's request despite the above; the device may not decode these bytes",
+	}}, p.Reasons...)
+	p.Decision = DecisionDirect
+	return p
+}
 
 // Reason returns the first reason with the given code, if any.
 func (p Plan) Reason(code string) (Reason, bool) {

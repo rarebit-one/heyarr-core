@@ -51,6 +51,17 @@ type QualityProfile struct {
 	Prefer   []policy.Rule `json:"prefer"`
 	Terminal []policy.Rule `json:"terminal"`
 
+	// ContentTypes is which works content type(s) this profile is meant to
+	// judge — "movie", "book", and so on — never null on the wire, like the
+	// rule sections. Empty means unrestricted: usable for any content type,
+	// which is every profile's answer before this field existed, and stays
+	// the honest one for a profile that is not content-type-specific at all
+	// (`subtitle` is aspect-scoped, ADR-0085; `indexer-determinable` is
+	// diagnostic, #129). It is metadata for a caller deciding which profiles
+	// to OFFER for a given want — nothing in evaluation (§63) reads it, so a
+	// profile with the "wrong" tag still evaluates exactly as its rules say.
+	ContentTypes []string `json:"content_types"`
+
 	// Seeded reports that this profile came from Heyarr's defaults rather than
 	// from an operator. Seeding never overwrites, so an edited default stays
 	// edited — this flag is how you can tell you are looking at one.
@@ -66,22 +77,23 @@ type QualityProfile struct {
 // rules and forgetting to send them are the same request, and one of the two
 // is a silent data loss.
 type profileRequest struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Accept      *[]policy.Rule `json:"accept"`
-	Prefer      *[]policy.Rule `json:"prefer"`
-	Terminal    *[]policy.Rule `json:"terminal"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description"`
+	Accept       *[]policy.Rule `json:"accept"`
+	Prefer       *[]policy.Rule `json:"prefer"`
+	Terminal     *[]policy.Rule `json:"terminal"`
+	ContentTypes *[]string      `json:"content_types"`
 }
 
-const profileColumns = `id, name, description, accept, prefer, terminal, seeded, created_at, updated_at`
+const profileColumns = `id, name, description, accept, prefer, terminal, content_types, seeded, created_at, updated_at`
 
 func scanQualityProfile(row interface{ Scan(...any) error }) (QualityProfile, error) {
 	var p QualityProfile
-	var accept, prefer, terminal string
+	var accept, prefer, terminal, contentTypes string
 	var seeded int
 	var created, updated string
 	if err := row.Scan(&p.ID, &p.Name, &p.Description,
-		&accept, &prefer, &terminal, &seeded, &created, &updated); err != nil {
+		&accept, &prefer, &terminal, &contentTypes, &seeded, &created, &updated); err != nil {
 		return QualityProfile{}, err
 	}
 	p.Seeded = seeded == 1
@@ -99,6 +111,11 @@ func scanQualityProfile(row interface{ Scan(...any) error }) (QualityProfile, er
 		}
 		*pair.dest = rules
 	}
+	types, err := decodeContentTypes(contentTypes)
+	if err != nil {
+		return QualityProfile{}, err
+	}
+	p.ContentTypes = types
 	p.CreatedAt = parseTime(created)
 	p.UpdatedAt = parseTime(updated)
 	return p, nil
@@ -116,6 +133,22 @@ func decodeRules(raw string) ([]policy.Rule, error) {
 	}
 	if out == nil {
 		out = []policy.Rule{}
+	}
+	return out, nil
+}
+
+// decodeContentTypes reads the content_types column, the same
+// null/absent-normalises-to-empty rule decodeRules uses.
+func decodeContentTypes(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}, nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, fmt.Errorf("decoding quality profile content types: %w", err)
+	}
+	if out == nil {
+		out = []string{}
 	}
 	return out, nil
 }
@@ -234,6 +267,7 @@ func (a *API) createQualityProfile(w http.ResponseWriter, r *http.Request) {
 
 	now := a.now().UTC()
 	out := fromDomain(profile, false, now, now)
+	out.ContentTypes = derefStrings(body.ContentTypes)
 
 	var ev events.Event
 	err := a.db.InTx(r.Context(), func(tx *sql.Tx) error {
@@ -306,9 +340,15 @@ func (a *API) updateQualityProfile(w http.ResponseWriter, r *http.Request) {
 			return &badRequest{err}
 		}
 
+		contentTypes := existing.ContentTypes
+		if body.ContentTypes != nil {
+			contentTypes = *body.ContentTypes
+		}
+
 		now := a.now().UTC()
 		out = fromDomain(merged, existing.Seeded, existing.CreatedAt, now)
 		out.ID = existing.ID
+		out.ContentTypes = contentTypes
 
 		if sameProfile(existing, out) {
 			// Not a transition. A PUT that changes nothing must not emit, or
@@ -409,6 +449,13 @@ func deref(r *[]policy.Rule) []policy.Rule {
 	return *r
 }
 
+func derefStrings(r *[]string) []string {
+	if r == nil {
+		return nil
+	}
+	return *r
+}
+
 // sameProfile reports whether a PUT is a no-op.
 func sameProfile(a, b QualityProfile) bool {
 	if a.Name != b.Name || a.Description != b.Description {
@@ -425,11 +472,23 @@ func sameProfile(a, b QualityProfile) bool {
 		}
 		return true
 	}
-	return same(a.Accept, b.Accept) && same(a.Prefer, b.Prefer) && same(a.Terminal, b.Terminal)
+	sameTypes := func(x, y []string) bool {
+		if len(x) != len(y) {
+			return false
+		}
+		for i := range x {
+			if x[i] != y[i] {
+				return false
+			}
+		}
+		return true
+	}
+	return same(a.Accept, b.Accept) && same(a.Prefer, b.Prefer) && same(a.Terminal, b.Terminal) &&
+		sameTypes(a.ContentTypes, b.ContentTypes)
 }
 
 func insertQualityProfile(ctx context.Context, tx *sql.Tx, p QualityProfile) error {
-	accept, prefer, terminal, err := encodeProfileSections(p)
+	accept, prefer, terminal, contentTypes, err := encodeProfileSections(p)
 	if err != nil {
 		return err
 	}
@@ -439,28 +498,28 @@ func insertQualityProfile(ctx context.Context, tx *sql.Tx, p QualityProfile) err
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO quality_profiles
-			(id, name, description, accept, prefer, terminal, seeded, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.ID, p.Name, p.Description, accept, prefer, terminal, seeded,
+			(id, name, description, accept, prefer, terminal, content_types, seeded, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.ID, p.Name, p.Description, accept, prefer, terminal, contentTypes, seeded,
 		p.CreatedAt.Format(time.RFC3339Nano), p.UpdatedAt.Format(time.RFC3339Nano))
 	return err
 }
 
 func updateQualityProfileRow(ctx context.Context, tx *sql.Tx, p QualityProfile) error {
-	accept, prefer, terminal, err := encodeProfileSections(p)
+	accept, prefer, terminal, contentTypes, err := encodeProfileSections(p)
 	if err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `
 		UPDATE quality_profiles
-		   SET name = ?, description = ?, accept = ?, prefer = ?, terminal = ?, updated_at = ?
+		   SET name = ?, description = ?, accept = ?, prefer = ?, terminal = ?, content_types = ?, updated_at = ?
 		 WHERE id = ?`,
-		p.Name, p.Description, accept, prefer, terminal,
+		p.Name, p.Description, accept, prefer, terminal, contentTypes,
 		p.UpdatedAt.Format(time.RFC3339Nano), p.ID)
 	return err
 }
 
-func encodeProfileSections(p QualityProfile) (accept, prefer, terminal string, err error) {
+func encodeProfileSections(p QualityProfile) (accept, prefer, terminal, contentTypes string, err error) {
 	enc := func(rules []policy.Rule) (string, error) {
 		if rules == nil {
 			rules = []policy.Rule{}
@@ -469,13 +528,22 @@ func encodeProfileSections(p QualityProfile) (accept, prefer, terminal string, e
 		return string(raw), marshalErr
 	}
 	if accept, err = enc(p.Accept); err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	if prefer, err = enc(p.Prefer); err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	if terminal, err = enc(p.Terminal); err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
-	return accept, prefer, terminal, nil
+	types := p.ContentTypes
+	if types == nil {
+		types = []string{}
+	}
+	raw, err := json.Marshal(types)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	contentTypes = string(raw)
+	return accept, prefer, terminal, contentTypes, nil
 }

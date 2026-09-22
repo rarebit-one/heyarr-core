@@ -17,6 +17,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/device/gateway"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/custody"
 )
 
 // GatewayPasswordEnvVar is where the device password is read from when no file
@@ -91,10 +92,39 @@ credentials are distinct by design.`,
 			if err != nil {
 				return err
 			}
+			// Resolve the device dir once so the cruciform pairing file and wake use the
+			// same directory the custody backend loads its key from.
+			deviceDir, err := resolveDeviceDir(*dir)
+			if err != nil {
+				return err
+			}
+			custOpts := custody.Options{
+				Backend:           cfg.Vault.Unwrapper,
+				DeviceDir:         deviceDir,
+				YubiKeySocket:     cfg.Vault.YubiKey.Socket,
+				YubiKeyPIN:        pinFromFileOrEnv(cfg.Vault.YubiKey.PINFile, VaultYubiKeyPINEnvVar, "vault.yubikey.pin_file"),
+				TPMSealedKeyFile:  cfg.Vault.TPM.SealedKeyFile,
+				TPMDevice:         cfg.Vault.TPM.Device,
+				TPMPIN:            pinFromFileOrEnv(cfg.Vault.TPM.PINFile, VaultTPMPINEnvVar, "vault.tpm.pin_file"),
+				CruciformPairFile: cruciformPairFile(cfg.Vault.Cruciform.PairFile, deviceDir),
+			}
+			// The gateway serves unwraps for the Personal MCP, so it wires the offload
+			// away-path wake too (nil for other backends / an un-enrolled device).
+			if custOpts.Backend == custody.Cruciform {
+				custOpts.CruciformWake, err = buildCruciformWake(cfg, deviceDir)
+				if err != nil {
+					return err
+				}
+			}
+			cust, err := custody.Select(custOpts)
+			if err != nil {
+				return err
+			}
 
 			srv, err := gateway.New(gateway.Options{
 				Personal: gateway.NewSpaceLibrary(apiClient, *dir).
-					WithRoles(gateway.SpaceRoles{StarredSpace: starredSpace, HistorySpace: historySpace}),
+					WithRoles(gateway.SpaceRoles{StarredSpace: starredSpace, HistorySpace: historySpace}).
+					WithCustody(cust),
 				Controller: gateway.Controller{
 					BaseURL: base,
 					User:    deviceUser,

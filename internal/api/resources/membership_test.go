@@ -181,8 +181,22 @@ func TestPhoneAdmitsPhoneAndTheNodeLearnsRemoves(t *testing.T) {
 
 	// A removes B and pushes the remove. B is refused from then on, its row is
 	// tombstoned, C (admitted by B BEFORE the remove) stays — no cascade through
-	// history (ADR-0007).
-	rmB := sign(privA, enrolment.OpRemove, devB, enrolment.OpHash(addC))
+	// history (ADR-0007). The fleet high-water is three (A, B, C), so ADR-0008
+	// rule 5 requires k=2: A's remove carries a second member's co-signature (C's)
+	// or it would be under_threshold and change nothing. The CosignOp → AttachCosigs
+	// flow is what a second device performs when it approves the removal.
+	rmBOp, err := enrolment.VerifyOp(sign(privA, enrolment.OpRemove, devB, enrolment.OpHash(addC)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cosigC, err := enrolment.CosignOp(privC, rmBOp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rmB, err := enrolment.AttachCosigs(privA, rmBOp, []enrolment.Cosig{cosigC})
+	if err != nil {
+		t.Fatal(err)
+	}
 	resp = h.do(http.MethodPost, "/membership/"+usr, "", strings.NewReader(fmt.Sprintf(`{"ops":[%q]}`, rmB)))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /membership: status = %d (body: %s)", resp.StatusCode, h.body(resp))
