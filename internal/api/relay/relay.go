@@ -44,6 +44,12 @@ type Options struct {
 	// nil means time.Now.
 	Now    func() time.Time
 	Logger *slog.Logger
+	// Types is the message-slot allow-list the relay accepts. Empty keeps
+	// voidbind-go's pairing default (commit/reveal/cert). A node that also carries
+	// the cruciform-offload live path sets it to the pairing set plus the offload
+	// slots — the caller composes them, so this package stays agnostic to what
+	// rides the relay (see the controller mount).
+	Types []string
 }
 
 // Handler serves the Voidbind relay under httpapi.RelayV1Prefix.
@@ -72,6 +78,7 @@ func New(opts Options) *Handler {
 		MaxSessions:     pairrelay.MaxSessions,
 		SessionTTL:      pairrelay.SessionTTL,
 		Now:             opts.Now,
+		Types:           opts.Types,
 	})
 	// The relay's own mux is written against "/v1/..." (the origin-relative
 	// paths a `voidbind relay` serves) and voidbind-go's client appends those

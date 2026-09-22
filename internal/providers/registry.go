@@ -258,21 +258,36 @@ func (r *Registry) EnrichProviders() []EnrichProvider {
 	return out
 }
 
-// DiscoverySearchers is every metadata provider that can ALSO resolve a
-// free-text query to candidate works not yet in the library (#451), in routing
-// order.
+// DiscoverySearchers is every registered provider that can resolve a free-text
+// query to candidate works not yet in the library (#451), in routing order.
 //
-// It is FeedProviders' narrower sibling: discovery is an optional facet of the
-// metadata capability, so the routing accessor is the same — walk the metadata
-// providers — and the type assertion picks out those that implement the extra
-// DiscoverySearcher interface rather than only Enumerate. A metadata provider
-// that cannot search itself (a podcast or RSS adapter handed a feed URL) is
-// simply absent from this slice, which is what lets a discovery caller answer
-// "no provider can do this" from an empty result rather than by iterating and
-// casting at the call site.
+// It walks Route(CapabilityMetadata) UNION Route(CapabilityEnrich), not just
+// the first. That used to be enough when only the two feed-shaped metadata
+// providers (TVDB, TMDB) could discover anything, but ADR-0077's deferred
+// want-scoped half added discovery to the book and music providers, which are
+// CapabilityEnrich, never CapabilityMetadata (ADR-0087 keeps them off the
+// feed/follow machinery on purpose — they have no Enumerate, no calendar).
+//
+// It is still gated by declared capability, deliberately, the same discipline
+// every other routing accessor here uses (FeedProviders, EnrichProviders,
+// Indexers) — walking every registered provider and type-asserting alone would
+// let anything that HAPPENS to implement Discover answer, whether or not it
+// claims to be able to look itself up (the providers.Fake test double implements
+// every interface unconditionally, which is exactly the case this would get
+// wrong: an indexer-only fake would wrongly start answering discovery queries).
+// A provider that cannot search itself is simply absent from this slice, which
+// is what lets a discovery caller answer "no provider can do this" from an
+// empty result rather than by iterating and casting at the call site.
 func (r *Registry) DiscoverySearchers() []DiscoverySearcher {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	var out []DiscoverySearcher
-	for _, p := range r.Route(CapabilityMetadata) {
+	for _, name := range r.order {
+		p := r.byName[name]
+		if !hasCapability(p.Capabilities(), CapabilityMetadata) && !hasCapability(p.Capabilities(), CapabilityEnrich) {
+			continue
+		}
 		if ds, ok := p.(DiscoverySearcher); ok {
 			out = append(out, ds)
 		}

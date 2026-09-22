@@ -74,6 +74,61 @@ type Config struct {
 	// empty configuration is fully supported: the login broker still mounts and
 	// still shows a QR, it simply wakes no device.
 	Notify Notify `koanf:"notify"`
+
+	// Vault selects this device's space-key custody backend (ADR-0098): which
+	// Unwrapper opens the space keys sealed for it. It is a device-side choice
+	// (the gateway and the vault CLI honour it); the default "software" needs no
+	// configuration.
+	Vault Vault `koanf:"vault"`
+}
+
+// Vault configures device-side space-key custody (ADR-0098). The device
+// encryption key is reached only through an Unwrapper, whose custody is a
+// pluggable per-platform backend; this selects it.
+type Vault struct {
+	// Unwrapper selects the custody backend: "software" (default, in-process
+	// ECDH), "yubikey" (the X25519 agreement runs on an OpenPGP card), "tpm"
+	// (the key is sealed to a TPM under a PCR+PIN policy), or "cruciform" (the
+	// desktop holds no key and offloads each unwrap to the paired phone, ADR-0098).
+	Unwrapper string `koanf:"unwrapper"`
+	// YubiKey configures the on-card backend; used only when unwrapper=yubikey.
+	YubiKey VaultYubiKey `koanf:"yubikey"`
+	// TPM configures the TPM-gated backend; used only when unwrapper=tpm.
+	TPM VaultTPM `koanf:"tpm"`
+	// Cruciform configures the offload backend; used only when unwrapper=cruciform.
+	Cruciform VaultCruciform `koanf:"cruciform"`
+}
+
+// VaultYubiKey configures the YubiKey-on-card custody backend.
+type VaultYubiKey struct {
+	// Socket is the gpg-agent Assuan socket the backend dials. Empty discovers it
+	// via gpgconf — the usual case.
+	Socket string `koanf:"socket"`
+	// PINFile reads the card User PIN from a file (trimmed). Empty falls back to
+	// the HEYARR_VAULT_YUBIKEY_PIN environment variable. The PIN gates the card;
+	// it is never written back anywhere.
+	PINFile string `koanf:"pin_file"`
+}
+
+// VaultTPM configures the TPM-gated custody backend.
+type VaultTPM struct {
+	// SealedKeyFile is the path to the sealed-key blob the backend unseals
+	// (provisioned by the tpm seal step). Required when unwrapper=tpm.
+	SealedKeyFile string `koanf:"sealed_key_file"`
+	// Device is the TPM resource-manager device to open. Empty uses /dev/tpmrm0.
+	Device string `koanf:"device"`
+	// PINFile reads the policy PIN from a file (trimmed). Empty falls back to the
+	// HEYARR_VAULT_TPM_PIN environment variable. The PIN gates the unseal; it is
+	// never written back anywhere.
+	PINFile string `koanf:"pin_file"`
+}
+
+// VaultCruciform configures the cruciform-offload custody backend.
+type VaultCruciform struct {
+	// PairFile is the path to the offload pairing config (written by
+	// `heyarr device pair-offload`). Empty resolves to cruciform-pairing.json in
+	// the device directory — the default location the pairing writes.
+	PairFile string `koanf:"pair_file"`
 }
 
 // Notify configures the push/wake login channel (ADR-0055). The subscription
@@ -487,6 +542,7 @@ func Defaults() Config {
 		Database: Database{},
 		Media:    Media{StreamConcurrency: 2},
 		Backup:   Backup{Interval: "5m"},
+		Vault:    Vault{Unwrapper: "software"},
 	}
 }
 
@@ -543,6 +599,55 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// SystemConfigPath is the conventional location of the configuration file on a
+// host install, and the path the packaged systemd unit passes to --config. A
+// CLI command run on the same host as the service resolves it (see ResolvePath)
+// so it targets the SAME data directory — the socket, the database and the
+// token store the service actually uses — rather than the built-in defaults,
+// which describe a directory the service is very likely not using.
+const SystemConfigPath = "/etc/heyarr/config.yaml"
+
+// systemConfigPath is the path ResolvePath actually probes. It is a var, not a
+// direct use of the const, so a test can point discovery at a file it created
+// rather than needing one to exist at the real system path.
+var systemConfigPath = SystemConfigPath
+
+// ConfigPathEnv names the environment variable that supplies the config file
+// path when --config is not given. It is the path analogue of the HEYARR_
+// value overrides: a service manager, or an operator's shell, can point every
+// heyarr invocation at one config without repeating --config.
+const ConfigPathEnv = "HEYARR_CONFIG"
+
+// ResolvePath decides which configuration file to load when the caller did not
+// name one with --config. It is the client half of #556.
+//
+// The built-in defaults (data_dir /var/lib/heyarr, addr 127.0.0.1:7777)
+// describe no running instance. A CLI command that silently falls back to them
+// dials a socket the server never bound; worse, a local-DB command like
+// `token create` opens a database the controller does not read, and a token
+// minted there is later rejected as an invalid credential — a symptom that
+// gives no hint of its cause. So when --config is empty, discover the instance
+// the way the host is set up to describe it, in order:
+//
+//  1. $HEYARR_CONFIG, if set — an explicit choice; a missing file behind it
+//     becomes a loud error from Load, not a silent fallback.
+//  2. SystemConfigPath, if it exists.
+//
+// An empty result means "no file": the built-in defaults, which are still the
+// right answer for a fresh install that has configured nothing yet.
+func ResolvePath(flagPath string) string {
+	if strings.TrimSpace(flagPath) != "" {
+		return flagPath
+	}
+	if env := strings.TrimSpace(os.Getenv(ConfigPathEnv)); env != "" {
+		return env
+	}
+	if _, err := os.Stat(systemConfigPath); err == nil {
+		return systemConfigPath
+	}
+	return ""
+}
+
 // applyDerivedDefaults fills in the paths that hang off DataDir. It runs after
 // loading so that setting data_dir alone moves everything, while setting a path
 // explicitly still wins.
@@ -582,6 +687,12 @@ func (c Config) BackupInterval() (time.Duration, error) {
 
 var validLogLevels = []string{"debug", "info", "warn", "error"}
 
+// validVaultUnwrappers is the set of currently SELECTABLE custody backends
+// (ADR-0098). "cruciform" is named in the ADR and built (#582) but not yet wired
+// to the callers, so configuring it is refused here rather than failing later at
+// open time.
+var validVaultUnwrappers = []string{"software", "yubikey", "tpm", "cruciform"}
+
 // Validate reports the first configuration problem, phrased so the operator can
 // act on it without reading the source. Configuration is checked before any
 // role starts: failing at startup is far cheaper than failing on first write.
@@ -606,6 +717,9 @@ func (c Config) Validate() error {
 	}
 	if c.Media.StreamConcurrency < 0 {
 		return fmt.Errorf("config: media.stream_concurrency must be zero or more, got %d", c.Media.StreamConcurrency)
+	}
+	if !slicesContains(validVaultUnwrappers, c.Vault.Unwrapper) {
+		return fmt.Errorf("config: vault.unwrapper %q is not one of %s", c.Vault.Unwrapper, strings.Join(validVaultUnwrappers, ", "))
 	}
 	// The guest allow-list is checked for CIDR shape even when guest mode is off:
 	// a malformed range is a mistake worth naming at startup, not on the first

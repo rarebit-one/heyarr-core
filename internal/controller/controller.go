@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	vbrelay "github.com/rarebit-one/voidbind-go/relay"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	"github.com/rarebit-one/heyarr-core/internal/api/dlna"
@@ -24,6 +25,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
 	"github.com/rarebit-one/heyarr-core/internal/api/subsonic"
 	"github.com/rarebit-one/heyarr-core/internal/api/vaultblob"
+	"github.com/rarebit-one/heyarr-core/internal/api/vaultplacement"
 	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
@@ -48,6 +50,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/cruciform"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/replication"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -839,6 +842,20 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
+	// The cross-site placement-pin route (ADR-0096). A device says a vault blob
+	// should live on a peer OTHER than the one it uploaded to — the pin the
+	// convergence union turns into a replication target — and takes it back when
+	// its retention policy lets the blob go. It writes only opaque (blob, peer)
+	// pairs to the same catalog, so it is the placement counterpart to
+	// vaultBlobHandler above, which pins an upload to THIS node.
+	vaultPlacementHandler, err := vaultplacement.New(vaultplacement.Options{
+		Pinner: cat,
+		Logger: c.log,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: %w", err)
+	}
+
 	// MCP mounts on the SAME authenticated router (§71, ADR-0019), so it
 	// inherits the middleware chain, the request correlation and the `read`
 	// scope floor rather than standing up a second server that would have to
@@ -883,7 +900,13 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// The Voidbind relay beside it (ADR-0066): the protocol the voidbind CLI and
 	// the phone actually speak, so this node is the rendezvous for its own
 	// devices without a separately-run `voidbind relay`. Same caps, same stance.
-	relayV1Handler := relay.New(relay.Options{Logger: c.log})
+	// It carries the pairing default slots plus the cruciform-offload live path's
+	// slots (its one-time pairing `confirm` and the recurring unwrap request/
+	// response), so one node relay is the rendezvous for both device enrolment and
+	// offload unwraps (ADR-0098). The relay stays a dumb, opaque store either way.
+	relayTypes := append(append([]string{}, vbrelay.DefaultTypes...),
+		append(cruciform.RelayPairTypes, cruciform.RelayUnwrapTypes...)...)
+	relayV1Handler := relay.New(relay.Options{Logger: c.log, Types: relayTypes})
 
 	// The encrypted personal-state plane's device-facing API (§38, §42,
 	// ADR-0049). It stores the opaque things a device pushes — a space, the
@@ -965,7 +988,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
-	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, vaultBlobHandler.Mount, mcpServer.Mount, psAPI.Mount},
+	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, vaultBlobHandler.Mount, vaultPlacementHandler.Mount, mcpServer.Mount, psAPI.Mount},
 		[]httpapi.MountFunc{renderHandler.Mount, relayHandler.Mount, relayV1Handler.Mount, subsonicHandler.Mount, opdsHandler.Mount, dlnaHandler.Mount}, nil
 }
 

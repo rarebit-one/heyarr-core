@@ -150,6 +150,23 @@ func (h *followHarness) exec(t *testing.T, query string, args ...any) {
 	}
 }
 
+// externalIDCount counts external_ids rows on the harness's work. With a source
+// and value it filters to that exact id; with both empty it counts any.
+func (h *followHarness) externalIDCount(t *testing.T, source, value string) int {
+	t.Helper()
+	q := `SELECT count(*) FROM external_ids WHERE entity_type = 'work' AND entity_id = ?`
+	args := []any{h.workID}
+	if source != "" || value != "" {
+		q += ` AND source = ? AND value = ?`
+		args = append(args, source, value)
+	}
+	var n int
+	if err := h.db.Reader().QueryRow(q, args...).Scan(&n); err != nil {
+		t.Fatalf("counting external ids: %v", err)
+	}
+	return n
+}
+
 func (h *followHarness) poll(t *testing.T) error {
 	t.Helper()
 	payload, err := json.Marshal(followed.PollSourcePayload{SourceID: h.sourceID})
@@ -391,6 +408,51 @@ func TestAFollowedPodcastArchivesEachEpisodeDirectly(t *testing.T) {
 
 // A poll is re-run — invariant 9 says it will be — and produces no duplicate
 // items and no duplicate wants.
+// A TV poll records the series' catalogue id on its work, so identification-
+// dependent features can find it. TV identification is TVDB-first (ADR-0058) and
+// leaves a work with NO external id when TVDB is not the configured adapter —
+// even though the followed source carries the id in feed_ref — which starved the
+// subtitle fetch (DueSubtitleFetches gates on the work having a tmdb/imdb
+// external id). The adapter names the id space its ref belongs to; the write is
+// idempotent so it self-heals a source followed before this existed.
+func TestAPollRecordsTheSeriesExternalIDOnItsWork(t *testing.T) {
+	h := newFollowHarnessOf(t, followed.BackfillFull, followed.TypeTVSeries, "157239")
+	h.feed.WithIDNamespace("tmdb")
+	h.feed.OfferFeed(h.feedRef,
+		episode("S01E01", "Pilot", time.Date(2025, 8, 12, 0, 0, 0, 0, time.UTC)))
+
+	if err := h.poll(t); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	if got := h.externalIDCount(t, "tmdb", "157239"); got != 1 {
+		t.Fatalf("the poll should have recorded tmdb=157239 on the work, found %d", got)
+	}
+
+	// Idempotent: a second poll must not duplicate it.
+	if err := h.poll(t); err != nil {
+		t.Fatalf("second poll: %v", err)
+	}
+	if got := h.externalIDCount(t, "tmdb", "157239"); got != 1 {
+		t.Errorf("a second poll duplicated the external id (%d rows), want 1 — the write must be idempotent", got)
+	}
+}
+
+// An adapter whose ref is a URL, not a catalogue id, reports no id namespace, so
+// a poll records no work external id (a podcast/channel/rss source).
+func TestAPollRecordsNoExternalIDWhenTheAdapterHasNoIDNamespace(t *testing.T) {
+	h := newFollowHarnessOf(t, followed.BackfillFull, followed.TypeTVSeries, "https://feed.example/x")
+	// The fake is left with no IDNamespace — a URL-ref adapter.
+	h.feed.OfferFeed(h.feedRef,
+		episode("S01E01", "Pilot", time.Date(2025, 8, 12, 0, 0, 0, 0, time.UTC)))
+
+	if err := h.poll(t); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	if got := h.externalIDCount(t, "", ""); got != 0 {
+		t.Errorf("an adapter reporting no id namespace must record no external id, found %d", got)
+	}
+}
+
 func TestPollingIsIdempotent(t *testing.T) {
 	h := newFollowHarness(t, followed.BackfillFull)
 	aired := time.Date(2020, 3, 1, 0, 0, 0, 0, time.UTC)

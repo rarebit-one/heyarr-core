@@ -28,6 +28,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	psclient "github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/custody"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
@@ -192,7 +193,11 @@ func (h *psHarness) assertNoPlaintextAtRest(spaceID string, secrets ...string) {
 }
 
 func (h *psHarness) reader() personalStateReader {
-	return personalStateReader{ctx: h.ctx, c: h.client, deviceDir: h.deviceDir}
+	cust, err := custody.Select(custody.Options{DeviceDir: h.deviceDir})
+	if err != nil {
+		h.t.Fatalf("selecting software custody: %v", err)
+	}
+	return personalStateReader{ctx: h.ctx, c: h.client, cust: cust}
 }
 
 // TestPersonalMCPReaderStarredIsDecryptedOnDevice: a genuinely-encrypted starred

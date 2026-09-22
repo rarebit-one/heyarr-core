@@ -154,7 +154,7 @@
         "heyarr/requiredScope": "read",
         "readOnlyHint": true
       },
-      "description": "Find content the library does NOT already hold. Where search_content looks only in the library, this asks the metadata provider (TVDB) for candidate series matching a free-text title, whether or not they are catalogued — the \"search then follow\" door. Each result carries a tvdb_id you pass straight to follow_source (or want_content by title) to bring it in. Use this when search_content came back empty and someone wants something new. Needs a metadata provider configured; a node without one says so rather than returning nothing.",
+      "description": "Find content the library does NOT already hold. Where search_content looks only in the library, this asks every configured metadata provider (TVDB/TMDB for series, TMDB for movies, Open Library for books, MusicBrainz for music) for candidate works matching a free-text title, whether or not they are catalogued — the \"search then acquire\" door. A tv_series result carries a tvdb_id you pass straight to follow_source; every result (including movie/book/music) carries source+external_id for reference and a type telling you which: a tv_series/podcast/youtube_channel/rss_feed result is followed (follow_source), a movie/book/music result has no calendar and is wanted instead (want_content by title+year+content_type). Use this when search_content came back empty and someone wants something new. Needs at least one metadata or enrich provider configured; a node without one says so rather than returning nothing.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

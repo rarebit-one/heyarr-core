@@ -470,6 +470,11 @@ func TestASearchThatReachedNobodyIsNotAnEmptySearch(t *testing.T) {
 		t.Fatal("a search that reached no indexer reported success, so the job " +
 			"will not retry and the want waits out its full cadence")
 	}
+	// The outage is a property of the moment: the queue must treat it as
+	// transient and retry patiently, not spend the attempt cap on a blip (#557).
+	if !errors.Is(err, jobs.ErrTransient) {
+		t.Errorf("an all-indexers-unreachable failure should be transient, got %v", err)
+	}
 
 	detail := h.detailOf(t)
 	if !strings.Contains(detail, "no indexer could be reached") {

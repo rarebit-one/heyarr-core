@@ -118,6 +118,10 @@ func (c *Client) Capabilities() []providers.Capability {
 // ServesType reports that this adapter enumerates tv_series sources.
 func (c *Client) ServesType(t followed.Type) bool { return t == followed.TypeTVSeries }
 
+// IDNamespace names the external-id source a TVDB ref belongs to, so a followed
+// series' ref (a TVDB series id) is recorded as its work's `tvdb` external id.
+func (c *Client) IDNamespace() string { return "tvdb" }
+
 // Check exercises the provider by logging in, and reports what it found. It
 // EXERCISES rather than asserts (providers.Provider): a key that is configured
 // but rejected must report unhealthy so work does not route to it and then fail.
@@ -234,7 +238,8 @@ func (c *Client) Discover(ctx context.Context, query string) ([]providers.Discov
 			Title:      strings.TrimSpace(hit.Name),
 			Year:       parseYear(hit.Year),
 			ExternalID: id,
-			Type:       followed.TypeTVSeries,
+			Source:     "tvdb",
+			Type:       string(followed.TypeTVSeries),
 			Overview:   strings.TrimSpace(hit.Overview),
 		})
 	}

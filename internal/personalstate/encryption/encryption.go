@@ -12,6 +12,13 @@ import vb "github.com/rarebit-one/voidbind-go/encryption"
 // SpaceKey is re-exported from voidbind-go/encryption.
 type SpaceKey = vb.SpaceKey
 
+// AgreementFunc is re-exported from voidbind-go/encryption (ADR-0098): the
+// X25519 ECDH step of an unwrap, factored out so the recipient private key can
+// live where this process cannot export it — a YubiKey doing the agreement
+// on-card, a TPM-gated key, or an offloaded phone. A pluggable Unwrapper backend
+// supplies one; UnwrapWithAgreement drives it.
+type AgreementFunc = vb.AgreementFunc
+
 // Re-exported encryption constants.
 const (
 	Algorithm    = vb.Algorithm
@@ -35,4 +42,10 @@ var (
 	Seal            = vb.Seal
 	NewSpaceKey     = vb.NewSpaceKey
 	Unwrap          = vb.Unwrap
+
+	// UnwrapWithAgreement is Unwrap with the ECDH injected (ADR-0098): the seam a
+	// hardware-gated or offloaded Unwrapper reaches through, so the recipient
+	// private key need not be an in-process *ecdh.PrivateKey. Unwrap delegates to
+	// it and is byte-identical.
+	UnwrapWithAgreement = vb.UnwrapWithAgreement
 )

@@ -123,7 +123,7 @@ func (h *Handler) Mount(r chi.Router) {
 // mismatching body fails verification and is a 400. The plaintext never exists
 // here — the client encrypted it (ADR-0021).
 func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
-	expected, err := hashing.Parse(chi.URLParam(r, "hash"))
+	expected, err := hashing.Parse(httpapi.HashParam(r))
 	if err != nil {
 		httpapi.Fail(w, r, problem.BadRequest("the blob id must be a blake3:<hex> digest: "+err.Error()))
 		return

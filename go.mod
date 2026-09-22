@@ -4,6 +4,8 @@ go 1.25.7
 
 require (
 	github.com/go-chi/chi/v5 v5.3.1
+	github.com/google/go-tpm v0.9.8
+	github.com/google/go-tpm-tools v0.4.9
 	github.com/google/uuid v1.6.0
 	github.com/knadh/koanf/parsers/yaml v1.1.1
 	github.com/knadh/koanf/providers/env/v2 v2.0.1
@@ -13,7 +15,7 @@ require (
 	github.com/lmittmann/tint v1.2.0
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/prometheus/client_golang v1.24.1
-	github.com/rarebit-one/voidbind-go v0.9.0
+	github.com/rarebit-one/voidbind-go v0.12.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
 	go.yaml.in/yaml/v3 v3.0.4

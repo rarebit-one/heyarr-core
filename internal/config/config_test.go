@@ -228,6 +228,9 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		{"public origin with bad scheme", func(c *Config) {
 			c.HTTP.PublicOrigin = "ftp://heyarr.example.com"
 		}, "absolute http(s) origin"},
+		{"unknown vault unwrapper", func(c *Config) {
+			c.Vault.Unwrapper = "quantum"
+		}, "vault.unwrapper"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -241,6 +244,21 @@ func TestValidateRejectsBadValues(t *testing.T) {
 				t.Errorf("error = %q, want it to mention %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestVaultUnwrapperSelectable: the default is software, and every wired backend
+// passes validation (ADR-0098). An unknown one is refused (covered above).
+func TestVaultUnwrapperSelectable(t *testing.T) {
+	if got := Defaults().Vault.Unwrapper; got != "software" {
+		t.Fatalf("default vault.unwrapper = %q, want software", got)
+	}
+	for _, backend := range []string{"software", "yubikey", "tpm", "cruciform"} {
+		cfg := Defaults()
+		cfg.Vault.Unwrapper = backend
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate rejected vault.unwrapper %q: %v", backend, err)
+		}
 	}
 }
 
@@ -519,4 +537,47 @@ func TestGuestEmptyAllowListValidatesAndTrustsNobody(t *testing.T) {
 			t.Errorf("an empty allow-list trusts %q", host)
 		}
 	}
+}
+
+// TestResolvePath covers the config discovery that #556 adds: an explicit flag
+// wins, else $HEYARR_CONFIG, else a present system config, else "" (defaults).
+func TestResolvePath(t *testing.T) {
+	t.Run("flag wins over everything", func(t *testing.T) {
+		t.Setenv(ConfigPathEnv, "/env/config.yaml")
+		if got := ResolvePath("/flag/config.yaml"); got != "/flag/config.yaml" {
+			t.Errorf("flag should win, got %q", got)
+		}
+	})
+
+	// HEYARR_CONFIG is an explicit choice and is returned even when the file is
+	// missing — Load then reports that loudly, which is the intended behaviour.
+	t.Run("env used when no flag", func(t *testing.T) {
+		t.Setenv(ConfigPathEnv, "/env/config.yaml")
+		if got := ResolvePath(""); got != "/env/config.yaml" {
+			t.Errorf("env should be used, got %q", got)
+		}
+	})
+
+	t.Run("system path discovered when present", func(t *testing.T) {
+		t.Setenv(ConfigPathEnv, "")
+		p := writeConfig(t, "peer:\n  name: test\n")
+		old := systemConfigPath
+		systemConfigPath = p
+		t.Cleanup(func() { systemConfigPath = old })
+		if got := ResolvePath(""); got != p {
+			t.Errorf("system path should be discovered, got %q", got)
+		}
+	})
+
+	// Nothing to discover means the built-in defaults, which are correct for a
+	// host that has configured nothing yet.
+	t.Run("empty when nothing to discover", func(t *testing.T) {
+		t.Setenv(ConfigPathEnv, "")
+		old := systemConfigPath
+		systemConfigPath = filepath.Join(t.TempDir(), "absent.yaml")
+		t.Cleanup(func() { systemConfigPath = old })
+		if got := ResolvePath(""); got != "" {
+			t.Errorf("expected empty (defaults), got %q", got)
+		}
+	})
 }

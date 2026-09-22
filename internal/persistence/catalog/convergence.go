@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
 	"github.com/rarebit-one/heyarr-core/internal/events"
@@ -104,7 +105,86 @@ func (c *Catalog) PlanPeerConvergence(ctx context.Context, scope string) (PeerCo
 		peers = append(peers, replication.Peer{ID: id, Mode: replication.ModeFull})
 	}
 	plan.Gaps = replication.Diff(peers, canonical, held)
+
+	// The pin union (ADR-0096). replication.Diff answered "what does the
+	// canonical blob set — every blob a live asset accounts for — require", and a
+	// vault blob is deliberately absent from it: it has no `assets` row for
+	// canonicalBlobs to find. A placement pin is the OTHER thing that makes a
+	// blob belong on a peer, so the pins are unioned in here, AFTER the diff and
+	// per-(blob, peer) — never by adding a pinned hash to the flat `canonical`
+	// set, which would fan every pin to ALL Full Peers and replicate a device's
+	// one-peer pin across the whole fabric (the thing ADR-0096 forbids).
+	pinGaps, err := c.pinGaps(ctx, required, held, plan.Gaps)
+	if err != nil {
+		return PeerConvergence{}, err
+	}
+	if len(pinGaps) > 0 {
+		plan.Gaps = append(plan.Gaps, pinGaps...)
+		// Re-sort to preserve Diff's deterministic (blob, peer) order across the
+		// union, which the per-cycle bound in replication.Bound depends on: a
+		// prefix of a randomly ordered list would defer a different arbitrary
+		// subset every cycle instead of finishing what it started.
+		sort.Slice(plan.Gaps, func(i, j int) bool {
+			if plan.Gaps[i].BlobHash != plan.Gaps[j].BlobHash {
+				return plan.Gaps[i].BlobHash < plan.Gaps[j].BlobHash
+			}
+			return plan.Gaps[i].PeerID < plan.Gaps[j].PeerID
+		})
+	}
 	return plan, nil
+}
+
+// pinGaps turns the placement pins into replication gaps, unioned on top of the
+// canonical-set diff (ADR-0096).
+//
+// A pin is a gap when its peer is one of THIS cycle's required Full Peers — the
+// `required` set, already scoped — and that peer does not already hold the blob.
+// A pin naming a peer that is not a Full Peer (or is out of this cycle's scope)
+// is ignored: §34's placement policies are unbuilt, and a pin to a partial or
+// cache peer has no policy that says it should hold anything.
+//
+// `have` is the gaps the diff already produced. A blob that is BOTH pinned and
+// canonical would otherwise be emitted twice — once by the diff, once here — so
+// the pair is skipped when the diff already named it. The queue's dedupe key
+// would collapse the duplicate jobs regardless, but a doubled gap would inflate
+// the under-replicated count this cycle reports and is worth not producing.
+func (c *Catalog) pinGaps(
+	ctx context.Context, required []string, held replication.Holdings, have []replication.Gap,
+) ([]replication.Gap, error) {
+	pins, err := c.AllPlacementPins(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(pins) == 0 {
+		return nil, nil
+	}
+
+	full := make(map[string]struct{}, len(required))
+	for _, id := range required {
+		full[id] = struct{}{}
+	}
+	already := make(map[string]struct{}, len(have))
+	for _, g := range have {
+		already[g.BlobHash+"\x00"+g.PeerID] = struct{}{}
+	}
+
+	var out []replication.Gap
+	for _, p := range pins {
+		if _, isFull := full[p.PeerID]; !isFull {
+			// A pin to a non-Full peer, or a peer outside this cycle's scope.
+			continue
+		}
+		if _, holds := held[p.PeerID][p.BlobHash]; holds {
+			continue
+		}
+		key := p.BlobHash + "\x00" + p.PeerID
+		if _, dup := already[key]; dup {
+			continue
+		}
+		already[key] = struct{}{}
+		out = append(out, replication.Gap{BlobHash: p.BlobHash, PeerID: p.PeerID})
+	}
+	return out, nil
 }
 
 // canonicalBlobs is the canonical blob set: every blob the catalog still

@@ -19,13 +19,14 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 )
 
-// The voidbind-go membership vectors (testdata/vectors/membership, ADR-0007),
-// replayed through the STORE rather than through enrolment.Evaluate directly:
-// every op is recorded into membership_ops, read back, and evaluated, and the
-// device_identities view the store materialises must agree with the vector's
-// expected members and removals. A vector that passes in voidbind-go and
-// fails here is a defect in the store's persistence or reconciliation, never a
-// "flaky key". Copied verbatim from voidbind-go v0.9.0; regenerate there with
+// The voidbind-go membership vectors (testdata/vectors/membership, ADR-0007 +
+// ADR-0008), replayed through the STORE rather than through enrolment.Evaluate
+// directly: every op is recorded into membership_ops, read back, and evaluated,
+// and the device_identities view the store materialises must agree with the
+// vector's expected members and removals. A vector that passes in voidbind-go
+// and fails here is a defect in the store's persistence or reconciliation, never
+// a "flaky key". Copied verbatim from voidbind-go v0.11.0 (ADR-0008 cosig-
+// enforced k-of-N removes, rule 5); regenerate there with
 // `go test ./enrolment -run TestVectors -update` and re-copy.
 
 type vector struct {

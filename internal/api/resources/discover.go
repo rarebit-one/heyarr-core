@@ -18,10 +18,13 @@ import (
 // POST /search is a library search: it answers "what do I already hold that
 // matches this", by a LIKE over works.sort_title, offline and fast. It cannot
 // answer "what could I acquire that I do NOT hold", because the library is the
-// only thing it reads. Discovery asks the metadata provider instead — a live
-// lookup against TVDB (ADR-0050/0058) that returns candidate works with their
-// external ids, whether or not the library has ever seen them — so a caller can
-// go from a free-text title to a follow_source in one step.
+// only thing it reads. Discovery asks the metadata providers instead — a live
+// lookup against TVDB/TMDB (ADR-0050/0058), and, per ADR-0077's deferred
+// want-scoped half, TMDB movies, Open Library books and MusicBrainz music too —
+// that returns candidate works with their external ids, whether or not the
+// library has ever seen them, so a caller can go from a free-text title to a
+// follow_source (the four feed-shaped types) or a want_content (movie, book,
+// music) in one step.
 //
 // Keeping them separate keeps each honest about its cost and its answer: /search
 // stays the fast offline path a client hits on every keystroke, and /discover is
@@ -33,7 +36,7 @@ import (
 // It is a POST under the read floor for the same reason /search and
 // /quality-profiles/{id}/evaluate are: the intent travels in a body, and it
 // writes nothing — a discovery search enters nothing into the library, it only
-// tells the caller what a follow WOULD name.
+// tells the caller what a follow or a want WOULD name.
 
 // errNoDiscovery is the refusal when this node has no provider that can look
 // content up. It is neither the caller's fault nor a failure — there is simply
@@ -49,21 +52,32 @@ type DiscoverRequest struct {
 }
 
 // DiscoveryResult is one candidate a discovery search returned — enough to show
-// a person which work it is and to follow it by id in one step.
+// a person which work it is and to act on it (follow OR want) in one step.
 type DiscoveryResult struct {
+	PosterURL   string `json:"poster_url,omitempty"`
+	BackdropURL string `json:"backdrop_url,omitempty"`
 	// Title and Year name the work as the metadata service knows it.
 	Title string `json:"title"`
 	Year  int    `json:"year,omitempty"`
-	// Type is the followed source type this candidate would be followed as
-	// (tv_series today), so a client picks the right follow flow without
-	// inferring it from the id's shape.
+	// Type is the content kind: one of the four followed source types
+	// (tv_series, podcast, youtube_channel, rss_feed — act on these via
+	// follow_source) or a works content type (movie, book, music — act on
+	// these via want_content by title; there is no calendar to follow).
 	Type string `json:"type"`
-	// TVDBID is the candidate's TVDB series id — the value follow_source takes as
-	// tvdb_id, so a client follows a discovery result in ONE step rather than by
-	// a title that might create a second work. Present for a tv_series candidate;
-	// a future provider whose external id is not a TVDB id would carry its own
-	// field rather than overloading this one.
+	// TVDBID is the candidate's TVDB/TMDB series id — the value follow_source
+	// takes as tvdb_id — kept as its own field for backward compatibility.
+	// Present only for a tv_series candidate.
 	TVDBID string `json:"tvdb_id,omitempty"`
+	// Source names the metadata service this candidate came from ("tvdb",
+	// "tmdb", "openlibrary", "musicbrainz"), and ExternalID is that service's
+	// own id for it — present for every candidate, tv_series included (where
+	// it duplicates TVDBID for the old field's sake). A movie/book/music
+	// candidate has no follow door to walk through in one step the way a
+	// tv_series id does; Source+ExternalID are for display and future
+	// cross-reference, and the actual next step is want_content(title, year,
+	// content_type).
+	Source     string `json:"source,omitempty"`
+	ExternalID string `json:"external_id,omitempty"`
 	// Overview is a short human description when the service supplied one, so a
 	// person choosing between two same-named series has something to choose on.
 	Overview string `json:"overview,omitempty"`
@@ -110,7 +124,11 @@ func (a *API) Discover(ctx context.Context, req DiscoverRequest) ([]DiscoveryRes
 		}
 		answered = true
 		for _, c := range candidates {
-			key := string(c.Type) + "\x00" + c.ExternalID
+			// Keyed on (type, source, external id): two providers can each mint
+			// external ids from their own id space, so type+id alone is not
+			// enough to tell a TMDB movie 100 apart from an unrelated OpenLibrary
+			// candidate that happened to carry the same string.
+			key := c.Type + "\x00" + c.Source + "\x00" + c.ExternalID
 			if seen[key] {
 				continue
 			}
@@ -132,10 +150,14 @@ func (a *API) Discover(ctx context.Context, req DiscoverRequest) ([]DiscoveryRes
 // WorkSummary and follow_source spell that identity.
 func discoveryResultFor(c providers.DiscoveryCandidate) DiscoveryResult {
 	r := DiscoveryResult{
-		Title:    c.Title,
-		Year:     c.Year,
-		Type:     string(c.Type),
-		Overview: c.Overview,
+		Title:       c.Title,
+		Year:        c.Year,
+		Type:        c.Type,
+		Source:      c.Source,
+		ExternalID:  c.ExternalID,
+		Overview:    c.Overview,
+		PosterURL:   c.PosterURL,
+		BackdropURL: c.BackdropURL,
 	}
 	if c.Type == "tv_series" {
 		r.TVDBID = c.ExternalID

@@ -240,6 +240,73 @@ func TestUpdateDistinguishesOmittedFromCleared(t *testing.T) {
 	}
 }
 
+// content_types is metadata for a caller deciding which profiles to OFFER for
+// a given want — a book picker should not offer a video-only profile. It
+// follows the exact omitted-vs-cleared distinction the rule sections do.
+func TestContentTypesCreateAndUpdate(t *testing.T) {
+	h := newHarness(t)
+
+	resp := postProfile(t, h, `{"name":"ebook","content_types":["book"]}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", resp.StatusCode, h.body(resp))
+	}
+	var created struct {
+		ID           string   `json:"id"`
+		ContentTypes []string `json:"content_types"`
+	}
+	if err := json.Unmarshal(h.body(resp), &created); err != nil {
+		t.Fatal(err)
+	}
+	if len(created.ContentTypes) != 1 || created.ContentTypes[0] != "book" {
+		t.Fatalf("content_types = %v, want [book]", created.ContentTypes)
+	}
+
+	// A create that omits content_types is unrestricted, not "book" leaking
+	// from an unrelated request — the empty default, same as the rule sections.
+	resp = postProfile(t, h, `{"name":"no-types-given"}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", resp.StatusCode, h.body(resp))
+	}
+	var untyped struct {
+		ContentTypes []string `json:"content_types"`
+	}
+	if err := json.Unmarshal(h.body(resp), &untyped); err != nil {
+		t.Fatal(err)
+	}
+	if len(untyped.ContentTypes) != 0 {
+		t.Fatalf("an omitted content_types must default to unrestricted (empty), got %v", untyped.ContentTypes)
+	}
+
+	path := "/api/v1/quality-profiles/" + created.ID
+
+	// Omitting content_types on a PUT leaves it alone.
+	resp = h.doStable(http.MethodPut, path, strings.NewReader(`{"description":"still a book profile"}`))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.StatusCode, h.body(resp))
+	}
+	var after struct {
+		ContentTypes []string `json:"content_types"`
+	}
+	if err := json.Unmarshal(h.body(resp), &after); err != nil {
+		t.Fatal(err)
+	}
+	if len(after.ContentTypes) != 1 || after.ContentTypes[0] != "book" {
+		t.Fatalf("omitting content_types must leave it alone, got %v", after.ContentTypes)
+	}
+
+	// Sending it as [] clears it back to unrestricted.
+	resp = h.doStable(http.MethodPut, path, strings.NewReader(`{"content_types":[]}`))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.StatusCode, h.body(resp))
+	}
+	if err := json.Unmarshal(h.body(resp), &after); err != nil {
+		t.Fatal(err)
+	}
+	if len(after.ContentTypes) != 0 {
+		t.Fatalf("sending [] must clear content_types back to unrestricted, got %v", after.ContentTypes)
+	}
+}
+
 // Invariant 7 — every state transition emits — and its converse, which is
 // doing just as much work: something that is not a transition must not.
 func TestEventsAreEmittedForChangesAndOnlyForChanges(t *testing.T) {

@@ -26,7 +26,8 @@ type (
 	Op = vb.Op
 	// OpKind is re-exported from voidbind-go/enrolment.
 	OpKind = vb.OpKind
-	// Cosig is re-exported from voidbind-go/enrolment (reserved, ADR-0007).
+	// Cosig is re-exported from voidbind-go/enrolment (enforced, ADR-0008: a
+	// second member's co-signature over a remove's core, counted by Evaluate).
 	Cosig = vb.Cosig
 	// Member is re-exported from voidbind-go/enrolment.
 	Member = vb.Member
@@ -62,6 +63,9 @@ const (
 	ReasonOutranked    = vb.ReasonOutranked
 	ReasonRemoved      = vb.ReasonRemoved
 	ReasonSuperseded   = vb.ReasonSuperseded
+	// ReasonUnderThreshold is ADR-0008 rule 5: a remove that did not muster the
+	// required k-of-N member co-signatures is ineffective and changes nothing.
+	ReasonUnderThreshold = vb.ReasonUnderThreshold
 )
 
 // Re-exported enrolment sentinels and functions.
@@ -99,4 +103,10 @@ var (
 	OpUser   = vb.OpUser
 	Evaluate = vb.Evaluate
 	Merge    = vb.Merge
+
+	// CosignOp and AttachCosigs are the ADR-0008 k-of-N remove primitives: a
+	// second member co-signs the remove's core (CosignOp), and the primary
+	// re-mints the token with the cosigs attached (AttachCosigs).
+	CosignOp     = vb.CosignOp
+	AttachCosigs = vb.AttachCosigs
 )

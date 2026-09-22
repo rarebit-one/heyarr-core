@@ -235,6 +235,116 @@ func (c *Catalog) OrphanedDownloads(ctx context.Context, grace time.Duration) ([
 	return out, rows.Err()
 }
 
+// StuckIngest is a want parked in VERIFYING or INGESTING whose phase has not
+// changed for a while — a download that finished but whose hash-and-import
+// never completed and is not being retried.
+type StuckIngest struct {
+	DesiredItemID string
+	Phase         acquisition.Phase
+}
+
+// StuckIngests lists wants in VERIFYING or INGESTING whose phase_entered_at is
+// older than `grace` — a wedged ingest.
+//
+// polldownloads enqueues the ingest exactly once, on the transition into
+// VERIFYING, because queueing it every pass would fill the queue with work that
+// is already done. That is correct while the job survives — but if it does not
+// (a worker crash mid-lease, a node OOM, a download client that dropped the
+// completed transfer before the ingest ran), nothing re-enqueues it and the
+// want sits in INGESTING forever with no job in any state driving it. This is
+// the read behind the watchdog that re-drives them.
+//
+// phase_entered_at (indexed with phase, migration 00014) dates the stall, and
+// the grace absorbs a legitimately slow verify of a large file — a genuine
+// verify/ingest holds its dedupe key live throughout, so re-enqueueing a want
+// found here is idempotent regardless.
+func (c *Catalog) StuckIngests(ctx context.Context, grace time.Duration) ([]StuckIngest, error) {
+	cutoff := c.clock.Now().Add(-grace).Format(timestampFormat)
+	rows, err := c.db.Reader().QueryContext(ctx, `
+		SELECT desired_item_id, phase
+		FROM acquisition_state
+		WHERE phase IN (?, ?) AND phase_entered_at < ?
+		ORDER BY phase_entered_at, desired_item_id`,
+		string(acquisition.PhaseVerifying), string(acquisition.PhaseIngesting), cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: listing stuck ingests: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []StuckIngest
+	for rows.Next() {
+		var s StuckIngest
+		var phase string
+		if err := rows.Scan(&s.DesiredItemID, &phase); err != nil {
+			return nil, err
+		}
+		s.Phase = acquisition.Phase(phase)
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// StuckGrab is a want stranded at idle after its grab failed. A poll failed the
+// selected release back to idle — a tracker rejection ("info hash is not
+// authorized"), a fetch that returned nothing — and left a troubled acquisition
+// row behind. Nothing re-drives it on its own: reconcile only sets satisfaction,
+// sweepOrphanedDownloads only looks at in-flight phases, and the search beat is
+// gated by a backoff that can be a day out AND would re-select the very release
+// that just failed. It carries the SELECTED candidate so the caller can block
+// that release before letting a fresh search pick a different one.
+type StuckGrab struct {
+	DesiredItemID string
+	// The selected candidate — the release whose grab failed. Provider and
+	// CandidateID are the INDEXER's, keyed the way blocked_releases and the
+	// search filter are — NOT the download client's provider/infohash carried on
+	// the acquisitions row.
+	Provider    string
+	CandidateID string
+	Title       string
+	// Trouble is what the transfer last reported, recorded as the block's detail.
+	Trouble string
+}
+
+// StuckGrabs lists wants stranded at idle after a failed grab: phase idle, not
+// satisfied, a selected candidate, and a leftover acquisition row that carries a
+// trouble string, entered idle at least `grace` ago.
+//
+// The grace is measured on phase_entered_at — when the fail landed the want at
+// idle — so a want that only just fell back, and might still be moved by the
+// same poll pass, is left for the next one. A want with NO selected candidate is
+// deliberately absent: without the release in hand to block, re-driving would
+// re-pick and re-fail, so those stay the search beat's business.
+func (c *Catalog) StuckGrabs(ctx context.Context, grace time.Duration) ([]StuckGrab, error) {
+	cutoff := c.clock.Now().Add(-grace).Format(timestampFormat)
+	rows, err := c.db.Reader().QueryContext(ctx, `
+		SELECT s.desired_item_id, rc.provider, rc.candidate_id, rc.title, a.trouble
+		FROM acquisition_state s
+		JOIN acquisitions a ON a.desired_item_id = s.desired_item_id
+		JOIN release_candidates rc
+		  ON rc.desired_item_id = s.desired_item_id AND rc.selected = 1
+		WHERE s.phase = ?
+		  AND s.content <> 'satisfied'
+		  AND a.trouble <> ''
+		  AND s.phase_entered_at < ?
+		ORDER BY s.phase_entered_at, s.desired_item_id`,
+		string(acquisition.PhaseIdle), cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: listing stuck grabs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []StuckGrab
+	for rows.Next() {
+		var g StuckGrab
+		if err := rows.Scan(&g.DesiredItemID, &g.Provider, &g.CandidateID,
+			&g.Title, &g.Trouble); err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
 // DropAcquisition removes the link between a want and a transfer.
 //
 // It does NOT touch the download client. Removing a transfer is a separate

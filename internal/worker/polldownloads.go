@@ -22,6 +22,20 @@ import (
 // transfer that still exists.
 const orphanDownloadGrace = 5 * time.Minute
 
+// stuckGrabGrace is how long a want may sit at idle carrying a failed transfer
+// before the poll concludes its grab is wedged and re-drives it. It need only
+// outlast the moment of failure — nothing else moves an idle want that holds a
+// troubled row — but a short grace keeps the sweep from racing the same pass
+// that failed it.
+const stuckGrabGrace = 2 * time.Minute
+
+// stuckIngestGrace is how long a want may sit in VERIFYING or INGESTING before
+// the watchdog re-drives its ingest. It must comfortably exceed a legitimate
+// verify-and-import of a large file (minutes, even under contention), because a
+// genuine ingest that IS running holds its dedupe key live throughout — so the
+// re-enqueue is a no-op for those and only reaches wants with no job at all.
+const stuckIngestGrace = 20 * time.Minute
+
 // PollDownloadsHandler asks every download client what it is doing and drives
 // §64's pipeline from the answer (§58, M3-10).
 //
@@ -101,11 +115,28 @@ func PollDownloadsHandler(
 		advanced += a
 		failed += f
 
+		// The other end of the pipeline: wants whose download finished but whose
+		// ingest wedged. Independent of whether any client answered this pass —
+		// the bytes are already local — so it runs unconditionally.
+		reingested := sweepStuckIngests(ctx, cat, ingests, log)
+
+		// A grab that never fetched — a tracker that refused the infohash, a
+		// magnet that resolved to nothing — fails the release back to idle but
+		// leaves the want carrying a troubled row and its dead selection, where
+		// no in-flight phase holds it and only the backed-off search beat would
+		// ever look. Re-drive it: block the release and clear its backoff so a
+		// fresh search picks another. Unconditional for the same reason the
+		// ingest sweep is — the failure is settled in the row, not in whether a
+		// client answered this pass.
+		redriven, rf := sweepStuckGrabs(ctx, cat, log)
+		failed += rf
+
 		// Logged only when something happened. A pass over a steady queue is
 		// the normal case and should be invisible.
-		if advanced > 0 || failed > 0 {
+		if advanced > 0 || failed > 0 || reingested > 0 || redriven > 0 {
 			log.Info("polled download clients",
-				"clients", len(clients), "advanced", advanced, "failed", failed)
+				"clients", len(clients), "advanced", advanced, "failed", failed,
+				"reingested", reingested, "redriven", redriven)
 		}
 		return nil
 	}
@@ -149,7 +180,10 @@ func reconcileTransfer(
 		return 0, err
 	}
 
-	return advancePipeline(ctx, cat, ingests, existing.DesiredItemID, t, log)
+	// existing.BytesDone is last pass's figure — RecordAcquisition above has
+	// just overwritten the row with this pass's, so it is captured here, before,
+	// to let advancePipeline tell a stuck transfer from one still pulling bytes.
+	return advancePipeline(ctx, cat, ingests, existing.DesiredItemID, t, existing.BytesDone, log)
 }
 
 // sweepOrphanedDownloads fails wants whose transfer has vanished from a client
@@ -205,6 +239,118 @@ func sweepOrphanedDownloads(
 	return advanced, failed
 }
 
+// sweepStuckIngests re-drives wants wedged in VERIFYING/INGESTING — a download
+// that finished but whose ingest never completed and is not being retried.
+//
+// The counterpart to sweepOrphanedDownloads at the far end of the pipeline: an
+// orphaned download lost its transfer BEFORE importing and is failed back to
+// idle to re-acquire; a stuck ingest HAS its bytes and just needs the import
+// re-run, so it is re-enqueued rather than failed. The ingest was queued once,
+// on the transition into VERIFYING (see enqueueAcquisitionIngest); if that job
+// was later lost — a crash mid-lease, a node OOM (this host has done both) — the
+// want sits in INGESTING forever with no job. Nothing else looks for that.
+//
+// Re-enqueue is idempotent by construction (ADR-0008's partial-unique index):
+// a still-running verify/ingest holds its dedupe key and the re-enqueue no-ops,
+// while a want whose job is gone gets a fresh one. So this reaches exactly the
+// wedged wants and leaves working ones alone; the grace in StuckIngests keeps it
+// off a verify that is simply slow.
+func sweepStuckIngests(
+	ctx context.Context, cat *catalog.Catalog, ingests ProbeEnqueuer, log *slog.Logger,
+) (reingested int) {
+	stuck, err := cat.StuckIngests(ctx, stuckIngestGrace)
+	if err != nil {
+		log.Warn("could not list stuck ingests", "error", err)
+		return 0
+	}
+	for _, s := range stuck {
+		if ctx.Err() != nil {
+			return reingested
+		}
+		enqueueAcquisitionIngest(ctx, ingests, s.DesiredItemID, log)
+		reingested++
+		log.Info("re-drove a wedged ingest",
+			"desired_item_id", s.DesiredItemID, "phase", string(s.Phase))
+	}
+	return reingested
+}
+
+// sweepStuckGrabs re-drives wants stranded at idle after a failed grab — the
+// grab-side analogue of BlockRelease's verify loop (§64, M3-13).
+//
+// A poll fails a release the download client could not fetch (a tracker that
+// refused the infohash, a magnet that resolved to nothing) back to idle
+// (advancePipeline's error branch) but leaves the troubled acquisition row and
+// the selected candidate in place. From idle nothing re-drives the want:
+// reconcile only sets satisfaction, sweepOrphanedDownloads only looks at
+// in-flight phases, and the search beat both waits out the failed search's
+// backoff (up to a day) AND would re-select the very release that just failed.
+// The want sits missing forever, or loops on one dead release — the download
+// counterpart of an ingest wedged with no job.
+//
+// The recovery is BlockRelease's: block the release that would not fetch so the
+// search stops choosing it, drop its transfer row, and clear the search
+// schedule so a fresh search runs now and picks a DIFFERENT candidate. Each
+// failing release is blocked in turn until a fetchable one is found or the want
+// runs out of candidates — convergence, not a loop. StuckGrabs only returns
+// wants that HAVE a selected candidate to block and whose row still carries the
+// trouble, so this reaches exactly the wedged wants and its grace keeps it off a
+// want that only just fell back.
+func sweepStuckGrabs(
+	ctx context.Context, cat *catalog.Catalog, log *slog.Logger,
+) (redriven, failed int) {
+	stuck, err := cat.StuckGrabs(ctx, stuckGrabGrace)
+	if err != nil {
+		log.Warn("could not list stuck grabs", "error", err)
+		return 0, 1
+	}
+	for _, g := range stuck {
+		if ctx.Err() != nil {
+			return redriven, failed
+		}
+		created, err := cat.BlockRelease(ctx, catalog.BlockedRelease{
+			DesiredItemID: g.DesiredItemID,
+			Provider:      g.Provider,
+			CandidateID:   g.CandidateID,
+			Title:         g.Title,
+			Detail:        g.Trouble,
+			Reason:        catalog.BlockGrabFailed,
+		})
+		if err != nil {
+			failed++
+			log.Warn("could not block a stuck grab's release",
+				"desired_item_id", g.DesiredItemID, "candidate_id", g.CandidateID, "error", err)
+			continue
+		}
+		// Drop the failed transfer row either way — it keeps the want out of the
+		// next sweep whether or not this pass wrote the block.
+		if err := cat.DropAcquisition(ctx, g.DesiredItemID); err != nil {
+			log.Warn("blocked a stuck grab's release but could not drop its transfer row",
+				"desired_item_id", g.DesiredItemID, "error", err)
+		}
+		if !created {
+			// The release was already blocked yet came back selected — the
+			// search chose a blocked release, which it must not. Do NOT clear the
+			// backoff: re-driving into the same forbidden pick would hot-loop the
+			// sweep. The dropped row keeps it out of the next pass, and the
+			// anomaly is surfaced rather than papered over.
+			log.Warn("a stuck grab's release was already blocked but was selected again",
+				"desired_item_id", g.DesiredItemID, "provider", g.Provider,
+				"candidate_id", g.CandidateID)
+			continue
+		}
+		if err := cat.ClearSearchSchedule(ctx, g.DesiredItemID); err != nil {
+			log.Warn("blocked a stuck grab's release but could not clear its search schedule",
+				"desired_item_id", g.DesiredItemID, "error", err)
+		}
+		redriven++
+		log.Info("re-drove a want whose grab was wedged at idle",
+			"desired_item_id", g.DesiredItemID, "provider", g.Provider,
+			"candidate_id", g.CandidateID, "title", g.Title, "trouble", g.Trouble)
+	}
+	return redriven, failed
+}
+
 // advancePipeline applies the §64 transition this transfer's state implies.
 //
 // Each edge is applied only when the machine is in a phase that admits it —
@@ -213,7 +359,7 @@ func sweepOrphanedDownloads(
 // and must move it exactly once.
 func advancePipeline(
 	ctx context.Context, cat *catalog.Catalog, ingests ProbeEnqueuer,
-	desiredItemID string, t providers.Transfer, log *slog.Logger,
+	desiredItemID string, t providers.Transfer, prevBytesDone int64, log *slog.Logger,
 ) (int, error) {
 	state, err := cat.Acquisition(ctx, desiredItemID)
 	if err != nil {
@@ -236,15 +382,17 @@ func advancePipeline(
 	var wants []acquisition.Transition
 	var detail string
 	switch {
-	case t.Error != "":
-		// Including the invisible tracker stall, which reached us as an Error
-		// because stall.go read trackerStats. Without that this branch would
-		// never fire for the most common stall there is.
-		wants, detail = []acquisition.Transition{acquisition.TransitionFail}, t.Error
 	case t.Done:
-		// To VERIFYING, never straight to ingest: a download client's claim of
+		// Complete → to VERIFYING, never straight to ingest: a client's claim of
 		// completion is a claim by a third party about bytes it fetched from
-		// strangers (invariant 1).
+		// strangers (invariant 1), which Heyarr hashes for itself.
+		//
+		// This comes BEFORE the error case ON PURPOSE. A finished transfer has
+		// the bytes, and a stale tracker-error string does not un-download them:
+		// a torrent whose one dead tracker set Error while its working trackers
+		// carried it to 100% must ingest, not be thrown away for the string.
+		// Verification is the gate that a completed-but-bad download hits, not
+		// this.
 		//
 		// `start_download` is included and is RECORDED when it applies, even
 		// though nobody watched bytes move. The alternative — skipping it —
@@ -254,9 +402,30 @@ func advancePipeline(
 		wants = []acquisition.Transition{
 			acquisition.TransitionStartDownload, acquisition.TransitionDownloaded,
 		}
+	case t.Error != "" && t.BytesDone <= prevBytesDone:
+		// Errored AND making no progress since the last pass: a transfer that is
+		// genuinely stuck — a dead tracker with no reachable peers, or a release
+		// the client could never start (BytesDone still 0). Fail it back to idle
+		// so a fresh search picks another.
+		//
+		// The `<= prevBytesDone` guard is what stops a TRANSIENT error from
+		// throwing away a download that is still moving. stall.go surfaces a
+		// per-tracker rejection ("info hash is not authorized") as the transfer's
+		// Error even when other trackers are serving it and bytes are flowing;
+		// failing on the string alone abandoned a viable download, and once the
+		// want was at idle the completing transfer was orphaned there and never
+		// ingested (Alien Earth E7). A dead tracker among several does not stop a
+		// torrent that is still pulling bytes, so only a stalled one is failed.
+		wants, detail = []acquisition.Transition{acquisition.TransitionFail}, t.Error
 	case t.BytesDone > 0:
+		// Progress — bytes advanced since the last pass, or arrived for the first
+		// time — with or without a transient error still on the transfer. Keep it
+		// downloading; the error is recorded as trouble on the row (above) but is
+		// not acted on while the bytes move.
 		wants = []acquisition.Transition{acquisition.TransitionStartDownload}
 	default:
+		// Not done, no fresh bytes, and either no error or an error with nothing
+		// yet fetched-and-moving: waiting in the queue. Nothing to apply.
 		return 0, nil
 	}
 

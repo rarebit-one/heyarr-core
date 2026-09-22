@@ -128,3 +128,130 @@ func TestStoredChangeIsCiphertext(t *testing.T) {
 		t.Fatalf("a stored change no longer validates: %v", err)
 	}
 }
+
+// TestChangesSinceReturnsOnlyTheTail: the incremental pull is what makes a
+// steady-state sync free. Pulling from a cursor returns what arrived after it,
+// and pulling from the cursor it hands back returns nothing (§44).
+func TestChangesSinceReturnsOnlyTheTail(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	sp, _ := s.CreateSpace(ctx, spaces.KindPersonal)
+
+	for _, body := range [][]byte{[]byte("a"), []byte("b"), []byte("c")} {
+		if err := s.PutChange(ctx, change(t, sp.ID, nil, body)); err != nil {
+			t.Fatalf("PutChange(%s): %v", body, err)
+		}
+	}
+
+	all, cursor, err := s.ChangesSince(ctx, sp.ID, 0)
+	if err != nil {
+		t.Fatalf("ChangesSince(0): %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("ChangesSince(0) returned %d changes, want 3", len(all))
+	}
+	if cursor == 0 {
+		t.Fatal("ChangesSince(0) handed back a zero cursor after returning rows")
+	}
+
+	// The whole point: caught up means nothing on the wire.
+	tail, next, err := s.ChangesSince(ctx, sp.ID, cursor)
+	if err != nil {
+		t.Fatalf("ChangesSince(cursor): %v", err)
+	}
+	if len(tail) != 0 {
+		t.Fatalf("a caught-up pull returned %d changes, want 0", len(tail))
+	}
+	if next != cursor {
+		t.Fatalf("an empty pull moved the cursor: %d -> %d", cursor, next)
+	}
+
+	// A new change arrives: only it comes back.
+	fresh := change(t, sp.ID, nil, []byte("d"))
+	if err := s.PutChange(ctx, fresh); err != nil {
+		t.Fatalf("PutChange(d): %v", err)
+	}
+	got, after, err := s.ChangesSince(ctx, sp.ID, cursor)
+	if err != nil {
+		t.Fatalf("ChangesSince(cursor) after a new change: %v", err)
+	}
+	if len(got) != 1 || got[0].ChangeID != fresh.ChangeID {
+		t.Fatalf("incremental pull = %d changes, want exactly the new one", len(got))
+	}
+	if after <= cursor {
+		t.Fatalf("cursor did not advance: %d -> %d", cursor, after)
+	}
+}
+
+// TestChangesSinceIsNotRewoundByARedelivery: a relay re-sending a change a
+// device has already passed must not drag it back before that device's cursor,
+// or the device would re-download the log forever.
+func TestChangesSinceIsNotRewoundByARedelivery(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	sp, _ := s.CreateSpace(ctx, spaces.KindPersonal)
+
+	first := change(t, sp.ID, nil, []byte("first"))
+	if err := s.PutChange(ctx, first); err != nil {
+		t.Fatalf("PutChange: %v", err)
+	}
+	if err := s.PutChange(ctx, change(t, sp.ID, nil, []byte("second"))); err != nil {
+		t.Fatalf("PutChange: %v", err)
+	}
+	_, cursor, err := s.ChangesSince(ctx, sp.ID, 0)
+	if err != nil {
+		t.Fatalf("ChangesSince(0): %v", err)
+	}
+
+	// Re-deliver the FIRST change. It keeps its original seq, so a caught-up
+	// device still sees nothing.
+	if err := s.PutChange(ctx, first); err != nil {
+		t.Fatalf("re-PutChange: %v", err)
+	}
+	got, _, err := s.ChangesSince(ctx, sp.ID, cursor)
+	if err != nil {
+		t.Fatalf("ChangesSince after re-delivery: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("a re-delivered change rewound the cursor: %d changes came back", len(got))
+	}
+}
+
+// TestChangesSinceAgreesWithChangesFor: the incremental path and the full path
+// must return the same log in the same order, or a device that switches between
+// them diverges.
+func TestChangesSinceAgreesWithChangesFor(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	sp, _ := s.CreateSpace(ctx, spaces.KindFamily)
+	for i := 0; i < 5; i++ {
+		if err := s.PutChange(ctx, change(t, sp.ID, nil, []byte{byte('a' + i)})); err != nil {
+			t.Fatalf("PutChange %d: %v", i, err)
+		}
+	}
+	full, err := s.ChangesFor(ctx, sp.ID)
+	if err != nil {
+		t.Fatalf("ChangesFor: %v", err)
+	}
+	inc, _, err := s.ChangesSince(ctx, sp.ID, 0)
+	if err != nil {
+		t.Fatalf("ChangesSince(0): %v", err)
+	}
+	if len(full) != len(inc) {
+		t.Fatalf("ChangesFor = %d changes, ChangesSince(0) = %d", len(full), len(inc))
+	}
+	for i := range full {
+		if full[i].ChangeID != inc[i].ChangeID {
+			t.Fatalf("order diverged at %d: %s vs %s", i, full[i].ChangeID, inc[i].ChangeID)
+		}
+	}
+}
+
+// TestChangesSinceUnknownSpace: an unknown space is an error, not an empty tail
+// that would read to a device as "you are up to date".
+func TestChangesSinceUnknownSpace(t *testing.T) {
+	s := newStore(t)
+	if _, _, err := s.ChangesSince(context.Background(), "no-such-space", 0); !errors.Is(err, store.ErrUnknownSpace) {
+		t.Fatalf("ChangesSince(unknown space) = %v, want ErrUnknownSpace", err)
+	}
+}
