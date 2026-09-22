@@ -18,6 +18,7 @@ import (
 	"github.com/knadh/koanf/providers/structs"
 	"github.com/knadh/koanf/v2"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
@@ -39,6 +40,13 @@ type Config struct {
 	Log       Log       `koanf:"log"`
 	Media     Media     `koanf:"media"`
 	Libraries []Library `koanf:"libraries"`
+
+	// Language is the household's audio-language preference (§62, #558),
+	// applied to the seeded VIDEO profiles as prefer rules at start so a
+	// foreign dub is out-scored by the wanted language without being rejected
+	// for its language (#129). It is disabled unless `language.prefer` names a
+	// language; a profile that states its own language rule overrides it.
+	Language Language `koanf:"language"`
 
 	// Providers configures the external services Heyarr talks to — indexers,
 	// download clients — through the centralised registry (§59, M3-07).
@@ -470,6 +478,39 @@ type Library struct {
 	Name        string   `koanf:"name"`
 	ContentType string   `koanf:"content_type"`
 	Roots       []string `koanf:"roots"`
+}
+
+// Language is the config surface for the household audio-language preference
+// (§62, #558). It maps 1:1 to policy.LanguageDefault; the split exists so the
+// domain type stays free of koanf tags. The zero value is disabled.
+//
+// A single-language household enables it with one block, replacing the bespoke
+// `everyday-en` profile that previously had to be authored and repointed:
+//
+//	language:
+//	  prefer: en          # ISO-639-1 code of the wanted audio language
+//	  weight: 50          # bonus a confirmed-en release scores
+//	  penalty: 100        # how far a confirmed-foreign dub is pushed down
+//	  foreign: [it, es, fr, de, ja, ko, zh, pt, ru, pl, tr, hi, nl, ar]
+//
+// It is a preference, never a gate: an untagged release (the common case from a
+// torrent title) is neither rewarded nor penalised and stays fully acquirable
+// (#129). A profile that states its own language rule opts out entirely.
+type Language struct {
+	Prefer  string   `koanf:"prefer"`
+	Weight  int      `koanf:"weight"`
+	Foreign []string `koanf:"foreign"`
+	Penalty int      `koanf:"penalty"`
+}
+
+// Policy maps the config surface to the domain default.
+func (l Language) Policy() policy.LanguageDefault {
+	return policy.LanguageDefault{
+		Prefer:  l.Prefer,
+		Weight:  l.Weight,
+		Foreign: l.Foreign,
+		Penalty: l.Penalty,
+	}
 }
 
 // Defaults returns the configuration Heyarr uses when nothing is specified.
