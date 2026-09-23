@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/device"
 	"github.com/rarebit-one/voidbind-go/encryption"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
@@ -25,7 +26,6 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	apiclient "github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/config"
-	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	psclient "github.com/rarebit-one/heyarr-core/internal/personalstate/client"

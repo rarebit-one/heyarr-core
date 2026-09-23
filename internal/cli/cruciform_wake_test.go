@@ -7,9 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/rarebit-one/voidbind-go/device"
+
 	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
 	"github.com/rarebit-one/heyarr-core/internal/config"
-	"github.com/rarebit-one/heyarr-core/internal/device"
 )
 
 // The wake client POSTs the device cert, ops and the relay session to the node's

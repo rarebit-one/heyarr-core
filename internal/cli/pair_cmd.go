@@ -14,13 +14,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/device"
 	"github.com/rarebit-one/voidbind-go/encryption"
 	"github.com/rarebit-one/voidbind-go/pairing"
 	"github.com/rarebit-one/voidbind-go/useridentity"
 	"github.com/spf13/cobra"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
-	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/pairflow"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 )

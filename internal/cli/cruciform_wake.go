@@ -11,9 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/device"
+
 	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
 	"github.com/rarebit-one/heyarr-core/internal/config"
-	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/cruciform"
 )
 

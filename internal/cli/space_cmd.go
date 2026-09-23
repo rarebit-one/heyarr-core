@@ -8,11 +8,11 @@ import (
 	"sort"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/device"
 	"github.com/rarebit-one/voidbind-go/useridentity"
 	"github.com/spf13/cobra"
 
 	apiclient "github.com/rarebit-one/heyarr-core/internal/client"
-	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"

@@ -13,7 +13,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rarebit-one/heyarr-core/internal/device"
+	"github.com/rarebit-one/voidbind-go/device"
+
+	heyarrdevice "github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/device/personalmcp"
 )
 
@@ -187,7 +189,7 @@ func TestAListResponseCarriesTheCaveatAsFields(t *testing.T) {
 	}{
 		{"enrolment_status", "not_enrolled"},
 		{"unproven", true},
-		{"authorises", device.NotYetAuthorisingFor(device.CommandHint)},
+		{"authorises", heyarrdevice.NotYetAuthorisingFor(heyarrdevice.CommandHint)},
 		{"algorithm", "ed25519"},
 	} {
 		if got := generated[tc.field]; got != tc.want {
@@ -213,7 +215,7 @@ func TestAListResponseCarriesTheCaveatAsFields(t *testing.T) {
 	if got, want := first["public_key"], generated["public_key"]; got != want {
 		t.Errorf("device_list reported public key %v, device_generate reported %v", got, want)
 	}
-	if got, want := listed["authorises"], device.NotYetAuthorisingFor(device.CommandHint); got != want {
+	if got, want := listed["authorises"], heyarrdevice.NotYetAuthorisingFor(heyarrdevice.CommandHint); got != want {
 		t.Errorf("device_list: authorises = %v, want the heyarr caveat", got)
 	}
 }

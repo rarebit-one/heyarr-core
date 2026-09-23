@@ -1,6 +1,11 @@
 // Package device is this machine's own key store: the client half of §40's
 // device identity, and nothing else.
 //
+// The store's implementation lives in github.com/rarebit-one/voidbind-go/device
+// and callers import it directly; this package keeps the reasoning below, the
+// heyarr-specific rendering hint ([CommandHint]), and the device-side
+// subpackages (gateway, personalmcp).
+//
 // # Why it is here and not in the controller
 //
 // §40 gives every user device its own private key, and §41 wraps space keys
@@ -24,8 +29,8 @@
 //
 // The cost of landing early is that the key is, today, decorative. ADR-0011's
 // bearer tokens are still the only thing that authorises a caller against the
-// controller. So every record this package produces carries [Device.Unproven]
-// and [Device.EnrolmentStatus], and the CLI prints [NotYetAuthorising] — for
+// controller. So every record the store produces carries Device.Unproven and
+// Device.EnrolmentStatus, and the CLI prints the not-yet-authorising caveat — for
 // the same reason placement made `unproven` a required RESPONSE field rather
 // than a domain note: a caveat that lives only in the domain is one the edge
 // forgets. A key called self-sovereign that is not yet load-bearing is worse
