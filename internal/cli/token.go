@@ -73,7 +73,7 @@ func withStore(ctx context.Context, configPath string, fn func(context.Context, 
 	return fn(ctx, store)
 }
 
-func newTokenCreateCommand(opts Options, configPath *string) *cobra.Command {
+func newTokenCreateCommand(_ Options, configPath *string) *cobra.Command {
 	var (
 		scopeList string
 		expires   string
@@ -165,7 +165,7 @@ func printCreatedToken(w io.Writer, created auth.CreatedToken, asJSON bool) erro
 	return nil
 }
 
-func newTokenListCommand(opts Options, configPath *string) *cobra.Command {
+func newTokenListCommand(_ Options, configPath *string) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -252,7 +252,7 @@ func printTokens(w io.Writer, tokens []auth.Token, now time.Time, asJSON bool) e
 	return nil
 }
 
-func newTokenRevokeCommand(opts Options, configPath *string) *cobra.Command {
+func newTokenRevokeCommand(_ Options, configPath *string) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "revoke <id>",

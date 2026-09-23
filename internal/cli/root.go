@@ -157,7 +157,7 @@ const (
 	rolesPeer
 )
 
-func newVersionCommand(opts Options) *cobra.Command {
+func newVersionCommand(_ Options) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "version",
@@ -177,7 +177,7 @@ func newVersionCommand(opts Options) *cobra.Command {
 	return cmd
 }
 
-func newConfigCommand(opts Options, configPath *string) *cobra.Command {
+func newConfigCommand(_ Options, configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Inspect configuration",
