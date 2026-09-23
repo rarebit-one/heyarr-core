@@ -243,12 +243,6 @@ func Merge(states ...*State) *State {
 	return out
 }
 
-// Clone returns an independent deep copy, so callers can merge without mutating
-// a shared state.
-func (s *State) Clone() *State {
-	return Merge(s)
-}
-
 // Items returns the present playlist in its converged total order.
 //
 // An item is present iff it has a live (non-tombstoned) add-tag; its sort key is

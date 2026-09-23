@@ -96,16 +96,6 @@ func Transitions() []Transition {
 	}
 }
 
-// ParseTransition validates a transition from the wire.
-func ParseTransition(s string) (Transition, error) {
-	for _, t := range Transitions() {
-		if string(t) == s {
-			return t, nil
-		}
-	}
-	return "", fmt.Errorf("%q is not an acquisition transition", s)
-}
-
 // table is the pipeline, written out in full.
 //
 // Every legal (phase, transition) pair is here and everything else is illegal.
