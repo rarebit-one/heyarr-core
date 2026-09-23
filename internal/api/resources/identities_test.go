@@ -10,8 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rarebit-one/voidbind-go/enrolment"
+
 	"github.com/rarebit-one/heyarr-core/internal/auth"
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 )
 

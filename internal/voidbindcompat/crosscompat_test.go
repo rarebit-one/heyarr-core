@@ -5,19 +5,16 @@ import (
 	"testing"
 	"time"
 
-	henrol "github.com/rarebit-one/heyarr-core/internal/enrolment"
-	hgrant "github.com/rarebit-one/heyarr-core/internal/grant"
-
 	venrol "github.com/rarebit-one/voidbind-go/enrolment"
 	vgrant "github.com/rarebit-one/voidbind-go/grant"
 	vrp "github.com/rarebit-one/voidbind-go/rp"
 )
 
 // Golden vectors CAPTURED FROM PRE-MIGRATION heyarr-core — generated on
-// origin/main BEFORE the identity packages became shims, with the fixed seeds
-// below (user = 0x01×32, device = 0x02×32) and a fixed issue time. They are the
-// load-bearing proof that this migration is a byte-identical dedup and not a
-// wire change: the post-migration code (and voidbind-go directly) must reproduce
+// origin/main BEFORE the identity packages moved to voidbind-go, with the fixed
+// seeds below (user = 0x01×32, device = 0x02×32) and a fixed issue time. They are
+// the load-bearing proof that this migration is a byte-identical dedup and not a
+// wire change: voidbind-go, which heyarr now imports directly, must reproduce
 // and verify these EXACT bytes, and a cert/grant minted before the migration
 // must still verify after it. If a golden constant ever has to change to make
 // this file pass, the "dedup" broke a wire format — stop and investigate.
@@ -54,17 +51,6 @@ func devicePub() ed25519.PublicKey {
 
 // --- Certs -----------------------------------------------------------------
 
-// The post-migration heyarr shim re-signs the pre-migration cert bytes exactly.
-func TestHeyarrShimReproducesGoldenCert(t *testing.T) {
-	got, err := henrol.SignCert(userPriv(), devicePub(), goldenDeviceEnc, fixedIssuedAt, henrol.CertLifetime)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != goldenCert {
-		t.Fatalf("heyarr shim cert bytes drifted from the pre-migration golden\n got:    %s\n golden: %s", got, goldenCert)
-	}
-}
-
 // voidbind-go signs the identical cert bytes — the library and heyarr agree.
 func TestVoidbindReproducesGoldenCert(t *testing.T) {
 	got, err := venrol.SignCert(userPriv(), devicePub(), goldenDeviceEnc, fixedIssuedAt, venrol.CertLifetime)
@@ -91,11 +77,12 @@ func TestPreMigrationCertVerifiesViaVoidbindRP(t *testing.T) {
 	}
 }
 
-// The same pre-migration cert verifies through heyarr's (now shimmed) enrolment.
-func TestPreMigrationCertVerifiesViaHeyarr(t *testing.T) {
-	cert, err := henrol.VerifyCert(goldenCert, userPub(), verifyNow)
+// The same pre-migration cert verifies through voidbind-go/enrolment, which
+// heyarr's own callers use directly.
+func TestPreMigrationCertVerifiesViaEnrolment(t *testing.T) {
+	cert, err := venrol.VerifyCert(goldenCert, userPub(), verifyNow)
 	if err != nil {
-		t.Fatalf("heyarr enrolment refused a pre-migration cert: %v", err)
+		t.Fatalf("voidbind-go/enrolment refused a pre-migration cert: %v", err)
 	}
 	if cert.Device != goldenDeviceKey {
 		t.Fatalf("cert.Device = %s, want %s", cert.Device, goldenDeviceKey)
@@ -103,17 +90,6 @@ func TestPreMigrationCertVerifiesViaHeyarr(t *testing.T) {
 }
 
 // --- Grants ----------------------------------------------------------------
-
-func heyarrGrant() hgrant.Grant {
-	return hgrant.Grant{
-		Issuer:       goldenUserID,
-		Principal:    goldenDeviceKey,
-		Resource:     goldenResource,
-		Capabilities: []hgrant.Capability{hgrant.CapabilityRead},
-		IssuedAt:     fixedIssuedAt,
-		ExpiresAt:    fixedIssuedAt.Add(time.Hour),
-	}
-}
 
 func voidbindGrant() vgrant.Grant {
 	return vgrant.Grant{
@@ -123,17 +99,6 @@ func voidbindGrant() vgrant.Grant {
 		Capabilities: []vgrant.Capability{vgrant.CapabilityRead},
 		IssuedAt:     fixedIssuedAt,
 		ExpiresAt:    fixedIssuedAt.Add(time.Hour),
-	}
-}
-
-// The post-migration heyarr shim re-signs the pre-migration grant bytes exactly.
-func TestHeyarrShimReproducesGoldenGrant(t *testing.T) {
-	got, err := heyarrGrant().Sign(userPriv())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != goldenGrant {
-		t.Fatalf("heyarr shim grant bytes drifted from the pre-migration golden\n got:    %s\n golden: %s", got, goldenGrant)
 	}
 }
 
@@ -148,19 +113,14 @@ func TestVoidbindReproducesGoldenGrant(t *testing.T) {
 	}
 }
 
-// A grant minted by PRE-migration heyarr verifies via voidbind-go, and via the
-// heyarr shim — both against the pinned issuer key (an RP's pinned user IS its
-// grant issuer, so one MemTrust answers both).
-func TestPreMigrationGrantVerifiesBothWays(t *testing.T) {
+// A grant minted by PRE-migration heyarr verifies via voidbind-go against the
+// pinned issuer key (an RP's pinned user IS its grant issuer, so the MemTrust
+// that pins the user also answers for the grant).
+func TestPreMigrationGrantVerifies(t *testing.T) {
 	trust := vrp.MemTrust{goldenUserID: userPub()}
 	req := vgrant.Request{Principal: goldenDeviceKey, Resource: goldenResource, Capability: vgrant.CapabilityRead}
 
 	if _, err := vgrant.Verify(goldenGrant, trust, req, verifyNow); err != nil {
 		t.Fatalf("voidbind-go/grant refused a pre-migration grant: %v", err)
-	}
-
-	hreq := hgrant.Request{Principal: goldenDeviceKey, Resource: goldenResource, Capability: hgrant.CapabilityRead}
-	if _, err := hgrant.Verify(goldenGrant, trust, hreq, verifyNow); err != nil {
-		t.Fatalf("heyarr grant refused a pre-migration grant: %v", err)
 	}
 }

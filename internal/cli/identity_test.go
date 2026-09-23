@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/enrolment"
 	"github.com/rarebit-one/voidbind-go/useridentity"
 
 	"github.com/rarebit-one/heyarr-core/internal/device"
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 )
 

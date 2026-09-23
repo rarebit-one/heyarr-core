@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/grant"
+	"github.com/rarebit-one/voidbind-go/grant"
 )
 
 // ErrNoCachedLease means no cached lease is even ABOUT this request — the cache

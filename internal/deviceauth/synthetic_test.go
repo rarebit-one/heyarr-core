@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/enrolment"
+
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 )
 
 // enrolActor pins a user (auto-named, so two distinct users never collide on the
