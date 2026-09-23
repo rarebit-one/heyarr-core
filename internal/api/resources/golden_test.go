@@ -26,6 +26,7 @@ func goldenPath(name string) string { return filepath.Join("testdata", name) }
 // scope enforcement, 404s, pagination stability — are written out separately
 // rather than left to the goldens.
 func TestResponseShapes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	tests := []struct {
@@ -93,6 +94,7 @@ func TestResponseShapes(t *testing.T) {
 // clients branch on, so a change to one has to show up in a reviewable diff
 // rather than in a client's error handling six months later.
 func TestProblemShapes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	tests := []struct {
@@ -162,6 +164,7 @@ func worksCursor(t *testing.T, h *harness) string {
 // this test does not own — the job queue's and the token store's — so they are
 // redacted and nothing else is.
 func TestWriteShapes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	t.Run("a created library", func(t *testing.T) {

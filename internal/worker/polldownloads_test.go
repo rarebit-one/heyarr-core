@@ -54,6 +54,7 @@ func (h *pollHarness) backdatePhaseEntered(t *testing.T, by time.Duration) {
 // torrent that is still pulling bytes, so a progressing transfer keeps going and
 // a completed one ingests, error string or not.
 func TestATransientTrackerErrorDoesNotAbandonAProgressingDownload(t *testing.T) {
+	t.Parallel()
 	h := newPollHarness(t)
 	h.grabAfterSearch(t, "Arrival.2016.2160p.mkv", []byte("the actual bytes of a film"))
 	id := h.transferID(t)
@@ -97,6 +98,7 @@ func TestATransientTrackerErrorDoesNotAbandonAProgressingDownload(t *testing.T) 
 // release. Without this, dropping the immediate fail-on-error would strand a
 // dead release in DOWNLOADING forever.
 func TestAStalledTransferWithAnErrorIsStillFailed(t *testing.T) {
+	t.Parallel()
 	h := newPollHarness(t)
 	h.grabAfterSearch(t, "Arrival.2016.2160p.mkv", []byte("the actual bytes of a film"))
 	id := h.transferID(t)
@@ -118,6 +120,7 @@ func TestAStalledTransferWithAnErrorIsStillFailed(t *testing.T) {
 }
 
 func TestAWantWhoseGrabIsRejectedIsBlockedAndReDriven(t *testing.T) {
+	t.Parallel()
 	h := newPollHarness(t)
 	h.grabAfterSearch(t, "Arrival.2016.2160p.mkv", []byte("the bytes of a film"))
 	id := h.transferID(t)
@@ -165,6 +168,7 @@ func TestAWantWhoseGrabIsRejectedIsBlockedAndReDriven(t *testing.T) {
 // is left alone until the grace elapses — its release stays unblocked and its
 // row stays put.
 func TestAJustFailedGrabSurvivesTheGrace(t *testing.T) {
+	t.Parallel()
 	h := newPollHarness(t)
 	h.grabAfterSearch(t, "Arrival.2016.2160p.mkv", []byte("the bytes of a film"))
 	id := h.transferID(t)
@@ -196,6 +200,7 @@ func TestAJustFailedGrabSurvivesTheGrace(t *testing.T) {
 // transition and nothing else moved the want. The sweep detects the absence and
 // fails the want back to idle, where a fresh search can re-acquire it.
 func TestAWantWhoseTransferVanishesIsFailedBackToIdle(t *testing.T) {
+	t.Parallel()
 	h := newPollHarness(t)
 	h.grabAfterSearch(t, "Arrival.2016.2160p.mkv", []byte("the bytes of a film"))
 	id := h.transferID(t)
@@ -231,6 +236,7 @@ func TestAWantWhoseTransferVanishesIsFailedBackToIdle(t *testing.T) {
 // still within the grace window, is left alone — a client that momentarily
 // omits a transfer that still exists must not cost the download.
 func TestATransientlyAbsentTransferSurvivesTheGrace(t *testing.T) {
+	t.Parallel()
 	h := newPollHarness(t)
 	h.grabAfterSearch(t, "Arrival.2016.2160p.mkv", []byte("the bytes of a film"))
 	id := h.transferID(t)

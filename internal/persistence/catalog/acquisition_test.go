@@ -90,6 +90,7 @@ func (h *harness) rowCount(t *testing.T) int {
 }
 
 func TestStartIsIdempotent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -133,6 +134,7 @@ func TestStartIsIdempotent(t *testing.T) {
 // Every legal edge writes a row AND an event, asserted by walking the whole
 // happy path rather than by a hand-written list that drifts.
 func TestEveryAdvanceEmits(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -181,6 +183,7 @@ func TestEveryAdvanceEmits(t *testing.T) {
 // An illegal transition changes nothing and emits nothing. A machine that
 // half-applies and then reports an error is worse than one that refuses.
 func TestAnIllegalAdvanceWritesNothing(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -212,6 +215,7 @@ func TestAnIllegalAdvanceWritesNothing(t *testing.T) {
 // reconciliation pass that changes nothing must emit nothing — otherwise a
 // timer over the whole library turns the event log into a heartbeat.
 func TestSatisfactionEmitsOnlyOnChange(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -259,6 +263,7 @@ func TestSatisfactionEmitsOnlyOnChange(t *testing.T) {
 // Reconciliation touching the axes must not reset it, or a want stuck since
 // Tuesday looks like it moved five minutes ago.
 func TestReconciliationDoesNotResetThePhaseClock(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -299,6 +304,7 @@ func TestReconciliationDoesNotResetThePhaseClock(t *testing.T) {
 // find; one that has just arrived there is not, and neither is one still
 // downloading. StuckIngests is what the re-ingest watchdog reads.
 func TestStuckIngestsFindsWedgedIngestsPastTheGrace(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -357,6 +363,7 @@ func TestStuckIngestsFindsWedgedIngestsPastTheGrace(t *testing.T) {
 // past the grace. A want with no selection, or a clean transfer row, is not one:
 // without the release to block, re-driving would only re-pick and re-fail.
 func TestStuckGrabsFindsIdleWantsWithAFailedTransferAndASelection(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -410,6 +417,7 @@ func TestStuckGrabsFindsIdleWantsWithAFailedTransferAndASelection(t *testing.T) 
 // A want with no acquisition row is a real state a caller has to handle, and it
 // must be a typed error rather than a bare sql.ErrNoRows leaking out.
 func TestReadingAnAbsentAcquisitionIsTyped(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	if _, err := h.cat.Acquisition(context.Background(), "no-such-want"); !errors.Is(err, catalog.ErrNoAcquisition) {
 		t.Errorf("expected ErrNoAcquisition, got %v", err)

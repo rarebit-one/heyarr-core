@@ -284,6 +284,7 @@ func (h *convergeHarness) transfers(t *testing.T) []queuedTransfer {
 // emitted, for the peer that is missing it — and NONE for the peer that holds
 // it, which is asserted by naming the destination rather than by counting.
 func TestABlobOnOnePeerIsWorkForTheOtherOnly(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	h.managed(t, blobOne)
 	h.reports(t, h.self, blobOne)
@@ -319,6 +320,7 @@ func TestABlobOnOnePeerIsWorkForTheOtherOnly(t *testing.T) {
 // second cycle harmless by construction. Asserted on the ROW rather than on
 // the constructor, so that an enqueue which forgot to pass the key is caught.
 func TestTheTransferIsKeyedOnTheBlobAndTheDestination(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	h.managed(t, blobOne)
 	h.reports(t, h.self, blobOne)
@@ -340,6 +342,7 @@ func TestTheTransferIsKeyedOnTheBlobAndTheDestination(t *testing.T) {
 // something, because a reconciler that enqueues nothing passes the naive
 // version of this test.
 func TestASecondCycleWithNothingChangedCreatesNoSecondJob(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	h.managed(t, blobOne)
 	h.reports(t, h.self, blobOne)
@@ -389,6 +392,7 @@ func TestASecondCycleWithNothingChangedCreatesNoSecondJob(t *testing.T) {
 // falls from a non-zero value to zero once the destination reports the bytes,
 // and never rises.
 func TestConvergenceIsMonotonicAcrossCycles(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	h.managed(t, blobOne)
 	h.managed(t, blobTwo)
@@ -460,6 +464,7 @@ func TestConvergenceIsMonotonicAcrossCycles(t *testing.T) {
 // A blob on neither peer is work for both. This is the assertion the "hard-code
 // the required peer set to one peer" sabotage must break.
 func TestABlobOnNeitherPeerIsWorkForBoth(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	h.managed(t, blobOne)
 	// Nobody reports holding it: the catalog knows the blob, no peer has
@@ -494,6 +499,7 @@ func TestABlobOnNeitherPeerIsWorkForBoth(t *testing.T) {
 // desired rather than checking a total, so a fabric that produced the right
 // COUNT for the wrong reason fails.
 func TestALinkedAssetProducesNoReplicationWork(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	h.linked(t, "photo1", "/srv/media/pictures/2019/beach.jpg")
 	h.linked(t, "photo2", "/srv/media/pictures/2019/hill.jpg")
@@ -534,6 +540,7 @@ func TestALinkedAssetProducesNoReplicationWork(t *testing.T) {
 // collection is about to reclaim (ADR-0018), and shipping it to a second site
 // so a sweep can delete it at both ends is work with a negative return.
 func TestAnUnreferencedBlobIsNotReplicated(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	h.exec(t, `INSERT INTO blobs (hash, size, mime, first_seen_at)
 		VALUES (?, 1024, 'video/x-matroska', ?)`, blobTwo, h.stamp)
@@ -550,6 +557,7 @@ func TestAnUnreferencedBlobIsNotReplicated(t *testing.T) {
 // Bounded work per cycle, and the remainder DEFERRED rather than dropped: the
 // count is reported, and a later cycle picks the rest up.
 func TestABoundedCycleDefersTheRemainderAndALaterCycleTakesIt(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	const blobs = 5
 	for i := 1; i <= blobs; i++ {
@@ -626,6 +634,7 @@ func TestABoundedCycleDefersTheRemainderAndALaterCycleTakesIt(t *testing.T) {
 // The deferred count reaches an operator, not just the event: a cycle that hit
 // its bound has NOT converged and must say so out loud.
 func TestABoundedCycleLogsWhatItDeferred(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	for i := 1; i <= 3; i++ {
 		h.managed(t, blobHash(i))
@@ -645,6 +654,7 @@ func TestABoundedCycleLogsWhatItDeferred(t *testing.T) {
 // Scoped to one peer, which is the on-demand path: only that peer's gaps are
 // considered, and the other peer's absence is not work this cycle does.
 func TestAScopedCycleOnlyConsidersThatPeer(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	h.managed(t, blobOne)
 
@@ -668,6 +678,7 @@ func TestAScopedCycleOnlyConsidersThatPeer(t *testing.T) {
 // failing the job five times over an ordinary race — a peer removed or demoted
 // between the enqueue and the run.
 func TestAScopeThatNamesNoFullPeerDoesNothing(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	h.managed(t, blobOne)
 
@@ -684,6 +695,7 @@ func TestAScopeThatNamesNoFullPeerDoesNothing(t *testing.T) {
 // advertising nothing at all still claims this job, because a degraded node is
 // exactly the one whose operator most needs to know what it is missing.
 func TestADegradedNodeStillClaimsTheConvergenceCycle(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	reg := ReconcilePeerRegistration(h.cat, h.queue, h.log)
 	if reg.RequiredCapability != "" {
@@ -718,6 +730,7 @@ func TestADegradedNodeStillClaimsTheConvergenceCycle(t *testing.T) {
 // reconciliation that also transferred would be one whose cycle time depended
 // on the size of the library.
 func TestReconciliationEmitsWorkAndMovesNothing(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	h.managed(t, blobOne)
 	h.reports(t, h.self, blobOne)
@@ -763,6 +776,7 @@ func TestReconciliationEmitsWorkAndMovesNothing(t *testing.T) {
 // manifests" — would pass on a reconciler that had started quietly skipping
 // the blobs whose manifests were gone.
 func TestDeletingEveryManifestChangesNothingButSpeed(t *testing.T) {
+	t.Parallel()
 	// series runs the whole convergence sequence and returns what it did.
 	series := func(t *testing.T, withManifests, thenDeleteThem bool) ([]int, []int) {
 		t.Helper()
@@ -928,6 +942,7 @@ func (h *convergeHarness) chunkings(t *testing.T) []string {
 // work is deferred until something needs it, and a background sweep over the
 // store would read every byte in the library for manifests nobody asked for.
 func TestAConvergenceCycleEnqueuesTheChunkingOfWhatItIsAboutToMove(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	h.managed(t, blobOne)
 	h.managed(t, blobTwo)
@@ -996,6 +1011,7 @@ func TestAConvergenceCycleEnqueuesTheChunkingOfWhatItIsAboutToMove(t *testing.T)
 // A blob that already has a manifest is not chunked again, and the cycle
 // decides that by READING the state — which generates nothing (ADR-0034).
 func TestAConvergenceCycleDoesNotChunkWhatIsAlreadyChunked(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	h.managed(t, blobOne)
 	h.managed(t, blobTwo)
@@ -1050,6 +1066,7 @@ func TestAConvergenceCycleDoesNotChunkWhatIsAlreadyChunked(t *testing.T) {
 // the cost of a job and a Stat each; a destination's first sync with a peer
 // holding a hundred thousand blobs would queue a hundred thousand of those.
 func TestAGapThisNodeMustCloseItselfIsNotChunkingWork(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	h.managed(t, blobOne)
 

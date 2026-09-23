@@ -35,6 +35,7 @@ type followedView struct {
 // A follow by title creates the series work and stores an inferred tv_series
 // source with the TVDB id as its feed_ref.
 func TestFollowASeriesByTitleInfersTVSeries(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	resp := follow(h, `{"tvdb_id":"12345","title":"The Series","quality_profile":"living-room","backfill":"full"}`)
@@ -68,6 +69,7 @@ func TestFollowASeriesByTitleInfersTVSeries(t *testing.T) {
 // (feed_ref = the URL itself); an identity that is neither a tvdb id nor an
 // http(s) URL is refused rather than stored unpolled.
 func TestFollowInfersFromAURL(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	ok := follow(h, `{"url":"https://thetvdb.com/series/98765","title":"Another","quality_profile":"living-room"}`)
@@ -109,6 +111,7 @@ func TestFollowInfersFromAURL(t *testing.T) {
 // feed URL and a /channel/<id> URL carry the channel id, and the stored feed_ref
 // is normalised to the canonical feed URL either way.
 func TestFollowInfersYouTube(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	// Both URL forms carry the id and normalise to the canonical feed URL. Two
@@ -151,6 +154,7 @@ func TestFollowInfersYouTube(t *testing.T) {
 // follows a feed's articles rather than treat it as a podcast. And a type that
 // contradicts the identity is refused by name.
 func TestFollowTypeHint(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	rss := follow(h, `{"url":"https://blog.example.com/rss.xml","type":"rss_feed","title":"A Blog","quality_profile":"living-room"}`)
@@ -185,6 +189,7 @@ func TestFollowTypeHint(t *testing.T) {
 }
 
 func TestFollowRefusesMissingAndConflictingInputs(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	cases := []struct {
@@ -229,6 +234,7 @@ func TestFollowRefusesMissingAndConflictingInputs(t *testing.T) {
 // Following the same series through the same feed twice is one subscription
 // written twice — a 409.
 func TestFollowingTwiceIsAConflict(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	body := `{"tvdb_id":"555","title":"Repeat","quality_profile":"living-room"}`
 	if r := follow(h, body); r.StatusCode != http.StatusCreated {
@@ -241,6 +247,7 @@ func TestFollowingTwiceIsAConflict(t *testing.T) {
 }
 
 func TestListAndUnfollow(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	create := follow(h, `{"tvdb_id":"777","title":"Listed","quality_profile":"living-room"}`)
 	if create.StatusCode != http.StatusCreated {
@@ -285,6 +292,7 @@ func TestListAndUnfollow(t *testing.T) {
 // cleared first — otherwise this would pass whether or not the poll route
 // enqueued anything, which is a test that cannot fail.
 func TestPollASourceNow(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	create := follow(h, `{"tvdb_id":"901","title":"Pollable","quality_profile":"living-room"}`)
 	if create.StatusCode != http.StatusCreated {
@@ -353,6 +361,7 @@ func TestPollASourceNow(t *testing.T) {
 // Polling an unknown source is a 404, the same not-found every other per-source
 // followed route renders.
 func TestPollingAnUnknownSourceIs404(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := h.doStable(http.MethodPost, "/api/v1/followed-sources/nope/poll", nil)
 	if resp.StatusCode != http.StatusNotFound {
@@ -364,6 +373,7 @@ func TestPollingAnUnknownSourceIs404(t *testing.T) {
 // queued. Two distinct subscriptions, each already carrying its follow-door
 // poll, so the sweep dedupes to two live jobs rather than four.
 func TestPollAllSources(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	for _, body := range []string{
 		`{"tvdb_id":"111","title":"First","quality_profile":"living-room"}`,
@@ -399,6 +409,7 @@ func TestPollAllSources(t *testing.T) {
 // Forcing a poll changes what will be fetched, so both routes need `write`; a
 // read token is refused before the handler runs.
 func TestPollScopes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth).seed()
 	reader := h.mint("reader", auth.ScopeRead)
 	for _, path := range []string{"/followed-sources/anything/poll", "/followed-sources/poll"} {
@@ -412,6 +423,7 @@ func TestPollScopes(t *testing.T) {
 // Content-intent search finds a work by its normalised title, with no source in
 // the question.
 func TestContentIntentSearch(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := h.doStable(http.MethodPost, "/api/v1/search",
 		strings.NewReader(`{"query":"arrival"}`))

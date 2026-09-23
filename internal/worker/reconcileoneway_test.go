@@ -33,6 +33,7 @@ import (
 // being created at all. The silence stays; the operator stops meeting it
 // weeks later as the first symptom.
 func TestOneWayPairingReconcilesToSilence(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	h.managed(t, blobOne)
 

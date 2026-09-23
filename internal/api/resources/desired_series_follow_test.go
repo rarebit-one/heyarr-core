@@ -33,6 +33,7 @@ func seriesDiscoveryRegistry(t *testing.T, title, externalID string) *providers.
 }
 
 func TestWantingASeriesEstablishesAFollow(t *testing.T) {
+	t.Parallel()
 	reg := seriesDiscoveryRegistry(t, "The Expanse", "280619")
 	h := newHarness(t, withProviders(reg)).seed()
 
@@ -82,6 +83,7 @@ func TestWantingASeriesEstablishesAFollow(t *testing.T) {
 }
 
 func TestWantingASeriesWithoutAProviderFallsBackToAWant(t *testing.T) {
+	t.Parallel()
 	// No metadata provider configured: the series cannot be resolved, so the want
 	// degrades to today's one-off want rather than erroring (ADR-0089 §2).
 	h := newHarness(t, withProviders(providers.New(nil))).seed()
@@ -111,6 +113,7 @@ func TestWantingASeriesWithoutAProviderFallsBackToAWant(t *testing.T) {
 }
 
 func TestWantingASeriesAlreadyFollowedIsIdempotent(t *testing.T) {
+	t.Parallel()
 	reg := seriesDiscoveryRegistry(t, "The Expanse", "280619")
 	h := newHarness(t, withProviders(reg)).seed()
 
@@ -134,6 +137,7 @@ func TestWantingASeriesAlreadyFollowedIsIdempotent(t *testing.T) {
 }
 
 func TestWantingAMovieDoesNotEstablishAFollow(t *testing.T) {
+	t.Parallel()
 	// A provider IS present — proving it is the content type, not the absence of a
 	// provider, that keeps a movie a one-off want (a movie is not a subscription).
 	reg := seriesDiscoveryRegistry(t, "The Conversation", "999")

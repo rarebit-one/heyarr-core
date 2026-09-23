@@ -104,6 +104,7 @@ func newFollowHarnessOf(
 // metadata provider is first (#415): with a TVDB adapter and a podcast adapter
 // both configured, a podcast source must reach the podcast adapter.
 func TestFeedProviderForRoutesByType(t *testing.T) {
+	t.Parallel()
 	tv := providers.NewFake("tv", providers.CapabilityMetadata).ServingTypes(followed.TypeTVSeries)
 	pod := providers.NewFake("pod", providers.CapabilityMetadata).ServingTypes(followed.TypePodcast)
 	reg := providers.New(nil)
@@ -218,6 +219,7 @@ func episode(key, title string, published time.Time) followed.FeedItem {
 // THE assertion this slice exists for: a feed of two episodes becomes two
 // byte-less Items and two item-scoped wants carrying the subscription's policy.
 func TestAPollProjectsAWantPerEpisode(t *testing.T) {
+	t.Parallel()
 	h := newFollowHarness(t, followed.BackfillFull)
 	aired := time.Date(2020, 3, 1, 0, 0, 0, 0, time.UTC)
 	h.feed.OfferFeed(h.feedRef,
@@ -284,6 +286,7 @@ func podcastEpisode(guid, title, enclosure string, published time.Time) followed
 // it over a download client. No indexer is configured — and none is needed, which
 // is the whole point of podcast-following being nearly free.
 func TestAFollowedPodcastArchivesEachEpisodeDirectly(t *testing.T) {
+	t.Parallel()
 	h := newFollowHarnessOf(t, followed.BackfillFull,
 		followed.TypePodcast, "https://feeds.example.com/show.xml")
 	aired := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
@@ -409,6 +412,7 @@ func TestAFollowedPodcastArchivesEachEpisodeDirectly(t *testing.T) {
 // external id). The adapter names the id space its ref belongs to; the write is
 // idempotent so it self-heals a source followed before this existed.
 func TestAPollRecordsTheSeriesExternalIDOnItsWork(t *testing.T) {
+	t.Parallel()
 	h := newFollowHarnessOf(t, followed.BackfillFull, followed.TypeTVSeries, "157239")
 	h.feed.WithIDNamespace("tmdb")
 	h.feed.OfferFeed(h.feedRef,
@@ -433,6 +437,7 @@ func TestAPollRecordsTheSeriesExternalIDOnItsWork(t *testing.T) {
 // An adapter whose ref is a URL, not a catalogue id, reports no id namespace, so
 // a poll records no work external id (a podcast/channel/rss source).
 func TestAPollRecordsNoExternalIDWhenTheAdapterHasNoIDNamespace(t *testing.T) {
+	t.Parallel()
 	h := newFollowHarnessOf(t, followed.BackfillFull, followed.TypeTVSeries, "https://feed.example/x")
 	// The fake is left with no IDNamespace — a URL-ref adapter.
 	h.feed.OfferFeed(h.feedRef,
@@ -447,6 +452,7 @@ func TestAPollRecordsNoExternalIDWhenTheAdapterHasNoIDNamespace(t *testing.T) {
 }
 
 func TestPollingIsIdempotent(t *testing.T) {
+	t.Parallel()
 	h := newFollowHarness(t, followed.BackfillFull)
 	aired := time.Date(2020, 3, 1, 0, 0, 0, 0, time.UTC)
 	h.feed.OfferFeed(h.feedRef,
@@ -473,6 +479,7 @@ func TestPollingIsIdempotent(t *testing.T) {
 // from_now archives only what the source emitted after it was followed, so a
 // back-catalogue episode is recorded as an Item but NOT projected onto a want.
 func TestBackfillFromNowLeavesTheBackCatalogueUnwanted(t *testing.T) {
+	t.Parallel()
 	h := newFollowHarness(t, followed.BackfillFromNow)
 	old := time.Now().UTC().AddDate(-1, 0, 0)
 	fresh := time.Now().UTC().AddDate(0, 0, 1)
@@ -500,6 +507,7 @@ func TestBackfillFromNowLeavesTheBackCatalogueUnwanted(t *testing.T) {
 // existing search pipeline drives to SELECTED with a grab enqueued — no follow-
 // specific code touches acquisition. This is the seam ADR-0057 promises.
 func TestAProjectedEpisodeFlowsIntoTheSearchPipeline(t *testing.T) {
+	t.Parallel()
 	h := newFollowHarness(t, followed.BackfillFull)
 	h.feed.OfferFeed(h.feedRef, episode("S02E01", "The Return",
 		time.Date(2020, 3, 1, 0, 0, 0, 0, time.UTC)))

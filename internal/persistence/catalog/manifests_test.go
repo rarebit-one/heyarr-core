@@ -143,6 +143,7 @@ func (h *harness) localChunkRows(t *testing.T) int {
 // only thing that would then notice is the whole-object hash at the far end of
 // a transfer that has already happened.
 func TestAManifestRoundTripsInOrder(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	blob := blobHash(t, "a")
@@ -225,6 +226,7 @@ func TestAManifestRoundTripsInOrder(t *testing.T) {
 // is the point — an assert_contains on "not_satisfied" matching "satisfied"
 // shipped in this repo once.
 func TestTheThreeStatesAreDistinguishableInOneRead(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -289,6 +291,7 @@ func TestTheThreeStatesAreDistinguishableInOneRead(t *testing.T) {
 // question unaskable by anything that was trying to decide whether the work
 // was worth doing.
 func TestAskingForTheStateGeneratesNothing(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	blob := blobHash(t, "e")
@@ -365,6 +368,7 @@ func TestAskingForTheStateGeneratesNothing(t *testing.T) {
 // would be implemented — a lookup that treated two identical chunk lists as
 // one blob would do it here, on rows, not on bytes.
 func TestAManifestIsNotAnIdentity(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	first := blobHash(t, "1")
@@ -431,6 +435,7 @@ func TestAManifestIsNotAnIdentity(t *testing.T) {
 // The manifest's own digest is checked on read, so a tampered manifest_chunks
 // row is caught before anything reassembles from it.
 func TestATamperedManifestChunkRowIsDetected(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	blob := blobHash(t, "f")
@@ -490,6 +495,7 @@ func TestATamperedManifestChunkRowIsDetected(t *testing.T) {
 // A hole in the idx sequence is a hole, not a shorter manifest. Deleting a row
 // shifts every chunk after it while still reassembling something.
 func TestAMissingChunkRowIsDetected(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	blob := blobHash(t, "3")
@@ -511,6 +517,7 @@ func TestAMissingChunkRowIsDetected(t *testing.T) {
 // blob that no longer exists is a dangling claim, and a reuse index full of
 // them sends a transfer to fetch chunks from nowhere.
 func TestDeletingABlobTakesItsManifestAndItsChunkIndex(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	doomed := blobHash(t, "4")
@@ -568,6 +575,7 @@ func TestDeletingABlobTakesItsManifestAndItsChunkIndex(t *testing.T) {
 // this node is holding. ADR-0034's falsification test is that deleting every
 // manifest costs speed and nothing else.
 func TestDiscardingAManifestKeepsTheBlobAndTheLocalChunkIndex(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	blob := blobHash(t, "6")
@@ -614,6 +622,7 @@ func TestDiscardingAManifestKeepsTheBlobAndTheLocalChunkIndex(t *testing.T) {
 // The recorded decision is a decision, with grounds, and it cannot coexist
 // with a manifest.
 func TestRecordingThatAManifestIsNotRequired(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	small := blobHash(t, "7")
@@ -660,6 +669,7 @@ func TestRecordingThatAManifestIsNotRequired(t *testing.T) {
 // (invariant 9), and re-chunking under other parameters shares no boundaries
 // with the old manifest.
 func TestSavingAManifestTwiceConverges(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	blob := blobHash(t, "9")
@@ -687,6 +697,7 @@ func TestSavingAManifestTwiceConverges(t *testing.T) {
 // A manifest for bytes the catalog has never seen cannot be reached, because a
 // manifest is keyed by the blob's identity and by nothing else.
 func TestAManifestForAnUnknownBlobIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	unknown := blobHash(t, "e")
@@ -702,6 +713,7 @@ func TestAManifestForAnUnknownBlobIsRefused(t *testing.T) {
 // Re-indexing one blob replaces that blob's rows, so a re-chunk cannot leave
 // the index claiming bytes at offsets nothing cuts at any more.
 func TestReindexingABlobReplacesItsEntries(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	blob := blobHash(t, "a")

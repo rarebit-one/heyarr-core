@@ -10,6 +10,7 @@ import (
 // and can be changed in place (ADR-0085 §6).
 
 func TestFollowSourceRoundTripsWantSubtitles(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 
@@ -30,6 +31,7 @@ func TestFollowSourceRoundTripsWantSubtitles(t *testing.T) {
 }
 
 func TestRepointChangesWantSubtitlesInPlace(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 

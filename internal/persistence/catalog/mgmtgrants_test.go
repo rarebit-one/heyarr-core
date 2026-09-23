@@ -11,6 +11,7 @@ import (
 // revoke reports whether anything existed, and that both transitions emit.
 
 func TestManagementGrantRoundTripsAndAuthorizes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 
@@ -54,6 +55,7 @@ func TestManagementGrantRoundTripsAndAuthorizes(t *testing.T) {
 }
 
 func TestManagementGrantIsIdempotent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	const dev = "ed25519:phone"
@@ -84,6 +86,7 @@ func TestManagementGrantIsIdempotent(t *testing.T) {
 }
 
 func TestRevokeManagementReportsExistence(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	const dev = "ed25519:phone"

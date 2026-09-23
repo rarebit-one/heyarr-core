@@ -18,6 +18,7 @@ import (
 // sibling deleted (ADR-0073, #449). A recorded delete op tombstones its target
 // and only its target.
 func TestCatalogTombstonedReflectsARecordedDeleteOp(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := testdb.Migrated(t)
 	clock := fixedClock{t: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)}

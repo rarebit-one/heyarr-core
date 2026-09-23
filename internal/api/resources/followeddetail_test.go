@@ -85,6 +85,7 @@ func (h *harness) followedItems(t *testing.T, path string) followedItemsPage {
 // A subscription is readable by id, and carries the followed work's title so a
 // list of subscriptions reads as titles rather than as work ids.
 func TestFollowedSourceIsReadableByID(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	created := followASeries(t, h)
 
@@ -107,6 +108,7 @@ func TestFollowedSourceIsReadableByID(t *testing.T) {
 // An unknown subscription is a 404, not the 500 the catalog's own sentinel
 // would otherwise become.
 func TestUnknownFollowedSourceIsA404(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	for _, path := range []string{
@@ -123,6 +125,7 @@ func TestUnknownFollowedSourceIsA404(t *testing.T) {
 // each whether heyarr actually holds it — including the item no want was
 // projected for, which is what makes it an archive rather than a queue.
 func TestFollowedSourceItemsReportTheThreeStates(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	created := followASeries(t, h)
 	seedProjectedItems(h, created.WorkID)
@@ -161,6 +164,7 @@ func TestFollowedSourceItemsReportTheThreeStates(t *testing.T) {
 // The archive pages by item_key, so a re-poll that inserts an older episode
 // cannot shuffle the pages under a reader.
 func TestFollowedSourceItemsPageByItemKey(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	created := followASeries(t, h)
 	seedProjectedItems(h, created.WorkID)
@@ -189,6 +193,7 @@ func TestFollowedSourceItemsPageByItemKey(t *testing.T) {
 // A source with no items yet is an empty page, not a 404: the subscription
 // exists and has simply not been polled.
 func TestFollowedSourceItemsAreEmptyBeforeTheFirstPoll(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	created := followASeries(t, h)
 
