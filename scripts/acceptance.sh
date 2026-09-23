@@ -65,6 +65,25 @@ fail() {
 }
 note() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
+# ps_enrol_device pins a device as an enrolled recipient so a space key may be
+# wrapped for it (enrol-before-wrap, ADR-0049): it generates a user identity in
+# the device's own dir, self-signs the device's cert (binding its X25519
+# encryption key), and enrols both on the node at sock. Args: sock token dir name.
+ps_enrol_device() {
+  local sock="$1" token="$2" dir="$3" nm="$4" cl uk cert
+  cl=( env "VOIDBIND_IDENTITY_DIR=$dir" "VOIDBIND_DEVICE_DIR=$dir" "$BIN" )
+  "${cl[@]}" identity generate --name "$nm" >/dev/null 2>&1
+  "${cl[@]}" identity enrol >/dev/null 2>&1
+  uk=$("${cl[@]}" identity show --json | jq -r .public_key)
+  cert=$("${cl[@]}" identity credential | cut -d'~' -f1)
+  curl -sS --unix-socket "$sock" -H "Authorization: Bearer $token" -X POST \
+    -H 'Content-Type: application/json' -d "{\"public_key\":\"$uk\",\"name\":\"$nm\"}" \
+    -o /dev/null "http://heyarr/api/v1/identities/users"
+  curl -sS --unix-socket "$sock" -H "Authorization: Bearer $token" -X POST \
+    -H 'Content-Type: application/json' -d "{\"cert\":\"$cert\",\"name\":\"$nm\"}" \
+    -o /dev/null "http://heyarr/api/v1/identities/devices"
+}
+
 assert_contains() { # haystack needle description
   if [[ "$1" == *"$2"* ]]; then pass "$3"; else
     fail "$3"; printf '       wanted to find: %s\n       in: %s\n' "$2" "$1"
@@ -5578,6 +5597,242 @@ pct() { # part whole
   if (( $2 == 0 )); then echo 0; else echo $(( $1 * 100 / $2 )); fi
 }
 
+# ---------------------------------------------------------------------------
+# THE VAULT BLOB THAT REPLICATES BY A PIN, NOT BY AN ASSET (ADR-0096, #540)
+# ---------------------------------------------------------------------------
+#
+# A vault blob is bytes a client encrypted and uploaded (internal/api/vaultblob):
+# it has NO `assets` row, so the canonical blob set — every blob a live asset
+# accounts for — never contains it, and the peer-convergence diff alone would
+# never replicate it or retain it. A placement pin is the other thing that makes
+# a blob belong on a peer, and this scene proves both halves of what the pin buys:
+#
+#   REPLICATION. A blob is pinned to node B through the device placement route
+#   while NO asset on B names it, and it crosses the wire to B when B reconciles —
+#   because the convergence union adds the pin's (blob, peer) to the plan even
+#   though the canonical-set diff does not. It is per-(blob, peer): the blob is
+#   pinned to B and reaches B, and this scene sends it nowhere else.
+#
+#   RETENTION. The same blob on node A has no asset either — its asset is deleted,
+#   which is a vault blob's real condition — so by every measure the first
+#   milestones had it is garbage, and `gc --apply` with a one-nanosecond grace
+#   window SPARES it, because a placement pin counts as a reference. Remove the
+#   pin and the very same sweep reclaims it: the pin was the whole of its retention.
+#
+# It is its own two-peer fabric, isolated under $WORK like the two-peer and swarm
+# arcs, so it shifts no count any other section asserts. Both nodes ingest the one
+# fixture — a peer can only be told a source holds a blob it has a row for, which
+# is content addressing's own rule (a replica of an unknown blob cannot be
+# recorded) — and then node B's asset AND bytes for it are deleted, so that when B
+# pulls it back the ONLY thing marking it desired on B is the pin.
+vault_placement_demo() {
+  local root="$WORK/vaultplacement" lib
+  lib="$root/library"
+  mkdir -p "$lib/movies/Vault Reel (2023)"
+
+  # A small blob — this scene is about a pin, not a transfer's size — and random,
+  # so its digest is not something the fixture generator already knows.
+  local secret="$lib/movies/Vault Reel (2023)/Vault.Reel.2023.1080p.mkv"
+  head -c 262144 /dev/urandom > "$secret"
+
+  local cfg_a="$WORK/vaultplacement-a.yaml" cfg_b="$WORK/vaultplacement-b.yaml"
+  local n
+  for n in a b; do
+    mkdir -p "$root/$n"
+    cat > "$WORK/vaultplacement-$n.yaml" <<YAML
+data_dir: $root/$n/data
+peer:
+  name: site-$n
+  site: site-$n
+  listen: 127.0.0.1:0
+log:
+  level: info
+  format: json
+http:
+  addr: ""
+libraries:
+  - name: films
+    content_type: movie
+    roots: ["$lib/movies"]
+YAML
+  done
+
+  VP_ROOT="$root"
+  local sock_a="$root/a/data/heyarr.sock" sock_b="$root/b/data/heyarr.sock"
+  local log_a="$root/a.log" log_b="$root/b.log"
+  local token_a token_b
+  token_a=$("$BIN" --config "$cfg_a" token create acceptance --scopes admin --json | jq -r .token)
+  token_b=$("$BIN" --config "$cfg_b" token create acceptance --scopes admin --json | jq -r .token)
+  VP_SOCK_B="$sock_b"; VP_TOKEN_B="$token_b"
+
+  start_peer_node "$cfg_a" "$log_a" all
+  start_peer_node "$cfg_b" "$log_b" all
+
+  vp_a() { curl -sS --unix-socket "$sock_a" -H "Authorization: Bearer $token_a" "${@:2}" "http://heyarr$1"; }
+  vp_b() { curl -sS --unix-socket "$sock_b" -H "Authorization: Bearer $token_b" "${@:2}" "http://heyarr$1"; }
+  local vcli_a="$BIN --config $cfg_a --token $token_a"
+  local vcli_b="$BIN --config $cfg_b --token $token_b"
+
+  local s waited
+  for s in "$sock_a" "$sock_b"; do
+    waited=0
+    while (( waited < 600 )); do
+      curl -sf --unix-socket "$s" http://heyarr/readyz >/dev/null 2>&1 && break
+      sleep 0.1; waited=$(( waited + 1 ))
+    done
+    if (( waited >= 600 )); then
+      fail "vault-placement: $s never became ready"; tail -20 "$log_a" "$log_b"; return 1
+    fi
+  done
+
+  local l
+  for l in "$log_a" "$log_b"; do
+    waited=0
+    while (( waited < 900 )); do
+      (( $(grep -c '"msg":"ingested"' "$l" 2>/dev/null || true) >= 1 )) && break
+      sleep 0.1; waited=$(( waited + 1 ))
+    done
+    if (( waited >= 900 )); then
+      fail "vault-placement: $l never ingested the fixture"; tail -20 "$l"; return 1
+    fi
+  done
+
+  local addr_a addr_b
+  addr_a=$(peer_listen_addr "$log_a") || { fail "vault-placement: node A never bound a peer surface"; return 1; }
+  addr_b=$(peer_listen_addr "$log_b") || { fail "vault-placement: node B never bound a peer surface"; return 1; }
+
+  # -------------------------------------------------------------------------
+  note "  a vault blob is uploaded to node A and pins itself there (ADR-0021, ADR-0096)"
+  # -------------------------------------------------------------------------
+  #
+  # The digest is learned from the asset node A made of the fixture — content
+  # addressing means the bytes on disk hash to the id the vault route verifies
+  # against — and the SAME bytes are uploaded through the vault ingest route, which
+  # stores them (idempotently) and pins them to node A itself.
+  VP_BLOB=$(vp_a /api/v1/assets | jq -r '.items[0].blob_hash')
+  assert_contains "$VP_BLOB" "blake3:" "node A hashed the fixture to a blake3 id"
+
+  local up
+  up=$(vp_a "/api/v1/vault/blobs/$VP_BLOB" -X PUT \
+    -H 'Content-Type: application/octet-stream' --data-binary @"$secret")
+  assert_eq "$(jq -r '.hash' <<<"$up")" "$VP_BLOB" \
+    "the vault ingest route stored the ciphertext under the id the client declared"
+
+  # -------------------------------------------------------------------------
+  note "  two peers, enrolled by public key in both directions (§26, ADR-0012)"
+  # -------------------------------------------------------------------------
+  local key_a key_b pid_b self_a
+  key_a=$($vcli_a peers list --json | jq -r '.[] | select(.is_self) | .public_key')
+  key_b=$($vcli_b peers list --json | jq -r '.[] | select(.is_self) | .public_key')
+  self_a=$($vcli_a peers list --json | jq -r '.[] | select(.is_self) | .id')
+  $vcli_a peers add --name site-b --site site-b --mode full \
+    --public-key "$key_b" --endpoint "https://$addr_b" --json >/dev/null 2>&1
+  $vcli_b peers add --name site-a --site site-a --mode full \
+    --public-key "$key_a" --endpoint "https://$addr_a" --json >/dev/null 2>&1
+  $vcli_a peers add --name site-a --public-key "$key_a" --endpoint "https://$addr_a" --json >/dev/null 2>&1
+  $vcli_b peers add --name site-b --public-key "$key_b" --endpoint "https://$addr_b" --json >/dev/null 2>&1
+
+  # The peer id node B knows itself by, which is what the pin must name: the
+  # convergence union matches a pin's peer_id against the Full Peer ids, not a name.
+  pid_b=$($vcli_b peers list --json | jq -r '.[] | select(.is_self) | .id')
+  assert_eq "$(( ${#pid_b} > 0 ))" "1" "node B knows the peer id it converges as"
+
+  # -------------------------------------------------------------------------
+  note "  the device pins the vault blob to node B (POST /api/v1/vault/placements)"
+  # -------------------------------------------------------------------------
+  #
+  # The pin is recorded on the node that will act on it — replication is a
+  # destination pull (ADR-0030), so node B's convergence is what turns the pin
+  # into a transfer. The route is the generic placement route, which (unlike the
+  # self-only pin the vault upload records) takes any peer id the device names.
+  local pin
+  pin=$(vp_b "/api/v1/vault/placements" -X POST -H 'Content-Type: application/json' \
+    -d "{\"blob_hash\":\"$VP_BLOB\",\"peer_id\":\"$pid_b\"}")
+  assert_eq "$(jq -r '.blob_hash' <<<"$pin")" "$VP_BLOB" \
+    "the placement pin was recorded for the pinned blob"
+  assert_eq "$(jq -r '.peer_id' <<<"$pin")" "$pid_b" \
+    "and names the peer it should live on"
+
+  # Now make node B a peer that does NOT hold the blob and has no asset for it:
+  # delete its asset (so the canonical diff cannot desire it) and its bytes (so a
+  # real transfer is needed), and report the loss so the fabric knows. From here,
+  # the ONLY thing marking the blob desired on B is the pin.
+  local bid
+  for bid in $(vp_b /api/v1/assets | jq -r --arg h "$VP_BLOB" '.items[] | select(.blob_hash == $h) | .id'); do
+    vp_b "/api/v1/assets/$bid" -X DELETE -o /dev/null
+  done
+  find "$root/b/data/cas/blobs" -name "${VP_BLOB#blake3:}" -type f -delete
+  $vcli_b peers report-inventory site-b --json >/dev/null
+  $vcli_b peers report-inventory site-a --json >/dev/null
+  # Node A tells node B's controller that A holds the bytes, so B has a source.
+  $vcli_a peers report-inventory site-b --json >/dev/null
+  assert_eq "$(peer_holds "$root/b/data/cas" "$VP_BLOB")" "0" \
+    "node B holds none of the blob, and no asset names it — only the pin marks it desired there"
+
+  # -------------------------------------------------------------------------
+  note "  the pin becomes a transfer: node B pulls the vault blob (convergence union)"
+  # -------------------------------------------------------------------------
+  vp_b "/api/v1/peers/site-b/reconcile" -X POST -o /dev/null
+  wait_for "the pinned vault blob never reached node B — the convergence union did not turn the pin into a transfer" \
+    900 vp_b_replicated
+  assert_eq "$(peer_holds "$root/b/data/cas" "$VP_BLOB")" "1" \
+    "the blob crossed the wire to node B because a pin, not an asset, marked it desired there"
+
+  # Node B tells node A it now holds the bytes, so A has a durable second copy on
+  # record — which the reverse-retention step below relies on: ADR-0018 will not
+  # let A delete a last copy it cannot see elsewhere, and here it can.
+  $vcli_b peers report-inventory site-a --json >/dev/null
+
+  # -------------------------------------------------------------------------
+  note "  and node A's garbage collector SPARES the pinned, asset-less vault blob (retention)"
+  # -------------------------------------------------------------------------
+  #
+  # Node A's asset for the fixture is deleted, so nothing in the catalogue
+  # references the bytes any more — a vault blob's real condition, since it never
+  # had an asset. Node A's self-pin from the vault upload is all that keeps it.
+  local aid
+  for aid in $(vp_a /api/v1/assets | jq -r --arg h "$VP_BLOB" '.items[] | select(.blob_hash == $h) | .id'); do
+    vp_a "/api/v1/assets/$aid" -X DELETE -o /dev/null
+  done
+  assert_eq "$(vp_a /api/v1/assets | jq -r --arg h "$VP_BLOB" '[.items[] | select(.blob_hash == $h)] | length')" "0" \
+    "no asset references the vault blob on node A — by the first milestones' measure it is garbage"
+  assert_eq "$(peer_holds "$root/a/data/cas" "$VP_BLOB")" "1" "and node A still holds the bytes"
+
+  # Two passes at a one-nanosecond grace: a pinned blob is counted referenced, so
+  # it is never even marked, let alone reclaimed.
+  local gc1 gc2
+  gc1=$("$BIN" --config "$cfg_a" gc --apply --grace 1ns --json 2>/dev/null)
+  assert_eq "$(jq -r --arg h "$VP_BLOB" '[.marked[].hash] | index($h) != null' <<<"$gc1")" "false" \
+    "the pinned vault blob is not even marked — a placement pin is a reference (ADR-0096)"
+  gc2=$("$BIN" --config "$cfg_a" gc --apply --grace 1ns --json 2>/dev/null)
+  assert_eq "$(jq -r --arg h "$VP_BLOB" '[.reclaimed[].hash] | index($h) != null' <<<"$gc2")" "false" \
+    "and never reclaimed by the sweep that would reclaim any unpinned, unreferenced blob"
+  assert_eq "$(peer_holds "$root/a/data/cas" "$VP_BLOB")" "1" \
+    "node A kept every byte of the pinned vault blob"
+
+  # Remove node A's self-pin — the device saying the blob may go — and the very
+  # same sweep reclaims it: the pin was the whole of its retention (ADR-0096).
+  vp_a /api/v1/vault/placements -X DELETE -H 'Content-Type: application/json' \
+    -d "{\"blob_hash\":\"$VP_BLOB\",\"peer_id\":\"$self_a\"}" -o /dev/null
+  "$BIN" --config "$cfg_a" gc --apply --grace 1ns --json >/dev/null 2>&1
+  "$BIN" --config "$cfg_a" gc --apply --grace 1ns --json >/dev/null 2>&1
+  assert_eq "$(peer_holds "$root/a/data/cas" "$VP_BLOB")" "0" \
+    "with its last pin gone the blob is reclaimable again — the pin was the whole of its retention"
+
+  local p
+  for p in "${PEER_PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done
+  for p in "${PEER_PIDS[@]:-}"; do wait "$p" 2>/dev/null || true; done
+  PEER_PIDS=()
+}
+
+# vp_b_replicated — 0 once node B has a replicate_blob job in `succeeded`, the last
+# of the things the transfer produces (#207). It reads globals the demo set so
+# wait_for can call it by name.
+vp_b_replicated() {
+  [[ "$(curl -sS --unix-socket "$VP_SOCK_B" -H "Authorization: Bearer $VP_TOKEN_B" \
+    "http://heyarr/api/v1/jobs?type=replicate_blob" | jq -r '[.items[] | select(.state == "succeeded")] | length > 0')" == "true" ]]
+}
+
 two_peer_demo() { # mode
   local mode=$1
   local root="$WORK/twopeer-$mode" lib
@@ -8042,13 +8297,22 @@ YAML
   "$BIN" device generate --device-dir "$B" --name devb >/dev/null 2>&1
   "$BIN" device generate --device-dir "$C" --name devc >/dev/null 2>&1
 
-  local bpub base
+  local bpub cpub base
   bpub=$("$BIN" device show --device-dir "$B" --json | jq -r .encryption_public_key)
+  cpub=$("$BIN" device show --device-dir "$C" --json | jq -r .encryption_public_key)
   base=( env "HEYARR_TOKEN=$token" "$BIN" --config "$cfg" )
 
+  # Enrol A and B so their encryption keys are PINNED recipients (enrol-before-wrap,
+  # ADR-0049): a space key may be wrapped only for an enrolled device or recovery
+  # key. C is left unenrolled on purpose — the stranger, and the negative below.
+  ps_enrol_device "$sock" "$token" "$A" deva
+  ps_enrol_device "$sock" "$token" "$B" devb
+
   # Device A mints a space, wrapping its key for itself (--self, default) and B.
+  # --recovery=false: these devices' local recovery keys are not pinned here, and
+  # this demo is about device recipients, not recovery (that is space_recovery_demo).
   local create space_id recips
-  create=$("${base[@]}" space create --device-dir "$A" --kind personal --recipient "$bpub" --json)
+  create=$("${base[@]}" space create --device-dir "$A" --kind personal --recipient "$bpub" --recovery=false --json)
   space_id=$(jq -r .id <<<"$create")
   recips=$(jq -r '.recipients | length' <<<"$create")
   assert_eq "$recips" "2" \
@@ -8087,9 +8351,192 @@ YAML
   assert_refuses "a device the space was not wrapped for cannot read it — a decrypt without the key fails" \
     "cannot read space" "${base[@]}" space read "$space_id" --device-dir "$C"
 
+  # ENROL-BEFORE-WRAP (ADR-0049): a space key cannot be wrapped for an unenrolled
+  # recipient. C was never enrolled, so wrapping a new space for its key is refused
+  # at the create path — a key issued and immediately wrapped-for is unspellable.
+  assert_refuses "a space key cannot be wrapped for an unenrolled recipient (enrol-before-wrap, ADR-0049)" \
+    "not an enrolled device" "${base[@]}" space create --device-dir "$A" --kind personal --recipient "$cpub" --recovery=false --json
+
   kill -TERM "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
 }
+
+# THE DEVICE GATEWAY: a stock Subsonic client points at the DEVICE, and the
+# device serves its playlists from state it decrypts locally while proxying the
+# library to a controller that holds only ciphertext (§70, §72, §73, ADR-0051,
+# #372, #387).
+#
+# This is the two-tier scene: two processes, a real controller and a real
+# gateway, driven over HTTP the way a stock app drives them. Until it existed the
+# gateway was proven only by a Go integration test — a thorough one, but the
+# defect this file exists to catch is precisely a mechanism whose only caller is
+# a test. The app-in-the-loop half (a real Subsonic APP, not curl) cannot live in
+# a 300s headless demo and is recorded separately in
+# docs/acceptance/real-app-in-the-loop.md.
+gateway_demo() {
+  local root="$WORK/gateway" data sock cfg D pwfile
+  data="$root/data"; sock="$data/heyarr.sock"; cfg="$WORK/gateway.yaml"
+  D="$root/dev"; pwfile="$root/device-password"
+  mkdir -p "$data" "$D"
+
+  # The gateway proxies library and stream methods to the controller over HTTP,
+  # so unlike every other section here this controller needs a TCP listener as
+  # well as its socket. Port 0: the kernel picks, the node logs what it got, and
+  # two runs on one machine cannot collide — the reason the rest of this file
+  # stays on a unix socket in the first place.
+  cat > "$cfg" <<YAML
+data_dir: $data
+peer:
+  name: acceptance-gateway
+  site: test
+log:
+  level: info
+  format: json
+http:
+  addr: 127.0.0.1:0
+  unix_socket: $sock
+  auth:
+    enabled: true
+libraries:
+  - name: albums
+    content_type: music
+    roots: ["$FULLLIB/music"]
+YAML
+
+  local token
+  token=$("$BIN" --config "$cfg" token create acceptance --scopes admin --json | jq -r .token)
+  "$BIN" --config "$cfg" all >"$root/controller.log" 2>&1 &
+  local pid=$!
+  local waited=0
+  while (( waited < 600 )); do
+    curl -sf --unix-socket "$sock" http://heyarr/readyz >/dev/null 2>&1 && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if (( waited >= 600 )); then
+    fail "the gateway scene's controller never became ready"; cat "$root/controller.log"
+    kill -KILL "$pid" 2>/dev/null || true; return 1
+  fi
+
+  # The two music fixtures have to be IN the catalogue before the proxied
+  # getArtists can prove anything; an empty answer would pass a shape check and
+  # prove nothing at all.
+  local ingested=0
+  waited=0
+  while (( waited < 1800 )); do
+    ingested=$(grep -c '"msg":"ingested"' "$root/controller.log" 2>/dev/null || true)
+    (( ingested >= 2 )) && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if (( ingested < 2 )); then
+    fail "the gateway scene ingested only $ingested of 2 music files"
+    kill -KILL "$pid" 2>/dev/null || true; return 1
+  fi
+
+  local http_addr
+  http_addr=$(grep -o '"http_addr":"[^"]*"' "$root/controller.log" | head -1 | cut -d'"' -f4)
+  if [[ -z "$http_addr" ]]; then
+    fail "the controller never reported the TCP address it bound"
+    kill -KILL "$pid" 2>/dev/null || true; return 1
+  fi
+
+  # One device: it is both the personal-state reader and the thing the stock app
+  # talks to. Enrolled, because a space key may be wrapped only for an enrolled
+  # device (enrol-before-wrap, ADR-0049).
+  "$BIN" device generate --device-dir "$D" --name gateway-device >/dev/null 2>&1
+  ps_enrol_device "$sock" "$token" "$D" gateway-device
+
+  local base create space_id
+  base=( env "HEYARR_TOKEN=$token" "$BIN" --config "$cfg" )
+  create=$("${base[@]}" space create --device-dir "$D" --kind personal --recovery=false --json)
+  space_id=$(jq -r .id <<<"$create")
+  "${base[@]}" space put "$space_id" --device-dir "$D" --item "midnight-jazz" >/dev/null
+
+  # The password the APP uses to reach the DEVICE. It is not the controller's
+  # bearer and the negative below proves the two cannot be swapped.
+  printf '%s' 'stock-app-password' > "$pwfile"
+  chmod 0600 "$pwfile"
+
+  env "HEYARR_TOKEN=$token" "$BIN" --config "$cfg" device gateway \
+    --device-dir "$D" --addr "http://$http_addr" --controller-url "http://$http_addr" \
+    --device-user stockapp --device-password-file "$pwfile" \
+    --listen 127.0.0.1:0 >"$root/gateway.log" 2>&1 &
+  local gwpid=$!
+
+  # The gateway prints the address it bound; wait for that line rather than for a
+  # fixed sleep, which is the bet on machine speed this file has lost before.
+  local gw_addr=""
+  waited=0
+  while (( waited < 600 )); do
+    gw_addr=$(sed -n 's|.*serving Subsonic on http://\([^/]*\)/rest.*|\1|p' "$root/gateway.log" | head -1)
+    [[ -n "$gw_addr" ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if [[ -z "$gw_addr" ]]; then
+    fail "the gateway never reported the address it bound"; cat "$root/gateway.log"
+    kill -KILL "$gwpid" "$pid" 2>/dev/null || true; return 1
+  fi
+
+  gw() { # method [extra-query]
+    curl -sS "http://$gw_addr/rest/$1?u=stockapp&p=stock-app-password&c=acceptance&v=1.16.1&f=json${2:+&$2}"
+  }
+
+  assert_eq "$(jq -r '.["subsonic-response"].status' <<<"$(gw ping)")" "ok" \
+    "a stock Subsonic client's ping is answered by the DEVICE, not the controller"
+
+  # THE SEPARATION ADR-0051 CLAIMS. The app holds a password for the device; the
+  # device holds a bearer for the controller. If the controller's bearer worked
+  # here the app would be holding the controller's credential after all, which is
+  # the whole thing the gateway exists to avoid.
+  assert_eq "$(jq -r '.["subsonic-response"].status' <<<"$(curl -sS \
+    "http://$gw_addr/rest/ping?u=stockapp&p=$token&c=acceptance&v=1.16.1&f=json")")" "failed" \
+    "the controller's bearer does NOT authenticate to the device — the two credentials are distinct"
+  assert_eq "$(jq -r '.["subsonic-response"].status' <<<"$(curl -sS \
+    "http://$gw_addr/rest/ping?u=stockapp&p=wrong&c=acceptance&v=1.16.1&f=json")")" "failed" \
+    "a wrong device password is refused"
+
+  # THE CLAIM. The playlist the app reads came out of ciphertext the controller
+  # stores and cannot open.
+  local playlists pl_id pl_items
+  playlists=$(gw getPlaylists)
+  pl_id=$(jq -r '.["subsonic-response"].playlists.playlist[0].id' <<<"$playlists")
+  assert_eq "$pl_id" "$space_id" \
+    "the device serves a playlist whose id is the space it decrypted"
+  pl_items=$(jq -r '[.["subsonic-response"].playlist.entry[]?.title] | join(",")' <<<"$(gw getPlaylist "id=$pl_id")")
+  assert_contains "$pl_items" "midnight-jazz" \
+    "a stock-Subsonic request read its playlist through the device gateway while the controller held only ciphertext"
+
+  # The other half of that sentence, measured rather than trusted: what the
+  # controller stores for this space does not contain the plaintext. python3 does
+  # the containment check so a NUL in the ciphertext cannot truncate it in bash.
+  local ct opaque
+  ct=$("${base[@]}" space changes "$space_id" --json | jq -r '.[0].ciphertext')
+  opaque=$(python3 -c 'import base64,sys; b=base64.b64decode(sys.argv[1]); sys.stdout.write("OPAQUE" if b"midnight-jazz" not in b else "PLAINTEXT-LEAKED")' "$ct")
+  assert_eq "$opaque" "OPAQUE" \
+    "and the controller's copy of that playlist is ciphertext — the plaintext item is nowhere in the bytes at rest"
+
+  # PROXYING, the other family of method: the library is the controller's and the
+  # gateway passes it through under its own bearer.
+  assert_eq "$(( $(jq -r '.["subsonic-response"].artists.index | length' <<<"$(gw getArtists)") > 0 ))" "1" \
+    "the library the device serves is the controller's, proxied — the device stores no catalogue"
+
+  # A proxied STREAM is the same bytes the ordinary blob route serves. A gateway
+  # that re-encoded, truncated or invented bytes would pass every assertion above.
+  local album_id song_id gw_sha direct_sha
+  album_id=$(jq -r 'first(.["subsonic-response"].albumList2.album[] | select(.songCount > 0) | .id)' \
+    <<<"$(gw getAlbumList2 "type=alphabeticalByName&size=500")")
+  song_id=$(jq -r '.["subsonic-response"].album.song[0].id' <<<"$(gw getAlbum "id=$album_id")")
+  gw_sha=$(curl -sS "http://$gw_addr/rest/stream?u=stockapp&p=stock-app-password&c=acceptance&v=1.16.1&id=$song_id" | shasum -a 256 | cut -d" " -f1)
+  direct_sha=$(curl -sS -H "Authorization: Bearer $token" \
+    "http://$http_addr/rest/stream?u=acceptance&p=$token&c=acceptance&v=1.16.1&id=$song_id" | shasum -a 256 | cut -d" " -f1)
+  assert_eq "$gw_sha" "$direct_sha" \
+    "the bytes a stock app streams through the device are byte-identical to the controller's own"
+
+  kill -TERM "$gwpid" 2>/dev/null || true
+  wait "$gwpid" 2>/dev/null || true
+  kill -TERM "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
 
 # REVOCATION CUTS ACCESS: a device is revoked from a space by rotating its key.
 # The revoked device's wrapped copy is DELETED and the space is re-keyed for
@@ -8141,6 +8588,13 @@ YAML
   bpub=$("$BIN" device show --device-dir "$B" --json | jq -r .encryption_public_key)
   cpub=$("$BIN" device show --device-dir "$C" --json | jq -r .encryption_public_key)
   base=( env "HEYARR_TOKEN=$token" "$BIN" --config "$cfg" )
+
+  # Enrol all three so their keys are pinned recipients (enrol-before-wrap,
+  # ADR-0049): the create wraps for A, B and C, and the rotation re-wraps for the
+  # remaining two — every one of them must be an enrolled device.
+  ps_enrol_device "$sock" "$token" "$A" reva
+  ps_enrol_device "$sock" "$token" "$B" revb
+  ps_enrol_device "$sock" "$token" "$C" revc
 
   # A mints a space wrapped for A, B and C (no recovery key in this demo).
   local create space_id recips
@@ -8293,9 +8747,14 @@ YAML
   "$BIN" device generate --device-dir "$dy" --name device-y >/dev/null 2>&1
   ypub=$("$BIN" device show --device-dir "$dy" --json | jq -r .encryption_public_key)
 
+  # Both devices are enrolled on node A, where the space is created — a space key
+  # may be wrapped only for pinned recipients (enrol-before-wrap, ADR-0049).
+  ps_enrol_device "$sock_a" "$token_a" "$dx" device-x
+  ps_enrol_device "$sock_a" "$token_a" "$dy" device-y
+
   # Device X creates a space on A, wrapped for X (self) and Y, and writes one item.
   local create space_id
-  create=$("${base_a[@]}" space create --device-dir "$dx" --kind shared --recipient "$ypub" --json)
+  create=$("${base_a[@]}" space create --device-dir "$dx" --kind shared --recipient "$ypub" --recovery=false --json)
   space_id=$(jq -r .id <<<"$create")
   "${base_a[@]}" space put "$space_id" --device-dir "$dx" --item "x-first" >/dev/null
 
@@ -8391,7 +8850,10 @@ YAML
   base=( env "HEYARR_TOKEN=$token" "$BIN" --config "$cfg" )
   sapi() { curl -sS --unix-socket "$sock" -H "Authorization: Bearer $token" "${@:2}" "http://heyarr$1"; }
 
-  space_id=$("${base[@]}" space create --device-dir "$dev" --kind personal --json | jq -r .id)
+  # The device is enrolled so its key is a pinned recipient (enrol-before-wrap, ADR-0049).
+  ps_enrol_device "$sock" "$token" "$dev" snap-dev
+
+  space_id=$("${base[@]}" space create --device-dir "$dev" --kind personal --recovery=false --json | jq -r .id)
   "${base[@]}" space put "$space_id" --device-dir "$dev" --item one >/dev/null
   "${base[@]}" space put "$space_id" --device-dir "$dev" --item two >/dev/null
   "${base[@]}" space put "$space_id" --device-dir "$dev" --item three >/dev/null
@@ -8554,12 +9016,16 @@ else
   recovery_demo
   note "ENCRYPTED PERSONAL STATE: the peer stores ciphertext it cannot read (§38, §42, ADR-0049, #320)"
   personalstate_demo
+  note "THE DEVICE GATEWAY: a stock Subsonic client reads playlists off the DEVICE, the controller holds ciphertext (§73, ADR-0051, #387)"
+  gateway_demo
   note "CONVERGE AFTER A PARTITION: two devices, an offline concurrent edit each, merged client-side (§42, §43, ADR-0049, #324)"
   converge_after_partition_demo
   note "SNAPSHOTS BOUND THE LOG: snapshot + compaction, and the state survives (§44, ADR-0049, #325)"
   snapshot_demo
   note "REVOCATION CUTS ACCESS: a device is revoked by rotating the space key (§41, ADR-0022, ADR-0049, #361)"
   revocation_demo
+  note "THE VAULT PLACEMENT PIN: a vault blob replicates and is retained by a pin, not an asset (ADR-0096, #540)"
+  vault_placement_demo
   note "THE SECOND PEER: placement, proven (§56, §64, M4-11) — heyarr all"
   two_peer_demo all
   note "THE SECOND PEER, again, as separate role processes (ADR-0002, M4-16)"

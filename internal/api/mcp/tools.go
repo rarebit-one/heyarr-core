@@ -56,12 +56,17 @@ func (s *Server) registerTools() {
 		Scope:    auth.ScopeRead,
 		ReadOnly: true,
 		Description: "Find content the library does NOT already hold. Where search_content " +
-			"looks only in the library, this asks the metadata provider (TVDB) for candidate " +
-			"series matching a free-text title, whether or not they are catalogued — the " +
-			"\"search then follow\" door. Each result carries a tvdb_id you pass straight to " +
-			"follow_source (or want_content by title) to bring it in. Use this when " +
-			"search_content came back empty and someone wants something new. Needs a metadata " +
-			"provider configured; a node without one says so rather than returning nothing.",
+			"looks only in the library, this asks every configured metadata provider (TVDB/TMDB " +
+			"for series, TMDB for movies, Open Library for books, MusicBrainz for music) for " +
+			"candidate works matching a free-text title, whether or not they are catalogued — " +
+			"the \"search then acquire\" door. A tv_series result carries a tvdb_id you pass " +
+			"straight to follow_source; every result (including movie/book/music) carries " +
+			"source+external_id for reference and a type telling you which: a tv_series/podcast/" +
+			"youtube_channel/rss_feed result is followed (follow_source), a movie/book/music " +
+			"result has no calendar and is wanted instead (want_content by title+year+" +
+			"content_type). Use this when search_content came back empty and someone wants " +
+			"something new. Needs at least one metadata or enrich provider configured; a node " +
+			"without one says so rather than returning nothing.",
 		InputSchema: schemaDiscoverContent,
 		Handler:     s.discoverContent,
 	})
@@ -241,6 +246,35 @@ func (s *Server) registerTools() {
 			"reach for when someone says \"I have this, why does Heyarr say it is missing\".",
 		InputSchema: schemaDesiredItemID,
 		Handler:     s.getContentSatisfaction,
+	})
+
+	s.tools.register(Tool{
+		Name:     "get_acquisition_status",
+		Title:    "What a want is downloading right now",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "Report where a want is in the acquisition pipeline (idle, searching, " +
+			"selected, queued, downloading, verifying, ingesting) and, when a download is in " +
+			"flight, the transfer behind it: which release was chosen — its name carries the " +
+			"resolution and size — how far it has downloaded, and any trouble the client " +
+			"reported. This is the read for \"what is this want actually doing\" and \"why is " +
+			"it still not here\", without opening the download client.",
+		InputSchema: schemaDesiredItemID,
+		Handler:     s.getAcquisitionStatus,
+	})
+
+	s.tools.register(Tool{
+		Name:     "list_jobs",
+		Title:    "Inspect the durable work queue",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "List the durable jobs Heyarr runs — searches, grabs, download polls, " +
+			"ingests — filtered by state and/or type, most recent first, each with its last " +
+			"error. This is the read behind \"why is nothing being acquired\": a search that " +
+			"found nothing, a grab the download client refused, a poll that failed. A `failed` " +
+			"job will retry with backoff; a `dead` one is terminal until an operator retries it.",
+		InputSchema: schemaListJobs,
+		Handler:     s.listJobs,
 	})
 
 	s.tools.register(Tool{

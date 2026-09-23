@@ -17,7 +17,7 @@ would count as existing, cannot be evaluated.
 ### Options inherited from parent commands
 
 ```
-  -c, --config string   path to the configuration file (default: built-in defaults plus HEYARR_ environment)
+  -c, --config string   path to the configuration file (default: $HEYARR_CONFIG, else /etc/heyarr/config.yaml if present, else built-in defaults plus HEYARR_ environment)
 ```
 
 ### See also
@@ -25,5 +25,6 @@ would count as existing, cannot be evaluated.
 * [heyarr](heyarr.md)	 - Self-hosted content lifecycle, replication and consumption
 * [heyarr desired add](heyarr_desired_add.md)	 - Want something
 * [heyarr desired list](heyarr_desired_list.md)	 - List what should exist
+* [heyarr desired reingest](heyarr_desired_reingest.md)	 - Re-drive a wedged ingest — a finished download that never imported
 * [heyarr desired rm](heyarr_desired_rm.md)	 - Stop wanting something
 * [heyarr desired set](heyarr_desired_set.md)	 - Change the conditions, the monitoring or the note

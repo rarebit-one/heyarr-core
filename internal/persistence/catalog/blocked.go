@@ -40,6 +40,15 @@ const (
 	// for it may well be wrong. Using one word for both would bake that
 	// decision in now; two words leave it open to be made later on evidence.
 	BlockIngestFailed BlockReason = "ingest_failed"
+	// BlockGrabFailed is a release the download client could never START
+	// fetching — the tracker refused the infohash, or the magnet resolved to
+	// nothing. The bytes never arrived, so it is neither a verification nor an
+	// ingest failure; it is a dead source. Blocking it stops the want
+	// re-selecting the same unfetchable release every search (§64's grab-side
+	// analogue of the verify loop 00018 breaks). Recorded distinctly because a
+	// tracker rejection is arguably transient — a future policy may expire it,
+	// where a hash mismatch is permanent.
+	BlockGrabFailed BlockReason = "grab_failed"
 	// BlockManual is an operator's decision.
 	BlockManual BlockReason = "manual"
 )

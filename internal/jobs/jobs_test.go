@@ -627,6 +627,95 @@ func TestAnOrdinaryFailureStillRetries(t *testing.T) {
 	}
 }
 
+// A transient failure — an outage the handler expects to recover from — keeps
+// retrying instead of walking to dead on the attempt cap. A brief indexer or
+// download-client outage must not strand a want forever (#557).
+func TestATransientFailureRetriesPastTheAttemptCap(t *testing.T) {
+	q, clock := newQueue(t)
+	enqueue(t, q, EnqueueOptions{MaxAttempts: 3})
+
+	cause := fmt.Errorf("%w: no indexer could be reached", ErrTransient)
+	for i := range 6 { // twice the cap, and then some
+		job, err := q.Claim(t.Context(), ClaimOptions{Owner: "w"})
+		if err != nil {
+			t.Fatalf("claim %d: %v (a transient failure went dead and stopped being claimable)", i, err)
+		}
+		if err := q.Fail(t.Context(), job.ID, "w", cause); err != nil {
+			t.Fatalf("fail %d: %v", i, err)
+		}
+		after, err := q.Get(t.Context(), job.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.State != Pending {
+			t.Fatalf("after %d transient failures of a 3-attempt job, state = %s, want pending", i+1, after.State)
+		}
+		clock.Advance(after.RunAfter.Sub(clock.Now()) + time.Second)
+	}
+
+	stats, err := q.Stats(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats[Dead] != 0 {
+		t.Errorf("stats = %v, want no dead job — a transient failure must not die at the cap", stats)
+	}
+}
+
+// The transient schedule is minutes-to-hours, past anything the ordinary
+// seconds-to-minutes cliff can reach — long enough to be kind to an outage.
+func TestTransientBackoffOutgrowsTheOrdinaryCeiling(t *testing.T) {
+	q, clock := newQueue(t)
+	enqueue(t, q, EnqueueOptions{MaxAttempts: 100})
+
+	cause := fmt.Errorf("%w: the download client is unreachable", ErrTransient)
+	var last time.Duration
+	for range 8 {
+		job, err := q.Claim(t.Context(), ClaimOptions{Owner: "w"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := q.Fail(t.Context(), job.ID, "w", cause); err != nil {
+			t.Fatal(err)
+		}
+		after, err := q.Get(t.Context(), job.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		last = after.RunAfter.Sub(clock.Now())
+		clock.Advance(last + time.Second)
+	}
+	if last <= defaultMaxBackoff {
+		t.Errorf("transient backoff after several attempts = %v, want longer than the ordinary ceiling %v", last, defaultMaxBackoff)
+	}
+	if last > transientMaxBackoff+transientBaseBackoff {
+		t.Errorf("transient backoff = %v exceeded its cap %v", last, transientMaxBackoff)
+	}
+}
+
+// A handler that contradicts itself is read as making the stronger claim:
+// "cannot ever succeed" beats "cannot succeed yet", so the job dies.
+func TestPermanentWinsOverTransient(t *testing.T) {
+	q, _ := newQueue(t)
+	enqueue(t, q, EnqueueOptions{MaxAttempts: 5})
+
+	job, err := q.Claim(t.Context(), ClaimOptions{Owner: "w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause := fmt.Errorf("%w: %w: contradictory", ErrPermanent, ErrTransient)
+	if err := q.Fail(t.Context(), job.ID, "w", cause); err != nil {
+		t.Fatal(err)
+	}
+	after, err := q.Get(t.Context(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State != Dead {
+		t.Errorf("state = %s, want dead — permanent must win over transient", after.State)
+	}
+}
+
 // A permanently-failed job is still revivable by hand.
 //
 // The handler said "this will fail the same way every time"; an operator who

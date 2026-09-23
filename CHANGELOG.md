@@ -11,6 +11,45 @@ stable.
 
 ### Added
 
+- **Guest mode is an M7 access lease, gated by a trusted-source allow-list
+  (ADR-0094, phase 1).** A credential-less request from an allow-listed source
+  address is now admitted as an anonymous `guest` principal minted as a
+  short-lived access lease (`internal/leases`, the store's first non-device
+  principal) carrying exactly the `browse`, `play` and `subtitle` capabilities —
+  browse the shared library, resolve/stream content, fetch subtitles — with a
+  1h life well under `grant.MaxTTL`. `http.guest.trusted_nets` is the new
+  source-address CIDR allow-list (the site LANs and WireGuard estate client
+  nets, the same ranges the deployment's systemd `IPAddressAllow` admits); it
+  defaults to the private + loopback ranges and an **empty list turns the tier
+  off** regardless of `http.guest.enabled`. A request from off the estate is not
+  a guest — it must enrol (`401`). A guest still cannot create wants/acquire,
+  follow, rate, monitor, or read/write any personal state (playlists, resume,
+  ratings, history); every such write is refused `403` with the stable,
+  machine-readable `capability_denied` code (reused verbatim from the grant
+  layer). The one write-scoped route a guest's `play` capability reaches is
+  `POST /playback`; nothing else write-scoped becomes reachable. The ADR-0074
+  content-class visibility seam (managed + linked visible, vault never) is
+  unchanged. Problem documents gain an optional `code` extension member for the
+  machine-readable reason.
+
+- **The node advertises itself over mDNS / DNS-SD so a client can find it
+  (ADR-0094, phase 2).** A controller now announces the `_heyarr._tcp` service
+  over mDNS (`224.0.0.251:5353`, `ff02::fb`) — the client-facing sibling of the
+  SSDP the renderer already speaks to *find* televisions, here the node
+  *announcing itself*. `internal/discovery` builds the DNS-SD records (PTR, SRV,
+  TXT `{txtvers=1, path=/api/v1, tls=0|1}`, and per-interface A/AAAA) as a pure,
+  unit-tested function and multicasts them on a cadence. Advertisement is gated
+  to **trusted interfaces only**: it reuses the guest trust boundary
+  (`http.guest.trusted_nets`) and announces solely on up, multicast-capable,
+  non-loopback interfaces whose address falls inside it — never on the raw
+  internet — so an empty boundary advertises to nobody, mirroring the guest
+  tier's "empty allow-list = off". It advertises the TLS endpoint (the bound
+  client-API port) and is inert on a socket-only or loopback-only node that names
+  no LAN-reachable port. New `http.discovery.disabled` is the independent
+  off-switch; advertisement is on by default where a trusted interface exists.
+  Split-horizon DNS (`heyarr.thesim.family`, mechanism 1) is untouched: the app
+  stays unaware of that name.
+
 - **Device enrolment carries the identity's recovery encryption public key
   (§41, rarebit-one/heyarr-mobile#41 part 2).** The device-enrolment response
   (`POST /enrol`) now includes `recovery_encryption_key`, the user identity's

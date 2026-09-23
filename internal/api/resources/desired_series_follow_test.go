@@ -23,7 +23,8 @@ func seriesDiscoveryRegistry(t *testing.T, title, externalID string) *providers.
 	reg := providers.New(nil)
 	fake := providers.NewFake("fake-tmdb", providers.CapabilityMetadata).
 		OfferDiscovery(title, providers.DiscoveryCandidate{
-			Title: title, Year: 2015, ExternalID: externalID, Type: followed.TypeTVSeries,
+			Title: title, Year: 2015, ExternalID: externalID, Source: "tmdb",
+			Type: string(followed.TypeTVSeries),
 		})
 	if err := reg.Register(fake); err != nil {
 		t.Fatal(err)

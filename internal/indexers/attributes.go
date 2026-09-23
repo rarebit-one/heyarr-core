@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 )
 
@@ -74,8 +75,10 @@ var torznabAttribute = map[string]policy.Attribute{
 	"language":   policy.AttrLanguage,
 }
 
-// attributesOf is everything the release actually asserted.
-func attributesOf(i item) acquisition.Attributes {
+// attributesOf is everything the release actually asserted, plus — when
+// parseTitles is on (ADR-0091) — what its title asserts about its own quality,
+// for the attributes the indexer left out.
+func attributesOf(i item, title string, parseTitles bool) acquisition.Attributes {
 	attrs := acquisition.Attributes{}
 
 	if n, ok := sizeOf(i); ok {
@@ -102,6 +105,14 @@ func attributesOf(i item) acquisition.Attributes {
 		attrs[mapped] = value
 	}
 
+	// ADR-0091: fill from the title, FILL-ONLY-ABSENT. A structured torznab
+	// assertion above is never replaced by a reading of the name — a real
+	// assertion always beats a derived one, the half of §63 that does not
+	// bend. Off by default; nothing here runs unless the operator opted in.
+	if parseTitles {
+		fillAbsent(attrs, titleAttributes(title))
+	}
+
 	// An empty map and a nil map mean the same thing to §63, and returning
 	// nil makes "the provider determined nothing" visible in a debugger
 	// rather than looking like an initialised-but-unpopulated result.
@@ -109,6 +120,86 @@ func attributesOf(i item) acquisition.Attributes {
 		return nil
 	}
 	return attrs
+}
+
+// titleAttributes reads a release NAME's own quality claims into policy's typed
+// vocabulary, each value marked Derived (ADR-0091) so §63 names it as read from
+// the title. It is the one place the release-name parser is mapped onto policy,
+// shared by the torznab and prowlarr clients. Returns nil when the name carried
+// nothing recognisable — the same "determined nothing" signal as an empty
+// structured extraction.
+func titleAttributes(title string) acquisition.Attributes {
+	q := identification.ParseReleaseQuality(title)
+	if q.Empty() {
+		return nil
+	}
+	attrs := acquisition.Attributes{}
+	if lines, ok := resolutionLines(q.Resolution); ok {
+		attrs[policy.AttrResolution] = policy.Num(lines).AsDerived()
+	}
+	if q.Source != "" {
+		attrs[policy.AttrSource] = policy.Text(q.Source).AsDerived()
+	}
+	if codec := videoCodecClass(q.Codec); codec != "" {
+		attrs[policy.AttrVideoCodec] = policy.Text(codec).AsDerived()
+	}
+	if q.DynamicRange != "" {
+		// Policy models a single hdr flag, not a DV/HDR distinction: either is
+		// "this release claims high dynamic range", which is the flag's word.
+		attrs[policy.AttrHDR] = policy.Flag(true).AsDerived()
+	}
+	if len(attrs) == 0 {
+		return nil
+	}
+	return attrs
+}
+
+// fillAbsent copies each key of src into dst ONLY where dst has no key — the
+// fill-only-absent merge ADR-0091 requires, so an asserted value is never
+// overwritten by a derived one.
+func fillAbsent(dst, src acquisition.Attributes) {
+	for k, v := range src {
+		if _, ok := dst[k]; !ok {
+			dst[k] = v
+		}
+	}
+}
+
+// resolutionLines turns the parser's "1080p"/"2160p"/"1080i" spelling into
+// policy's vertical-line integer. It reads the leading digits and ignores the
+// trailing p/i, which are a spelling of the same number rather than a claim.
+func resolutionLines(res string) (int64, bool) {
+	if res == "" {
+		return 0, false
+	}
+	end := 0
+	for end < len(res) && res[end] >= '0' && res[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(res[:end], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// videoCodecClass folds the parser's spelling onto policy's video_codec class
+// (h264/hevc/av1/vp9), passing others through as-is. x264 and x265 are scene
+// spellings of the AVC and HEVC classes a profile actually compares against.
+func videoCodecClass(codec string) string {
+	switch codec {
+	case "":
+		return ""
+	case "x265", "h265", "hevc":
+		return "hevc"
+	case "x264", "h264", "avc":
+		return "h264"
+	default:
+		return codec
+	}
 }
 
 // valueFor converts a raw attribute value into policy's typed form, declining

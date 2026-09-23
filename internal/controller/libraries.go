@@ -14,46 +14,64 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
 
-// warnIfIngestWillCopy says so, once per root, when the store and the library
-// are in different MOUNTS and ingest cannot therefore hardlink.
+// warnIfIngestWillCopy says so, once per root, when ingest from this library
+// cannot use the hardlink rung and every adopted file will therefore be a full
+// byte copy.
 //
 // ADR-0014 says cross-filesystem ingest "degrades to a copy with a warning,
 // never an error". The degrading was implemented; the warning was not, and its
 // absence is expensive in a way nothing else notices. Both cheap rungs of the
-// ladder need the source and destination in one MOUNT — reflink because cloning
-// is a filesystem operation, hardlink because link(2) returns EXDEV across
-// mounts whatever the device — so a CAS and a library on different mounts means
-// EVERY ingest is a full byte copy and adopting a library doubles its storage.
-// That is the outcome ADR-0014 exists to avoid, and it arrives silently, one
-// file at a time.
+// ladder need the source and the destination in one MOUNT — reflink because
+// cloning is a filesystem operation, hardlink because link(2) returns EXDEV
+// across mounts whatever the device — so a CAS and a library that cannot link
+// to each other means EVERY ingest is a full byte copy and adopting a library
+// doubles its storage. That is the outcome ADR-0014 exists to avoid, and it
+// arrives silently, one file at a time.
 //
-// It asks about mounts, not device numbers (SameMount, not SameFilesystem):
-// #222 was a store and a library on ONE device but two bind mounts under
-// ProtectSystem=strict, which st_dev cannot distinguish, so the check that
-// asked it was silent on the one host where the problem was real.
+// It asks cas.HardlinkOutlook, which ATTEMPTS a hardlink rather than predicting
+// one. Both previous instruments predicted: st_dev asked "one filesystem?" and
+// was identical across the two bind mounts ProtectSystem=strict creates, so it
+// was silent on the one host where the problem was real (#222); mount ids ask
+// the comparison link(2) makes, which is right about mounts and still blind to
+// a link refused for any other reason. The probe reads the errno of the
+// operation the ingest will perform, so it cannot be blind to a cause nobody
+// modelled — and it falls back to the mount inference only when the library
+// holds no file to link, which is before any bytes are at stake.
 //
 // Once per root at startup, not once per file: this is a configuration
 // question, answerable before any bytes move, and a million-line log is not a
 // warning.
 func warnIfIngestWillCopy(casRoot, libraryPath string, log *slog.Logger) {
-	same, known, err := cas.SameMount(casRoot, libraryPath)
+	outlook, err := cas.HardlinkOutlook(libraryPath, casRoot)
 	if err != nil {
 		// Not fatal. The library may not be mounted yet, which the scan will
 		// report far more usefully than a startup check can.
-		log.Debug("could not compare the content store and the library mount",
+		log.Debug("could not establish whether ingest from the library can hardlink",
 			"cas_root", casRoot, "path", libraryPath, "error", err)
 		return
 	}
-	if !known || same {
+	if !outlook.Known {
+		log.Debug("whether ingest from the library can hardlink is not known",
+			"cas_root", casRoot, "path", libraryPath,
+			"instrument", outlook.Instrument, "evidence", outlook.Evidence)
+		return
+	}
+	if outlook.CanHardlink {
 		return
 	}
 	log.Warn("ingest from this library will COPY every file rather than share its bytes",
 		"path", libraryPath,
 		"cas_root", casRoot,
-		"why", "the content store and the library are in different mounts (they may even "+
-			"be on the same filesystem), and reflink and hardlink cannot cross a mount — "+
-			"under a ProtectSystem=strict systemd unit a read-only library and a "+
-			"read-write store are separate mounts",
+		// How it was established, not just what: a warning from the probe is a
+		// fact, one from the inference is a prediction, and an operator
+		// deciding whether to believe it needs to know which.
+		"instrument", outlook.Instrument,
+		"evidence", outlook.Evidence,
+		"why", "the store and the library cannot hardlink to each other — most often "+
+			"because they are in different mounts (they may even be on the same "+
+			"filesystem), and neither reflink nor hardlink can cross a mount: under a "+
+			"ProtectSystem=strict systemd unit a read-only library and a read-write "+
+			"store are separate mounts",
 		"cost", "adopting this library will consume a second full copy of it",
 		"fix", "the store and the library must be in the SAME mount, not merely the same "+
 			"filesystem — see #222 and reference-linux-host.md")

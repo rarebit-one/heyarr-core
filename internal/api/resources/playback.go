@@ -123,7 +123,12 @@ type playbackStart struct {
 // non-DIRECT plan is an ANSWER — the same reasoning the planner gives for
 // DecisionUnplayable being a decision rather than an error — and the caller
 // should hand it to the client unchanged rather than deciding a status itself.
-func (a *API) beginPlayback(ctx context.Context, assetID, deviceID, wantVerb string) (playbackStart, *problem.Problem) {
+// forceDirect, when set, overrides a non-DIRECT plan to DIRECT (see
+// [playback.Plan.ForceDirect]) — the caller's explicit "send it anyway" for a
+// device that decodes more than it declares (a TV that under-declares over DLNA).
+// It is a deliberate escape hatch, not a capability finding; the honest refusal
+// remains the default.
+func (a *API) beginPlayback(ctx context.Context, assetID, deviceID, wantVerb string, forceDirect bool) (playbackStart, *problem.Problem) {
 	device, err := a.deviceProfile(ctx, deviceID)
 	if err != nil {
 		return playbackStart{}, a.problemFor("device", err)
@@ -139,6 +144,11 @@ func (a *API) beginPlayback(ctx context.Context, assetID, deviceID, wantVerb str
 	}
 
 	plan := playback.Choose(media, device, replicasOf(route))
+	if forceDirect {
+		// The caller took responsibility for a device that decodes more than it
+		// declares; the plan keeps its reasons but is served DIRECT.
+		plan = plan.ForceDirect()
+	}
 	rendered := renderPlan(assetID, deviceID, plan, route, blobHash)
 
 	// Everything that is not DIRECT is a refusal, and the refusal is as much
@@ -234,7 +244,10 @@ func (a *API) startPlayback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	started, prob := a.beginPlayback(r.Context(), body.AssetID, body.DeviceID, body.Verb)
+	// The direct-client endpoint keeps the honest refusal: a client that cannot
+	// direct-play has the /playback/plan fragmented-MP4 route (ADR-0069) as its
+	// path, so it needs no force-direct escape hatch. That is a renderer concern.
+	started, prob := a.beginPlayback(r.Context(), body.AssetID, body.DeviceID, body.Verb, false)
 	if prob != nil {
 		httpapi.Fail(w, r, prob)
 		return

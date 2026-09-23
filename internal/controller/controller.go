@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	vbrelay "github.com/rarebit-one/voidbind-go/relay"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	"github.com/rarebit-one/heyarr-core/internal/api/dlna"
@@ -23,6 +24,8 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/render"
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
 	"github.com/rarebit-one/heyarr-core/internal/api/subsonic"
+	"github.com/rarebit-one/heyarr-core/internal/api/vaultblob"
+	"github.com/rarebit-one/heyarr-core/internal/api/vaultplacement"
 	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
@@ -31,9 +34,11 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/downloads"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/guest"
 	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/indexers"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/leases"
 	"github.com/rarebit-one/heyarr-core/internal/media"
 	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
 	"github.com/rarebit-one/heyarr-core/internal/media/probe"
@@ -45,6 +50,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/cruciform"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/replication"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -272,6 +278,16 @@ func (c *Controller) Run(ctx context.Context) error {
 		return err
 	}
 
+	// mDNS / DNS-SD advertisement (ADR-0094 §Discovery, Phase 2). The client-
+	// facing sibling of the renderer package's SSDP: it announces `_heyarr._tcp`
+	// on the trusted interfaces so a client finds this node without being told an
+	// address. It is started after srv.Start() because it advertises the port the
+	// TCP listener actually bound, and it is inert unless there is a trusted,
+	// multicast-capable interface AND a reachable port — a socket-only or
+	// loopback-only node names nothing a device on the LAN could dial, exactly as
+	// it mints no renderer URL.
+	advertiser := c.startDiscovery(ctx, srv.Addr())
+
 	// Reconciliation runs on the SERVING context, not the startup one: it is
 	// ongoing work rather than schema-shaped setup, and it must stop when the
 	// controller does.
@@ -392,6 +408,10 @@ func (c *Controller) Run(ctx context.Context) error {
 	// finishing.
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancelShutdown()
+	// Stop announcing before the listeners drain: a client that heard the last
+	// announcement must not then find the port closed. Stop is a no-op when
+	// advertisement was inert.
+	advertiser.Stop()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		c.log.Error("the http server did not shut down cleanly", "error", err)
 	}
@@ -573,11 +593,36 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 		return nil, nil, fmt.Errorf("controller: opening the management-grant store: %w", err)
 	}
 
+	// The guest access-lease issuer (ADR-0094): when guest mode is enabled, a
+	// credential-less caller from inside the trusted-net boundary is admitted as a
+	// guest backed by a short-lived M7 lease. It is the SAME access_leases table,
+	// signer and event log the peer surface's lease store uses — a second handle
+	// over one store of record, the pattern the personal-state and catalog stores
+	// already follow here — so a guest lease is listable and revocable exactly as
+	// a cross-site lease is. Built only when the mode is on, so a node that never
+	// serves guests loads no lease signer for it.
+	var guestLeases httpapi.GuestLeaseIssuer
+	if c.cfg.HTTP.Guest.Enabled {
+		leaseSigner, err := identity.Signer(c.cfg.DataDir)
+		if err != nil {
+			return nil, nil, fmt.Errorf("controller: loading the identity key for guest leases: %w", err)
+		}
+		guestLeaseStore, err := leases.New(leases.Options{
+			Writer: db.Writer(), Reader: db.Reader(), Events: eventLog,
+			Signer: leaseSigner, Siblings: siblingKeys{store: members},
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("controller: opening the guest access-lease store: %w", err)
+		}
+		guestLeases = guest.NewMinter(guestLeaseStore, guest.DefaultTTL)
+	}
+
 	srv, err := httpapi.New(httpapi.Options{
 		Config:           c.cfg,
 		Logger:           c.log,
 		DB:               db,
 		Verifier:         verifier,
+		GuestLeases:      guestLeases,
 		DeviceVerifier:   deviceIdentities,
 		SessionValidator: sessions,
 		// The same store, asked a different question: is the device that
@@ -783,6 +828,34 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
+	// The vault content ingest path (ADR-0021, ADR-0096): a client uploads a
+	// pre-encrypted ciphertext blob, and the peer stores it and pins it to itself
+	// so GC retains it (a vault blob has no assets row). Reads ride the shared
+	// blobs GET route; only the write is vault-specific.
+	vaultBlobHandler, err := vaultblob.New(vaultblob.Options{
+		Store:    blobStore,
+		Pinner:   cat,
+		SelfPeer: selfPeerID,
+		Logger:   c.log,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: %w", err)
+	}
+
+	// The cross-site placement-pin route (ADR-0096). A device says a vault blob
+	// should live on a peer OTHER than the one it uploaded to — the pin the
+	// convergence union turns into a replication target — and takes it back when
+	// its retention policy lets the blob go. It writes only opaque (blob, peer)
+	// pairs to the same catalog, so it is the placement counterpart to
+	// vaultBlobHandler above, which pins an upload to THIS node.
+	vaultPlacementHandler, err := vaultplacement.New(vaultplacement.Options{
+		Pinner: cat,
+		Logger: c.log,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: %w", err)
+	}
+
 	// MCP mounts on the SAME authenticated router (§71, ADR-0019), so it
 	// inherits the middleware chain, the request correlation and the `read`
 	// scope floor rather than standing up a second server that would have to
@@ -827,7 +900,13 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// The Voidbind relay beside it (ADR-0066): the protocol the voidbind CLI and
 	// the phone actually speak, so this node is the rendezvous for its own
 	// devices without a separately-run `voidbind relay`. Same caps, same stance.
-	relayV1Handler := relay.New(relay.Options{Logger: c.log})
+	// It carries the pairing default slots plus the cruciform-offload live path's
+	// slots (its one-time pairing `confirm` and the recurring unwrap request/
+	// response), so one node relay is the rendezvous for both device enrolment and
+	// offload unwraps (ADR-0098). The relay stays a dumb, opaque store either way.
+	relayTypes := append(append([]string{}, vbrelay.DefaultTypes...),
+		append(cruciform.RelayPairTypes, cruciform.RelayUnwrapTypes...)...)
+	relayV1Handler := relay.New(relay.Options{Logger: c.log, Types: relayTypes})
 
 	// The encrypted personal-state plane's device-facing API (§38, §42,
 	// ADR-0049). It stores the opaque things a device pushes — a space, the
@@ -852,7 +931,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 			fullPeerLister{members: members, self: selfPeerID},
 			eventLog, c.log)
 	}
-	psAPI, err := personalstateapi.New(personalstateapi.Options{Store: psStore, Replicator: replicator, Logger: c.log})
+	psAPI, err := personalstateapi.New(personalstateapi.Options{Store: psStore, Replicator: replicator, Authorizer: identities, Logger: c.log})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
@@ -909,7 +988,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
-	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, mcpServer.Mount, psAPI.Mount},
+	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, vaultBlobHandler.Mount, vaultPlacementHandler.Mount, mcpServer.Mount, psAPI.Mount},
 		[]httpapi.MountFunc{renderHandler.Mount, relayHandler.Mount, relayV1Handler.Mount, subsonicHandler.Mount, opdsHandler.Mount, dlnaHandler.Mount}, nil
 }
 

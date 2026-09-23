@@ -20,7 +20,7 @@ import (
 // the first from a full disk and about the second from a scan that ingested
 // half a file.
 //
-// Heyarr already has cas.SameFilesystem and the warning
+// Heyarr already has cas.HardlinkOutlook and the warning
 // warnIfIngestWillCopy prints for library roots. Extending both to the
 // download path is a handful of lines and turns the ecosystem's most common
 // operational failures into a startup line, before a single byte moves.
@@ -87,32 +87,40 @@ func refuseDownloadInsideALibrary(provider, local string, cfg config.Config) err
 // cheap rungs of ADR-0014's ladder need the source and the destination in ONE
 // mount — reflink because cloning is a filesystem operation, hardlink because
 // link(2) returns EXDEV across mounts whatever the device — so a download
-// directory on a different mount from the store means every acquisition is a
-// full byte copy, silently, one file at a time.
+// directory the store cannot link from means every acquisition is a full byte
+// copy, silently, one file at a time.
 //
 // A warning rather than an error: it works, it is merely expensive, and an
 // operator who genuinely has two mounts should not be prevented from running
-// Heyarr. What they should not be is uninformed. It asks SameMount, not
-// SameFilesystem, for the #222 reason: one device can be two mounts.
+// Heyarr. What they should not be is uninformed. It asks cas.HardlinkOutlook,
+// which attempts a real link rather than comparing st_dev, for the #222
+// reason: one device can be two mounts, and a device-number check is silent on
+// exactly the host where the copying is real. A download directory is usually
+// empty at startup, so this most often falls back to the mount inference —
+// still strictly better than the device number, and the probe takes over as
+// soon as there is anything in there to link.
 func warnIfDownloadWillCopy(provider, local, casRoot string, log *slog.Logger) {
-	same, known, err := cas.SameMount(casRoot, local)
+	outlook, err := cas.HardlinkOutlook(local, casRoot)
 	if err != nil {
 		// Not fatal. The download directory may not exist yet — the client
 		// creates it on first use — and a startup check is the wrong place to
 		// insist on it.
-		log.Debug("could not compare the download path and the content store",
+		log.Debug("could not establish whether ingest from the download path can hardlink",
 			"provider", provider, "path", local, "cas_root", casRoot, "error", err)
 		return
 	}
-	if !known || same {
+	if !outlook.Known || outlook.CanHardlink {
 		return
 	}
 	log.Warn("ingesting from this download path will COPY every file rather than share its bytes",
 		"provider", provider,
 		"path", local,
 		"cas_root", casRoot,
-		"why", "the download path and the content store are in different mounts (they may "+
-			"even be on the same filesystem), and reflink and hardlink cannot cross a mount",
+		"instrument", outlook.Instrument,
+		"evidence", outlook.Evidence,
+		"why", "the download path and the content store cannot hardlink to each other, "+
+			"most often because they are in different mounts (they may even be on the "+
+			"same filesystem), and reflink and hardlink cannot cross a mount",
 		"cost", "every acquisition will consume a second full copy of itself",
 		"fix", "put the download path and cas.root in the same mount, not merely the same filesystem")
 }

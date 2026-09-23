@@ -420,7 +420,7 @@ func (a *API) deleteAsset(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (a *API) getBlob(w http.ResponseWriter, r *http.Request) {
-	hash := chi.URLParam(r, "hash")
+	hash := httpapi.HashParam(r)
 	var b Blob
 	var mime sql.NullString
 	var state string

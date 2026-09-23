@@ -222,6 +222,79 @@ func (c *Client) Enrich(ctx context.Context, q providers.EnrichQuery) (providers
 	return providers.EnrichResult{}, false, nil
 }
 
+// maxDiscoverDocs is how many search results Discover asks for — a person
+// picking a book to want reads the first handful, same as maxDocs for
+// enrichment, but named separately because the two calls tune independently.
+const maxDiscoverDocs = 20
+
+// Discover resolves a free-text query to candidate books, INCLUDING ones the
+// library does not yet hold (#451, ADR-0077's deferred want-scoped half). It
+// satisfies providers.DiscoverySearcher — Open Library's first, since ADR-0077
+// left it and MusicBrainz unbuilt pending a discovery candidate with somewhere
+// to put a non-feed work.
+//
+// Unlike Enrich, which cleans a shelf-scraped title before matching an already-
+// held Work, Discover runs the query exactly as given: it is what a person
+// typed looking for something new, not filename noise to strip.
+//
+// A book is never followed — there is no calendar, no feed, nothing to poll —
+// so every candidate carries Type "book" and the caller's next step is
+// want_content(title, year, content_type: "book"), same as a TMDB movie
+// candidate. ExternalID (the work's OLID) is carried for display/cross-
+// reference only, same reason.
+//
+// An empty result is the modelled "nothing matched" outcome, not an error; an
+// error is a call that could not be made, which the caller must see rather than
+// read as an empty catalogue.
+func (c *Client) Discover(ctx context.Context, query string) ([]providers.DiscoveryCandidate, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, errors.New("openlibrary: a query is required to discover books")
+	}
+
+	path := fmt.Sprintf("%s/search.json?q=%s&limit=%d&fields=key,title,author_name,first_publish_year,cover_i",
+		c.endpoint, neturl.QueryEscape(query), maxDiscoverDocs)
+	var body searchResponse
+	if err := c.get(ctx, path, "search", &body); err != nil {
+		return nil, err
+	}
+
+	out := make([]providers.DiscoveryCandidate, 0, len(body.Docs))
+	for _, doc := range body.Docs {
+		olid := workOLID(doc.Key)
+		if olid == "" {
+			// A doc with no work key cannot be recorded as an id — skip it, same
+			// as Enrich does, rather than surface an unreferenceable row.
+			continue
+		}
+		title := strings.TrimSpace(doc.Title)
+		if title == "" {
+			continue
+		}
+		overview := ""
+		if len(doc.AuthorName) > 0 {
+			overview = "by " + strings.Join(doc.AuthorName, ", ")
+		}
+		artwork := ""
+		if doc.CoverID > 0 {
+			// -M ("medium") rather than Enrich's -L: a discovery row is a
+			// compact list thumbnail, not the bigger context Enrich's cover
+			// serves a held Work's detail view.
+			artwork = fmt.Sprintf("%s/%d-M.jpg", coverBase, doc.CoverID)
+		}
+		out = append(out, providers.DiscoveryCandidate{
+			Title:      title,
+			Year:       doc.FirstPublishYear,
+			ExternalID: olid,
+			Source:     "openlibrary",
+			Type:       "book",
+			Overview:   overview,
+			PosterURL:  artwork,
+		})
+	}
+	return out, nil
+}
+
 // get performs a rate-limited GET and decodes the JSON body. Open Library needs
 // no credential, so nothing here carries a secret; op is stamped into a non-200
 // error so a failed search or health check are told apart in a health detail.
@@ -352,4 +425,7 @@ type searchDoc struct {
 	FirstPublishYear int    `json:"first_publish_year"`
 }
 
-var _ providers.EnrichProvider = (*Client)(nil)
+var (
+	_ providers.EnrichProvider    = (*Client)(nil)
+	_ providers.DiscoverySearcher = (*Client)(nil)
+)

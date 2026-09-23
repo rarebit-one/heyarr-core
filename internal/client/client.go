@@ -394,6 +394,32 @@ func (c *Client) Post(ctx context.Context, path string, body, out any) error {
 	return c.roundTrip(req, out)
 }
 
+// Put sends a full JSON body and decodes the response into out.
+//
+// It is separate from Post and Patch for the same reason those two are
+// separate: a Put replaces a resource wholesale, and a caller that means
+// "replace" should reach for neither the verb that means "create" nor the one
+// that means "change a few named fields". The quality-profile update endpoint
+// is a PUT.
+func (c *Client) Put(ctx context.Context, path string, body, out any) error {
+	var reader io.Reader
+	if body != nil {
+		buf, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reader = bytes.NewReader(buf)
+	}
+	req, err := c.newRequest(ctx, http.MethodPut, path, nil, reader)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return c.roundTrip(req, out)
+}
+
 // Patch sends a partial JSON body and decodes the response into out.
 //
 // It is separate from Post rather than a method parameter because the two mean

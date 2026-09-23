@@ -154,7 +154,7 @@
         "heyarr/requiredScope": "read",
         "readOnlyHint": true
       },
-      "description": "Find content the library does NOT already hold. Where search_content looks only in the library, this asks the metadata provider (TVDB) for candidate series matching a free-text title, whether or not they are catalogued — the \"search then follow\" door. Each result carries a tvdb_id you pass straight to follow_source (or want_content by title) to bring it in. Use this when search_content came back empty and someone wants something new. Needs a metadata provider configured; a node without one says so rather than returning nothing.",
+      "description": "Find content the library does NOT already hold. Where search_content looks only in the library, this asks every configured metadata provider (TVDB/TMDB for series, TMDB for movies, Open Library for books, MusicBrainz for music) for candidate works matching a free-text title, whether or not they are catalogued — the \"search then acquire\" door. A tv_series result carries a tvdb_id you pass straight to follow_source; every result (including movie/book/music) carries source+external_id for reference and a type telling you which: a tv_series/podcast/youtube_channel/rss_feed result is followed (follow_source), a movie/book/music result has no calendar and is wanted instead (want_content by title+year+content_type). Use this when search_content came back empty and someone wants something new. Needs at least one metadata or enrich provider configured; a node without one says so rather than returning nothing.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -348,6 +348,28 @@
       },
       "name": "followed_source_items",
       "title": "What a followed source has"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
+      "description": "Report where a want is in the acquisition pipeline (idle, searching, selected, queued, downloading, verifying, ingesting) and, when a download is in flight, the transfer behind it: which release was chosen — its name carries the resolution and size — how far it has downloaded, and any trouble the client reported. This is the read for \"what is this want actually doing\" and \"why is it still not here\", without opening the download client.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "desired_item_id": {
+            "description": "The want to explain.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "desired_item_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_acquisition_status",
+      "title": "What a want is downloading right now"
     },
     {
       "annotations": {
@@ -584,6 +606,42 @@
         "heyarr/requiredScope": "read",
         "readOnlyHint": true
       },
+      "description": "List the durable jobs Heyarr runs — searches, grabs, download polls, ingests — filtered by state and/or type, most recent first, each with its last error. This is the read behind \"why is nothing being acquired\": a search that found nothing, a grab the download client refused, a poll that failed. A `failed` job will retry with backoff; a `dead` one is terminal until an operator retries it.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "How many jobs at most, most recent first. Defaults to the maximum.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "description": "Only jobs in this state. `failed` is a spent attempt the queue will retry with backoff; `dead` is terminal until an operator retries it. Omit for any state.",
+            "enum": [
+              "pending",
+              "leased",
+              "succeeded",
+              "failed",
+              "dead"
+            ],
+            "type": "string"
+          },
+          "type": {
+            "description": "Only jobs of this type, e.g. search_release, grab_release, poll_downloads, ingest_acquisition. Omit for any type.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_jobs",
+      "title": "Inspect the durable work queue"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
       "description": "List the televisions, speakers and projectors on the network that Heyarr can play to. Use this to resolve what someone means by \"the living room\" before playing anything. A device that is switched off will not be listed — that is not the same as it not existing, so do not tell someone they have no television because a screen was asleep.",
       "inputSchema": {
         "additionalProperties": false,
@@ -637,6 +695,10 @@
           "asset_id": {
             "description": "The asset to play. Resolve it with search_content first.",
             "type": "string"
+          },
+          "force_direct": {
+            "description": "Cast anyway when the device's declared codecs would otherwise refuse the plan. Only for a device you KNOW decodes more than it advertises (a TV that decodes Dolby Digital Plus but under-declares it over DLNA). The bytes are sent as-is; if the device truly cannot decode them, it plays nothing. Off by default — try without it first and read the refusal.",
+            "type": "boolean"
           },
           "renderer": {
             "description": "Which device, by name or id. A partial name is matched against what each device calls itself, so \"living\" finds \"Samsung QN85BA 55\" only if that is what it is called — prefer list_renderers when unsure.",

@@ -18,6 +18,7 @@ import (
 	"github.com/knadh/koanf/providers/structs"
 	"github.com/knadh/koanf/v2"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
@@ -39,6 +40,13 @@ type Config struct {
 	Log       Log       `koanf:"log"`
 	Media     Media     `koanf:"media"`
 	Libraries []Library `koanf:"libraries"`
+
+	// Language is the household's audio-language preference (§62, #558),
+	// applied to the seeded VIDEO profiles as prefer rules at start so a
+	// foreign dub is out-scored by the wanted language without being rejected
+	// for its language (#129). It is disabled unless `language.prefer` names a
+	// language; a profile that states its own language rule overrides it.
+	Language Language `koanf:"language"`
 
 	// Providers configures the external services Heyarr talks to — indexers,
 	// download clients — through the centralised registry (§59, M3-07).
@@ -66,6 +74,61 @@ type Config struct {
 	// empty configuration is fully supported: the login broker still mounts and
 	// still shows a QR, it simply wakes no device.
 	Notify Notify `koanf:"notify"`
+
+	// Vault selects this device's space-key custody backend (ADR-0098): which
+	// Unwrapper opens the space keys sealed for it. It is a device-side choice
+	// (the gateway and the vault CLI honour it); the default "software" needs no
+	// configuration.
+	Vault Vault `koanf:"vault"`
+}
+
+// Vault configures device-side space-key custody (ADR-0098). The device
+// encryption key is reached only through an Unwrapper, whose custody is a
+// pluggable per-platform backend; this selects it.
+type Vault struct {
+	// Unwrapper selects the custody backend: "software" (default, in-process
+	// ECDH), "yubikey" (the X25519 agreement runs on an OpenPGP card), "tpm"
+	// (the key is sealed to a TPM under a PCR+PIN policy), or "cruciform" (the
+	// desktop holds no key and offloads each unwrap to the paired phone, ADR-0098).
+	Unwrapper string `koanf:"unwrapper"`
+	// YubiKey configures the on-card backend; used only when unwrapper=yubikey.
+	YubiKey VaultYubiKey `koanf:"yubikey"`
+	// TPM configures the TPM-gated backend; used only when unwrapper=tpm.
+	TPM VaultTPM `koanf:"tpm"`
+	// Cruciform configures the offload backend; used only when unwrapper=cruciform.
+	Cruciform VaultCruciform `koanf:"cruciform"`
+}
+
+// VaultYubiKey configures the YubiKey-on-card custody backend.
+type VaultYubiKey struct {
+	// Socket is the gpg-agent Assuan socket the backend dials. Empty discovers it
+	// via gpgconf — the usual case.
+	Socket string `koanf:"socket"`
+	// PINFile reads the card User PIN from a file (trimmed). Empty falls back to
+	// the HEYARR_VAULT_YUBIKEY_PIN environment variable. The PIN gates the card;
+	// it is never written back anywhere.
+	PINFile string `koanf:"pin_file"`
+}
+
+// VaultTPM configures the TPM-gated custody backend.
+type VaultTPM struct {
+	// SealedKeyFile is the path to the sealed-key blob the backend unseals
+	// (provisioned by the tpm seal step). Required when unwrapper=tpm.
+	SealedKeyFile string `koanf:"sealed_key_file"`
+	// Device is the TPM resource-manager device to open. Empty uses /dev/tpmrm0.
+	Device string `koanf:"device"`
+	// PINFile reads the policy PIN from a file (trimmed). Empty falls back to the
+	// HEYARR_VAULT_TPM_PIN environment variable. The PIN gates the unseal; it is
+	// never written back anywhere.
+	PINFile string `koanf:"pin_file"`
+}
+
+// VaultCruciform configures the cruciform-offload custody backend.
+type VaultCruciform struct {
+	// PairFile is the path to the offload pairing config (written by
+	// `heyarr device pair-offload`). Empty resolves to cruciform-pairing.json in
+	// the device directory — the default location the pairing writes.
+	PairFile string `koanf:"pair_file"`
 }
 
 // Notify configures the push/wake login channel (ADR-0055). The subscription
@@ -147,6 +210,12 @@ type HTTP struct {
 	// reverse proxy or TLS listener, not the address the socket bound. Empty
 	// keeps today's derived behaviour (ADR-0072).
 	PublicOrigin string `koanf:"public_origin"`
+	// Discovery advertises this node over mDNS / DNS-SD so a client on a trusted
+	// network can FIND it without being told an address (ADR-0094 §Discovery,
+	// Phase 2). It is the client-facing sibling of the SSDP the renderer package
+	// speaks to find televisions: there the node is the searcher, here it is the
+	// one announcing itself. See Discovery.
+	Discovery Discovery `koanf:"discovery"`
 }
 
 // TLS points at the certificate and key that serve the client API over HTTPS.
@@ -172,13 +241,100 @@ type Auth struct {
 	Enabled bool `koanf:"enabled"`
 }
 
-// Guest configures anonymous read-only browse (ADR-0074). Disabled by default:
-// the zero value is off, so an unmentioned key leaves the safe stance — a
-// credential-less request is refused — untouched. Enabled admits such a request
-// as a first-class Guest identity holding only the read scope.
+// Guest configures anonymous read-only browse (ADR-0074, ADR-0094). Disabled by
+// default: the zero value is off, so an unmentioned key leaves the safe stance —
+// a credential-less request is refused — untouched. Enabled admits such a
+// request as a first-class Guest, backed by a short-lived M7 access lease
+// (principal="guest"), but ONLY when its source address falls inside
+// TrustedNets.
 type Guest struct {
 	Enabled bool `koanf:"enabled"`
+	// TrustedNets is the source-address allow-list (ADR-0094): the CIDRs a
+	// credential-less caller may be admitted as a Guest from. It is the trust
+	// boundary — the site LANs and the WireGuard estate client nets, the same
+	// ranges the deployment's systemd IPAddressAllow admits — and raw internet is
+	// deliberately NOT on it: an off-estate caller must enrol, not browse
+	// anonymously.
+	//
+	// An EMPTY list turns the tier OFF regardless of Enabled: a guest mode that
+	// admits nobody is safer than one that admits everybody by omission, so the
+	// allow-list is required rather than defaulted-open. The defaults below are
+	// the RFC 1918 private ranges plus loopback and IPv6 unique-local as
+	// stand-ins; the CONCRETE estate ranges are supplied by the homelab-ops
+	// infrastructure (the systemd IPAddressAllow list), not hardcoded here.
+	TrustedNets []string `koanf:"trusted_nets"`
 }
+
+// TrustsSource reports whether host — a bare IP, as internal/api/http.remoteHost
+// yields — falls inside any of the configured trusted networks. A blank or
+// unparseable host, and the empty allow-list, are never trusted: the tier is off
+// by construction rather than open by accident.
+//
+// It parses on each call; callers on a hot path pre-resolve TrustedNets once
+// (see internal/api/http.Server). It is here so config owns the meaning of its
+// own field, and so a test can assert the boundary without standing up a server.
+func (g Guest) TrustsSource(host string) bool {
+	nets, err := g.ParsedNets()
+	if err != nil || len(nets) == 0 {
+		return false
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return false
+	}
+	for _, n := range nets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// ParsedNets parses TrustedNets into CIDR networks, reporting the first that is
+// not a valid CIDR. It is the one parser both Validate (at load) and the server
+// (at startup) use, so a value that loads is a value the server can resolve.
+func (g Guest) ParsedNets() ([]*net.IPNet, error) {
+	out := make([]*net.IPNet, 0, len(g.TrustedNets))
+	for _, c := range g.TrustedNets {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a CIDR (e.g. 192.168.0.0/16): %w", c, err)
+		}
+		out = append(out, n)
+	}
+	return out, nil
+}
+
+// Discovery configures mDNS / DNS-SD advertisement of this node (ADR-0094
+// §Discovery, Phase 2). The node advertises the `_heyarr._tcp` service so a
+// client discovers it, else falls back to the split-horizon DNS name, else to
+// manual entry.
+//
+// It deliberately carries no allow-list of its own: the interfaces it may
+// announce on ARE the guest trust boundary (HTTP.Guest.TrustedNets). Discovery
+// only ever tells a client "there is a heyarr here" on a network heyarr already
+// treats as trusted, and never on the raw internet — the same boundary, stated
+// once. An empty guest trusted-net set therefore turns advertisement off too:
+// a node that trusts no network announces itself to none.
+type Discovery struct {
+	// Disabled turns advertisement OFF even where a trusted interface exists. It
+	// is the independent off-switch (ADR-0094): the default — unmentioned — is to
+	// advertise on every trusted, multicast-capable, non-loopback interface, and
+	// setting this true suppresses that without touching the guest boundary the
+	// gating reuses. It is phrased as "disabled" rather than "enabled" so the
+	// zero value is the useful one: a client can find a node out of the box.
+	Disabled bool `koanf:"disabled"`
+}
+
+// Advertises reports whether the node should announce itself, given whether any
+// trusted interface exists. The trusted-set emptiness is decided by the caller
+// (the advertiser resolves interfaces against HTTP.Guest.TrustedNets); this is
+// only the operator's explicit off-switch.
+func (d Discovery) Advertises() bool { return !d.Disabled }
 
 // Peer identifies this node within the Heyarr instance. A peer row exists from
 // Milestone 1 even though there is only one (ADR-0010).
@@ -324,19 +480,69 @@ type Library struct {
 	Roots       []string `koanf:"roots"`
 }
 
+// Language is the config surface for the household audio-language preference
+// (§62, #558). It maps 1:1 to policy.LanguageDefault; the split exists so the
+// domain type stays free of koanf tags. The zero value is disabled.
+//
+// A single-language household enables it with one block, replacing the bespoke
+// `everyday-en` profile that previously had to be authored and repointed:
+//
+//	language:
+//	  prefer: en          # ISO-639-1 code of the wanted audio language
+//	  weight: 50          # bonus a confirmed-en release scores
+//	  penalty: 100        # how far a confirmed-foreign dub is pushed down
+//	  foreign: [it, es, fr, de, ja, ko, zh, pt, ru, pl, tr, hi, nl, ar]
+//
+// It is a preference, never a gate: an untagged release (the common case from a
+// torrent title) is neither rewarded nor penalised and stays fully acquirable
+// (#129). A profile that states its own language rule opts out entirely.
+type Language struct {
+	Prefer  string   `koanf:"prefer"`
+	Weight  int      `koanf:"weight"`
+	Foreign []string `koanf:"foreign"`
+	Penalty int      `koanf:"penalty"`
+}
+
+// Policy maps the config surface to the domain default.
+func (l Language) Policy() policy.LanguageDefault {
+	return policy.LanguageDefault{
+		Prefer:  l.Prefer,
+		Weight:  l.Weight,
+		Foreign: l.Foreign,
+		Penalty: l.Penalty,
+	}
+}
+
 // Defaults returns the configuration Heyarr uses when nothing is specified.
 // The defaults are deliberately safe rather than convenient: loopback only,
 // authentication on.
 func Defaults() Config {
 	return Config{
-		DataDir:  "/var/lib/heyarr",
-		HTTP:     HTTP{Addr: "127.0.0.1:7777", Auth: Auth{Enabled: true}},
+		DataDir: "/var/lib/heyarr",
+		HTTP: HTTP{
+			Addr: "127.0.0.1:7777",
+			Auth: Auth{Enabled: true},
+			// The guest trust boundary defaults to the private + loopback ranges
+			// (ADR-0094). It is inert until http.guest.enabled is set; the concrete
+			// estate ranges are supplied by homelab-ops infra (IPAddressAllow), and
+			// these documentation-safe defaults are what a single-LAN deployment
+			// flips guest on against without further configuration.
+			Guest: Guest{TrustedNets: []string{
+				"127.0.0.0/8",    // loopback (the node itself)
+				"::1/128",        // loopback (IPv6)
+				"10.0.0.0/8",     // RFC 1918
+				"172.16.0.0/12",  // RFC 1918
+				"192.168.0.0/16", // RFC 1918
+				"fd00::/8",       // RFC 4193 unique-local (the WireGuard estate net)
+			}},
+		},
 		Peer:     Peer{Name: "local"},
 		Log:      Log{Level: "info", Format: "auto"},
 		CAS:      CAS{},
 		Database: Database{},
 		Media:    Media{StreamConcurrency: 2},
 		Backup:   Backup{Interval: "5m"},
+		Vault:    Vault{Unwrapper: "software"},
 	}
 }
 
@@ -393,6 +599,55 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// SystemConfigPath is the conventional location of the configuration file on a
+// host install, and the path the packaged systemd unit passes to --config. A
+// CLI command run on the same host as the service resolves it (see ResolvePath)
+// so it targets the SAME data directory — the socket, the database and the
+// token store the service actually uses — rather than the built-in defaults,
+// which describe a directory the service is very likely not using.
+const SystemConfigPath = "/etc/heyarr/config.yaml"
+
+// systemConfigPath is the path ResolvePath actually probes. It is a var, not a
+// direct use of the const, so a test can point discovery at a file it created
+// rather than needing one to exist at the real system path.
+var systemConfigPath = SystemConfigPath
+
+// ConfigPathEnv names the environment variable that supplies the config file
+// path when --config is not given. It is the path analogue of the HEYARR_
+// value overrides: a service manager, or an operator's shell, can point every
+// heyarr invocation at one config without repeating --config.
+const ConfigPathEnv = "HEYARR_CONFIG"
+
+// ResolvePath decides which configuration file to load when the caller did not
+// name one with --config. It is the client half of #556.
+//
+// The built-in defaults (data_dir /var/lib/heyarr, addr 127.0.0.1:7777)
+// describe no running instance. A CLI command that silently falls back to them
+// dials a socket the server never bound; worse, a local-DB command like
+// `token create` opens a database the controller does not read, and a token
+// minted there is later rejected as an invalid credential — a symptom that
+// gives no hint of its cause. So when --config is empty, discover the instance
+// the way the host is set up to describe it, in order:
+//
+//  1. $HEYARR_CONFIG, if set — an explicit choice; a missing file behind it
+//     becomes a loud error from Load, not a silent fallback.
+//  2. SystemConfigPath, if it exists.
+//
+// An empty result means "no file": the built-in defaults, which are still the
+// right answer for a fresh install that has configured nothing yet.
+func ResolvePath(flagPath string) string {
+	if strings.TrimSpace(flagPath) != "" {
+		return flagPath
+	}
+	if env := strings.TrimSpace(os.Getenv(ConfigPathEnv)); env != "" {
+		return env
+	}
+	if _, err := os.Stat(systemConfigPath); err == nil {
+		return systemConfigPath
+	}
+	return ""
+}
+
 // applyDerivedDefaults fills in the paths that hang off DataDir. It runs after
 // loading so that setting data_dir alone moves everything, while setting a path
 // explicitly still wins.
@@ -432,6 +687,12 @@ func (c Config) BackupInterval() (time.Duration, error) {
 
 var validLogLevels = []string{"debug", "info", "warn", "error"}
 
+// validVaultUnwrappers is the set of currently SELECTABLE custody backends
+// (ADR-0098). "cruciform" is named in the ADR and built (#582) but not yet wired
+// to the callers, so configuring it is refused here rather than failing later at
+// open time.
+var validVaultUnwrappers = []string{"software", "yubikey", "tpm", "cruciform"}
+
 // Validate reports the first configuration problem, phrased so the operator can
 // act on it without reading the source. Configuration is checked before any
 // role starts: failing at startup is far cheaper than failing on first write.
@@ -456,6 +717,16 @@ func (c Config) Validate() error {
 	}
 	if c.Media.StreamConcurrency < 0 {
 		return fmt.Errorf("config: media.stream_concurrency must be zero or more, got %d", c.Media.StreamConcurrency)
+	}
+	if !slicesContains(validVaultUnwrappers, c.Vault.Unwrapper) {
+		return fmt.Errorf("config: vault.unwrapper %q is not one of %s", c.Vault.Unwrapper, strings.Join(validVaultUnwrappers, ", "))
+	}
+	// The guest allow-list is checked for CIDR shape even when guest mode is off:
+	// a malformed range is a mistake worth naming at startup, not on the first
+	// credential-less request after the mode is later enabled (ADR-0094). An
+	// empty list is legal — it simply turns the tier off.
+	if _, err := c.HTTP.Guest.ParsedNets(); err != nil {
+		return fmt.Errorf("config: http.guest.trusted_nets: %w", err)
 	}
 	// The peer surface's address is checked for shape only. There is
 	// deliberately no loopback rule here and no equivalent of ADR-0011's

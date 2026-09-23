@@ -27,3 +27,29 @@ that writes in place would corrupt a blob. Integrity scanning (§57) is what
 catches that, and it is why corrupt blobs are quarantined rather than deleted.
 
 Cross-filesystem ingest degrades to a copy with a warning, never an error.
+
+## The boundary is the mount, not the filesystem (#222)
+
+`link(2)` returns `EXDEV` when its two paths are on different **mounts**,
+whatever device they share. One filesystem bind-mounted twice therefore degrades
+past the hardlink rung exactly as a genuinely separate disk would — and that is
+precisely what `ProtectSystem=strict` does to a `ReadOnlyPaths` library and a
+`ReadWritePaths` store.
+
+#222 measured it: **63 of 63 files copied, ~22 GB consumed**, on a host where
+`stat -c %d` reported one device for both paths. The warning this ADR promised
+was implemented against `st_dev`, so it was structurally incapable of firing on
+the one deployment where it mattered.
+
+**So the check attempts the operation rather than predicting it.** It links a
+real file from the library into the store's `tmp/`, reads the errno, and removes
+it. A mount-id comparison would have been right about mounts and still a
+prediction; the probe is right about whatever the kernel actually does, which is
+how it also catches the `EPERM` from `fs.protected_hardlinks` that no mount
+inference models. It falls back to inferring from the mount table only when
+there is no file to link yet — the one case where nothing is at stake — and each
+warning names which instrument answered, because a measurement and a prediction
+are not the same claim.
+
+The rule for anything added here later: **do not ask whether a cheap rung
+*should* work.** Ask the kernel whether it just did.

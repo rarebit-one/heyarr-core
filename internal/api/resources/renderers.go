@@ -183,6 +183,11 @@ var errNoSuchRenderer = errors.New("no renderer with that id answered; it may be
 // playOnRendererRequest is the POST /renderers/{udn}/play body.
 type playOnRendererRequest struct {
 	AssetID string `json:"asset_id"`
+	// ForceDirect sends the bytes even when the renderer's declared codecs would
+	// make the plan non-DIRECT — the caller's "cast anyway" for a device that
+	// decodes more than it advertises (a TV that under-declares DD+ over DLNA).
+	// Off by default; the honest refusal stands unless it is set.
+	ForceDirect bool `json:"force_direct"`
 }
 
 // playOnRenderer plans a playback, mints a capability URL and pushes it.
@@ -221,7 +226,7 @@ func (a *API) playOnRenderer(w http.ResponseWriter, r *http.Request) {
 			"request_id", httpapi.RequestIDFrom(r.Context()), "udn", udn, "error", err)
 	}
 
-	started, err := a.startForRendererCtx(r.Context(), body.AssetID, udn, rend, profile)
+	started, err := a.startForRendererCtx(r.Context(), body.AssetID, udn, rend, profile, body.ForceDirect)
 	if err != nil {
 		a.failRenderer(w, r, err)
 		return
@@ -378,7 +383,7 @@ type startedPlayback struct {
 // That closes the loop the first commit in this branch opened: the television
 // declares its codecs, the planner judges the file against them, and nobody
 // hand-maintains a list.
-func (a *API) startForRendererCtx(ctx context.Context, assetID, udn string, rend renderer.Renderer, profile playback.DeviceProfile) (startedPlayback, error) {
+func (a *API) startForRendererCtx(ctx context.Context, assetID, udn string, rend renderer.Renderer, profile playback.DeviceProfile, forceDirect bool) (startedPlayback, error) {
 	deviceID, err := a.upsertRendererDevice(ctx, udn, rend, profile)
 	if err != nil {
 		return startedPlayback{}, err
@@ -388,7 +393,7 @@ func (a *API) startForRendererCtx(ctx context.Context, assetID, udn string, rend
 	// watch when there is video, listen when there is not. A renderer is not
 	// the right place to decide that — the Devialet has no screen, and the
 	// asset already knows whether it has a picture.
-	started, prob := a.beginPlayback(ctx, assetID, deviceID, "")
+	started, prob := a.beginPlayback(ctx, assetID, deviceID, "", forceDirect)
 	if prob != nil {
 		return startedPlayback{}, prob
 	}
@@ -680,8 +685,9 @@ func (a *API) RenderersFor(ctx context.Context, refresh bool) ([]RendererView, e
 	return views, nil
 }
 
-// PlayOnRenderer plans, mints and pushes.
-func (a *API) PlayOnRenderer(ctx context.Context, udn, assetID string) (map[string]any, error) {
+// PlayOnRenderer plans, mints and pushes. forceDirect is the "cast anyway"
+// override (see playOnRendererRequest.ForceDirect); false keeps the honest refusal.
+func (a *API) PlayOnRenderer(ctx context.Context, udn, assetID string, forceDirect bool) (map[string]any, error) {
 	rend, ctrl, err := a.controllerFor(ctx, udn)
 	if err != nil {
 		return nil, err
@@ -690,7 +696,7 @@ func (a *API) PlayOnRenderer(ctx context.Context, udn, assetID string) (map[stri
 	if err != nil {
 		a.log.Warn("reading a renderer's capabilities", "udn", udn, "error", err)
 	}
-	started, err := a.startForRendererCtx(ctx, assetID, udn, rend, profile)
+	started, err := a.startForRendererCtx(ctx, assetID, udn, rend, profile, forceDirect)
 	if err != nil {
 		return nil, err
 	}

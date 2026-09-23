@@ -21,6 +21,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr controller`](heyarr_controller.md) | Own coordinated mutable state: catalog, policy, jobs, API |
 | [`heyarr desired add`](heyarr_desired_add.md) | Want something |
 | [`heyarr desired list`](heyarr_desired_list.md) | List what should exist |
+| [`heyarr desired reingest`](heyarr_desired_reingest.md) | Re-drive a wedged ingest — a finished download that never imported |
 | [`heyarr desired rm`](heyarr_desired_rm.md) | Stop wanting something |
 | [`heyarr desired set`](heyarr_desired_set.md) | Change the conditions, the monitoring or the note |
 | [`heyarr desired`](heyarr_desired.md) | Say what should exist, whether or not it does yet |
@@ -28,8 +29,10 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr device generate`](heyarr_device_generate.md) | Generate this machine's device key |
 | [`heyarr device list`](heyarr_device_list.md) | List this machine's device keys |
 | [`heyarr device mcp`](heyarr_device_mcp.md) | Run the Personal MCP for this machine's device key and personal state (§73) |
+| [`heyarr device pair-offload`](heyarr_device_pair-offload.md) | Pair this desktop with your phone for cruciform-offload custody (ADR-0098) |
 | [`heyarr device remove`](heyarr_device_remove.md) | Remove a device key |
 | [`heyarr device revoke`](heyarr_device_revoke.md) | Revoke a device at this peer and re-key the spaces it could read (ADR-0068, ADR-0049) |
+| [`heyarr device seal-tpm`](heyarr_device_seal-tpm.md) | Seal this device's encryption key to the TPM for hardware-gated custody (ADR-0098) |
 | [`heyarr device show`](heyarr_device_show.md) | Show one device key |
 | [`heyarr device`](heyarr_device.md) | Manage this machine's device key (§40, ADR-0032) |
 | [`heyarr enrich backfill`](heyarr_enrich_backfill.md) | Enrich held music/book works now, ignoring the background cadence |
@@ -73,6 +76,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr play`](heyarr_play.md) | Play an asset on a television, speaker or projector (§68) |
 | [`heyarr quality-profile create`](heyarr_quality-profile_create.md) | Author a quality profile (§62) |
 | [`heyarr quality-profile list`](heyarr_quality-profile_list.md) | List the quality profiles |
+| [`heyarr quality-profile set`](heyarr_quality-profile_set.md) | Change an existing quality profile's rules or description (§62) |
 | [`heyarr quality-profile`](heyarr_quality-profile.md) | Author and inspect the quality profiles a want is measured against |
 | [`heyarr recover`](heyarr_recover.md) | Rebuild this peer's control plane from a surviving peer (§51, §82, M7-04) |
 | [`heyarr renderers discover`](heyarr_renderers_discover.md) | Search the local network for media renderers |
@@ -90,6 +94,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr space list`](heyarr_space_list.md) | List the encrypted spaces the controller holds (metadata only) |
 | [`heyarr space put`](heyarr_space_put.md) | Add an item to a space's playlist (encrypted client-side, then pushed) |
 | [`heyarr space read`](heyarr_space_read.md) | Read a space's playlist on an authorised device (decrypts and merges locally) |
+| [`heyarr space recover`](heyarr_space_recover.md) | Recover vault space keys from your recovery secret, offline (ADR-0022, ADR-0049) |
 | [`heyarr space rotate`](heyarr_space_rotate.md) | Revoke recipients from a space by rotating its key (§41, #361) |
 | [`heyarr space snapshot`](heyarr_space_snapshot.md) | Take an encrypted snapshot at the current causal point (§44) |
 | [`heyarr space`](heyarr_space.md) | Create and read encrypted personal-state spaces (§38, §42, ADR-0049) |
@@ -103,6 +108,10 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr token list`](heyarr_token_list.md) | List API tokens |
 | [`heyarr token revoke`](heyarr_token_revoke.md) | Revoke an API token |
 | [`heyarr token`](heyarr_token.md) | Manage API tokens (ADR-0011) |
+| [`heyarr vault ls`](heyarr_vault_ls.md) | List the live files in a vault |
+| [`heyarr vault pull`](heyarr_vault_pull.md) | Read a file from the vault, decrypting it on this device |
+| [`heyarr vault push`](heyarr_vault_push.md) | Seal a local file into the vault and record it at a vault path |
+| [`heyarr vault`](heyarr_vault.md) | Push, pull and list files in an encrypted media vault (ADR-0021, ADR-0095) |
 | [`heyarr version`](heyarr_version.md) | Print build information |
 | [`heyarr worker`](heyarr_worker.md) | Execute leased jobs |
 | [`heyarr works list`](heyarr_works_list.md) | List works |

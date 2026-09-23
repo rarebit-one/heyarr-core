@@ -69,12 +69,22 @@ func (c *Catalog) DueSubtitleFetches(ctx context.Context, now time.Time, limit i
 		  AND (s.next_fetch_at IS NULL OR s.next_fetch_at <= ?)
 		  AND EXISTS (
 		        SELECT 1 FROM assets v
-		        WHERE v.edition_id = coalesce(it.edition_id, d.edition_id)
-		          AND v.role != 'subtitle'
+		        WHERE v.role != 'subtitle'
 		          AND v.source_class = 'managed'
 		          AND v.blob_hash IS NOT NULL
 		          AND v.missing_since IS NULL
-		          AND (d.item_id IS NULL OR v.item_id = d.item_id OR v.item_id IS NULL)
+		          AND (
+		                -- An item-scoped want: its own item_id already pins the
+		                -- precise episode, independent of whether that item's
+		                -- edition grouping has been discovered yet (items.edition_id
+		                -- is nullable — 00040_followed_sources_and_items.sql).
+		                (d.item_id IS NOT NULL AND v.item_id = d.item_id)
+		                -- An edition-scoped want (a film): match on its own edition.
+		             OR (d.item_id IS NULL AND v.edition_id = d.edition_id)
+		                -- Pre-ADR-0086 content: the video has no item link at all,
+		                -- so fall back to the item's edition.
+		             OR (d.item_id IS NOT NULL AND v.item_id IS NULL AND v.edition_id = it.edition_id)
+		          )
 		  )
 		ORDER BY coalesce(s.next_fetch_at, ''), d.id
 		LIMIT ?`, sortable(now), limit)
@@ -175,12 +185,21 @@ func (c *Catalog) SourceVideoForSubtitle(ctx context.Context, desiredItemID stri
 		FROM desired_items d
 		LEFT JOIN items it ON it.id = d.item_id
 		JOIN assets v
-		  ON v.edition_id = coalesce(it.edition_id, d.edition_id)
-		 AND v.role != 'subtitle'
+		  ON v.role != 'subtitle'
 		 AND v.source_class = 'managed'
 		 AND v.blob_hash IS NOT NULL
 		 AND v.missing_since IS NULL
-		 AND (d.item_id IS NULL OR v.item_id = d.item_id OR v.item_id IS NULL)
+		 AND (
+		       -- Item-scoped: item_id already pins the precise episode, whether
+		       -- or not that item's own edition grouping has been discovered yet
+		       -- (items.edition_id is nullable — 00040_followed_sources_and_items.sql).
+		       (d.item_id IS NOT NULL AND v.item_id = d.item_id)
+		       -- Edition-scoped want (a film): match on its own edition.
+		    OR (d.item_id IS NULL AND v.edition_id = d.edition_id)
+		       -- Pre-ADR-0086 content: the video has no item link, fall back to
+		       -- the item's edition.
+		    OR (d.item_id IS NOT NULL AND v.item_id IS NULL AND v.edition_id = it.edition_id)
+		 )
 		WHERE d.id = ?
 		ORDER BY (d.item_id IS NOT NULL AND v.item_id = d.item_id) DESC, v.id
 		LIMIT 1`, desiredItemID).Scan(&assetID)

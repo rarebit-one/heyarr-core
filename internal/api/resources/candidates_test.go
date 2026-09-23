@@ -189,9 +189,78 @@ func TestManualSearchQueuesAJob(t *testing.T) {
 	}
 }
 
+// TestManualSearchRefusesASubtitleWant covers ADR-0085's "never search a
+// subtitle want" from the OTHER direction: DueSearches (the automated beat)
+// already skips subtitle-aspect wants by construction, but this manual door —
+// and the identically-shaped MCP search_releases tool — is a second way onto
+// the same search_release/grab_release job chain, reached by a person or an
+// operator script that does not know a want's aspect without asking. Left
+// open, a subtitle want gets driven into a torrent search and parked `queued`
+// there, a phase the subtitle fetch beat will never see as idle again.
+func TestManualSearchRefusesASubtitleWant(t *testing.T) {
+	h := newHarness(t)
+	const stamp = "2026-09-09T12:00:00Z"
+	h.exec(`INSERT INTO works (id, content_type, work_key, title, sort_title, created_at, updated_at)
+		VALUES ('sw', 'series', 'sw', 'sw', 'sw', ?, ?)`, stamp, stamp)
+	h.exec(`INSERT INTO editions (id, work_id, created_at) VALUES ('sw-ed', 'sw', ?)`, stamp)
+	h.exec(`INSERT INTO quality_profiles
+		(id, name, description, accept, prefer, terminal, seeded, created_at, updated_at)
+		VALUES ('sw-q', 'subtitle', '', '[]', '[]', '[]', 1, ?, ?)`, stamp, stamp)
+	h.exec(`INSERT INTO desired_items
+		(id, scope, work_id, edition_id, aspect, language, quality_profile_id, monitor, reason, created_at, updated_at)
+		VALUES ('sw-want', 'edition', 'sw', 'sw-ed', 'subtitle', 'en', 'sw-q', 0, 'subtitles: en requested', ?, ?)`,
+		stamp, stamp)
+
+	resp := h.doStable(http.MethodPost, "/api/v1/desired/sw-want/search", nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.StatusCode, h.body(resp))
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM jobs WHERE type = 'search_release'`); n != 0 {
+		t.Errorf("a subtitle want must never get a search_release job, got %d", n)
+	}
+}
+
 func TestSearchingAnUnknownWantIs404(t *testing.T) {
 	h := newHarness(t).seed()
 	resp := h.doStable(http.MethodPost, "/api/v1/desired/nope/search", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// Re-ingest queues the same import job the download poll would, and dedupes per
+// want — the manual lever for a wedged ingest, and what the watchdog does.
+func TestManualReingestQueuesAnIngestJob(t *testing.T) {
+	h := newHarness(t).seed()
+	resp := h.doStable(http.MethodPost, "/api/v1/desired/"+desired1ID+"/reingest", nil)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", resp.StatusCode, h.body(resp))
+	}
+	var got map[string]string
+	if err := json.Unmarshal(h.body(resp), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["job_id"] == "" || got["status"] != "queued" {
+		t.Errorf("response = %v", got)
+	}
+	if n := h.countRows(t,
+		`SELECT count(*) FROM jobs WHERE type = 'ingest_acquisition'`); n != 1 {
+		t.Errorf("%d ingest jobs queued, want 1", n)
+	}
+
+	// Idempotent: a live ingest is left alone, so asking twice yields one job.
+	if r := h.doStable(http.MethodPost, "/api/v1/desired/"+desired1ID+"/reingest", nil); r.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d", r.StatusCode)
+	}
+	if n := h.countRows(t,
+		`SELECT count(*) FROM jobs WHERE type = 'ingest_acquisition'`); n != 1 {
+		t.Errorf("%d ingest jobs after asking twice; the dedupe key should collapse them", n)
+	}
+}
+
+func TestReingestingAnUnknownWantIs404(t *testing.T) {
+	h := newHarness(t).seed()
+	resp := h.doStable(http.MethodPost, "/api/v1/desired/nope/reingest", nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
 	}

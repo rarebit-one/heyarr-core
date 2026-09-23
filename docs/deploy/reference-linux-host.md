@@ -139,6 +139,24 @@ Heyarr warns about this at startup, once per library root — `ingest from this
 library will COPY every file rather than share its bytes` — which is the
 warning ADR-0014 always promised and did not implement until this was found.
 
+That check **attempts a hardlink** from the library into the store's `tmp/`
+directory and reads the errno, rather than predicting the answer from device
+numbers. The distinction is the whole of
+[#222](https://github.com/rarebit-one/heyarr-core/issues/222): a
+`ReadOnlyPaths` library and a `ReadWritePaths` store under
+`ProtectSystem=strict` are two bind mounts of ONE filesystem, so they report
+the same `st_dev` while `link(2)` returns `EXDEV` between them — `stat -c %d`
+is therefore silent on exactly the host where every ingest is copying. The
+warning names which instrument answered: `instrument="probe: a real link(2)
+into the store"` is a measurement, and `instrument="inference: the mount
+table"` is a prediction, used only when the source directory held no file to
+link yet.
+
+If the ladder degrades anyway, the first such ingest says so at WARNING —
+`ingest fell back to COPYING bytes rather than sharing them`, with the errno it
+fell back on — and every ingest line carries its own `materialised=` and, when
+something degraded, `degraded_because=`.
+
 ## Filesystem layout
 
 FHS, so that a package and a hand install put things in the same places:

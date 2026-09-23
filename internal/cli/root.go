@@ -63,7 +63,21 @@ One logical library, multiple complete sovereign peers.`,
 	root.SetOut(opts.Stdout)
 	root.SetErr(opts.Stderr)
 	root.PersistentFlags().StringVarP(&configPath, "config", "c", "",
-		"path to the configuration file (default: built-in defaults plus HEYARR_ environment)")
+		"path to the configuration file (default: $"+config.ConfigPathEnv+", else "+
+			config.SystemConfigPath+" if present, else built-in defaults plus HEYARR_ environment)")
+
+	// Resolve the config file once, before any subcommand loads it, so a bare
+	// `heyarr <cmd>` on the same host as the service targets the service's data
+	// directory rather than the built-in defaults (#556). Writing the result
+	// back into the shared configPath means every command — the client
+	// commands and the local-DB ones (token, fsck, gc) alike — see the same
+	// resolution. No subcommand defines its own PersistentPreRunE, so this one
+	// runs for all of them; the device/identity/pair commands ignore configPath
+	// by design, and resolving it for them changes nothing.
+	root.PersistentPreRunE = func(_ *cobra.Command, _ []string) error {
+		configPath = config.ResolvePath(configPath)
+		return nil
+	}
 
 	root.AddCommand(
 		newVersionCommand(opts),
@@ -112,6 +126,12 @@ One logical library, multiple complete sovereign peers.`,
 		// machine's device key like a device command — the controller stores the
 		// ciphertext and only this device holds the key that opens it.
 		newSpaceCommand(opts, &configPath),
+		// The vault media client (ADR-0021, ADR-0095, ADR-0096, ADR-0097). A
+		// hybrid like `space`: it talks to the controller over /api/v1 and holds
+		// this machine's device key — the peer stores ciphertext blobs, encrypted
+		// drive changes and opaque placement pins, and this device alone holds the
+		// key that seals a file into frames and opens them back.
+		newVaultCommand(opts, &configPath),
 		newPeersCommand(opts, &configPath),
 		newEventsCommand(opts, &configPath),
 		newSystemCommand(opts, &configPath),

@@ -32,8 +32,43 @@ would count as existing, cannot be evaluated.`,
 		newDesiredAddCommand(opts, configPath),
 		newDesiredListCommand(opts, configPath),
 		newDesiredSetCommand(opts, configPath),
+		newDesiredReingestCommand(opts, configPath),
 		newDesiredRemoveCommand(opts, configPath),
 	)
+	return cmd
+}
+
+func newDesiredReingestCommand(_ Options, configPath *string) *cobra.Command {
+	var flags clientFlags
+	cmd := &cobra.Command{
+		Use:   "reingest <id>",
+		Short: "Re-drive a wedged ingest — a finished download that never imported",
+		Long: `Re-run the hash-and-import for a want stuck in VERIFYING or INGESTING.
+
+A download that completed but whose ingest was lost — a worker crash, a node
+OOM, a client that dropped the completed transfer before the ingest ran — sits
+with no job driving it and never advances. This queues that import again; the
+ingest worker re-locates and re-verifies the bytes itself, so nothing else is
+needed. Idempotent: an ingest that is actually running is left alone.
+
+The stuck-ingest watchdog does this automatically once a want has been wedged
+past a grace window; this is the manual lever for doing it now.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				var out map[string]any
+				if err := c.Post(ctx, "/desired/"+args[0]+"/reingest", nil, &out); err != nil {
+					return err
+				}
+				if flags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), out)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "queued a re-ingest for %s (job %v)\n", args[0], out["job_id"])
+				return nil
+			})
+		},
+	}
+	flags.register(cmd)
 	return cmd
 }
 
@@ -294,7 +329,7 @@ func newQualityProfileCommand(_ Options, configPath *string) *cobra.Command {
 				if flags.asJSON {
 					return emitJSON(cmd.OutOrStdout(), profiles)
 				}
-				t := newTable("ID", "NAME", "SEEDED", "TERMINAL", "DESCRIPTION")
+				t := newTable("ID", "NAME", "SEEDED", "TERMINAL", "CONTENT TYPES", "DESCRIPTION")
 				for _, p := range profiles {
 					// "never" is the honest rendering of no terminal rules: it
 					// means there is no condition under which this profile is
@@ -304,7 +339,13 @@ func newQualityProfileCommand(_ Options, configPath *string) *cobra.Command {
 					if body := strings.TrimSpace(string(p.Terminal)); body != "" && body != "[]" && body != "null" {
 						terminal = "yes"
 					}
-					t.add(p.ID, p.Name, strconv.FormatBool(p.Seeded), terminal, p.Description)
+					// "any" is the honest rendering of an empty ContentTypes: usable
+					// for any content type, not "none declared yet".
+					types := "any"
+					if len(p.ContentTypes) > 0 {
+						types = strings.Join(p.ContentTypes, ",")
+					}
+					t.add(p.ID, p.Name, strconv.FormatBool(p.Seeded), terminal, types, p.Description)
 				}
 				return t.render(cmd.OutOrStdout(), "no quality profiles")
 			})
@@ -316,6 +357,7 @@ func newQualityProfileCommand(_ Options, configPath *string) *cobra.Command {
 	var (
 		createFlags                           clientFlags
 		description, accept, prefer, terminal string
+		contentTypes                          []string
 	)
 	createCmd := &cobra.Command{
 		Use:   "create <name>",
@@ -331,16 +373,21 @@ given as a JSON array of rules — the same shape the API takes:
 
   heyarr quality-profile create living-room \
     --accept  '[{"attribute":"resolution","op":"gte","value":1080}]' \
-    --prefer  '[{"attribute":"video_codec","op":"eq","value":"hevc","weight":20}]'
+    --prefer  '[{"attribute":"video_codec","op":"eq","value":"hevc","weight":20}]' \
+    --content-types movie,series
 
 An omitted group is left empty; a profile with no terminal rules is never
 "finished", which is legal — that is what the seeded "archival" profile is.
+--content-types is metadata for a caller deciding which profiles to OFFER for
+a given want (a picker should not offer a video profile for a book) — nothing
+in evaluation reads it, so an omitted or wrong tag never changes what this
+profile accepts. Omitted means unrestricted: usable for any content type.
 Authoring is deliberate: a name that already exists is reported as a conflict,
 never silently replaced.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return createFlags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
-				req := client.CreateQualityProfileRequest{Name: args[0], Description: description}
+				req := client.CreateQualityProfileRequest{Name: args[0], Description: description, ContentTypes: contentTypes}
 				// Reject malformed JSON here so a typo is a local error that
 				// names the flag, rather than a 400 the operator has to decode.
 				for _, g := range []struct {
@@ -377,6 +424,100 @@ never silently replaced.`,
 	createCmd.Flags().StringVar(&accept, "accept", "", "gate rules as a JSON array — a candidate failing any is rejected")
 	createCmd.Flags().StringVar(&prefer, "prefer", "", "scoring rules as a JSON array — weighted preferences, never gates")
 	createCmd.Flags().StringVar(&terminal, "terminal", "", "stop rules as a JSON array — when the upgrade workflow stops looking")
+	createCmd.Flags().StringSliceVar(&contentTypes, "content-types", nil, "which content types this profile is for (e.g. movie,series); omitted means unrestricted")
+
+	var (
+		setFlags                                                   clientFlags
+		setName, setDescription, setAccept, setPrefer, setTerminal string
+		setContentTypes                                            []string
+	)
+	setCmd := &cobra.Command{
+		Use:   "set <name|id>",
+		Short: "Change an existing quality profile's rules or description (§62)",
+		Long: `Change a quality profile in place, named the way "list" shows it — by name or id.
+
+Only the parts you pass change. A rule group you OMIT is left as it was; a group
+you pass as an explicit empty array is CLEARED. Those are different intentions —
+"leave the terminal rules alone" and "remove them" are not the same edit:
+
+  # prefer English on everyday, leaving its accept and terminal untouched
+  heyarr quality-profile set everyday \
+    --prefer '[{"attribute":"language","op":"eq","value":"en","weight":50}]'
+
+  # clear a profile's terminal rules (make it never "finished")
+  heyarr quality-profile set archival --terminal '[]'
+
+Rename with --name; --description replaces the description. The new rules take
+effect the next time each want is evaluated — its next search, upgrade scan or
+satisfaction read — not as an immediate mass re-judge.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return setFlags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				// Resolve name-or-id to an id the way an operator names it: the
+				// profile they see in "list", by either column. Profiles are
+				// few, so a list-and-match is cheaper to reason about than a
+				// second by-name lookup route.
+				profiles, err := client.List[client.QualityProfile](ctx, c, "/quality-profiles", client.ListOptions{})
+				if err != nil {
+					return err
+				}
+				id := ""
+				for _, p := range profiles {
+					if p.ID == args[0] || p.Name == args[0] {
+						id = p.ID
+						break
+					}
+				}
+				if id == "" {
+					return fmt.Errorf("no quality profile named or with id %q", args[0])
+				}
+
+				req := client.UpdateQualityProfileRequest{Name: setName, Description: setDescription}
+				// A rule group changes only when its flag was given — a flag
+				// left off means "leave it", which is why Changed is checked
+				// rather than the value being empty. Malformed JSON is a local
+				// error naming the flag, not a 400 to decode.
+				for _, g := range []struct {
+					name string
+					raw  string
+					dst  **json.RawMessage
+				}{
+					{"accept", setAccept, &req.Accept},
+					{"prefer", setPrefer, &req.Prefer},
+					{"terminal", setTerminal, &req.Terminal},
+				} {
+					if !cmd.Flags().Changed(g.name) {
+						continue
+					}
+					if !json.Valid([]byte(g.raw)) {
+						return fmt.Errorf("--%s is not valid JSON (pass a JSON array, or [] to clear)", g.name)
+					}
+					rm := json.RawMessage(g.raw)
+					*g.dst = &rm
+				}
+				if cmd.Flags().Changed("content-types") {
+					req.ContentTypes = &setContentTypes
+				}
+
+				var out client.QualityProfile
+				if err := c.Put(ctx, "/quality-profiles/"+id, req, &out); err != nil {
+					return err
+				}
+				if setFlags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), out)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "updated quality profile %s (%s)\n", out.Name, out.ID)
+				return nil
+			})
+		},
+	}
+	setFlags.register(setCmd)
+	setCmd.Flags().StringVar(&setName, "name", "", "rename the profile")
+	setCmd.Flags().StringVar(&setDescription, "description", "", "replace the description")
+	setCmd.Flags().StringVar(&setAccept, "accept", "", "replace gate rules (JSON array; [] clears)")
+	setCmd.Flags().StringVar(&setPrefer, "prefer", "", "replace scoring rules (JSON array; [] clears)")
+	setCmd.Flags().StringVar(&setTerminal, "terminal", "", "replace stop rules (JSON array; [] clears)")
+	setCmd.Flags().StringSliceVar(&setContentTypes, "content-types", nil, "replace which content types this profile is for (comma-separated; pass an empty value to clear back to unrestricted)")
 
 	cmd := &cobra.Command{
 		Use:     "quality-profile",
@@ -391,9 +532,10 @@ never silently replaced.`,
 A profile with no terminal rules is never finished, which is legal and is what
 the seeded "archival" profile is.
 
-Use "create" to author one and "list" to read them.`,
+Use "create" to author one, "set" to change one, and "list" to read them.`,
 	}
 	cmd.AddCommand(listCmd)
 	cmd.AddCommand(createCmd)
+	cmd.AddCommand(setCmd)
 	return cmd
 }

@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -133,6 +134,45 @@ func (a *API) listJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	a.write(w, r, http.StatusOK, newPage(out, q.limit,
 		func(x Job) []string { return []string{x.ID} }, "jobs"))
+}
+
+// ListJobs reads jobs filtered by state and/or type, most recent first (id is a
+// UUIDv7, so DESC is newest-enqueued-first). It is the read the MCP door and any
+// non-HTTP caller uses; the HTTP listJobs keeps its cursor paging for browsing
+// the whole queue. `state` and `jobType` empty mean "any"; `limit` is bounded by
+// the caller.
+func (a *API) ListJobs(ctx context.Context, state, jobType string, limit int) ([]Job, error) {
+	where := []string{"1 = 1"}
+	args := []any{}
+	if state != "" {
+		where = append(where, "state = ?")
+		args = append(args, state)
+	}
+	if jobType != "" {
+		where = append(where, "type = ?")
+		args = append(args, jobType)
+	}
+	args = append(args, limit)
+
+	//nolint:gosec // the query is assembled only from the literal fragments above; every value is bound
+	stmt := `SELECT ` + jobColumns + ` FROM jobs WHERE ` + strings.Join(where, " AND ") +
+		` ORDER BY id DESC LIMIT ?`
+
+	rows, err := a.reader.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Job
+	for rows.Next() {
+		j, err := scanJobRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
 }
 
 func (a *API) getJob(w http.ResponseWriter, r *http.Request) {

@@ -41,7 +41,14 @@ func seedQualityProfiles(ctx context.Context, db *sqlite.DB, cfg config.Config, 
 	if err != nil {
 		return fmt.Errorf("controller: opening the catalog: %w", err)
 	}
-	if _, err := cat.SeedQualityProfiles(ctx, policy.Defaults()); err != nil {
+	// The household language preference (§62, #558) is applied to the seeded
+	// video profiles here, so `everyday`/`living-room`/`archival` prefer the
+	// wanted language without a bespoke `everyday-en` clone. It is a no-op when
+	// unconfigured, and — because seeding converges on the name and never
+	// overwrites an existing row — it shapes the profiles a FRESH install gets;
+	// an operator editing a live profile's language uses `quality-profile set`.
+	seeded := policy.WithLanguageDefaults(policy.Defaults(), cfg.Language.Policy())
+	if _, err := cat.SeedQualityProfiles(ctx, seeded); err != nil {
 		return fmt.Errorf("controller: seeding quality profiles: %w", err)
 	}
 	return nil

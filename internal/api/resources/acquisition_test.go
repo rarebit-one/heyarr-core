@@ -224,3 +224,33 @@ func TestTheDatabaseRefusesPlacementWithoutContent(t *testing.T) {
 		t.Errorf("expected a constraint failure, got %v", err)
 	}
 }
+
+// A want with a transfer in flight carries its download byte counts in the
+// acquisition view, so a client can show progress without a second request.
+func TestAWantsDownloadProgressIsInTheView(t *testing.T) {
+	h := newHarness(t).seed()
+	h.exec(`INSERT OR REPLACE INTO acquisitions
+		(id, desired_item_id, provider, external_id, bytes_total, bytes_done,
+		 created_at, updated_at, last_seen_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		"acq-dl-1", desired1ID, "transmission", "infohash-1",
+		int64(4_000_000_000), int64(1_500_000_000),
+		"2026-09-10T00:00:00Z", "2026-09-10T00:00:00Z", "2026-09-10T00:00:00Z")
+
+	resp := h.get("/api/v1/desired/" + desired1ID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var got struct {
+		Acquisition map[string]any `json:"acquisition"`
+	}
+	if err := json.Unmarshal(h.body(resp), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Acquisition["bytes_total"] != float64(4_000_000_000) {
+		t.Errorf("bytes_total = %v, want 4000000000", got.Acquisition["bytes_total"])
+	}
+	if got.Acquisition["bytes_done"] != float64(1_500_000_000) {
+		t.Errorf("bytes_done = %v, want 1500000000", got.Acquisition["bytes_done"])
+	}
+}

@@ -11,8 +11,38 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/testutil"
 )
+
+// A local-DB command run with NO --config resolves HEYARR_CONFIG through the
+// root's config discovery (#556), so it opens the SAME database the service
+// uses rather than the built-in default — the failure that made a freshly
+// minted token get rejected as an invalid credential.
+func TestTokenCreateUsesHeyarrConfigEnv(t *testing.T) {
+	cfg := tokenConfig(t)
+	t.Setenv(config.ConfigPathEnv, cfg)
+
+	out, _, err := run(t, context.Background(),
+		"token", "create", "jellyfin", "--scopes", "read", "--json")
+	if err != nil {
+		t.Fatalf("token create via HEYARR_CONFIG: %v", err)
+	}
+	if !strings.Contains(out, `"token"`) {
+		t.Fatalf("expected a minted token, got %s", out)
+	}
+
+	// It landed in the config's data_dir DB: a list through the same config
+	// sees it. If discovery had not threaded through, the token would have gone
+	// to the built-in default DB and this list would be empty.
+	list, _, err := run(t, context.Background(), "--config", cfg, "token", "list", "--json")
+	if err != nil {
+		t.Fatalf("token list: %v", err)
+	}
+	if !strings.Contains(list, "jellyfin") {
+		t.Errorf("token minted via HEYARR_CONFIG did not land in the config's DB: %s", list)
+	}
+}
 
 // tokenConfig writes a config file pointing at a temporary data directory.
 func tokenConfig(t *testing.T) string {

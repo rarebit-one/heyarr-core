@@ -1,6 +1,7 @@
 package catalog_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,6 +14,53 @@ import (
 // the controller. What these add is the pair of things only a real database
 // can be wrong about: which wants the due query returns, and whether the
 // compare-and-set actually refuses.
+
+// Clearing a want's schedule makes it due a search at once, from a clean
+// streak — how a re-driven want (its failed release just blocked) escapes the
+// backoff the failed search left behind, and how the stuck-grab sweep hands a
+// want back to the search beat.
+func TestClearingASearchScheduleMakesTheWantDueAtOnce(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	due, err := h.cat.DueSearches(ctx, now, 10)
+	if err != nil || len(due) != 1 {
+		t.Fatalf("setup: due=%d err=%v", len(due), err)
+	}
+	// Record a search a day out, so the want is NOT due now.
+	if _, err := h.cat.RecordSearchScheduled(ctx, h.want, due[0].Schedule, 3, now, now.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.cat.DueSearches(ctx, now, 10); err != nil {
+		t.Fatal(err)
+	} else if len(got) != 0 {
+		t.Fatalf("setup: a want scheduled a day out must not be due now, got %d", len(got))
+	}
+
+	if err := h.cat.ClearSearchSchedule(ctx, h.want); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := h.cat.SearchSchedule(ctx, h.want); err != nil {
+		t.Fatal(err)
+	} else if found {
+		t.Fatal("the schedule row is still present after ClearSearchSchedule")
+	}
+	got, err := h.cat.DueSearches(ctx, now, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[0].FirstEver {
+		t.Fatalf("after clearing, the want must be due now and from a clean streak, got %+v", got)
+	}
+
+	// Idempotent: clearing an already-clear schedule is a no-op, not an error.
+	if err := h.cat.ClearSearchSchedule(ctx, h.want); err != nil {
+		t.Fatalf("clearing an absent schedule should be a no-op, got %v", err)
+	}
+}
 
 func TestAWantWithNoRowIsDueImmediately(t *testing.T) {
 	h := newHarness(t)
@@ -214,5 +262,55 @@ func TestIndexerHealthIgnoresProvidersThatCannotSearch(t *testing.T) {
 	}
 	if !health["prowlarr"].Healthy {
 		t.Error("the healthy indexer is not reported as healthy")
+	}
+}
+
+// A full batch of feed items must not hide an indexer-searchable want forever.
+// The batch limit applies to eligible searches, not the rows examined.
+func TestDueSearchLimitCountsOnlyEligibleWants(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	for i := range 51 {
+		id := fmt.Sprintf("000-document-%03d", i)
+		h.exec(t, `INSERT INTO works
+   (id, content_type, work_key, title, sort_title, attributes, created_at, updated_at)
+   VALUES (?, 'document', ?, 'Article', 'article', '{}', ?, ?)`, id, id, stamp, stamp)
+		h.exec(t, `INSERT INTO desired_items
+   (id, scope, work_id, quality_profile_id, monitor, reason, created_at, updated_at)
+   VALUES (?, 'work', ?, 'q1', 1, '', ?, ?)`, id, id, stamp, stamp)
+		if _, err := h.cat.StartAcquisition(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.exec(t, `INSERT INTO works
+ (id, content_type, work_key, title, sort_title, attributes, created_at, updated_at)
+ VALUES ('movie-2', 'movie', 'movie:second', 'Second Movie', 'second movie', '{}', ?, ?)`, stamp, stamp)
+
+	h.exec(t, `INSERT INTO desired_items
+  (id, scope, work_id, quality_profile_id, monitor, reason, created_at, updated_at)
+  SELECT 'want-2', scope, 'movie-2', quality_profile_id, monitor, reason, created_at, updated_at
+  FROM desired_items WHERE id = ?`, h.want)
+	for _, id := range []string{h.want, "want-2"} {
+		if _, err := h.cat.StartAcquisition(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct{ limit, count int }{{0, 0}, {1, 1}, {2, 2}, {50, 2}} {
+		t.Run(fmt.Sprintf("limit_%d", tc.limit), func(t *testing.T) {
+			due, err := h.cat.DueSearches(ctx, now, tc.limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(due) != tc.count {
+				t.Fatalf("due=%+v, want %d eligible searches", due, tc.count)
+			}
+			for i, item := range due {
+				want := []string{h.want, "want-2"}[i]
+				if item.DesiredItemID != want {
+					t.Errorf("due[%d]=%q, want %q", i, item.DesiredItemID, want)
+				}
+			}
+		})
 	}
 }

@@ -117,6 +117,28 @@ func TestEnvironmentOverridesFile(t *testing.T) {
 	}
 }
 
+func TestDiscoveryAdvertisesByDefaultAndTogglesOff(t *testing.T) {
+	// Unmentioned: the zero value advertises, so a client can find a node out of
+	// the box (ADR-0094 §Discovery). The guest trust boundary still gates WHERE.
+	cfg, err := Load(writeConfig(t, "data_dir: /srv/heyarr\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.HTTP.Discovery.Advertises() {
+		t.Error("discovery should advertise by default")
+	}
+
+	// The independent off-switch suppresses advertisement without touching the
+	// guest boundary the gating reuses.
+	off, err := Load(writeConfig(t, "http:\n  discovery:\n    disabled: true\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if off.HTTP.Discovery.Advertises() {
+		t.Error("http.discovery.disabled=true should stop advertisement")
+	}
+}
+
 func TestMissingConfigFileNamesThePath(t *testing.T) {
 	_, err := Load("/nonexistent/heyarr.yaml")
 	if err == nil {
@@ -206,6 +228,9 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		{"public origin with bad scheme", func(c *Config) {
 			c.HTTP.PublicOrigin = "ftp://heyarr.example.com"
 		}, "absolute http(s) origin"},
+		{"unknown vault unwrapper", func(c *Config) {
+			c.Vault.Unwrapper = "quantum"
+		}, "vault.unwrapper"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -219,6 +244,21 @@ func TestValidateRejectsBadValues(t *testing.T) {
 				t.Errorf("error = %q, want it to mention %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestVaultUnwrapperSelectable: the default is software, and every wired backend
+// passes validation (ADR-0098). An unknown one is refused (covered above).
+func TestVaultUnwrapperSelectable(t *testing.T) {
+	if got := Defaults().Vault.Unwrapper; got != "software" {
+		t.Fatalf("default vault.unwrapper = %q, want software", got)
+	}
+	for _, backend := range []string{"software", "yubikey", "tpm", "cruciform"} {
+		cfg := Defaults()
+		cfg.Vault.Unwrapper = backend
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate rejected vault.unwrapper %q: %v", backend, err)
+		}
 	}
 }
 
@@ -439,4 +479,105 @@ func TestRenderAddrMustBeAConcreteReachableAddress(t *testing.T) {
 			t.Errorf("Validate accepted render_addr %q", bad)
 		}
 	}
+}
+
+// The guest tier is off by default — the safe stance — but its allow-list is
+// pre-populated with the private + loopback ranges, so flipping the mode on
+// against a single LAN needs no further configuration (ADR-0094). The concrete
+// estate ranges are supplied by the homelab-ops infrastructure.
+func TestGuestDefaultsOffWithPrivateAllowList(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.HTTP.Guest.Enabled {
+		t.Error("guest mode is on by default")
+	}
+	nets, err := cfg.HTTP.Guest.ParsedNets()
+	if err != nil {
+		t.Fatalf("default trusted nets do not parse: %v", err)
+	}
+	if len(nets) == 0 {
+		t.Fatal("the default guest allow-list is empty")
+	}
+	// A private LAN address is trusted by default; a documentation range standing
+	// in for raw internet is not.
+	if !cfg.HTTP.Guest.TrustsSource("192.168.1.50") {
+		t.Error("a private LAN address is not in the default allow-list")
+	}
+	if cfg.HTTP.Guest.TrustsSource("203.0.113.7") {
+		t.Error("an off-estate address is trusted by default")
+	}
+}
+
+// A malformed CIDR is a startup error, named, even with guest mode off: a range
+// nobody can parse is a mistake worth catching before the mode is later enabled.
+func TestGuestAllowListRejectsAMalformedCIDR(t *testing.T) {
+	cfg := Defaults()
+	cfg.HTTP.Guest.TrustedNets = []string{"not-a-cidr"}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a malformed guest CIDR was accepted")
+	}
+	if !strings.Contains(err.Error(), "trusted_nets") {
+		t.Errorf("the error does not name the setting: %v", err)
+	}
+}
+
+// An empty allow-list is legal — it simply turns the tier off — and TrustsSource
+// then matches nobody, loopback included.
+func TestGuestEmptyAllowListValidatesAndTrustsNobody(t *testing.T) {
+	cfg := Defaults()
+	cfg.HTTP.Guest.TrustedNets = nil
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("an empty guest allow-list was refused: %v", err)
+	}
+	for _, host := range []string{"127.0.0.1", "192.168.1.1", "203.0.113.7", "", "unix"} {
+		if cfg.HTTP.Guest.TrustsSource(host) {
+			t.Errorf("an empty allow-list trusts %q", host)
+		}
+	}
+}
+
+// TestResolvePath covers the config discovery that #556 adds: an explicit flag
+// wins, else $HEYARR_CONFIG, else a present system config, else "" (defaults).
+func TestResolvePath(t *testing.T) {
+	t.Run("flag wins over everything", func(t *testing.T) {
+		t.Setenv(ConfigPathEnv, "/env/config.yaml")
+		if got := ResolvePath("/flag/config.yaml"); got != "/flag/config.yaml" {
+			t.Errorf("flag should win, got %q", got)
+		}
+	})
+
+	// HEYARR_CONFIG is an explicit choice and is returned even when the file is
+	// missing — Load then reports that loudly, which is the intended behaviour.
+	t.Run("env used when no flag", func(t *testing.T) {
+		t.Setenv(ConfigPathEnv, "/env/config.yaml")
+		if got := ResolvePath(""); got != "/env/config.yaml" {
+			t.Errorf("env should be used, got %q", got)
+		}
+	})
+
+	t.Run("system path discovered when present", func(t *testing.T) {
+		t.Setenv(ConfigPathEnv, "")
+		p := writeConfig(t, "peer:\n  name: test\n")
+		old := systemConfigPath
+		systemConfigPath = p
+		t.Cleanup(func() { systemConfigPath = old })
+		if got := ResolvePath(""); got != p {
+			t.Errorf("system path should be discovered, got %q", got)
+		}
+	})
+
+	// Nothing to discover means the built-in defaults, which are correct for a
+	// host that has configured nothing yet.
+	t.Run("empty when nothing to discover", func(t *testing.T) {
+		t.Setenv(ConfigPathEnv, "")
+		old := systemConfigPath
+		systemConfigPath = filepath.Join(t.TempDir(), "absent.yaml")
+		t.Cleanup(func() { systemConfigPath = old })
+		if got := ResolvePath(""); got != "" {
+			t.Errorf("expected empty (defaults), got %q", got)
+		}
+	})
 }

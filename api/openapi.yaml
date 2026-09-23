@@ -2264,6 +2264,105 @@ paths:
         '416':
           description: The requested range lies outside the blob.
 
+  /api/v1/vault/blobs/{hash}:
+    parameters:
+      - name: hash
+        in: path
+        required: true
+        description: The BLAKE3 digest that names the ciphertext blob, as `blake3:<64 lowercase hex characters>`.
+        schema:
+          type: string
+          pattern: '^blake3:[0-9a-f]{64}$'
+    put:
+      tags: [personal-state]
+      operationId: uploadVaultBlob
+      summary: Upload a client-encrypted, content-addressed vault blob and pin it. Requires `write`.
+      description: >-
+        The vault content ingest path (ADR-0021, ADR-0096), deliberately separate
+        from scan-ingest and from the read-only blob GET contract. The client
+        encrypts the bytes into fixed frames (ADR-0097) and uploads the ciphertext
+        under the digest that names it; the server verifies the bytes hash to
+        `{hash}`, stores them, and records a placement pin so garbage collection
+        retains them — a vault blob has no catalog reference the control plane can
+        see. The server never holds plaintext. Reads use `GET /blobs/{hash}/content`.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: The blob was stored and pinned.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [hash, size]
+                additionalProperties: false
+                properties:
+                  hash:
+                    type: string
+                    description: The `blake3:<hex>` id the blob was stored under.
+                  size:
+                    type: integer
+                    format: int64
+                    description: The ciphertext byte length stored.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/vault/placements:
+    post:
+      tags: [personal-state]
+      operationId: pinVaultPlacement
+      summary: Pin a vault blob to a peer OTHER than self, so it replicates there. Requires `write`.
+      description: >-
+        Cross-site placement (ADR-0096). A device says a ciphertext vault blob
+        should live on a named peer; the convergence union turns the pin into a
+        replication target for that peer, and the pin retains the blob against
+        garbage collection. The pin is opaque — a (blob, peer) pair with no space,
+        path or asset link — so the control plane learns that a blob belongs on a
+        peer, never which vault or file it is. Idempotent per (blob, peer). The peer
+        is not checked for existence: a pin may outlive churn in `peers`, and a pin
+        naming a peer that is not a replication target is simply ignored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlacementPinInput" }
+      responses:
+        "200":
+          description: The pin, as recorded (the (blob, peer) pair it is identified by).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlacementPinInput" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    delete:
+      tags: [personal-state]
+      operationId: unpinVaultPlacement
+      summary: Remove a vault blob's placement pin for a peer. Requires `write`.
+      description: >-
+        Removes the pin recorded by POST (ADR-0096), so the peer is no longer a
+        replication target for the blob and, where the pin was the blob's last
+        reference, garbage collection may reclaim it. A pin is identified by its
+        (blob, peer) pair, so the body carries the same two fields as POST.
+        Idempotent: removing a pin that is not there is a 204, not a 404.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlacementPinInput" }
+      responses:
+        "204":
+          description: The pin is gone (or was already).
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /api/v1/peers:
     get:
       tags: [fabric]
@@ -3521,6 +3620,45 @@ paths:
         On a node with **no indexer** the job stays *pending and visible*
         rather than failing (ADR-0025) — it is work waiting for a capability,
         not work that went wrong.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "202":
+          description: Queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  desired_item_id: { type: string }
+                  job_id: { type: string }
+                  status: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/desired/{id}/reingest:
+    post:
+      tags: [desired]
+      operationId: reingestDesired
+      summary: Re-drive the import for a want whose ingest wedged.
+      description: |
+        Re-run the hash-and-import for a want stuck in `verifying` or
+        `ingesting` — a download that finished but whose ingest job was lost (a
+        worker crash mid-lease, a node OOM, a client that dropped the completed
+        transfer before it ran), leaving the want with no job driving it.
+
+        **Enqueues** the same `ingest_acquisition` job the download poll would;
+        the ingest worker re-locates and re-verifies the bytes itself, so no
+        download-client state is needed. **Idempotent** — the dedupe key means
+        an ingest already running is left alone, so this answers `202` and
+        reaches only wants with no live ingest.
+
+        The stuck-ingest watchdog does this automatically once a want has been
+        wedged past a grace window; this is the same action on demand.
       parameters:
         - name: id
           in: path
@@ -6558,6 +6696,22 @@ components:
           type: string
           format: byte
           description: The opaque sealed bytes (base64). The peer cannot open them.
+    PlacementPinInput:
+      type: object
+      description: >-
+        An opaque placement pin (ADR-0096): a ciphertext vault blob and the peer it
+        should live on. The pin is identified by this pair — there is no server-minted
+        id — so the same shape records a pin (POST) and removes it (DELETE).
+      required: [blob_hash, peer_id]
+      additionalProperties: false
+      properties:
+        blob_hash:
+          type: string
+          pattern: '^blake3:[0-9a-f]{64}$'
+          description: The BLAKE3 digest naming the ciphertext blob, as `blake3:<64 lowercase hex characters>`.
+        peer_id:
+          type: string
+          description: The peer the blob should live on. Not checked for existence — a pin may outlive churn in peers.
     WrappedKey:
       type: object
       description: A stored wrapped copy of a space key.
@@ -8821,6 +8975,20 @@ components:
         detail:
           type: string
           description: Why the last pipeline move happened, when it was a failure.
+        bytes_total:
+          type: integer
+          format: int64
+          description: |
+            Total bytes of the transfer in flight, as the download client last
+            reported it. Omitted when there is no transfer; zero when the client
+            has not said the size yet.
+        bytes_done:
+          type: integer
+          format: int64
+          description: |
+            Bytes fetched so far of the transfer in flight, refreshed on every
+            download poll. With `bytes_total`, this is how far a download has
+            got — omitted when there is no transfer.
 
     CreateDesired:
       type: object
