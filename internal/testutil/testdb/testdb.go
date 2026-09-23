@@ -58,7 +58,7 @@ var template = sync.OnceValues(func() ([]byte, error) {
 		return nil, fmt.Errorf("testdb: template WAL still holds %d bytes after close; "+
 			"the main file alone is not the migrated schema", fi.Size())
 	}
-	return os.ReadFile(path)
+	return os.ReadFile(path) // #nosec G304 -- a file this function just created under its own MkdirTemp
 })
 
 // MigratedPath writes a fresh, fully-migrated database into its own
