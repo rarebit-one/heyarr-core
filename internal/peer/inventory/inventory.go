@@ -58,7 +58,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
 )
 
 // Mode is the shape of a report. See the package doc for what each one

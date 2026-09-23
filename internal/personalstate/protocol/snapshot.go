@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
 )
 
 // The errors this file refuses with.

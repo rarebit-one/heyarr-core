@@ -8,10 +8,10 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rarebit-one/voidbind-go/hashing"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 )
 
 // The piece availability route (§23, §26, ADR-0042, ADR-0043).

@@ -30,7 +30,8 @@ import (
 	"io"
 	"math"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 

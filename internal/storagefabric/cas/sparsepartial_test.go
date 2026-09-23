@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
 )
 
 // content is deterministic bytes of a given size, so a test can assert a

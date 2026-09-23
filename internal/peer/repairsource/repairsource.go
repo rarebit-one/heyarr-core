@@ -50,8 +50,9 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/peer/transfer"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/chunking"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"

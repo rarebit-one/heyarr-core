@@ -6,8 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 )
 
 // The client route's ensure-on-GET adapter against a real database (#371).

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
 )
 
 // The placement precondition on garbage collection (ADR-0018, §19, §53, §56,
