@@ -131,16 +131,16 @@ type playbackStart struct {
 func (a *API) beginPlayback(ctx context.Context, assetID, deviceID, wantVerb string, forceDirect bool) (playbackStart, *problem.Problem) {
 	device, err := a.deviceProfile(ctx, deviceID)
 	if err != nil {
-		return playbackStart{}, a.problemFor("device", err)
+		return playbackStart{}, a.problemFor(ctx, "device", err)
 	}
 	media, blobHash, err := a.mediaProfile(ctx, assetID)
 	if err != nil {
-		return playbackStart{}, a.problemFor("asset", err)
+		return playbackStart{}, a.problemFor(ctx, "asset", err)
 	}
 	// Where the bytes come from (§32) before what to do with them (§68).
 	route, err := a.routeBlob(ctx, blobHash)
 	if err != nil {
-		return playbackStart{}, a.problemFor("replica", err)
+		return playbackStart{}, a.problemFor(ctx, "replica", err)
 	}
 
 	plan := playback.Choose(media, device, replicasOf(route))
@@ -182,7 +182,7 @@ func (a *API) beginPlayback(ctx context.Context, assetID, deviceID, wantVerb str
 	token, err := a.tokens.Create(ctx,
 		"playback "+session.ID, []auth.Scope{auth.ScopeRead}, &expires)
 	if err != nil {
-		return playbackStart{}, a.problemFor("playback", err)
+		return playbackStart{}, a.problemFor(ctx, "playback", err)
 	}
 
 	var event events.Event
@@ -211,7 +211,7 @@ func (a *API) beginPlayback(ctx context.Context, assetID, deviceID, wantVerb str
 			return playbackStart{}, problem.BadRequest(
 				"asset_id and device_id must both name something that exists")
 		}
-		return playbackStart{}, a.problemFor("playback", err)
+		return playbackStart{}, a.problemFor(ctx, "playback", err)
 	}
 	a.events.Publish(event)
 
