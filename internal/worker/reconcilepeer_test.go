@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -19,6 +18,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/chunking"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // Peer convergence, against a real database and a real queue (§19, §57, M4-08).
@@ -70,14 +70,7 @@ type convergeHarness struct {
 func newConvergeHarness(t *testing.T) *convergeHarness {
 	t.Helper()
 	ctx := t.Context()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)

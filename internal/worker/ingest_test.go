@@ -22,6 +22,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // harness is a real database, a real CAS and a real pipeline. Storage tests use
@@ -43,14 +44,7 @@ func newHarness(t *testing.T) *harness {
 	t.Helper()
 	dir := t.TempDir()
 
-	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
-	if err != nil {
-		t.Fatalf("opening database: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatalf("migrating: %v", err)
-	}
+	db := testdb.Migrated(t)
 
 	store, err := cas.OpenFS(filepath.Join(dir, "cas"))
 	if err != nil {

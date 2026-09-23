@@ -2,7 +2,6 @@ package catalog_test
 
 import (
 	"context"
-	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
@@ -11,7 +10,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/media/capability"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // M5-112 against a real database (§6, §75, ADR-0039).
@@ -58,15 +57,7 @@ type capHarness struct {
 
 func newCapHarness(t *testing.T) *capHarness {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	clock := &capClock{t: time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {
