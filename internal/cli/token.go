@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -148,9 +147,7 @@ func printCreatedToken(w io.Writer, created auth.CreatedToken, asJSON bool) erro
 		if tk.ExpiresAt != nil {
 			out.ExpiresAt = tk.ExpiresAt.UTC().Format(time.RFC3339Nano)
 		}
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(out)
+		return emitJSON(w, out)
 	}
 
 	expiry := "never"
@@ -236,9 +233,7 @@ func printTokens(w io.Writer, tokens []auth.Token, now time.Time, asJSON bool) e
 			}
 			out = append(out, row)
 		}
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(out)
+		return emitJSON(w, out)
 	}
 
 	if len(tokens) == 0 {
@@ -280,9 +275,7 @@ row on every call, so nothing is cached past it.`,
 					return err
 				}
 				if asJSON {
-					enc := json.NewEncoder(cmd.OutOrStdout())
-					enc.SetIndent("", "  ")
-					return enc.Encode(tokenJSON{
+					return emitJSON(cmd.OutOrStdout(), tokenJSON{
 						ID:        tk.ID,
 						Name:      tk.Name,
 						Scopes:    scopeStrings(tk.Scopes),
