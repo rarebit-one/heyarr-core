@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/encryption"
 	"github.com/rarebit-one/voidbind-go/enrolment"
 
 	"github.com/rarebit-one/heyarr-core/internal/auth"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
 // TestPhoneSelfEnrolsAndReadsButDoesNotWrite is the acceptance for ADR-0067,

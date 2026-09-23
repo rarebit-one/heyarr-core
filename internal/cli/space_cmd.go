@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/useridentity"
 	"github.com/spf13/cobra"
 
 	apiclient "github.com/rarebit-one/heyarr-core/internal/client"
@@ -17,7 +18,6 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
-	"github.com/rarebit-one/heyarr-core/internal/useridentity"
 )
 
 // newSpaceCommand builds `heyarr space` — the device side of encrypted personal

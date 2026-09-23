@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/recovery"
+	"github.com/rarebit-one/voidbind-go/useridentity"
 	"github.com/spf13/cobra"
 
 	"github.com/rarebit-one/heyarr-core/internal/device"
-	"github.com/rarebit-one/heyarr-core/internal/recovery"
-	"github.com/rarebit-one/heyarr-core/internal/useridentity"
 )
 
 // identityGenerateJSON is the --json shape of `identity generate` and

@@ -119,7 +119,7 @@ linters:
               desc: "the peer must not import the device-side space client — unwrapping and decryption are client-side only (Invariant 6, ADR-0049)"
             - pkg: github.com/rarebit-one/heyarr-core/internal/personalstate/statesync
               desc: "the peer must not import the CRDT<->change bridge — decoding a change to a CRDT op is a client-side operation (Invariant 6, §42)"
-            - pkg: github.com/rarebit-one/heyarr-core/internal/personalstate/encryption
+            - pkg: github.com/rarebit-one/voidbind-go/encryption
               desc: "the peer must not import the encryption package — it holds no key and turns no stored byte into plaintext (Invariant 6, ADR-0049)"
 
     revive:

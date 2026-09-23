@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/rarebit-one/voidbind-go/encryption"
 	"github.com/rarebit-one/voidbind-go/hashing"
 
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/vaultframe"
 )
 

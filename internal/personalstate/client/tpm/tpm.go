@@ -15,9 +15,9 @@ import (
 	"fmt"
 
 	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/rarebit-one/voidbind-go/encryption"
 
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
 // PINFunc yields the TPM policy PIN — the sealed object's authValue. Production

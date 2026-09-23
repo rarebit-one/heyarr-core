@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/useridentity"
+
 	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
-	"github.com/rarebit-one/heyarr-core/internal/useridentity"
 )
 
 // identityDir is a config-directory-shaped temporary directory, never a data

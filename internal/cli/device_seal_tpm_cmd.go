@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/rarebit-one/voidbind-go/encryption"
 	"github.com/spf13/cobra"
 
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/tpm"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
 // newDeviceSealTPMCommand builds `heyarr device seal-tpm`: it seals THIS device's

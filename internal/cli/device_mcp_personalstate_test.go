@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/encryption"
+
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	psapi "github.com/rarebit-one/heyarr-core/internal/api/personalstate"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
@@ -29,7 +31,6 @@ import (
 	psclient "github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/custody"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"

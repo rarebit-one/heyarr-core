@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/pairing"
+	"github.com/rarebit-one/voidbind-go/pairing"
 )
 
 // memRelay is an in-memory, write-once Relay: exactly the untrusted transport
