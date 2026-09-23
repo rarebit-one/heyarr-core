@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -82,11 +81,9 @@ func ProbeHandler(opts ProbeHandlerOptions) HandlerFunc {
 	}
 
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload probe.Payload
-		if err := json.Unmarshal(job.Payload, &payload); err != nil {
-			// A payload that cannot be decoded will never decode. Retrying it
-			// is five guaranteed failures and a delay before the same answer.
-			return fmt.Errorf("probe: undecodable payload: %w", err)
+		payload, err := decodePayload[probe.Payload](job)
+		if err != nil {
+			return err
 		}
 		if payload.BlobHash == "" {
 			return errors.New("probe: the payload names no blob")
