@@ -53,7 +53,7 @@ func (h *Handler) getMembership(w http.ResponseWriter, r *http.Request) {
 		httpapi.Fail(w, r, problem.Internal())
 		return
 	}
-	h.writeMembership(w, http.StatusOK, Membership{User: usr, Ops: nonNil(ops)})
+	httpapi.WriteJSON(w, r, h.log, http.StatusOK, Membership{User: usr, Ops: nonNil(ops)})
 }
 
 // postMembership records ops a device pushes. It evaluates them merged with
@@ -72,7 +72,7 @@ func (h *Handler) postMembership(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body pushRequest
-	if err := decodeJSON(w, r, &body); err != nil {
+	if err := httpapi.DecodeJSON(w, r, &body, maxRequestBody); err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	}
@@ -136,7 +136,7 @@ func (h *Handler) postMembership(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n := len(fresh)
-	h.writeMembership(w, http.StatusOK, Membership{User: usr, Ops: nonNil(ops), Recorded: &n})
+	httpapi.WriteJSON(w, r, h.log, http.StatusOK, Membership{User: usr, Ops: nonNil(ops), Recorded: &n})
 }
 
 // pinnedUser resolves the {usr} path segment: a rendered Ed25519 key that this
@@ -161,18 +161,6 @@ func (h *Handler) pinnedUser(w http.ResponseWriter, r *http.Request) (string, bo
 		return "", false
 	}
 	return usr, true
-}
-
-func (h *Handler) writeMembership(w http.ResponseWriter, status int, m Membership) {
-	out, err := json.Marshal(m)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(status)
-	_, _ = w.Write(out)
 }
 
 // nonNil renders an empty op list as [] rather than null: a client iterating

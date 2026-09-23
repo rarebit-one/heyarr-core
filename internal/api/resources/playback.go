@@ -231,8 +231,7 @@ func (a *API) beginPlayback(ctx context.Context, assetID, deviceID, wantVerb str
 
 func (a *API) startPlayback(w http.ResponseWriter, r *http.Request) {
 	var body StartPlaybackRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	for _, f := range []struct{ name, value string }{

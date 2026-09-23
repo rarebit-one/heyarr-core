@@ -671,8 +671,7 @@ func hasCapabilityNamed(caps []providers.Capability, want providers.Capability) 
 // createFollowedSource is POST /api/v1/followed-sources — a shell over FollowSource.
 func (a *API) createFollowedSource(w http.ResponseWriter, r *http.Request) {
 	var body FollowSourceRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	out, err := a.FollowSource(r.Context(), body)
@@ -894,8 +893,7 @@ func (a *API) pollAllFollowedSources(w http.ResponseWriter, r *http.Request) {
 // wants.
 func (a *API) patchFollowedSource(w http.ResponseWriter, r *http.Request) {
 	var body RepointRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	out, err := a.RepointSource(r.Context(), chi.URLParam(r, "id"), body)

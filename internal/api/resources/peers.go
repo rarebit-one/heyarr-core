@@ -89,8 +89,7 @@ type createPeerRequest struct {
 
 func (a *API) createPeer(w http.ResponseWriter, r *http.Request) {
 	var body createPeerRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	if err := required("name", body.Name); err != nil {

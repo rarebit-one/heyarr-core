@@ -554,21 +554,10 @@ func (a *API) Mount(r chi.Router) {
 	}
 }
 
-// write renders a successful JSON response.
+// write renders a successful JSON response, with this API's encoder (HTML
+// escaping off — see marshal).
 func (a *API) write(w http.ResponseWriter, r *http.Request, status int, body any) {
-	buf, err := marshal(body)
-	if err != nil {
-		a.log.Error("encoding a response failed",
-			"request_id", httpapi.RequestIDFrom(r.Context()), "path", r.URL.Path, "error", err)
-		httpapi.Fail(w, r, problem.Internal())
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(status)
-	// #nosec G705 -- the body is JSON produced by encoding/json and served as
-	// application/json with nosniff; there is no HTML context to escape into.
-	_, _ = w.Write(buf)
+	httpapi.WriteJSONWith(w, r, a.log, status, body, marshal)
 }
 
 // fail maps an internal error onto a problem document.

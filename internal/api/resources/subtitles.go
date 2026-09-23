@@ -43,8 +43,7 @@ type SubtitleBackfillRequest struct {
 // bad asset.
 func (a *API) backfillSubtitles(w http.ResponseWriter, r *http.Request) {
 	var body SubtitleBackfillRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	if body.LibraryID == "" && body.WorkID == "" && !body.All {
@@ -174,8 +173,7 @@ type SubtitleWantRequest struct {
 // it repeatedly and only the genuinely-missing get a new want.
 func (a *API) requestSubtitles(w http.ResponseWriter, r *http.Request) {
 	var body SubtitleWantRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	lang := strings.ToLower(strings.TrimSpace(body.Language))

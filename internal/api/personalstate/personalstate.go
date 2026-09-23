@@ -19,7 +19,6 @@ package personalstate
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -269,7 +268,7 @@ const timeFormat = "2006-01-02T15:04:05.999999999Z07:00" // time.RFC3339Nano
 
 func (a *API) createSpace(w http.ResponseWriter, r *http.Request) {
 	var req createSpaceRequest
-	if err := decodeJSON(w, r, &req); err != nil {
+	if err := httpapi.DecodeJSON(w, r, &req, maxRequestBody); err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	}
@@ -329,7 +328,7 @@ func (a *API) listWrappedKeys(w http.ResponseWriter, r *http.Request) {
 func (a *API) rewrapKeys(w http.ResponseWriter, r *http.Request) {
 	spaceID := chi.URLParam(r, "id")
 	var req rewrapRequest
-	if err := decodeJSON(w, r, &req); err != nil {
+	if err := httpapi.DecodeJSON(w, r, &req, maxRequestBody); err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	}
@@ -369,7 +368,7 @@ func (a *API) revokeKey(w http.ResponseWriter, r *http.Request) {
 func (a *API) putChange(w http.ResponseWriter, r *http.Request) {
 	spaceID := chi.URLParam(r, "id")
 	var ch protocol.EncryptedChange
-	if err := decodeJSON(w, r, &ch); err != nil {
+	if err := httpapi.DecodeJSON(w, r, &ch, maxRequestBody); err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	}
@@ -443,18 +442,7 @@ func (a *API) failStore(w http.ResponseWriter, r *http.Request, doing string, er
 	}
 }
 
-// write renders a successful JSON response with nosniff, mirroring the resources
-// API's helper.
+// write renders a successful JSON response with nosniff.
 func (a *API) write(w http.ResponseWriter, r *http.Request, status int, body any) {
-	buf, err := json.Marshal(body)
-	if err != nil {
-		a.log.Error("encoding a response failed",
-			"request_id", httpapi.RequestIDFrom(r.Context()), "path", r.URL.Path, "error", err)
-		httpapi.Fail(w, r, problem.Internal())
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(status)
-	_, _ = w.Write(buf)
+	httpapi.WriteJSON(w, r, a.log, status, body)
 }
