@@ -2,7 +2,9 @@ package downloads
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -263,9 +265,11 @@ func TestTransfersAreIdentifiedByInfohash(t *testing.T) {
 	}
 }
 
+// decodeJSONBody reads a JSON body, for tests that stand up a server behaving
+// the way the daemon does.
 func decodeJSONBody(r *http.Request, out any) error {
 	defer func() { _ = r.Body.Close() }()
-	return decodeJSON(r, out)
+	return json.NewDecoder(io.LimitReader(r.Body, maxResponseBytes)).Decode(out)
 }
 
 // 🔴 THE SAFETY PROPERTY. A transfer Heyarr did not queue is INVISIBLE — not
