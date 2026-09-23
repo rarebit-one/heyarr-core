@@ -57,10 +57,21 @@ func New(cfg config.Config, log *slog.Logger) *Worker {
 // Name identifies the role in logs and supervision.
 func (w *Worker) Name() string { return "worker" }
 
-// minSchemaVersion is the migration this role's handlers require. A worker that
-// starts against an older schema does not fail at startup — it fails on the
-// first job, hours later, having already told the operator it was healthy.
-const minSchemaVersion = 7
+// There is no minimum schema version to keep up to date here. A worker requires
+// every migration compiled into its own binary to have been applied — the same
+// set the controller from the same release applies (sqlite.UnappliedMigrations).
+// A hand-maintained constant sat at 7 for forty-odd migrations, which made the
+// guard below a guard against a database nobody has had since milestone 1; a
+// worker started against a half-migrated database does not fail at startup, it
+// fails on the first job, hours later, having already told the operator it was
+// healthy.
+//
+// Upgrade order follows from it: the controller first, since it owns the schema
+// (§7, ADR-0003). A worker from an older build than the database is fine —
+// migrations it does not know about are not its requirement. A worker from a
+// NEWER build than the controller waits for schemaWait and then refuses, naming
+// what is missing, rather than running handlers against columns that are not
+// there.
 
 // schemaWait bounds how long the worker waits for the controller to migrate.
 // The roles start concurrently (ADR-0002) and the controller is the slow one
@@ -123,7 +134,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	// Unlike opening the database, WAITING is interruptible: a SIGTERM arriving
 	// while the controller is still migrating should stop this process, not
 	// leave it polling for two minutes past the point anyone wanted it alive.
-	if err := waitForSchema(ctx, db, w.log); err != nil {
+	if err := waitForSchema(ctx, db, w.log, schemaWait); err != nil {
 		if ctx.Err() != nil {
 			w.log.Info("worker stopped while waiting for the schema")
 			return nil
@@ -676,28 +687,28 @@ func (w *Worker) Run(ctx context.Context) error {
 	return nil
 }
 
-// waitForSchema blocks until the controller has migrated far enough for this
-// worker's handlers, polling for the condition rather than sleeping.
-func waitForSchema(ctx context.Context, db *sqlite.DB, log *slog.Logger) error {
-	deadline := time.Now().Add(schemaWait)
-	var last int64 = -1
+// waitForSchema blocks until the controller has applied every migration this
+// worker's binary knows about, polling for the condition rather than sleeping.
+func waitForSchema(ctx context.Context, db *sqlite.DB, log *slog.Logger, wait time.Duration) error {
+	deadline := time.Now().Add(wait)
+	last := -1
 	for {
-		version, err := sqlite.AppliedSchemaVersion(ctx, db)
-		if err == nil && version >= minSchemaVersion {
+		missing, err := sqlite.UnappliedMigrations(ctx, db)
+		if err == nil && len(missing) == 0 {
 			return nil
 		}
-		if err == nil && version != last {
+		if err == nil && len(missing) != last {
 			log.Info("waiting for the controller to migrate the schema",
-				"have", version, "need", minSchemaVersion)
-			last = version
+				"unapplied", len(missing), "first", missing[0], "last", missing[len(missing)-1])
+			last = len(missing)
 		}
 		if time.Now().After(deadline) {
 			if err != nil {
-				return fmt.Errorf("worker: schema did not reach version %d within %s: %w",
-					minSchemaVersion, schemaWait, err)
+				return fmt.Errorf("worker: schema was not ready within %s: %w", wait, err)
 			}
-			return fmt.Errorf("worker: schema is at version %d after %s, this worker needs %d — "+
-				"is a controller running against %s?", last, schemaWait, minSchemaVersion, db.Path())
+			return fmt.Errorf("worker: after %s the database is still missing %d migration(s) this worker needs "+
+				"(%s) — is a controller from this release or newer running against %s?",
+				wait, len(missing), describeVersions(missing), db.Path())
 		}
 		select {
 		case <-ctx.Done():
@@ -705,6 +716,22 @@ func waitForSchema(ctx context.Context, db *sqlite.DB, log *slog.Logger) error {
 		case <-time.After(schemaPollInterval):
 		}
 	}
+}
+
+// describeVersions renders a list of migration versions for an error message,
+// eliding the middle of a long one: "00041, 00042, ... 00054 (14)".
+func describeVersions(versions []int64) string {
+	format := func(vs []int64) string {
+		parts := make([]string, len(vs))
+		for i, v := range vs {
+			parts[i] = fmt.Sprintf("%05d", v)
+		}
+		return strings.Join(parts, ", ")
+	}
+	if len(versions) <= 5 {
+		return format(versions)
+	}
+	return fmt.Sprintf("%s, ... %s (%d)", format(versions[:2]), format(versions[len(versions)-1:]), len(versions))
 }
 
 // owner identifies this worker in leases. It must be unique per process: two
