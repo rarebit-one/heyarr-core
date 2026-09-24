@@ -59,6 +59,8 @@ jobs:
       full: ${{ steps.decide.outputs.full }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: decide
         env:
           GH_TOKEN: ${{ github.token }}
@@ -124,6 +126,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # No setup step: the guard needs only git and python3, both present on
       # the runner image. It refuses to pass if python3 is missing rather than
       # skipping, because a hygiene check that silently no-ops is worse than
