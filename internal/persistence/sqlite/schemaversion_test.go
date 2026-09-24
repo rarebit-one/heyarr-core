@@ -110,3 +110,79 @@ func openUnmigratedDB(t *testing.T) *DB {
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
+
+func TestUnappliedMigrationsIsEveryKnownMigrationBeforeAnyMigrate(t *testing.T) {
+	db := openUnmigratedDB(t)
+	before := tableNames(t, db)
+	missing, err := UnappliedMigrations(t.Context(), db)
+	if err != nil {
+		t.Fatalf("UnappliedMigrations: %v", err)
+	}
+	known, err := knownVersions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != len(known) {
+		t.Fatalf("an unmigrated database is missing %d migrations, want all %d", len(missing), len(known))
+	}
+	// A role that does not own the schema asks this; it must not write either
+	// (see TestAStatusCheckCreatesNothing).
+	if after := tableNames(t, db); len(after) != len(before) {
+		t.Fatalf("asking what is unapplied changed the schema: %v then %v", before, after)
+	}
+}
+
+func TestUnappliedMigrationsIsEmptyOnceMigrated(t *testing.T) {
+	db := openTestDB(t) // already migrated
+	missing, err := UnappliedMigrations(t.Context(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("a fully migrated database reports unapplied migrations %v", missing)
+	}
+}
+
+// The case a version number cannot see: a database at the highest known
+// version that has not yet applied a gap-filler. AppliedSchemaVersion says it
+// is current; it is missing a table.
+func TestUnappliedMigrationsSeesAMissingGapFiller(t *testing.T) {
+	ctx := t.Context()
+	db := openTestDB(t)
+	if _, err := db.Writer().ExecContext(ctx, `DELETE FROM goose_db_version WHERE version_id = 22`); err != nil {
+		t.Fatal(err)
+	}
+	known, err := KnownSchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := AppliedSchemaVersion(ctx, db); err != nil || v != known {
+		t.Fatalf("precondition: AppliedSchemaVersion = %d, %v; want %d", v, err, known)
+	}
+	missing, err := UnappliedMigrations(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 1 || missing[0] != 22 {
+		t.Fatalf("UnappliedMigrations = %v, want [22]", missing)
+	}
+}
+
+func TestUnappliedMigrationsSeesARollback(t *testing.T) {
+	ctx := t.Context()
+	db := openTestDB(t)
+	if err := MigrateDown(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	known, err := KnownSchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing, err := UnappliedMigrations(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 1 || missing[0] != known {
+		t.Fatalf("after rolling back the head, UnappliedMigrations = %v, want [%d]", missing, known)
+	}
+}

@@ -71,7 +71,7 @@ type spaceCreateView struct {
 	Recipients []string `json:"recipients"`
 }
 
-func newSpaceCreateCommand(opts Options, configPath, deviceDir *string) *cobra.Command {
+func newSpaceCreateCommand(_ Options, configPath, deviceDir *string) *cobra.Command {
 	var (
 		flags           clientFlags
 		kind            string
@@ -210,7 +210,7 @@ func recoveryRecipientID(identityDir string) (string, error) {
 	return id.EncryptionKey, nil
 }
 
-func newSpaceListCommand(opts Options, configPath *string) *cobra.Command {
+func newSpaceListCommand(_ Options, configPath *string) *cobra.Command {
 	var flags clientFlags
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -243,7 +243,7 @@ func newSpaceListCommand(opts Options, configPath *string) *cobra.Command {
 	return cmd
 }
 
-func newSpaceKeysCommand(opts Options, configPath *string) *cobra.Command {
+func newSpaceKeysCommand(_ Options, configPath *string) *cobra.Command {
 	var flags clientFlags
 	cmd := &cobra.Command{
 		Use:   "keys <space-id>",
@@ -281,7 +281,7 @@ type spaceChangeView struct {
 	Ciphertext []byte   `json:"ciphertext"`
 }
 
-func newSpaceChangesCommand(opts Options, configPath *string) *cobra.Command {
+func newSpaceChangesCommand(_ Options, configPath *string) *cobra.Command {
 	var flags clientFlags
 	cmd := &cobra.Command{
 		Use:   "changes <space-id>",
@@ -316,7 +316,7 @@ metadata. Nothing here is decrypted — that is the whole point (§38). Use
 	return cmd
 }
 
-func newSpacePutCommand(opts Options, configPath, deviceDir *string) *cobra.Command {
+func newSpacePutCommand(_ Options, configPath, deviceDir *string) *cobra.Command {
 	var (
 		flags clientFlags
 		item  string
@@ -378,7 +378,7 @@ type spaceReadView struct {
 	Items   []string `json:"items"`
 }
 
-func newSpaceReadCommand(opts Options, configPath, deviceDir *string) *cobra.Command {
+func newSpaceReadCommand(_ Options, configPath, deviceDir *string) *cobra.Command {
 	var flags clientFlags
 	cmd := &cobra.Command{
 		Use:   "read <space-id>",

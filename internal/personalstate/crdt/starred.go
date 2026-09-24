@@ -219,9 +219,6 @@ func MergeStars(sets ...*StarSet) *StarSet {
 	return out
 }
 
-// Clone returns an independent deep copy.
-func (s *StarSet) Clone() *StarSet { return MergeStars(s) }
-
 // IsStarred reports whether itemID has any live star-tag.
 func (s *StarSet) IsStarred(itemID string) bool {
 	for tag, rec := range s.adds {

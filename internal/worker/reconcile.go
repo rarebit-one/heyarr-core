@@ -2,9 +2,7 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
@@ -39,11 +37,9 @@ const reconcileBatch = 5000
 // than a logged error and a sweep that finishes.
 func ReconcileHandler(cat *catalog.Catalog, log *slog.Logger) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload acquisition.ReconcilePayload
-		if len(job.Payload) > 0 {
-			if err := json.Unmarshal(job.Payload, &payload); err != nil {
-				return fmt.Errorf("worker: reconcile_desired payload is not decodable: %w", err)
-			}
+		payload, err := decodeOptionalPayload[acquisition.ReconcilePayload](job)
+		if err != nil {
+			return err
 		}
 
 		ids := []string{payload.DesiredItemID}

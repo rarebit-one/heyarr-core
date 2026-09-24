@@ -45,9 +45,6 @@ type Opened struct {
 	manifest Manifest
 }
 
-// Manifest is the verified manifest.
-func (o *Opened) Manifest() Manifest { return o.manifest }
-
 // DB is a read-only handle to the snapshot. A write through it fails at the
 // storage layer with SQLITE_READONLY (invariant 5).
 func (o *Opened) DB() *sql.DB { return o.db }

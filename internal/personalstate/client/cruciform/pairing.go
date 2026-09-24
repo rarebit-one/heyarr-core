@@ -131,42 +131,6 @@ func EncodeInvite(relayBase, session string, salt []byte) (string, error) {
 	return InviteScheme + ":" + inviteOpaque + "?" + q.Encode(), nil
 }
 
-// Invite is a decoded offload pairing invite — the phone half's parse target.
-type Invite struct {
-	RelayBase string
-	Session   string
-	Salt      []byte
-}
-
-// DecodeInvite parses an invite URI back into its parts, refusing a wrong scheme,
-// opaque, version, or a salt below the freshness floor. It is here so the wire
-// contract has one definition the phone half mirrors and tests exercise.
-func DecodeInvite(s string) (Invite, error) {
-	u, err := url.Parse(s)
-	if err != nil {
-		return Invite{}, fmt.Errorf("%w: %w", ErrMalformedInvite, err)
-	}
-	if u.Scheme != InviteScheme || u.Opaque != inviteOpaque {
-		return Invite{}, fmt.Errorf("%w: not a %q:%s invite", ErrMalformedInvite, InviteScheme, inviteOpaque)
-	}
-	q := u.Query()
-	if v := q.Get("v"); v != offloadInviteVer {
-		return Invite{}, fmt.Errorf("%w: version %q, want %q", ErrMalformedInvite, v, offloadInviteVer)
-	}
-	inv := Invite{RelayBase: q.Get("relay"), Session: q.Get("session")}
-	inv.Salt, err = hex.DecodeString(q.Get("salt"))
-	if err != nil {
-		return Invite{}, fmt.Errorf("%w: salt is not hex: %w", ErrMalformedInvite, err)
-	}
-	if inv.RelayBase == "" || inv.Session == "" {
-		return Invite{}, fmt.Errorf("%w: missing relay or session", ErrMalformedInvite)
-	}
-	if len(inv.Salt) < pairing.MinSaltLen {
-		return Invite{}, fmt.Errorf("%w: salt is %d bytes, want at least %d", ErrMalformedInvite, len(inv.Salt), pairing.MinSaltLen)
-	}
-	return inv, nil
-}
-
 // pairReveal is the wire form of a side's revealed public keys. Keys are rendered
 // in the canonical algorithm-prefixed hex the rest of the system uses. The
 // desktop reveals only its transport signing key (Enc empty, bound by its framed

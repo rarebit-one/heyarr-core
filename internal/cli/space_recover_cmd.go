@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
@@ -131,9 +130,7 @@ func runSpaceRecover(ctx context.Context, cmd *cobra.Command, configPath, device
 	}
 
 	if asJSON {
-		enc := json.NewEncoder(cmd.OutOrStdout())
-		enc.SetIndent("", "  ")
-		return enc.Encode(res)
+		return emitJSON(cmd.OutOrStdout(), res)
 	}
 	printSpaceRecover(cmd.OutOrStdout(), res)
 	return nil

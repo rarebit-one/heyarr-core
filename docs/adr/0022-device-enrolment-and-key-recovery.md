@@ -129,8 +129,8 @@ to `Accepted`:
   ADR-0038): the two exchange public keys and a salt, derive the same short
   authentication string over both keys, and on a human match the old device
   signs the enrolment cert — the relay learns no key material. The
-  **commit-before-reveal** ordering (`internal/pairing/commitment.go`,
-  `internal/pairflow`) is what makes the short code's security real against a
+  **commit-before-reveal** ordering (`pairing/commitment.go` in voidbind-go,
+  re-exported by `internal/pairing`; `internal/pairflow`) is what makes the short code's security real against a
   rushing attacker: each side commits to its key before either reveals, so a
   man-in-the-middle cannot choose its substituted key after seeing the peer's.
   The demo proves both the honest enrolment and that a mismatched code enrols

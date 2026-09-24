@@ -182,9 +182,6 @@ func MergeReadingPositions(maps ...*ReadingPositions) *ReadingPositions {
 	return out
 }
 
-// Clone returns an independent deep copy.
-func (r *ReadingPositions) Clone() *ReadingPositions { return MergeReadingPositions(r) }
-
 // Position returns the current reading position for pubID, if any.
 func (r *ReadingPositions) Position(pubID string) (string, bool) {
 	rec, ok := r.positions[pubID]

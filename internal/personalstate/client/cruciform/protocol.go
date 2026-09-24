@@ -101,23 +101,6 @@ func signRequest(key ed25519.PrivateKey, wrapped, ephPub, nonce []byte) ([]byte,
 	return marshalRequest(request{Wrapped: wrapped, EphPub: ephPub, Nonce: nonce, Sig: sig}), nil
 }
 
-// verifyRequest parses a request off the relay and checks its signature against
-// the pinned desktop transport public key. The phone calls this before gating.
-func verifyRequest(pub ed25519.PublicKey, raw []byte) (request, error) {
-	if len(pub) != ed25519.PublicKeySize {
-		return request{}, ErrWrongTransportKeyLen
-	}
-	req, err := unmarshalRequest(raw)
-	if err != nil {
-		return request{}, err
-	}
-	if len(req.Sig) != ed25519.SignatureSize ||
-		!ed25519.Verify(pub, requestSigningInput(req.Wrapped, req.EphPub, req.Nonce), req.Sig) {
-		return request{}, ErrBadRequestSignature
-	}
-	return req, nil
-}
-
 // responseSigningInput is the canonical byte string the response signature covers.
 func responseSigningInput(nonce, sealed []byte) []byte {
 	var b bytes.Buffer
@@ -126,16 +109,6 @@ func responseSigningInput(nonce, sealed []byte) []byte {
 	putField(&b, nonce)
 	putField(&b, sealed)
 	return b.Bytes()
-}
-
-// signResponse builds a signed, marshaled response. The phone calls it after it
-// has sealed the space key to the request's EphPub.
-func signResponse(key ed25519.PrivateKey, nonce, sealed []byte) ([]byte, error) {
-	if len(key) != ed25519.PrivateKeySize {
-		return nil, ErrWrongPhoneKeyLen
-	}
-	sig := ed25519.Sign(key, responseSigningInput(nonce, sealed))
-	return marshalResponse(response{Nonce: nonce, Sealed: sealed, Sig: sig}), nil
 }
 
 // verifyResponse parses the phone's answer, checks the phone device signature,
@@ -166,40 +139,6 @@ func marshalRequest(r request) []byte {
 	putField(&b, r.Wrapped)
 	putField(&b, r.EphPub)
 	putField(&b, r.Nonce)
-	putField(&b, r.Sig)
-	return b.Bytes()
-}
-
-func unmarshalRequest(raw []byte) (request, error) {
-	r := bytes.NewReader(raw)
-	if err := expectVersion(r); err != nil {
-		return request{}, err
-	}
-	var req request
-	var err error
-	if req.Wrapped, err = getField(r); err != nil {
-		return request{}, err
-	}
-	if req.EphPub, err = getField(r); err != nil {
-		return request{}, err
-	}
-	if req.Nonce, err = getField(r); err != nil {
-		return request{}, err
-	}
-	if req.Sig, err = getField(r); err != nil {
-		return request{}, err
-	}
-	if r.Len() != 0 {
-		return request{}, fmt.Errorf("%w: trailing bytes", ErrMalformed)
-	}
-	return req, nil
-}
-
-func marshalResponse(r response) []byte {
-	var b bytes.Buffer
-	b.WriteByte(wireVersion)
-	putField(&b, r.Nonce)
-	putField(&b, r.Sealed)
 	putField(&b, r.Sig)
 	return b.Bytes()
 }

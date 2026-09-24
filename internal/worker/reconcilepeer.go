@@ -2,9 +2,7 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
@@ -96,11 +94,9 @@ func reconcilePeerHandler(
 	cat *catalog.Catalog, queue *jobs.Queue, log *slog.Logger, limit int,
 ) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload replication.ReconcilePeerPayload
-		if len(job.Payload) > 0 {
-			if err := json.Unmarshal(job.Payload, &payload); err != nil {
-				return fmt.Errorf("worker: reconcile_peer payload is not decodable: %w", err)
-			}
+		payload, err := decodeOptionalPayload[replication.ReconcilePeerPayload](job)
+		if err != nil {
+			return err
 		}
 
 		plan, err := cat.PlanPeerConvergence(ctx, payload.PeerID)
