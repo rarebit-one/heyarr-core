@@ -1,0 +1,9 @@
+{
+  "out": "<dir>/recovery.blob",
+  "recipient": "x25519:<hex>",
+  "generated_at": "<timestamp>",
+  "space_ids": [
+    "<uuid>",
+    "<uuid>"
+  ]
+}

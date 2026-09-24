@@ -23,6 +23,14 @@ does that).
 The whole flow is offline. Key material is never printed — only which spaces were
 opened — so the output is safe to log.
 
+With --from-blob the wrapped copies come from an exported recovery blob
+(`heyarr space export-recovery`) instead of the control database, so recovery
+needs no database at all. Anyone who knows your recovery PUBLIC key could make a
+blob, so a key from one is not trusted for writing on its word: with --rewrap,
+each key must first decrypt the newest content this node's database holds for
+its space, and a key that does not (a stale blob from before the space was
+re-keyed, or a forged one) is refused (ADR-0022 addendum).
+
 The secret is read from --secret-file, or from --secret, or from standard input
 — prefer a file or a pipe, since a secret in argv is visible in ps and shell
 history.
@@ -34,6 +42,7 @@ heyarr space recover [flags]
 ### Options
 
 ```
+      --from-blob string     take the wrapped copies from this exported recovery blob instead of the control database
       --json                 emit machine-readable JSON
       --rewrap               also re-seal the recovered keys for THIS machine's device so it keeps reading the spaces (writes the control DB; run with the controller stopped)
       --secret string        the recovery secret (prefer --secret-file or stdin; argv is visible in ps)

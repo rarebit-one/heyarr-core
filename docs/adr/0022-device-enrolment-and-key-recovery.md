@@ -150,3 +150,64 @@ What remains is explicitly *additive* and does not gate this record (see
 Sequencing): SLIP-39 share splitting for social recovery, and the exported
 recovery blob. This ADR is accepted on the base secret path both problems are
 built on, exactly as the Decision separated enrolment from recovery.
+
+## Addendum (2026-09-25): the exported recovery blob
+
+The blob the Decision anticipated is built: `heyarr space export-recovery`
+writes it, and `heyarr space recover --from-blob` reads it.
+
+### Format
+
+`heyarr-recovery-blob-v1` holds the copy of every space's key that is wrapped for
+the recovery encryption key: `{format, user_id, recovery_recipient,
+generated_at, spaces: [{space_id, kind, wrapped}]}`. Each `wrapped` is the same
+`encryption.Seal` output `wrapped_keys` already stores, so the blob adds no new
+key material.
+
+The file is `heyarr-recovery-blob-v1 ‖ 0x00 ‖ uint32be(len) ‖ sealed key ‖
+ciphertext`. A fresh one-time key is sealed to the recovery PUBLIC key, and it
+encrypts the JSON body (`encryption.EncryptChange`). Two consequences follow:
+
+- **Exporting needs no secret.** Any node, or any device holding the identity's
+  public record, can make one, so it can be refreshed routinely.
+- **Only the secret opens it.** On open, the recipient and user the blob names
+  must be the ones the secret derives.
+
+As the Decision says, this is a **durability** mechanism. It survives the loss of
+every control database, but it protects nothing the peers do not already hold.
+
+### A blob is not an authority: the re-wrap check
+
+Sealing to a public key is anonymous-sender, so anyone who knows the recovery
+public key can mint a blob that opens cleanly, carrying keys of their choosing.
+Opening a blob therefore proves nothing about who made it. The danger is
+`--rewrap`: re-wrapping a forged key for this device would have it write future
+content under a key the forger holds. A genuine but stale blob, from before a
+rotation, would do the same with a revoked key.
+
+So a key from a blob is re-wrapped only if it **decrypts the newest ciphertext
+(change or snapshot) this node's database holds for its space**:
+
+- That ties the key to content the space's real writers produced. A forger cannot
+  make someone else's authentic ciphertext verify under a key of their choosing.
+- It also ties the key to the *current* key. A rotation stores its snapshot under
+  the new key, which is newer than anything under the old one.
+- A space with no content here cannot be checked, and is refused.
+- The check runs over every space before anything is written, so a refusal
+  re-wraps nothing.
+
+Without `--rewrap`, a blob only reports which spaces its keys open. That needs no
+database at all, which makes it a safe offline drill.
+
+Residual trust is the same as the database path's. A holder of a `write` token
+can already store content under a key of its choosing, and can already replace a
+space's recovery copy in `wrapped_keys` (the rewrap route accepts the recovery
+key as a recipient). The blob check keeps the blob path at that bar, not below
+it: anyone can *mint* a blob, but only a writer can make one pass.
+
+### What would make us revisit
+
+- A space key commitment stored with the space, which would let the check work
+  on a space with no content.
+- Signed blobs verified against membership, if a blob ever has to be trusted for
+  more than re-wrapping.

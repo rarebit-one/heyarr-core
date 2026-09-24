@@ -60,6 +60,7 @@ it.`,
 		newSpaceRotateCommand(opts, configPath, &deviceDir),
 		newSpaceCompactCommand(opts, configPath),
 		newSpaceRecoverCommand(opts, configPath, &deviceDir),
+		newSpaceExportRecoveryCommand(opts, configPath),
 	)
 	return cmd
 }
@@ -134,6 +135,9 @@ yet; run ` + "`heyarr identity generate`" + ` to enable it, or pass --recovery=f
 					ids = append(ids, r.ID)
 				}
 				sort.Strings(ids)
+				if recoveryID != "" {
+					fmt.Fprintln(cmd.ErrOrStderr(), staleBlobHint)
+				}
 				if flags.asJSON {
 					return emitJSON(cmd.OutOrStdout(), spaceCreateView{ID: created.ID, Kind: created.Kind, Recipients: ids})
 				}
@@ -611,6 +615,7 @@ space may re-key it), and at least one recipient must remain.`,
 					return err
 				}
 				revoked, remainIDs, snapID, dropped := view.Revoked, view.Remaining, view.SnapshotID, view.Dropped
+				fmt.Fprintln(cmd.ErrOrStderr(), staleBlobHint)
 				if flags.asJSON {
 					return emitJSON(cmd.OutOrStdout(), view)
 				}
