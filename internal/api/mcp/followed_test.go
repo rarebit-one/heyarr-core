@@ -169,8 +169,9 @@ func TestPollSourceNeedsWriteScope(t *testing.T) {
 }
 
 // list_followed decodes its arguments like every other tool: limit cuts the
-// list and says so, a misspelled field is refused rather than ignored, and no
-// arguments at all still lists everything.
+// list and says so, a limit outside the advertised 1..maxRows is refused, a
+// misspelled field is refused rather than ignored, and no arguments at all
+// still lists everything.
 func TestListFollowedHonoursItsArguments(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, false)
@@ -206,6 +207,18 @@ func TestListFollowedHonoursItsArguments(t *testing.T) {
 		structured(t, &bare)
 	if len(bare.FollowedSources) != 3 || bare.Truncated {
 		t.Errorf("no arguments = %+v, want every source, not truncated", bare)
+	}
+
+	for _, bad := range []string{`{"limit":0}`, `{"limit":-1}`, `{"limit":201}`} {
+		resp := h.call("", "list_followed", bad)
+		if resp.Body.Error == nil {
+			t.Errorf("%s was accepted: %s", bad, resp.Raw)
+			continue
+		}
+		if resp.Body.Error.Code != -32602 || !strings.Contains(resp.Body.Error.Message, "limit") {
+			t.Errorf("%s: error = %d %q, want -32602 naming the limit",
+				bad, resp.Body.Error.Code, resp.Body.Error.Message)
+		}
 	}
 
 	typo := h.call("", "list_followed", `{"limt":1}`)
