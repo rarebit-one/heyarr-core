@@ -13,12 +13,11 @@ import (
 
 // Catalog snapshots, from the controller's side (§52, §79, M4-13).
 //
-// This file builds the payload a Full Peer materialises and records what it
-// issued in peer_snapshots. The peer's half — the separate, read-only snapshot
-// database — is internal/peer/catalog, and the two are deliberately different
-// packages against different files: §52's "the snapshot should not be treated
-// as independently writable control state" is enforced by there being no
-// writable path from one to the other (Invariant 5, ADR-0003).
+// This file builds the payload a peer pulls and records what it issued in
+// peer_snapshots. The wire types live in internal/peer/catalog; §52's "the
+// snapshot should not be treated as independently writable control state" holds
+// because nothing on the receiving side writes a payload back into a control
+// database (Invariant 5, ADR-0003).
 //
 // # Why the controller allocates the version
 //
@@ -61,7 +60,7 @@ type SnapshotRequest struct {
 	// somebody else's.
 	ControllerID string
 	// Holding is the version the peer says it already has. Zero means "none",
-	// which is also what a peer that has lost its snapshot store reports — and
+	// which is also what a peer that has lost its snapshot reports — and
 	// both correctly produce a full rebuild.
 	Holding int64
 	// Full forces the drift-correcting full rebuild even when an incremental
