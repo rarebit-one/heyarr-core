@@ -566,8 +566,10 @@ func (f *chunkFixture) snapshot(hash hashing.Hash) chunkSnapshot {
 // with the blob. A 20 GB remux is the normal large input here (ADR-0013), and a
 // handler that buffered what it read would be unusable on exactly the blobs
 // chunking exists for.
+//
+// Deliberately NOT t.Parallel: runtime.ReadMemStats is process-wide, so any
+// test allocating alongside this one shows up as "growth" and fails it.
 func TestChunkBlobMemoryStaysFlatOverALargeBlob(t *testing.T) {
-	t.Parallel()
 	f := newChunkFixture(t)
 
 	measure := func(size int) (heap uint64, chunks int) {
