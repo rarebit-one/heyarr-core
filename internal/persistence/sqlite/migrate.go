@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -151,31 +152,100 @@ func KnownSchemaVersion() (int64, error) { return maxKnownVersion() }
 // maxKnownVersion is the highest migration compiled into this binary, derived
 // from the embedded filenames so it cannot drift from what actually ships.
 func maxKnownVersion() (int64, error) {
+	versions, err := knownVersions()
+	if err != nil {
+		return 0, err
+	}
+	return versions[len(versions)-1], nil
+}
+
+// knownVersions is every migration compiled into this binary, ascending.
+func knownVersions() ([]int64, error) {
 	entries, err := fs.ReadDir(migrationsFS, "migrations")
 	if err != nil {
-		return 0, fmt.Errorf("sqlite: reading embedded migrations: %w", err)
+		return nil, fmt.Errorf("sqlite: reading embedded migrations: %w", err)
 	}
-	var maxVersion int64
+	var versions []int64
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
 		}
 		numeric, _, ok := strings.Cut(e.Name(), "_")
 		if !ok {
-			return 0, fmt.Errorf("sqlite: migration %q does not start with a version number", e.Name())
+			return nil, fmt.Errorf("sqlite: migration %q does not start with a version number", e.Name())
 		}
 		v, err := strconv.ParseInt(numeric, 10, 64)
 		if err != nil {
-			return 0, fmt.Errorf("sqlite: migration %q has an unparseable version: %w", e.Name(), err)
+			return nil, fmt.Errorf("sqlite: migration %q has an unparseable version: %w", e.Name(), err)
 		}
-		if v > maxVersion {
-			maxVersion = v
+		versions = append(versions, v)
+	}
+	if len(versions) == 0 {
+		return nil, errors.New("sqlite: no migrations are embedded in this binary")
+	}
+	slices.Sort(versions)
+	return versions, nil
+}
+
+// UnappliedMigrations reports which migrations compiled into this binary the
+// database has NOT applied, ascending. Empty means every migration this binary
+// knows about is in place — which is the question a role that does not own the
+// schema actually has, and is not the same question as "is the version at
+// least N".
+//
+// A version number cannot answer it, because this project fills reserved gaps
+// in the numbering (see Migrate): a database already at 42 that has not yet
+// applied a gap-filler 00022 is at 42 by SchemaVersion and missing a table, and
+// the moment the controller applies it, AppliedSchemaVersion reports 22. A
+// "version >= N" check is wrong in both directions there. The set is not.
+//
+// Migrations the database has that this binary does not know (a newer
+// controller, an older worker) are not reported: they are not this binary's
+// requirement. Like AppliedSchemaVersion, this only reads, on the reader pool.
+func UnappliedMigrations(ctx context.Context, db *DB) ([]int64, error) {
+	known, err := knownVersions()
+	if err != nil {
+		return nil, err
+	}
+
+	applied := make(map[int64]bool)
+	var exists int
+	if err := db.Reader().QueryRowContext(ctx,
+		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).
+		Scan(&exists); err != nil {
+		return nil, fmt.Errorf("sqlite: looking for the migration table: %w", err)
+	}
+	if exists != 0 {
+		// Oldest first, so the most recent row for a version wins: a migration
+		// applied and then rolled back is not applied.
+		rows, err := db.Reader().QueryContext(ctx,
+			`SELECT version_id, is_applied FROM goose_db_version ORDER BY id ASC`)
+		if err != nil {
+			return nil, fmt.Errorf("sqlite: reading the applied migrations: %w", err)
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var (
+				version int64
+				ok      bool
+			)
+			if err := rows.Scan(&version, &ok); err != nil {
+				return nil, fmt.Errorf("sqlite: reading the applied migrations: %w", err)
+			}
+			applied[version] = ok
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("sqlite: reading the applied migrations: %w", err)
 		}
 	}
-	if maxVersion == 0 {
-		return 0, errors.New("sqlite: no migrations are embedded in this binary")
+
+	var missing []int64
+	for _, v := range known {
+		if !applied[v] {
+			missing = append(missing, v)
+		}
 	}
-	return maxVersion, nil
+	return missing, nil
 }
 
 // AppliedSchemaVersion reports the applied version without touching anything.
