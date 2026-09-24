@@ -113,7 +113,7 @@ them all. A second generate refuses unless you pass --force.`,
 				return err
 			}
 			if asJSON {
-				return encodeJSON(cmd.OutOrStdout(), identityGenerateJSON{
+				return emitJSON(cmd.OutOrStdout(), identityGenerateJSON{
 					Identity:       useridentity.NewView(id),
 					RecoverySecret: secret.String(),
 				})
@@ -221,7 +221,7 @@ history.`,
 			}
 
 			if asJSON {
-				return encodeJSON(cmd.OutOrStdout(), struct {
+				return emitJSON(cmd.OutOrStdout(), struct {
 					Identity useridentity.View `json:"identity"`
 					Device   device.View       `json:"device"`
 				}{Identity: useridentity.NewView(id), Device: device.NewView(enrolled, device.CommandHint)})
@@ -288,7 +288,7 @@ func newIdentityShowCommand(_ Options, dir *string) *cobra.Command {
 				return err
 			}
 			if asJSON {
-				return encodeJSON(cmd.OutOrStdout(), useridentity.NewView(id))
+				return emitJSON(cmd.OutOrStdout(), useridentity.NewView(id))
 			}
 			printIdentity(cmd.OutOrStdout(), id)
 			fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", identityPinHint(id))
@@ -346,7 +346,7 @@ identity lives. It reads the local device key (generate one with
 				return err
 			}
 			if asJSON {
-				return encodeJSON(cmd.OutOrStdout(), device.NewView(enrolled, device.CommandHint))
+				return emitJSON(cmd.OutOrStdout(), device.NewView(enrolled, device.CommandHint))
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "device enrolled\n\n")
 			printDevice(cmd.OutOrStdout(), enrolled)

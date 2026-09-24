@@ -30,6 +30,7 @@ func newIdentityKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey, string
 // writes alike require admin, and a write token — which could otherwise mint
 // itself an identity — is refused.
 func TestIdentityRoutesAreAdminInBothDirections(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth)
 	reader := h.mint("reader", auth.ScopeRead)
 	writer := h.mint("writer", auth.ScopeWrite)
@@ -66,6 +67,7 @@ func TestIdentityRoutesAreAdminInBothDirections(t *testing.T) {
 // router and asserts the identities the store recorded, not the status codes
 // alone: the device the API lists is the one whose cert was posted.
 func TestEnrolUserThenDeviceThenRevoke(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth)
 	admin := h.mint("admin", auth.ScopeAdmin)
 
@@ -168,6 +170,7 @@ func TestEnrolUserThenDeviceThenRevoke(t *testing.T) {
 // API: a cert signed by a user the node never pinned is a 404, not a silent
 // enrolment.
 func TestEnrolDeviceRefusesAnUnpinnedUser(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth)
 	admin := h.mint("admin", auth.ScopeAdmin)
 
@@ -187,6 +190,7 @@ func TestEnrolDeviceRefusesAnUnpinnedUser(t *testing.T) {
 // TestEnrolUserRejectsAMalformedKey: a public key that is not a rendered
 // Ed25519 key is a 400 paste error, not a 500.
 func TestEnrolUserRejectsAMalformedKey(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth)
 	admin := h.mint("admin", auth.ScopeAdmin)
 	resp := h.do(http.MethodPost, "/api/v1/identities/users", admin.Secret,

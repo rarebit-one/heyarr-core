@@ -20,6 +20,7 @@ import (
 // backoff the failed search left behind, and how the stuck-grab sweep hands a
 // want back to the search beat.
 func TestClearingASearchScheduleMakesTheWantDueAtOnce(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -63,6 +64,7 @@ func TestClearingASearchScheduleMakesTheWantDueAtOnce(t *testing.T) {
 }
 
 func TestAWantWithNoRowIsDueImmediately(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -98,6 +100,7 @@ func TestAWantWithNoRowIsDueImmediately(t *testing.T) {
 // two are separated by their work's content type and not by anything else: the
 // movie want is due and the document want, set up identically, is not.
 func TestADocumentWantIsNeverDueASearch(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 
@@ -140,6 +143,7 @@ func TestADocumentWantIsNeverDueASearch(t *testing.T) {
 // and the spread on next_search_at means sub-second values are the norm rather
 // than a curiosity.
 func TestDueComparisonSurvivesASubSecondBoundary(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -182,6 +186,7 @@ func TestDueComparisonSurvivesASubSecondBoundary(t *testing.T) {
 // The compare-and-set. Recording twice for the same pass advances the streak
 // once, which is what stops two roles from doubling the interval twice.
 func TestRecordingIsACompareAndSet(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -211,6 +216,7 @@ func TestRecordingIsACompareAndSet(t *testing.T) {
 // Carrying a MISSING want's week of silence into its first upgrade search
 // would start that search two weeks late.
 func TestChangingScheduleResetsTheStreak(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -244,6 +250,7 @@ func TestChangingScheduleResetsTheStreak(t *testing.T) {
 // Only providers that can SEARCH. A download client being down says nothing
 // about whether searching is worth attempting.
 func TestIndexerHealthIgnoresProvidersThatCannotSearch(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	h.exec(t, `INSERT INTO provider_health
@@ -268,6 +275,7 @@ func TestIndexerHealthIgnoresProvidersThatCannotSearch(t *testing.T) {
 // A full batch of feed items must not hide an indexer-searchable want forever.
 // The batch limit applies to eligible searches, not the rows examined.
 func TestDueSearchLimitCountsOnlyEligibleWants(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	for i := range 51 {

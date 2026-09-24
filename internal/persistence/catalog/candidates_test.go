@@ -64,6 +64,7 @@ func rankThree() []acquisition.Ranked {
 // A stored explanation that might not be the real one is worse than none,
 // because it will be believed.
 func TestTheStoredEvaluationIsByteIdenticalToTheEvaluators(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -121,6 +122,7 @@ func TestTheStoredEvaluationIsByteIdenticalToTheEvaluators(t *testing.T) {
 // Twelve candidates, none acceptable: twelve durable, explained refusals, and
 // nothing selected. This is §63's deliverable, and §60's reason for keeping it.
 func TestTwelveRejectionsArePersisted(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -182,6 +184,7 @@ func TestTwelveRejectionsArePersisted(t *testing.T) {
 
 // The best ACCEPTABLE candidate is selected, and exactly one is.
 func TestTheBestAcceptableCandidateIsSelected(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -224,6 +227,7 @@ func TestTheBestAcceptableCandidateIsSelected(t *testing.T) {
 // A search REPLACES its predecessor. Keeping both would make "what are the
 // candidates for this want" a question with an ORDER BY and a LIMIT.
 func TestASearchReplacesThePreviousSet(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -261,6 +265,7 @@ func TestASearchReplacesThePreviousSet(t *testing.T) {
 // Re-running the same search produces the same rows, not duplicates. The job
 // WILL be re-run (invariant 9).
 func TestRecordingTheSameSearchTwiceDoesNotDuplicate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -284,6 +289,7 @@ func TestRecordingTheSameSearchTwiceDoesNotDuplicate(t *testing.T) {
 // the event a want that found nothing is indistinguishable from a want nobody
 // searched — which is exactly the silence §60 keeps rejection reasons to avoid.
 func TestAnEmptySearchStillEmits(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -308,6 +314,7 @@ func TestAnEmptySearchStillEmits(t *testing.T) {
 // scorer had said — an override that left no trace would look exactly like an
 // ordinary selection.
 func TestOverrideRecordsTheDisagreement(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -357,6 +364,7 @@ func TestOverrideRecordsTheDisagreement(t *testing.T) {
 // disagreement. Recording it as one would put a departure in the audit trail
 // that never happened.
 func TestReSelectingTheScorersChoiceIsNotAnOverride(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -383,6 +391,7 @@ func TestReSelectingTheScorersChoiceIsNotAnOverride(t *testing.T) {
 // acceptable, and an override that could ignore them would turn `accept` into
 // a suggestion.
 func TestOverrideRefusesARejectedCandidate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -407,6 +416,7 @@ func TestOverrideRefusesARejectedCandidate(t *testing.T) {
 }
 
 func TestOverridingAnUnknownCandidateIsTyped(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -424,6 +434,7 @@ func TestOverridingAnUnknownCandidateIsTyped(t *testing.T) {
 // explains what a want is currently acquiring; removing it would leave an
 // acquisition with nothing to say why.
 func TestPruneSparesTheSelectedCandidate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -455,6 +466,7 @@ func TestPruneSparesTheSelectedCandidate(t *testing.T) {
 
 // A prune with a cutoff before anything was searched removes nothing.
 func TestPruneLeavesRecentCandidates(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -474,6 +486,7 @@ func TestPruneLeavesRecentCandidates(t *testing.T) {
 
 // Candidates do not outlive the want they explain.
 func TestCandidatesCascadeFromTheWant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -495,6 +508,7 @@ func TestCandidatesCascadeFromTheWant(t *testing.T) {
 
 // SearchContextFor gathers what a query needs in one read.
 func TestSearchContextCarriesTheQueryAndTheProfile(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -522,6 +536,7 @@ func TestSearchContextCarriesTheQueryAndTheProfile(t *testing.T) {
 // ADR-0093: an item-scoped want reads the season and episode from its item, so
 // the search can be scoped to the episode and the containment gate can run.
 func TestSearchContextReadsTheItemsSeasonAndEpisode(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -554,6 +569,7 @@ func TestSearchContextReadsTheItemsSeasonAndEpisode(t *testing.T) {
 // numeric season/episode — parsed by the same scanner parser a release title
 // uses, so the want and the release read by one vocabulary (ADR-0093).
 func TestSearchContextFallsBackToTheItemKey(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -592,6 +608,7 @@ func TestSearchContextFallsBackToTheItemKey(t *testing.T) {
 // So these candidates have titles that sort OPPOSITE to their ids, at equal
 // scores. Any second opinion about ranking shows up immediately.
 func TestTheListingBreaksTiesOnTheEvaluatorsKeyAndNoOther(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {

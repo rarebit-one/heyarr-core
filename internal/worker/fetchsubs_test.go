@@ -136,6 +136,7 @@ func baseCtx() catalog.SubtitleFetchContext {
 }
 
 func TestFetchSubsAttachesBestCandidate(t *testing.T) {
+	t.Parallel()
 	rec := &recordingRecorder{ctx: baseCtx(), ctxOK: true}
 	prov := &fakeSubtitleProvider{
 		name: "opensubtitles",
@@ -181,6 +182,7 @@ func TestFetchSubsAttachesBestCandidate(t *testing.T) {
 }
 
 func TestFetchSubsBacksOffWhenNothingFound(t *testing.T) {
+	t.Parallel()
 	rec := &recordingRecorder{ctx: catalog.SubtitleFetchContext{
 		DesiredItemID: "want-1", Language: "en", IMDBID: "0944947",
 		SourceVideoAssetID: "video-1", Fruitless: 2,
@@ -202,6 +204,7 @@ func TestFetchSubsBacksOffWhenNothingFound(t *testing.T) {
 }
 
 func TestFetchSubsBacksOffOnProviderError(t *testing.T) {
+	t.Parallel()
 	rec := &recordingRecorder{ctx: baseCtx(), ctxOK: true}
 	prov := &fakeSubtitleProvider{name: "opensubtitles", findErr: errors.New("quota spent")}
 	h := FetchSubsHandler(FetchSubsHandlerOptions{
@@ -218,6 +221,7 @@ func TestFetchSubsBacksOffOnProviderError(t *testing.T) {
 }
 
 func TestFetchSubsNoOpWhenIneligible(t *testing.T) {
+	t.Parallel()
 	rec := &recordingRecorder{ctxOK: false} // source video gone / not a subtitle want
 	prov := &fakeSubtitleProvider{name: "opensubtitles"}
 	h := FetchSubsHandler(FetchSubsHandlerOptions{
@@ -233,6 +237,7 @@ func TestFetchSubsNoOpWhenIneligible(t *testing.T) {
 }
 
 func TestFetchSubsStoreFailureIsRetryable(t *testing.T) {
+	t.Parallel()
 	rec := &recordingRecorder{ctx: baseCtx(), ctxOK: true}
 	prov := &fakeSubtitleProvider{
 		name:       "opensubtitles",

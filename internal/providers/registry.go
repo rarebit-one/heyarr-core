@@ -122,21 +122,6 @@ func (r *Registry) Len() int {
 	return len(r.order)
 }
 
-// Names lists every provider in routing order.
-func (r *Registry) Names() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return append([]string(nil), r.order...)
-}
-
-// Lookup returns one provider by name.
-func (r *Registry) Lookup(name string) (Provider, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	p, ok := r.byName[name]
-	return p, ok
-}
-
 // Route returns every provider with a capability, in configured order.
 //
 // It does NOT filter by health, and that is deliberate. Health is observed

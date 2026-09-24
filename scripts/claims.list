@@ -239,7 +239,7 @@ evidence the new device is enrolled by the old one over the relay — paired, no
 claim pairing-substitution-changes-the-code
 state proven
 ref   §40, ADR-0022, #305
-why   The short authentication string binds BOTH keys, so a man-in-the-middle that substitutes the responder key derives a DIFFERENT code, which the two humans catch. This is the whole security argument for a 7-digit code, and it is the property commit-before-reveal (internal/pairing/commitment.go) makes true against a rushing attacker; measured here by deriving the code over an honest key and over a substitute and asserting they differ.
+why   The short authentication string binds BOTH keys, so a man-in-the-middle that substitutes the responder key derives a DIFFERENT code, which the two humans catch. This is the whole security argument for a 7-digit code, and it is the property commit-before-reveal (pairing/commitment.go in voidbind-go, re-exported by internal/pairing) makes true against a rushing attacker; measured here by deriving the code over an honest key and over a substitute and asserting they differ.
 evidence a substituted responder key yields a DIFFERENT short code — the MITM the humans catch
 
 claim recovery-reconstructs-the-identity-offline

@@ -75,6 +75,7 @@ func healthOf(t *testing.T, tracker *health.Tracker, peerID string) health.State
 // remote one a source, a second makes the local one win on locality, and
 // silence past the window hands it back to the remote one.
 func TestRoutingFollowsHealthTheTrackerActuallyMoved(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	clk := &movingClock{now: fixedTime}
 	tracker := trackerOver(t, h, clk)

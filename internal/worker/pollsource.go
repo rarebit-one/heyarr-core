@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -63,9 +62,9 @@ func PollSourceHandler(
 	reg *providers.Registry, cat *catalog.Catalog, grabs *jobs.Queue, log *slog.Logger,
 ) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload followed.PollSourcePayload
-		if err := json.Unmarshal(job.Payload, &payload); err != nil {
-			return fmt.Errorf("worker: poll_source payload is not decodable: %w", err)
+		payload, err := decodePayload[followed.PollSourcePayload](job)
+		if err != nil {
+			return err
 		}
 		if payload.SourceID == "" {
 			return errors.New("worker: poll_source needs a source")

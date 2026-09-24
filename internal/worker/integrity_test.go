@@ -179,6 +179,7 @@ func (h *harness) deleteAsset(id string) {
 // The acceptance criterion, against the real catalog: truncating one CAS file
 // makes a deep check report THAT blob, quarantine it, and say so in the log.
 func TestDeepCheckQuarantinesTheTruncatedBlobAndRecordsIt(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.write("Good Film (2019)/Good Film (2019).mkv", "bytes that stay exactly as they were")
 	h.write("Bad Film (2020)/Bad Film (2020).mkv", "bytes an external tool will rewrite in place")
@@ -261,6 +262,7 @@ func TestDeepCheckQuarantinesTheTruncatedBlobAndRecordsIt(t *testing.T) {
 // the asset with it — assets.missing_since is what tells a user the film they
 // think they own is not there.
 func TestCheckMarksAMissingBlobAndItsAssets(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.write("Gone Film (2021)/Gone Film (2021).mkv", "bytes that will be removed by hand")
 	res := h.ingest("Gone Film (2021)/Gone Film (2021).mkv")
@@ -295,6 +297,7 @@ func TestCheckMarksAMissingBlobAndItsAssets(t *testing.T) {
 
 // ADR-0018's headline: after the grace window the bytes go, before it they stay.
 func TestGCFreesBytesOnlyAfterTheGraceWindow(t *testing.T) {
+	t.Parallel()
 	const grace = 72 * time.Hour
 	tests := []struct {
 		name        string
@@ -355,6 +358,7 @@ func TestGCFreesBytesOnlyAfterTheGraceWindow(t *testing.T) {
 // `heyarr gc` with no flags changes nothing — asserted on the bytes and on
 // every row count, not on the collector's own opinion of itself.
 func TestGCWithNoFlagsChangesNothing(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.write("Kept Film (2015)/Kept Film (2015).mkv", "bytes that are still referenced")
 	h.write("Dropped Film (2016)/Dropped Film (2016).mkv", "bytes that are not")
@@ -411,6 +415,7 @@ func TestGCWithNoFlagsChangesNothing(t *testing.T) {
 // The orphan M1-10 deliberately creates: a fault after the CAS write and before
 // the commit leaves bytes with no blobs row. Nothing else will ever clean it up.
 func TestGCReclaimsTheOrphanAnIngestFaultLeaves(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.write("Faulted Film (2017)/Faulted Film (2017).mkv", "bytes written before a fault rolled the transaction back")
 
@@ -485,6 +490,7 @@ func TestGCReclaimsTheOrphanAnIngestFaultLeaves(t *testing.T) {
 // remove a blob an asset points at. Asserted directly, because a backstop
 // nobody has watched catch anything is a comment.
 func TestTheDatabaseRefusesToReclaimAReferencedBlob(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.write("Referenced Film (2014)/Referenced Film (2014).mkv", "bytes with a live asset")
 	res := h.ingest("Referenced Film (2014)/Referenced Film (2014).mkv")
@@ -502,6 +508,7 @@ func TestTheDatabaseRefusesToReclaimAReferencedBlob(t *testing.T) {
 // data irreversibly, so it is asserted over generated reference graphs rather
 // than over one hand-built case.
 func TestGCNeverRemovesABlobAnAssetStillReferences(t *testing.T) {
+	t.Parallel()
 	const graphs = 25
 	var (
 		totalBlobs     int
@@ -665,6 +672,7 @@ func (h *harness) seedRandomGraph(t *testing.T, rng *rand.Rand) (blobs []string,
 // --- job handlers -----------------------------------------------------------
 
 func TestVerifyBlobHandlerRecordsBothOutcomes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.write("Verified Film (2013)/Verified Film (2013).mkv", "bytes that verify cleanly")
 	res := h.ingest("Verified Film (2013)/Verified Film (2013).mkv")
@@ -707,6 +715,7 @@ func TestVerifyBlobHandlerRecordsBothOutcomes(t *testing.T) {
 // The job payload's zero value must be a dry run. A scheduled sweep that
 // deletes because a field was omitted is how a library disappears overnight.
 func TestGCHandlerDefaultsToADryRun(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.write("Sweepable Film (2012)/Sweepable Film (2012).mkv", "bytes with no surviving asset")
 	res := h.ingest("Sweepable Film (2012)/Sweepable Film (2012).mkv")

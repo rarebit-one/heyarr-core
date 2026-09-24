@@ -40,8 +40,11 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: stable, cache: true }
       - run: go vet ./...
+      # Pinned, not `latest`: a new golangci-lint release can add or tighten
+      # checks and turn main red with no change here. Bump it deliberately,
+      # together with whatever .golangci.yml needs, after a clean local run.
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with: { version: latest }
+        with: { version: v2.13.2 }
       # A malformed workflow file does not fail — it silently never runs.
       # actionlint catches that before it can hide a broken pipeline.
       #
@@ -144,9 +147,10 @@ jobs:
       # can approach the default under load on a busy runner, and a per-package
       # test timeout is only a hang reported as a failure if the bound is
       # generous enough to be reached solely when something is genuinely wedged.
-      # The job's own timeout-minutes stays the outer stop. coverage.out is still
-      # written here, unchanged; the race detector now lives in `test-race`.
-      - run: go test -count=1 -timeout=20m -coverprofile=coverage.out ./...
+      # The job's own timeout-minutes stays the outer stop. No -coverprofile:
+      # nothing uploaded or gated on coverage.out. The race detector lives in
+      # `test-race`.
+      - run: go test -count=1 -timeout=20m ./...
       - name: the toolchain tests ran rather than skipping
         if: runner.os == 'Linux'
         run: |
@@ -187,7 +191,7 @@ jobs:
   #
   # Coverage is deliberately NOT collected here: coverage.out was never uploaded
   # or gated anywhere (dead output), and the instrumentation only slows the
-  # detector. The plain `test` job still writes coverage.out exactly as before.
+  # detector.
   test-race:
     name: test-race
     runs-on: ubuntu-latest

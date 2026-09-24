@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"sort"
 	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
@@ -769,11 +768,4 @@ func validatePathMap(name string, maps []PathMapping) error {
 		seen[remote] = true
 	}
 	return nil
-}
-
-// Sorted returns entries by name, for rendering.
-func Sorted(rs []Resolved) []Resolved {
-	out := append([]Resolved(nil), rs...)
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
 }
