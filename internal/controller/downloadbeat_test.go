@@ -248,31 +248,16 @@ func TestTheDownloadBeatStopsWithItsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tick := make(chan time.Time) // unbuffered: a send completes only when the beat takes it
-	stopped := make(chan struct{})
-	startDownloadPollOn(ctx, []providers.Entry{fakeDownloadClient(t.TempDir())}, queue, discard(),
-		func() (<-chan time.Time, func()) { return tick, func() { close(stopped) } })
+	clock := newFakeTicker()
+	startDownloadPoll(ctx, []providers.Entry{fakeDownloadClient(t.TempDir())}, queue, discard(), clock.newTicker)
 
 	// The control: while its context is live the beat is listening on this
 	// ticker. Without it, a beat that never read the ticker would pass below.
-	select {
-	case tick <- time.Now():
-	case <-time.After(10 * time.Second):
-		t.Fatal("the beat never took a tick while its context was live")
-	}
+	clock.fire(t)
 
 	before := countPollJobs(t, db.Reader())
 	cancel()
-	select {
-	case <-stopped:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the beat did not stop its ticker after its context was cancelled")
-	}
-	select {
-	case tick <- time.Now():
-		t.Error("the beat took a tick after its context was cancelled")
-	default:
-	}
+	clock.awaitStop(t)
 	if after := countPollJobs(t, db.Reader()); after != before {
 		t.Errorf("the beat enqueued after its context was cancelled: %d then %d", before, after)
 	}
