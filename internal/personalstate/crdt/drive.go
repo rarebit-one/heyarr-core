@@ -360,9 +360,6 @@ func MergeDrives(drives ...*Drive) *Drive {
 	return out
 }
 
-// Clone returns an independent deep copy.
-func (d *Drive) Clone() *Drive { return MergeDrives(d) }
-
 // Get returns the current blob at path, if the path is live.
 func (d *Drive) Get(p string) (DriveEntry, bool) {
 	rec, ok := d.entries[normalisePath(p)]

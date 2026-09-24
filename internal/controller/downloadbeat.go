@@ -111,6 +111,19 @@ const downloadPollInterval = 15 * time.Second
 // routing still decides the latter, and still would if a client were added to
 // the registry by some future path this does not know about.
 func startDownloadPoll(ctx context.Context, cfg []providers.Entry, queue *jobs.Queue, log *slog.Logger) {
+	startDownloadPollOn(ctx, cfg, queue, log, func() (<-chan time.Time, func()) {
+		ticker := time.NewTicker(downloadPollInterval)
+		return ticker.C, ticker.Stop
+	})
+}
+
+// startDownloadPollOn is startDownloadPoll with the beat's clock injected, so
+// a test can drive and observe the ticker rather than sleep out an interval.
+// newTicker is called only when there is a download client, and the stop it
+// returns is called when the beat's goroutine exits.
+func startDownloadPollOn(ctx context.Context, cfg []providers.Entry, queue *jobs.Queue, log *slog.Logger,
+	newTicker func() (<-chan time.Time, func()),
+) {
 	if !hasDownloadClient(cfg, log) {
 		// Said at info rather than debug. "Why is nothing being acquired" is a
 		// question this line answers, and the worker's own startup log makes
@@ -132,14 +145,14 @@ func startDownloadPoll(ctx context.Context, cfg []providers.Entry, queue *jobs.Q
 	}
 	enqueue("startup")
 
+	tick, stop := newTicker()
 	go func() {
-		ticker := time.NewTicker(downloadPollInterval)
-		defer ticker.Stop()
+		defer stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-tick:
 				enqueue("beat")
 			}
 		}

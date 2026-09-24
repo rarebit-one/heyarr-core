@@ -281,7 +281,11 @@ func TestASlowConsumerReceivesEverythingInOrder(t *testing.T) {
 	}
 	defer func() { _ = conn.Close() }()
 	if tcp, ok := conn.(*net.TCPConn); ok {
-		if err := tcp.SetReadBuffer(2048); err != nil {
+		// Small against the ~300KB flood below, so the server's write still
+		// blocks — but not so small that the window collapses to a segment
+		// and every round trip waits out a delayed ACK. At 2KB this test
+		// spent ~23s in that stall; at 32KB the flood no longer blocks.
+		if err := tcp.SetReadBuffer(16 << 10); err != nil {
 			t.Fatalf("shrinking the receive buffer: %v", err)
 		}
 	}

@@ -586,4 +586,7 @@ func TestTheHandlerRejectsAnUndecodablePayload(t *testing.T) {
 	if !strings.Contains(err.Error(), "not decodable") {
 		t.Errorf("error does not say what went wrong: %v", err)
 	}
+	if !errors.Is(err, jobs.ErrPermanent) {
+		t.Errorf("an undecodable payload will never decode, but the error is retryable: %v", err)
+	}
 }

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"time"
@@ -100,7 +99,7 @@ what the old one could. So a second generate refuses unless you pass --force.`,
 				return err
 			}
 			if asJSON {
-				return encodeJSON(cmd.OutOrStdout(), device.NewView(dev, device.CommandHint))
+				return emitJSON(cmd.OutOrStdout(), device.NewView(dev, device.CommandHint))
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "device key generated\n\n")
 			printDevice(cmd.OutOrStdout(), dev)
@@ -131,7 +130,7 @@ func newDeviceListCommand(_ Options, dir *string) *cobra.Command {
 			}
 			w := cmd.OutOrStdout()
 			if asJSON {
-				return encodeJSON(w, device.NewViews(devices, device.CommandHint))
+				return emitJSON(w, device.NewViews(devices, device.CommandHint))
 			}
 			if len(devices) == 0 {
 				fmt.Fprintln(w, "no device key on this machine — create one with `heyarr device generate`")
@@ -172,7 +171,7 @@ func newDeviceShowCommand(_ Options, dir *string) *cobra.Command {
 				return err
 			}
 			if asJSON {
-				return encodeJSON(cmd.OutOrStdout(), device.NewView(dev, device.CommandHint))
+				return emitJSON(cmd.OutOrStdout(), device.NewView(dev, device.CommandHint))
 			}
 			printDevice(cmd.OutOrStdout(), dev)
 			fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", caveat(dev))
@@ -204,7 +203,7 @@ required and is matched exactly, because an unrecoverable command that accepts
 				return err
 			}
 			if asJSON {
-				return encodeJSON(cmd.OutOrStdout(), device.NewView(dev, device.CommandHint))
+				return emitJSON(cmd.OutOrStdout(), device.NewView(dev, device.CommandHint))
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "removed %s (%s)\n", dev.ID, dev.Name)
 			fmt.Fprintf(cmd.OutOrStdout(), "its private key is gone from %s\n", dev.KeyPath)
@@ -419,10 +418,4 @@ func caveat(d device.Device) string {
 		return "enrolled: " + d.AuthorisationNote(device.CommandHint) + "."
 	}
 	return "unproven: " + d.AuthorisationNote(device.CommandHint) + "."
-}
-
-func encodeJSON(w io.Writer, v any) error {
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	return enc.Encode(v)
 }

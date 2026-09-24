@@ -238,15 +238,41 @@ func TestTheDownloadPollIsFasterThanTheHealthBeat(t *testing.T) {
 
 // The beat stops with its context, so a shut-down controller leaves no goroutine
 // enqueueing into a closed database.
+//
+// The ticker is injected, so this watches the goroutine itself rather than
+// sleeping out an interval and counting rows — which could not have seen a
+// stray tick anyway, since the poll's dedupe key folds a second enqueue into
+// the startup job that is still pending.
 func TestTheDownloadBeatStopsWithItsContext(t *testing.T) {
 	db, queue := healthQueue(t)
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	startDownloadPoll(ctx, []providers.Entry{fakeDownloadClient(t.TempDir())}, queue, discard())
-	cancel()
+	tick := make(chan time.Time) // unbuffered: a send completes only when the beat takes it
+	stopped := make(chan struct{})
+	startDownloadPollOn(ctx, []providers.Entry{fakeDownloadClient(t.TempDir())}, queue, discard(),
+		func() (<-chan time.Time, func()) { return tick, func() { close(stopped) } })
+
+	// The control: while its context is live the beat is listening on this
+	// ticker. Without it, a beat that never read the ticker would pass below.
+	select {
+	case tick <- time.Now():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the beat never took a tick while its context was live")
+	}
 
 	before := countPollJobs(t, db.Reader())
-	time.Sleep(downloadPollInterval + 200*time.Millisecond)
+	cancel()
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the beat did not stop its ticker after its context was cancelled")
+	}
+	select {
+	case tick <- time.Now():
+		t.Error("the beat took a tick after its context was cancelled")
+	default:
+	}
 	if after := countPollJobs(t, db.Reader()); after != before {
 		t.Errorf("the beat enqueued after its context was cancelled: %d then %d", before, after)
 	}

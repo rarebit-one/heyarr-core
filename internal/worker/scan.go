@@ -2,8 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/scanner"
@@ -20,11 +18,11 @@ import (
 // where this one stopped instead of re-reading what already landed (M1-12).
 func ScanHandler(s *scanner.Scanner) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload scanner.Payload
-		if err := json.Unmarshal(job.Payload, &payload); err != nil {
-			return fmt.Errorf("worker: scan_library payload is not decodable: %w", err)
+		payload, err := decodePayload[scanner.Payload](job)
+		if err != nil {
+			return err
 		}
-		_, err := s.Scan(ctx, payload)
+		_, err = s.Scan(ctx, payload)
 		return err
 	}
 }
