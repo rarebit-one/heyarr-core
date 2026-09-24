@@ -285,13 +285,35 @@ func classifyDiscover(err error) error {
 	return err
 }
 
+// listFollowedArgs is what listFollowed decodes (held to its schema by schemaargs_test.go).
+type listFollowedArgs struct {
+	Limit int `json:"limit"`
+}
+
 // listFollowed is §55's list_followed, shared with GET /api/v1/followed-sources.
-func (s *Server) listFollowed(ctx context.Context, _ json.RawMessage) (any, error) {
-	out, err := s.resources.ListFollowed(ctx)
+// The row limit is this door's own, applied the same way as every other
+// listing's: clamped to maxRows, and a cut list says it was cut.
+func (s *Server) listFollowed(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args listFollowedArgs
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	limit := clampLimit(args.Limit)
+
+	sources, err := s.resources.ListFollowed(ctx)
 	if err != nil {
 		return nil, classifyFollow(err)
 	}
-	return map[string]any{"followed_sources": out}, nil
+	out := struct {
+		truncatable
+		FollowedSources []resources.FollowedSourceView `json:"followed_sources"`
+	}{FollowedSources: sources}
+	if len(out.FollowedSources) > limit {
+		out.FollowedSources = out.FollowedSources[:limit]
+		out.Truncated = true
+	}
+	out.Count = len(out.FollowedSources)
+	return out, nil
 }
 
 // unfollowArgs is what unfollow decodes (held to its schema by schemaargs_test.go).

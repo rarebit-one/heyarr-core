@@ -46,6 +46,7 @@ var toolArgs = map[string]any{
 
 	// Followed sources (tools_followed.go).
 	"follow_source":         followSourceArgs{},
+	"list_followed":         listFollowedArgs{},
 	"unfollow":              unfollowArgs{},
 	"poll_source":           pollSourceArgs{},
 	"set_source_profile":    setSourceProfileArgs{},
@@ -59,14 +60,6 @@ var toolArgs = map[string]any{
 	"verify_blob":         verifyBlobArgs{},
 }
 
-// toolsNotDecodingArgs are tools whose handler never reads its arguments, so
-// there is no struct to hold the schema to. Each entry is a known gap, not a
-// pattern to follow: a handler that ignores its arguments silently accepts a
-// misspelled or unsupported one, which decodeArgs exists to refuse.
-var toolsNotDecodingArgs = map[string]string{
-	"list_followed": "listFollowed ignores its arguments; the limit its schema advertises has no effect",
-}
-
 func TestToolSchemasMatchTheirArgs(t *testing.T) {
 	t.Parallel()
 	s := &Server{tools: newRegistry()}
@@ -75,9 +68,6 @@ func TestToolSchemasMatchTheirArgs(t *testing.T) {
 	registered := map[string]bool{}
 	for _, tool := range s.tools.all() {
 		registered[tool.Name] = true
-		if _, known := toolsNotDecodingArgs[tool.Name]; known {
-			continue
-		}
 		args, ok := toolArgs[tool.Name]
 		if !ok {
 			t.Errorf("%s has no entry in toolArgs: name the struct its handler decodes into", tool.Name)
@@ -93,11 +83,6 @@ func TestToolSchemasMatchTheirArgs(t *testing.T) {
 	for name := range toolArgs {
 		if !registered[name] {
 			t.Errorf("toolArgs names %s, which is not a registered tool", name)
-		}
-	}
-	for name := range toolsNotDecodingArgs {
-		if !registered[name] {
-			t.Errorf("toolsNotDecodingArgs names %s, which is not a registered tool", name)
 		}
 	}
 }
