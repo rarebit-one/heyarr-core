@@ -110,19 +110,11 @@ const downloadPollInterval = 15 * time.Second
 // there is work, not about whether the work can be done — the capability
 // routing still decides the latter, and still would if a client were added to
 // the registry by some future path this does not know about.
-func startDownloadPoll(ctx context.Context, cfg []providers.Entry, queue *jobs.Queue, log *slog.Logger) {
-	startDownloadPollOn(ctx, cfg, queue, log, func() (<-chan time.Time, func()) {
-		ticker := time.NewTicker(downloadPollInterval)
-		return ticker.C, ticker.Stop
-	})
-}
-
-// startDownloadPollOn is startDownloadPoll with the beat's clock injected, so
-// a test can drive and observe the ticker rather than sleep out an interval.
+//
 // newTicker is called only when there is a download client, and the stop it
 // returns is called when the beat's goroutine exits.
-func startDownloadPollOn(ctx context.Context, cfg []providers.Entry, queue *jobs.Queue, log *slog.Logger,
-	newTicker func() (<-chan time.Time, func()),
+func startDownloadPoll(ctx context.Context, cfg []providers.Entry, queue *jobs.Queue, log *slog.Logger,
+	newTicker tickerFunc,
 ) {
 	if !hasDownloadClient(cfg, log) {
 		// Said at info rather than debug. "Why is nothing being acquired" is a
@@ -143,21 +135,9 @@ func startDownloadPollOn(ctx context.Context, cfg []providers.Entry, queue *jobs
 				"reason", reason, "error", err)
 		}
 	}
-	enqueue("startup")
-
-	tick, stop := newTicker()
-	go func() {
-		defer stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-tick:
-				enqueue("beat")
-			}
-		}
-	}()
-	log.Info("download poll beat started", "interval", downloadPollInterval)
+	startBeat(ctx, log, newTicker, beat{
+		name: "download poll", interval: downloadPollInterval, startup: true, pass: enqueue,
+	})
 }
 
 // hasDownloadClient reports whether configuration declares one.

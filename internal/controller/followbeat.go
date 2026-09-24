@@ -210,28 +210,15 @@ func (s *followScheduler) holdOff(ctx context.Context) (bool, error) {
 // down for hours has sources that came due in that time — and costs nothing on a
 // library with none due, since being due is a stored date rather than a
 // consequence of starting.
-func startFollowBeat(ctx context.Context, cat *catalog.Catalog, queue *jobs.Queue, log *slog.Logger) {
+func startFollowBeat(ctx context.Context, cat *catalog.Catalog, queue *jobs.Queue, log *slog.Logger, newTicker tickerFunc) {
 	s := newFollowScheduler(cat, queue, wallClock{}, log)
 	run := func(reason string) {
 		if _, err := s.pass(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("a source-poll scheduling pass failed", "reason", reason, "error", err)
 		}
 	}
-	run("startup")
-
-	go func() {
-		ticker := time.NewTicker(followBeatInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				run("beat")
-			}
-		}
-	}()
-	log.Info("follow beat started",
-		"interval", followBeatInterval,
-		"poll_cadence", followed.FeedPoll().Base)
+	startBeat(ctx, log, newTicker, beat{
+		name: "follow", interval: followBeatInterval, startup: true, pass: run,
+		attrs: []any{"poll_cadence", followed.FeedPoll().Base},
+	})
 }

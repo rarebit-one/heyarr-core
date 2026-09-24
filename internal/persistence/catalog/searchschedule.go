@@ -22,10 +22,8 @@ import (
 // What lives here is the query that finds what is due and the write that
 // records an attempt, in the same split as every other beat in this package.
 
-// Everything in this file is a `next_search_at <= now` comparison against
-// values that carry a sub-second spread by construction, so the timestamps are
-// written with sqlite.FormatTimestamp: fixed-width, so that SQLite's
-// lexicographic TEXT order is the chronological order (see TimestampLayout).
+// The table's due predicate, ordering and upsert are the shared fruitless-backoff
+// bookkeeping in backoffschedule.go (searchBackoff).
 
 // DueSearch is one want the scheduler should search now.
 type DueSearch struct {
@@ -69,18 +67,19 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 	// resting most of the time, but a library mid-import is not, and reading
 	// every want in order to discard the ones that are downloading is the sort
 	// of pass that is fine until the first time it matters.
+	//nolint:gosec // the concatenated fragments are searchBackoff's literal table and columns; now is bound
 	rows, err := c.db.Reader().QueryContext(ctx, `
 		SELECT d.id, d.monitor, a.phase, a.managed, a.content, a.placement,
 		       coalesce(w.content_type, ''), d.aspect,
 		       coalesce(s.schedule, ''), coalesce(s.fruitless, 0),
-		       coalesce(s.next_search_at, '')
+		       `+searchBackoff.dueOrder()+`
 		FROM desired_items d
 		JOIN acquisition_state a ON a.desired_item_id = d.id
 		JOIN works w ON w.id = d.work_id
-		LEFT JOIN search_schedule s ON s.desired_item_id = d.id
+		`+searchBackoff.leftJoin("d.id")+`
 		WHERE a.phase = 'idle'
-		  AND (s.next_search_at IS NULL OR s.next_search_at <= ?)
-		ORDER BY coalesce(s.next_search_at, ''), d.id`, sqlite.FormatTimestamp(now))
+		  AND `+searchBackoff.dueWhere()+`
+		ORDER BY `+searchBackoff.dueOrder()+`, d.id`, sqlite.FormatTimestamp(now))
 	if err != nil {
 		return nil, fmt.Errorf("catalog: listing wants due a search: %w", err)
 	}
@@ -168,33 +167,19 @@ func (c *Catalog) RecordSearchScheduled(
 	if desiredItemID == "" {
 		return false, fmt.Errorf("catalog: recording a scheduled search needs a want")
 	}
-	nowStr, nextStr := sqlite.FormatTimestamp(now), sqlite.FormatTimestamp(next)
-
-	// No event. This is bookkeeping and not a state transition (invariant 7
-	// governs the latter): the transition that HAPPENED here is the job being
-	// enqueued, which the queue already emits, and emitting a second event per
-	// want per pass would turn the log into a heartbeat.
-	res, err := c.db.Writer().ExecContext(ctx, `
-		INSERT INTO search_schedule
-			(desired_item_id, schedule, fruitless, last_searched_at, next_search_at,
-			 created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (desired_item_id) DO UPDATE SET
-			schedule         = excluded.schedule,
-			fruitless        = excluded.fruitless,
-			last_searched_at = excluded.last_searched_at,
-			next_search_at   = excluded.next_search_at,
-			updated_at       = excluded.updated_at
-		WHERE search_schedule.next_search_at <= excluded.last_searched_at`,
-		desiredItemID, s.Name, fruitless, nowStr, nextStr, nowStr, nowStr)
+	// The CAS guard is onlyIfDue; no event, for the reason record gives.
+	advanced, err := searchBackoff.record(ctx, c.db, backoffAttempt{
+		subject:   desiredItemID,
+		fruitless: fruitless,
+		now:       now,
+		next:      next,
+		extra:     []backoffColumn{{name: "schedule", value: s.Name}},
+		onlyIfDue: true,
+	})
 	if err != nil {
 		return false, fmt.Errorf("catalog: recording a scheduled search for %s: %w", desiredItemID, err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("catalog: recording a scheduled search for %s: %w", desiredItemID, err)
-	}
-	return n > 0, nil
+	return advanced, nil
 }
 
 // ClearSearchSchedule removes a want's search bookkeeping, so it is due a search
@@ -210,9 +195,7 @@ func (c *Catalog) ClearSearchSchedule(ctx context.Context, desiredItemID string)
 	if desiredItemID == "" {
 		return fmt.Errorf("catalog: clearing a search schedule needs a want")
 	}
-	_, err := c.db.Writer().ExecContext(ctx,
-		`DELETE FROM search_schedule WHERE desired_item_id = ?`, desiredItemID)
-	if err != nil {
+	if err := searchBackoff.clear(ctx, c.db, desiredItemID); err != nil {
 		return fmt.Errorf("catalog: clearing the search schedule for %s: %w", desiredItemID, err)
 	}
 	return nil

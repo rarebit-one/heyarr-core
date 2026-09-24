@@ -24,14 +24,16 @@ func (c *countingCatalogSyncer) SyncAll(context.Context) (int, int, error) {
 
 // TestCatalogOpsSyncBeatDrivesTheSyncerOnATick is the mechanism-with-a-caller
 // proof for #449's driver: the beat, on its interval, actually calls SyncAll — it
-// is not a converge routine nobody schedules. Injected syncer + real ticker, the
+// is not a converge routine nobody schedules. Injected syncer + a hand-fired ticker, the
 // fire channel the synchronisation, context cancelled to stop the goroutine.
 func TestCatalogOpsSyncBeatDrivesTheSyncerOnATick(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	s := &countingCatalogSyncer{fired: make(chan struct{})}
-	runCatalogOpsSyncBeat(ctx, s, 2*time.Millisecond, slog.New(slog.DiscardHandler))
+	clock := newFakeTicker()
+	runCatalogOpsSyncBeat(ctx, s, time.Minute, slog.New(slog.DiscardHandler), clock.newTicker)
+	clock.fire(t)
 
 	select {
 	case <-s.fired:
@@ -50,8 +52,9 @@ func TestCatalogOpsSyncBeatRespectsAStoppedContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &countingCatalogSyncer{fired: make(chan struct{})}
 	cancel()
-	runCatalogOpsSyncBeat(ctx, s, time.Millisecond, slog.New(slog.DiscardHandler))
-	time.Sleep(20 * time.Millisecond)
+	clock := newFakeTicker()
+	runCatalogOpsSyncBeat(ctx, s, time.Minute, slog.New(slog.DiscardHandler), clock.newTicker)
+	clock.awaitStop(t)
 	if s.calls.Load() != 0 {
 		t.Fatalf("a cancelled beat still drove the syncer %d times", s.calls.Load())
 	}
