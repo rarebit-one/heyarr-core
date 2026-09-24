@@ -303,13 +303,13 @@ func (c *Controller) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("controller: opening the job queue for reconciliation: %w", err)
 	}
-	startReconciliation(ctx, reconcileQueue, peerHealth, c.log)
-	startUpgradeScan(ctx, reconcileQueue, c.log)
+	startReconciliation(ctx, reconcileQueue, peerHealth, c.log, wallTicker)
+	startUpgradeScan(ctx, reconcileQueue, c.log, wallTicker)
 	// The provider health beat (#164). Same queue and the same serving
 	// context: it is ongoing work and it must stop when the controller does.
 	// See healthbeat.go for why a minute, why it runs on a degraded node, and
 	// why its interval is also the capabilities cache's refresh rate.
-	startProviderHealth(ctx, reconcileQueue, c.log)
+	startProviderHealth(ctx, reconcileQueue, c.log, wallTicker)
 
 	// The search beat (#130). It needs a catalog as well as a queue — unlike
 	// the two sweeps above, it asks a per-want question before enqueueing
@@ -322,7 +322,7 @@ func (c *Controller) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("controller: opening the catalog for the search beat: %w", err)
 	}
-	startSearchBeat(ctx, beatCatalog, reconcileQueue, c.log)
+	startSearchBeat(ctx, beatCatalog, reconcileQueue, c.log, wallTicker)
 
 	// The follow beat (§55, M12). The search beat's sibling: it asks a per-source
 	// question — "what does this feed have now" — before enqueueing a poll, so it
@@ -330,25 +330,25 @@ func (c *Controller) Run(ctx context.Context) error {
 	// project item-scoped wants that the search beat above then drives. See
 	// followbeat.go for why it mirrors the search beat and where it deliberately
 	// differs (the poll outcome is stored, not derived from a resting state).
-	startFollowBeat(ctx, beatCatalog, reconcileQueue, c.log)
+	startFollowBeat(ctx, beatCatalog, reconcileQueue, c.log, wallTicker)
 
 	// The subtitle fetch beat (ADR-0085). A direct-route sibling of the search
 	// beat: it enqueues a provider fetch for each subtitle want whose video is
 	// held but whose caption is missing, on a quota-respecting cadence the fetch
 	// job itself paces. See subtitlebeat.go.
-	startSubtitleBeat(ctx, beatCatalog, reconcileQueue, c.log)
+	startSubtitleBeat(ctx, beatCatalog, reconcileQueue, c.log, wallTicker)
 
 	// The enrich beat (ADR-0087): it enqueues an enrich_work job for each held
 	// music/book Work that is under-enriched (no cover and/or no canonical id), on
 	// a gentle cadence the enrich job itself paces via a backoff schedule. See
 	// enrichbeat.go.
-	startEnrichBeat(ctx, beatCatalog, reconcileQueue, c.log)
+	startEnrichBeat(ctx, beatCatalog, reconcileQueue, c.log, wallTicker)
 
 	// The download poll beat (#247). Same queue and the same serving context.
 	// See downloadbeat.go for why fifteen seconds rather than the health
 	// beat's minute, why the startup pass is the important one, and why this
 	// beat asks the configuration first where the health beat does not.
-	startDownloadPoll(ctx, c.cfg.Providers, reconcileQueue, c.log)
+	startDownloadPoll(ctx, c.cfg.Providers, reconcileQueue, c.log, wallTicker)
 
 	// The continuous control-plane backup (§49, ADR-0044, M7-02). Its interval
 	// was validated at config load, so the error here cannot fire; it is read

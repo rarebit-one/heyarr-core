@@ -20,7 +20,6 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/backup"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/replication"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
@@ -58,7 +57,7 @@ func startStatePlaneReplication(ctx context.Context, db *sqlite.DB, eventLog *ev
 		replication.NewClient(material, log),
 		fullPeerLister{members: members, self: selfPeerID},
 		eventLog, log)
-	runStateReplicationBeat(ctx, reconciler, interval, log)
+	runStateReplicationBeat(ctx, reconciler, interval, log, wallTicker)
 }
 
 // stateReconciler is the one thing the beat drives — the on-demand reconciler's
@@ -71,7 +70,7 @@ type stateReconciler interface {
 
 // runStateReplicationBeat drives one reconcile per tick until ctx is done, over
 // the shared non-fatal cadence runner.
-func runStateReplicationBeat(ctx context.Context, reconciler stateReconciler, interval time.Duration, log *slog.Logger) {
+func runStateReplicationBeat(ctx context.Context, reconciler stateReconciler, interval time.Duration, log *slog.Logger, newTicker tickerFunc) {
 	cycle := func(ctx context.Context) error {
 		replicated, deferred, err := reconciler.ReconcileAll(ctx)
 		if err != nil {
@@ -82,10 +81,7 @@ func runStateReplicationBeat(ctx context.Context, reconciler stateReconciler, in
 		}
 		return nil
 	}
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		backup.RunCadence(ctx, ticker.C, cycle, log)
-	}()
-	log.Info("personal-state replication beat started", "interval", interval)
+	startBeat(ctx, log, newTicker, beat{
+		name: "personal-state replication", interval: interval, pass: cadencePass(ctx, cycle, log),
+	})
 }
