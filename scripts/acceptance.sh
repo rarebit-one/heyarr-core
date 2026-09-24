@@ -9022,6 +9022,14 @@ YAML
 # happy path (a 34-42s wait for a health pass that #164's section already
 # procures and asserts, and four event-log replays that each sat out a
 # five-second --max-time; see events_replay) came out, and the budget stayed.
+#
+# Later in 2026-09 a search stopped asking indexers one after another. The
+# demo's two real-but-refusing indexers (acceptance-torznab, -newznab) each
+# spend about six seconds in retry backoff per search, and they used to be
+# paid serially; asked concurrently, they cost one backoff rather than two.
+# CI verdict lines went from ubuntu 237-241s / macOS 239-255s to 208s / 227s.
+# The budget stayed at 300 deliberately: that is margin regained, not room to
+# spend.
 DEMO_BUDGET_SECONDS=${DEMO_BUDGET_SECONDS:-300}
 DEMO_STARTED=$SECONDS
 
