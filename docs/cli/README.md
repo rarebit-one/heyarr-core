@@ -90,6 +90,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr space changes`](heyarr_space_changes.md) | List a space's stored changes AS THE PEER HOLDS THEM — ciphertext |
 | [`heyarr space compact`](heyarr_space_compact.md) | Drop the changes the latest snapshot subsumes (§44) |
 | [`heyarr space create`](heyarr_space_create.md) | Mint an encrypted space and wrap its key for the authorised devices |
+| [`heyarr space export-recovery`](heyarr_space_export-recovery.md) | Export every space's recovery-wrapped key into one recovery blob (ADR-0022) |
 | [`heyarr space keys`](heyarr_space_keys.md) | List the wrapped copies of a space's key (recipients only, no key material) |
 | [`heyarr space list`](heyarr_space_list.md) | List the encrypted spaces the controller holds (metadata only) |
 | [`heyarr space put`](heyarr_space_put.md) | Add an item to a space's playlist (encrypted client-side, then pushed) |
