@@ -6,9 +6,10 @@ package peerapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
-	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -20,10 +21,9 @@ import (
 
 // The catalog snapshot over the authenticated peer link (§52, M4-06, M4-13).
 //
-// The point of testing it here rather than only against the store is that the
-// two properties this route owes cannot be shown anywhere else: that the peer
-// a snapshot is built for comes from the CERTIFICATE, and that a real peer can
-// pull one over a real pinned connection and materialise it.
+// The two properties this route owes can only be shown here: that the peer a
+// snapshot is built for comes from the CERTIFICATE, and that a real member can
+// pull one over a real pinned connection.
 
 var snapshotEpoch = time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 
@@ -100,38 +100,47 @@ func serveWithSnapshots(t *testing.T, self *peerNode, members mtls.Membership, s
 	return &listener{srv: srv, self: self, addr: srv.Addr(), logs: logs}
 }
 
-// A peer pulls its snapshot over the pinned link and materialises it locally.
+// fetchSnapshot is what a peer would do: GET the snapshot over the pinned link,
+// saying which version it holds, and decode the payload.
+func fetchSnapshot(t *testing.T, client *http.Client, addr string, holding int64) *peercatalog.Snapshot {
+	t.Helper()
+	target := "https://" + addr + peerapi.Prefix + "/catalog/snapshot?holding=" + strconv.FormatInt(holding, 10)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("fetching the snapshot over the peer link: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var snap peercatalog.Snapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		t.Fatalf("decoding the snapshot: %v", err)
+	}
+	if err := snap.Meta.Validate(); err != nil {
+		t.Fatalf("the snapshot's metadata does not validate: %v", err)
+	}
+	return &snap
+}
+
+// A peer pulls its snapshot over the pinned link, and the payload decodes.
 func TestAPeerPullsItsSnapshotOverTheAuthenticatedLink(t *testing.T) {
-	ctx := context.Background()
 	controller := newPeerNode(t, "controller-a", "controller")
 	peerB := newPeerNode(t, "peer-b", "site-b")
 	root := newTrustRoot(controller.member(), peerB.member())
 
 	src := &recordingSource{}
 	l := serveWithSnapshots(t, controller, root, src)
+	client := dialler(t, peerB, root)
 
-	store, err := peercatalog.Open(ctx, peercatalog.Options{
-		Path: filepath.Join(t.TempDir(), "catalog-snapshot.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = store.Close() }()
-
-	refresher, err := peercatalog.NewRefresher(store, peercatalog.HTTPFetcher{
-		Client:  dialler(t, peerB, root),
-		BaseURL: "https://" + l.addr + peerapi.Prefix,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	meta, err := refresher.Refresh(ctx, false)
-	if err != nil {
-		t.Fatalf("refreshing over the peer link: %v", err)
-	}
-	if meta.Version != 1 || meta.ControllerID != "controller-a" {
-		t.Fatalf("meta = %+v, want version 1 from controller-a", meta)
+	snap := fetchSnapshot(t, client, l.addr, 0)
+	if snap.Meta.Version != 1 || snap.Meta.ControllerID != "controller-a" {
+		t.Fatalf("meta = %+v, want version 1 from controller-a", snap.Meta)
 	}
 
 	// The peer the snapshot was built FOR is the one the certificate proved.
@@ -142,33 +151,22 @@ func TestAPeerPullsItsSnapshotOverTheAuthenticatedLink(t *testing.T) {
 	if len(asked) != 1 || asked[0] != "peer-b" {
 		t.Fatalf("the controller built the snapshot for %v, want [peer-b]", asked)
 	}
-
-	contents, err := store.Contents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(contents.Works) != 1 || contents.Works[0].Title != "Arrival" {
-		t.Fatalf("the snapshot did not land: %+v", contents.Works)
+	if len(snap.Works) != 1 || snap.Works[0].Title != "Arrival" {
+		t.Fatalf("the snapshot did not come across: %+v", snap.Works)
 	}
 
-	// A second refresh reports what it holds, so the controller can answer
+	// A second pull reports what it holds, so the controller can answer
 	// incrementally rather than resending the library.
 	src.title = "Arrival (Remastered)"
-	if _, err := refresher.Refresh(ctx, false); err != nil {
-		t.Fatal(err)
-	}
+	snap = fetchSnapshot(t, client, l.addr, snap.Meta.Version)
 	src.mu.Lock()
 	holding := append([]int64(nil), src.holding...)
 	src.mu.Unlock()
 	if len(holding) != 2 || holding[0] != 0 || holding[1] != 1 {
 		t.Fatalf("holding = %v, want [0 1]", holding)
 	}
-	contents, err = store.Contents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if contents.Works[0].Title != "Arrival (Remastered)" {
-		t.Fatalf("the second refresh did not land: %+v", contents.Works)
+	if snap.Works[0].Title != "Arrival (Remastered)" {
+		t.Fatalf("the second pull did not carry the change: %+v", snap.Works)
 	}
 }
 

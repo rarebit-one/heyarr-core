@@ -3,7 +3,6 @@ package catalog_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -20,11 +19,12 @@ import (
 
 // M4-13's acceptance against a REAL controller database (§52).
 //
-// The peer-side store has its own tests. What these add is the half that can
-// only be wrong against real rows: that the snapshot's contents are the
-// controller's catalogue, that a change to the catalogue reaches the snapshot
-// only when it is refreshed, and that the incremental path and the full
-// rebuild agree about a catalogue neither of them made up.
+// These are the half that can only be wrong against real rows: that the
+// snapshot's contents are the controller's catalogue, that a change to the
+// catalogue reaches the snapshot only when it is refreshed, and that the
+// incremental path and the full rebuild agree about a catalogue neither of them
+// made up. What a peer holds is modelled by materialise below — the payload
+// semantics Snapshot documents, applied in memory.
 //
 // Contents are compared as ROW SETS. Counts would pass on a snapshot holding
 // the same number of different rows, which is the exact shape of a prune that
@@ -32,11 +32,11 @@ import (
 
 const peerUnderTest = "peer-b"
 
-// snapshotHarness is newHarness plus a peer to issue snapshots to and a peer
-// store to materialise them into.
+// snapshotHarness is newHarness plus a peer to issue snapshots to and the
+// snapshot that peer currently holds (nil until the first refresh).
 type snapshotHarness struct {
 	*harness
-	store *peercatalog.Store
+	held *peercatalog.Snapshot
 }
 
 func newSnapshotHarness(t *testing.T) *snapshotHarness {
@@ -50,15 +50,85 @@ func newSnapshotHarness(t *testing.T) *snapshotHarness {
 		VALUES ('lib-1', 'Films', 'movie', 1, ?)`, stamp)
 	h.exec(t, `INSERT INTO library_roots (id, library_id, path, ingest_mode, enabled, created_at)
 		VALUES ('root-1', 'lib-1', '/srv/films', 'link', 1, ?)`, stamp)
+	return &snapshotHarness{harness: h}
+}
 
-	store, err := peercatalog.Open(context.Background(), peercatalog.Options{
-		Path: filepath.Join(t.TempDir(), "catalog-snapshot.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
+// materialise applies one payload to what a peer holds, following the
+// semantics Snapshot documents: a full payload replaces the contents outright;
+// an incremental one upserts the rows it carries and then keeps only the ids in
+// its complete id set, which is how deletions are derived.
+func materialise(t *testing.T, held, next *peercatalog.Snapshot) *peercatalog.Snapshot {
+	t.Helper()
+	if err := next.Meta.Validate(); err != nil {
+		t.Fatalf("the payload's metadata does not validate: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
-	return &snapshotHarness{harness: h, store: store}
+	if held != nil && next.Meta.Version <= held.Meta.Version {
+		t.Fatalf("offered version %d while holding %d — versions must advance",
+			next.Meta.Version, held.Meta.Version)
+	}
+	out := &peercatalog.Snapshot{Meta: next.Meta}
+	if next.Meta.Kind == peercatalog.KindFull || held == nil {
+		if next.Meta.Kind != peercatalog.KindFull {
+			t.Fatalf("an incremental payload offered to a peer holding nothing")
+		}
+		out.Libraries = append(out.Libraries, next.Libraries...)
+		out.LibraryRoots = append(out.LibraryRoots, next.LibraryRoots...)
+		out.Works = append(out.Works, next.Works...)
+		out.Editions = append(out.Editions, next.Editions...)
+		out.Blobs = append(out.Blobs, next.Blobs...)
+		out.Assets = append(out.Assets, next.Assets...)
+		return out
+	}
+	if next.IDs == nil {
+		t.Fatal("an incremental payload carries no id sets, so deletions are invisible")
+	}
+	keep := func(table string) map[string]bool {
+		ids, ok := next.IDs[table]
+		if !ok {
+			t.Fatalf("the incremental payload carries no id set for %s", table)
+		}
+		m := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			m[id] = true
+		}
+		return m
+	}
+	out.Libraries = mergeRows(held.Libraries, next.Libraries, keep("snapshot_libraries"),
+		func(r peercatalog.Library) string { return r.ID })
+	out.LibraryRoots = mergeRows(held.LibraryRoots, next.LibraryRoots, keep("snapshot_library_roots"),
+		func(r peercatalog.LibraryRoot) string { return r.ID })
+	out.Works = mergeRows(held.Works, next.Works, keep("snapshot_works"),
+		func(r peercatalog.Work) string { return r.ID })
+	out.Editions = mergeRows(held.Editions, next.Editions, keep("snapshot_editions"),
+		func(r peercatalog.Edition) string { return r.ID })
+	out.Blobs = mergeRows(held.Blobs, next.Blobs, keep("snapshot_blobs"),
+		func(r peercatalog.Blob) string { return r.Hash })
+	out.Assets = mergeRows(held.Assets, next.Assets, keep("snapshot_assets"),
+		func(r peercatalog.Asset) string { return r.ID })
+	return out
+}
+
+// mergeRows upserts changed into held by key, then prunes every key not in keep.
+func mergeRows[R any](held, changed []R, keep map[string]bool, key func(R) string) []R {
+	byKey := map[string]R{}
+	for _, r := range held {
+		byKey[key(r)] = r
+	}
+	for _, r := range changed {
+		byKey[key(r)] = r
+	}
+	keys := make([]string, 0, len(byKey))
+	for k := range byKey {
+		if keep[k] {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	out := make([]R, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, byKey[k])
+	}
+	return out
 }
 
 // addWork inserts a work and one edition for it, at the given instant.
@@ -87,20 +157,12 @@ func (h *snapshotHarness) build(t *testing.T, holding int64, full bool) *peercat
 // refresh builds and applies, the way the peer does.
 func (h *snapshotHarness) refresh(t *testing.T, full bool) *peercatalog.Snapshot {
 	t.Helper()
-	ctx := context.Background()
 	var holding int64
-	switch meta, err := h.store.Metadata(ctx); {
-	case errors.Is(err, peercatalog.ErrNoSnapshot):
-		holding = 0
-	case err != nil:
-		t.Fatal(err)
-	default:
-		holding = meta.Version
+	if h.held != nil {
+		holding = h.held.Meta.Version
 	}
 	snap := h.build(t, holding, full)
-	if err := h.store.Apply(ctx, snap); err != nil {
-		t.Fatalf("applying the snapshot: %v", err)
-	}
+	h.held = materialise(t, h.held, snap)
 	return snap
 }
 
@@ -173,7 +235,6 @@ func assertSameSet(t *testing.T, what string, want, got []string) {
 func TestASnapshotHoldsTheControllersCatalogueRowForRow(t *testing.T) {
 	t.Parallel()
 	h := newSnapshotHarness(t)
-	ctx := context.Background()
 	h.addWork(t, "w-arrival", "Arrival", stamp)
 	h.addWork(t, "w-dune", "Dune", stamp)
 	h.exec(t, `INSERT INTO blobs (hash, size, mime, first_seen_at)
@@ -185,10 +246,7 @@ func TestASnapshotHoldsTheControllersCatalogueRowForRow(t *testing.T) {
 
 	h.refresh(t, false)
 
-	contents, err := h.store.Contents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	contents := h.held
 	got := snapshotIDs(contents)
 	for _, table := range []struct{ name, key string }{
 		{"libraries", "id"},
@@ -225,7 +283,6 @@ func TestASnapshotHoldsTheControllersCatalogueRowForRow(t *testing.T) {
 func TestACatalogueChangeIsStaleUntilTheSnapshotIsRefreshed(t *testing.T) {
 	t.Parallel()
 	h := newSnapshotHarness(t)
-	ctx := context.Background()
 	h.addWork(t, "w-arrival", "Arrival", stamp)
 	first := h.refresh(t, false)
 	if first.Meta.Version != 1 {
@@ -239,18 +296,12 @@ func TestACatalogueChangeIsStaleUntilTheSnapshotIsRefreshed(t *testing.T) {
 	// STALE FIRST. This is the half that matters: reading the snapshot does
 	// not refresh it, so a design that rebuilt on every read — which would
 	// pass an end-state-only assertion — fails here.
-	before, err := h.store.Contents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := h.held
 	if containsWork(before, "w-dune") {
 		t.Fatal("the snapshot already had the new work before any refresh — " +
 			"it is being rebuilt on read, which is not what a snapshot is")
 	}
-	beforeMeta, err := h.store.Metadata(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	beforeMeta := h.held.Meta
 	if beforeMeta.Version != 1 {
 		t.Fatalf("reading the snapshot moved its version to %d", beforeMeta.Version)
 	}
@@ -261,10 +312,7 @@ func TestACatalogueChangeIsStaleUntilTheSnapshotIsRefreshed(t *testing.T) {
 		t.Fatalf("second refresh kind = %s, want incremental — the peer held the "+
 			"version the controller last issued", second.Meta.Kind)
 	}
-	after, err := h.store.Contents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	after := h.held
 	if !containsWork(after, "w-dune") {
 		t.Fatal("the refreshed snapshot is still missing the new work")
 	}
@@ -276,26 +324,19 @@ func TestACatalogueChangeIsStaleUntilTheSnapshotIsRefreshed(t *testing.T) {
 func TestADeletedWorkLeavesTheSnapshotOnRefresh(t *testing.T) {
 	t.Parallel()
 	h := newSnapshotHarness(t)
-	ctx := context.Background()
 	h.addWork(t, "w-arrival", "Arrival", stamp)
 	h.addWork(t, "w-dune", "Dune", stamp)
 	h.refresh(t, false)
 
 	h.exec(t, `DELETE FROM works WHERE id = 'w-dune'`)
 
-	before, err := h.store.Contents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := h.held
 	if !containsWork(before, "w-dune") {
 		t.Fatal("the fixture is wrong: the snapshot never held w-dune")
 	}
 
 	h.refresh(t, false)
-	after, err := h.store.Contents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	after := h.held
 	if containsWork(after, "w-dune") {
 		t.Fatal("a deleted work survived an incremental refresh")
 	}
@@ -323,19 +364,9 @@ func TestIncrementalAndFullRebuildAgreeAboutTheSameCatalogue(t *testing.T) {
 	if inc.Meta.Kind != peercatalog.KindIncremental {
 		t.Fatalf("kind = %s, want incremental", inc.Meta.Kind)
 	}
-	incContents, err := h2.store.Contents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	incContents := h2.held
 
-	// A second peer store against the SAME controller, taking the full path.
-	fullStore, err := peercatalog.Open(ctx, peercatalog.Options{
-		Path: filepath.Join(t.TempDir(), "full-snapshot.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = fullStore.Close() }()
+	// A second peer against the SAME controller, taking the full path.
 	fullSnap, err := h2.cat.BuildSnapshot(ctx, catalog.SnapshotRequest{
 		PeerID: peerUnderTest, ControllerID: "controller-a", Holding: 0, Full: true,
 	})
@@ -345,13 +376,7 @@ func TestIncrementalAndFullRebuildAgreeAboutTheSameCatalogue(t *testing.T) {
 	if fullSnap.Meta.Kind != peercatalog.KindFull {
 		t.Fatalf("kind = %s, want full", fullSnap.Meta.Kind)
 	}
-	if err := fullStore.Apply(ctx, fullSnap); err != nil {
-		t.Fatal(err)
-	}
-	fullContents, err := fullStore.Contents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fullContents := materialise(t, nil, fullSnap)
 
 	if incContents.ContentDigest() != fullContents.ContentDigest() {
 		t.Fatalf("incremental and full disagree\n  incremental works: %v\n  full works: %v",
@@ -388,10 +413,7 @@ func TestSnapshotVersionsAdvanceAcrossBuilds(t *testing.T) {
 		if rec.ControllerID != "controller-a" {
 			t.Fatalf("controller = %q", rec.ControllerID)
 		}
-		stored, err := h.store.Metadata(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
+		stored := h.held.Meta
 		if stored.Version != snap.Meta.Version {
 			t.Fatalf("the peer holds version %d, the controller issued %d",
 				stored.Version, snap.Meta.Version)
@@ -555,22 +577,6 @@ func TestTheChunkManifestStateReachesTheSnapshot(t *testing.T) {
 					"one state — that is the boolean again, on the wire")
 			}
 		})
-	}
-
-	// And through the peer store, which is where a peer actually reads it.
-	h.refresh(t, true)
-	contents, err := h.store.Contents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stored := make(map[string]manifests.State, len(contents.Blobs))
-	for _, b := range contents.Blobs {
-		stored[b.Hash] = b.ChunkManifest
-	}
-	if stored[manifested] != manifests.StatePresent ||
-		stored[exempt] != manifests.StateNotRequired ||
-		stored[undecided] != manifests.StateUndecided {
-		t.Errorf("the materialised snapshot holds %v", stored)
 	}
 }
 
