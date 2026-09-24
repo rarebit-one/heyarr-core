@@ -60,10 +60,10 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr library root set-ingest-mode`](heyarr_library_root_set-ingest-mode.md) | Change how an existing root materialises ingested bytes |
 | [`heyarr library root`](heyarr_library_root.md) | Add or remove a library's roots |
 | [`heyarr library`](heyarr_library.md) | Manage libraries and their roots |
-| [`heyarr pair authorise`](heyarr_pair_authorise.md) | Old device: authorise a new device and sign its enrolment cert |
-| [`heyarr pair enrol`](heyarr_pair_enrol.md) | New device: pair with an old device and store the enrolment cert |
+| [`heyarr pair authorise`](heyarr_pair_authorise.md) | Existing side: admit a new device by signing its membership op |
+| [`heyarr pair enrol`](heyarr_pair_enrol.md) | New device: join through an invite and store the membership op |
 | [`heyarr pair sas`](heyarr_pair_sas.md) | Compute the short authentication string for two keys and a salt |
-| [`heyarr pair`](heyarr_pair.md) | Authorise a new device from an already-enrolled one (§40, ADR-0022) |
+| [`heyarr pair`](heyarr_pair.md) | Admit a new device from one that can already vouch for you (§40, ADR-0022) |
 | [`heyarr peer`](heyarr_peer.md) | Serve and replicate bytes |
 | [`heyarr peers add`](heyarr_peers_add.md) | Enrol another peer by its public key |
 | [`heyarr peers attach`](heyarr_peers_attach.md) | Attach to a controller over mTLS and report what it records this node as |

@@ -36,4 +36,4 @@ heyarr pair sas [flags]
 
 ### See also
 
-* [heyarr pair](heyarr_pair.md)	 - Authorise a new device from an already-enrolled one (§40, ADR-0022)
+* [heyarr pair](heyarr_pair.md)	 - Admit a new device from one that can already vouch for you (§40, ADR-0022)

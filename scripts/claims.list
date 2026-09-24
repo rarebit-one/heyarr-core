@@ -232,9 +232,9 @@ evidence the peer that trusts it recognised the rebuilt node as the same peer, w
 
 claim pairing-enrols-a-new-device
 state proven
-ref   §40, ADR-0022, ADR-0038, #305
-why   An OLD device authorises a NEW one over a dumb relay: the two exchange public keys and a salt, derive the same short code, and on a human match the old device signs an enrolment cert the new device stores — the server trusted with nothing (ADR-0038). Before this the pairing primitives (the SAS, the commitment) and the relay each existed with no path from the binary that ran an actual handshake: internal/pairflow and internal/pairrelay were built and unit-tested, and no command reached them. This is that caller, end to end, over the real HTTP relay.
-evidence the new device is enrolled by the old one over the relay — paired, no server trusted
+ref   §40, ADR-0022, ADR-0038, ADR-0066, ADR-0068, #305, #627
+why   The identity, or a device that is already a member, admits a NEW one over a dumb relay: the authorising side prints an invite, the two exchange public keys, derive the same short code, and on a human match the authorising side signs a membership op (ADR-0068) the new device stores — the server trusted with nothing (ADR-0038). The handshake is voidbind-go's pairflow over the node's /pair/v1 relay, the protocol the Voidbind apps speak (ADR-0066); the identity signs through its store's signer and never hands the seed out. The demo runs it end to end twice, over the real HTTP relay: the identity admits a device, and that device, now a member, admits the next.
+evidence the new device is admitted by the identity over the relay — paired, no server trusted
 
 claim pairing-substitution-changes-the-code
 state proven
