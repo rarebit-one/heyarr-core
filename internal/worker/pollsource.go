@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/desired"
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
@@ -55,11 +56,24 @@ type idNamespaced interface {
 	IDNamespace() string
 }
 
+// PollSourceStore is the part of the catalog the source poll uses. A
+// *catalog.Catalog satisfies it; the handler depends on no more than it calls.
+type PollSourceStore interface {
+	CreateDesiredItem(ctx context.Context, item desired.Item) (catalog.DesiredItemRecord, error)
+	DesiredItemForItem(ctx context.Context, itemID, profileID string) (string, bool, error)
+	FollowSource(ctx context.Context, id string) (catalog.StoredSource, error)
+	ProfileIDByName(ctx context.Context, name string) (string, bool, error)
+	RecordDirectRelease(ctx context.Context, desiredItemID string, cand acquisition.ReleaseCandidate) (bool, error)
+	RecordPollOutcome(ctx context.Context, sourceID string, foundNew bool, now time.Time) error
+	UpsertItem(ctx context.Context, workID string, fi followed.FeedItem) (catalog.Item, bool, error)
+	WriteWorkExternalID(ctx context.Context, workID, source, value string) error
+}
+
 // PollSourceHandler runs one source's poll. reg resolves the feed adapter, cat
 // stores items and wants, and grabs is the queue a fresh want's reconciliation
 // is enqueued to (nil-tolerant, so a poll is exercisable without one).
 func PollSourceHandler(
-	reg *providers.Registry, cat *catalog.Catalog, grabs *jobs.Queue, log *slog.Logger,
+	reg *providers.Registry, cat PollSourceStore, grabs *jobs.Queue, log *slog.Logger,
 ) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
 		payload, err := decodePayload[followed.PollSourcePayload](job)
@@ -287,7 +301,7 @@ func shouldProject(src catalog.StoredSource, fi followed.FeedItem) bool {
 // Idempotent (invariant 9): RecordDirectRelease no-ops on a want already past
 // MISSING, so a re-poll drives nothing twice and enqueues no duplicate grab.
 func startAcquisition(
-	ctx context.Context, cat *catalog.Catalog, grabs *jobs.Queue,
+	ctx context.Context, cat PollSourceStore, grabs *jobs.Queue,
 	src catalog.StoredSource, item catalog.Item, fi followed.FeedItem,
 	wantID string, log *slog.Logger,
 ) error {

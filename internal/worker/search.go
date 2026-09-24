@@ -61,12 +61,22 @@ const candidateLimit = 200
 // stops being interesting once the search that produced it is stale.
 const candidateRetention = 30 * 24 * time.Hour
 
+// SearchStore is the part of the catalog the search handler uses. A
+// *catalog.Catalog satisfies it; the handler depends on no more than it calls.
+type SearchStore interface {
+	AdvanceAcquisition(ctx context.Context, desiredItemID string, t acquisition.Transition, detail string) (catalog.AcquisitionRecord, error)
+	BlockedKeys(ctx context.Context, desiredItemID string) (map[string]catalog.BlockedRelease, error)
+	PruneCandidates(ctx context.Context, olderThan time.Time) (int64, error)
+	RecordSearch(ctx context.Context, desiredItemID string, ranked []acquisition.Ranked, incumbent acquisition.Incumbent) (catalog.SearchOutcome, error)
+	SearchContextFor(ctx context.Context, desiredItemID string) (catalog.SearchContext, error)
+}
+
 // SearchHandler runs one want's search.
 // grabs is the queue the follow-up grab is written to. It is the same
 // interface the ingest and probe follow-ups use, and nil is tolerated so a
 // search can still be exercised without one (see enqueueGrab).
 func SearchHandler(
-	reg *providers.Registry, cat *catalog.Catalog, grabs ProbeEnqueuer, log *slog.Logger,
+	reg *providers.Registry, cat SearchStore, grabs ProbeEnqueuer, log *slog.Logger,
 ) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
 		payload, err := decodePayload[acquisition.SearchPayload](job)
