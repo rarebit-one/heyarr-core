@@ -44,7 +44,7 @@ func (a *API) getSnapshot(w http.ResponseWriter, r *http.Request) {
 func (a *API) putSnapshot(w http.ResponseWriter, r *http.Request) {
 	spaceID := chi.URLParam(r, "id")
 	var snap protocol.EncryptedSnapshot
-	if err := decodeJSON(w, r, &snap); err != nil {
+	if err := httpapi.DecodeJSON(w, r, &snap, maxRequestBody); err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	}
@@ -67,7 +67,7 @@ type snapshotStored struct {
 func (a *API) compact(w http.ResponseWriter, r *http.Request) {
 	spaceID := chi.URLParam(r, "id")
 	var req compactRequest
-	if err := decodeJSON(w, r, &req); err != nil {
+	if err := httpapi.DecodeJSON(w, r, &req, maxRequestBody); err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	}

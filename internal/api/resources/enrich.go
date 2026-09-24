@@ -36,8 +36,7 @@ type EnrichBackfillRequest struct {
 // concurrent beat pass) dedupes on its work-scoped key.
 func (a *API) backfillEnrich(w http.ResponseWriter, r *http.Request) {
 	var body EnrichBackfillRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	if body.LibraryID == "" && body.WorkID == "" && body.Author == "" && !body.All {

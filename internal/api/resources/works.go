@@ -53,8 +53,7 @@ func (a *API) patchWork(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	var body WorkPatch
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	if body.Title == nil && body.Year == nil && body.ContentType == nil {

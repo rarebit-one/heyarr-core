@@ -38,7 +38,7 @@ type Readiness struct {
 // because the database is busy causes a restart loop that makes the database
 // busier.
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"status": "ok"})
+	WriteJSON(w, r, s.log, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handleReadyz answers readiness: this process can actually serve requests.
@@ -62,7 +62,7 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusServiceUnavailable
 		body.Status = "not ready"
 	}
-	s.writeJSON(w, r, status, body)
+	WriteJSON(w, r, s.log, status, body)
 }
 
 func (s *Server) checkDatabase(ctx context.Context) Check {
@@ -279,7 +279,7 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	casCheck := s.checkCAS()
 	eventsInfo := s.eventsHead(ctx)
 
-	s.writeJSON(w, r, http.StatusOK, SystemInfo{
+	WriteJSON(w, r, s.log, http.StatusOK, SystemInfo{
 		Build:         s.build,
 		Peer:          PeerInfo{Name: s.cfg.Peer.Name, Site: s.cfg.Peer.Site},
 		SchemaVersion: s.schema,

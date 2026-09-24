@@ -140,8 +140,7 @@ func (a *API) listManagementGrants(w http.ResponseWriter, r *http.Request) {
 // updates its note rather than failing.
 func (a *API) createManagementGrant(w http.ResponseWriter, r *http.Request) {
 	var body ManagementGrantRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	deviceKey := strings.TrimSpace(body.DeviceKey)

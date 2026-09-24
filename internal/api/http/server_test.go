@@ -356,9 +356,9 @@ func TestListenerConstructionRefusesAnUnauthenticatedPublicBind(t *testing.T) {
 // Every response carries X-Content-Type-Options, whether or not the handler
 // that produced it remembered to set it.
 //
-// Three writers set it individually today — routes.go's writeJSON,
-// problem.Write and the resource API's write — and the failure mode of three
-// places remembering the same thing is a fourth that does not. This asserts
+// The shared writers set it individually today — WriteJSON and problem.Write
+// — and the failure mode of several places remembering the same thing is one
+// more that does not. This asserts
 // the guarantee is structural rather than habitual: `/probe` sets no headers
 // at all, and the panic on `/boom` never reaches a writer that could.
 //

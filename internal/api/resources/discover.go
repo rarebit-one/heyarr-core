@@ -184,8 +184,7 @@ func DiscoverClientFault(err error) (string, bool) {
 // discoverRoute is POST /api/v1/discover — a shell over Discover.
 func (a *API) discoverRoute(w http.ResponseWriter, r *http.Request) {
 	var body DiscoverRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	out, err := a.Discover(r.Context(), body)

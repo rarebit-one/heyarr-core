@@ -85,8 +85,7 @@ const maxCandidates = 500
 // evaluateCandidates is POST /api/v1/quality-profiles/{id}/evaluate.
 func (a *API) evaluateCandidates(w http.ResponseWriter, r *http.Request) {
 	var body evaluateRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	if id := chi.URLParam(r, "id"); id != "" {
