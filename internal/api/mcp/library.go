@@ -19,23 +19,26 @@ import (
 // discipline search_content is built on. Only the truncatable envelope, which
 // keeps a listing inside a model's context, is this door's own.
 
+// browseLibraryArgs is what browseLibrary decodes (held to its schema by schemaargs_test.go).
+type browseLibraryArgs struct {
+	ContentType         string `json:"content_type"`
+	LibraryID           string `json:"library_id"`
+	Query               string `json:"q"`
+	Artist              string `json:"artist"`
+	Author              string `json:"author"`
+	Year                *int64 `json:"year"`
+	YearFrom            *int64 `json:"year_from"`
+	YearTo              *int64 `json:"year_to"`
+	Sort                string `json:"sort"`
+	IncludeArtwork      *bool  `json:"include_artwork"`
+	IncludePrimaryAsset *bool  `json:"include_primary_asset"`
+	Limit               int    `json:"limit"`
+}
+
 // browseLibrary walks the catalog with the browse embeds (ADR-0075). It is the
 // counterpart to search_content: search resolves a title, this walks a shelf.
 func (s *Server) browseLibrary(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		ContentType         string `json:"content_type"`
-		LibraryID           string `json:"library_id"`
-		Query               string `json:"q"`
-		Artist              string `json:"artist"`
-		Author              string `json:"author"`
-		Year                *int64 `json:"year"`
-		YearFrom            *int64 `json:"year_from"`
-		YearTo              *int64 `json:"year_to"`
-		Sort                string `json:"sort"`
-		IncludeArtwork      *bool  `json:"include_artwork"`
-		IncludePrimaryAsset *bool  `json:"include_primary_asset"`
-		Limit               int    `json:"limit"`
-	}
+	var args browseLibraryArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -83,13 +86,16 @@ func (s *Server) browseLibrary(ctx context.Context, raw json.RawMessage) (any, e
 	return out, nil
 }
 
+// groupingArgs is what listGroupedTool decodes (held to its schema by schemaargs_test.go).
+type groupingArgs struct {
+	Query string `json:"q"`
+	Limit int    `json:"limit"`
+}
+
 // listGroupedTool is the shared body of list_artists and list_authors: a
 // grouping over one attribute a scan wrote, paged and counted.
 func (s *Server) listGroupedTool(ctx context.Context, raw json.RawMessage, attr, contentType, collection string) (any, error) {
-	var args struct {
-		Query string `json:"q"`
-		Limit int    `json:"limit"`
-	}
+	var args groupingArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -117,15 +123,18 @@ func (s *Server) listAuthors(ctx context.Context, raw json.RawMessage) (any, err
 	return s.listGroupedTool(ctx, raw, "author", "book", "authors")
 }
 
+// continueRailArgs is what continueRail decodes (held to its schema by schemaargs_test.go).
+type continueRailArgs struct {
+	DeviceID string `json:"device_id"`
+	Limit    int    `json:"limit"`
+}
+
 // continueRail lists the newest positioned, not-finished session per work — the
 // "pick up where it stopped" rail (ADR-0075). These are resume points the node
 // holds server-side (ADR-0024); the encrypted personal history stays in the
 // Personal MCP (§72), which this server holds no key for.
 func (s *Server) continueRail(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		DeviceID string `json:"device_id"`
-		Limit    int    `json:"limit"`
-	}
+	var args continueRailArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -152,14 +161,17 @@ func (s *Server) continueRail(ctx context.Context, raw json.RawMessage) (any, er
 	return out, nil
 }
 
+// followedSourceItemsArgs is what followedSourceItems decodes (held to its schema by schemaargs_test.go).
+type followedSourceItemsArgs struct {
+	SourceID string `json:"source_id"`
+	Limit    int    `json:"limit"`
+}
+
 // followedSourceItems lists what one subscription has archived and merely knows
 // about (#430), complementing list_followed's per-source summary. It is the
 // per-item detail behind a single followed source.
 func (s *Server) followedSourceItems(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		SourceID string `json:"source_id"`
-		Limit    int    `json:"limit"`
-	}
+	var args followedSourceItemsArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
