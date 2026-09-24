@@ -11,6 +11,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
+	"golang.org/x/sync/errgroup"
 )
 
 // Registry is the centralised provider registry (§59).
@@ -389,7 +390,28 @@ type Failure struct {
 	Detail   string
 }
 
-// Search asks every indexer, in routing order, and aggregates the answers.
+// searchConcurrency bounds how many indexers one search asks at once.
+//
+// Concurrent because an unreachable indexer costs its full retry backoff
+// (seconds, not milliseconds) and asking one after another made every search
+// pay that for every dead indexer in turn — the healthy ones waited on it. Bounded
+// because a node configured with many indexers should not open that many
+// connections at once for a single want; four covers the usual homelab
+// configuration in one wave while keeping the burst polite. Each indexer's own
+// retry and backoff are unchanged: this changes when an indexer is asked, never
+// how often.
+const searchConcurrency = 4
+
+// indexerAnswer is one indexer's reply, held until every indexer has answered
+// so the merge can run in routing order regardless of who answered first.
+type indexerAnswer struct {
+	asked bool
+	found []acquisition.ReleaseCandidate
+	err   error
+}
+
+// Search asks every indexer, concurrently, and aggregates the answers in
+// routing order.
 //
 // # Why the registry does the fan-out
 //
@@ -405,6 +427,14 @@ type Failure struct {
 // unreachable is ordinary; discarding three working indexers' results because a
 // fourth timed out would make the whole feature as reliable as its worst
 // member.
+//
+// # Asked together, merged in order
+//
+// Indexers are asked concurrently (bounded by searchConcurrency) so a slow or
+// dead one delays only itself, but the answers are merged in ROUTING order once
+// all are in. The merge — deduplication's first-seen-wins, the order Failures
+// are appended — is therefore exactly what asking them one after another
+// produced, and nothing in the result depends on which indexer answered first.
 func (r *Registry) Search(ctx context.Context, q Query) (SearchResult, error) {
 	if err := q.Validate(); err != nil {
 		return SearchResult{}, err
@@ -415,25 +445,44 @@ func (r *Registry) Search(ctx context.Context, q Query) (SearchResult, error) {
 		return SearchResult{}, fmt.Errorf("%w: %s", ErrNoProvider, CapabilityIndexer)
 	}
 
+	answers := make([]indexerAnswer, len(indexers))
+	var g errgroup.Group
+	g.SetLimit(searchConcurrency)
+	for i, idx := range indexers {
+		g.Go(func() error {
+			// An indexer not yet asked when the search is cancelled is not
+			// asked at all, as when they were asked in turn.
+			if ctx.Err() != nil {
+				return nil
+			}
+			found, err := idx.Search(ctx, q)
+			answers[i] = indexerAnswer{asked: true, found: found, err: err}
+			// Never an error to the group: one indexer failing must not
+			// cancel the others (see above).
+			return nil
+		})
+	}
+	_ = g.Wait()
+
 	result := SearchResult{Consulted: len(indexers)}
 	seen := map[string]bool{}
-	for _, idx := range indexers {
-		if err := ctx.Err(); err != nil {
-			return result, err
+	for i, idx := range indexers {
+		a := answers[i]
+		if !a.asked {
+			continue
 		}
-		found, err := idx.Search(ctx, q)
-		if err != nil {
+		if a.err != nil {
 			result.Failures = append(result.Failures, Failure{
 				Provider: idx.Name(),
 				// %v rather than %w: this is a report for an operator, and a
 				// Secret in an implementation's error renders redacted through
 				// String(). Wrapping would make the chain inspectable, which
 				// is not what a status line is for.
-				Detail: fmt.Sprintf("%v", err),
+				Detail: fmt.Sprintf("%v", a.err),
 			})
 			continue
 		}
-		for _, c := range found {
+		for _, c := range a.found {
 			// Deduplicate across providers. Two indexers proxying the same
 			// tracker return the same release, and §63 scoring it twice would
 			// put a duplicate at the top of its own ranking.
@@ -455,6 +504,11 @@ func (r *Registry) Search(ctx context.Context, q Query) (SearchResult, error) {
 			seen[key] = true
 			result.Candidates = append(result.Candidates, c)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		// Cancelled mid-search: what did answer is returned alongside the
+		// cancellation, as it always was, rather than presented as complete.
+		return result, err
 	}
 
 	// A stable order out of the registry, so that M3-04's ranking is fed the
