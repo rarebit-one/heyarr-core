@@ -392,6 +392,40 @@ record independently agreeing on the bytes.
   run that repaired everything and met a lying peer still exits non-zero, for the
   same reason `fsck` exits non-zero on damage at all.
 
+### Changed
+
+- **`heyarr pair` runs on voidbind-go's pairing flow and the `/pair/v1` relay
+  (#647, ADR-0066 amended).** `pair authorise --as identity|device|auto` builds
+  the initiator from the identity store's signer (the genesis key never leaves
+  the store) or from a device that is already a member. `pair enrol --invite`
+  admits the device as a membership op (ADR-0068). **Breaking:** `pair enrol` no
+  longer takes `--session`, because the invite now carries the session. The new
+  protocol has no abort message, so a device whose code was refused waits out its
+  `--timeout` before giving up.
+- **Voidbind tokens are checked for their type (voidbind-go v0.15.0, ADR-0009
+  phase 1; #646, #650).** Every verifier now checks a token's `typ` claim when it
+  has one and refuses a wrong value. Untyped tokens are still accepted, and
+  nothing this node mints carries `typ` yet, so what it sends is unchanged. This
+  closes the gap where token kinds were told apart only by their `v` numbers,
+  and those overlap (grant v1 and cert v1, cert v2 and possession v2).
+- **A release search asks its indexers concurrently** (#626). They used to be
+  asked one at a time, so an indexer that refused connections cost its full
+  retry budget on every search.
+- **Timestamps that are compared are stored in a sortable, fixed-width layout**
+  (#621, migration 00055). `RFC3339Nano` drops trailing zeros, so `.1Z` sorted
+  after `.15Z` in the job queue's `run_after` and lease range queries. The error
+  was under a second, so it never showed.
+- **A job whose payload cannot be decoded fails permanently** (#615). It used to
+  spend its five retries first. The worker's schema guard is now derived from
+  the embedded migrations instead of a hand-kept number that had fallen behind.
+
+### Removed
+
+- **The legacy `/pair/sessions` relay, `internal/pairflow` and
+  `internal/pairrelay`** (#648). No client used them: heyarr-kmp and voidbind-kmp
+  pair over `/pair/v1`. The relay keeps its caps (256 sessions, 10-minute TTL).
+- **The never-wired peer catalog snapshot store** (#625), about 1.2k lines.
+
 ### Fixed
 
 - **A grab no longer depends on the download client reaching the indexer**
