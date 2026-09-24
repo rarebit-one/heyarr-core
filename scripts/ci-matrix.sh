@@ -95,7 +95,12 @@ if [ -z "$files" ]; then
 	decide true "the pull request lists no changed files"
 fi
 
-platform_suffix_re='_(darwin|windows|unix|linux|bsd|freebsd|netbsd|openbsd|other|posix)(_test)?\.go$'
+# Go's implicit filename constraints: *_GOOS.go, *_GOARCH.go and *_GOOS_GOARCH.go
+# (each optionally _test). The repo-convention suffixes (unix, bsd, other, posix)
+# are kept too, though Go itself only applies GOOS/GOARCH names.
+goos='aix|android|darwin|dragonfly|freebsd|hurd|illumos|ios|js|linux|netbsd|openbsd|plan9|solaris|wasip1|windows|zos|unix|bsd|other|posix'
+goarch='386|amd64|arm|arm64|loong64|mips|mips64|mips64le|mipsle|ppc64|ppc64le|riscv64|s390x|wasm'
+platform_suffix_re="_(($goos)(_($goarch))?|($goarch))(_test)?\\.go$"
 
 # A package is platform-sensitive if it already splits code by platform.
 platform_dir() {
