@@ -67,6 +67,21 @@ type acquisitionRoot interface {
 	RootForContentType(ctx context.Context, contentType string) (ingest.Root, error)
 }
 
+// IngestAcquisitionStore is the part of the catalog the acquisition ingest handler uses. A
+// *catalog.Catalog satisfies it; the handler depends on no more than it calls.
+type IngestAcquisitionStore interface {
+	Acquisition(ctx context.Context, desiredItemID string) (catalog.AcquisitionRecord, error)
+	AcquisitionFor(ctx context.Context, desiredItemID string) (catalog.Acquisition, error)
+	AdvanceAcquisition(ctx context.Context, desiredItemID string, t acquisition.Transition, detail string) (catalog.AcquisitionRecord, error)
+	BlockRelease(ctx context.Context, b catalog.BlockedRelease) (bool, error)
+	DesiredItemTarget(ctx context.Context, desiredItemID string) (scope, itemID, aspect, language string, err error)
+	ItemsForWork(ctx context.Context, workID string) ([]catalog.Item, error)
+	SearchContextFor(ctx context.Context, desiredItemID string) (catalog.SearchContext, error)
+	SelectedCandidate(ctx context.Context, desiredItemID string) (catalog.Candidate, error)
+	SetAssetItem(ctx context.Context, assetID, itemID string) error
+	WorkForDesired(ctx context.Context, desiredItemID string) (catalog.DesiredWork, error)
+}
+
 // IngestAcquisitionHandler brings one completed acquisition under management.
 //
 // # Failure is a modelled edge, not a returned error
@@ -81,7 +96,7 @@ type acquisitionRoot interface {
 // that will not accept the write — because that is a real failure and retrying
 // it is the right response.
 func IngestAcquisitionHandler(
-	cat *catalog.Catalog, roots acquisitionRoot, pipeline *ingest.Pipeline,
+	cat IngestAcquisitionStore, roots acquisitionRoot, pipeline *ingest.Pipeline,
 	probes ProbeEnqueuer, log *slog.Logger,
 ) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
@@ -490,7 +505,7 @@ func isSampleName(name string) bool {
 // wrong-season file, an episode with no want yet), is left UNLINKED (item_id
 // null) rather than attached to the wrong episode.
 func ingestArtifacts(
-	ctx context.Context, cat *catalog.Catalog, roots acquisitionRoot,
+	ctx context.Context, cat IngestAcquisitionStore, roots acquisitionRoot,
 	pipeline *ingest.Pipeline, desiredItemID string, batch verifiedTransfer,
 ) (results []ingest.Result, linked int, err error) {
 	sc, err := cat.SearchContextFor(ctx, desiredItemID)
@@ -619,7 +634,7 @@ func intAttr(v any) (int, bool) {
 // the same release and the download repeats until somebody notices the
 // bandwidth.
 func failAcquisition(
-	ctx context.Context, cat *catalog.Catalog, desiredItemID string,
+	ctx context.Context, cat IngestAcquisitionStore, desiredItemID string,
 	acq catalog.Acquisition, reason catalog.BlockReason, cause error, log *slog.Logger,
 ) error {
 	selected, err := cat.SelectedCandidate(ctx, desiredItemID)

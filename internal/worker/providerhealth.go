@@ -5,9 +5,14 @@ import (
 	"log/slog"
 
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
+
+// ProviderHealthRecorder records what a health pass observed. A
+// *catalog.Catalog satisfies it; the handler depends on no more than it calls.
+type ProviderHealthRecorder interface {
+	RecordProviderHealth(ctx context.Context, statuses []providers.Status) error
+}
 
 // ProviderHealthHandler exercises every configured provider and records what it
 // found (§59, ADR-0025).
@@ -40,7 +45,7 @@ import (
 // Idempotent by construction (invariant 9): it reads the world and writes what
 // it saw. Running it twice writes the same answers the second time.
 func ProviderHealthHandler(
-	reg *providers.Registry, recorder *catalog.Catalog, log *slog.Logger,
+	reg *providers.Registry, recorder ProviderHealthRecorder, log *slog.Logger,
 ) HandlerFunc {
 	return func(ctx context.Context, _ jobs.Job) error {
 		statuses := reg.CheckAll(ctx)

@@ -36,6 +36,21 @@ const stuckGrabGrace = 2 * time.Minute
 // re-enqueue is a no-op for those and only reaches wants with no job at all.
 const stuckIngestGrace = 20 * time.Minute
 
+// PollDownloadsStore is the part of the catalog the download poll uses. A
+// *catalog.Catalog satisfies it; the handler depends on no more than it calls.
+type PollDownloadsStore interface {
+	Acquisition(ctx context.Context, desiredItemID string) (catalog.AcquisitionRecord, error)
+	AcquisitionByExternal(ctx context.Context, provider, externalID string) (catalog.Acquisition, error)
+	AdvanceAcquisition(ctx context.Context, desiredItemID string, t acquisition.Transition, detail string) (catalog.AcquisitionRecord, error)
+	BlockRelease(ctx context.Context, b catalog.BlockedRelease) (bool, error)
+	ClearSearchSchedule(ctx context.Context, desiredItemID string) error
+	DropAcquisition(ctx context.Context, desiredItemID string) error
+	OrphanedDownloads(ctx context.Context, grace time.Duration) ([]catalog.OrphanedDownload, error)
+	RecordAcquisition(ctx context.Context, a catalog.Acquisition) (bool, error)
+	StuckGrabs(ctx context.Context, grace time.Duration) ([]catalog.StuckGrab, error)
+	StuckIngests(ctx context.Context, grace time.Duration) ([]catalog.StuckIngest, error)
+}
+
 // PollDownloadsHandler asks every download client what it is doing and drives
 // §64's pipeline from the answer (§58, M3-10).
 //
@@ -59,7 +74,7 @@ const stuckIngestGrace = 20 * time.Minute
 // one from being polled, and would put the pass into a backoff that reports the
 // same thing more slowly.
 func PollDownloadsHandler(
-	reg *providers.Registry, cat *catalog.Catalog, ingests ProbeEnqueuer, log *slog.Logger,
+	reg *providers.Registry, cat PollDownloadsStore, ingests ProbeEnqueuer, log *slog.Logger,
 ) HandlerFunc {
 	return func(ctx context.Context, _ jobs.Job) error {
 		clients := reg.Downloaders()
@@ -147,7 +162,7 @@ func PollDownloadsHandler(
 // Returns how many state transitions it caused, so the caller can log a pass
 // that did something and stay quiet about one that did not.
 func reconcileTransfer(
-	ctx context.Context, cat *catalog.Catalog, ingests ProbeEnqueuer, provider string,
+	ctx context.Context, cat PollDownloadsStore, ingests ProbeEnqueuer, provider string,
 	t providers.Transfer, log *slog.Logger,
 ) (int, error) {
 	existing, err := cat.AcquisitionByExternal(ctx, provider, t.ID)
@@ -199,7 +214,7 @@ func reconcileTransfer(
 // still-running download (refreshed every pass) is never a candidate; this only
 // adds the gate that the owning client actually answered this pass.
 func sweepOrphanedDownloads(
-	ctx context.Context, cat *catalog.Catalog, responded map[string]bool, log *slog.Logger,
+	ctx context.Context, cat PollDownloadsStore, responded map[string]bool, log *slog.Logger,
 ) (advanced, failed int) {
 	if len(responded) == 0 {
 		return 0, 0
@@ -256,7 +271,7 @@ func sweepOrphanedDownloads(
 // wedged wants and leaves working ones alone; the grace in StuckIngests keeps it
 // off a verify that is simply slow.
 func sweepStuckIngests(
-	ctx context.Context, cat *catalog.Catalog, ingests ProbeEnqueuer, log *slog.Logger,
+	ctx context.Context, cat PollDownloadsStore, ingests ProbeEnqueuer, log *slog.Logger,
 ) (reingested int) {
 	stuck, err := cat.StuckIngests(ctx, stuckIngestGrace)
 	if err != nil {
@@ -297,7 +312,7 @@ func sweepStuckIngests(
 // trouble, so this reaches exactly the wedged wants and its grace keeps it off a
 // want that only just fell back.
 func sweepStuckGrabs(
-	ctx context.Context, cat *catalog.Catalog, log *slog.Logger,
+	ctx context.Context, cat PollDownloadsStore, log *slog.Logger,
 ) (redriven, failed int) {
 	stuck, err := cat.StuckGrabs(ctx, stuckGrabGrace)
 	if err != nil {
@@ -358,7 +373,7 @@ func sweepStuckGrabs(
 // than exceptional: a poll pass sees the same completed transfer many times
 // and must move it exactly once.
 func advancePipeline(
-	ctx context.Context, cat *catalog.Catalog, ingests ProbeEnqueuer,
+	ctx context.Context, cat PollDownloadsStore, ingests ProbeEnqueuer,
 	desiredItemID string, t providers.Transfer, prevBytesDone int64, log *slog.Logger,
 ) (int, error) {
 	state, err := cat.Acquisition(ctx, desiredItemID)
