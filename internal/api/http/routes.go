@@ -23,22 +23,22 @@ const APIPrefix = "/api/v1"
 // mitigation it names for query strings has to apply here too.
 const RenderPrefix = "/render"
 
-// RelayPrefix is where the device-pairing relay is mounted (§40, ADR-0022,
-// ADR-0038). Like RenderPrefix it is deliberately OUTSIDE APIPrefix and its
-// authenticated group: a device being paired is not yet enrolled and has no
-// credential to present, and the relay is a DUMB store-and-forward of PUBLIC
-// values (two commitments, two public keys, a salt, a signed cert). It learns no
-// key material and vouches for nothing, which is why serving it without a
-// credential adds no authority to anyone — it is a rendezvous, not a resource.
+// RelayPrefix is the device-pairing relay's BASE (§40, ADR-0022, ADR-0038): a
+// Voidbind client is given "<node>/pair" and appends the /v1/... paths itself,
+// so the relay's routes live under RelayV1Prefix. Like RenderPrefix it is
+// deliberately OUTSIDE APIPrefix and its authenticated group: a device being
+// paired is not yet enrolled and has no credential to present, and the relay is
+// a DUMB store-and-forward of public values and ciphertext it cannot open. It
+// learns no key material and vouches for nothing, which is why serving it
+// without a credential adds no authority to anyone — it is a rendezvous, not a
+// resource.
 const RelayPrefix = "/pair"
 
 // RelayV1Prefix is where the Voidbind relay — voidbind-go's relay.Server, the
-// protocol the voidbind CLI and the phone (voidbind-kmp) speak — is mounted
-// (ADR-0066). It sits beside the legacy relay above, not in place of it. A
-// Voidbind client is given "<node>/pair" (RelayPrefix) as its relay BASE — the
-// client appends the /v1/... paths itself, as it would against a standalone
-// `voidbind relay` — and so lands here. Public for the same reason RelayPrefix
-// is.
+// protocol `heyarr pair`, the voidbind CLI and the phone (voidbind-kmp) speak —
+// is mounted (ADR-0066). It is the node's only pairing relay: the legacy
+// /pair/sessions/{s}/slots/{slot} relay is retired. Public for the same reason
+// RelayPrefix is.
 const RelayV1Prefix = RelayPrefix + "/v1"
 
 // EnrolPath is where a paired device enrols itself (ADR-0067): POST {cert,
