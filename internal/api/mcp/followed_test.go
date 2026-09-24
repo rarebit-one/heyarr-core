@@ -167,3 +167,66 @@ func TestPollSourceNeedsWriteScope(t *testing.T) {
 		t.Errorf("the refusal should name the scope; got %q", resp.Body.Error.Message)
 	}
 }
+
+// list_followed decodes its arguments like every other tool: limit cuts the
+// list and says so, a limit outside the advertised 1..maxRows is refused, a
+// misspelled field is refused rather than ignored, and no arguments at all
+// still lists everything.
+func TestListFollowedHonoursItsArguments(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, false)
+
+	for _, id := range []string{"321", "322", "323"} {
+		h.call("", "follow_source",
+			`{"tvdb_id":"`+id+`","title":"Show `+id+`","quality_profile":"living-room"}`).
+			structured(t, &struct{}{})
+	}
+
+	type listing struct {
+		Count           int  `json:"count"`
+		Truncated       bool `json:"truncated"`
+		FollowedSources []struct {
+			ID string `json:"id"`
+		} `json:"followed_sources"`
+	}
+
+	var cut listing
+	h.call("", "list_followed", `{"limit":2}`).structured(t, &cut)
+	if len(cut.FollowedSources) != 2 || cut.Count != 2 || !cut.Truncated {
+		t.Errorf("limit 2 of 3 = %+v, want two sources, count 2, truncated", cut)
+	}
+
+	var all listing
+	h.call("", "list_followed", `{"limit":3}`).structured(t, &all)
+	if len(all.FollowedSources) != 3 || all.Count != 3 || all.Truncated {
+		t.Errorf("limit 3 of 3 = %+v, want three sources, not truncated", all)
+	}
+
+	var bare listing
+	h.rpc("", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_followed"}}`).
+		structured(t, &bare)
+	if len(bare.FollowedSources) != 3 || bare.Truncated {
+		t.Errorf("no arguments = %+v, want every source, not truncated", bare)
+	}
+
+	for _, bad := range []string{`{"limit":0}`, `{"limit":-1}`, `{"limit":201}`} {
+		resp := h.call("", "list_followed", bad)
+		if resp.Body.Error == nil {
+			t.Errorf("%s was accepted: %s", bad, resp.Raw)
+			continue
+		}
+		if resp.Body.Error.Code != -32602 || !strings.Contains(resp.Body.Error.Message, "limit") {
+			t.Errorf("%s: error = %d %q, want -32602 naming the limit",
+				bad, resp.Body.Error.Code, resp.Body.Error.Message)
+		}
+	}
+
+	typo := h.call("", "list_followed", `{"limt":1}`)
+	if typo.Body.Error == nil {
+		t.Fatalf("a misspelled field was accepted: %s", typo.Raw)
+	}
+	if typo.Body.Error.Code != -32602 || !strings.Contains(typo.Body.Error.Message, "limt") {
+		t.Errorf("error = %d %q, want -32602 naming the unknown field",
+			typo.Body.Error.Code, typo.Body.Error.Message)
+	}
+}
