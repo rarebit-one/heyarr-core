@@ -56,7 +56,7 @@ func (h *Handler) handleGetArtists(w http.ResponseWriter, r *http.Request) {
 			  AND trim(json_extract(attributes, '$.artist')) <> ''
 			GROUP BY artist`)
 		if err != nil {
-			h.internalError(w, r, p, "getArtists", err)
+			h.internalError(w, p, "getArtists", err)
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -71,13 +71,13 @@ func (h *Handler) handleGetArtists(w http.ResponseWriter, r *http.Request) {
 			var name string
 			var count int
 			if err := rows.Scan(&name, &count); err != nil {
-				h.internalError(w, r, p, "getArtists", err)
+				h.internalError(w, p, "getArtists", err)
 				return
 			}
 			artists = append(artists, entry{name: name, sort: strings.ToLower(stripArticle(name)), count: count})
 		}
 		if err := rows.Err(); err != nil {
-			h.internalError(w, r, p, "getArtists", err)
+			h.internalError(w, p, "getArtists", err)
 			return
 		}
 		sort.Slice(artists, func(i, j int) bool { return artists[i].sort < artists[j].sort })
@@ -117,7 +117,7 @@ func (h *Handler) handleGetArtist(w http.ResponseWriter, r *http.Request) {
 			`json_extract(w.attributes, '$.artist') = ?`, []any{name},
 			`w.year, w.sort_title`, -1, 0)
 		if err != nil {
-			h.internalError(w, r, p, "getArtist", err)
+			h.internalError(w, p, "getArtist", err)
 			return
 		}
 		if len(albums) == 0 {
@@ -175,7 +175,7 @@ func (h *Handler) handleGetAlbumList2(w http.ResponseWriter, r *http.Request) {
 
 		albums, err := h.albumsWhere(r.Context(), `w.content_type = 'music'`, nil, orderBy, size, offset)
 		if err != nil {
-			h.internalError(w, r, p, "getAlbumList2", err)
+			h.internalError(w, p, "getAlbumList2", err)
 			return
 		}
 		resp := h.ok()
@@ -203,13 +203,13 @@ func (h *Handler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err != nil {
-			h.internalError(w, r, p, "getAlbum", err)
+			h.internalError(w, p, "getAlbum", err)
 			return
 		}
 
 		songs, err := h.songs(r.Context(), workID, title, artist, int(year.Int64))
 		if err != nil {
-			h.internalError(w, r, p, "getAlbum", err)
+			h.internalError(w, p, "getAlbum", err)
 			return
 		}
 
