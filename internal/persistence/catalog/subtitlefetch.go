@@ -50,6 +50,7 @@ func (c *Catalog) DueSubtitleFetches(ctx context.Context, now time.Time, limit i
 	if limit <= 0 {
 		return nil, nil
 	}
+	//nolint:gosec // the concatenated fragments are subtitleFetchBackoff's literal table and columns; every value is bound
 	rows, err := c.db.Reader().QueryContext(ctx, `
 		SELECT d.id, d.language,
 		       coalesce(imdb.value, ''), coalesce(tmdb.value, ''),
@@ -63,12 +64,12 @@ func (c *Catalog) DueSubtitleFetches(ctx context.Context, now time.Time, limit i
 		       ON imdb.entity_type = 'work' AND imdb.entity_id = d.work_id AND imdb.source = 'imdb'
 		LEFT JOIN external_ids tmdb
 		       ON tmdb.entity_type = 'work' AND tmdb.entity_id = d.work_id AND tmdb.source = 'tmdb'
-		LEFT JOIN subtitle_fetch_schedule s ON s.desired_item_id = d.id
+		`+subtitleFetchBackoff.leftJoin("d.id")+`
 		WHERE d.aspect = 'subtitle'
 		  AND a.phase = 'idle'
 		  AND a.content != 'satisfied'
 		  AND (imdb.value IS NOT NULL OR tmdb.value IS NOT NULL)
-		  AND (s.next_fetch_at IS NULL OR s.next_fetch_at <= ?)
+		  AND `+subtitleFetchBackoff.dueWhere()+`
 		  AND EXISTS (
 		        SELECT 1 FROM assets v
 		        WHERE v.role != 'subtitle'
@@ -88,7 +89,7 @@ func (c *Catalog) DueSubtitleFetches(ctx context.Context, now time.Time, limit i
 		             OR (d.item_id IS NOT NULL AND v.item_id IS NULL AND v.edition_id = it.edition_id)
 		          )
 		  )
-		ORDER BY coalesce(s.next_fetch_at, ''), d.id
+		ORDER BY `+subtitleFetchBackoff.dueOrder()+`, d.id
 		LIMIT ?`, sqlite.FormatTimestamp(now), limit)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: listing subtitle wants due a fetch: %w", err)
@@ -137,6 +138,7 @@ type SubtitleFetchContext struct {
 func (c *Catalog) SubtitleFetchContext(ctx context.Context, desiredItemID string) (SubtitleFetchContext, bool, error) {
 	out := SubtitleFetchContext{DesiredItemID: desiredItemID}
 	var seasonStr, epsStr string
+	//nolint:gosec // the concatenated fragment is subtitleFetchBackoff's literal join; the want id is bound
 	err := c.db.Reader().QueryRowContext(ctx, `
 		SELECT d.language,
 		       coalesce(imdb.value, ''), coalesce(tmdb.value, ''),
@@ -149,7 +151,7 @@ func (c *Catalog) SubtitleFetchContext(ctx context.Context, desiredItemID string
 		       ON imdb.entity_type = 'work' AND imdb.entity_id = d.work_id AND imdb.source = 'imdb'
 		LEFT JOIN external_ids tmdb
 		       ON tmdb.entity_type = 'work' AND tmdb.entity_id = d.work_id AND tmdb.source = 'tmdb'
-		LEFT JOIN subtitle_fetch_schedule s ON s.desired_item_id = d.id
+		`+subtitleFetchBackoff.leftJoin("d.id")+`
 		WHERE d.id = ? AND d.aspect = 'subtitle'`, desiredItemID).
 		Scan(&out.Language, &out.IMDBID, &out.TMDBID, &seasonStr, &epsStr, &out.Fruitless)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -224,17 +226,9 @@ func (c *Catalog) RecordSubtitleFetchScheduled(
 	if desiredItemID == "" {
 		return fmt.Errorf("catalog: recording a scheduled subtitle fetch needs a want")
 	}
-	nowStr, nextStr := sqlite.FormatTimestamp(now), sqlite.FormatTimestamp(next)
-	_, err := c.db.Writer().ExecContext(ctx, `
-		INSERT INTO subtitle_fetch_schedule
-			(desired_item_id, fruitless, last_fetched_at, next_fetch_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT (desired_item_id) DO UPDATE SET
-			fruitless       = excluded.fruitless,
-			last_fetched_at = excluded.last_fetched_at,
-			next_fetch_at   = excluded.next_fetch_at,
-			updated_at      = excluded.updated_at`,
-		desiredItemID, fruitless, nowStr, nextStr, nowStr, nowStr)
+	_, err := subtitleFetchBackoff.record(ctx, c.db, backoffAttempt{
+		subject: desiredItemID, fruitless: fruitless, now: now, next: next,
+	})
 	if err != nil {
 		return fmt.Errorf("catalog: recording a scheduled subtitle fetch: %w", err)
 	}

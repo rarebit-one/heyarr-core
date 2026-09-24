@@ -68,16 +68,17 @@ func (c *Catalog) DueEnrichWorks(ctx context.Context, now time.Time, limit int) 
 	if limit <= 0 {
 		return nil, nil
 	}
+	//nolint:gosec // the concatenated fragments are enrichDueWhere and enrichBackoff's literal table and columns; every value is bound
 	rows, err := c.db.Reader().QueryContext(ctx, `
 		SELECT w.id, w.content_type, w.title, coalesce(w.year, 0),
 		       coalesce(json_extract(w.attributes, '$.artist'), ''),
 		       coalesce(json_extract(w.attributes, '$.author'), ''),
 		       coalesce(s.fruitless, 0)
 		FROM works w
-		LEFT JOIN enrich_schedule s ON s.work_id = w.id
+		`+enrichBackoff.leftJoin("w.id")+`
 		WHERE `+enrichDueWhere+`
-		  AND (s.next_enrich_at IS NULL OR s.next_enrich_at <= ?)
-		ORDER BY coalesce(s.next_enrich_at, ''), w.id
+		  AND `+enrichBackoff.dueWhere()+`
+		ORDER BY `+enrichBackoff.dueOrder()+`, w.id
 		LIMIT ?`, sqlite.FormatTimestamp(now), limit)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: listing works due enrichment: %w", err)
@@ -105,13 +106,14 @@ func (c *Catalog) DueEnrichWorks(ctx context.Context, now time.Time, limit int) 
 func (c *Catalog) EnrichContext(ctx context.Context, workID string) (DueEnrichWork, bool, error) {
 	var d DueEnrichWork
 	d.WorkID = workID
+	//nolint:gosec // the concatenated fragment is enrichBackoff's literal join; the work id is bound
 	err := c.db.Reader().QueryRowContext(ctx, `
 		SELECT w.content_type, w.title, coalesce(w.year, 0),
 		       coalesce(json_extract(w.attributes, '$.artist'), ''),
 		       coalesce(json_extract(w.attributes, '$.author'), ''),
 		       coalesce(s.fruitless, 0)
 		FROM works w
-		LEFT JOIN enrich_schedule s ON s.work_id = w.id
+		`+enrichBackoff.leftJoin("w.id")+`
 		WHERE w.id = ? AND w.content_type IN ('music','book')`, workID).
 		Scan(&d.ContentType, &d.Title, &d.Year, &d.Artist, &d.Author, &d.Fruitless)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -133,17 +135,9 @@ func (c *Catalog) RecordEnrichScheduled(
 	if workID == "" {
 		return fmt.Errorf("catalog: recording a scheduled enrich needs a work")
 	}
-	nowStr, nextStr := sqlite.FormatTimestamp(now), sqlite.FormatTimestamp(next)
-	_, err := c.db.Writer().ExecContext(ctx, `
-		INSERT INTO enrich_schedule
-			(work_id, fruitless, last_enriched_at, next_enrich_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT (work_id) DO UPDATE SET
-			fruitless        = excluded.fruitless,
-			last_enriched_at = excluded.last_enriched_at,
-			next_enrich_at   = excluded.next_enrich_at,
-			updated_at       = excluded.updated_at`,
-		workID, fruitless, nowStr, nextStr, nowStr, nowStr)
+	_, err := enrichBackoff.record(ctx, c.db, backoffAttempt{
+		subject: workID, fruitless: fruitless, now: now, next: next,
+	})
 	if err != nil {
 		return fmt.Errorf("catalog: recording a scheduled enrich: %w", err)
 	}
