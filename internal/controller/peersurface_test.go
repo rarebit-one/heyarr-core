@@ -35,7 +35,7 @@ import (
 // controller is the only place that holds both the transport and the store,
 // and an adapter tested nowhere is where a cache gets added.
 
-func realFabric(t *testing.T) (*membership.Store, *sqlite.DB) {
+func realFabric(t *testing.T) *membership.Store {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -56,12 +56,12 @@ func realFabric(t *testing.T) (*membership.Store, *sqlite.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return store, db
+	return store
 }
 
 func TestRemovingAMembershipRecordSeversALivePeerConnection(t *testing.T) {
 	ctx := context.Background()
-	store, _ := realFabric(t)
+	store := realFabric(t)
 
 	selfPub, selfPriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -184,7 +184,7 @@ func TestRemovingAMembershipRecordSeversALivePeerConnection(t *testing.T) {
 // be reported as an unavailable trust root — which fails closed but tells the
 // operator the wrong thing.
 func TestPeerLookupTranslatesTheTrustRootsRefusal(t *testing.T) {
-	store, _ := realFabric(t)
+	store := realFabric(t)
 	stranger, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)

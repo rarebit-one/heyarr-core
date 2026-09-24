@@ -175,7 +175,7 @@ func EnrichHandler(opts EnrichHandlerOptions) HandlerFunc {
 
 		coverAttached := false
 		if url := res.CoverURL.Reveal(); url != "" {
-			if err := opts.attachCover(ctx, workID, wctx.ContentType, res.CoverURL, now(), log); err != nil {
+			if err := opts.attachCover(ctx, workID, wctx.ContentType, res.CoverURL, now()); err != nil {
 				// A cover that would not fetch or adopt is not a job failure — the id
 				// was recorded, and the next pass retries the image. Only a store
 				// error (below) is transient enough to retry now; a fetch miss backs
@@ -217,7 +217,7 @@ func (o EnrichHandlerOptions) providerFor(contentType string) providers.EnrichPr
 // role='artwork' asset. The store error is returned (transient, retryable); a
 // fetch error is returned too and the caller treats it as "no cover this pass".
 func (o EnrichHandlerOptions) attachCover(
-	ctx context.Context, workID, contentType string, coverURL secret.Value, now time.Time, log *slog.Logger,
+	ctx context.Context, workID, contentType string, coverURL secret.Value, now time.Time,
 ) error {
 	body, mime, err := o.Fetcher.Fetch(ctx, coverURL)
 	if err != nil {

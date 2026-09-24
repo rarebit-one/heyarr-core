@@ -83,6 +83,15 @@ jobs:
       # together with whatever .golangci.yml needs, after a clean local run.
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with: { version: v2.13.2 }
+      # A function that nothing calls, not even a test, is a claim with no
+      # evidence behind it (#613 removed the backlog). deadcode is pinned in the
+      # Makefile for the same reason golangci-lint is pinned above. It checks
+      # one build configuration, so it runs on the linux leg only. If a function
+      # is ever reachable only from another GOOS's files, move it behind that
+      # build tag instead of adding an allowlist.
+      - name: no unreachable functions
+        if: matrix.goos == 'linux'
+        run: make deadcode
       # A malformed workflow file does not fail — it silently never runs.
       # actionlint catches that before it can hide a broken pipeline.
       #

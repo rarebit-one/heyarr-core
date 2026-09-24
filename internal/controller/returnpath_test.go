@@ -55,7 +55,7 @@ func TestProbeReturnPath(t *testing.T) {
 		}
 	}()
 
-	store, _ := realFabric(t)
+	store := realFabric(t)
 	up := registerPeerAt(t, store, "peer-up", "https://"+listener.Addr().String())
 	// Port 9 is discard: reserved, and refusing connections everywhere.
 	down := registerPeerAt(t, store, "peer-down", "https://127.0.0.1:9")

@@ -60,16 +60,18 @@ type searchOut struct {
 	} `json:"episodes"`
 }
 
-func (h *harness) search(t *testing.T, body string) (*http.Response, searchOut) {
+func (h *harness) search(t *testing.T, body string) searchOut {
 	t.Helper()
 	resp := h.do(http.MethodPost, "/api/v1/search", "", strings.NewReader(body))
-	var out searchOut
-	if resp.StatusCode == http.StatusOK {
-		if err := json.Unmarshal(h.body(resp), &out); err != nil {
-			t.Fatal(err)
-		}
+	raw := h.body(resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/v1/search %s = %d: %s", body, resp.StatusCode, raw)
 	}
-	return resp, out
+	var out searchOut
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 func TestSearchShapes(t *testing.T) {
@@ -96,7 +98,7 @@ func TestSearchFindsEpisodesByTheirOwnTitle(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t).seed().seedBrowse().seedSeries()
 
-	_, out := h.search(t, `{"query":"pilot"}`)
+	out := h.search(t, `{"query":"pilot"}`)
 	if len(out.Works) != 0 {
 		t.Fatalf("no WORK is called pilot, got %+v", out.Works)
 	}
@@ -125,7 +127,7 @@ func TestSearchWorksCarryPosterAndAttributes(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t).seed().seedBrowse().seedSeries()
 
-	_, out := h.search(t, `{"query":"arrival"}`)
+	out := h.search(t, `{"query":"arrival"}`)
 	if len(out.Works) != 1 || len(out.Episodes) != 0 {
 		t.Fatalf("got %d works, %d episodes", len(out.Works), len(out.Episodes))
 	}
@@ -147,12 +149,12 @@ func TestSearchWorksCarryPosterAndAttributes(t *testing.T) {
 func TestSearchContentTypeNarrowsBothLists(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t).seed().seedBrowse().seedSeries()
-	_, out := h.search(t, `{"query":"pilot","content_type":"movie"}`)
+	out := h.search(t, `{"query":"pilot","content_type":"movie"}`)
 	if len(out.Episodes) != 0 {
 		t.Fatalf("a movie-only search returned series episodes: %+v", out.Episodes)
 	}
 	// A content_type-only search lists works and looks for no episodes.
-	_, out = h.search(t, `{"content_type":"series"}`)
+	out = h.search(t, `{"content_type":"series"}`)
 	if len(out.Works) != 1 || len(out.Episodes) != 0 {
 		t.Fatalf("got %d works, %d episodes", len(out.Works), len(out.Episodes))
 	}

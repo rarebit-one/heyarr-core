@@ -101,7 +101,7 @@ func (h *harness) addLibrary(name, contentType, path, mode string) (libID, rootI
 	return libID, rootID
 }
 
-func (h *harness) write(relPath, contents string) string {
+func (h *harness) write(relPath, contents string) {
 	h.t.Helper()
 	full := filepath.Join(h.rootDir, filepath.FromSlash(relPath))
 	if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
@@ -110,7 +110,6 @@ func (h *harness) write(relPath, contents string) string {
 	if err := os.WriteFile(full, []byte(contents), 0o640); err != nil {
 		h.t.Fatal(err)
 	}
-	return full
 }
 
 func (h *harness) ingest(relPath string) ingest.Result {

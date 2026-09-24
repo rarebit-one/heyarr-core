@@ -38,9 +38,9 @@ func newFixture(t *testing.T) *fixture {
 	return &fixture{store: store, db: db, clock: clock}
 }
 
-// insertWork adds a live work row the way the scanner's get-or-create would,
-// returning its id. Enough of 00002_core.sql's NOT NULLs to be a valid row.
-func (f *fixture) insertWork(t *testing.T, contentType, workKey, title string) string {
+// insertWork adds a live work row the way the scanner's get-or-create would.
+// Enough of 00002_core.sql's NOT NULLs to be a valid row.
+func (f *fixture) insertWork(t *testing.T, contentType, workKey, title string) {
 	t.Helper()
 	id := uuid.Must(uuid.NewV7()).String()
 	ts := now.Format(time.RFC3339Nano)
@@ -51,7 +51,6 @@ func (f *fixture) insertWork(t *testing.T, contentType, workKey, title string) s
 	if err != nil {
 		t.Fatalf("insert work: %v", err)
 	}
-	return id
 }
 
 func (f *fixture) workExists(t *testing.T, contentType, workKey string) bool {

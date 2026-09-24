@@ -40,8 +40,13 @@ lint:                         ## vet + golangci-lint
 	go vet ./...
 	$(GOLANGCI_LINT) run
 
-deadcode:                     ## report unreachable functions (informational; never fails)
-	-go run $(DEADCODE) -test ./...
+deadcode:                     ## fail if any function is unreachable, even from tests (CI runs this)
+	@out="$$(go run $(DEADCODE) -test ./...)" || exit 1; \
+	if [ -n "$$out" ]; then \
+		printf '%s\n' "$$out"; \
+		echo "deadcode: the functions above are unreachable even from tests; delete them" >&2; \
+		exit 1; \
+	fi
 
 claims: build fixtures        ## run the demo and fail if a claimed mechanism was never exercised
 	./scripts/claims.sh
