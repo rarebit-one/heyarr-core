@@ -106,22 +106,48 @@ func (h *Handler) Mount(r chi.Router) {
 // challenge, which is exactly what a reader waits for before it prompts.
 func (h *Handler) authed(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		_, password, ok := r.BasicAuth()
-		if !ok || password == "" {
+		switch h.authenticate(r) {
+		case http.StatusUnauthorized:
 			h.challenge(w)
-			return
-		}
-		id, err := h.auth.Verify(r.Context(), password)
-		if err != nil {
-			h.challenge(w)
-			return
-		}
-		if !id.Allows(auth.ScopeRead) {
+		case http.StatusForbidden:
 			http.Error(w, "the credential is not allowed to read the library", http.StatusForbidden)
-			return
+		default:
+			next(w, r)
 		}
-		next(w, r)
 	}
+}
+
+// authenticate checks that the request's Basic password is a Heyarr token with
+// at least `read`. It returns http.StatusOK when it is, and otherwise the
+// status to refuse with.
+//
+// It deliberately hands no auth.Identity on to the handlers, for the same
+// reasons as the OpenSubsonic adapter's authenticate (#619). Every
+// identity-scoped behaviour on the REST surface keys on something an OPDS
+// caller cannot have. Guest restrictions (ADR-0074, ADR-0094), including the
+// guest.Visible asset filter, key on Identity.Guest. Only the credential-less
+// guest admission inside the /api/v1 group sets that flag. This adapter mounts
+// outside that group and always demands a bearer token, which Verify never
+// resolves to a guest. Per-identity state (reading position, bookmarks,
+// shelves) is encrypted personal state the controller cannot read (Invariant 6,
+// ADR-0054), and this adapter does not serve any of it. Downloads go to
+// internal/api/blobs, which does not look at identity either. What is left is
+// one shared publication catalogue gated by scope, so `read` is the whole
+// authorisation decision. If a finer, per-identity grant ever reaches the
+// catalogue, the identity has to start flowing into the handlers here.
+func (h *Handler) authenticate(r *http.Request) int {
+	_, password, ok := r.BasicAuth()
+	if !ok || password == "" {
+		return http.StatusUnauthorized
+	}
+	id, err := h.auth.Verify(r.Context(), password)
+	if err != nil {
+		return http.StatusUnauthorized
+	}
+	if !id.Allows(auth.ScopeRead) {
+		return http.StatusForbidden
+	}
+	return http.StatusOK
 }
 
 func (h *Handler) challenge(w http.ResponseWriter) {
