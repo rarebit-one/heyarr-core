@@ -44,11 +44,13 @@ func TestMigrateUpThenAllTheWayDown(t *testing.T) {
 		t.Fatal("Migrate left the database at version 0")
 	}
 
+	// blobs is created by 00002 and never dropped, so it spans the whole
+	// chain: present at head, and gone only if every Down really ran.
 	var name string
 	err = db.Reader().QueryRow(
-		`SELECT name FROM sqlite_master WHERE type='table' AND name='schema_meta'`).Scan(&name)
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='blobs'`).Scan(&name)
 	if err != nil {
-		t.Fatalf("migration did not create its table: %v", err)
+		t.Fatalf("migration did not create the blobs table: %v", err)
 	}
 
 	migrateAllTheWayDown(t, db)
@@ -62,9 +64,9 @@ func TestMigrateUpThenAllTheWayDown(t *testing.T) {
 	// A Down that does not actually drop what Up created is the usual way a
 	// rollback "succeeds" while leaving the database unusable.
 	err = db.Reader().QueryRow(
-		`SELECT name FROM sqlite_master WHERE type='table' AND name='schema_meta'`).Scan(&name)
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='blobs'`).Scan(&name)
 	if !errors.Is(err, sql.ErrNoRows) {
-		t.Errorf("schema_meta survived the rollback (err = %v)", err)
+		t.Errorf("blobs survived the rollback (err = %v)", err)
 	}
 }
 
