@@ -110,9 +110,9 @@ jobs:
       # per CI run rather than once per matrix leg.
       - name: lint workflow files
         if: matrix.goos == 'linux'
-        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # 1.7.12
-        with:
-          args: -color
+        # `docker run` rather than `uses: docker://...`: the org pin gate's pinact cannot
+        # parse docker:// action refs and fails on them. The image stays digest-pinned (1.7.12).
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
 
   # This repo is public. A real host name, a real premises name or a real home
   # directory in a public AGPL repo is a permanent disclosure — git history
