@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
 // The subtitle fetch schedule (ADR-0085): which subtitle wants are due a fetch,
@@ -87,7 +89,7 @@ func (c *Catalog) DueSubtitleFetches(ctx context.Context, now time.Time, limit i
 		          )
 		  )
 		ORDER BY coalesce(s.next_fetch_at, ''), d.id
-		LIMIT ?`, sortable(now), limit)
+		LIMIT ?`, sqlite.FormatTimestamp(now), limit)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: listing subtitle wants due a fetch: %w", err)
 	}
@@ -222,7 +224,7 @@ func (c *Catalog) RecordSubtitleFetchScheduled(
 	if desiredItemID == "" {
 		return fmt.Errorf("catalog: recording a scheduled subtitle fetch needs a want")
 	}
-	nowStr, nextStr := sortable(now), sortable(next)
+	nowStr, nextStr := sqlite.FormatTimestamp(now), sqlite.FormatTimestamp(next)
 	_, err := c.db.Writer().ExecContext(ctx, `
 		INSERT INTO subtitle_fetch_schedule
 			(desired_item_id, fruitless, last_fetched_at, next_fetch_at, created_at, updated_at)

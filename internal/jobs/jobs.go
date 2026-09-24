@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
 // State is where a job is in its life.
@@ -160,7 +161,6 @@ const (
 	// hours rather than a day so recovery is still noticed promptly.
 	transientBaseBackoff = 1 * time.Minute
 	transientMaxBackoff  = 6 * time.Hour
-	timeFormat           = time.RFC3339Nano
 	claimableSelectCols  = `id, type, payload, state, priority, coalesce(dedupe_key,''),
 		required_capability, run_after, attempts, max_attempts,
 		coalesce(lease_owner,''), coalesce(lease_expires_at,''),
@@ -917,14 +917,14 @@ func format(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.UTC().Format(timeFormat)
+	return sqlite.FormatTimestamp(t)
 }
 
 func parse(s string) time.Time {
 	if s == "" {
 		return time.Time{}
 	}
-	t, err := time.Parse(timeFormat, s)
+	t, err := sqlite.ParseTimestamp(s)
 	if err != nil {
 		return time.Time{}
 	}

@@ -744,3 +744,48 @@ func TestAPermanentlyFailedJobCanStillBeRetriedByHand(t *testing.T) {
 		t.Errorf("state = %s after a hand retry, want pending", revived.State)
 	}
 }
+
+// Due-ness and lease expiry are TEXT comparisons in SQL, so they are only as
+// right as the stored timestamps sort. Trimmed RFC3339Nano does not sort
+// within a second: "…:00.1Z" > "…:00.15Z" and "…:01Z" > "…:01.000000001Z",
+// because 'Z' sorts after every digit and after '.'. Each case here is a job
+// or lease that IS due, and that `run_after <= ?` / `lease_expires_at <= ?`
+// called not due under that layout.
+func TestDueAndExpiryComparisonsSurviveASubSecondBoundary(t *testing.T) {
+	cases := []struct {
+		name     string
+		at, then time.Duration // the stored instant, and the later "now" that must see it as passed
+	}{
+		{"a shorter fraction", 100 * time.Millisecond, 150 * time.Millisecond},
+		{"a whole second", time.Second, time.Second + time.Nanosecond},
+		{"a trailing-zero fraction", 500 * time.Millisecond, 500*time.Millisecond + time.Nanosecond},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+"/run_after", func(t *testing.T) {
+			q, clock := newQueue(t)
+			base := clock.Now()
+			enqueue(t, q, EnqueueOptions{RunAfter: base.Add(tc.at)})
+
+			clock.Advance(tc.then)
+			if _, err := q.Claim(t.Context(), ClaimOptions{Owner: "w"}); err != nil {
+				t.Fatalf("a job due %v ago was not claimable: %v", tc.then-tc.at, err)
+			}
+		})
+		t.Run(tc.name+"/lease_expires_at", func(t *testing.T) {
+			q, clock := newQueue(t)
+			enqueue(t, q, EnqueueOptions{})
+			if _, err := q.Claim(t.Context(), ClaimOptions{Owner: "doomed", LeaseTTL: tc.at}); err != nil {
+				t.Fatal(err)
+			}
+
+			clock.Advance(tc.then)
+			n, err := q.ReapExpiredLeases(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n != 1 {
+				t.Fatalf("reaped %d leases that expired %v ago, want 1", n, tc.then-tc.at)
+			}
+		})
+	}
+}

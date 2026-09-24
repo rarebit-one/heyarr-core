@@ -11,6 +11,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/desired"
 	"github.com/rarebit-one/heyarr-core/internal/domain/strategy"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
@@ -21,24 +22,10 @@ import (
 // What lives here is the query that finds what is due and the write that
 // records an attempt, in the same split as every other beat in this package.
 
-// sortableTimestamp is a FIXED-WIDTH RFC 3339 layout, and the width is the
-// whole reason it exists.
-//
-// timestampFormat is time.RFC3339Nano, which TRIMS trailing zeros from the
-// fractional second: 12:00:00 UTC formats as "…T12:00:00Z" while one
-// nanosecond later formats as "…T12:00:00.000000001Z". SQLite compares TEXT
-// lexicographically, and 'Z' (0x5A) sorts after '.' (0x2E) — so under
-// RFC3339Nano the LATER instant compares as the EARLIER string whenever the
-// two fall in the same second.
-//
 // Everything in this file is a `next_search_at <= now` comparison against
-// values that carry a sub-second spread by construction, so that collision is
-// not hypothetical here. Padding the fraction to a fixed nine digits makes
-// lexicographic order and chronological order the same order again. It still
-// parses as RFC3339Nano, so readers do not need to know.
-const sortableTimestamp = "2006-01-02T15:04:05.000000000Z07:00"
-
-func sortable(t time.Time) string { return t.UTC().Format(sortableTimestamp) }
+// values that carry a sub-second spread by construction, so the timestamps are
+// written with sqlite.FormatTimestamp: fixed-width, so that SQLite's
+// lexicographic TEXT order is the chronological order (see TimestampLayout).
 
 // DueSearch is one want the scheduler should search now.
 type DueSearch struct {
@@ -93,7 +80,7 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 		LEFT JOIN search_schedule s ON s.desired_item_id = d.id
 		WHERE a.phase = 'idle'
 		  AND (s.next_search_at IS NULL OR s.next_search_at <= ?)
-		ORDER BY coalesce(s.next_search_at, ''), d.id`, sortable(now))
+		ORDER BY coalesce(s.next_search_at, ''), d.id`, sqlite.FormatTimestamp(now))
 	if err != nil {
 		return nil, fmt.Errorf("catalog: listing wants due a search: %w", err)
 	}
@@ -181,7 +168,7 @@ func (c *Catalog) RecordSearchScheduled(
 	if desiredItemID == "" {
 		return false, fmt.Errorf("catalog: recording a scheduled search needs a want")
 	}
-	nowStr, nextStr := sortable(now), sortable(next)
+	nowStr, nextStr := sqlite.FormatTimestamp(now), sqlite.FormatTimestamp(next)
 
 	// No event. This is bookkeeping and not a state transition (invariant 7
 	// governs the latter): the transition that HAPPENED here is the job being
@@ -258,8 +245,8 @@ func (c *Catalog) SearchSchedule(ctx context.Context, desiredItemID string) (Sea
 		return SearchScheduleRow{}, false, fmt.Errorf("catalog: reading the search schedule for %s: %w",
 			desiredItemID, err)
 	}
-	r.LastSearchedAt, _ = time.Parse(time.RFC3339Nano, last)
-	r.NextSearchAt, _ = time.Parse(time.RFC3339Nano, next)
+	r.LastSearchedAt, _ = sqlite.ParseTimestamp(last)
+	r.NextSearchAt, _ = sqlite.ParseTimestamp(next)
 	return r, true, nil
 }
 

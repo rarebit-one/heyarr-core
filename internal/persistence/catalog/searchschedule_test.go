@@ -135,7 +135,7 @@ func TestADocumentWantIsNeverDueASearch(t *testing.T) {
 	}
 }
 
-// The hazard sortableTimestamp exists for. RFC3339Nano TRIMS trailing zeros,
+// The hazard sqlite.TimestampLayout exists for. RFC3339Nano TRIMS trailing zeros,
 // so "…:00Z" and "…:00.000000001Z" compare in the wrong order as TEXT — and
 // the due query is exactly that comparison.
 //
