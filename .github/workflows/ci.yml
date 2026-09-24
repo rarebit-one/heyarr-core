@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The full OS matrix, nightly, even on a day nothing merges — so runner-image
+  # drift on macOS or Windows surfaces within a day rather than on the next
+  # merge. 05:30 UTC, after daemon-acceptance.yml (03:30) and race-nightly.yml
+  # (04:00), so the three do not compete for the org's macOS runners.
+  schedule:
+    - cron: "30 5 * * *"
+  # Run the full matrix against any branch on demand.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,11 +22,41 @@ permissions:
 env:
   GOPRIVATE: github.com/rarebit-one/*
 
+# A new push to a PR supersedes the run in flight, so cancel it. A run on main
+# is never cancelled mid-flight: each merge gets its full-matrix verdict, which
+# is what makes it safe for pull requests to skip the macOS and Windows legs.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Which operating systems this run tests on. Push to main, the nightly
+  # schedule and a manual dispatch get the full matrix; a pull request gets
+  # Linux only unless it touches something platform-sensitive or carries the
+  # `ci:full-matrix` label. scripts/ci-matrix.sh holds the rules and the data
+  # behind them. Only the jobs that need a macOS or Windows RUNNER read this —
+  # `lint` cross-compiles every GOOS on Linux and stays unconditional, because
+  # it is cheap and it is what caught the one Windows-only bug in the sample.
+  plan:
+    name: plan the OS matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      full: ${{ steps.decide.outputs.full }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        # bash, not ./: the file mode is not something this check should depend on.
+        run: bash scripts/ci-matrix.sh
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -94,7 +132,11 @@ jobs:
   # macOS becomes a real test of the degrade path: every build proves on a real
   # machine that a Heyarr with no ffprobe still starts, scans, ingests and
   # serves. A unit test cannot make that claim about a whole process tree.
+  #
+  # On a pull request the macOS legs run only when `plan` says the change is
+  # platform-sensitive; push to main and the nightly run always include them.
   test:
+    needs: plan
     runs-on: ${{ matrix.os }}
     # No leg here runs -race any more: the race detector moved to the dedicated
     # `test-race` job below, which shards the full suite across parallel runners
@@ -106,7 +148,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(needs.plan.outputs.full == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
         go: [stable, oldstable]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -264,20 +306,22 @@ jobs:
   # repair stops reusing, quietly, forever. The `test` matrix above runs Linux
   # and macOS, so Windows — the platform most likely to differ, and the one
   # nobody here develops on — would otherwise be asserted by nothing.
+  #
+  # On a pull request only the Linux row runs unless `plan` says otherwise —
+  # and a change to the chunking package itself always makes it say otherwise.
   chunking-determinism:
     name: chunk boundaries are identical across platforms
+    needs: plan
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: ubuntu-latest, flags: -race }
-          - { os: macos-latest, flags: -race }
-          # windows/amd64 needs a C toolchain for the race detector, and the
-          # assertion here is determinism, which the detector has nothing to say
-          # about. The two rows above run this package under -race.
-          - { os: windows-latest, flags: "" }
+        # Full: ubuntu and macOS under -race, plus windows without it —
+        # windows/amd64 needs a C toolchain for the race detector, and the
+        # assertion here is determinism, which the detector has nothing to say
+        # about. The two unix rows run this package under -race.
+        include: ${{ fromJSON(needs.plan.outputs.full == 'true' && '[{"os":"ubuntu-latest","flags":"-race"},{"os":"macos-latest","flags":"-race"},{"os":"windows-latest","flags":""}]' || '[{"os":"ubuntu-latest","flags":"-race"}]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
@@ -314,12 +358,19 @@ jobs:
   # free-space behaviour, and every one of those differs between Linux and
   # macOS. Running it on one of the two would leave the other untested in
   # exactly the places it is most likely to differ.
+  #
+  # On a pull request the macOS leg runs only when `plan` says the change is
+  # platform-sensitive (scripts/, which holds the demo, always is); every push
+  # to main and the nightly run still run both. Over 30 days, 22 macOS-only
+  # failures here caught one real bug (bash 3.2 in scripts/acceptance.sh) and
+  # were otherwise the demo overrunning its budget on a slower runner.
   acceptance:
     name: acceptance (end-to-end)
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(needs.plan.outputs.full == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -392,10 +443,15 @@ jobs:
       - run: make demo
 
   # Aggregate status so branch protection needs exactly one required check.
+  #
+  # `plan` is in the list so that if it fails, `ci` fails — the jobs that need
+  # it are then skipped, and a skipped job alone would not trip the check
+  # below. Legs that `plan` leaves out of a matrix are not skipped jobs: they
+  # never exist, so they cannot affect `needs.<job>.result`.
   ci:
     name: ci
     if: always()
-    needs: [lint, hygiene, generate-check, test, race, chunking-determinism, build, acceptance, acceptance-degraded]
+    needs: [plan, lint, hygiene, generate-check, test, race, chunking-determinism, build, acceptance, acceptance-degraded]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
