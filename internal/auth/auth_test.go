@@ -3,13 +3,13 @@ package auth_test
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 type fakeClock struct{ t time.Time }
@@ -18,15 +18,7 @@ func (c *fakeClock) Now() time.Time { return c.t }
 
 func newStore(t *testing.T) (*auth.Store, *fakeClock, *sqlite.DB) {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	clock := &fakeClock{t: time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)}
 	store, err := auth.NewStore(auth.StoreOptions{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {
@@ -66,6 +58,7 @@ func renderToken(t *testing.T, tk auth.Token) string {
 }
 
 func TestScopeAuthorityIsOrdered(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		held []auth.Scope
@@ -93,6 +86,7 @@ func TestScopeAuthorityIsOrdered(t *testing.T) {
 }
 
 func TestParseScopesRejectsWhatItDoesNotUnderstand(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		in      string
 		want    string
@@ -128,6 +122,7 @@ func TestParseScopesRejectsWhatItDoesNotUnderstand(t *testing.T) {
 }
 
 func TestSplitDropsScopesItDoesNotKnow(t *testing.T) {
+	t.Parallel()
 	// A row written by a newer binary must grant what this one understands and
 	// nothing more — not fail, and certainly not fail open.
 	if got := auth.Join(auth.Split("read,teleport,write")); got != "read,write" {
@@ -136,6 +131,7 @@ func TestSplitDropsScopesItDoesNotKnow(t *testing.T) {
 }
 
 func TestTheStoredHashIsNotTheToken(t *testing.T) {
+	t.Parallel()
 	store, _, db := newStore(t)
 	ctx := context.Background()
 
@@ -169,6 +165,7 @@ func TestTheStoredHashIsNotTheToken(t *testing.T) {
 }
 
 func TestVerifyRejectsAWrongSecretOfTheSameLength(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newStore(t)
 	ctx := context.Background()
 	v := newVerifier(t, store)
@@ -201,6 +198,7 @@ func TestVerifyRejectsAWrongSecretOfTheSameLength(t *testing.T) {
 }
 
 func TestVerifyRejectsRevokedAndExpiredTokens(t *testing.T) {
+	t.Parallel()
 	store, clock, _ := newStore(t)
 	ctx := context.Background()
 	v := newVerifier(t, store)
@@ -250,6 +248,7 @@ func TestVerifyRejectsRevokedAndExpiredTokens(t *testing.T) {
 }
 
 func TestVerifyRejectsMalformedCredentials(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newStore(t)
 	v := newVerifier(t, store)
 	ctx := context.Background()
@@ -279,6 +278,7 @@ func TestVerifyRejectsMalformedCredentials(t *testing.T) {
 }
 
 func TestTokensAreDistinctAndCarryEnoughEntropy(t *testing.T) {
+	t.Parallel()
 	seen := map[string]bool{}
 	for i := 0; i < 64; i++ {
 		_, raw, secret, err := auth.NewToken()
@@ -299,6 +299,7 @@ func TestTokensAreDistinctAndCarryEnoughEntropy(t *testing.T) {
 }
 
 func TestLastUsedIsRecordedButThrottled(t *testing.T) {
+	t.Parallel()
 	store, clock, _ := newStore(t)
 	ctx := context.Background()
 	v, err := auth.NewVerifier(auth.VerifierOptions{Store: store, TouchInterval: 5 * time.Minute})
@@ -337,6 +338,7 @@ func TestLastUsedIsRecordedButThrottled(t *testing.T) {
 }
 
 func TestCreateReusesThePrincipalForTheSameName(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newStore(t)
 	ctx := context.Background()
 
@@ -357,6 +359,7 @@ func TestCreateReusesThePrincipalForTheSameName(t *testing.T) {
 }
 
 func TestRevokeReportsASecondRevocation(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newStore(t)
 	ctx := context.Background()
 
@@ -376,6 +379,7 @@ func TestRevokeReportsASecondRevocation(t *testing.T) {
 }
 
 func TestListNeverReturnsCredentialMaterial(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newStore(t)
 	ctx := context.Background()
 
@@ -405,6 +409,7 @@ func TestListNeverReturnsCredentialMaterial(t *testing.T) {
 // secret and fails verification. Between them, one credential has exactly one
 // accepted form.
 func TestATokenHasExactlyOneSpelling(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newStore(t)
 	v := newVerifier(t, store)
 	ctx := context.Background()

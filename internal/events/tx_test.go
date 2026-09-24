@@ -4,23 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 func newLogWithDB(t *testing.T) (*Log, *sqlite.DB) {
 	t.Helper()
-	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatalf("opening database: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatalf("migrating: %v", err)
-	}
+	db := testdb.Migrated(t)
 	l, err := New(Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)
@@ -36,6 +29,7 @@ func newLogWithDB(t *testing.T) (*Log, *sqlite.DB) {
 // until the context expires rather than an error, which is why this is asserted
 // rather than left as a comment.
 func TestEmitInsideATransactionBlocksOnTheWriteLockItsCallerHolds(t *testing.T) {
+	t.Parallel()
 	l, db := newLogWithDB(t)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 750*time.Millisecond)
@@ -55,6 +49,7 @@ func TestEmitInsideATransactionBlocksOnTheWriteLockItsCallerHolds(t *testing.T) 
 }
 
 func TestEmitTxIsInvisibleUntilTheTransactionCommits(t *testing.T) {
+	t.Parallel()
 	l, db := newLogWithDB(t)
 
 	var emitted Event
@@ -92,6 +87,7 @@ func TestEmitTxIsInvisibleUntilTheTransactionCommits(t *testing.T) {
 }
 
 func TestEmitTxLeavesNoEventBehindWhenTheTransactionRollsBack(t *testing.T) {
+	t.Parallel()
 	l, db := newLogWithDB(t)
 
 	sentinel := errors.New("sentinel")
@@ -120,6 +116,7 @@ func TestEmitTxLeavesNoEventBehindWhenTheTransactionRollsBack(t *testing.T) {
 // A subscriber must never see an event whose transaction later rolls back: it
 // may act on it, and the log is the record of what happened (§76).
 func TestEmitTxDoesNotFanOutUntilPublish(t *testing.T) {
+	t.Parallel()
 	l, db := newLogWithDB(t)
 	sub := l.Subscribe(4)
 	defer sub.Close()
@@ -151,6 +148,7 @@ func TestEmitTxDoesNotFanOutUntilPublish(t *testing.T) {
 }
 
 func TestEmitTxRequiresATransaction(t *testing.T) {
+	t.Parallel()
 	l, _ := newLogWithDB(t)
 	if _, err := l.EmitTx(t.Context(), nil, TypeBlobCreated, "blob", "b1", nil); err == nil {
 		t.Fatal("EmitTx accepted a nil transaction")

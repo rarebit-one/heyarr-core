@@ -46,6 +46,7 @@ func peerAt(n *peerNode, addr string) integrity.Peer {
 }
 
 func TestDurabilityVerifierConfirmsAPeerThatHoldsTheBytes(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	asker := newPeerNode(t, "peer-asker", "asker")
 	root := newTrustRoot(source.member(), asker.member())
@@ -61,6 +62,7 @@ func TestDurabilityVerifierConfirmsAPeerThatHoldsTheBytes(t *testing.T) {
 // hold them — which is a different action from silence, and the only one that
 // justifies correcting a `replicas` row.
 func TestDurabilityVerifierReportsAPeerThatDoesNotHoldTheBytes(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	asker := newPeerNode(t, "peer-asker", "asker")
 	root := newTrustRoot(source.member(), asker.member())
@@ -82,6 +84,7 @@ func TestDurabilityVerifierReportsAPeerThatDoesNotHoldTheBytes(t *testing.T) {
 // mistaken for the peer denying it, which would corrupt a correct row to
 // `missing`.
 func TestDurabilityVerifierReportsAPeerThatAnswersNothing(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	asker := newPeerNode(t, "peer-asker", "asker")
 	root := newTrustRoot(source.member(), asker.member())
@@ -108,6 +111,7 @@ func TestDurabilityVerifierReportsAPeerThatAnswersNothing(t *testing.T) {
 // believing whatever answered an unpinned dial would be trust on first use — in
 // the service of deciding it is safe to delete the last local copy.
 func TestDurabilityVerifierRefusesAPeerWithNoPinnedKey(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	asker := newPeerNode(t, "peer-asker", "asker")
 	root := newTrustRoot(source.member(), asker.member())
@@ -128,6 +132,7 @@ func TestDurabilityVerifierRefusesAPeerWithNoPinnedKey(t *testing.T) {
 // A peer that is up and serves no bytes at all establishes nothing either way:
 // it has not stayed silent and it has not denied the blob.
 func TestDurabilityVerifierRefusesAPeerServingNoBytes(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	asker := newPeerNode(t, "peer-asker", "asker")
 	root := newTrustRoot(source.member(), asker.member())

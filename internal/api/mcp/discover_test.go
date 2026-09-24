@@ -13,6 +13,7 @@ import (
 // and follow_source are built on.
 
 func TestDiscoverContentReturnsCandidates(t *testing.T) {
+	t.Parallel()
 	reg := providers.New(nil)
 	fake := providers.NewFake("fake-tvdb", providers.CapabilityMetadata).
 		OfferDiscovery("the expanse",
@@ -46,6 +47,7 @@ func TestDiscoverContentReturnsCandidates(t *testing.T) {
 
 // A query with nothing to search on is an invalid-params refusal, not a result.
 func TestDiscoverContentRefusesEmptyQuery(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	resp := h.call("", "discover_content", `{"query":"  "}`)
 	if resp.Body.Error == nil {
@@ -56,6 +58,7 @@ func TestDiscoverContentRefusesEmptyQuery(t *testing.T) {
 // A node with no metadata provider says so — actionably — rather than returning
 // nothing. The default harness configures no providers, so this is that node.
 func TestDiscoverContentWithoutAProviderSaysSo(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	resp := h.call("", "discover_content", `{"query":"anything"}`)
 	if resp.Body.Error == nil {

@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // Everything here runs against a real migrated SQLite database and a real
@@ -66,14 +66,7 @@ type fixture struct {
 func newFixture(t *testing.T, prober health.Prober) (*fixture, *health.Tracker) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	clk := &clock{now: start}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clk})
 	if err != nil {

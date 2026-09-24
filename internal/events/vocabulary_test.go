@@ -89,6 +89,7 @@ func values(consts []eventTypeConst) []string {
 // their own constants would eventually add the same string twice under two
 // names, and a subscriber filtering on one would silently miss the other.
 func TestNoEventTypeIsDeclaredTwice(t *testing.T) {
+	t.Parallel()
 	seen := map[string]string{}
 	for _, c := range eventTypeConstants(t) {
 		if first, dup := seen[c.value]; dup {
@@ -104,6 +105,7 @@ func TestNoEventTypeIsDeclaredTwice(t *testing.T) {
 // names are written out here because reserving them IS the change under test —
 // everything else in this file is enumerated instead.
 func TestThePeerPlaneVocabularyIsReserved(t *testing.T) {
+	t.Parallel()
 	byName := map[string]eventTypeConst{}
 	for _, c := range eventTypeConstants(t) {
 		byName[c.name] = c
@@ -180,6 +182,7 @@ func inPeerPlane(value string) bool {
 //
 // Enumerated rather than listed, so a peer.up added next month fails here.
 func TestNoPeerPlaneTypeIsNamedAfterASingleEdge(t *testing.T) {
+	t.Parallel()
 	edgeWords := []string{
 		"up", "down", "online", "offline", "reachable", "unreachable",
 		"healthy", "unhealthy", "connected", "disconnected",
@@ -210,6 +213,7 @@ func TestNoPeerPlaneTypeIsNamedAfterASingleEdge(t *testing.T) {
 // a transfer, which is a discrete unit of queued work — see "No per-blob events
 // during replication" in the package doc.
 func TestNoPeerPlaneTypeFiresPerBlob(t *testing.T) {
+	t.Parallel()
 	const transferException = "replication.transfer_changed"
 
 	for _, c := range eventTypeConstants(t) {
@@ -241,6 +245,7 @@ func TestNoPeerPlaneTypeFiresPerBlob(t *testing.T) {
 // seven characters, and a prefix match on "replica" rather than "replica."
 // would quietly hand a replica subscriber every transfer in the fabric.
 func TestWildcardSubscriptionsSelectExactlyTheirNamespace(t *testing.T) {
+	t.Parallel()
 	all := values(eventTypeConstants(t))
 	patterns := []string{"peer.*", "replica.*", "replication.*", "sync.*", "catalog.*"}
 
@@ -299,6 +304,7 @@ func TestWildcardSubscriptionsSelectExactlyTheirNamespace(t *testing.T) {
 // client that reconnects with ?after= sees a different world than the one it
 // was watching. Same enumeration, same patterns, through the SQL filter.
 func TestReplayedHistorySelectsTheSameNamespacesAsTheLiveStream(t *testing.T) {
+	t.Parallel()
 	all := values(eventTypeConstants(t))
 	l := newLog(t)
 

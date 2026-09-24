@@ -32,6 +32,7 @@ func (h *harness) songID(t *testing.T, album, track string) string {
 }
 
 func TestStreamReturnsExactBytes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	id := h.songID(t, "Contour Lines", "Datum")
 
@@ -48,6 +49,7 @@ func TestStreamReturnsExactBytes(t *testing.T) {
 }
 
 func TestDownloadReturnsExactBytes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	id := h.songID(t, "Contour Lines", "Benchmark")
 
@@ -66,6 +68,7 @@ func TestDownloadReturnsExactBytes(t *testing.T) {
 // handler unchanged: a Range request gets a 206 with a Content-Range and only
 // the requested bytes. The adapter writes none of that itself.
 func TestStreamHonoursRange(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	id := h.songID(t, "Contour Lines", "Datum")
 	want := h.bytesOf["Datum"]
@@ -96,6 +99,7 @@ func TestStreamHonoursRange(t *testing.T) {
 }
 
 func TestStreamNotFound(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	q := h.creds()
 	q.Set("id", "tr:no-such-edition")
@@ -106,6 +110,7 @@ func TestStreamNotFound(t *testing.T) {
 }
 
 func TestStreamRejectsWrongKindID(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	q := h.creds()
 	q.Set("id", h.albumID(t, "Contour Lines")) // an album id, not a track id
@@ -116,6 +121,7 @@ func TestStreamRejectsWrongKindID(t *testing.T) {
 }
 
 func TestStreamRequiresAuth(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	q := url.Values{"id": {"tr:whatever"}, "f": {"json"}} // no credential
 	r := decode(t, h.raw("stream", q))

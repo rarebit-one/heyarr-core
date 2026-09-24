@@ -79,6 +79,7 @@ func (l *listener) attachmentURL() string {
 // the peer authenticates to the controller with its ADR-0012 identity
 
 func TestAPeerAttachesToTheControllerWithItsOwnCertificate(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-id", "controller")
 	remote := newPeerNode(t, "remote-peer-id", "remote-peer")
 	root := newTrustRoot(controller.member(), remote.member())
@@ -144,6 +145,7 @@ func TestAPeerAttachesToTheControllerWithItsOwnCertificate(t *testing.T) {
 // to carry the right id. Both weaker assertions pass against a server that
 // reads the acting peer out of the body.
 func TestPeerACannotActAsPeerB(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-id", "controller")
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
@@ -201,6 +203,7 @@ func TestPeerACannotActAsPeerB(t *testing.T) {
 // that stops being compared, and the reflex fix — "fall back to the
 // certificate's id" — is the one that makes the comparison decorative.
 func TestADeclarationIsRequiredAndIsNeverDefaultedToTheCertificate(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-id", "controller")
 	remote := newPeerNode(t, "remote-peer-id", "remote-peer")
 	root := newTrustRoot(controller.member(), remote.member())
@@ -231,6 +234,7 @@ func TestADeclarationIsRequiredAndIsNeverDefaultedToTheCertificate(t *testing.T)
 // A surface that echoed the body would return the same 200 and the same shape
 // on every honest request ever made against it.
 func TestTheAttachmentIsDerivedRatherThanEchoed(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-id", "controller")
 	// The name deliberately shares no substring with the id: the assertion
 	// below is that the name was READ FROM MEMBERSHIP, and a name the request
@@ -266,6 +270,7 @@ func TestTheAttachmentIsDerivedRatherThanEchoed(t *testing.T) {
 // same fact asserted over a real mTLS connection by an authenticated peer,
 // because the discovery test cannot make one.
 func TestTheAdminSurfaceIsNotServedOnThePeerListener(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-id", "controller")
 	remote := newPeerNode(t, "remote-peer-id", "remote-peer")
 	root := newTrustRoot(controller.member(), remote.member())
@@ -309,6 +314,7 @@ func TestTheAdminSurfaceIsNotServedOnThePeerListener(t *testing.T) {
 // handshake, so a widening is a failing unit test rather than a behaviour
 // nobody notices.
 func TestAuthorisesIsAnEquality(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-id", "controller")
 	remote := newPeerNode(t, "remote-peer-id", "remote-peer")
 	root := newTrustRoot(controller.member(), remote.member())

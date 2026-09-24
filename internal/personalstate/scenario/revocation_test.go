@@ -44,6 +44,7 @@ import (
 //     fail to decode the post-rotation change (asserted below), and D — still
 //     holding the old key — would decode it, tripping the forward-secrecy check.
 func TestRevocationIsForwardOnly(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	peer := newStore(t)
 

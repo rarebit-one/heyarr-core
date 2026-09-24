@@ -22,6 +22,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // fakeEnsurer is a byte-agnostic blobs.TransferEnsurer for the HTTP-level tests:
@@ -116,14 +117,13 @@ func newEnsureHarness(
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(ctx, sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 
 	cfg := config.Defaults()
 	cfg.DataDir = dir

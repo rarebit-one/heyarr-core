@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -16,7 +15,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/catalogop"
 	"github.com/rarebit-one/heyarr-core/internal/catalogtomb"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 var catalogOpsNow = time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
@@ -25,15 +24,7 @@ var catalogOpsNow = time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 // controller wires as the CatalogOps source.
 func realCatalogTomb(t *testing.T) *catalogtomb.Store {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	store, err := catalogtomb.New(catalogtomb.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)
@@ -57,6 +48,7 @@ func catalogOpsURL(l *listener) string {
 
 // A member fetches this node's catalog ops over the pinned link.
 func TestCatalogOpsRouteServesTheLogToAMember(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, signer, _ := ed25519.GenerateKey(nil)
 	store := realCatalogTomb(t)
@@ -87,6 +79,7 @@ func TestCatalogOpsRouteServesTheLogToAMember(t *testing.T) {
 
 // A node not converging a catalog answers 503, not a broken 200.
 func TestCatalogOpsRouteAnswers503WhenNotConverging(t *testing.T) {
+	t.Parallel()
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
 	root := newTrustRoot(a.member(), b.member())
@@ -105,6 +98,7 @@ func TestCatalogOpsRouteAnswers503WhenNotConverging(t *testing.T) {
 // signed; A records it and A's store then tombstones that work — the removal
 // crossed the site boundary. The response carries A's merged log back.
 func TestPushingACatalogOpConvergesTheServersStore(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, signerB, _ := ed25519.GenerateKey(nil)
 	aStore := realCatalogTomb(t)
@@ -144,6 +138,7 @@ func TestPushingACatalogOpConvergesTheServersStore(t *testing.T) {
 // A pushed op whose signature does not verify is the pusher's error: 400, and
 // nothing is recorded.
 func TestPushingAMalformedCatalogOpIsRejected(t *testing.T) {
+	t.Parallel()
 	aStore := realCatalogTomb(t)
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")

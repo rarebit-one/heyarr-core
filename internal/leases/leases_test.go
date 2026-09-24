@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,7 +12,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/leases"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 type fixedClock struct{ t time.Time }
@@ -24,15 +23,7 @@ var now = time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 
 func newStore(t *testing.T) (*leases.Store, ed25519.PrivateKey) {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	clock := &fixedClock{t: now}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {
@@ -208,14 +199,7 @@ func TestHonourRefusesUntrustedIssuer(t *testing.T) {
 func TestIssueRefusedWithoutSigner(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)

@@ -5,14 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // fakeClock makes lease expiry and backoff ordinary assertions rather than
@@ -40,14 +39,7 @@ func (c *fakeClock) Advance(d time.Duration) {
 
 func newQueue(t *testing.T) (*Queue, *fakeClock) {
 	t.Helper()
-	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatalf("opening database: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatalf("migrating: %v", err)
-	}
+	db := testdb.Migrated(t)
 
 	clock := newClock()
 	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
@@ -88,6 +80,7 @@ func enqueue(t *testing.T, q *Queue, opts EnqueueOptions) Job {
 }
 
 func TestEnqueueAndClaimRoundTrip(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	enqueued := enqueue(t, q, EnqueueOptions{
 		Type:    "ingest_artifact",
@@ -117,6 +110,7 @@ func TestEnqueueAndClaimRoundTrip(t *testing.T) {
 }
 
 func TestClaimReportsNoWorkRatherThanFailing(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	// An idle queue is the common case for a polling worker, not an error.
 	if _, err := q.Claim(t.Context(), ClaimOptions{Owner: "w"}); !errors.Is(err, ErrNoWork) {
@@ -127,6 +121,7 @@ func TestClaimReportsNoWorkRatherThanFailing(t *testing.T) {
 // THE test for this package. Two workers must never both believe they own the
 // same job — that is the whole reason claiming is a single statement.
 func TestConcurrentClaimsNeverDoubleClaim(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 
 	const jobCount = 400
@@ -192,6 +187,7 @@ func TestConcurrentClaimsNeverDoubleClaim(t *testing.T) {
 
 // A worker that dies costs one lease interval, not a stuck queue.
 func TestExpiredLeasesAreReclaimed(t *testing.T) {
+	t.Parallel()
 	q, clock := newQueue(t)
 	enqueue(t, q, EnqueueOptions{})
 
@@ -239,6 +235,7 @@ func TestExpiredLeasesAreReclaimed(t *testing.T) {
 // Losing the lease must be reported, because the handler has to stop:
 // something else may already be running the work.
 func TestOperationsFailOnceTheLeaseIsLost(t *testing.T) {
+	t.Parallel()
 	q, clock := newQueue(t)
 	enqueue(t, q, EnqueueOptions{})
 	job, err := q.Claim(t.Context(), ClaimOptions{Owner: "worker-1", LeaseTTL: time.Minute})
@@ -268,6 +265,7 @@ func TestOperationsFailOnceTheLeaseIsLost(t *testing.T) {
 }
 
 func TestHeartbeatExtendsTheLease(t *testing.T) {
+	t.Parallel()
 	q, clock := newQueue(t)
 	enqueue(t, q, EnqueueOptions{})
 	job, err := q.Claim(t.Context(), ClaimOptions{Owner: "w", LeaseTTL: time.Minute})
@@ -292,6 +290,7 @@ func TestHeartbeatExtendsTheLease(t *testing.T) {
 
 // Idempotency: the same logical work enqueued twice while live is one job.
 func TestDedupeKeyMakesEnqueueIdempotent(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	key := "ingest:root-1:/srv/films/x.mkv"
 
@@ -313,6 +312,7 @@ func TestDedupeKeyMakesEnqueueIdempotent(t *testing.T) {
 // ...but a COMPLETED job must not block the same work later, or a library
 // could be scanned exactly once, ever.
 func TestDedupeKeyIsReusableOnceTheJobFinishes(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	key := "scan:library-1"
 
@@ -332,6 +332,7 @@ func TestDedupeKeyIsReusableOnceTheJobFinishes(t *testing.T) {
 }
 
 func TestPriorityOrdersClaims(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	low, high := 200, 10
 	enqueue(t, q, EnqueueOptions{Type: "low", Priority: &low})
@@ -347,6 +348,7 @@ func TestPriorityOrdersClaims(t *testing.T) {
 }
 
 func TestRunAfterDelaysClaiming(t *testing.T) {
+	t.Parallel()
 	q, clock := newQueue(t)
 	enqueue(t, q, EnqueueOptions{RunAfter: clock.Now().Add(time.Hour)})
 
@@ -361,6 +363,7 @@ func TestRunAfterDelaysClaiming(t *testing.T) {
 
 // A box with no GPU must never lease a transcode (§75).
 func TestCapabilityRouting(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	enqueue(t, q, EnqueueOptions{Type: "transcode", RequiredCapability: "ffmpeg"})
 	enqueue(t, q, EnqueueOptions{Type: "hash_blob"})
@@ -388,6 +391,7 @@ func TestCapabilityRouting(t *testing.T) {
 }
 
 func TestTypeFilterRestrictsClaims(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	enqueue(t, q, EnqueueOptions{Type: "scan_library"})
 	enqueue(t, q, EnqueueOptions{Type: "ingest_artifact"})
@@ -405,6 +409,7 @@ func TestTypeFilterRestrictsClaims(t *testing.T) {
 // fails every queued job at once and they all retry in lockstep, hammering it
 // back down the moment it recovers.
 func TestFailBacksOffWithJitter(t *testing.T) {
+	t.Parallel()
 	q, clock := newQueue(t)
 	enqueue(t, q, EnqueueOptions{MaxAttempts: 10})
 
@@ -453,6 +458,7 @@ func TestFailBacksOffWithJitter(t *testing.T) {
 // Dead is terminal on purpose: a job that cannot succeed should stop consuming
 // worker slots and start being visible.
 func TestExhaustedJobsGoDeadRatherThanLoopingForever(t *testing.T) {
+	t.Parallel()
 	q, clock := newQueue(t)
 	enqueue(t, q, EnqueueOptions{MaxAttempts: 3})
 
@@ -481,6 +487,7 @@ func TestExhaustedJobsGoDeadRatherThanLoopingForever(t *testing.T) {
 
 // Retry is the operator action after fixing whatever was wrong.
 func TestRetryRevivesADeadJob(t *testing.T) {
+	t.Parallel()
 	q, clock := newQueue(t)
 	enqueue(t, q, EnqueueOptions{MaxAttempts: 1})
 
@@ -512,6 +519,7 @@ func TestRetryRevivesADeadJob(t *testing.T) {
 }
 
 func TestCompleteMarksSucceeded(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	enqueue(t, q, EnqueueOptions{})
 	job, err := q.Claim(t.Context(), ClaimOptions{Owner: "w"})
@@ -537,6 +545,7 @@ func TestCompleteMarksSucceeded(t *testing.T) {
 }
 
 func TestEnqueueRejectsAnEmptyType(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	if _, err := q.Enqueue(t.Context(), EnqueueOptions{}); err == nil {
 		t.Error("Enqueue accepted a job with no type")
@@ -544,6 +553,7 @@ func TestEnqueueRejectsAnEmptyType(t *testing.T) {
 }
 
 func TestClaimRequiresAnOwner(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	if _, err := q.Claim(t.Context(), ClaimOptions{}); err == nil {
 		t.Error("Claim accepted an empty owner — the lease would belong to nobody")
@@ -551,6 +561,7 @@ func TestClaimRequiresAnOwner(t *testing.T) {
 }
 
 func TestGetReportsMissingJobs(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	if _, err := q.Get(t.Context(), "no-such-job"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Get returned %v, want ErrNotFound", err)
@@ -558,6 +569,7 @@ func TestGetReportsMissingJobs(t *testing.T) {
 }
 
 func TestNewRequiresAWriter(t *testing.T) {
+	t.Parallel()
 	if _, err := New(Options{}); err == nil {
 		t.Error("New accepted a queue with no writer")
 	}
@@ -571,6 +583,7 @@ func TestNewRequiresAWriter(t *testing.T) {
 // threshold, and then materialises the WHOLE blob — five times, for a fact
 // established the first time (#232).
 func TestAPermanentFailureGoesStraightToDead(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	enqueue(t, q, EnqueueOptions{MaxAttempts: 5})
 
@@ -604,6 +617,7 @@ func TestAPermanentFailureGoesStraightToDead(t *testing.T) {
 // everything straight to dead would pass the test above and silently stop the
 // queue retrying anything.
 func TestAnOrdinaryFailureStillRetries(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	enqueue(t, q, EnqueueOptions{MaxAttempts: 5})
 
@@ -631,6 +645,7 @@ func TestAnOrdinaryFailureStillRetries(t *testing.T) {
 // retrying instead of walking to dead on the attempt cap. A brief indexer or
 // download-client outage must not strand a want forever (#557).
 func TestATransientFailureRetriesPastTheAttemptCap(t *testing.T) {
+	t.Parallel()
 	q, clock := newQueue(t)
 	enqueue(t, q, EnqueueOptions{MaxAttempts: 3})
 
@@ -665,6 +680,7 @@ func TestATransientFailureRetriesPastTheAttemptCap(t *testing.T) {
 // The transient schedule is minutes-to-hours, past anything the ordinary
 // seconds-to-minutes cliff can reach — long enough to be kind to an outage.
 func TestTransientBackoffOutgrowsTheOrdinaryCeiling(t *testing.T) {
+	t.Parallel()
 	q, clock := newQueue(t)
 	enqueue(t, q, EnqueueOptions{MaxAttempts: 100})
 
@@ -696,6 +712,7 @@ func TestTransientBackoffOutgrowsTheOrdinaryCeiling(t *testing.T) {
 // A handler that contradicts itself is read as making the stronger claim:
 // "cannot ever succeed" beats "cannot succeed yet", so the job dies.
 func TestPermanentWinsOverTransient(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	enqueue(t, q, EnqueueOptions{MaxAttempts: 5})
 
@@ -722,6 +739,7 @@ func TestPermanentWinsOverTransient(t *testing.T) {
 // has fixed the world is making a different claim, and `jobs retry` is where
 // they make it.
 func TestAPermanentlyFailedJobCanStillBeRetriedByHand(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	enqueue(t, q, EnqueueOptions{MaxAttempts: 5})
 
@@ -752,6 +770,7 @@ func TestAPermanentlyFailedJobCanStillBeRetriedByHand(t *testing.T) {
 // or lease that IS due, and that `run_after <= ?` / `lease_expires_at <= ?`
 // called not due under that layout.
 func TestDueAndExpiryComparisonsSurviveASubSecondBoundary(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		at, then time.Duration // the stored instant, and the later "now" that must see it as passed

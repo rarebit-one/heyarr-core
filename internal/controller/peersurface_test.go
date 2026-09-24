@@ -19,6 +19,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // The peer transport against the REAL trust root.
@@ -38,14 +39,13 @@ func realFabric(t *testing.T) (*membership.Store, *sqlite.DB) {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(ctx, sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)

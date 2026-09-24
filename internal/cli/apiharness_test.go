@@ -33,6 +33,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // The client commands are tested against a real API over a real database, with
@@ -164,14 +165,13 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 	if dir == "" {
 		dir = t.TempDir()
 	}
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(ctx, sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 
 	clock := &testClock{t: fixedTime}
 	store, err := auth.NewStore(auth.StoreOptions{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})

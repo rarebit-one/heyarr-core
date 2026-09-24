@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +19,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // Everything here runs against a real migrated SQLite database. The refusals
@@ -46,14 +46,7 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	clock := &fixedClock{t: fixedTime}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {
@@ -133,6 +126,7 @@ func (f *fixture) eventsOfType(eventType string) []map[string]any {
 }
 
 func TestRegisterPinsTheKeyAndLookupFindsIt(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	pub := key(t)
 
@@ -195,6 +189,7 @@ func TestRegisterPinsTheKeyAndLookupFindsIt(t *testing.T) {
 // operator who hit it: a mistyped key, the wrong site's key, a name already in
 // use, and two ways of trying to be this node.
 func TestEachRefusalIsItsOwn(t *testing.T) {
+	t.Parallel()
 	shared := key(t)
 
 	cases := []struct {
@@ -319,6 +314,7 @@ func TestEachRefusalIsItsOwn(t *testing.T) {
 // Register — a restore, a repair by hand, a future migration — and a trust
 // root enforced only in the code path everybody remembers is enforced nowhere.
 func TestTheSchemaRefusesTwoPeersUnderOneKey(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	pub := key(t)
 	f.register("peer-b", pub, "https://b.example:8385")
@@ -338,6 +334,7 @@ func TestTheSchemaRefusesTwoPeersUnderOneKey(t *testing.T) {
 // TestAnEndpointMovesWithoutTouchingIdentity is the other half of "a peer is
 // registered by its public key, not by its address".
 func TestAnEndpointMovesWithoutTouchingIdentity(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	pub := key(t)
 	first := f.register("peer-b", pub, "https://b.example:8385")
@@ -407,6 +404,7 @@ func TestAnEndpointMovesWithoutTouchingIdentity(t *testing.T) {
 // servers, which are plain HTTP by construction, and would have to grow
 // certificates to say anything about liveness.
 func TestTheStoreStoresTheEndpointItIsGiven(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	// The shape the health package builds: a plain-HTTP httptest address.
 	got := f.register("peer-b", key(t), "http://127.0.0.1:44471")
@@ -418,6 +416,7 @@ func TestTheStoreStoresTheEndpointItIsGiven(t *testing.T) {
 // TestTheStoreTrimsButDoesNotRewrite: whitespace is not a value, and a
 // re-registration with the same endpoint is not a move.
 func TestTheStoreTrimsButDoesNotRewrite(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	pub := key(t)
 	got := f.register("peer-b", pub, "  https://b.example:8385  ")
@@ -440,6 +439,7 @@ func TestTheStoreTrimsButDoesNotRewrite(t *testing.T) {
 // end-to-end version — a peer that was reading bytes and then cannot — is in
 // revocation_test.go.
 func TestRemoveIsRevocation(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	pub := key(t)
 	enrolled := f.register("peer-b", pub, "https://b.example:8385")
@@ -495,6 +495,7 @@ func TestRemoveIsRevocation(t *testing.T) {
 // TestRemovingAPeerTakesItsReplicasWithIt: a peer this instance will not talk
 // to is not a peer whose copy counts towards placement.
 func TestRemovingAPeerTakesItsReplicasWithIt(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	pub := key(t)
 	enrolled := f.register("peer-b", pub, "https://b.example:8385")
@@ -540,6 +541,7 @@ func mustExec(t *testing.T, db *sql.DB, query string, args ...any) {
 // key and node B registers node A's, and each ends up with two peers whose
 // public keys match byte-for-byte what the other reports as its own.
 func TestBothSidesSeeTwoPeers(t *testing.T) {
+	t.Parallel()
 	a := newFixture(t)
 	b := newFixture(t)
 
@@ -589,6 +591,7 @@ func recordSelfKey(t *testing.T, f *fixture, pub ed25519.PublicKey) {
 // It is a scan of the values rather than a review of the struct, because the
 // field that leaks a key is the one somebody added after the review.
 func TestNothingHereCarriesPrivateKeyMaterial(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

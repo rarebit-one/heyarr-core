@@ -130,6 +130,7 @@ func fetchSnapshot(t *testing.T, client *http.Client, addr string, holding int64
 
 // A peer pulls its snapshot over the pinned link, and the payload decodes.
 func TestAPeerPullsItsSnapshotOverTheAuthenticatedLink(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-a", "controller")
 	peerB := newPeerNode(t, "peer-b", "site-b")
 	root := newTrustRoot(controller.member(), peerB.member())
@@ -173,6 +174,7 @@ func TestAPeerPullsItsSnapshotOverTheAuthenticatedLink(t *testing.T) {
 // A node that serves the peer fabric but holds no catalogue says so, rather
 // than reporting an internal error or hiding the route.
 func TestANodeWithNoCatalogueRefusesTheSnapshotHonestly(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "peer-a", "site-a")
 	peerB := newPeerNode(t, "peer-b", "site-b")
 	root := newTrustRoot(controller.member(), peerB.member())
@@ -197,6 +199,7 @@ func TestANodeWithNoCatalogueRefusesTheSnapshotHonestly(t *testing.T) {
 // A non-member cannot reach the snapshot at all: the refusal is the failed
 // handshake, not a status code.
 func TestANonMemberCannotReachTheSnapshot(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-a", "controller")
 	stranger := newPeerNode(t, "peer-x", "elsewhere")
 	root := newTrustRoot(controller.member()) // the stranger is not in it
@@ -210,6 +213,7 @@ func TestANonMemberCannotReachTheSnapshot(t *testing.T) {
 // A malformed `holding` is refused rather than silently treated as zero, which
 // would turn a client bug into an unexplained full rebuild every time.
 func TestAMalformedHoldingIsRefused(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-a", "controller")
 	peerB := newPeerNode(t, "peer-b", "site-b")
 	root := newTrustRoot(controller.member(), peerB.member())

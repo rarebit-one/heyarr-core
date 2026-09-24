@@ -17,6 +17,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
 	"github.com/rarebit-one/heyarr-core/internal/testutil"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // integrityFixture is a config file plus a database and a store behind it, so
@@ -56,14 +57,13 @@ func (f *integrityFixture) seed(contents string, tracked bool) string {
 		return desc.Hash.String()
 	}
 
-	db, err := sqlite.Open(f.t.Context(), sqlite.Options{Path: filepath.Join(f.dir, "heyarr.db")})
+	dbPath := filepath.Join(f.dir, "heyarr.db")
+	testdb.WriteMigrated(f.t, dbPath)
+	db, err := sqlite.Open(f.t.Context(), sqlite.Options{Path: dbPath})
 	if err != nil {
 		f.t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	if err := sqlite.Migrate(f.t.Context(), db); err != nil {
-		f.t.Fatal(err)
-	}
 	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		f.t.Fatal(err)

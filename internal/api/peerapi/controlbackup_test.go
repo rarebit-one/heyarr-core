@@ -16,6 +16,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/backup"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // serveWithControlBackup is serve() with a control-backup store behind the
@@ -49,14 +50,13 @@ func serveWithControlBackup(t *testing.T, self *peerNode, members mtls.Membershi
 func signedBackupBy(t *testing.T, sourceID string, priv ed25519.PrivateKey) (string, backup.Manifest) {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatal(err)
-	}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +78,7 @@ func signedBackupBy(t *testing.T, sourceID string, priv ed25519.PrivateKey) (str
 // the peer surface to a second node and is byte-identical on arrival, asserted
 // by digest at both ends.
 func TestControlBackupPushCrossesToAPeer(t *testing.T) {
+	t.Parallel()
 	sender := newPeerNode(t, "peer-a", "site-a")
 	receiver := newPeerNode(t, "peer-b", "site-b")
 	root := newTrustRoot(sender.member(), receiver.member())
@@ -119,6 +120,7 @@ func TestControlBackupPushCrossesToAPeer(t *testing.T) {
 // TestControlBackupPushRefusedFromARevokedPeer proves a peer removed from
 // membership cannot push — the mTLS handshake fails, so nothing lands.
 func TestControlBackupPushRefusedFromARevokedPeer(t *testing.T) {
+	t.Parallel()
 	sender := newPeerNode(t, "peer-a", "site-a")
 	receiver := newPeerNode(t, "peer-b", "site-b")
 	root := newTrustRoot(sender.member(), receiver.member())
@@ -143,6 +145,7 @@ func TestControlBackupPushRefusedFromARevokedPeer(t *testing.T) {
 // TestControlBackupPushRefusesAForeignSource proves a peer cannot push a backup
 // whose manifest names a different source than itself.
 func TestControlBackupPushRefusesAForeignSource(t *testing.T) {
+	t.Parallel()
 	sender := newPeerNode(t, "peer-a", "site-a")
 	receiver := newPeerNode(t, "peer-b", "site-b")
 	other := newPeerNode(t, "peer-c", "site-c")
@@ -172,6 +175,7 @@ func TestControlBackupPushRefusesAForeignSource(t *testing.T) {
 // then A, built from the RESTORED key, authenticates to B — which still pins A's
 // key, so a successful request is proof the fabric trusts the restored node.
 func TestRecoverRoundTripIsRecognisedByThePeer(t *testing.T) {
+	t.Parallel()
 	sender := newPeerNode(t, "peer-a", "site-a")
 	receiver := newPeerNode(t, "peer-b", "site-b")
 	root := newTrustRoot(sender.member(), receiver.member())

@@ -21,6 +21,7 @@ import (
 // rather than from a binary on PATH.
 
 func TestASearchJobStaysPendingWithoutAnIndexer(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	ctx := context.Background()
 
@@ -79,6 +80,7 @@ func TestASearchJobStaysPendingWithoutAnIndexer(t *testing.T) {
 // The same job, on a node that HAS an indexer, is claimed. Without this the
 // test above would pass against a queue that never claimed anything.
 func TestASearchJobIsClaimedWithAnIndexer(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	ctx := context.Background()
 
@@ -112,6 +114,7 @@ func TestASearchJobIsClaimedWithAnIndexer(t *testing.T) {
 // routed INDEPENDENTLY: a node with an indexer and no download client claims
 // searches and leaves acquisitions waiting.
 func TestCapabilitiesRouteIndependently(t *testing.T) {
+	t.Parallel()
 	q, _ := newQueue(t)
 	ctx := context.Background()
 

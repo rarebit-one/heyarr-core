@@ -36,6 +36,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/guest"
 	"github.com/rarebit-one/heyarr-core/internal/leases"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // syncBuffer is a log sink a test can read while the server is still writing
@@ -82,14 +83,13 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(ctx, sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 
 	casDir := filepath.Join(dir, "cas")
 	if err := os.MkdirAll(casDir, 0o750); err != nil {
@@ -1058,14 +1058,13 @@ func (failingEventHead) Latest(context.Context) (int64, error) {
 // describe a degraded node, not to become unavailable alongside it.
 func TestSystemReportsAnUnreadableEventLogRatherThanZero(t *testing.T) {
 	dir := t.TempDir()
-	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatal(err)
-	}
 
 	cfg := config.Defaults()
 	cfg.DataDir = dir
@@ -1225,14 +1224,13 @@ func TestSystemReportsTheMediaToolchain(t *testing.T) {
 func systemWithMedia(t *testing.T, tools []httpapi.ToolInfo) ([]byte, httpapi.SystemInfo) {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatal(err)
-	}
 	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)
@@ -1294,14 +1292,13 @@ func systemResponse(t *testing.T, build buildinfo.Info, applied, known int64, qu
 ) (int, []byte) {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatal(err)
-	}
 	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)
@@ -1502,14 +1499,13 @@ func TestSystemRejectsAnUnparseableExpectedSchema(t *testing.T) {
 // health is exactly the failure #150 exists to encode against.
 func TestNewRequiresTheSchemaVersionThisBinaryKnows(t *testing.T) {
 	dir := t.TempDir()
-	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatal(err)
-	}
 	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)

@@ -147,6 +147,7 @@ func mustChange(t *testing.T, space string, parents []string, ciphertext []byte)
 // TestStateRouteServesOpaqueChangesToAMember: a member offers its heads and pulls
 // the changes it is missing, as ciphertext moved verbatim, and pushes a new one.
 func TestStateRouteServesOpaqueChangesToAMember(t *testing.T) {
+	t.Parallel()
 	const space = "0199aaaa-0000-7000-8000-00000000cafe"
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
@@ -220,6 +221,7 @@ func mustSnapshot(t *testing.T, space string, frontier []string, ciphertext []by
 // snapshot a peer holds (ciphertext moved verbatim) and pushes one, which the peer
 // accepts after verifying its content-address — the snapshot leg of §44.
 func TestStateSnapshotRouteOffersAndAcceptsOpaqueSnapshots(t *testing.T) {
+	t.Parallel()
 	const space = "0199dddd-0000-7000-8000-00000000face"
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
@@ -265,6 +267,7 @@ func TestStateSnapshotRouteOffersAndAcceptsOpaqueSnapshots(t *testing.T) {
 // TestStateLatestSnapshotAbsentIs404: a space with no snapshot yet 404s, distinct
 // from a served empty body — the caller then seeds from the change log alone.
 func TestStateLatestSnapshotAbsentIs404(t *testing.T) {
+	t.Parallel()
 	const space = "0199eeee-0000-7000-8000-00000000beef"
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
@@ -286,6 +289,7 @@ func TestStateLatestSnapshotAbsentIs404(t *testing.T) {
 // TestStateSnapshotPushRejectsForgedID: a snapshot whose stated id does not match
 // its bytes is refused before storage (Invariant 1), exactly as a change is.
 func TestStateSnapshotPushRejectsForgedID(t *testing.T) {
+	t.Parallel()
 	const space = "0199ffff-0000-7000-8000-00000000d00d"
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
@@ -317,6 +321,7 @@ func TestStateSnapshotPushRejectsForgedID(t *testing.T) {
 // already covers — the incremental pull (protocol.Missing), computed without
 // decryption.
 func TestStateChangesMissingFiltersByHave(t *testing.T) {
+	t.Parallel()
 	const space = "0199bbbb-0000-7000-8000-00000000beef"
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
@@ -362,6 +367,7 @@ func TestStateChangesMissingFiltersByHave(t *testing.T) {
 // TestStatePushRejectsForgedID: a change whose stated id does not match its bytes
 // is a 400, refused before storage (Invariant 1).
 func TestStatePushRejectsForgedID(t *testing.T) {
+	t.Parallel()
 	const space = "0199cccc-0000-7000-8000-00000000d00d"
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
@@ -393,6 +399,7 @@ func TestStatePushRejectsForgedID(t *testing.T) {
 // TestStateAnswers503WithNoBackend: a node with no personal-state store still
 // MOUNTS the routes (so the OpenAPI parity walk sees them) and answers 503.
 func TestStateAnswers503WithNoBackend(t *testing.T) {
+	t.Parallel()
 	const space = "0199dddd-0000-7000-8000-00000000face"
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
@@ -411,6 +418,7 @@ func TestStateAnswers503WithNoBackend(t *testing.T) {
 // TestStateUnknownSpaceIs404: a space this peer has not been replicated is a 404,
 // not a 500 — the not-found the wiring adapter translates.
 func TestStateUnknownSpaceIs404(t *testing.T) {
+	t.Parallel()
 	const space = "0199eeee-0000-7000-8000-000000001234"
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
@@ -430,6 +438,7 @@ func TestStateUnknownSpaceIs404(t *testing.T) {
 // TestANonMemberCannotReachState: a stranger is refused at the mTLS handshake, so
 // the state routes are unreachable to a non-member — like every peer route.
 func TestANonMemberCannotReachState(t *testing.T) {
+	t.Parallel()
 	const space = "0199ffff-0000-7000-8000-000000005678"
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	stranger := newPeerNode(t, "stranger-id", "stranger")
@@ -446,6 +455,7 @@ func TestANonMemberCannotReachState(t *testing.T) {
 // wrapped key to this peer over the metadata routes; both are stored (204), and a
 // malformed push (bad kind, empty recipient) is a 400.
 func TestStatePutSpaceAndWrappedKey(t *testing.T) {
+	t.Parallel()
 	const space = "0199a0a0-0000-7000-8000-0000000000aa"
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")

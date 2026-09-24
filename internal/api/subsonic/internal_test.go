@@ -3,6 +3,7 @@ package subsonic
 import "testing"
 
 func TestIDRoundTrip(t *testing.T) {
+	t.Parallel()
 	t.Run("album", func(t *testing.T) {
 		got, ok := decodeAlbumID(albumID("work-123"))
 		if !ok || got != "work-123" {
@@ -26,6 +27,7 @@ func TestIDRoundTrip(t *testing.T) {
 }
 
 func TestDecodeRejectsWrongKind(t *testing.T) {
+	t.Parallel()
 	// A track id is not an album id; feeding one to the other must not decode,
 	// or a client's mixed-up id would query the wrong table.
 	if _, ok := decodeAlbumID(trackID("x")); ok {
@@ -43,6 +45,7 @@ func TestDecodeRejectsWrongKind(t *testing.T) {
 }
 
 func TestIndexKey(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"azimuth":       "A",
 		"Contour Lines": "C",
@@ -58,6 +61,7 @@ func TestIndexKey(t *testing.T) {
 }
 
 func TestStripArticle(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"The Cartographers": "Cartographers",
 		"Theremin":          "Theremin", // not a whole-word article
@@ -73,6 +77,7 @@ func TestStripArticle(t *testing.T) {
 }
 
 func TestSuffixOf(t *testing.T) {
+	t.Parallel()
 	if got := suffixOf("01 - Datum.FLAC", "flac"); got != "flac" {
 		t.Errorf("filename suffix = %q, want flac", got)
 	}
@@ -82,6 +87,7 @@ func TestSuffixOf(t *testing.T) {
 }
 
 func TestAlbumOrderPersonalTypes(t *testing.T) {
+	t.Parallel()
 	// The three history/starred types are personal state the server cannot read;
 	// they must be flagged so the endpoint returns empty rather than an ORDER BY
 	// that fabricates a ranking.

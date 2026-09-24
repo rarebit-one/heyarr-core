@@ -6,6 +6,7 @@ import (
 )
 
 func TestGetArtists(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	r := h.get("getArtists", nil)
 	if r.Artists == nil {
@@ -43,6 +44,7 @@ func TestGetArtists(t *testing.T) {
 }
 
 func TestGetArtist(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	artists := h.get("getArtists", nil)
 	id := artists.Artists.Index[1].Artist[0].ID // The Cartographers
@@ -64,6 +66,7 @@ func TestGetArtist(t *testing.T) {
 }
 
 func TestGetArtistNotFound(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	// A well-formed but wrong-kind id must not be mistaken for an artist.
 	r := h.get("getArtist", url.Values{"id": {"tr:something"}})
@@ -73,6 +76,7 @@ func TestGetArtistNotFound(t *testing.T) {
 }
 
 func TestGetAlbumList2Alphabetical(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	r := h.get("getAlbumList2", url.Values{"type": {"alphabeticalByName"}})
 	if r.AlbumList2 == nil {
@@ -96,6 +100,7 @@ func TestGetAlbumList2Alphabetical(t *testing.T) {
 }
 
 func TestGetAlbumList2SizeAndOffset(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	first := h.get("getAlbumList2", url.Values{"type": {"alphabeticalByName"}, "size": {"2"}})
 	if len(first.AlbumList2.Album) != 2 {
@@ -114,6 +119,7 @@ func TestGetAlbumList2SizeAndOffset(t *testing.T) {
 // return an empty list, not a fabricated one: that state is personal and
 // encrypted, and the controller cannot read it (§72).
 func TestGetAlbumList2PersonalTypesEmpty(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	for _, typ := range []string{"starred", "recent", "frequent"} {
 		r := h.get("getAlbumList2", url.Values{"type": {typ}})
@@ -127,6 +133,7 @@ func TestGetAlbumList2PersonalTypesEmpty(t *testing.T) {
 }
 
 func TestGetAlbum(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	id := h.albumID(t, "Contour Lines")
 
@@ -166,6 +173,7 @@ func TestGetAlbum(t *testing.T) {
 }
 
 func TestGetAlbumLinkedTrackExcluded(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	id := h.albumID(t, "Meridian")
 	r := h.get("getAlbum", url.Values{"id": {id}})
@@ -178,6 +186,7 @@ func TestGetAlbumLinkedTrackExcluded(t *testing.T) {
 }
 
 func TestGetAlbumNotFound(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	r := h.get("getAlbum", url.Values{"id": {"al:no-such-work"}})
 	if r.Status != "failed" || r.Error == nil || r.Error.Code != 70 {

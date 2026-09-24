@@ -304,6 +304,7 @@ func decodeProblem(t *testing.T, body string) problem.Problem {
 // wrong order is a set of valid chunks and the wrong file (ADR-0034), and it
 // is the one fault the per-chunk digests cannot see.
 func TestAPeerFetchesTheChunkSequenceTheSourceStoredInOrder(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())
@@ -383,6 +384,7 @@ func TestAPeerFetchesTheChunkSequenceTheSourceStoredInOrder(t *testing.T) {
 // thought to have, ordering by anything caller-derived — would differ here,
 // and would differ in a way no single-caller test could see.
 func TestTheManifestIsIdenticalForEveryCaller(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	one := newPeerNode(t, "peer-one", "one")
 	two := newPeerNode(t, "peer-two", "two")
@@ -421,6 +423,7 @@ func TestTheManifestIsIdenticalForEveryCaller(t *testing.T) {
 // 200 here and look like a feature, and a route that chunked and failed would
 // answer 404 and look like this test passing.
 func TestAskingForAManifestThatDoesNotExistGeneratesNothing(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())
@@ -483,6 +486,7 @@ func TestAskingForAManifestThatDoesNotExistGeneratesNothing(t *testing.T) {
 // a decision somebody took rather than an absence, and it is just as final:
 // asking must not overturn it by producing the manifest it says is unnecessary.
 func TestABlobDecidedToNeedNoManifestAlsoAnswers404AndGeneratesNothing(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())
@@ -521,6 +525,7 @@ func TestABlobDecidedToNeedNoManifestAlsoAnswers404AndGeneratesNothing(t *testin
 // URI, which is the contract. The destination's differing ACTION is asserted
 // on the other side of the wire, in internal/peer/transfer.
 func TestTheThreeManifestlessAnswersAreDistinguishable(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())
@@ -648,6 +653,7 @@ func (s *serverSeen) mark() int {
 // client-side Handshake() returns success against a listener that accepts
 // every key.
 func TestARevokedPeerCannotReadAManifest(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())
@@ -732,6 +738,7 @@ func TestARevokedPeerCannotReadAManifest(t *testing.T) {
 // what every destination does, and it should require editing a committed file
 // rather than only a string.
 func TestTheManifestWireShapeIsAGoldenFile(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())

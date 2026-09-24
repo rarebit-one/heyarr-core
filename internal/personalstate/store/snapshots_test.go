@@ -34,6 +34,7 @@ func chain(t *testing.T, s interface {
 }
 
 func TestPutAndLatestSnapshot(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 	sp, err := s.PutSpace(ctx, mustUUIDStr(t), spaces.KindPersonal)
@@ -75,6 +76,7 @@ func TestPutAndLatestSnapshot(t *testing.T) {
 // (and not the snapshot) would never receive, and the "still there" assertion
 // fires.
 func TestCompactionRespectsTheAcknowledgedFrontier(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// Case A: every replica has acknowledged up to c3. Compaction drops c1,c2,c3

@@ -26,6 +26,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // A peer is not an admin (ADR-0033), asserted ROUTE BY ROUTE.
@@ -75,14 +76,12 @@ func newPeerSurfaceHarness(t *testing.T, presented httpapi.PresentedPeerKey) *pe
 	ctx := context.Background()
 	c := newTestController(t)
 
+	testdb.WriteMigrated(t, c.cfg.Database.Path)
 	db, err := sqlite.Open(ctx, sqlite.Options{Path: c.cfg.Database.Path})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 	blobStore, err := cas.OpenFS(filepath.Clean(c.cfg.CAS.Root))
 	if err != nil {
 		t.Fatal(err)

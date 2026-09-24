@@ -10,7 +10,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,7 +21,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // The peer surface as a WITNESS (#184).
@@ -56,14 +55,7 @@ var livenessStart = time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
 func newLivenessFixture(t *testing.T) *livenessFixture {
 	t.Helper()
 	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	clk := &livenessClock{now: livenessStart}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clk})
 	if err != nil {
@@ -181,6 +173,7 @@ func serveWithLiveness(
 // how #184 survived M4 — every test still passed, because nothing ever looked
 // at whether the value could move.
 func TestAPeerThatSpeaksOnlyToThePeerSurfaceBecomesReachable(t *testing.T) {
+	t.Parallel()
 	f := newLivenessFixture(t)
 	nodeA := newPeerNode(t, "01990000-0000-7000-8000-0000000000a1", "site-a")
 	nodeB := newPeerNode(t, "01990000-0000-7000-8000-0000000000b1", "site-b")
@@ -232,6 +225,7 @@ func TestAPeerThatSpeaksOnlyToThePeerSurfaceBecomesReachable(t *testing.T) {
 // makes a great many requests, and one write per request would put a heartbeat
 // into the single-writer control plane and into the event log.
 func TestRepeatedPeerRequestsEmitOneEdge(t *testing.T) {
+	t.Parallel()
 	f := newLivenessFixture(t)
 	nodeA := newPeerNode(t, "01990000-0000-7000-8000-0000000000a2", "site-a")
 	nodeB := newPeerNode(t, "01990000-0000-7000-8000-0000000000b2", "site-b")
@@ -258,6 +252,7 @@ func TestRepeatedPeerRequestsEmitOneEdge(t *testing.T) {
 // does not pin is not a peer whose liveness there is any business recording —
 // and it cannot complete a handshake to try.
 func TestAKeyThisFabricDoesNotPinRecordsNoLiveness(t *testing.T) {
+	t.Parallel()
 	f := newLivenessFixture(t)
 	nodeA := newPeerNode(t, "01990000-0000-7000-8000-0000000000a3", "site-a")
 	nodeB := newPeerNode(t, "01990000-0000-7000-8000-0000000000b3", "site-b")
@@ -286,6 +281,7 @@ func TestAKeyThisFabricDoesNotPinRecordsNoLiveness(t *testing.T) {
 // peer asked for something; whether this node managed to write down that it
 // was up is this node's problem.
 func TestAFailingLivenessSinkDoesNotFailThePeerRequest(t *testing.T) {
+	t.Parallel()
 	nodeA := newPeerNode(t, "01990000-0000-7000-8000-0000000000a5", "site-a")
 	nodeB := newPeerNode(t, "01990000-0000-7000-8000-0000000000b5", "site-b")
 	root := newTrustRoot(nodeA.member(), nodeB.member())

@@ -27,6 +27,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 const stamp = "2026-08-01T00:00:00Z"
@@ -62,14 +63,13 @@ func newHarnessWith(t *testing.T, authEnabled bool, reg *providers.Registry) *ha
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(ctx, sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 
 	cfg := config.Defaults()
 	cfg.DataDir = dir

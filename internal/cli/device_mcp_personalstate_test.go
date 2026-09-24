@@ -34,6 +34,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // psHarness is a running controller with the encrypted personal-state API, a
@@ -51,14 +52,13 @@ func newPSHarness(t *testing.T) *psHarness {
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(ctx, sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 	authStore, err := auth.NewStore(auth.StoreOptions{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)

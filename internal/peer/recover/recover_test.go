@@ -16,6 +16,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/backup"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // signedBackup builds a signed backup of a control plane on disk, attributed to
@@ -23,14 +24,13 @@ import (
 func signedBackup(t *testing.T, sourceID string) (string, backup.Manifest, []byte) {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatal(err)
-	}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)
@@ -208,14 +208,13 @@ func TestApplyRefusesToOverwriteAnIdentity(t *testing.T) {
 func TestFetchRefusesASchemaTooNew(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatal(err)
-	}
 	known, err := sqlite.KnownSchemaVersion()
 	if err != nil {
 		t.Fatal(err)

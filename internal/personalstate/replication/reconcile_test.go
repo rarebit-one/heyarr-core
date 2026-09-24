@@ -3,30 +3,21 @@ package replication_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/replication"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/store"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 func newStore(t *testing.T) *store.Store {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)
@@ -148,6 +139,7 @@ func mustUUID(t *testing.T) string {
 // up holding the space, both wrapped keys and both changes; a second reconcile
 // pushes nothing (idempotent, Invariant 9).
 func TestReconcileConvergesATargetThenIsIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local := newStore(t)
 	target := newStore(t)
@@ -187,6 +179,7 @@ func TestReconcileConvergesATargetThenIsIdempotent(t *testing.T) {
 // pushed AFTER its changes, so the target holds the tail the frontier references
 // before it receives the snapshot. The peer stores ciphertext it never opens.
 func TestReconcileReplicatesTheLatestSnapshot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local := newStore(t)
 	target := newStore(t)
@@ -236,6 +229,7 @@ func TestReconcileReplicatesTheLatestSnapshot(t *testing.T) {
 // recorded fact, not a failure of the cycle — a reachable peer still converges
 // (ADR-0038).
 func TestReconcileDefersUnreachablePeerButConvergesOthers(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local := newStore(t)
 	reachable := newStore(t)
