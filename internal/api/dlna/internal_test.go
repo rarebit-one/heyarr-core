@@ -3,6 +3,7 @@ package dlna
 import "testing"
 
 func TestPageWindow(t *testing.T) {
+	t.Parallel()
 	in := []int{0, 1, 2, 3, 4}
 	if got := page(in, 0, 0); len(got) != 5 {
 		t.Errorf("count 0 should mean all, got %d", len(got))
@@ -19,6 +20,7 @@ func TestPageWindow(t *testing.T) {
 }
 
 func TestClassFor(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"movie":   classVideoItem,
 		"series":  classVideoItem,
@@ -34,6 +36,7 @@ func TestClassFor(t *testing.T) {
 }
 
 func TestFolderTitle(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{"movie": "Movies", "series": "TV", "music": "Music", "paper": "Paper", "": "Other"}
 	for ct, want := range cases {
 		if got := folderTitle(ct); got != want {
@@ -43,6 +46,7 @@ func TestFolderTitle(t *testing.T) {
 }
 
 func TestParseBrowse(t *testing.T) {
+	t.Parallel()
 	body := []byte(`<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>` +
 		`<u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">` +
 		`<ObjectID>ct:movie</ObjectID><BrowseFlag>BrowseDirectChildren</BrowseFlag>` +

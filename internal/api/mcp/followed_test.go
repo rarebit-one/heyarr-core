@@ -13,6 +13,7 @@ import (
 // discipline want_content is built on.
 
 func TestFollowSourceListAndUnfollow(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 
 	var created struct {
@@ -57,6 +58,7 @@ func TestFollowSourceListAndUnfollow(t *testing.T) {
 // and followed, while an identity that is neither a tvdb id nor an http(s) URL is
 // refused rather than stored unpolled.
 func TestFollowSourceInfersPodcastAndRefusesJunk(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 
 	var followed struct {
@@ -84,6 +86,7 @@ func TestFollowSourceInfersPodcastAndRefusesJunk(t *testing.T) {
 // resources.PollSource the REST route uses — so the MCP door reaches the same
 // enqueue. It queues a job and says so; an unknown id is a quotable not-found.
 func TestPollSourceTool(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 
 	var created struct {
@@ -127,6 +130,7 @@ func TestPollSourceTool(t *testing.T) {
 // poll_source is a mutating verb: it declares write scope and is not read-only,
 // so an MCP client's confirmation prompt treats it as a change.
 func TestPollSourceIsAWriteTool(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	var found bool
 	for _, tool := range h.server.Tools() {
@@ -149,6 +153,7 @@ func TestPollSourceIsAWriteTool(t *testing.T) {
 // A read token cannot force a poll — poll_source changes what will be fetched,
 // so the scope middleware refuses it (forbidden, not invalid-params).
 func TestPollSourceNeedsWriteScope(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, true)
 	read := h.mint("reader", auth.ScopeRead)
 	resp := h.call(read, "poll_source", `{"source_id":"whatever"}`)

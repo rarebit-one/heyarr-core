@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 type fixedClock struct{ t time.Time }
@@ -34,15 +34,7 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	clock := &fixedClock{t: now}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {

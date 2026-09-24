@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -29,19 +28,12 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/store"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 func newAPI(t *testing.T) *API {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)
@@ -61,15 +53,7 @@ func newAPI(t *testing.T) *API {
 // themselves (e.g. to inject a Replicator).
 func newDB(t *testing.T) *sqlite.DB {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	return db
 }
 
@@ -114,6 +98,7 @@ func call(t *testing.T, handler http.HandlerFunc, method, target string, body an
 // either makes the "ciphertext at rest" assertion below fire, because the item
 // bytes then appear in what the peer holds.
 func TestPeerStoresCiphertextAndCannotRead(t *testing.T) {
+	t.Parallel()
 	api := newAPI(t)
 
 	aKey, err := encryption.GenerateKey()
@@ -210,6 +195,7 @@ func TestPeerStoresCiphertextAndCannotRead(t *testing.T) {
 }
 
 func TestCreateSpaceRejectsUnknownKind(t *testing.T) {
+	t.Parallel()
 	api := newAPI(t)
 	rec := call(t, api.createSpace, http.MethodPost, "/spaces", createSpaceRequest{ID: mustUUID(t), Kind: "nonsense"}, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -218,6 +204,7 @@ func TestCreateSpaceRejectsUnknownKind(t *testing.T) {
 }
 
 func TestPutChangeRejectsForgedID(t *testing.T) {
+	t.Parallel()
 	api := newAPI(t)
 	id := mustUUID(t)
 	if rec := call(t, api.createSpace, http.MethodPost, "/spaces", createSpaceRequest{ID: id, Kind: "personal"}, nil); rec.Code != http.StatusCreated {
@@ -235,6 +222,7 @@ func TestPutChangeRejectsForgedID(t *testing.T) {
 }
 
 func TestChangesOnUnknownSpaceIs404(t *testing.T) {
+	t.Parallel()
 	api := newAPI(t)
 	id := mustUUID(t)
 	rec := call(t, api.listChanges, http.MethodGet, "/spaces/"+id+"/changes", nil, map[string]string{"id": id})
@@ -273,6 +261,7 @@ func (f *fakeReplicator) ReconcileAll(context.Context) (int, int, error) {
 // TestReplicateEndpointDrivesTheReconciler: POST /state/replicate runs the
 // reconciler and returns its counts; with no reconciler it is a 503.
 func TestReplicateEndpointDrivesTheReconciler(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := newDB(t)
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
@@ -321,6 +310,7 @@ func TestReplicateEndpointDrivesTheReconciler(t *testing.T) {
 // SABOTAGE (the reviewer's break): make revokeKey a no-op (skip DeleteWrappedKey),
 // and the "B is gone" assertion below fires — B's stale copy would still be listed.
 func TestRewrapAndRevokeRotatesAccess(t *testing.T) {
+	t.Parallel()
 	api := newAPI(t)
 
 	aKey, err := encryption.GenerateKey()
@@ -404,6 +394,7 @@ func wrappedFor(t *testing.T, api *API, spaceID, recipient string) []byte {
 }
 
 func TestRewrapRejectsEmpty(t *testing.T) {
+	t.Parallel()
 	api := newAPI(t)
 	id := mustUUID(t)
 	if rec := call(t, api.createSpace, http.MethodPost, "/spaces", createSpaceRequest{ID: id, Kind: "personal"}, nil); rec.Code != http.StatusCreated {
@@ -416,6 +407,7 @@ func TestRewrapRejectsEmpty(t *testing.T) {
 }
 
 func TestRevokeOnUnknownSpaceIs404(t *testing.T) {
+	t.Parallel()
 	api := newAPI(t)
 	id := mustUUID(t)
 	rec := call(t, api.revokeKey, http.MethodDelete, "/spaces/"+id+"/keys/x25519:dead", nil,
@@ -433,6 +425,7 @@ func TestRevokeOnUnknownSpaceIs404(t *testing.T) {
 // SABOTAGE (the reviewer's break): make listChanges ignore ?since and always
 // call ChangesFor — the second pull then returns 2 changes and this fails.
 func TestListChangesSinceReturnsOnlyTheTail(t *testing.T) {
+	t.Parallel()
 	api := newAPI(t)
 
 	key, err := encryption.GenerateKey()
@@ -513,6 +506,7 @@ func TestListChangesSinceReturnsOnlyTheTail(t *testing.T) {
 // TestListChangesRejectsABadCursor: a malformed cursor is the caller's 400, not
 // a silent full re-download that would read as success.
 func TestListChangesRejectsABadCursor(t *testing.T) {
+	t.Parallel()
 	api := newAPI(t)
 	id := mustUUID(t)
 	for _, bad := range []string{"abc", "-1", "9999999999999999999999"} {

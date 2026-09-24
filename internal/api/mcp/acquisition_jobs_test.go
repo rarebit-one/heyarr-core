@@ -11,6 +11,7 @@ import (
 // caller sees where a want is AND which release it is pulling — the release name
 // carrying the resolution and size that otherwise needed a look in the client.
 func TestGetAcquisitionStatus(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	id := h.wantOne("")
 
@@ -66,6 +67,7 @@ func TestGetAcquisitionStatus(t *testing.T) {
 
 // A want with nothing in flight reports its phase and no transfer.
 func TestGetAcquisitionStatusWithoutTransfer(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	id := h.wantOne("")
 
@@ -88,6 +90,7 @@ func TestGetAcquisitionStatusWithoutTransfer(t *testing.T) {
 // list_jobs filters by state and surfaces the last error — the read behind
 // "why is nothing being acquired".
 func TestListJobs(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	stamp := time.Now().UTC().Format(time.RFC3339Nano)
 	h.exec(`INSERT INTO jobs (id, type, state, run_after, created_at, updated_at, last_error)

@@ -12,6 +12,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // Seeding runs at EVERY start, not only the first. These tests are about the
@@ -27,14 +28,12 @@ func seedHarness(t *testing.T) (*sqlite.DB, config.Config) {
 	cfg.Peer.Name = "test-peer"
 	cfg.Peer.Site = "test-site"
 
+	testdb.WriteMigrated(t, cfg.Database.Path)
 	db, err := sqlite.Open(ctx, sqlite.Options{Path: cfg.Database.Path})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 	return db, cfg
 }
 

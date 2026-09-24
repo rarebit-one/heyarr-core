@@ -10,6 +10,7 @@ import (
 )
 
 func TestRootFeedIsNavigation(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := h.get("/opds", true)
 	if resp.StatusCode != http.StatusOK {
@@ -33,6 +34,7 @@ func TestRootFeedIsNavigation(t *testing.T) {
 }
 
 func TestAuthChallenge(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := h.get("/opds", false) // no credential
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -44,6 +46,7 @@ func TestAuthChallenge(t *testing.T) {
 }
 
 func TestAuthWrongPassword(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/opds", nil)
 	req.SetBasicAuth("reader", "not-the-token")
@@ -58,6 +61,7 @@ func TestAuthWrongPassword(t *testing.T) {
 }
 
 func TestPublicationsFeed(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := h.get("/opds/publications", true)
 	if resp.StatusCode != http.StatusOK {

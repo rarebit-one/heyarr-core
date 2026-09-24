@@ -184,6 +184,7 @@ func (l *listener) piecesURL(hash string) string {
 // holding part of a blob is indistinguishable from one holding none, and two
 // peers both still fetching have nothing to say to each other.
 func TestAPeerCanReportHoldingPartOfABlob(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())
@@ -224,6 +225,7 @@ func TestAPeerCanReportHoldingPartOfABlob(t *testing.T) {
 // The fixture deliberately CAN compute, and counts it. An absence assertion
 // whose subject cannot exist is a sentence, not an assertion.
 func TestAnsweringReadsNoContent(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())
@@ -260,6 +262,7 @@ func TestAnsweringReadsNoContent(t *testing.T) {
 // them is the same mistake as reporting an unreachable indexer as one that
 // found nothing (#239).
 func TestHoldingNothingYetIsNotTheSameAsNeverHavingHeardOfIt(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())
@@ -296,6 +299,7 @@ func TestHoldingNothingYetIsNotTheSameAsNeverHavingHeardOfIt(t *testing.T) {
 // peer has none of it", so try another source; 503 means this peer is not
 // serving bytes at all, so there is nothing here to try again for.
 func TestANodeWithNoStoreAnswersUnavailableRatherThanNotFound(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())
@@ -316,6 +320,7 @@ func TestANodeWithNoStoreAnswersUnavailableRatherThanNotFound(t *testing.T) {
 
 // A path that is not a digest is refused before anything is looked up.
 func TestANonDigestPathIsRefused(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())
@@ -346,6 +351,7 @@ func TestANonDigestPathIsRefused(t *testing.T) {
 // those, so the piece is its own route (ADR-0042 said otherwise; the PR that
 // added this says why it no longer holds).
 func TestAPeerCanFetchOnePieceOfAPartiallyHeldBlob(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())
@@ -378,6 +384,7 @@ func TestAPeerCanFetchOnePieceOfAPartiallyHeldBlob(t *testing.T) {
 // sources could not tell "not yet" from "broken". So it is a 404: try another
 // peer, or ask again later.
 func TestAPieceThisNodeDoesNotHoldIsRefusedAsNotFound(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())
@@ -408,6 +415,7 @@ func TestAPieceThisNodeDoesNotHoldIsRefusedAsNotFound(t *testing.T) {
 // A negative or unparseable index is a bad request, and the source is never
 // asked — the same discipline the availability route applies to a non-digest.
 func TestAnIndexThatIsNotAPieceNumberIsRefused(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())
@@ -439,6 +447,7 @@ func TestAnIndexThatIsNotAPieceNumberIsRefused(t *testing.T) {
 // A node with no content store answers 503 rather than 404: there is nothing
 // here to try again for, which is a different thing from not holding a piece.
 func TestAPieceFromANodeWithNoStoreIsUnavailableRatherThanNotFound(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())
@@ -459,6 +468,7 @@ func TestAPieceFromANodeWithNoStoreIsUnavailableRatherThanNotFound(t *testing.T)
 // A fault reading the piece is a 500 that says nothing, and the detail goes to
 // the log — a peer is not told why this node's disk is unhappy.
 func TestAFaultServingAPieceIsNotExplainedToThePeer(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	dest := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), dest.member())
@@ -486,6 +496,7 @@ func TestAFaultServingAPieceIsNotExplainedToThePeer(t *testing.T) {
 // An unpinned caller cannot fetch a piece, exactly as it cannot fetch content.
 // The piece route is new; the credential is not (ADR-0012).
 func TestAnUnpinnedPeerCannotFetchAPiece(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	stranger := newPeerNode(t, "peer-stranger", "stranger")
 	root := newTrustRoot(source.member())

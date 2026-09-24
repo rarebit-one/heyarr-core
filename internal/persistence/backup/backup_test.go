@@ -17,6 +17,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/backup"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // fixedClock is a deterministic clock for provenance assertions.
@@ -35,14 +36,13 @@ type node struct {
 func newNode(t *testing.T) *node {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatalf("events: %v", err)
@@ -425,12 +425,10 @@ func TestOpenRefusesAManifestLyingAboutSchema(t *testing.T) {
 // is foreign_key_check, not the write, that must catch it.
 func buildInconsistentDB(t *testing.T, path string) int64 {
 	t.Helper()
+	testdb.WriteMigrated(t, path)
 	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: path})
 	if err != nil {
 		t.Fatalf("open: %v", err)
-	}
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
 	}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {

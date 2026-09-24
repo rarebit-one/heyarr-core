@@ -18,6 +18,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 	"github.com/rarebit-one/voidbind-go/notify"
 	vbweblogin "github.com/rarebit-one/voidbind-go/weblogin"
 )
@@ -66,14 +67,12 @@ func newPushHarness(t *testing.T) *pushHarness {
 	ctx := context.Background()
 	dir := t.TempDir()
 
+	testdb.WriteMigrated(t, dir+"/heyarr.db")
 	db, err := sqlite.Open(ctx, sqlite.Options{Path: dir + "/heyarr.db"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)

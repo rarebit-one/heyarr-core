@@ -27,6 +27,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // This file holds the single assertion issue #136 is really about.
@@ -78,14 +79,13 @@ func newPeerNode(t *testing.T, presented httpapi.PresentedPeerKey) *peerNode {
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(ctx, sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 
 	clock := &fixedClock{t: fixedTime}
 	quiet := slog.New(slog.DiscardHandler)
@@ -191,6 +191,7 @@ func tracedGet(t *testing.T, c *http.Client, url string) (status int, body strin
 }
 
 func TestRemovingAPeerSeversAConnectionThatWasReadingBytes(t *testing.T) {
+	t.Parallel()
 	// The key the connection presents. In production this is the public key in
 	// the peer's mTLS client certificate (M4-05); here it is handed to the
 	// server through the same seam that will read it.
@@ -322,6 +323,7 @@ func TestRemovingAPeerSeversAConnectionThatWasReadingBytes(t *testing.T) {
 //
 // Without this, a guard that refused everything would pass the test above.
 func TestANonPeerConnectionIsUnaffected(t *testing.T) {
+	t.Parallel()
 	node := newPeerNode(t, func(*http.Request) ([]byte, bool) { return nil, false })
 	const content = "bytes an ordinary client reads with a bearer token"
 	desc, err := node.cas.Put(context.Background(), strings.NewReader(content))
@@ -343,6 +345,7 @@ func TestANonPeerConnectionIsUnaffected(t *testing.T) {
 // they pin both edges — enrolment lets a peer in, removal puts it back out —
 // so neither can be satisfied by a guard that is stuck open or stuck shut.
 func TestAnUnenrolledPeerIsRefusedFromTheStart(t *testing.T) {
+	t.Parallel()
 	stranger, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)

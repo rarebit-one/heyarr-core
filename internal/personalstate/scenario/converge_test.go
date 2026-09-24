@@ -3,7 +3,6 @@ package scenario_test
 import (
 	"bytes"
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,7 +10,6 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
@@ -19,6 +17,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/store"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // injected is a fixed timestamp: nothing here depends on the wall clock (ADR-0017).
@@ -28,15 +27,7 @@ var injected = time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 
 func newStore(t *testing.T) *store.Store {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)
@@ -146,6 +137,7 @@ func readState(t *testing.T, ctx context.Context, peer *store.Store, m *client.M
 // and the convergence assertion fires. Or store plaintext instead of ciphertext,
 // and the at-rest assertion fires.
 func TestConvergeAfterPartition(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	peerA := newStore(t)
 	peerB := newStore(t)

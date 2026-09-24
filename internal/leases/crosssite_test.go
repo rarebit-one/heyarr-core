@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,7 +12,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/leases"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // fakeSiblings is a static SiblingKeys, the peer set B has pinned.
@@ -26,15 +25,7 @@ func (f fakeSiblings) PeerKeys(context.Context) (map[string]ed25519.PublicKey, e
 // peerStore builds a store for one peer with a given signer and pinned siblings.
 func peerStore(t *testing.T, signer ed25519.PrivateKey, siblings leases.SiblingKeys) *leases.Store {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	clock := &fixedClock{t: now}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {

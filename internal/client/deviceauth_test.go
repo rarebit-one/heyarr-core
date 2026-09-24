@@ -24,7 +24,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +34,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/events"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // testClock is one clock shared by the client (minting) and the peer
@@ -107,15 +106,7 @@ func clockHint(err error) string {
 
 func newPeer(t *testing.T, clock *testClock) *peer {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "peer.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {
 		t.Fatal(err)

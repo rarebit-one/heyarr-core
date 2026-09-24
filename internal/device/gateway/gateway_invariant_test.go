@@ -16,6 +16,7 @@ import (
 // the controller — while the controller never sees a byte of the playlist
 // plaintext. A proxied stream is byte-identical to the controller's own bytes.
 func TestGatewayServesDecryptedPlaylistsAndProxiesLibrary(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	// 1. Personal state, served locally from decrypted CRDT.
@@ -121,6 +122,7 @@ func TestGatewayServesDecryptedPlaylistsAndProxiesLibrary(t *testing.T) {
 // controller bearer is NOT that password. A stock app can never present, guess or
 // leak the controller token, because the device never accepts it.
 func TestTheAppAndControllerCredentialsAreDistinct(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	// The right device password works (already exercised above, asserted here so
@@ -152,6 +154,7 @@ func TestTheAppAndControllerCredentialsAreDistinct(t *testing.T) {
 // TestAnUnsupportedMethodIsRefusedInTheEnvelope: an unknown method returns a
 // Subsonic error the client can parse, not an HTTP 404 it chokes on.
 func TestAnUnsupportedMethodIsRefusedInTheEnvelope(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := h.get("getPodcasts", nil)
 	if resp.Error == nil {
@@ -179,6 +182,7 @@ func artistPresent(r subResp, name string) bool {
 // converged order — while the controller never sees a byte of the starred or
 // played plaintext at rest (Invariant 6, §72).
 func TestGatewayServesStarredAndHistoryFromDecryptedState(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	// getStarred2 — most-recently-starred first: bravo was starred after alpha.

@@ -91,6 +91,7 @@ func sourceStore(t *testing.T, content []byte) (*cas.FS, hashing.Hash) {
 // that answered 200 with an empty body would pass a status-only test and be
 // useless to every consumer of it.
 func TestPeerSurfaceServesBlobContentToAMember(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	puller := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), puller.member())
@@ -126,6 +127,7 @@ func TestPeerSurfaceServesBlobContentToAMember(t *testing.T) {
 // them — by wrapping the handler, or by copying a simpler one — this is what
 // would notice.
 func TestPeerSurfaceServesRangesAndHead(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	puller := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), puller.member())
@@ -175,6 +177,7 @@ func TestPeerSurfaceServesRangesAndHead(t *testing.T) {
 // 404 and 503 are different answers to different questions, and a puller acts
 // on the difference.
 func TestPeerSurfaceDistinguishesAnAbsentBlobFromNoStoreAtAll(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	puller := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), puller.member())
@@ -219,6 +222,7 @@ func TestPeerSurfaceDistinguishesAnAbsentBlobFromNoStoreAtAll(t *testing.T) {
 // revocation is the deletion of the record (ADR-0012) — on the connection the
 // peer is already holding open.
 func TestPeerSurfaceRefusesBlobContentToARevokedPeer(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	puller := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), puller.member())
@@ -266,6 +270,7 @@ func TestPeerSurfaceRefusesBlobContentToARevokedPeer(t *testing.T) {
 // too, where the expected value is arithmetic on the fixture rather than
 // anything the server computed.
 func TestTheSourceRecordsHowManyBytesItServed(t *testing.T) {
+	t.Parallel()
 	source := newPeerNode(t, "peer-source", "source")
 	puller := newPeerNode(t, "peer-destination", "destination")
 	root := newTrustRoot(source.member(), puller.member())

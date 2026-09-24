@@ -11,6 +11,7 @@ import (
 // database.
 
 func TestInitialize(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	resp := h.rpc("", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)
 
@@ -48,6 +49,7 @@ func TestInitialize(t *testing.T) {
 }
 
 func TestToolsListIsStableAndDescribesItself(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 
 	var first []string
@@ -100,6 +102,7 @@ func TestToolsListIsStableAndDescribesItself(t *testing.T) {
 // for a read token would make the vocabulary depend on the credential, so an
 // agent could not learn what exists.
 func TestToolsListDoesNotDependOnTheCredential(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, true)
 	read := h.mint("reader", "read")
 	admin := h.mint("admin", "read", "write", "admin")
@@ -127,6 +130,7 @@ func TestToolsListDoesNotDependOnTheCredential(t *testing.T) {
 }
 
 func TestSearchContent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 
 	var out struct {
@@ -159,6 +163,7 @@ func TestSearchContent(t *testing.T) {
 // entity's ids (forward) and which entity carries an id (reverse). An unknown id
 // is a no-match, not an error, so a consumer can probe cheaply.
 func TestGetExternalIDs(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	h.exec(`INSERT INTO external_ids (id, entity_type, entity_id, source, value)
 		VALUES (?, 'work', ?, 'tmdb', '329865')`,
@@ -209,6 +214,7 @@ func TestGetExternalIDs(t *testing.T) {
 
 // The central action, and the one that must work for content nothing has seen.
 func TestWantContentForSomethingTheLibraryHasNeverSeen(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 
 	var item struct {
@@ -240,6 +246,7 @@ func TestWantContentForSomethingTheLibraryHasNeverSeen(t *testing.T) {
 
 // The profile is named the way a person names it, not by id.
 func TestWantContentRefusesAnUnknownProfileByName(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	resp := h.call("", "want_content",
 		`{"work_id":"`+workID+`","quality_profile":"nonexistent"}`)
@@ -260,6 +267,7 @@ func TestWantContentRefusesAnUnknownProfileByName(t *testing.T) {
 // as its fault, not as an internal error — which is what resources.ClientFault
 // exists to keep consistent across both doors.
 func TestWantingTheSameThingTwiceIsTheCallersFault(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	h.wantOne("")
 
@@ -279,6 +287,7 @@ func TestWantingTheSameThingTwiceIsTheCallersFault(t *testing.T) {
 }
 
 func TestMonitorContent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	id := h.wantOne("")
 
@@ -300,6 +309,7 @@ func TestMonitorContent(t *testing.T) {
 }
 
 func TestGetMissingContent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	id := h.wantOne("")
 
@@ -335,6 +345,7 @@ func TestGetMissingContent(t *testing.T) {
 
 // The flagship. The reasons come back with their stable rule codes intact.
 func TestExplainReleaseReturnsReasonsNotAVerdict(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 
 	var out struct {
@@ -398,6 +409,7 @@ func TestExplainReleaseReturnsReasonsNotAVerdict(t *testing.T) {
 // An attribute left OUT is undetermined, not false. That is a different answer
 // from a wrong one and sends a person somewhere different.
 func TestExplainReleaseReportsUndeterminedRatherThanGuessing(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 
 	var out struct {
@@ -437,6 +449,7 @@ func TestExplainReleaseReportsUndeterminedRatherThanGuessing(t *testing.T) {
 // A misspelled attribute is refused rather than silently scored against
 // nothing, which would produce an explanation that looks right.
 func TestExplainReleaseRefusesAnUnknownAttribute(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	resp := h.call("", "explain_release", `{"quality_profile":"living-room","releases":[
 		{"id":"x","attributes":{"bitrate":5000}}]}`)
@@ -452,6 +465,7 @@ func TestExplainReleaseRefusesAnUnknownAttribute(t *testing.T) {
 // "the answer" would otherwise recommend acquiring something the profile
 // refuses.
 func TestExplainReleaseSelectsNothingWhenNothingIsAcceptable(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	var out struct {
 		Selected string `json:"selected"`
@@ -474,6 +488,7 @@ func TestExplainReleaseSelectsNothingWhenNothingIsAcceptable(t *testing.T) {
 }
 
 func TestGetContentSatisfaction(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	id := h.wantOne("")
 
@@ -517,6 +532,7 @@ func TestGetContentSatisfaction(t *testing.T) {
 }
 
 func TestGetPeerStatus(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	var out struct {
 		Count int    `json:"count"`
@@ -540,6 +556,7 @@ func TestGetPeerStatus(t *testing.T) {
 }
 
 func TestGetReplicaStatus(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	var out struct {
 		Count    int `json:"count"`
@@ -564,6 +581,7 @@ func TestGetReplicaStatus(t *testing.T) {
 }
 
 func TestVerifyBlobQueuesRatherThanRuns(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 
 	var out struct {
@@ -593,6 +611,7 @@ func TestVerifyBlobQueuesRatherThanRuns(t *testing.T) {
 // An agent that misspelled an argument finds out, rather than getting a
 // cheerful empty result it cannot learn from.
 func TestUnknownArgumentsAreRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	resp := h.call("", "search_content", `{"quury":"arrival"}`)
 	if resp.Body.Error == nil {
@@ -607,6 +626,7 @@ func TestUnknownArgumentsAreRefused(t *testing.T) {
 // structured value, so an agent gets prose it can quote and a shape it can
 // branch on rather than having to parse the prose.
 func TestResultsCarryTextAndStructure(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	resp := h.call("", "get_peer_status", "")
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -12,22 +11,14 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/leases"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // newCache builds a consumer CacheStore over a fresh db with the given pinned
 // siblings — the trust set a cached lease's signature verifies against.
 func newCache(t *testing.T, siblings leases.SiblingKeys) *leases.CacheStore {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	c, err := leases.NewCache(leases.CacheOptions{Writer: db.Writer(), Reader: db.Reader(), Siblings: siblings})
 	if err != nil {
 		t.Fatal(err)

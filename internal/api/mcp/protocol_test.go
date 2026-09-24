@@ -13,6 +13,7 @@ import (
 // JSON-RPC 2.0, the parts a client will actually exercise.
 
 func TestProtocolRefusals(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		body string
@@ -49,6 +50,7 @@ func TestProtocolRefusals(t *testing.T) {
 // clients treat a reply to one as a protocol violation, so this is not
 // pedantry.
 func TestANotificationIsNotAnswered(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	resp := h.rpc("", `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
 
@@ -63,6 +65,7 @@ func TestANotificationIsNotAnswered(t *testing.T) {
 // The id round-trips exactly, including its JSON type. A client correlating
 // replies by id would mismatch every one if a string became a number.
 func TestTheRequestIDRoundTrips(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	for _, id := range []string{`1`, `"abc"`, `42`} {
 		resp := h.rpc("", `{"jsonrpc":"2.0","id":`+id+`,"method":"ping"}`)
@@ -78,6 +81,7 @@ func TestTheRequestIDRoundTrips(t *testing.T) {
 // A tool failure is an error INSIDE the JSON-RPC envelope, not an HTTP status.
 // A client that saw a 400 would treat the transport as broken and reconnect.
 func TestAToolFailureIsStill200(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	resp := h.call("", "verify_blob", `{}`)
 
@@ -97,6 +101,7 @@ func TestAToolFailureIsStill200(t *testing.T) {
 // deprecation header an agent reads. So a change to one has to show up in a
 // reviewable diff rather than in an agent's behaviour six months later.
 func TestToolSurfaceGolden(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	resp := h.rpc("", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 
@@ -115,6 +120,7 @@ func TestToolSurfaceGolden(t *testing.T) {
 // verb looks like — is a deliberate, reviewable change rather than a silent
 // one.
 func TestDeferralsGolden(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 
 	type entry struct {

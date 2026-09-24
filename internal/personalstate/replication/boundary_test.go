@@ -12,6 +12,7 @@ import (
 // personal-state packages are unreachable — so a "helpful" dedup on a decrypted
 // field cannot be written here. Mirrors the peerapi boundary test.
 func TestReplicationCannotReadPersonalState(t *testing.T) {
+	t.Parallel()
 	const pkg = "github.com/rarebit-one/heyarr-core/internal/personalstate/replication"
 	forbidden := []string{
 		"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt",

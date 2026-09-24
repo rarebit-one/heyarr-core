@@ -80,6 +80,7 @@ func decodeReachback(t *testing.T, body string) peerapi.Reachback {
 // probe's, the peer asked about is the CERTIFICATE's peer, and the target
 // comes back so a caller can see which address was tried.
 func TestReachbackReportsTheProbeAgainstTheCallersOwnRecord(t *testing.T) {
+	t.Parallel()
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
 	root := newTrustRoot(a.member(), b.member())
@@ -112,6 +113,7 @@ func TestReachbackReportsTheProbeAgainstTheCallersOwnRecord(t *testing.T) {
 // TestReachbackReportsAnUnreachableReturnPath is #186's observed case, as the
 // far end sees it.
 func TestReachbackReportsAnUnreachableReturnPath(t *testing.T) {
+	t.Parallel()
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
 	root := newTrustRoot(a.member(), b.member())
@@ -136,6 +138,7 @@ func TestReachbackReportsAnUnreachableReturnPath(t *testing.T) {
 // caller's decision table needs to see, and a failure would be read as a
 // fault in the network by every caller that treats an error as one.
 func TestReachbackWithoutAProberIsUnknownRatherThanAnError(t *testing.T) {
+	t.Parallel()
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
 	root := newTrustRoot(a.member(), b.member())
