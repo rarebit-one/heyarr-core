@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -48,9 +47,9 @@ func GrabReleaseHandler(
 	reg *providers.Registry, cat *catalog.Catalog, log *slog.Logger,
 ) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload acquisition.GrabPayload
-		if err := json.Unmarshal(job.Payload, &payload); err != nil {
-			return fmt.Errorf("worker: grab_release payload is not decodable: %w", err)
+		payload, err := decodePayload[acquisition.GrabPayload](job)
+		if err != nil {
+			return err
 		}
 		if payload.DesiredItemID == "" {
 			return errors.New("worker: grab_release needs a desired item")
