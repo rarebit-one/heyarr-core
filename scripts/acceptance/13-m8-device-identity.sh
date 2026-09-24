@@ -145,18 +145,32 @@ YAML
   wait "$pid" 2>/dev/null || true
 }
 
-# DEVICE PAIRING: an old device authorises a new one over a dumb relay (§40,
-# ADR-0022, ADR-0038, #305).
+# pair_invite waits for `heyarr pair authorise` (writing to $1) to print its
+# invite, and echoes it. Empty after ten seconds, which fails the enrol after it.
+pair_invite() {
+  local out="$1" waited=0 inv=""
+  while (( waited < 100 )); do
+    inv=$(sed -n 's/^invite: *//p' "$out" 2>/dev/null | head -n 1)
+    [[ -n "$inv" ]] && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  printf '%s' "$inv"
+}
+
+# DEVICE PAIRING: an identity or a member device admits a new one over a dumb
+# relay (§40, ADR-0022, ADR-0038, ADR-0068, #305).
 #
-# M8-03 proved a device authenticates from a cert. This is where that cert comes
-# from when there is no operator at a keyboard: an already-enrolled OLD device
-# authorises a NEW one directly, the server acting only as a dumb store-and-
-# forward (ADR-0038). The two exchange public keys and a salt through the relay,
-# each derives a short authentication string over BOTH keys, the humans compare
-# the two codes, and on a match the old device signs an enrolment cert the new
-# device stores. A man-in-the-middle that substitutes a key changes the code, so
-# the code is the whole gate — and the demo proves both halves: the honest
-# pairing enrols, and a mismatched code enrols nobody.
+# M8-03 proved a device authenticates from a credential. This is where that
+# credential comes from when there is no operator at a keyboard: the identity,
+# or a device that is already a member, admits a NEW one directly, the server
+# acting only as a dumb store-and-forward (ADR-0038). The authorising side
+# prints an invite (the relay session and a salt), the two exchange public keys
+# through the relay, each derives a short authentication string over BOTH keys,
+# the humans compare the two codes, and on a match the authorising side signs a
+# membership op the new device stores (ADR-0068). A man-in-the-middle that
+# substitutes a key changes the code, so the code is the whole gate — and the
+# demo proves both halves: the honest pairing enrols, and a mismatched code
+# enrols nobody.
 #
 # The relay is on the UNAUTHENTICATED router (ADR-0040): a device being paired
 # holds no credential, so this node needs no auth for the relay to work. Client
@@ -238,17 +252,18 @@ YAML
   assert_eq "$enc_cmp" "differ" \
     "a substituted responder ENCRYPTION key yields a DIFFERENT short code — the wrap-target swap the humans catch too"
 
-  # THE HONEST PAIRING, over the real relay: both sides derive the SAME code and
-  # the new device ends up enrolled under the user. Run concurrently, as the two
-  # devices are; --yes stands in for the human who saw the codes match.
-  local sess="acceptance-pair-ok" aout eout apid epid arc erc
+  # THE HONEST PAIRING, over the node's Voidbind relay (/pair/v1, ADR-0066):
+  # authorise opens a session and prints an invite, the new device joins
+  # through it, both sides derive the SAME code and the new device ends up a
+  # member of the user. Run concurrently, as the two devices are; --yes stands
+  # in for the human who saw the codes match.
+  local aout eout apid arc erc invite
   aout="$root/authorise.out"; eout="$root/enrol.out"
-  ( "${oldc[@]}" pair authorise --relay "$sock" --session "$sess" --yes --poll 10ms >"$aout" 2>&1 ) &
+  ( "${oldc[@]}" pair authorise --relay "$sock" --yes --poll 10ms >"$aout" 2>&1 ) &
   apid=$!
-  ( "${newc[@]}" pair enrol --relay "$sock" --session "$sess" --yes --poll 10ms >"$eout" 2>&1 ) &
-  epid=$!
+  invite=$(pair_invite "$aout")
+  erc=0; "${newc[@]}" pair enrol --invite "$invite" --yes --poll 10ms >"$eout" 2>&1 || erc=$?
   arc=0; wait "$apid" || arc=$?
-  erc=0; wait "$epid" || erc=$?
   assert_eq "$arc" "0" "pair authorise completed"
   assert_eq "$erc" "0" "pair enrol completed"
 
@@ -263,26 +278,43 @@ YAML
   after=$("${newc[@]}" device show --json)
   new_status=$(jq -r .enrolment_status <<<"$after")
   assert_eq "$new_status" "enrolled" \
-    "the new device is enrolled by the old one over the relay — paired, no server trusted"
+    "the new device is admitted by the identity over the relay — paired, no server trusted"
   enrolled_user=$(jq -r .enrolled_user <<<"$after")
   assert_eq "$enrolled_user" "$user_key" \
-    "and the paired device authenticates as the SAME user the old device vouched for"
+    "and the paired device authenticates as the SAME user the identity vouched for"
 
-  # THE REFUSAL: told the codes did NOT match (a wrong --confirm-sas), the old
-  # device refuses to sign and NO device is enrolled. The refusal is the
+  # A MEMBER ADMITS THE NEXT DEVICE (ADR-0068). The device just admitted holds
+  # no identity, only its membership, and that is enough: it signs an add op for
+  # a third device as itself, and the third device is a member of the same user.
+  local thirdc mout tout mpid mrc trc third_user
+  thirdc=( env "VOIDBIND_IDENTITY_DIR=$root/third-id" "VOIDBIND_DEVICE_DIR=$root/third-dev" "$BIN" )
+  mout="$root/member-authorise.out"; tout="$root/third-enrol.out"
+  ( "${newc[@]}" pair authorise --relay "$sock" --yes --poll 10ms >"$mout" 2>&1 ) &
+  mpid=$!
+  invite=$(pair_invite "$mout")
+  trc=0; "${thirdc[@]}" pair enrol --invite "$invite" --yes --poll 10ms >"$tout" 2>&1 || trc=$?
+  mrc=0; wait "$mpid" || mrc=$?
+  assert_eq "$mrc" "0" "a member device authorised the next device"
+  assert_eq "$trc" "0" "and the next device enrolled through it"
+  third_user=$("${thirdc[@]}" device show --json | jq -r .enrolled_user)
+  assert_eq "$third_user" "$user_key" \
+    "the device a MEMBER admitted is a member of the same user — no identity key needed"
+
+  # THE REFUSAL: told the codes did NOT match (a wrong --confirm-sas), the
+  # identity refuses to sign and NO device is enrolled. The new device waits
+  # for an admission that never comes, and gives up. The refusal is the
   # deliverable as much as the success.
-  local rsess="acceptance-pair-refuse" refc rapid repid rarc auth_verdict ref_status
+  local refc rapid rarc auth_verdict ref_status
   refc=( env "VOIDBIND_IDENTITY_DIR=$root/ref-id" "VOIDBIND_DEVICE_DIR=$root/ref-dev" "$BIN" )
   "${refc[@]}" device generate --name reject-phone >/dev/null 2>&1
-  ( "${oldc[@]}" pair authorise --relay "$sock" --session "$rsess" --confirm-sas 0000000 --poll 10ms >"$root/refuse-auth.out" 2>&1 ) &
+  ( "${oldc[@]}" pair authorise --relay "$sock" --confirm-sas 0000000 --poll 10ms >"$root/refuse-auth.out" 2>&1 ) &
   rapid=$!
-  ( "${refc[@]}" pair enrol --relay "$sock" --session "$rsess" --yes --poll 10ms >"$root/refuse-enrol.out" 2>&1 ) &
-  repid=$!
+  invite=$(pair_invite "$root/refuse-auth.out")
+  "${refc[@]}" pair enrol --invite "$invite" --yes --poll 10ms --timeout 2s >"$root/refuse-enrol.out" 2>&1 || true
   rarc=0; wait "$rapid" || rarc=$?
-  wait "$repid" 2>/dev/null || true
   auth_verdict="signed"; [[ "$rarc" != "0" ]] && auth_verdict="refused"
   assert_eq "$auth_verdict" "refused" \
-    "a mismatched code makes the old device refuse to sign, so a substituted key enrols nobody"
+    "a mismatched code makes the identity refuse to sign, so a substituted key enrols nobody"
   ref_status=$("${refc[@]}" device show --json | jq -r .enrolment_status)
   assert_eq "$ref_status" "not_enrolled" \
     "and the device left the refused pairing not_enrolled — the short code is the whole gate"

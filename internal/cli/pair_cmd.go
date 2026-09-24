@@ -3,37 +3,42 @@ package cli
 import (
 	"bufio"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/rarebit-one/voidbind-go/device"
 	"github.com/rarebit-one/voidbind-go/encryption"
+	"github.com/rarebit-one/voidbind-go/enrolment"
+	"github.com/rarebit-one/voidbind-go/pairflow"
 	"github.com/rarebit-one/voidbind-go/pairing"
+	vbrelay "github.com/rarebit-one/voidbind-go/relay"
 	"github.com/rarebit-one/voidbind-go/useridentity"
 	"github.com/spf13/cobra"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
-	"github.com/rarebit-one/heyarr-core/internal/pairflow"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 )
 
-// newPairCommand builds `heyarr pair` (§40, ADR-0022, ADR-0038).
+// newPairCommand builds `heyarr pair` (§40, ADR-0022, ADR-0038, ADR-0066).
 //
-// Pairing is how a NEW device is enrolled by an OLD one without trusting the
-// server (ADR-0022): the two exchange public keys and a salt through a DUMB
-// relay, each computes a short authentication string over both keys, the humans
-// compare the two codes, and on a match the old device signs an enrolment cert
-// for the new device's key. A man-in-the-middle that substitutes a key changes
-// the code, and the commit-before-reveal ordering (internal/pairflow) stops it
-// choosing its key after seeing the peer's, so the short code is the whole gate.
+// Pairing is how a NEW device is admitted by one that can already vouch for the
+// identity, without trusting the server (ADR-0022): the two exchange public keys
+// through a DUMB relay, each computes a short authentication string over both
+// keys and the invite's salt, the humans compare the two codes, and on a match
+// the initiator signs a membership `add` op for the new device (ADR-0068). A
+// man-in-the-middle that substitutes a key changes the code, and the
+// commit-before-reveal ordering stops it choosing its key after seeing the
+// peer's, so the short code is the whole gate.
+//
+// The handshake is voidbind-go's pairflow over voidbind-go's relay protocol, the
+// same one the Voidbind apps speak, served by the node at httpapi.RelayV1Prefix.
 //
 // Like `heyarr device` and `heyarr identity`, these are CLIENT commands: they
 // hold the person's keys, in the person's own config directory, and reach a
@@ -41,14 +46,16 @@ import (
 func newPairCommand(opts Options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pair",
-		Short: "Authorise a new device from an already-enrolled one (§40, ADR-0022)",
-		Long: `Enrol a NEW device by an OLD, already-enrolled one, over a dumb relay.
+		Short: "Admit a new device from one that can already vouch for you (§40, ADR-0022)",
+		Long: `Admit a NEW device from one that can already vouch for your identity, over a
+dumb relay.
 
-Run ` + "`heyarr pair authorise`" + ` on the OLD device (the one that holds your
-user identity) and ` + "`heyarr pair enrol`" + ` on the NEW device, pointing both
-at the same running Heyarr's relay and the same session id. Each prints a short
-code; compare them, and if they match the old device signs a cert the new device
-stores. The server only relays public values — it learns no key material and
+Run ` + "`heyarr pair authorise`" + ` where your user identity lives, or on a
+device that is already a member. It opens a session on a running Heyarr's relay
+and prints an invite. Run ` + "`heyarr pair enrol --invite <invite>`" + ` on the
+NEW device. Each side prints a short code. Compare them, and if they match the
+authorising side signs a membership op that admits the new device. The server
+only relays public values and one sealed message. It learns no key material and
 vouches for nothing (ADR-0038).`,
 	}
 	cmd.AddCommand(
@@ -61,8 +68,6 @@ vouches for nothing (ADR-0038).`,
 
 // pairCommonFlags are shared by authorise and enrol.
 type pairCommonFlags struct {
-	relay      string
-	session    string
 	confirmSAS string
 	yes        bool
 	poll       time.Duration
@@ -70,99 +75,253 @@ type pairCommonFlags struct {
 }
 
 func (f *pairCommonFlags) register(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&f.relay, "relay", "",
-		"the running Heyarr's relay: a unix socket path, unix:///path, http://host:port or host:port")
-	cmd.Flags().StringVar(&f.session, "session", "",
-		"the rendezvous session id both devices share (authorise generates one if empty)")
 	cmd.Flags().StringVar(&f.confirmSAS, "confirm-sas", "",
 		"proceed only if the derived code equals this value — the scripted stand-in for a human comparison")
 	cmd.Flags().BoolVar(&f.yes, "yes", false,
 		"assume the codes matched, without prompting (use only when you compared them another way)")
-	cmd.Flags().DurationVar(&f.poll, "poll", pairflow.DefaultPollInterval,
+	cmd.Flags().DurationVar(&f.poll, "poll", vbrelay.DefaultPollInterval,
 		"how often to re-check the relay for the next handshake step")
 	cmd.Flags().DurationVar(&f.timeout, "timeout", 2*time.Minute,
 		"how long to wait for the whole handshake before giving up")
 }
 
+// The --as values of `pair authorise`.
+const (
+	pairAsAuto     = "auto"
+	pairAsIdentity = "identity"
+	pairAsDevice   = "device"
+)
+
 func newPairAuthoriseCommand(_ Options) *cobra.Command {
 	var (
 		f           pairCommonFlags
+		relayAddr   string
+		as          string
 		identityDir string
+		deviceDir   string
 		lifetime    time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "authorise",
-		Short: "Old device: authorise a new device and sign its enrolment cert",
-		Long: `Run this on an already-enrolled device. It contributes your USER identity
-public key to the handshake, derives the short code, and — once you confirm the
-new device shows the same code — signs an enrolment cert for the new device's
-key. Signing needs your user identity private key, so run it where that identity
-lives.`,
+		Short: "Existing side: admit a new device by signing its membership op",
+		Long: `Run this where your user identity lives, or on a device that is already a
+member of your identity. It opens a session on the relay, prints an invite for
+the new device, derives the short code, and, once you confirm the new device
+shows the same code, signs a membership add op for the new device's keys and
+hands it over sealed to the new device's encryption key (ADR-0068).
+
+--as picks what signs:
+  identity  your user identity (the genesis key), read from --identity-dir;
+            the private key is used through a signer and never leaves its store
+  device    this machine's device, which must already be a member
+  auto      identity when one is present here, otherwise device (the default)
+
+Either way, a local device enrolled under the same identity contributes the
+membership ops it knows and records the new add afterwards.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			idStore, err := openUserIdentityStore(identityDir)
+			ep, err := relayForNode(relayAddr)
 			if err != nil {
 				return err
-			}
-			id, err := idStore.Get()
-			if err != nil {
-				return err
-			}
-			relay, err := newRelayHTTP(f.relay)
-			if err != nil {
-				return err
-			}
-			session := f.session
-			if session == "" {
-				session = randomSession()
 			}
 			salt, err := pairing.NewSalt()
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "pairing session: %s\n", session)
-			fmt.Fprintf(cmd.OutOrStdout(), "on the new device: heyarr pair enrol --relay <relay> --session %s\n\n", session)
+			in, record, err := buildInitiator(as, identityDir, deviceDir, salt, lifetime)
+			if err != nil {
+				return err
+			}
+			known := in.Ops()
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), f.timeout)
 			defer cancel()
-			res, err := pairflow.Initiator{
-				Relay: relay, Session: session, PollInterval: f.poll,
-				UserPub: id.PublicKey, Salt: salt,
-				Confirm: confirmFunc(cmd, &f),
-				Sign: func(devPub ed25519.PublicKey, devEnc []byte) (string, error) {
-					// The handshake now authenticates the new device's encryption
-					// key too (§41, ADR-0049), so the cert binds it — rendered
-					// x25519:<hex>, empty for a pre-Milestone-9 responder.
-					return idStore.SignCert(devPub, encryption.FormatPublicKey(devEnc), lifetime)
-				},
-			}.Run(ctx)
-			return reportPairResult(cmd, "authorise", res, err)
+			session, err := vbrelay.CreateSession(ctx, ep.httpc, ep.base)
+			if err != nil {
+				return fmt.Errorf("pair: opening a relay session: %w", err)
+			}
+			invite, err := pairflow.EncodeInvite(ep.invite, session, salt, in.UserID())
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if in.Genesis() {
+				fmt.Fprintf(out, "authorising as: user identity %s\n", in.UserID())
+			} else {
+				fmt.Fprintf(out, "authorising as: member device %s of user %s\n", in.DeviceID(), in.UserID())
+			}
+			fmt.Fprintf(out, "invite: %s\n", invite)
+			fmt.Fprintf(out, "on the new device: heyarr pair enrol --invite '%s'\n\n", invite)
+
+			t := ep.transport(session, pairflow.RoleInitiator, f.poll)
+			sas, err := in.Handshake(ctx, t)
+			if err != nil {
+				return fmt.Errorf("pair: handshake: %w", err)
+			}
+			if err := confirmSAS(cmd, &f, sas); err != nil {
+				return err
+			}
+			if err := in.Authorise(ctx, t); err != nil {
+				return fmt.Errorf("pair: delivering the admission: %w", err)
+			}
+			if err := record(in.Ops()); err != nil {
+				return fmt.Errorf("pair: the new device is admitted, but recording its op here failed: %w", err)
+			}
+			fmt.Fprintf(out, "\npaired: signed a membership op admitting the new device %s\n",
+				admittedDevice(known, in.Ops()))
+			return nil
 		},
 	}
 	f.register(cmd)
+	cmd.Flags().StringVar(&relayAddr, "relay", "",
+		"the running Heyarr's relay: a unix socket path, unix:///path, http://host:port or host:port")
+	cmd.Flags().StringVar(&as, "as", pairAsAuto,
+		"what signs the admission: identity, device, or auto (identity when present here)")
 	cmd.Flags().StringVar(&identityDir, "identity-dir", "",
 		"where your user identity lives (default: your config directory; "+useridentity.EnvDir+" overrides)")
+	cmd.Flags().StringVar(&deviceDir, "device-dir", "",
+		"where this machine's device key lives (default: your config directory; "+device.EnvDir+" overrides)")
 	cmd.Flags().DurationVar(&lifetime, "lifetime", 0,
-		"how long the signed cert is valid (default: the 90-day enrolment lifetime)")
+		"how long an admission signed as the identity is valid (default: the enrolment lifetime)")
 	return cmd
+}
+
+// buildInitiator picks and builds the pairflow initiator for `pair authorise`,
+// and returns how to record the op set afterwards.
+//
+// The identity initiator signs through useridentity.Store.Signer, so the genesis
+// seed is read per signature and never held here. The device initiator is a
+// member device: it signs with its own key and cites its own admitting op.
+func buildInitiator(as, identityDir, deviceDir string, salt []byte, lifetime time.Duration,
+) (*pairflow.Initiator, func([]string) error, error) {
+	now := time.Now().UTC()
+	devStore, err := openDeviceStore(deviceDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	idStore, err := openUserIdentityStore(identityDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	switch as {
+	case pairAsAuto:
+		as = pairAsDevice
+		if _, err := idStore.Get(); err == nil {
+			as = pairAsIdentity
+		}
+	case pairAsIdentity, pairAsDevice:
+	default:
+		return nil, nil, fmt.Errorf("pair: --as must be identity, device or auto, not %q", as)
+	}
+
+	if as == pairAsIdentity {
+		id, err := idStore.Get()
+		if err != nil {
+			return nil, nil, err
+		}
+		signer, err := idStore.Signer()
+		if err != nil {
+			return nil, nil, err
+		}
+		// A local device enrolled under THIS identity is the replica of what the
+		// identity knows: its ops let the genesis admission cite the current heads
+		// (and re-admit a removed device), and it records the new add. A device of
+		// another identity, or none, contributes nothing.
+		var known []string
+		record := func([]string) error { return nil }
+		if dev, err := devStore.Get(""); err == nil && dev.EnrolledUser() == identity.FormatPublicKey(id.PublicKey) {
+			if known, err = devStore.Ops(); err != nil {
+				return nil, nil, err
+			}
+			record = devStore.RecordOps
+		}
+		in, err := pairflow.NewGenesisInitiatorWithSigner(signer, known, salt, now, lifetime)
+		if err != nil {
+			return nil, nil, err
+		}
+		return in, record, nil
+	}
+
+	dev, err := devStore.Get("")
+	if err != nil {
+		return nil, nil, fmt.Errorf("pair: this machine has no device to authorise from (%w); "+
+			"run it where your user identity lives, or pass --as identity", err)
+	}
+	admitting, ok := dev.EnrolmentCert()
+	if !ok {
+		return nil, nil, fmt.Errorf("pair: device %s is not a member of any identity (%s), so it cannot admit another",
+			dev.PublicKeyString(), dev.AuthorisationNote())
+	}
+	signer, err := devStore.LoadSigningKey()
+	if err != nil {
+		return nil, nil, err
+	}
+	known, err := devStore.Ops()
+	if err != nil {
+		return nil, nil, err
+	}
+	in, err := pairflow.NewDeviceInitiator(signer, dev.EncryptionKey, admitting, known, salt, now)
+	if err != nil {
+		return nil, nil, err
+	}
+	return in, devStore.RecordOps, nil
+}
+
+// admittedDevice names the device an Authorise just admitted: the add op that is
+// in the initiator's op set now and was not before.
+func admittedDevice(before, after []string) string {
+	seen := make(map[string]bool, len(before))
+	for _, tok := range before {
+		seen[tok] = true
+	}
+	for _, tok := range after {
+		if seen[tok] {
+			continue
+		}
+		if op, err := enrolment.VerifyOp(tok); err == nil && op.Kind == enrolment.OpAdd {
+			return op.Device
+		}
+	}
+	return "(unknown)"
 }
 
 func newPairEnrolCommand(_ Options) *cobra.Command {
 	var (
 		f         pairCommonFlags
+		invite    string
+		relayAddr string
 		deviceDir string
 	)
 	cmd := &cobra.Command{
 		Use:   "enrol",
-		Short: "New device: pair with an old device and store the enrolment cert",
-		Long: `Run this on the NEW device. It generates (or reuses) this machine's device
-key, contributes it to the handshake, derives the short code, and — once you
-confirm the old device shows the same code — receives and stores the enrolment
-cert the old device signs. Afterwards this device authenticates as your user.`,
+		Short: "New device: join through an invite and store the membership op",
+		Long: `Run this on the NEW device with the invite ` + "`heyarr pair authorise`" + ` printed.
+It generates (or reuses) this machine's device keys, contributes them to the
+handshake, derives the short code, and, once you confirm the other side shows the
+same code, receives the membership add op that admits this device, with the ops
+that authorise it. It checks that the op admits THIS device into the invite's
+identity, signed by the side it compared codes with, and stores both
+(ADR-0068). Afterwards this device authenticates as your user.
+
+--relay overrides the relay the invite names, for when this device reaches the
+node by a different address. It takes the same forms as authorise's --relay.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if f.session == "" {
-				return errors.New("pair enrol needs --session, the id shown by `heyarr pair authorise`")
+			if strings.TrimSpace(invite) == "" {
+				return errors.New("pair enrol needs --invite, the voidbind:pair?... invite `heyarr pair authorise` printed")
+			}
+			inv, err := pairflow.DecodeInvite(strings.TrimSpace(invite))
+			if err != nil {
+				return err
+			}
+			var ep relayEndpoint
+			if relayAddr != "" {
+				ep, err = relayForNode(relayAddr)
+			} else {
+				ep, err = relayFromInvite(inv.RelayBase)
+			}
+			if err != nil {
+				return err
 			}
 			devStore, err := openDeviceStore(deviceDir)
 			if err != nil {
@@ -170,31 +329,56 @@ cert the old device signs. Afterwards this device authenticates as your user.`,
 			}
 			dev, err := devStore.Get("")
 			if err != nil {
-				dev, err = devStore.Generate("", false)
-				if err != nil {
+				if dev, err = devStore.Generate("", false); err != nil {
 					return err
 				}
 			}
-			relay, err := newRelayHTTP(f.relay)
+			if dev.EnrolmentStatus() == device.EnrolmentEnrolled && dev.EnrolledUser() != inv.User {
+				return fmt.Errorf("pair: this device is already a member of %s; the invite is for %s",
+					dev.EnrolledUser(), inv.User)
+			}
+			signPriv, err := devStore.LoadSigningKey()
 			if err != nil {
 				return err
 			}
+			encPriv, err := devStore.LoadEncryptionKey()
+			if err != nil {
+				return err
+			}
+			resp, err := pairflow.NewResponderWithKeys(inv.User, signPriv, encPriv, inv.Salt, time.Now().UTC())
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "joining user: %s\nthis device:  %s\n\n", inv.User, resp.DeviceID())
+
 			ctx, cancel := context.WithTimeout(cmd.Context(), f.timeout)
 			defer cancel()
-			res, err := pairflow.Responder{
-				Relay: relay, Session: f.session, PollInterval: f.poll,
-				DevicePub: dev.PublicKey,
-				DeviceEnc: dev.EncryptionKey,
-				Confirm:   confirmFunc(cmd, &f),
-				Accept: func(cert string) error {
-					_, err := devStore.Enrol(cert)
-					return err
-				},
-			}.Run(ctx)
-			return reportPairResult(cmd, "enrol", res, err)
+			t := ep.transport(inv.Session, pairflow.RoleResponder, f.poll)
+			sas, err := resp.Handshake(ctx, t)
+			if err != nil {
+				return fmt.Errorf("pair: handshake: %w", err)
+			}
+			if err := confirmSAS(cmd, &f, sas); err != nil {
+				return err
+			}
+			enr, err := resp.Receive(ctx, t)
+			if err != nil {
+				return fmt.Errorf("pair: waiting for the admission (the other side may have refused the code): %w", err)
+			}
+			if _, err := devStore.EnrolWithOps(enr.Op, enr.Ops); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "\nenrolled: this device is now a member of user %s (%d membership ops recorded)\n",
+				inv.User, len(enr.Ops))
+			return nil
 		},
 	}
 	f.register(cmd)
+	cmd.Flags().StringVar(&invite, "invite", "",
+		"the voidbind:pair?... invite printed by `heyarr pair authorise`")
+	cmd.Flags().StringVar(&relayAddr, "relay", "",
+		"reach the relay at this address instead of the invite's (a unix socket path, unix:///path, http://host:port or host:port)")
 	cmd.Flags().StringVar(&deviceDir, "device-dir", "",
 		"where this machine's device key lives (default: your config directory; "+device.EnvDir+" overrides)")
 	return cmd
@@ -272,51 +456,32 @@ func parseOptionalEnc(s string) ([]byte, error) {
 	return pub.Bytes(), nil
 }
 
-// confirmFunc builds the SAS comparison callback from the flags. It prints the
-// derived code, then decides whether to proceed: against --confirm-sas when
-// given (the scripted human), silently on --yes, or by prompting otherwise.
-func confirmFunc(cmd *cobra.Command, f *pairCommonFlags) func(pairing.SAS) (bool, error) {
-	return func(sas pairing.SAS) (bool, error) {
-		fmt.Fprintf(cmd.OutOrStdout(), "short authentication code: %s\n", sas.Grouped())
-		if f.confirmSAS != "" {
-			want := normaliseSAS(f.confirmSAS)
-			return want == string(sas), nil
-		}
-		if f.yes {
-			return true, nil
-		}
+// errSASRefused is a pairing whose codes were not confirmed: nothing was signed
+// on the authorising side, and nothing is stored on the new one.
+var errSASRefused = errors.New("pairing refused: the codes did not match, so no device was admitted")
+
+// confirmSAS prints the derived code, then decides whether to proceed: against
+// --confirm-sas when given (the scripted human), silently on --yes, or by
+// prompting otherwise. A refusal is errSASRefused.
+func confirmSAS(cmd *cobra.Command, f *pairCommonFlags, sas pairing.SAS) error {
+	fmt.Fprintf(cmd.OutOrStdout(), "short authentication code: %s\n", sas.Grouped())
+	ok := false
+	switch {
+	case f.confirmSAS != "":
+		ok = normaliseSAS(f.confirmSAS) == sas.String()
+	case f.yes:
+		ok = true
+	default:
 		fmt.Fprintf(cmd.OutOrStdout(), "does the other device show the SAME code? [y/N]: ")
-		reader := bufio.NewReader(cmd.InOrStdin())
-		line, err := reader.ReadString('\n')
+		line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
 		if err != nil && err != io.EOF {
-			return false, fmt.Errorf("reading your confirmation: %w", err)
+			return fmt.Errorf("reading your confirmation: %w", err)
 		}
 		answer := strings.ToLower(strings.TrimSpace(line))
-		return answer == "y" || answer == "yes", nil
+		ok = answer == "y" || answer == "yes"
 	}
-}
-
-// reportPairResult renders the outcome of a handshake and maps it to an exit code.
-func reportPairResult(cmd *cobra.Command, role string, res pairflow.Result, err error) error {
-	if err != nil {
-		switch {
-		case errors.Is(err, pairflow.ErrSASRefused):
-			return fmt.Errorf("pairing refused: the codes did not match, so no device was enrolled")
-		case errors.Is(err, pairflow.ErrPeerAborted):
-			return fmt.Errorf("pairing aborted: the other device stopped (it may have refused the code)")
-		case errors.Is(err, pairflow.ErrCommitmentMismatch):
-			return fmt.Errorf("pairing refused: a device revealed a key it had not committed to — "+
-				"this is what a man-in-the-middle looks like (%w)", err)
-		default:
-			return err
-		}
-	}
-	if role == "authorise" {
-		fmt.Fprintf(cmd.OutOrStdout(), "\npaired: signed an enrolment cert for the new device %s\n",
-			identity.FormatPublicKey(res.PeerKey))
-	} else {
-		fmt.Fprintf(cmd.OutOrStdout(), "\nenrolled: this device now authenticates as user %s\n",
-			identity.FormatPublicKey(res.PeerKey))
+	if !ok {
+		return errSASRefused
 	}
 	return nil
 }
@@ -327,94 +492,73 @@ func normaliseSAS(s string) string {
 	return strings.ReplaceAll(strings.TrimSpace(s), " ", "")
 }
 
-// randomSession returns a fresh URL-safe rendezvous id. It is not a secret — the
-// pairing's security is the short code — so plain hex of 16 random bytes is
-// ample and cannot collide in practice.
-func randomSession() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
+// relayEndpoint is how this CLI reaches a node's Voidbind relay: the HTTP client
+// (a unix-socket dialer, or plain TCP), the relay BASE voidbind-go's client
+// appends "/v1/..." to, and the form of that address the invite carries.
+type relayEndpoint struct {
+	httpc  *http.Client
+	base   string
+	invite string
 }
 
-// relayHTTP is the CLI's HTTP implementation of pairflow.Relay: it PUTs and GETs
-// opaque slot values against a running node's public relay (httpapi.RelayPrefix).
-type relayHTTP struct {
-	httpc *http.Client
-	base  string
-}
+// unixRelayHost stands in for the host of a request that is dialled over a unix
+// socket; the dialer ignores it.
+const unixRelayHost = "http://relay.heyarr.invalid"
 
-// newRelayHTTP builds a relay client for an address, supporting the same forms
-// as the API client: a unix socket path, unix:///path, http://host:port, or a
-// bare host:port.
-func newRelayHTTP(addr string) (*relayHTTP, error) {
+// relayForNode resolves a node address — a unix socket path, unix:///path,
+// http(s)://host:port or a bare host:port — to the node's relay. The node serves
+// the Voidbind relay under httpapi.RelayPrefix, so that is the base.
+//
+// A unix-socket relay is carried in the invite as unix:///abs/path, which only
+// another `heyarr pair enrol` on the same machine can use; an HTTP relay is
+// carried as its base URL, which any Voidbind client can.
+func relayForNode(addr string) (relayEndpoint, error) {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
-		return nil, errors.New("pair: --relay is required (a unix socket path, unix:///path, " +
+		return relayEndpoint{}, errors.New("pair: --relay is required (a unix socket path, unix:///path, " +
 			"http://host:port or host:port)")
 	}
 	transport := &http.Transport{MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second}
-	base := ""
+	httpc := &http.Client{Transport: transport, Timeout: 30 * time.Second}
 	switch {
 	case strings.HasPrefix(addr, "unix://"), strings.HasPrefix(addr, "/"), strings.HasPrefix(addr, "./"):
-		socket := strings.TrimPrefix(addr, "unix://")
+		socket, err := filepath.Abs(strings.TrimPrefix(addr, "unix://"))
+		if err != nil {
+			return relayEndpoint{}, fmt.Errorf("pair: resolving the relay socket: %w", err)
+		}
 		transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", socket)
 		}
-		base = "http://relay.heyarr.invalid"
+		return relayEndpoint{httpc: httpc, base: unixRelayHost + httpapi.RelayPrefix, invite: "unix://" + socket}, nil
 	case strings.HasPrefix(addr, "http://"), strings.HasPrefix(addr, "https://"):
-		base = strings.TrimRight(addr, "/")
+		addr = strings.TrimRight(addr, "/")
 	default:
-		base = "http://" + addr
+		addr = "http://" + strings.TrimRight(addr, "/")
 	}
-	return &relayHTTP{httpc: &http.Client{Transport: transport, Timeout: 30 * time.Second}, base: base}, nil
+	base := strings.TrimSuffix(addr, httpapi.RelayPrefix) + httpapi.RelayPrefix
+	return relayEndpoint{httpc: httpc, base: base, invite: base}, nil
 }
 
-func (r *relayHTTP) slotURL(session, slot string) string {
-	return r.base + httpapi.RelayPrefix + "/sessions/" + session + "/slots/" + slot
+// relayFromInvite resolves the relay an invite names: a unix:// socket (from a
+// `heyarr pair authorise` on this machine) or an HTTP relay base, used as-is.
+func relayFromInvite(relayBase string) (relayEndpoint, error) {
+	if strings.HasPrefix(relayBase, "unix://") {
+		return relayForNode(relayBase)
+	}
+	if !strings.HasPrefix(relayBase, "http://") && !strings.HasPrefix(relayBase, "https://") {
+		return relayEndpoint{}, fmt.Errorf("pair: the invite's relay %q is not an http(s) or unix:// address", relayBase)
+	}
+	base := strings.TrimRight(relayBase, "/")
+	return relayEndpoint{
+		httpc:  &http.Client{Timeout: 30 * time.Second},
+		base:   base,
+		invite: base,
+	}, nil
 }
 
-func (r *relayHTTP) Put(ctx context.Context, session, slot string, data []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, r.slotURL(session, slot), strings.NewReader(string(data)))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-	resp, err := r.httpc.Do(req)
-	if err != nil {
-		return fmt.Errorf("pair: reaching the relay: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode/100 != 2 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("pair: relay refused %s (%d): %s", slot, resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	return nil
-}
-
-func (r *relayHTTP) Get(ctx context.Context, session, slot string) ([]byte, bool, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.slotURL(session, slot), nil)
-	if err != nil {
-		return nil, false, err
-	}
-	resp, err := r.httpc.Do(req)
-	if err != nil {
-		return nil, false, fmt.Errorf("pair: reaching the relay: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	switch {
-	case resp.StatusCode == http.StatusNotFound:
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, false, nil
-	case resp.StatusCode/100 == 2:
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		if err != nil {
-			return nil, false, fmt.Errorf("pair: reading a relay slot: %w", err)
-		}
-		return body, true, nil
-	default:
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, false, fmt.Errorf("pair: relay error on %s (%d): %s", slot, resp.StatusCode, strings.TrimSpace(string(body)))
-	}
+// transport binds the endpoint to one session and one role — the pairflow
+// Transport voidbind-go's relay client implements.
+func (e relayEndpoint) transport(session string, role pairflow.Role, poll time.Duration) *vbrelay.Client {
+	return &vbrelay.Client{Base: e.base, Session: session, Role: string(role), HTTP: e.httpc, PollInterval: poll}
 }
