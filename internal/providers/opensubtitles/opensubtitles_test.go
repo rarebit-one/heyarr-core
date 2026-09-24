@@ -12,6 +12,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 	"github.com/rarebit-one/heyarr-core/internal/providers/fixtures"
+	"github.com/rarebit-one/heyarr-core/internal/providers/httpjson"
 )
 
 // The replay suite (ADR-0026): OpenSubtitles is an external service reached with
@@ -303,9 +304,9 @@ func TestResolveGivesUpAfterSecondUnauthorized(t *testing.T) {
 	if err == nil {
 		t.Fatal("resolve succeeded, want an error after two 401s")
 	}
-	var he *httpError
-	if !errors.As(err, &he) || he.status != http.StatusUnauthorized {
-		t.Fatalf("error = %v, want an httpError with 401", err)
+	var he *httpjson.Error
+	if !errors.As(err, &he) || he.Status != http.StatusUnauthorized {
+		t.Fatalf("error = %v, want an httpjson.Error with 401", err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
