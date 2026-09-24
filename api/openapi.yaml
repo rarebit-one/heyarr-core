@@ -860,7 +860,19 @@ paths:
         Every change is opaque: a content-addressed id, its causal parents, and
         ciphertext. The peer never decrypted any of it; the semantic merge is
         client-side.
-      parameters: [{ $ref: "#/components/parameters/id" }]
+
+        Without `since` this is the whole log. With `since` — the `cursor` a
+        previous response returned — it is only what arrived after it, so a
+        device in steady state pulls an empty list instead of the history.
+      parameters:
+        - $ref: "#/components/parameters/id"
+        - name: since
+          in: query
+          schema: { type: integer, format: int64, minimum: 0 }
+          description: |
+            A `cursor` from a previous response. Not a timestamp and not a
+            causal frontier: it is this peer's arrival position, meaningless
+            against another peer. A negative or non-integer value is a `400`.
       responses:
         "200":
           description: The changes the peer holds for the space (possibly empty).
@@ -868,12 +880,20 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [space_id, changes]
+                required: [space_id, changes, cursor]
                 properties:
                   space_id: { type: string }
                   changes:
                     type: array
                     items: { $ref: "#/components/schemas/EncryptedChange" }
+                  cursor:
+                    type: integer
+                    format: int64
+                    description: |
+                      This peer's opaque, monotonic arrival position after the
+                      last change returned. Always present — store it and pass
+                      it back as `since`.
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -8126,6 +8146,12 @@ components:
         audio: { type: string }
         width: { type: integer }
         height: { type: integer }
+        duration_seconds:
+          type: number
+          description: |
+            The source's full runtime in seconds — the scrubber total for a
+            `stream` plan, whose transcode cannot report its own length until
+            it finishes. Absent when the probe found none.
 
     PlaybackPlan:
       type: object
@@ -9501,6 +9527,15 @@ components:
             Stop conditions. **All** must hold for a candidate to be terminal.
             Empty means this profile is never finished.
           items: { $ref: "#/components/schemas/QualityRule" }
+        content_types:
+          type: array
+          items: { type: string }
+          description: |
+            Which works content type(s) this profile is meant to judge
+            (`movie`, `book`, …). Always present, never null; empty means
+            unrestricted — usable for any content type. Metadata for a caller
+            deciding which profiles to offer for a want: nothing in evaluation
+            (§63) reads it, so it never changes what a profile accepts.
         seeded:
           type: boolean
           description: |
@@ -9528,6 +9563,12 @@ components:
         terminal:
           type: array
           items: { $ref: "#/components/schemas/QualityRule" }
+        content_types:
+          type: array
+          items: { type: string }
+          description: |
+            See QualityProfile.content_types. Follows the section rule: omitted
+            on `POST` is empty (unrestricted), omitted on `PUT` is left alone.
 
     QualityRule:
       type: object
