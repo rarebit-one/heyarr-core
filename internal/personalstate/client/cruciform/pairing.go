@@ -59,9 +59,10 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/rarebit-one/heyarr-core/internal/pairing"
+	"github.com/rarebit-one/voidbind-go/encryption"
+	"github.com/rarebit-one/voidbind-go/pairing"
+
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
 // The relay slot names the pairing ceremony writes, one per handshake step. They

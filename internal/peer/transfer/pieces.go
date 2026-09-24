@@ -9,10 +9,11 @@ import (
 	"net/http"
 	"sort"
 
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
 	domaintransfer "github.com/rarebit-one/heyarr-core/internal/domain/transfer"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/pieces"
 )
 

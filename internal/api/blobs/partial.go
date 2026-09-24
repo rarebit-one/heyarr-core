@@ -5,7 +5,8 @@ import (
 	"errors"
 	"io"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
 

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
 )
 
 // The one-way reachability deadlock, reproduced against the real reconciler

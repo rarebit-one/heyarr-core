@@ -11,9 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rarebit-one/voidbind-go/useridentity"
 	"github.com/spf13/cobra"
-
-	"github.com/rarebit-one/heyarr-core/internal/useridentity"
 )
 
 // recoveryTestCmd builds a cobra command carrying just the --recovery flag, so a

@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/events"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	peercatalog "github.com/rarebit-one/heyarr-core/internal/peer/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/chunking"

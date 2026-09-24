@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
+	"github.com/rarebit-one/voidbind-go/encryption"
+	"github.com/rarebit-one/voidbind-go/recovery"
+
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spacerecover"
-	"github.com/rarebit-one/heyarr-core/internal/recovery"
 )
 
 // sealForRecovery mints a fresh space key and seals it for the recovery secret's

@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
 	"github.com/rarebit-one/heyarr-core/internal/events"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/peer/inventory"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"

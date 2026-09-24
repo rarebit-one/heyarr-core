@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/rarebit-one/heyarr-core/internal/device"
+	"github.com/rarebit-one/voidbind-go/device"
+
+	heyarrdevice "github.com/rarebit-one/heyarr-core/internal/device"
 )
 
 // instructions are what an agent reads before it chooses a tool. The caveat is
@@ -135,7 +137,7 @@ func (s *Server) generate(args json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"device": device.NewView(dev, device.CommandHint)}, nil
+	return map[string]any{"device": device.NewView(dev, heyarrdevice.CommandHint)}, nil
 }
 
 func (s *Server) list(args json.RawMessage) (any, error) {
@@ -148,11 +150,11 @@ func (s *Server) list(args json.RawMessage) (any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"devices": device.NewViews(devices, device.CommandHint),
+		"devices": device.NewViews(devices, heyarrdevice.CommandHint),
 		// The caveat rides on the LIST as well as on each record, because an
 		// empty list is also an answer somebody will act on. It names heyarr,
 		// not the voidbind CLI, like every other rendering here (#369).
-		"authorises": device.NotYetAuthorisingFor(device.CommandHint),
+		"authorises": heyarrdevice.NotYetAuthorisingFor(heyarrdevice.CommandHint),
 	}, nil
 }
 
@@ -167,7 +169,7 @@ func (s *Server) show(args json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"device": device.NewView(dev, device.CommandHint)}, nil
+	return map[string]any{"device": device.NewView(dev, heyarrdevice.CommandHint)}, nil
 }
 
 func (s *Server) remove(args json.RawMessage) (any, error) {
@@ -181,5 +183,5 @@ func (s *Server) remove(args json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"removed": device.NewView(dev, device.CommandHint)}, nil
+	return map[string]any{"removed": device.NewView(dev, heyarrdevice.CommandHint)}, nil
 }

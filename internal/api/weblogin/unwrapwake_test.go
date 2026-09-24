@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/enrolment"
+
 	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 )
 
 // postWake calls POST /v1/unwrap-wake with a JSON body and returns the response.

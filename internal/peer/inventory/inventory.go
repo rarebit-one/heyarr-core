@@ -58,7 +58,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
 )
 
 // Path is where a controller accepts an inventory report, under the peer

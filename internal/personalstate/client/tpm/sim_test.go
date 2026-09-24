@@ -21,9 +21,9 @@ import (
 
 	"github.com/google/go-tpm-tools/simulator"
 	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/rarebit-one/voidbind-go/encryption"
 
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
 func TestSealUnsealAgainstSimulator(t *testing.T) {

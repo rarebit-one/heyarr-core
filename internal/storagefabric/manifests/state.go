@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
 )
 
 // State is what is known about a blob's chunk manifest (§16, ADR-0034).

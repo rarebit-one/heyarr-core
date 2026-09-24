@@ -6,7 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/chunking"
 )
 

@@ -37,11 +37,11 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rarebit-one/voidbind-go/enrolment"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/voidbind-go/rp"
 )
 

@@ -27,7 +27,7 @@ func TestPeerSurfaceCannotReadPersonalState(t *testing.T) {
 		"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt",
 		"github.com/rarebit-one/heyarr-core/internal/personalstate/client",
 		"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync",
-		"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption",
+		"github.com/rarebit-one/voidbind-go/encryption",
 	}
 
 	out, err := exec.Command("go", "list", "-deps", pkg).CombinedOutput()

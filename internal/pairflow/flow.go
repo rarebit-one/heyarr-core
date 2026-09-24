@@ -45,7 +45,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/pairing"
+	"github.com/rarebit-one/voidbind-go/pairing"
 )
 
 // The relay slots, one value each, written once. Their names are the wire

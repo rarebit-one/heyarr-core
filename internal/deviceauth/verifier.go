@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
+	"github.com/rarebit-one/voidbind-go/enrolment"
 	"github.com/rarebit-one/voidbind-go/rp"
 )
 

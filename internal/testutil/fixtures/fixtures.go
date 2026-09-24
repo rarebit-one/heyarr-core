@@ -22,8 +22,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 )
 
 // DefaultLargeFileSize is the streaming fixture's size. Large enough that

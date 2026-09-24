@@ -41,10 +41,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rarebit-one/voidbind-go/hashing"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
 

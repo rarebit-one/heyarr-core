@@ -7,10 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rarebit-one/heyarr-core/internal/device"
+	"github.com/rarebit-one/voidbind-go/device"
+	"github.com/rarebit-one/voidbind-go/encryption"
+
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/cruciform"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
 // The software backend is a client.Custody keyed on the device's own encryption

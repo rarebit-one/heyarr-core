@@ -9,7 +9,7 @@ import (
 	"io"
 	"sort"
 
-	"github.com/rarebit-one/heyarr-core/internal/device"
+	"github.com/rarebit-one/voidbind-go/device"
 )
 
 // protocolVersion is the MCP revision this speaks. The same revision the

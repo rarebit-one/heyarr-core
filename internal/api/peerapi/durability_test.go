@@ -6,7 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/peer/durability"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"

@@ -67,9 +67,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rarebit-one/voidbind-go/hashing"
 	"golang.org/x/text/unicode/norm"
-
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 )
 
 // ErrInvalidChange rejects a [DriveChange] that is not well-formed BEFORE it can

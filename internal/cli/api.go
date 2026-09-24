@@ -11,13 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/device"
 	"github.com/spf13/cobra"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/config"
-	"github.com/rarebit-one/heyarr-core/internal/device"
 )
 
 // The client commands.

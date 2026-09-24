@@ -7,11 +7,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/device"
+	"github.com/rarebit-one/voidbind-go/recovery"
+	"github.com/rarebit-one/voidbind-go/useridentity"
 	"github.com/spf13/cobra"
 
-	"github.com/rarebit-one/heyarr-core/internal/device"
-	"github.com/rarebit-one/heyarr-core/internal/recovery"
-	"github.com/rarebit-one/heyarr-core/internal/useridentity"
+	heyarrdevice "github.com/rarebit-one/heyarr-core/internal/device"
 )
 
 // identityGenerateJSON is the --json shape of `identity generate` and
@@ -224,7 +225,7 @@ history.`,
 				return emitJSON(cmd.OutOrStdout(), struct {
 					Identity useridentity.View `json:"identity"`
 					Device   device.View       `json:"device"`
-				}{Identity: useridentity.NewView(id), Device: device.NewView(enrolled, device.CommandHint)})
+				}{Identity: useridentity.NewView(id), Device: device.NewView(enrolled, heyarrdevice.CommandHint)})
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "identity recovered — offline, from the recovery secret alone\n\n")
 			printIdentity(cmd.OutOrStdout(), id)
@@ -346,7 +347,7 @@ identity lives. It reads the local device key (generate one with
 				return err
 			}
 			if asJSON {
-				return emitJSON(cmd.OutOrStdout(), device.NewView(enrolled, device.CommandHint))
+				return emitJSON(cmd.OutOrStdout(), device.NewView(enrolled, heyarrdevice.CommandHint))
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "device enrolled\n\n")
 			printDevice(cmd.OutOrStdout(), enrolled)

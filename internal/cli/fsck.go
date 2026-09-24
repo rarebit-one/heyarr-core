@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/hashing"
 	"github.com/spf13/cobra"
 
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/events"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/peer/durability"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
