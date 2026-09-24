@@ -1,29 +1,21 @@
 // Package relay mounts the Voidbind pairing relay — voidbind-go's relay.Server —
 // on the node's PUBLIC router, under httpapi.RelayV1Prefix (ADR-0066).
 //
-// It exists because a phone does not speak heyarr's own relay. internal/pairflow
-// and internal/pairrelay predate the Voidbind extraction and speak a private
-// slot protocol (/pair/sessions/{s}/slots/{slot}, uvarint-framed reveals, a
-// plaintext cert). The Voidbind clients — the voidbind CLI's pair-initiate /
-// pair-join and the phone's voidbind-kmp — speak voidbind-go's relay protocol
-// instead: POST /v1/sessions, then PUT|GET /v1/sessions/{id}/{role}/{type} with
-// a JSON reveal and an X25519-sealed cert. A node that hosts only the legacy
-// relay cannot be the rendezvous for its own phone; this package makes it one.
+// It is the node's only pairing relay. The Voidbind clients — `heyarr pair`,
+// the voidbind CLI's pair-initiate / pair-join and the phone's voidbind-kmp —
+// speak voidbind-go's relay protocol: POST /v1/sessions, then
+// PUT|GET /v1/sessions/{id}/{role}/{type} with a JSON reveal and an
+// X25519-sealed admission. The legacy slot relay that heyarr ran at
+// /pair/sessions/{s}/slots/{slot} before the Voidbind extraction is retired
+// (ADR-0066, #627).
 //
-// The mount is ADDITIVE. The legacy relay stays at /pair for `heyarr pair`, and
-// this one sits beside it at /pair/v1; neither can be confused for the other
-// because the legacy relay has no "/v1/sessions" path and this one has no
-// "/sessions/{s}/slots" path. Retiring the legacy pair is a separate change
-// (ADR-0066 records why it is not this one).
-//
-// Like the legacy relay (ADR-0038) and every other public mount, this grants
-// nothing: the relay is an opaque, write-once, in-memory blob store that never
-// parses a payload and holds no key; the security is the commit-before-reveal
-// and the SAS on the two clients, and the cert crosses it sealed to the new
-// device's encryption key. Serving it without a credential adds no authority to
-// anyone. The caps a public route carries — a per-message byte cap, a live
-// session cap and a TTL — are the SAME values the legacy relay enforces, so the
-// two mounts present one abuse surface rather than two.
+// Like every other public mount, this grants nothing (ADR-0038): the relay is an
+// opaque, write-once, in-memory blob store that never parses a payload and holds
+// no key; the security is the commit-before-reveal and the SAS on the two
+// clients, and the admission crosses it sealed to the new device's encryption
+// key. Serving it without a credential adds no authority to anyone. A public
+// route still carries caps: a per-message byte cap, a live session cap and a
+// TTL.
 package relay
 
 import (
@@ -35,7 +27,6 @@ import (
 	vbrelay "github.com/rarebit-one/voidbind-go/relay"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
-	"github.com/rarebit-one/heyarr-core/internal/pairrelay"
 )
 
 // Options configure a Handler. The zero value is the production configuration.
@@ -58,16 +49,25 @@ type Handler struct {
 	log    *slog.Logger
 }
 
-// MaxMessageBytes bounds one relay slot. The legacy relay's 4 KiB was sized for
-// a bare commit/reveal; since ADR-0068 the sealed `cert` slot carries the
+// MaxMessageBytes bounds one relay slot. The retired legacy relay's 4 KiB was
+// sized for a bare commit/reveal; since ADR-0068 the sealed `cert` slot carries the
 // admitting op AND the initiator's known membership ops (up to
 // rp.MaxPresentedOps of ~700 B each), and a phone with a few devices overflowed
 // it with a 413 mid-pairing. voidbind-go's own relay default (64 KiB) is the
 // wire's stated bound, so the node uses the same number.
 const MaxMessageBytes = vbrelay.DefaultMaxMessageBytes
 
-// New builds the relay with the legacy relay's session caps and the
-// voidbind-go relay's slot cap.
+// MaxSessions is how many live pairing sessions the relay holds at once. A
+// homelab pairs a handful of devices, rarely at the same time; the cap only has
+// to stop an unauthenticated caller exhausting memory with sessions.
+const MaxSessions = 256
+
+// SessionTTL is how long an idle session lives before it is evictable. A
+// pairing completes in seconds, or is abandoned.
+const SessionTTL = 10 * time.Minute
+
+// New builds the relay with the node's session caps and the voidbind-go relay's
+// slot cap.
 func New(opts Options) *Handler {
 	log := opts.Logger
 	if log == nil {
@@ -75,8 +75,8 @@ func New(opts Options) *Handler {
 	}
 	srv := vbrelay.NewServer(vbrelay.Options{
 		MaxMessageBytes: MaxMessageBytes,
-		MaxSessions:     pairrelay.MaxSessions,
-		SessionTTL:      pairrelay.SessionTTL,
+		MaxSessions:     MaxSessions,
+		SessionTTL:      SessionTTL,
 		Now:             opts.Now,
 		Types:           opts.Types,
 	})

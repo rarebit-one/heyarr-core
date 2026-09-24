@@ -44,7 +44,6 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/media"
 	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
 	"github.com/rarebit-one/heyarr-core/internal/media/probe"
-	"github.com/rarebit-one/heyarr-core/internal/pairrelay"
 	"github.com/rarebit-one/heyarr-core/internal/peer/catalogsync"
 	"github.com/rarebit-one/heyarr-core/internal/peer/health"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
@@ -1013,15 +1012,13 @@ func (c *Controller) renderAndRelayRoutes(secret []byte, blobHandler *blobs.Hand
 		return nil, fmt.Errorf("controller: %w", err)
 	}
 
-	// The device-pairing relay (§40, ADR-0022, ADR-0038). A dumb, ephemeral,
-	// in-memory store-and-forward that two devices exchange through so an old
-	// one can authorise a new one — mounted publicly, like the renderer route,
-	// because a device being paired has no credential and the relay grants no
-	// authority (see internal/pairrelay).
-	relayHandler := pairrelay.NewHandler(pairrelay.HandlerOptions{Logger: c.log})
-	// The Voidbind relay beside it (ADR-0066): the protocol the voidbind CLI and
-	// the phone actually speak, so this node is the rendezvous for its own
-	// devices without a separately-run `voidbind relay`. Same caps, same stance.
+	// The device-pairing relay (§40, ADR-0022, ADR-0038, ADR-0066): voidbind-go's
+	// dumb, ephemeral, in-memory store-and-forward that two devices exchange
+	// through so one that can vouch for the identity admits a new one — the
+	// protocol `heyarr pair`, the voidbind CLI and the phone all speak, so this
+	// node is the rendezvous for its own devices without a separately-run
+	// `voidbind relay`. It is mounted publicly, like the renderer route, because
+	// a device being paired has no credential and the relay grants no authority.
 	// It carries the pairing default slots plus the cruciform-offload live path's
 	// slots (its one-time pairing `confirm` and the recurring unwrap request/
 	// response), so one node relay is the rendezvous for both device enrolment and
@@ -1030,7 +1027,7 @@ func (c *Controller) renderAndRelayRoutes(secret []byte, blobHandler *blobs.Hand
 		append(cruciform.RelayPairTypes, cruciform.RelayUnwrapTypes...)...)
 	relayV1Handler := relay.New(relay.Options{Logger: c.log, Types: relayTypes})
 
-	return []httpapi.MountFunc{renderHandler.Mount, relayHandler.Mount, relayV1Handler.Mount}, nil
+	return []httpapi.MountFunc{renderHandler.Mount, relayV1Handler.Mount}, nil
 }
 
 // personalStateAPI builds the encrypted personal-state plane's device-facing API.

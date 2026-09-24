@@ -196,9 +196,12 @@ device self-enrols through, presenting its own cert and possession proof
 (ADR-0067). `POST /api/v1/devices` is NOT enrolment — it is the playback
 renderer upsert (§68), a different resource that happens to be called a device.
 `GET /api/v1/identities/users/{key}/devices` lists what a user has vouched for.
-Pairing exchanges public values through the dumb relay at
-`PUT|GET /pair/sessions/{session}/slots/{slot}` (ADR-0022, unauthenticated — it
-carries only commitments and public keys).
+Pairing exchanges public values through the dumb Voidbind relay: the client's
+relay base is `<node>/pair`, it opens a session with `POST /pair/v1/sessions`,
+and each side writes and polls `PUT|GET /pair/v1/sessions/{id}/{role}/{type}`
+(ADR-0022, ADR-0066, unauthenticated — it carries only commitments, public keys
+and the admission sealed to the new device's encryption key). The legacy
+`/pair/sessions/{session}/slots/{slot}` relay is retired.
 
 ### 1b. QR web-login → session token (bootstrap / credential-less fallback, ADR-0053)
 
