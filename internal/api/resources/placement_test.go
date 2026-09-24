@@ -122,6 +122,7 @@ func assertPlacement(t *testing.T, got placementBlock, want, why string) {
 // hard-coded `false`, which is the exact regression the single-peer half
 // exists to catch — and vice versa.
 func TestPlacementUnprovenIsComputedFromTheTargetSet(t *testing.T) {
+	t.Parallel()
 	t.Run("one peer, and it is this node", func(t *testing.T) {
 		h := newHarness(t).seed()
 		got := placementOf(t, h, desired2ID)
@@ -152,6 +153,7 @@ func TestPlacementUnprovenIsComputedFromTheTargetSet(t *testing.T) {
 // about the fabric, so a bug that collapsed two of them together would fail
 // here rather than pass on a coincidence.
 func TestPlacementAgainstATargetSetOfTwo(t *testing.T) {
+	t.Parallel()
 	t.Run("held by one of two required peers is converging", func(t *testing.T) {
 		h := newHarness(t).seed().enrolPeerB()
 		got := placementOf(t, h, desired2ID)

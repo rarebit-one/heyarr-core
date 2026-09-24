@@ -35,6 +35,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // Bytes leaving one machine and arriving, verified, on another (§21, §32,
@@ -173,14 +174,7 @@ func newTransferFabric(t *testing.T) *transferFabric {
 	ctx := t.Context()
 	dir := t.TempDir()
 
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)
@@ -450,6 +444,7 @@ func (f *transferFabric) quarantined() []cas.Quarantined {
 // against: a blob present on one peer and absent on the other arrives,
 // verifies, and becomes `present`.
 func TestReplicateBlobTransfersAndVerifies(t *testing.T) {
+	t.Parallel()
 	f := newTransferFabric(t)
 	content := transferPayload(1)
 	hash := f.seedBlob(content)
@@ -511,6 +506,7 @@ func TestReplicateBlobTransfersAndVerifies(t *testing.T) {
 
 // Invariant 9. The queue WILL re-run this.
 func TestReplicateBlobRunTwiceIsOneReplica(t *testing.T) {
+	t.Parallel()
 	f := newTransferFabric(t)
 	hash := f.seedBlob(transferPayload(2))
 
@@ -553,6 +549,7 @@ func TestReplicateBlobRunTwiceIsOneReplica(t *testing.T) {
 // A source serving the wrong bytes for a hash, reproduced only after the same
 // fabric has been seen to transfer honestly.
 func TestReplicateBlobRefusesBytesThatAreNotWhatWasAskedFor(t *testing.T) {
+	t.Parallel()
 	f := newTransferFabric(t)
 
 	// First: the transfer works. Without this the refusal below proves nothing.
@@ -612,6 +609,7 @@ func TestReplicateBlobRefusesBytesThatAreNotWhatWasAskedFor(t *testing.T) {
 // makes the counter move — and only then is it asserted to stay still. An
 // assertion on an absence that has never been seen to fire is worth nothing.
 func TestReplicateBlobKeepsTheControllerOutOfTheDataPath(t *testing.T) {
+	t.Parallel()
 	f := newTransferFabric(t)
 	hash := f.seedBlob(transferPayload(5))
 
@@ -683,6 +681,7 @@ func TestReplicateBlobKeepsTheControllerOutOfTheDataPath(t *testing.T) {
 
 // A transfer that dies mid-flight, and the retry that then succeeds.
 func TestReplicateBlobInterruptedLeavesNoReplicaAndRetries(t *testing.T) {
+	t.Parallel()
 	f := newTransferFabric(t)
 	hash := f.seedBlob(transferPayload(7))
 	f.sourceBlobs.truncateOnce.Store(true)
@@ -737,6 +736,7 @@ func TestReplicateBlobInterruptedLeavesNoReplicaAndRetries(t *testing.T) {
 // no longer a member is no longer a source, and the refusal happens before a
 // connection exists.
 func TestReplicateBlobRefusesASourceThatIsNotAMember(t *testing.T) {
+	t.Parallel()
 	f := newTransferFabric(t)
 
 	// First, the same fabric transferring successfully.
@@ -778,6 +778,7 @@ func TestReplicateBlobRefusesASourceThatIsNotAMember(t *testing.T) {
 // refused by name: dialling the endpoint and accepting whatever answered would
 // be trust on first use with extra steps (ADR-0012).
 func TestReplicateBlobRefusesASourceWithNothingToPin(t *testing.T) {
+	t.Parallel()
 	f := newTransferFabric(t)
 	hash := f.seedBlob(transferPayload(10))
 	f.exec(`UPDATE peers SET public_key = NULL WHERE id = ?`, f.sourceID)
@@ -801,6 +802,7 @@ func TestReplicateBlobRefusesASourceWithNothingToPin(t *testing.T) {
 // A destination pulls its own bytes (ADR-0030). A job naming another peer is
 // work for that peer's queue, and this node must not quietly complete it.
 func TestReplicateBlobRefusesAJobForAnotherPeer(t *testing.T) {
+	t.Parallel()
 	f := newTransferFabric(t)
 	hash := f.seedBlob(transferPayload(11))
 
@@ -821,6 +823,7 @@ func TestReplicateBlobRefusesAJobForAnotherPeer(t *testing.T) {
 
 // The registration is a value, so the two properties it IS can be asserted.
 func TestReplicateBlobRegistrationIsBoundedAndUnconditional(t *testing.T) {
+	t.Parallel()
 	reg := ReplicateBlobRegistration(TransferDeps{})
 	if reg.MaxConcurrent <= 0 {
 		t.Fatal("replicate_blob is registered unbounded; a first full sync would run one transfer " +
@@ -847,6 +850,7 @@ func TestReplicateBlobRegistrationIsBoundedAndUnconditional(t *testing.T) {
 // candidate list, and this. Whenever a fixture's expected order agrees with its
 // incidental order, the test asserts nothing about the rule.
 func TestRankSourcesPrefersReachableWithoutExcludingUnknown(t *testing.T) {
+	t.Parallel()
 	key := []byte("0123456789abcdef0123456789abcdef")
 	candidates := []replication.Source{
 		{PeerID: "a", Endpoint: "https://a:1", PublicKey: key, Health: replication.HealthUnreachable},
@@ -995,6 +999,7 @@ func (f *transferFabric) seedPartialBlob(content []byte) hashing.Hash {
 // the same gap again forever — even when the bytes were sitting on peers, in
 // pieces, the whole time.
 func TestReplicateBlobAssemblesFromAPeerHoldingOnlyPartOfIt(t *testing.T) {
+	t.Parallel()
 	f := newTransferFabric(t)
 	content := transferPayload(9)
 	hash := f.seedPartialBlob(content)
@@ -1072,6 +1077,7 @@ func TestReplicateBlobAssemblesFromAPeerHoldingOnlyPartOfIt(t *testing.T) {
 // trips and gain nothing, so the branch is deliberately reachable only when
 // there is no whole source.
 func TestReplicateBlobStillStreamsWhenAPeerHoldsTheWholeBlob(t *testing.T) {
+	t.Parallel()
 	f := newTransferFabric(t)
 	content := transferPayload(10)
 	hash := f.seedBlob(content) // seedBlob writes a `present` replica
@@ -1106,6 +1112,7 @@ func TestReplicateBlobStillStreamsWhenAPeerHoldsTheWholeBlob(t *testing.T) {
 // is no source. Not a failed transfer: nothing was attempted, nothing about
 // this peer's disk changed, and the gap is offered again next cycle.
 func TestReplicateBlobWithNoWholeAndNoPartialSourceIsStillNoSource(t *testing.T) {
+	t.Parallel()
 	f := newTransferFabric(t)
 	hash := f.seedPartialBlob(transferPayload(11))
 	// f.sourcePieces is empty: the member answers 404 for this blob.

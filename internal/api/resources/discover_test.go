@@ -34,6 +34,7 @@ func discover(h *harness, body string) *http.Response {
 // A discovery search asks the metadata provider, so it returns a candidate the
 // library does NOT hold — with the tvdb_id a client follows in one step.
 func TestDiscoverReturnsCandidatesNotInTheLibrary(t *testing.T) {
+	t.Parallel()
 	reg := providers.New(nil)
 	fake := providers.NewFake("fake-tvdb", providers.CapabilityMetadata).
 		OfferDiscovery("the expanse",
@@ -83,6 +84,7 @@ func TestDiscoverReturnsCandidatesNotInTheLibrary(t *testing.T) {
 // client can tell it apart from a tv_series result and route it to want_content
 // instead of follow_source.
 func TestDiscoverReturnsWantScopedCandidates(t *testing.T) {
+	t.Parallel()
 	reg := providers.New(nil)
 	fake := providers.NewFake("fake-openlibrary", providers.CapabilityEnrich).
 		OfferDiscovery("dune",
@@ -131,6 +133,7 @@ func TestDiscoverReturnsWantScopedCandidates(t *testing.T) {
 
 // A query with nothing to search on is refused — a 400, not an empty 200.
 func TestDiscoverRefusesEmptyQuery(t *testing.T) {
+	t.Parallel()
 	reg := providers.New(nil)
 	if err := reg.Register(
 		providers.NewFake("fake-tvdb", providers.CapabilityMetadata)); err != nil {
@@ -149,6 +152,7 @@ func TestDiscoverRefusesEmptyQuery(t *testing.T) {
 // different from a 400 (caller's fault) and a 500 (server failure), and it must
 // not read as "found nothing".
 func TestDiscoverWithoutAProviderIs503(t *testing.T) {
+	t.Parallel()
 	// A registry whose only provider is an indexer — a real "no metadata
 	// provider can look content up" node, not merely an empty registry.
 	reg := providers.New(nil)
@@ -173,6 +177,7 @@ func TestDiscoverWithoutAProviderIs503(t *testing.T) {
 // A discovery search matching nothing is an empty result, not an error: the
 // provider answered, and its answer is "no such series".
 func TestDiscoverMatchingNothingIsEmpty(t *testing.T) {
+	t.Parallel()
 	reg := providers.New(nil)
 	if err := reg.Register(
 		providers.NewFake("fake-tvdb", providers.CapabilityMetadata)); err != nil {
@@ -198,6 +203,7 @@ func TestDiscoverMatchingNothingIsEmpty(t *testing.T) {
 // Two providers offering the same series yield ONE result: discovery merges and
 // deduplicates on (type, external id) rather than showing the same series twice.
 func TestDiscoverDeduplicatesAcrossProviders(t *testing.T) {
+	t.Parallel()
 	same := providers.DiscoveryCandidate{
 		Title: "The Expanse", Year: 2015, ExternalID: "280619", Source: "tvdb",
 		Type: string(followed.TypeTVSeries),

@@ -27,6 +27,7 @@ func postProfile(t *testing.T, h *harness, body string) *http.Response {
 // reading §62's `"hevc": 20` reaches for a weight everywhere — and silently
 // ignoring it would leave an operator believing a gate is scoring.
 func TestAcceptRuleWithAWeightIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := postProfile(t, h, `{
 		"name": "weighted-gate",
@@ -45,6 +46,7 @@ func TestAcceptRuleWithAWeightIsRefused(t *testing.T) {
 }
 
 func TestTerminalRuleWithAWeightIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := postProfile(t, h, `{
 		"name": "weighted-stop",
@@ -63,6 +65,7 @@ func TestTerminalRuleWithAWeightIsRefused(t *testing.T) {
 // profile, and this is the write-time half of that claim: a weight is what
 // makes a rule a preference at all.
 func TestPreferenceWithoutAWeightIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := postProfile(t, h, `{
 		"name": "weightless",
@@ -80,6 +83,7 @@ func TestPreferenceWithoutAWeightIsRefused(t *testing.T) {
 // this, "prefer anything that is not a webrip" has to be written as a gate,
 // which rejects rather than deprioritises.
 func TestNegativeWeightIsAccepted(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := postProfile(t, h, `{
 		"name": "penalised",
@@ -105,6 +109,7 @@ func TestNegativeWeightIsAccepted(t *testing.T) {
 // The acceptance criterion this issue names first: an unknown attribute is
 // rejected when the profile is WRITTEN, not when a candidate is evaluated.
 func TestUnknownAttributeIsRefusedAtWriteTime(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := postProfile(t, h, `{
 		"name": "typo",
@@ -128,6 +133,7 @@ func TestUnknownAttributeIsRefusedAtWriteTime(t *testing.T) {
 // A rule that looks right and silently never fires is the worst outcome of the
 // three, because nothing complains and the profile appears to work.
 func TestRulesThatWouldSilentlyNeverMatchAreRefused(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		rule string
@@ -171,6 +177,7 @@ func TestRulesThatWouldSilentlyNeverMatchAreRefused(t *testing.T) {
 // An absent `terminal` and an empty one are the same statement, and both are
 // legal. "Never stop looking" must not need a sentinel value.
 func TestAProfileWithNoTerminalRulesIsLegalAndReadsBackAsAnEmptyList(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := postProfile(t, h, `{"name":"open-ended","accept":[]}`)
 	if resp.StatusCode != http.StatusCreated {
@@ -192,6 +199,7 @@ func TestAProfileWithNoTerminalRulesIsLegalAndReadsBackAsAnEmptyList(t *testing.
 // A create, not an upsert. Silently replacing a profile because the name
 // matched would discard whatever it said before.
 func TestDuplicateNameIsAConflictNotAnOverwrite(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	if resp := postProfile(t, h, `{"name":"dup","accept":[]}`); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("first create: status = %d", resp.StatusCode)
@@ -210,6 +218,7 @@ func TestDuplicateNameIsAConflictNotAnOverwrite(t *testing.T) {
 // different intentions, and collapsing them makes "clear the terminal rules"
 // and "forget to send them" the same request.
 func TestUpdateDistinguishesOmittedFromCleared(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	path := "/api/v1/quality-profiles/" + profile1ID
 
@@ -244,6 +253,7 @@ func TestUpdateDistinguishesOmittedFromCleared(t *testing.T) {
 // a given want — a book picker should not offer a video-only profile. It
 // follows the exact omitted-vs-cleared distinction the rule sections do.
 func TestContentTypesCreateAndUpdate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	resp := postProfile(t, h, `{"name":"ebook","content_types":["book"]}`)
@@ -310,6 +320,7 @@ func TestContentTypesCreateAndUpdate(t *testing.T) {
 // Invariant 7 — every state transition emits — and its converse, which is
 // doing just as much work: something that is not a transition must not.
 func TestEventsAreEmittedForChangesAndOnlyForChanges(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	path := "/api/v1/quality-profiles/" + profile1ID
 
@@ -339,6 +350,7 @@ func TestEventsAreEmittedForChangesAndOnlyForChanges(t *testing.T) {
 }
 
 func TestCreateAndDeleteEmit(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	before := h.eventCount(t)
 
@@ -374,6 +386,7 @@ func TestCreateAndDeleteEmit(t *testing.T) {
 }
 
 func TestUnknownProfileIs404(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
 		resp := h.doStable(method, "/api/v1/quality-profiles/nope", nil)
@@ -390,6 +403,7 @@ func TestUnknownProfileIs404(t *testing.T) {
 // Pagination is keyset like every other collection, so that a profile created
 // while someone pages does not shift the boundary.
 func TestQualityProfilesPaginate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := h.get("/api/v1/quality-profiles?limit=1")
 	if resp.StatusCode != http.StatusOK {

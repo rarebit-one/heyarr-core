@@ -61,6 +61,7 @@ func listUpgradable(t *testing.T, h *harness, value string) []string {
 // The four disqualifying reasons, each reported distinctly. A client that only
 // learns "not upgradable" cannot tell an operator anything useful.
 func TestUpgradeStatusIsReportedPerWant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	// The seeded fixture has two wants over work1: desired1ID is monitored
@@ -88,6 +89,7 @@ func TestUpgradeStatusIsReportedPerWant(t *testing.T) {
 
 // A want with nothing acceptable held is an ACQUISITION, not an upgrade.
 func TestAnUnsatisfiedWantIsNotAnUpgrade(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	// A fresh want for content nothing holds.
@@ -110,6 +112,7 @@ func TestAnUnsatisfiedWantIsNotAnUpgrade(t *testing.T) {
 
 // The listing filter §71's get_upgrade_candidates will expose.
 func TestUpgradableFilter(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	upgradable := listUpgradable(t, h, "true")
@@ -143,6 +146,7 @@ func TestUpgradableFilter(t *testing.T) {
 // Turning monitoring off takes a want out of the upgradable set immediately —
 // the operator's instruction, honoured without waiting for a beat.
 func TestUnmonitoringRemovesAWantFromTheUpgradableSet(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	if !contains(listUpgradable(t, h, "true"), desired1ID) {
@@ -167,6 +171,7 @@ func TestUnmonitoringRemovesAWantFromTheUpgradableSet(t *testing.T) {
 // silently returns everything, which reads as "nothing is upgradable" or
 // "everything is", depending on which way the caller was hoping.
 func TestUpgradableRefusesAnUnknownValue(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := h.doStable(http.MethodGet, "/api/v1/desired?upgradable=maybe", nil)
 	if resp.StatusCode != http.StatusBadRequest {
@@ -180,6 +185,7 @@ func TestUpgradableRefusesAnUnknownValue(t *testing.T) {
 // Reading the upgrade block writes nothing. It is a question, not an
 // instruction.
 func TestReadingTheUpgradeBlockEmitsNothing(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	before := h.eventsOfType(t, "acquisition.upgrade_found", "acquisition.upgrade_superseded")
 	for range 3 {

@@ -2,7 +2,6 @@ package catalog_test
 
 import (
 	"context"
-	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
@@ -11,7 +10,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/media/capability"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // M5-112 against a real database (§6, §75, ADR-0039).
@@ -58,15 +57,7 @@ type capHarness struct {
 
 func newCapHarness(t *testing.T) *capHarness {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	clock := &capClock{t: time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {
@@ -127,6 +118,7 @@ func (h *capHarness) namesFor(t *testing.T, workerID string) []string {
 // capability at all — which is a way of passing that proves nothing about
 // narrowing, and is exactly the mistake the inventory tests next door record.
 func TestAnAdvertisementNarrowsWhenAProbeStopsPassing(t *testing.T) {
+	t.Parallel()
 	h := newCapHarness(t)
 
 	gained := h.advertise(t, "worker-1", "peer-a", "node-a",
@@ -163,6 +155,7 @@ func TestAnAdvertisementNarrowsWhenAProbeStopsPassing(t *testing.T) {
 // implementation that treated an empty set as "nothing to say" would leave the
 // whole stale advertisement standing.
 func TestAnAdvertisementMayNarrowToNothing(t *testing.T) {
+	t.Parallel()
 	h := newCapHarness(t)
 	h.advertise(t, "worker-1", "peer-a", "node-a", "ffmpeg", "ffmpeg.encoder.hevc.qsv")
 
@@ -191,6 +184,7 @@ func TestAnAdvertisementMayNarrowToNothing(t *testing.T) {
 // re-resolves the binary, so the ONLY thing that ever removes a binary
 // capability is the advertisement expiring with the process that made it.
 func TestHardwareNarrowsWhileTheBinaryCapabilitySurvives(t *testing.T) {
+	t.Parallel()
 	h := newCapHarness(t)
 	ctx := context.Background()
 
@@ -240,6 +234,7 @@ func TestHardwareNarrowsWhileTheBinaryCapabilitySurvives(t *testing.T) {
 // what happens when the process is gone. The deaths that matter write no log
 // line and get no chance to run a shutdown hook.
 func TestAWorkerThatDiesStopsAdvertisingWithinTheTTL(t *testing.T) {
+	t.Parallel()
 	h := newCapHarness(t)
 	h.advertise(t, "worker-1", "peer-a", "node-a", "ffmpeg", "ffmpeg.encoder.hevc.qsv")
 
@@ -267,6 +262,7 @@ func TestAWorkerThatDiesStopsAdvertisingWithinTheTTL(t *testing.T) {
 // An advertisement expiring exactly now has expired. Rounding the other way
 // honours a claim for an instant longer than the worker promised it.
 func TestAnAdvertisementExpiringExactlyNowIsNotHonoured(t *testing.T) {
+	t.Parallel()
 	h := newCapHarness(t)
 	h.advertise(t, "worker-1", "peer-a", "node-a", "ffmpeg")
 	h.clock.advance(capTTL)
@@ -284,6 +280,7 @@ func TestAnAdvertisementExpiringExactlyNowIsNotHonoured(t *testing.T) {
 // filters by node; what it does not prove is that a second machine's
 // advertisement arrives here at all.
 func TestTheFleetViewAnswersAcrossMoreThanOneNode(t *testing.T) {
+	t.Parallel()
 	h := newCapHarness(t)
 	h.advertise(t, "worker-a", "peer-a", "node-a", "ffmpeg", "ffmpeg.encoder.hevc.qsv")
 	h.advertise(t, "worker-b", "peer-b", "node-b", "ffmpeg", "ffmpeg.encoder.hevc.qsv",
@@ -322,6 +319,7 @@ func TestTheFleetViewAnswersAcrossMoreThanOneNode(t *testing.T) {
 // anything — and, worse, would answer "which nodes can encode AV1" with a node
 // that merely has ffmpeg installed.
 func TestTheFleetQueryMatchesTheWholeCapabilityAndNotAPrefix(t *testing.T) {
+	t.Parallel()
 	h := newCapHarness(t)
 	h.advertise(t, "worker-encoder-only", "peer-b", "node-b", "ffmpeg.encoder.hevc.qsv")
 
@@ -347,6 +345,7 @@ func TestTheFleetQueryMatchesTheWholeCapabilityAndNotAPrefix(t *testing.T) {
 // event (invariant 9). A beat that emitted an event every time it found the
 // world unaltered would bury the one that matters.
 func TestReAdvertisingTheSameSetChangesNothing(t *testing.T) {
+	t.Parallel()
 	h := newCapHarness(t)
 	h.advertise(t, "worker-1", "peer-a", "node-a", "ffmpeg", "ffmpeg.encoder.hevc.qsv")
 	before := h.eventTypes(t)
@@ -370,6 +369,7 @@ func TestReAdvertisingTheSameSetChangesNothing(t *testing.T) {
 // The narrowing is the transition worth seeing, so it emits — once, with both
 // halves in the payload.
 func TestANarrowingEmitsOneEvent(t *testing.T) {
+	t.Parallel()
 	h := newCapHarness(t)
 	h.advertise(t, "worker-1", "peer-a", "node-a", "ffmpeg", "ffmpeg.encoder.av1.qsv")
 	before := len(h.eventTypes(t))
@@ -388,6 +388,7 @@ func TestANarrowingEmitsOneEvent(t *testing.T) {
 // that never expires outlives the process that wrote it, which is the one thing
 // this table exists to prevent.
 func TestAnAdvertisementWithoutATTLIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newCapHarness(t)
 	_, err := h.cat.AdvertiseCapabilities(context.Background(), capability.Advertisement{
 		WorkerID: "worker-1", Held: held("ffmpeg"),
