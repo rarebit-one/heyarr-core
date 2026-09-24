@@ -2,8 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
@@ -39,11 +37,9 @@ const upgradeScanBatch = 5000
 // same way.
 func UpgradeScanHandler(cat *catalog.Catalog, log *slog.Logger) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload acquisition.UpgradeScanPayload
-		if len(job.Payload) > 0 {
-			if err := json.Unmarshal(job.Payload, &payload); err != nil {
-				return fmt.Errorf("worker: upgrade_scan payload is not decodable: %w", err)
-			}
+		payload, err := decodeOptionalPayload[acquisition.UpgradeScanPayload](job)
+		if err != nil {
+			return err
 		}
 
 		result, err := cat.ScanForUpgrades(ctx, upgradeScanBatch)
