@@ -12,6 +12,17 @@ on:
     - cron: "30 5 * * *"
   # Run the full matrix against any branch on demand.
   workflow_dispatch:
+  # Merge queue. `ci` is the required check, so it has to report on the queue's
+  # merge_group ref too, or a queued PR waits until the queue times it out.
+  # This trigger does nothing until a merge queue is enabled on main. `plan`
+  # gives these runs the full OS matrix (scripts/ci-matrix.sh rule 1: not a
+  # pull request), the same verdict a push to main gets, so macOS/Windows-only
+  # breakage is caught before main moves. The concurrency group below falls back
+  # to github.ref, which is unique per queue entry
+  # (refs/heads/gh-readonly-queue/main/pr-<n>-<sha>), and cancel-in-progress is
+  # false for this event, so queued runs never cancel one another.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -30,10 +41,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Which operating systems this run tests on. Push to main, the nightly
-  # schedule and a manual dispatch get the full matrix; a pull request gets
-  # Linux only unless it touches something platform-sensitive or carries the
-  # `ci:full-matrix` label. scripts/ci-matrix.sh holds the rules and the data
+  # Which operating systems this run tests on. Push to main, a merge-queue
+  # run, the nightly schedule and a manual dispatch get the full matrix; a pull
+  # request gets Linux only unless it touches something platform-sensitive or
+  # carries the `ci:full-matrix` label. scripts/ci-matrix.sh holds the rules and the data
   # behind them. Only the jobs that need a macOS or Windows RUNNER read this —
   # `lint` cross-compiles every GOOS on Linux and stays unconditional, because
   # it is cheap and it is what caught the one Windows-only bug in the sample.
