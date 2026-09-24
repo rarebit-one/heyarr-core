@@ -22,8 +22,8 @@ import (
 // decrypts and merges, and the two starred sets converge.
 func TestStarredConvergesThroughEncryptedChanges(t *testing.T) {
 	t.Parallel()
-	_, ra, _ := device(t)
-	_, rb, ub := device(t)
+	ra, _ := device(t)
+	rb, ub := device(t)
 
 	mgrA := client.New()
 	sp, wrapped, err := mgrA.Create(spaces.KindShared, testNow, []client.Recipient{ra, rb})
@@ -61,8 +61,8 @@ func TestStarredConvergesThroughEncryptedChanges(t *testing.T) {
 // register round-trips through the bridge and converges across two devices.
 func TestReadingPositionConvergesThroughEncryptedChanges(t *testing.T) {
 	t.Parallel()
-	_, ra, _ := device(t)
-	_, rb, ub := device(t)
+	ra, _ := device(t)
+	rb, ub := device(t)
 
 	mgrA := client.New()
 	sp, wrapped, err := mgrA.Create(spaces.KindShared, testNow, []client.Recipient{ra, rb})
@@ -103,8 +103,8 @@ func TestReadingPositionConvergesThroughEncryptedChanges(t *testing.T) {
 // trips through the bridge; counts sum across the two devices' events.
 func TestPlayHistoryConvergesThroughEncryptedChanges(t *testing.T) {
 	t.Parallel()
-	_, ra, _ := device(t)
-	_, rb, ub := device(t)
+	ra, _ := device(t)
+	rb, ub := device(t)
 
 	mgrA := client.New()
 	sp, wrapped, err := mgrA.Create(spaces.KindShared, testNow, []client.Recipient{ra, rb})
@@ -145,7 +145,7 @@ func TestPlayHistoryConvergesThroughEncryptedChanges(t *testing.T) {
 // plaintext (item id / position) into the wire ciphertext a peer holds.
 func TestNewChangeTypesAreOpaqueToThePeer(t *testing.T) {
 	t.Parallel()
-	_, ra, _ := device(t)
+	ra, _ := device(t)
 	m := client.New()
 	sp, _, err := m.Create(spaces.KindPersonal, testNow, []client.Recipient{ra})
 	if err != nil {
@@ -181,7 +181,7 @@ func TestNewChangeTypesAreOpaqueToThePeer(t *testing.T) {
 // change id against its bytes for a new type too, refusing a tampered change.
 func TestGenericDecodeRejectsForgedChange(t *testing.T) {
 	t.Parallel()
-	_, ra, _ := device(t)
+	ra, _ := device(t)
 	m := client.New()
 	sp, _, err := m.Create(spaces.KindPersonal, testNow, []client.Recipient{ra})
 	if err != nil {

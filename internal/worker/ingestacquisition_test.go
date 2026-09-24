@@ -754,7 +754,7 @@ func (h *ingestHarness) setupSeries(t *testing.T, episodes int) map[string]strin
 // selectAndCompletePack drives the triggering want to VERIFYING with a
 // multi-file release (a directory) on disk, which is the state an ingest job
 // finds for a season pack. `files` are release-relative paths → contents.
-func (h *ingestHarness) selectAndCompletePack(t *testing.T, dirName string, files map[string][]byte) string {
+func (h *ingestHarness) selectAndCompletePack(t *testing.T, dirName string, files map[string][]byte) {
 	t.Helper()
 	ctx := t.Context()
 
@@ -799,7 +799,6 @@ func (h *ingestHarness) selectAndCompletePack(t *testing.T, dirName string, file
 	if got := h.state(t).Phase; got != acquisition.PhaseVerifying {
 		t.Fatalf("setup: phase is %s, expected verifying", got)
 	}
-	return dir
 }
 
 // linkedItemKey returns the item_key an asset is linked to, or "" for an

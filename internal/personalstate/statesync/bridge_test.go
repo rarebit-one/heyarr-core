@@ -2,7 +2,6 @@ package statesync_test
 
 import (
 	"bytes"
-	"crypto/ecdh"
 	"testing"
 	"time"
 
@@ -17,7 +16,7 @@ import (
 
 var testNow = time.Date(2026, 8, 27, 1, 0, 0, 0, time.UTC)
 
-func device(t *testing.T) (*ecdh.PrivateKey, client.Recipient, client.Unwrapper) {
+func device(t *testing.T) (client.Recipient, client.Unwrapper) {
 	t.Helper()
 	priv, err := encryption.GenerateKey()
 	if err != nil {
@@ -27,7 +26,7 @@ func device(t *testing.T) (*ecdh.PrivateKey, client.Recipient, client.Unwrapper)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return priv, r, client.NewKeyUnwrapper(priv)
+	return r, client.NewKeyUnwrapper(priv)
 }
 
 func wrappedFor(t *testing.T, ws []client.WrappedFor, id string) []byte {
@@ -45,7 +44,7 @@ func wrappedFor(t *testing.T, ws []client.WrappedFor, id string) []byte {
 // change decodes back to the same change on a device holding the space key.
 func TestEncodeDecodeRoundTrip(t *testing.T) {
 	t.Parallel()
-	_, ra, _ := device(t)
+	ra, _ := device(t)
 	m := client.New()
 	sp, _, err := m.Create(spaces.KindPersonal, testNow, []client.Recipient{ra})
 	if err != nil {
@@ -73,8 +72,8 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 // devices' playlists converge. The peer between them never sees plaintext.
 func TestTwoDevicesConvergeThroughEncryptedChanges(t *testing.T) {
 	t.Parallel()
-	_, ra, _ := device(t)
-	_, rb, ub := device(t)
+	ra, _ := device(t)
+	rb, ub := device(t)
 
 	mgrA := client.New()
 	sp, wrapped, err := mgrA.Create(spaces.KindShared, testNow, []client.Recipient{ra, rb})
@@ -125,7 +124,7 @@ func TestTwoDevicesConvergeThroughEncryptedChanges(t *testing.T) {
 // opaque change — the confidentiality the wrap protects.
 func TestNonRecipientCannotDecode(t *testing.T) {
 	t.Parallel()
-	_, ra, _ := device(t)
+	ra, _ := device(t)
 	mgrA := client.New()
 	sp, _, err := mgrA.Create(spaces.KindPersonal, testNow, []client.Recipient{ra})
 	if err != nil {
@@ -146,7 +145,7 @@ func TestNonRecipientCannotDecode(t *testing.T) {
 // refused before decryption — a client trusts a claimed id no more than a peer.
 func TestDecodeRejectsForgedChange(t *testing.T) {
 	t.Parallel()
-	_, ra, _ := device(t)
+	ra, _ := device(t)
 	m := client.New()
 	sp, _, err := m.Create(spaces.KindPersonal, testNow, []client.Recipient{ra})
 	if err != nil {
@@ -166,7 +165,7 @@ func TestDecodeRejectsForgedChange(t *testing.T) {
 // CRDT change's plaintext (the item id) — a peer holding it learns nothing.
 func TestChangeIsOpaqueToThePeer(t *testing.T) {
 	t.Parallel()
-	_, ra, _ := device(t)
+	ra, _ := device(t)
 	m := client.New()
 	sp, _, err := m.Create(spaces.KindPersonal, testNow, []client.Recipient{ra})
 	if err != nil {

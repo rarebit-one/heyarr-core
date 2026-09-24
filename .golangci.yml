@@ -14,6 +14,7 @@ linters:
     - rowserrcheck
     - sqlclosecheck
     - staticcheck
+    - unparam
     - unused
 
   settings:
@@ -131,6 +132,17 @@ linters:
     rules:
       - path: _test\.go$
         linters: [gosec]
+
+      # A test helper names its inputs so the call site reads as the scenario:
+      # h.startPlayback(asset1ID), not h.startPlayback(). unparam reports any
+      # parameter that every current caller passes the same value, and in a
+      # test that is usually a fixture chosen once and kept explicit on
+      # purpose. It is not dead weight. Only this class is excluded, and only
+      # in tests. Unused results, always-nil errors and unused parameters still
+      # report everywhere, and so does every finding in non-test code.
+      - path: _test\.go$
+        text: "always receives"
+        linters: [unparam]
 
       # On a platform without copy-on-write cloning, reflink() is an
       # unconditional error by construction (see reflink_other.go), so
