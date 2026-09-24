@@ -19,6 +19,13 @@ import (
 // times out and nothing is ever reconciled".
 const reconcileBatch = 5000
 
+// ReconcileStore is the part of the catalog the reconciliation sweep uses. A
+// *catalog.Catalog satisfies it; the handler depends on no more than it calls.
+type ReconcileStore interface {
+	DesiredItemsToReconcile(ctx context.Context, limit int) ([]string, error)
+	ReconcileDesired(ctx context.Context, desiredItemID string) (catalog.ReconcileResult, error)
+}
+
 // ReconcileHandler answers §56's two questions for every want, or for one.
 //
 // # Idempotent, and silent when nothing changed
@@ -35,7 +42,7 @@ const reconcileBatch = 5000
 // data problem for that want. Failing the whole job would mean one broken row
 // stops the entire library being reconciled, which is a much worse outcome
 // than a logged error and a sweep that finishes.
-func ReconcileHandler(cat *catalog.Catalog, log *slog.Logger) HandlerFunc {
+func ReconcileHandler(cat ReconcileStore, log *slog.Logger) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
 		payload, err := decodeOptionalPayload[acquisition.ReconcilePayload](job)
 		if err != nil {

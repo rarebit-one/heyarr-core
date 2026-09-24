@@ -16,6 +16,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/transfer"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
 )
 
 // maxConcurrentTransfers bounds how many blobs this node pulls at once.
@@ -39,6 +40,19 @@ import (
 // next to it.
 const maxConcurrentTransfers = 2
 
+// TransferCatalog is the part of the catalog a blob transfer uses: who holds
+// the bytes, and the record of what happened. A *catalog.Catalog satisfies it;
+// the handler depends on no more than it calls.
+type TransferCatalog interface {
+	BeginBlobTransfer(ctx context.Context, t catalog.BlobTransfer) error
+	BlobSize(ctx context.Context, blobHash string) (int64, error)
+	BlobSources(ctx context.Context, blobHash string) ([]replication.Source, error)
+	Peers(ctx context.Context) ([]integrity.Peer, error)
+	RecordBlobTransferFailed(ctx context.Context, t catalog.BlobTransfer, state string) error
+	RecordBlobTransferred(ctx context.Context, t catalog.BlobTransfer) error
+	SelfPeer(ctx context.Context) (string, error)
+}
+
 // TransferDeps is what the replicate_blob handler needs to move bytes.
 //
 // It is a struct rather than five parameters because the handler is
@@ -47,7 +61,7 @@ const maxConcurrentTransfers = 2
 // be got wrong silently.
 type TransferDeps struct {
 	// Catalog answers who holds the bytes and records what happened.
-	Catalog *catalog.Catalog
+	Catalog TransferCatalog
 	// Store is this node's content store: where verified bytes land.
 	Store cas.Store
 	// Puller opens the pinned connection and verifies what arrives. It is

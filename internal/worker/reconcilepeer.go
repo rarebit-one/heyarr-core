@@ -30,6 +30,15 @@ import (
 // practice — it only stops the pathological first cycle.
 const replicateBatch = 250
 
+// ReconcilePeerStore is the part of the catalog peer convergence uses. A
+// *catalog.Catalog satisfies it; the handler depends on no more than it calls.
+type ReconcilePeerStore interface {
+	ChunkManifestStates(ctx context.Context) (map[string]manifests.State, error)
+	PlanPeerConvergence(ctx context.Context, scope string) (catalog.PeerConvergence, error)
+	RecordPeerReconciled(ctx context.Context, s catalog.PeerReconcileSummary) error
+	SelfPeer(ctx context.Context) (string, error)
+}
+
 // ReconcilePeerHandler is §57's peer-convergence reconciliation (§19, M4-08).
 //
 // It diffs §19's desired blob set against what the peers have reported holding
@@ -55,7 +64,7 @@ const replicateBatch = 250
 // it is looping, and the two are indistinguishable in one pass. Across cycles
 // they are not — the work count of a converging system falls, and only ever
 // falls, as inventories report the transfers landing.
-func ReconcilePeerHandler(cat *catalog.Catalog, queue *jobs.Queue, log *slog.Logger) HandlerFunc {
+func ReconcilePeerHandler(cat ReconcilePeerStore, queue *jobs.Queue, log *slog.Logger) HandlerFunc {
 	return reconcilePeerHandler(cat, queue, log, replicateBatch)
 }
 
@@ -77,7 +86,7 @@ func ReconcilePeerHandler(cat *catalog.Catalog, queue *jobs.Queue, log *slog.Log
 // MaxConcurrent 1: two concurrent cycles would each read the fabric while the
 // other enqueued against it, and the loser would spend the pass deciding
 // against a picture that had already moved.
-func ReconcilePeerRegistration(cat *catalog.Catalog, queue *jobs.Queue, log *slog.Logger) Registration {
+func ReconcilePeerRegistration(cat ReconcilePeerStore, queue *jobs.Queue, log *slog.Logger) Registration {
 	return Registration{
 		Handler:       ReconcilePeerHandler(cat, queue, log),
 		MaxConcurrent: 1,
@@ -91,7 +100,7 @@ func ReconcilePeerRegistration(cat *catalog.Catalog, queue *jobs.Queue, log *slo
 // mechanism and not of the number — and a test that had to enqueue
 // replicateBatch+1 transfers to reach it would be a test nobody runs.
 func reconcilePeerHandler(
-	cat *catalog.Catalog, queue *jobs.Queue, log *slog.Logger, limit int,
+	cat ReconcilePeerStore, queue *jobs.Queue, log *slog.Logger, limit int,
 ) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
 		payload, err := decodeOptionalPayload[replication.ReconcilePeerPayload](job)
