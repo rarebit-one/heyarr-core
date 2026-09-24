@@ -290,3 +290,34 @@ func contains(ss []string, want string) bool {
 	}
 	return false
 }
+
+// An expired lease must not be served even when its expiry and "now" fall in
+// the same second. Stored as trimmed RFC3339Nano, an expiry of 12:00:00.1 is
+// "…00.1Z" and a now of 12:00:00.15 is "…00.15Z" — and as TEXT "…00.1Z" is the
+// GREATER of the two ('Z' sorts after '5'), so `expires_at > now` called a
+// lease that had lapsed 50ms ago live. The fixed-width layout
+// (sqlite.TimestampLayout) is what makes that comparison chronological.
+func TestAnExpiredLeaseIsNotServedWithinTheSameSecond(t *testing.T) {
+	t.Parallel()
+	store, _ := newStore(t)
+	ctx := context.Background()
+	if _, err := store.Issue(ctx, "user-a", "asset-1", []grant.Capability{grant.CapabilityRead}, 100*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := store.ActiveLeases(ctx, now.Add(50*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("%d leases active 50ms before expiry, want 1", len(before))
+	}
+
+	after, err := store.ActiveLeases(ctx, now.Add(150*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 0 {
+		t.Fatalf("%d leases served 50ms AFTER expiry, want 0", len(after))
+	}
+}

@@ -31,9 +31,8 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/grant"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
-
-const timeFormat = time.RFC3339Nano
 
 // Clock is injected so expiry is a unit fact, not a sleep (ADR-0017).
 type Clock interface{ Now() time.Time }
@@ -162,7 +161,7 @@ func (s *Store) Issue(ctx context.Context, principal, resource string, caps []gr
 		`INSERT INTO access_leases (id, principal, resource, capabilities, issuer, token, issued_at, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, principal, resource, joinCaps(caps), s.issuerID, token,
-		now.Format(timeFormat), g.ExpiresAt.UTC().Format(timeFormat)); err != nil {
+		sqlite.FormatTimestamp(now), sqlite.FormatTimestamp(g.ExpiresAt)); err != nil {
 		return Lease{}, fmt.Errorf("leases: storing lease: %w", err)
 	}
 	ev, err := s.events.EmitTx(ctx, tx, events.TypeLeaseIssued, "lease", id,
@@ -255,7 +254,7 @@ func (s *Store) Revoke(ctx context.Context, id string) (Lease, error) {
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE access_leases SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`,
-		now.Format(timeFormat), id); err != nil {
+		sqlite.FormatTimestamp(now), id); err != nil {
 		return Lease{}, fmt.Errorf("leases: revoking: %w", err)
 	}
 	ev, err := s.events.EmitTx(ctx, tx, events.TypeLeaseRevoked, "lease", id,
@@ -281,7 +280,7 @@ func (s *Store) ActiveLeases(ctx context.Context, now time.Time) ([]Lease, error
 		`SELECT id, principal, resource, capabilities, issuer, token, issued_at, expires_at, revoked_at
 		 FROM access_leases
 		 WHERE revoked_at IS NULL AND expires_at > ?
-		 ORDER BY expires_at ASC, id ASC`, now.UTC().Format(timeFormat))
+		 ORDER BY expires_at ASC, id ASC`, sqlite.FormatTimestamp(now))
 	if err != nil {
 		return nil, fmt.Errorf("leases: listing active leases: %w", err)
 	}
@@ -370,14 +369,14 @@ func scanLease(row rowScanner) (Lease, error) {
 		return Lease{}, fmt.Errorf("leases: reading lease: %w", err)
 	}
 	l.Capabilities = splitCaps(caps)
-	if l.IssuedAt, err = time.Parse(timeFormat, issued); err != nil {
+	if l.IssuedAt, err = sqlite.ParseTimestamp(issued); err != nil {
 		return Lease{}, fmt.Errorf("leases: lease %s has an unparseable issued_at: %w", l.ID, err)
 	}
-	if l.ExpiresAt, err = time.Parse(timeFormat, expires); err != nil {
+	if l.ExpiresAt, err = sqlite.ParseTimestamp(expires); err != nil {
 		return Lease{}, fmt.Errorf("leases: lease %s has an unparseable expires_at: %w", l.ID, err)
 	}
 	if revoked.Valid && revoked.String != "" {
-		t, err := time.Parse(timeFormat, revoked.String)
+		t, err := sqlite.ParseTimestamp(revoked.String)
 		if err != nil {
 			return Lease{}, fmt.Errorf("leases: lease %s has an unparseable revoked_at: %w", l.ID, err)
 		}
