@@ -860,7 +860,19 @@ paths:
         Every change is opaque: a content-addressed id, its causal parents, and
         ciphertext. The peer never decrypted any of it; the semantic merge is
         client-side.
-      parameters: [{ $ref: "#/components/parameters/id" }]
+
+        Without `since` this is the whole log. With `since` — the `cursor` a
+        previous response returned — it is only what arrived after it, so a
+        device in steady state pulls an empty list instead of the history.
+      parameters:
+        - $ref: "#/components/parameters/id"
+        - name: since
+          in: query
+          schema: { type: integer, format: int64, minimum: 0 }
+          description: |
+            A `cursor` from a previous response. Not a timestamp and not a
+            causal frontier: it is this peer's arrival position, meaningless
+            against another peer. A negative or non-integer value is a `400`.
       responses:
         "200":
           description: The changes the peer holds for the space (possibly empty).
@@ -868,12 +880,20 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [space_id, changes]
+                required: [space_id, changes, cursor]
                 properties:
                   space_id: { type: string }
                   changes:
                     type: array
                     items: { $ref: "#/components/schemas/EncryptedChange" }
+                  cursor:
+                    type: integer
+                    format: int64
+                    description: |
+                      This peer's opaque, monotonic arrival position after the
+                      last change returned. Always present — store it and pass
+                      it back as `since`.
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -1523,93 +1543,6 @@ paths:
           description: The blob exists.
         '404':
           description: See `/render/{capability}`.
-  /pair/sessions/{session}/slots/{slot}:
-    parameters:
-      - name: session
-        in: path
-        required: true
-        description: >-
-          A rendezvous label the two devices agree on out of band (the old
-          device generates it and shows it, in a QR or a short code, to the
-          new one). It is NOT a secret — the pairing's security is the short
-          authentication string the humans compare, not the obscurity of this
-          id — and a URL-safe token of at most 128 characters.
-        schema:
-          type: string
-      - name: slot
-        in: path
-        required: true
-        description: >-
-          One of the fixed handshake slots: `initiator_commit`,
-          `responder_commit`, `initiator_reveal`, `responder_reveal`, `cert`
-          or `abort`. Any other name is a 400.
-        schema:
-          type: string
-          enum: [initiator_commit, responder_commit, initiator_reveal, responder_reveal, cert, abort]
-    put:
-      tags: [pairing]
-      operationId: putPairSlot
-      security: []
-      summary: Post one value into a pairing handshake slot (§40, ADR-0022, ADR-0038).
-      description: >-
-        The device-pairing relay, and — with `render` — one of Heyarr's two
-        unauthenticated surfaces. It exists because enrolment is PAIRING, not
-        sharing (ADR-0022): a new device that is not yet enrolled has no
-        credential to present, and the old device authorises it directly, with
-        the server acting only as a dumb store-and-forward.
-
-
-        Every value that crosses this relay is PUBLIC — a commitment (a hash),
-        a public key, a session salt, or a signed enrolment cert — so a relay
-        that read every byte would still learn nothing it could pair with
-        (ADR-0038). The relay never joins two sessions, never inspects a value
-        and vouches for nothing; the man-in-the-middle defence is the
-        commit-before-reveal ordering and the short authentication string the
-        two humans compare, neither of which this endpoint can see or affect.
-
-
-        Slots are write-once: a second PUT of the same bytes is idempotent, a
-        different value to a written slot is a 409. Sessions are in-memory,
-        bounded and short-lived (a ten-minute TTL, a per-slot size cap, a cap
-        on live sessions), which is the whole security surface of serving this
-        without a credential — it grants no authority, so the only abuse is
-        memory, and the bounds close it.
-      requestBody:
-        required: true
-        content:
-          application/octet-stream:
-            schema: { type: string, format: binary }
-      responses:
-        '204':
-          description: The value was stored (or an identical value already was).
-        '400':
-          description: An unknown slot name or a malformed session id.
-        '409':
-          description: The slot already holds a different value; slots are write-once.
-        '413':
-          description: The value is larger than the per-slot cap.
-        '429':
-          description: Too many live pairing sessions; try again once some expire.
-    get:
-      tags: [pairing]
-      operationId: getPairSlot
-      security: []
-      summary: Read one value from a pairing handshake slot.
-      description: >-
-        The other half of the relay: the peer polls the slot it is waiting on
-        until it appears. Returns the opaque bytes another device posted, or a
-        404 while the slot is still empty (which is the ordinary "keep
-        waiting") or once the session has expired.
-      responses:
-        '200':
-          description: The stored value.
-          content:
-            application/octet-stream:
-              schema: { type: string, format: binary }
-        '400':
-          description: A malformed session id.
-        '404':
-          description: Nothing is stored at this slot yet, or the session has expired.
   /enrol:
     post:
       tags: [pairing]
@@ -1794,22 +1727,25 @@ paths:
       security: []
       summary: Open a Voidbind pairing session (ADR-0066).
       description: >-
-        The Voidbind relay — voidbind-go's `relay` protocol, which the
-        `voidbind` CLI (`pair-initiate` / `pair-join`) and the phone client
-        speak — mounted beside the legacy `/pair` relay so this node can be
-        the rendezvous for its own devices. A Voidbind client is pointed at
+        The device-pairing relay (§40, ADR-0022, ADR-0038) — voidbind-go's
+        `relay` protocol, which `heyarr pair`, the `voidbind` CLI
+        (`pair-initiate` / `pair-join`) and the phone client speak — so this
+        node can be the rendezvous for its own devices. A client is pointed at
         `<node>/pair` as its relay BASE (the client appends `/v1/...` itself,
-        exactly as against a standalone `voidbind relay`) and lands here.
+        exactly as against a standalone `voidbind relay`) and lands here. It
+        replaced the legacy `/pair/sessions/{session}/slots/{slot}` relay,
+        which is retired (ADR-0066).
 
 
-        Like `/pair` it is public and grants nothing: an in-memory, write-once,
-        opaque blob store addressed by (session, role, type) that never parses
-        a payload and holds no key. What crosses it is either public (two
-        commitments, two revealed public keys) or ciphertext it cannot open
-        (the enrolment cert, sealed to the new device's X25519 key). The
-        initiator — the machine holding the user identity — opens the session
-        and shares its id and a salt with the new device out of band (the
-        invite QR).
+        With `render` it is one of Heyarr's unauthenticated surfaces, and it
+        grants nothing: a new device has no credential to present yet, and
+        the relay is an in-memory, write-once, opaque blob store addressed by
+        (session, role, type) that never parses a payload and holds no key.
+        What crosses it is either public (two commitments, two revealed public
+        keys) or ciphertext it cannot open (the admission, sealed to the new
+        device's X25519 key). The initiator — the user identity, or a device
+        that is already a member — opens the session and shares its id and a
+        salt with the new device out of band (the invite QR).
       responses:
         '200':
           description: The session was opened.
@@ -1860,8 +1796,8 @@ paths:
       description: >-
         Write-once: a second PUT of a slot is a 409 whatever the value, so a
         confused or hostile participant cannot replace its own commitment
-        after the peer has read it. The same per-message byte cap, live-session
-        cap and ten-minute TTL as the legacy relay bound the abuse surface.
+        after the peer has read it. A per-message byte cap, a live-session
+        cap and a ten-minute TTL bound the abuse surface.
       requestBody:
         required: true
         content:
@@ -8210,6 +8146,12 @@ components:
         audio: { type: string }
         width: { type: integer }
         height: { type: integer }
+        duration_seconds:
+          type: number
+          description: |
+            The source's full runtime in seconds — the scrubber total for a
+            `stream` plan, whose transcode cannot report its own length until
+            it finishes. Absent when the probe found none.
 
     PlaybackPlan:
       type: object
@@ -9585,6 +9527,15 @@ components:
             Stop conditions. **All** must hold for a candidate to be terminal.
             Empty means this profile is never finished.
           items: { $ref: "#/components/schemas/QualityRule" }
+        content_types:
+          type: array
+          items: { type: string }
+          description: |
+            Which works content type(s) this profile is meant to judge
+            (`movie`, `book`, …). Always present, never null; empty means
+            unrestricted — usable for any content type. Metadata for a caller
+            deciding which profiles to offer for a want: nothing in evaluation
+            (§63) reads it, so it never changes what a profile accepts.
         seeded:
           type: boolean
           description: |
@@ -9612,6 +9563,12 @@ components:
         terminal:
           type: array
           items: { $ref: "#/components/schemas/QualityRule" }
+        content_types:
+          type: array
+          items: { type: string }
+          description: |
+            See QualityProfile.content_types. Follows the section rule: omitted
+            on `POST` is empty (unrestricted), omitted on `PUT` is left alone.
 
     QualityRule:
       type: object

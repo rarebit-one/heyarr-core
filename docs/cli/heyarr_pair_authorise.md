@@ -1,14 +1,23 @@
 ## heyarr pair authorise
 
-Old device: authorise a new device and sign its enrolment cert
+Existing side: admit a new device by signing its membership op
 
 ### Synopsis
 
-Run this on an already-enrolled device. It contributes your USER identity
-public key to the handshake, derives the short code, and — once you confirm the
-new device shows the same code — signs an enrolment cert for the new device's
-key. Signing needs your user identity private key, so run it where that identity
-lives.
+Run this where your user identity lives, or on a device that is already a
+member of your identity. It opens a session on the relay, prints an invite for
+the new device, derives the short code, and, once you confirm the new device
+shows the same code, signs a membership add op for the new device's keys and
+hands it over sealed to the new device's encryption key (ADR-0068).
+
+--as picks what signs:
+  identity  your user identity (the genesis key), read from --identity-dir;
+            the private key is used through a signer and never leaves its store
+  device    this machine's device, which must already be a member
+  auto      identity when one is present here, otherwise device (the default)
+
+Either way, a local device enrolled under the same identity contributes the
+membership ops it knows and records the new add afterwards.
 
 ```
 heyarr pair authorise [flags]
@@ -17,12 +26,13 @@ heyarr pair authorise [flags]
 ### Options
 
 ```
+      --as string             what signs the admission: identity, device, or auto (identity when present here) (default "auto")
       --confirm-sas string    proceed only if the derived code equals this value — the scripted stand-in for a human comparison
+      --device-dir string     where this machine's device key lives (default: your config directory; VOIDBIND_DEVICE_DIR overrides)
       --identity-dir string   where your user identity lives (default: your config directory; VOIDBIND_IDENTITY_DIR overrides)
-      --lifetime duration     how long the signed cert is valid (default: the 90-day enrolment lifetime)
+      --lifetime duration     how long an admission signed as the identity is valid (default: the enrolment lifetime)
       --poll duration         how often to re-check the relay for the next handshake step (default 150ms)
       --relay string          the running Heyarr's relay: a unix socket path, unix:///path, http://host:port or host:port
-      --session string        the rendezvous session id both devices share (authorise generates one if empty)
       --timeout duration      how long to wait for the whole handshake before giving up (default 2m0s)
       --yes                   assume the codes matched, without prompting (use only when you compared them another way)
 ```
@@ -35,4 +45,4 @@ heyarr pair authorise [flags]
 
 ### See also
 
-* [heyarr pair](heyarr_pair.md)	 - Authorise a new device from an already-enrolled one (§40, ADR-0022)
+* [heyarr pair](heyarr_pair.md)	 - Admit a new device from one that can already vouch for you (§40, ADR-0022)

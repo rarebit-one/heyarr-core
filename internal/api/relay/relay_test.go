@@ -19,16 +19,13 @@ import (
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/relay"
-	"github.com/rarebit-one/heyarr-core/internal/pairrelay"
 )
 
-// newNode mounts BOTH relays on one public router, the way the controller does,
-// so the tests prove they coexist rather than that each works alone.
+// newNode mounts the relay on a public router, the way the controller does.
 func newNode(t *testing.T) *httptest.Server {
 	t.Helper()
 	r := chi.NewRouter()
 	relay.New(relay.Options{}).Mount(r)
-	pairrelay.NewHandler(pairrelay.HandlerOptions{}).Mount(r)
 	ts := httptest.NewServer(r)
 	t.Cleanup(ts.Close)
 	return ts
@@ -38,9 +35,8 @@ func newNode(t *testing.T) *httptest.Server {
 // initiator (the machine holding the user identity) and responder (the phone)
 // pair through the node's /pair/v1 with voidbind-go's OWN relay client — the
 // exact client code path voidbind-kmp mirrors — and the responder ends up with
-// a cert the user key verifies. Nothing in this test touches heyarr's legacy
-// pairflow: if the wire contract drifted from what the clients speak, the
-// handshake fails here.
+// a cert the user key verifies. If the wire contract drifted from what the
+// clients speak, the handshake fails here.
 func TestVoidbindPairflowCompletesThroughTheNode(t *testing.T) {
 	ts := newNode(t)
 	// A Voidbind client's relay BASE is the node's /pair: voidbind-go's client
@@ -165,9 +161,10 @@ func TestVoidbindPairflowCompletesThroughTheNode(t *testing.T) {
 	}
 }
 
-// TestLegacyRelayStillServesBesideIt: the two protocols have disjoint paths and
-// both answer on one router — `heyarr pair` keeps working after the mount.
-func TestLegacyRelayStillServesBesideIt(t *testing.T) {
+// TestRelayContract: the relay is write-once per slot, refuses an unknown role
+// and an oversized message, and the legacy /pair/sessions relay it replaced is
+// gone (ADR-0066).
+func TestRelayContract(t *testing.T) {
 	ts := newNode(t)
 	ctx := context.Background()
 	put := func(url, body string) int {
@@ -193,14 +190,11 @@ func TestLegacyRelayStillServesBesideIt(t *testing.T) {
 		return res.StatusCode, string(b)
 	}
 	legacy := ts.URL + httpapi.RelayPrefix + "/sessions/0123456789abcdef0123456789abcdef/slots/initiator_commit"
-	if code := put(legacy, "commitment"); code != http.StatusNoContent {
-		t.Fatalf("legacy PUT: %d", code)
-	}
-	if code, body := get(legacy); code != http.StatusOK || body != "commitment" {
-		t.Fatalf("legacy GET: %d %q", code, body)
+	if code := put(legacy, "commitment"); code/100 == 2 {
+		t.Fatalf("the retired legacy relay accepted a PUT: %d", code)
 	}
 
-	// The v1 relay is write-once per slot and refuses an unknown role/type — the
+	// The relay is write-once per slot and refuses an unknown role/type — the
 	// contract voidbind-kmp relies on — and does not answer the legacy shape.
 	base := ts.URL + httpapi.RelayPrefix
 	session, err := vbrelay.CreateSession(ctx, ts.Client(), base)
@@ -220,7 +214,7 @@ func TestLegacyRelayStillServesBesideIt(t *testing.T) {
 	if code, _ := get(base + "/sessions/x/slots/cert"); code/100 == 2 {
 		t.Fatal("the v1 mount answered a legacy-shaped path")
 	}
-	// The same per-message cap as the legacy relay.
+	// The per-message cap.
 	big := strings.Repeat("a", relay.MaxMessageBytes+1)
 	if code := put(ts.URL+httpapi.RelayV1Prefix+"/sessions/"+session+"/responder/reveal", big); code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("v1 oversized PUT: %d, want 413", code)

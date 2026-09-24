@@ -20,6 +20,7 @@ import (
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/mcp"
 	"github.com/rarebit-one/heyarr-core/internal/api/opds"
+	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	personalstateapi "github.com/rarebit-one/heyarr-core/internal/api/personalstate"
 	"github.com/rarebit-one/heyarr-core/internal/api/relay"
 	"github.com/rarebit-one/heyarr-core/internal/api/render"
@@ -33,6 +34,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/catalogtomb"
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
+	"github.com/rarebit-one/heyarr-core/internal/discovery"
 	"github.com/rarebit-one/heyarr-core/internal/downloads"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/guest"
@@ -42,7 +44,6 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/media"
 	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
 	"github.com/rarebit-one/heyarr-core/internal/media/probe"
-	"github.com/rarebit-one/heyarr-core/internal/pairrelay"
 	"github.com/rarebit-one/heyarr-core/internal/peer/catalogsync"
 	"github.com/rarebit-one/heyarr-core/internal/peer/health"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
@@ -122,36 +123,8 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 	}()
 
-	if err := sqlite.Migrate(startupCtx, db); err != nil {
-		return fmt.Errorf("controller: migrating database: %w", err)
-	}
-	version, err := sqlite.SchemaVersion(startupCtx, db)
+	version, err := c.prepareSchema(startupCtx, db)
 	if err != nil {
-		return fmt.Errorf("controller: reading schema version: %w", err)
-	}
-
-	// The libraries block is control-plane configuration, so the controller
-	// owns turning it into rows — and the scan that follows is a job, because
-	// the worker that runs it may be another process entirely (§4, ADR-0002).
-	//
-	// Like the migration above it, this runs on the STARTUP context rather than
-	// the shutdown one, and for the same reason: it is idempotent schema-shaped
-	// work that the next start would only have to redo, and a SIGTERM arriving
-	// here should be an ordinary stop rather than a start that half-happened.
-	// A misconfigured library is a startup failure — discovering it hours later
-	// when a scan silently never happens is much more expensive.
-	if err := reconcileLibraries(startupCtx, db, c.cfg, c.log); err != nil {
-		return err
-	}
-
-	// Quality profiles are seeded before anything else can want them (§62,
-	// M3-01). A Heyarr with no profiles is one where the first interesting
-	// thing you can do — want something — requires authoring JSON against a
-	// vocabulary you have not read.
-	//
-	// It converges on the profile name and never overwrites, so an operator
-	// who tunes a default keeps their tuning across every restart.
-	if err := seedQualityProfiles(startupCtx, db, c.cfg, c.log); err != nil {
 		return err
 	}
 
@@ -164,90 +137,11 @@ func (c *Controller) Run(ctx context.Context) error {
 
 	c.db = db
 
-	// The CAS root is the controller's to have ready before it says it is up:
-	// /readyz reports on it, and an operator who has not created it yet should
-	// learn that from a readiness probe rather than from an ingest failing
-	// hours into a scan. The layout inside it belongs to the storage fabric
-	// (ADR-0006); all that happens here is that the directory exists.
-	if c.cfg.CAS.Root != "" {
-		if err := os.MkdirAll(c.cfg.CAS.Root, 0o750); err != nil {
-			return fmt.Errorf("controller: creating the CAS root %s: %w", c.cfg.CAS.Root, err)
-		}
-	}
-
-	// The CAS is opened once, here, and handed to whatever serves from it. The
-	// controller does not know the layout inside the root (ADR-0006) — only
-	// that a store exists to read blobs through.
-	blobStore, err := cas.OpenFS(c.cfg.CAS.Root)
-	if err != nil {
-		return fmt.Errorf("controller: opening the CAS at %s: %w", c.cfg.CAS.Root, err)
-	}
-
-	// The peer identity, and ADR-0010's refusal.
-	//
-	// This runs BEFORE the server is constructed, let alone started. A node
-	// that binds a listener and then discovers its identity is contested has
-	// already served reads under it, and "the read was served by peer X" is a
-	// claim that cannot be withdrawn once another machine has made it too.
-	//
-	// It is also before the reconcilers and the job queue: a job leased under
-	// a contested identity is worse again, because the lease outlives the
-	// process that took it.
-	identityEvents, err := events.New(events.Options{
-		Writer: db.Writer(), Reader: db.Reader(), Logger: c.log,
-	})
-	if err != nil {
-		return fmt.Errorf("controller: opening the event log for the peer identity: %w", err)
-	}
-	identityCatalog, err := catalog.New(catalog.Options{
-		DB: db, Events: identityEvents,
-		PeerName: c.cfg.Peer.Name, PeerSite: c.cfg.Peer.Site, Logger: c.log,
-	})
-	if err != nil {
-		return fmt.Errorf("controller: opening the catalog for the peer identity: %w", err)
-	}
-	self, err := identity.Ensure(startupCtx, identity.Options{
-		DataDir: c.cfg.DataDir,
-		Peers:   identityCatalog,
-		CAS:     blobStore,
-		Logger:  c.log,
-	})
-	if err != nil {
-		return fmt.Errorf("controller: %w", err)
-	}
-
-	// This node's certificate material, derived once and used twice: the peer
-	// listener presents it, and the health probe dials with it (#184). It is
-	// built here, before either, so that an identity that cannot produce a
-	// certificate is a startup failure rather than a probe that quietly never
-	// works.
-	material, err := c.peerMaterial(self)
+	node, err := c.bootstrapNode(startupCtx, db)
 	if err != nil {
 		return err
 	}
-
-	// Peer reachability (§31, §32, M4-10, #184).
-	//
-	// Constructed BEFORE both servers, because both record liveness through
-	// it: an inbound request from a peer is the best evidence that peer is up,
-	// and it is evidence that arrives on the request path — on the client API
-	// for anything holding a bearer token, and on the PEER surface for a
-	// remote peer, which holds none.
-	//
-	// The idle probe dials the peer fabric itself, pinned, with this node's
-	// certificate. It used to speak plain HTTPS to /healthz, which an mTLS
-	// listener will not complete a handshake with — so in the topology this
-	// milestone actually builds, the probe could not answer either, and a
-	// remote peer's health never left `unknown` (#184).
-	peerHealth, err := health.New(health.Options{
-		DB:     db,
-		Events: identityEvents,
-		Prober: health.MTLSProber{Material: material, Logger: c.log},
-		Logger: c.log,
-	})
-	if err != nil {
-		return fmt.Errorf("controller: opening peer health: %w", err)
-	}
+	blobStore, self, material, peerHealth := node.blobStore, node.self, node.material, node.peerHealth
 
 	srv, members, err := c.newServer(ctx, db, blobStore, version, peerHealth, self.PeerID, material)
 	if err != nil {
@@ -288,6 +182,176 @@ func (c *Controller) Run(ctx context.Context) error {
 	// it mints no renderer URL.
 	advertiser := c.startDiscovery(ctx, srv.Addr())
 
+	if err := c.startBeats(ctx, db, self, material, members, peerHealth); err != nil {
+		return err
+	}
+
+	// "started" is logged only after every listener is bound. A start line
+	// printed before the socket exists is a lie that costs someone an
+	// afternoon: the supervisor, the acceptance script and an operator tailing
+	// the log all treat it as "you can talk to it now".
+	c.log.Info("controller started",
+		"database", c.cfg.Database.Path,
+		"schema_version", version,
+		"peer_id", self.PeerID,
+		// The PUBLIC key. It is what another site needs in order to enrol this
+		// node (ADR-0012), and it is safe in a log by construction — the
+		// private half is a file this process never reads into a log field.
+		"peer_public_key", self.PublicKeyString(),
+		"http_addr", srv.Addr(),
+		"unix_socket", srv.SocketPath(),
+		"auth_enabled", c.cfg.HTTP.Auth.Enabled,
+		// Empty when this node serves no peer surface, which is a
+		// configuration rather than a failure.
+		"peer_addr", peerSrv.Addr())
+
+	return c.serve(ctx, srv, peerSrv, advertiser)
+}
+
+// prepareSchema migrates the database and converges the configuration-owned
+// rows on it, returning the schema version it is at. It runs on the STARTUP
+// context (see Run).
+func (c *Controller) prepareSchema(startupCtx context.Context, db *sqlite.DB) (int64, error) {
+	if err := sqlite.Migrate(startupCtx, db); err != nil {
+		return 0, fmt.Errorf("controller: migrating database: %w", err)
+	}
+	version, err := sqlite.SchemaVersion(startupCtx, db)
+	if err != nil {
+		return 0, fmt.Errorf("controller: reading schema version: %w", err)
+	}
+
+	// The libraries block is control-plane configuration, so the controller
+	// owns turning it into rows — and the scan that follows is a job, because
+	// the worker that runs it may be another process entirely (§4, ADR-0002).
+	//
+	// Like the migration above it, this runs on the STARTUP context rather than
+	// the shutdown one, and for the same reason: it is idempotent schema-shaped
+	// work that the next start would only have to redo, and a SIGTERM arriving
+	// here should be an ordinary stop rather than a start that half-happened.
+	// A misconfigured library is a startup failure — discovering it hours later
+	// when a scan silently never happens is much more expensive.
+	if err := reconcileLibraries(startupCtx, db, c.cfg, c.log); err != nil {
+		return 0, err
+	}
+
+	// Quality profiles are seeded before anything else can want them (§62,
+	// M3-01). A Heyarr with no profiles is one where the first interesting
+	// thing you can do — want something — requires authoring JSON against a
+	// vocabulary you have not read.
+	//
+	// It converges on the profile name and never overwrites, so an operator
+	// who tunes a default keeps their tuning across every restart.
+	if err := seedQualityProfiles(startupCtx, db, c.cfg, c.log); err != nil {
+		return 0, err
+	}
+	return version, nil
+}
+
+// nodeBootstrap is what Run needs about this node before any listener exists:
+// its CAS, its peer identity, the certificate material derived from it, and the
+// peer-reachability tracker both servers record liveness through.
+type nodeBootstrap struct {
+	blobStore  cas.Store
+	self       identity.Identity
+	material   *mtls.Material
+	peerHealth *health.Tracker
+}
+
+// bootstrapNode readies the CAS root and establishes the peer identity,
+// certificate material and peer health, all before the server is constructed.
+func (c *Controller) bootstrapNode(startupCtx context.Context, db *sqlite.DB) (nodeBootstrap, error) {
+	// The CAS root is the controller's to have ready before it says it is up:
+	// /readyz reports on it, and an operator who has not created it yet should
+	// learn that from a readiness probe rather than from an ingest failing
+	// hours into a scan. The layout inside it belongs to the storage fabric
+	// (ADR-0006); all that happens here is that the directory exists.
+	if c.cfg.CAS.Root != "" {
+		if err := os.MkdirAll(c.cfg.CAS.Root, 0o750); err != nil {
+			return nodeBootstrap{}, fmt.Errorf("controller: creating the CAS root %s: %w", c.cfg.CAS.Root, err)
+		}
+	}
+
+	// The CAS is opened once, here, and handed to whatever serves from it. The
+	// controller does not know the layout inside the root (ADR-0006) — only
+	// that a store exists to read blobs through.
+	blobStore, err := cas.OpenFS(c.cfg.CAS.Root)
+	if err != nil {
+		return nodeBootstrap{}, fmt.Errorf("controller: opening the CAS at %s: %w", c.cfg.CAS.Root, err)
+	}
+
+	// The peer identity, and ADR-0010's refusal.
+	//
+	// This runs BEFORE the server is constructed, let alone started. A node
+	// that binds a listener and then discovers its identity is contested has
+	// already served reads under it, and "the read was served by peer X" is a
+	// claim that cannot be withdrawn once another machine has made it too.
+	//
+	// It is also before the reconcilers and the job queue: a job leased under
+	// a contested identity is worse again, because the lease outlives the
+	// process that took it.
+	identityEvents, err := events.New(events.Options{
+		Writer: db.Writer(), Reader: db.Reader(), Logger: c.log,
+	})
+	if err != nil {
+		return nodeBootstrap{}, fmt.Errorf("controller: opening the event log for the peer identity: %w", err)
+	}
+	identityCatalog, err := catalog.New(catalog.Options{
+		DB: db, Events: identityEvents,
+		PeerName: c.cfg.Peer.Name, PeerSite: c.cfg.Peer.Site, Logger: c.log,
+	})
+	if err != nil {
+		return nodeBootstrap{}, fmt.Errorf("controller: opening the catalog for the peer identity: %w", err)
+	}
+	self, err := identity.Ensure(startupCtx, identity.Options{
+		DataDir: c.cfg.DataDir,
+		Peers:   identityCatalog,
+		CAS:     blobStore,
+		Logger:  c.log,
+	})
+	if err != nil {
+		return nodeBootstrap{}, fmt.Errorf("controller: %w", err)
+	}
+
+	// This node's certificate material, derived once and used twice: the peer
+	// listener presents it, and the health probe dials with it (#184). It is
+	// built here, before either, so that an identity that cannot produce a
+	// certificate is a startup failure rather than a probe that quietly never
+	// works.
+	material, err := c.peerMaterial(self)
+	if err != nil {
+		return nodeBootstrap{}, err
+	}
+
+	// Peer reachability (§31, §32, M4-10, #184).
+	//
+	// Constructed BEFORE both servers, because both record liveness through
+	// it: an inbound request from a peer is the best evidence that peer is up,
+	// and it is evidence that arrives on the request path — on the client API
+	// for anything holding a bearer token, and on the PEER surface for a
+	// remote peer, which holds none.
+	//
+	// The idle probe dials the peer fabric itself, pinned, with this node's
+	// certificate. It used to speak plain HTTPS to /healthz, which an mTLS
+	// listener will not complete a handshake with — so in the topology this
+	// milestone actually builds, the probe could not answer either, and a
+	// remote peer's health never left `unknown` (#184).
+	peerHealth, err := health.New(health.Options{
+		DB:     db,
+		Events: identityEvents,
+		Prober: health.MTLSProber{Material: material, Logger: c.log},
+		Logger: c.log,
+	})
+	if err != nil {
+		return nodeBootstrap{}, fmt.Errorf("controller: opening peer health: %w", err)
+	}
+	return nodeBootstrap{blobStore: blobStore, self: self, material: material, peerHealth: peerHealth}, nil
+}
+
+// startBeats opens the queue, catalog and event log the controller's beats
+// share and starts every one of them on the SERVING context.
+func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identity.Identity,
+	material *mtls.Material, members *membership.Store, peerHealth *health.Tracker,
+) error {
 	// Reconciliation runs on the SERVING context, not the startup one: it is
 	// ongoing work rather than schema-shaped setup, and it must stop when the
 	// controller does.
@@ -303,13 +367,13 @@ func (c *Controller) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("controller: opening the job queue for reconciliation: %w", err)
 	}
-	startReconciliation(ctx, reconcileQueue, peerHealth, c.log)
-	startUpgradeScan(ctx, reconcileQueue, c.log)
+	startReconciliation(ctx, reconcileQueue, peerHealth, c.log, wallTicker)
+	startUpgradeScan(ctx, reconcileQueue, c.log, wallTicker)
 	// The provider health beat (#164). Same queue and the same serving
 	// context: it is ongoing work and it must stop when the controller does.
 	// See healthbeat.go for why a minute, why it runs on a degraded node, and
 	// why its interval is also the capabilities cache's refresh rate.
-	startProviderHealth(ctx, reconcileQueue, c.log)
+	startProviderHealth(ctx, reconcileQueue, c.log, wallTicker)
 
 	// The search beat (#130). It needs a catalog as well as a queue — unlike
 	// the two sweeps above, it asks a per-want question before enqueueing
@@ -322,7 +386,7 @@ func (c *Controller) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("controller: opening the catalog for the search beat: %w", err)
 	}
-	startSearchBeat(ctx, beatCatalog, reconcileQueue, c.log)
+	startSearchBeat(ctx, beatCatalog, reconcileQueue, c.log, wallTicker)
 
 	// The follow beat (§55, M12). The search beat's sibling: it asks a per-source
 	// question — "what does this feed have now" — before enqueueing a poll, so it
@@ -330,25 +394,25 @@ func (c *Controller) Run(ctx context.Context) error {
 	// project item-scoped wants that the search beat above then drives. See
 	// followbeat.go for why it mirrors the search beat and where it deliberately
 	// differs (the poll outcome is stored, not derived from a resting state).
-	startFollowBeat(ctx, beatCatalog, reconcileQueue, c.log)
+	startFollowBeat(ctx, beatCatalog, reconcileQueue, c.log, wallTicker)
 
 	// The subtitle fetch beat (ADR-0085). A direct-route sibling of the search
 	// beat: it enqueues a provider fetch for each subtitle want whose video is
 	// held but whose caption is missing, on a quota-respecting cadence the fetch
 	// job itself paces. See subtitlebeat.go.
-	startSubtitleBeat(ctx, beatCatalog, reconcileQueue, c.log)
+	startSubtitleBeat(ctx, beatCatalog, reconcileQueue, c.log, wallTicker)
 
 	// The enrich beat (ADR-0087): it enqueues an enrich_work job for each held
 	// music/book Work that is under-enriched (no cover and/or no canonical id), on
 	// a gentle cadence the enrich job itself paces via a backoff schedule. See
 	// enrichbeat.go.
-	startEnrichBeat(ctx, beatCatalog, reconcileQueue, c.log)
+	startEnrichBeat(ctx, beatCatalog, reconcileQueue, c.log, wallTicker)
 
 	// The download poll beat (#247). Same queue and the same serving context.
 	// See downloadbeat.go for why fifteen seconds rather than the health
 	// beat's minute, why the startup pass is the important one, and why this
 	// beat asks the configuration first where the health beat does not.
-	startDownloadPoll(ctx, c.cfg.Providers, reconcileQueue, c.log)
+	startDownloadPoll(ctx, c.cfg.Providers, reconcileQueue, c.log, wallTicker)
 
 	// The continuous control-plane backup (§49, ADR-0044, M7-02). Its interval
 	// was validated at config load, so the error here cannot fire; it is read
@@ -373,26 +437,12 @@ func (c *Controller) Run(ctx context.Context) error {
 	// the backup cadence for the reason the state beat does — both are peer-sync
 	// RPO intervals — and is a no-op on a single-site node with no peer surface.
 	startCatalogOpsSync(ctx, db, backupInterval, self.PeerID, c.log, material, members)
+	return nil
+}
 
-	// "started" is logged only after every listener is bound. A start line
-	// printed before the socket exists is a lie that costs someone an
-	// afternoon: the supervisor, the acceptance script and an operator tailing
-	// the log all treat it as "you can talk to it now".
-	c.log.Info("controller started",
-		"database", c.cfg.Database.Path,
-		"schema_version", version,
-		"peer_id", self.PeerID,
-		// The PUBLIC key. It is what another site needs in order to enrol this
-		// node (ADR-0012), and it is safe in a log by construction — the
-		// private half is a file this process never reads into a log field.
-		"peer_public_key", self.PublicKeyString(),
-		"http_addr", srv.Addr(),
-		"unix_socket", srv.SocketPath(),
-		"auth_enabled", c.cfg.HTTP.Auth.Enabled,
-		// Empty when this node serves no peer surface, which is a
-		// configuration rather than a failure.
-		"peer_addr", peerSrv.Addr())
-
+// serve blocks until ctx is cancelled or a listener fails, then drains both
+// servers and stops advertising.
+func (c *Controller) serve(ctx context.Context, srv *httpapi.Server, peerSrv *peerapi.Server, advertiser *discovery.Advertiser) error {
 	var runErr error
 	select {
 	case <-ctx.Done():
@@ -525,7 +575,10 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	}
 	legs := streamLegs{streamer: streamer, prober: prober}
 
-	mounts, publicMounts, err := c.mounts(ctx, db, store, verifier, blobStore, eventLog, members, deviceIdentities, selfPeerID, material, legs)
+	mounts, publicMounts, err := c.mounts(ctx, mountDeps{
+		db: db, tokens: store, verifier: verifier, blobStore: blobStore, eventLog: eventLog,
+		members: members, identities: deviceIdentities, selfPeerID: selfPeerID, material: material, legs: legs,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -678,6 +731,22 @@ func (l casBlobLocator) SourcePath(ctx context.Context, blobHash string) (string
 	return l.store.LocalPath(ctx, h)
 }
 
+// mountDeps is what the API surfaces are built from: the stores newServer
+// opened and this node's identity-derived material. It exists so the surface
+// builders below take one value rather than ten positional parameters.
+type mountDeps struct {
+	db         *sqlite.DB
+	tokens     *auth.Store
+	verifier   *auth.Verifier
+	blobStore  cas.Store
+	eventLog   *events.Log
+	members    *membership.Store
+	identities *deviceauth.Store
+	selfPeerID string
+	material   *mtls.Material
+	legs       streamLegs
+}
+
 // mounts is the API surface this controller serves.
 //
 // It is one function rather than a literal inside newServer because the
@@ -693,8 +762,8 @@ func (l casBlobLocator) SourcePath(ctx context.Context, blobHash string) (string
 // different trust roots, and a mix-up in either direction is severe: an API
 // route mounted publicly is the library given away, and the renderer route
 // mounted privately is a 401 for every television.
-func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Store, verifier *auth.Verifier, blobStore cas.Store, eventLog *events.Log, members *membership.Store, identities *deviceauth.Store, selfPeerID string, material *mtls.Material, legs streamLegs) (apiMounts, publicMounts []httpapi.MountFunc, err error) {
-	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
+func (c *Controller) mounts(ctx context.Context, d mountDeps) (apiMounts, publicMounts []httpapi.MountFunc, err error) {
+	queue, err := jobs.New(jobs.Options{Writer: d.db.Writer(), Reader: d.db.Reader(), Events: d.eventLog})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
@@ -702,12 +771,46 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// same construction reconcileLibraries and the worker use — one catalog
 	// per process would be tidier, and is a refactor rather than this issue.
 	cat, err := catalog.New(catalog.Options{
-		DB: db, Events: eventLog,
+		DB: d.db, Events: d.eventLog,
 		PeerName: c.cfg.Peer.Name, PeerSite: c.cfg.Peer.Site, Logger: c.log,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: opening the catalog: %w", err)
 	}
+	api, secret, err := c.resourceAPI(ctx, d, queue, cat)
+	if err != nil {
+		return nil, nil, err
+	}
+	blobHandler, contentMounts, err := c.contentRoutes(d, queue, cat)
+	if err != nil {
+		return nil, nil, err
+	}
+	mcpServer, err := c.mcpServer(d, api, queue)
+	if err != nil {
+		return nil, nil, err
+	}
+	renderMounts, err := c.renderAndRelayRoutes(secret, blobHandler)
+	if err != nil {
+		return nil, nil, err
+	}
+	psAPI, err := c.personalStateAPI(d)
+	if err != nil {
+		return nil, nil, err
+	}
+	compatMounts, err := c.compatAdapters(d, secret, blobHandler)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	apiMounts = append(append([]httpapi.MountFunc{api.Mount}, contentMounts...), mcpServer.Mount, psAPI.Mount)
+	publicMounts = append(renderMounts, compatMounts...)
+	return apiMounts, publicMounts, nil
+}
+
+// resourceAPI builds the resource API over the provider registry, the
+// catalog op log and the renderer secret, and starts its progress beat. The
+// secret is returned because the renderer and DLNA routes sign with it too.
+func (c *Controller) resourceAPI(ctx context.Context, d mountDeps, queue *jobs.Queue, cat *catalog.Catalog) (*resources.API, []byte, error) {
 	// The provider registry, from configuration. Validation already happened
 	// at config load — a malformed endpoint or a missing credential stopped
 	// this process before it opened a database — so this cannot fail for a
@@ -740,7 +843,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// own; both write the same tables through the single writer. The signer is
 	// this peer's identity key — load-failure is not fatal: a node with no
 	// identity yet simply deletes locally, and emitWorkDeleteOp skips the op.
-	catalogTomb, err := catalogtomb.New(catalogtomb.Options{Writer: db.Writer(), Reader: db.Reader()})
+	catalogTomb, err := catalogtomb.New(catalogtomb.Options{Writer: d.db.Writer(), Reader: d.db.Reader()})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: opening the catalog-tombstone store: %w", err)
 	}
@@ -753,23 +856,23 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// peer surface's certificate to dial a sibling, so it is wired only when this
 	// node has one; without it the route answers 503 (a single-site node).
 	var catalogSync resources.CatalogSyncTrigger
-	if material != nil {
+	if d.material != nil {
 		catalogSync = catalogsync.NewSyncer(
 			catalogTomb,
-			catalogsync.NewClient(material, c.log),
-			catalogSiblings{members: members, self: selfPeerID},
+			catalogsync.NewClient(d.material, c.log),
+			catalogSiblings{members: d.members, self: d.selfPeerID},
 			c.log)
 	}
 
 	apiOpts := resources.Options{
-		DB:         db,
+		DB:         d.db,
 		Jobs:       queue,
-		Events:     eventLog,
-		Tokens:     store,
+		Events:     d.eventLog,
+		Tokens:     d.tokens,
 		Catalog:    cat,
 		Providers:  providerRegistry,
-		Membership: members,
-		Identities: identities,
+		Membership: d.members,
+		Identities: d.identities,
 		Logger:     c.log,
 
 		CatalogTombstones: catalogTomb,
@@ -778,17 +881,17 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 
 		RenderSecret:  secret,
 		RenderBaseURL: rendererBaseURL(c.cfg),
-		SelfPeerID:    selfPeerID,
+		SelfPeerID:    d.selfPeerID,
 
-		Blobs: casBlobLocator{store: blobStore},
+		Blobs: casBlobLocator{store: d.blobStore},
 	}
 	// Typed nils must not become non-nil interfaces: "no streamer" has to
 	// stay nil all the way down (ADR-0069).
-	if legs.streamer != nil {
-		apiOpts.Streamer = legs.streamer
+	if d.legs.streamer != nil {
+		apiOpts.Streamer = d.legs.streamer
 	}
-	if legs.prober != nil {
-		apiOpts.Prober = legs.prober
+	if d.legs.prober != nil {
+		apiOpts.Prober = d.legs.prober
 	}
 	api, err := resources.New(apiOpts)
 	if err != nil {
@@ -799,6 +902,13 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// producer at all, so every session stayed at "created".
 	api.StartProgressBeat(ctx)
 
+	return api, secret, nil
+}
+
+// contentRoutes builds the client blob route and the vault upload and placement
+// routes beside it. The blob handler is returned on its own as well, because the
+// renderer and compatibility adapters delegate byte serving to it.
+func (c *Controller) contentRoutes(d mountDeps, queue *jobs.Queue, cat *catalog.Catalog) (*blobs.Handler, []httpapi.MountFunc, error) {
 	// The CLIENT blob route may serve a blob that is still arriving, blocking
 	// until the requested range lands (§33, §84, ADR-0044). That capability is
 	// wired HERE and nowhere else: the peer surface builds its own handler with
@@ -808,7 +918,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// stage partials does not satisfy the reader, and the route falls back to a
 	// plain 404.
 	var partialSource blobs.PartialSource
-	if pr, ok := blobStore.(partialStore); ok {
+	if pr, ok := d.blobStore.(partialStore); ok {
 		partialSource = piecePartialSource{store: pr, log: c.log}
 	}
 	// A GET for a blob this node DESIRES but does not hold, with no transfer in
@@ -819,7 +929,7 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// this nor Partial, so its whole-blob contract is untouched (ADR-0042).
 	ensurer := blobTransferEnsurer{cat: cat, queue: queue, log: c.log}
 	blobHandler, err := blobs.New(blobs.Options{
-		Store:   blobStore,
+		Store:   d.blobStore,
 		Logger:  c.log,
 		Partial: partialSource,
 		Ensure:  ensurer,
@@ -833,9 +943,9 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// so GC retains it (a vault blob has no assets row). Reads ride the shared
 	// blobs GET route; only the write is vault-specific.
 	vaultBlobHandler, err := vaultblob.New(vaultblob.Options{
-		Store:    blobStore,
+		Store:    d.blobStore,
 		Pinner:   cat,
-		SelfPeer: selfPeerID,
+		SelfPeer: d.selfPeerID,
 		Logger:   c.log,
 	})
 	if err != nil {
@@ -856,6 +966,11 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		return nil, nil, fmt.Errorf("controller: %w", err)
 	}
 
+	return blobHandler, []httpapi.MountFunc{blobHandler.Mount, vaultBlobHandler.Mount, vaultPlacementHandler.Mount}, nil
+}
+
+// mcpServer builds the MCP surface over the resource API.
+func (c *Controller) mcpServer(d mountDeps, api *resources.API, queue *jobs.Queue) (*mcp.Server, error) {
 	// MCP mounts on the SAME authenticated router (§71, ADR-0019), so it
 	// inherits the middleware chain, the request correlation and the `read`
 	// scope floor rather than standing up a second server that would have to
@@ -866,16 +981,22 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// intents: wanting content is one intent with two front doors, and two
 	// implementations of it would drift silently.
 	mcpServer, err := mcp.New(mcp.Options{
-		DB:        db,
+		DB:        d.db,
 		Resources: api,
 		Jobs:      queue,
 		Logger:    c.log,
 		Version:   buildinfo.Get().Version,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("controller: %w", err)
+		return nil, fmt.Errorf("controller: %w", err)
 	}
 
+	return mcpServer, nil
+}
+
+// renderAndRelayRoutes builds the unauthenticated renderer route and the two
+// device-pairing relays — public mounts, in that order.
+func (c *Controller) renderAndRelayRoutes(secret []byte, blobHandler *blobs.Handler) ([]httpapi.MountFunc, error) {
 	// The renderer route (ADR-0040). Its signing secret belongs to the node
 	// that serves the bytes, so a capability is only valid here — which is why
 	// this milestone mints one only for a replica on this node.
@@ -888,18 +1009,16 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		RenderBaseURL: rendererBaseURL(c.cfg),
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("controller: %w", err)
+		return nil, fmt.Errorf("controller: %w", err)
 	}
 
-	// The device-pairing relay (§40, ADR-0022, ADR-0038). A dumb, ephemeral,
-	// in-memory store-and-forward that two devices exchange through so an old
-	// one can authorise a new one — mounted publicly, like the renderer route,
-	// because a device being paired has no credential and the relay grants no
-	// authority (see internal/pairrelay).
-	relayHandler := pairrelay.NewHandler(pairrelay.HandlerOptions{Logger: c.log})
-	// The Voidbind relay beside it (ADR-0066): the protocol the voidbind CLI and
-	// the phone actually speak, so this node is the rendezvous for its own
-	// devices without a separately-run `voidbind relay`. Same caps, same stance.
+	// The device-pairing relay (§40, ADR-0022, ADR-0038, ADR-0066): voidbind-go's
+	// dumb, ephemeral, in-memory store-and-forward that two devices exchange
+	// through so one that can vouch for the identity admits a new one — the
+	// protocol `heyarr pair`, the voidbind CLI and the phone all speak, so this
+	// node is the rendezvous for its own devices without a separately-run
+	// `voidbind relay`. It is mounted publicly, like the renderer route, because
+	// a device being paired has no credential and the relay grants no authority.
 	// It carries the pairing default slots plus the cruciform-offload live path's
 	// slots (its one-time pairing `confirm` and the recurring unwrap request/
 	// response), so one node relay is the rendezvous for both device enrolment and
@@ -908,15 +1027,20 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 		append(cruciform.RelayPairTypes, cruciform.RelayUnwrapTypes...)...)
 	relayV1Handler := relay.New(relay.Options{Logger: c.log, Types: relayTypes})
 
+	return []httpapi.MountFunc{renderHandler.Mount, relayV1Handler.Mount}, nil
+}
+
+// personalStateAPI builds the encrypted personal-state plane's device-facing API.
+func (c *Controller) personalStateAPI(d mountDeps) (*personalstateapi.API, error) {
 	// The encrypted personal-state plane's device-facing API (§38, §42,
 	// ADR-0049). It stores the opaque things a device pushes — a space, the
 	// wrapped copies of its key, the encrypted changes — and can read none of
 	// them (Invariant 6). The store is a thin single-writer wrapper over the same
 	// controller database (ADR-0003); the peer-to-peer sync surface (#322) opens
 	// its own over the same DB, which is safe because there is one writer.
-	psStore, err := psstore.New(psstore.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
+	psStore, err := psstore.New(psstore.Options{Writer: d.db.Writer(), Reader: d.db.Reader(), Events: d.eventLog})
 	if err != nil {
-		return nil, nil, fmt.Errorf("controller: opening the personal-state store: %w", err)
+		return nil, fmt.Errorf("controller: opening the personal-state store: %w", err)
 	}
 	// On a node with a peer surface (it has certificate material), the plane
 	// replicates to every trusted Full Peer (§37, §45): the reconciler dials each
@@ -924,18 +1048,24 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// wrapped keys and missing changes. Without material there is no peer to reach,
 	// and the replicate route answers 503 — a single-peer node, not a wiring error.
 	var replicator personalstateapi.Replicator
-	if material != nil {
+	if d.material != nil {
 		replicator = replication.NewReconciler(
 			psStore,
-			replication.NewClient(material, c.log),
-			fullPeerLister{members: members, self: selfPeerID},
-			eventLog, c.log)
+			replication.NewClient(d.material, c.log),
+			fullPeerLister{members: d.members, self: d.selfPeerID},
+			d.eventLog, c.log)
 	}
-	psAPI, err := personalstateapi.New(personalstateapi.Options{Store: psStore, Replicator: replicator, Authorizer: identities, Logger: c.log})
+	psAPI, err := personalstateapi.New(personalstateapi.Options{Store: psStore, Replicator: replicator, Authorizer: d.identities, Logger: c.log})
 	if err != nil {
-		return nil, nil, fmt.Errorf("controller: %w", err)
+		return nil, fmt.Errorf("controller: %w", err)
 	}
 
+	return psAPI, nil
+}
+
+// compatAdapters builds the OpenSubsonic, OPDS and DLNA adapters — public
+// mounts, in that order.
+func (c *Controller) compatAdapters(d mountDeps, secret []byte, blobHandler *blobs.Handler) ([]httpapi.MountFunc, error) {
 	// The OpenSubsonic compatibility adapter (§70, M11). Like the renderer and
 	// relay it is a PUBLIC mount: a Subsonic client cannot present a Heyarr
 	// bearer credential, so the adapter authenticates in the protocol's own
@@ -944,14 +1074,14 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// the server-readable catalogue and delegates byte serving to blobHandler;
 	// it never touches the encrypted personal-state plane (§72).
 	subsonicHandler, err := subsonic.New(subsonic.Options{
-		DB:            db,
-		Auth:          verifier,
+		DB:            d.db,
+		Auth:          d.verifier,
 		Blobs:         blobHandler,
 		ServerVersion: buildinfo.Get().Version,
 		Logger:        c.log,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("controller: %w", err)
+		return nil, fmt.Errorf("controller: %w", err)
 	}
 
 	// The OPDS compatibility adapter (§69, §70, M11). The publications
@@ -962,13 +1092,13 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// publication catalogue and delegates byte serving to blobHandler; it never
 	// touches the encrypted personal-state plane (§72).
 	opdsHandler, err := opds.New(opds.Options{
-		DB:     db,
-		Auth:   verifier,
+		DB:     d.db,
+		Auth:   d.verifier,
 		Blobs:  blobHandler,
 		Logger: c.log,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("controller: %w", err)
+		return nil, fmt.Errorf("controller: %w", err)
 	}
 
 	// The DLNA/UPnP ContentDirectory MediaServer (§70, #202). A public mount
@@ -980,16 +1110,15 @@ func (c *Controller) mounts(ctx context.Context, db *sqlite.DB, store *auth.Stor
 	// deferred SSDP advertisement work; a control point given the description URL
 	// browses and plays without it.
 	dlnaHandler, err := dlna.New(dlna.Options{
-		DB:           db,
+		DB:           d.db,
 		RenderSecret: secret,
 		Logger:       c.log,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("controller: %w", err)
+		return nil, fmt.Errorf("controller: %w", err)
 	}
 
-	return []httpapi.MountFunc{api.Mount, blobHandler.Mount, vaultBlobHandler.Mount, vaultPlacementHandler.Mount, mcpServer.Mount, psAPI.Mount},
-		[]httpapi.MountFunc{renderHandler.Mount, relayHandler.Mount, relayV1Handler.Mount, subsonicHandler.Mount, opdsHandler.Mount, dlnaHandler.Mount}, nil
+	return []httpapi.MountFunc{subsonicHandler.Mount, opdsHandler.Mount, dlnaHandler.Mount}, nil
 }
 
 // liveness converts a possibly-absent tracker into the interface the HTTP

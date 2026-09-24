@@ -311,7 +311,7 @@ func (s *searchScheduler) holdOff(ctx context.Context) (bool, error) {
 // reason to go looking for better copies of things that are fine — this one
 // costs nothing on a library with nothing due, since being due is a stored
 // date rather than a consequence of starting.
-func startSearchBeat(ctx context.Context, cat *catalog.Catalog, queue *jobs.Queue, log *slog.Logger) {
+func startSearchBeat(ctx context.Context, cat *catalog.Catalog, queue *jobs.Queue, log *slog.Logger, newTicker tickerFunc) {
 	s := newSearchScheduler(cat, queue, wallClock{}, log)
 	run := func(reason string) {
 		if _, err := s.pass(ctx); err != nil && ctx.Err() == nil {
@@ -321,22 +321,11 @@ func startSearchBeat(ctx context.Context, cat *catalog.Catalog, queue *jobs.Queu
 			log.Warn("a search scheduling pass failed", "reason", reason, "error", err)
 		}
 	}
-	run("startup")
-
-	go func() {
-		ticker := time.NewTicker(searchBeatInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				run("beat")
-			}
-		}
-	}()
-	log.Info("search beat started",
-		"interval", searchBeatInterval,
-		"missing_cadence", acquisition.MissingSearches().Base,
-		"upgrade_cadence", acquisition.UpgradeSearches().Base)
+	startBeat(ctx, log, newTicker, beat{
+		name: "search", interval: searchBeatInterval, startup: true, pass: run,
+		attrs: []any{
+			"missing_cadence", acquisition.MissingSearches().Base,
+			"upgrade_cadence", acquisition.UpgradeSearches().Base,
+		},
+	})
 }

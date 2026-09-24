@@ -37,10 +37,8 @@ package openlibrary
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	neturl "net/url"
 	"strings"
@@ -49,6 +47,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 	"github.com/rarebit-one/heyarr-core/internal/providers/enrichmatch"
+	"github.com/rarebit-one/heyarr-core/internal/providers/httpjson"
 	"github.com/rarebit-one/heyarr-core/internal/providers/ratelimit"
 )
 
@@ -299,52 +298,18 @@ func (c *Client) Discover(ctx context.Context, query string) ([]providers.Discov
 // no credential, so nothing here carries a secret; op is stamped into a non-200
 // error so a failed search or health check are told apart in a health detail.
 func (c *Client) get(ctx context.Context, path, op string, into any) error {
-	if err := c.limiter.Wait(ctx); err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return fmt.Errorf("openlibrary: building %s request: %w", op, err)
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", c.userAgent)
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("openlibrary: %s request failed: %w", op, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
-	if err != nil {
-		return fmt.Errorf("openlibrary: reading %s response: %w", op, err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return &httpError{status: resp.StatusCode, op: op}
-	}
-	if err := json.Unmarshal(raw, into); err != nil {
-		return fmt.Errorf("openlibrary: decoding %s response: %w", op, err)
-	}
-	return nil
-}
-
-// httpError is a non-200 from Open Library, carrying the status so Check can tell
-// an outage from a bad request.
-type httpError struct {
-	status int
-	op     string
-}
-
-func (e *httpError) Error() string {
-	return fmt.Sprintf("openlibrary: %s returned HTTP %d", e.op, e.status)
+	return httpjson.Client{
+		HTTP: c.http, Service: "openlibrary", MaxBody: maxBodyBytes,
+		UserAgent: c.userAgent, Limiter: c.limiter,
+	}.Get(ctx, path, op, into)
 }
 
 // reachDetail turns a check error into a health detail. Open Library needs no
 // credential, so an error is reachability, not auth.
 func reachDetail(err error) string {
-	var he *httpError
+	var he *httpjson.Error
 	if errors.As(err, &he) {
-		return fmt.Sprintf("Open Library returned HTTP %d", he.status)
+		return fmt.Sprintf("Open Library returned HTTP %d", he.Status)
 	}
 	return "could not reach Open Library"
 }

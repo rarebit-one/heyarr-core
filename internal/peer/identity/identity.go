@@ -4,10 +4,10 @@
 // its Signer, the key-file storage, and Ensure with its Peers/Marker interfaces
 // — was extracted into voidbind-go byte-for-byte. This package re-exports it.
 //
-// The three glue spots the migration keeps in heyarr live ELSEWHERE and are
-// unchanged by this shim: heyarr's DB implements the Peers and Marker interfaces
+// The glue the migration keeps in heyarr lives ELSEWHERE and are
+// is unchanged by this shim: heyarr's DB implements the Peers and Marker interfaces
 // (re-exported below as aliases, so those implementations still satisfy them)
-// and passes them to Ensure; deviceauth and pairrelay keep their DB/HTTP halves.
+// and passes them to Ensure; deviceauth keeps its DB/HTTP half.
 // Only the identity primitives are deduplicated here. Tests live in voidbind-go.
 package identity
 

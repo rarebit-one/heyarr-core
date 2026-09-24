@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-09-02
+**Amended:** 2026-09-24. The trigger below was met and the legacy relay is gone; see *Amendment: the legacy relay is retired*.
 **Builds on:** ADR-0022 (pairing, not sharing), ADR-0038 (the relay is untrusted), ADR-0048 (device-cert enrolment), ADR-0054 (a first-party device-side key-holder is the product)
 
 ## Context
@@ -75,3 +76,30 @@ clean — rather than a heyarr change that reaches around the library.
 - **The clients converge on something other than voidbind-go's relay.** There is
   no sign of it; the point of ADR-0054 is that the first-party client and the
   library share one identity core.
+
+## Amendment: the legacy relay is retired (2026-09-24, #627)
+
+The first trigger above was met. voidbind-go v0.12.0 added the key-supplied
+responder (`pairflow.NewResponderWithKeys`). v0.14.0 added the signer-backed
+initiator (`pairflow.NewGenesisInitiatorWithSigner`, over
+`useridentity.Store.Signer`, which never exports the seed). So:
+
+- `heyarr pair` runs voidbind-go's `pairflow` over voidbind-go's relay client,
+  against this node's `/pair/v1` mount. `pair authorise` signs as the user
+  identity or as a device that is already a member. `pair enrol` pairs the
+  stored device keys and enrols the admission as a membership op with its ops
+  (ADR-0068).
+- `internal/pairflow`, `internal/pairrelay` and the `/pair/sessions/{session}/slots/{slot}`
+  mount are deleted, along with their OpenAPI entries.
+- **No deprecation window was needed.** Only `heyarr pair` ever spoke the
+  legacy protocol. heyarr-kmp, heyarr-tizen and voidbind-kmp all speak
+  `/pair/v1`, and none of them calls `/pair/sessions` (checked on each
+  repository's main branch at retirement). The only mismatch left is an older
+  `heyarr pair` against a newer node. It fails on its first relay write and
+  enrols nothing. A newer `heyarr pair` works against any node that has the
+  `/pair/v1` mount.
+
+`/pair/v1/...` is now the node's only pairing relay, unchanged by this
+amendment. It keeps the session caps the legacy relay set (256 live sessions,
+a ten-minute TTL), now declared in `internal/api/relay`, and voidbind-go's
+per-message cap.

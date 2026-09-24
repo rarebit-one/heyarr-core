@@ -6,8 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -15,19 +13,20 @@ import (
 
 	"github.com/rarebit-one/voidbind-go/enrolment"
 	"github.com/rarebit-one/voidbind-go/rp"
+	"github.com/rarebit-one/voidbind-go/testvectors"
 
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 )
 
-// The voidbind-go membership vectors (testdata/vectors/membership, ADR-0007 +
-// ADR-0008), replayed through the STORE rather than through enrolment.Evaluate
+// The voidbind-go membership vectors (ADR-0007 + ADR-0008), replayed through the STORE rather than through enrolment.Evaluate
 // directly: every op is recorded into membership_ops, read back, and evaluated,
 // and the device_identities view the store materialises must agree with the
 // vector's expected members and removals. A vector that passes in voidbind-go
 // and fails here is a defect in the store's persistence or reconciliation, never
-// a "flaky key". Copied verbatim from voidbind-go v0.11.0 (ADR-0008 cosig-
-// enforced k-of-N removes, rule 5); regenerate there with
-// `go test ./enrolment -run TestVectors -update` and re-copy.
+// a "flaky key". They are read from voidbind-go's testvectors package, so they
+// are always the ones minted by the voidbind-go version go.mod pins; nothing is
+// copied into this repo. Regenerate them in voidbind-go with
+// `go test ./enrolment -run TestVectors -update` and bump the dependency.
 
 type vector struct {
 	Name string `json:"name"`
@@ -59,22 +58,22 @@ type vector struct {
 
 func loadVectors(t *testing.T) []vector {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join("testdata", "vectors", "membership", "*.json"))
-	if err != nil || len(files) == 0 {
-		t.Fatalf("no vectors found: %v", err)
+	names := testvectors.MembershipCases()
+	if len(names) == 0 {
+		t.Fatal("no membership vectors in voidbind-go/testvectors")
 	}
-	var out []vector
-	for _, f := range files {
-		raw, err := os.ReadFile(f)
+	out := make([]vector, 0, len(names))
+	for _, name := range names {
+		raw, err := testvectors.Membership(name)
 		if err != nil {
 			t.Fatal(err)
 		}
 		var v vector
 		if err := json.Unmarshal(raw, &v); err != nil {
-			t.Fatalf("%s: %v", f, err)
+			t.Fatalf("%s: %v", name, err)
 		}
-		if v.Name != strings.TrimSuffix(filepath.Base(f), ".json") {
-			t.Fatalf("%s: name %q does not match the file", f, v.Name)
+		if v.Name != name {
+			t.Fatalf("%s: name %q does not match the case", name, v.Name)
 		}
 		out = append(out, v)
 	}

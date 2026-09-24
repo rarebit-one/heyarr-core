@@ -24,15 +24,17 @@ func (c *countingReconciler) ReconcileAll(context.Context) (int, int, error) {
 
 // TestReplicationBeatDrivesTheReconcilerOnATick is the mechanism-with-a-caller
 // proof for #362: the beat, on its interval, actually calls ReconcileAll — it is
-// not a mechanism nobody schedules. It uses an injected reconciler and a real
-// ticker (a fast interval, no time.Sleep in the assertion — the fire channel is
+// not a mechanism nobody schedules. It uses an injected reconciler and a
+// ticker it fires by hand (no time.Sleep in the assertion — the fire channel is
 // the synchronisation), and cancels the context to stop the goroutine.
 func TestReplicationBeatDrivesTheReconcilerOnATick(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	rec := &countingReconciler{fired: make(chan struct{})}
-	runStateReplicationBeat(ctx, rec, 2*time.Millisecond, slog.New(slog.DiscardHandler))
+	clock := newFakeTicker()
+	runStateReplicationBeat(ctx, rec, time.Minute, slog.New(slog.DiscardHandler), clock.newTicker)
+	clock.fire(t)
 
 	select {
 	case <-rec.fired:
@@ -54,8 +56,9 @@ func TestReplicationBeatDisabledDoesNothing(t *testing.T) {
 	// Disabled path is inside startStatePlaneReplication's guard, but assert the
 	// runner respects a stopped context: cancel first, then run — no calls.
 	cancel()
-	runStateReplicationBeat(ctx, rec, time.Millisecond, slog.New(slog.DiscardHandler))
-	time.Sleep(20 * time.Millisecond)
+	clock := newFakeTicker()
+	runStateReplicationBeat(ctx, rec, time.Minute, slog.New(slog.DiscardHandler), clock.newTicker)
+	clock.awaitStop(t)
 	if rec.calls.Load() != 0 {
 		t.Fatalf("a cancelled beat still drove the reconciler %d times", rec.calls.Load())
 	}
