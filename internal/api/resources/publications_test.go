@@ -32,6 +32,7 @@ func (h *harness) publications(t *testing.T, query string) []publication {
 }
 
 func TestPublicationsAreListedWithWhatTheirContainerDeclared(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	items := h.publications(t, "")
 	if len(items) == 0 {
@@ -74,6 +75,7 @@ func TestPublicationsAreListedWithWhatTheirContainerDeclared(t *testing.T) {
 // The bytes come from the ordinary blob endpoint. ADR-0013 is one endpoint with
 // four consumers, and a reader is the fifth — not a fifth endpoint.
 func TestAPublicationPointsAtTheOrdinaryBlobEndpoint(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	items := h.publications(t, "")
 
@@ -89,6 +91,7 @@ func TestAPublicationPointsAtTheOrdinaryBlobEndpoint(t *testing.T) {
 }
 
 func TestPublicationsFilterByFormat(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	epubs := h.publications(t, "?format=epub")
@@ -106,6 +109,7 @@ func TestPublicationsFilterByFormat(t *testing.T) {
 }
 
 func TestOnePublicationByAssetID(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	items := h.publications(t, "?format=epub")
 	if len(items) != 1 {

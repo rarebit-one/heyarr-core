@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
 )
 
 // PutExpecting is the receiving half of invariant 1: the destination knows

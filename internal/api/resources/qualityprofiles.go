@@ -245,8 +245,7 @@ func qualityProfileByID(ctx context.Context, q rowQuerier, id string) (QualityPr
 // name matched would discard whatever it said before.
 func (a *API) createQualityProfile(w http.ResponseWriter, r *http.Request) {
 	var body profileRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 
@@ -304,8 +303,7 @@ func (a *API) createQualityProfile(w http.ResponseWriter, r *http.Request) {
 func (a *API) updateQualityProfile(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var body profileRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 

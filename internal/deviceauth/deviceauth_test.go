@@ -12,8 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/enrolment"
+
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"

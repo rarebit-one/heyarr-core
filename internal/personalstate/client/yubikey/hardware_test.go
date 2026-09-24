@@ -5,8 +5,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/rarebit-one/voidbind-go/encryption"
+
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/yubikey"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
 // TestRoundTripAgainstTheCard seals a space key to the card's cv25519 public

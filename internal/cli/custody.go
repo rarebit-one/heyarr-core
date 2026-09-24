@@ -6,8 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/rarebit-one/voidbind-go/device"
+
 	"github.com/rarebit-one/heyarr-core/internal/config"
-	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/cruciform"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/custody"

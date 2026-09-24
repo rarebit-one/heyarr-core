@@ -12,7 +12,8 @@
 // # The order this file exists to hold: commit before reveal
 //
 // The security of a short SAS rests on neither side being able to choose its key
-// with knowledge of the other's (see internal/pairing/commitment.go). This flow
+// with knowledge of the other's (see pairing/commitment.go in voidbind-go, which
+// internal/pairing re-exports). This flow
 // is what enforces that ordering: each side publishes its COMMITMENT first, and
 // reveals its key only after the peer's commitment is in; and each side, on
 // receiving the peer's revealed key, calls [pairing.Commitment.Open] to check it
@@ -44,7 +45,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/pairing"
+	"github.com/rarebit-one/voidbind-go/pairing"
 )
 
 // The relay slots, one value each, written once. Their names are the wire

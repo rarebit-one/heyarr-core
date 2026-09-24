@@ -8,8 +8,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/rarebit-one/heyarr-core/internal/pairing"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
+	"github.com/rarebit-one/voidbind-go/encryption"
+	"github.com/rarebit-one/voidbind-go/pairing"
 )
 
 // This test is the golden-vector generator + self-consistency check for the

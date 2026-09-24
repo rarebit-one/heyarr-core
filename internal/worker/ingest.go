@@ -2,13 +2,12 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"io"
 	"strings"
 
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
 	"github.com/rarebit-one/heyarr-core/internal/media/probe"
@@ -85,13 +84,9 @@ func (r readerAt) Close() error { return r.rs.Close() }
 // and the pipeline is the part worth testing.
 func IngestHandler(p *ingest.Pipeline, probes ProbeEnqueuer) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload ingest.Payload
-		if err := json.Unmarshal(job.Payload, &payload); err != nil {
-			// A payload that cannot be decoded will never decode. Retrying it
-			// five times is five identical failures and a longer wait before
-			// anyone sees the real problem, but the queue owns retry policy —
-			// so say clearly what happened and let it exhaust attempts.
-			return fmt.Errorf("worker: ingest_artifact payload is not decodable: %w", err)
+		payload, err := decodePayload[ingest.Payload](job)
+		if err != nil {
+			return err
 		}
 		res, err := p.Ingest(ctx, ingest.Request{
 			RootID:     payload.RootID,

@@ -16,18 +16,17 @@ package vaultblob
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rarebit-one/voidbind-go/hashing"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
 
@@ -153,19 +152,5 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.write(w, r, http.StatusCreated, uploadResult{Hash: expected.String(), Size: desc.Size})
-}
-
-func (h *Handler) write(w http.ResponseWriter, r *http.Request, status int, body any) {
-	buf, err := json.Marshal(body)
-	if err != nil {
-		h.log.Error("encoding a response failed",
-			"request_id", httpapi.RequestIDFrom(r.Context()), "path", r.URL.Path, "error", err)
-		httpapi.Fail(w, r, problem.Internal())
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(status)
-	_, _ = w.Write(buf)
+	httpapi.WriteJSON(w, r, h.log, http.StatusCreated, uploadResult{Hash: expected.String(), Size: desc.Size})
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rarebit-one/voidbind-go/hashing"
 	vbrelay "github.com/rarebit-one/voidbind-go/relay"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
@@ -35,7 +36,6 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/downloads"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/guest"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/indexers"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/leases"

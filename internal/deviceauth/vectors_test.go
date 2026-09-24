@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/enrolment"
 	"github.com/rarebit-one/voidbind-go/rp"
 
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 )
 
 // The voidbind-go membership vectors (testdata/vectors/membership, ADR-0007 +

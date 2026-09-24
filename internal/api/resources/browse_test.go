@@ -108,6 +108,7 @@ func (h *harness) noFollow(method, path string) *http.Response {
 }
 
 func TestBrowseShapes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse()
 
 	tests := []struct {
@@ -135,6 +136,7 @@ func TestBrowseShapes(t *testing.T) {
 // The listing without `include` is byte-identical to what it was before the
 // embeds existed: a client that never asked pays nothing and sees nothing new.
 func TestWorksWithoutIncludeCarryNoEmbeds(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse()
 	body := string(h.body(h.get("/api/v1/works?content_type=movie")))
 	if strings.Contains(body, `"artwork"`) || strings.Contains(body, `"primary_asset"`) {
@@ -143,6 +145,7 @@ func TestWorksWithoutIncludeCarryNoEmbeds(t *testing.T) {
 }
 
 func TestIncludeDistinguishesNotAskedFromNone(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse()
 	var pg struct {
 		Items []map[string]json.RawMessage `json:"items"`
@@ -172,6 +175,7 @@ func TestIncludeDistinguishesNotAskedFromNone(t *testing.T) {
 }
 
 func TestIncludeRefusesAnUnknownEmbed(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	if resp := h.get("/api/v1/works?include=artwrok"); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
@@ -179,6 +183,7 @@ func TestIncludeRefusesAnUnknownEmbed(t *testing.T) {
 }
 
 func TestYearFilters(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse()
 	tests := []struct {
 		query string
@@ -202,6 +207,7 @@ func TestYearFilters(t *testing.T) {
 }
 
 func TestAuthorFilter(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse()
 	ids := workIDs(t, h.body(h.get("/api/v1/works?content_type=book&author=Author+A")))
 	if len(ids) != 1 || ids[0] != work7ID {
@@ -212,6 +218,7 @@ func TestAuthorFilter(t *testing.T) {
 // Recent-first pages under its own cursor. A title-order cursor is refused on
 // it and vice versa: the two are different positions in different orders.
 func TestRecentOrderPagesAndRefusesAForeignCursor(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse()
 
 	var first struct {
@@ -253,6 +260,7 @@ func TestRecentOrderPagesAndRefusesAForeignCursor(t *testing.T) {
 // The embeds page correctly under the recent order too: the cursor is keyed on
 // the stored created_at, not on a re-rendered time.
 func TestRecentOrderWithEmbedsPages(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse()
 	var first struct {
 		NextCursor string `json:"next_cursor"`
@@ -267,6 +275,7 @@ func TestRecentOrderWithEmbedsPages(t *testing.T) {
 }
 
 func TestArtworkRedirectsToTheBlob(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse()
 
 	resp := h.noFollow(http.MethodGet, "/api/v1/works/"+work1ID+"/artwork")
@@ -288,6 +297,7 @@ func TestArtworkRedirectsToTheBlob(t *testing.T) {
 }
 
 func TestArtworkIsNotFoundWhenAbsent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse()
 
 	// An unknown work and a work with no poster are both 404s, and they say
@@ -334,6 +344,7 @@ func workIDs(t *testing.T, body []byte) []string {
 // when the walk began — the same guarantee the title order's stability test makes,
 // on the order a shelf actually uses.
 func TestRecentOrderWithEmbedsIsStableWhileTheTableIsWrittenTo(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse()
 
 	before := workIDs(t, h.body(h.get("/api/v1/works?sort=recent&limit=200")))

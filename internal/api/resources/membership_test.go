@@ -29,6 +29,7 @@ import (
 // node's view tombstones it. /enrol accepts the op-set shape and the cert-era
 // shape alike.
 func TestPhoneAdmitsPhoneAndTheNodeLearnsRemoves(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth)
 	admin := h.mint("admin", auth.ScopeAdmin)
 

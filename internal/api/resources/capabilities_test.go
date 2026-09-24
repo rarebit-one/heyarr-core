@@ -54,6 +54,7 @@ func (h *harness) capabilities(t *testing.T, query string) resources.Capabilitie
 
 // The fleet question, across more than one node.
 func TestTheCapabilityViewAnswersWhichNodesHoldACapability(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.seedAdvertisement(t, "worker-a", "peer-a", "node-a", time.Hour,
 		"ffmpeg", "ffmpeg.encoder.hevc.qsv")
@@ -84,6 +85,7 @@ func TestTheCapabilityViewAnswersWhichNodesHoldACapability(t *testing.T) {
 // A stale advertisement is not honoured. The worker is gone; nothing deleted
 // its rows, because the deaths that matter do not get to run a shutdown hook.
 func TestAStaleAdvertisementIsNotHonoured(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	// Expired an hour ago.
 	h.seedAdvertisement(t, "worker-dead", "peer-a", "node-a", -time.Hour,
@@ -113,6 +115,7 @@ func TestAStaleAdvertisementIsNotHonoured(t *testing.T) {
 // a filter that matched prefixes would answer "which nodes can encode HEVC"
 // with every node that has the binary.
 func TestTheCapabilityFilterIsExactAndNotAPrefix(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.seedAdvertisement(t, "worker-binary-only", "peer-a", "node-a", time.Hour, "ffmpeg")
 	h.seedAdvertisement(t, "worker-encoder", "peer-b", "node-b", time.Hour, "ffmpeg.encoder.hevc")
@@ -137,6 +140,7 @@ func TestTheCapabilityFilterIsExactAndNotAPrefix(t *testing.T) {
 // A fleet where nothing has advertised is a real answer, and it must marshal as
 // empty arrays rather than nulls — null reads as "we could not find out".
 func TestAFleetThatHasAdvertisedNothingIsAnAnswer(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	body := string(h.body(h.get("/api/v1/capabilities")))
 	for _, want := range []string{`"holders":[]`, `"available":[]`} {
@@ -149,6 +153,7 @@ func TestAFleetThatHasAdvertisedNothingIsAnAnswer(t *testing.T) {
 // The source travels with the capability, because it is what says whether the
 // claim is re-verified at all.
 func TestTheSourceOfEachCapabilityIsReported(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.seedAdvertisement(t, "worker-a", "peer-a", "node-a", time.Hour, "ffmpeg.encoder.hevc.qsv")
 

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
 )
 
 // The CAS half of the two-places peer identity (ADR-0010, M4-03). The store

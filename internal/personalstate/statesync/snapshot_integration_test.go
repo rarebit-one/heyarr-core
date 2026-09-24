@@ -7,11 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/encryption"
+
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"

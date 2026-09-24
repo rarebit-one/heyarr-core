@@ -15,9 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/pairing"
+	"github.com/rarebit-one/voidbind-go/encryption"
+	"github.com/rarebit-one/voidbind-go/pairing"
+
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
 // memRelay is an in-memory two-role relay for the pairing handshake: each

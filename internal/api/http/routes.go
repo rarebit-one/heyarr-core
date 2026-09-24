@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -160,19 +159,3 @@ type slogErrorLog struct {
 }
 
 func (l slogErrorLog) Println(v ...any) { l.log.Error("metrics handler", "error", v) }
-
-// writeJSON renders a successful JSON response. Errors are never written this
-// way — those are problem documents.
-func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, status int, body any) {
-	buf, err := json.Marshal(body)
-	if err != nil {
-		s.log.Error("encoding a response failed",
-			"request_id", RequestIDFrom(r.Context()), "path", r.URL.Path, "error", err)
-		Fail(w, r, problem.Internal())
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(status)
-	_, _ = w.Write(buf)
-}

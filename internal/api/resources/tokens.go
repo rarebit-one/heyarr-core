@@ -85,8 +85,7 @@ type createTokenRequest struct {
 
 func (a *API) createToken(w http.ResponseWriter, r *http.Request) {
 	var body createTokenRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	if err := required("name", body.Name); err != nil {

@@ -58,8 +58,12 @@ import (
 	"sort"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
 )
+
+// Path is where a controller accepts an inventory report, under the peer
+// surface's prefix. It is a constant so the two ends cannot disagree about it.
+const Path = "/peer/v1/inventory"
 
 // Mode is the shape of a report. See the package doc for what each one
 // confirms about a blob it does not mention — the two are not interchangeable

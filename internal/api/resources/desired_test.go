@@ -38,6 +38,7 @@ func decodeDesired(t *testing.T, h *harness, resp *http.Response) map[string]any
 // THE test for this issue. Wanting something Heyarr has never seen, naming it
 // only by what it is, and getting a want back.
 func TestWantingContentThatDoesNotExist(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	resp := postDesired(t, h, `{
@@ -79,6 +80,7 @@ func TestWantingContentThatDoesNotExist(t *testing.T) {
 // normalisation from scanning, everything would appear to work and the library
 // would slowly fill with pairs of works that are the same thing.
 func TestWantingThenWantingAgainConvergesOnOneWork(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	first := postDesired(t, h, `{
@@ -109,6 +111,7 @@ func TestWantingThenWantingAgainConvergesOnOneWork(t *testing.T) {
 // §61: never one version per title. The living-room copy and the phone-sized
 // copy are two wants and both must exist.
 func TestTwoProfilesOverOneWorkAreTwoWants(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	first := postDesired(t, h, `{
@@ -139,6 +142,7 @@ func TestTwoProfilesOverOneWorkAreTwoWants(t *testing.T) {
 
 // A profile is required, because §56 has nothing to evaluate without one.
 func TestAWantMustNameAQualityProfile(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := postDesired(t, h, `{"work": {"content_type":"movie","title":"Solaris"}}`)
 	if resp.StatusCode != http.StatusBadRequest {
@@ -150,6 +154,7 @@ func TestAWantMustNameAQualityProfile(t *testing.T) {
 }
 
 func TestAmbiguousAndMissingTargetsAreRefused(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, body, want string
 	}{
@@ -208,6 +213,7 @@ func TestAmbiguousAndMissingTargetsAreRefused(t *testing.T) {
 // A work-scoped want carrying an edition id is refused, because an unused id is
 // exactly the kind of field something later reads without checking the scope.
 func TestWorkScopeMustNotCarryAnEdition(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := postDesired(t, h, fmt.Sprintf(`{
 		"work_id": %q, "edition_id": %q, "scope": "work",
@@ -221,6 +227,7 @@ func TestWorkScopeMustNotCarryAnEdition(t *testing.T) {
 }
 
 func TestEditionScopedWant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := postDesired(t, h, fmt.Sprintf(`{
 		"work_id": %q, "edition_id": %q, "scope": "edition",
@@ -236,6 +243,7 @@ func TestEditionScopedWant(t *testing.T) {
 
 // Monitored and wanted are two axes (§60 keeps both words).
 func TestMonitorIsSeparateFromWanting(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := postDesired(t, h, `{
 		"work": {"content_type":"movie","title":"Le Samourai","year":1967},
@@ -281,6 +289,7 @@ func TestMonitorIsSeparateFromWanting(t *testing.T) {
 // want, and allowing it would make the acquisition history describe something
 // else.
 func TestTheTargetCannotBeChanged(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := postDesired(t, h, fmt.Sprintf(`{"work_id": %q, "quality_profile":"living-room"}`, work2ID))
 	if resp.StatusCode != http.StatusCreated {
@@ -298,6 +307,7 @@ func TestTheTargetCannotBeChanged(t *testing.T) {
 }
 
 func TestPatchChangesProfileMonitorAndReason(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := postDesired(t, h, fmt.Sprintf(`{"work_id": %q, "quality_profile":"living-room"}`, work2ID))
 	id, _ := decodeDesired(t, h, resp)["id"].(string)
@@ -325,6 +335,7 @@ func TestPatchChangesProfileMonitorAndReason(t *testing.T) {
 
 // Invariant 7, and its converse.
 func TestDesiredEventsFireForChangesAndOnlyForChanges(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	const (
@@ -388,6 +399,7 @@ func TestDesiredEventsFireForChangesAndOnlyForChanges(t *testing.T) {
 // Creating a Work because somebody wanted it is a catalog transition, and a
 // subscriber watching the catalog grow should see it however it was created.
 func TestWantingUnknownContentEmitsAWorkCreatedEvent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	const (
 		workCreated = "content.work.created"
@@ -426,6 +438,7 @@ func TestWantingUnknownContentEmitsAWorkCreatedEvent(t *testing.T) {
 // A profile still measuring a want cannot be deleted: deleting the standard and
 // leaving the desire makes satisfaction unanswerable (§56).
 func TestAProfileInUseCannotBeDeleted(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	if r := postDesired(t, h, fmt.Sprintf(`{"work_id": %q, "quality_profile":"living-room"}`,
 		work2ID)); r.StatusCode != http.StatusCreated {
@@ -444,6 +457,7 @@ func TestAProfileInUseCannotBeDeleted(t *testing.T) {
 // Deleting a Work takes its wants with it — a want for something that no longer
 // exists is a dangling reference every read path would have to special-case.
 func TestDeletingAWorkCascadesToItsWants(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := postDesired(t, h, fmt.Sprintf(`{"work_id": %q, "quality_profile":"living-room"}`, work2ID))
 	id, _ := decodeDesired(t, h, resp)["id"].(string)
@@ -456,6 +470,7 @@ func TestDeletingAWorkCascadesToItsWants(t *testing.T) {
 }
 
 func TestDesiredPaginates(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	for i, profile := range []string{"living-room", "archival"} {
 		body := fmt.Sprintf(`{"work":{"content_type":"movie","title":"Film %d","year":%d},
@@ -493,6 +508,7 @@ func TestDesiredPaginates(t *testing.T) {
 }
 
 func TestUnknownDesiredItemIs404(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
 		if resp := h.doStable(method, "/api/v1/desired/nope", nil); resp.StatusCode != http.StatusNotFound {
@@ -507,6 +523,7 @@ func TestUnknownDesiredItemIs404(t *testing.T) {
 
 // Wanting is a write, not an admin action: it is ordinary operator traffic.
 func TestWantingNeedsAWriteToken(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth).seed()
 	readToken := h.mint("reader", auth.ScopeRead)
 

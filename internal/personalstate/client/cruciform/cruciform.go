@@ -42,7 +42,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
+	"github.com/rarebit-one/voidbind-go/encryption"
 )
 
 // DefaultTimeout bounds a single offload round-trip. It is generous: the phone
@@ -77,15 +77,6 @@ type Unwrapper struct {
 
 // Option configures an [Unwrapper].
 type Option func(*Unwrapper)
-
-// WithTimeout overrides [DefaultTimeout] for each round-trip.
-func WithTimeout(d time.Duration) Option {
-	return func(u *Unwrapper) {
-		if d > 0 {
-			u.timeout = d
-		}
-	}
-}
 
 // New returns a cruciform-offload Unwrapper. transportKey is this desktop's
 // pairing key (ed25519 private); phonePub is the paired phone's pinned device key

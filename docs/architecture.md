@@ -66,7 +66,7 @@ follows from keeping them separate.
 | §7 controller | `internal/controller` |
 | §9 worker | `internal/worker` |
 | §11–12 content model | `internal/domain/content` |
-| §13–16 hashing, chunking | `internal/hashing`, `internal/storagefabric/chunking` |
+| §13–16 hashing, chunking | `voidbind-go/hashing` (external), `internal/storagefabric/chunking` |
 | §17–22 storage fabric | `internal/storagefabric/**` |
 | §28–29 range serving, remote probe | `internal/api/http`, `internal/media/probe` |
 | §37–47 personal state | `internal/personalstate/**` |

@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -62,9 +61,9 @@ func RemuxHandler(opts RemuxHandlerOptions) HandlerFunc {
 	}
 
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload ffmpeg.Payload
-		if err := json.Unmarshal(job.Payload, &payload); err != nil {
-			return fmt.Errorf("remux: undecodable payload: %w", err)
+		payload, err := decodePayload[ffmpeg.Payload](job)
+		if err != nil {
+			return err
 		}
 		if payload.BlobHash == "" || payload.AssetID == "" {
 			return errors.New("remux: the payload names no blob or no asset")

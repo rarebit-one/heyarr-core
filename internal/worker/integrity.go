@@ -2,13 +2,13 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
 )
@@ -23,9 +23,9 @@ import (
 // leaving it in the event log where an operator will see it (ADR-0008).
 func VerifyBlobHandler(checker *integrity.Checker, log *slog.Logger) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload integrity.VerifyPayload
-		if err := json.Unmarshal(job.Payload, &payload); err != nil {
-			return fmt.Errorf("worker: verify_blob payload is not decodable: %w", err)
+		payload, err := decodePayload[integrity.VerifyPayload](job)
+		if err != nil {
+			return err
 		}
 		h, err := hashing.Parse(payload.Hash)
 		if err != nil {
@@ -59,11 +59,9 @@ func VerifyBlobHandler(checker *integrity.Checker, log *slog.Logger) HandlerFunc
 // omitted is how a library disappears overnight.
 func GCHandler(collector *integrity.Collector, log *slog.Logger) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload integrity.GCPayload
-		if len(job.Payload) > 0 {
-			if err := json.Unmarshal(job.Payload, &payload); err != nil {
-				return fmt.Errorf("worker: gc_blobs payload is not decodable: %w", err)
-			}
+		payload, err := decodeOptionalPayload[integrity.GCPayload](job)
+		if err != nil {
+			return err
 		}
 		result, err := collector.Collect(ctx, integrity.CollectOptions{
 			Apply: payload.Apply,

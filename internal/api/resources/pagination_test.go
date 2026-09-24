@@ -30,6 +30,7 @@ type workPage struct {
 // is never reached. A scan writing "Aliens" into a library while someone is
 // browsing the Bs is exactly this.
 func TestPaginationIsStableWhileTheTableIsWrittenTo(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	const total = 60
@@ -117,6 +118,7 @@ func TestPaginationIsStableWhileTheTableIsWrittenTo(t *testing.T) {
 // looks correct in a demo: sort_title alone is not unique, so the boundary
 // between two pages can fall in the middle of a group of equal titles.
 func TestPagesDoNotSplitRowsThatShareASortTitle(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	const total = 25
@@ -159,6 +161,7 @@ func TestPagesDoNotSplitRowsThatShareASortTitle(t *testing.T) {
 }
 
 func TestCursorsAreOpaqueAndValidated(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	tests := []struct {
@@ -192,6 +195,7 @@ func TestCursorsAreOpaqueAndValidated(t *testing.T) {
 // to actually apply: an unbounded limit is a client asking the server to hold
 // the whole catalog in memory.
 func TestLimitIsClamped(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	const total = 250
 	for i := range total {

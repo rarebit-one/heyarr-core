@@ -5,9 +5,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rarebit-one/voidbind-go/hashing"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
 )
 
@@ -57,6 +57,7 @@ func (h *harness) claimReplica(hash, peerID, state string, reportedAt time.Time)
 // into a table with no foreign key to `blobs` (00028), is what survives — and
 // "on what grounds?" is only ever asked after the blob is gone.
 func TestDurabilityEvidenceOutlivesTheBlobRowAndTheReplicasThatCascadeWithIt(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.write("Evidenced Film (2019)/Evidenced Film (2019).mkv", "bytes with a witness")
 	res := h.ingest("Evidenced Film (2019)/Evidenced Film (2019).mkv")
@@ -118,6 +119,7 @@ func TestDurabilityEvidenceOutlivesTheBlobRowAndTheReplicasThatCascadeWithIt(t *
 // Watched declining, because a backstop nobody has seen catch anything is a
 // comment.
 func TestTheCatalogRefusesToReclaimABlobNothingEstablishedTheDurabilityOf(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.write("Unwitnessed Film (2020)/Unwitnessed Film (2020).mkv", "bytes with no witness")
 	res := h.ingest("Unwitnessed Film (2020)/Unwitnessed Film (2020).mkv")
@@ -144,6 +146,7 @@ func TestTheCatalogRefusesToReclaimABlobNothingEstablishedTheDurabilityOf(t *tes
 // A lying row is corrected where the catalog can see it, and the correction is
 // an event like every other state transition (invariant 7).
 func TestCorrectingALyingReplicaRowMovesItToMissingAndSaysSo(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.write("Contradicted Film (2021)/Contradicted Film (2021).mkv", "bytes a peer denies holding")
 	res := h.ingest("Contradicted Film (2021)/Contradicted Film (2021).mkv")
@@ -184,6 +187,7 @@ func TestCorrectingALyingReplicaRowMovesItToMissingAndSaysSo(t *testing.T) {
 // machine. The filter is in the SQL rather than in every caller, so it is
 // asserted where it lives.
 func TestThePeerViewsNeverIncludeThisNode(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.write("Local Film (2022)/Local Film (2022).mkv", "bytes only this node holds")
 	res := h.ingest("Local Film (2022)/Local Film (2022).mkv")
@@ -250,6 +254,7 @@ func TestThePeerViewsNeverIncludeThisNode(t *testing.T) {
 // explained, rather than by a CHECK constraint that names neither the blob nor
 // the caller.
 func TestAnUnrecognisedDurabilityBasisIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.write("Basis Film (2023)/Basis Film (2023).mkv", "bytes with a made-up justification")
 	res := h.ingest("Basis Film (2023)/Basis Film (2023).mkv")

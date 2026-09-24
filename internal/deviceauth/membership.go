@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rarebit-one/voidbind-go/enrolment"
 
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/voidbind-go/rp"
 )

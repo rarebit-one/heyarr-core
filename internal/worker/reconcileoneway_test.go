@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
 )
 
 // The one-way reachability deadlock, reproduced against the real reconciler
@@ -33,6 +33,7 @@ import (
 // being created at all. The silence stays; the operator stops meeting it
 // weeks later as the first symptom.
 func TestOneWayPairingReconcilesToSilence(t *testing.T) {
+	t.Parallel()
 	h := newConvergeHarness(t)
 	h.managed(t, blobOne)
 

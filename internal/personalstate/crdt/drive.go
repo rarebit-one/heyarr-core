@@ -67,9 +67,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rarebit-one/voidbind-go/hashing"
 	"golang.org/x/text/unicode/norm"
-
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 )
 
 // ErrInvalidChange rejects a [DriveChange] that is not well-formed BEFORE it can
@@ -359,9 +358,6 @@ func MergeDrives(drives ...*Drive) *Drive {
 	}
 	return out
 }
-
-// Clone returns an independent deep copy.
-func (d *Drive) Clone() *Drive { return MergeDrives(d) }
 
 // Get returns the current blob at path, if the path is live.
 func (d *Drive) Get(p string) (DriveEntry, bool) {

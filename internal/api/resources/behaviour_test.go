@@ -24,6 +24,7 @@ import (
 // has nothing in it, so a client retries forever or gives up silently
 // depending on which guess its author made.
 func TestUnknownIdentifiersAreNotFoundRatherThanEmpty(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	tests := []struct {
@@ -78,6 +79,7 @@ func TestUnknownIdentifiersAreNotFoundRatherThanEmpty(t *testing.T) {
 // science documentaries" is an answer, and the client's loop over items must
 // not have to special-case it.
 func TestAnEmptyCollectionIsAnEmptyPageNotAnError(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	for _, path := range []string{
 		"/api/v1/works?content_type=nothing-has-this",
@@ -103,6 +105,7 @@ func TestAnEmptyCollectionIsAnEmptyPageNotAnError(t *testing.T) {
 // asserting is that the mutating routes ask for more than that, and that the
 // credential routes ask for admin.
 func TestScopeEnforcementOnEveryMutatingRoute(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth).seed()
 	reader := h.mint("reader", auth.ScopeRead)
 	writer := h.mint("writer", auth.ScopeWrite)
@@ -178,6 +181,7 @@ func TestScopeEnforcementOnEveryMutatingRoute(t *testing.T) {
 // afterwards, because a handler that unlinks bytes inline is the version of
 // this feature where a bug is unrecoverable.
 func TestDeletingAnAssetLeavesTheBlobAlone(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	before := h.get("/api/v1/blobs/" + blob1Hash)
@@ -218,6 +222,7 @@ func TestDeletingAnAssetLeavesTheBlobAlone(t *testing.T) {
 // The event and the state change have to commit together, or invariant 7 is
 // "usually" rather than "always". A rolled-back write must leave no event.
 func TestAFailedWriteLeavesNoEvent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	// The second create violates the unique name index, so the transaction
@@ -244,6 +249,7 @@ func TestAFailedWriteLeavesNoEvent(t *testing.T) {
 }
 
 func TestScanEnqueuesOneJobPerEnabledRootAndIsIdempotent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	// A second root, and a disabled one that must not be scanned.
@@ -302,6 +308,7 @@ func TestScanEnqueuesOneJobPerEnabledRootAndIsIdempotent(t *testing.T) {
 }
 
 func TestScanningALibraryWithNoRootsIsARefusalNotAnEmptyAccept(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := h.do(http.MethodPost, "/api/v1/libraries/"+libBooksID+"/scan", "", nil)
 	raw := h.body(resp)
@@ -314,6 +321,7 @@ func TestScanningALibraryWithNoRootsIsARefusalNotAnEmptyAccept(t *testing.T) {
 }
 
 func TestRetryDistinguishesAMissingJobFromOneThatIsStillRunning(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	// job1 is pending: retrying it would mean running it twice.
@@ -345,6 +353,7 @@ func TestRetryDistinguishesAMissingJobFromOneThatIsStillRunning(t *testing.T) {
 }
 
 func TestTokenLifecycleNeverLeaksASecretAndRefusesADoubleRevoke(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	created := h.do(http.MethodPost, "/api/v1/tokens", "",
@@ -392,6 +401,7 @@ func TestTokenLifecycleNeverLeaksASecretAndRefusesADoubleRevoke(t *testing.T) {
 }
 
 func TestCreateValidation(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	tests := []struct {

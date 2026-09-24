@@ -13,8 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/events"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/chunking"
@@ -189,6 +190,7 @@ func assertState(t *testing.T, got manifests.State, want manifests.State, what s
 // while rewriting every row, and a manifest that embedded the clock would
 // produce a different digest on the second pass.
 func TestChunkBlobGeneratesOnceAndIsByteIdenticalOnASecondRun(t *testing.T) {
+	t.Parallel()
 	f := newChunkFixture(t)
 	hash := f.seedBlob(pseudoRandom(chunkableSize, 7))
 
@@ -273,6 +275,7 @@ func TestChunkBlobGeneratesOnceAndIsByteIdenticalOnASecondRun(t *testing.T) {
 // measuring the absence of something that CAN occur: the same fixture then runs
 // the job and one appears.
 func TestIngestGeneratesNoManifestAndTheJobDoes(t *testing.T) {
+	t.Parallel()
 	f := newChunkFixture(t)
 	const rel = "Movie Title (2019)/Movie Title (2019) - 2160p.mkv"
 	f.writeBytes(rel, pseudoRandom(chunkableSize, 11))
@@ -310,6 +313,7 @@ func TestIngestGeneratesNoManifestAndTheJobDoes(t *testing.T) {
 // §16's "small Blobs may never require chunk manifests", given a number and
 // written down as a decision rather than left as an absence.
 func TestABlobBelowTheThresholdIsRecordedAsNeverNeedingAManifest(t *testing.T) {
+	t.Parallel()
 	f := newChunkFixture(t)
 	small := f.seedBlob(pseudoRandom(64<<10, 3))
 
@@ -354,6 +358,7 @@ func TestABlobBelowTheThresholdIsRecordedAsNeverNeedingAManifest(t *testing.T) {
 // against a chunker that simply could not handle a short input. The same bytes
 // are run under two thresholds and produce the two different answers.
 func TestTheExemptionIsTheThresholdAndNotTheBlob(t *testing.T) {
+	t.Parallel()
 	f := newChunkFixture(t)
 	content := pseudoRandom(2<<10, 5)
 	exempt := f.seedBlob(content)
@@ -389,6 +394,7 @@ func TestTheExemptionIsTheThresholdAndNotTheBlob(t *testing.T) {
 // is known to mean the check stopped it rather than that the fixture never
 // produces one.
 func TestACorruptBlobProducesNoManifestAndIsQuarantined(t *testing.T) {
+	t.Parallel()
 	f := newChunkFixture(t)
 	content := pseudoRandom(chunkableSize, 13)
 
@@ -492,6 +498,7 @@ func TestACorruptBlobProducesNoManifestAndIsQuarantined(t *testing.T) {
 // are asserted, because "emits nothing" is what stops every retry of every job
 // becoming event noise, and "changes nothing" is what makes that observable.
 func TestChunkBlobRerunEmitsNoEventAndChangesNoRow(t *testing.T) {
+	t.Parallel()
 	f := newChunkFixture(t)
 	hash := f.seedBlob(pseudoRandom(chunkableSize, 19))
 	if err := f.run(hash); err != nil {
@@ -560,6 +567,9 @@ func (f *chunkFixture) snapshot(hash hashing.Hash) chunkSnapshot {
 // with the blob. A 20 GB remux is the normal large input here (ADR-0013), and a
 // handler that buffered what it read would be unusable on exactly the blobs
 // chunking exists for.
+//
+// Deliberately NOT t.Parallel: runtime.ReadMemStats is process-wide, so any
+// test allocating alongside this one shows up as "growth" and fails it.
 func TestChunkBlobMemoryStaysFlatOverALargeBlob(t *testing.T) {
 	f := newChunkFixture(t)
 
@@ -642,6 +652,7 @@ func (r *cancellingReader) Read(p []byte) (int, error) {
 // absent — "an error was returned" is not the property, because a handler that
 // wrote chunk rows as it went and then returned an error would satisfy it.
 func TestChunkBlobCancellationLeavesNoPartialManifest(t *testing.T) {
+	t.Parallel()
 	f := newChunkFixture(t)
 	hash := f.seedBlob(pseudoRandom(chunkableSize, 23))
 
@@ -680,6 +691,7 @@ func TestChunkBlobCancellationLeavesNoPartialManifest(t *testing.T) {
 // here five times before declaring chunking broken on a node that is simply not
 // the one holding the blob.
 func TestChunkBlobSkipsABlobThisNodeDoesNotHold(t *testing.T) {
+	t.Parallel()
 	f := newChunkFixture(t)
 	hash := f.seedBlob(pseudoRandom(chunkableSize, 29))
 	if err := f.cas.Delete(f.t.Context(), hash); err != nil {
@@ -700,6 +712,7 @@ func TestChunkBlobSkipsABlobThisNodeDoesNotHold(t *testing.T) {
 // The registration is one value whose properties can be asserted rather than
 // read: bounded concurrency, and nothing required of the node.
 func TestChunkBlobRegistrationIsBoundedAndUnconditional(t *testing.T) {
+	t.Parallel()
 	reg := ChunkBlobRegistration(ChunkDeps{})
 	if reg.Handler == nil {
 		t.Fatal("the registration has no handler")
@@ -718,6 +731,7 @@ func TestChunkBlobRegistrationIsBoundedAndUnconditional(t *testing.T) {
 // silently is policy nobody can review. Both are pinned here so that changing
 // either is a deliberate edit to a test that says why the number was chosen.
 func TestTheChunkingThresholdIsTheChunkersMaximum(t *testing.T) {
+	t.Parallel()
 	if manifests.ThresholdBytes != chunking.DefaultMax {
 		t.Errorf("ThresholdBytes = %d, want the chunker's maximum %d — below Max a blob is a handful "+
 			"of chunks at most, and the manifest costs the same read as the transfer it would optimise",
@@ -806,6 +820,7 @@ func (f *chunkFixture) damage(hash hashing.Hash, at int64) {
 // enqueued and then have its blob reclaimed underneath it, and failing would
 // bury an ordinary race in a queue error four retries later (ADR-0008).
 func TestChunkBlobSkipsABlobTheCatalogNoLongerHas(t *testing.T) {
+	t.Parallel()
 	f := newChunkFixture(t)
 	hash := f.seedBlob(pseudoRandom(chunkableSize, 31))
 	if _, err := f.db.Writer().ExecContext(f.t.Context(),

@@ -1120,6 +1120,40 @@ api() { # path [curl args...]
   curl -sS --unix-socket "$SOCK" -H "Authorization: Bearer $TOKEN" "$@" "http://heyarr$path"
 }
 
+# events_replay prints the event log from seq 0 up to the head as it stands
+# NOW, and then stops.
+#
+# SSE never ends by design, so a replay has to be cut off. It used to be cut
+# off by `--max-time 5` alone, which made every replay cost exactly five
+# seconds however little there was to read — four of them were twenty seconds
+# of the demo budget spent waiting for events nobody was going to emit.
+#
+# The head is read from /api/v1/system BEFORE the stream is opened, so every
+# event the caller is about to assert on — emitted by an action that has
+# already returned — is at or below it, and the replay stops at the blank line
+# that ends that event. `--max-time 5` stays as the bound: a head that cannot
+# be read, or a stream that never reaches it, degrades to the old behaviour
+# rather than to a hang or a truncated read.
+events_replay() {
+  local head
+  head=$(api /api/v1/system | jq -r 'if .events.ok then .events.head else 0 end' 2>/dev/null || echo 0)
+  [[ "$head" =~ ^[0-9]+$ ]] || head=0
+  # A read loop over a process substitution, not a pipeline. A pipeline waits
+  # for every member, and curl would sit in it on an idle stream until its
+  # --max-time — the very five seconds this exists to stop paying. Past the
+  # break curl is left to hit that bound on its own, off the critical path.
+  # (Not awk either: mawk, Ubuntu's awk, block-buffers the pipe it reads.)
+  local line seq=0
+  while IFS= read -r line; do
+    printf '%s\n' "$line"
+    if [[ "$line" == "id: "* ]]; then
+      seq=${line#id: }
+    elif [[ -z "$line" ]] && (( head > 0 && seq >= head )); then
+      break
+    fi
+  done < <(api "/api/v1/events?after=0" --max-time 5 --no-buffer 2>/dev/null || true)
+}
+
 # Follows keyset cursors to the end. A list command that reads one page and
 # stops is wrong for a real library, and a demo that asserts on one page would
 # never notice.
@@ -1661,8 +1695,8 @@ YAML
   # what makes it expensive (ADR-0009). Replaying from 0 must show the ingest
   # story in causal order.
   local events_out
-  # SSE never ends by design, so the read is bounded here rather than waited on.
-  events_out=$(api "/api/v1/events?after=0" --max-time 5 --no-buffer 2>/dev/null || true)
+  # SSE never ends by design, so the replay is bounded at the current head.
+  events_out=$(events_replay)
   local ev
   for ev in blob.created content.asset.created replica.present ingest.completed system.scan.progress; do
     if grep -q "$ev" <<<"$events_out"; then
@@ -2789,33 +2823,18 @@ YAML
 
   # #131: A SECOND CHECK IS A SECOND OBSERVATION, NOT A REPLAY OF THE FIRST.
   #
-  # Decision 3 in internal/indexers/client.go makes the health check WRITE the
-  # capabilities cache and never read it. If that inverted, an indexer that
-  # answered once would stay healthy for the TTL after it stopped answering —
-  # and here, where it has never answered at all, the reported health must be
-  # false on every pass rather than only on the first.
+  # Asserted in provider_health_beat_demo (#164), not here. That section
+  # PROCURES a second pass — it restarts its controller, which is a real beat
+  # enqueue on the real path — and then asserts both halves of this claim
+  # against a pass that demonstrably ran.
   #
-  # Whether a second pass has run by now depends on the worker's timing, so
-  # the second observation is WAITED FOR rather than assumed, and the claim is
-  # made only once two distinct ones exist. A fixed sleep would pass on a fast
-  # machine and flake on a loaded one.
-  local tz_first_checked tz_second tz_waited
-  tz_first_checked=$(jq -r '.checked_at // "never"' <<<"$tz_entry")
-  tz_waited=0
-  while (( tz_waited < 300 )); do
-    tz_second=$(jq -c '[.providers[] | select(.name == "acceptance-torznab")] | .[0]' \
-      <<<"$(api /api/v1/providers)")
-    [[ "$(jq -r '.checked_at // "never"' <<<"$tz_second")" != "$tz_first_checked" ]] && break
-    sleep 0.1; tz_waited=$(( tz_waited + 1 ))
-  done
-  if [[ "$(jq -r '.checked_at // "never"' <<<"$tz_second")" == "$tz_first_checked" ]]; then
-    pass "only one health pass has run, so a second observation is not yet assertable"
-  else
-    assert_eq "$(jq -r '.healthy' <<<"$tz_second")" "false" \
-      "a second health pass observes the indexer again rather than replaying the first"
-    assert_eq "$(jq -r '.version // "absent"' <<<"$tz_second")" "absent" \
-      "and still reports no version on the second pass"
-  fi
+  # This node used to wait up to thirty seconds for its own beat to come round
+  # again instead. The beat interval is a minute (internal/controller/
+  # healthbeat.go), so on the Linux runner the wait ran out every time and
+  # recorded "not yet assertable", and on macOS the loop was slow enough to
+  # catch the tick at about forty seconds. Measured over twenty-four CI runs,
+  # that was 34-42s of every run's budget spent proving, at best, what #164
+  # already proves in two.
 
   # The API key is in the config file three lines above. It must not be in the
   # response, and the assertion is on the VALUE rather than the field name so
@@ -3033,7 +3052,7 @@ YAML
   # Every search emits, including the empty one — it leaves no rows behind, so
   # the event is the only trace it happened.
   local search_events
-  search_events=$(api "/api/v1/events?after=0" --max-time 5 --no-buffer 2>/dev/null || true)
+  search_events=$(events_replay)
   if grep -q 'acquisition.search_completed' <<<"$search_events"; then
     pass "a completed search reaches the event log"
   else
@@ -3135,7 +3154,7 @@ YAML
   # This opens the tail FIRST, then makes the worker emit, which is the only
   # ordering that can tell the two apart.
   local head_seq tail_out tail_pid tail_rc=0
-  head_seq=$(api "/api/v1/events?after=0" --max-time 5 2>/dev/null | grep -c '^id:' || true)
+  head_seq=$(events_replay | grep -c '^id:' || true)
   tail_out="$WORK/live-tail.json"
   cli events tail --after "$head_seq" --limit 1 --json >"$tail_out" 2>&1 &
   tail_pid=$!
@@ -3780,7 +3799,7 @@ YAML
   # Every acquisition transition emits (invariant 7). Creating the state is the
   # first one, and it must be in the log rather than only in the row.
   local acq_events
-  acq_events=$(api "/api/v1/events?after=0" --max-time 5 --no-buffer 2>/dev/null || true)
+  acq_events=$(events_replay)
   if grep -q 'acquisition.phase_changed' <<<"$acq_events"; then
     pass "the acquisition state machine emits to the event log"
   else
@@ -8994,6 +9013,15 @@ YAML
 # forced. macOS is the tight runner class — M6 measured it at 205-213s against
 # 240 — so 300 restores roughly the margin that existed before, rather than
 # buying new room.
+#
+# By 2026-09 the margin was gone again, on BOTH runner classes rather than only
+# macOS. Twenty-four CI verdict lines: ubuntu-latest 288-294s, macos-latest
+# 285-306s, with macOS the one that crossed 300 (301, 301, 306). The runners
+# were not the difference — the demo had grown. The answer this time was to
+# take time out rather than add budget: two waits that proved nothing on the
+# happy path (a 34-42s wait for a health pass that #164's section already
+# procures and asserts, and four event-log replays that each sat out a
+# five-second --max-time; see events_replay) came out, and the budget stayed.
 DEMO_BUDGET_SECONDS=${DEMO_BUDGET_SECONDS:-300}
 DEMO_STARTED=$SECONDS
 

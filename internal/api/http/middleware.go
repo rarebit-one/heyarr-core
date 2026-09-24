@@ -56,10 +56,10 @@ func Fail(w http.ResponseWriter, r *http.Request, p *problem.Problem) {
 
 // nosniffMiddleware sets X-Content-Type-Options on every response.
 //
-// Every write path in this server already sets it — routes.go's writeJSON,
-// problem.Write and the resource API's write all do. That is three places
-// remembering the same thing, and the failure mode of "remembering" is one
-// handler that does not.
+// Every write path in this server already sets it — WriteJSON and
+// problem.Write both do. That is still more than one place remembering the same
+// thing, and the failure mode of "remembering" is one handler that writes its
+// own body and does not.
 //
 // Setting it centrally makes the guarantee structural instead of habitual: a
 // handler added tomorrow gets it whether or not its author knew to. The

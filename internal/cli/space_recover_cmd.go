@@ -3,20 +3,19 @@ package cli
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
 
+	"github.com/rarebit-one/voidbind-go/encryption"
+	"github.com/rarebit-one/voidbind-go/recovery"
 	"github.com/spf13/cobra"
 
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spacerecover"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
-	"github.com/rarebit-one/heyarr-core/internal/recovery"
 )
 
 // spaceRecoverResult is the outcome of a space-key recovery. It deliberately
@@ -131,9 +130,7 @@ func runSpaceRecover(ctx context.Context, cmd *cobra.Command, configPath, device
 	}
 
 	if asJSON {
-		enc := json.NewEncoder(cmd.OutOrStdout())
-		enc.SetIndent("", "  ")
-		return enc.Encode(res)
+		return emitJSON(cmd.OutOrStdout(), res)
 	}
 	printSpaceRecover(cmd.OutOrStdout(), res)
 	return nil

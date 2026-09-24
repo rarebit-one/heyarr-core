@@ -270,8 +270,7 @@ func (a *API) searchItems(ctx context.Context, query, contentType string, limit 
 // searchContentRoute is POST /api/v1/search — a shell over SearchContent.
 func (a *API) searchContentRoute(w http.ResponseWriter, r *http.Request) {
 	var body SearchContentRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	out, err := a.SearchContent(r.Context(), body)

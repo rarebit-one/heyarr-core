@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -100,9 +99,9 @@ func FetchSubsHandler(opts FetchSubsHandlerOptions) HandlerFunc {
 	}
 
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload acquisition.FetchSubtitlePayload
-		if err := json.Unmarshal(job.Payload, &payload); err != nil {
-			return fmt.Errorf("fetch-subtitle: undecodable payload: %w", err)
+		payload, err := decodePayload[acquisition.FetchSubtitlePayload](job)
+		if err != nil {
+			return err
 		}
 		if payload.DesiredItemID == "" {
 			return fmt.Errorf("fetch-subtitle: the payload names no want")

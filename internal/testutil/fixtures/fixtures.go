@@ -19,12 +19,12 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 )
 
 // DefaultLargeFileSize is the streaming fixture's size. Large enough that
@@ -443,7 +443,3 @@ func slug(s string) string {
 	}
 	return strings.Trim(b.String(), "-")
 }
-
-// Dir is the conventional name of the generated library within a work
-// directory, so the demo and the tests agree without passing it around.
-func Dir(work string) string { return path.Join(work, "library") }

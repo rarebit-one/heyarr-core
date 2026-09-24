@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/google/go-tpm/tpm2"
+	"github.com/rarebit-one/voidbind-go/encryption"
 
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
 // The backend implements the client.Custody seam (ADR-0098).

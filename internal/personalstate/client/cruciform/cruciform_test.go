@@ -9,8 +9,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/rarebit-one/voidbind-go/encryption"
+
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
 // The backend implements the client.Unwrapper seam (ADR-0098) — the whole point.

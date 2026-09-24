@@ -18,17 +18,16 @@ package vaultplacement
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rarebit-one/voidbind-go/hashing"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 )
 
 // Pinner records and removes opaque placement pins (ADR-0096).
@@ -107,7 +106,7 @@ func (h *Handler) pin(w http.ResponseWriter, r *http.Request) {
 		httpapi.Fail(w, r, problem.Internal())
 		return
 	}
-	h.write(w, r, http.StatusOK, placementResult(in))
+	httpapi.WriteJSON(w, r, h.log, http.StatusOK, placementResult(in))
 }
 
 // unpin removes a placement pin, so the peer is no longer a replication target for
@@ -133,7 +132,7 @@ func (h *Handler) unpin(w http.ResponseWriter, r *http.Request) {
 // failure and returning false when it is malformed.
 func (h *Handler) decode(w http.ResponseWriter, r *http.Request) (placementInput, bool) {
 	var in placementInput
-	if err := decodeJSON(w, r, &in); err != nil {
+	if err := httpapi.DecodeJSON(w, r, &in, maxRequestBody); err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return placementInput{}, false
 	}
@@ -146,18 +145,4 @@ func (h *Handler) decode(w http.ResponseWriter, r *http.Request) (placementInput
 		return placementInput{}, false
 	}
 	return in, true
-}
-
-func (h *Handler) write(w http.ResponseWriter, r *http.Request, status int, body any) {
-	buf, err := json.Marshal(body)
-	if err != nil {
-		h.log.Error("encoding a response failed",
-			"request_id", httpapi.RequestIDFrom(r.Context()), "path", r.URL.Path, "error", err)
-		httpapi.Fail(w, r, problem.Internal())
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(status)
-	_, _ = w.Write(buf)
 }

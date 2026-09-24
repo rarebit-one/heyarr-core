@@ -8,9 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/encryption"
 	"github.com/rarebit-one/voidbind-go/relay"
-
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
 // TestOffloadOverRealRelay drives the whole offload backend over a REAL voidbind

@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -70,9 +69,9 @@ func SearchHandler(
 	reg *providers.Registry, cat *catalog.Catalog, grabs ProbeEnqueuer, log *slog.Logger,
 ) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload acquisition.SearchPayload
-		if err := json.Unmarshal(job.Payload, &payload); err != nil {
-			return fmt.Errorf("worker: search_release payload is not decodable: %w", err)
+		payload, err := decodePayload[acquisition.SearchPayload](job)
+		if err != nil {
+			return err
 		}
 		if payload.DesiredItemID == "" {
 			return errors.New("worker: search_release needs a desired item")

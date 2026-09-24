@@ -63,6 +63,7 @@ func seedSubtitleAsset(t *testing.T, h *harness, id, itemID, attrs, filename str
 }
 
 func TestSubtitleWantSatisfiedByMatchingLanguageAndItem(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	want, itemID := seedSubtitleWant(t, h)
@@ -80,6 +81,7 @@ func TestSubtitleWantSatisfiedByMatchingLanguageAndItem(t *testing.T) {
 }
 
 func TestSubtitleWantNotSatisfiedByWrongLanguage(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	want, itemID := seedSubtitleWant(t, h)
@@ -97,6 +99,7 @@ func TestSubtitleWantNotSatisfiedByWrongLanguage(t *testing.T) {
 }
 
 func TestSubtitleWantNotSatisfiedByAnotherEpisodesSubtitle(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	want, _ := seedSubtitleWant(t, h)
@@ -117,6 +120,7 @@ func TestSubtitleWantNotSatisfiedByAnotherEpisodesSubtitle(t *testing.T) {
 }
 
 func TestSubtitleWantSatisfiedByFilenameLanguageFallback(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	want, itemID := seedSubtitleWant(t, h)
@@ -135,6 +139,7 @@ func TestSubtitleWantSatisfiedByFilenameLanguageFallback(t *testing.T) {
 }
 
 func TestSetAssetItemLinksAndClears(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	_, itemID := seedSubtitleWant(t, h)
@@ -168,6 +173,7 @@ func TestSetAssetItemLinksAndClears(t *testing.T) {
 // A subtitle want is direct-route, so the search beat never picks it up whatever
 // its state (ADR-0085): DueSearches must not return it.
 func TestDueSearchesSkipsSubtitleWants(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	want, _ := seedSubtitleWant(t, h)

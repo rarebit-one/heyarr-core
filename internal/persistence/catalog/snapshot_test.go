@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/events"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	peercatalog "github.com/rarebit-one/heyarr-core/internal/peer/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/chunking"
@@ -170,6 +171,7 @@ func assertSameSet(t *testing.T, what string, want, got []string) {
 // The snapshot's contents ARE the controller's catalogue, for every covered
 // table, compared as row sets.
 func TestASnapshotHoldsTheControllersCatalogueRowForRow(t *testing.T) {
+	t.Parallel()
 	h := newSnapshotHarness(t)
 	ctx := context.Background()
 	h.addWork(t, "w-arrival", "Arrival", stamp)
@@ -221,6 +223,7 @@ func TestASnapshotHoldsTheControllersCatalogueRowForRow(t *testing.T) {
 // A catalogue change reaches the snapshot only when it is refreshed. Stale
 // first, current after.
 func TestACatalogueChangeIsStaleUntilTheSnapshotIsRefreshed(t *testing.T) {
+	t.Parallel()
 	h := newSnapshotHarness(t)
 	ctx := context.Background()
 	h.addWork(t, "w-arrival", "Arrival", stamp)
@@ -271,6 +274,7 @@ func TestACatalogueChangeIsStaleUntilTheSnapshotIsRefreshed(t *testing.T) {
 // A deletion reaches the snapshot too — the case an "upsert what changed"
 // design silently gets wrong.
 func TestADeletedWorkLeavesTheSnapshotOnRefresh(t *testing.T) {
+	t.Parallel()
 	h := newSnapshotHarness(t)
 	ctx := context.Background()
 	h.addWork(t, "w-arrival", "Arrival", stamp)
@@ -302,6 +306,7 @@ func TestADeletedWorkLeavesTheSnapshotOnRefresh(t *testing.T) {
 // An incremental refresh and a full rebuild of the same catalogue state produce
 // identical snapshots.
 func TestIncrementalAndFullRebuildAgreeAboutTheSameCatalogue(t *testing.T) {
+	t.Parallel()
 	h2 := newSnapshotHarness(t)
 	ctx := context.Background()
 	later := "2026-08-02T00:00:00Z"
@@ -359,6 +364,7 @@ func TestIncrementalAndFullRebuildAgreeAboutTheSameCatalogue(t *testing.T) {
 // Versions increase monotonically across builds, and the control plane records
 // what it issued.
 func TestSnapshotVersionsAdvanceAcrossBuilds(t *testing.T) {
+	t.Parallel()
 	h := newSnapshotHarness(t)
 	ctx := context.Background()
 	h.addWork(t, "w-arrival", "Arrival", stamp)
@@ -399,6 +405,7 @@ func TestSnapshotVersionsAdvanceAcrossBuilds(t *testing.T) {
 // A peer the controller has never issued a snapshot to has NO record — not a
 // record at version zero.
 func TestAPeerWithNoSnapshotHasNoRecordRatherThanAnEmptyOne(t *testing.T) {
+	t.Parallel()
 	h := newSnapshotHarness(t)
 	_, err := h.cat.PeerSnapshot(context.Background(), peerUnderTest)
 	if !errors.Is(err, catalog.ErrNoPeerSnapshot) {
@@ -415,6 +422,7 @@ func TestAPeerWithNoSnapshotHasNoRecordRatherThanAnEmptyOne(t *testing.T) {
 
 // One event per build, and it carries what an operator needs to read it.
 func TestEachBuildEmitsExactlyOneEvent(t *testing.T) {
+	t.Parallel()
 	h := newSnapshotHarness(t)
 	ctx := context.Background()
 	h.addWork(t, "w-arrival", "Arrival", stamp)
@@ -442,6 +450,7 @@ func TestEachBuildEmitsExactlyOneEvent(t *testing.T) {
 
 // A build asks the control plane, and the control plane reports the age.
 func TestTheControlPlaneReportsTheSnapshotsAge(t *testing.T) {
+	t.Parallel()
 	h := newSnapshotHarness(t)
 	ctx := context.Background()
 	h.addWork(t, "w-arrival", "Arrival", stamp)
@@ -486,6 +495,7 @@ func containsWork(snap *peercatalog.Snapshot, id string) bool {
 // build the blob rows with different WHERE clauses and only one of them was
 // exercised while this was being written.
 func TestTheChunkManifestStateReachesTheSnapshot(t *testing.T) {
+	t.Parallel()
 	h := newSnapshotHarness(t)
 	ctx := context.Background()
 
@@ -567,6 +577,7 @@ func TestTheChunkManifestStateReachesTheSnapshot(t *testing.T) {
 // The snapshot's content digest covers the state, so two snapshots that differ
 // only in a blob's chunk-manifest state are not reported as the same snapshot.
 func TestTheSnapshotDigestCoversTheChunkManifestState(t *testing.T) {
+	t.Parallel()
 	a := peercatalog.Snapshot{Blobs: []peercatalog.Blob{
 		{Hash: "blake3:" + repeat("a", 64), Size: 1, ChunkManifest: manifests.StateUndecided},
 	}}

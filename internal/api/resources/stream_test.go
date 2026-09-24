@@ -159,6 +159,7 @@ func (h *harness) emit(eventType, subject string) int64 {
 // polite close is not the case that breaks — a dropped connection is, and it
 // drops at whatever point the server happened to have reached.
 func TestReconnectingTheEventStreamIsGapless(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -268,6 +269,7 @@ func assertNoGapsOrDuplicates(t *testing.T, want, got []int64) {
 // drain waits, and the log is untouched. This asserts the stronger property
 // that replaced the gap — everything arrives, in order, with no reconnect.
 func TestASlowConsumerReceivesEverythingInOrder(t *testing.T) {
+	t.Parallel()
 	// A one-event subscription buffer, so the notifications are certainly
 	// dropped. If delivery depended on them, this test could not pass.
 	h := newHarness(t, withStreamBuffer(1))
@@ -279,7 +281,11 @@ func TestASlowConsumerReceivesEverythingInOrder(t *testing.T) {
 	}
 	defer func() { _ = conn.Close() }()
 	if tcp, ok := conn.(*net.TCPConn); ok {
-		if err := tcp.SetReadBuffer(2048); err != nil {
+		// Small against the ~300KB flood below, so the server's write still
+		// blocks — but not so small that the window collapses to a segment
+		// and every round trip waits out a delayed ACK. At 2KB this test
+		// spent ~23s in that stall; at 32KB the flood no longer blocks.
+		if err := tcp.SetReadBuffer(16 << 10); err != nil {
 			t.Fatalf("shrinking the receive buffer: %v", err)
 		}
 	}
@@ -354,6 +360,7 @@ func TestASlowConsumerReceivesEverythingInOrder(t *testing.T) {
 // that has to receive every event in the system to notice its own job finishing
 // is a client that falls behind and gets dropped.
 func TestTheStreamFiltersByType(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	h.emit(events.TypeBlobCreated, "before-blob")
@@ -380,6 +387,7 @@ func TestTheStreamFiltersByType(t *testing.T) {
 // The frames have to be what an EventSource expects, or the browser client that
 // this endpoint exists for silently receives nothing.
 func TestTheStreamIsWellFormedSSE(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	c := h.openStream("?after=0")
 	defer c.close()
@@ -405,6 +413,7 @@ func TestTheStreamIsWellFormedSSE(t *testing.T) {
 // one client type that reconnects automatically is the one that reconnects with
 // a gap.
 func TestTheStreamHonoursLastEventID(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	first := h.emit(events.TypeBlobCreated, "one")
 	second := h.emit(events.TypeBlobCreated, "two")
@@ -438,6 +447,7 @@ func TestTheStreamHonoursLastEventID(t *testing.T) {
 }
 
 func TestTheStreamRejectsNonsense(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	for _, q := range []string{"?after=yesterday", "?after=-4"} {
 		resp := h.get("/api/v1/events" + q)
@@ -466,6 +476,7 @@ func TestTheStreamRejectsNonsense(t *testing.T) {
 // is exhausted, so it swallows anything a test can emit quickly enough to
 // matter. A test that cannot fail is a comment.
 func TestTheStreamSubscribesBeforeItSaysItIsReady(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	// A backlog large enough that the catch-up read is several queries. In a
@@ -502,6 +513,7 @@ func TestTheStreamSubscribesBeforeItSaysItIsReady(t *testing.T) {
 // invisible until the next reconnect, so `heyarr events tail` could not watch a
 // scan happen.
 func TestAnEventFromAnotherRoleReachesAnOpenStream(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	stream := h.openStream("?after=0")
 	defer stream.close()
@@ -607,6 +619,7 @@ func TestAnEventIsDeliveredExactlyOnceDespiteBothPaths(t *testing.T) {
 // subscription delivery races ahead of the poll that would have carried the
 // remote one.
 func TestAnEarlierEventFromAnotherRoleIsNotSkippedByALaterLocalOne(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	stream := h.openStream("?after=0")
 	defer stream.close()
@@ -671,6 +684,7 @@ func TestAnEarlierEventFromAnotherRoleIsNotSkippedByALaterLocalOne(t *testing.T)
 // that matters, not either half: /api/v1/system knows what the head is and
 // /api/v1/events knows what ?after= means, and they are only correct together.
 func TestSystemHeadIsAUsableStreamResumePoint(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	if got := h.eventsHead(); got != 0 {

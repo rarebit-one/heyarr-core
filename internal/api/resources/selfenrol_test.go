@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/encryption"
 	"github.com/rarebit-one/voidbind-go/enrolment"
 
 	"github.com/rarebit-one/heyarr-core/internal/auth"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 )
 
 // TestPhoneSelfEnrolsAndReadsButDoesNotWrite is the acceptance for ADR-0067,
@@ -31,6 +31,7 @@ import (
 // scheme and is refused a write, because enrolment grants the read floor and
 // nothing more (ADR-0065).
 func TestPhoneSelfEnrolsAndReadsButDoesNotWrite(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth)
 	admin := h.mint("admin", auth.ScopeAdmin)
 
@@ -213,6 +214,7 @@ func TestPhoneSelfEnrolsAndReadsButDoesNotWrite(t *testing.T) {
 // server, and this test asserts the response carries the public recipient and
 // nothing derived from a secret.
 func TestEnrolmentCarriesRecoveryEncryptionKey(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth)
 	admin := h.mint("admin", auth.ScopeAdmin)
 
@@ -296,6 +298,7 @@ func TestEnrolmentCarriesRecoveryEncryptionKey(t *testing.T) {
 // encryption key that is not a well-formed x25519 public key is a 400, so garbage
 // never reaches the enrolment response.
 func TestEnrolUserRejectsMalformedRecoveryKey(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth)
 	admin := h.mint("admin", auth.ScopeAdmin)
 	u, _, err := enrolment.GenerateUserIdentity()

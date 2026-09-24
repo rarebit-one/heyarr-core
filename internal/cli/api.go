@@ -11,22 +11,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/device"
 	"github.com/spf13/cobra"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/config"
-	"github.com/rarebit-one/heyarr-core/internal/device"
 )
 
 // The client commands.
 //
 // Everything in this file and its neighbours talks to a running Heyarr over
 // /api/v1 — by default over the unix socket in the data directory. That is
-// different from `token`, `fsck` and `gc`, which open the database directly
-// because they are host administration and have to work before a credential
-// exists or when the controller will not start. Nothing else may follow them:
+// different from `token`, `fsck`, `gc`, `backup`, `backup push` and
+// `space recover`, which open the database directly because they are host
+// administration and have to work before a credential exists or when the
+// controller will not start. Nothing else may follow them:
 // a command that reads the database because it is easier is a command that
 // works on the host and nowhere else, and that stops agreeing with the API the
 // first time the two are changed apart.

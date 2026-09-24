@@ -17,7 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/device"
+	"github.com/rarebit-one/voidbind-go/device"
+
+	heyarrdevice "github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/testutil"
 )
 
@@ -441,7 +443,7 @@ func TestDeviceHumanOutputSaysTheKeyAuthorisesNothing(t *testing.T) {
 		// The caveat names heyarr, the binary the reader ran — not the voidbind
 		// CLI they do not have (#369). Assert the heyarr-rendered form, and that
 		// the voidbind default is NOT what leaked through.
-		for _, want := range []string{"unproven", "not_enrolled", device.NotYetAuthorisingFor(device.CommandHint)} {
+		for _, want := range []string{"unproven", "not_enrolled", heyarrdevice.NotYetAuthorisingFor(heyarrdevice.CommandHint)} {
 			if !strings.Contains(out, want) {
 				t.Errorf("`heyarr %s` does not say %q:\n%s", strings.Join(args, " "), want, out)
 			}

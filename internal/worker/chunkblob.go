@@ -2,13 +2,13 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
@@ -171,9 +171,9 @@ func ChunkBlobHandler(deps ChunkDeps) HandlerFunc {
 	}
 
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload manifests.ChunkBlobPayload
-		if err := json.Unmarshal(job.Payload, &payload); err != nil {
-			return fmt.Errorf("worker: chunk_blob payload is not decodable: %w", err)
+		payload, err := decodePayload[manifests.ChunkBlobPayload](job)
+		if err != nil {
+			return err
 		}
 		hash, err := hashing.Parse(payload.BlobHash)
 		if err != nil {

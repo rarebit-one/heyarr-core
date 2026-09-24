@@ -42,6 +42,7 @@ func (h *harness) countJobs(t *testing.T, jobType string) int {
 }
 
 func TestReconcilingAPeerQueuesACycleForThatPeer(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seedSelf()
 	h.exec(`INSERT INTO peers (id, name, site, mode, is_self, enrolled_at, created_at)
 		VALUES ('01990000-0000-7000-8000-0000000000b2', 'site-b', 'site-b', 'full', 0, ?, ?)`,
@@ -88,6 +89,7 @@ func TestReconcilingAPeerQueuesACycleForThatPeer(t *testing.T) {
 // Asking twice while a cycle is queued yields one job — the same guarantee the
 // beat relies on, reached from the other side.
 func TestReconcilingAPeerTwiceQueuesOneCycle(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seedSelf()
 	h.exec(`INSERT INTO peers (id, name, site, mode, is_self, enrolled_at, created_at)
 		VALUES ('01990000-0000-7000-8000-0000000000b2', 'site-b', 'site-b', 'full', 0, ?, ?)`,
@@ -111,6 +113,7 @@ func TestReconcilingAPeerTwiceQueuesOneCycle(t *testing.T) {
 // An unknown peer is a 404 here rather than a job that runs, finds no such
 // Full Peer and succeeds having done nothing.
 func TestReconcilingAnUnknownPeerIsNotFound(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seedSelf()
 
 	resp := h.do(http.MethodPost, "/api/v1/peers/nobody/reconcile", "", nil)

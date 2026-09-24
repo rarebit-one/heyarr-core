@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/voidbind-go/hashing"
 )
 
 func playheadBlob(t *testing.T) hashing.Hash {

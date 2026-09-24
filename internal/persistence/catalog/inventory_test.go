@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/events"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/peer/inventory"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
@@ -151,6 +152,7 @@ func present(hash string, bytes int64) inventory.Entry {
 // the first non-self replicas rows this system has ever held
 
 func TestAPeerReportProducesReplicaRowsForThatRemotePeer(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	self := h.seedRemotePeer(t)
 	a, b := hashOf('a'), hashOf('b')
@@ -219,6 +221,7 @@ func TestAPeerReportProducesReplicaRowsForThatRemotePeer(t *testing.T) {
 // asserting that this file knows how to describe a loss, not that the peer
 // does.
 func TestAPeerThatStopsHoldingABlobMovesTheRowToMissing(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.seedRemotePeer(t)
 	ctx := context.Background()
@@ -301,6 +304,7 @@ func TestAPeerThatStopsHoldingABlobMovesTheRowToMissing(t *testing.T) {
 // says the loss out loud — and if it could not, a peer that reports
 // incrementally would never be able to give a replica back.
 func TestAnIncrementalReportAlsoTakesAReplicaAway(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.seedRemotePeer(t)
 	ctx := context.Background()
@@ -341,6 +345,7 @@ func TestAnIncrementalReportAlsoTakesAReplicaAway(t *testing.T) {
 // replacement transfer over the evidence (ADR-0018), and reporting it present
 // leaves the controller believing in a copy nothing can read.
 func TestAQuarantinedBlobIsReportedCorrupt(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.seedRemotePeer(t)
 	ctx := context.Background()
@@ -392,6 +397,7 @@ func TestAQuarantinedBlobIsReportedCorrupt(t *testing.T) {
 // idempotence (invariant 9)
 
 func TestTwoIdenticalReportsChangeNothingAndEmitNoEvents(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.seedRemotePeer(t)
 	ctx := context.Background()
@@ -450,6 +456,7 @@ func TestTwoIdenticalReportsChangeNothingAndEmitNoEvents(t *testing.T) {
 // incremental report is a diff, and a diff is meaningless without the state it
 // is a diff from.
 func TestAnIncrementalAndAFullReportOfTheSameRealityAgree(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	gone, changed, steady1, steady2, arrived := hashOf('a'), hashOf('b'), hashOf('c'), hashOf('d'), hashOf('e')
 	all := []string{gone, changed, steady1, steady2, arrived}
@@ -559,6 +566,7 @@ func TestAnIncrementalAndAFullReportOfTheSameRealityAgree(t *testing.T) {
 // on: a row nobody has confirmed recently must be readable as a fact about the
 // past.
 func TestFreshnessAdvancesOnConfirmationAndNotOnOmission(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.seedRemotePeer(t)
 	ctx := context.Background()
@@ -600,6 +608,7 @@ func TestFreshnessAdvancesOnConfirmationAndNotOnOmission(t *testing.T) {
 // column's meaning. NULL is reachable and means exactly "nobody has confirmed
 // this", which is what the migration deliberately does not backfill away.
 func TestARowNoPeerHasEverConfirmedHasNoReportedAt(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	self := h.seedRemotePeer(t)
 	a := hashOf('a')
@@ -621,6 +630,7 @@ func TestARowNoPeerHasEverConfirmedHasNoReportedAt(t *testing.T) {
 // replicas row — and refusing the whole report over it would let one unknown
 // blob block every real one in the same cycle.
 func TestAReportOfABlobThisControllerDoesNotKnowIsCountedNotRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.seedRemotePeer(t)
 	known, stranger := hashOf('a'), hashOf('f')
@@ -646,6 +656,7 @@ func TestAReportOfABlobThisControllerDoesNotKnowIsCountedNotRefused(t *testing.T
 // disagreeing is an operator problem, and it has to be named rather than
 // producing rows for a peer that does not exist.
 func TestAReportFromAPeerWithNoCatalogRowIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	a := hashOf('a')
 	h.seedBlobs(t, a)
@@ -665,6 +676,7 @@ func TestAReportFromAPeerWithNoCatalogRowIsRefused(t *testing.T) {
 // let it keep its replicas forever, and that table is what garbage collection
 // reads before deleting the last copy.
 func TestAFullReportWithNoEntriesEmptiesThePeer(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.seedRemotePeer(t)
 	ctx := context.Background()
@@ -705,6 +717,7 @@ func TestAFullReportWithNoEntriesEmptiesThePeer(t *testing.T) {
 // this, a future caller that forgot to compare would silently file one peer's
 // inventory under another's id.
 func TestTheReportIsRecordedAgainstTheActingPeerNotTheDeclaredOne(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	self := h.seedRemotePeer(t)
 	a := hashOf('a')

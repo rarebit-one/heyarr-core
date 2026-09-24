@@ -14,6 +14,7 @@ import (
 // ON DELETE CASCADE, so the database performs the removal (#228). Logical in
 // ADR-0018's sense: the catalog rows go and not one byte is unlinked.
 func TestDeleteEmptyLibraryRemovesItAndItsRoots(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	// An empty library with a root and no assets — the shell a throwaway or a
@@ -53,6 +54,7 @@ func TestDeleteEmptyLibraryRemovesItAndItsRoots(t *testing.T) {
 // library's assets of their library rather than refuse. The seeded `films`
 // library holds two assets, so its delete is refused and says how to proceed.
 func TestDeleteLibraryRefusesWhileItHoldsContent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	resp := h.doStable(http.MethodDelete, "/api/v1/libraries/"+libFilmsID, nil)
@@ -78,6 +80,7 @@ func TestDeleteLibraryRefusesWhileItHoldsContent(t *testing.T) {
 // (#228). An asset belongs to its library, not to a root, so the seeded films
 // asset is untouched when the films root goes.
 func TestDeleteLibraryRootStopsScanningWithoutRemovingContent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	resp := h.doStable(http.MethodDelete, "/api/v1/libraries/"+libFilmsID+"/roots/"+rootID, nil)
@@ -102,6 +105,7 @@ func TestDeleteLibraryRootStopsScanningWithoutRemovingContent(t *testing.T) {
 // A root is addressed under its own library. A root id that belongs to another
 // library is a 404 here, never a cross-library delete.
 func TestDeleteLibraryRootIsScopedToItsLibrary(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	// A root under `books`, deleted through the `films` path.
@@ -121,6 +125,7 @@ func TestDeleteLibraryRootIsScopedToItsLibrary(t *testing.T) {
 // Both deletes need `write`. A read token browsing the library must not be able
 // to remove it or its roots.
 func TestLibraryDeletesNeedWriteScope(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth).seed()
 	readOnly := h.mint("reader", auth.ScopeRead).Secret
 

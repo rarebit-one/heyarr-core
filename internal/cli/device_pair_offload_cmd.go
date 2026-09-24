@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rarebit-one/voidbind-go/device"
 	"github.com/spf13/cobra"
 
-	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/cruciform"
 	vbrelay "github.com/rarebit-one/voidbind-go/relay"
