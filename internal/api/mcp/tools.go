@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
-	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 )
 
@@ -23,411 +22,20 @@ import (
 // they were deferred for reasons that had stopped being true, which produces an
 // agent waiting for a milestone that already shipped (#226).
 //
-// The split between this file and the handlers is deliberate: this is the
-// VOCABULARY, readable in one screen, and reviewing the authorisation surface
-// means reading the Scope column here rather than opening nine handlers.
+// The split between the registrations and the handlers is deliberate: the
+// registrations are the VOCABULARY, and reviewing the authorisation surface
+// means reading their Scope column rather than opening every handler. They are
+// grouped one lane per file (tools_*.go, renderers.go) so each lane still reads
+// in one screen.
 
 func (s *Server) registerTools() {
 	// The renderer lane (§68), in its own file: four verbs about the
 	// physical world rather than about the catalog.
 	s.registerRendererTools()
-
-	s.tools.register(Tool{
-		Name:     "search_content",
-		Title:    "Search the library",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "Find works already in the library by title. Use this to resolve " +
-			"what someone means before wanting it — a work found here can be wanted by " +
-			"id, which is exact, rather than by description, which may create a second " +
-			"work if it does not match what a scan would have produced. A tv_series hit " +
-			"that carries a stored tvdb_id can be followed in one step by passing that id " +
-			"to follow_source; a hit without one omits it. Each work carries its " +
-			"attributes and its artwork (null when it has none); `episodes` lists the " +
-			"parts of a work that matched by their own title — a scanned episode with " +
-			"its file, or an item a followed source projected.",
-		InputSchema: schemaSearchContent,
-		Handler:     s.searchContent,
-	})
-
-	s.tools.register(Tool{
-		Name:     "discover_content",
-		Title:    "Discover new content",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "Find content the library does NOT already hold. Where search_content " +
-			"looks only in the library, this asks every configured metadata provider (TVDB/TMDB " +
-			"for series, TMDB for movies, Open Library for books, MusicBrainz for music) for " +
-			"candidate works matching a free-text title, whether or not they are catalogued — " +
-			"the \"search then acquire\" door. A tv_series result carries a tvdb_id you pass " +
-			"straight to follow_source; every result (including movie/book/music) carries " +
-			"source+external_id for reference and a type telling you which: a tv_series/podcast/" +
-			"youtube_channel/rss_feed result is followed (follow_source), a movie/book/music " +
-			"result has no calendar and is wanted instead (want_content by title+year+" +
-			"content_type). Use this when search_content came back empty and someone wants " +
-			"something new. Needs at least one metadata or enrich provider configured; a node " +
-			"without one says so rather than returning nothing.",
-		InputSchema: schemaDiscoverContent,
-		Handler:     s.discoverContent,
-	})
-
-	s.tools.register(Tool{
-		Name:     "get_external_ids",
-		Title:    "Get external identifiers",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "Resolve external catalogue identifiers (tmdb, imdb) for a work or " +
-			"edition, or reverse a source+value back to the work or edition that carries " +
-			"it. Use this to reconcile an outside id to a heyarr work_id and back by id " +
-			"rather than by a fuzzy title. Read-only; an unknown id returns an empty list.",
-		InputSchema: schemaGetExternalIDs,
-		Handler:     s.getExternalIDs,
-	})
-
-	s.tools.register(Tool{
-		Name:     "want_content",
-		Title:    "Want content",
-		Scope:    auth.ScopeWrite,
-		ReadOnly: false,
-		Description: "Declare that content SHOULD exist under a quality profile, whether " +
-			"or not it does. This is the central action: it works for content the library " +
-			"has never seen, creating the work from a description. Name the profile the " +
-			"way a person would — \"living-room\" — not by id.",
-		InputSchema: schemaWantContent,
-		Handler:     s.wantContent,
-	})
-
-	s.tools.register(Tool{
-		Name:     "monitor_content",
-		Title:    "Keep looking, or stop",
-		Scope:    auth.ScopeWrite,
-		ReadOnly: false,
-		Description: "Turn monitoring on or off for a want. Monitoring is NOT the same as " +
-			"wanting: an unmonitored want that is satisfied is finished, while a monitored " +
-			"one keeps looking for something better. Turn it off when someone says \"this " +
-			"copy is fine, stop\".",
-		InputSchema: schemaMonitorContent,
-		Handler:     s.monitorContent,
-	})
-
-	s.tools.register(Tool{
-		Name:     "search_releases",
-		Title:    "Look for releases now",
-		Scope:    auth.ScopeWrite,
-		ReadOnly: false,
-		Description: "Ask the indexers for releases that would satisfy a want, now, " +
-			"rather than waiting for its next scheduled search. It QUEUES the search and " +
-			"returns a job — an indexer can take thirty seconds to refuse, so nothing " +
-			"holds while it runs. Read the want back afterwards to see what was found " +
-			"and what was chosen.",
-		InputSchema: schemaSearchReleases,
-		Handler:     s.searchReleases,
-	})
-
-	s.tools.register(Tool{
-		Name:     "acquire_release",
-		Title:    "Acquire a particular release",
-		Scope:    auth.ScopeWrite,
-		ReadOnly: false,
-		Description: "Choose one specific release for a want and start fetching it — " +
-			"§60's manual override. Use it when someone names the release they want " +
-			"rather than letting the scorer decide. A candidate the quality profile " +
-			"REJECTED is refused, and the refusal names the rule: change the profile if " +
-			"it should be acceptable, rather than overriding it here.",
-		InputSchema: schemaAcquireRelease,
-		Handler:     s.acquireRelease,
-	})
-
-	s.tools.register(Tool{
-		Name:     "follow_source",
-		Title:    "Follow a source",
-		Scope:    auth.ScopeWrite,
-		ReadOnly: false,
-		Description: "Subscribe to a source and archive everything it emits, forever — a " +
-			"STANDING subscription, distinct from want_content, which gets one thing once. " +
-			"Give a content intent (which series or podcast) and an identity (a url, or a " +
-			"tvdb_id); the type is inferred, you never name a source or a provider. A TVDB id " +
-			"or URL is a TV series; any other http(s) feed URL is a podcast.",
-		InputSchema: schemaFollowSource,
-		Handler:     s.followSource,
-	})
-
-	s.tools.register(Tool{
-		Name:     "list_followed",
-		Title:    "What is followed",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "List every followed source with how many items its feed has yielded, " +
-			"how many are archived, when it was last polled and when it is due next, and " +
-			"whether its feed adapter is healthy. Read this to answer \"is this working\".",
-		InputSchema: schemaNoArgs,
-		Handler:     s.listFollowed,
-	})
-
-	s.tools.register(Tool{
-		Name:     "unfollow",
-		Title:    "Stop following a source",
-		Scope:    auth.ScopeWrite,
-		ReadOnly: false,
-		Description: "Stop a subscription. By default it stops future polls and KEEPS every " +
-			"episode already archived (keep_archive true). Phase 1 always keeps the archive; " +
-			"asking to remove it is refused.",
-		InputSchema: schemaUnfollow,
-		Handler:     s.unfollow,
-	})
-
-	s.tools.register(Tool{
-		Name:     "poll_source",
-		Title:    "Poll a source now",
-		Scope:    auth.ScopeWrite,
-		ReadOnly: false,
-		Description: "Poll one followed source now instead of waiting for its next scheduled " +
-			"round, which can be up to six hours out. Reach for it after following something and " +
-			"not wanting to wait, or when a feed just posted. It QUEUES the poll and returns a job " +
-			"— a feed host can be slow, so nothing holds while it runs — and leaves the source's " +
-			"schedule alone: this is an EXTRA poll, not a reschedule. Idempotent: asking again while " +
-			"a poll is still queued collapses to the one job. Read list_followed afterwards to see " +
-			"when it last polled and what it found.",
-		InputSchema: schemaPollSource,
-		Handler:     s.pollSource,
-	})
-
-	s.tools.register(Tool{
-		Name:     "set_source_profile",
-		Title:    "Repoint a source at a quality profile",
-		Scope:    auth.ScopeWrite,
-		ReadOnly: false,
-		Description: "Change a followed source's strategy IN PLACE, without unfollowing it: which " +
-			"quality profile it — and every item it has already archived — is judged against, " +
-			"and/or its backfill. Reach for the profile when a feed is on the wrong one: an article " +
-			"or podcast feed on a video profile never counts as archived, because a captured page " +
-			"has no resolution for the video profile's gate to pass; move it to \"published\" and its " +
-			"held items are re-judged and become archived at once. Reach for backfill=full when a " +
-			"from_now follow should now archive its whole back-catalogue: the poll it queues " +
-			"projects every item the feed has ever listed — a real capacity commitment. Give at " +
-			"least one of the two. Name the profile as a person would, the same as follow_source.",
-		InputSchema: schemaSetSourceProfile,
-		Handler:     s.setSourceProfile,
-	})
-
-	s.tools.register(Tool{
-		Name:     "get_missing_content",
-		Title:    "What is not satisfied",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "List wants whose content is not satisfied — either nothing is held, " +
-			"or what is held does not meet the profile. Use get_content_satisfaction on " +
-			"one of them to find out which, and why.",
-		InputSchema: schemaNoArgs,
-		Handler:     s.getMissingContent,
-	})
-
-	s.tools.register(Tool{
-		Name:     "get_upgrade_candidates",
-		Title:    "What could be better",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "List wants that are satisfied and could still be improved — " +
-			"monitored, holding acceptable content, and not yet at the profile's terminal " +
-			"condition. A want being here does not mean a better release exists, only " +
-			"that nothing about its state rules one out.",
-		InputSchema: schemaNoArgs,
-		Handler:     s.getUpgradeCandidates,
-	})
-
-	s.tools.register(Tool{
-		Name:     "get_content_satisfaction",
-		Title:    "Why a want is or is not met",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "Explain one want: whether the library holds bytes the profile " +
-			"accepts, whether those bytes are on every peer that should hold them, and " +
-			"WHICH RULE rejected each asset that did not qualify. This is the tool to " +
-			"reach for when someone says \"I have this, why does Heyarr say it is missing\".",
-		InputSchema: schemaDesiredItemID,
-		Handler:     s.getContentSatisfaction,
-	})
-
-	s.tools.register(Tool{
-		Name:     "get_acquisition_status",
-		Title:    "What a want is downloading right now",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "Report where a want is in the acquisition pipeline (idle, searching, " +
-			"selected, queued, downloading, verifying, ingesting) and, when a download is in " +
-			"flight, the transfer behind it: which release was chosen — its name carries the " +
-			"resolution and size — how far it has downloaded, and any trouble the client " +
-			"reported. This is the read for \"what is this want actually doing\" and \"why is " +
-			"it still not here\", without opening the download client.",
-		InputSchema: schemaDesiredItemID,
-		Handler:     s.getAcquisitionStatus,
-	})
-
-	s.tools.register(Tool{
-		Name:     "list_jobs",
-		Title:    "Inspect the durable work queue",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "List the durable jobs Heyarr runs — searches, grabs, download polls, " +
-			"ingests — filtered by state and/or type, most recent first, each with its last " +
-			"error. This is the read behind \"why is nothing being acquired\": a search that " +
-			"found nothing, a grab the download client refused, a poll that failed. A `failed` " +
-			"job will retry with backoff; a `dead` one is terminal until an operator retries it.",
-		InputSchema: schemaListJobs,
-		Handler:     s.listJobs,
-	})
-
-	s.tools.register(Tool{
-		Name:     "explain_release",
-		Title:    "Explain a release against a profile",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "Score one or more releases against a quality profile and return the " +
-			"reasons — every rule considered, whether it passed, failed, scored, missed or " +
-			"could not be determined. Writes nothing, so it is safe to use for answering " +
-			"\"would this be accepted?\" before anything is acquired. An attribute left out " +
-			"is reported as undetermined rather than as a failure, which is a different " +
-			"thing and sends you to a different place.",
-		InputSchema: schemaExplainRelease,
-		Handler:     s.explainRelease,
-	})
-
-	// The browse lane (ADR-0075): shelf reads that map to the newer HTTP
-	// browse handlers, each a shell over the same resources intent so the two
-	// doors cannot drift. They complement search_content — resolving a title —
-	// with walking the catalog the way a consumer client presents it.
-	s.tools.register(Tool{
-		Name:     "browse_library",
-		Title:    "Browse the library",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "Walk the catalog the way a shelf presents it, rather than resolving one " +
-			"title. Filter by content_type, year (exact or a from/to range), library, artist or " +
-			"author, and sort A–Z or newest-added first; each work carries its poster and the one " +
-			"file a tap would play (null when it has none). Reach for this to answer \"what do we " +
-			"have\" and \"what is new\"; use search_content when you already know the title.",
-		InputSchema: schemaBrowseLibrary,
-		Handler:     s.browseLibrary,
-	})
-
-	s.tools.register(Tool{
-		Name:     "list_artists",
-		Title:    "List artists",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "List the artists the music library groups by, with how many works each has " +
-			"and a representative cover. An artist is a grouping over what a scan wrote, not an " +
-			"entity — pass a name back to browse_library as `artist` to get that artist's albums.",
-		InputSchema: schemaGrouping,
-		Handler:     s.listArtists,
-	})
-
-	s.tools.register(Tool{
-		Name:     "list_authors",
-		Title:    "List authors",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "List the authors the book library groups by, with how many works each has " +
-			"and a representative cover. An author is a grouping over what a scan wrote, not an " +
-			"entity — pass a name back to browse_library as `author` to get that author's books.",
-		InputSchema: schemaGrouping,
-		Handler:     s.listAuthors,
-	})
-
-	s.tools.register(Tool{
-		Name:     "continue_rail",
-		Title:    "Pick up where it stopped",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "List the newest not-finished session per work that has a position — the " +
-			"\"continue\" rail a client draws to resume where playback stopped. Each row carries the " +
-			"work, the part (season and episode for a series), the file with its duration, and the " +
-			"stored position. These are resume points the node keeps server-side; the encrypted " +
-			"user artifacts this server cannot decrypt stay in the separate device-side surface.",
-		InputSchema: schemaContinueRail,
-		Handler:     s.continueRail,
-	})
-
-	s.tools.register(Tool{
-		Name:     "followed_source_items",
-		Title:    "What a followed source has",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "Detail ONE followed source: the subscription itself plus every item its feed " +
-			"has yielded — what is archived and what it merely knows about, each with the want it " +
-			"projected and that want's state. Where list_followed answers \"is this working\" across " +
-			"all subscriptions, this answers \"what has this one got\" for a single source.",
-		InputSchema: schemaFollowedSourceItems,
-		Handler:     s.followedSourceItems,
-	})
-
-	s.tools.register(Tool{
-		Name:     "get_provider_status",
-		Title:    "Indexer and download-client status",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "Report the configured indexers and download clients (and metadata providers), " +
-			"what each can do, whether the last check found it usable and which version it reported. " +
-			"This is the read behind \"why is nothing being acquired\": a node with none configured is " +
-			"a supported deployment and says so with an empty list. No credential is ever reported.",
-		InputSchema: schemaNoArgs,
-		Handler:     s.getProviderStatus,
-	})
-
-	s.tools.register(Tool{
-		Name:     "get_peer_status",
-		Title:    "Peer status",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "List the peers this instance knows about and what each is for. " +
-			"A single peer is a supported deployment rather than a symptom — most " +
-			"Heyarr installations are one machine — so do not report a fabric of one " +
-			"as a replication fault. Ask get_content_satisfaction whether placement " +
-			"is answering a real question: it reports `unproven` when the target set " +
-			"is this node alone.",
-		InputSchema: schemaNoArgs,
-		Handler:     s.getPeerStatus,
-	})
-
-	s.tools.register(Tool{
-		Name:     "get_replica_status",
-		Title:    "Where bytes are",
-		Scope:    auth.ScopeRead,
-		ReadOnly: true,
-		Description: "Report which peers hold a blob and whether their copy is verified. " +
-			"A copy that is pending or corrupt is NOT a copy for placement purposes.",
-		InputSchema: schemaBlobHash,
-		Handler:     s.getReplicaStatus,
-	})
-
-	s.tools.register(Tool{
-		Name:     "sync_peer",
-		Title:    "Reconcile against a peer",
-		Scope:    auth.ScopeWrite,
-		ReadOnly: false,
-		Description: "Ask this instance to reconcile the desired blob set against what " +
-			"a peer is known to hold, now, rather than waiting for the next scheduled " +
-			"cycle. Queues work rather than doing it: the diff enqueues a transfer per " +
-			"gap and the bytes move afterwards, so this reply says only that the cycle " +
-			"was accepted. It is the on-demand half of the reconciliation §57 asks for " +
-			"on a beat and on demand — useful straight after enrolling a peer or " +
-			"restoring one, and pointless to call in a loop.",
-		InputSchema: schemaSyncPeer,
-		Handler:     s.syncPeer,
-	})
-
-	s.tools.register(Tool{
-		Name:     "verify_blob",
-		Title:    "Re-verify stored bytes",
-		Scope:    auth.ScopeWrite,
-		ReadOnly: false,
-		Description: "Queue a re-read of a blob's bytes to confirm they still hash to " +
-			"what the catalog recorded. Queues work rather than doing it — the answer " +
-			"arrives on the job, not in this reply — because re-hashing a large file is " +
-			"not something to hold a request open for.",
-		InputSchema: schemaBlobHash,
-		Handler:     s.verifyBlob,
-	})
+	s.registerLibraryTools()     // tools_library.go
+	s.registerAcquisitionTools() // tools_acquisition.go
+	s.registerFollowedTools()    // tools_followed.go
+	s.registerFabricTools()      // tools_fabric.go
 }
 
 // decodeArgs unmarshals a tool's arguments, rejecting unknown fields.
@@ -447,6 +55,17 @@ func decodeArgs(raw json.RawMessage, into any) error {
 	return nil
 }
 
+// wantContentArgs is what wantContent decodes (held to its schema by schemaargs_test.go).
+type wantContentArgs struct {
+	WorkID         string `json:"work_id"`
+	Title          string `json:"title"`
+	ContentType    string `json:"content_type"`
+	Year           int    `json:"year"`
+	QualityProfile string `json:"quality_profile"`
+	Monitor        *bool  `json:"monitor"`
+	Reason         string `json:"reason"`
+}
+
 // wantContent is the write intent, shared with POST /api/v1/desired.
 //
 // The whole body of this function is the argument shape and the delegation.
@@ -454,15 +73,7 @@ func decodeArgs(raw json.RawMessage, into any) error {
 // call it, so the acquisition row, the two events and the immediate
 // reconciliation cannot happen through one door and not the other.
 func (s *Server) wantContent(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		WorkID         string `json:"work_id"`
-		Title          string `json:"title"`
-		ContentType    string `json:"content_type"`
-		Year           int    `json:"year"`
-		QualityProfile string `json:"quality_profile"`
-		Monitor        *bool  `json:"monitor"`
-		Reason         string `json:"reason"`
-	}
+	var args wantContentArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -493,12 +104,15 @@ func (s *Server) wantContent(ctx context.Context, raw json.RawMessage) (any, err
 	return out.Desired, nil
 }
 
+// monitorContentArgs is what monitorContent decodes (held to its schema by schemaargs_test.go).
+type monitorContentArgs struct {
+	DesiredItemID string `json:"desired_item_id"`
+	Monitor       *bool  `json:"monitor"`
+}
+
 // monitorContent is the other write intent, shared with PATCH /desired/{id}.
 func (s *Server) monitorContent(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		DesiredItemID string `json:"desired_item_id"`
-		Monitor       *bool  `json:"monitor"`
-	}
+	var args monitorContentArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -520,6 +134,11 @@ func (s *Server) monitorContent(ctx context.Context, raw json.RawMessage) (any, 
 	return item, nil
 }
 
+// searchReleasesArgs is what searchReleases decodes (held to its schema by schemaargs_test.go).
+type searchReleasesArgs struct {
+	DesiredItemID string `json:"desired_item_id"`
+}
+
 // searchReleases is §71's search_releases.
 //
 // It queues the search rather than performing it, and says so, because a search
@@ -528,9 +147,7 @@ func (s *Server) monitorContent(ctx context.Context, raw json.RawMessage) (any, 
 // want's candidates afterwards — get_content_satisfaction explains what is
 // held, and explain_release scores what was offered.
 func (s *Server) searchReleases(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		DesiredItemID string `json:"desired_item_id"`
-	}
+	var args searchReleasesArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -544,6 +161,12 @@ func (s *Server) searchReleases(ctx context.Context, raw json.RawMessage) (any, 
 	return out, nil
 }
 
+// acquireReleaseArgs is what acquireRelease decodes (held to its schema by schemaargs_test.go).
+type acquireReleaseArgs struct {
+	DesiredItemID string `json:"desired_item_id"`
+	CandidateID   string `json:"candidate_id"`
+}
+
 // acquireRelease is §71's acquire_release.
 //
 // It is §60's manual override reached by an agent: select this candidate, and
@@ -552,10 +175,7 @@ func (s *Server) searchReleases(ctx context.Context, raw json.RawMessage) (any, 
 // statement of what is acceptable into a suggestion, and the reason it gets
 // back names the rule so it can say WHY rather than that it failed.
 func (s *Server) acquireRelease(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		DesiredItemID string `json:"desired_item_id"`
-		CandidateID   string `json:"candidate_id"`
-	}
+	var args acquireReleaseArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -592,24 +212,27 @@ func (s *Server) acquireRelease(ctx context.Context, raw json.RawMessage) (any, 
 	}, nil
 }
 
+// followSourceArgs is what followSource decodes (held to its schema by schemaargs_test.go).
+type followSourceArgs struct {
+	URL            string   `json:"url"`
+	TVDBID         string   `json:"tvdb_id"`
+	Type           string   `json:"type"`
+	WorkID         string   `json:"work_id"`
+	Title          string   `json:"title"`
+	Year           int      `json:"year"`
+	QualityProfile string   `json:"quality_profile"`
+	Monitor        *bool    `json:"monitor"`
+	Backfill       string   `json:"backfill"`
+	Reason         string   `json:"reason"`
+	WantSubtitles  []string `json:"want_subtitles"`
+}
+
 // followSource is §55's follow_source — the subscription intent, shared with
 // POST /api/v1/followed-sources. The same "one intent, two doors" discipline as
 // want_content: the source, its poll bookkeeping and its event are created
 // through resources.FollowSource, so the two doors cannot drift.
 func (s *Server) followSource(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		URL            string   `json:"url"`
-		TVDBID         string   `json:"tvdb_id"`
-		Type           string   `json:"type"`
-		WorkID         string   `json:"work_id"`
-		Title          string   `json:"title"`
-		Year           int      `json:"year"`
-		QualityProfile string   `json:"quality_profile"`
-		Monitor        *bool    `json:"monitor"`
-		Backfill       string   `json:"backfill"`
-		Reason         string   `json:"reason"`
-		WantSubtitles  []string `json:"want_subtitles"`
-	}
+	var args followSourceArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -626,15 +249,18 @@ func (s *Server) followSource(ctx context.Context, raw json.RawMessage) (any, er
 	return out, nil
 }
 
+// discoverContentArgs is what discoverContent decodes (held to its schema by schemaargs_test.go).
+type discoverContentArgs struct {
+	Query string `json:"query"`
+}
+
 // discoverContent is #451's discover_content — the "not-yet-in-library" search,
 // shared with POST /api/v1/discover through resources.Discover so the MCP door
 // and the REST door cannot drift. Unlike search_content (a raw library read that
 // hits s.reader directly), discovery needs the provider registry, which lives
 // behind the resource API — so it delegates there, the same as list_followed.
 func (s *Server) discoverContent(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		Query string `json:"query"`
-	}
+	var args discoverContentArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -668,13 +294,16 @@ func (s *Server) listFollowed(ctx context.Context, _ json.RawMessage) (any, erro
 	return map[string]any{"followed_sources": out}, nil
 }
 
+// unfollowArgs is what unfollow decodes (held to its schema by schemaargs_test.go).
+type unfollowArgs struct {
+	SourceID    string `json:"source_id"`
+	KeepArchive *bool  `json:"keep_archive"`
+}
+
 // unfollow is §55's unfollow, shared with DELETE /api/v1/followed-sources/{id}.
 // keep_archive defaults to true — stop polling, keep what was archived.
 func (s *Server) unfollow(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		SourceID    string `json:"source_id"`
-		KeepArchive *bool  `json:"keep_archive"`
-	}
+	var args unfollowArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -694,14 +323,17 @@ func (s *Server) unfollow(ctx context.Context, raw json.RawMessage) (any, error)
 	return map[string]any{"source_id": args.SourceID, "status": "unfollowed; the archive was kept"}, nil
 }
 
+// pollSourceArgs is what pollSource decodes (held to its schema by schemaargs_test.go).
+type pollSourceArgs struct {
+	SourceID string `json:"source_id"`
+}
+
 // pollSource is poll_source, shared with POST /api/v1/followed-sources/{id}/poll
 // through resources.PollSource — the same enqueue the follow door and the follow
 // beat use, so an on-demand poll and a scheduled one cannot drift. It queues the
 // poll and says so; an unknown id is a not-found the agent can quote.
 func (s *Server) pollSource(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		SourceID string `json:"source_id"`
-	}
+	var args pollSourceArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -715,16 +347,19 @@ func (s *Server) pollSource(ctx context.Context, raw json.RawMessage) (any, erro
 	return out, nil
 }
 
+// setSourceProfileArgs is what setSourceProfile decodes (held to its schema by schemaargs_test.go).
+type setSourceProfileArgs struct {
+	SourceID       string    `json:"source_id"`
+	QualityProfile string    `json:"quality_profile"`
+	Backfill       string    `json:"backfill"`
+	WantSubtitles  *[]string `json:"want_subtitles"`
+}
+
 // setSourceProfile is set_source_profile, shared with PATCH
 // /api/v1/followed-sources/{id}. It reuses the exact repoint RepointSource runs,
 // so the two doors move a subscription's strategy the same way (ADR-0082).
 func (s *Server) setSourceProfile(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		SourceID       string    `json:"source_id"`
-		QualityProfile string    `json:"quality_profile"`
-		Backfill       string    `json:"backfill"`
-		WantSubtitles  *[]string `json:"want_subtitles"`
-	}
+	var args setSourceProfileArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}

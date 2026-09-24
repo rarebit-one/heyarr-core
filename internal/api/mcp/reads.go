@@ -46,16 +46,19 @@ type truncatable struct {
 	Truncated bool `json:"truncated"`
 }
 
+// searchContentArgs is what searchContent decodes (held to its schema by schemaargs_test.go).
+type searchContentArgs struct {
+	Query       string `json:"query"`
+	ContentType string `json:"content_type"`
+	Limit       int    `json:"limit"`
+}
+
 // searchContent finds works — and episodes — already in the library. It is a
 // shell over resources.SearchContent, the same function POST /search calls
 // (ADR-0075), so the two doors cannot drift; only the truncatable envelope is
 // this door's own.
 func (s *Server) searchContent(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		Query       string `json:"query"`
-		ContentType string `json:"content_type"`
-		Limit       int    `json:"limit"`
-	}
+	var args searchContentArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -87,6 +90,14 @@ func (s *Server) searchContent(ctx context.Context, raw json.RawMessage) (any, e
 	return out, nil
 }
 
+// getExternalIDsArgs is what getExternalIDs decodes (held to its schema by schemaargs_test.go).
+type getExternalIDsArgs struct {
+	WorkID    string `json:"work_id"`
+	EditionID string `json:"edition_id"`
+	Source    string `json:"source"`
+	Value     string `json:"value"`
+}
+
 // getExternalIDs resolves external catalogue identifiers (tmdb, imdb, …) for a
 // work or edition, or reverses a source+value back to whatever carries it —
 // implements ADR-0050. It is a read-only projection of the external_ids rows
@@ -94,12 +105,7 @@ func (s *Server) searchContent(ctx context.Context, raw json.RawMessage) (any, e
 // reconcile an outside id to a heyarr work_id and back by id rather than by a
 // fuzzy title match. An unknown id is "no match" (an empty list), never an error.
 func (s *Server) getExternalIDs(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		WorkID    string `json:"work_id"`
-		EditionID string `json:"edition_id"`
-		Source    string `json:"source"`
-		Value     string `json:"value"`
-	}
+	var args getExternalIDsArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -264,6 +270,11 @@ func deref(s *string) string {
 	return *s
 }
 
+// getMissingContentArgs is what getMissingContent decodes (held to its schema by schemaargs_test.go).
+type getMissingContentArgs struct {
+	Limit int `json:"limit"`
+}
+
 // getMissingContent lists wants whose content is not satisfied.
 //
 // "Not satisfied" covers both nothing held AND held-but-not-good-enough, which
@@ -271,14 +282,17 @@ func deref(s *string) string {
 // them MISSING and AVAILABLE, and the state field tells them apart — which is
 // why the summary carries it rather than a bare boolean.
 func (s *Server) getMissingContent(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		Limit int `json:"limit"`
-	}
+	var args getMissingContentArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
 	return s.wantQuery(ctx,
 		`(a.content IS NULL OR a.content <> 'satisfied')`, clampLimit(args.Limit))
+}
+
+// getUpgradeCandidatesArgs is what getUpgradeCandidates decodes (held to its schema by schemaargs_test.go).
+type getUpgradeCandidatesArgs struct {
+	Limit int `json:"limit"`
 }
 
 // getUpgradeCandidates lists wants that could be improved.
@@ -289,9 +303,7 @@ func (s *Server) getMissingContent(ctx context.Context, raw json.RawMessage) (an
 // render a list. This is the same deliberate superset the JSON API's
 // `upgradable=true` returns.
 func (s *Server) getUpgradeCandidates(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		Limit int `json:"limit"`
-	}
+	var args getUpgradeCandidatesArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -300,15 +312,18 @@ func (s *Server) getUpgradeCandidates(ctx context.Context, raw json.RawMessage) 
 		clampLimit(args.Limit))
 }
 
+// getContentSatisfactionArgs is what getContentSatisfaction decodes (held to its schema by schemaargs_test.go).
+type getContentSatisfactionArgs struct {
+	DesiredItemID string `json:"desired_item_id"`
+}
+
 // getContentSatisfaction explains ONE want.
 //
 // It reconciles rather than reading a cached answer — the same choice the HTTP
 // endpoint makes, and for the same reason: an explanation that might be minutes
 // stale is one nobody can trust while looking at a file they can see on disk.
 func (s *Server) getContentSatisfaction(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		DesiredItemID string `json:"desired_item_id"`
-	}
+	var args getContentSatisfactionArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -323,14 +338,17 @@ func (s *Server) getContentSatisfaction(ctx context.Context, raw json.RawMessage
 	return result, nil
 }
 
+// getAcquisitionStatusArgs is what getAcquisitionStatus decodes (held to its schema by schemaargs_test.go).
+type getAcquisitionStatusArgs struct {
+	DesiredItemID string `json:"desired_item_id"`
+}
+
 // getAcquisitionStatus reports where a want is in the pipeline and the transfer
 // behind it — the read that answers "what is this want doing right now", which
 // otherwise needed a look inside the download client (progress, and the release
 // name that carries its resolution and size).
 func (s *Server) getAcquisitionStatus(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		DesiredItemID string `json:"desired_item_id"`
-	}
+	var args getAcquisitionStatusArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -351,16 +369,19 @@ type listJobsResult struct {
 	Jobs []resources.Job `json:"jobs"`
 }
 
+// listJobsArgs is what listJobs decodes (held to its schema by schemaargs_test.go).
+type listJobsArgs struct {
+	State string `json:"state"`
+	Type  string `json:"type"`
+	Limit int    `json:"limit"`
+}
+
 // listJobs surfaces the durable job queue — the read behind "why is nothing
 // being acquired": a search that found nothing, a grab the client refused, a
 // poll that failed. `failed` will retry with backoff; `dead` is terminal until
 // retried. It shares resources.ListJobs with the HTTP door.
 func (s *Server) listJobs(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		State string `json:"state"`
-		Type  string `json:"type"`
-		Limit int    `json:"limit"`
-	}
+	var args listJobsArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -388,6 +409,16 @@ func (s *Server) listJobs(ctx context.Context, raw json.RawMessage) (any, error)
 	}, nil
 }
 
+// explainReleaseArgs is what explainRelease decodes (held to its schema by schemaargs_test.go).
+type explainReleaseArgs struct {
+	QualityProfile string `json:"quality_profile"`
+	Releases       []struct {
+		ID         string         `json:"id"`
+		Title      string         `json:"title"`
+		Attributes map[string]any `json:"attributes"`
+	} `json:"releases"`
+}
+
 // explainRelease scores releases against a profile and returns §63's reasons.
 //
 // The flagship. It writes nothing, so an agent may use it freely to answer
@@ -395,14 +426,7 @@ func (s *Server) listJobs(ctx context.Context, raw json.RawMessage) (any, error)
 // back with their stable rule codes intact rather than summarised, because the
 // code is the part a person can act on.
 func (s *Server) explainRelease(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		QualityProfile string `json:"quality_profile"`
-		Releases       []struct {
-			ID         string         `json:"id"`
-			Title      string         `json:"title"`
-			Attributes map[string]any `json:"attributes"`
-		} `json:"releases"`
-	}
+	var args explainReleaseArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -616,11 +640,14 @@ func (s *Server) getPeerStatus(ctx context.Context, raw json.RawMessage) (any, e
 	return out, nil
 }
 
+// getReplicaStatusArgs is what getReplicaStatus decodes (held to its schema by schemaargs_test.go).
+type getReplicaStatusArgs struct {
+	BlobHash string `json:"blob_hash"`
+}
+
 // getReplicaStatus reports which peers hold a blob.
 func (s *Server) getReplicaStatus(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		BlobHash string `json:"blob_hash"`
-	}
+	var args getReplicaStatusArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -669,15 +696,18 @@ func (s *Server) getReplicaStatus(ctx context.Context, raw json.RawMessage) (any
 	return out, nil
 }
 
+// verifyBlobArgs is what verifyBlob decodes (held to its schema by schemaargs_test.go).
+type verifyBlobArgs struct {
+	BlobHash string `json:"blob_hash"`
+}
+
 // verifyBlob queues a re-read of a blob's bytes.
 //
 // Queues rather than runs. Re-hashing a large blob is minutes of I/O, and a
 // tool call that held a connection open for it would time out somewhere in the
 // middle and tell the agent nothing. The answer arrives on the job.
 func (s *Server) verifyBlob(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		BlobHash string `json:"blob_hash"`
-	}
+	var args verifyBlobArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -714,6 +744,11 @@ func (s *Server) verifyBlob(ctx context.Context, raw json.RawMessage) (any, erro
 	}, nil
 }
 
+// syncPeerArgs is what syncPeer decodes (held to its schema by schemaargs_test.go).
+type syncPeerArgs struct {
+	Peer string `json:"peer"`
+}
+
 // syncPeer queues a reconciliation cycle against one peer.
 //
 // The same intent as POST /api/v1/peers/{id}/reconcile, and for the same
@@ -724,9 +759,7 @@ func (s *Server) verifyBlob(ctx context.Context, raw json.RawMessage) (any, erro
 // This verb was DEFERRED from Milestone 3 because the peer model held exactly
 // one peer and there was nothing to synchronise with. There is now.
 func (s *Server) syncPeer(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		Peer string `json:"peer"`
-	}
+	var args syncPeerArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
