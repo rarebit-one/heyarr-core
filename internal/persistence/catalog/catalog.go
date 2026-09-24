@@ -111,6 +111,9 @@ func New(opts Options) (*Catalog, error) {
 
 var _ ingest.Catalog = (*Catalog)(nil)
 
+// timestampFormat trims trailing zeros, so its TEXT order is not time order
+// within a second. A column that SQL compares (`<`, `<=`, `>`) or sorts by is
+// written with sqlite.FormatTimestamp instead; both parse with either layout.
 const timestampFormat = time.RFC3339Nano
 
 // SelfPeer returns this node's peer id, creating the row on first use.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
 // The direct release — a non-search source's release, recorded whole (§55, §64,
@@ -79,7 +80,7 @@ func (c *Catalog) RecordDirectRelease(
 	}
 
 	now := c.clock.Now()
-	stamp := now.Format(timestampFormat)
+	stamp := sqlite.FormatTimestamp(now)
 	searchID := uuid.Must(uuid.NewV7()).String()
 
 	eval := acquisition.Evaluation{

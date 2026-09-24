@@ -9,6 +9,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/media/capability"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
 // Worker capability advertisement, persisted (§6, §75, ADR-0039, M5-112).
@@ -150,8 +151,8 @@ func (c *Catalog) AdvertiseCapabilities(
 					expires_at = excluded.expires_at,
 					detail     = excluded.detail`,
 				ad.WorkerID, name, ad.PeerID, ad.PeerName, string(source),
-				provedAt.UTC().Format(timestampFormat),
-				expires.Format(timestampFormat), h.Detail); err != nil {
+				sqlite.FormatTimestamp(provedAt),
+				sqlite.FormatTimestamp(expires), h.Detail); err != nil {
 				return fmt.Errorf("catalog: advertising %s for worker %s: %w", name, ad.WorkerID, err)
 			}
 			if _, had := before[name]; !had {
@@ -167,7 +168,7 @@ func (c *Catalog) AdvertiseCapabilities(
 		// Housekeeping, not the expiry mechanism. See the doc comment.
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM worker_capabilities WHERE expires_at <= ?`,
-			now.Format(timestampFormat)); err != nil {
+			sqlite.FormatTimestamp(now)); err != nil {
 			return fmt.Errorf("catalog: sweeping expired advertisements: %w", err)
 		}
 
@@ -223,7 +224,7 @@ func (c *Catalog) AdvertiseCapabilities(
 // node that can encode anything — the routing table's exactness is the reason
 // the dotted vocabulary needed no schema change in the first place.
 func (c *Catalog) FleetCapabilities(ctx context.Context, only string) ([]capability.Advertised, error) {
-	now := c.clock.Now().UTC().Format(timestampFormat)
+	now := sqlite.FormatTimestamp(c.clock.Now())
 
 	query := `
 		SELECT worker_id, capability, peer_id, peer_name, source, proved_at, expires_at, detail

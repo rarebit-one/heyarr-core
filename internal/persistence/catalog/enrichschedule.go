@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
 // The enrich schedule (ADR-0087): which held music/book Works are due an enrich
@@ -76,7 +78,7 @@ func (c *Catalog) DueEnrichWorks(ctx context.Context, now time.Time, limit int) 
 		WHERE `+enrichDueWhere+`
 		  AND (s.next_enrich_at IS NULL OR s.next_enrich_at <= ?)
 		ORDER BY coalesce(s.next_enrich_at, ''), w.id
-		LIMIT ?`, sortable(now), limit)
+		LIMIT ?`, sqlite.FormatTimestamp(now), limit)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: listing works due enrichment: %w", err)
 	}
@@ -131,7 +133,7 @@ func (c *Catalog) RecordEnrichScheduled(
 	if workID == "" {
 		return fmt.Errorf("catalog: recording a scheduled enrich needs a work")
 	}
-	nowStr, nextStr := sortable(now), sortable(next)
+	nowStr, nextStr := sqlite.FormatTimestamp(now), sqlite.FormatTimestamp(next)
 	_, err := c.db.Writer().ExecContext(ctx, `
 		INSERT INTO enrich_schedule
 			(work_id, fruitless, last_enriched_at, next_enrich_at, created_at, updated_at)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
 // Acquisition state (§64, M3-03).
@@ -70,7 +71,7 @@ func (c *Catalog) Acquisition(ctx context.Context, desiredItemID string) (Acquis
 // want that is halfway through a download.
 func (c *Catalog) StartAcquisition(ctx context.Context, desiredItemID string) (AcquisitionRecord, error) {
 	initial := acquisition.Initial()
-	now := c.clock.Now().Format(timestampFormat)
+	now := sqlite.FormatTimestamp(c.clock.Now())
 
 	var (
 		rec     AcquisitionRecord
@@ -138,7 +139,7 @@ func acquisitionInTx(ctx context.Context, tx *sql.Tx, id string) (AcquisitionRec
 func (c *Catalog) AdvanceAcquisition(
 	ctx context.Context, desiredItemID string, t acquisition.Transition, detail string,
 ) (AcquisitionRecord, error) {
-	now := c.clock.Now().Format(timestampFormat)
+	now := sqlite.FormatTimestamp(c.clock.Now())
 
 	var (
 		rec AcquisitionRecord
@@ -192,7 +193,7 @@ func (c *Catalog) AdvanceAcquisition(
 func (c *Catalog) SetSatisfaction(
 	ctx context.Context, desiredItemID string, content, placement acquisition.Satisfaction,
 ) (AcquisitionRecord, error) {
-	now := c.clock.Now().Format(timestampFormat)
+	now := sqlite.FormatTimestamp(c.clock.Now())
 
 	var (
 		rec     AcquisitionRecord
