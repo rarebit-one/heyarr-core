@@ -33,7 +33,7 @@ import (
 // client handles, rather than a fabricated transcode.
 func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request) {
 	p := parse(r)
-	if _, code, msg := h.authenticate(r.Context(), p); code != 0 {
+	if code, msg := h.authenticate(r.Context(), p); code != 0 {
 		h.write(w, p.format, h.fail(code, msg))
 		return
 	}
@@ -50,7 +50,7 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.internalError(w, r, p, "stream", err)
+		h.internalError(w, p, "stream", err)
 		return
 	}
 	if mime == "" {

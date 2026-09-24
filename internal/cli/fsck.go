@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -390,12 +389,10 @@ func printRepairedReport(
 	faults []repairsource.SourceFault, asJSON bool,
 ) error {
 	if asJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
 		if results == nil {
 			results = []integrity.RepairResult{}
 		}
-		return enc.Encode(struct {
+		return emitJSON(w, struct {
 			Check        integrity.Report         `json:"check"`
 			Repairs      []integrity.RepairResult `json:"repairs"`
 			SourceFaults []sourceFaultJSON        `json:"source_faults"`
@@ -466,9 +463,7 @@ func printRepairs(w io.Writer, results []integrity.RepairResult) error {
 
 func printReport(w io.Writer, report integrity.Report, asJSON bool) error {
 	if asJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(report)
+		return emitJSON(w, report)
 	}
 
 	mode := "shallow"
@@ -588,9 +583,7 @@ window rather than a partly spent one.`,
 
 func printCollection(w io.Writer, result integrity.Collection, asJSON bool) error {
 	if asJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(result)
+		return emitJSON(w, result)
 	}
 
 	mode := "dry run — nothing was changed"

@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -104,9 +103,9 @@ func EnrichHandler(opts EnrichHandlerOptions) HandlerFunc {
 	}
 
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload acquisition.EnrichWorkPayload
-		if err := json.Unmarshal(job.Payload, &payload); err != nil {
-			return fmt.Errorf("enrich-work: undecodable payload: %w", err)
+		payload, err := decodePayload[acquisition.EnrichWorkPayload](job)
+		if err != nil {
+			return err
 		}
 		if payload.WorkID == "" {
 			return fmt.Errorf("enrich-work: the payload names no work")

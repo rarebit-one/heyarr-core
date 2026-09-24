@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -134,9 +133,7 @@ func optionalSigner(dataDir string) ed25519.PrivateKey {
 func printBackup(out io.Writer, art backup.Artifact, asJSON bool) error {
 	m := art.Manifest
 	if asJSON {
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		return enc.Encode(backupJSON{
+		return emitJSON(out, backupJSON{
 			Path:          art.Dir,
 			Generation:    m.Generation,
 			SchemaVersion: m.SchemaVersion,

@@ -19,7 +19,6 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 
@@ -443,7 +442,3 @@ func slug(s string) string {
 	}
 	return strings.Trim(b.String(), "-")
 }
-
-// Dir is the conventional name of the generated library within a work
-// directory, so the demo and the tests agree without passing it around.
-func Dir(work string) string { return path.Join(work, "library") }
