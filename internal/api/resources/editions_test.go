@@ -14,6 +14,7 @@ import (
 // bytes stay, and its parent work is untouched — an edition is a subordinate,
 // scanner-recreatable grouping.
 func TestDeleteEditionRemovesTheCatalogRowsAndNoBytes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	resp := h.doStable(http.MethodDelete, "/api/v1/editions/"+edition1ID, nil)
@@ -56,6 +57,7 @@ func TestDeleteEditionRemovesTheCatalogRowsAndNoBytes(t *testing.T) {
 // route emits them, a desired.removed per cancelled want — both an edition-scoped
 // want and one scoped to an item the edition owns — and one edition.deleted.
 func TestDeleteEditionEmitsEveryRemoval(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	// An edition-scoped want directly on edition1, and an item belonging to
@@ -95,6 +97,7 @@ func TestDeleteEditionEmitsEveryRemoval(t *testing.T) {
 // edition is one of the seasons it projects: deleting an edition whose work is
 // still followed is refused, and the refusal says how to proceed.
 func TestDeleteEditionRefusesAFollowedWork(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	resp := follow(h, `{"tvdb_id":"12345","work_id":"`+work1ID+`","quality_profile":"living-room"}`)
@@ -120,6 +123,7 @@ func TestDeleteEditionRefusesAFollowedWork(t *testing.T) {
 // Deleting an edition needs `write`. A read token browsing the library must not
 // be able to empty it.
 func TestDeleteEditionNeedsWriteScope(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth).seed()
 	readOnly := h.mint("reader", auth.ScopeRead).Secret
 

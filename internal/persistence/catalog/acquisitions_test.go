@@ -25,6 +25,7 @@ func transfer(id, name string) providers.Transfer {
 }
 
 func TestRecordingAnAcquisitionIsIdempotent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -64,6 +65,7 @@ func TestRecordingAnAcquisitionIsIdempotent(t *testing.T) {
 // Progress is refreshed on every pass even when nothing transitions, because it
 // is what makes "stuck since Tuesday" visible.
 func TestProgressIsRefreshedWithoutCreating(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -98,6 +100,7 @@ func TestProgressIsRefreshedWithoutCreating(t *testing.T) {
 // its numeric ids from 1, so a row keyed on one would silently start pointing
 // at somebody else's transfer. Keying on the infohash survives it.
 func TestTheInfohashSurvivesAClientRestart(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -140,6 +143,7 @@ func TestTheInfohashSurvivesAClientRestart(t *testing.T) {
 // upsert only reconciles (provider, external_id). Replacing keeps exactly one
 // row — the newer transfer — and lets the grab complete.
 func TestOneAcquisitionPerWant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -177,6 +181,7 @@ func TestOneAcquisitionPerWant(t *testing.T) {
 
 // A want with nothing in flight is a typed answer, not a bare sql error.
 func TestAnAbsentAcquisitionIsTyped(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	if _, err := h.cat.AcquisitionFor(context.Background(), h.want); !errors.Is(err, catalog.ErrNoAcquisitionRow) {
 		t.Errorf("expected ErrNoAcquisitionRow, got %v", err)
@@ -186,6 +191,7 @@ func TestAnAbsentAcquisitionIsTyped(t *testing.T) {
 // Dropping the link does not touch the download client. Forgetting about a
 // transfer and deleting its bytes are different decisions.
 func TestDroppingAnAcquisitionLeavesTheTransferAlone(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -203,6 +209,7 @@ func TestDroppingAnAcquisitionLeavesTheTransferAlone(t *testing.T) {
 
 // A want's acquisition does not outlive it.
 func TestDeletingAWantCascadesToItsAcquisition(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 

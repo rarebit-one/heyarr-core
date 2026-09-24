@@ -91,6 +91,7 @@ func readCandidates(t *testing.T, h *harness, id string) (*http.Response, wireCa
 // The rejections reach the wire, with the rule that rejected them. A rejection
 // reason that stops at the database answers nobody.
 func TestCandidatesCarryTheirReasonsToTheWire(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	h.seedCandidates(t)
 
@@ -139,6 +140,7 @@ func TestCandidatesCarryTheirReasonsToTheWire(t *testing.T) {
 // A want nobody has searched for has no candidates, and that is a 200 with an
 // empty list rather than a 404 — the want exists, it simply has no answers yet.
 func TestAWantWithNoSearchHasNoCandidates(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp, got := readCandidates(t, h, desired1ID)
 	if resp.StatusCode != http.StatusOK {
@@ -153,6 +155,7 @@ func TestAWantWithNoSearchHasNoCandidates(t *testing.T) {
 }
 
 func TestCandidatesForAnUnknownWantIs404(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	if resp := h.get("/api/v1/desired/nope/candidates"); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
@@ -162,6 +165,7 @@ func TestCandidatesForAnUnknownWantIs404(t *testing.T) {
 // A manual search queues a job rather than running one: a search is a job
 // (invariant 4), and the worker may be another process.
 func TestManualSearchQueuesAJob(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := h.doStable(http.MethodPost, "/api/v1/desired/"+desired1ID+"/search", nil)
 	if resp.StatusCode != http.StatusAccepted {
@@ -198,6 +202,7 @@ func TestManualSearchQueuesAJob(t *testing.T) {
 // open, a subtitle want gets driven into a torrent search and parked `queued`
 // there, a phase the subtitle fetch beat will never see as idle again.
 func TestManualSearchRefusesASubtitleWant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	const stamp = "2026-09-09T12:00:00Z"
 	h.exec(`INSERT INTO works (id, content_type, work_key, title, sort_title, created_at, updated_at)
@@ -221,6 +226,7 @@ func TestManualSearchRefusesASubtitleWant(t *testing.T) {
 }
 
 func TestSearchingAnUnknownWantIs404(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := h.doStable(http.MethodPost, "/api/v1/desired/nope/search", nil)
 	if resp.StatusCode != http.StatusNotFound {
@@ -231,6 +237,7 @@ func TestSearchingAnUnknownWantIs404(t *testing.T) {
 // Re-ingest queues the same import job the download poll would, and dedupes per
 // want — the manual lever for a wedged ingest, and what the watchdog does.
 func TestManualReingestQueuesAnIngestJob(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := h.doStable(http.MethodPost, "/api/v1/desired/"+desired1ID+"/reingest", nil)
 	if resp.StatusCode != http.StatusAccepted {
@@ -259,6 +266,7 @@ func TestManualReingestQueuesAnIngestJob(t *testing.T) {
 }
 
 func TestReingestingAnUnknownWantIs404(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := h.doStable(http.MethodPost, "/api/v1/desired/nope/reingest", nil)
 	if resp.StatusCode != http.StatusNotFound {
@@ -269,6 +277,7 @@ func TestReingestingAnUnknownWantIs404(t *testing.T) {
 // The manual override records the disagreement — an override that left no
 // trace would look exactly like an ordinary selection.
 func TestOverrideRecordsWhatTheScorerHadChosen(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	h.seedCandidates(t)
 
@@ -309,6 +318,7 @@ func TestOverrideRecordsWhatTheScorerHadChosen(t *testing.T) {
 // §62's gates are the operator's own statement of what is acceptable. An
 // override that could ignore them would turn `accept` into a suggestion.
 func TestOverrideRefusesACandidateTheProfileRejected(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	h.seedCandidates(t)
 
@@ -333,6 +343,7 @@ func TestOverrideRefusesACandidateTheProfileRejected(t *testing.T) {
 }
 
 func TestOverrideRefusals(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, body string
 		status     int
@@ -364,6 +375,7 @@ func TestOverrideRefusals(t *testing.T) {
 // would answer a different question — what would be decided NOW — which is the
 // substitution that makes an audit trail worthless.
 func TestListingDoesNotRescore(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	h.seedCandidates(t)
 
@@ -387,6 +399,7 @@ func TestListingDoesNotRescore(t *testing.T) {
 
 // Candidates do not outlive the want they explain.
 func TestCandidatesCascadeWhenTheWantIsDeleted(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	h.seedCandidates(t)
 
@@ -403,6 +416,7 @@ func TestCandidatesCascadeWhenTheWantIsDeleted(t *testing.T) {
 // Searching and overriding change what will be acquired, so both need `write`.
 // Listing explains what already happened, and needs only `read`.
 func TestCandidateScopes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth).seed()
 	h.seedCandidates(t)
 	reader := h.mint("reader", auth.ScopeRead)
@@ -424,6 +438,7 @@ func TestCandidateScopes(t *testing.T) {
 // identity a client branches on, so a change to one has to show up in a
 // reviewable diff rather than in a client's error handling six months later.
 func TestCandidatesShape(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	h.seedCandidates(t)
 	resp := h.doStable(http.MethodGet, "/api/v1/desired/"+desired1ID+"/candidates", nil)

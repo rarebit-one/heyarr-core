@@ -18,6 +18,7 @@ import (
 // library declared `show` had its artwork read by `movie/title-year` and grew a
 // movie Work that does not exist (#227).
 func TestALibraryCannotBeCreatedWithATypeHeyarrDoesNotKnow(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	for _, ct := range []string{"show", "album", "tv", "film", "Movie", "unknown"} {
@@ -47,6 +48,7 @@ func TestALibraryCannotBeCreatedWithATypeHeyarrDoesNotKnow(t *testing.T) {
 // `document` library could not be created — so every article ingest hit
 // ErrNoRootForContent with nowhere to land.
 func TestTheKnownContentTypesAreStillAccepted(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	for _, ct := range []string{"movie", "series", "music", "book", "document"} {

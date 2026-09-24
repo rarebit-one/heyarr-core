@@ -32,6 +32,7 @@ func (f *fakeEnqueuer) Enqueue(_ context.Context, opts jobs.EnqueueOptions) (job
 // probe is a job (§75) — so what ingest does is queue one, with the capability
 // that decides who may run it.
 func TestIngestQueuesAProbeForMedia(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		relPath string
@@ -96,6 +97,7 @@ func TestIngestQueuesAProbeForMedia(t *testing.T) {
 // because a follow-up job could not be queued would be trading the whole asset
 // for its metadata.
 func TestAFailureToQueueAProbeDoesNotFailTheIngest(t *testing.T) {
+	t.Parallel()
 	q := &fakeEnqueuer{err: errors.New("the queue is on fire")}
 	// The assertion is that this returns at all rather than panicking or
 	// propagating; enqueueProbe has no error to return by design.
@@ -123,6 +125,7 @@ func (f *fakeMinter) Create(
 // A probe credential is scoped to read and expires. A worker holding a
 // long-lived admin token for the life of the process is what this avoids.
 func TestAProbeCredentialIsScopedAndExpiring(t *testing.T) {
+	t.Parallel()
 	minter := &fakeMinter{}
 	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 
@@ -157,6 +160,7 @@ func TestAProbeCredentialIsScopedAndExpiring(t *testing.T) {
 // A payload that cannot be decoded will never decode, and a payload naming no
 // blob is not a probe.
 func TestProbeHandlerRefusesNonsensePayloads(t *testing.T) {
+	t.Parallel()
 	handler := ProbeHandler(ProbeHandlerOptions{Tokens: &fakeMinter{}})
 	for _, tc := range []struct{ name, payload string }{
 		{"not json", `{{{`},
@@ -207,6 +211,7 @@ func probeOnce(t *testing.T, cause error) error {
 // neither can the fifth. Each one range-probes, gives up past §29's threshold,
 // and then materialises the WHOLE blob (#232).
 func TestABlobThatIsNotMediaIsNotRetried(t *testing.T) {
+	t.Parallel()
 	err := probeOnce(t, fmt.Errorf("%w: Invalid data found when processing input",
 		probe.ErrProbeFailed))
 	if err == nil {
@@ -229,6 +234,7 @@ func TestABlobThatIsNotMediaIsNotRetried(t *testing.T) {
 // declared permanent is work that silently never happens, which is worse than
 // the retries this saves.
 func TestATransientProbeFailureIsStillRetried(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		cause error

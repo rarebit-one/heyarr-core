@@ -247,8 +247,7 @@ type RemuxRequest struct {
 // event stream, and re-plans when it succeeds.
 func (a *API) enqueueRemux(w http.ResponseWriter, r *http.Request) {
 	var body RemuxRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	for _, f := range []struct{ name, value string }{

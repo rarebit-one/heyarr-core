@@ -29,10 +29,8 @@
 package enrol
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -147,7 +145,7 @@ type Enrolled struct {
 
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	var body request
-	if err := decodeJSON(w, r, &body); err != nil {
+	if err := httpapi.DecodeJSON(w, r, &body, maxRequestBody); err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	}
@@ -188,7 +186,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 			"device_key", device.DeviceKey, "user", user.PublicKey, "name", device.Name)
 	}
 	w.Header().Set("Location", httpapi.APIPrefix+"/identities/devices/"+device.DeviceKey)
-	out, err := json.Marshal(Enrolled{
+	httpapi.WriteJSON(w, r, h.log, status, Enrolled{
 		DeviceKey:             device.DeviceKey,
 		EncryptionKey:         device.EncryptionKey,
 		RecoveryEncryptionKey: user.RecoveryEncryptionKey,
@@ -198,38 +196,4 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		EnrolledAt:            device.EnrolledAt,
 		ExpiresAt:             device.ExpiresAt,
 	})
-	if err != nil {
-		httpapi.Fail(w, r, problem.Internal())
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(status)
-	_, _ = w.Write(out)
-}
-
-// decodeJSON reads exactly one JSON object into v, bounded and strict — the
-// resources API's rule, restated here because this route sits outside it.
-func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
-	if ct := r.Header.Get("Content-Type"); ct != "" {
-		if mediaType, _, _ := strings.Cut(ct, ";"); strings.TrimSpace(mediaType) != "application/json" {
-			return fmt.Errorf("the request body must be application/json, not %s", mediaType)
-		}
-	}
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			return fmt.Errorf("the request body is larger than %d bytes", maxRequestBody)
-		}
-		if errors.Is(err, io.EOF) {
-			return errors.New("the request body is empty")
-		}
-		return fmt.Errorf("the request body is not valid JSON: %w", err)
-	}
-	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("the request body must contain exactly one JSON object")
-	}
-	return nil
 }

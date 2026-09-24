@@ -110,6 +110,7 @@ func (f *transferFabric) publishManifest(content []byte, blob hashing.Hash) mani
 // path is OBSERVED — the source records that every request carried a Range
 // header — rather than inferred from a transfer that worked.
 func TestReplicateBlobTakesTheChunkedPathWhenTheSourceHasAManifest(t *testing.T) {
+	t.Parallel()
 	f := newTransferFabric(t)
 	content := transferPayload(1)
 	hash := f.seedBlob(content)
@@ -146,6 +147,7 @@ func TestReplicateBlobTakesTheChunkedPathWhenTheSourceHasAManifest(t *testing.T)
 // same way: no request carried a Range header. §16's third state doing its job,
 // asserted rather than assumed (ADR-0035).
 func TestReplicateBlobPullsWholeWhenTheSourceHasNoManifest(t *testing.T) {
+	t.Parallel()
 	f := newTransferFabric(t)
 	content := transferPayload(2)
 	hash := f.seedBlob(content)
@@ -176,6 +178,7 @@ func TestReplicateBlobPullsWholeWhenTheSourceHasNoManifest(t *testing.T) {
 // become one. Four assertions because these are four different code paths and
 // M4-12 found that the record of who holds what is easy to get wrong.
 func TestAPartialChunkedTransferIsNotAReplicaByAnyRoute(t *testing.T) {
+	t.Parallel()
 	f := newTransferFabric(t)
 	content := transferPayload(3)
 	hash := f.seedBlob(content)
@@ -277,6 +280,7 @@ func TestAPartialChunkedTransferIsNotAReplicaByAnyRoute(t *testing.T) {
 // And the resume: the same job, re-run once the source is answering again,
 // finishes from what is on disk and writes `present` exactly once.
 func TestAnInterruptedChunkedTransferResumesOnTheNextRun(t *testing.T) {
+	t.Parallel()
 	f := newTransferFabric(t)
 	content := transferPayload(4)
 	hash := f.seedBlob(content)

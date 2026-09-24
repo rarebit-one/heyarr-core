@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -145,14 +147,15 @@ func newPeerSurfaceHarness(t *testing.T, presented httpapi.PresentedPeerKey) *pe
 // Two clients, because the two phases of this file want opposite things from a
 // timeout.
 //
-// Discovery walks EVERY registered route, and some of them answer by
-// streaming: it needs a short deadline so a stream is passed over rather than
-// hanging the test. The assertions afterwards run against routes that are
-// known to answer immediately, and they need a generous one — argon2id
-// verification is deliberately expensive (ADR-0011) and the first request on a
-// token pays for it, under -race, on a machine running the rest of the suite.
-// A three-second deadline there is how this file failed in CI while passing
-// alone.
+// Discovery walks EVERY registered route, and some of them do not answer
+// promptly: the event stream holds its connection open, and the renderer
+// routes run a real SSDP sweep that takes seconds. It needs a short deadline
+// so such a route is passed over rather than hanging the test. The assertions
+// afterwards run against routes that are known to answer immediately, and
+// they need a generous one — argon2id verification is deliberately expensive
+// (ADR-0011) and the first request on a token pays for it, under -race, on a
+// machine running the rest of the suite. A three-second deadline there is how
+// this file failed in CI while passing alone.
 var (
 	probeClient  = &http.Client{Timeout: 5 * time.Second}
 	assertClient = &http.Client{Timeout: 60 * time.Second}
@@ -174,25 +177,35 @@ func (h *peerSurfaceHarness) token(t *testing.T, name string, scope auth.Scope) 
 	return created.Secret
 }
 
-// do issues one request with the generous deadline. Everything that asserts
-// uses it.
+// do issues one request with the generous deadline and reads the whole body.
+// Everything that asserts uses it.
 func (h *peerSurfaceHarness) do(t *testing.T, method, route, token string) (int, string) {
 	t.Helper()
-	return h.request(t, assertClient, method, route, token)
+	status, body, err := h.request(assertClient, method, route, token, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return status, body
 }
 
 // probe issues one request with the short deadline, for the discovery walk.
-func (h *peerSurfaceHarness) probe(t *testing.T, method, route, token string) (int, string) {
-	t.Helper()
-	return h.request(t, probeClient, method, route, token)
+//
+// Only a 403 has its body read. The scope refusal that identifies the admin
+// surface is a 403 with a short, finite body; any other status already says
+// "not this", and reading on would wait out the deadline on a route that
+// answers by streaming. It takes no *testing.T because the walk probes
+// concurrently.
+func (h *peerSurfaceHarness) probe(method, route, token string) (int, string, error) {
+	return h.request(probeClient, method, route, token, false)
 }
 
-func (h *peerSurfaceHarness) request(t *testing.T, c *http.Client, method, route, token string) (int, string) {
-	t.Helper()
+// request issues one request. The error is for a request that could not be
+// built; a request that was sent but not answered is reported in the body.
+func (h *peerSurfaceHarness) request(c *http.Client, method, route, token string, readAll bool) (int, string, error) {
 	url := h.server.URL + fillParams(route)
 	req, err := http.NewRequestWithContext(context.Background(), method, url, strings.NewReader("{}"))
 	if err != nil {
-		t.Fatal(err)
+		return 0, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
@@ -200,23 +213,25 @@ func (h *peerSurfaceHarness) request(t *testing.T, c *http.Client, method, route
 	}
 	resp, err := c.Do(req)
 	if err != nil {
-		// A route that streams (the event stream, the MCP session) answers by
-		// holding the connection open, and a probe that waited for it would
-		// hang this test rather than fail it. A response that never arrives is
-		// not a refusal and not an admin route: it is reported as neither, and
-		// the discovery floor is what catches a day when that swallows
-		// something real.
-		return 0, "(no response: " + err.Error() + ")"
+		// A route that answers slowly (the renderer sweep) or by holding the
+		// connection open before any header is written would hang this test
+		// rather than fail it. A response that never arrives is not a refusal
+		// and not an admin route: it is reported as neither, and the
+		// discovery floor is what catches a day when that swallows something
+		// real.
+		return 0, "(no response: " + err.Error() + ")", nil
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if !readAll && resp.StatusCode != http.StatusForbidden {
+		return resp.StatusCode, "(body not read)", nil
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		// Same case as a dial that never answered: a streaming route sent
-		// headers and then kept the connection open. Reported as neither a
-		// refusal nor an admin route.
-		return 0, "(no body: " + err.Error() + ")"
+		// A streaming route sent headers and then kept the connection open.
+		// Reported as neither a refusal nor an admin route.
+		return 0, "(no body: " + err.Error() + ")", nil
 	}
-	return resp.StatusCode, string(body)
+	return resp.StatusCode, string(body), nil
 }
 
 // fillParams substitutes a value that resolves to nothing for every path
@@ -235,8 +250,31 @@ func fillParams(route string) string {
 	return strings.Join(out, "/")
 }
 
+// discovered memoises the admin surface across the tests in this file.
+//
+// Every harness here is built by newPeerSurfaceHarness over the same wiring,
+// so the surface is a property of the router, not of the harness that
+// happened to walk it. Walking it once is the whole saving: the walk has to
+// wait out the probe deadline on the routes that do not answer promptly, and
+// it would otherwise pay that again per test. A walk that fails leaves the
+// cache empty, so the next test walks again rather than inheriting a failure.
+var discovered struct {
+	sync.Mutex
+	routes []string
+}
+
 // adminRoutes discovers the admin surface by asking the router.
 func adminRoutes(t *testing.T, h *peerSurfaceHarness) []string {
+	t.Helper()
+	discovered.Lock()
+	defer discovered.Unlock()
+	if discovered.routes == nil {
+		discovered.routes = walkAdminRoutes(t, h)
+	}
+	return slices.Clone(discovered.routes)
+}
+
+func walkAdminRoutes(t *testing.T, h *peerSurfaceHarness) []string {
 	t.Helper()
 	writeToken := h.token(t, "discovery", auth.ScopeWrite)
 
@@ -248,25 +286,48 @@ func adminRoutes(t *testing.T, h *peerSurfaceHarness) []string {
 			"nothing\n%s", status, body)
 	}
 
-	var found []string
+	type probed struct {
+		route  string
+		status int
+		body   string
+		err    error
+	}
+	var (
+		wg      sync.WaitGroup
+		results []*probed
+	)
+	// Concurrently, so the routes that wait out the probe deadline wait it
+	// out together rather than one after another.
 	err := chi.Walk(h.router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		route = normalisePath(route)
 		if !strings.HasPrefix(route, httpapi.APIPrefix) {
 			return nil
 		}
-		status, body := h.probe(t, method, route, writeToken)
-		if status == http.StatusForbidden && strings.Contains(body, "does not carry the admin scope") {
-			found = append(found, method+" "+route)
-		}
+		p := &probed{route: method + " " + route}
+		results = append(results, p)
+		wg.Go(func() {
+			p.status, p.body, p.err = h.probe(method, route, writeToken)
+		})
 		return nil
 	})
+	wg.Wait()
 	if err != nil {
 		t.Fatalf("walking the router: %v", err)
+	}
+
+	var found []string
+	for _, p := range results {
+		if p.err != nil {
+			t.Fatalf("probing %s: %v", p.route, p.err)
+		}
+		if p.status == http.StatusForbidden && strings.Contains(p.body, "does not carry the admin scope") {
+			found = append(found, p.route)
+		}
 	}
 	sort.Strings(found)
 
 	for _, want := range adminSurfaceFloor {
-		if !slicesContains(found, want) {
+		if !slices.Contains(found, want) {
 			t.Fatalf("the admin surface discovery did not find %q. Everything in this file is "+
 				"asserted against what it found, so a discovery that has stopped working would "+
 				"make every assertion below vacuous.\nfound:\n  %s",
@@ -274,15 +335,6 @@ func adminRoutes(t *testing.T, h *peerSurfaceHarness) []string {
 		}
 	}
 	return found
-}
-
-func slicesContains(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
 }
 
 // TestAPeerCertificateIsRefusedOnEveryAdminRoute.

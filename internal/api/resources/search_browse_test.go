@@ -73,6 +73,7 @@ func (h *harness) search(t *testing.T, body string) (*http.Response, searchOut) 
 }
 
 func TestSearchShapes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse().seedSeries()
 	tests := []struct {
 		name, body, golden string
@@ -92,6 +93,7 @@ func TestSearchShapes(t *testing.T) {
 }
 
 func TestSearchFindsEpisodesByTheirOwnTitle(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse().seedSeries()
 
 	_, out := h.search(t, `{"query":"pilot"}`)
@@ -120,6 +122,7 @@ func TestSearchFindsEpisodesByTheirOwnTitle(t *testing.T) {
 }
 
 func TestSearchWorksCarryPosterAndAttributes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse().seedSeries()
 
 	_, out := h.search(t, `{"query":"arrival"}`)
@@ -142,6 +145,7 @@ func TestSearchWorksCarryPosterAndAttributes(t *testing.T) {
 }
 
 func TestSearchContentTypeNarrowsBothLists(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse().seedSeries()
 	_, out := h.search(t, `{"query":"pilot","content_type":"movie"}`)
 	if len(out.Episodes) != 0 {
@@ -155,6 +159,7 @@ func TestSearchContentTypeNarrowsBothLists(t *testing.T) {
 }
 
 func TestGuestSearchHidesAVaultPosterAndFile(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth, withGuest).seed().seedSeries()
 	seedVaultArtwork(h)
 	// Make the episode's only file a vault one.

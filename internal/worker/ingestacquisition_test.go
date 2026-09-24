@@ -174,6 +174,7 @@ func (h *ingestHarness) count(t *testing.T, query string, args ...any) int {
 // CONTENT_SATISFIED here would be asserting that this handler answered a
 // question it must not answer.
 func TestACompletedAcquisitionBecomesAManagedAsset(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.selectAndComplete(t, "Arrival.2016.2160p.mkv", []byte("the actual bytes of a film"))
 
@@ -211,6 +212,7 @@ func TestACompletedAcquisitionBecomesAManagedAsset(t *testing.T) {
 // reingest` re-drive; before this fix the re-enqueue succeeded and changed
 // nothing, because the handler only ran from VERIFYING.
 func TestAnIngestResumesFromIngesting(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.selectAndComplete(t, "Arrival.2016.2160p.mkv", []byte("the actual bytes of a film"))
 
@@ -253,6 +255,7 @@ func TestAnIngestResumesFromIngesting(t *testing.T) {
 // INGESTING want as a duplicate delivery, so the stuck-ingest watchdog re-drove
 // it every pass forever (a 32 GB Yellowstone season pack did exactly that).
 func TestAnIngestResumesAManagedWantStuckInIngesting(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.selectAndComplete(t, "Arrival.2016.2160p.mkv", []byte("the actual bytes of a film"))
 
@@ -294,6 +297,7 @@ func TestAnIngestResumesAManagedWantStuckInIngesting(t *testing.T) {
 // contents differ produces a different blob, and there is no path by which a
 // claimed hash becomes an identity.
 func TestTheBlobIsKeyedOnTheDigestHeyarrComputed(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	contents := []byte("bytes that arrived")
 	h.selectAndComplete(t, "Arrival.2016.2160p.mkv", contents)
@@ -318,6 +322,7 @@ func TestTheBlobIsKeyedOnTheDigestHeyarrComputed(t *testing.T) {
 // A verification that nobody has watched reject anything is decoration. Each
 // case is a way a "completed" download is not something we can ingest.
 func TestVerificationRefusals(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		// prepare mutates the download directory after the transfer is
@@ -415,6 +420,7 @@ func TestVerificationRefusals(t *testing.T) {
 // the mark has to survive RecordSearch replacing the candidate set, which is
 // exactly what happens between the two searches below.
 func TestAFailedReleaseIsNotChosenAgain(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	path := h.selectAndComplete(t, "Arrival.2016.2160p.mkv", []byte("something"))
 	mustRemove(t, path)
@@ -453,6 +459,7 @@ func TestAFailedReleaseIsNotChosenAgain(t *testing.T) {
 // When everything on offer has already failed, that is a DIFFERENT outcome
 // from finding nothing, and an operator needs to be able to tell them apart.
 func TestASearchWhereEverythingHasAlreadyFailed(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	path := h.selectAndComplete(t, "Arrival.2016.2160p.mkv", []byte("x"))
 	mustRemove(t, path)
@@ -477,6 +484,7 @@ func TestASearchWhereEverythingHasAlreadyFailed(t *testing.T) {
 // Invariant 9: the job WILL be re-run, and re-running it must not produce a
 // second asset.
 func TestIngestingTwiceProducesOneAsset(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.selectAndComplete(t, "Arrival.2016.2160p.mkv", []byte("the actual bytes"))
 
@@ -503,6 +511,7 @@ func TestIngestingTwiceProducesOneAsset(t *testing.T) {
 // A copy and a reflink both produce a correct file; only one of them is the
 // feature, and on a same-filesystem store the cheap rung must be the one taken.
 func TestTheMaterialisationRungIsRecorded(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.selectAndComplete(t, "Arrival.2016.2160p.mkv", []byte("bytes worth not copying"))
 
@@ -555,6 +564,7 @@ func TestTheMaterialisationRungIsRecorded(t *testing.T) {
 
 // Nothing the download client still holds is deleted by Heyarr (§60, ADR-0018).
 func TestIngestLeavesTheDownloadClientsCopyAlone(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	path := h.selectAndComplete(t, "Arrival.2016.2160p.mkv", []byte("still seeding"))
 
@@ -578,6 +588,7 @@ func TestIngestLeavesTheDownloadClientsCopyAlone(t *testing.T) {
 // An ingest that arrives when the want has moved on is the normal case for a
 // deduped job on a beat, not an error.
 func TestAnIngestForAWantThatMovedOnIsHarmless(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.selectAndComplete(t, "Arrival.2016.2160p.mkv", []byte("bytes"))
 	if err := h.ingest(t); err != nil {
@@ -597,6 +608,7 @@ func TestAnIngestForAWantThatMovedOnIsHarmless(t *testing.T) {
 // "no such root" would send an operator looking for a missing directory when
 // the actual problem is a library they have not made.
 func TestNoLibraryForTheContentType(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.exec(t, `UPDATE libraries SET content_type = 'series' WHERE id = 'lib1'`)
 	h.selectAndComplete(t, "Arrival.2016.2160p.mkv", []byte("bytes"))
@@ -637,6 +649,7 @@ func TestNoLibraryForTheContentType(t *testing.T) {
 // test's subject. What IS the subject is the routing: a document-typed Work
 // resolving to a document library root on ingest.
 func TestADocumentAcquisitionLandsInItsLibrary(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 
 	// The library and the wanted Work are `document`, as a followed feed makes
@@ -813,6 +826,7 @@ func (h *ingestHarness) assetItemKeys(t *testing.T) map[string]string {
 
 // THE season-pack test: six episode files, six assets, each mapped to its item.
 func TestASeasonPackIngestsEveryEpisodeAndLinksEachToItsItem(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.setupSeries(t, 6)
 
@@ -855,6 +869,7 @@ func TestASeasonPackIngestsEveryEpisodeAndLinksEachToItsItem(t *testing.T) {
 // sibling want, after a reconcile, finds the asset the single download produced
 // — one transfer, one blob per file, many wants served.
 func TestASeasonPackSatisfiesEverySiblingEpisodeWant(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	wants := h.setupSeries(t, 6)
 
@@ -884,6 +899,7 @@ func TestASeasonPackSatisfiesEverySiblingEpisodeWant(t *testing.T) {
 // A file the pack parser cannot place — no season/episode in the name — is
 // ingested but left UNLINKED, never guessed onto an episode.
 func TestAnUnparseablePackFileIsLeftUnlinked(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.setupSeries(t, 2)
 
@@ -908,6 +924,7 @@ func TestAnUnparseablePackFileIsLeftUnlinked(t *testing.T) {
 // A file for a season the work has no item for is ingested but left unlinked —
 // the same safe direction, so an S02 file never lands on an S01 episode.
 func TestAWrongSeasonPackFileIsLeftUnlinked(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.setupSeries(t, 2) // only S01E01, S01E02 exist as items
 
@@ -935,6 +952,7 @@ func TestAWrongSeasonPackFileIsLeftUnlinked(t *testing.T) {
 // A nested season folder, where only the directory names the season
 // ("Show S01/Season 01/E01 - Pilot.mkv"), still maps each file to its item.
 func TestASeasonPackWithNestedSeasonFolders(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.setupSeries(t, 2)
 
@@ -957,6 +975,7 @@ func TestASeasonPackWithNestedSeasonFolders(t *testing.T) {
 
 // A sample clip beside the episodes is not ingested as content.
 func TestASeasonPackIgnoresSamples(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.setupSeries(t, 1)
 
@@ -978,6 +997,7 @@ func TestASeasonPackIgnoresSamples(t *testing.T) {
 // A single-file series episode is unchanged: its one asset links to the item the
 // WANT asserts (ADR-0086), via the download's item, not by parsing the filename.
 func TestASingleEpisodeStillLinksViaTheWantsItem(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.setupSeries(t, 2)
 
@@ -1038,6 +1058,7 @@ func (h *ingestHarness) scalar(t *testing.T, query string, args ...any) string {
 // verified and catalogued — and the want that asked for them reported
 // `assets: []` forever, in a state indistinguishable from patience.
 func TestAnAcquisitionAttachesToTheWantsWorkWhenTheFilenameDisagrees(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.selectAndComplete(t, "alpine-standard-3.23.2-armv7.iso", []byte("the bytes that arrived"))
 
@@ -1067,6 +1088,7 @@ func TestAnAcquisitionAttachesToTheWantsWorkWhenTheFilenameDisagrees(t *testing.
 // and a library that grows a phantom Work per acquisition is its own problem
 // (#227 is that problem arriving from the scanner).
 func TestAnAcquisitionDoesNotCreateASecondWork(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	before := h.count(t, `SELECT count(*) FROM works`)
 
@@ -1088,6 +1110,7 @@ func TestAnAcquisitionDoesNotCreateASecondWork(t *testing.T) {
 // part in the decision — and would be indistinguishable from the guess this
 // issue is about, in the one column an operator would check.
 func TestAnAcquiredAssetRecordsThatTheWantIdentifiedIt(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.selectAndComplete(t, "alpine-standard-3.23.2-armv7.iso", []byte("the bytes that arrived"))
 	if err := h.ingest(t); err != nil {
@@ -1106,6 +1129,7 @@ func TestAnAcquiredAssetRecordsThatTheWantIdentifiedIt(t *testing.T) {
 // file a subtitle as if it were the film. The filename here is a subtitle, and
 // the want is for a movie.
 func TestTheWantNamesTheWorkAndThePathStillNamesTheFile(t *testing.T) {
+	t.Parallel()
 	h := newIngestHarness(t)
 	h.selectAndComplete(t, "Arrival.2016.2160p.en.srt", []byte("1\n00:00:01,000 --> 00:00:02,000\nhello\n"))
 	if err := h.ingest(t); err != nil {

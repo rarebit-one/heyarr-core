@@ -40,6 +40,7 @@ func acquisitionOf(t *testing.T, h *harness, id string) map[string]any {
 // acquisition row is one the reconciliation sweep cannot advance and nothing
 // would notice — it would sit there, wanted and never searched for.
 func TestWantingCreatesAcquisitionState(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := postDesired(t, h, `{
 		"work": {"content_type":"movie","title":"Solaris","year":1972},
@@ -80,6 +81,7 @@ func TestWantingCreatesAcquisitionState(t *testing.T) {
 // CONTENT_SATISFIED but not which of §56's two questions was answered cannot
 // tell "we have it" from "we have it everywhere".
 func TestBothAxesAreOnTheWireAlongsideTheName(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	converging := acquisitionOf(t, h, desired1ID)
@@ -107,6 +109,7 @@ func TestBothAxesAreOnTheWireAlongsideTheName(t *testing.T) {
 // The distinction the milestone epic names, over HTTP: obtaining usable content
 // and replicating it to every required peer are different answers.
 func TestContentSatisfiedAndFullySatisfiedAreDifferentOnTheWire(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	// Content satisfied, placement not yet answered.
@@ -138,6 +141,7 @@ func TestContentSatisfiedAndFullySatisfiedAreDifferentOnTheWire(t *testing.T) {
 // 1080p-minimum profile is available and not satisfied, and conflating them
 // makes the upgrade workflow unreachable.
 func TestAvailableIsNotContentSatisfiedOnTheWire(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	h.exec(`UPDATE acquisition_state SET phase = 'idle', managed = 1,
 	          content = 'not_satisfied', placement = 'unknown' WHERE desired_item_id = ?`, desired1ID)
@@ -156,6 +160,7 @@ func TestAvailableIsNotContentSatisfiedOnTheWire(t *testing.T) {
 // A list of wants carries acquisition state without an N+1: fifty wants must
 // not be fifty-one queries.
 func TestListingWantsCarriesAcquisitionState(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := h.get("/api/v1/desired")
 	var page struct {
@@ -177,6 +182,7 @@ func TestListingWantsCarriesAcquisitionState(t *testing.T) {
 // A want whose acquisition row is missing is still readable. The API says
 // nothing about its state rather than hiding the want or inventing one.
 func TestAWantWithNoAcquisitionRowIsStillReadable(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	h.exec(`DELETE FROM acquisition_state WHERE desired_item_id = ?`, desired1ID)
 
@@ -196,6 +202,7 @@ func TestAWantWithNoAcquisitionRowIsStillReadable(t *testing.T) {
 
 // Deleting a want takes its acquisition state with it.
 func TestDeletingAWantCascadesToItsAcquisitionState(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp := postDesired(t, h, fmt.Sprintf(`{"work_id": %q, "quality_profile":"living-room"}`, work2ID))
 	if resp.StatusCode != http.StatusCreated {
@@ -214,6 +221,7 @@ func TestDeletingAWantCascadesToItsAcquisitionState(t *testing.T) {
 // The impossible combination §56 forbids is refused by the DATABASE, not only
 // by the domain — a repair script does not go through the validator.
 func TestTheDatabaseRefusesPlacementWithoutContent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	err := h.execErr(`UPDATE acquisition_state SET content = 'not_satisfied', placement = 'satisfied'
 	                   WHERE desired_item_id = ?`, desired1ID)
@@ -228,6 +236,7 @@ func TestTheDatabaseRefusesPlacementWithoutContent(t *testing.T) {
 // A want with a transfer in flight carries its download byte counts in the
 // acquisition view, so a client can show progress without a second request.
 func TestAWantsDownloadProgressIsInTheView(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	h.exec(`INSERT OR REPLACE INTO acquisitions
 		(id, desired_item_id, provider, external_id, bytes_total, bytes_done,

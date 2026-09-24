@@ -66,6 +66,7 @@ func (h *harness) seedAsset(t *testing.T, hash, editionKey, editionType string, 
 // A satisfied, monitored, non-terminal want is eligible. This is the state the
 // whole workflow exists for.
 func TestScanFindsAnEligibleWant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -99,6 +100,7 @@ func TestScanFindsAnEligibleWant(t *testing.T) {
 
 // A terminal incumbent has nothing left to want, so it is not eligible.
 func TestScanSkipsATerminalWant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -128,6 +130,7 @@ func TestScanSkipsATerminalWant(t *testing.T) {
 // Running the loop over unmonitored wants is how *arr installations
 // re-download libraries nobody asked them to touch.
 func TestScanNeverConsidersAnUnmonitoredWant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -169,6 +172,7 @@ func TestScanNeverConsidersAnUnmonitoredWant(t *testing.T) {
 // search job owns it, and reporting it here would make two jobs fight over the
 // same row.
 func TestScanSkipsAnUnsatisfiedWant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -194,6 +198,7 @@ func TestScanSkipsAnUnsatisfiedWant(t *testing.T) {
 // terminal, unmonitored or unsatisfied most of the time, and a beat that
 // announced that every pass would be a heartbeat.
 func TestAScanWithNothingToSayIsSilent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -222,6 +227,7 @@ func TestAScanWithNothingToSayIsSilent(t *testing.T) {
 // nothing — the decision to act is a separate step, so the beat can run often
 // without announcing the same available upgrade every pass.
 func TestAScanOverAnEligibleLibraryStillEmitsNothing(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -251,6 +257,7 @@ func TestAScanOverAnEligibleLibraryStillEmitsNothing(t *testing.T) {
 // a satisfied want into an empty one — which is worse than never having
 // upgraded at all.
 func TestTheIncumbentSurvivesUntilTheReplacementIsUnderManagement(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	hash := "blake3:" + repeat("1", 64)
@@ -290,6 +297,7 @@ func TestTheIncumbentSurvivesUntilTheReplacementIsUnderManagement(t *testing.T) 
 // Supersession is a LOGICAL delete (ADR-0018): the Asset row goes, the Blob
 // stays, and gc_blobs reclaims it later if nothing else references it.
 func TestSupersessionIsLogicalAndKeepsTheBytes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	h.setProfile(t, gate1080)
@@ -334,6 +342,7 @@ func TestSupersessionIsLogicalAndKeepsTheBytes(t *testing.T) {
 // Supersession is idempotent, because the job that calls it will be re-run
 // (invariant 9).
 func TestSupersessionIsIdempotent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	h.setProfile(t, gate1080)
@@ -371,6 +380,7 @@ func TestSupersessionIsIdempotent(t *testing.T) {
 // An asset cannot supersede itself. Refusing is better than deleting the asset
 // that was supposed to survive.
 func TestAnAssetCannotSupersedeItself(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	h.setProfile(t, gate1080)
@@ -394,6 +404,7 @@ func TestAnAssetCannotSupersedeItself(t *testing.T) {
 // A missing replacement — one the scanner marked gone — is not under
 // management, so it cannot be superseded to.
 func TestAMissingReplacementCannotSupersede(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	h.setProfile(t, gate1080)
@@ -414,6 +425,7 @@ func TestAMissingReplacementCannotSupersede(t *testing.T) {
 // edit changes what "better" means, and an upgrade reported against a standard
 // nobody is using any more is worse than no upgrade at all.
 func TestRaisingTheProfileMakesASatisfiedWantIneligible(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -451,6 +463,7 @@ func TestRaisingTheProfileMakesASatisfiedWantIneligible(t *testing.T) {
 // RecordUpgradeFound refuses to announce a non-upgrade, so an "upgrade found"
 // in the log always means one was.
 func TestRecordUpgradeFoundRefusesANonUpgrade(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	before := h.eventCount(t)
@@ -470,6 +483,7 @@ func TestRecordUpgradeFoundRefusesANonUpgrade(t *testing.T) {
 // And it does announce a real one, carrying the size of the improvement —
 // which is what makes an upgrade reviewable rather than merely reported.
 func TestRecordUpgradeFoundEmits(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	before := h.eventCount(t)

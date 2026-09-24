@@ -122,6 +122,7 @@ func (h *harness) routedPlan(t *testing.T, assetID, deviceID string) (plan, rout
 // nothing else changed it is routed cross-site AND SAYS SO. One client, two
 // states, two different peer ids.
 func TestTheSameClientIsRoutedLocallyAndThenCrossSite(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	h.addPeer(peerBID, "peer-b", "site-b", "http://peer-b:7777", "reachable")
 	h.putReplica(blob1Hash, peerBID, "present")
@@ -194,6 +195,7 @@ func TestTheSameClientIsRoutedLocallyAndThenCrossSite(t *testing.T) {
 // lose, because routing a read to a machine that has been off since Tuesday is
 // a client waiting out a TCP timeout while a healthy peer holds the same bytes.
 func TestAnUnhealthyLocalPeerLosesToAHealthyRemoteOne(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	// This node is reachable by inspection, so the unhealthy LOCAL peer has to
 	// be a different machine at the same site — which is also the realistic
@@ -227,6 +229,7 @@ func TestAnUnhealthyLocalPeerLosesToAHealthyRemoteOne(t *testing.T) {
 // A replica that is not 'present' is not a source, whatever else is true of
 // the peer holding it.
 func TestAPendingOrCorruptReplicaIsNotASource(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"pending", "corrupt", "missing"} {
 		t.Run(state, func(t *testing.T) {
 			h := newHarness(t).seed()
@@ -255,6 +258,7 @@ func TestAPendingOrCorruptReplicaIsNotASource(t *testing.T) {
 // plan endpoint's structure and the playback endpoint's problem document,
 // because an operator reading a support ticket has only the second.
 func TestNoHealthyPeerHoldsItIsARefusalThatNamesEveryPeer(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	h.putReplica(blob1Hash, peerID, "corrupt")
 	h.addPeer(peerBID, "peer-b", "site-b", "http://peer-b:7777", "reachable") // healthy, no bytes
@@ -302,6 +306,7 @@ func TestNoHealthyPeerHoldsItIsARefusalThatNamesEveryPeer(t *testing.T) {
 // the SELECTED PEER, and fetching it moves bytes without the controller
 // hearing about it.
 func TestTheContentURLPointsAtTheSelectedPeerAndNotTheController(t *testing.T) {
+	t.Parallel()
 	want := []byte("the bytes that live on peer-b, and nowhere near the controller")
 
 	var peerHits int
@@ -376,6 +381,7 @@ func TestTheContentURLPointsAtTheSelectedPeerAndNotTheController(t *testing.T) {
 // The bound expires. A URL handed out with a credential that never expires is
 // a credential that leaks permanently.
 func TestTheDirectURLsCredentialExpiresAndAnExpiredOneIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth).seed()
 	client := h.mint("client", auth.ScopeRead, auth.ScopeWrite)
 

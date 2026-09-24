@@ -30,6 +30,7 @@ func seedBackfillVideo(t *testing.T, h *harness, workID, videoAsset, videoBlob s
 }
 
 func TestSubtitleBackfillEnqueuesForVideosMissingSubtitles(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	seedBackfillVideo(t, h, "ys", "ys-e1", "blake3:"+strings.Repeat("a", 64), false)
 
@@ -54,6 +55,7 @@ func TestSubtitleBackfillEnqueuesForVideosMissingSubtitles(t *testing.T) {
 }
 
 func TestSubtitleBackfillSkipsAlreadyCaptionedVideos(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	seedBackfillVideo(t, h, "got", "got-e1", "blake3:"+strings.Repeat("b", 64), true) // has a sidecar
 
@@ -82,6 +84,7 @@ func TestSubtitleBackfillSkipsAlreadyCaptionedVideos(t *testing.T) {
 // subtitle asset on this edition" check must not let episode B's video, which the
 // existing subtitle does not belong to, hide behind episode A's caption.
 func TestSubtitleBackfillPerEpisodeOnASharedSeasonEdition(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	const stamp = "2026-09-09T12:00:00Z"
 	h.exec(`INSERT INTO works (id, content_type, work_key, title, sort_title, created_at, updated_at)
@@ -125,6 +128,7 @@ func TestSubtitleBackfillPerEpisodeOnASharedSeasonEdition(t *testing.T) {
 }
 
 func TestSubtitleBackfillRefusesAnUnscopedRequest(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := h.do(http.MethodPost, "/api/v1/subtitles/backfill", "", strings.NewReader(`{}`))
 	defer func() { _ = resp.Body.Close() }()

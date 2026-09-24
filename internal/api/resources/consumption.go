@@ -109,8 +109,7 @@ type createSessionRequest struct {
 
 func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 	var body createSessionRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	for _, f := range []struct{ name, value string }{
@@ -254,8 +253,7 @@ func (a *API) applyTransition(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	var body transitionRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	transition, err := parseTransition(body.Transition)

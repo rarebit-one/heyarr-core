@@ -69,6 +69,7 @@ func (h *harness) continueRail(t *testing.T, query string) continueOut {
 }
 
 func TestContinueShape(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse().seedContinue()
 	resp := h.doStable(http.MethodGet, "/api/v1/consumption/continue", nil)
 	if resp.StatusCode != http.StatusOK {
@@ -78,6 +79,7 @@ func TestContinueShape(t *testing.T) {
 }
 
 func TestContinueFoldsToTheNewestSessionPerWork(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse().seedContinue()
 	out := h.continueRail(t, "")
 
@@ -105,6 +107,7 @@ func TestContinueFoldsToTheNewestSessionPerWork(t *testing.T) {
 }
 
 func TestContinueFilters(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse().seedContinue()
 
 	if out := h.continueRail(t, "?device_id="+device1ID); len(out.Items) != 1 || out.Items[0].Work.ID != work1ID {
@@ -122,6 +125,7 @@ func TestContinueFilters(t *testing.T) {
 }
 
 func TestContinueIsClosedToAGuest(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth, withGuest).seed().seedBrowse().seedContinue()
 	if resp := h.get("/api/v1/consumption/continue"); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("guest = %d, want 403", resp.StatusCode)
