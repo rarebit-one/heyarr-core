@@ -84,7 +84,7 @@ jobs:
         with:
           token: ${{ secrets.AUTOLAND_PAT }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version: stable, cache: true }
+        with: { go-version: stable, cache: false }  # release/publish path: no cache restore (zizmor cache-poisoning)
 
       # Multi-architecture images without an arm64 runner.
       - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
