@@ -4,17 +4,20 @@ package cli
 // device — Cruciform's scanner, or a phone — reads it straight off the screen
 // instead of the invite being copied across.
 //
-// The encoder is github.com/skip2/go-qrcode: pure Go, no dependencies of its
-// own, and the encoder voidbind-go's `voidbind pair-initiate` already uses for
-// the same invite. The half-block rendering matches voidbind's too, so the two
-// tools print the same code the same way.
+// The encoder is github.com/boombuler/barcode/qr: pure Go, no dependencies of
+// its own, and it reaches no further into the standard library than `image`
+// and `image/color`. That last property is not incidental. §69's render guard
+// (internal/controller/render_guard_test.go) forbids an image codec anywhere in
+// the import graph, and the encoder voidbind-go uses for the same invite,
+// skip2/go-qrcode, imports image/png for its PNG output. The half-block
+// rendering matches voidbind's, so the two tools draw the code the same way.
 
 import (
 	"fmt"
 	"io"
 	"strings"
 
-	qrcode "github.com/skip2/go-qrcode"
+	"github.com/boombuler/barcode/qr"
 )
 
 // Half-block glyphs. Each character cell shows TWO module rows, top and bottom,
@@ -30,14 +33,30 @@ const (
 	glyphBothDark    = " "
 )
 
+// quietZone is the light margin a scanner needs around the symbol, in modules.
+// ISO/IEC 18004 asks for four.
+const quietZone = 4
+
 // qrModules encodes payload at medium error correction and returns its module
 // matrix, quiet zone included (true = dark).
 func qrModules(payload string) ([][]bool, error) {
-	q, err := qrcode.New(payload, qrcode.Medium)
+	code, err := qr.Encode(payload, qr.M, qr.Auto)
 	if err != nil {
 		return nil, fmt.Errorf("encoding the invite as a QR code: %w", err)
 	}
-	return q.Bitmap(), nil
+	size := code.Bounds().Dx()
+	modules := make([][]bool, size+2*quietZone)
+	for row := range modules {
+		modules[row] = make([]bool, size+2*quietZone)
+	}
+	for y := range size {
+		for x := range size {
+			// The default scheme draws dark modules black and light ones white.
+			r, g, b, _ := code.At(x, y).RGBA()
+			modules[y+quietZone][x+quietZone] = r+g+b < 3*0x8000
+		}
+	}
+	return modules, nil
 }
 
 // renderQR writes payload to w as a half-block QR code.
