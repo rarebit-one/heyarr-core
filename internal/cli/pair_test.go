@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -183,8 +184,9 @@ func TestPairAdmitsNewDevicesThroughTheCLI(t *testing.T) {
 }
 
 // TestPairRefusalOnMismatchedCodeEnrolsNobody: when the authorising side is told
-// the codes do NOT match (a wrong --confirm-sas), it signs nothing, and the new
-// device — whose wait for an admission then runs out — stores nothing.
+// the codes do NOT match (a wrong --confirm-sas), it signs nothing and posts a
+// signed refusal (ADR-0012), and the new device hears it — it fails with
+// errPairRefusedByPeer, not a timeout — and stores nothing.
 func TestPairRefusalOnMismatchedCodeEnrolsNobody(t *testing.T) {
 	relayAddr := relayServer(t)
 	idDir := identityDir(t)
@@ -212,8 +214,49 @@ func TestPairRefusalOnMismatchedCodeEnrolsNobody(t *testing.T) {
 	if res.enrolErr == nil {
 		t.Fatalf("enrol completed despite the initiator refusing:\n%s", res.enrolOut)
 	}
+	// The refusal, not the 2s --timeout running out: a timeout is a context
+	// deadline, never errPairRefusedByPeer.
+	if !errors.Is(res.enrolErr, errPairRefusedByPeer) {
+		t.Fatalf("enrol did not hear the refusal: %v\n%s", res.enrolErr, res.enrolOut)
+	}
 	after := showDeviceJSON(t, ctx, devDir)
 	if after.EnrolmentStatus != device.EnrolmentNotEnrolled {
+		t.Fatalf("a device was enrolled despite a refused pairing: %q", after.EnrolmentStatus)
+	}
+}
+
+// TestPairRefusalOverARelayWithoutTheSlot: a relay that predates ADR-0012 has
+// no `refuse` slot and answers the refusal 400. That is advisory — authorise
+// still reports the mismatch as the refusal, not as a relay failure — and the
+// new device falls back to waiting out its --timeout, enrolling nothing.
+func TestPairRefusalOverARelayWithoutTheSlot(t *testing.T) {
+	r := chi.NewRouter()
+	relay.New(relay.Options{Types: []string{"commit", "reveal", "cert"}}).Mount(r)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+	idDir := identityDir(t)
+	devDir := deviceDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, _, err := run(t, ctx, "identity", "generate", "--identity-dir", idDir, "--name", "owner"); err != nil {
+		t.Fatalf("identity generate: %v", err)
+	}
+	res := runPair(t, ctx,
+		[]string{
+			"--as", "identity", "--identity-dir", idDir, "--device-dir", deviceDir(t),
+			"--relay", srv.URL, "--confirm-sas", "0000000", "--poll", "10ms",
+		},
+		[]string{"--device-dir", devDir, "--yes", "--poll", "10ms", "--timeout", "1s"})
+
+	if !errors.Is(res.authErr, errSASRefused) {
+		t.Fatalf("authorise: %v, want the SAS refusal even though the relay rejected the refuse slot\n%s",
+			res.authErr, res.authOut)
+	}
+	if res.enrolErr == nil || errors.Is(res.enrolErr, errPairRefusedByPeer) {
+		t.Fatalf("enrol: %v, want a timeout (the relay could not carry the refusal)\n%s", res.enrolErr, res.enrolOut)
+	}
+	if after := showDeviceJSON(t, ctx, devDir); after.EnrolmentStatus != device.EnrolmentNotEnrolled {
 		t.Fatalf("a device was enrolled despite a refused pairing: %q", after.EnrolmentStatus)
 	}
 }

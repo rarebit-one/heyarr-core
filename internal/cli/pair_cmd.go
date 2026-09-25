@@ -170,6 +170,7 @@ The invite string is printed either way, on its own line, for scripts.`,
 				return fmt.Errorf("pair: handshake: %w", err)
 			}
 			if err := confirmSAS(cmd, &f, sas); err != nil {
+				refusePairing(cmd, in, t)
 				return err
 			}
 			if err := in.Authorise(ctx, t); err != nil {
@@ -378,6 +379,9 @@ node by a different address. It takes the same forms as authorise's --relay.`,
 				return err
 			}
 			enr, err := resp.Receive(ctx, t)
+			if errors.Is(err, pairflow.ErrRefused) {
+				return errPairRefusedByPeer
+			}
 			if err != nil {
 				return fmt.Errorf("pair: waiting for the admission (the other side may have refused the code): %w", err)
 			}
@@ -474,6 +478,30 @@ func parseOptionalEnc(s string) ([]byte, error) {
 // errSASRefused is a pairing whose codes were not confirmed: nothing was signed
 // on the authorising side, and nothing is stored on the new one.
 var errSASRefused = errors.New("pairing refused: the codes did not match, so no device was admitted")
+
+// errPairRefusedByPeer is `pair enrol` hearing the authorising side's signed
+// refusal (ADR-0012 in voidbind-go): its operator rejected the code, or
+// cancelled. The refusal verifies under the key this device compared codes
+// with, so it is the other device's answer, not the relay's.
+var errPairRefusedByPeer = errors.New("pair: the other device refused the pairing, so this device was not admitted; " +
+	"the codes may not have matched — try again, and if it happens twice, suspect the network")
+
+// refuseTimeout bounds the best-effort refusal `pair authorise` posts on its
+// way out, so an unreachable relay cannot hold up an answer already given.
+const refuseTimeout = 5 * time.Second
+
+// refusePairing tells the new device that this side refused the pairing, so its
+// `pair enrol` stops at once instead of waiting out its --timeout. It is
+// best-effort: the pairing is abandoned either way, so a relay that predates
+// the refuse slot (a 400) or cannot be reached is logged, not fatal. It runs on
+// a context detached from the command's, which a cancel may already have ended.
+func refusePairing(cmd *cobra.Command, in *pairflow.Initiator, t pairflow.Transport) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(cmd.Context()), refuseTimeout)
+	defer cancel()
+	if err := in.Refuse(ctx, t); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "pair: could not tell the new device about the refusal (it will time out instead): %v\n", err)
+	}
+}
 
 // confirmSAS prints the derived code, then decides whether to proceed: against
 // --confirm-sas when given (the scripted human), silently on --yes, or by

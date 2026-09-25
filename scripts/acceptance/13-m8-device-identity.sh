@@ -145,6 +145,10 @@ YAML
   wait "$pid" 2>/dev/null || true
 }
 
+# pair_ms_now prints wall-clock milliseconds: bash 3.2 (macOS) has no
+# EPOCHREALTIME and BSD date no %N, and python3 is already a demo dependency.
+pair_ms_now() { python3 -c 'import time; print(int(time.time() * 1000))'; }
+
 # pair_invite waits for `heyarr pair authorise` (writing to $1) to print its
 # invite, and echoes it. Empty after ten seconds, which fails the enrol after it.
 pair_invite() {
@@ -301,20 +305,33 @@ YAML
     "the device a MEMBER admitted is a member of the same user — no identity key needed"
 
   # THE REFUSAL: told the codes did NOT match (a wrong --confirm-sas), the
-  # identity refuses to sign and NO device is enrolled. The new device waits
-  # for an admission that never comes, and gives up. The refusal is the
-  # deliverable as much as the success.
-  local refc rapid rarc auth_verdict ref_status
+  # identity refuses to sign and NO device is enrolled. It also posts a SIGNED
+  # refusal to the relay (voidbind-go ADR-0012), so the new device learns the
+  # answer in one poll rather than waiting out its --timeout for an admission
+  # that never comes. The refusal is the deliverable as much as the success.
+  local refc rapid rarc auth_verdict ref_status ref_t0 ref_ms ref_erc ref_speed ref_out
   refc=( env "VOIDBIND_IDENTITY_DIR=$root/ref-id" "VOIDBIND_DEVICE_DIR=$root/ref-dev" "$BIN" )
   "${refc[@]}" device generate --name reject-phone >/dev/null 2>&1
   ( "${oldc[@]}" pair authorise --relay "$sock" --confirm-sas 0000000 --poll 10ms >"$root/refuse-auth.out" 2>&1 ) &
   rapid=$!
   invite=$(pair_invite "$root/refuse-auth.out")
-  "${refc[@]}" pair enrol --invite "$invite" --yes --poll 10ms --timeout 2s >"$root/refuse-enrol.out" 2>&1 || true
+  ref_t0=$(pair_ms_now)
+  ref_erc=0; "${refc[@]}" pair enrol --invite "$invite" --yes --poll 10ms --timeout 2s >"$root/refuse-enrol.out" 2>&1 || ref_erc=$?
+  ref_ms=$(( $(pair_ms_now) - ref_t0 ))
   rarc=0; wait "$rapid" || rarc=$?
   auth_verdict="signed"; [[ "$rarc" != "0" ]] && auth_verdict="refused"
   assert_eq "$auth_verdict" "refused" \
     "a mismatched code makes the identity refuse to sign, so a substituted key enrols nobody"
+  # FAST, and FROM THE OTHER DEVICE: enrol exits non-zero naming the refusal,
+  # well inside the 2s --timeout it used to spend in full (about 2000ms before
+  # ADR-0012; tens of milliseconds after). 1000ms leaves a loaded runner room
+  # while still failing any run that fell back to the timeout.
+  ref_speed="timed out"; (( ref_erc != 0 && ref_ms < 1000 )) && ref_speed="fast"
+  assert_eq "$ref_speed" "fast" \
+    "the new device hears the signed refusal at once (${ref_ms}ms, exit ${ref_erc}), not after its 2s timeout"
+  ref_out=$(cat "$root/refuse-enrol.out")
+  assert_contains "$ref_out" "the other device refused the pairing" \
+    "and it says the other device refused, rather than that the wait ran out"
   ref_status=$("${refc[@]}" device show --json | jq -r .enrolment_status)
   assert_eq "$ref_status" "not_enrolled" \
     "and the device left the refused pairing not_enrolled — the short code is the whole gate"

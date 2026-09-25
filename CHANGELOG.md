@@ -407,8 +407,20 @@ record independently agreeing on the bytes.
   the store) or from a device that is already a member. `pair enrol --invite`
   admits the device as a membership op (ADR-0068). **Breaking:** `pair enrol` no
   longer takes `--session`, because the invite now carries the session. The new
-  protocol has no abort message, so a device whose code was refused waits out its
-  `--timeout` before giving up.
+  protocol had no abort message, so a device whose code was refused waited out
+  its `--timeout` before giving up (fixed by the signed refusal below).
+- **A refused pairing fails fast on the new device (voidbind-go v0.17.0,
+  ADR-0012; voidbind-go#64).** When the operator of `heyarr pair authorise`
+  rejects the code (or the confirmation is cancelled), it now posts a signed
+  refusal to the relay's new `refuse` slot, and `heyarr pair enrol` stops at
+  once with "the other device refused the pairing" and a non-zero exit, instead
+  of waiting out its `--timeout`. The refusal is signed by the key the new device
+  compared codes with and bound to the session, so nobody else on the relay can
+  forge one. Posting it is best-effort: a relay without the slot answers 400,
+  `authorise` notes that on stderr, and the new device times out as before. The
+  node's `/pair/v1` relay serves the slot, because it is built on voidbind-go's
+  default pairing slots. The acceptance demo's refused pairing drops from about
+  2s to tens of milliseconds.
 - **Voidbind tokens are checked for their type (voidbind-go v0.15.0, ADR-0009
   phase 1; #646, #650).** Every verifier now checks a token's `typ` claim when it
   has one and refuses a wrong value. Untyped tokens are still accepted, and
