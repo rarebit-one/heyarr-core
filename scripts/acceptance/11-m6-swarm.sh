@@ -104,6 +104,9 @@ swarm_demo() {
   local n
   for n in a b origin; do
     mkdir -p "$root/$n"
+    # Unquoted delimiter: the body needs $root, $n and a command substitution.
+    # So every backtick in it is escaped — an unescaped one is a command
+    # substitution too, run while the heredoc is built (#656).
     cat > "$WORK/swarm-$n.yaml" <<YAML
 data_dir: $root/$n/data
 peer:
@@ -113,11 +116,11 @@ peer:
   # THE EXTERNAL SOURCE IS A WEB SEED, and the other two are piece peers
   # (§27, ADR-0042, #266).
   #
-  # `serve_pieces: false` leaves the content route untouched and refuses the
+  # \`serve_pieces: false\` leaves the content route untouched and refuses the
   # piece routes permanently, which is exactly §27's shape: a member reachable
   # over HTTP that serves byte ranges of blobs it holds whole and takes no part
   # in swarms. Until this existed nothing in the tree could produce such a node,
-  # so `transfer.WebSeed` was constructed nowhere outside a Go test and the
+  # so \`transfer.WebSeed\` was constructed nowhere outside a Go test and the
   # transport's web-seed half was unreachable from any running binary.
   #
   # It costs the demo nothing — the same three nodes, the same fixture, the same
