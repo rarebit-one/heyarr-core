@@ -47,6 +47,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr identity generate`](heyarr_identity_generate.md) | Generate your user identity keypair |
 | [`heyarr identity recover`](heyarr_identity_recover.md) | Reconstruct your user identity from its recovery secret, offline (ADR-0022) |
 | [`heyarr identity show`](heyarr_identity_show.md) | Show your user identity |
+| [`heyarr identity verify-recovery`](heyarr_identity_verify-recovery.md) | Check your written recovery secret against this identity, without using it (ADR-0022) |
 | [`heyarr identity`](heyarr_identity.md) | Manage your user identity and enrol this machine's device (§40, ADR-0048) |
 | [`heyarr jobs list`](heyarr_jobs_list.md) | List jobs |
 | [`heyarr jobs retry`](heyarr_jobs_retry.md) | Put a finished job back on the queue |

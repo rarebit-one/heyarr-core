@@ -20,7 +20,8 @@ secret, derives the key and signs a cert, touching no server.
 
 The secret is read from --secret-file, or from --secret, or from standard input
 — prefer a file or a pipe, since a secret in argv is visible in ps and shell
-history.
+history. Instead of the secret, the same input may hold SLIP-39 recovery shares,
+one per line (`voidbind recovery split`): enough of them rebuild the secret.
 
 ```
 heyarr identity recover [flags]

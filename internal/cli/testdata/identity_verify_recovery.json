@@ -1,0 +1,5 @@
+{
+  "user_id": "ed25519:<hex>",
+  "fingerprint": "XXXX XXXX XXXX XXXX",
+  "recovery_key": "x25519:<hex>"
+}

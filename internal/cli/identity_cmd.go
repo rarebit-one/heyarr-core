@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/voidbind-go/device"
+	vbidentity "github.com/rarebit-one/voidbind-go/identity"
 	"github.com/rarebit-one/voidbind-go/recovery"
 	"github.com/rarebit-one/voidbind-go/useridentity"
 	"github.com/spf13/cobra"
@@ -68,6 +69,7 @@ deliberate human act rather than something a device can claim about itself
 		newIdentityShowCommand(opts, &identityDir),
 		newIdentityEnrolCommand(opts, &identityDir, &deviceDir),
 		newIdentityRecoverCommand(opts, &identityDir, &deviceDir),
+		newIdentityVerifyRecoveryCommand(opts, &identityDir),
 		newIdentityCredentialCommand(opts, &deviceDir),
 	)
 	return cmd
@@ -113,6 +115,7 @@ them all. A second generate refuses unless you pass --force.`,
 			if err != nil {
 				return err
 			}
+
 			if asJSON {
 				return emitJSON(cmd.OutOrStdout(), identityGenerateJSON{
 					Identity:       useridentity.NewView(id),
@@ -140,6 +143,7 @@ func recoverySecretNotice(secret recovery.Secret) string {
 	return "RECOVERY SECRET — write this down and keep it OFFLINE. It is shown once and never again:\n" +
 		"  " + secret.String() + "\n" +
 		"It reconstructs this identity if every device is lost (`heyarr identity recover`). " +
+		"To print it as a sheet with a QR code: `voidbind recovery sheet --secret-file - --out sheet.html`. " +
 		"Anyone who has it can become you, so store it like a house key, not a password."
 }
 
@@ -171,14 +175,15 @@ secret, derives the key and signs a cert, touching no server.
 
 The secret is read from --secret-file, or from --secret, or from standard input
 — prefer a file or a pipe, since a secret in argv is visible in ps and shell
-history.`,
+history. Instead of the secret, the same input may hold SLIP-39 recovery shares,
+one per line (` + "`voidbind recovery split`" + `): enough of them rebuild the secret.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			raw, err := readRecoverySecret(cmd, secretStr, secretFile)
 			if err != nil {
 				return err
 			}
-			secret, err := recovery.ParseSecret(raw)
+			secret, err := parseRecoveryInput(raw)
 			if err != nil {
 				// Surface the loud failure cleanly rather than as a stack of
 				// wrapped internals — a mistyped secret is a re-read, not a bug.
@@ -416,4 +421,75 @@ func identityPinHint(id useridentity.Identity) string {
 		"  heyarr token create … (an admin token), then\n" +
 		"  POST /api/v1/identities/users {\"public_key\":\"" + id.PublicKeyString() + "\"}\n" +
 		"until then, a cert this identity signs is refused at the peer (ADR-0032)."
+}
+
+// newIdentityVerifyRecoveryCommand checks a written recovery secret (or a set of
+// recovery shares) against this identity without using it (voidbind-go
+// ADR-0010): the checksum, the identity it derives, and its recovery key.
+func newIdentityVerifyRecoveryCommand(_ Options, identityDir *string) *cobra.Command {
+	var (
+		secretStr  string
+		secretFile string
+		asJSON     bool
+	)
+	cmd := &cobra.Command{
+		Use:   "verify-recovery",
+		Short: "Check your written recovery secret against this identity, without using it (ADR-0022)",
+		Long: `Check the recovery secret you wrote down, before you ever need it.
+
+The secret's checksum is verified, the identity it derives is compared with the
+one stored here (its public key and its recovery encryption key), and its
+fingerprint is printed so you can compare it with the one on your recovery
+sheet. Nothing is signed, stored or sent: run it as often as you like, and at
+least once a year.
+
+The secret is read from --secret-file, --secret or standard input, like
+` + "`identity recover`" + `; recovery shares, one per line, work too. A secret that
+belongs to another identity is an error, so a script can gate on it.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			raw, err := readRecoverySecret(cmd, secretStr, secretFile)
+			if err != nil {
+				return err
+			}
+			secret, err := parseRecoveryInput(raw)
+			if err != nil {
+				return fmt.Errorf("the recovery secret was not accepted: %w", err)
+			}
+			derived, err := deriveRecoveryIdentity(secret)
+			if err != nil {
+				return err
+			}
+			store, err := openUserIdentityStore(*identityDir)
+			if err != nil {
+				return err
+			}
+			id, err := store.Get()
+			if err != nil {
+				return err
+			}
+			if pinned := vbidentity.FormatPublicKey(id.PublicKey); pinned != derived.UserID {
+				return fmt.Errorf("this secret derives %s (fingerprint %s), but this identity is %s — "+
+					"it is not this identity's recovery secret", derived.UserID, derived.Fingerprint, pinned)
+			}
+			if id.EncryptionKey != "" && id.EncryptionKey != derived.RecoveryKey {
+				return fmt.Errorf("this secret's recovery key %s is not the one this identity wraps space keys for (%s)",
+					derived.RecoveryKey, id.EncryptionKey)
+			}
+			if asJSON {
+				return emitJSON(cmd.OutOrStdout(), derived)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "✓ the recovery secret matches this identity\n\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "  user          %s\n", derived.UserID)
+			fmt.Fprintf(cmd.OutOrStdout(), "  fingerprint   %s\n", derived.Fingerprint)
+			fmt.Fprintf(cmd.OutOrStdout(), "  recovery key  %s\n\n", derived.RecoveryKey)
+			fmt.Fprintf(cmd.OutOrStdout(), "Nothing was signed, stored or sent.\n")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&secretStr, "secret", "",
+		"the recovery secret (prefer --secret-file or a pipe: a secret in argv is visible in ps)")
+	cmd.Flags().StringVar(&secretFile, "secret-file", "", "read the recovery secret (or shares, one per line) from this file")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
+	return cmd
 }

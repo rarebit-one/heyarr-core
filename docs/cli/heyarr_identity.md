@@ -35,3 +35,4 @@ deliberate human act rather than something a device can claim about itself
 * [heyarr identity generate](heyarr_identity_generate.md)	 - Generate your user identity keypair
 * [heyarr identity recover](heyarr_identity_recover.md)	 - Reconstruct your user identity from its recovery secret, offline (ADR-0022)
 * [heyarr identity show](heyarr_identity_show.md)	 - Show your user identity
+* [heyarr identity verify-recovery](heyarr_identity_verify-recovery.md)	 - Check your written recovery secret against this identity, without using it (ADR-0022)
