@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -251,7 +252,30 @@ func (a *API) deletePeer(w http.ResponseWriter, r *http.Request) {
 		a.failMembership(w, r, err)
 		return
 	}
+	// The peer is gone, so is every transfer queued to it (#658). Not in the
+	// removal's transaction — membership and the queue are separate stores —
+	// and not a reason to fail a removal that has already happened: a job this
+	// misses is refused, before it moves a byte, by the handler.
+	if n, err := a.cancelTransfersTo(r.Context(), m.PeerID); err != nil {
+		a.log.Warn("could not cancel the transfers queued to a removed peer; each will fail "+
+			"permanently when claimed", "peer_id", m.PeerID, "error", err)
+	} else if n > 0 {
+		a.log.Info("cancelled the transfers queued to a removed peer", "peer_id", m.PeerID, "jobs", n)
+	}
 	a.write(w, r, http.StatusOK, peerFromMember(m))
+}
+
+// cancelTransfersTo ends every pending replicate_blob whose destination is
+// peerID. A payload that does not decode is left alone: it is not this
+// function's to judge, and the handler will fail it on its own terms.
+func (a *API) cancelTransfersTo(ctx context.Context, peerID string) (int, error) {
+	return a.jobs.CancelPending(ctx, replication.ReplicateBlobJobType, func(j jobs.Job) bool {
+		var p replication.ReplicateBlobPayload
+		if err := json.Unmarshal(j.Payload, &p); err != nil {
+			return false
+		}
+		return p.DestinationPeerID == peerID
+	}, "cancelled: the destination peer "+peerID+" was removed")
 }
 
 // reconcilePeer is POST /api/v1/peers/{id}/reconcile (§19, §57, M4-08).

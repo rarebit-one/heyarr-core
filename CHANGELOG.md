@@ -428,6 +428,21 @@ record independently agreeing on the bytes.
 
 ### Fixed
 
+- **`replicate_blob` no longer fails forever on a FOREIGN KEY refusal** (#658).
+  A vault upload recorded only a placement pin, so the catalogue had no `blobs`
+  row for bytes the node held. Convergence read the self-pin as a gap and queued
+  a transfer. The handler found the bytes already present and tried to record
+  the replica, and `replicas.blob_hash` references `blobs`, so the insert was
+  refused on every cycle, for every vault blob. The same missing row left vault
+  bytes looking untracked to garbage collection. The vault upload now records
+  the blob row, this node's `present` replica and the pin in one transaction.
+  A held blob with no row is adopted when its replica is recorded, so a node
+  that uploaded before this fix heals on its next convergence cycle without
+  operator action. A `replicate_blob` whose target peer is not a member, or
+  whose blob is unknown and not held, now fails permanently before any
+  connection opens. Removing a peer cancels its pending transfers, each with a
+  terminal `job.failed` event marked `cancelled`. Convergence no longer plans a
+  pin to another peer for a blob this node has no row for.
 - **A grab no longer depends on the download client reaching the indexer**
   (ADR-0076, #492). The Transmission client handed `torrent-add` the indexer's
   `.torrent` download URL as `filename`, which made Transmission fetch it — and

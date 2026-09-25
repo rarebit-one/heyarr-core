@@ -248,6 +248,14 @@ func reconcilePeerHandler(
 			}
 		}
 
+		if plan.Unrecordable > 0 {
+			// Said rather than silently dropped, for the reason the bound is:
+			// a pin that plans nothing looks exactly like a pin already
+			// satisfied (#658).
+			log.Info("placement pins name blobs this node has no record of, so no transfer was planned "+
+				"for them", "pins", plan.Unrecordable,
+				"note", "they are planned once the blob is known here")
+		}
 		if summary.Deferred > 0 {
 			// Logged rather than silently dropped. A cycle that hit its bound
 			// has NOT converged, and without this line it looks exactly like
