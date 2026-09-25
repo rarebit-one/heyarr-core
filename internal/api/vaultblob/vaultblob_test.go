@@ -35,13 +35,15 @@ type fakePinner struct {
 	calls      int
 	pinnedHash string
 	pinnedPeer string
+	pinnedSize int64
 	err        error
 }
 
-func (f *fakePinner) PinPlacement(_ context.Context, blobHash, peerID string) error {
+func (f *fakePinner) RecordVaultBlob(_ context.Context, blobHash string, size int64, peerID string) error {
 	f.calls++
 	f.pinnedHash = blobHash
 	f.pinnedPeer = peerID
+	f.pinnedSize = size
 	return f.err
 }
 
@@ -86,6 +88,11 @@ func TestUploadStoresAndPins(t *testing.T) {
 	if pinner.calls != 1 || pinner.pinnedHash != goodHash || pinner.pinnedPeer != "peer-self" {
 		t.Fatalf("want one pin of %s to peer-self, got calls=%d hash=%s peer=%s",
 			goodHash, pinner.calls, pinner.pinnedHash, pinner.pinnedPeer)
+	}
+	// The size recorded is the store's, of the bytes it verified — the blob row
+	// the catalogue writes from it is what makes the upload a replica (#658).
+	if pinner.pinnedSize != int64(len(body)) {
+		t.Fatalf("recorded size %d, want the stored %d", pinner.pinnedSize, len(body))
 	}
 	var out uploadResult
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {

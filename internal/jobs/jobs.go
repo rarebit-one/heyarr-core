@@ -827,6 +827,91 @@ func (q *Queue) Retry(ctx context.Context, id string) error {
 	})
 }
 
+// CancelPending ends every PENDING job of jobType that match accepts, moving it
+// to dead with reason as its error, and reports how many it ended.
+//
+// It exists for work whose subject has gone away before it ran — a transfer to
+// a peer that has just been removed (#658) — which would otherwise run, fail
+// the same way and walk its attempts to dead. Pending only, which includes a
+// failed attempt waiting on its backoff: a leased job is running, and taking it
+// from under its worker is not something the queue does. A handler that can
+// fail such a job permanently is the backstop for that case.
+//
+// Each cancelled job emits job.failed, terminal and permanent, with
+// "cancelled": true — every state transition emits an event (§76, ADR-0009),
+// and a cancelled job is a job that failed without running rather than a new
+// state an old consumer would not know. `jobs retry` moves one back, as it does
+// any dead job.
+func (q *Queue) CancelPending(
+	ctx context.Context, jobType string, match func(Job) bool, reason string,
+) (int, error) {
+	now := q.clock.Now()
+	var cancelled int
+	err := q.inTx(ctx, func(tx *sql.Tx) ([]events.Event, error) {
+		cancelled = 0
+		candidates, err := pendingMatching(ctx, tx, jobType, match)
+		if err != nil {
+			return nil, err
+		}
+
+		var out []events.Event
+		for _, job := range candidates {
+			res, err := tx.ExecContext(ctx, `
+				UPDATE jobs SET state = 'dead', last_error = ?, finished_at = ?, updated_at = ?
+				WHERE id = ? AND state = 'pending'`,
+				reason, format(now), format(now), job.ID)
+			if err != nil {
+				return nil, fmt.Errorf("jobs: cancelling %s: %w", job.ID, err)
+			}
+			if n, err := res.RowsAffected(); err != nil {
+				return nil, fmt.Errorf("jobs: cancelling %s: %w", job.ID, err)
+			} else if n == 0 {
+				continue
+			}
+			job.State, job.LastError = Dead, reason
+			e, err := q.events.EmitTx(ctx, tx, events.TypeJobFailed, "job", job.ID,
+				transitionPayload(job, map[string]any{
+					"terminal": true, "permanent": true, "cancelled": true,
+				}))
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, e)
+			cancelled++
+		}
+		return out, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return cancelled, nil
+}
+
+// pendingMatching reads the pending jobs of jobType that match accepts, inside
+// the caller's transaction.
+func pendingMatching(ctx context.Context, tx *sql.Tx, jobType string, match func(Job) bool) ([]Job, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT `+claimableSelectCols+`
+		FROM jobs WHERE type = ? AND state = 'pending' ORDER BY id`, jobType)
+	if err != nil {
+		return nil, fmt.Errorf("jobs: reading the pending %s jobs: %w", jobType, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Job
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, fmt.Errorf("jobs: reading the pending %s jobs: %w", jobType, err)
+		}
+		if match(j) {
+			out = append(out, j)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("jobs: reading the pending %s jobs: %w", jobType, err)
+	}
+	return out, nil
+}
+
 // Stats counts jobs by state, for operational visibility (§60).
 func (q *Queue) Stats(ctx context.Context) (map[State]int, error) {
 	rows, err := q.reader.QueryContext(ctx, `SELECT state, count(*) FROM jobs GROUP BY state`)

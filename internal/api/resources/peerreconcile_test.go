@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
+	"github.com/rarebit-one/heyarr-core/internal/jobs"
 )
 
 // Convergence on demand (§19, §57, M4-08).
@@ -122,5 +123,66 @@ func TestReconcilingAnUnknownPeerIsNotFound(t *testing.T) {
 	}
 	if got := h.countJobs(t, replication.ReconcilePeerJobType); got != 0 {
 		t.Fatalf("%d cycles queued for an unknown peer, want 0", got)
+	}
+}
+
+// TestRemovingAPeerCancelsTheTransfersQueuedToIt (#658): a removed peer's
+// pending replicate_blob jobs end, with an event each, instead of running and
+// failing until their attempts run out. A transfer to another peer is untouched.
+func TestRemovingAPeerCancelsTheTransfersQueuedToIt(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seedSelf()
+	const (
+		gone = "01990000-0000-7000-8000-0000000000b2"
+		kept = "01990000-0000-7000-8000-0000000000c3"
+		blob = "blake3:1111111111111111111111111111111111111111111111111111111111111111"
+	)
+	for _, p := range [][2]string{{gone, "site-b"}, {kept, "site-c"}} {
+		h.exec(`INSERT INTO peers (id, name, site, mode, is_self, enrolled_at, created_at)
+			VALUES (?, ?, ?, 'full', 0, ?, ?)`, p[0], p[1], p[1], seedTime, seedTime)
+	}
+	for _, peer := range []string{gone, kept} {
+		gap := replication.Gap{BlobHash: blob, PeerID: peer}
+		if _, err := h.jobs.Enqueue(t.Context(), jobs.EnqueueOptions{
+			Type:      replication.ReplicateBlobJobType,
+			Payload:   replication.ReplicateBlobPayload{BlobHash: blob, DestinationPeerID: peer},
+			DedupeKey: gap.DedupeKey(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if resp := h.do(http.MethodDelete, "/api/v1/peers/site-b", "", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	states := map[string]string{}
+	rows, err := h.db.Reader().Query(`SELECT json_extract(payload, '$.destination_peer_id'), state
+		FROM jobs WHERE type = ?`, replication.ReplicateBlobJobType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var peer, state string
+		if err := rows.Scan(&peer, &state); err != nil {
+			t.Fatal(err)
+		}
+		states[peer] = state
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if states[gone] != "dead" || states[kept] != "pending" {
+		t.Fatalf("job states after removal = %v, want %s dead and %s pending", states, gone, kept)
+	}
+
+	var cancelled int
+	if err := h.db.Reader().QueryRow(`SELECT count(*) FROM events
+		WHERE type = 'job.failed' AND json_extract(payload, '$.cancelled') = 1`).Scan(&cancelled); err != nil {
+		t.Fatal(err)
+	}
+	if cancelled != 1 {
+		t.Fatalf("%d cancellation events, want 1", cancelled)
 	}
 }

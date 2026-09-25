@@ -199,14 +199,36 @@ func (c *Catalog) BeginBlobTransfer(ctx context.Context, t BlobTransfer) error {
 // a transition that did not happen would turn every retry into event noise.
 // It is the same rule inventory reconciliation follows for an unchanged report,
 // and it is why the emit is inside the `changed` branch rather than beside it.
+//
+// # A blob this node holds and has no row for is adopted, not refused (#658)
+//
+// `replicas.blob_hash` references `blobs`, so a replica of a blob with no row
+// cannot be recorded. Every transfer path reaches here through
+// BeginBlobTransfer, whose own insert needs the row, so for them the adoption
+// below is a no-op. The path it exists for is the handler's already-held
+// short-circuit: bytes that are in this node's store, verified by address,
+// that the catalogue never recorded — a vault upload before #658 was one — and
+// whose replica row was therefore refused on every run, forever. The size is
+// this node's own Stat of its own bytes, so the row is a fact about this disk
+// rather than a claim anyone made.
 func (c *Catalog) RecordBlobTransferred(ctx context.Context, t BlobTransfer) error {
 	now := c.clock.Now().UTC().Format(timestampFormat)
-	var (
-		ev      events.Event
-		changed bool
-	)
+	var pending []events.Event
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
-		changed = false
+		pending = nil
+		adopted, err := adoptBlob(ctx, tx, t.BlobHash, t.Bytes, now)
+		if err != nil {
+			return err
+		}
+		if adopted {
+			ev, err := c.events.EmitTx(ctx, tx, events.TypeBlobCreated, "blob", t.BlobHash, map[string]any{
+				"size": t.Bytes, "adopted": true,
+			})
+			if err != nil {
+				return err
+			}
+			pending = append(pending, ev)
+		}
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO replicas (blob_hash, peer_id, state, bytes_present, verified_at, updated_at)
 			VALUES (?, ?, 'present', ?, ?, ?)
@@ -227,17 +249,58 @@ func (c *Catalog) RecordBlobTransferred(ctx context.Context, t BlobTransfer) err
 		if n == 0 {
 			return nil
 		}
-		changed = true
-		ev, err = c.emitTransferChanged(ctx, tx, replication.TransferSucceeded, t)
-		return err
+		ev, err := c.emitTransferChanged(ctx, tx, replication.TransferSucceeded, t)
+		if err != nil {
+			return err
+		}
+		pending = append(pending, ev)
+		return nil
 	})
 	if err != nil {
 		return err
 	}
-	if changed {
-		c.events.Publish(ev)
+	if len(pending) > 0 {
+		c.events.Publish(pending...)
 	}
 	return nil
+}
+
+// adoptBlob records a blob row for bytes this node holds, if there is none,
+// and reports whether it wrote one. The hash is the primary key (ADR-0005), so
+// an existing row — the ordinary case — is left exactly as it was.
+func adoptBlob(ctx context.Context, tx *sql.Tx, hash string, size int64, now string) (bool, error) {
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO blobs (hash, size, first_seen_at) VALUES (?, ?, ?)
+		ON CONFLICT (hash) DO NOTHING`, hash, size, now)
+	if err != nil {
+		return false, fmt.Errorf("catalog: recording blob %s: %w", hash, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("catalog: recording blob %s: %w", hash, err)
+	}
+	return n == 1, nil
+}
+
+// ReplicationTarget says whether the catalogue can record a replica of blobHash
+// on peerID at all: whether the peer is a member, and whether the blob has a
+// row (#658).
+//
+// `replicas` references both, so a transfer for a pair missing either one ends
+// in a refused insert — after the bytes have crossed the network, on the
+// transfer path. The replicate_blob handler asks this FIRST, so that a job
+// naming a peer that has been removed, or a blob this node has never recorded,
+// fails before any connection is opened.
+func (c *Catalog) ReplicationTarget(ctx context.Context, blobHash, peerID string) (peerKnown, blobKnown bool, err error) {
+	var p, b int
+	err = c.db.Reader().QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM peers WHERE id = ?),
+		       EXISTS (SELECT 1 FROM blobs WHERE hash = ?)`, peerID, blobHash).Scan(&p, &b)
+	if err != nil {
+		return false, false, fmt.Errorf("catalog: checking the replication target %s on peer %s: %w",
+			blobHash, peerID, err)
+	}
+	return p == 1, b == 1, nil
 }
 
 // RecordBlobTransferFailed records a transfer that did not produce a replica,
