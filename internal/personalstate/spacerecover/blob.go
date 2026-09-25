@@ -3,11 +3,13 @@ package spacerecover
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/rarebit-one/voidbind-go/encryption"
@@ -114,6 +116,7 @@ func SealBlob(b Blob) ([]byte, error) {
 // and one whose recorded recipient or user is not the secret's. The keys inside
 // are still wrapped: pass [Blob.Wrapped] to [UnwrapAll].
 func OpenBlob(secret recovery.Secret, data []byte) (Blob, error) {
+	data = decodeBlobText(data)
 	rest, ok := bytes.CutPrefix(data, blobMagic)
 	if !ok || len(rest) < 4 {
 		return Blob{}, ErrNotABlob
@@ -155,6 +158,23 @@ func OpenBlob(secret recovery.Secret, data []byte) (Blob, error) {
 		}
 	}
 	return b, nil
+}
+
+// EncodeBlobText is the blob as base64 text, for keeping it where only text
+// goes (a note, a password manager entry). [OpenBlob] reads either form.
+func EncodeBlobText(data []byte) string { return base64.StdEncoding.EncodeToString(data) }
+
+// decodeBlobText turns base64 text (whitespace and line breaks allowed) back
+// into blob bytes; anything else is returned unchanged for the magic check.
+func decodeBlobText(data []byte) []byte {
+	if bytes.HasPrefix(data, blobMagic) {
+		return data
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(string(data)), ""))
+	if err != nil {
+		return data
+	}
+	return decoded
 }
 
 // Wrapped returns the blob's copies keyed by space id: the input [UnwrapAll] takes.

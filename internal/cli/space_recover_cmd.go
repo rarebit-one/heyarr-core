@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/rarebit-one/voidbind-go/encryption"
-	"github.com/rarebit-one/voidbind-go/recovery"
 	"github.com/spf13/cobra"
 
 	"github.com/rarebit-one/heyarr-core/internal/config"
@@ -95,7 +94,7 @@ func runSpaceRecover(ctx context.Context, cmd *cobra.Command, configPath, device
 	if err != nil {
 		return err
 	}
-	secret, err := recovery.ParseSecret(raw)
+	secret, err := parseRecoveryInput(raw)
 	if err != nil {
 		// A mistyped secret is caught by its checksum here rather than opening
 		// nothing and looking like data loss — surface it cleanly.
