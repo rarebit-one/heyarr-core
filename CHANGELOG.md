@@ -11,6 +11,13 @@ stable.
 
 ### Added
 
+- **`heyarr pair authorise` draws the invite as a terminal QR code** (#655), so
+  the joining device (Cruciform's scanner, or a phone) can read it off the
+  screen instead of the invite being copied across. It is drawn in half-block
+  characters, only when stdout is a terminal. `--qr` forces it on and `--no-qr`
+  turns it off. The invite string is still printed on its own line, so scripts
+  are unaffected. The encoder is `github.com/skip2/go-qrcode`, the one
+  voidbind-go already uses for the same invite.
 - **Guest mode is an M7 access lease, gated by a trusted-source allow-list
   (ADR-0094, phase 1).** A credential-less request from an allow-listed source
   address is now admitted as an anonymous `guest` principal minted as a

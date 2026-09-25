@@ -100,6 +100,7 @@ func newPairAuthoriseCommand(_ Options) *cobra.Command {
 		identityDir string
 		deviceDir   string
 		lifetime    time.Duration
+		qr, noQR    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "authorise",
@@ -117,7 +118,11 @@ hands it over sealed to the new device's encryption key (ADR-0068).
   auto      identity when one is present here, otherwise device (the default)
 
 Either way, a local device enrolled under the same identity contributes the
-membership ops it knows and records the new add afterwards.`,
+membership ops it knows and records the new add afterwards.
+
+When stdout is a terminal the invite is also drawn as a QR code, so the new
+device can scan it off the screen. --qr draws it anyway and --no-qr never does.
+The invite string is printed either way, on its own line, for scripts.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ep, err := relayForNode(relayAddr)
@@ -151,6 +156,12 @@ membership ops it knows and records the new add afterwards.`,
 				fmt.Fprintf(out, "authorising as: member device %s of user %s\n", in.DeviceID(), in.UserID())
 			}
 			fmt.Fprintf(out, "invite: %s\n", invite)
+			if showQR(qr, noQR, out) {
+				fmt.Fprintln(out)
+				if err := renderQR(out, invite); err != nil {
+					return err
+				}
+			}
 			fmt.Fprintf(out, "on the new device: heyarr pair enrol --invite '%s'\n\n", invite)
 
 			t := ep.transport(session, pairflow.RoleInitiator, f.poll)
@@ -183,6 +194,10 @@ membership ops it knows and records the new add afterwards.`,
 		"where this machine's device key lives (default: your config directory; "+device.EnvDir+" overrides)")
 	cmd.Flags().DurationVar(&lifetime, "lifetime", 0,
 		"how long an admission signed as the identity is valid (default: the enrolment lifetime)")
+	cmd.Flags().BoolVar(&qr, "qr", false,
+		"draw the invite as a QR code even when stdout is not a terminal (default: drawn only on a terminal)")
+	cmd.Flags().BoolVar(&noQR, "no-qr", false, "never draw the invite as a QR code")
+	cmd.MarkFlagsMutuallyExclusive("qr", "no-qr")
 	return cmd
 }
 
