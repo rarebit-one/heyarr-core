@@ -36,7 +36,7 @@ type Options struct {
 	Now    func() time.Time
 	Logger *slog.Logger
 	// Types is the message-slot allow-list the relay accepts. Empty keeps
-	// voidbind-go's pairing default (commit/reveal/cert). A node that also carries
+	// voidbind-go's pairing default (commit/reveal/cert/refuse). A node that also carries
 	// the cruciform-offload live path sets it to the pairing set plus the offload
 	// slots — the caller composes them, so this package stays agnostic to what
 	// rides the relay (see the controller mount).

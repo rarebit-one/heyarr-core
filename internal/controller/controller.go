@@ -1023,11 +1023,18 @@ func (c *Controller) renderAndRelayRoutes(secret []byte, blobHandler *blobs.Hand
 	// slots (its one-time pairing `confirm` and the recurring unwrap request/
 	// response), so one node relay is the rendezvous for both device enrolment and
 	// offload unwraps (ADR-0098). The relay stays a dumb, opaque store either way.
-	relayTypes := append(append([]string{}, vbrelay.DefaultTypes...),
-		append(cruciform.RelayPairTypes, cruciform.RelayUnwrapTypes...)...)
-	relayV1Handler := relay.New(relay.Options{Logger: c.log, Types: relayTypes})
+	relayV1Handler := relay.New(relay.Options{Logger: c.log, Types: nodeRelayTypes()})
 
 	return []httpapi.MountFunc{renderHandler.Mount, relayV1Handler.Mount}, nil
+}
+
+// nodeRelayTypes is the slot allow-list of the node's /pair/v1 relay: voidbind-go's
+// pairing set (relay.DefaultTypes — commit, reveal, cert and, since ADR-0012,
+// the signed `refuse`) plus the cruciform-offload slots. Building on DefaultTypes
+// is what makes a voidbind-go bump carry a new pairing slot to the node.
+func nodeRelayTypes() []string {
+	return append(append([]string{}, vbrelay.DefaultTypes...),
+		append(cruciform.RelayPairTypes, cruciform.RelayUnwrapTypes...)...)
 }
 
 // personalStateAPI builds the encrypted personal-state plane's device-facing API.
