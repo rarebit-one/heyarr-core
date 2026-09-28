@@ -43,7 +43,12 @@ op it does not know. The Android decoder is fixed and shipped first.**
    pushes a snapshot) **refuses** to snapshot a log that contains an op it
    cannot fold, rather than silently dropping it. A reader may skip what it
    does not understand. A snapshotter may not, because its frontier would still
-   subsume the change and compaction would then delete the only copy. This
+   subsume the change and compaction would then delete the only copy. The same
+   applies to snapshot **fields**. Go's `encoding/json` silently drops an
+   unknown `name` when it loads a newer snapshot, so a producer decodes a
+   snapshot it means to re-snapshot strictly (`DisallowUnknownFields`, or a
+   snapshot `v` it does not recognise), and refuses rather than writing a
+   name-less successor. This
    step is useful on its own, and it is the precondition for everything
    else.
 2. **The register.** `OpName` carries `{Name, At, Writer}`. The state keeps the
