@@ -36,9 +36,9 @@ Two things that the issue does not state change the shape of the decision:
 has pulled, the same rule the Go CLI already follows (`currentHeads`), and
 never on a frontier derived from the drive's own `PosKey`s. A device pushes a
 snapshot of its folded drive at those heads on a cadence, and cold-starts from
-the latest snapshot plus the tail. Compaction stays an explicit `admin`
-decision on the peer's authority, never a device capability and never
-unattended. Replication moves parents before children before any device sends a
+the latest snapshot plus the tail once snapshots are authenticated (#681).
+Compaction stays an explicit `admin` decision on the peer's authority, never a
+device capability and never unattended. Replication moves parents before children before any device sends a
 parented change. Existing flat history needs no re-seed. The first snapshot,
 taken at `Heads` = every root, subsumes all of it.**
 
@@ -70,38 +70,27 @@ taken at `Heads` = every root, subsumes all of it.**
   generated drive-snapshot fixture that both suites read. Without it the JSON
   contract (field names, `omitempty`, ordering) is pinned in one direction
   only.
-- **Cold start.** Fetch `getSnapshot`, fold it, then apply only the changes
-  outside its frontier's causal history. This extends the restart case #110
-  covered locally to a fresh device. **What a snapshot is trusted for:** its
-  ciphertext is AEAD under the space key, so only a member device holding that
-  key can author one that decrypts. A write-scoped token without the key can
-  only push undecryptable bytes, and a cold start that cannot open the snapshot
-  falls back to the full log. A key-holding member could equally wreck the
-  state with ordinary changes, so the snapshot's trust boundary is the same as
-  a change's. The residual risk is a *buggy* member, which the next point
-  bounds. While the uncompacted log still exists, a device may re-fold it in
-  the background and discard a snapshot that disagrees. **After compaction**
-  there is no full log to fall back to. So a compaction **pins** the snapshot
-  it named: the peer never drops a pinned snapshot, and the snapshot read
-  offers it beside the latest. A device that cannot open the latest (for
-  example, an undecryptable upload from a keyless token) falls back to the
-  pinned base plus the tail, never to nothing.
-- **Compaction on the peer, decided by an operator.** Only a peer knows which
-  replicas acknowledged what (§45, the `ackedFrontier` in
-  `store.CompactChanges`). A device guessing that frontier is exactly the
-  data-loss case that compaction's double condition exists to stop. A peer
-  **also cannot verify a snapshot**. Any `write`-scoped device, including a
-  buggy or compromised one, can push a self-consistent snapshot whose frontier
-  names every head while its ciphertext omits state, and the peer cannot
-  decrypt it to check. So compaction stays the explicit
-  `heyarr space compact` (admin), run against a snapshot the operator has
-  chosen, and the request **names that snapshot by id**. Today the CLI sends
-  only a frontier, and `Store.CompactChanges` re-reads whichever snapshot is
-  latest when it runs, so a snapshot pushed between the two steps would be
-  compacted against without anyone choosing it. The store must compact against
-  the named, immutable snapshot, or refuse. A peer-side job may **report** what compaction would drop (a
-  dry-run), but it does not delete on its own until a verifiable
-  snapshot-eligibility rule exists.
+- **Cold start and compaction are gated on snapshot trust (#681).** Fetching
+  `getSnapshot`, folding it, and applying only the tail extends to a fresh
+  device the restart case #110 covered locally. Review of this record found
+  that snapshots cannot yet carry that weight. First, the frontier sits
+  outside the AEAD, so a keyless `write` token can re-label valid ciphertext
+  with a newer frontier. Second, the latest snapshot by arrival time may not
+  cover the compaction base. Third, only the latest snapshot replicates. So a
+  vault device **may push snapshots** (harmless while nothing trusts them),
+  but a device **does not cold-start from a server snapshot**, and no vault
+  space is compacted, until #681 has:
+  - bound `(space, record type, frontier)` into the authenticated data;
+  - made compaction name its snapshot by id and **pin** it as the base;
+  - made cold start prefer the pinned base unless a newer authenticated
+    frontier provably covers it;
+  - replicated the pinned base to every trusted Full Peer (§45).
+- **Compaction stays an operator decision.** Only a peer knows which replicas
+  acknowledged what (§45, the `ackedFrontier` in `store.CompactChanges`), and
+  no peer can verify a snapshot it cannot decrypt. So compaction is the
+  explicit `heyarr space compact` (admin), never a device capability and never
+  unattended. A peer-side job may **report** what compaction would drop. It
+  does not delete on its own.
 
 ## Consequences
 
