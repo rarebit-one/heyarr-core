@@ -447,6 +447,13 @@ record independently agreeing on the bytes.
 
 ### Fixed
 
+- **The OPDS catalogue root and acquisition feed answer `HEAD`** (#606). They
+  were registered for `GET` only, so a reader that probes before fetching
+  (KOReader does) got the router's 405 for an unmatched method, and a client
+  that reads a failed `HEAD` as "not there" would call the catalogue broken.
+  Both now answer `HEAD` with the `GET`'s status and headers and no body, like
+  the download, OpenSubsonic and blob routes already did.
+
 - **`replicate_blob` no longer fails forever on a FOREIGN KEY refusal** (#658).
   A vault upload recorded only a placement pin, so the catalogue had no `blobs`
   row for bytes the node held. Convergence read the self-pin as a gap and queued

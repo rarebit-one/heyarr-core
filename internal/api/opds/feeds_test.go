@@ -136,3 +136,29 @@ func entryTitles(f feedT) []string {
 	}
 	return out
 }
+
+// A reader that probes a feed with HEAD before fetching it must see the same
+// status and headers the GET would give, not the router's 405 (#606).
+func TestFeedsAnswerHead(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	for _, path := range []string{"/opds", "/opds/publications"} {
+		t.Run(path, func(t *testing.T) {
+			get := h.get(path, true)
+			head := h.do(http.MethodHead, path, true)
+			if head.StatusCode != http.StatusOK {
+				t.Fatalf("HEAD %s = %d, want 200", path, head.StatusCode)
+			}
+			if got, want := head.Header.Get("Content-Type"), get.Header.Get("Content-Type"); got != want {
+				t.Errorf("HEAD content type = %q, want the GET's %q", got, want)
+			}
+			if b := body(t, head); len(b) != 0 {
+				t.Errorf("HEAD carried a %d-byte body, want none", len(b))
+			}
+			// Authentication is not skipped for HEAD.
+			if anon := h.do(http.MethodHead, path, false); anon.StatusCode != http.StatusUnauthorized {
+				t.Errorf("unauthenticated HEAD %s = %d, want 401", path, anon.StatusCode)
+			}
+		})
+	}
+}

@@ -238,13 +238,21 @@ func (s *Server) accessLogMiddleware(next http.Handler) http.Handler {
 		slot := &identitySlot{}
 		r = r.WithContext(context.WithValue(r.Context(), ctxKeyIdentitySlot, slot))
 		defer func() {
+			// A HEAD is served by running the GET handler, which writes its
+			// whole body; net/http then drops those bytes rather than send
+			// them. The recorder counts what the handler wrote, so without
+			// this every HEAD probe (#606) would log the full payload as sent.
+			sent := rec.written
+			if r.Method == http.MethodHead {
+				sent = 0
+			}
 			attrs := []any{
 				"request_id", RequestIDFrom(r.Context()),
 				"method", r.Method,
 				"path", logPath(r),
 				"route", routePattern(r),
 				"status", rec.status,
-				"bytes", rec.written,
+				"bytes", sent,
 				"duration_ms", time.Since(start).Milliseconds(),
 				"remote", remoteHost(r),
 			}

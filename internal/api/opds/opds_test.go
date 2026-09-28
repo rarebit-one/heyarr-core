@@ -191,7 +191,12 @@ func (h *harness) edition(ctx context.Context, store cas.Store, workID, editionI
 
 func (h *harness) get(path string, auth bool) *http.Response {
 	h.t.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, h.http.URL+path, nil)
+	return h.do(http.MethodGet, path, auth)
+}
+
+func (h *harness) do(method, path string, auth bool) *http.Response {
+	h.t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), method, h.http.URL+path, nil)
 	if err != nil {
 		h.t.Fatal(err)
 	}
