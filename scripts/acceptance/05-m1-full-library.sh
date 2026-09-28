@@ -1078,6 +1078,14 @@ YAML
   assert_contains "$opds_root" 'kind=navigation' "the OPDS root is a navigation feed"
   assert_contains "$opds_root" '/opds/publications' "the root descends into the acquisition feed"
 
+  # A reader that probes before fetching (KOReader does, #606) must get the
+  # GET's answer without the body — not the router's 405 for an unmatched method.
+  local opds_head
+  opds_head=$(curl -sS --unix-socket "$SOCK" -u "acceptance:$TOKEN" -I -o /dev/null \
+    -w '%{http_code} %{content_type}' "http://heyarr/opds")
+  assert_contains "$opds_head" '200 ' "a HEAD on the OPDS root answers 200, not 405 (#606)"
+  assert_contains "$opds_head" 'kind=navigation' "a HEAD on the OPDS root carries the GET's content type (#606)"
+
   opds_pub=$(opds "/publications")
   assert_contains "$opds_pub" 'kind=acquisition' "the OPDS publications feed is an acquisition feed"
   assert_contains "$opds_pub" 'http://opds-spec.org/acquisition' "a publication carries an acquisition link"

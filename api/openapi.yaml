@@ -1956,6 +1956,19 @@ paths:
               schema: { type: string }
         '401':
           description: No or bad credential; carries an HTTP Basic authentication challenge.
+    head:
+      tags: [compat]
+      operationId: opdsRootHead
+      security: []
+      summary: Headers for the OPDS catalog root.
+      description: >-
+        The HEAD counterpart, used by a reader probing the catalogue before
+        fetching it (#606). Same status and headers as the GET, no body.
+      responses:
+        '200':
+          description: Headers only, no body.
+        '401':
+          description: No or bad credential; carries an HTTP Basic authentication challenge.
   /opds/publications:
     get:
       tags: [compat]
@@ -1975,6 +1988,19 @@ paths:
           content:
             application/atom+xml:
               schema: { type: string }
+        '401':
+          description: No or bad credential; carries an HTTP Basic authentication challenge.
+    head:
+      tags: [compat]
+      operationId: opdsPublicationsHead
+      security: []
+      summary: Headers for the OPDS acquisition feed.
+      description: >-
+        The HEAD counterpart, used by a reader probing the feed before fetching
+        it (#606). Same status and headers as the GET, no body.
+      responses:
+        '200':
+          description: Headers only, no body.
         '401':
           description: No or bad credential; carries an HTTP Basic authentication challenge.
   /opds/download/{id}:

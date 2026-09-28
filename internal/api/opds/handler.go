@@ -89,9 +89,17 @@ func New(opts Options) (*Handler, error) {
 // Mount registers the adapter on an UNAUTHENTICATED router (see Prefix). Three
 // routes: the root menu, the one acquisition feed, and the byte download. Few
 // and fixed on purpose — the route-parity guard (ADR-0015) documents each.
+//
+// Every route answers HEAD as well as GET (#606). Readers such as KOReader
+// probe a feed with HEAD before fetching it, and a GET-only registration lets
+// that probe fall through to the router's 405 — which a client may fairly read
+// as "this catalogue is not there". net/http serves HEAD from the GET handler
+// and discards the body, so the headers match the GET's exactly.
 func (h *Handler) Mount(r chi.Router) {
 	r.Get(Prefix, h.authed(h.handleRoot))
+	r.Head(Prefix, h.authed(h.handleRoot))
 	r.Get(Prefix+"/publications", h.authed(h.handlePublications))
+	r.Head(Prefix+"/publications", h.authed(h.handlePublications))
 	r.Get(Prefix+"/download/{id}", h.authed(h.handleDownload))
 	r.Head(Prefix+"/download/{id}", h.authed(h.handleDownload))
 }
