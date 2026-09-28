@@ -210,6 +210,45 @@
       ],
       "encode": "adds:\n  t1=a@1:t1\n  t2=b@18446744073709551615:t2\ntombstones:\ncounter:18446744073709551615\n",
       "snapshot": "{\"adds\":[{\"tag\":\"t1\",\"item\":\"a\",\"counter\":1,\"order_tag\":\"t1\"},{\"tag\":\"t2\",\"item\":\"b\",\"counter\":18446744073709551615,\"order_tag\":\"t2\"}],\"tombstones\":[],\"counter\":18446744073709551615}"
+    },
+    {
+      "name": "unknown-op-is-ignored",
+      "changes": [
+        {
+          "Op": 0,
+          "ItemID": "a",
+          "Tag": "t1",
+          "Order": {
+            "Counter": 1,
+            "Tag": "t1"
+          },
+          "Observed": null
+        },
+        {
+          "Op": 2,
+          "ItemID": "",
+          "Tag": "t8",
+          "Order": {
+            "Counter": 40,
+            "Tag": "t8"
+          },
+          "Observed": null
+        },
+        {
+          "Op": 200,
+          "ItemID": "phantom",
+          "Tag": "t9",
+          "Order": {
+            "Counter": 50,
+            "Tag": "t9"
+          },
+          "Observed": [
+            "t1"
+          ]
+        }
+      ],
+      "encode": "adds:\n  t1=a@1:t1\ntombstones:\ncounter:1\n",
+      "snapshot": "{\"adds\":[{\"tag\":\"t1\",\"item\":\"a\",\"counter\":1,\"order_tag\":\"t1\"}],\"tombstones\":[],\"counter\":1}"
     }
   ]
 }
