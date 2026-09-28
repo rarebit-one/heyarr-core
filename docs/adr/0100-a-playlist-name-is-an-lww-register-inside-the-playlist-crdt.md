@@ -38,8 +38,14 @@ op it does not know. The Android decoder is fixed and shipped first.**
 1. **Tolerance first.** Change `PlaylistOp.of` (and any other Kotlin CRDT
    decoder with the same fallback, such as `Starred.kt`) so an unknown op is
    skipped, never coerced to ADD. Add a parity vector with an unknown op to both
-   the Go and Kotlin suites. This change is useful on its own, and it is the
-   precondition for everything else.
+   the Go and Kotlin suites. In the same step, every **snapshot producer**
+   (`heyarr space snapshot`, `space rotate`, the gateway, and any client that
+   pushes a snapshot) **refuses** to snapshot a log that contains an op it
+   cannot fold, rather than silently dropping it. A reader may skip what it
+   does not understand. A snapshotter may not, because its frontier would still
+   subsume the change and compaction would then delete the only copy. This
+   step is useful on its own, and it is the precondition for everything
+   else.
 2. **The register.** `OpName` carries `{Name, At, Writer}`. The state keeps the
    greatest `(At, Writer)` name, with the name string as the final tie-break, as
    `readingpos` does. It is a max-register, so it joins commutatively,
@@ -64,10 +70,13 @@ name.
 - The rollout has an order: first the tolerant decoders on every client that
   folds playlists, then the writers. Writing a name before the Android fix
   reaches devices would make those devices diverge.
-- A client that predates the snapshot field and **pushes a snapshot** would
-  drop the name from it, and compaction could then lose the name for good. Today
-  only the Go CLI and the gateway snapshot playlists. Before any other client
-  starts snapshotting a playlist, it must understand `name`.
+- Snapshot producers that are already deployed are the real hazard. A pre-name
+  `heyarr space rotate` would fold without the name, take a snapshot whose
+  frontier still subsumes the `OpName` change, and compact it away for good.
+  The refuse-to-snapshot rule in step 1 closes that gap, but only for binaries
+  that carry it. Enabling name writers therefore waits until every
+  snapshotting binary in use carries step 1 (a pre-step-1 CLI is simply
+  unsupported against a named space), not only until readers tolerate the op.
 - No change to the peer, the store, or the envelope. The peer still stores
   opaque changes and learns nothing new (invariant 6).
 
