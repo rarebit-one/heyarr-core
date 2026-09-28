@@ -131,6 +131,21 @@ health_check_recorded() { # provider-name
   [[ "$(jq -r '.checked_at // "never"' <<<"$WAIT_HEALTH_ENTRY")" != "never" ]]
 }
 
+# PROBEABLE — the jq filter every "pick a media asset to probe, plan or remux"
+# selection goes through. It keeps out the streaming fixture.
+#
+# That fixture (Blue Harvest, ~200 MB) is a Matroska HEADER followed by filler:
+# it exists to be streamed and ranged, and ffprobe cannot read it (the pinned
+# 7.0.2 answers "End of file"), so no probe ever records a container for it.
+# The selections below used to take `head -1` of every .mkv/.mp4 asset in id
+# order, and ids follow ingest order, which a 200 MB file wins or loses by
+# timing alone. On the runs where it ingested first, the remux section waited
+# the full wait_for_probe budget for a probe that could never land, reported
+# the cascade #274 describes against blob blake3:c4344d27..., and spent enough
+# time doing it to overrun the demo budget too. Every one of those failures was
+# the selection, not the code under test.
+PROBEABLE='select(.filename != null) | select(.filename | contains("Blue Harvest (2019)") | not)'
+
 # probe_recorded <blob-hash> — 0 once the blob's probe has landed and named a
 # container.
 #
@@ -746,7 +761,7 @@ YAML
   # session, fetch the bytes with the credential it issued, and check they are
   # the bytes the catalog says they are.
   local play_asset play_device play_json play_session play_url play_token play_hash play_digest
-  play_asset=$(api_all /api/v1/assets '.items[] | select(.filename != null) | select(.filename | endswith(".mkv") or endswith(".mp4")) | .id' | head -1)
+  play_asset=$(api_all /api/v1/assets ".items[] | $PROBEABLE | select(.filename | endswith(\".mkv\") or endswith(\".mp4\")) | .id" | head -1)
   play_hash=$(api "/api/v1/assets/$play_asset" | jq -r '.blob_hash')
 
   # WAIT FOR THE PROBE BEFORE ANY PLAN IS ASKED FOR (#207). Everything from here
@@ -908,7 +923,7 @@ YAML
   # a real socket — because each of those three being right in isolation is
   # how a wiring bug survives.
   local plan_device limited_device plan_json plan_hash
-  plan_asset=$(api_all /api/v1/assets '.items[] | select(.filename != null) | select(.filename | endswith(".mkv") or endswith(".mp4")) | .id' | head -1)
+  plan_asset=$(api_all /api/v1/assets ".items[] | $PROBEABLE | select(.filename | endswith(\".mkv\") or endswith(\".mp4\")) | .id" | head -1)
   plan_hash=$(api "/api/v1/assets/$plan_asset" | jq -r '.blob_hash')
 
   # The same wait as the playing section, and it is not redundant: this filter
@@ -1183,7 +1198,7 @@ YAML
   # require one. This is the first time it is watched deciding anything, and
   # the assertion runs BOTH ways depending on what this machine has.
   local probe_jobs probe_hash probe_state
-  probe_hash=$(api_all /api/v1/assets '.items[] | select(.filename != null) | select(.filename | endswith(".mkv") or endswith(".mp4") or endswith(".flac")) | .blob_hash' | head -1)
+  probe_hash=$(api_all /api/v1/assets ".items[] | $PROBEABLE | select(.filename | endswith(\".mkv\") or endswith(\".mp4\") or endswith(\".flac\")) | .blob_hash" | head -1)
 
   probe_jobs=$(api "/api/v1/jobs?type=probe_blob" | jq -r '.items | length')
   assert_contains "$probe_jobs" "" "probe jobs were enqueued by ingest"
@@ -3421,7 +3436,7 @@ YAML
 
     # And the equipped worker is still doing its job alongside it: a fleet
     # with one incapable member is not a broken fleet.
-    bare_probe_hash=$(api_all /api/v1/assets '.items[] | select(.filename != null) | select(.filename | endswith(".mkv") or endswith(".mp4")) | .blob_hash' | head -1)
+    bare_probe_hash=$(api_all /api/v1/assets ".items[] | $PROBEABLE | select(.filename | endswith(\".mkv\") or endswith(\".mp4\")) | .blob_hash" | head -1)
     assert_eq "$(api "/api/v1/blobs/$bare_probe_hash/probe" -o /dev/null -w '%{http_code}')" "200" \
       "the capable worker still probed while an incapable one was running"
 
@@ -3439,7 +3454,7 @@ YAML
   # on the same edition in a container the device actually declares.
   if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
     local mkv_asset mkv_edition mkv_hash remux_device remux_job remux_code derived_before derived_after
-    mkv_asset=$(api_all /api/v1/assets '.items[] | select(.filename != null) | select(.filename | endswith(".mkv")) | .id' | head -1)
+    mkv_asset=$(api_all /api/v1/assets ".items[] | $PROBEABLE | select(.filename | endswith(\".mkv\")) | .id" | head -1)
     mkv_edition=$(api "/api/v1/assets/$mkv_asset" | jq -r '.edition_id')
     mkv_hash=$(api "/api/v1/assets/$mkv_asset" | jq -r '.blob_hash')
 
