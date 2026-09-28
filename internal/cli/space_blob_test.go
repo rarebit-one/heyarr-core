@@ -27,6 +27,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/testutil"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 const (
@@ -57,14 +58,14 @@ func newBlobNode(t *testing.T) blobNode {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
+	// The shared migrated template, not a per-test Migrate: the database has to
+	// sit at cfg.Database.Path because the CLI under test opens it there (#610).
+	testdb.WriteMigrated(t, cfg.Database.Path)
 	db, err := sqlite.Open(ctx, sqlite.Options{Path: cfg.Database.Path})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 	clock := &steppingClock{t: time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {
