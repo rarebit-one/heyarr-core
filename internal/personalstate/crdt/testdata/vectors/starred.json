@@ -116,6 +116,29 @@
       ],
       "encode": "stars:\n  s1=a@1\n  s2=b@18446744073709551615\ntombstones:\ncounter:18446744073709551615\n",
       "snapshot": "{\"stars\":[{\"tag\":\"s1\",\"item\":\"a\",\"at\":1},{\"tag\":\"s2\",\"item\":\"b\",\"at\":18446744073709551615}],\"tombstones\":[],\"counter\":18446744073709551615}"
+    },
+    {
+      "name": "unknown-op-is-ignored",
+      "changes": [
+        {
+          "Op": 0,
+          "ItemID": "a",
+          "Tag": "s1",
+          "At": 1,
+          "Observed": null
+        },
+        {
+          "Op": 200,
+          "ItemID": "phantom",
+          "Tag": "s9",
+          "At": 50,
+          "Observed": [
+            "s1"
+          ]
+        }
+      ],
+      "encode": "stars:\n  s1=a@1\ntombstones:\ncounter:1\n",
+      "snapshot": "{\"stars\":[{\"tag\":\"s1\",\"item\":\"a\",\"at\":1}],\"tombstones\":[],\"counter\":1}"
     }
   ]
 }

@@ -102,6 +102,15 @@ func playlistVectors(t *testing.T) vectorFile {
 		{"counter-poison-saturates-at-maxuint64", []crdt.Change{
 			add("a", "t1", ord(1, "t1")), add("b", "t2", ord(maxU64, "t2")),
 		}},
+		// An op this reader does not know is IGNORED — no item, no tombstone, no
+		// counter bump (ADR-0100 step 1, heyarr-kmp#111). Op 2 with an empty item
+		// is the shape ADR-0100's playlist-name op takes; op 200 carries an item
+		// and tags, so a port that coerces it to an add grows a phantom entry.
+		{"unknown-op-is-ignored", []crdt.Change{
+			add("a", "t1", ord(1, "t1")),
+			{Op: crdt.Op(2), Tag: "t8", Order: ord(40, "t8")},
+			{Op: crdt.Op(200), ItemID: "phantom", Tag: "t9", Order: ord(50, "t9"), Observed: []crdt.Tag{"t1"}},
+		}},
 	}
 	vf := vectorFile{Kind: "playlist", Note: vectorNote}
 	for _, sc := range scenarios {
@@ -145,6 +154,11 @@ func starredVectors(t *testing.T) vectorFile {
 		{"unstar-tombstones-all-observed", []crdt.StarChange{star("a", "s1", 1), unstar("a", "s1")}},
 		{"counter-poison-saturates-at-maxuint64", []crdt.StarChange{
 			star("a", "s1", 1), star("b", "s2", maxU64),
+		}},
+		// An unknown op is ignored, as in the playlist (heyarr-kmp#111).
+		{"unknown-op-is-ignored", []crdt.StarChange{
+			star("a", "s1", 1),
+			{Op: crdt.StarOp(200), ItemID: "phantom", Tag: "s9", At: 50, Observed: []crdt.StarTag{"s1"}},
 		}},
 	}
 	vf := vectorFile{Kind: "starred", Note: vectorNote}
