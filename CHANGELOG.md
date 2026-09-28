@@ -447,6 +447,23 @@ record independently agreeing on the bytes.
 
 ### Fixed
 
+- **A personal-state snapshot's frontier is authenticated** (#681, security).
+  The frontier and space travelled beside the ciphertext, and the snapshot id is
+  a public digest, so a principal with a `write` token and no space key could
+  relabel a valid snapshot to newer heads, recompute the id and push it. It still
+  decrypted. A snapshot is now sealed as a versioned envelope
+  (`heyarr/personalstate/snapshot-envelope/v2`) that carries the record type,
+  space and canonical frontier inside the AEAD, and the decoder refuses one whose
+  outer space or frontier does not match what was sealed. Snapshots written
+  before the envelope still decode, because a key rotation can leave one as the
+  only copy of a space's state. They must be the canonical serialisation of the
+  state they decode to, so another record's ciphertext (a change) cannot pass
+  as an empty legacy snapshot. `statesync.OpenSnapshot` reports their frontier
+  as unauthenticated, so cold start and compaction can refuse to trust it.
+  Cross-language vectors are in
+  `internal/personalstate/protocol/testdata/vectors/snapshot_envelope.json`.
+  Readers must understand the envelope before a producer that writes it is used
+  against their spaces: update heyarr-kmp clients first.
 - **The OPDS catalogue root and acquisition feed answer `HEAD`** (#606). They
   were registered for `GET` only, so a reader that probes before fetching
   (KOReader does) got the router's 405 for an unmatched method, and a client
