@@ -60,8 +60,8 @@ taken at `Heads` = every root, subsumes all of it.**
   does not heal a peer that is **already** missing an ancestor, and the Go
   `space put` and `vault put` paths write parented changes today. So #682 also
   adds a repair reconcile, which compares ids the target confirms it holds and
-  resends absent ancestors. It runs once on upgrade and then as a periodic
-  audit. #682 is the precondition for the device change below.
+  resends absent ancestors. Ids covered by the target's replicated pinned base
+  count as held. It runs once on upgrade and then as a periodic audit. #682 is the precondition for the device change below.
 - **Parents.** The engine already folds the pulled log, so it holds the envelope
   ids. The heads are the ids that no pulled change names as a parent. Only
   `push()` changes, and only its second argument. Pin it with a Go↔Kotlin parity
@@ -90,6 +90,9 @@ taken at `Heads` = every root, subsumes all of it.**
   - made cold start prefer the pinned base unless a newer authenticated
     frontier provably covers it;
   - replicated the pinned base to every trusted Full Peer (§45).
+  - replaced the caller-supplied `ackedFrontier` with a durable per-peer
+    acknowledgement record, so compaction is proven by what each trusted Full
+    Peer confirmed holding.
 - **Compaction stays an operator decision.** Only a peer knows which replicas
   acknowledged what (§45, the `ackedFrontier` in `store.CompactChanges`), and
   no peer can verify a snapshot it cannot decrypt. So compaction is the
