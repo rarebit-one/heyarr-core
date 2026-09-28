@@ -56,7 +56,12 @@ taken at `Heads` = every root, subsumes all of it.**
   An absent parent is often a legitimately compacted ancestor: the snapshot
   frontier that `currentHeads` anchors on after compaction, or the older parent
   of an offline device's change that another device's snapshot has since
-  subsumed. A parking rule would strand exactly those writes (§43).
+  subsumed. A parking rule would strand exactly those writes (§43). Order alone
+  does not heal a peer that is **already** missing an ancestor, and the Go
+  `space put` and `vault put` paths write parented changes today. So #682 also
+  adds a repair reconcile, which compares ids the target confirms it holds and
+  resends absent ancestors. It runs once on upgrade and then as a periodic
+  audit. #682 is the precondition for the device change below.
 - **Parents.** The engine already folds the pulled log, so it holds the envelope
   ids. The heads are the ids that no pulled change names as a parent. Only
   `push()` changes, and only its second argument. Pin it with a Go↔Kotlin parity
@@ -94,8 +99,8 @@ taken at `Heads` = every root, subsumes all of it.**
 
 ## Consequences
 
-- Once replication pushes changes in topological order, rolling out parents
-  needs no coordination between devices. Old devices keep pushing roots, which
+- Once #682 (topological order plus ancestor repair) has shipped to the peers,
+  rolling out parents needs no coordination between devices. Old devices keep pushing roots, which
   stays correct and only costs frontier size. New devices
   push parented changes, and readers already read `parents`. Nothing about
   merge semantics changes, so the "live 48 GB vault" risk lies in the snapshot
