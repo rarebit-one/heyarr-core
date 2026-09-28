@@ -49,3 +49,99 @@ jobs:
       # -timeout=20m for the same reason ci.yml pins it: internal/api/resources
       # can approach the 10m default under -race on a loaded runner.
       - run: go test -race -count=1 -timeout=20m ./...
+
+  # A red nightly nobody hears about is the failure this job exists for (#611):
+  # race-nightly ran red five nights running and was found by someone triaging
+  # issues, not by the pipeline. Off the merge path is deliberate, so the signal
+  # has to be delivered some other way — an issue, because a red nightly with no
+  # owner is precisely the thing an issue is for.
+  #
+  # One issue per outage, not one per night: it is found by a body marker (never
+  # by title, which drifts), each further red night comments on it, and the
+  # first green night afterwards says so once. It is never closed here — the
+  # cause of a red is a human's to confirm, not a later green's to assume.
+  escalate:
+    name: escalate
+    needs: race
+    if: ${{ always() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      actions: read # to tell a superseded run from a timed-out one
+    steps:
+      - name: open, update or recover the race-nightly issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULT: ${{ needs.race.result }}
+          RUN_ID: ${{ github.run_id }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          marker='<!-- issue-key: race-nightly -->'
+          red='<!-- race-nightly: red -->'
+          recovered='<!-- race-nightly: recovered -->'
+          today=$(date -u +%Y-%m-%d)
+
+          # The open issue carrying the marker, if any. Decided by the body
+          # marker alone, never the title, so a retitled issue still matches.
+          number=$(gh issue list --state open --json number,body --limit 500 \
+            | jq -r --arg m "$marker" 'map(select(.body | contains($m))) | first | .number // empty')
+
+          # Whether the newest comment THIS job wrote is a recovery. Only its
+          # own comments count, so a person replying afterwards changes nothing.
+          last_state() {
+            gh issue view "$1" --json comments \
+              | jq -r --arg red "$red" --arg rec "$recovered" '
+                  [.comments[].body
+                   | if contains($rec) then "recovered" elif contains($red) then "red" else empty end]
+                  | last // "red"'
+          }
+
+          if [[ "$RESULT" == cancelled ]]; then
+            # cancelled is either the job timeout (how the #602 outage presented)
+            # or cancel-in-progress making way for a newer run of this workflow.
+            # Only the first is red; the newer run reports for itself. The
+            # concurrency group is keyed by ref, so only a newer run on THIS
+            # branch can have cancelled this one.
+            newer=$(gh run list --workflow race-nightly.yml --branch "$REF_NAME" --limit 20 --json databaseId \
+              | jq --argjson id "$RUN_ID" 'map(select(.databaseId > $id)) | length')
+            if (( newer > 0 )); then
+              echo "cancelled by a newer run; that run reports for itself"
+              exit 0
+            fi
+          fi
+
+          case "$RESULT" in
+            success)
+              [[ -n "$number" ]] || { echo "green, and no open issue: nothing to say"; exit 0; }
+              if [[ "$(last_state "$number")" == recovered ]]; then
+                echo "green again; #$number already records the recovery"
+                exit 0
+              fi
+              gh issue comment "$number" --body "$(printf "**Green again** on %s — [run](%s), \`%s\`.\n\nLeft open: a later green does not say why the earlier runs were red. Close this once the cause is understood.\n\n%s\n" \
+                "$today" "$RUN_URL" "$SHA" "$recovered")"
+              ;;
+            failure|cancelled)
+              if [[ -n "$number" ]]; then
+                gh issue comment "$number" --body "$(printf "Red on %s (\`%s\`) — [run](%s), \`%s\`.\n\n%s\n" \
+                  "$today" "$RESULT" "$RUN_URL" "$SHA" "$red")"
+              else
+                gh issue create --title "race-nightly is red (since $today)" --body "$(printf '%s\n' \
+                  "The scheduled full \`-race\` matrix (\`.github/workflows/race-nightly.yml\`) finished \`$RESULT\` on $today." \
+                  "" \
+                  "- run: $RUN_URL" \
+                  "- commit: \`$SHA\`" \
+                  "" \
+                  "It is deliberately off the merge path, so nothing else will say so. Each further red night comments here, and the first green one records the recovery; this issue is never closed automatically (#611)." \
+                  "" \
+                  "$marker")"
+              fi
+              ;;
+            *)
+              echo "race finished '$RESULT' — neither red nor green, nothing to escalate"
+              ;;
+          esac
