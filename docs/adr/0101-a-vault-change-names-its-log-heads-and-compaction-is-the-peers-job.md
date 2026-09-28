@@ -49,12 +49,14 @@ taken at `Heads` = every root, subsumes all of it.**
   before its parent leaves the child as the target's head. Every retry then
   walks the child's ancestry on the source, decides the target already holds
   the parent, and never resends it. So before any device parents a change,
-  `Missing` must return changes in topological order (parents first), and a
-  holder must park a change whose parents are **neither stored nor in the
-  frontier of a snapshot it holds**. The snapshot-frontier clause matters.
-  After compaction, `currentHeads` deliberately parents the next change on the
-  snapshot's frontier, whose rows are gone. A stored frontier is therefore a
-  valid anchor, not a missing parent.
+  `Missing` must return changes in **topological order** (parents first), and
+  the push stops at the first failure. That alone guarantees a partial
+  transfer never stores a child ahead of its parent. Holders deliberately keep
+  **accepting** a change whose parents are absent, as `PutChange` does today.
+  An absent parent is often a legitimately compacted ancestor: the snapshot
+  frontier that `currentHeads` anchors on after compaction, or the older parent
+  of an offline device's change that another device's snapshot has since
+  subsumed. A parking rule would strand exactly those writes (§43).
 - **Parents.** The engine already folds the pulled log, so it holds the envelope
   ids. The heads are the ids that no pulled change names as a parent. Only
   `push()` changes, and only its second argument. Pin it with a Go↔Kotlin parity
@@ -78,7 +80,12 @@ taken at `Heads` = every root, subsumes all of it.**
   state with ordinary changes, so the snapshot's trust boundary is the same as
   a change's. The residual risk is a *buggy* member, which the next point
   bounds. While the uncompacted log still exists, a device may re-fold it in
-  the background and discard a snapshot that disagrees.
+  the background and discard a snapshot that disagrees. **After compaction**
+  there is no full log to fall back to. So a compaction **pins** the snapshot
+  it named: the peer never drops a pinned snapshot, and the snapshot read
+  offers it beside the latest. A device that cannot open the latest (for
+  example, an undecryptable upload from a keyless token) falls back to the
+  pinned base plus the tail, never to nothing.
 - **Compaction on the peer, decided by an operator.** Only a peer knows which
   replicas acknowledged what (§45, the `ackedFrontier` in
   `store.CompactChanges`). A device guessing that frontier is exactly the
