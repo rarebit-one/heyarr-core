@@ -94,3 +94,4 @@ An ADR that merely describes the code is not worth having.
 | [0094](0094-a-guest-on-a-trusted-network-watches-without-an-identity.md) | A guest on a trusted network watches without an identity | Proposed |
 | [0099](0099-discovery-gains-a-want-scoped-candidate-and-book-music-search.md) | Discovery gains a want-scoped candidate; TMDB movies, Open Library books and MusicBrainz music become discoverable | Accepted |
 | [0100](0100-a-playlist-name-is-an-lww-register-inside-the-playlist-crdt.md) | A playlist's name is an LWW register inside the playlist CRDT, and unknown ops are ignored first | Proposed |
+| [0101](0101-a-vault-change-names-its-log-heads-and-compaction-is-the-peers-job.md) | A vault change names the log heads it saw, a device snapshots, and compaction stays the peer's job | Proposed |
