@@ -50,8 +50,11 @@ taken at `Heads` = every root, subsumes all of it.**
   walks the child's ancestry on the source, decides the target already holds
   the parent, and never resends it. So before any device parents a change,
   `Missing` must return changes in topological order (parents first), and a
-  holder must refuse or park a change whose parents it lacks. `HaveAll`
-  already exists for that check.
+  holder must park a change whose parents are **neither stored nor in the
+  frontier of a snapshot it holds**. The snapshot-frontier clause matters.
+  After compaction, `currentHeads` deliberately parents the next change on the
+  snapshot's frontier, whose rows are gone. A stored frontier is therefore a
+  valid anchor, not a missing parent.
 - **Parents.** The engine already folds the pulled log, so it holds the envelope
   ids. The heads are the ids that no pulled change names as a parent. Only
   `push()` changes, and only its second argument. Pin it with a Go↔Kotlin parity
@@ -67,7 +70,15 @@ taken at `Heads` = every root, subsumes all of it.**
   only.
 - **Cold start.** Fetch `getSnapshot`, fold it, then apply only the changes
   outside its frontier's causal history. This extends the restart case #110
-  covered locally to a fresh device.
+  covered locally to a fresh device. **What a snapshot is trusted for:** its
+  ciphertext is AEAD under the space key, so only a member device holding that
+  key can author one that decrypts. A write-scoped token without the key can
+  only push undecryptable bytes, and a cold start that cannot open the snapshot
+  falls back to the full log. A key-holding member could equally wreck the
+  state with ordinary changes, so the snapshot's trust boundary is the same as
+  a change's. The residual risk is a *buggy* member, which the next point
+  bounds. While the uncompacted log still exists, a device may re-fold it in
+  the background and discard a snapshot that disagrees.
 - **Compaction on the peer, decided by an operator.** Only a peer knows which
   replicas acknowledged what (§45, the `ackedFrontier` in
   `store.CompactChanges`). A device guessing that frontier is exactly the
@@ -77,7 +88,11 @@ taken at `Heads` = every root, subsumes all of it.**
   names every head while its ciphertext omits state, and the peer cannot
   decrypt it to check. So compaction stays the explicit
   `heyarr space compact` (admin), run against a snapshot the operator has
-  chosen. A peer-side job may **report** what compaction would drop (a
+  chosen, and the request **names that snapshot by id**. Today the CLI sends
+  only a frontier, and `Store.CompactChanges` re-reads whichever snapshot is
+  latest when it runs, so a snapshot pushed between the two steps would be
+  compacted against without anyone choosing it. The store must compact against
+  the named, immutable snapshot, or refuse. A peer-side job may **report** what compaction would drop (a
   dry-run), but it does not delete on its own until a verifiable
   snapshot-eligibility rule exists.
 
