@@ -16,8 +16,9 @@ person does not think of as four things:
 - `search_content` searches **only the library** — works already held, resolved
   by title so a later want can name a work by id rather than by description
   (tools.go:36).
-- `discover_content` asks the **metadata provider** (TVDB today) for candidate
-  series *not* in the library — the "search then follow" door (tools.go:54).
+- `discover_content` asks the **metadata providers** (TVDB and TMDB series,
+  TMDB movies, Open Library books, MusicBrainz music — ADR-0077/ADR-0099) for
+  candidate works *not* in the library — the "search then follow" door (tools.go:54).
 - `want_content` declares a one-off desire (tools.go:82); `follow_source`
   declares a standing subscription that archives a series or podcast forever
   (tools.go:136).
@@ -49,7 +50,7 @@ inferred from the result:
 - The Discover screen's `Want` sends `want_content{title, content_type:"series"}`
   with `series` **hardcoded for every hit** (DiscoverScreen.kt,
   `DiscoveryResults`), so it behaves like a follow — and would mis-file a
-  discovered movie or album as a series.
+  discovered movie or music work as a series.
 
 So the door you reach for changes the outcome, and each door has baked in an
 assumption (Search: "everything is a one-off want"; Discover: "everything is a
@@ -89,6 +90,12 @@ already does, tools.go:63), and a slow indexer never stalls held results.
 
 ### 2. Results are de-duplicated by identity, held wins
 
+**Held means the library holds at least one asset for the work** — a playable
+file — not merely that a `works` row exists. `search_content` returns works with
+no files (search.go selects from `works` alone), and a pending want creates a work
+row before anything is acquired; such a work is *wanted*, not held, and takes the
+not-held action below (its acquisition status may still be shown, §5).
+
 A provider hit and a library work are the **same result** when they share an
 identity — a stored external id (`tvdb`/`tmdb`, the reconciliation path of
 ADR-0050, reachable via `get_external_ids`) or a resolved work id. When they
@@ -106,10 +113,10 @@ write path, now applied to the read path:
 
 | held? | content type | primary action |
 |---|---|---|
-| held | movie, episode, album, track, book, document | **Play** (resume via the ADR-0024 session; the result names the one file a tap would play, per ADR-0075) |
+| held | movie, episode, music, book, document | **Play** (resume via the ADR-0024 session; the result names the one file a tap would play, per ADR-0075) |
 | held | series | **Open** — you already hold it (and, via ADR-0089, follow it); the action opens its episodes (the ADR-0075 projection), it does not re-want |
 | not held | series | **Follow** — a standing subscription (ADR-0089/ADR-0057) |
-| not held | movie, album, book | **Want** — a one-off desire (`want_content`) |
+| not held | movie, music, book | **Want** — a one-off desire (`want_content`) |
 
 The action is a property of the *result*, decided by heyarr-core, and the client
 executes the verb it names. A client MUST NOT hardcode want-vs-follow per screen,
@@ -123,7 +130,7 @@ Discover hit hardcoded to `series`, a Search hit sent with no type at all).
 
 "Get this" resolves to whichever verb the inferred action names — `follow_source`
 (or the 0089 want→follow bridge) for a not-held series, `want_content` for a
-not-held movie/album/book — reusing every existing acquisition path unchanged. The
+not-held movie/music/book — reusing every existing acquisition path unchanged. The
 tail of each verb still governs itself: a movie want remains ADR-0077's deferred
 "want-scoped discovery candidate", and a music or book want still requires an
 explicit quality profile because its type has no default (ADR-0082 §3). The
@@ -155,12 +162,11 @@ product.
 - **One search box, no tab to pre-guess.** A user types a title without first
   deciding whether it is held; held results simply sort to the top. This is the
   shelf, not the ledger (ADR-0075).
-- **The provider arm is only as wide as `discover_content` is.** Today that is
-  TVDB series (tools.go:58); movie/music/book discovery is still ADR-0077/0087's
-  deferred provider path. The unified surface is defined now and its provider arm
-  widens as `discover_content` gains those types — no rework of the merge, dedup
-  or action inference when it does, because those turn on content type, which is
-  already the axis.
+- **The provider arm is exactly as wide as `discover_content` is.** Since
+  ADR-0099 that is TVDB/TMDB series, TMDB movies, Open Library books and
+  MusicBrainz music, each capability-gated. The merge, dedup and action inference
+  turn on content type, which is already the axis, so a provider added later
+  widens the arm with no rework.
 - **Held-container vs held-leaf is an honest split in the action table** (§3): a
   held *series* opens rather than plays, because a series is not a single file.
   This keeps "Play" meaning play and avoids pretending a container is a stream.
@@ -206,10 +212,10 @@ product.
 
 ## What would make us revisit
 
-- **`discover_content` gaining music and book providers** (ADR-0077/0087) — the
-  merge and action table already turn on content type, so this widens the provider
-  arm without reshaping the surface, but the album/book **Play** and **Want** tails
-  (profiles, acquisition) land with those ADRs, not this one.
+- **The music/book acquisition tails** — ADR-0099 already made music and books
+  discoverable, and the merge and action table turn on content type, so the
+  provider arm needs no reshaping; the music/book **Play** and **Want** tails
+  (profiles, acquisition) land with their own ADRs, not this one.
 - **A confidence gate on identity dedup**, mirroring ADR-0088, if top-match
   reconciliation collapses distinct works often enough to want a "these look like
   the same title — are they?" surface rather than always erring toward two rows.
