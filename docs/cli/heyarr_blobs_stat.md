@@ -10,7 +10,7 @@ heyarr blobs stat <hash> [flags]
 
 ```
       --addr string         where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
-      --device-dir string   where this machine's device key lives, used with --peer (default: your config directory; VOIDBIND_DEVICE_DIR overrides)
+      --device-dir string   where this machine's device key lives, used with --peer (default: your config directory; VOID_WHICH_BINDS_DEVICE_DIR overrides)
       --json                emit machine-readable JSON
       --peer string         read from a REMOTE peer as this machine's enrolled device (ADR-0048): a fresh possession proof is minted per request, never a cached token. The value is the peer's http(s):// URL. Mutually exclusive with --token
       --timeout duration    how long one request may take; streaming reads and the event stream are exempt (default 30s)

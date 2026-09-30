@@ -3,7 +3,7 @@ package chunking
 import (
 	"encoding/binary"
 
-	"github.com/rarebit-one/voidbind-go/hashing"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 )
 
 // gearSeed is the domain separator the gear table is derived from. It is part

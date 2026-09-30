@@ -29,7 +29,7 @@ heyarr space export-recovery --out <file> [flags]
 ### Options
 
 ```
-      --identity-dir string   where your user identity lives (default: your config directory; VOIDBIND_IDENTITY_DIR overrides)
+      --identity-dir string   where your user identity lives (default: your config directory; VOID_WHICH_BINDS_IDENTITY_DIR overrides)
       --json                  emit machine-readable JSON
       --out string            write the recovery blob to this file (required)
       --recipient string      the recovery key to export for (x25519:<hex>); default: your user identity's
@@ -39,7 +39,7 @@ heyarr space export-recovery --out <file> [flags]
 
 ```
   -c, --config string       path to the configuration file (default: $HEYARR_CONFIG, else /etc/heyarr/config.yaml if present, else built-in defaults plus HEYARR_ environment)
-      --device-dir string   where this machine's device key lives (default: your config directory; VOIDBIND_DEVICE_DIR overrides)
+      --device-dir string   where this machine's device key lives (default: your config directory; VOID_WHICH_BINDS_DEVICE_DIR overrides)
 ```
 
 ### See also

@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/rarebit-one/voidbind-go/hashing"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 )
 
 // Resumable staging: bytes that survive an attempt, and are believed by

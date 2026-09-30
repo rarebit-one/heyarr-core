@@ -42,7 +42,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/encryption"
+	"github.com/rarebit-one/void-which-binds-go/encryption"
 )
 
 // DefaultTimeout bounds a single offload round-trip. It is generous: the phone

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/enrolment"
-	"github.com/rarebit-one/voidbind-go/rp"
-	"github.com/rarebit-one/voidbind-go/testvectors"
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
+	"github.com/rarebit-one/void-which-binds-go/rp"
+	"github.com/rarebit-one/void-which-binds-go/testvectors"
 
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 )

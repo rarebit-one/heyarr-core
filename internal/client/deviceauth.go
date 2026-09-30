@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/enrolment"
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
 )
 
 // DeviceScheme is the HTTP Authorization scheme a device presents, the

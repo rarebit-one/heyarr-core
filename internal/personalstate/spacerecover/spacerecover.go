@@ -23,8 +23,8 @@ package spacerecover
 import (
 	"fmt"
 
-	"github.com/rarebit-one/voidbind-go/encryption"
-	"github.com/rarebit-one/voidbind-go/recovery"
+	"github.com/rarebit-one/void-which-binds-go/encryption"
+	"github.com/rarebit-one/void-which-binds-go/recovery"
 )
 
 // RecipientID returns the wrapped_keys recipient id ("x25519:<hex>") a space key

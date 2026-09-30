@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rarebit-one/voidbind-go/device"
+	"github.com/rarebit-one/void-which-binds-go/device"
 
 	heyarrdevice "github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/device/personalmcp"

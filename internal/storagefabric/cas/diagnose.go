@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/rarebit-one/voidbind-go/hashing"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 )
 
 // ErrStoreUnwritable is a store that cannot be written to at all, as opposed to

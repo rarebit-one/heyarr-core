@@ -11,7 +11,7 @@ heyarr works list [flags]
 ```
       --addr string           where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
       --content-type string   only works of this content type
-      --device-dir string     where this machine's device key lives, used with --peer (default: your config directory; VOIDBIND_DEVICE_DIR overrides)
+      --device-dir string     where this machine's device key lives, used with --peer (default: your config directory; VOID_WHICH_BINDS_DEVICE_DIR overrides)
       --json                  emit machine-readable JSON
       --library string        only works with an asset in this library (id or name)
       --limit int             stop after this many rows (default: every row, following pagination cursors)

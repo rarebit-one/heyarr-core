@@ -23,7 +23,7 @@ heyarr pair enrol [flags]
 
 ```
       --confirm-sas string             proceed only if the derived code equals this value — the scripted stand-in for a human comparison
-      --device-dir string              where this machine's device key lives (default: your config directory; VOIDBIND_DEVICE_DIR overrides)
+      --device-dir string              where this machine's device key lives (default: your config directory; VOID_WHICH_BINDS_DEVICE_DIR overrides)
       --invite heyarr pair authorise   the voidbind:pair?... invite printed by heyarr pair authorise
       --poll duration                  how often to re-check the relay for the next handshake step (default 150ms)
       --relay string                   reach the relay at this address instead of the invite's (a unix socket path, unix:///path, http://host:port or host:port)

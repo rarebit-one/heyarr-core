@@ -28,8 +28,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/device"
-	"github.com/rarebit-one/voidbind-go/enrolment"
+	"github.com/rarebit-one/void-which-binds-go/device"
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
 
 	"github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"

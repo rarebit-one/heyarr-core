@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/rarebit-one/voidbind-go/encryption"
-	"github.com/rarebit-one/voidbind-go/identity"
-	"github.com/rarebit-one/voidbind-go/recovery"
+	"github.com/rarebit-one/void-which-binds-go/encryption"
+	"github.com/rarebit-one/void-which-binds-go/identity"
+	"github.com/rarebit-one/void-which-binds-go/recovery"
 )
 
 // minShareWords is the length of the shortest SLIP-39 share (a 128-bit secret);

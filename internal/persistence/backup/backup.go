@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/hashing"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 	_ "modernc.org/sqlite" // pure-Go driver; see ADR-0004
 
 	"github.com/rarebit-one/heyarr-core/internal/events"

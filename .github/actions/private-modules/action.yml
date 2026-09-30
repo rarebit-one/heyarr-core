@@ -1,6 +1,6 @@
 name: private-modules
 description: >
-  Grant this job read access to rarebit-one's private Go modules (voidbind-go),
+  Grant this job read access to rarebit-one's private Go modules (void-which-binds-go),
   so go build / go test / go mod download can fetch them. It rewrites the HTTPS
   clone URL for the org to carry a read PAT; GOPRIVATE (set at the workflow
   level) keeps those module paths off the public proxy and checksum database.

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/rarebit-one/voidbind-go/pairing"
+	"github.com/rarebit-one/void-which-binds-go/pairing"
 )
 
 // The PHONE half of the offload wire contract, kept in a test file so it does

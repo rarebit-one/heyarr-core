@@ -10,7 +10,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/encryption"
+	"github.com/rarebit-one/void-which-binds-go/encryption"
 	"github.com/spf13/cobra"
 
 	"github.com/rarebit-one/heyarr-core/internal/config"

@@ -67,7 +67,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rarebit-one/voidbind-go/hashing"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 	"golang.org/x/text/unicode/norm"
 )
 

@@ -13,14 +13,14 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/rarebit-one/voidbind-go/enrolment"
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
-	vbweblogin "github.com/rarebit-one/voidbind-go/weblogin"
+	vbweblogin "github.com/rarebit-one/void-which-binds-go/weblogin"
 )
 
 // base is the fixed external origin the broker binds every challenge to and

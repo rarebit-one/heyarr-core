@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/rarebit-one/voidbind-go/enrolment"
-	"github.com/rarebit-one/voidbind-go/pairflow"
-	"github.com/rarebit-one/voidbind-go/pairing"
-	vbrelay "github.com/rarebit-one/voidbind-go/relay"
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
+	"github.com/rarebit-one/void-which-binds-go/pairflow"
+	"github.com/rarebit-one/void-which-binds-go/pairing"
+	vbrelay "github.com/rarebit-one/void-which-binds-go/relay"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/relay"

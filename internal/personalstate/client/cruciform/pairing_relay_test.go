@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/pairing"
-	"github.com/rarebit-one/voidbind-go/relay"
+	"github.com/rarebit-one/void-which-binds-go/pairing"
+	"github.com/rarebit-one/void-which-binds-go/relay"
 )
 
 // TestOfflinePairOverRealRelay drives the whole pairing ceremony over a REAL

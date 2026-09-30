@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/device"
-	vbidentity "github.com/rarebit-one/voidbind-go/identity"
-	"github.com/rarebit-one/voidbind-go/recovery"
-	"github.com/rarebit-one/voidbind-go/useridentity"
+	"github.com/rarebit-one/void-which-binds-go/device"
+	vbidentity "github.com/rarebit-one/void-which-binds-go/identity"
+	"github.com/rarebit-one/void-which-binds-go/recovery"
+	"github.com/rarebit-one/void-which-binds-go/useridentity"
 	"github.com/spf13/cobra"
 
 	heyarrdevice "github.com/rarebit-one/heyarr-core/internal/device"
@@ -143,7 +143,7 @@ func recoverySecretNotice(secret recovery.Secret) string {
 	return "RECOVERY SECRET — write this down and keep it OFFLINE. It is shown once and never again:\n" +
 		"  " + secret.String() + "\n" +
 		"It reconstructs this identity if every device is lost (`heyarr identity recover`). " +
-		"To print it as a sheet with a QR code: `voidbind recovery sheet --secret-file - --out sheet.html`. " +
+		"To print it as a sheet with a QR code: `void-which-binds recovery sheet --secret-file - --out sheet.html`. " +
 		"Anyone who has it can become you, so store it like a house key, not a password."
 }
 
@@ -176,7 +176,7 @@ secret, derives the key and signs a cert, touching no server.
 The secret is read from --secret-file, or from --secret, or from standard input
 — prefer a file or a pipe, since a secret in argv is visible in ps and shell
 history. Instead of the secret, the same input may hold SLIP-39 recovery shares,
-one per line (` + "`voidbind recovery split`" + `): enough of them rebuild the secret.`,
+one per line (` + "`void-which-binds recovery split`" + `): enough of them rebuild the secret.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			raw, err := readRecoverySecret(cmd, secretStr, secretFile)

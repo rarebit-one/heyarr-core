@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rarebit-one/voidbind-go/recovery"
+	"github.com/rarebit-one/void-which-binds-go/recovery"
 
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spacerecover"
 	"github.com/rarebit-one/heyarr-core/internal/testutil"

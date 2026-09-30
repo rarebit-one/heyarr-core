@@ -14,7 +14,7 @@ on:
 permissions:
   contents: read
 
-# voidbind-go is a private module in this org (see ci.yml): GOPRIVATE keeps its
+# void-which-binds-go is a private module in this org (see ci.yml): GOPRIVATE keeps its
 # path off the public proxy/sumdb; the private-modules action supplies the token.
 env:
   GOPRIVATE: github.com/rarebit-one/*

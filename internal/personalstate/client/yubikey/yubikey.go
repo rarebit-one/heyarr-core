@@ -3,7 +3,7 @@ package yubikey
 import (
 	"fmt"
 
-	"github.com/rarebit-one/voidbind-go/encryption"
+	"github.com/rarebit-one/void-which-binds-go/encryption"
 )
 
 // PINFunc yields the OpenPGP User PIN (PW1) that gates PSO:DECIPHER. Production

@@ -13,7 +13,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/hashing"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 )
 
 // Materialisation is how a source file becomes a blob in the store.

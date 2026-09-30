@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/encryption"
-	"github.com/rarebit-one/voidbind-go/recovery"
+	"github.com/rarebit-one/void-which-binds-go/encryption"
+	"github.com/rarebit-one/void-which-binds-go/recovery"
 
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/events"

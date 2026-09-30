@@ -62,7 +62,7 @@ note() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 # encryption key), and enrols both on the node at sock. Args: sock token dir name.
 ps_enrol_device() {
   local sock="$1" token="$2" dir="$3" nm="$4" cl uk cert
-  cl=( env "VOIDBIND_IDENTITY_DIR=$dir" "VOIDBIND_DEVICE_DIR=$dir" "$BIN" )
+  cl=( env "VOID_WHICH_BINDS_IDENTITY_DIR=$dir" "VOID_WHICH_BINDS_DEVICE_DIR=$dir" "$BIN" )
   "${cl[@]}" identity generate --name "$nm" >/dev/null 2>&1
   "${cl[@]}" identity enrol >/dev/null 2>&1
   uk=$("${cl[@]}" identity show --json | jq -r .public_key)

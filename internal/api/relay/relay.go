@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	vbrelay "github.com/rarebit-one/voidbind-go/relay"
+	vbrelay "github.com/rarebit-one/void-which-binds-go/relay"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 )

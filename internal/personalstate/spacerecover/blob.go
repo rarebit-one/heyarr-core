@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/encryption"
-	"github.com/rarebit-one/voidbind-go/identity"
-	"github.com/rarebit-one/voidbind-go/recovery"
+	"github.com/rarebit-one/void-which-binds-go/encryption"
+	"github.com/rarebit-one/void-which-binds-go/identity"
+	"github.com/rarebit-one/void-which-binds-go/recovery"
 )
 
 // BlobFormat names and versions the exported recovery blob (ADR-0022 addendum,

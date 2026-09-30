@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/rarebit-one/voidbind-go/hashing"
-	vbrelay "github.com/rarebit-one/voidbind-go/relay"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
+	vbrelay "github.com/rarebit-one/void-which-binds-go/relay"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	"github.com/rarebit-one/heyarr-core/internal/api/dlna"

@@ -8,8 +8,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/rarebit-one/voidbind-go/encryption"
-	"github.com/rarebit-one/voidbind-go/pairing"
+	"github.com/rarebit-one/void-which-binds-go/encryption"
+	"github.com/rarebit-one/void-which-binds-go/pairing"
 )
 
 // This test is the golden-vector generator + self-consistency check for the

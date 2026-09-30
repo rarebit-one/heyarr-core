@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/hashing"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"

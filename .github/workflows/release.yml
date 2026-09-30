@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 # The release gate and goreleaser both compile the module, which fetches the
-# private voidbind-go dependency. GOPRIVATE + the private-modules token (used in
+# private void-which-binds-go dependency. GOPRIVATE + the private-modules token (used in
 # each job below) let that fetch succeed.
 env:
   GOPRIVATE: github.com/rarebit-one/*
