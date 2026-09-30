@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/go-tpm/tpm2"
-	"github.com/rarebit-one/voidbind-go/encryption"
+	"github.com/rarebit-one/void-which-binds-go/encryption"
 
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 )

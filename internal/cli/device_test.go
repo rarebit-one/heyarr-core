@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/device"
+	"github.com/rarebit-one/void-which-binds-go/device"
 
 	heyarrdevice "github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/testutil"
@@ -448,8 +448,10 @@ func TestDeviceHumanOutputSaysTheKeyAuthorisesNothing(t *testing.T) {
 				t.Errorf("`heyarr %s` does not say %q:\n%s", strings.Join(args, " "), want, out)
 			}
 		}
-		if strings.Contains(out, "voidbind") {
-			t.Errorf("`heyarr %s` leaked the voidbind command name:\n%s", strings.Join(args, " "), out)
+		for _, leaked := range []string{"voidbind", "void-which-binds"} { // the gen1 and the ADR-0013 R1 command names
+			if strings.Contains(out, leaked) {
+				t.Errorf("`heyarr %s` leaked the %s command name:\n%s", strings.Join(args, " "), leaked, out)
+			}
 		}
 	}
 }

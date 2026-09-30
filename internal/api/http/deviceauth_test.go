@@ -20,8 +20,8 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
-	"github.com/rarebit-one/voidbind-go/enrolment"
-	"github.com/rarebit-one/voidbind-go/rp"
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
+	"github.com/rarebit-one/void-which-binds-go/rp"
 )
 
 // This proves the acceptance sentence's first half at the HTTP boundary: a

@@ -401,6 +401,21 @@ record independently agreeing on the bytes.
 
 ### Changed
 
+- **The device library is `github.com/rarebit-one/void-which-binds-go` v0.18.0**
+  (was `voidbind-go` v0.17.0; ADR-0013 R1 upstream renamed the module and its
+  binaries, and the wire is byte-identical). The device and identity directory
+  overrides are now `VOID_WHICH_BINDS_DEVICE_DIR` and
+  `VOID_WHICH_BINDS_IDENTITY_DIR`, as the `--device-dir` / `--identity-dir` help
+  says. The old `VOIDBIND_DEVICE_DIR` / `VOIDBIND_IDENTITY_DIR` are still read as
+  a fallback and log a deprecation once per process.
+- **`/v1/subscriptions` and `/v1/unwrap-wake` take a possession proof**
+  (voidbind-go#70). A device sends its cert plus a proof for it (the
+  `possession` field, or `cert` as `<cert>~<proof>`), and the membership ops it
+  presents are recorded only once the proof verifies. A bare cert, the wire
+  deployed phones still send, is still served, but nothing it presents is
+  recorded, and the node logs each such device once as still to migrate.
+  `heyarr`'s own unwrap-wake client now signs a fresh proof per wake.
+
 - **`heyarr pair` runs on voidbind-go's pairing flow and the `/pair/v1` relay
   (#647, ADR-0066 amended).** `pair authorise --as identity|device|auto` builds
   the initiator from the identity store's signer (the genesis key never leaves

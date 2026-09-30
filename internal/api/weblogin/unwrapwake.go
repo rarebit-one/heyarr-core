@@ -2,13 +2,16 @@ package weblogin
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/notify"
-	"github.com/rarebit-one/voidbind-go/rp"
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
+	"github.com/rarebit-one/void-which-binds-go/notify"
+	"github.com/rarebit-one/void-which-binds-go/rp"
 )
 
 // UnwrapWakePrefix is where the cruciform-offload wake endpoint mounts — POST
@@ -31,6 +34,15 @@ const UnwrapWakePrefix = "/v1/unwrap-wake" // #nosec G101 -- a URL path, not a c
 // this cert proves (ADR-0098): the transport key that authenticates the offload
 // exchange itself is a separate, desktop↔phone pairing key and never reaches here.
 //
+// The cert is paired with a possession proof for it — the `possession` field, or
+// `cert` as the Device credential `<cert>~<proof>`, the same two spellings the
+// subscription registry takes — and the request is authenticated check →
+// possession → commit (rp.Verifier.VerifyWithPossession, voidbind-go#70), so
+// the membership ops it presents are recorded only once the caller has proved
+// it holds the device key. A BARE cert (the pre-v0.18 wire) is still served for
+// compatibility, but it is only CHECKED — nothing it presents is recorded — and
+// the device is logged once as still to migrate.
+//
 // The ping is opaque by construction (notify.NewUnwrapPing): it carries only the
 // public (relay, session) pointer — never a key, a wrapped blob, or a challenge —
 // so a node, a push server, or a wake channel learns nothing from relaying it.
@@ -39,6 +51,7 @@ type unwrapWaker struct {
 	notifier *notify.Notifier
 	now      func() time.Time
 	log      *slog.Logger
+	bare     *bareCertWarner
 }
 
 // unwrapWakeReq is the wire request: the device's enrolment cert and the
@@ -46,10 +59,14 @@ type unwrapWaker struct {
 // open for this unwrap. relay_base and session are the SAME opaque pointer the
 // desktop posted its signed request into — public, unguessable, no secret.
 type unwrapWakeReq struct {
-	Cert      string   `json:"cert"`
-	Ops       []string `json:"ops,omitempty"`
-	RelayBase string   `json:"relay_base"`
-	Session   string   `json:"session"`
+	Cert string `json:"cert"`
+	// Possession is the device's possession proof for Cert
+	// (enrolment.SignPossession), unless Cert already carries it as
+	// `<cert>~<proof>`. Optional for now: see authenticate.
+	Possession string   `json:"possession,omitempty"`
+	Ops        []string `json:"ops,omitempty"`
+	RelayBase  string   `json:"relay_base"`
+	Session    string   `json:"session"`
 }
 
 // unwrapWakeResp reports how many of the user's devices were woken — 0 is not an
@@ -88,7 +105,7 @@ func (u *unwrapWaker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The user woken is the cert's user, never a field the client claimed.
-	auth, err := u.verifier.Verify(req.Cert, req.Ops, u.clock())
+	auth, err := u.authenticate(req.Cert, req.Possession, req.Ops, u.clock())
 	if err != nil {
 		// Any cert-chain failure (un-enrolled user, bad or expired cert, no trust
 		// set) is an opaque 401 — the same stance the subscription surface takes.
@@ -117,3 +134,34 @@ func (u *unwrapWaker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(unwrapWakeResp{Woken: receipt.Woken()})
 }
+
+// authenticate is the check → possession → commit chain (voidbind-go#70). With a
+// proof it is rp.Verifier.VerifyWithPossession: the presented ops are persisted
+// only once the proof verifies. Without one the cert is only checked — it must
+// still name a current member, since that is what picks the user woken — and
+// nothing it presents is recorded, because a bare cert may be a replay.
+func (u *unwrapWaker) authenticate(cert, possession string, ops []string, now time.Time) (rp.Authenticated, error) {
+	cert, possession = strings.TrimSpace(cert), strings.TrimSpace(possession)
+	if cred, embedded, found := strings.Cut(cert, enrolment.CredentialSeparator); found {
+		if possession != "" {
+			return rp.Authenticated{}, errPossessionTwice
+		}
+		cert, possession = strings.TrimSpace(cred), strings.TrimSpace(embedded)
+	}
+	if possession != "" {
+		return u.verifier.VerifyWithPossession(cert, possession, ops, now)
+	}
+	pending, err := u.verifier.Check(cert, ops, now)
+	if err != nil {
+		return rp.Authenticated{}, err
+	}
+	if u.bare != nil {
+		u.bare.warn(pending.Authenticated)
+	}
+	return pending.Authenticated, nil
+}
+
+// errPossessionTwice is a request that carried a proof both in `possession` and
+// embedded in `cert`. Like every other authentication failure it answers the
+// opaque 401.
+var errPossessionTwice = errors.New("weblogin: possession proof given twice")

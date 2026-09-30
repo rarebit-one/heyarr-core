@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/rarebit-one/voidbind-go/encryption"
+	"github.com/rarebit-one/void-which-binds-go/encryption"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"

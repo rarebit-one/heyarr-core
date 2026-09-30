@@ -11,7 +11,7 @@ permissions:
   contents: read
   security-events: write
 
-# CodeQL autobuilds the Go module, which fetches the private voidbind-go
+# CodeQL autobuilds the Go module, which fetches the private void-which-binds-go
 # dependency. GOPRIVATE + the private-modules token below let that fetch succeed.
 env:
   GOPRIVATE: github.com/rarebit-one/*

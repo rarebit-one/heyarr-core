@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/notify"
-	"github.com/rarebit-one/voidbind-go/rp"
+	"github.com/rarebit-one/void-which-binds-go/notify"
+	"github.com/rarebit-one/void-which-binds-go/rp"
 )
 
 // This file wires heyarr as a relying party of Voidbind's push/wake plane
@@ -114,11 +114,29 @@ func (p *pushNotifier) NotifyLogin(ctx context.Context, loginID string) (int, er
 // this reuses the exact trust set and op log that back the device authenticator
 // and the login broker.
 //
+// A request carries the cert plus a possession proof for it (the `possession`
+// field, or `cert` as the Device credential `<cert>~<proof>`), and the ops it
+// presents are recorded only once that proof verifies (void-which-binds-go
+// v0.18, voidbind-go#70). A BARE cert — the wire deployed phones still send —
+// is accepted for compatibility (notify.Registry.AllowBareCert): it still has to
+// name a current member, but nothing it presents is recorded, and the device is
+// logged once as still to migrate. Refusing bare certs is a follow-up for when
+// the phones' notify client sends a proof.
+//
 // now supplies the verification clock; nil means time.Now (production). It is
 // injectable so a test can pin the verification instant against a
-// frozen-window op.
-func SubscriptionRoutes(store notify.Store, trust rp.TrustStore, membership rp.Membership, now func() time.Time) http.Handler {
-	h := &notify.Handler{Registry: notify.Registry{Store: store, Trust: trust, Membership: membership, Now: now}}
+// frozen-window op. log receives the bare-cert deprecation warnings; nil
+// discards them.
+func SubscriptionRoutes(store notify.Store, trust rp.TrustStore, membership rp.Membership, now func() time.Time, log *slog.Logger) http.Handler {
+	bare := newBareCertWarner(log, SubscriptionsPrefix)
+	h := &notify.Handler{Registry: notify.Registry{
+		Store:         store,
+		Trust:         trust,
+		Membership:    membership,
+		Now:           now,
+		AllowBareCert: true,
+		OnBareCert:    bare.warn,
+	}}
 	return h.Routes()
 }
 

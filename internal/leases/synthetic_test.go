@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/grant"
+	"github.com/rarebit-one/void-which-binds-go/grant"
 )
 
 // Adversarial synthetic tests for the lease store: malformed tokens, cross-type

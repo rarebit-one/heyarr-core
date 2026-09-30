@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rarebit-one/voidbind-go/encryption"
+	"github.com/rarebit-one/void-which-binds-go/encryption"
 
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/vaultframe"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/vaultread"

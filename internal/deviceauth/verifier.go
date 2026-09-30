@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
-	"github.com/rarebit-one/voidbind-go/enrolment"
-	"github.com/rarebit-one/voidbind-go/rp"
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
+	"github.com/rarebit-one/void-which-binds-go/rp"
 )
 
 // Scheme is the HTTP Authorization scheme a device presents, alongside the

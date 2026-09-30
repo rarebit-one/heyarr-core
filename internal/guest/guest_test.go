@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/rarebit-one/voidbind-go/grant"
+	"github.com/rarebit-one/void-which-binds-go/grant"
 
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/guest"

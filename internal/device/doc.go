@@ -1,7 +1,7 @@
 // Package device is this machine's own key store: the client half of §40's
 // device identity, and nothing else.
 //
-// The store's implementation lives in github.com/rarebit-one/voidbind-go/device
+// The store's implementation lives in github.com/rarebit-one/void-which-binds-go/device
 // and callers import it directly; this package keeps the reasoning below, the
 // heyarr-specific rendering hint ([CommandHint]), and the device-side
 // subpackages (gateway, personalmcp).

@@ -1,4 +1,4 @@
-// Package identity is a thin shim over github.com/rarebit-one/voidbind-go/identity.
+// Package identity is a thin shim over github.com/rarebit-one/void-which-binds-go/identity.
 //
 // The Ed25519 identity core — public-key format/parse, the Identity value and
 // its Signer, the key-file storage, and Ensure with its Peers/Marker interfaces
@@ -11,7 +11,7 @@
 // Only the identity primitives are deduplicated here. Tests live in voidbind-go.
 package identity
 
-import vb "github.com/rarebit-one/voidbind-go/identity"
+import vb "github.com/rarebit-one/void-which-binds-go/identity"
 
 // Identity is re-exported from voidbind-go/identity.
 type Identity = vb.Identity

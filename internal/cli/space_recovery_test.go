@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rarebit-one/voidbind-go/useridentity"
+	"github.com/rarebit-one/void-which-binds-go/useridentity"
 	"github.com/spf13/cobra"
 )
 

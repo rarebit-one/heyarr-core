@@ -11,7 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/device"
+	"github.com/rarebit-one/void-which-binds-go/device"
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
 	"github.com/rarebit-one/heyarr-core/internal/config"
@@ -54,20 +55,53 @@ func buildCruciformWake(cfg config.Config, deviceDir string) (cruciform.WakeFunc
 	if err != nil {
 		return nil, err
 	}
-	return newCruciformWake(base, hc, cert, ops), nil
+	return newCruciformWake(base, hc, cert, ops, deviceProver(ds)), nil
+}
+
+// possessionProver signs a fresh possession proof for this device's cert.
+type possessionProver func(now time.Time) (string, error)
+
+// deviceProver proves possession with the device store's key: Credential signs a
+// fresh `<cert>~<proof>` inside the store (the seed never leaves it), and only the
+// proof half is sent, in its own `possession` field — so a node from before the
+// field existed ignores it and still reads a plain cert.
+func deviceProver(ds *device.Store) possessionProver {
+	return func(now time.Time) (string, error) {
+		cred, err := ds.Credential(now, 0)
+		if err != nil {
+			return "", err
+		}
+		_, proof, ok := strings.Cut(cred, enrolment.CredentialSeparator)
+		if !ok || proof == "" {
+			return "", fmt.Errorf("cruciform wake: the device credential carries no possession proof")
+		}
+		return proof, nil
+	}
 }
 
 // newCruciformWake returns the WakeFunc that POSTs an unwrap-wake to the node. The
-// cert and ops authenticate the request; relay_base and session (the transport's
-// per-unwrap relay session) tell the phone which session to open.
-func newCruciformWake(base string, hc *http.Client, cert string, ops []string) cruciform.WakeFunc {
+// cert, a possession proof freshly signed per wake (voidbind-go#70: the node
+// records the presented ops only once the proof verifies) and the ops
+// authenticate the request; relay_base and session (the transport's per-unwrap
+// relay session) tell the phone which session to open. A nil prove sends a bare
+// cert, which the node serves but records nothing from.
+func newCruciformWake(base string, hc *http.Client, cert string, ops []string, prove possessionProver) cruciform.WakeFunc {
 	return func(ctx context.Context, relayBase, session string) error {
+		var possession string
+		if prove != nil {
+			p, err := prove(time.Now())
+			if err != nil {
+				return fmt.Errorf("cruciform wake: proving possession: %w", err)
+			}
+			possession = p
+		}
 		body, err := json.Marshal(struct {
-			Cert      string   `json:"cert"`
-			Ops       []string `json:"ops,omitempty"`
-			RelayBase string   `json:"relay_base"`
-			Session   string   `json:"session"`
-		}{Cert: cert, Ops: ops, RelayBase: relayBase, Session: session})
+			Cert       string   `json:"cert"`
+			Possession string   `json:"possession,omitempty"`
+			Ops        []string `json:"ops,omitempty"`
+			RelayBase  string   `json:"relay_base"`
+			Session    string   `json:"session"`
+		}{Cert: cert, Possession: possession, Ops: ops, RelayBase: relayBase, Session: session})
 		if err != nil {
 			return fmt.Errorf("cruciform wake: encoding request: %w", err)
 		}

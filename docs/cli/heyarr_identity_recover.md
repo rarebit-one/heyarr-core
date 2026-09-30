@@ -21,7 +21,7 @@ secret, derives the key and signs a cert, touching no server.
 The secret is read from --secret-file, or from --secret, or from standard input
 — prefer a file or a pipe, since a secret in argv is visible in ps and shell
 history. Instead of the secret, the same input may hold SLIP-39 recovery shares,
-one per line (`voidbind recovery split`): enough of them rebuild the secret.
+one per line (`void-which-binds recovery split`): enough of them rebuild the secret.
 
 ```
 heyarr identity recover [flags]
@@ -42,8 +42,8 @@ heyarr identity recover [flags]
 
 ```
   -c, --config string         path to the configuration file (default: $HEYARR_CONFIG, else /etc/heyarr/config.yaml if present, else built-in defaults plus HEYARR_ environment)
-      --device-dir string     where this machine's device key lives (default: your config directory; VOIDBIND_DEVICE_DIR overrides)
-      --identity-dir string   where your user identity lives (default: your config directory; VOIDBIND_IDENTITY_DIR overrides)
+      --device-dir string     where this machine's device key lives (default: your config directory; VOID_WHICH_BINDS_DEVICE_DIR overrides)
+      --identity-dir string   where your user identity lives (default: your config directory; VOID_WHICH_BINDS_IDENTITY_DIR overrides)
 ```
 
 ### See also

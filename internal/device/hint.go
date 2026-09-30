@@ -1,11 +1,11 @@
 package device
 
 // The device store itself — keys, records, certs, rendering — is voidbind-go's
-// (github.com/rarebit-one/voidbind-go/device), and callers import it directly.
+// (github.com/rarebit-one/void-which-binds-go/device), and callers import it directly.
 // What stays here is the one piece that is heyarr's own: the name a device
 // rendering tells the operator to run.
 
-import vb "github.com/rarebit-one/voidbind-go/device"
+import vb "github.com/rarebit-one/void-which-binds-go/device"
 
 // CommandName is the binary heyarr presents as (matches root.go's `Use`). It is
 // here so every place that renders a device reads the same name from one spot.

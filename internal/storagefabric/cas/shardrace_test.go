@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/rarebit-one/voidbind-go/hashing"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 )
 
 // shardMates searches for n distinct payloads whose BLAKE3 digests share their

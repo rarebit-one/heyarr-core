@@ -34,9 +34,9 @@ import (
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
-	"github.com/rarebit-one/voidbind-go/notify"
-	"github.com/rarebit-one/voidbind-go/rp"
-	"github.com/rarebit-one/voidbind-go/weblogin"
+	"github.com/rarebit-one/void-which-binds-go/notify"
+	"github.com/rarebit-one/void-which-binds-go/rp"
+	"github.com/rarebit-one/void-which-binds-go/weblogin"
 )
 
 // LoginPrefix is where the broker's JSON API is mounted (POST /login, GET
@@ -169,7 +169,7 @@ func New(opts Options) (*Handler, error) {
 		base:      opts.Base,
 		signin:    page,
 		log:       log,
-		subRoutes: SubscriptionRoutes(store, trust, opts.Identities.Membership(context.Background()), nil),
+		subRoutes: SubscriptionRoutes(store, trust, opts.Identities.Membership(context.Background()), nil, log),
 		push:      push,
 		// The offload wake endpoint, over the SAME pinned trust and membership the
 		// broker and the subscription registry use, fanning to the same notifier the
@@ -178,6 +178,7 @@ func New(opts Options) (*Handler, error) {
 			verifier: rp.Verifier{Trust: trust, Membership: opts.Identities.Membership(context.Background())},
 			notifier: notifier,
 			log:      log,
+			bare:     newBareCertWarner(log, UnwrapWakePrefix),
 		},
 	}, nil
 }

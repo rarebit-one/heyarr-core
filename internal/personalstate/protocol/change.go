@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/rarebit-one/voidbind-go/hashing"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 )
 
 // The errors this package refuses with.

@@ -30,8 +30,8 @@ import (
 	"io"
 	"math"
 
-	"github.com/rarebit-one/voidbind-go/encryption"
-	"github.com/rarebit-one/voidbind-go/hashing"
+	"github.com/rarebit-one/void-which-binds-go/encryption"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 )
 
 // Wire constants (ADR-0097). A change to any is a new manifest Version, never a

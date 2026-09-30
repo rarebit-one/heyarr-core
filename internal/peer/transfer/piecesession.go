@@ -6,7 +6,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/rarebit-one/voidbind-go/hashing"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 
 	domaintransfer "github.com/rarebit-one/heyarr-core/internal/domain/transfer"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"

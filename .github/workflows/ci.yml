@@ -27,7 +27,7 @@ on:
 permissions:
   contents: read
 
-# voidbind-go is a private module in this org. GOPRIVATE keeps its path off the
+# void-which-binds-go is a private module in this org. GOPRIVATE keeps its path off the
 # public proxy and checksum database; the private-modules action (used in each
 # compiling job below) supplies the token that lets git fetch it.
 env:

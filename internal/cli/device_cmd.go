@@ -6,7 +6,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/device"
+	"github.com/rarebit-one/void-which-binds-go/device"
 	"github.com/spf13/cobra"
 
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
