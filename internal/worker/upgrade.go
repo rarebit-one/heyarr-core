@@ -2,8 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
@@ -15,6 +13,12 @@ import (
 // the failure mode of a very large library should be "the scan takes several
 // passes" rather than "the scan times out and nothing is ever upgraded".
 const upgradeScanBatch = 5000
+
+// UpgradeScanner runs the upgrade scan. A
+// *catalog.Catalog satisfies it; the handler depends on no more than it calls.
+type UpgradeScanner interface {
+	ScanForUpgrades(ctx context.Context, limit int) (catalog.UpgradeScanResult, error)
+}
 
 // UpgradeScanHandler finds the wants that could be improved (§60, M3-06).
 //
@@ -37,13 +41,11 @@ const upgradeScanBatch = 5000
 // It will be re-run (invariant 9). It reads and concludes; running it twice
 // over an unchanged library reaches the same conclusions and records them the
 // same way.
-func UpgradeScanHandler(cat *catalog.Catalog, log *slog.Logger) HandlerFunc {
+func UpgradeScanHandler(cat UpgradeScanner, log *slog.Logger) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload acquisition.UpgradeScanPayload
-		if len(job.Payload) > 0 {
-			if err := json.Unmarshal(job.Payload, &payload); err != nil {
-				return fmt.Errorf("worker: upgrade_scan payload is not decodable: %w", err)
-			}
+		payload, err := decodeOptionalPayload[acquisition.UpgradeScanPayload](job)
+		if err != nil {
+			return err
 		}
 
 		result, err := cat.ScanForUpgrades(ctx, upgradeScanBatch)

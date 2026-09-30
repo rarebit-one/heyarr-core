@@ -22,6 +22,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // harness is a real database, a real CAS and a real pipeline. Storage tests use
@@ -43,14 +44,7 @@ func newHarness(t *testing.T) *harness {
 	t.Helper()
 	dir := t.TempDir()
 
-	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
-	if err != nil {
-		t.Fatalf("opening database: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatalf("migrating: %v", err)
-	}
+	db := testdb.Migrated(t)
 
 	store, err := cas.OpenFS(filepath.Join(dir, "cas"))
 	if err != nil {
@@ -107,7 +101,7 @@ func (h *harness) addLibrary(name, contentType, path, mode string) (libID, rootI
 	return libID, rootID
 }
 
-func (h *harness) write(relPath, contents string) string {
+func (h *harness) write(relPath, contents string) {
 	h.t.Helper()
 	full := filepath.Join(h.rootDir, filepath.FromSlash(relPath))
 	if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
@@ -116,7 +110,6 @@ func (h *harness) write(relPath, contents string) string {
 	if err := os.WriteFile(full, []byte(contents), 0o640); err != nil {
 		h.t.Fatal(err)
 	}
-	return full
 }
 
 func (h *harness) ingest(relPath string) ingest.Result {
@@ -164,6 +157,7 @@ func payloadField(t *testing.T, e events.Event, key string) any {
 // (ADR-0008), so "ran twice" has to be indistinguishable from "ran once",
 // except in the log.
 func TestIngestingTheSameFileTwiceConvergesOnOneOfEverything(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.write("Movie Title (2019)/Movie Title (2019) - 2160p.mkv", "the same bytes")
 
@@ -209,6 +203,7 @@ func TestIngestingTheSameFileTwiceConvergesOnOneOfEverything(t *testing.T) {
 // Two paths, identical bytes: one blob, two assets. Deduplication is a property
 // of the bytes, and an asset is a place those bytes were found (§13).
 func TestTwoPathsWithIdenticalBytesShareOneBlob(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	const contents = "identical bytes in two places"
 	h.write("Movie A (2001)/Movie A (2001).mkv", contents)
@@ -245,6 +240,7 @@ func TestTwoPathsWithIdenticalBytesShareOneBlob(t *testing.T) {
 // Injected at every stage, because "it rolls back" is a claim about the last
 // stage anyone happened to test.
 func TestAFaultBeforeCommitLeavesAnOrphanAndNoPartialState(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"blob", "work", "edition", "asset", "replica", "commit"} {
 		t.Run("fault after "+stage, func(t *testing.T) {
 			h := newHarness(t)
@@ -318,6 +314,7 @@ func TestAFaultBeforeCommitLeavesAnOrphanAndNoPartialState(t *testing.T) {
 // falls out of reference and the GC reclaims it after its grace window — it is
 // never unlinked inline (ADR-0018).
 func TestAReplacedFileKeepsItsAssetAndGainsANewBlob(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.write("Movie Title (2019)/Movie Title (2019).mkv", "first cut")
 	first := h.ingest("Movie Title (2019)/Movie Title (2019).mkv")
@@ -349,6 +346,7 @@ func TestAReplacedFileKeepsItsAssetAndGainsANewBlob(t *testing.T) {
 }
 
 func TestIdentificationIsRecordedOnEveryAsset(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.write("Movie Title (2019)/Movie Title (2019).mkv", "identifiable")
 	h.write("¿qué?.bin", "unidentifiable")
@@ -384,6 +382,7 @@ func TestIdentificationIsRecordedOnEveryAsset(t *testing.T) {
 }
 
 func TestTheSelfPeerIsCreatedExactlyOnceUnderConcurrency(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	const callers = 8
@@ -423,6 +422,7 @@ func TestTheSelfPeerIsCreatedExactlyOnceUnderConcurrency(t *testing.T) {
 }
 
 func TestRootResolution(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	root, err := h.catalog.Root(t.Context(), h.rootID)
@@ -539,6 +539,7 @@ func until(t *testing.T, deadline time.Duration, cond func() bool) error {
 }
 
 func TestTheCASAdapterCarriesTheLadderResultBack(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store, err := cas.OpenFS(filepath.Join(dir, "cas"))
 	if err != nil {
@@ -574,6 +575,7 @@ func TestTheCASAdapterCarriesTheLadderResultBack(t *testing.T) {
 }
 
 func TestTheHandlerRejectsAnUndecodablePayload(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	handler := IngestHandler(h.pipeline, nil)
 	err := handler(t.Context(), jobs.Job{Type: ingest.JobType, Payload: json.RawMessage(`{"root_id": 12}`)})
@@ -582,5 +584,8 @@ func TestTheHandlerRejectsAnUndecodablePayload(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not decodable") {
 		t.Errorf("error does not say what went wrong: %v", err)
+	}
+	if !errors.Is(err, jobs.ErrPermanent) {
+		t.Errorf("an undecodable payload will never decode, but the error is retryable: %v", err)
 	}
 }

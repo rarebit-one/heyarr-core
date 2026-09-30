@@ -24,17 +24,17 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/void-which-binds-go/device"
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
+
 	"github.com/rarebit-one/heyarr-core/internal/client"
-	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/events"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // testClock is one clock shared by the client (minting) and the peer
@@ -106,15 +106,7 @@ func clockHint(err error) string {
 
 func newPeer(t *testing.T, clock *testClock) *peer {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "peer.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {
 		t.Fatal(err)
@@ -130,10 +122,10 @@ func newPeer(t *testing.T, clock *testClock) *peer {
 
 // enrolledDevice creates a real on-disk device store, generates a device,
 // vouches for it with a fresh user identity, and returns the store (the client's
-// Credentialer) alongside the user key and cert. pin controls whether the peer
+// Credentialer). pin controls whether the peer
 // pins the user and enrols the device — an unpinned pair is the unpinned-user
 // refusal.
-func enrolledDevice(t *testing.T, p *peer, clock *testClock, pin bool) (*device.Store, string) {
+func enrolledDevice(t *testing.T, p *peer, clock *testClock, pin bool) *device.Store {
 	t.Helper()
 	store, err := device.NewStore(device.StoreOptions{Dir: t.TempDir()})
 	if err != nil {
@@ -163,7 +155,7 @@ func enrolledDevice(t *testing.T, p *peer, clock *testClock, pin bool) (*device.
 			t.Fatalf("enrol device: %v", err)
 		}
 	}
-	return store, user.UserID()
+	return store
 }
 
 // get issues one authenticated GET and decodes the JSON body.
@@ -180,7 +172,7 @@ func TestDeviceClientAuthenticatesAndReadsThenStillReadsPastTTL(t *testing.T) {
 	p := newPeer(t, clock)
 	srv := httptest.NewServer(p)
 	t.Cleanup(srv.Close)
-	store, _ := enrolledDevice(t, p, clock, true)
+	store := enrolledDevice(t, p, clock, true)
 
 	c, err := client.New(client.Options{Addr: srv.URL, Device: store, Clock: clock.Now})
 	if err != nil {
@@ -246,7 +238,7 @@ func TestDeviceClientReMintsGracefullyOnClockSkew(t *testing.T) {
 			p.serverSkew = skew
 			srv := httptest.NewServer(p)
 			t.Cleanup(srv.Close)
-			store, _ := enrolledDevice(t, p, clock, true)
+			store := enrolledDevice(t, p, clock, true)
 
 			c, err := client.New(client.Options{Addr: srv.URL, Device: store, Clock: clock.Now})
 			if err != nil {
@@ -273,7 +265,7 @@ func TestDeviceClientSurfacesCleanErrors(t *testing.T) {
 		p := newPeer(t, clock)
 		srv := httptest.NewServer(p)
 		t.Cleanup(srv.Close)
-		store, _ := enrolledDevice(t, p, clock, true)
+		store := enrolledDevice(t, p, clock, true)
 
 		dev, err := store.Get("")
 		if err != nil {
@@ -296,7 +288,7 @@ func TestDeviceClientSurfacesCleanErrors(t *testing.T) {
 		p := newPeer(t, clock)
 		srv := httptest.NewServer(p)
 		t.Cleanup(srv.Close)
-		store, _ := enrolledDevice(t, p, clock, false) // never pinned at the peer
+		store := enrolledDevice(t, p, clock, false) // never pinned at the peer
 
 		c, err := client.New(client.Options{Addr: srv.URL, Device: store, Clock: clock.Now})
 		if err != nil {

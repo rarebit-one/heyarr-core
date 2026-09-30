@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -155,9 +154,7 @@ func printPush(out io.Writer, art backup.Artifact, targets []backupsync.Target,
 	}
 
 	if asJSON {
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		return enc.Encode(result)
+		return emitJSON(out, result)
 	}
 	if _, err := fmt.Fprintf(out, "backup generation %d (%d bytes) pushed to %d peer(s)\n",
 		result.Generation, result.SizeBytes, len(result.Peers)); err != nil {

@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"database/sql"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // The provider health beat (#164), against a real database and a real queue.
@@ -26,15 +26,7 @@ import (
 // healthQueue opens a queue over a fresh migrated database.
 func healthQueue(t *testing.T) (*sqlite.DB, *jobs.Queue) {
 	t.Helper()
-	ctx := t.Context()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)
@@ -237,15 +229,16 @@ func TestTheHealthPassIsClaimableByANodeWithNoCapabilities(t *testing.T) {
 func TestTheHealthBeatStopsWithItsContext(t *testing.T) {
 	db, queue := healthQueue(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	startProviderHealth(ctx, queue, discard())
+	defer cancel()
+	clock := newFakeTicker()
+	startProviderHealth(ctx, queue, discard(), clock.newTicker)
 	if got := countHealthJobs(t, db.Reader()); got != 1 {
 		t.Fatalf("starting the beat enqueued %d jobs, want 1 immediately", got)
 	}
+	// The control: while its context is live the beat is listening.
+	clock.fire(t)
 	cancel()
-	// Nothing to assert on a stopped goroutine except that nothing more
-	// arrives; the interval is a minute, so a tick within this window would be
-	// a bug of a different kind.
-	time.Sleep(50 * time.Millisecond)
+	clock.awaitStop(t)
 	if got := countHealthJobs(t, db.Reader()); got != 1 {
 		t.Errorf("a cancelled beat kept enqueueing: %d jobs", got)
 	}

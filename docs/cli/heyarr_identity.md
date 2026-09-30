@@ -17,8 +17,8 @@ deliberate human act rather than something a device can claim about itself
 ### Options
 
 ```
-      --device-dir string     where this machine's device key lives (default: your config directory; VOIDBIND_DEVICE_DIR overrides)
-      --identity-dir string   where your user identity lives (default: your config directory; VOIDBIND_IDENTITY_DIR overrides)
+      --device-dir string     where this machine's device key lives (default: your config directory; VOID_WHICH_BINDS_DEVICE_DIR overrides)
+      --identity-dir string   where your user identity lives (default: your config directory; VOID_WHICH_BINDS_IDENTITY_DIR overrides)
 ```
 
 ### Options inherited from parent commands
@@ -35,3 +35,4 @@ deliberate human act rather than something a device can claim about itself
 * [heyarr identity generate](heyarr_identity_generate.md)	 - Generate your user identity keypair
 * [heyarr identity recover](heyarr_identity_recover.md)	 - Reconstruct your user identity from its recovery secret, offline (ADR-0022)
 * [heyarr identity show](heyarr_identity_show.md)	 - Show your user identity
+* [heyarr identity verify-recovery](heyarr_identity_verify-recovery.md)	 - Check your written recovery secret against this identity, without using it (ADR-0022)

@@ -261,7 +261,10 @@ so both the binary and the fixture generator are cross-compiled and shipped:
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o heyarr ./cmd/heyarr
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o genlibrary \
   ./internal/testutil/fixtures/cmd/genlibrary
-scp heyarr genlibrary scripts/acceptance.sh <host>:/srv/media/heyarr-acceptance/
+scp heyarr genlibrary <host>:/srv/media/heyarr-acceptance/
+# The demo is split into sections it sources: ship scripts/acceptance/ with it.
+ssh <host> 'mkdir -p /srv/media/heyarr-acceptance/scripts'
+scp -r scripts/acceptance.sh scripts/acceptance <host>:/srv/media/heyarr-acceptance/scripts/
 ssh <host> 'cd /srv/media/heyarr-acceptance && TMPDIR=$PWD/tmp ./scripts/acceptance.sh'
 ```
 

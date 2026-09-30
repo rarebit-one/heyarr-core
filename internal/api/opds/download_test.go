@@ -11,6 +11,7 @@ import (
 )
 
 func TestDownloadReturnsExactBytes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := h.get("/opds/download/ea1", true)
 	if resp.StatusCode != http.StatusOK {
@@ -25,6 +26,7 @@ func TestDownloadReturnsExactBytes(t *testing.T) {
 // unchanged: a Range request gets a 206 with a Content-Range and only the
 // requested bytes. The adapter writes none of that itself.
 func TestDownloadHonoursRange(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	want := h.bytesOf["ea1"]
 
@@ -49,6 +51,7 @@ func TestDownloadHonoursRange(t *testing.T) {
 }
 
 func TestDownloadNotFound(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := h.get("/opds/download/no-such-edition", true)
 	if resp.StatusCode != http.StatusNotFound {
@@ -59,6 +62,7 @@ func TestDownloadNotFound(t *testing.T) {
 // TestDownloadLinkedNotAcquirable proves the linked-only edition, which the feed
 // never advertises, also cannot be downloaded directly — it has no blob.
 func TestDownloadLinkedNotAcquirable(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := h.get("/opds/download/eb1", true)
 	if resp.StatusCode != http.StatusNotFound {
@@ -67,6 +71,7 @@ func TestDownloadLinkedNotAcquirable(t *testing.T) {
 }
 
 func TestDownloadRequiresAuth(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := h.get("/opds/download/ea1", false)
 	if resp.StatusCode != http.StatusUnauthorized {

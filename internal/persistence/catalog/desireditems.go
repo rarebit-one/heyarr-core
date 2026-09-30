@@ -13,6 +13,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/desired"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
 // Creating a want, in one place (§55, M3-02, M12).
@@ -231,7 +232,7 @@ func insertDesiredItem(ctx context.Context, tx *sql.Tx, item desired.Item, now t
 func insertRestingAcquisition(
 	ctx context.Context, tx *sql.Tx, desiredItemID string, s acquisition.State, now time.Time,
 ) error {
-	stamp := now.Format(timestampFormat)
+	stamp := sqlite.FormatTimestamp(now)
 	managed := 0
 	if s.Managed {
 		managed = 1

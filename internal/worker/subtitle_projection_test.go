@@ -37,6 +37,7 @@ func (h *followHarness) countWantsByAspect(t *testing.T) (primary, subtitle int)
 }
 
 func TestPollProjectsSubtitleWantsWhenSourceWantsThem(t *testing.T) {
+	t.Parallel()
 	h := newFollowHarness(t, followed.BackfillFull)
 
 	// The seeded subtitle profile the projection resolves by name.
@@ -100,6 +101,7 @@ func TestPollProjectsSubtitleWantsWhenSourceWantsThem(t *testing.T) {
 // With no want_subtitles set, a poll projects only primary wants — the feature is
 // off by default and costs nothing.
 func TestPollProjectsNoSubtitleWantsByDefault(t *testing.T) {
+	t.Parallel()
 	h := newFollowHarness(t, followed.BackfillFull)
 	h.feed.OfferFeed(h.feedRef, episode("S02E01", "The Return", time.Now().UTC()))
 	if err := h.poll(t); err != nil {

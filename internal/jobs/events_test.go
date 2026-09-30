@@ -39,6 +39,7 @@ func payloadOf(t *testing.T, e events.Event) map[string]any {
 }
 
 func TestEveryJobTransitionIsRecorded(t *testing.T) {
+	t.Parallel()
 	q, log, clock := newQueueWithLog(t)
 
 	job := enqueue(t, q, EnqueueOptions{Type: "ingest_artifact", MaxAttempts: 2})
@@ -119,6 +120,7 @@ func TestEveryJobTransitionIsRecorded(t *testing.T) {
 // transition, and one a client especially wants to hear about: "the worker
 // running your job died" is otherwise only discoverable by polling.
 func TestReapingAnExpiredLeaseIsRecordedPerJob(t *testing.T) {
+	t.Parallel()
 	q, log, clock := newQueueWithLog(t)
 
 	a := enqueue(t, q, EnqueueOptions{Type: "ingest_artifact"})
@@ -155,6 +157,7 @@ func TestReapingAnExpiredLeaseIsRecordedPerJob(t *testing.T) {
 // The transition and the event it describes are one transaction, or the log can
 // disagree with the table — and the log is the record of what happened.
 func TestARefusedTransitionRecordsNothing(t *testing.T) {
+	t.Parallel()
 	q, log, _ := newQueueWithLog(t)
 
 	job := enqueue(t, q, EnqueueOptions{Type: "ingest_artifact"})
@@ -181,6 +184,7 @@ func TestARefusedTransitionRecordsNothing(t *testing.T) {
 }
 
 func TestAQueueWithoutAnEventLogIsRefused(t *testing.T) {
+	t.Parallel()
 	// The invariant says no exceptions, and an exception a caller can create by
 	// leaving a field nil is still an exception.
 	if _, err := New(Options{Writer: nil}); err == nil {

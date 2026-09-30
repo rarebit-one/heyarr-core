@@ -88,51 +88,39 @@ func (s *Server) registerRendererTools() {
 }
 
 var schemaListRenderers = obj(map[string]any{
-	"refresh": map[string]any{
-		"type": "boolean",
-		"description": "Search the network again rather than reusing the last result. " +
-			"Use this when someone has just switched a device on, and not otherwise — " +
-			"a search takes several seconds.",
-	},
+	"refresh": boolean("Search the network again rather than reusing the last result. " +
+		"Use this when someone has just switched a device on, and not otherwise — " +
+		"a search takes several seconds."),
 })
 
 var schemaPlayHere = obj(map[string]any{
-	"asset_id": map[string]any{
-		"type":        "string",
-		"description": "The asset to play. Resolve it with search_content first.",
-	},
-	"renderer": map[string]any{
-		"type": "string",
-		"description": "Which device, by name or id. A partial name is matched against " +
-			"what each device calls itself, so \"living\" finds \"Samsung QN85BA 55\" " +
-			"only if that is what it is called — prefer list_renderers when unsure.",
-	},
-	"force_direct": map[string]any{
-		"type": "boolean",
-		"description": "Cast anyway when the device's declared codecs would otherwise " +
-			"refuse the plan. Only for a device you KNOW decodes more than it advertises " +
-			"(a TV that decodes Dolby Digital Plus but under-declares it over DLNA). The " +
-			"bytes are sent as-is; if the device truly cannot decode them, it plays " +
-			"nothing. Off by default — try without it first and read the refusal.",
-	},
+	"asset_id": str("The asset to play. Resolve it with search_content first."),
+	"renderer": str("Which device, by name or id. A partial name is matched against " +
+		"what each device calls itself, so \"living\" finds \"Samsung QN85BA 55\" " +
+		"only if that is what it is called — prefer list_renderers when unsure."),
+	"force_direct": boolean("Cast anyway when the device's declared codecs would otherwise " +
+		"refuse the plan. Only for a device you KNOW decodes more than it advertises " +
+		"(a TV that decodes Dolby Digital Plus but under-declares it over DLNA). The " +
+		"bytes are sent as-is; if the device truly cannot decode them, it plays " +
+		"nothing. Off by default — try without it first and read the refusal."),
 })
 
 var schemaControlPlayback = obj(map[string]any{
-	"renderer": map[string]any{"type": "string", "description": "Which device, by name or id."},
-	"action": map[string]any{
-		"type": "string", "enum": []any{"pause", "resume", "stop"},
-		"description": "What to do.",
-	},
+	"renderer": str("Which device, by name or id."),
+	"action":   strEnum("What to do.", "pause", "resume", "stop"),
 })
 
 var schemaPlaybackStatus = obj(map[string]any{
-	"renderer": map[string]any{"type": "string", "description": "Which device, by name or id."},
+	"renderer": str("Which device, by name or id."),
 })
 
+// listRenderersArgs is what listRenderers decodes (held to its schema by schemaargs_test.go).
+type listRenderersArgs struct {
+	Refresh bool `json:"refresh"`
+}
+
 func (s *Server) listRenderers(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		Refresh bool `json:"refresh"`
-	}
+	var args listRenderersArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -153,12 +141,15 @@ func (s *Server) listRenderers(ctx context.Context, raw json.RawMessage) (any, e
 	return map[string]any{"renderers": found}, nil
 }
 
+// playHereArgs is what playHere decodes (held to its schema by schemaargs_test.go).
+type playHereArgs struct {
+	AssetID     string `json:"asset_id"`
+	Renderer    string `json:"renderer"`
+	ForceDirect bool   `json:"force_direct"`
+}
+
 func (s *Server) playHere(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		AssetID     string `json:"asset_id"`
-		Renderer    string `json:"renderer"`
-		ForceDirect bool   `json:"force_direct"`
-	}
+	var args playHereArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -172,11 +163,14 @@ func (s *Server) playHere(ctx context.Context, raw json.RawMessage) (any, error)
 	return s.resources.PlayOnRenderer(ctx, udn, args.AssetID, args.ForceDirect)
 }
 
+// controlPlaybackArgs is what controlPlayback decodes (held to its schema by schemaargs_test.go).
+type controlPlaybackArgs struct {
+	Renderer string `json:"renderer"`
+	Action   string `json:"action"`
+}
+
 func (s *Server) controlPlayback(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		Renderer string `json:"renderer"`
-		Action   string `json:"action"`
-	}
+	var args controlPlaybackArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
@@ -192,10 +186,13 @@ func (s *Server) controlPlayback(ctx context.Context, raw json.RawMessage) (any,
 	return s.resources.ControlRenderer(ctx, udn, args.Action)
 }
 
+// playbackStatusArgs is what playbackStatus decodes (held to its schema by schemaargs_test.go).
+type playbackStatusArgs struct {
+	Renderer string `json:"renderer"`
+}
+
 func (s *Server) playbackStatus(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args struct {
-		Renderer string `json:"renderer"`
-	}
+	var args playbackStatusArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}

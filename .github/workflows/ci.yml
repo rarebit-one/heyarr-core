@@ -4,21 +4,72 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The full OS matrix, nightly, even on a day nothing merges — so runner-image
+  # drift on macOS or Windows surfaces within a day rather than on the next
+  # merge. 05:30 UTC, after daemon-acceptance.yml (03:30) and race-nightly.yml
+  # (04:00), so the three do not compete for the org's macOS runners.
+  schedule:
+    - cron: "30 5 * * *"
+  # Run the full matrix against any branch on demand.
+  workflow_dispatch:
+  # Merge queue. `ci` is the required check, so it has to report on the queue's
+  # merge_group ref too, or a queued PR waits until the queue times it out.
+  # This trigger does nothing until a merge queue is enabled on main. `plan`
+  # gives these runs the full OS matrix (scripts/ci-matrix.sh rule 1: not a
+  # pull request), the same verdict a push to main gets, so macOS/Windows-only
+  # breakage is caught before main moves. The concurrency group below falls back
+  # to github.ref, which is unique per queue entry
+  # (refs/heads/gh-readonly-queue/main/pr-<n>-<sha>), and cancel-in-progress is
+  # false for this event, so queued runs never cancel one another.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
 
-# voidbind-go is a private module in this org. GOPRIVATE keeps its path off the
+# void-which-binds-go is a private module in this org. GOPRIVATE keeps its path off the
 # public proxy and checksum database; the private-modules action (used in each
 # compiling job below) supplies the token that lets git fetch it.
 env:
   GOPRIVATE: github.com/rarebit-one/*
 
+# A new push to a PR supersedes the run in flight, so cancel it. A run on main
+# is never cancelled mid-flight: each merge gets its full-matrix verdict, which
+# is what makes it safe for pull requests to skip the macOS and Windows legs.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Which operating systems this run tests on. Push to main, a merge-queue
+  # run, the nightly schedule and a manual dispatch get the full matrix; a pull
+  # request gets Linux only unless it touches something platform-sensitive or
+  # carries the `ci:full-matrix` label. scripts/ci-matrix.sh holds the rules and the data
+  # behind them. Only the jobs that need a macOS or Windows RUNNER read this —
+  # `lint` cross-compiles every GOOS on Linux and stays unconditional, because
+  # it is cheap and it is what caught the one Windows-only bug in the sample.
+  plan:
+    name: plan the OS matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      full: ${{ steps.decide.outputs.full }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        # bash, not ./: the file mode is not something this check should depend on.
+        run: bash scripts/ci-matrix.sh
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -40,8 +91,20 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: stable, cache: true }
       - run: go vet ./...
+      # Pinned, not `latest`: a new golangci-lint release can add or tighten
+      # checks and turn main red with no change here. Bump it deliberately,
+      # together with whatever .golangci.yml needs, after a clean local run.
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with: { version: latest }
+        with: { version: v2.13.2 }
+      # A function that nothing calls, not even a test, is a claim with no
+      # evidence behind it (#613 removed the backlog). deadcode is pinned in the
+      # Makefile for the same reason golangci-lint is pinned above. It checks
+      # one build configuration, so it runs on the linux leg only. If a function
+      # is ever reachable only from another GOOS's files, move it behind that
+      # build tag instead of adding an allowlist.
+      - name: no unreachable functions
+        if: matrix.goos == 'linux'
+        run: make deadcode
       # A malformed workflow file does not fail — it silently never runs.
       # actionlint catches that before it can hide a broken pipeline.
       #
@@ -49,9 +112,9 @@ jobs:
       # per CI run rather than once per matrix leg.
       - name: lint workflow files
         if: matrix.goos == 'linux'
-        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # 1.7.12
-        with:
-          args: -color
+        # `docker run` rather than `uses: docker://...`: the org pin gate's pinact cannot
+        # parse docker:// action refs and fails on them. The image stays digest-pinned (1.7.12).
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
 
   # This repo is public. A real host name, a real premises name or a real home
   # directory in a public AGPL repo is a permanent disclosure — git history
@@ -63,6 +126,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # No setup step: the guard needs only git and python3, both present on
       # the runner image. It refuses to pass if python3 is missing rather than
       # skipping, because a hygiene check that silently no-ops is worse than
@@ -91,7 +156,11 @@ jobs:
   # macOS becomes a real test of the degrade path: every build proves on a real
   # machine that a Heyarr with no ffprobe still starts, scans, ingests and
   # serves. A unit test cannot make that claim about a whole process tree.
+  #
+  # On a pull request the macOS legs run only when `plan` says the change is
+  # platform-sensitive; push to main and the nightly run always include them.
   test:
+    needs: plan
     runs-on: ${{ matrix.os }}
     # No leg here runs -race any more: the race detector moved to the dedicated
     # `test-race` job below, which shards the full suite across parallel runners
@@ -103,7 +172,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(needs.plan.outputs.full == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
         go: [stable, oldstable]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -144,9 +213,10 @@ jobs:
       # can approach the default under load on a busy runner, and a per-package
       # test timeout is only a hang reported as a failure if the bound is
       # generous enough to be reached solely when something is genuinely wedged.
-      # The job's own timeout-minutes stays the outer stop. coverage.out is still
-      # written here, unchanged; the race detector now lives in `test-race`.
-      - run: go test -count=1 -timeout=20m -coverprofile=coverage.out ./...
+      # The job's own timeout-minutes stays the outer stop. No -coverprofile:
+      # nothing uploaded or gated on coverage.out. The race detector lives in
+      # `test-race`.
+      - run: go test -count=1 -timeout=20m ./...
       - name: the toolchain tests ran rather than skipping
         if: runner.os == 'Linux'
         run: |
@@ -187,7 +257,7 @@ jobs:
   #
   # Coverage is deliberately NOT collected here: coverage.out was never uploaded
   # or gated anywhere (dead output), and the instrumentation only slows the
-  # detector. The plain `test` job still writes coverage.out exactly as before.
+  # detector.
   test-race:
     name: test-race
     runs-on: ubuntu-latest
@@ -260,20 +330,22 @@ jobs:
   # repair stops reusing, quietly, forever. The `test` matrix above runs Linux
   # and macOS, so Windows — the platform most likely to differ, and the one
   # nobody here develops on — would otherwise be asserted by nothing.
+  #
+  # On a pull request only the Linux row runs unless `plan` says otherwise —
+  # and a change to the chunking package itself always makes it say otherwise.
   chunking-determinism:
     name: chunk boundaries are identical across platforms
+    needs: plan
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: ubuntu-latest, flags: -race }
-          - { os: macos-latest, flags: -race }
-          # windows/amd64 needs a C toolchain for the race detector, and the
-          # assertion here is determinism, which the detector has nothing to say
-          # about. The two rows above run this package under -race.
-          - { os: windows-latest, flags: "" }
+        # Full: ubuntu and macOS under -race, plus windows without it —
+        # windows/amd64 needs a C toolchain for the race detector, and the
+        # assertion here is determinism, which the detector has nothing to say
+        # about. The two unix rows run this package under -race.
+        include: ${{ fromJSON(needs.plan.outputs.full == 'true' && '[{"os":"ubuntu-latest","flags":"-race"},{"os":"macos-latest","flags":"-race"},{"os":"windows-latest","flags":""}]' || '[{"os":"ubuntu-latest","flags":"-race"}]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
@@ -310,12 +382,19 @@ jobs:
   # free-space behaviour, and every one of those differs between Linux and
   # macOS. Running it on one of the two would leave the other untested in
   # exactly the places it is most likely to differ.
+  #
+  # On a pull request the macOS leg runs only when `plan` says the change is
+  # platform-sensitive (scripts/, which holds the demo, always is); every push
+  # to main and the nightly run still run both. Over 30 days, 22 macOS-only
+  # failures here caught one real bug (bash 3.2 in scripts/acceptance.sh) and
+  # were otherwise the demo overrunning its budget on a slower runner.
   acceptance:
     name: acceptance (end-to-end)
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(needs.plan.outputs.full == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -388,10 +467,15 @@ jobs:
       - run: make demo
 
   # Aggregate status so branch protection needs exactly one required check.
+  #
+  # `plan` is in the list so that if it fails, `ci` fails — the jobs that need
+  # it are then skipped, and a skipped job alone would not trip the check
+  # below. Legs that `plan` leaves out of a matrix are not skipped jobs: they
+  # never exist, so they cannot affect `needs.<job>.result`.
   ci:
     name: ci
     if: always()
-    needs: [lint, hygiene, generate-check, test, race, chunking-determinism, build, acceptance, acceptance-degraded]
+    needs: [plan, lint, hygiene, generate-check, test, race, chunking-determinism, build, acceptance, acceptance-degraded]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

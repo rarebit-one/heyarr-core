@@ -6,20 +6,23 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/rarebit-one/void-which-binds-go/device"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
 	"github.com/rarebit-one/heyarr-core/internal/config"
-	"github.com/rarebit-one/heyarr-core/internal/device"
 )
 
-// The wake client POSTs the device cert, ops and the relay session to the node's
+// The wake client POSTs the device cert, a fresh possession proof, ops and the relay session to the node's
 // /v1/unwrap-wake, exactly the fields the server verifies and forwards.
 func TestCruciformWakePostsToTheNode(t *testing.T) {
 	var got struct {
-		Cert      string   `json:"cert"`
-		Ops       []string `json:"ops"`
-		RelayBase string   `json:"relay_base"`
-		Session   string   `json:"session"`
+		Cert       string   `json:"cert"`
+		Possession string   `json:"possession"`
+		Ops        []string `json:"ops"`
+		RelayBase  string   `json:"relay_base"`
+		Session    string   `json:"session"`
 	}
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -30,14 +33,15 @@ func TestCruciformWakePostsToTheNode(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	wake := newCruciformWake(srv.URL, srv.Client(), "cert-abc", []string{"op-1"})
+	prove := func(time.Time) (string, error) { return "proof-xyz", nil }
+	wake := newCruciformWake(srv.URL, srv.Client(), "cert-abc", []string{"op-1"}, prove)
 	if err := wake(context.Background(), "https://relay.example/pair", "sess-9"); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	if gotPath != weblogin.UnwrapWakePrefix {
 		t.Fatalf("posted to %q, want %q", gotPath, weblogin.UnwrapWakePrefix)
 	}
-	if got.Cert != "cert-abc" || got.RelayBase != "https://relay.example/pair" || got.Session != "sess-9" {
+	if got.Cert != "cert-abc" || got.Possession != "proof-xyz" || got.RelayBase != "https://relay.example/pair" || got.Session != "sess-9" {
 		t.Fatalf("wake body = %+v", got)
 	}
 	if len(got.Ops) != 1 || got.Ops[0] != "op-1" {
@@ -53,7 +57,7 @@ func TestCruciformWakeSurfacesNodeError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	wake := newCruciformWake(srv.URL, srv.Client(), "cert", nil)
+	wake := newCruciformWake(srv.URL, srv.Client(), "cert", nil, nil)
 	if err := wake(context.Background(), "r", "s"); err == nil {
 		t.Fatal("a node refusal should surface as an error")
 	}

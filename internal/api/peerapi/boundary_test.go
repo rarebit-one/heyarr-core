@@ -22,12 +22,13 @@ import (
 // SABOTAGE (the reviewer's break): add `import ".../personalstate/crdt"` to any
 // file in this package and this test fails — as does the depguard rule at lint.
 func TestPeerSurfaceCannotReadPersonalState(t *testing.T) {
+	t.Parallel()
 	const pkg = "github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	forbidden := []string{
 		"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt",
 		"github.com/rarebit-one/heyarr-core/internal/personalstate/client",
 		"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync",
-		"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption",
+		"github.com/rarebit-one/void-which-binds-go/encryption",
 	}
 
 	out, err := exec.Command("go", "list", "-deps", pkg).CombinedOutput()

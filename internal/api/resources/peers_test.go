@@ -65,6 +65,7 @@ func decodePeer(t *testing.T, resp *http.Response) resources.Peer {
 }
 
 func TestEnrollingAPeerPinsItsKey(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seedSelf()
 	pub := newKey(t)
 
@@ -120,6 +121,7 @@ func TestEnrollingAPeerPinsItsKey(t *testing.T) {
 // TestReRegisteringMovesTheEndpointAndAnswers200: nothing was created, so the
 // status must not say something was.
 func TestReRegisteringMovesTheEndpointAndAnswers200(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seedSelf()
 	pub := newKey(t)
 
@@ -152,6 +154,7 @@ func TestReRegisteringMovesTheEndpointAndAnswers200(t *testing.T) {
 // different mistakes, they need different statuses, and a client that saw one
 // status for all of them could not tell a typo from a collision.
 func TestEachEnrolmentRefusalGetsItsOwnStatus(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		// setup returns the request body, after establishing whatever state
@@ -279,6 +282,7 @@ func TestEachEnrolmentRefusalGetsItsOwnStatus(t *testing.T) {
 // stored normalised, so what `peers list` prints is what the next
 // re-registration can be given back unchanged.
 func TestTheAPINormalisesABareHostPortEndpoint(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seedSelf()
 	pub := newKey(t)
 
@@ -303,6 +307,7 @@ func TestTheAPINormalisesABareHostPortEndpoint(t *testing.T) {
 // its key before anyone knows where it will live. Only a value that was given
 // and cannot be dialled is refused.
 func TestAnEndpointIsOptional(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seedSelf()
 	resp := h.postPeer(t, map[string]string{"name": "peer-b", "public_key": newKey(t)})
 	if resp.StatusCode != http.StatusCreated {
@@ -317,6 +322,7 @@ func TestAnEndpointIsOptional(t *testing.T) {
 // which is the point — so this asserts that the one route that writes peers
 // rows cannot produce one, however it is called.
 func TestTheAPICannotRegisterASecondSelf(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seedSelf()
 	// is_self is not part of the request schema. Sending it anyway is what an
 	// attacker or a hopeful client would do, and the decoder refuses unknown
@@ -363,6 +369,7 @@ func TestTheAPICannotRegisterASecondSelf(t *testing.T) {
 // would pass on an implementation that rendered a zero PeerSnapshot for every
 // peer, which is precisely the conflation Milestone 7 cannot survive.
 func TestPeerShowReportsTheSnapshotVersionAndAgeOrNoneAtAll(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seedSelf()
 	h.exec(`INSERT INTO peers (id, name, site, mode, is_self, enrolled_at, created_at)
 		VALUES ('01990000-0000-7000-8000-0000000000b1', 'peer-b', 'site-b', 'full', 0, ?, ?)`,

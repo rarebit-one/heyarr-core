@@ -12,6 +12,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/backupsync"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/backup"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // source is a peer producing signed backups of its own control plane.
@@ -27,14 +28,13 @@ type source struct {
 func newSource(t *testing.T, id string) *source {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatalf("events: %v", err)

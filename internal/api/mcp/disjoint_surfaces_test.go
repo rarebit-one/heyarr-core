@@ -4,7 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/rarebit-one/heyarr-core/internal/device"
+	"github.com/rarebit-one/void-which-binds-go/device"
+
 	"github.com/rarebit-one/heyarr-core/internal/device/personalmcp"
 )
 
@@ -28,6 +29,7 @@ func (stubReader) ReadingPositions(string) ([]personalmcp.ReadingPosition, error
 // TestNoToolTouchesPersonalState (which forbids the vocabulary) by asserting the
 // two enumerated surfaces do not intersect.
 func TestTheTwoMCPSurfacesAreDisjoint(t *testing.T) {
+	t.Parallel()
 	controller := newHarness(t, false).server.Names()
 
 	ds, err := device.NewStore(device.StoreOptions{Dir: filepath.Join(t.TempDir(), "device")})

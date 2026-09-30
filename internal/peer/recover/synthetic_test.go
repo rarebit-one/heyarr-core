@@ -24,6 +24,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/backup"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // --- Scenario 1: Fetch propagates a fetch error cleanly. ---
@@ -75,11 +76,9 @@ func TestApplyPartialStateExistingDBNoKey(t *testing.T) {
 	// there is NO identity key. This models a data dir left half-populated by an
 	// earlier aborted run.
 	dbPath := sqlite.DataDirFor(dataDir)
+	testdb.WriteMigrated(t, dbPath)
 	pre, err := sqlite.Open(t.Context(), sqlite.Options{Path: dbPath})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sqlite.Migrate(t.Context(), pre); err != nil {
 		t.Fatal(err)
 	}
 	preLog, err := events.New(events.Options{Writer: pre.Writer(), Reader: pre.Reader()})
@@ -177,14 +176,13 @@ func TestApplyPartialStateKeyNoDB(t *testing.T) {
 func leasedBackup(t *testing.T, sourceID string) (string, backup.Manifest, []byte, string) {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatal(err)
-	}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)

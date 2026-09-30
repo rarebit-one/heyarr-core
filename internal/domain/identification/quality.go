@@ -46,11 +46,6 @@ type quality struct {
 	Codec      string // "x265"
 }
 
-// Empty reports whether nothing at all was recognised.
-func (q quality) Empty() bool {
-	return q.Resolution == "" && q.Source == "" && q.Dynamic == "" && q.Codec == ""
-}
-
 // Key is the stable part of an edition key: same bytes for the same release
 // shape, regardless of the order the tokens appeared in.
 func (q quality) Key() string {

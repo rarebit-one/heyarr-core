@@ -35,7 +35,7 @@ heyarr device mcp [flags]
 ### Options inherited from parent commands
 
 ```
-      --device-dir string   where this machine's device key lives (default: your config directory; VOIDBIND_DEVICE_DIR overrides)
+      --device-dir string   where this machine's device key lives (default: your config directory; VOID_WHICH_BINDS_DEVICE_DIR overrides)
 ```
 
 ### See also

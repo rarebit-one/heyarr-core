@@ -434,17 +434,6 @@ func (r *Runtime) track(jobType string, delta int) {
 	r.mu.Unlock()
 }
 
-// InFlight reports how many jobs of each type are running.
-func (r *Runtime) InFlight() map[string]int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make(map[string]int, len(r.running))
-	for k, v := range r.running {
-		out[k] = v
-	}
-	return out
-}
-
 // execute runs one job with a lease-linked context and a heartbeat.
 func (r *Runtime) execute(parent context.Context, job jobs.Job) {
 	reg, ok := r.registry.Lookup(job.Type)

@@ -48,6 +48,7 @@ func readProviders(t *testing.T, h *harness) wireProviders {
 // ADR-0025's whole claim at the edge: a node with nothing configured answers,
 // and answers honestly. Not a 404, not a 500 — an empty set.
 func TestANodeWithNoProvidersReportsAnEmptySet(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	got := readProviders(t, h)
 
@@ -70,6 +71,7 @@ func TestANodeWithNoProvidersReportsAnEmptySet(t *testing.T) {
 }
 
 func TestConfiguredProvidersAreReported(t *testing.T) {
+	t.Parallel()
 	reg := providers.New(nil)
 	for _, p := range []*providers.Fake{
 		providers.NewFake("an-indexer", providers.CapabilityIndexer),
@@ -97,6 +99,7 @@ func TestConfiguredProvidersAreReported(t *testing.T) {
 // "Nobody has looked" is distinct from "we looked and it is broken", and the
 // distinction has to survive to the wire — they lead to different actions.
 func TestNeverCheckedIsDistinctFromUnhealthy(t *testing.T) {
+	t.Parallel()
 	reg := providers.New(nil)
 	if err := reg.Register(providers.NewFake("an-indexer", providers.CapabilityIndexer)); err != nil {
 		t.Fatal(err)
@@ -122,6 +125,7 @@ func TestNeverCheckedIsDistinctFromUnhealthy(t *testing.T) {
 // switched off" and "not configured at all" stay tellable apart. Without this,
 // "why is nothing searching" means re-reading the config file.
 func TestADisabledProviderIsReportedWithNoCapabilities(t *testing.T) {
+	t.Parallel()
 	resolved, err := providers.Validate([]providers.Entry{
 		{Name: "an-indexer", Type: "torznab", Endpoint: "https://x.invalid", APIKey: "k"},
 		{
@@ -162,6 +166,7 @@ func TestADisabledProviderIsReportedWithNoCapabilities(t *testing.T) {
 // The credential must not reach the response. Asserted by searching the body
 // for the plaintext, not by reading the struct definition.
 func TestNoCredentialReachesTheResponse(t *testing.T) {
+	t.Parallel()
 	const secret = "sk-live-DO-NOT-LEAK-8e91c4"
 	resolved, err := providers.Validate([]providers.Entry{{
 		Name: "an-indexer", Type: "torznab",
@@ -191,6 +196,7 @@ func TestNoCredentialReachesTheResponse(t *testing.T) {
 // The metadata capability exists with nothing implementing it, and it reaches
 // the wire. This is what stops the registry becoming indexer-shaped.
 func TestAMetadataProviderIsReported(t *testing.T) {
+	t.Parallel()
 	reg := providers.New(nil)
 	if err := reg.Register(
 		providers.NewFake("a-metadata-service", providers.CapabilityMetadata)); err != nil {
@@ -217,6 +223,7 @@ func TestAMetadataProviderIsReported(t *testing.T) {
 // would leak a username to every reader of GET /api/v1/providers. Asserted by
 // searching the body, not by reading the struct definition (ADR-0025).
 func TestNoHalfOfABasicCredentialReachesTheResponse(t *testing.T) {
+	t.Parallel()
 	const username = "heyarr-DO-NOT-LEAK-username"
 	const password = "hunter2:the-real-part-8e91c4"
 

@@ -8,16 +8,16 @@ import (
 	"sort"
 	"time"
 
+	"github.com/rarebit-one/void-which-binds-go/device"
+	"github.com/rarebit-one/void-which-binds-go/useridentity"
 	"github.com/spf13/cobra"
 
 	apiclient "github.com/rarebit-one/heyarr-core/internal/client"
-	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
-	"github.com/rarebit-one/heyarr-core/internal/useridentity"
 )
 
 // newSpaceCommand builds `heyarr space` — the device side of encrypted personal
@@ -60,6 +60,7 @@ it.`,
 		newSpaceRotateCommand(opts, configPath, &deviceDir),
 		newSpaceCompactCommand(opts, configPath),
 		newSpaceRecoverCommand(opts, configPath, &deviceDir),
+		newSpaceExportRecoveryCommand(opts, configPath),
 	)
 	return cmd
 }
@@ -71,7 +72,7 @@ type spaceCreateView struct {
 	Recipients []string `json:"recipients"`
 }
 
-func newSpaceCreateCommand(opts Options, configPath, deviceDir *string) *cobra.Command {
+func newSpaceCreateCommand(_ Options, configPath, deviceDir *string) *cobra.Command {
 	var (
 		flags           clientFlags
 		kind            string
@@ -134,6 +135,9 @@ yet; run ` + "`heyarr identity generate`" + ` to enable it, or pass --recovery=f
 					ids = append(ids, r.ID)
 				}
 				sort.Strings(ids)
+				if recoveryID != "" {
+					fmt.Fprintln(cmd.ErrOrStderr(), staleBlobHint)
+				}
 				if flags.asJSON {
 					return emitJSON(cmd.OutOrStdout(), spaceCreateView{ID: created.ID, Kind: created.Kind, Recipients: ids})
 				}
@@ -210,7 +214,7 @@ func recoveryRecipientID(identityDir string) (string, error) {
 	return id.EncryptionKey, nil
 }
 
-func newSpaceListCommand(opts Options, configPath *string) *cobra.Command {
+func newSpaceListCommand(_ Options, configPath *string) *cobra.Command {
 	var flags clientFlags
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -243,7 +247,7 @@ func newSpaceListCommand(opts Options, configPath *string) *cobra.Command {
 	return cmd
 }
 
-func newSpaceKeysCommand(opts Options, configPath *string) *cobra.Command {
+func newSpaceKeysCommand(_ Options, configPath *string) *cobra.Command {
 	var flags clientFlags
 	cmd := &cobra.Command{
 		Use:   "keys <space-id>",
@@ -281,7 +285,7 @@ type spaceChangeView struct {
 	Ciphertext []byte   `json:"ciphertext"`
 }
 
-func newSpaceChangesCommand(opts Options, configPath *string) *cobra.Command {
+func newSpaceChangesCommand(_ Options, configPath *string) *cobra.Command {
 	var flags clientFlags
 	cmd := &cobra.Command{
 		Use:   "changes <space-id>",
@@ -316,7 +320,7 @@ metadata. Nothing here is decrypted — that is the whole point (§38). Use
 	return cmd
 }
 
-func newSpacePutCommand(opts Options, configPath, deviceDir *string) *cobra.Command {
+func newSpacePutCommand(_ Options, configPath, deviceDir *string) *cobra.Command {
 	var (
 		flags clientFlags
 		item  string
@@ -378,7 +382,7 @@ type spaceReadView struct {
 	Items   []string `json:"items"`
 }
 
-func newSpaceReadCommand(opts Options, configPath, deviceDir *string) *cobra.Command {
+func newSpaceReadCommand(_ Options, configPath, deviceDir *string) *cobra.Command {
 	var flags clientFlags
 	cmd := &cobra.Command{
 		Use:   "read <space-id>",
@@ -611,6 +615,7 @@ space may re-key it), and at least one recipient must remain.`,
 					return err
 				}
 				revoked, remainIDs, snapID, dropped := view.Revoked, view.Remaining, view.SnapshotID, view.Dropped
+				fmt.Fprintln(cmd.ErrOrStderr(), staleBlobHint)
 				if flags.asJSON {
 					return emitJSON(cmd.OutOrStdout(), view)
 				}

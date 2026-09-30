@@ -146,8 +146,7 @@ func decodeStringList(raw string) ([]string, error) {
 // registration converges: same key, same row, profile updated.
 func (a *API) registerDevice(w http.ResponseWriter, r *http.Request) {
 	var body registerDeviceRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	if err := required("device_key", body.DeviceKey); err != nil {

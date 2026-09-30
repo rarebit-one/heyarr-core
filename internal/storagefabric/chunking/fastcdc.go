@@ -6,7 +6,7 @@ import (
 	"io"
 	"math/bits"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 )
 
 // Default chunk sizes.

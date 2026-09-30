@@ -10,6 +10,7 @@ import (
 )
 
 func TestDescriptionAndSCPD(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	desc := readAll(t, h.get("/dlna/description.xml"))
 	if !strings.Contains(desc, "urn:schemas-upnp-org:device:MediaServer:1") {
@@ -25,6 +26,7 @@ func TestDescriptionAndSCPD(t *testing.T) {
 }
 
 func TestBrowseRootFolders(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	r := h.browse("0", "BrowseDirectChildren")
 	if r.fault {
@@ -50,6 +52,7 @@ func TestBrowseRootFolders(t *testing.T) {
 }
 
 func TestBrowseMovieItem(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	r := h.browse("ct:movie", "BrowseDirectChildren")
 	if r.fault {
@@ -78,6 +81,7 @@ func TestBrowseMovieItem(t *testing.T) {
 // bytes. The adapter emits a real, fetchable capability, not a decorative
 // string.
 func TestResURLServesExactBytes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	it := h.browse("ct:movie", "BrowseDirectChildren").itemByTitle(t, "Arrival")
 
@@ -109,6 +113,7 @@ func TestResURLServesExactBytes(t *testing.T) {
 }
 
 func TestBrowseMusicItem(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	it := h.browse("ct:music", "BrowseDirectChildren").itemByTitle(t, "Datum")
 	if it.Class != "object.item.audioItem.musicTrack" {
@@ -120,6 +125,7 @@ func TestBrowseMusicItem(t *testing.T) {
 }
 
 func TestBrowseMetadataRoot(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	r := h.browse("0", "BrowseMetadata")
 	if r.fault || len(r.didl.Containers) != 1 {
@@ -131,6 +137,7 @@ func TestBrowseMetadataRoot(t *testing.T) {
 }
 
 func TestNonServableBookNeverAppears(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	// There is no book folder, and browsing the (nonexistent) book container
 	// yields nothing rather than the epub.
@@ -144,6 +151,7 @@ func TestNonServableBookNeverAppears(t *testing.T) {
 }
 
 func TestUnknownObjectFaults(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	r := h.browse("asset:nope", "BrowseMetadata")
 	if !r.fault || r.faultCode != 701 {
@@ -156,6 +164,7 @@ func TestUnknownObjectFaults(t *testing.T) {
 }
 
 func TestNonBrowseActionFaults(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	body := `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>` +
 		`<u:Search xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1"><ContainerID>0</ContainerID></u:Search>` +

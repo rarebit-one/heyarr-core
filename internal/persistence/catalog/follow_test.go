@@ -28,6 +28,7 @@ func source(workID string, backfill followed.Backfill) followed.Source {
 }
 
 func TestCreateFollowSourceIsDueImmediatelyAndEmits(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	before := h.eventCount(t)
@@ -59,6 +60,7 @@ func TestCreateFollowSourceIsDueImmediatelyAndEmits(t *testing.T) {
 }
 
 func TestFollowingTheSameFeedTwiceIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	if _, err := h.cat.CreateFollowSource(ctx, source("w1", followed.BackfillFromNow)); err != nil {
@@ -70,6 +72,7 @@ func TestFollowingTheSameFeedTwiceIsRefused(t *testing.T) {
 }
 
 func TestRecordPollScheduledIsCompareAndSet(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	src, err := h.cat.CreateFollowSource(ctx, source("w1", followed.BackfillFromNow))
@@ -97,6 +100,7 @@ func TestRecordPollScheduledIsCompareAndSet(t *testing.T) {
 }
 
 func TestRecordPollOutcomeResetsOrBacksOff(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	src, err := h.cat.CreateFollowSource(ctx, source("w1", followed.BackfillFromNow))
@@ -138,6 +142,7 @@ func TestRecordPollOutcomeResetsOrBacksOff(t *testing.T) {
 }
 
 func TestUpsertItemIsIdempotentAndEmitsOncePerItem(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	fi := followed.FeedItem{Key: "S02E01", Title: "The Return", Attributes: map[string]string{"season": "2"}}
@@ -180,6 +185,7 @@ func TestUpsertItemIsIdempotentAndEmitsOncePerItem(t *testing.T) {
 }
 
 func TestCreateDesiredItemProjectsAtItemScopeAndRefusesDuplicates(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	it, _, err := h.cat.UpsertItem(ctx, "w1",
@@ -217,6 +223,7 @@ func TestCreateDesiredItemProjectsAtItemScopeAndRefusesDuplicates(t *testing.T) 
 }
 
 func TestMetadataHealthReportsOnlyMetadataProviders(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	h.exec(t, `INSERT INTO provider_health

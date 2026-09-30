@@ -1,0 +1,11 @@
+{
+  "recipient": "x25519:<hex>",
+  "recovered": 2,
+  "space_ids": [
+    "<uuid>",
+    "<uuid>"
+  ],
+  "rewrapped": 2,
+  "device": "x25519:<hex>",
+  "blob_generated_at": "<timestamp>"
+}

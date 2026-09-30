@@ -21,6 +21,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // ADR-0015: api/openapi.yaml is hand-written, and this test is the mechanism
@@ -66,14 +67,12 @@ func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
 	c := newTestController(t)
 	ctx := context.Background()
+	testdb.WriteMigrated(t, c.cfg.Database.Path)
 	db, err := sqlite.Open(ctx, sqlite.Options{Path: c.cfg.Database.Path})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 	blobStore, err := cas.OpenFS(c.cfg.CAS.Root)
 	if err != nil {
 		t.Fatal(err)

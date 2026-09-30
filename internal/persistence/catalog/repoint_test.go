@@ -43,6 +43,7 @@ func wantProfile(t *testing.T, h *harness, wantID string) string {
 }
 
 func TestRepointingTheProfileMovesTheSourceAndItsWants(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	src, want := seedSubscription(t, h)
@@ -76,6 +77,7 @@ func TestRepointingTheProfileMovesTheSourceAndItsWants(t *testing.T) {
 }
 
 func TestRepointingTheBackfillMovesOnlyTheSource(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	src, want := seedSubscription(t, h)
@@ -103,6 +105,7 @@ func TestRepointingTheBackfillMovesOnlyTheSource(t *testing.T) {
 }
 
 func TestRepointingBothMovesBoth(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := t.Context()
 	src, want := seedSubscription(t, h)
@@ -124,6 +127,7 @@ func TestRepointingBothMovesBoth(t *testing.T) {
 }
 
 func TestARepointThatChangesNothingIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	src, _ := seedSubscription(t, h)
 	if _, err := h.cat.RepointFollowedSource(t.Context(), src, "", "", nil); err == nil {
@@ -133,6 +137,7 @@ func TestARepointThatChangesNothingIsRefused(t *testing.T) {
 }
 
 func TestRepointingAMissingSourceIsNotFound(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	_, err := h.cat.RepointFollowedSource(t.Context(), "nope", "q1", "", nil)
 	if err == nil || err.Error() != catalog.ErrNoFollowSource.Error() {

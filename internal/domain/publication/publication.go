@@ -55,9 +55,6 @@ const (
 	FormatCBR Format = "cbr"
 )
 
-// Formats is every recognised format, in a stable order.
-func Formats() []Format { return []Format{FormatEPUB, FormatPDF, FormatCBZ, FormatCBR} }
-
 // FormatForExtension maps a lowercased extension, including the dot, to a
 // format. The empty Format means "not a publication".
 //

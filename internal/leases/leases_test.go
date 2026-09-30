@@ -4,15 +4,15 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/void-which-binds-go/grant"
+
 	"github.com/rarebit-one/heyarr-core/internal/events"
-	"github.com/rarebit-one/heyarr-core/internal/grant"
 	"github.com/rarebit-one/heyarr-core/internal/leases"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 type fixedClock struct{ t time.Time }
@@ -23,15 +23,7 @@ var now = time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 
 func newStore(t *testing.T) (*leases.Store, ed25519.PrivateKey) {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	clock := &fixedClock{t: now}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {
@@ -207,14 +199,7 @@ func TestHonourRefusesUntrustedIssuer(t *testing.T) {
 func TestIssueRefusedWithoutSigner(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)
@@ -289,4 +274,35 @@ func contains(ss []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// An expired lease must not be served even when its expiry and "now" fall in
+// the same second. Stored as trimmed RFC3339Nano, an expiry of 12:00:00.1 is
+// "…00.1Z" and a now of 12:00:00.15 is "…00.15Z" — and as TEXT "…00.1Z" is the
+// GREATER of the two ('Z' sorts after '5'), so `expires_at > now` called a
+// lease that had lapsed 50ms ago live. The fixed-width layout
+// (sqlite.TimestampLayout) is what makes that comparison chronological.
+func TestAnExpiredLeaseIsNotServedWithinTheSameSecond(t *testing.T) {
+	t.Parallel()
+	store, _ := newStore(t)
+	ctx := context.Background()
+	if _, err := store.Issue(ctx, "user-a", "asset-1", []grant.Capability{grant.CapabilityRead}, 100*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := store.ActiveLeases(ctx, now.Add(50*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("%d leases active 50ms before expiry, want 1", len(before))
+	}
+
+	after, err := store.ActiveLeases(ctx, now.Add(150*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 0 {
+		t.Fatalf("%d leases served 50ms AFTER expiry, want 0", len(after))
+	}
 }

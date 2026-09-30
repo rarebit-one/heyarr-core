@@ -95,26 +95,12 @@ func (s *enrichScheduler) pass(ctx context.Context) (int, error) {
 }
 
 // startEnrichBeat runs a pass now and then on the beat, like the subtitle beat.
-func startEnrichBeat(ctx context.Context, cat *catalog.Catalog, queue *jobs.Queue, log *slog.Logger) {
+func startEnrichBeat(ctx context.Context, cat *catalog.Catalog, queue *jobs.Queue, log *slog.Logger, newTicker tickerFunc) {
 	s := newEnrichScheduler(cat, queue, wallClock{}, log)
 	run := func(reason string) {
 		if _, err := s.pass(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("an enrich scheduling pass failed", "reason", reason, "error", err)
 		}
 	}
-	run("startup")
-
-	go func() {
-		ticker := time.NewTicker(enrichBeatInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				run("beat")
-			}
-		}
-	}()
-	log.Info("enrich beat started", "interval", enrichBeatInterval)
+	startBeat(ctx, log, newTicker, beat{name: "enrich", interval: enrichBeatInterval, startup: true, pass: run})
 }

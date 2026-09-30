@@ -15,6 +15,7 @@ import (
 // a blob a reconcile cycle would replicate is exactly a blob a GET may ensure.
 
 func TestIsBlobDesiredMatchesTheCanonicalSet(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -44,6 +45,7 @@ func TestIsBlobDesiredMatchesTheCanonicalSet(t *testing.T) {
 // asset has already reported lost. The gate must agree, or a GET would re-start
 // a transfer for exactly the bytes the catalog stopped desiring.
 func TestABlobWithMissingBytesIsNotDesired(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 

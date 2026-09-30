@@ -12,6 +12,7 @@ import (
 // The token is the plan: what it names is what the route does, and only the
 // credential it was minted for can present it.
 func TestStreamTokenRoundTripsAndBinds(t *testing.T) {
+	t.Parallel()
 	key := streamKey([]byte("secret"))
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
 	tok := streamToken{
@@ -77,6 +78,7 @@ func flip(token, from, to string) string {
 // The subject is stable per credential and distinct across them — including
 // a device credential, which has no token id.
 func TestStreamSubjectNamesTheCredential(t *testing.T) {
+	t.Parallel()
 	bearer := auth.Identity{Principal: auth.Principal{ID: "p1"}, Token: auth.Token{ID: "t1", Name: "phone"}}
 	bearer2 := auth.Identity{Principal: auth.Principal{ID: "p1"}, Token: auth.Token{ID: "t2", Name: "phone"}}
 	device := auth.Identity{Principal: auth.Principal{ID: "p1"}, Token: auth.Token{Name: "device:k1"}}
@@ -103,6 +105,7 @@ func TestStreamSubjectNamesTheCredential(t *testing.T) {
 // A node with no render secret still signs: a per-process secret, so the
 // key is never empty and sign cannot be talked into an unsigned token.
 func TestStreamSecretIsNeverEmpty(t *testing.T) {
+	t.Parallel()
 	s, err := newStreamSecret()
 	if err != nil || len(s) != 32 {
 		t.Fatalf("secret = %x, %v", s, err)

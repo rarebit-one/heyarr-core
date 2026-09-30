@@ -11,9 +11,9 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/guest"
-	"github.com/rarebit-one/voidbind-go/rp"
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
+	"github.com/rarebit-one/void-which-binds-go/rp"
 )
 
 // DeviceVerifier authenticates a device credential (ADR-0048, ADR-0068): the

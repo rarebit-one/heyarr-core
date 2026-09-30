@@ -24,6 +24,7 @@ func seedSeries(h *harness, id, title, tvdbID string) {
 // A content-intent search surfaces the stored tvdb id of a work that has one, so
 // a client can follow the hit in one step, and omits it for a work that has none.
 func TestSearchSurfacesStoredTVDBID(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	seedSeries(h, "w-tvdb", "Follow Me Home", "424242")
 	seedSeries(h, "w-none", "Follow Me Away", "")
@@ -67,6 +68,7 @@ func TestSearchSurfacesStoredTVDBID(t *testing.T) {
 // disabled → anonymous admin) harness it reports the anonymous kind and write
 // authority — enough to prove the shape a client reads.
 func TestSessionIntrospection(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := h.get("/api/v1/session")
 	if resp.StatusCode != http.StatusOK {
@@ -91,6 +93,7 @@ func TestSessionIntrospection(t *testing.T) {
 // The management-grant surface round-trips: issue a grant, see it listed,
 // re-issue it idempotently, then revoke it (and a revoke of nothing is a 404).
 func TestManagementGrantEndpoints(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	create := h.do(http.MethodPost, "/api/v1/session/management-grants", "",

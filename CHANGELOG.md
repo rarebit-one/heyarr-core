@@ -11,6 +11,13 @@ stable.
 
 ### Added
 
+- **`heyarr pair authorise` draws the invite as a terminal QR code** (#655), so
+  the joining device (Cruciform's scanner, or a phone) can read it off the
+  screen instead of the invite being copied across. It is drawn in half-block
+  characters, only when stdout is a terminal. `--qr` forces it on and `--no-qr`
+  turns it off. The invite string is still printed on its own line, so scripts
+  are unaffected. The encoder is `github.com/boombuler/barcode/qr`, which is
+  pure Go and imports no image codec, so §69's render guard still holds.
 - **Guest mode is an M7 access lease, gated by a trusted-source allow-list
   (ADR-0094, phase 1).** A credential-less request from an allow-listed source
   address is now admitted as an anonymous `guest` principal minted as a
@@ -392,8 +399,108 @@ record independently agreeing on the bytes.
   run that repaired everything and met a lying peer still exits non-zero, for the
   same reason `fsck` exits non-zero on damage at all.
 
+### Changed
+
+- **The device library is `github.com/rarebit-one/void-which-binds-go` v0.18.0**
+  (was `voidbind-go` v0.17.0; ADR-0013 R1 upstream renamed the module and its
+  binaries, and the wire is byte-identical). The device and identity directory
+  overrides are now `VOID_WHICH_BINDS_DEVICE_DIR` and
+  `VOID_WHICH_BINDS_IDENTITY_DIR`, as the `--device-dir` / `--identity-dir` help
+  says. The old `VOIDBIND_DEVICE_DIR` / `VOIDBIND_IDENTITY_DIR` are still read as
+  a fallback and log a deprecation once per process.
+- **`/v1/subscriptions` and `/v1/unwrap-wake` take a possession proof**
+  (voidbind-go#70). A device sends its cert plus a proof for it (the
+  `possession` field, or `cert` as `<cert>~<proof>`), and the membership ops it
+  presents are recorded only once the proof verifies. A bare cert, the wire
+  deployed phones still send, is still served, but nothing it presents is
+  recorded, and the node logs each such device once as still to migrate.
+  `heyarr`'s own unwrap-wake client now signs a fresh proof per wake.
+
+- **`heyarr pair` runs on voidbind-go's pairing flow and the `/pair/v1` relay
+  (#647, ADR-0066 amended).** `pair authorise --as identity|device|auto` builds
+  the initiator from the identity store's signer (the genesis key never leaves
+  the store) or from a device that is already a member. `pair enrol --invite`
+  admits the device as a membership op (ADR-0068). **Breaking:** `pair enrol` no
+  longer takes `--session`, because the invite now carries the session. The new
+  protocol had no abort message, so a device whose code was refused waited out
+  its `--timeout` before giving up (fixed by the signed refusal below).
+- **A refused pairing fails fast on the new device (voidbind-go v0.17.0,
+  ADR-0012; voidbind-go#64).** When the operator of `heyarr pair authorise`
+  rejects the code (or the confirmation is cancelled), it now posts a signed
+  refusal to the relay's new `refuse` slot, and `heyarr pair enrol` stops at
+  once with "the other device refused the pairing" and a non-zero exit, instead
+  of waiting out its `--timeout`. The refusal is signed by the key the new device
+  compared codes with and bound to the session, so nobody else on the relay can
+  forge one. Posting it is best-effort: a relay without the slot answers 400,
+  `authorise` notes that on stderr, and the new device times out as before. The
+  node's `/pair/v1` relay serves the slot, because it is built on voidbind-go's
+  default pairing slots. The acceptance demo's refused pairing drops from about
+  2s to tens of milliseconds.
+- **Voidbind tokens are checked for their type (voidbind-go v0.15.0, ADR-0009
+  phase 1; #646, #650).** Every verifier now checks a token's `typ` claim when it
+  has one and refuses a wrong value. Untyped tokens are still accepted, and
+  nothing this node mints carries `typ` yet, so what it sends is unchanged. This
+  closes the gap where token kinds were told apart only by their `v` numbers,
+  and those overlap (grant v1 and cert v1, cert v2 and possession v2).
+- **A release search asks its indexers concurrently** (#626). They used to be
+  asked one at a time, so an indexer that refused connections cost its full
+  retry budget on every search.
+- **Timestamps that are compared are stored in a sortable, fixed-width layout**
+  (#621, migration 00055). `RFC3339Nano` drops trailing zeros, so `.1Z` sorted
+  after `.15Z` in the job queue's `run_after` and lease range queries. The error
+  was under a second, so it never showed.
+- **A job whose payload cannot be decoded fails permanently** (#615). It used to
+  spend its five retries first. The worker's schema guard is now derived from
+  the embedded migrations instead of a hand-kept number that had fallen behind.
+
+### Removed
+
+- **The legacy `/pair/sessions` relay, `internal/pairflow` and
+  `internal/pairrelay`** (#648). No client used them: heyarr-kmp and voidbind-kmp
+  pair over `/pair/v1`. The relay keeps its caps (256 sessions, 10-minute TTL).
+- **The never-wired peer catalog snapshot store** (#625), about 1.2k lines.
+
 ### Fixed
 
+- **A personal-state snapshot's frontier is authenticated** (#681, security).
+  The frontier and space travelled beside the ciphertext, and the snapshot id is
+  a public digest, so a principal with a `write` token and no space key could
+  relabel a valid snapshot to newer heads, recompute the id and push it. It still
+  decrypted. A snapshot is now sealed as a versioned envelope
+  (`heyarr/personalstate/snapshot-envelope/v2`) that carries the record type,
+  space and canonical frontier inside the AEAD, and the decoder refuses one whose
+  outer space or frontier does not match what was sealed. Snapshots written
+  before the envelope still decode, because a key rotation can leave one as the
+  only copy of a space's state. They must be the canonical serialisation of the
+  state they decode to, so another record's ciphertext (a change) cannot pass
+  as an empty legacy snapshot. `statesync.OpenSnapshot` reports their frontier
+  as unauthenticated, so cold start and compaction can refuse to trust it.
+  Cross-language vectors are in
+  `internal/personalstate/protocol/testdata/vectors/snapshot_envelope.json`.
+  Readers must understand the envelope before a producer that writes it is used
+  against their spaces: update heyarr-kmp clients first.
+- **The OPDS catalogue root and acquisition feed answer `HEAD`** (#606). They
+  were registered for `GET` only, so a reader that probes before fetching
+  (KOReader does) got the router's 405 for an unmatched method, and a client
+  that reads a failed `HEAD` as "not there" would call the catalogue broken.
+  Both now answer `HEAD` with the `GET`'s status and headers and no body, like
+  the download, OpenSubsonic and blob routes already did.
+
+- **`replicate_blob` no longer fails forever on a FOREIGN KEY refusal** (#658).
+  A vault upload recorded only a placement pin, so the catalogue had no `blobs`
+  row for bytes the node held. Convergence read the self-pin as a gap and queued
+  a transfer. The handler found the bytes already present and tried to record
+  the replica, and `replicas.blob_hash` references `blobs`, so the insert was
+  refused on every cycle, for every vault blob. The same missing row left vault
+  bytes looking untracked to garbage collection. The vault upload now records
+  the blob row, this node's `present` replica and the pin in one transaction.
+  A held blob with no row is adopted when its replica is recorded, so a node
+  that uploaded before this fix heals on its next convergence cycle without
+  operator action. A `replicate_blob` whose target peer is not a member, or
+  whose blob is unknown and not held, now fails permanently before any
+  connection opens. Removing a peer cancels its pending transfers, each with a
+  terminal `job.failed` event marked `cancelled`. Convergence no longer plans a
+  pin to another peer for a blob this node has no row for.
 - **A grab no longer depends on the download client reaching the indexer**
   (ADR-0076, #492). The Transmission client handed `torrent-add` the indexer's
   `.torrent` download URL as `filename`, which made Transmission fetch it — and

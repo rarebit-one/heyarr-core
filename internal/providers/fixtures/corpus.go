@@ -1,7 +1,5 @@
 package fixtures
 
-import "path/filepath"
-
 // CorpusRoot is where the committed captures live, relative to the repository
 // root.
 //
@@ -13,6 +11,3 @@ const CorpusRoot = "internal/providers/fixtures/testdata"
 
 // corpusDir resolves CorpusRoot from within this package's own directory.
 func corpusDir() string { return "testdata" }
-
-// ServiceDir is the corpus directory for one service.
-func ServiceDir(root, service string) string { return filepath.Join(root, service) }

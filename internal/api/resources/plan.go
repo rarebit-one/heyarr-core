@@ -99,8 +99,7 @@ type PlanReason struct {
 
 func (a *API) planPlayback(w http.ResponseWriter, r *http.Request) {
 	var body PlanRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	if err := required("asset_id", body.AssetID); err != nil {

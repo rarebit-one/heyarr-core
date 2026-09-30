@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -68,9 +67,9 @@ func ExtractSubsHandler(opts ExtractSubsHandlerOptions) HandlerFunc {
 	}
 
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload ffmpeg.ExtractPayload
-		if err := json.Unmarshal(job.Payload, &payload); err != nil {
-			return fmt.Errorf("extract-subs: undecodable payload: %w", err)
+		payload, err := decodePayload[ffmpeg.ExtractPayload](job)
+		if err != nil {
+			return err
 		}
 		if payload.BlobHash == "" || payload.AssetID == "" {
 			return errors.New("extract-subs: the payload names no blob or no asset")

@@ -171,8 +171,7 @@ type createLibraryRequest struct {
 
 func (a *API) createLibrary(w http.ResponseWriter, r *http.Request) {
 	var body createLibraryRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	if err := required("name", body.Name); err != nil {
@@ -255,8 +254,7 @@ func (a *API) createLibraryRoot(w http.ResponseWriter, r *http.Request) {
 	libraryID := chi.URLParam(r, "id")
 
 	var body createRootRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	if err := required("path", body.Path); err != nil {
@@ -351,8 +349,7 @@ func (a *API) updateLibraryRoot(w http.ResponseWriter, r *http.Request) {
 	rootID := chi.URLParam(r, "rootID")
 
 	var body updateRootRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	if body.IngestMode == nil {

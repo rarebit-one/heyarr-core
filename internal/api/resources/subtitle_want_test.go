@@ -60,6 +60,7 @@ func wantWithScope(t *testing.T, h *harness, bodyJSON string) (candidates, creat
 }
 
 func TestSubtitleWantCreatesItemScopedWantForAnEpisode(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	seedSubtitleProfile(t, h)
 	seedEpisodeVideo(t, h, "ys", "ys-e1", "blake3:"+strings.Repeat("a", 64), false)
@@ -83,6 +84,7 @@ func TestSubtitleWantCreatesItemScopedWantForAnEpisode(t *testing.T) {
 }
 
 func TestSubtitleWantIsIdempotent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	seedSubtitleProfile(t, h)
 	seedEpisodeVideo(t, h, "ys", "ys-e1", "blake3:"+strings.Repeat("a", 64), false)
@@ -107,6 +109,7 @@ func TestSubtitleWantIsIdempotent(t *testing.T) {
 }
 
 func TestSubtitleWantSkipsAlreadyCaptioned(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	seedSubtitleProfile(t, h)
 	seedEpisodeVideo(t, h, "got", "got-e1", "blake3:"+strings.Repeat("b", 64), true) // has an en sub on the item
@@ -121,6 +124,7 @@ func TestSubtitleWantSkipsAlreadyCaptioned(t *testing.T) {
 }
 
 func TestSubtitleWantForAnotherLanguageStillWanted(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	seedSubtitleProfile(t, h)
 	seedEpisodeVideo(t, h, "got", "got-e1", "blake3:"+strings.Repeat("b", 64), true) // has en, not de
@@ -135,6 +139,7 @@ func TestSubtitleWantForAnotherLanguageStillWanted(t *testing.T) {
 }
 
 func TestSubtitleWantRefusesUnscopedOrLanguageless(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	seedSubtitleProfile(t, h)
 	// No scope.

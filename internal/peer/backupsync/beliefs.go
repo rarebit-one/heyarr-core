@@ -76,28 +76,3 @@ func (b *Beliefs) Of(ctx context.Context, peerID string) (int64, bool, error) {
 	}
 	return gen, true, nil
 }
-
-// All returns every peer's belief, for the operator-facing "who is behind" view.
-func (b *Beliefs) All(ctx context.Context) ([]Belief, error) {
-	rows, err := b.db.Reader().QueryContext(ctx,
-		`SELECT peer_id, generation, digest, pushed_at FROM peer_control_backups ORDER BY peer_id`)
-	if err != nil {
-		return nil, fmt.Errorf("backupsync: reading beliefs: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []Belief
-	for rows.Next() {
-		var (
-			bel      Belief
-			pushedAt string
-		)
-		if err := rows.Scan(&bel.PeerID, &bel.Generation, &bel.Digest, &pushedAt); err != nil {
-			return nil, fmt.Errorf("backupsync: reading a belief: %w", err)
-		}
-		if t, err := time.Parse(timestampFormat, pushedAt); err == nil {
-			bel.PushedAt = t
-		}
-		out = append(out, bel)
-	}
-	return out, rows.Err()
-}

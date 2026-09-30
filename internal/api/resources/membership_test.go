@@ -13,9 +13,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rarebit-one/voidbind-go/enrolment"
-	"github.com/rarebit-one/voidbind-go/identity"
-	"github.com/rarebit-one/voidbind-go/rp"
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
+	"github.com/rarebit-one/void-which-binds-go/identity"
+	"github.com/rarebit-one/void-which-binds-go/rp"
 
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 )
@@ -29,6 +29,7 @@ import (
 // node's view tombstones it. /enrol accepts the op-set shape and the cert-era
 // shape alike.
 func TestPhoneAdmitsPhoneAndTheNodeLearnsRemoves(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth)
 	admin := h.mint("admin", auth.ScopeAdmin)
 

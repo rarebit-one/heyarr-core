@@ -93,13 +93,19 @@ func TestRunReportsAnUnusableDatabase(t *testing.T) {
 
 func TestRunStopsWhenCancelled(t *testing.T) {
 	cfg := testConfig(t)
+	cfg.HTTP.UnixSocket = "" // t.TempDir() overruns sun_path on macOS
 	ctx, cancel := context.WithCancel(context.Background())
 
+	logs := &syncBuffer{}
 	done := make(chan error, 1)
-	go func() { done <- New(cfg, discard()).Run(ctx) }()
+	go func() { done <- New(cfg, slog.New(slog.NewJSONHandler(logs, nil))).Run(ctx) }()
 
-	// Let it get past startup, then ask it to stop.
-	waitForMigratedDatabase(t, cfg.Database.Path)
+	// Let it get past startup, then ask it to stop. The start line, not the
+	// database file appearing: a file exists as soon as the startup migration
+	// begins, and a cancel that lands mid-migration waits for it to finish
+	// (see the test above) — seconds under -race on a loaded runner, which
+	// is what spent this test's 5s budget before shutdown had even begun.
+	waitForLogLine(t, logs, "controller started")
 	cancel()
 
 	select {

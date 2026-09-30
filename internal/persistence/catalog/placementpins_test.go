@@ -26,6 +26,7 @@ func refCount(t *testing.T, h *harness, hash string) int {
 // as unreferenced and reclaims it. A placement pin must count as a reference so
 // GC keeps it — and drop back to reclaimable when the pin is removed.
 func TestPlacementPinCountsAsAReference(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	blob := hashOf('a')
@@ -69,6 +70,7 @@ func TestPlacementPinCountsAsAReference(t *testing.T) {
 
 // TestPinPlacementRejectsEmptyArgs: a pin needs both a blob and a peer.
 func TestPinPlacementRejectsEmptyArgs(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if err := h.cat.PinPlacement(ctx, "", "peer"); err == nil {

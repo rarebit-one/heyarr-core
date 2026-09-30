@@ -19,6 +19,7 @@ import (
 // call a mutating verb would be a read token that can write, and nothing about
 // a successful call would ever reveal it.
 func TestAReadTokenCannotCallAMutatingTool(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, true)
 	read := h.mint("reader", auth.ScopeRead)
 
@@ -54,6 +55,7 @@ func TestAReadTokenCannotCallAMutatingTool(t *testing.T) {
 // The same tools, with a write token, are allowed — otherwise the test above
 // would pass against a server that refused everything.
 func TestAWriteTokenCanCallAMutatingTool(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, true)
 	write := h.mint("writer", auth.ScopeRead, auth.ScopeWrite)
 
@@ -68,6 +70,7 @@ func TestAWriteTokenCanCallAMutatingTool(t *testing.T) {
 // Reads need only read, which is what makes an agent with a read-only
 // credential useful rather than inert.
 func TestAReadTokenCanCallEveryReadOnlyTool(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, true)
 	read := h.mint("reader", auth.ScopeRead)
 
@@ -104,6 +107,7 @@ func TestAReadTokenCanCallEveryReadOnlyTool(t *testing.T) {
 // holds when someone adds a convenient tool in Milestone 9 — which is exactly
 // when this boundary is most likely to be crossed by accident.
 func TestNoToolTouchesPersonalState(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 
 	// §37–§47's vocabulary. A tool whose NAME or DESCRIPTION reaches for any of
@@ -136,6 +140,7 @@ func TestNoToolTouchesPersonalState(t *testing.T) {
 // surface that actually got registered rather than trusting that nobody
 // bypassed it.
 func TestEveryToolDeclaresACoherentScope(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 
 	for _, tool := range h.server.Tools() {
@@ -164,6 +169,7 @@ func TestEveryToolDeclaresACoherentScope(t *testing.T) {
 // Every verb §71 lists is either shipped or explicitly deferred with the
 // milestone that brings it. Nothing is silently missing.
 func TestEverySpecVerbIsShippedOrDeferred(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 
 	// §71's list, verbatim.
@@ -209,6 +215,7 @@ func TestEverySpecVerbIsShippedOrDeferred(t *testing.T) {
 // published vocabulary with a hole in it, which is what ADR-0019 waited to
 // avoid.
 func TestNoToolIsAStub(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 
 	for _, tool := range h.server.Tools() {
@@ -242,6 +249,7 @@ func deferredNames() map[string]bool {
 // An unknown name that is NOT a §71 verb gets no milestone. An agent that
 // mistyped should not be told to wait for something that is coming.
 func TestAMistypedToolIsNotReportedAsDeferred(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	resp := h.call("", "want_contnet", "{}")
 	if resp.Body.Error == nil {

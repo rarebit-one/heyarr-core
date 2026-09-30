@@ -68,6 +68,7 @@ func (h *harness) registerDevice(t *testing.T, body string) (*http.Response, dev
 // exists for: an app announces itself on every launch, and a row per launch is
 // how these tables end up with four thousand devices called "Living Room".
 func TestRegisteringTheSameDeviceTwiceConvergesOnOneRow(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	first, created := h.registerDevice(t, livingRoom)
@@ -108,6 +109,7 @@ func TestRegisteringTheSameDeviceTwiceConvergesOnOneRow(t *testing.T) {
 // nothing is not one, and emitting for it would make every app launch in the
 // house an event.
 func TestDeviceEventsFireOnChangeAndNotOnEveryLaunch(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	h.registerDevice(t, livingRoom)
@@ -150,6 +152,7 @@ func assertLastDeviceEvent(t *testing.T, h *harness, wantType string, wantCount 
 // Every one of these is a refusal that would otherwise reach the planner as
 // nonsense and produce a decision nobody could explain.
 func TestMalformedDeviceProfilesAreRefused(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		body string
@@ -225,6 +228,7 @@ func TestMalformedDeviceProfilesAreRefused(t *testing.T) {
 // Two clients spelling one capability differently must converge, or the
 // planner matches one television and not its identical twin.
 func TestCodecNamesAreNormalisedAndDeduplicated(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	_, d := h.registerDevice(t, `{
 		"device_key":"k","name":"x",
@@ -240,6 +244,7 @@ func TestCodecNamesAreNormalisedAndDeduplicated(t *testing.T) {
 // be able to reason about it (the answer is TRANSCODE, or a refusal), so it has
 // to be storable.
 func TestADeviceThatDeclaresNothingIsAccepted(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp, d := h.registerDevice(t, `{"device_key":"bare","name":"Bare"}`)
 	if resp.StatusCode != http.StatusCreated {
@@ -256,6 +261,7 @@ func TestADeviceThatDeclaresNothingIsAccepted(t *testing.T) {
 }
 
 func TestUnknownDeviceIsA404(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	if resp := h.get("/api/v1/devices/nope"); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 — an empty 200 is indistinguishable from a device with nothing in it",
@@ -266,6 +272,7 @@ func TestUnknownDeviceIsA404(t *testing.T) {
 // Registering is a write; reading is a read. Asserted rather than assumed,
 // because the scope on a route is the authorisation contract.
 func TestDeviceScopes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth)
 	readOnly := h.mint("reader", auth.ScopeRead)
 	writer := h.mint("writer", auth.ScopeRead, auth.ScopeWrite)

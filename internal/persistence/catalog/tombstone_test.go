@@ -3,7 +3,6 @@ package catalog_test
 import (
 	"context"
 	"crypto/ed25519"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,7 +10,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/catalogtomb"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // Catalog.Tombstoned reads the materialised work_tombstones view — the read the
@@ -19,15 +18,9 @@ import (
 // sibling deleted (ADR-0073, #449). A recorded delete op tombstones its target
 // and only its target.
 func TestCatalogTombstonedReflectsARecordedDeleteOp(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	clock := fixedClock{t: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)}
 	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 // reads the want afterwards. A verb that blocked would make an agent's turn
 // hostage to somebody else's tracker.
 func TestSearchReleasesQueuesAJobRatherThanBlocking(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	id := h.wantOne("")
 
@@ -49,6 +50,7 @@ func TestSearchReleasesQueuesAJobRatherThanBlocking(t *testing.T) {
 // for this want at all, which is the same refusal path a superseded search
 // produces.
 func TestAcquireReleaseRefusesACandidateThisWantDoesNotHave(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	id := h.wantOne("")
 
@@ -68,6 +70,7 @@ func TestAcquireReleaseRefusesACandidateThisWantDoesNotHave(t *testing.T) {
 // candidate for several wants — and a want with no candidate would make this
 // "acquire something", which is what the scorer is for.
 func TestAcquireReleaseNeedsBothAWantAndACandidate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	id := h.wantOne("")
 
@@ -96,6 +99,7 @@ func TestAcquireReleaseNeedsBothAWantAndACandidate(t *testing.T) {
 // that waits for something which already shipped, which is worse than the
 // missing tool the mechanism exists to avoid.
 func TestTheShippedAcquisitionVerbsAreNotStillDeferred(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, false)
 	deferred := deferredNames()
 

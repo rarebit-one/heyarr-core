@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
+
 	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 )
 
 // postWake calls POST /v1/unwrap-wake with a JSON body and returns the response.
@@ -29,12 +30,12 @@ func (h *pushHarness) postWake(t *testing.T, body string) *http.Response {
 // relay/session pointer — nothing else.
 func TestUnwrapWakeWakesTheUsersPhone(t *testing.T) {
 	h := newPushHarness(t)
-	cert, _ := h.enrolledDevice(t)
+	cert, priv := h.enrolledDevice(t)
 	// The phone registers its wake endpoint (same user, cert-authed).
-	h.subscribe(t, cert, "https://ntfy.example/phone-topic")
+	h.subscribe(t, cert, priv, "https://ntfy.example/phone-topic")
 
 	const relayBase, session = "https://heyarr.test/pair", "sess-offload-1"
-	resp := h.postWake(t, `{"cert":"`+cert+`","relay_base":"`+relayBase+`","session":"`+session+`"}`)
+	resp := h.postWake(t, `{"cert":"`+cert+`","possession":"`+prove(t, priv, cert)+`","relay_base":"`+relayBase+`","session":"`+session+`"}`)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
@@ -130,5 +131,47 @@ func TestUnwrapWakeValidatesInput(t *testing.T) {
 	defer func() { _ = getResp.Body.Close() }()
 	if getResp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("GET unwrap-wake = %d, want 405", getResp.StatusCode)
+	}
+}
+
+// wakeStatus POSTs an unwrap-wake body and returns the status.
+func (h *pushHarness) wakeStatus(t *testing.T, body string) int {
+	t.Helper()
+	resp := h.postWake(t, body)
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+// TestUnwrapWakeAuthenticatesPossession covers the check → possession → commit
+// chain (voidbind-go#70): a proof may ride in `possession` or inside `cert` as
+// the Device credential; a proof from another key, a malformed one, or one
+// given twice is the opaque 401; and a bare cert — the pre-v0.18 wire — is still
+// served for compatibility, with nothing it presents recorded.
+func TestUnwrapWakeAuthenticatesPossession(t *testing.T) {
+	h := newPushHarness(t)
+	cert, priv := h.enrolledDevice(t)
+	_, otherPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const tail = `","relay_base":"r","session":"s"}`
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"proof field", `{"cert":"` + cert + `","possession":"` + prove(t, priv, cert) + tail, http.StatusOK},
+		{"device credential", `{"cert":"` + cert + enrolment.CredentialSeparator + prove(t, priv, cert) + tail, http.StatusOK},
+		{"bare cert (compatibility)", `{"cert":"` + cert + tail, http.StatusOK},
+		{"foreign proof", `{"cert":"` + cert + `","possession":"` + prove(t, otherPriv, cert) + tail, http.StatusUnauthorized},
+		{"malformed proof", `{"cert":"` + cert + `","possession":"not-a-proof` + tail, http.StatusUnauthorized},
+		{"proof twice", `{"cert":"` + cert + enrolment.CredentialSeparator + prove(t, priv, cert) + `","possession":"` + prove(t, priv, cert) + tail, http.StatusUnauthorized},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := h.wakeStatus(t, tc.body); got != tc.want {
+				t.Fatalf("unwrap-wake = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }

@@ -49,6 +49,7 @@ func (h *harness) plan(t *testing.T, assetID, deviceID string) (*http.Response, 
 // it is the state of every blob on a node with no ffprobe (ADR-0023), and the
 // planner's answer for it is the one most likely to be got wrong.
 func TestPlanningUnprobedMediaIsDirectWithAReason(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	resp, p := h.plan(t, asset1ID, device1ID)
@@ -73,6 +74,7 @@ func TestPlanningUnprobedMediaIsDirectWithAReason(t *testing.T) {
 // With a probe, the planner has something to decide against — every verdict
 // reachable through the real API.
 func TestPlanningAgainstARealProbe(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name       string
 		container  string
@@ -133,6 +135,7 @@ func TestPlanningAgainstARealProbe(t *testing.T) {
 // ffprobe calls "matroska,webm" must play DIRECT — the planner's first version
 // sent every Matroska file in the library to a remux.
 func TestMatroskaOnADeviceThatDeclaresMKV(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	h.exec(`INSERT INTO blob_probes
 		(blob_hash, container, format_long, duration_seconds, bitrate_bps,
@@ -150,6 +153,7 @@ func TestMatroskaOnADeviceThatDeclaresMKV(t *testing.T) {
 }
 
 func TestPlanRefusals(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	for _, tc := range []struct {
 		name, body string
@@ -173,6 +177,7 @@ func TestPlanRefusals(t *testing.T) {
 // opens a session when someone presses it; if planning created state, every
 // hover would too.
 func TestPlanningOpensNoSession(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	before := h.count(t, `SELECT count(*) FROM consumption_sessions`)

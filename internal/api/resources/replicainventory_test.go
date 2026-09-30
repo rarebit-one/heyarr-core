@@ -32,6 +32,7 @@ import (
 const remoteInventoryPeer = "01990000-0000-7000-8000-0000000remot"
 
 func TestAPeersInventoryReportIsVisibleOnTheReplicasRoute(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	ctx := context.Background()
 

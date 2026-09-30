@@ -17,6 +17,7 @@ import (
 // seeded films root is `reflink`; this flips it and observes the row, the
 // returned representation and the event all agree.
 func TestUpdateLibraryRootChangesIngestMode(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	resp := h.doStable(http.MethodPatch, "/api/v1/libraries/"+libFilmsID+"/roots/"+rootID,
@@ -49,6 +50,7 @@ func TestUpdateLibraryRootChangesIngestMode(t *testing.T) {
 // nothing — the CHECK constraint would reject it at the database anyway, but the
 // operator gets a 400 naming the valid modes rather than a 500.
 func TestUpdateLibraryRootRejectsUnknownMode(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	for _, body := range []string{`{"ingest_mode":"symlink"}`, `{"ingest_mode":""}`, `{}`} {
@@ -70,6 +72,7 @@ func TestUpdateLibraryRootRejectsUnknownMode(t *testing.T) {
 // A root is amended under its own library. A root id belonging to another
 // library is a 404 through the wrong path, never a cross-library edit.
 func TestUpdateLibraryRootIsScopedToItsLibrary(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	const booksRootID = "01990000-0000-7000-8000-0000000000rb"
@@ -89,6 +92,7 @@ func TestUpdateLibraryRootIsScopedToItsLibrary(t *testing.T) {
 // The patch needs `write`. A read token browsing the library must not be able to
 // change how it ingests.
 func TestUpdateLibraryRootNeedsWriteScope(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth).seed()
 	readOnly := h.mint("reader", auth.ScopeRead).Secret
 

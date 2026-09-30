@@ -41,6 +41,7 @@ func (h *harness) workAssets(t *testing.T, path string) workAssetsPage {
 // The listing is scoped to ONE work, resolved through its editions, and carries
 // the blob size the screen would otherwise fetch per asset.
 func TestWorkAssetsAreScopedAndCarryBlobFacts(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	page := h.workAssets(t, "/api/v1/works/"+work1ID+"/assets")
@@ -67,6 +68,7 @@ func TestWorkAssetsAreScopedAndCarryBlobFacts(t *testing.T) {
 // INNER join to blobs would silently drop every linked file from the one
 // listing where a person is counting their files.
 func TestWorkAssetsIncludeLinkedFilesWithNoBlob(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	page := h.workAssets(t, "/api/v1/works/"+work3ID+"/assets")
@@ -86,6 +88,7 @@ func TestWorkAssetsIncludeLinkedFilesWithNoBlob(t *testing.T) {
 // Both being 200 would make "add something" and "you asked for the wrong thing"
 // indistinguishable.
 func TestWorkAssetsTellEmptyApartFromUnknown(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	h.exec(`INSERT INTO works (id, content_type, work_key, title, sort_title, attributes, created_at, updated_at)
@@ -105,6 +108,7 @@ func TestWorkAssetsTellEmptyApartFromUnknown(t *testing.T) {
 // The state filter is the one /assets already offers, so a screen can ask for
 // the files that are actually there.
 func TestWorkAssetsFilterByState(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	if n := len(h.workAssets(t, "/api/v1/works/"+work2ID+"/assets?state=missing").Items); n != 1 {
@@ -119,6 +123,7 @@ func TestWorkAssetsFilterByState(t *testing.T) {
 // its own: one from /assets is refused rather than read as a position in a
 // different query.
 func TestWorkAssetsRefuseAForeignCursor(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	var assets struct {

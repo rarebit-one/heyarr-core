@@ -149,6 +149,7 @@ const phoneNoAC3 = `{"containers":["mp4","mkv","webm"],"video":["h264","hevc","v
 // The #432 case end to end at the API: an AC-3 file, a phone with no AC-3
 // decoder, a stream planned, and the stream fetched.
 func TestAClientThatCannotDecodeTheAudioIsServedAStream(t *testing.T) {
+	t.Parallel()
 	streamer := &fakeStreamer{}
 	h := newHarness(t, withStreamLeg(streamer, newFakeBlobs(t), nil)).seed()
 	h.seedProbe(blob1Hash, "matroska,webm", "h264", "ac3", 1080)
@@ -221,6 +222,7 @@ func TestAClientThatCannotDecodeTheAudioIsServedAStream(t *testing.T) {
 
 // The same file for a client that declares AC-3 is the bytes, unchanged.
 func TestAClientThatDecodesTheSourceIsHandedTheBlob(t *testing.T) {
+	t.Parallel()
 	streamer := &fakeStreamer{}
 	h := newHarness(t, withStreamLeg(streamer, newFakeBlobs(t), nil)).seed()
 	h.seedProbe(blob1Hash, "matroska,webm", "h264", "ac3", 1080)
@@ -247,6 +249,7 @@ func TestAClientThatDecodesTheSourceIsHandedTheBlob(t *testing.T) {
 // Every refusal of the token is one opaque 404: another credential's token,
 // a tampered one, nothing.
 func TestAStreamTokenIsBoundToTheCredentialThatPlannedIt(t *testing.T) {
+	t.Parallel()
 	streamer := &fakeStreamer{}
 	h := newHarness(t, withAuth, withStreamLeg(streamer, newFakeBlobs(t), nil)).seed()
 	h.seedProbe(blob1Hash, "matroska,webm", "h264", "ac3", 1080)
@@ -288,6 +291,7 @@ func TestAStreamTokenIsBoundToTheCredentialThatPlannedIt(t *testing.T) {
 // A node with no ffmpeg says so and hands over the bytes — never a 5xx and
 // never a black player with no explanation.
 func TestWithoutFFmpegThePlanIsDirectAndSaysWhy(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	h.seedProbe(blob1Hash, "matroska,webm", "h264", "ac3", 1080)
 
@@ -310,6 +314,7 @@ func TestWithoutFFmpegThePlanIsDirectAndSaysWhy(t *testing.T) {
 // Nothing probed and ffprobe available: the plan probes now, answers from the
 // finding, and caches it where the worker would have.
 func TestAnUnprobedBlobIsProbedOnDemandAndCached(t *testing.T) {
+	t.Parallel()
 	prober := &fakeProber{result: probe.Result{
 		Container: "avi",
 		Streams: []probe.Stream{
@@ -348,6 +353,7 @@ func TestAnUnprobedBlobIsProbedOnDemandAndCached(t *testing.T) {
 
 // Past the cap the client is told to retry, with a status and not a stall.
 func TestPastTheCapAStreamIsRefusedWith429(t *testing.T) {
+	t.Parallel()
 	streamer := &fakeStreamer{busy: true}
 	h := newHarness(t, withStreamLeg(streamer, newFakeBlobs(t), nil)).seed()
 	h.seedProbe(blob1Hash, "matroska,webm", "h264", "ac3", 1080)
@@ -409,6 +415,7 @@ func TestAClientDisconnectReachesTheStreamer(t *testing.T) {
 // Backward compatibility: a plan without `client` still needs a device, and
 // still answers exactly as before, with none of the leg fields.
 func TestAPlanWithoutClientIsUnchanged(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withStreamLeg(&fakeStreamer{}, newFakeBlobs(t), nil)).seed()
 	h.seedProbe(blob1Hash, "matroska,webm", "h264", "ac3", 1080)
 

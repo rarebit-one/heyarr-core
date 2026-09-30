@@ -6,9 +6,10 @@ import (
 	"crypto/ecdh"
 	"testing"
 
+	"github.com/rarebit-one/void-which-binds-go/encryption"
+
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
@@ -43,6 +44,7 @@ import (
 //     fail to decode the post-rotation change (asserted below), and D — still
 //     holding the old key — would decode it, tripping the forward-secrecy check.
 func TestRevocationIsForwardOnly(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	peer := newStore(t)
 

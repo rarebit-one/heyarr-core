@@ -55,6 +55,7 @@ func newWant(t *testing.T, h *harness, title string) string {
 // want stays MISSING/idle, and an operator who then fetches the release
 // themselves and posts it here got a success and no result.
 func TestAdoptingBytesForAWantThatNeverSearchedActuallyAdvancesIt(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	id := newWant(t, h, "Solaris")
 
@@ -86,6 +87,7 @@ func TestAdoptingBytesForAWantThatNeverSearchedActuallyAdvancesIt(t *testing.T) 
 // this endpoint already makes to jumping straight to VERIFYING: a history that
 // does not describe what happened.
 func TestAdoptionIsRecordedAsItselfRatherThanAsAFabricatedSearch(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	id := newWant(t, h, "Stalker")
 
@@ -119,6 +121,7 @@ func TestAdoptionIsRecordedAsItselfRatherThanAsAFabricatedSearch(t *testing.T) {
 // The control: without it, a fix that always adopted would erase the real
 // history of the polled path, which is the majority case.
 func TestAWantAlreadyInFlightStillWalksTheOrdinaryEdges(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	id := newWant(t, h, "Mirror")
 

@@ -110,7 +110,12 @@ const downloadPollInterval = 15 * time.Second
 // there is work, not about whether the work can be done — the capability
 // routing still decides the latter, and still would if a client were added to
 // the registry by some future path this does not know about.
-func startDownloadPoll(ctx context.Context, cfg []providers.Entry, queue *jobs.Queue, log *slog.Logger) {
+//
+// newTicker is called only when there is a download client, and the stop it
+// returns is called when the beat's goroutine exits.
+func startDownloadPoll(ctx context.Context, cfg []providers.Entry, queue *jobs.Queue, log *slog.Logger,
+	newTicker tickerFunc,
+) {
 	if !hasDownloadClient(cfg, log) {
 		// Said at info rather than debug. "Why is nothing being acquired" is a
 		// question this line answers, and the worker's own startup log makes
@@ -130,21 +135,9 @@ func startDownloadPoll(ctx context.Context, cfg []providers.Entry, queue *jobs.Q
 				"reason", reason, "error", err)
 		}
 	}
-	enqueue("startup")
-
-	go func() {
-		ticker := time.NewTicker(downloadPollInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				enqueue("beat")
-			}
-		}
-	}()
-	log.Info("download poll beat started", "interval", downloadPollInterval)
+	startBeat(ctx, log, newTicker, beat{
+		name: "download poll", interval: downloadPollInterval, startup: true, pass: enqueue,
+	})
 }
 
 // hasDownloadClient reports whether configuration declares one.

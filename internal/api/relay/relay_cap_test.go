@@ -3,7 +3,7 @@ package relay
 import (
 	"testing"
 
-	vbrelay "github.com/rarebit-one/voidbind-go/relay"
+	vbrelay "github.com/rarebit-one/void-which-binds-go/relay"
 )
 
 // A sealed cert slot carrying the admitting op plus up to rp.MaxPresentedOps

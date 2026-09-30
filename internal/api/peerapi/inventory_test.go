@@ -136,6 +136,7 @@ func reportBody(t *testing.T, declared string) string {
 // overwrite any other's replicas — and every test in which nobody lies would
 // still pass.
 func TestAPeerCannotReportAnotherPeersInventory(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-id", "controller")
 	honest := newPeerNode(t, "honest-peer-id", "honest-peer")
 	victim := newPeerNode(t, "victim-peer-id", "victim-peer")
@@ -194,6 +195,7 @@ func TestAPeerCannotReportAnotherPeersInventory(t *testing.T) {
 // whose NAME differs from anything in the body — a server reading the body
 // would have no way to produce it.
 func TestTheActingPeerIsTheCertificateEvenWhenTheBodyAgrees(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-id", "controller")
 	remote := newPeerNode(t, "remote-peer-id", "remote-peer")
 	root := newTrustRoot(controller.member(), remote.member())
@@ -229,6 +231,7 @@ func TestTheActingPeerIsTheCertificateEvenWhenTheBodyAgrees(t *testing.T) {
 // the ordinary refusals
 
 func TestAnInventoryReportWithNoDeclaredPeerIsRefused(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-id", "controller")
 	remote := newPeerNode(t, "remote-peer-id", "remote-peer")
 	root := newTrustRoot(controller.member(), remote.member())
@@ -253,6 +256,7 @@ func TestAnInventoryReportWithNoDeclaredPeerIsRefused(t *testing.T) {
 }
 
 func TestAMalformedInventoryReportIsRefusedBeforeTheControlPlane(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-id", "controller")
 	remote := newPeerNode(t, "remote-peer-id", "remote-peer")
 	root := newTrustRoot(controller.member(), remote.member())
@@ -294,6 +298,7 @@ func TestAMalformedInventoryReportIsRefusedBeforeTheControlPlane(t *testing.T) {
 // this router, and an unmounted route would be documented and unserved — so
 // the refusal has to be a real answer rather than a 404.
 func TestANodeWithNoCatalogRefusesInventoryRatherThanAcceptingSilently(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-id", "controller")
 	remote := newPeerNode(t, "remote-peer-id", "remote-peer")
 	root := newTrustRoot(controller.member(), remote.member())
@@ -313,6 +318,7 @@ func TestANodeWithNoCatalogRefusesInventoryRatherThanAcceptingSilently(t *testin
 // TestAnUnenrolledPeerCannotReportInventory: membership is the only trust root
 // in this path, and it is consulted per request, not per connection (M4-04).
 func TestAnUnenrolledPeerCannotReportInventory(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-id", "controller")
 	remote := newPeerNode(t, "remote-peer-id", "remote-peer")
 	root := newTrustRoot(controller.member(), remote.member())
@@ -348,6 +354,7 @@ func TestAnUnenrolledPeerCannotReportInventory(t *testing.T) {
 // has no catalog row is an operator problem, and saying so is more useful than
 // a 500.
 func TestASinkRefusalIsTranslatedRatherThanLeaked(t *testing.T) {
+	t.Parallel()
 	controller := newPeerNode(t, "controller-id", "controller")
 	remote := newPeerNode(t, "remote-peer-id", "remote-peer")
 	root := newTrustRoot(controller.member(), remote.member())
@@ -372,6 +379,7 @@ func TestASinkRefusalIsTranslatedRatherThanLeaked(t *testing.T) {
 // in two packages. A mismatch would not fail to compile — it would 404 at the
 // far end of a network, on a deployment nobody is watching.
 func TestTheReporterAndTheRouteAgreeOnThePath(t *testing.T) {
+	t.Parallel()
 	if want := peerapi.Prefix + "/inventory"; inventory.Path != want {
 		t.Fatalf("the reporter posts to %q and the peer surface serves %q", inventory.Path, want)
 	}

@@ -17,6 +17,7 @@ type followedSubsView struct {
 }
 
 func TestFollowWithWantSubtitles(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	resp := follow(h, `{"tvdb_id":"12345","title":"The Series","quality_profile":"living-room",`+

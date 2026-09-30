@@ -12,6 +12,7 @@ import (
 // The database half of the peer identity (M4-03, ADR-0012).
 
 func TestRecordingThePublicKeyIsIdempotentAndEmitsOnce(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -66,6 +67,7 @@ func TestRecordingThePublicKeyIsIdempotentAndEmitsOnce(t *testing.T) {
 // write that replaces it destroys the only thing that could settle the
 // argument (ADR-0010).
 func TestRecordingADifferentPublicKeyIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -101,6 +103,7 @@ func TestRecordingADifferentPublicKeyIsRefused(t *testing.T) {
 // column set rather than the code: a future migration that adds a private_key
 // column fails here, which is the point.
 func TestNoPeerColumnHoldsPrivateKeyMaterial(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	rows, err := h.db.Reader().QueryContext(context.Background(), `PRAGMA table_info(peers)`)
 	if err != nil {

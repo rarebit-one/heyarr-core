@@ -44,6 +44,7 @@ func seedEpisodeVideo(t *testing.T, h *harness, itemID string) {
 }
 
 func TestRecordFetchedSubtitleAttachesToVideoEdition(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	_, itemID := seedSubtitleWant(t, h)
@@ -78,6 +79,7 @@ func TestRecordFetchedSubtitleAttachesToVideoEdition(t *testing.T) {
 }
 
 func TestFetchedSubtitleSatisfiesTheWant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	want, itemID := seedSubtitleWant(t, h)
@@ -97,6 +99,7 @@ func TestFetchedSubtitleSatisfiesTheWant(t *testing.T) {
 }
 
 func TestDueSubtitleFetchesRequiresHeldVideoAndExternalID(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	want, itemID := seedSubtitleWant(t, h)
@@ -140,6 +143,7 @@ func TestDueSubtitleFetchesRequiresHeldVideoAndExternalID(t *testing.T) {
 // the precise episode, and requiring an edition match on top of that starves any
 // item whose grouping lags its video.
 func TestDueSubtitleFetchesMatchesByItemWithoutItemEdition(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	want, itemID := seedSubtitleWant(t, h)
@@ -156,6 +160,7 @@ func TestDueSubtitleFetchesMatchesByItemWithoutItemEdition(t *testing.T) {
 }
 
 func TestDueSubtitleFetchesSkipsSatisfiedAndNonSubtitle(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	_, itemID := seedSubtitleWant(t, h)
@@ -190,6 +195,7 @@ func TestDueSubtitleFetchesSkipsSatisfiedAndNonSubtitle(t *testing.T) {
 }
 
 func TestSourceVideoForSubtitlePrefersItemMatch(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	_, itemID := seedSubtitleWant(t, h)

@@ -23,6 +23,7 @@ func (f *fakeCatalogSync) SyncAll(context.Context) (int, int, error) {
 
 // A node not wired for two-site convergence answers 503, not a broken 200.
 func TestCatalogSyncRouteAnswers503WhenNotWired(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := h.doStable(http.MethodPost, "/api/v1/catalog/sync", nil)
 	if resp.StatusCode != http.StatusServiceUnavailable {
@@ -32,6 +33,7 @@ func TestCatalogSyncRouteAnswers503WhenNotWired(t *testing.T) {
 
 // When wired, the route runs the pass and reports what converged.
 func TestCatalogSyncRouteRunsThePassAndReportsCounts(t *testing.T) {
+	t.Parallel()
 	trigger := &fakeCatalogSync{synced: 1, deferred: 0}
 	h := newHarness(t, withCatalogSyncTrigger(trigger))
 
@@ -56,6 +58,7 @@ func TestCatalogSyncRouteRunsThePassAndReportsCounts(t *testing.T) {
 
 // A pass that fails locally is a 500, not a partial success.
 func TestCatalogSyncRouteFailsClosedOnAStoreError(t *testing.T) {
+	t.Parallel()
 	trigger := &fakeCatalogSync{err: errors.New("db gone")}
 	h := newHarness(t, withCatalogSyncTrigger(trigger))
 	if got := h.doStable(http.MethodPost, "/api/v1/catalog/sync", nil).StatusCode; got != http.StatusInternalServerError {

@@ -595,8 +595,7 @@ func (a *API) pollFollowNow(ctx context.Context, sourceID string) {
 // that established a follow (ADR-0089) returns the subscription, at its own path.
 func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 	var body WantContentRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	out, err := a.WantContent(r.Context(), body)
@@ -810,8 +809,7 @@ func (a *API) UpdateDesired(ctx context.Context, id string, req UpdateDesiredReq
 func (a *API) updateDesired(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var body UpdateDesiredRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	out, err := a.UpdateDesired(r.Context(), id, body)

@@ -101,26 +101,12 @@ func (s *subtitleScheduler) pass(ctx context.Context) (int, error) {
 }
 
 // startSubtitleBeat runs a pass now and then on the beat, like the search beat.
-func startSubtitleBeat(ctx context.Context, cat *catalog.Catalog, queue *jobs.Queue, log *slog.Logger) {
+func startSubtitleBeat(ctx context.Context, cat *catalog.Catalog, queue *jobs.Queue, log *slog.Logger, newTicker tickerFunc) {
 	s := newSubtitleScheduler(cat, queue, wallClock{}, log)
 	run := func(reason string) {
 		if _, err := s.pass(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("a subtitle fetch scheduling pass failed", "reason", reason, "error", err)
 		}
 	}
-	run("startup")
-
-	go func() {
-		ticker := time.NewTicker(subtitleBeatInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				run("beat")
-			}
-		}
-	}()
-	log.Info("subtitle fetch beat started", "interval", subtitleBeatInterval)
+	startBeat(ctx, log, newTicker, beat{name: "subtitle fetch", interval: subtitleBeatInterval, startup: true, pass: run})
 }

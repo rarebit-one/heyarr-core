@@ -14,6 +14,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
@@ -443,7 +444,7 @@ func (c *Catalog) DueSources(ctx context.Context, now time.Time, limit int) ([]D
 		FROM follow_sources
 		WHERE next_poll_at IS NULL OR next_poll_at <= ?
 		ORDER BY coalesce(next_poll_at, ''), id
-		LIMIT ?`, sortable(now), limit)
+		LIMIT ?`, sqlite.FormatTimestamp(now), limit)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: listing sources due a poll: %w", err)
 	}
@@ -490,7 +491,7 @@ func (c *Catalog) RecordPollScheduled(
 		   SET poll_schedule = ?, next_poll_at = ?, updated_at = ?
 		 WHERE id = ?
 		   AND (next_poll_at IS NULL OR next_poll_at <= ?)`,
-		s.Name, sortable(next), sortable(now), sourceID, sortable(now))
+		s.Name, sqlite.FormatTimestamp(next), sqlite.FormatTimestamp(now), sourceID, sqlite.FormatTimestamp(now))
 	if err != nil {
 		return false, fmt.Errorf("catalog: recording a scheduled poll for %s: %w", sourceID, err)
 	}
@@ -531,7 +532,7 @@ func (c *Catalog) RecordPollOutcome(
 		UPDATE follow_sources
 		   SET poll_fruitless = ?, last_polled_at = ?, next_poll_at = ?, updated_at = ?
 		 WHERE id = ?`,
-		fruitless, sortable(now), sortable(next), sortable(now), sourceID); err != nil {
+		fruitless, sqlite.FormatTimestamp(now), sqlite.FormatTimestamp(next), sqlite.FormatTimestamp(now), sourceID); err != nil {
 		return fmt.Errorf("catalog: recording a poll outcome for %s: %w", sourceID, err)
 	}
 	return nil

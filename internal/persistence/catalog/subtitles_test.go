@@ -3,7 +3,6 @@ package catalog_test
 import (
 	"context"
 	"database/sql"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +10,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 type subClock struct{ t time.Time }
@@ -32,14 +32,7 @@ var (
 func seedVideo(t *testing.T) (cat *catalog.Catalog, ctx context.Context, db *sqlite.DB, sourceAssetID, editionID string) {
 	t.Helper()
 	ctx = context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db = testdb.Migrated(t)
 	clock := &subClock{t: time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {

@@ -3,6 +3,7 @@ module github.com/rarebit-one/heyarr-core
 go 1.25.7
 
 require (
+	github.com/boombuler/barcode v1.1.0
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/google/go-tpm v0.9.8
 	github.com/google/go-tpm-tools v0.4.9
@@ -15,12 +16,13 @@ require (
 	github.com/lmittmann/tint v1.2.0
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/prometheus/client_golang v1.24.1
-	github.com/rarebit-one/voidbind-go v0.12.0
+	github.com/rarebit-one/void-which-binds-go v0.18.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/crypto v0.55.0
 	golang.org/x/net v0.57.0
+	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.41.0
 	modernc.org/sqlite v1.57.0
@@ -49,7 +51,6 @@ require (
 	github.com/sethvargo/go-retry v0.4.0 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

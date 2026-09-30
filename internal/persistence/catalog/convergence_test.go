@@ -25,6 +25,7 @@ func gapPairs(gaps []replication.Gap) []string {
 // diff per-(blob, peer): a pin to one peer produces a gap for that peer and for
 // no other.
 func TestConvergenceUnionsPlacementPins(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -68,6 +69,7 @@ func TestConvergenceUnionsPlacementPins(t *testing.T) {
 // so a pin naming a peer that is not a Full Peer produces no gap — there is no
 // policy that says a partial or cache peer should hold anything.
 func TestConvergencePinToNonFullPeerIsIgnored(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.SelfPeer(ctx); err != nil {
@@ -97,6 +99,7 @@ func TestConvergencePinToNonFullPeerIsIgnored(t *testing.T) {
 // blob is not a gap. The pin says where the blob belongs; a `present` replica says
 // it is already there, and convergence has nothing to do.
 func TestConvergencePinSatisfiedByPresentReplica(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	h.seedRemotePeer(t)
@@ -123,6 +126,7 @@ func TestConvergencePinSatisfiedByPresentReplica(t *testing.T) {
 // only for that peer, exactly as the canonical-set diff is scoped — a pin to a
 // peer outside the scope is left for that peer's own cycle.
 func TestConvergencePinRespectsScope(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	self := h.seedRemotePeer(t)

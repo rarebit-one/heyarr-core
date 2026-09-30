@@ -69,6 +69,7 @@ func (h *harness) newSession(t *testing.T, verb string) session {
 // needed a follow-up fix (#62) to make that true — this is the same claim,
 // asserted before it can be false.
 func TestASessionsWholeLifeIsOnTheEventStream(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	s := h.newSession(t, "watch")
 
@@ -116,6 +117,7 @@ func TestASessionsWholeLifeIsOnTheEventStream(t *testing.T) {
 // and a 409 says "you are out of date", and only the second is fixed by
 // re-reading the session.
 func TestAnIllegalTransitionIsAConflictAndEmitsNothing(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	s := h.newSession(t, "watch")
 
@@ -161,6 +163,7 @@ func (h *harness) eventCount(t *testing.T) int {
 // alike. This is the claim ADR-0024 rests on — one model, three units — and it
 // is what a "Continue watching" row is made of.
 func TestContinueReturnsTheExactLocatorForEveryUnit(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ verb, locator, unit string }{
 		{"watch", "1284.5", "seconds"},
 		{"listen", "37", "seconds"},
@@ -202,6 +205,7 @@ func TestContinueReturnsTheExactLocatorForEveryUnit(t *testing.T) {
 
 // "Continue watching" as a query: everything not yet terminal, newest first.
 func TestResumableExcludesFinishedSessions(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	open1 := h.newSession(t, "watch")
@@ -252,6 +256,7 @@ func TestResumableExcludesFinishedSessions(t *testing.T) {
 // Timestamps distinguish a session nobody watched from one someone watched two
 // minutes of. Without that the history is unreadable.
 func TestASessionAbandonedBeforeStartingHasNoStartTime(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	abandoned := h.newSession(t, "watch")
@@ -280,6 +285,7 @@ func TestASessionAbandonedBeforeStartingHasNoStartTime(t *testing.T) {
 // position, and a client cannot tell "at the very beginning" from "never
 // played" if both render as 0.
 func TestAFreshSessionHasNoProgressRatherThanZero(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	s := h.newSession(t, "watch")
 	if s.Progress != nil {
@@ -292,6 +298,7 @@ func TestAFreshSessionHasNoProgressRatherThanZero(t *testing.T) {
 }
 
 func TestSessionRefusals(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	valid := h.newSession(t, "watch")
 
@@ -357,6 +364,7 @@ func TestSessionRefusals(t *testing.T) {
 }
 
 func TestUnknownSessionIsA404(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	if resp := h.get("/api/v1/consumption/sessions/nope"); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)

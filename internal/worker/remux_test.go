@@ -93,6 +93,7 @@ func remuxHarness(t *testing.T) (*ffmpeg.Remuxer, string) {
 }
 
 func TestRemuxHandlerAdoptsTheOutputAndRecordsIt(t *testing.T) {
+	t.Parallel()
 	remuxer, _ := remuxHarness(t)
 	src := filepath.Join(t.TempDir(), "in.mkv")
 	if err := os.WriteFile(src, mkvFixture(t), 0o600); err != nil {
@@ -129,6 +130,7 @@ func TestRemuxHandlerAdoptsTheOutputAndRecordsIt(t *testing.T) {
 
 // A failure between remuxing and adopting must leave nothing behind.
 func TestAFailedAdoptionLeavesNoFile(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(t.TempDir(), "in.mkv")
 	if err := os.WriteFile(src, mkvFixture(t), 0o600); err != nil {
 		t.Fatal(err)
@@ -162,6 +164,7 @@ func TestAFailedAdoptionLeavesNoFile(t *testing.T) {
 }
 
 func TestRemuxHandlerRefusesNonsense(t *testing.T) {
+	t.Parallel()
 	handler := RemuxHandler(RemuxHandlerOptions{})
 	for _, tc := range []struct{ name, payload string }{
 		{"not json", `{{{`},

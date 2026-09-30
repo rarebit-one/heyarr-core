@@ -94,10 +94,8 @@ func startBackup(ctx context.Context, db *sqlite.DB, eventLog *events.Log,
 		return nil
 	}
 
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		backup.RunCadence(ctx, ticker.C, cycle, log)
-	}()
-	log.Info("continuous backup beat started", "interval", interval, "dir", dir)
+	startBeat(ctx, log, wallTicker, beat{
+		name: "continuous backup", interval: interval,
+		attrs: []any{"dir", dir}, pass: cadencePass(ctx, cycle, log),
+	})
 }

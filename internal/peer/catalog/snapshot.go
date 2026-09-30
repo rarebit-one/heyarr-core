@@ -35,9 +35,8 @@ const (
 // All three fields are load-bearing rather than diagnostic. Without
 // ControllerID a snapshot restored from another deployment's backup (§51, §82)
 // is indistinguishable from this one's. Without Version there is no way to
-// refuse a stale apply. Without GeneratedAt, M7 cannot say how old its answer
-// is — and §53's "conservative rather than unavailable" collapses into
-// "confident and wrong".
+// refuse a stale apply. Without GeneratedAt, nothing reading it can say how old
+// its answer is — and a stale answer presented as current is worse than none.
 type Meta struct {
 	// ControllerID is the peer id of the controller whose catalogue this is.
 	ControllerID string `json:"controller_id"`
@@ -68,9 +67,8 @@ func (m Meta) Age(now time.Time) time.Duration { return now.Sub(m.GeneratedAt) }
 // Validate reports whether this metadata could describe a real snapshot.
 //
 // Version 0 is refused explicitly. "No snapshot" is the absence of a snapshot
-// (see [ErrNoSnapshot]) and must never be spellable as a snapshot at version
-// zero — the two answers mean different things to M7 and the schema, the wire
-// and this check all agree on that.
+// and must never be spellable as a snapshot at version zero — the controller's
+// peer_snapshots record, the wire and this check all agree on that.
 func (m Meta) Validate() error {
 	switch {
 	case m.ControllerID == "":
@@ -211,11 +209,9 @@ func (s *Snapshot) Rows() int {
 // Covered names the snapshot's tables in dependency order: a parent before
 // every child that references it.
 //
-// Applying in this order and pruning in reverse is what lets the snapshot
-// store keep foreign keys ON. That is not decoration — a snapshot with a
-// dangling edition_id is worthless to M7 in exactly the situation M7 exists
-// for, and the schema is the half of the check that also holds when a row
-// arrives through a repair by hand.
+// The names are the keys of an incremental payload's IDs map. Applying in this
+// order and pruning in reverse is what lets a receiver that enforces foreign
+// keys materialise a payload without relaxing them.
 func Covered() []string {
 	return []string{
 		"snapshot_libraries",

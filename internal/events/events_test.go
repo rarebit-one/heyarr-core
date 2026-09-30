@@ -2,25 +2,17 @@ package events
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 func newLog(t *testing.T) *Log {
 	t.Helper()
-	db, err := sqlite.Open(t.Context(), sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatalf("opening database: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(t.Context(), db); err != nil {
-		t.Fatalf("migrating: %v", err)
-	}
+	db := testdb.Migrated(t)
 	l, err := New(Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)
@@ -29,6 +21,7 @@ func newLog(t *testing.T) *Log {
 }
 
 func TestEmitPersistsAndAssignsMonotonicSequence(t *testing.T) {
+	t.Parallel()
 	l := newLog(t)
 
 	var seqs []int64
@@ -61,6 +54,7 @@ func TestEmitPersistsAndAssignsMonotonicSequence(t *testing.T) {
 // The property that makes reconnection safe: a client that saw seq N and asks
 // for everything after N sees no gaps and no duplicates.
 func TestSinceIsGaplessAndDuplicateFree(t *testing.T) {
+	t.Parallel()
 	l := newLog(t)
 	const total = 50
 	for i := range total {
@@ -97,6 +91,7 @@ func TestSinceIsGaplessAndDuplicateFree(t *testing.T) {
 }
 
 func TestSinceFiltersByType(t *testing.T) {
+	t.Parallel()
 	l := newLog(t)
 	for _, tt := range []string{TypeBlobCreated, TypeJobFailed, TypeJobSucceeded, TypeAssetCreated} {
 		if _, err := l.Emit(t.Context(), tt, "", "", nil); err != nil {
@@ -137,6 +132,7 @@ func TestSinceFiltersByType(t *testing.T) {
 }
 
 func TestSubscribeReceivesLiveEvents(t *testing.T) {
+	t.Parallel()
 	l := newLog(t)
 	sub := l.Subscribe(16)
 	defer sub.Close()
@@ -159,6 +155,7 @@ func TestSubscribeReceivesLiveEvents(t *testing.T) {
 }
 
 func TestSubscriptionFiltersByType(t *testing.T) {
+	t.Parallel()
 	l := newLog(t)
 	sub := l.Subscribe(16, "job.*")
 	defer sub.Close()
@@ -185,6 +182,7 @@ func TestSubscriptionFiltersByType(t *testing.T) {
 // memory growth and take the whole process down instead of the one thing that
 // is actually broken.
 func TestASlowSubscriberNeverBlocksAWriter(t *testing.T) {
+	t.Parallel()
 	l := newLog(t)
 	stalled := l.Subscribe(2) // deliberately tiny, and never read
 	defer stalled.Close()
@@ -223,6 +221,7 @@ func TestASlowSubscriberNeverBlocksAWriter(t *testing.T) {
 // A dropped event means the client's view has gaps, and it must be able to
 // tell — otherwise it would trust an incomplete stream.
 func TestDroppedEventsAreReportedNotHidden(t *testing.T) {
+	t.Parallel()
 	l := newLog(t)
 	sub := l.Subscribe(1)
 	defer sub.Close()
@@ -249,6 +248,7 @@ func TestDroppedEventsAreReportedNotHidden(t *testing.T) {
 // Durability before fan-out: a subscriber must never see an event that is not
 // in the log, because it may act on it.
 func TestEveryDeliveredEventIsAlreadyPersisted(t *testing.T) {
+	t.Parallel()
 	l := newLog(t)
 	sub := l.Subscribe(256)
 	defer sub.Close()
@@ -277,6 +277,7 @@ func TestEveryDeliveredEventIsAlreadyPersisted(t *testing.T) {
 }
 
 func TestConcurrentEmitsAllPersistWithDistinctSequences(t *testing.T) {
+	t.Parallel()
 	l := newLog(t)
 
 	const writers, each = 8, 25
@@ -315,6 +316,7 @@ func TestConcurrentEmitsAllPersistWithDistinctSequences(t *testing.T) {
 }
 
 func TestCloseIsIdempotentAndUnsubscribes(t *testing.T) {
+	t.Parallel()
 	l := newLog(t)
 	sub := l.Subscribe(4)
 	if l.SubscriberCount() != 1 {
@@ -332,6 +334,7 @@ func TestCloseIsIdempotentAndUnsubscribes(t *testing.T) {
 }
 
 func TestEmitRejectsAnEmptyType(t *testing.T) {
+	t.Parallel()
 	l := newLog(t)
 	if _, err := l.Emit(t.Context(), "", "", "", nil); err == nil {
 		t.Error("Emit accepted an event with no type")
@@ -339,12 +342,14 @@ func TestEmitRejectsAnEmptyType(t *testing.T) {
 }
 
 func TestNewRequiresAWriter(t *testing.T) {
+	t.Parallel()
 	if _, err := New(Options{}); err == nil {
 		t.Error("New accepted a log with no writer")
 	}
 }
 
 func TestMatchType(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		pattern, eventType string
 		want               bool
@@ -368,6 +373,7 @@ func TestMatchType(t *testing.T) {
 // Every caller-supplied value must arrive as a bind parameter; if a future
 // change interpolates one, this fails rather than shipping an injection.
 func TestTypeFilterOnlyEmitsBoundClauses(t *testing.T) {
+	t.Parallel()
 	hostile := []string{
 		"blob.created",
 		"job.*",

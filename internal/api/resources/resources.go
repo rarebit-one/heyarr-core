@@ -16,6 +16,7 @@
 package resources
 
 import (
+	"context"
 	"crypto/ed25519"
 	"database/sql"
 	"errors"
@@ -554,51 +555,38 @@ func (a *API) Mount(r chi.Router) {
 	}
 }
 
-// write renders a successful JSON response.
+// write renders a successful JSON response, with this API's encoder (HTML
+// escaping off — see marshal).
 func (a *API) write(w http.ResponseWriter, r *http.Request, status int, body any) {
-	buf, err := marshal(body)
-	if err != nil {
-		a.log.Error("encoding a response failed",
-			"request_id", httpapi.RequestIDFrom(r.Context()), "path", r.URL.Path, "error", err)
-		httpapi.Fail(w, r, problem.Internal())
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(status)
-	// #nosec G705 -- the body is JSON produced by encoding/json and served as
-	// application/json with nosniff; there is no HTML context to escape into.
-	_, _ = w.Write(buf)
+	httpapi.WriteJSONWith(w, r, a.log, status, body, marshal)
 }
 
-// fail maps an internal error onto a problem document.
+// fail maps an internal error onto a problem document and writes it.
 //
 // "No such row" is a 404 rather than a 500 because it is the ordinary "you
 // asked for something that is not here" and must not be a page in an on-call
 // runbook. Each layer spells it differently, so all three spellings are handled
-// here rather than at every call site, where one would eventually be missed and
-// a missing work would become an alert.
+// in problemFor rather than at every call site, where one would eventually be
+// missed and a missing work would become an alert.
+func (a *API) fail(w http.ResponseWriter, r *http.Request, what string, err error) {
+	httpapi.Fail(w, r, a.problemFor(r.Context(), what, err))
+}
+
 // problemFor is fail's answer without writing it.
 //
 // It exists for the handlers that have to DECIDE something after the failure —
 // pushing to a renderer, say — rather than returning immediately. Sharing the
 // mapping keeps "no such row is a 404" in one place; duplicating it is how one
 // copy eventually turns a missing asset into an alert.
-func (a *API) problemFor(what string, err error) *problem.Problem {
+//
+// An unexpected error is logged with the request id, which ties it to the
+// access-log line for the same request (and that line's path, already
+// redacted where a path carries a credential).
+func (a *API) problemFor(ctx context.Context, what string, err error) *problem.Problem {
 	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, jobs.ErrNotFound) || errors.Is(err, auth.ErrNotFound) {
 		return problem.NotFound("no " + what + " with that identifier")
 	}
-	a.log.Error("a request failed", "resource", what, "error", err)
-	return problem.Internal()
-}
-
-func (a *API) fail(w http.ResponseWriter, r *http.Request, what string, err error) {
-	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, jobs.ErrNotFound) || errors.Is(err, auth.ErrNotFound) {
-		httpapi.Fail(w, r, problem.NotFound("no "+what+" with that identifier"))
-		return
-	}
 	a.log.Error("a request failed",
-		"request_id", httpapi.RequestIDFrom(r.Context()),
-		"path", r.URL.Path, "resource", what, "error", err)
-	httpapi.Fail(w, r, problem.Internal())
+		"request_id", httpapi.RequestIDFrom(ctx), "resource", what, "error", err)
+	return problem.Internal()
 }

@@ -2,20 +2,21 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 
+	"github.com/rarebit-one/void-which-binds-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/peer/transfer"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
 )
 
 // maxConcurrentTransfers bounds how many blobs this node pulls at once.
@@ -39,6 +40,26 @@ import (
 // next to it.
 const maxConcurrentTransfers = 2
 
+// TransferCatalog is the part of the catalog a blob transfer uses: who holds
+// the bytes, and the record of what happened. A *catalog.Catalog satisfies it;
+// the handler depends on no more than it calls.
+type TransferCatalog interface {
+	BeginBlobTransfer(ctx context.Context, t catalog.BlobTransfer) error
+	BlobSize(ctx context.Context, blobHash string) (int64, error)
+	BlobSources(ctx context.Context, blobHash string) ([]replication.Source, error)
+	Peers(ctx context.Context) ([]integrity.Peer, error)
+	RecordBlobTransferFailed(ctx context.Context, t catalog.BlobTransfer, state string) error
+	RecordBlobTransferred(ctx context.Context, t catalog.BlobTransfer) error
+	ReplicationTarget(ctx context.Context, blobHash, peerID string) (peerKnown, blobKnown bool, err error)
+	SelfPeer(ctx context.Context) (string, error)
+}
+
+// ErrUnknownReplicationTarget is a replicate_blob naming a peer, or a blob, the
+// catalogue has no row for (#658). `replicas` references both, so the replica
+// such a job would produce could never be recorded: wrapped with
+// jobs.ErrPermanent, and checked before any byte moves.
+var ErrUnknownReplicationTarget = errors.New("worker: replicate_blob names a target the catalog cannot record")
+
 // TransferDeps is what the replicate_blob handler needs to move bytes.
 //
 // It is a struct rather than five parameters because the handler is
@@ -47,7 +68,7 @@ const maxConcurrentTransfers = 2
 // be got wrong silently.
 type TransferDeps struct {
 	// Catalog answers who holds the bytes and records what happened.
-	Catalog *catalog.Catalog
+	Catalog TransferCatalog
 	// Store is this node's content store: where verified bytes land.
 	Store cas.Store
 	// Puller opens the pinned connection and verifies what arrives. It is
@@ -130,9 +151,9 @@ func ReplicateBlobHandler(deps TransferDeps) HandlerFunc {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload replication.ReplicateBlobPayload
-		if err := json.Unmarshal(job.Payload, &payload); err != nil {
-			return fmt.Errorf("worker: replicate_blob payload is not decodable: %w", err)
+		payload, err := decodePayload[replication.ReplicateBlobPayload](job)
+		if err != nil {
+			return err
 		}
 		hash, err := hashing.Parse(payload.BlobHash)
 		if err != nil {
@@ -140,6 +161,23 @@ func ReplicateBlobHandler(deps TransferDeps) HandlerFunc {
 			// into paths, and before a URL is built out of it.
 			return fmt.Errorf("worker: replicate_blob names %q, which is not a blob identifier: %w",
 				payload.BlobHash, err)
+		}
+
+		// Can the outcome be recorded at all (#658)? Asked BEFORE the
+		// destination check and before any connection, because a job that can
+		// only end in a refused insert should cost one query, not a transfer.
+		peerKnown, blobKnown, err := deps.Catalog.ReplicationTarget(ctx, hash.String(), payload.DestinationPeerID)
+		if err != nil {
+			return err
+		}
+		if !peerKnown {
+			// Removed (revocation deletes the membership row, ADR-0012) or never
+			// enrolled. Removing a peer cancels its queued transfers; this is
+			// the backstop for one that was already claimed, or queued by a
+			// build that did not cancel. A peer that is re-enrolled has a new
+			// row, and the next reconciliation cycle plans for it afresh.
+			return fmt.Errorf("%w: unknown peer %s — it is not a member, so a replica of %s on it "+
+				"cannot be recorded: %w", ErrUnknownReplicationTarget, payload.DestinationPeerID, hash, jobs.ErrPermanent)
 		}
 
 		self, err := deps.Catalog.SelfPeer(ctx)
@@ -174,7 +212,19 @@ func ReplicateBlobHandler(deps TransferDeps) HandlerFunc {
 		if err != nil {
 			return err
 		}
+		if !blobKnown && !held {
+			// This node has no row for the blob and does not hold it, so it
+			// has nothing to pull it against — no size to divide it by, no
+			// replica any source could be recorded as holding — and nowhere to
+			// record the outcome. A later cycle plans it again once the blob is
+			// known here (an ingest, a snapshot); retrying this job would not.
+			return fmt.Errorf("%w: unknown blob %s — this node has no record of it, so its replica on "+
+				"peer %s cannot be recorded: %w", ErrUnknownReplicationTarget, hash, self, jobs.ErrPermanent)
+		}
 		if held {
+			// A held blob with no row is adopted by RecordBlobTransferred:
+			// the bytes are here, verified by address, and this is the one
+			// place the catalogue can learn so (#658).
 			desc, err := deps.Store.Stat(ctx, hash)
 			if err != nil {
 				return err

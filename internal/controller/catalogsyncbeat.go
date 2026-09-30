@@ -22,7 +22,6 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/catalogsync"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/backup"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
@@ -56,7 +55,7 @@ func startCatalogOpsSync(ctx context.Context, db *sqlite.DB, interval time.Durat
 		catalogsync.NewClient(material, log),
 		catalogSiblings{members: members, self: selfPeerID},
 		log)
-	runCatalogOpsSyncBeat(ctx, syncer, interval, log)
+	runCatalogOpsSyncBeat(ctx, syncer, interval, log, wallTicker)
 }
 
 // catalogSyncer is the one thing the beat drives — a seam a test asserts the beat
@@ -68,7 +67,7 @@ type catalogSyncer interface {
 
 // runCatalogOpsSyncBeat drives one convergence pass per tick until ctx is done,
 // over the shared non-fatal cadence runner.
-func runCatalogOpsSyncBeat(ctx context.Context, syncer catalogSyncer, interval time.Duration, log *slog.Logger) {
+func runCatalogOpsSyncBeat(ctx context.Context, syncer catalogSyncer, interval time.Duration, log *slog.Logger, newTicker tickerFunc) {
 	cycle := func(ctx context.Context) error {
 		synced, deferred, err := syncer.SyncAll(ctx)
 		if err != nil {
@@ -79,12 +78,9 @@ func runCatalogOpsSyncBeat(ctx context.Context, syncer catalogSyncer, interval t
 		}
 		return nil
 	}
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		backup.RunCadence(ctx, ticker.C, cycle, log)
-	}()
-	log.Info("catalog-ops sync beat started", "interval", interval)
+	startBeat(ctx, log, newTicker, beat{
+		name: "catalog-ops sync", interval: interval, pass: cadencePass(ctx, cycle, log),
+	})
 }
 
 // catalogSiblings enumerates the Full Peers this node converges its catalog with

@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 # The release gate and goreleaser both compile the module, which fetches the
-# private voidbind-go dependency. GOPRIVATE + the private-modules token (used in
+# private void-which-binds-go dependency. GOPRIVATE + the private-modules token (used in
 # each job below) let that fetch succeed.
 env:
   GOPRIVATE: github.com/rarebit-one/*
@@ -29,6 +29,9 @@ jobs:
   gate:
     name: gate
     runs-on: ubuntu-latest
+    # Above the 25m polling deadline below, so a slow CI run fails with the
+    # gate's own message rather than a bare job timeout.
+    timeout-minutes: 30
     permissions:
       checks: read # read the tag commit's check-runs
     steps:
@@ -66,6 +69,8 @@ jobs:
   release:
     needs: gate
     runs-on: ubuntu-latest
+    # Multi-arch images build arm64 under QEMU, which is the slow part.
+    timeout-minutes: 60
     permissions:
       contents: write # create the release and upload archives
       packages: write # push to ghcr.io
@@ -79,7 +84,7 @@ jobs:
         with:
           token: ${{ secrets.AUTOLAND_PAT }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version: stable, cache: true }
+        with: { go-version: stable, cache: false }  # release/publish path: no cache restore (zizmor cache-poisoning)
 
       # Multi-architecture images without an arm64 runner.
       - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0

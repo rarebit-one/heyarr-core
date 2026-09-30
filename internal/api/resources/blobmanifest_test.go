@@ -38,6 +38,7 @@ func (h *harness) blobView(t *testing.T, hash string) blobView {
 }
 
 func TestTheBlobEndpointReportsAllThreeManifestStates(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	// blob1 gets a manifest, blob2 a recorded decision. A third is left alone.
@@ -75,6 +76,7 @@ func TestTheBlobEndpointReportsAllThreeManifestStates(t *testing.T) {
 
 // 🔴 A GET is a GET.
 func TestReadingABlobGeneratesNoManifest(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	before := h.countRows(t, `SELECT count(*) FROM chunk_manifests`)

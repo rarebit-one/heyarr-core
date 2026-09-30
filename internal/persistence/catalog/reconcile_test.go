@@ -55,6 +55,7 @@ func (h *harness) setProfile(t *testing.T, accept string) {
 const gate1080 = `[{"attribute":"resolution","op":"gte","value":1080}]`
 
 func TestReconcileFindsAnAssetThatSatisfies(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -88,6 +89,7 @@ func TestReconcileFindsAnAssetThatSatisfies(t *testing.T) {
 // downloaded episode falsely satisfied every episode of the series (and
 // acquisition then stopped for the rest).
 func TestItemWantIsSatisfiedOnlyByItsOwnItemsAsset(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	h.setProfile(t, gate1080)
@@ -151,6 +153,7 @@ func TestItemWantIsSatisfiedOnlyByItsOwnItemsAsset(t *testing.T) {
 // The distinction that makes the upgrade workflow reachable, through the real
 // query path: an asset that exists and does not meet the profile.
 func TestReconcileReportsPresentButUnsatisfying(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -185,6 +188,7 @@ func TestReconcileReportsPresentButUnsatisfying(t *testing.T) {
 
 // A want with nothing behind it.
 func TestReconcileAWantWithNoAssets(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -212,6 +216,7 @@ func TestReconcileAWantWithNoAssets(t *testing.T) {
 // would otherwise turn the event log into a heartbeat, and an event stream that
 // is mostly noise is one nobody follows.
 func TestReconcileIsIdempotentAndSilent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -252,6 +257,7 @@ func TestReconcileIsIdempotentAndSilent(t *testing.T) {
 // This is the case ingest hooks and API callbacks cannot see, and the reason a
 // timer exists at all.
 func TestEditingAProfileUnsatisfiesAWantNothingElseTouched(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -290,6 +296,7 @@ func TestEditingAProfileUnsatisfiesAWantNothingElseTouched(t *testing.T) {
 // Losing the asset moves both axes and the managed flag together. Getting that
 // wrong produces a state the machine's own validation refuses.
 func TestReconcileAfterTheAssetGoesAway(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -322,6 +329,7 @@ func TestReconcileAfterTheAssetGoesAway(t *testing.T) {
 // An asset the scanner marked missing is not an asset. Counting it would report
 // a want as satisfied by a file that is not there.
 func TestAMissingAssetDoesNotSatisfy(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
@@ -346,6 +354,7 @@ func TestAMissingAssetDoesNotSatisfy(t *testing.T) {
 // That is what makes a degraded node say "I cannot tell whether this satisfies
 // you" instead of "this does not satisfy you", which are different problems.
 func TestWithNoProbeTheAttributesAreUndetermined(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {

@@ -74,8 +74,7 @@ type enrolUserRequest struct {
 
 func (a *API) enrolUser(w http.ResponseWriter, r *http.Request) {
 	var body enrolUserRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	if err := required("public_key", body.PublicKey); err != nil {
@@ -151,8 +150,7 @@ type enrolDeviceRequest struct {
 
 func (a *API) enrolDevice(w http.ResponseWriter, r *http.Request) {
 	var body enrolDeviceRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	if err := required("cert", body.Cert); err != nil {

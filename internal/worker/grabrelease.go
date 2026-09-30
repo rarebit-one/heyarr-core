@@ -2,16 +2,25 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
+
+// GrabStore is the part of the catalog the grab handler uses. A
+// *catalog.Catalog satisfies it; the handler depends on no more than it calls.
+type GrabStore interface {
+	Acquisition(ctx context.Context, desiredItemID string) (catalog.AcquisitionRecord, error)
+	AdvanceAcquisition(ctx context.Context, desiredItemID string, t acquisition.Transition, detail string) (catalog.AcquisitionRecord, error)
+	RecordAcquisition(ctx context.Context, a catalog.Acquisition) (bool, error)
+	SelectedSource(ctx context.Context, desiredItemID string) (candidateID string, source secret.Value, err error)
+}
 
 // GrabReleaseHandler hands a want's selected release to a download client —
 // §64's SELECTED → QUEUED edge (#225).
@@ -45,12 +54,12 @@ import (
 // on a lease that expired mid-call, where the transfer was created and the row
 // was not.
 func GrabReleaseHandler(
-	reg *providers.Registry, cat *catalog.Catalog, log *slog.Logger,
+	reg *providers.Registry, cat GrabStore, log *slog.Logger,
 ) HandlerFunc {
 	return func(ctx context.Context, job jobs.Job) error {
-		var payload acquisition.GrabPayload
-		if err := json.Unmarshal(job.Payload, &payload); err != nil {
-			return fmt.Errorf("worker: grab_release payload is not decodable: %w", err)
+		payload, err := decodePayload[acquisition.GrabPayload](job)
+		if err != nil {
+			return err
 		}
 		if payload.DesiredItemID == "" {
 			return errors.New("worker: grab_release needs a desired item")

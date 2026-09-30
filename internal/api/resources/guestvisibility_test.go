@@ -37,6 +37,7 @@ func seedVaultAsset(h *harness) {
 }
 
 func TestGuestCannotSeeAVaultAssetByID(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth, withGuest).seed()
 	seedVaultAsset(h)
 
@@ -55,6 +56,7 @@ func TestGuestCannotSeeAVaultAssetByID(t *testing.T) {
 }
 
 func TestGuestListingExcludesVaultAssets(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth, withGuest).seed()
 	seedVaultAsset(h)
 
@@ -76,6 +78,7 @@ func TestGuestListingExcludesVaultAssets(t *testing.T) {
 }
 
 func TestGuestWorkAssetsExcludeVaultAssets(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth, withGuest).seed()
 	seedVaultAsset(h)
 
@@ -114,6 +117,7 @@ func seedVaultArtwork(h *harness) {
 // invisible to a Guest — a 404 on the artwork route, a null embed — and
 // visible to an enrolled reader.
 func TestGuestCannotSeeAVaultPoster(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth, withGuest).seed()
 	seedVaultArtwork(h)
 

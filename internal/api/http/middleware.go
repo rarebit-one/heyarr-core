@@ -56,10 +56,10 @@ func Fail(w http.ResponseWriter, r *http.Request, p *problem.Problem) {
 
 // nosniffMiddleware sets X-Content-Type-Options on every response.
 //
-// Every write path in this server already sets it — routes.go's writeJSON,
-// problem.Write and the resource API's write all do. That is three places
-// remembering the same thing, and the failure mode of "remembering" is one
-// handler that does not.
+// Every write path in this server already sets it — WriteJSON and
+// problem.Write both do. That is still more than one place remembering the same
+// thing, and the failure mode of "remembering" is one handler that writes its
+// own body and does not.
 //
 // Setting it centrally makes the guarantee structural instead of habitual: a
 // handler added tomorrow gets it whether or not its author knew to. The
@@ -238,13 +238,21 @@ func (s *Server) accessLogMiddleware(next http.Handler) http.Handler {
 		slot := &identitySlot{}
 		r = r.WithContext(context.WithValue(r.Context(), ctxKeyIdentitySlot, slot))
 		defer func() {
+			// A HEAD is served by running the GET handler, which writes its
+			// whole body; net/http then drops those bytes rather than send
+			// them. The recorder counts what the handler wrote, so without
+			// this every HEAD probe (#606) would log the full payload as sent.
+			sent := rec.written
+			if r.Method == http.MethodHead {
+				sent = 0
+			}
 			attrs := []any{
 				"request_id", RequestIDFrom(r.Context()),
 				"method", r.Method,
 				"path", logPath(r),
 				"route", routePattern(r),
 				"status", rec.status,
-				"bytes", rec.written,
+				"bytes", sent,
 				"duration_ms", time.Since(start).Milliseconds(),
 				"remote", remoteHost(r),
 			}

@@ -39,12 +39,10 @@
 package opensubtitles
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	neturl "net/url"
 	"strconv"
@@ -54,6 +52,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/httpjson"
 	"github.com/rarebit-one/heyarr-core/internal/providers/ratelimit"
 )
 
@@ -273,8 +272,8 @@ func (c *Client) ResolveSubtitle(ctx context.Context, fileID string) (providers.
 
 	link, err := c.download(ctx, id, false)
 	if err != nil {
-		var he *httpError
-		if errors.As(err, &he) && he.status == http.StatusUnauthorized {
+		var he *httpjson.Error
+		if errors.As(err, &he) && he.Status == http.StatusUnauthorized {
 			// Token expired or absent: mint a fresh one and try once more. A
 			// second 401 is a rejected LOGIN, not an expired token, and is
 			// returned rather than retried.
@@ -358,76 +357,33 @@ func (c *Client) ensureToken(ctx context.Context, force bool) (string, error) {
 // in the Api-Key header, never in path, so an error rendering the request URL
 // cannot leak it.
 func (c *Client) get(ctx context.Context, path, op string, into any) error {
-	if err := c.limiter.Wait(ctx); err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return fmt.Errorf("opensubtitles: building %s request: %w", op, err)
-	}
-	c.setHeaders(req, "")
-	return c.do(req, op, into)
+	return c.api().Get(ctx, path, op, into, c.credentials("")...)
 }
 
 // post performs a rate-limited POST with a JSON body. A non-empty bearer adds
 // the JWT the /download endpoint needs beside the Api-Key; /login passes "".
 func (c *Client) post(ctx context.Context, path, op string, reqBody []byte, bearer string, into any) error {
-	if err := c.limiter.Wait(ctx); err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, path, bytes.NewReader(reqBody))
-	if err != nil {
-		return fmt.Errorf("opensubtitles: building %s request: %w", op, err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.setHeaders(req, bearer)
-	return c.do(req, op, into)
+	return c.api().Post(ctx, path, op, reqBody, into, c.credentials(bearer)...)
 }
 
-// setHeaders puts the api-key, accept, user-agent and (when given) the bearer
-// token on a request. The credentials are set exactly here, at the point they
-// are handed to the request that must send them, and never reach the URL.
-func (c *Client) setHeaders(req *http.Request, bearer string) {
-	req.Header.Set("Api-Key", c.apiKey)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", c.userAgent)
+// credentials are the api-key and (when given) the bearer token. They are set
+// exactly here, at the point they are handed to the request that must send
+// them, and never reach the URL.
+func (c *Client) credentials(bearer string) []httpjson.Header {
+	h := []httpjson.Header{{Key: "Api-Key", Value: c.apiKey}}
 	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
+		h = append(h, httpjson.Bearer(bearer))
 	}
+	return h
 }
 
-// do sends a prepared request, reads the bounded body and decodes it, mapping a
-// non-200 to an httpError that carries the status so a caller (and Check) can
-// tell an auth failure from an outage.
-func (c *Client) do(req *http.Request, op string, into any) error {
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("opensubtitles: %s request failed: %w", op, err)
+// api is the shared JSON round trip over this client's transport: bounded,
+// rate-limited, with the descriptive User-Agent OpenSubtitles requires.
+func (c *Client) api() httpjson.Client {
+	return httpjson.Client{
+		HTTP: c.http, Service: "opensubtitles", MaxBody: maxBodyBytes,
+		UserAgent: c.userAgent, Limiter: c.limiter,
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
-	if err != nil {
-		return fmt.Errorf("opensubtitles: reading %s response: %w", op, err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return &httpError{status: resp.StatusCode, op: op}
-	}
-	if err := json.Unmarshal(raw, into); err != nil {
-		return fmt.Errorf("opensubtitles: decoding %s response: %w", op, err)
-	}
-	return nil
-}
-
-// httpError is a non-200 from OpenSubtitles, carrying the status so a caller and
-// Check can tell an auth failure from an outage or a spent quota.
-type httpError struct {
-	status int
-	op     string
-}
-
-func (e *httpError) Error() string {
-	return fmt.Sprintf("opensubtitles: %s returned HTTP %d", e.op, e.status)
 }
 
 // authDetail turns a check error into a health detail that never leaks a
@@ -435,9 +391,9 @@ func (e *httpError) Error() string {
 // disabled or over-quota account, which is still a "your credential will not
 // work" answer rather than an outage.
 func authDetail(err error) string {
-	var he *httpError
+	var he *httpjson.Error
 	if errors.As(err, &he) {
-		switch he.status {
+		switch he.Status {
 		case http.StatusUnauthorized:
 			return "the API key was rejected"
 		case http.StatusForbidden:

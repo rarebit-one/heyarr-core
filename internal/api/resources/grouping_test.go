@@ -51,6 +51,7 @@ func (h *harness) groups(t *testing.T, path string) groupsOut {
 }
 
 func TestGroupingShapes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse()
 	seedAlbumCover(h)
 	for _, tt := range []struct{ name, path, golden string }{
@@ -68,6 +69,7 @@ func TestGroupingShapes(t *testing.T) {
 }
 
 func TestArtistsGroupCountAndPickTheFirstCover(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse()
 	seedAlbumCover(h)
 	out := h.groups(t, "/api/v1/artists")
@@ -86,6 +88,7 @@ func TestArtistsGroupCountAndPickTheFirstCover(t *testing.T) {
 }
 
 func TestGroupingsPageAndFilter(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed().seedBrowse()
 	first := h.groups(t, "/api/v1/artists?limit=1")
 	if len(first.Items) != 1 || first.NextCursor == "" {
@@ -107,6 +110,7 @@ func TestGroupingsPageAndFilter(t *testing.T) {
 }
 
 func TestGuestArtistPictureHidesAVaultCover(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth, withGuest).seed().seedBrowse()
 	seedAlbumCover(h)
 	h.exec(`UPDATE assets SET source_class = 'vault' WHERE id = ?`, albumCoverAssetID)

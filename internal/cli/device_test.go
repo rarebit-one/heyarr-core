@@ -17,7 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/device"
+	"github.com/rarebit-one/void-which-binds-go/device"
+
+	heyarrdevice "github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/testutil"
 )
 
@@ -441,13 +443,15 @@ func TestDeviceHumanOutputSaysTheKeyAuthorisesNothing(t *testing.T) {
 		// The caveat names heyarr, the binary the reader ran — not the voidbind
 		// CLI they do not have (#369). Assert the heyarr-rendered form, and that
 		// the voidbind default is NOT what leaked through.
-		for _, want := range []string{"unproven", "not_enrolled", device.NotYetAuthorisingFor(device.CommandHint)} {
+		for _, want := range []string{"unproven", "not_enrolled", heyarrdevice.NotYetAuthorisingFor(heyarrdevice.CommandHint)} {
 			if !strings.Contains(out, want) {
 				t.Errorf("`heyarr %s` does not say %q:\n%s", strings.Join(args, " "), want, out)
 			}
 		}
-		if strings.Contains(out, "voidbind") {
-			t.Errorf("`heyarr %s` leaked the voidbind command name:\n%s", strings.Join(args, " "), out)
+		for _, leaked := range []string{"voidbind", "void-which-binds"} { // the gen1 and the ADR-0013 R1 command names
+			if strings.Contains(out, leaked) {
+				t.Errorf("`heyarr %s` leaked the %s command name:\n%s", strings.Join(args, " "), leaked, out)
+			}
 		}
 	}
 }

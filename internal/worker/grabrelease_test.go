@@ -78,6 +78,7 @@ func (h *grabHarness) pendingGrabs(t *testing.T) int {
 // never act on the decision, and rested in SELECTED looking exactly like a
 // transfer in flight.
 func TestASearchQueuesAGrabForTheReleaseItSelected(t *testing.T) {
+	t.Parallel()
 	h := newGrabHarness(t)
 	h.fake.Offer("Arrival",
 		offer("plain", 1080, "h264"),
@@ -100,6 +101,7 @@ func TestASearchQueuesAGrabForTheReleaseItSelected(t *testing.T) {
 
 // And the grab moves the want on to QUEUED, which nothing could do before.
 func TestAGrabHandsTheReleaseToAClientAndReachesQueued(t *testing.T) {
+	t.Parallel()
 	h := newGrabHarness(t)
 	h.fake.Offer("Arrival",
 		offer("plain", 1080, "h264"),
@@ -139,6 +141,7 @@ func TestAGrabHandsTheReleaseToAClientAndReachesQueued(t *testing.T) {
 // would attach another's work to its own want. The want would then never leave
 // QUEUED, which is the same silent resting state one phase further along.
 func TestAGrabRecordsTheAcquisitionSoThePollCanFindIt(t *testing.T) {
+	t.Parallel()
 	h := newGrabHarness(t)
 	h.fake.Offer("Arrival", offer("good", 2160, "hevc"))
 	if err := h.run(t); err != nil {
@@ -178,6 +181,7 @@ func TestAGrabRecordsTheAcquisitionSoThePollCanFindIt(t *testing.T) {
 // A grab will be re-run (invariant 9), and a re-run must not start a second
 // transfer or move the want twice.
 func TestAGrabRunTwiceStartsOneTransfer(t *testing.T) {
+	t.Parallel()
 	h := newGrabHarness(t)
 	h.fake.Offer("Arrival", offer("good", 2160, "hevc"))
 	if err := h.run(t); err != nil {
@@ -209,6 +213,7 @@ func TestAGrabRunTwiceStartsOneTransfer(t *testing.T) {
 // is failed, which both moves it out of SELECTED and blocks the release, so the
 // next search does not choose the same unfetchable thing again.
 func TestAReleaseWithNoSourceFailsTheWantRatherThanRestingInSelected(t *testing.T) {
+	t.Parallel()
 	h := newGrabHarness(t)
 	h.fake.Offer("Arrival", offerWithoutSource("good", 2160, "hevc"))
 	if err := h.run(t); err != nil {
@@ -239,6 +244,7 @@ func TestAReleaseWithNoSourceFailsTheWantRatherThanRestingInSelected(t *testing.
 // — a handler that returned nil here would leave the want in SELECTED with
 // nothing anywhere recording why.
 func TestAGrabAgainstADownClientFailsLoudlyAndKeepsTheSelection(t *testing.T) {
+	t.Parallel()
 	h := newGrabHarness(t)
 	h.client.FailWith(errors.New("the client is restarting"))
 	h.fake.Offer("Arrival", offer("good", 2160, "hevc"))
@@ -265,6 +271,7 @@ func TestAGrabAgainstADownClientFailsLoudlyAndKeepsTheSelection(t *testing.T) {
 // defensible, but it would make the job's own record of what it was for untrue,
 // and the grab queued for the NEW selection is the one that should do the work.
 func TestAGrabSkipsWhenTheSelectionChangedUnderIt(t *testing.T) {
+	t.Parallel()
 	h := newGrabHarness(t)
 	h.fake.Offer("Arrival", offer("good", 2160, "hevc"))
 	if err := h.run(t); err != nil {
@@ -292,6 +299,7 @@ func TestAGrabSkipsWhenTheSelectionChangedUnderIt(t *testing.T) {
 // against the struct, because the struct having no field is a fact about today
 // and the row is what would leak.
 func TestAQueuedGrabDoesNotCarryTheSourceInItsPayload(t *testing.T) {
+	t.Parallel()
 	h := newGrabHarness(t)
 	const passkey = "DO-NOT-LEAK-4f2a"
 	c := offer("good", 2160, "hevc")
@@ -318,6 +326,7 @@ func TestAQueuedGrabDoesNotCarryTheSourceInItsPayload(t *testing.T) {
 // `source` is deliberately absent from candidateCols for this reason, so a
 // candidate view cannot carry it even by accident.
 func TestTheSourceIsNotInWhatTheAPIReturnsForACandidate(t *testing.T) {
+	t.Parallel()
 	h := newGrabHarness(t)
 	const passkey = "DO-NOT-LEAK-4f2a"
 	c := offer("good", 2160, "hevc")

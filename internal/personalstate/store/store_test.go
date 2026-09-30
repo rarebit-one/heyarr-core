@@ -5,15 +5,15 @@ import (
 	"context"
 	"crypto/ecdh"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/void-which-binds-go/encryption"
+
 	"github.com/rarebit-one/heyarr-core/internal/events"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/store"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 type fixedClock struct{ t time.Time }
@@ -24,15 +24,7 @@ var now = time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 
 func newStore(t *testing.T) *store.Store {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	clock := &fixedClock{t: now}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {
@@ -56,6 +48,7 @@ func device(t *testing.T) (*ecdh.PrivateKey, string) {
 }
 
 func TestCreateSpaceAndList(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 
@@ -77,6 +70,7 @@ func TestCreateSpaceAndList(t *testing.T) {
 }
 
 func TestCreateSpaceRejectsUnknownKind(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if _, err := s.CreateSpace(context.Background(), spaces.Kind("nope")); !errors.Is(err, spaces.ErrUnknownKind) {
 		t.Fatalf("CreateSpace(bad kind) = %v, want ErrUnknownKind", err)
@@ -84,6 +78,7 @@ func TestCreateSpaceRejectsUnknownKind(t *testing.T) {
 }
 
 func TestUnknownSpaceRefused(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 	if _, err := s.Space(ctx, "missing"); !errors.Is(err, store.ErrUnknownSpace) {
@@ -95,6 +90,7 @@ func TestUnknownSpaceRefused(t *testing.T) {
 }
 
 func TestPutAndFetchWrappedKeys(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 	sp, _ := s.CreateSpace(ctx, spaces.KindFamily)
@@ -131,6 +127,7 @@ func TestPutAndFetchWrappedKeys(t *testing.T) {
 // a change), and a THIRD device — standing in for any other peer or party — gets
 // nothing. The store itself has no unwrap path; this drives Seal/Unwrap around it.
 func TestStoredWrappedKeyOpensOnlyForItsTarget(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 	sp, _ := s.CreateSpace(ctx, spaces.KindPersonal)
@@ -189,6 +186,7 @@ func TestStoredWrappedKeyOpensOnlyForItsTarget(t *testing.T) {
 // the old one — a recipient has exactly one current copy, which is how a re-wrap
 // after revocation (§41) lands.
 func TestReWrapReplacesInPlace(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 	sp, _ := s.CreateSpace(ctx, spaces.KindShared)
@@ -213,6 +211,7 @@ func TestReWrapReplacesInPlace(t *testing.T) {
 }
 
 func TestEmptyInputsRefused(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 	sp, _ := s.CreateSpace(ctx, spaces.KindResearch)
@@ -227,6 +226,7 @@ func TestEmptyInputsRefused(t *testing.T) {
 // TestPutSpace records a client-minted space, is idempotent on a re-push, and
 // refuses a re-push under a different kind or a non-uuid id.
 func TestPutSpace(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 

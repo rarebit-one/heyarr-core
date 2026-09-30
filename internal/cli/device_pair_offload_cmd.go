@@ -15,12 +15,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rarebit-one/void-which-binds-go/device"
 	"github.com/spf13/cobra"
 
-	"github.com/rarebit-one/heyarr-core/internal/device"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/cruciform"
-	vbrelay "github.com/rarebit-one/voidbind-go/relay"
+	vbrelay "github.com/rarebit-one/void-which-binds-go/relay"
 )
 
 // newDevicePairOffloadCommand builds `heyarr device pair-offload`: the one-time

@@ -56,6 +56,7 @@ func evaluate(t *testing.T, h *harness, profileID, body string) (*http.Response,
 // The seeded living-room profile: accept resolution >= 1080; prefer hevc (20)
 // and hdr (10); terminal resolution >= 2160 and source == remux.
 func TestEvaluateAgainstARealProfile(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	resp, got := evaluate(t, h, profile1ID, `{"candidates":[
@@ -119,6 +120,7 @@ func TestEvaluateAgainstARealProfile(t *testing.T) {
 // The claim that makes a gate a gate, over HTTP: maximal preferences cannot buy
 // past a failed accept rule.
 func TestPreferencesCannotBuyPastAGate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	_, got := evaluate(t, h, profile1ID, `{"candidates":[
 		{"id":"brilliant-but-tiny","attributes":{
@@ -143,6 +145,7 @@ func TestPreferencesCannotBuyPastAGate(t *testing.T) {
 // Twelve candidates, none acceptable, twelve explanations. §63's rejection
 // reasons are as much the deliverable as the acceptances.
 func TestTwelveRejectionsOverHTTP(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	var parts []string
@@ -172,6 +175,7 @@ func TestTwelveRejectionsOverHTTP(t *testing.T) {
 // Determinism over the wire, including under a shuffled input order — the
 // property that silently breaks and looks exactly like a working system.
 func TestRankingIsStableAcrossInputOrder(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	tie := func(ids ...string) string {
@@ -211,6 +215,7 @@ func TestRankingIsStableAcrossInputOrder(t *testing.T) {
 // An attribute the provider could not determine is reported as such, not as a
 // failure — and an undetermined GATE still rejects.
 func TestUndeterminedAttributesOverTheWire(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	// No resolution at all.
@@ -250,6 +255,7 @@ func TestUndeterminedAttributesOverTheWire(t *testing.T) {
 // Every rule considered produces a reason. A rule that ran silently is a rule
 // nobody can confirm ran.
 func TestEveryRuleProducesAReason(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	_, got := evaluate(t, h, profile1ID, `{"candidates":[
 		{"id":"c1","attributes":{"resolution":2160,"source":"remux","video_codec":"hevc","hdr":true}}
@@ -273,6 +279,7 @@ func TestEveryRuleProducesAReason(t *testing.T) {
 // `fail` means exactly one thing. A terminal condition not reached is a MISS,
 // and must not appear in rejected_by.
 func TestATerminalMissIsNotARejection(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	_, got := evaluate(t, h, profile1ID, `{"candidates":[
 		{"id":"c1","attributes":{"resolution":1080,"source":"web-dl","video_codec":"h264","hdr":false}}
@@ -300,6 +307,7 @@ func TestATerminalMissIsNotARejection(t *testing.T) {
 }
 
 func TestEvaluateRefusals(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, body, want string
 		status           int
@@ -341,6 +349,7 @@ func TestEvaluateRefusals(t *testing.T) {
 }
 
 func TestEvaluateAgainstAnUnknownProfileIs404(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp, _ := evaluate(t, h, "nope", `{"candidates":[{"id":"x","attributes":{}}]}`)
 	if resp.StatusCode != http.StatusNotFound {
@@ -351,6 +360,7 @@ func TestEvaluateAgainstAnUnknownProfileIs404(t *testing.T) {
 // Inspectable means inspectable by a read-only credential. An endpoint that
 // needed a write token could not be used to tune a profile from a dashboard.
 func TestEvaluatingNeedsOnlyRead(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth).seed()
 	readToken := h.mint("reader", auth.ScopeRead)
 
@@ -365,6 +375,7 @@ func TestEvaluatingNeedsOnlyRead(t *testing.T) {
 
 // And it really writes nothing.
 func TestEvaluatingWritesNothing(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	before := h.eventCount(t)
 	if resp, _ := evaluate(t, h, profile1ID, `{"candidates":[

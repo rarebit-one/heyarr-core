@@ -114,7 +114,7 @@ const providerHealthInterval = time.Minute
 // it. The worker side agrees: the handler is registered with no
 // RequiredCapability, so a node with no providers claims the job, finds
 // nothing and does nothing.
-func startProviderHealth(ctx context.Context, queue *jobs.Queue, log *slog.Logger) {
+func startProviderHealth(ctx context.Context, queue *jobs.Queue, log *slog.Logger, newTicker tickerFunc) {
 	enqueue := func(reason string) {
 		if err := enqueueProviderHealth(ctx, queue); err != nil {
 			// Never fatal, for the same reason reconciliation's is not: this
@@ -125,21 +125,9 @@ func startProviderHealth(ctx context.Context, queue *jobs.Queue, log *slog.Logge
 				"reason", reason, "error", err)
 		}
 	}
-	enqueue("startup")
-
-	go func() {
-		ticker := time.NewTicker(providerHealthInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				enqueue("beat")
-			}
-		}
-	}()
-	log.Info("provider health beat started", "interval", providerHealthInterval)
+	startBeat(ctx, log, newTicker, beat{
+		name: "provider health", interval: providerHealthInterval, startup: true, pass: enqueue,
+	})
 }
 
 // enqueueProviderHealth queues one pass over every configured provider.

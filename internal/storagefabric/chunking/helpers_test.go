@@ -7,7 +7,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 )
 
 // pseudoRandom generates deterministic bytes from an xorshift64* generator

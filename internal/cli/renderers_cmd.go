@@ -114,7 +114,7 @@ one extra round trip per device.`,
 
 			w := cmd.OutOrStdout()
 			if asJSON {
-				return encodeJSON(w, views)
+				return emitJSON(w, views)
 			}
 			printRenderers(w, views, withProfile)
 			return nil

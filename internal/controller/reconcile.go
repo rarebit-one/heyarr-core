@@ -103,7 +103,7 @@ const upgradeScanInterval = 6 * time.Hour
 // The immediate one matters: a Heyarr that has just started may have missed
 // hours of change, and waiting a full interval to notice would make a restart
 // look like a period of blindness.
-func startReconciliation(ctx context.Context, queue *jobs.Queue, peers *health.Tracker, log *slog.Logger) {
+func startReconciliation(ctx context.Context, queue *jobs.Queue, peers *health.Tracker, log *slog.Logger, newTicker tickerFunc) {
 	enqueue := func(reason string) {
 		if err := enqueueReconcile(ctx, queue, ""); err != nil {
 			// Never fatal. Reconciliation is how Heyarr notices things, not
@@ -160,34 +160,23 @@ func startReconciliation(ctx context.Context, queue *jobs.Queue, peers *health.T
 		}
 	}
 
-	enqueue("startup")
-	// Converged at startup, for reconciliation's reason: a node that has just
-	// started may have been down while a peer lost a disk, and the diff is
-	// cheap on a fabric that is already converged — it reads two sets and
-	// enqueues nothing.
-	converge("startup")
-	// Swept at startup, unlike the upgrade scan below and for reconciliation's
-	// reason: a node that has just started knows nothing about who is up, and
-	// waiting a full interval to find out would make every restart a window in
-	// which reads are routed on stale reachability.
-	sweep()
-
-	go func() {
-		ticker := time.NewTicker(reconcileInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				enqueue("beat")
-				converge("beat")
-				sweep()
-			}
-		}
-	}()
-	log.Info("reconciliation beat started", "interval", reconcileInterval,
-		"peer_health_window", healthWindow(peers))
+	// All three run at startup as well as on the beat. Converged at startup,
+	// for reconciliation's reason: a node that has just started may have been
+	// down while a peer lost a disk, and the diff is cheap on a fabric that is
+	// already converged — it reads two sets and enqueues nothing. Swept at
+	// startup, unlike the upgrade scan below and for reconciliation's reason: a
+	// node that has just started knows nothing about who is up, and waiting a
+	// full interval to find out would make every restart a window in which
+	// reads are routed on stale reachability.
+	startBeat(ctx, log, newTicker, beat{
+		name: "reconciliation", interval: reconcileInterval, startup: true,
+		attrs: []any{"peer_health_window", healthWindow(peers)},
+		pass: func(reason string) {
+			enqueue(reason)
+			converge(reason)
+			sweep()
+		},
+	})
 }
 
 // startUpgradeScan enqueues an upgrade sweep on its own, much slower beat
@@ -198,24 +187,17 @@ func startReconciliation(ctx context.Context, queue *jobs.Queue, peers *health.T
 // Heyarr was not looking — but it is not a reason to go looking for better
 // copies of things that are already fine. A node that restarts six times
 // during a debugging session should not launch six upgrade sweeps.
-func startUpgradeScan(ctx context.Context, queue *jobs.Queue, log *slog.Logger) {
-	go func() {
-		ticker := time.NewTicker(upgradeScanInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := enqueueUpgradeScan(ctx, queue, ""); err != nil {
-					// Never fatal, for the same reason reconciliation is not:
-					// this is how Heyarr notices things, not how it works.
-					log.Warn("could not enqueue an upgrade scan", "error", err)
-				}
+func startUpgradeScan(ctx context.Context, queue *jobs.Queue, log *slog.Logger, newTicker tickerFunc) {
+	startBeat(ctx, log, newTicker, beat{
+		name: "upgrade scan", interval: upgradeScanInterval,
+		pass: func(string) {
+			if err := enqueueUpgradeScan(ctx, queue, ""); err != nil {
+				// Never fatal, for the same reason reconciliation is not:
+				// this is how Heyarr notices things, not how it works.
+				log.Warn("could not enqueue an upgrade scan", "error", err)
 			}
-		}
-	}()
-	log.Info("upgrade scan beat started", "interval", upgradeScanInterval)
+		},
+	})
 }
 
 // enqueuePeerReconcile queues a convergence cycle, or one peer's (§19, §57).

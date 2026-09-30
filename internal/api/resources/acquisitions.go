@@ -58,8 +58,7 @@ func (a *API) adoptAcquisition(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body adoptAcquisitionRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	for _, f := range []struct{ name, value string }{

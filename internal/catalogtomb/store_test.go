@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"database/sql"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/catalogop"
 	"github.com/rarebit-one/heyarr-core/internal/catalogtomb"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 var now = time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
@@ -29,15 +29,7 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	clock := &fixedClock{t: now}
 	store, err := catalogtomb.New(catalogtomb.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {
@@ -46,9 +38,9 @@ func newFixture(t *testing.T) *fixture {
 	return &fixture{store: store, db: db, clock: clock}
 }
 
-// insertWork adds a live work row the way the scanner's get-or-create would,
-// returning its id. Enough of 00002_core.sql's NOT NULLs to be a valid row.
-func (f *fixture) insertWork(t *testing.T, contentType, workKey, title string) string {
+// insertWork adds a live work row the way the scanner's get-or-create would.
+// Enough of 00002_core.sql's NOT NULLs to be a valid row.
+func (f *fixture) insertWork(t *testing.T, contentType, workKey, title string) {
 	t.Helper()
 	id := uuid.Must(uuid.NewV7()).String()
 	ts := now.Format(time.RFC3339Nano)
@@ -59,7 +51,6 @@ func (f *fixture) insertWork(t *testing.T, contentType, workKey, title string) s
 	if err != nil {
 		t.Fatalf("insert work: %v", err)
 	}
-	return id
 }
 
 func (f *fixture) workExists(t *testing.T, contentType, workKey string) bool {
@@ -98,6 +89,7 @@ func newKey(t *testing.T) ed25519.PrivateKey {
 // tombstone AND removes the live work row — the remove-wins application. This
 // is a delete learned from a peer converging at this site.
 func TestDeleteRecordSuppressesWork(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := context.Background()
 	peer := newKey(t)
@@ -127,6 +119,7 @@ func TestDeleteRecordSuppressesWork(t *testing.T) {
 // TestRecordIsIdempotent: recording the same op twice is one row and no error —
 // the property a peer sync relies on to re-push freely.
 func TestRecordIsIdempotent(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := context.Background()
 	peer := newKey(t)
@@ -150,6 +143,7 @@ func TestRecordIsIdempotent(t *testing.T) {
 // TestMalformedOpIsRefused: a token that does not verify is refused whole and
 // nothing is written.
 func TestMalformedOpIsRefused(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := context.Background()
 	if err := f.store.RecordOps(ctx, []string{"not-a-token"}); err == nil {
@@ -169,6 +163,7 @@ func TestMalformedOpIsRefused(t *testing.T) {
 // heals; once it does, A's work is suppressed and tombstoned — the same state B
 // reached when it authored the delete.
 func TestPartitionMergeConvergesAtStore(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	siteBKey := newKey(t)
 
@@ -200,6 +195,7 @@ func TestPartitionMergeConvergesAtStore(t *testing.T) {
 // removes the materialised tombstone, so the scanner may re-derive the work
 // again (the re-ripped-later case).
 func TestCausalRestoreLiftsMaterialisedTombstone(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := context.Background()
 	peer := newKey(t)
@@ -233,6 +229,7 @@ func TestCausalRestoreLiftsMaterialisedTombstone(t *testing.T) {
 // TestConcurrentRestoreDoesNotLift: a restore NOT citing the delete leaves the
 // tombstone in place at the storage layer too — remove-wins end to end.
 func TestConcurrentRestoreDoesNotLift(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := context.Background()
 	a := newKey(t)

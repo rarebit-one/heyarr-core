@@ -263,8 +263,7 @@ func (a *API) selectCandidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body selectRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	if err := required("candidate_id", body.CandidateID); err != nil {

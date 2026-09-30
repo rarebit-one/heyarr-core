@@ -11,6 +11,7 @@ import (
 // reclaims leases already past their expiry, so it would leave these looking
 // live; ReclaimAllLeases voids them unconditionally.
 func TestReclaimAllLeasesHandlesFutureDatedLeases(t *testing.T) {
+	t.Parallel()
 	q, clock := newQueue(t)
 	enqueue(t, q, EnqueueOptions{Type: "hash_blob"})
 

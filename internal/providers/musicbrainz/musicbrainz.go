@@ -32,10 +32,8 @@ package musicbrainz
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	neturl "net/url"
 	"strconv"
@@ -45,6 +43,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 	"github.com/rarebit-one/heyarr-core/internal/providers/enrichmatch"
+	"github.com/rarebit-one/heyarr-core/internal/providers/httpjson"
 	"github.com/rarebit-one/heyarr-core/internal/providers/ratelimit"
 )
 
@@ -327,55 +326,21 @@ func confidence(artist, album string, rel release) float64 {
 // get performs a rate-limited GET and decodes the JSON body. MusicBrainz needs no
 // credential; the mandatory User-Agent is set on every request.
 func (c *Client) get(ctx context.Context, path, op string, into any) error {
-	if err := c.limiter.Wait(ctx); err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return fmt.Errorf("musicbrainz: building %s request: %w", op, err)
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", c.userAgent)
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("musicbrainz: %s request failed: %w", op, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
-	if err != nil {
-		return fmt.Errorf("musicbrainz: reading %s response: %w", op, err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return &httpError{status: resp.StatusCode, op: op}
-	}
-	if err := json.Unmarshal(raw, into); err != nil {
-		return fmt.Errorf("musicbrainz: decoding %s response: %w", op, err)
-	}
-	return nil
-}
-
-// httpError is a non-200 from MusicBrainz, carrying the status so Check can tell
-// a throttle (503) or a bad request from an outage.
-type httpError struct {
-	status int
-	op     string
-}
-
-func (e *httpError) Error() string {
-	return fmt.Sprintf("musicbrainz: %s returned HTTP %d", e.op, e.status)
+	return httpjson.Client{
+		HTTP: c.http, Service: "musicbrainz", MaxBody: maxBodyBytes,
+		UserAgent: c.userAgent, Limiter: c.limiter,
+	}.Get(ctx, path, op, into)
 }
 
 // reachDetail turns a check error into a health detail. MusicBrainz needs no
 // credential, so an error is reachability (or a 503 throttle), not auth.
 func reachDetail(err error) string {
-	var he *httpError
+	var he *httpjson.Error
 	if errors.As(err, &he) {
-		if he.status == http.StatusServiceUnavailable {
+		if he.Status == http.StatusServiceUnavailable {
 			return "MusicBrainz is throttling (HTTP 503)"
 		}
-		return fmt.Sprintf("MusicBrainz returned HTTP %d", he.status)
+		return fmt.Sprintf("MusicBrainz returned HTTP %d", he.Status)
 	}
 	return "could not reach MusicBrainz"
 }

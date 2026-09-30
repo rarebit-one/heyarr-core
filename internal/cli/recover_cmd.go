@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -196,9 +195,7 @@ func dataDirIsLive(socket string) (bool, string) {
 
 func printRecover(out io.Writer, r recoverJSON, asJSON bool) error {
 	if asJSON {
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		return enc.Encode(r)
+		return emitJSON(out, r)
 	}
 	verb := "would restore"
 	if r.Applied {

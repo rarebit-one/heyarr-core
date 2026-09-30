@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -24,6 +23,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 // The search job, end to end against the FAKE indexer (§60, §63, M3-12).
@@ -51,14 +51,7 @@ type searchHarness struct {
 func newSearchHarness(t *testing.T) *searchHarness {
 	t.Helper()
 	ctx := t.Context()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)
@@ -173,6 +166,7 @@ func offerWithoutSource(id string, resolution int64, codec string) acquisition.R
 // THE assertion this issue exists for: MISSING → SEARCHING → CANDIDATES_FOUND
 // → SELECTED, with no real indexer anywhere.
 func TestASearchWalksTheMachineToSelected(t *testing.T) {
+	t.Parallel()
 	h := newSearchHarness(t)
 	h.fake.Offer("Arrival",
 		offer("good", 2160, "hevc"),
@@ -208,6 +202,7 @@ func TestASearchWalksTheMachineToSelected(t *testing.T) {
 // return an error, or the job backs off and an unavailable release becomes an
 // indexer hammering loop.
 func TestAnEmptySearchIsNotAJobFailure(t *testing.T) {
+	t.Parallel()
 	h := newSearchHarness(t)
 	// The fake is offered nothing, so it answers nothing.
 
@@ -222,6 +217,7 @@ func TestAnEmptySearchIsNotAJobFailure(t *testing.T) {
 // Twelve candidates, none acceptable: the rejections stay, the want returns to
 // rest, and the job succeeds.
 func TestTwelveUnacceptableCandidatesLeaveTwelveExplanations(t *testing.T) {
+	t.Parallel()
 	h := newSearchHarness(t)
 	var offers []acquisition.ReleaseCandidate
 	for i := range 12 {
@@ -253,6 +249,7 @@ func TestTwelveUnacceptableCandidatesLeaveTwelveExplanations(t *testing.T) {
 // One indexer being down must not discard what the others returned, and must
 // not be silent either (§60 keeps operational visibility).
 func TestOneFailingIndexerDoesNotDiscardTheOthers(t *testing.T) {
+	t.Parallel()
 	h := newSearchHarness(t)
 	h.fake.Offer("Arrival", offer("good", 2160, "hevc"))
 
@@ -273,6 +270,7 @@ func TestOneFailingIndexerDoesNotDiscardTheOthers(t *testing.T) {
 // The job WILL be re-run (invariant 9). Re-running it over the same answers
 // produces the same rows rather than duplicates.
 func TestReRunningTheSearchDoesNotDuplicate(t *testing.T) {
+	t.Parallel()
 	h := newSearchHarness(t)
 	h.fake.Offer("Arrival", offer("good", 2160, "hevc"), offer("plain", 1080, "h264"))
 
@@ -301,6 +299,7 @@ func TestReRunningTheSearchDoesNotDuplicate(t *testing.T) {
 
 // A want that is already acquiring must not be searched over the top of itself.
 func TestASearchSkipsAWantThatIsAlreadyInFlight(t *testing.T) {
+	t.Parallel()
 	h := newSearchHarness(t)
 	h.fake.Offer("Arrival", offer("good", 2160, "hevc"))
 
@@ -332,6 +331,7 @@ func TestASearchSkipsAWantThatIsAlreadyInFlight(t *testing.T) {
 // The stored evaluation is the evaluator's, driven all the way through the job
 // rather than only through the catalog.
 func TestTheJobStoresTheEvaluatorsOwnAnswer(t *testing.T) {
+	t.Parallel()
 	h := newSearchHarness(t)
 	offers := []acquisition.ReleaseCandidate{
 		offer("good", 2160, "hevc"),
@@ -373,6 +373,7 @@ func TestTheJobStoresTheEvaluatorsOwnAnswer(t *testing.T) {
 // A malformed payload is a programming error and must fail loudly rather than
 // searching for nothing.
 func TestAnUndecodablePayloadFails(t *testing.T) {
+	t.Parallel()
 	h := newSearchHarness(t)
 	handler := SearchHandler(h.reg, h.cat, h.queue, slog.New(slog.DiscardHandler))
 	err := handler(t.Context(), jobs.Job{
@@ -440,6 +441,7 @@ func TestAWantSaysWhenAnIndexerCouldNotBeReached(t *testing.T) {
 // The control: without it, a fix that always mentioned failures would pass the
 // test above while making the ordinary case wrong.
 func TestAWantWithHealthyIndexersRecordsAPlainEmptySearch(t *testing.T) {
+	t.Parallel()
 	h := newSearchHarness(t)
 
 	if err := h.run(t); err != nil {
@@ -540,6 +542,7 @@ func (h *searchHarness) seedHeldAsset(t *testing.T, id, codec string, height int
 // steady state of every want after its first success, and a combination nothing
 // in CI exercised.
 func TestASatisfiedWantIsNotDraggedBackwardsByItsOwnNextSearch(t *testing.T) {
+	t.Parallel()
 	h := newSearchHarness(t)
 	h.seedHeldAsset(t, "held", "hevc", 2160)
 	if _, err := h.cat.ReconcileDesired(t.Context(), h.want); err != nil {
@@ -591,6 +594,7 @@ func TestASatisfiedWantIsNotDraggedBackwardsByItsOwnNextSearch(t *testing.T) {
 // backwards" is implemented as "never select again" — which would break §60's
 // upgrade workflow entirely while making the other test pass.
 func TestASatisfiedWantStillTakesAGenuineUpgrade(t *testing.T) {
+	t.Parallel()
 	h := newSearchHarness(t)
 	// Held: 2160p h264 — accepted by the gate, and it misses the hevc
 	// preference, so there is real room above it.

@@ -10,8 +10,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
-
-	"github.com/rarebit-one/heyarr-core/internal/personalstate/encryption"
+	"github.com/rarebit-one/void-which-binds-go/encryption"
 )
 
 // The sealing core (validated against a TPM 2.0 in a spike, then mirrored here):

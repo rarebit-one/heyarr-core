@@ -13,6 +13,7 @@ import (
 // failing on one store-wide fault is one fault, not twelve, and the log should
 // say so once rather than twelve times.
 func TestStoreUnwritableIsRaisedOnce(t *testing.T) {
+	t.Parallel()
 	var alarm onceAlarm
 	storeWide := fmt.Errorf("ingest: materialising something: %w", cas.ErrStoreUnwritable)
 
@@ -31,6 +32,7 @@ func TestStoreUnwritableIsRaisedOnce(t *testing.T) {
 // reasons must not be dressed up as a store fault, or the alarm stops meaning
 // anything.
 func TestStoreUnwritableIgnoresOrdinaryFailures(t *testing.T) {
+	t.Parallel()
 	var alarm onceAlarm
 	for _, cause := range []error{
 		errors.New("ingest: probing the container: ffprobe not found"),
@@ -50,6 +52,7 @@ func TestStoreUnwritableIgnoresOrdinaryFailures(t *testing.T) {
 // TestStoreUnwritableRaisesOnceUnderConcurrency: jobs fail on their own
 // goroutines, so exactly-once has to survive that.
 func TestStoreUnwritableRaisesOnceUnderConcurrency(t *testing.T) {
+	t.Parallel()
 	var alarm onceAlarm
 	var mu sync.Mutex
 	raised := 0

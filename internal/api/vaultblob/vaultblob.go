@@ -16,18 +16,17 @@ package vaultblob
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
 
@@ -44,10 +43,16 @@ type Store interface {
 	PutExpecting(ctx context.Context, r io.Reader, expected hashing.Hash) (cas.Descriptor, error)
 }
 
-// Pinner records a placement pin that retains a blob on a peer (ADR-0096).
+// Pinner records a stored vault blob in the catalogue — its blob row, this
+// node's replica, and the placement pin that retains it (ADR-0096, #658).
 // *catalog.Catalog satisfies it.
+//
+// It is one call rather than a bare pin because a pin alone left the bytes
+// unknown to the catalogue: convergence then queued a transfer of a blob this
+// node already held, whose replica could never be recorded, and garbage
+// collection saw untracked bytes (#658).
 type Pinner interface {
-	PinPlacement(ctx context.Context, blobHash, peerID string) error
+	RecordVaultBlob(ctx context.Context, blobHash string, size int64, peerID string) error
 }
 
 // Options configure a Handler.
@@ -144,28 +149,15 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pin AFTER the bytes land: a pin for bytes that failed to store would be a
-	// pin outliving its blob (ADR-0096). This node is the pin target — it holds
-	// the bytes; cross-site placement is a device-supplied pin for another peer.
-	if err := h.pinner.PinPlacement(r.Context(), expected.String(), h.selfPeer); err != nil {
+	// Record AFTER the bytes land: a pin for bytes that failed to store would be
+	// a pin outliving its blob (ADR-0096). This node is the pin target — it
+	// holds the bytes; cross-site placement is a device-supplied pin for another
+	// peer. The size is the store's, of bytes it has just verified.
+	if err := h.pinner.RecordVaultBlob(r.Context(), expected.String(), desc.Size, h.selfPeer); err != nil {
 		h.log.Error("pinning a vault blob", "hash", expected.String(), "error", err)
 		httpapi.Fail(w, r, problem.Internal())
 		return
 	}
 
-	h.write(w, r, http.StatusCreated, uploadResult{Hash: expected.String(), Size: desc.Size})
-}
-
-func (h *Handler) write(w http.ResponseWriter, r *http.Request, status int, body any) {
-	buf, err := json.Marshal(body)
-	if err != nil {
-		h.log.Error("encoding a response failed",
-			"request_id", httpapi.RequestIDFrom(r.Context()), "path", r.URL.Path, "error", err)
-		httpapi.Fail(w, r, problem.Internal())
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(status)
-	_, _ = w.Write(buf)
+	httpapi.WriteJSON(w, r, h.log, http.StatusCreated, uploadResult{Hash: expected.String(), Size: desc.Size})
 }

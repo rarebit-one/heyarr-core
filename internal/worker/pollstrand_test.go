@@ -92,6 +92,7 @@ func (h *pollHarness) poll(t *testing.T) {
 // observed in progress. It was NOT reachable before #225, because nothing put a
 // want into QUEUED at all — which is why it has survived until now.
 func TestATransferThatCompletesBetweenPollsDoesNotStrandItsWant(t *testing.T) {
+	t.Parallel()
 	h := newPollHarness(t)
 	h.grabAfterSearch(t, "Arrival.2016.2160p.mkv", []byte("the bytes of a film"))
 
@@ -118,6 +119,7 @@ func TestATransferThatCompletesBetweenPollsDoesNotStrandItsWant(t *testing.T) {
 // The control: a fix that walked every edge unconditionally would also pass the
 // test above while double-advancing a want that was already DOWNLOADING.
 func TestATransferObservedInProgressStillWalksOneEdgeAtATime(t *testing.T) {
+	t.Parallel()
 	h := newPollHarness(t)
 	h.grabAfterSearch(t, "Arrival.2016.2160p.mkv", []byte("the bytes of a film"))
 	id := h.transferID(t)

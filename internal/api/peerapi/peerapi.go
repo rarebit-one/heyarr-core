@@ -78,7 +78,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -664,17 +663,7 @@ func (s *Server) handleIdentity(w http.ResponseWriter, r *http.Request) {
 // writeJSON renders a successful peer response. Errors never come through here
 // — those are problem documents, written by httpapi.Fail.
 func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, body any) {
-	buf, err := json.Marshal(body)
-	if err != nil {
-		s.log.Error("encoding a peer response failed",
-			"request_id", httpapi.RequestIDFrom(r.Context()), "path", r.URL.Path, "error", err)
-		httpapi.Fail(w, r, problem.Internal())
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(buf)
+	httpapi.WriteJSON(w, r, s.log, http.StatusOK, body)
 }
 
 // Start binds the peer listener and serves in the background. A Server with no

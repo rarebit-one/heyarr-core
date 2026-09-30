@@ -13,13 +13,14 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
-	vbweblogin "github.com/rarebit-one/voidbind-go/weblogin"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
+	vbweblogin "github.com/rarebit-one/void-which-binds-go/weblogin"
 )
 
 // base is the fixed external origin the broker binds every challenge to and
@@ -39,14 +40,13 @@ func newHarness(t *testing.T) *harness {
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(ctx, sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)

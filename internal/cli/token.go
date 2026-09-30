@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -74,7 +73,7 @@ func withStore(ctx context.Context, configPath string, fn func(context.Context, 
 	return fn(ctx, store)
 }
 
-func newTokenCreateCommand(opts Options, configPath *string) *cobra.Command {
+func newTokenCreateCommand(_ Options, configPath *string) *cobra.Command {
 	var (
 		scopeList string
 		expires   string
@@ -148,9 +147,7 @@ func printCreatedToken(w io.Writer, created auth.CreatedToken, asJSON bool) erro
 		if tk.ExpiresAt != nil {
 			out.ExpiresAt = tk.ExpiresAt.UTC().Format(time.RFC3339Nano)
 		}
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(out)
+		return emitJSON(w, out)
 	}
 
 	expiry := "never"
@@ -168,7 +165,7 @@ func printCreatedToken(w io.Writer, created auth.CreatedToken, asJSON bool) erro
 	return nil
 }
 
-func newTokenListCommand(opts Options, configPath *string) *cobra.Command {
+func newTokenListCommand(_ Options, configPath *string) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -236,9 +233,7 @@ func printTokens(w io.Writer, tokens []auth.Token, now time.Time, asJSON bool) e
 			}
 			out = append(out, row)
 		}
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(out)
+		return emitJSON(w, out)
 	}
 
 	if len(tokens) == 0 {
@@ -257,7 +252,7 @@ func printTokens(w io.Writer, tokens []auth.Token, now time.Time, asJSON bool) e
 	return nil
 }
 
-func newTokenRevokeCommand(opts Options, configPath *string) *cobra.Command {
+func newTokenRevokeCommand(_ Options, configPath *string) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "revoke <id>",
@@ -280,9 +275,7 @@ row on every call, so nothing is cached past it.`,
 					return err
 				}
 				if asJSON {
-					enc := json.NewEncoder(cmd.OutOrStdout())
-					enc.SetIndent("", "  ")
-					return enc.Encode(tokenJSON{
+					return emitJSON(cmd.OutOrStdout(), tokenJSON{
 						ID:        tk.ID,
 						Name:      tk.Name,
 						Scopes:    scopeStrings(tk.Scopes),

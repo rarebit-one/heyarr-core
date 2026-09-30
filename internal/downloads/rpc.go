@@ -271,9 +271,3 @@ func summarise(body []byte) string {
 	}
 	return s
 }
-
-// decodeJSON reads a JSON body, used by tests that stand up a server behaving
-// the way the daemon does.
-func decodeJSON(r *http.Request, out any) error {
-	return json.NewDecoder(io.LimitReader(r.Body, maxResponseBytes)).Decode(out)
-}

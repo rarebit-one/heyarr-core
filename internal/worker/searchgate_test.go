@@ -11,6 +11,7 @@ import (
 // rejects a different season and a different episode — each rejection carrying a
 // durable, machine-coded reason rather than being dropped (ADR-0093 §2).
 func TestGateSeasonEpisode(t *testing.T) {
+	t.Parallel()
 	candidates := []acquisition.ReleaseCandidate{
 		{ID: "ep", Title: "Slow.Horses.S01E01.1080p.WEB-DL.x265-GRP"},
 		{ID: "pack", Title: "Slow.Horses.S01.COMPLETE.1080p.WEB-DL.x265-GRP"},
@@ -59,6 +60,7 @@ func TestGateSeasonEpisode(t *testing.T) {
 // A season pack for the WRONG season must never be kept, whatever season it is —
 // the invariant the observed bug violated.
 func TestGateSeasonEpisodeNeverKeepsAWrongSeasonPack(t *testing.T) {
+	t.Parallel()
 	for season := 0; season <= 9; season++ {
 		if season == 1 {
 			continue

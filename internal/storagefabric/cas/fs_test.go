@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 )
 
 func newStore(t *testing.T) *FS {

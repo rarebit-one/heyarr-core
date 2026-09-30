@@ -25,6 +25,7 @@ func (h *harness) patchWork(t *testing.T, id, body string) *http.Response {
 // A correction changes what a person reads and the order they read it in, and
 // leaves the identity a rescan converges on alone.
 func TestPatchWorkCorrectsTheDisplayFactsNotTheIdentity(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	before := h.work(t, work1ID)
@@ -59,6 +60,7 @@ func TestPatchWorkCorrectsTheDisplayFactsNotTheIdentity(t *testing.T) {
 // Every patch field is optional, and omitting one leaves it alone — the
 // distinction a plain (non-pointer) body would lose.
 func TestPatchWorkLeavesOmittedFieldsAlone(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	if resp := h.patchWork(t, work1ID, `{"title":"Arrival"}`); resp.StatusCode != http.StatusOK {
@@ -76,6 +78,7 @@ func TestPatchWorkLeavesOmittedFieldsAlone(t *testing.T) {
 // A year of 0 is "there is no year", which is a different request from omitting
 // the field.
 func TestPatchWorkClearsAYear(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	if resp := h.patchWork(t, work1ID, `{"year":0}`); resp.StatusCode != http.StatusOK {
@@ -87,6 +90,7 @@ func TestPatchWorkClearsAYear(t *testing.T) {
 }
 
 func TestPatchWorkRefusesNonsense(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	cases := []struct{ name, body string }{
@@ -111,6 +115,7 @@ func TestPatchWorkRefusesNonsense(t *testing.T) {
 // unlinked — the blobs stay for the GC sweeper to reclaim behind its grace
 // window.
 func TestDeleteWorkRemovesTheCatalogRowsAndNoBytes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	resp := h.doStable(http.MethodDelete, "/api/v1/works/"+work1ID, nil)
@@ -147,6 +152,7 @@ func TestDeleteWorkRemovesTheCatalogRowsAndNoBytes(t *testing.T) {
 // is emitted exactly as one removed on its own — a subscriber must not have to
 // special-case "unless the whole work went".
 func TestDeleteWorkEmitsEveryRemoval(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	if got := h.doStable(http.MethodDelete, "/api/v1/works/"+work1ID, nil).StatusCode; got != http.StatusNoContent {
@@ -169,6 +175,7 @@ func TestDeleteWorkEmitsEveryRemoval(t *testing.T) {
 // node's own store — the record a sibling merges so it does not rebuild the work
 // on its next scan (ADR-0073, #449).
 func TestDeleteWorkEmitsASignedCatalogDeleteOp(t *testing.T) {
+	t.Parallel()
 	_, signer, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -217,6 +224,7 @@ func TestDeleteWorkEmitsASignedCatalogDeleteOp(t *testing.T) {
 // rather than silently dropping the subscription, and the refusal says how to
 // proceed.
 func TestDeleteWorkRefusesAFollowedWork(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	resp := follow(h, `{"tvdb_id":"12345","work_id":"`+work1ID+`","quality_profile":"living-room"}`)
@@ -242,6 +250,7 @@ func TestDeleteWorkRefusesAFollowedWork(t *testing.T) {
 // Both mutations need `write`. A read token browsing the library must not be
 // able to empty it.
 func TestWorkMutationsNeedWriteScope(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth).seed()
 	readOnly := h.mint("reader", auth.ScopeRead).Secret
 

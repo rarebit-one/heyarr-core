@@ -20,7 +20,7 @@ device holds the only key that opens it.
 ### Options
 
 ```
-      --device-dir string   where this machine's device key lives (default: your config directory; VOIDBIND_DEVICE_DIR overrides)
+      --device-dir string   where this machine's device key lives (default: your config directory; VOID_WHICH_BINDS_DEVICE_DIR overrides)
 ```
 
 ### Options inherited from parent commands

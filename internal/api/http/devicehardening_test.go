@@ -17,8 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
+
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 )
 
 // Device-scheme hardening (#420), found by the real mobile client: the 401 says

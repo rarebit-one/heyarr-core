@@ -22,6 +22,7 @@ func change(t *testing.T, spaceID string, parents []string, ct []byte) protocol.
 }
 
 func TestPutAndFetchChanges(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 	sp, _ := s.CreateSpace(ctx, spaces.KindPersonal)
@@ -55,6 +56,7 @@ func TestPutAndFetchChanges(t *testing.T) {
 // forgery a malicious peer might push — is refused, never stored. The store never
 // trusts a claimed id (Invariant 1).
 func TestPutChangeVerifiesID(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 	sp, _ := s.CreateSpace(ctx, spaces.KindFamily)
@@ -72,6 +74,7 @@ func TestPutChangeVerifiesID(t *testing.T) {
 // TestPutChangeIsIdempotent: accepting the same change twice leaves one row — a
 // re-sending relay cannot duplicate it (the id is the primary key).
 func TestPutChangeIsIdempotent(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 	sp, _ := s.CreateSpace(ctx, spaces.KindResearch)
@@ -88,6 +91,7 @@ func TestPutChangeIsIdempotent(t *testing.T) {
 }
 
 func TestPutChangeRequiresSpace(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 	c := change(t, "missing-space", nil, []byte("x"))
@@ -100,6 +104,7 @@ func TestPutChangeRequiresSpace(t *testing.T) {
 // ciphertext, byte-for-byte, and it is not the plaintext — the peer holds
 // ciphertext it cannot read (§38).
 func TestStoredChangeIsCiphertext(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 	sp, _ := s.CreateSpace(ctx, spaces.KindPersonal)
@@ -133,6 +138,7 @@ func TestStoredChangeIsCiphertext(t *testing.T) {
 // steady-state sync free. Pulling from a cursor returns what arrived after it,
 // and pulling from the cursor it hands back returns nothing (§44).
 func TestChangesSinceReturnsOnlyTheTail(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 	sp, _ := s.CreateSpace(ctx, spaces.KindPersonal)
@@ -187,6 +193,7 @@ func TestChangesSinceReturnsOnlyTheTail(t *testing.T) {
 // device has already passed must not drag it back before that device's cursor,
 // or the device would re-download the log forever.
 func TestChangesSinceIsNotRewoundByARedelivery(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 	sp, _ := s.CreateSpace(ctx, spaces.KindPersonal)
@@ -221,6 +228,7 @@ func TestChangesSinceIsNotRewoundByARedelivery(t *testing.T) {
 // must return the same log in the same order, or a device that switches between
 // them diverges.
 func TestChangesSinceAgreesWithChangesFor(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 	sp, _ := s.CreateSpace(ctx, spaces.KindFamily)
@@ -250,6 +258,7 @@ func TestChangesSinceAgreesWithChangesFor(t *testing.T) {
 // TestChangesSinceUnknownSpace: an unknown space is an error, not an empty tail
 // that would read to a device as "you are up to date".
 func TestChangesSinceUnknownSpace(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if _, _, err := s.ChangesSince(context.Background(), "no-such-space", 0); !errors.Is(err, store.ErrUnknownSpace) {
 		t.Fatalf("ChangesSince(unknown space) = %v, want ErrUnknownSpace", err)

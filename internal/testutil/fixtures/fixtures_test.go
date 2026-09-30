@@ -9,9 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rarebit-one/void-which-binds-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
 )
 
 // smallLibrary keeps the tree shape but shrinks the streaming fixture, so the

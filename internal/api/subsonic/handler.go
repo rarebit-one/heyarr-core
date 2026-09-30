@@ -166,8 +166,20 @@ func parse(r *http.Request) params {
 	}
 }
 
-// authenticate turns a Subsonic credential into a Heyarr identity with at least
-// `read`.
+// authenticate checks that a Subsonic credential is a Heyarr token with at
+// least `read`, returning a zero code on success.
+//
+// It deliberately returns no auth.Identity. Every identity-scoped behaviour
+// the REST surface applies keys on something this adapter cannot meet: guest
+// restrictions (ADR-0074, ADR-0094) key on Identity.Guest, which only the
+// credential-less guest admission in the /api/v1 group mints — a Subsonic
+// caller always presents a bearer token, so it is never a guest; and
+// per-identity state (play history, starred, playlists) is encrypted personal
+// state the controller cannot read (Invariant 6, ADR-0054), which this adapter
+// does not serve at all. What remains is one shared catalogue gated by scope,
+// so `read` is the whole authorisation decision. If a finer, per-identity
+// grant ever reaches the catalogue, this is where the identity must start to
+// flow into the handlers.
 //
 // A Subsonic client offers one of two credentials. It may send the password
 // directly (p=, optionally hex-encoded as p=enc:<hex>); that password IS a
@@ -178,37 +190,37 @@ func parse(r *http.Request) params {
 // from the plaintext password, and Heyarr keeps tokens argon2id-hashed at rest
 // and never holds the plaintext (auth/token.go). That is a deliberate,
 // documented refusal, not a gap — configure the client to send the password.
-func (h *Handler) authenticate(ctx context.Context, p params) (auth.Identity, int, string) {
+func (h *Handler) authenticate(ctx context.Context, p params) (int, string) {
 	if p.token != "" {
-		return auth.Identity{}, errBadAuth,
+		return errBadAuth,
 			"salted-token authentication is not supported; configure this client to send the password directly"
 	}
 	pw := p.password
 	if pw == "" {
-		return auth.Identity{}, errMissingParam, "required parameter is missing: p"
+		return errMissingParam, "required parameter is missing: p"
 	}
 	if enc, ok := strings.CutPrefix(pw, "enc:"); ok {
 		decoded, err := decodeHex(enc)
 		if err != nil {
-			return auth.Identity{}, errBadAuth, "wrong username or password"
+			return errBadAuth, "wrong username or password"
 		}
 		pw = decoded
 	}
 	id, err := h.auth.Verify(ctx, pw)
 	if err != nil {
-		return auth.Identity{}, errBadAuth, "wrong username or password"
+		return errBadAuth, "wrong username or password"
 	}
 	if !id.Allows(auth.ScopeRead) {
-		return auth.Identity{}, errNotAuthorized, "this credential is not allowed to read the library"
+		return errNotAuthorized, "this credential is not allowed to read the library"
 	}
-	return id, 0, ""
+	return 0, ""
 }
 
 // authed authenticates, then either runs the envelope handler or writes the
 // Subsonic error the failure maps to.
 func (h *Handler) authed(w http.ResponseWriter, r *http.Request, fn func(w http.ResponseWriter, r *http.Request, p params)) {
 	p := parse(r)
-	if _, code, msg := h.authenticate(r.Context(), p); code != 0 {
+	if code, msg := h.authenticate(r.Context(), p); code != 0 {
 		h.write(w, p.format, h.fail(code, msg))
 		return
 	}
@@ -248,7 +260,7 @@ func (h *Handler) handleGetMusicFolders(w http.ResponseWriter, r *http.Request) 
 	h.authed(w, r, func(w http.ResponseWriter, r *http.Request, p params) {
 		folders, err := h.musicFolders(r.Context())
 		if err != nil {
-			h.internalError(w, r, p, "getMusicFolders", err)
+			h.internalError(w, p, "getMusicFolders", err)
 			return
 		}
 		resp := h.ok()
@@ -260,7 +272,7 @@ func (h *Handler) handleGetMusicFolders(w http.ResponseWriter, r *http.Request) 
 // internal logs a query failure and returns the generic Subsonic error, never
 // the underlying message — a client cannot act on a SQL error and it should not
 // see the schema.
-func (h *Handler) internalError(w http.ResponseWriter, r *http.Request, p params, op string, err error) {
+func (h *Handler) internalError(w http.ResponseWriter, p params, op string, err error) {
 	h.log.Error("subsonic query failed", "op", op, "error", err)
 	h.write(w, p.format, h.fail(errGeneric, "the server failed to answer that request"))
 }

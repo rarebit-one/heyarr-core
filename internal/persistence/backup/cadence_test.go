@@ -16,7 +16,7 @@ func TestRunCadenceTakesOnEachTick(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ticks := make(chan time.Time)
 	took := make(chan struct{}, 4)
-	take := func(context.Context) error {
+	take := func(context.Context) error { //nolint:unparam // RunCadence's take must return an error; this fake never fails
 		took <- struct{}{}
 		return nil
 	}

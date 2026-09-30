@@ -19,6 +19,7 @@ import (
 // A node with no toolchain advertises nothing and leaves the jobs that need it
 // alone. This is ADR-0023's degrade path as a whole rather than as two halves.
 func TestANodeWithNoToolchainAdvertisesNothingAndClaimsNothingThatNeedsIt(t *testing.T) {
+	t.Parallel()
 	toolchain, err := media.Resolve(t.Context(), media.NoToolchain())
 	if err != nil {
 		t.Fatalf("resolving on a bare node failed, which would make FFmpeg mandatory: %v", err)
@@ -71,6 +72,7 @@ func TestANodeWithNoToolchainAdvertisesNothingAndClaimsNothingThatNeedsIt(t *tes
 // that is never granted are both untested. A node that resolved the toolchain
 // must actually claim the work.
 func TestANodeWithTheToolchainClaimsTheJobsThatNeedIt(t *testing.T) {
+	t.Parallel()
 	q := newFakeQueue(
 		jobs.Job{ID: "p1", Type: probe.JobType, RequiredCapability: probe.Capability},
 		jobs.Job{ID: "t1", Type: "transcode", RequiredCapability: media.CapabilityFFmpeg},

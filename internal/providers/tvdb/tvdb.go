@@ -26,7 +26,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	neturl "net/url"
 	"strconv"
@@ -35,6 +34,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/httpjson"
 )
 
 // defaultEndpoint is TheTVDB v4 base URL. Overridden by Options.Endpoint, which
@@ -157,7 +157,7 @@ func (c *Client) Enumerate(ctx context.Context, ref string) ([]followed.FeedItem
 	for page := 0; page < maxPages; page++ {
 		path := fmt.Sprintf("%s/series/%s/episodes/default?page=%d", c.endpoint, url(ref), page)
 		var body episodesResponse
-		if err := c.getJSON(ctx, path, token, &body); err != nil {
+		if err := c.get(ctx, path, "episodes", token, &body); err != nil {
 			return nil, err
 		}
 		for _, ep := range body.Data.Episodes {
@@ -221,7 +221,7 @@ func (c *Client) Discover(ctx context.Context, query string) ([]providers.Discov
 	path := fmt.Sprintf("%s/search?query=%s&type=series&limit=%d",
 		c.endpoint, queryEscape(query), maxSearchResults)
 	var body searchResponse
-	if err := c.getSearchJSON(ctx, path, token, &body); err != nil {
+	if err := c.get(ctx, path, "search", token, &body); err != nil {
 		return nil, err
 	}
 
@@ -246,36 +246,6 @@ func (c *Client) Discover(ctx context.Context, query string) ([]providers.Discov
 	return out, nil
 }
 
-// getSearchJSON is getJSON's sibling for the search op, differing only in the
-// httpError op it stamps so a failed discovery is told apart from a failed
-// episode enumeration in a health detail or a log.
-func (c *Client) getSearchJSON(ctx context.Context, path, token string, into any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return fmt.Errorf("tvdb: building search request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("tvdb: search request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
-	if err != nil {
-		return fmt.Errorf("tvdb: reading search response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return &httpError{status: resp.StatusCode, op: "search"}
-	}
-	if err := json.Unmarshal(raw, into); err != nil {
-		return fmt.Errorf("tvdb: decoding search response: %w", err)
-	}
-	return nil
-}
-
 // parseYear reads TVDB's year, which it sends as a string ("2011") and sometimes
 // omits. A missing or unparseable year is zero, distinct from any real year.
 func parseYear(s string) int {
@@ -297,30 +267,9 @@ func (c *Client) login(ctx context.Context) (string, error) {
 	// revealed only to its intended destination. It never reaches a log or the
 	// corpus (the fixtures are synthesised and key-free).
 	reqBody, _ := json.Marshal(loginRequest{APIKey: c.apiKey}) //nolint:gosec // G117: the login body is the key's intended destination (TVDB v4 auth)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.endpoint+"/login", strings.NewReader(string(reqBody)))
-	if err != nil {
-		return "", fmt.Errorf("tvdb: building login request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("tvdb: login request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
-	if err != nil {
-		return "", fmt.Errorf("tvdb: reading login response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", &httpError{status: resp.StatusCode, op: "login"}
-	}
 	var body loginResponse
-	if err := json.Unmarshal(raw, &body); err != nil {
-		return "", fmt.Errorf("tvdb: decoding login response: %w", err)
+	if err := c.api().Post(ctx, c.endpoint+"/login", "login", reqBody, &body); err != nil {
+		return "", err
 	}
 	if strings.TrimSpace(body.Data.Token) == "" {
 		return "", errors.New("tvdb: login succeeded but returned no token")
@@ -328,49 +277,22 @@ func (c *Client) login(ctx context.Context) (string, error) {
 	return body.Data.Token, nil
 }
 
-// getJSON performs an authenticated GET and decodes the JSON body.
-func (c *Client) getJSON(ctx context.Context, path, token string, into any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return fmt.Errorf("tvdb: building request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("tvdb: request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
-	if err != nil {
-		return fmt.Errorf("tvdb: reading response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return &httpError{status: resp.StatusCode, op: "episodes"}
-	}
-	if err := json.Unmarshal(raw, into); err != nil {
-		return fmt.Errorf("tvdb: decoding response: %w", err)
-	}
-	return nil
+// get performs an authenticated GET and decodes the JSON body. op is stamped
+// into a non-200 error so a failed discovery is told apart from a failed
+// episode enumeration in a health detail or a log.
+func (c *Client) get(ctx context.Context, path, op, token string, into any) error {
+	return c.api().Get(ctx, path, op, into, httpjson.Bearer(token))
 }
 
-// httpError is a non-200 from TVDB, carrying the status so a caller (and Check)
-// can tell an auth failure from an outage.
-type httpError struct {
-	status int
-	op     string
-}
-
-func (e *httpError) Error() string {
-	return fmt.Sprintf("tvdb: %s returned HTTP %d", e.op, e.status)
+// api is the shared JSON round trip over this client's transport.
+func (c *Client) api() httpjson.Client {
+	return httpjson.Client{HTTP: c.http, Service: "tvdb", MaxBody: maxBodyBytes}
 }
 
 // loginDetail turns a login error into a health detail that never leaks the key.
 func loginDetail(err error) string {
-	var he *httpError
-	if errors.As(err, &he) && he.status == http.StatusUnauthorized {
+	var he *httpjson.Error
+	if errors.As(err, &he) && he.Status == http.StatusUnauthorized {
 		return "the API key was rejected"
 	}
 	return "could not reach TVDB"

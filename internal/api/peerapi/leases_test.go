@@ -6,17 +6,17 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/void-which-binds-go/grant"
+
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/events"
-	"github.com/rarebit-one/heyarr-core/internal/grant"
 	"github.com/rarebit-one/heyarr-core/internal/leases"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
-	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 var leaseNow = time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
@@ -44,15 +44,7 @@ func (s siblingSet) PeerKeys(context.Context) (map[string]ed25519.PublicKey, err
 // the given siblings — the same shape the controller wires.
 func realLeaseStore(t *testing.T, signer ed25519.PrivateKey, siblings leases.SiblingKeys) *leases.Store {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(t.TempDir(), "heyarr.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Migrated(t)
 	clock := leaseClock{t: leaseNow}
 	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: clock})
 	if err != nil {
@@ -71,6 +63,7 @@ func realLeaseStore(t *testing.T, signer ed25519.PrivateKey, siblings leases.Sib
 func leasesURL(l *listener) string { return "https://" + l.addr + peerapi.Prefix + "/leases" }
 
 func TestLeasesRouteServesActiveTokensToAMember(t *testing.T) {
+	t.Parallel()
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
 	root := newTrustRoot(a.member(), b.member())
@@ -95,6 +88,7 @@ func TestLeasesRouteServesActiveTokensToAMember(t *testing.T) {
 }
 
 func TestLeasesRouteAnswers503WithNoIssuer(t *testing.T) {
+	t.Parallel()
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
 	root := newTrustRoot(a.member(), b.member())
@@ -110,6 +104,7 @@ func TestLeasesRouteAnswers503WithNoIssuer(t *testing.T) {
 }
 
 func TestANonMemberCannotFetchLeases(t *testing.T) {
+	t.Parallel()
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	stranger := newPeerNode(t, "stranger-id", "stranger")
 	root := newTrustRoot(a.member()) // stranger is NOT enrolled
@@ -125,6 +120,7 @@ func TestANonMemberCannotFetchLeases(t *testing.T) {
 // reaches nobody, and the signature against A's pinned key is the whole
 // authority (ADR-0048). It still expires on B's own clock.
 func TestBFetchesAndHonoursASiblingsLeaseWithTheIssuerDown(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// Peer A's lease issuer key, and a store that has issued one lease.

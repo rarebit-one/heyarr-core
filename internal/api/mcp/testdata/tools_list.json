@@ -453,14 +453,7 @@
       "description": "List the peers this instance knows about and what each is for. A single peer is a supported deployment rather than a symptom — most Heyarr installations are one machine — so do not report a fabric of one as a replication fault. Ask get_content_satisfaction whether placement is answering a real question: it reports `unproven` when the target set is this node alone.",
       "inputSchema": {
         "additionalProperties": false,
-        "properties": {
-          "limit": {
-            "description": "How many rows at most. Defaults to the maximum.",
-            "maximum": 200,
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
+        "properties": {},
         "type": "object"
       },
       "name": "get_peer_status",
@@ -474,14 +467,7 @@
       "description": "Report the configured indexers and download clients (and metadata providers), what each can do, whether the last check found it usable and which version it reported. This is the read behind \"why is nothing being acquired\": a node with none configured is a supported deployment and says so with an empty list. No credential is ever reported.",
       "inputSchema": {
         "additionalProperties": false,
-        "properties": {
-          "limit": {
-            "description": "How many rows at most. Defaults to the maximum.",
-            "maximum": 200,
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
+        "properties": {},
         "type": "object"
       },
       "name": "get_provider_status",

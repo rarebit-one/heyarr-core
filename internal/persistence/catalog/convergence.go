@@ -51,6 +51,12 @@ type PeerConvergence struct {
 	// Gaps is every (blob, peer) the desired set requires and no peer
 	// inventory accounts for, in deterministic order.
 	Gaps []replication.Gap
+	// Unrecordable counts placement pins left out of Gaps because this node
+	// has no `blobs` row for the pinned blob and the pin names another peer
+	// (#658). Such a transfer could never be recorded — `replicas` references
+	// `blobs` — so planning it would be a job that fails every cycle. The pin
+	// stays; it is planned once the blob is known here.
+	Unrecordable int
 }
 
 // PlanPeerConvergence diffs the desired blob set against what the peers hold.
@@ -114,10 +120,11 @@ func (c *Catalog) PlanPeerConvergence(ctx context.Context, scope string) (PeerCo
 	// per-(blob, peer) — never by adding a pinned hash to the flat `canonical`
 	// set, which would fan every pin to ALL Full Peers and replicate a device's
 	// one-peer pin across the whole fabric (the thing ADR-0096 forbids).
-	pinGaps, err := c.pinGaps(ctx, required, held, plan.Gaps)
+	pinGaps, unrecordable, err := c.pinGaps(ctx, required, held, plan.Gaps)
 	if err != nil {
 		return PeerConvergence{}, err
 	}
+	plan.Unrecordable = unrecordable
 	if len(pinGaps) > 0 {
 		plan.Gaps = append(plan.Gaps, pinGaps...)
 		// Re-sort to preserve Diff's deterministic (blob, peer) order across the
@@ -148,15 +155,33 @@ func (c *Catalog) PlanPeerConvergence(ctx context.Context, scope string) (PeerCo
 // the pair is skipped when the diff already named it. The queue's dedupe key
 // would collapse the duplicate jobs regardless, but a doubled gap would inflate
 // the under-replicated count this cycle reports and is worth not producing.
+//
+// # A pin for a blob this node has no row for (#658)
+//
+// Pins carry no foreign keys (migration 00050), so a pin can name a blob the
+// catalogue has never recorded, and a replica of it cannot be recorded either.
+// For ANOTHER peer that pin is skipped and counted: the transfer it would plan
+// ends in a refused insert, every cycle. For THIS node it is still planned: the
+// bytes may be here already — a vault upload recorded before #658 wrote only
+// the pin — and the replicate_blob handler adopts a held blob it has no row
+// for, which is how such a node heals without an operator.
 func (c *Catalog) pinGaps(
 	ctx context.Context, required []string, held replication.Holdings, have []replication.Gap,
-) ([]replication.Gap, error) {
+) ([]replication.Gap, int, error) {
 	pins, err := c.AllPlacementPins(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if len(pins) == 0 {
-		return nil, nil
+		return nil, 0, nil
+	}
+	known, err := c.pinnedBlobsKnown(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	self, err := c.SelfPeer(ctx)
+	if err != nil {
+		return nil, 0, err
 	}
 
 	full := make(map[string]struct{}, len(required))
@@ -168,13 +193,21 @@ func (c *Catalog) pinGaps(
 		already[g.BlobHash+"\x00"+g.PeerID] = struct{}{}
 	}
 
-	var out []replication.Gap
+	var (
+		out          []replication.Gap
+		unrecordable int
+	)
 	for _, p := range pins {
 		if _, isFull := full[p.PeerID]; !isFull {
-			// A pin to a non-Full peer, or a peer outside this cycle's scope.
+			// A pin to a non-Full peer, a peer outside this cycle's scope, or a
+			// peer that is no longer a member: `required` is read from `peers`.
 			continue
 		}
 		if _, holds := held[p.PeerID][p.BlobHash]; holds {
+			continue
+		}
+		if _, ok := known[p.BlobHash]; !ok && p.PeerID != self {
+			unrecordable++
 			continue
 		}
 		key := p.BlobHash + "\x00" + p.PeerID
@@ -184,7 +217,26 @@ func (c *Catalog) pinGaps(
 		already[key] = struct{}{}
 		out = append(out, replication.Gap{BlobHash: p.BlobHash, PeerID: p.PeerID})
 	}
-	return out, nil
+	return out, unrecordable, nil
+}
+
+// pinnedBlobsKnown is the set of pinned blobs the catalogue has a row for.
+func (c *Catalog) pinnedBlobsKnown(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := c.db.Reader().QueryContext(ctx, `
+		SELECT DISTINCT p.blob_hash FROM placement_pins p JOIN blobs b ON b.hash = p.blob_hash`)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: reading the pinned blobs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return nil, err
+		}
+		out[hash] = struct{}{}
+	}
+	return out, rows.Err()
 }
 
 // canonicalBlobs is the canonical blob set: every blob the catalog still

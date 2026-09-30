@@ -25,6 +25,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 const stamp = "2026-08-01T00:00:00Z"
@@ -43,14 +44,13 @@ func newHarness(t *testing.T) *harness {
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	db, err := sqlite.Open(ctx, sqlite.Options{Path: filepath.Join(dir, "heyarr.db")})
+	dbPath := filepath.Join(dir, "heyarr.db")
+	testdb.WriteMigrated(t, dbPath)
+	db, err := sqlite.Open(ctx, sqlite.Options{Path: dbPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 
 	store, err := auth.NewStore(auth.StoreOptions{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
@@ -191,7 +191,12 @@ func (h *harness) edition(ctx context.Context, store cas.Store, workID, editionI
 
 func (h *harness) get(path string, auth bool) *http.Response {
 	h.t.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, h.http.URL+path, nil)
+	return h.do(http.MethodGet, path, auth)
+}
+
+func (h *harness) do(method, path string, auth bool) *http.Response {
+	h.t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), method, h.http.URL+path, nil)
 	if err != nil {
 		h.t.Fatal(err)
 	}

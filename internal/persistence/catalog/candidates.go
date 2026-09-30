@@ -18,6 +18,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
 // Release candidates and their evaluations (§63, M3-12).
@@ -134,7 +135,7 @@ func (c *Catalog) RecordSearch(
 ) (SearchOutcome, error) {
 	searchID := uuid.Must(uuid.NewV7()).String()
 	now := c.clock.Now()
-	stamp := now.Format(timestampFormat)
+	stamp := sqlite.FormatTimestamp(now)
 
 	outcome := SearchOutcome{SearchID: searchID, Found: len(ranked)}
 	// BestOver, not Best: for a satisfied want this is an upgrade search, and
@@ -259,7 +260,7 @@ func (c *Catalog) SelectedCandidate(ctx context.Context, desiredItemID string) (
 func (c *Catalog) OverrideSelection(
 	ctx context.Context, desiredItemID, candidateID string,
 ) (Candidate, error) {
-	now := c.clock.Now().Format(timestampFormat)
+	now := sqlite.FormatTimestamp(c.clock.Now())
 
 	var (
 		chosen Candidate
@@ -511,7 +512,7 @@ func episodeFromAttributes(attrsJSON string) (season, episode int, ok bool) {
 func (c *Catalog) PruneCandidates(ctx context.Context, olderThan time.Time) (int64, error) {
 	res, err := c.db.Writer().ExecContext(ctx, `
 		DELETE FROM release_candidates
-		WHERE searched_at < ? AND selected = 0`, olderThan.Format(timestampFormat))
+		WHERE searched_at < ? AND selected = 0`, sqlite.FormatTimestamp(olderThan))
 	if err != nil {
 		return 0, fmt.Errorf("catalog: pruning candidates: %w", err)
 	}

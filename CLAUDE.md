@@ -22,7 +22,7 @@ make build          # ./bin/heyarr
 make test           # go test -race ./...
 make lint           # go vet + golangci-lint
 make gen            # regenerate committed generated code; CI asserts no drift
-make demo           # scripts/acceptance.sh — the milestone gate
+make demo           # scripts/acceptance.sh (+ the sections it sources from scripts/acceptance/) — the milestone gate
 make test-skips     # which tests SKIPPED, and why — a package-level `ok` hides them
 ```
 

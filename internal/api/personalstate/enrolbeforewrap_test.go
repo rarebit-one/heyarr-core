@@ -42,6 +42,7 @@ const (
 // pinned recipient (ADR-0049). An enrolled recipient is accepted; an unenrolled
 // one is refused with 403 and leaves no orphan space behind.
 func TestCreateSpaceEnforcesEnrolBeforeWrap(t *testing.T) {
+	t.Parallel()
 	api, st := apiWithAuthorizer(t, map[string]bool{enrolledKey: true})
 
 	ok := call(t, api.createSpace, http.MethodPost, "/spaces", createSpaceRequest{
@@ -77,6 +78,7 @@ func TestCreateSpaceEnforcesEnrolBeforeWrap(t *testing.T) {
 // TestRewrapEnforcesEnrolBeforeWrap: the rewrap path is guarded too, so a
 // rotation cannot smuggle in an unenrolled recipient.
 func TestRewrapEnforcesEnrolBeforeWrap(t *testing.T) {
+	t.Parallel()
 	api, _ := apiWithAuthorizer(t, map[string]bool{enrolledKey: true})
 
 	id := mustUUID(t)
@@ -99,6 +101,7 @@ func TestRewrapEnforcesEnrolBeforeWrap(t *testing.T) {
 // TestNoAuthorizerLeavesTheCheckOff documents that a nil authorizer is the
 // pre-M9 behaviour — any recipient is accepted — so the check is opt-in via wiring.
 func TestNoAuthorizerLeavesTheCheckOff(t *testing.T) {
+	t.Parallel()
 	api := newAPI(t) // built with no authorizer
 	rec := call(t, api.createSpace, http.MethodPost, "/spaces", createSpaceRequest{
 		ID: mustUUID(t), Kind: "personal",

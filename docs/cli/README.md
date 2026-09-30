@@ -47,6 +47,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr identity generate`](heyarr_identity_generate.md) | Generate your user identity keypair |
 | [`heyarr identity recover`](heyarr_identity_recover.md) | Reconstruct your user identity from its recovery secret, offline (ADR-0022) |
 | [`heyarr identity show`](heyarr_identity_show.md) | Show your user identity |
+| [`heyarr identity verify-recovery`](heyarr_identity_verify-recovery.md) | Check your written recovery secret against this identity, without using it (ADR-0022) |
 | [`heyarr identity`](heyarr_identity.md) | Manage your user identity and enrol this machine's device (§40, ADR-0048) |
 | [`heyarr jobs list`](heyarr_jobs_list.md) | List jobs |
 | [`heyarr jobs retry`](heyarr_jobs_retry.md) | Put a finished job back on the queue |
@@ -60,10 +61,10 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr library root set-ingest-mode`](heyarr_library_root_set-ingest-mode.md) | Change how an existing root materialises ingested bytes |
 | [`heyarr library root`](heyarr_library_root.md) | Add or remove a library's roots |
 | [`heyarr library`](heyarr_library.md) | Manage libraries and their roots |
-| [`heyarr pair authorise`](heyarr_pair_authorise.md) | Old device: authorise a new device and sign its enrolment cert |
-| [`heyarr pair enrol`](heyarr_pair_enrol.md) | New device: pair with an old device and store the enrolment cert |
+| [`heyarr pair authorise`](heyarr_pair_authorise.md) | Existing side: admit a new device by signing its membership op |
+| [`heyarr pair enrol`](heyarr_pair_enrol.md) | New device: join through an invite and store the membership op |
 | [`heyarr pair sas`](heyarr_pair_sas.md) | Compute the short authentication string for two keys and a salt |
-| [`heyarr pair`](heyarr_pair.md) | Authorise a new device from an already-enrolled one (§40, ADR-0022) |
+| [`heyarr pair`](heyarr_pair.md) | Admit a new device from one that can already vouch for you (§40, ADR-0022) |
 | [`heyarr peer`](heyarr_peer.md) | Serve and replicate bytes |
 | [`heyarr peers add`](heyarr_peers_add.md) | Enrol another peer by its public key |
 | [`heyarr peers attach`](heyarr_peers_attach.md) | Attach to a controller over mTLS and report what it records this node as |
@@ -90,6 +91,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr space changes`](heyarr_space_changes.md) | List a space's stored changes AS THE PEER HOLDS THEM — ciphertext |
 | [`heyarr space compact`](heyarr_space_compact.md) | Drop the changes the latest snapshot subsumes (§44) |
 | [`heyarr space create`](heyarr_space_create.md) | Mint an encrypted space and wrap its key for the authorised devices |
+| [`heyarr space export-recovery`](heyarr_space_export-recovery.md) | Export every space's recovery-wrapped key into one recovery blob (ADR-0022) |
 | [`heyarr space keys`](heyarr_space_keys.md) | List the wrapped copies of a space's key (recipients only, no key material) |
 | [`heyarr space list`](heyarr_space_list.md) | List the encrypted spaces the controller holds (metadata only) |
 | [`heyarr space put`](heyarr_space_put.md) | Add an item to a space's playlist (encrypted client-side, then pushed) |

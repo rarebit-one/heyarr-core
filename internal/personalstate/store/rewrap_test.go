@@ -10,6 +10,7 @@ import (
 // TestDeleteWrappedKeyRemovesOnlyThatRecipient: revoking one recipient's copy
 // leaves the others, and is idempotent.
 func TestDeleteWrappedKeyRemovesOnlyThatRecipient(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ctx := context.Background()
 	sp, _ := s.CreateSpace(ctx, spaces.KindFamily)

@@ -16,3 +16,7 @@
 # uses `git status --porcelain` being empty to decide whether a worktree is
 # safe to remove, so a stray untracked directory makes that check answer wrong.
 __pycache__/
+
+# A dev helper built with a bare `go build ./internal/testutil/fixtures/cmd/stagepartial`
+# lands at the repo root; a 4MB binary reached main that way once (#498).
+/stagepartial

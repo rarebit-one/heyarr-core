@@ -8,7 +8,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -158,7 +157,7 @@ const (
 	rolesPeer
 )
 
-func newVersionCommand(opts Options) *cobra.Command {
+func newVersionCommand(_ Options) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "version",
@@ -167,9 +166,7 @@ func newVersionCommand(opts Options) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			info := buildinfo.Get()
 			if asJSON {
-				enc := json.NewEncoder(cmd.OutOrStdout())
-				enc.SetIndent("", "  ")
-				return enc.Encode(info)
+				return emitJSON(cmd.OutOrStdout(), info)
 			}
 			_, err := fmt.Fprintf(cmd.OutOrStdout(), "heyarr %s (%s, built %s, %s)\n",
 				info.Version, info.Commit, info.Date, info.GoVersion)
@@ -180,7 +177,7 @@ func newVersionCommand(opts Options) *cobra.Command {
 	return cmd
 }
 
-func newConfigCommand(opts Options, configPath *string) *cobra.Command {
+func newConfigCommand(_ Options, configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Inspect configuration",
@@ -197,9 +194,7 @@ frequently not what any single source says.`,
 			if err != nil {
 				return err
 			}
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(cfg)
+			return emitJSON(cmd.OutOrStdout(), cfg)
 		},
 	}
 	// --redacted is accepted now and does nothing, because nothing in the

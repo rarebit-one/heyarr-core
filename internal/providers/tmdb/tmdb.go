@@ -57,10 +57,8 @@ package tmdb
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	neturl "net/url"
 	"sort"
@@ -70,6 +68,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/httpjson"
 )
 
 // defaultEndpoint is TMDB's v3 base URL. Overridden by Options.Endpoint, which
@@ -368,53 +367,25 @@ func (c *Client) discoverMovies(ctx context.Context, query string) ([]providers.
 // told apart in a health detail or a log. The token travels only in the
 // Authorization header, never in path, so an error rendering the request URL
 // cannot leak it.
+//
+// The bearer token is TMDB v4 read-access auth on the v3 endpoints, revealed
+// only here at the point it is handed to the request that must send it. It
+// never reaches a log or the corpus (the fixtures are synthesised and
+// key-free).
 func (c *Client) get(ctx context.Context, path, op string, into any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return fmt.Errorf("tmdb: building %s request: %w", op, err)
-	}
-	// The bearer token is TMDB v4 read-access auth on the v3 endpoints, revealed
-	// only here at the point it is handed to the request that must send it. It
-	// never reaches a log or the corpus (the fixtures are synthesised and
-	// key-free).
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("tmdb: %s request failed: %w", op, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
-	if err != nil {
-		return fmt.Errorf("tmdb: reading %s response: %w", op, err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return &httpError{status: resp.StatusCode, op: op}
-	}
-	if err := json.Unmarshal(raw, into); err != nil {
-		return fmt.Errorf("tmdb: decoding %s response: %w", op, err)
-	}
-	return nil
+	return c.api().Get(ctx, path, op, into, httpjson.Bearer(c.token))
 }
 
-// httpError is a non-200 from TMDB, carrying the status so a caller (and Check)
-// can tell an auth failure from an outage.
-type httpError struct {
-	status int
-	op     string
-}
-
-func (e *httpError) Error() string {
-	return fmt.Sprintf("tmdb: %s returned HTTP %d", e.op, e.status)
+// api is the shared JSON round trip over this client's transport.
+func (c *Client) api() httpjson.Client {
+	return httpjson.Client{HTTP: c.http, Service: "tmdb", MaxBody: maxBodyBytes}
 }
 
 // authDetail turns a check error into a health detail that never leaks the
 // token. TMDB answers a rejected token with 401.
 func authDetail(err error) string {
-	var he *httpError
-	if errors.As(err, &he) && he.status == http.StatusUnauthorized {
+	var he *httpjson.Error
+	if errors.As(err, &he) && he.Status == http.StatusUnauthorized {
 		return "the API token was rejected"
 	}
 	return "could not reach TMDB"

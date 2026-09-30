@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
@@ -65,7 +66,7 @@ func scanAcquisitionRow(row interface{ Scan(...any) error }) (Acquisition, error
 // transition. A poll pass over an unchanged queue must emit nothing, or the
 // event log becomes a heartbeat.
 func (c *Catalog) RecordAcquisition(ctx context.Context, a Acquisition) (bool, error) {
-	now := c.clock.Now().Format(timestampFormat)
+	now := sqlite.FormatTimestamp(c.clock.Now())
 	var created bool
 
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
@@ -208,7 +209,7 @@ type OrphanedDownload struct {
 // The grace absorbs a single transient read that omits a transfer that still
 // exists; it should exceed a couple of poll intervals.
 func (c *Catalog) OrphanedDownloads(ctx context.Context, grace time.Duration) ([]OrphanedDownload, error) {
-	cutoff := c.clock.Now().Add(-grace).Format(timestampFormat)
+	cutoff := sqlite.FormatTimestamp(c.clock.Now().Add(-grace))
 	rows, err := c.db.Reader().QueryContext(ctx, `
 		SELECT a.desired_item_id, a.provider, a.external_id, a.external_name, s.phase
 		FROM acquisitions a
@@ -259,7 +260,7 @@ type StuckIngest struct {
 // verify/ingest holds its dedupe key live throughout, so re-enqueueing a want
 // found here is idempotent regardless.
 func (c *Catalog) StuckIngests(ctx context.Context, grace time.Duration) ([]StuckIngest, error) {
-	cutoff := c.clock.Now().Add(-grace).Format(timestampFormat)
+	cutoff := sqlite.FormatTimestamp(c.clock.Now().Add(-grace))
 	rows, err := c.db.Reader().QueryContext(ctx, `
 		SELECT desired_item_id, phase
 		FROM acquisition_state
@@ -315,7 +316,7 @@ type StuckGrab struct {
 // deliberately absent: without the release in hand to block, re-driving would
 // re-pick and re-fail, so those stay the search beat's business.
 func (c *Catalog) StuckGrabs(ctx context.Context, grace time.Duration) ([]StuckGrab, error) {
-	cutoff := c.clock.Now().Add(-grace).Format(timestampFormat)
+	cutoff := sqlite.FormatTimestamp(c.clock.Now().Add(-grace))
 	rows, err := c.db.Reader().QueryContext(ctx, `
 		SELECT s.desired_item_id, rc.provider, rc.candidate_id, rc.title, a.trouble
 		FROM acquisition_state s

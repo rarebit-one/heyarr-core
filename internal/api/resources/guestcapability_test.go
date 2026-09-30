@@ -21,6 +21,7 @@ import (
 // default trusted net) can browse the shared library and play from it — the two
 // capabilities the lease grants that reach a route.
 func TestGuestFromAnAllowedSourceCanBrowseAndPlay(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth, withGuest).seed()
 
 	// Browse: the read floor its browse capability covers — the library, and the
@@ -49,6 +50,7 @@ func TestGuestFromAnAllowedSourceCanBrowseAndPlay(t *testing.T) {
 // desired), acquire (reconcile), follow, subtitle want/backfill and enrich are
 // all closed to a guest, whose lease carries none of them.
 func TestGuestIsRefusedEveryWriteWithACapabilityCode(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth, withGuest).seed()
 
 	// A desired id to aim the per-item write routes at. The write guard runs
@@ -91,6 +93,7 @@ func TestGuestIsRefusedEveryWriteWithACapabilityCode(t *testing.T) {
 // token reaching the same route proves the 403 is about being a guest, not the
 // route being shut.
 func TestGuestIsRefusedTheConsumptionChokepoints(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth, withGuest).seed().seedBrowse().seedContinue()
 
 	for _, path := range []string{"/api/v1/consumption/sessions", "/api/v1/consumption/continue"} {
@@ -115,6 +118,7 @@ func TestGuestIsRefusedTheConsumptionChokepoints(t *testing.T) {
 // (every write above is refused). The precise lease row is asserted in the
 // leases and guest package tests, on the injected clock.
 func TestGuestLeaseGrantsPlayButNoWrite(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth, withGuest).seed()
 
 	if resp, _ := h.startPlayback(t, asset1ID, device1ID, ""); resp.StatusCode != http.StatusCreated {

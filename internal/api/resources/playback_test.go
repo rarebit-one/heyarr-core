@@ -40,6 +40,7 @@ func (h *harness) startPlayback(t *testing.T, assetID, deviceID, verb string) (*
 
 // One call: plan, session, and somewhere to play from.
 func TestStartingAPlaybackReturnsASessionAndAURL(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	resp, got := h.startPlayback(t, asset1ID, device1ID, "")
@@ -84,6 +85,7 @@ func TestStartingAPlaybackReturnsASessionAndAURL(t *testing.T) {
 // The credential actually works against the blob endpoint, and expires.
 // Issuing a token nobody tried is issuing a claim.
 func TestThePlaybackCredentialWorksAndIsScopedToRead(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, withAuth).seed()
 	writer := h.mint("client", auth.ScopeRead, auth.ScopeWrite)
 
@@ -114,6 +116,7 @@ func TestThePlaybackCredentialWorksAndIsScopedToRead(t *testing.T) {
 // deliverable as the success. A client that cannot distinguish "not supported
 // for you" from "the server is broken" retries the wrong one forever.
 func TestANonDirectPlanIsRefusedWithItsRationaleAndOpensNoSession(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	// A probe the seeded device refuses.
 	h.exec(`INSERT INTO blob_probes
@@ -149,6 +152,7 @@ func TestANonDirectPlanIsRefusedWithItsRationaleAndOpensNoSession(t *testing.T) 
 // .mkv holding only audio is a legitimate thing, and calling it "watching"
 // puts it in the wrong row of every continue-watching list.
 func TestTheVerbIsDerivedFromTheProbe(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		streams  string
@@ -189,6 +193,7 @@ func TestTheVerbIsDerivedFromTheProbe(t *testing.T) {
 // Unprobed media still plays. This is the ADR-0023 case end to end: a node
 // with no ffprobe must still be able to play its library.
 func TestUnprobedMediaStillPlays(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	resp, got := h.startPlayback(t, asset1ID, device1ID, "")
 	if resp.StatusCode != http.StatusCreated {
@@ -203,6 +208,7 @@ func TestUnprobedMediaStillPlays(t *testing.T) {
 }
 
 func TestStartPlaybackRefusals(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 	for _, tc := range []struct {
 		name, body string
@@ -231,6 +237,7 @@ func TestStartPlaybackRefusals(t *testing.T) {
 // nothing looked at it. internal/auth already proves an expired token is
 // rejected (M1-13); what was missing was proof that playback SETS one.
 func TestThePlaybackCredentialExpires(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	_, got := h.startPlayback(t, asset1ID, device1ID, "")

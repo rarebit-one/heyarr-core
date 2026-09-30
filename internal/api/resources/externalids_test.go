@@ -14,6 +14,7 @@ import (
 // A work's stored identifiers are keyed by source, so a client reads
 // `external_ids.tmdb` rather than scanning a list.
 func TestWorkDetailCarriesExternalIDs(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	var got struct {
@@ -35,6 +36,7 @@ func TestWorkDetailCarriesExternalIDs(t *testing.T) {
 // An edition is the other entity type external_ids rows may name, and the rows
 // do not leak across entity types: the edition's tvdb id is not the work's.
 func TestEditionDetailCarriesItsOwnExternalIDs(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	var edition struct {
@@ -63,6 +65,7 @@ func TestEditionDetailCarriesItsOwnExternalIDs(t *testing.T) {
 // never an omitted key: ADR-0025's "no match, never an error" applied to a
 // catalogue identifier, and the shape a client can read without a nil check.
 func TestExternalIDsAreEmptyRatherThanAbsent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	raw := h.body(h.get("/api/v1/works/" + work2ID))
@@ -83,6 +86,7 @@ func TestExternalIDsAreEmptyRatherThanAbsent(t *testing.T) {
 // listing that carried them would pay one lookup per row for a field the list
 // screen does not show.
 func TestWorkListingOmitsExternalIDs(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t).seed()
 
 	var page struct {

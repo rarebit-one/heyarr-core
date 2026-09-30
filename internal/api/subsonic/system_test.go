@@ -15,6 +15,7 @@ import (
 func hexOf(s string) string { return hex.EncodeToString([]byte(s)) }
 
 func TestPing(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	r := h.get("ping", nil)
 	if r.Status != "ok" {
@@ -37,6 +38,7 @@ func TestPing(t *testing.T) {
 // TestPingXMLDefault proves the default format is XML, and that it carries the
 // namespace and OpenSubsonic handshake attributes a strict client parses.
 func TestPingXMLDefault(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	q := h.creds()
 	q.Del("f") // default format
@@ -63,6 +65,7 @@ func TestPingXMLDefault(t *testing.T) {
 }
 
 func TestAuthMissingPassword(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	q := url.Values{"u": {"player"}, "c": {"c"}, "v": {"1.16.1"}, "f": {"json"}}
 	r := decode(t, h.raw("ping", q))
@@ -72,6 +75,7 @@ func TestAuthMissingPassword(t *testing.T) {
 }
 
 func TestAuthWrongPassword(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	q := h.creds()
 	q.Set("p", "not-a-real-token")
@@ -85,6 +89,7 @@ func TestAuthWrongPassword(t *testing.T) {
 // message that tells the user how to fix it — the adapter cannot recompute the
 // MD5 because Heyarr never holds the plaintext token.
 func TestAuthTokenSchemeRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	q := url.Values{
 		"u": {"player"}, "t": {"deadbeef"}, "s": {"salt"},
@@ -102,6 +107,7 @@ func TestAuthTokenSchemeRefused(t *testing.T) {
 // TestPasswordHexEncoded proves the enc:<hex> password form is accepted — some
 // clients send it so the token never appears verbatim in a URL.
 func TestPasswordHexEncoded(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	q := h.creds()
 	q.Set("p", "enc:"+hexOf(h.token))
@@ -112,6 +118,7 @@ func TestPasswordHexEncoded(t *testing.T) {
 }
 
 func TestGetLicense(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	r := h.get("getLicense", nil)
 	if r.License == nil || !r.License.Valid {
@@ -123,6 +130,7 @@ func TestGetLicense(t *testing.T) {
 // client may call before it has a working credential answers without one, and
 // advertises OpenSubsonic support (a present, if empty, extension list).
 func TestOpenSubsonicExtensionsUnauthenticated(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	resp := h.raw("getOpenSubsonicExtensions", url.Values{"f": {"json"}})
 	r := decode(t, resp)
@@ -135,6 +143,7 @@ func TestOpenSubsonicExtensionsUnauthenticated(t *testing.T) {
 }
 
 func TestGetMusicFolders(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	r := h.get("getMusicFolders", nil)
 	if r.MusicFolders == nil {
@@ -149,6 +158,7 @@ func TestGetMusicFolders(t *testing.T) {
 }
 
 func TestUnknownMethod(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	r := h.get("getPodcasts", nil)
 	if r.Status != "failed" || r.Error == nil {

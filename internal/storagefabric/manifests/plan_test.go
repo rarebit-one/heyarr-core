@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/chunking"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
@@ -26,13 +27,12 @@ import (
 // implementation that sorted, reordered or keyed by digest would satisfy every
 // ordering assertion below by coincidence — which is how one sabotage passed
 // on this milestone already.
-func planFixture(t *testing.T, lengths ...int64) (manifests.Manifest, [][]byte) {
+func planFixture(t *testing.T, lengths ...int64) manifests.Manifest {
 	t.Helper()
 	var (
-		chunks  []chunking.Chunk
-		content [][]byte
-		off     int64
-		whole   = hashing.New()
+		chunks []chunking.Chunk
+		off    int64
+		whole  = hashing.New()
 	)
 	for i, n := range lengths {
 		body := bytes.Repeat([]byte{byte('A' + (i*7)%26), byte(i)}, int(n/2))
@@ -43,7 +43,6 @@ func planFixture(t *testing.T, lengths ...int64) (manifests.Manifest, [][]byte) 
 		_, _ = h.Write(body)
 		chunks = append(chunks, chunking.Chunk{Offset: off, Length: n, Digest: h.Sum()})
 		_, _ = whole.Write(body)
-		content = append(content, body)
 		off += n
 	}
 	ascending, descending := true, true
@@ -64,14 +63,14 @@ func planFixture(t *testing.T, lengths ...int64) (manifests.Manifest, [][]byte) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return m, content
+	return m
 }
 
 // With nothing kept and nothing held, every chunk is fetched. The control for
 // everything below: a planner that returned "reuse" for an empty index would
 // pass a saving assertion by fetching nothing at all.
 func TestAPlanWithNoPrefixAndNoIndexFetchesEverything(t *testing.T) {
-	m, _ := planFixture(t, 1024, 2048, 512, 4096)
+	m := planFixture(t, 1024, 2048, 512, 4096)
 
 	plan := manifests.PlanFor(m, 0, nil)
 
@@ -97,7 +96,7 @@ func TestAPlanWithNoPrefixAndNoIndexFetchesEverything(t *testing.T) {
 // A verified prefix is kept and the rest is not, and the boundary is a chunk
 // count rather than a byte offset — ADR-0035's refusal, expressed in the type.
 func TestAVerifiedPrefixIsKeptAndTheRestIsNot(t *testing.T) {
-	m, _ := planFixture(t, 1024, 2048, 512, 4096)
+	m := planFixture(t, 1024, 2048, 512, 4096)
 
 	plan := manifests.PlanFor(m, 2, nil)
 
@@ -123,7 +122,7 @@ func TestAVerifiedPrefixIsKeptAndTheRestIsNot(t *testing.T) {
 // believed. It arrives from a scan of a file, and a file is the thing this
 // milestone assumes is wrong.
 func TestAPrefixCountOutsideTheManifestIsClamped(t *testing.T) {
-	m, _ := planFixture(t, 1024, 2048)
+	m := planFixture(t, 1024, 2048)
 
 	for _, kept := range []int{-5, 99} {
 		plan := manifests.PlanFor(m, kept, nil)
@@ -146,7 +145,7 @@ func TestAPrefixCountOutsideTheManifestIsClamped(t *testing.T) {
 // records WHERE — a blob, an offset, a length — rather than resolving the
 // chunk to an identity (ADR-0034).
 func TestAHeldChunkIsPlannedAsALocalReadFromWhereItIs(t *testing.T) {
-	m, _ := planFixture(t, 1024, 2048, 512)
+	m := planFixture(t, 1024, 2048, 512)
 	donorBlob := hashing.MustParse("blake3:" + strings.Repeat("11", 32))
 	held := map[hashing.Hash][]manifests.LocalChunk{
 		m.Chunks[1].Digest: {{
@@ -182,7 +181,7 @@ func TestAHeldChunkIsPlannedAsALocalReadFromWhereItIs(t *testing.T) {
 // plan declining to schedule a read it can already see describes something
 // else.
 func TestAnIndexEntryThatDoesNotDescribeTheChunkIsNotScheduled(t *testing.T) {
-	m, _ := planFixture(t, 1024, 2048, 512)
+	m := planFixture(t, 1024, 2048, 512)
 	donorBlob := hashing.MustParse("blake3:" + strings.Repeat("22", 32))
 
 	tests := map[string]manifests.LocalChunk{
@@ -213,7 +212,7 @@ func TestAnIndexEntryThatDoesNotDescribeTheChunkIsNotScheduled(t *testing.T) {
 // The first usable candidate wins, deterministically, so that two runs of the
 // same plan schedule the same reads.
 func TestTheFirstUsableDonorIsChosen(t *testing.T) {
-	m, _ := planFixture(t, 1024, 2048)
+	m := planFixture(t, 1024, 2048)
 	first := hashing.MustParse("blake3:" + strings.Repeat("33", 32))
 	second := hashing.MustParse("blake3:" + strings.Repeat("44", 32))
 	held := map[hashing.Hash][]manifests.LocalChunk{
@@ -238,7 +237,7 @@ func TestTheFirstUsableDonorIsChosen(t *testing.T) {
 // it: the bytes are already in the right place and reading them again would be
 // work with no result.
 func TestAKeptChunkIsNotRePlannedAsALocalRead(t *testing.T) {
-	m, _ := planFixture(t, 1024, 2048)
+	m := planFixture(t, 1024, 2048)
 	held := map[hashing.Hash][]manifests.LocalChunk{
 		m.Chunks[0].Digest: {{
 			Digest: m.Chunks[0].Digest, BlobHash: hashing.MustParse("blake3:" + strings.Repeat("55", 32)),
@@ -257,8 +256,8 @@ func TestAKeptChunkIsNotRePlannedAsALocalRead(t *testing.T) {
 // another manifest, one of another length, and one whose entries have been
 // reordered.
 func TestValidateRefusesAPlanThatIsNotThisManifests(t *testing.T) {
-	m, _ := planFixture(t, 1024, 2048, 512)
-	other, _ := planFixture(t, 4096, 4096)
+	m := planFixture(t, 1024, 2048, 512)
+	other := planFixture(t, 4096, 4096)
 
 	if err := manifests.PlanFor(m, 0, nil).Validate(m); err != nil {
 		t.Fatalf("a plan built from this manifest was refused: %v", err)
@@ -284,7 +283,7 @@ func TestValidateRefusesAPlanThatIsNotThisManifests(t *testing.T) {
 // The stats are the number the feature exists to produce, so they are asserted
 // against arithmetic done here rather than against the planner's own totals.
 func TestStatsTotalWhatThePlanSays(t *testing.T) {
-	m, _ := planFixture(t, 1000, 2000, 3000, 4000)
+	m := planFixture(t, 1000, 2000, 3000, 4000)
 	donor := hashing.MustParse("blake3:" + strings.Repeat("66", 32))
 	held := map[hashing.Hash][]manifests.LocalChunk{
 		m.Chunks[2].Digest: {{Digest: m.Chunks[2].Digest, BlobHash: donor, Offset: 0, Length: 3000}},

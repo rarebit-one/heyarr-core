@@ -12,14 +12,15 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rarebit-one/void-which-binds-go/enrolment"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
-	"github.com/rarebit-one/heyarr-core/internal/enrolment"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
-	"github.com/rarebit-one/voidbind-go/notify"
-	vbweblogin "github.com/rarebit-one/voidbind-go/weblogin"
+	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
+	"github.com/rarebit-one/void-which-binds-go/notify"
+	vbweblogin "github.com/rarebit-one/void-which-binds-go/weblogin"
 )
 
 // captureChannel is a fake WakeChannel: it records every ping (and the
@@ -66,14 +67,12 @@ func newPushHarness(t *testing.T) *pushHarness {
 	ctx := context.Background()
 	dir := t.TempDir()
 
+	testdb.WriteMigrated(t, dir+"/heyarr.db")
 	db, err := sqlite.Open(ctx, sqlite.Options{Path: dir + "/heyarr.db"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		t.Fatal(err)
@@ -98,11 +97,23 @@ func newPushHarness(t *testing.T) *pushHarness {
 	return &pushHarness{harness: &harness{ts: ts, h: h, store: store}, ch: ch}
 }
 
-// subscribe registers a device's ntfy wake endpoint through the real, cert-authed
-// POST /v1/subscriptions route — exactly how a phone enrols its wake address.
-func (h *pushHarness) subscribe(t *testing.T, cert, endpoint string) {
+// prove signs a fresh possession proof for cert with the device key — what a
+// client sends beside its cert since void-which-binds-go v0.18 (voidbind-go#70).
+func prove(t *testing.T, devicePriv ed25519.PrivateKey, cert string) string {
 	t.Helper()
-	body := `{"cert":"` + cert + `","channel":"ntfy","endpoint":"` + endpoint + `"}`
+	proof, err := enrolment.SignPossession(devicePriv, cert, time.Now().UTC(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return proof
+}
+
+// subscribe registers a device's ntfy wake endpoint through the real, cert-authed
+// POST /v1/subscriptions route — exactly how a phone enrols its wake address: the
+// cert plus a possession proof for it.
+func (h *pushHarness) subscribe(t *testing.T, cert string, devicePriv ed25519.PrivateKey, endpoint string) {
+	t.Helper()
+	body := `{"cert":"` + cert + `","possession":"` + prove(t, devicePriv, cert) + `","channel":"ntfy","endpoint":"` + endpoint + `"}`
 	resp, err := h.ts.Client().Post(h.ts.URL+weblogin.SubscriptionsPrefix, "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -120,8 +131,8 @@ func (h *pushHarness) subscribe(t *testing.T, cert, endpoint string) {
 func TestPushWakesSubscribedUserOnLoginInit(t *testing.T) {
 	t.Parallel()
 	h := newPushHarness(t)
-	cert, _ := h.enrolledDevice(t)
-	h.subscribe(t, cert, "https://ntfy.example/heyarr-me")
+	cert, priv := h.enrolledDevice(t)
+	h.subscribe(t, cert, priv, "https://ntfy.example/heyarr-me")
 
 	cr := h.create(t) // POST /login
 
@@ -159,8 +170,8 @@ func TestPushSkipsUnsubscribedUser(t *testing.T) {
 func TestPushPingIsOpaque(t *testing.T) {
 	t.Parallel()
 	h := newPushHarness(t)
-	cert, _ := h.enrolledDevice(t)
-	h.subscribe(t, cert, "https://ntfy.example/heyarr-me")
+	cert, priv := h.enrolledDevice(t)
+	h.subscribe(t, cert, priv, "https://ntfy.example/heyarr-me")
 
 	cr := h.create(t)
 
@@ -202,10 +213,10 @@ func TestPushPingIsOpaque(t *testing.T) {
 func TestSubscriptionRoutesBehindCertAuth(t *testing.T) {
 	t.Parallel()
 	h := newPushHarness(t)
-	cert, _ := h.enrolledDevice(t)
+	cert, priv := h.enrolledDevice(t)
 
 	// Register: the enrolled device subscribes a wake endpoint → 200.
-	body := `{"cert":"` + cert + `","channel":"ntfy","endpoint":"https://ntfy.example/heyarr-me"}`
+	body := `{"cert":"` + cert + `","possession":"` + prove(t, priv, cert) + `","channel":"ntfy","endpoint":"https://ntfy.example/heyarr-me"}`
 	resp, err := h.ts.Client().Post(h.ts.URL+weblogin.SubscriptionsPrefix, "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -260,5 +271,50 @@ func TestSubscriptionRoutesBehindCertAuth(t *testing.T) {
 	_ = h.create(t)
 	if got := h.ch.captured(); len(got) != 0 {
 		t.Fatalf("captured %d pings after unsubscribe, want 0", len(got))
+	}
+}
+
+// postSubscription POSTs a raw body to /v1/subscriptions and returns the status.
+func (h *pushHarness) postSubscription(t *testing.T, body string) int {
+	t.Helper()
+	resp, err := h.ts.Client().Post(h.ts.URL+weblogin.SubscriptionsPrefix, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+// TestSubscriptionAcceptsABareCertForCompatibility: a phone on the pre-v0.18
+// wire sends only its cert. It is still served (notify.Registry.AllowBareCert) —
+// the cert must name a current member, and its wake endpoint is registered — so
+// deployed phones keep their push login across the upgrade.
+func TestSubscriptionAcceptsABareCertForCompatibility(t *testing.T) {
+	t.Parallel()
+	h := newPushHarness(t)
+	cert, _ := h.enrolledDevice(t)
+
+	if got := h.postSubscription(t, `{"cert":"`+cert+`","channel":"ntfy","endpoint":"https://ntfy.example/bare"}`); got != http.StatusOK {
+		t.Fatalf("bare-cert register = %d, want 200", got)
+	}
+	_ = h.create(t)
+	if got := h.ch.captured(); len(got) != 1 {
+		t.Fatalf("captured %d pings for a bare-cert subscriber, want 1", len(got))
+	}
+}
+
+// TestSubscriptionRefusesAForeignProof: a proof signed by a key other than the
+// cert's device — someone replaying a seen cert with their own key — is refused.
+func TestSubscriptionRefusesAForeignProof(t *testing.T) {
+	t.Parallel()
+	h := newPushHarness(t)
+	cert, _ := h.enrolledDevice(t)
+	_, otherPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"cert":"` + cert + `","possession":"` + prove(t, otherPriv, cert) + `","channel":"ntfy","endpoint":"https://ntfy.example/x"}`
+	if got := h.postSubscription(t, body); got != http.StatusUnauthorized {
+		t.Fatalf("foreign-proof register = %d, want 401", got)
 	}
 }

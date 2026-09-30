@@ -7,7 +7,8 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/rarebit-one/heyarr-core/internal/hashing"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/chunking"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"

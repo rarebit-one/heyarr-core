@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/rarebit-one/voidbind-go/relay"
+	"github.com/rarebit-one/void-which-binds-go/relay"
 )
 
 // The offload exchange rides the voidbind pairing relay (ADR-0002) as a second

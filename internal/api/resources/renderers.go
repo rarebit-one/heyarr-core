@@ -198,8 +198,7 @@ type playOnRendererRequest struct {
 // session for a playback it never started.
 func (a *API) playOnRenderer(w http.ResponseWriter, r *http.Request) {
 	var body playOnRendererRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	if err := required("asset_id", body.AssetID); err != nil {
@@ -298,8 +297,7 @@ type seekRequest struct {
 
 func (a *API) seekRenderer(w http.ResponseWriter, r *http.Request) {
 	var body seekRequest
-	if err := decodeJSON(w, r, &body); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if !decodeOr400(w, r, &body) {
 		return
 	}
 	_, ctrl, err := a.controllerFor(r.Context(), chi.URLParam(r, "udn"))

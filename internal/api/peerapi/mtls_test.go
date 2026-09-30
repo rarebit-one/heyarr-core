@@ -282,6 +282,7 @@ func decodeIdentity(t *testing.T, body string) peerapi.IdentityResponse {
 // the happy path, asserted as an identity rather than as a status
 
 func TestTwoEnrolledPeersCompleteAMutuallyAuthenticatedRequest(t *testing.T) {
+	t.Parallel()
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
 	root := newTrustRoot(a.member(), b.member())
@@ -324,6 +325,7 @@ func TestTwoEnrolledPeersCompleteAMutuallyAuthenticatedRequest(t *testing.T) {
 // and the day a DNS record moved it would stream a complete library to
 // whatever answered on that port.
 func TestTheDiallerPinsTheListenerToo(t *testing.T) {
+	t.Parallel()
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
 	serverRoot := newTrustRoot(a.member(), b.member())
@@ -349,6 +351,7 @@ func TestTheDiallerPinsTheListenerToo(t *testing.T) {
 // the refusals, each at the connection level
 
 func TestAKeyThatIsNotAMemberIsRefusedDuringTheHandshake(t *testing.T) {
+	t.Parallel()
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
 	stranger := newPeerNode(t, "stranger-id", "stranger")
@@ -381,6 +384,7 @@ func TestAKeyThatIsNotAMemberIsRefusedDuringTheHandshake(t *testing.T) {
 }
 
 func TestNoClientCertificateAtAllIsRefusedDuringTheHandshake(t *testing.T) {
+	t.Parallel()
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
 	root := newTrustRoot(a.member(), b.member())
@@ -411,6 +415,7 @@ func TestNoClientCertificateAtAllIsRefusedDuringTheHandshake(t *testing.T) {
 // That is what a pin is for, and it is the case a check written against the
 // certificate's subject would sail straight through.
 func TestASubstitutedKeyIsRefused(t *testing.T) {
+	t.Parallel()
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
 	root := newTrustRoot(a.member(), b.member())
@@ -442,6 +447,7 @@ func TestASubstitutedKeyIsRefused(t *testing.T) {
 }
 
 func TestAnExpiredCertificateIsRefusedAndARegeneratedOneIsAccepted(t *testing.T) {
+	t.Parallel()
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 
 	// A node whose clock — and therefore whose certificate — is two hours
@@ -485,6 +491,7 @@ func TestAnExpiredCertificateIsRefusedAndARegeneratedOneIsAccepted(t *testing.T)
 // sufficient": a token gets a caller nowhere here, and its absence costs an
 // enrolled peer nothing.
 func TestABearerTokenIsNotAPeerCredential(t *testing.T) {
+	t.Parallel()
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
 	root := newTrustRoot(a.member(), b.member())
@@ -522,6 +529,7 @@ func TestABearerTokenIsNotAPeerCredential(t *testing.T) {
 // membership is consulted per connection AND per request
 
 func TestMembershipIsConsultedPerConnectionAndPerRequest(t *testing.T) {
+	t.Parallel()
 	a := newPeerNode(t, "peer-a-id", "peer-a")
 	b := newPeerNode(t, "peer-b-id", "peer-b")
 	root := newTrustRoot(a.member(), b.member())
