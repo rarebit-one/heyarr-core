@@ -1,6 +1,6 @@
 # 0092. Discovery is one search, and the result — not the door — carries the action
 
-**Status:** Proposed (2026-09-10)
+**Status:** Accepted (2026-09-30)
 **Date:** 2026-09-10
 **Milestone:** M12 — Followed Sources / The Archive (Phase 6)
 
