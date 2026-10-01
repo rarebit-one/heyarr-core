@@ -1,0 +1,18 @@
+{
+  "mode": "prove",
+  "stage": "<dir>/stage",
+  "proof": "device-only",
+  "gen1_user": "ed25519:<hex>",
+  "gen1_recovery": "x25519:<hex>",
+  "gen2_user": "ed25519:<hex>",
+  "gen2_recovery": "x25519:<hex>",
+  "device_recipient": "x25519:<hex>",
+  "blob_generated_at": "2026-09-25T00:00:00Z",
+  "spaces": [
+    {
+      "space_id": "0199a0b0-0000-7000-8000-000000000001",
+      "kind": "vault",
+      "proved": "ok"
+    }
+  ]
+}

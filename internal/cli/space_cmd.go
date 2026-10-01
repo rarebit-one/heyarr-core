@@ -61,6 +61,7 @@ it.`,
 		newSpaceCompactCommand(opts, configPath),
 		newSpaceRecoverCommand(opts, configPath, &deviceDir),
 		newSpaceExportRecoveryCommand(opts, configPath),
+		newSpaceRewrapCommand(opts, configPath, &deviceDir),
 	)
 	return cmd
 }

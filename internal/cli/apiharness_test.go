@@ -108,6 +108,7 @@ type apiHarness struct {
 	tokens     *auth.Store
 	identities *deviceauth.Store
 	cas        *cas.FS
+	spaces     *psstore.Store
 	clock      *testClock
 	configPath string
 	dataDir    string
@@ -128,6 +129,10 @@ type harnessOptions struct {
 	// address actually bound. A test sets it to somewhere nothing answers to
 	// prove a command went over the SOCKET rather than over TCP.
 	clientAddr string
+	// wrapAuthorizer turns on enrol-before-wrap (ADR-0049) on the
+	// personal-state API, as a controller wires it, so a wrap for a recipient
+	// that is not pinned is refused.
+	wrapAuthorizer bool
 }
 
 type harnessOption func(*harnessOptions)
@@ -135,6 +140,10 @@ type harnessOption func(*harnessOptions)
 // withAPIAuth turns authentication on, which is what the credential-resolution
 // tests need.
 func withAPIAuth(o *harnessOptions) { o.auth = true }
+
+// withWrapAuthorizer wires the device store as the personal-state API's
+// recipient authorizer.
+func withWrapAuthorizer(o *harnessOptions) { o.wrapAuthorizer = true }
 
 // withDataDir puts the harness in a directory the test chose.
 func withDataDir(dir string) harnessOption {
@@ -242,7 +251,11 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	psAPI, err := personalstateapi.New(personalstateapi.Options{Store: psStore})
+	psOpts := personalstateapi.Options{Store: psStore}
+	if ho.wrapAuthorizer {
+		psOpts.Authorizer = identities
+	}
+	psAPI, err := personalstateapi.New(psOpts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +292,7 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 	}
 	h := &apiHarness{
 		t: t, db: db, jobs: queue, events: eventLog, tokens: store, identities: identities,
-		cas: store2, clock: clock, dataDir: dir, bound: ho.bind,
+		cas: store2, spaces: psStore, clock: clock, dataDir: dir, bound: ho.bind,
 	}
 
 	configPath := filepath.Join(dir, "heyarr.yaml")

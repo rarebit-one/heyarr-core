@@ -38,7 +38,7 @@ stable.
 - **The space recovery blob is `heyarr-recovery-blob-v2`.** Its body and every
   wrapped key in it are sealed under the gen2 labels. A gen1
   `heyarr-recovery-blob-v1` file is refused as `ErrNotABlob`, with a message
-  naming the cutover's rewrap (void-which-binds-go's `migrate/gen1`, a later
+  naming the cutover's rewrap (void-which-binds-go's `migrate/gen1`, through
   `heyarr space rewrap`) as the only reader.
 - **`/v1/unwrap-wake` refuses a bare cert.** A request must carry a possession
   proof (in `possession`, or as the `<cert>~<proof>` device credential); one
@@ -50,6 +50,28 @@ stable.
   `getVoidWhichBindsPairSlot`) and docs use the Void-Which-Binds names.
 
 ### Added
+
+- **`heyarr space rewrap` moves every space key from gen1 to gen2 for the
+  cutover** (void-which-binds ADR-0022, C2 steps 4 to 7). The space keys and
+  content are unchanged; each key is sealed afresh to the gen2 laptop device
+  and the gen2 recovery key. It has three modes. `--from <gen1.blob> --stage
+  <dir> --expect-db <db copy> [--expect <export.json>]` runs offline. It opens
+  the pre-cutover `space export-recovery` blob with the gen1 secret or shares,
+  through void-which-binds-go's read-only `migrate/gen1`. It writes `<dir>`
+  (0700, new): `manifest.json` (`heyarr-rewrap-stage-v1`), a gen2
+  `recovery.blob` and `SHA256SUMS`, then proves them. The staged spaces must be
+  exactly `encrypted_spaces` in the read-only database copy, and `--expect`'s
+  `space_ids` when given. Any difference names every id and writes nothing.
+  `--prove <dir> [--gen2-secret-file <f>]` opens every space through the gen2
+  secret alone, the device and the recovery blob, and checks they give the same
+  key. Without the secret it proves the device wraps only. `--upload <dir>`
+  runs as the enrolled gen2 device. It checks the controller holds exactly the
+  staged spaces and that each key opens the space's newest content, then
+  uploads and reads back the two wraps. It is safe to re-run and never deletes
+  a wrap. Secrets come only from `--gen1-secret-file` and `--gen2-secret-file`
+  (one of them may be `-` for standard input), never from argv or a prompt. The
+  cruciform custody backend is refused for the offline modes. `--json` is
+  supported.
 
 - **`heyarr admin user rekey <principal> <ed25519:…> --recovery-key <x25519:…>`
   replaces a pinned user identity's key in place** (void-which-binds ADR-0022,
