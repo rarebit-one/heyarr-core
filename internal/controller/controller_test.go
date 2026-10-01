@@ -253,3 +253,28 @@ func TestTheControllerRefusesAnUnauthenticatedPublicBind(t *testing.T) {
 		t.Errorf("error = %v, want it to name the refusal", err)
 	}
 }
+
+// A configured notify plane needs its bearer on EVERY node (ADR-0102), not
+// only on one that mounts web login: a loopback-only node (no render base, so
+// no login) with notify.url set and no token must still refuse to start.
+func TestNotifyPlaneWithoutBearerStopsStartupWithoutWebLogin(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Notify.URL = "https://notify.example:2587"
+	cfg.Notify.EnqueueTokenFile = ""
+	t.Setenv("HEYARR_NOTIFY_ENQUEUE_TOKEN", "")
+	if base := renderBaseURL(cfg); base != "" {
+		t.Fatalf("precondition: test node should mount no web login, got render base %q", base)
+	}
+
+	// A live context: Run must fail while building the server. Had it started,
+	// it would serve until the deadline and then return nil.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := New(cfg, discard()).Run(ctx)
+	if err == nil {
+		t.Fatal("a notify.url with no bearer started anyway")
+	}
+	if !strings.Contains(err.Error(), "notify") {
+		t.Fatalf("startup failed for another reason: %v", err)
+	}
+}

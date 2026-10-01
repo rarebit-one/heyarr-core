@@ -160,14 +160,23 @@ func loginInitPush(next http.Handler, n loginNotifier, log *slog.Logger) http.Ha
 			return
 		}
 		// Best-effort: a wake error never surfaces to the browser (the QR the
-		// relayed response already carried is the fallback).
+		// relayed response already carried is the fallback). The wake runs in its
+		// own goroutine so this handler returns and the response COMPLETES at once:
+		// a flush alone leaves the body open, and the sign-in page's r.json() waits
+		// for EOF before showing the QR.
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), loginPushTimeout)
-		defer cancel()
-		if _, err := n.NotifyLogin(ctx, id); err != nil && log != nil {
-			log.Warn("push: waking devices for login", "login", id, "err", err)
-		}
+		runLoginWake(func() {
+			defer cancel()
+			if _, err := n.NotifyLogin(ctx, id); err != nil && log != nil {
+				log.Warn("push: waking devices for login", "login", id, "err", err)
+			}
+		})
 	})
 }
+
+// runLoginWake runs a login wake off the request path. Tests replace it to wait
+// for the wake.
+var runLoginWake = func(wake func()) { go wake() }
 
 // loginIDFromBody pulls the "id" field out of a weblogin create response
 // (`{"id":"...","qr":"...",...}`). A body that does not parse or carries no id

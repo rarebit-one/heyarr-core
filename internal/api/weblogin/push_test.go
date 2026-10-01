@@ -118,7 +118,13 @@ func newPushHarness(t *testing.T) *pushHarness {
 // its QR back must settle before asserting what the plane received. Closing an
 // httptest.Server blocks until its outstanding handlers return (and the later
 // cleanup Close is a no-op).
-func (h *pushHarness) settle() { h.ts.Close() }
+// settle closes the test server, then waits for every login wake still in
+// flight; wakes run off the request path, so closing the server alone does not
+// wait for them.
+func (h *pushHarness) settle() {
+	h.ts.Close()
+	weblogin.LoginWakes.Wait()
+}
 
 // pinnedUserIDs lists the user ids heyarr has pinned, in store order.
 func (h *harness) pinnedUserIDs(t *testing.T) []string {
@@ -267,8 +273,30 @@ func TestPushIsNotOnTheQRsCriticalPath(t *testing.T) {
 	h := &pushHarness{harness: newHarnessWith(t, func(o *weblogin.Options) { o.LoginWaker = c }), plane: plane}
 	_, _ = h.enrolledDevice(t)
 
-	if cr := h.create(t); cr.QR == "" { // returns although the plane has not answered
-		t.Fatal("login init returned no QR")
+	// Read the create response to EOF, as the sign-in page's r.json() does: a
+	// wake on the request path would hold the body open until the held plane
+	// answered, even after the QR chunk was flushed.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.ts.URL+"/login", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := h.ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		close(plane.hold) // let the server's Close in cleanup finish
+		t.Fatalf("login init body did not complete while the plane was held: %v", err)
+	}
+	var cr struct {
+		QR string `json:"qr"`
+	}
+	if err := json.Unmarshal(body, &cr); err != nil || cr.QR == "" {
+		t.Fatalf("login init returned no QR: %v %q", err, body)
 	}
 	close(plane.hold)
 	h.settle()
