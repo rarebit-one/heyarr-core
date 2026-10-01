@@ -15,33 +15,41 @@ laptop device and the gen2 recovery key. Three modes, one at a time:
     void-which-binds-go's read-only migrate/gen1 package. Seals each key to this
     machine's device key (the configured custody backend; it must unwrap here,
     offline) and to the gen2 recovery key, and writes <dir>, which must not
-    exist: manifest.json, recovery.blob (a gen2 recovery blob) and SHA256SUMS.
-    The staged spaces must be EXACTLY the rows of encrypted_spaces in
-    --expect-db (a copy of the frozen controller's backup, opened read-only),
-    and exactly the space_ids of --expect when given. Any missing or extra
-    space is a hard stop and nothing is written. It then proves the stage.
+    exist: manifest.json, recovery.blob (a gen2 recovery blob), SHA256SUMS and
+    STAGE-MAC. The staged spaces must be EXACTLY the rows of encrypted_spaces
+    in --expect-db (a copy of the frozen controller's backup, opened
+    read-only), and exactly the space_ids of --expect when given. Any missing
+    or extra space is a hard stop and nothing is written. It then proves the
+    stage.
 
---prove <dir> [--gen2-secret-file <f>]
-    Opens every staged wrap with the gen2 secret alone and with this device,
-    opens recovery.blob with the gen2 secret, and checks all three give the
-    same key for every space and that SHA256SUMS match. Without the gen2 secret
-    only the device wraps are proved.
+--prove <dir>
+    Checks STAGE-MAC under the gen2 secret, opens every staged wrap with the
+    gen2 secret alone and with this device, opens recovery.blob with the gen2
+    secret, and checks all three give the same key for every space and that
+    SHA256SUMS match.
 
 --upload <dir>
-    ONLINE, as the enrolled gen2 device. Proves the device wraps, checks the
-    controller holds exactly the staged spaces, checks each key opens the
-    space's newest content (its latest snapshot, else its newest change; a
-    space with no content is reported uploaded-empty), then uploads the device and gen2 recovery wraps and reads them back. Re-running
-    it is safe. It never deletes a wrap, gen1 ones included. The controller
-    accepts the recovery wrap only once `heyarr admin user rekey` has pinned
-    the gen2 recovery key.
+    ONLINE, as the enrolled gen2 device. Proves the stage as --prove does,
+    checks the controller holds exactly the staged spaces, checks each key
+    opens the space's newest content (its latest snapshot, else its newest
+    change; a space with no content is reported uploaded-empty), then uploads
+    the device and gen2 recovery wraps and reads them back. Re-running it is
+    safe. It never deletes a wrap, gen1 ones included. The controller accepts
+    the recovery wrap only once `heyarr admin user rekey` has pinned the
+    gen2 recovery key.
+
+STAGE-MAC is an HMAC-SHA256 over the other three files, keyed from the gen2
+secret, so every mode needs --gen2-secret-file: a stage that was changed after
+--stage, by anyone without the gen2 secret, is refused before anything in it is
+used. That is what makes a space with no content safe to upload, with nothing
+on the controller to check its key against.
 
 Secrets are read from FILES only, never argv or a prompt: --gen1-secret-file
 and --gen2-secret-file, either of which (not both) may be "-" for standard
 input. Each holds the recovery secret, or its SLIP-39 shares one per line.
 
 ```
-heyarr space rewrap (--from <gen1.blob> --stage <dir> | --prove <dir> | --upload <dir>) [flags]
+heyarr space rewrap (--from <gen1.blob> --stage <dir> | --prove <dir> | --upload <dir>) --gen2-secret-file <f> [flags]
 ```
 
 ### Options
@@ -52,7 +60,7 @@ heyarr space rewrap (--from <gen1.blob> --stage <dir> | --prove <dir> | --upload
       --expect-db string          with --from: a COPY of the frozen controller database; the staged spaces must equal its encrypted_spaces
       --from string               stage from this gen1 recovery blob (offline)
       --gen1-secret-file string   with --from: read the gen1 recovery secret or shares from this file ("-": standard input)
-      --gen2-secret-file string   read the gen2 recovery secret or shares from this file ("-": standard input)
+      --gen2-secret-file string   every mode: read the gen2 recovery secret or shares from this file ("-": standard input); it keys the stage MAC
       --identity-dir string       with --from: where your gen2 user identity lives; when one is there, its recovery key must be the gen2 secret's (default: your config directory; VOID_WHICH_BINDS_IDENTITY_DIR overrides)
       --json                      emit machine-readable JSON
       --prove string              prove this stage directory (offline)

@@ -1,7 +1,7 @@
 {
   "mode": "upload",
   "stage": "<dir>/stage",
-  "proof": "device-only",
+  "proof": "full",
   "gen1_user": "ed25519:<hex>",
   "gen1_recovery": "x25519:<hex>",
   "gen2_user": "ed25519:<hex>",

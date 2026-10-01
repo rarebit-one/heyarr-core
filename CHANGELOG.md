@@ -59,19 +59,25 @@ stable.
   the pre-cutover `space export-recovery` blob with the gen1 secret or shares,
   through void-which-binds-go's read-only `migrate/gen1`. It writes `<dir>`
   (0700, new): `manifest.json` (`heyarr-rewrap-stage-v1`), a gen2
-  `recovery.blob` and `SHA256SUMS`, then proves them. The staged spaces must be
-  exactly `encrypted_spaces` in the read-only database copy, and `--expect`'s
-  `space_ids` when given. Any difference names every id and writes nothing.
-  `--prove <dir> [--gen2-secret-file <f>]` opens every space through the gen2
-  secret alone, the device and the recovery blob, and checks they give the same
-  key. Without the secret it proves the device wraps only. `--upload <dir>`
-  runs as the enrolled gen2 device. It checks the controller holds exactly the
-  staged spaces and that each key opens the space's newest content, then
-  uploads and reads back the two wraps. It is safe to re-run and never deletes
-  a wrap. Secrets come only from `--gen1-secret-file` and `--gen2-secret-file`
-  (one of them may be `-` for standard input), never from argv or a prompt. The
-  cruciform custody backend is refused for the offline modes. `--json` is
-  supported.
+  `recovery.blob`, `SHA256SUMS` and `STAGE-MAC`, then proves them. The staged
+  spaces must be exactly `encrypted_spaces` in the read-only database copy,
+  and `--expect`'s `space_ids` when given. Any difference names every id and
+  writes nothing. `--prove <dir>` opens every space through the gen2 secret
+  alone, the device and the recovery blob, and checks they give the same key.
+  `--upload <dir>` runs as the enrolled gen2 device. It proves the stage in
+  full, checks the controller holds exactly the staged spaces and that each
+  key opens the space's newest content, then uploads and reads back the two
+  wraps. A space with no content is uploaded as `uploaded-empty`. It is safe
+  to re-run and never deletes a wrap. `STAGE-MAC` is an HMAC-SHA256 over the
+  other three files, keyed by HKDF-SHA256 from the gen2 secret under
+  `heyarr/rewrap-stage-mac/v1` (#692). Every mode therefore takes
+  `--gen2-secret-file`, and `--prove` and `--upload` refuse a stage whose tag
+  does not verify before they use anything in it. Without the MAC, anyone who
+  could write to the stage could swap an empty space's wraps for ones of a key
+  they know and recompute `SHA256SUMS`. Secrets come only from
+  `--gen1-secret-file` and `--gen2-secret-file` (one of them may be `-` for
+  standard input), never from argv or a prompt. The cruciform custody backend
+  is refused for the offline modes. `--json` is supported.
 
 - **`heyarr admin user rekey <principal> <ed25519:…> --recovery-key <x25519:…>`
   replaces a pinned user identity's key in place** (void-which-binds ADR-0022,

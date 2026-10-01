@@ -48,6 +48,7 @@ const (
 	rewrapManifestFile = "manifest.json"
 	rewrapBlobFile     = "recovery.blob"
 	rewrapSumsFile     = "SHA256SUMS"
+	// rewrapMACFile (STAGE-MAC) is in space_rewrap_mac.go.
 )
 
 // rewrapManifest is a stage directory's manifest.json. It holds only public
@@ -82,8 +83,9 @@ type spaceRewrapView struct {
 	// Mode is "stage", "prove" or "upload".
 	Mode  string `json:"mode"`
 	Stage string `json:"stage"`
-	// Proof is "full" (the gen2 secret alone, the device, and the recovery blob
-	// all open every space to the same key) or "device-only".
+	// Proof is "full": the stage's MAC verifies under the gen2 secret, and the
+	// gen2 secret alone, the device, and the recovery blob all open every space
+	// to the same key. Every mode proves the stage in full.
 	Proof           string                 `json:"proof"`
 	Gen1User        string                 `json:"gen1_user"`
 	Gen1Recovery    string                 `json:"gen1_recovery"`
@@ -100,7 +102,8 @@ type spaceRewrapSpaceView struct {
 	// Proved is "ok" for every space; a space that fails is an error, not a row.
 	Proved string `json:"proved"`
 	// Upload is "uploaded", "uploaded-empty" (no content to check the key
-	// against) or "already-present" in upload mode.
+	// against; the stage MAC vouches for it) or "already-present" in upload
+	// mode.
 	Upload string `json:"upload,omitempty"`
 }
 
@@ -118,7 +121,7 @@ func newSpaceRewrapCommand(_ Options, configPath, deviceDir *string) *cobra.Comm
 		identityDir string
 	)
 	cmd := &cobra.Command{
-		Use:   "rewrap (--from <gen1.blob> --stage <dir> | --prove <dir> | --upload <dir>)",
+		Use:   "rewrap (--from <gen1.blob> --stage <dir> | --prove <dir> | --upload <dir>) --gen2-secret-file <f>",
 		Short: "Rewrap every space key from the gen1 recovery blob to gen2 (void-which-binds ADR-0022 cutover)",
 		Long: `Move every space key from gen1 (Voidbind) to gen2 (Void-Which-Binds) during the
 cutover (void-which-binds-go ADR-0022, C2 steps 4 to 7). The space keys do not
@@ -131,26 +134,34 @@ laptop device and the gen2 recovery key. Three modes, one at a time:
     void-which-binds-go's read-only migrate/gen1 package. Seals each key to this
     machine's device key (the configured custody backend; it must unwrap here,
     offline) and to the gen2 recovery key, and writes <dir>, which must not
-    exist: manifest.json, recovery.blob (a gen2 recovery blob) and SHA256SUMS.
-    The staged spaces must be EXACTLY the rows of encrypted_spaces in
-    --expect-db (a copy of the frozen controller's backup, opened read-only),
-    and exactly the space_ids of --expect when given. Any missing or extra
-    space is a hard stop and nothing is written. It then proves the stage.
+    exist: manifest.json, recovery.blob (a gen2 recovery blob), SHA256SUMS and
+    STAGE-MAC. The staged spaces must be EXACTLY the rows of encrypted_spaces
+    in --expect-db (a copy of the frozen controller's backup, opened
+    read-only), and exactly the space_ids of --expect when given. Any missing
+    or extra space is a hard stop and nothing is written. It then proves the
+    stage.
 
---prove <dir> [--gen2-secret-file <f>]
-    Opens every staged wrap with the gen2 secret alone and with this device,
-    opens recovery.blob with the gen2 secret, and checks all three give the
-    same key for every space and that SHA256SUMS match. Without the gen2 secret
-    only the device wraps are proved.
+--prove <dir>
+    Checks STAGE-MAC under the gen2 secret, opens every staged wrap with the
+    gen2 secret alone and with this device, opens recovery.blob with the gen2
+    secret, and checks all three give the same key for every space and that
+    SHA256SUMS match.
 
 --upload <dir>
-    ONLINE, as the enrolled gen2 device. Proves the device wraps, checks the
-    controller holds exactly the staged spaces, checks each key opens the
-    space's newest content (its latest snapshot, else its newest change; a
-    space with no content is reported uploaded-empty), then uploads the device and gen2 recovery wraps and reads them back. Re-running
-    it is safe. It never deletes a wrap, gen1 ones included. The controller
-    accepts the recovery wrap only once ` + "`heyarr admin user rekey`" + ` has pinned
-    the gen2 recovery key.
+    ONLINE, as the enrolled gen2 device. Proves the stage as --prove does,
+    checks the controller holds exactly the staged spaces, checks each key
+    opens the space's newest content (its latest snapshot, else its newest
+    change; a space with no content is reported uploaded-empty), then uploads
+    the device and gen2 recovery wraps and reads them back. Re-running it is
+    safe. It never deletes a wrap, gen1 ones included. The controller accepts
+    the recovery wrap only once ` + "`heyarr admin user rekey`" + ` has pinned the
+    gen2 recovery key.
+
+STAGE-MAC is an HMAC-SHA256 over the other three files, keyed from the gen2
+secret, so every mode needs --gen2-secret-file: a stage that was changed after
+--stage, by anyone without the gen2 secret, is refused before anything in it is
+used. That is what makes a space with no content safe to upload, with nothing
+on the controller to check its key against.
 
 Secrets are read from FILES only, never argv or a prompt: --gen1-secret-file
 and --gen2-secret-file, either of which (not both) may be "-" for standard
@@ -166,9 +177,12 @@ input. Each holds the recovery secret, or its SLIP-39 shares one per line.`,
 				}
 				return set
 			}
+			if gen2File == "" {
+				return errors.New("every mode needs --gen2-secret-file: the stage is authenticated with a MAC keyed from the gen2 secret")
+			}
 			switch {
 			case from != "":
-				if stage == "" || expectDB == "" || gen1File == "" || gen2File == "" {
+				if stage == "" || expectDB == "" || gen1File == "" {
 					return errors.New("--from needs --stage, --expect-db, --gen1-secret-file and --gen2-secret-file")
 				}
 				v, err := runRewrapStage(cmd, configPath, *deviceDir, identityDir, rewrapStageInput{
@@ -188,11 +202,17 @@ input. Each holds the recovery secret, or its SLIP-39 shares one per line.`,
 				}
 				return emitRewrap(cmd, flags.asJSON, v)
 			case upload != "":
-				if bad := changed("stage", "expect-db", "expect", "gen1-secret-file", "gen2-secret-file", "identity-dir"); len(bad) > 0 {
-					return fmt.Errorf("--upload does not take %s (it proves the device wraps only, and needs no secret)", strings.Join(bad, ", "))
+				if bad := changed("stage", "expect-db", "expect", "gen1-secret-file", "identity-dir"); len(bad) > 0 {
+					return fmt.Errorf("--upload does not take %s", strings.Join(bad, ", "))
+				}
+				// The secret is read before the client is made, so a bad one
+				// fails without touching the network.
+				secret, err := readGen2Secret(cmd, gen2File)
+				if err != nil {
+					return err
 				}
 				return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-					v, err := runRewrapUpload(ctx, c, configPath, *deviceDir, upload)
+					v, err := runRewrapUpload(ctx, c, configPath, *deviceDir, upload, secret)
 					if err != nil {
 						return err
 					}
@@ -212,7 +232,7 @@ input. Each holds the recovery secret, or its SLIP-39 shares one per line.`,
 	f.StringVar(&prove, "prove", "", "prove this stage directory (offline)")
 	f.StringVar(&upload, "upload", "", "upload this stage directory's wraps as this enrolled device (online)")
 	f.StringVar(&gen1File, "gen1-secret-file", "", `with --from: read the gen1 recovery secret or shares from this file ("-": standard input)`)
-	f.StringVar(&gen2File, "gen2-secret-file", "", `read the gen2 recovery secret or shares from this file ("-": standard input)`)
+	f.StringVar(&gen2File, "gen2-secret-file", "", `every mode: read the gen2 recovery secret or shares from this file ("-": standard input); it keys the stage MAC`)
 	f.StringVar(&identityDir, "identity-dir", "",
 		"with --from: where your gen2 user identity lives; when one is there, its recovery key must be the gen2 secret's (default: your config directory; "+useridentity.EnvDir+" overrides)")
 	cmd.MarkFlagsMutuallyExclusive("from", "prove", "upload")
@@ -391,8 +411,9 @@ func runRewrapStage(cmd *cobra.Command, configPath *string, deviceDir, identityD
 	return writeAndProveStage(in.stage, m, blobData, g2, cust)
 }
 
-// writeAndProveStage writes the stage to a temporary sibling directory, proves
-// it there, and renames it into place, so a failure leaves nothing behind.
+// writeAndProveStage writes the stage to a temporary sibling directory, MACs it
+// under the gen2 secret, proves it there, and renames it into place, so a
+// failure leaves nothing behind.
 func writeAndProveStage(stage string, m rewrapManifest, blobData []byte, g2 recovery.Secret, cust client.Custody) (spaceRewrapView, error) {
 	manifestData, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -414,20 +435,25 @@ func writeAndProveStage(stage string, m rewrapManifest, blobData []byte, g2 reco
 	}()
 	sums := fmt.Sprintf("%x  %s\n%x  %s\n",
 		sha256.Sum256(manifestData), rewrapManifestFile, sha256.Sum256(blobData), rewrapBlobFile)
-	for _, f := range []struct {
-		name string
-		data []byte
-	}{
-		{rewrapManifestFile, manifestData},
-		{rewrapBlobFile, blobData},
-		{rewrapSumsFile, []byte(sums)},
-	} {
-		if err := writeNewFile(filepath.Join(tmp, f.name), f.data); err != nil {
+	covered := map[string][]byte{
+		rewrapManifestFile: manifestData,
+		rewrapBlobFile:     blobData,
+		rewrapSumsFile:     []byte(sums),
+	}
+	tag, err := rewrapStageMAC(g2, covered)
+	if err != nil {
+		return spaceRewrapView{}, err
+	}
+	for _, name := range rewrapMACFiles {
+		if err := writeNewFile(filepath.Join(tmp, name), covered[name]); err != nil {
 			return spaceRewrapView{}, err
 		}
 	}
+	if err := writeNewFile(filepath.Join(tmp, rewrapMACFile), formatStageMAC(tag)); err != nil {
+		return spaceRewrapView{}, err
+	}
 
-	v, err := proveStage(tmp, &g2, cust)
+	v, _, err := proveStage(tmp, g2, cust)
 	if err != nil {
 		return spaceRewrapView{}, fmt.Errorf("the freshly written stage did not prove, so nothing was kept: %w", err)
 	}
@@ -458,26 +484,32 @@ func writeNewFile(path string, data []byte) error {
 	return f.Close()
 }
 
-// runRewrapProve is --prove: the full proof with the gen2 secret, or the
-// device-only proof without it.
+// readGen2Secret reads and parses the gen2 recovery secret for --prove and
+// --upload.
+func readGen2Secret(cmd *cobra.Command, gen2File string) (recovery.Secret, error) {
+	raw, err := readRewrapSecret(cmd, gen2File, "gen2")
+	if err != nil {
+		return recovery.Secret{}, err
+	}
+	s, err := parseRecoveryInput(raw)
+	if err != nil {
+		return recovery.Secret{}, fmt.Errorf("the gen2 secret was not accepted: %w", err)
+	}
+	return s, nil
+}
+
+// runRewrapProve is --prove: the stage MAC and the full proof, with the gen2
+// secret.
 func runRewrapProve(cmd *cobra.Command, configPath *string, deviceDir, dir, gen2File string) (spaceRewrapView, error) {
-	var secret *recovery.Secret
-	if gen2File != "" {
-		raw, err := readRewrapSecret(cmd, gen2File, "gen2")
-		if err != nil {
-			return spaceRewrapView{}, err
-		}
-		s, err := parseRecoveryInput(raw)
-		if err != nil {
-			return spaceRewrapView{}, fmt.Errorf("the gen2 secret was not accepted: %w", err)
-		}
-		secret = &s
+	secret, err := readGen2Secret(cmd, gen2File)
+	if err != nil {
+		return spaceRewrapView{}, err
 	}
 	cust, err := offlineCustody(configPath, deviceDir)
 	if err != nil {
 		return spaceRewrapView{}, err
 	}
-	v, err := proveStage(dir, secret, cust)
+	v, _, err := proveStage(dir, secret, cust)
 	if err != nil {
 		return spaceRewrapView{}, err
 	}
@@ -485,36 +517,48 @@ func runRewrapProve(cmd *cobra.Command, configPath *string, deviceDir, dir, gen2
 	return v, nil
 }
 
-// proveStage is PROVE (ADR-0022 C2 step 5) over a stage directory. With a
-// secret it is the full proof: the secret derives the manifest's gen2 user and
-// recovery key, the recovery wraps open with the secret alone, the device wraps
-// open through custody, recovery.blob opens with the secret, and all three give
-// the same key for every space. Without one it is the device-only proof. Both
-// first check the directory holds exactly the stage files and SHA256SUMS match.
-func proveStage(dir string, secret *recovery.Secret, cust client.Custody) (spaceRewrapView, error) {
-	m, blobData, err := readStage(dir)
+// provedStage is a stage's content as proveStage read, authenticated and
+// proved it. Upload works from it alone and never re-reads the directory, so
+// the bytes it uploads are the bytes that were proved.
+type provedStage struct {
+	m     rewrapManifest
+	wraps map[string]map[string][]byte
+}
+
+// proveStage is PROVE (ADR-0022 C2 step 5) over a stage directory. It first
+// checks the directory holds exactly the stage files and that STAGE-MAC
+// verifies under the secret, before anything in the stage is parsed; then that
+// SHA256SUMS match. Then the full proof: the secret derives the manifest's gen2
+// user and recovery key, the recovery wraps open with the secret alone, the
+// device wraps open through custody, recovery.blob opens with the secret, and
+// all three give the same key for every space.
+func proveStage(dir string, secret recovery.Secret, cust client.Custody) (spaceRewrapView, provedStage, error) {
+	m, blobData, err := readStage(dir, secret)
 	if err != nil {
-		return spaceRewrapView{}, err
+		return spaceRewrapView{}, provedStage{}, err
 	}
 	wraps, err := decodeStageWraps(m)
 	if err != nil {
-		return spaceRewrapView{}, err
+		return spaceRewrapView{}, provedStage{}, err
 	}
 
 	if got := cust.RecipientID(); got != m.DeviceRecipient {
-		return spaceRewrapView{}, fmt.Errorf("this device's key is %s, but the stage was wrapped for %s; prove and upload from the device that staged it", got, m.DeviceRecipient)
+		return spaceRewrapView{}, provedStage{}, fmt.Errorf("this device's key is %s, but the stage was wrapped for %s; prove and upload from the device that staged it", got, m.DeviceRecipient)
 	}
 	devKeys := make(map[string]encryption.SpaceKey, len(m.Spaces))
 	for _, s := range m.Spaces {
 		k, err := cust.Unwrap(wraps[s.SpaceID][m.DeviceRecipient])
 		if err != nil {
-			return spaceRewrapView{}, fmt.Errorf("space %s: this device does not open its staged wrap: %w", s.SpaceID, err)
+			return spaceRewrapView{}, provedStage{}, fmt.Errorf("space %s: this device does not open its staged wrap: %w", s.SpaceID, err)
 		}
 		devKeys[s.SpaceID] = k
 	}
+	if err := proveWithSecret(m, wraps, blobData, secret, devKeys); err != nil {
+		return spaceRewrapView{}, provedStage{}, err
+	}
 
 	v := spaceRewrapView{
-		Proof:           "device-only",
+		Proof:           "full",
 		Gen1User:        m.Gen1User,
 		Gen1Recovery:    m.Gen1Recovery,
 		Gen2User:        m.Gen2User,
@@ -523,16 +567,10 @@ func proveStage(dir string, secret *recovery.Secret, cust client.Custody) (space
 		BlobGeneratedAt: m.BlobGeneratedAt,
 		Spaces:          make([]spaceRewrapSpaceView, 0, len(m.Spaces)),
 	}
-	if secret != nil {
-		if err := proveWithSecret(m, wraps, blobData, *secret, devKeys); err != nil {
-			return spaceRewrapView{}, err
-		}
-		v.Proof = "full"
-	}
 	for _, s := range m.Spaces {
 		v.Spaces = append(v.Spaces, spaceRewrapSpaceView{SpaceID: s.SpaceID, Kind: s.Kind, Proved: "ok"})
 	}
-	return v, nil
+	return v, provedStage{m: m, wraps: wraps}, nil
 }
 
 func proveWithSecret(m rewrapManifest, wraps map[string]map[string][]byte, blobData []byte, secret recovery.Secret, devKeys map[string]encryption.SpaceKey) error {
@@ -582,10 +620,11 @@ func proveWithSecret(m rewrapManifest, wraps map[string]map[string][]byte, blobD
 	return nil
 }
 
-// readStage checks the stage directory holds exactly its three files, that
-// SHA256SUMS lists exactly the other two and matches them, and parses the
-// manifest strictly.
-func readStage(dir string) (rewrapManifest, []byte, error) {
+// readStage checks the stage directory holds exactly its four files, that
+// STAGE-MAC verifies under the gen2 secret over the other three (before any of
+// them is parsed), that SHA256SUMS lists exactly the manifest and the blob and
+// matches them, and parses the manifest strictly.
+func readStage(dir string, secret recovery.Secret) (rewrapManifest, []byte, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return rewrapManifest{}, nil, fmt.Errorf("reading the stage directory: %w", err)
@@ -597,7 +636,7 @@ func readStage(dir string) (rewrapManifest, []byte, error) {
 		}
 		names = append(names, e.Name())
 	}
-	want := []string{rewrapSumsFile, rewrapManifestFile, rewrapBlobFile}
+	want := append([]string{rewrapMACFile}, rewrapMACFiles...)
 	sort.Strings(names)
 	sort.Strings(want)
 	if !slices.Equal(names, want) {
@@ -606,10 +645,23 @@ func readStage(dir string) (rewrapManifest, []byte, error) {
 	read := func(name string) ([]byte, error) {
 		return os.ReadFile(filepath.Join(dir, name)) // #nosec G304 -- a fixed name inside the stage directory the operator named
 	}
-	sums, err := read(rewrapSumsFile)
+	contents := make(map[string][]byte, len(rewrapMACFiles))
+	for _, name := range rewrapMACFiles {
+		data, err := read(name)
+		if err != nil {
+			return rewrapManifest{}, nil, err
+		}
+		contents[name] = data
+	}
+	macFile, err := read(rewrapMACFile)
 	if err != nil {
 		return rewrapManifest{}, nil, err
 	}
+	if err := verifyStageMAC(secret, macFile, contents); err != nil {
+		return rewrapManifest{}, nil, err
+	}
+
+	sums := contents[rewrapSumsFile]
 	listed := map[string]string{}
 	sc := bufio.NewScanner(bytes.NewReader(sums))
 	for sc.Scan() {
@@ -622,17 +674,11 @@ func readStage(dir string) (rewrapManifest, []byte, error) {
 	if len(listed) != 2 || listed[rewrapManifestFile] == "" || listed[rewrapBlobFile] == "" {
 		return rewrapManifest{}, nil, fmt.Errorf("%s must list exactly %s and %s", rewrapSumsFile, rewrapManifestFile, rewrapBlobFile)
 	}
-	contents := map[string][]byte{}
 	for _, name := range []string{rewrapManifestFile, rewrapBlobFile} {
-		data, err := read(name)
-		if err != nil {
-			return rewrapManifest{}, nil, err
-		}
-		got := sha256.Sum256(data)
+		got := sha256.Sum256(contents[name])
 		if hex.EncodeToString(got[:]) != listed[name] {
 			return rewrapManifest{}, nil, fmt.Errorf("%s does not match %s: the stage was changed or damaged", name, rewrapSumsFile)
 		}
-		contents[name] = data
 	}
 
 	var m rewrapManifest
@@ -689,25 +735,19 @@ func decodeStageWraps(m rewrapManifest) (map[string]map[string][]byte, error) {
 	return out, nil
 }
 
-// runRewrapUpload is --upload: the device-only proof, the server-side set and
-// content checks for every space, then the uploads and their read-back.
-func runRewrapUpload(ctx context.Context, c *apiclient.Client, configPath *string, deviceDir, dir string) (spaceRewrapView, error) {
+// runRewrapUpload is --upload: the stage MAC and the full proof, the
+// server-side set and content checks for every space, then the uploads and
+// their read-back.
+func runRewrapUpload(ctx context.Context, c *apiclient.Client, configPath *string, deviceDir, dir string, secret recovery.Secret) (spaceRewrapView, error) {
 	cust, err := selectCustody(configPath, deviceDir)
 	if err != nil {
 		return spaceRewrapView{}, err
 	}
-	v, err := proveStage(dir, nil, cust)
+	v, st, err := proveStage(dir, secret, cust)
 	if err != nil {
 		return spaceRewrapView{}, err
 	}
-	m, _, err := readStage(dir)
-	if err != nil {
-		return spaceRewrapView{}, err
-	}
-	wraps, err := decodeStageWraps(m)
-	if err != nil {
-		return spaceRewrapView{}, err
-	}
+	m, wraps := st.m, st.wraps
 
 	list, err := c.ListSpaces(ctx)
 	if err != nil {
@@ -726,9 +766,11 @@ func runRewrapUpload(ctx context.Context, c *apiclient.Client, configPath *strin
 	}
 
 	// Every key is checked against the controller's content before anything
-	// is uploaded. A space with no content has nothing to check against; writes
-	// are stopped from C2 step 3, so its key cannot have moved since the
-	// export, and the full prove has already opened it three ways.
+	// is uploaded. A space with no content has nothing to check against, and
+	// needs nothing: staging bound each key to the frozen database's own gen1
+	// recovery wrap, and STAGE-MAC, which only the gen2 secret can make, has
+	// just shown the stage is byte for byte what staging wrote (#692). Writes
+	// are stopped from C2 step 3, so the key cannot have moved since.
 	empty := make(map[string]bool)
 	for _, s := range m.Spaces {
 		k, err := cust.Unwrap(wraps[s.SpaceID][m.DeviceRecipient])
@@ -808,8 +850,9 @@ func hasStagedWraps(ctx context.Context, c *apiclient.Client, spaceID string, st
 // never landed is under the newer key, so a stale stage is refused. The
 // frontier is used only when the snapshot's authenticated envelope vouches for
 // it. Otherwise (no snapshot, or a legacy one), the key must open every head change (one no other change names as
-// a parent). A space with no content reports empty: the stage's keys are
-// already bound to the frozen database, and writes are stopped from C2 step 3.
+// a parent). A space with no content reports empty: staging bound the stage's
+// keys to the frozen database, STAGE-MAC carries that binding to the upload,
+// and writes are stopped from C2 step 3.
 func verifyRemoteSpaceKey(ctx context.Context, c *apiclient.Client, spaceID string, k encryption.SpaceKey) (empty bool, err error) {
 	snap, hasSnap, err := c.Snapshot(ctx, spaceID)
 	if err != nil {
@@ -1130,8 +1173,5 @@ func printSpaceRewrap(w io.Writer, v spaceRewrapView) {
 			line += "  " + s.Upload
 		}
 		fmt.Fprintln(w, line)
-	}
-	if v.Proof == "device-only" && v.Mode == "prove" {
-		fmt.Fprintln(w, "Only the device wraps were proved; pass --gen2-secret-file for the full proof.")
 	}
 }
