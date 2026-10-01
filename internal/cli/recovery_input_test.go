@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -146,5 +147,16 @@ func TestBlobAsTextRecovers(t *testing.T) {
 	}
 	if _, err := f.recoverRewrap(t, scanned); err != nil {
 		t.Fatalf("recover from the blob text: %v", err)
+	}
+}
+
+// TestRecoveryInputRefusesAGen1Secret: since the gen2 cutover (void-which-binds-go
+// ADR-0022) the old sheet's `heyarr1…` secret is refused as the library's
+// ErrGenerationRetired, never decoded into an identity, so the operator is told
+// it is the retired sheet rather than that they mistyped it.
+func TestRecoveryInputRefusesAGen1Secret(t *testing.T) {
+	const gen1 = "heyarr1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnzs23v9ccrydpk8qarc0s6e0ucu"
+	if _, err := parseRecoveryInput(gen1); !errors.Is(err, recovery.ErrGenerationRetired) {
+		t.Fatalf("parseRecoveryInput(gen1) = %v, want ErrGenerationRetired", err)
 	}
 }

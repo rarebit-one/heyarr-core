@@ -1,6 +1,6 @@
 // Package catalogop is the editorial catalog op-log's first increment: a
 // signed, content-addressed DELETE tombstone for a work, merged and evaluated
-// exactly the way the membership op-set is (ADR-0068, voidbind-go ADR-0007).
+// exactly the way the membership op-set is (ADR-0068, void-which-binds-go ADR-0007).
 //
 // # Why this exists (ADR-0073, #449, Phase 1)
 //

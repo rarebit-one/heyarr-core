@@ -1,6 +1,6 @@
 // Package cruciform is the ADR-0098 "cruciform-offload" device-key custody
 // backend: the desktop holds NO device encryption key at all. On unwrap it wakes
-// the paired phone (one.rarebit.cruciform) over the voidbind notify plane
+// the paired phone (one.rarebit.cruciform) over the void-which-binds notify plane
 // (ADR-0005) and exchanges the wrapped space key over the pairing relay
 // (ADR-0002); the phone hardware-gates (StrongBox/TEE + biometric), performs the
 // X25519 agreement in its enclave, and returns the space key. The phone is the
@@ -28,7 +28,7 @@
 // # Transport is a seam
 //
 // The wake+relay wiring is behind the [Transport] interface. The concrete
-// notify+relay transport (and the phone half in voidbind-kmp) is deferred — this
+// notify+relay transport (and the phone half in void-which-binds-kmp) is deferred — this
 // package is the desktop-side backend and its authenticated protocol, unit-tested
 // against a fake transport; a live round-trip is gated on a reachable paired
 // phone, exactly as the yubikey backend gated its on-card round-trip.
@@ -51,7 +51,7 @@ import (
 const DefaultTimeout = 90 * time.Second
 
 // Transport wakes the paired phone and carries one opaque request to it and one
-// opaque response back, over the voidbind notify + pairing-relay planes. It holds
+// opaque response back, over the void-which-binds notify + pairing-relay planes. It holds
 // no key and never inspects the bytes: everything it forwards is public or
 // already-sealed (the request carries no secret; the space key comes back sealed
 // to a key only this unwrap holds). A live implementation creates a relay

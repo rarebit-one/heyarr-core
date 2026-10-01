@@ -14,7 +14,7 @@ package crdt_test
 //
 // Regenerate with:  go test ./internal/personalstate/crdt -run TestParityVectors -update
 // and re-copy the testdata/vectors/*.json files into heyarr-mobile's test
-// resources (the same discipline internal/deviceauth uses for the voidbind-go
+// resources (the same discipline internal/deviceauth uses for the void-which-binds-go
 // membership vectors).
 //
 // The fold is a semilattice join, so the converged state is order-independent

@@ -171,7 +171,7 @@ const (
 	// "which key was this identity before?" is the question a rekey raises.
 	TypeUserRekeyed = "identity.user.rekeyed"
 
-	// ADR-0068 (voidbind-go ADR-0007): an identity is a set of device keys
+	// ADR-0068 (void-which-binds-go ADR-0007): an identity is a set of device keys
 	// evolved by member-signed ops. Recording ops this node had not seen is a
 	// state transition of the op log; a device the evaluation removes is
 	// tombstoned exactly as an admin revocation is, but by a member's signed

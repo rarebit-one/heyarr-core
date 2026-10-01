@@ -17,7 +17,7 @@ const minShareWords = 20
 
 // parseRecoveryInput turns what the operator gave into the recovery secret: the
 // bech32m secret itself (spaces and case as written are fine), or SLIP-39
-// recovery shares, one per line, that combine to it (voidbind-go ADR-0011). A
+// recovery shares, one per line, that combine to it (void-which-binds-go ADR-0011). A
 // bad checksum in either is refused, never carried into a different identity.
 func parseRecoveryInput(raw string) (recovery.Secret, error) {
 	text := strings.TrimSpace(raw)

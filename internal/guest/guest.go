@@ -18,7 +18,7 @@ import (
 )
 
 // The HEYARR-side capabilities a guest access lease carries (ADR-0094). They are
-// defined over grant.Capability — the bare string type voidbind-go re-exports —
+// defined over grant.Capability — the bare string type void-which-binds-go re-exports —
 // but they are OURS: the dependency knows only `read`/`write`, and coupling a
 // browse/play/subtitle vocabulary into it was rejected. A guest lease grants
 // exactly these three and nothing else.

@@ -26,7 +26,7 @@ import (
 // TestPhoneSelfEnrolsAndReadsButDoesNotWrite is the acceptance for ADR-0067,
 // end to end through the real router: an admin pins a user; a device holding a
 // cert that user signed (what pairing hands a phone) and a fresh possession
-// proof — both minted with voidbind-go's enrolment package, the phone's code —
+// proof — both minted with void-which-binds-go's enrolment package, the phone's code —
 // POSTs /enrol with no credential; it then reads /api/v1/works under the Device
 // scheme and is refused a write, because enrolment grants the read floor and
 // nothing more (ADR-0065).

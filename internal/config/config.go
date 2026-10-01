@@ -68,7 +68,7 @@ type Config struct {
 	// it, so they live under the data directory too unless pointed elsewhere.
 	Backup Backup `koanf:"backup"`
 
-	// Notify points this node at the SHARED Voidbind notify plane (ADR-0102,
+	// Notify points this node at the SHARED Void-Which-Binds notify plane (ADR-0102,
 	// superseding ADR-0055's embedded registry): the one place a phone subscribes,
 	// which this node asks to wake devices for a push login and for a
 	// cruciform-offload unwrap. Push is additive to the QR web-login (ADR-0053) —
@@ -267,7 +267,7 @@ type HTTP struct {
 	// scheme, host and any port a browser or television types, e.g.
 	// "https://heyarr.example.com". It is what the login/session rp origin and
 	// the rendered base URL use when set, because a listener derives an IP:port
-	// (renderBaseURL) and a Voidbind login needs the https HOSTNAME behind the
+	// (renderBaseURL) and a Void-Which-Binds login needs the https HOSTNAME behind the
 	// reverse proxy or TLS listener, not the address the socket bound. Empty
 	// keeps today's derived behaviour (ADR-0072).
 	PublicOrigin string `koanf:"public_origin"`

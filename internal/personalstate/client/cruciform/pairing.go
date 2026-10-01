@@ -11,7 +11,7 @@ package cruciform
 //     response with it) and the phone's X25519 ENCRYPTION key (the wrap target it
 //     looks the sealed space-key copy up by — RecipientID).
 //
-// It is NOT a voidbind membership enrolment. The transport key is a pairing
+// It is NOT a void-which-binds membership enrolment. The transport key is a pairing
 // identity, not a custody key: it holds no device encryption key and is never a
 // member (ADR-0098 — the desktop holds nothing). So this ceremony deliberately
 // does NOT use pairflow.Initiator (which signs an `add` op and seals a space key
@@ -20,9 +20,9 @@ package cruciform
 // dumb relay, and pins keys instead of enrolling.
 //
 // Like the unwrap protocol (protocol.go), this pairing wire is heyarr-core-local:
-// the voidbind-kmp/cruciform phone half mirrors THIS, not a voidbind-go pairflow
+// the void-which-binds-kmp/cruciform phone half mirrors THIS, not a void-which-binds-go pairflow
 // variant. The generic pieces it rides — the relay, the SAS commit-reveal, the
-// pairing primitives — are voidbind-go's; the offload-specific shape is here.
+// pairing primitives — are void-which-binds-go's; the offload-specific shape is here.
 //
 // # The handshake, and where each guarantee lives
 //
@@ -75,11 +75,12 @@ const (
 )
 
 // InviteScheme and the offload invite's opaque + version. The scheme matches
-// voidbind's pairing invite so a phone routes both through one QR scanner, but the
-// opaque is distinct (`offload-pair`, not `pair`) so the phone dispatches this to
+// void-which-binds' pairing invite so a phone routes both through one QR
+// scanner (gen2 only, void-which-binds-go ADR-0022: a gen1 `voidbind:` invite is
+// refused), but the opaque is distinct (`offload-pair`, not `pair`) so the phone dispatches this to
 // the offload-pairing handler rather than device enrolment.
 const (
-	InviteScheme      = "voidbind"
+	InviteScheme      = "void-which-binds"
 	inviteOpaque      = "offload-pair"
 	offloadInviteVer  = "1"
 	pairConfirmDomain = "heyarr-cruciform-pair-confirm-v1\x00"
@@ -99,9 +100,9 @@ var (
 
 // PairTransport ferries opaque pairing messages between the two sides through the
 // relay. Post writes THIS side's slot for a step; Fetch reads the PEER side's
-// slot, blocking until it is present or ctx is done. voidbind's relay.Client
+// slot, blocking until it is present or ctx is done. void-which-binds' relay.Client
 // implements it (the CLI wires one as role "initiator"); a test supplies an
-// in-memory fake. Its shape matches voidbind's pairflow.Transport deliberately.
+// in-memory fake. Its shape matches void-which-binds' pairflow.Transport deliberately.
 type PairTransport interface {
 	Post(ctx context.Context, msgType string, payload []byte) error
 	Fetch(ctx context.Context, msgType string) ([]byte, error)
@@ -110,7 +111,7 @@ type PairTransport interface {
 // EncodeInvite renders the QR/short-code payload the phone scans to bootstrap the
 // pairing rendezvous:
 //
-//	voidbind:offload-pair?v=1&relay=<origin>&session=<id>&salt=<hex>
+//	void-which-binds:offload-pair?v=1&relay=<origin>&session=<id>&salt=<hex>
 //
 // The salt is hex so it survives a QR/text round-trip. The relay, session and
 // salt travel over the VISUAL channel (the phone scans the desktop's screen),

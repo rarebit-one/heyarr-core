@@ -8,8 +8,8 @@ Pair this desktop with your phone (one.rarebit.cruciform) so the vault's
 `cruciform` custody backend can open spaces without any device key on this
 machine: each unwrap wakes the phone, which hardware-gates and returns the key.
 
-Run this once. It creates a rendezvous on the node's voidbind relay and prints a
-`voidbind:offload-pair?…` invite — the payload the phone scans as a QR (a
+Run this once. It creates a rendezvous on the node's void-which-binds relay and prints a
+`void-which-binds:offload-pair?…` invite — the payload the phone scans as a QR (a
 desktop GUI renders it; the CLI prints the text). Both screens then show a short
 code; compare them, and on a match this desktop pins the phone's keys and the
 phone pins this desktop's transport key.
@@ -28,7 +28,7 @@ heyarr device pair-offload [flags]
       --confirm-sas string   proceed only if the derived code equals this value — the scripted stand-in for a human comparison
       --out string           where to write the pairing config (default: cruciform-pairing.json in the device directory)
       --poll duration        how often to re-check the relay for the phone's next step (default 150ms)
-      --relay string         the node's voidbind relay base the phone also reaches: unix:///path, http://host:port/pair, or host:port/pair
+      --relay string         the node's void-which-binds relay base the phone also reaches: unix:///path, http://host:port/pair, or host:port/pair
       --timeout duration     how long to wait for the whole pairing before giving up (default 2m0s)
       --yes                  assume the codes matched, without prompting (use only when you compared them another way)
 ```

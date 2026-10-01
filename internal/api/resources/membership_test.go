@@ -62,7 +62,7 @@ func TestPhoneAdmitsPhoneAndTheNodeLearnsRemoves(t *testing.T) {
 		return p
 	}
 	// as sends a request under the Device scheme, optionally with the
-	// Voidbind-Membership header.
+	// Void-Which-Binds-Membership header.
 	as := func(op string, priv ed25519.PrivateKey, presented []string, method, path string, body io.Reader) *http.Response {
 		t.Helper()
 		req, err := http.NewRequest(method, h.http.URL+path, body)

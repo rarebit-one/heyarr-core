@@ -36,7 +36,7 @@ func renderBaseURL(cfg config.Config) string {
 	// scheme+host clients reach this node at — the https hostname behind a TLS
 	// listener or reverse proxy (ADR-0072). It is the most authoritative source
 	// there is, so it beats both the peer endpoint and anything derived from the
-	// listener address, and it is exactly what a Voidbind login rp origin needs:
+	// listener address, and it is exactly what a Void-Which-Binds login rp origin needs:
 	// a hostname, not the IP:port a socket happened to bind. Validated at config
 	// load, so it is an absolute http(s) origin by the time it reaches here.
 	if origin := strings.TrimSpace(cfg.HTTP.PublicOrigin); origin != "" {

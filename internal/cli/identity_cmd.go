@@ -22,7 +22,7 @@ import (
 // secret is displayed once and then never leaves the store again (ADR-0022).
 type identityGenerateJSON struct {
 	Identity useridentity.View `json:"identity"`
-	// RecoverySecret is the bech32m "heyarr1…" secret to write down. Present on
+	// RecoverySecret is the bech32m "void-which-binds1…" secret to write down. Present on
 	// generate, empty on recover (recovery consumes an existing secret rather
 	// than minting one).
 	RecoverySecret string `json:"recovery_secret,omitempty"`
@@ -424,7 +424,7 @@ func identityPinHint(id useridentity.Identity) string {
 }
 
 // newIdentityVerifyRecoveryCommand checks a written recovery secret (or a set of
-// recovery shares) against this identity without using it (voidbind-go
+// recovery shares) against this identity without using it (void-which-binds-go
 // ADR-0010): the checksum, the identity it derives, and its recovery key.
 func newIdentityVerifyRecoveryCommand(_ Options, identityDir *string) *cobra.Command {
 	var (

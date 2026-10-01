@@ -12,10 +12,10 @@ import (
 	"github.com/rarebit-one/void-which-binds-go/notify"
 )
 
-// This file wires heyarr's push login to the SHARED Voidbind notify plane
+// This file wires heyarr's push login to the SHARED Void-Which-Binds notify plane
 // (void-which-binds-notify, ADR-0102) — the push counterpart to the QR web-login
 // broker (ADR-0053). A successful POST /login also asks the plane to push the
-// opaque voidbind:login?rp=&id= ping to the paired devices of the pinned users, so
+// opaque void-which-binds:login?rp=&id= ping to the paired devices of the pinned users, so
 // a phone can approve without the browser's QR being scanned. The QR stays the
 // primary channel — a push failure, an unconfigured plane or an unsubscribed user
 // never blocks the login (push is additive and fail-open).

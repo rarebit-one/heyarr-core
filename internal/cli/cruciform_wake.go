@@ -21,7 +21,7 @@ import (
 
 // buildCruciformWake constructs the WakeFunc the cruciform-offload transport calls
 // to wake the paired phone for an unwrap over the away-path (relay + push): it
-// POSTs to the node's /v1/unwrap-wake, which fans an opaque voidbind:unwrap ping to
+// POSTs to the node's /v1/unwrap-wake, which fans an opaque void-which-binds:unwrap ping to
 // this user's subscribed devices (ADR-0098).
 //
 // It authenticates with THIS device's enrolment cert and membership ops — Option A:
@@ -80,20 +80,15 @@ func deviceProver(ds *device.Store) possessionProver {
 }
 
 // newCruciformWake returns the WakeFunc that POSTs an unwrap-wake to the node. The
-// cert, a possession proof freshly signed per wake (voidbind-go#70: the node
-// records the presented ops only once the proof verifies) and the ops
-// authenticate the request; relay_base and session (the transport's per-unwrap
-// relay session) tell the phone which session to open. A nil prove sends a bare
-// cert, which the node serves but records nothing from.
+// cert, a possession proof freshly signed per wake (void-which-binds-go#70: the
+// node records the presented ops only once the proof verifies, and refuses a
+// bare cert) and the ops authenticate the request; relay_base and session (the
+// transport's per-unwrap relay session) tell the phone which session to open.
 func newCruciformWake(base string, hc *http.Client, cert string, ops []string, prove possessionProver) cruciform.WakeFunc {
 	return func(ctx context.Context, relayBase, session string) error {
-		var possession string
-		if prove != nil {
-			p, err := prove(time.Now())
-			if err != nil {
-				return fmt.Errorf("cruciform wake: proving possession: %w", err)
-			}
-			possession = p
+		possession, err := prove(time.Now())
+		if err != nil {
+			return fmt.Errorf("cruciform wake: proving possession: %w", err)
 		}
 		body, err := json.Marshal(struct {
 			Cert       string   `json:"cert"`

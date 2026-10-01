@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,6 +111,28 @@ func TestBlobRefusesTheWrongSecretAndDamage(t *testing.T) {
 	for _, junk := range [][]byte{nil, []byte("not a blob"), []byte(spacerecover.BlobFormat + "\x00\xff\xff\xff\xff")} {
 		if _, err := spacerecover.OpenBlob(secret, junk); !errors.Is(err, spacerecover.ErrNotABlob) {
 			t.Fatalf("junk %q: err = %v, want ErrNotABlob", junk, err)
+		}
+	}
+}
+
+// TestBlobRefusesAGen1Blob: a heyarr-recovery-blob-v1 file is the gen1
+// (Voidbind) blob, sealed under labels this binary no longer derives. It is
+// ErrNotABlob, raw or as base64 text, and the error names where it goes instead
+// (the cutover's rewrap through void-which-binds-go's migrate/gen1).
+func TestBlobRefusesAGen1Blob(t *testing.T) {
+	secret := mustSecret(t)
+	data, err := spacerecover.SealBlob(spacerecover.Blob{RecoveryRecipient: recipientOf(t, secret)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen1 := append([]byte("heyarr-recovery-blob-v1\x00"), bytes.TrimPrefix(data, []byte(spacerecover.BlobFormat+"\x00"))...)
+	for name, in := range map[string][]byte{"raw": gen1, "text": []byte(spacerecover.EncodeBlobText(gen1))} {
+		_, err := spacerecover.OpenBlob(secret, in)
+		if !errors.Is(err, spacerecover.ErrNotABlob) {
+			t.Fatalf("%s gen1 blob: err = %v, want ErrNotABlob", name, err)
+		}
+		if !strings.Contains(err.Error(), "migrate/gen1") || !strings.Contains(err.Error(), "space rewrap") {
+			t.Fatalf("%s gen1 blob: err %q does not say where a gen1 blob goes", name, err)
 		}
 	}
 }

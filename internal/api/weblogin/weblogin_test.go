@@ -269,8 +269,8 @@ func TestSigninPageServed(t *testing.T) {
 		t.Fatalf("GET /signin = %d", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "Voidbind") {
-		t.Fatal("the signin page does not mention Voidbind")
+	if !strings.Contains(string(body), "Void-Which-Binds") {
+		t.Fatal("the signin page does not mention Void-Which-Binds")
 	}
 }
 

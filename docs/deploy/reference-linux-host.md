@@ -295,7 +295,7 @@ fixture:
 ## Push login and the unwrap wake (ADR-0102)
 
 Heyarr does not hold device subscriptions. Phones subscribe to one shared
-Voidbind notify plane (`void-which-binds-notify`). Heyarr asks that plane to
+Void-Which-Binds notify plane (`void-which-binds-notify`). Heyarr asks that plane to
 wake them, for a QR login and for a cruciform-offload unwrap. To turn this on,
 name the plane and give Heyarr the plane's enqueue bearer, which is the value
 of the plane's `VOID_WHICH_BINDS_NOTIFY_ENQUEUE_TOKEN`:

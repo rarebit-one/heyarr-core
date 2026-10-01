@@ -49,8 +49,8 @@ func newDevicePairOffloadCommand(_ Options, dir *string) *cobra.Command {
 ` + "`cruciform`" + ` custody backend can open spaces without any device key on this
 machine: each unwrap wakes the phone, which hardware-gates and returns the key.
 
-Run this once. It creates a rendezvous on the node's voidbind relay and prints a
-` + "`voidbind:offload-pair?…`" + ` invite — the payload the phone scans as a QR (a
+Run this once. It creates a rendezvous on the node's void-which-binds relay and prints a
+` + "`void-which-binds:offload-pair?…`" + ` invite — the payload the phone scans as a QR (a
 desktop GUI renders it; the CLI prints the text). Both screens then show a short
 code; compare them, and on a match this desktop pins the phone's keys and the
 phone pins this desktop's transport key.
@@ -74,7 +74,7 @@ terminal. Re-running reuses the existing transport key if one is already paired.
 				return err
 			}
 
-			base, hc, err := newVoidbindRelayBase(relayAddr)
+			base, hc, err := newVoidWhichBindsRelayBase(relayAddr)
 			if err != nil {
 				return err
 			}
@@ -131,7 +131,7 @@ terminal. Re-running reuses the existing transport key if one is already paired.
 		},
 	}
 	cmd.Flags().StringVar(&relayAddr, "relay", "",
-		"the node's voidbind relay base the phone also reaches: unix:///path, http://host:port/pair, or host:port/pair")
+		"the node's void-which-binds relay base the phone also reaches: unix:///path, http://host:port/pair, or host:port/pair")
 	cmd.Flags().StringVar(&confirmSAS, "confirm-sas", "",
 		"proceed only if the derived code equals this value — the scripted stand-in for a human comparison")
 	cmd.Flags().BoolVar(&yes, "yes", false,
@@ -179,15 +179,15 @@ func newPairSalt() ([]byte, error) {
 	return salt, nil
 }
 
-// newVoidbindRelayBase resolves a relay address into the base string voidbind's
+// newVoidWhichBindsRelayBase resolves a relay address into the base string void-which-binds'
 // relay.Client dials (<base>/v1/sessions/…) and an HTTP client for it. It accepts
 // the same address forms as `heyarr pair`: a unix socket, an http(s) origin, or a
 // bare host:port — for a unix socket the base is a placeholder host the custom
 // dialer ignores.
-func newVoidbindRelayBase(addr string) (string, *http.Client, error) {
+func newVoidWhichBindsRelayBase(addr string) (string, *http.Client, error) {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
-		return "", nil, errors.New("pair-offload: --relay is required (the node's voidbind relay base, e.g. http://host:port/pair)")
+		return "", nil, errors.New("pair-offload: --relay is required (the node's void-which-binds relay base, e.g. http://host:port/pair)")
 	}
 	transport := &http.Transport{MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second}
 	switch {

@@ -19,7 +19,7 @@ import (
 // DeviceVerifier authenticates a device credential (ADR-0048, ADR-0068): the
 // device's admitting membership op plus a proof the caller holds the device
 // key, evaluated offline against a pinned genesis key and the identity's op
-// log merged with the ops the device presented (the Voidbind-Membership
+// log merged with the ops the device presented (the Void-Which-Binds-Membership
 // header). It is an interface so the server can be wired without the identity
 // store in tests, mirroring PeerMembership.
 type DeviceVerifier interface {
@@ -131,7 +131,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 				next.ServeHTTP(w, s.withIdentity(r, id))
 				return
 			}
-			// A Voidbind web-login session token is also carried as a Bearer
+			// A Void-Which-Binds web-login session token is also carried as a Bearer
 			// credential (ADR-0053). It is tried ONLY after the primary verifier
 			// declines this value, so a real service token keeps its exact path,
 			// metrics and error mapping, and only an otherwise-rejected bearer value

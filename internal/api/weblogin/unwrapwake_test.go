@@ -81,9 +81,9 @@ func wokenOf(t *testing.T, resp *http.Response) int {
 func TestUnwrapWakeUnsubscribedUserWakesNobody(t *testing.T) {
 	h := newPushHarness(t)
 	h.plane.woken = 0
-	cert, _ := h.enrolledDevice(t)
+	cert, priv := h.enrolledDevice(t)
 
-	resp := h.postWake(t, `{"cert":"`+cert+`","relay_base":"r","session":"s"}`)
+	resp := h.postWake(t, `{"cert":"`+cert+`","possession":"`+prove(t, priv, cert)+`","relay_base":"r","session":"s"}`)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unwrap-wake = %d, want 200", resp.StatusCode)
@@ -195,10 +195,10 @@ func (h *pushHarness) wakeStatus(t *testing.T, body string) int {
 }
 
 // TestUnwrapWakeAuthenticatesPossession covers the check → possession → commit
-// chain (voidbind-go#70): a proof may ride in `possession` or inside `cert` as
-// the Device credential; a proof from another key, a malformed one, or one
-// given twice is the opaque 401; and a bare cert — the pre-v0.18 wire — is still
-// served for compatibility, with nothing it presents recorded.
+// chain (void-which-binds-go#70): a proof may ride in `possession` or inside
+// `cert` as the Device credential; a proof from another key, a malformed one,
+// one given twice, or none at all (a bare cert — the pre-v0.18 wire, refused
+// since the gen2 cutover, ADR-0022) is the opaque 401.
 func TestUnwrapWakeAuthenticatesPossession(t *testing.T) {
 	h := newPushHarness(t)
 	cert, priv := h.enrolledDevice(t)
@@ -214,7 +214,7 @@ func TestUnwrapWakeAuthenticatesPossession(t *testing.T) {
 	}{
 		{"proof field", `{"cert":"` + cert + `","possession":"` + prove(t, priv, cert) + tail, http.StatusOK},
 		{"device credential", `{"cert":"` + cert + enrolment.CredentialSeparator + prove(t, priv, cert) + tail, http.StatusOK},
-		{"bare cert (compatibility)", `{"cert":"` + cert + tail, http.StatusOK},
+		{"bare cert", `{"cert":"` + cert + tail, http.StatusUnauthorized},
 		{"foreign proof", `{"cert":"` + cert + `","possession":"` + prove(t, otherPriv, cert) + tail, http.StatusUnauthorized},
 		{"malformed proof", `{"cert":"` + cert + `","possession":"not-a-proof` + tail, http.StatusUnauthorized},
 		{"proof twice", `{"cert":"` + cert + enrolment.CredentialSeparator + prove(t, priv, cert) + `","possession":"` + prove(t, priv, cert) + tail, http.StatusUnauthorized},

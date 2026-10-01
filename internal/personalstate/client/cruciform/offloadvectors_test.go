@@ -14,7 +14,7 @@ import (
 
 // This test is the golden-vector generator + self-consistency check for the
 // cruciform-offload wire (ADR-0098). The wire is heyarr-core-local, so the
-// voidbind-kmp/cruciform phone half mirrors THIS: the deterministic vectors it
+// void-which-binds-kmp/cruciform phone half mirrors THIS: the deterministic vectors it
 // emits (invite, pairing-confirm transcript + SAS + both signatures, and the
 // unwrap request/response signing-inputs + marshalled bytes) are replayed
 // byte-for-byte on the Kotlin side, and a Go-sealed interop blob proves the
@@ -23,7 +23,7 @@ import (
 // It always runs as an ordinary test (asserting the wire is internally
 // consistent — signatures verify, records round-trip, the interop blob opens). It
 // ALSO writes the vectors JSON when HEYARR_OFFLOAD_VECTORS_OUT names a path, which
-// is how the committed copy under voidbind-kmp's test resources is refreshed. The
+// is how the committed copy under void-which-binds-kmp's test resources is refreshed. The
 // interop blob uses a fresh ephemeral (encryption.Seal is randomised), so the
 // vectors are regenerated rather than byte-pinned in this repo; the byte-for-byte
 // parity lives in the Kotlin replay.

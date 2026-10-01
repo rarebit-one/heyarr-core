@@ -57,7 +57,8 @@ func TestCruciformWakeSurfacesNodeError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	wake := newCruciformWake(srv.URL, srv.Client(), "cert", nil, nil)
+	prove := func(time.Time) (string, error) { return "proof", nil }
+	wake := newCruciformWake(srv.URL, srv.Client(), "cert", nil, prove)
 	if err := wake(context.Background(), "r", "s"); err == nil {
 		t.Fatal("a node refusal should surface as an error")
 	}

@@ -218,7 +218,7 @@ func TestPossessionWindowThatEndsBeforeItStartsIsRefused(t *testing.T) {
 
 // signedPossessionWindow assembles a possession proof by hand, so a test can
 // give it a window SignPossession would refuse to make. The body is the same
-// shape voidbind-go signs — version, cert hash, iat, exp — and it is really
+// shape void-which-binds-go signs — version, cert hash, iat, exp — and it is really
 // signed by the device key, so everything up to the window check passes and the
 // window check is what the assertion is about.
 func signedPossessionWindow(t *testing.T, priv ed25519.PrivateKey, cert string, issued, expires time.Time) string {

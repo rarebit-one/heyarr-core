@@ -12,7 +12,7 @@ import (
 	"github.com/rarebit-one/void-which-binds-go/relay"
 )
 
-// TestOffloadOverRealRelay drives the whole offload backend over a REAL voidbind
+// TestOffloadOverRealRelay drives the whole offload backend over a REAL void-which-binds
 // relay (Server + Client) against a fake phone that answers by polling the relay —
 // the live path minus the actual device. It proves the RelayTransport carries the
 // signed request out and the sealed reply back, and that the recovered space key

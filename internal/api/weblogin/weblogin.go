@@ -1,7 +1,7 @@
-// Package weblogin stands up heyarr's Voidbind QR web-login (ADR-0053): the
+// Package weblogin stands up heyarr's Void-Which-Binds QR web-login (ADR-0053): the
 // browser/TV counterpart to the device-cert scheme (ADR-0048). A browser or a
 // television holds no device cert and no device key, so it logs in the
-// WhatsApp-Web way — it shows a voidbind:login QR, a device the account owner has
+// WhatsApp-Web way — it shows a void-which-binds:login QR, a device the account owner has
 // enrolled approves the challenge, and the broker mints a short-lived session
 // token the browser then carries as `Authorization: Bearer <token>`.
 //
@@ -9,7 +9,7 @@
 // trust that backs deviceauth: the login broker's trust set is heyarr's
 // user-identity store (internal/deviceauth), so a QR login is honoured for
 // exactly the users a device credential is. The heavy lifting — challenge
-// minting, offline cert verification, token issuance — is voidbind-go/weblogin;
+// minting, offline cert verification, token issuance — is void-which-binds-go/weblogin;
 // this package is the mount and the DB-backed trust adapter.
 //
 // It mounts on the UNAUTHENTICATED router (like the renderer, relay and the
@@ -160,7 +160,6 @@ func New(opts Options) (*Handler, error) {
 			verifier: rp.Verifier{Trust: userTrust{store: opts.Identities}, Membership: opts.Identities.Membership(context.Background())},
 			enqueuer: opts.UnwrapWaker,
 			log:      log,
-			bare:     newBareCertWarner(log, UnwrapWakePrefix),
 		},
 	}, nil
 }

@@ -39,12 +39,12 @@ type Authenticated struct {
 	UserKey       string
 	DeviceKey     string
 	// AdmittedBy is the hash of the op that admitted the device — the credential
-	// it presented, as the evaluation accepted it (voidbind-go ADR-0007).
+	// it presented, as the evaluation accepted it (void-which-binds-go ADR-0007).
 	AdmittedBy string
 }
 
 // Verify authenticates a presented device credential, merged with the
-// membership ops the device presented beside it (the Voidbind-Membership
+// membership ops the device presented beside it (the Void-Which-Binds-Membership
 // header, ADR-0068), and resolves the principal it acts as — or returns why it
 // does not.
 //
@@ -60,7 +60,7 @@ type Authenticated struct {
 //     BEFORE the evaluation below because the evaluation writes (it records
 //     ops and materialises the view): a caller who cannot prove the key
 //     leaves nothing behind, and a leaked op alone never creates a row;
-//  4. the identity's membership is EVALUATED (voidbind-go/rp, ADR-0007) over
+//  4. the identity's membership is EVALUATED (void-which-binds-go/rp, ADR-0007) over
 //     the ops this node has recorded plus the ones presented, the ops it had
 //     not seen are recorded and the device view reconciled, and the
 //     credential's device must be a current member (the enrolment.* and rp.*
@@ -158,7 +158,7 @@ func (s *Store) memberDevice(ctx context.Context, user User, deviceKey string) (
 // enrols with is judged by exactly the rule it will later authenticate under
 // — one verifier, not two that can drift.
 //
-// Steps 1 and 3 are voidbind-go/rp's verifier — the shared trust core All
+// Steps 1 and 3 are void-which-binds-go/rp's verifier — the shared trust core All
 // Thing and heyarr hold in common (ADR-0048, ADR-0068). It is backed by the
 // single key resolved from the store, pinned under the claimed user, and by
 // the store itself as the op log (rp.Membership): rp records the ops it
@@ -231,7 +231,7 @@ const MaxPossessionTTL = 10 * time.Minute
 var ErrPossessionTTLTooLong = errors.New("deviceauth: possession proof lives longer than this node accepts")
 
 // possessionWindow is the {iat, exp} a proof carries. The proof body is
-// voidbind-go's, and its payload type is unexported there, so the two fields
+// void-which-binds-go's, and its payload type is unexported there, so the two fields
 // this node has a policy about are re-read here rather than the package being
 // forked for a getter. Only these two are read: everything else about the proof
 // — the version, the binding, the signature — is VerifyPossession's business and

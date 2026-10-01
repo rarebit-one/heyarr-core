@@ -305,10 +305,12 @@ func TestDecodeInviteRejectsMalformed(t *testing.T) {
 		uri  string
 	}{
 		{"wrong scheme", "https://relay.example/pair"},
-		{"enrolment opaque", "voidbind:pair?v=1&relay=r&session=s&salt=00"},
-		{"wrong version", "voidbind:offload-pair?v=99&relay=r&session=s&salt=" + hexSalt(salt)},
-		{"short salt", "voidbind:offload-pair?v=1&relay=r&session=s&salt=00"},
-		{"missing relay", "voidbind:offload-pair?v=1&session=s&salt=" + hexSalt(salt)},
+		{"enrolment opaque", "void-which-binds:pair?v=1&relay=r&session=s&salt=00"},
+		{"wrong version", "void-which-binds:offload-pair?v=99&relay=r&session=s&salt=" + hexSalt(salt)},
+		{"short salt", "void-which-binds:offload-pair?v=1&relay=r&session=s&salt=00"},
+		{"missing relay", "void-which-binds:offload-pair?v=1&session=s&salt=" + hexSalt(salt)},
+		// The gen1 scheme is refused: gen2 has no dual parsing (void-which-binds-go ADR-0022).
+		{"gen1 scheme", "voidbind:offload-pair?v=1&relay=r&session=s&salt=" + hexSalt(salt)},
 	} {
 		if _, err := DecodeInvite(tc.uri); err == nil {
 			t.Errorf("%s: expected an error", tc.name)

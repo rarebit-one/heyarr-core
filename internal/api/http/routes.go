@@ -24,7 +24,7 @@ const APIPrefix = "/api/v1"
 const RenderPrefix = "/render"
 
 // RelayPrefix is the device-pairing relay's BASE (§40, ADR-0022, ADR-0038): a
-// Voidbind client is given "<node>/pair" and appends the /v1/... paths itself,
+// Void-Which-Binds client is given "<node>/pair" and appends the /v1/... paths itself,
 // so the relay's routes live under RelayV1Prefix. Like RenderPrefix it is
 // deliberately OUTSIDE APIPrefix and its authenticated group: a device being
 // paired is not yet enrolled and has no credential to present, and the relay is
@@ -34,8 +34,8 @@ const RenderPrefix = "/render"
 // resource.
 const RelayPrefix = "/pair"
 
-// RelayV1Prefix is where the Voidbind relay — voidbind-go's relay.Server, the
-// protocol `heyarr pair`, the voidbind CLI and the phone (voidbind-kmp) speak —
+// RelayV1Prefix is where the Void-Which-Binds relay — void-which-binds-go's relay.Server, the
+// protocol `heyarr pair`, the void-which-binds CLI and the phone (void-which-binds-kmp) speak —
 // is mounted (ADR-0066). It is the node's only pairing relay: the legacy
 // /pair/sessions/{s}/slots/{slot} relay is retired. Public for the same reason
 // RelayPrefix is.

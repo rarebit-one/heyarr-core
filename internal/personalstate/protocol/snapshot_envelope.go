@@ -11,7 +11,7 @@ package protocol
 //
 // The fix binds (record type, space, frontier) INSIDE the AEAD: the plaintext a
 // snapshot producer encrypts is this envelope, not the bare state. The content
-// cipher (voidbind-go encryption.EncryptChange) takes no associated data, so the
+// cipher (void-which-binds-go encryption.EncryptChange) takes no associated data, so the
 // binding rides in the authenticated plaintext instead — the same guarantee,
 // since Poly1305 authenticates every plaintext byte. After decryption a reader
 // re-checks the envelope against the snapshot's outer fields and refuses a

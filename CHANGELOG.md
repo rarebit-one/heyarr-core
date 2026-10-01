@@ -9,6 +9,46 @@ stable.
 
 ## [Unreleased]
 
+### Changed (BREAKING: gen2-only, void-which-binds ADR-0022)
+
+> **Do not deploy this before ADR-0022's C2 cutover.** This build accepts only
+> gen2 (Void-Which-Binds) credentials, so every gen1 (Voidbind) device, pin,
+> grant, session and recovery blob stops working the moment it runs. It is
+> built and staged at C1 and deployed at C2 step 6. C2 step 4's
+> `heyarr space export-recovery` runs on the **pre-cutover** binary (v0.5.x on
+> void-which-binds-go v0.18.x), against the stopped controller database, so its
+> `heyarr-recovery-blob-v1` output is gen1 and is read only by the cutover's
+> rewrap, never by this build.
+
+- **The device library is `github.com/rarebit-one/void-which-binds-go` v0.19.0,
+  which is gen2-only.** Every token must carry a `void-which-binds.*` `typ`
+  (untyped and `voidbind.*` tokens are refused), signature domains and KDF labels
+  take their gen2 spellings, recovery secrets are `void-which-binds1…` (a gen1
+  `heyarr1…` secret is refused as `recovery.ErrGenerationRetired`), URIs use the
+  `void-which-binds:` scheme with pairing invite `v=4`, and the headers are
+  `Void-Which-Binds-Membership` and `Void-Which-Binds-Grant` (`X-Voidbind-Grant`
+  is gone). Key files carry only `void-which-binds-*-seed:` markers, so a gen1
+  device key is refused, and the default device and identity directories are
+  `<config dir>/void-which-binds/{device,identity}`. Only
+  `VOID_WHICH_BINDS_*` environment names are read. The peer (node) identity key
+  file is unchanged.
+- **The Cruciform offload invite is `void-which-binds:offload-pair?v=1&…`** (was
+  `voidbind:`). A `voidbind:` invite is refused. The phone half must re-copy the
+  offload vectors.
+- **The space recovery blob is `heyarr-recovery-blob-v2`.** Its body and every
+  wrapped key in it are sealed under the gen2 labels. A gen1
+  `heyarr-recovery-blob-v1` file is refused as `ErrNotABlob`, with a message
+  naming the cutover's rewrap (void-which-binds-go's `migrate/gen1`, a later
+  `heyarr space rewrap`) as the only reader.
+- **`/v1/unwrap-wake` refuses a bare cert.** A request must carry a possession
+  proof (in `possession`, or as the `<cert>~<proof>` device credential); one
+  without is the opaque `401`. The bare-cert compatibility path and its
+  deprecation log were for pre-v0.5.3 desktops, which are gen1 devices the
+  cutover re-enrols. The desktop wake client always sends a proof.
+- The web sign-in page, CLI help, OpenAPI document (operation ids
+  `createVoidWhichBindsPairSession`, `putVoidWhichBindsPairSlot`,
+  `getVoidWhichBindsPairSlot`) and docs use the Void-Which-Binds names.
+
 ### Added
 
 - **`heyarr admin user rekey <principal> <ed25519:…> --recovery-key <x25519:…>`

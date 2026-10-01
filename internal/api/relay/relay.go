@@ -1,12 +1,12 @@
-// Package relay mounts the Voidbind pairing relay — voidbind-go's relay.Server —
+// Package relay mounts the Void-Which-Binds pairing relay — void-which-binds-go's relay.Server —
 // on the node's PUBLIC router, under httpapi.RelayV1Prefix (ADR-0066).
 //
-// It is the node's only pairing relay. The Voidbind clients — `heyarr pair`,
-// the voidbind CLI's pair-initiate / pair-join and the phone's voidbind-kmp —
-// speak voidbind-go's relay protocol: POST /v1/sessions, then
+// It is the node's only pairing relay. The Void-Which-Binds clients — `heyarr pair`,
+// the void-which-binds CLI's pair-initiate / pair-join and the phone's void-which-binds-kmp —
+// speak void-which-binds-go's relay protocol: POST /v1/sessions, then
 // PUT|GET /v1/sessions/{id}/{role}/{type} with a JSON reveal and an
 // X25519-sealed admission. The legacy slot relay that heyarr ran at
-// /pair/sessions/{s}/slots/{slot} before the Voidbind extraction is retired
+// /pair/sessions/{s}/slots/{slot} before the Void-Which-Binds extraction is retired
 // (ADR-0066, #627).
 //
 // Like every other public mount, this grants nothing (ADR-0038): the relay is an
@@ -36,14 +36,14 @@ type Options struct {
 	Now    func() time.Time
 	Logger *slog.Logger
 	// Types is the message-slot allow-list the relay accepts. Empty keeps
-	// voidbind-go's pairing default (commit/reveal/cert/refuse). A node that also carries
+	// void-which-binds-go's pairing default (commit/reveal/cert/refuse). A node that also carries
 	// the cruciform-offload live path sets it to the pairing set plus the offload
 	// slots — the caller composes them, so this package stays agnostic to what
 	// rides the relay (see the controller mount).
 	Types []string
 }
 
-// Handler serves the Voidbind relay under httpapi.RelayV1Prefix.
+// Handler serves the Void-Which-Binds relay under httpapi.RelayV1Prefix.
 type Handler struct {
 	routes http.Handler
 	log    *slog.Logger
@@ -53,7 +53,7 @@ type Handler struct {
 // sized for a bare commit/reveal; since ADR-0068 the sealed `cert` slot carries the
 // admitting op AND the initiator's known membership ops (up to
 // rp.MaxPresentedOps of ~700 B each), and a phone with a few devices overflowed
-// it with a 413 mid-pairing. voidbind-go's own relay default (64 KiB) is the
+// it with a 413 mid-pairing. void-which-binds-go's own relay default (64 KiB) is the
 // wire's stated bound, so the node uses the same number.
 const MaxMessageBytes = vbrelay.DefaultMaxMessageBytes
 
@@ -66,7 +66,7 @@ const MaxSessions = 256
 // pairing completes in seconds, or is abandoned.
 const SessionTTL = 10 * time.Minute
 
-// New builds the relay with the node's session caps and the voidbind-go relay's
+// New builds the relay with the node's session caps and the void-which-binds-go relay's
 // slot cap.
 func New(opts Options) *Handler {
 	log := opts.Logger
@@ -81,7 +81,7 @@ func New(opts Options) *Handler {
 		Types:           opts.Types,
 	})
 	// The relay's own mux is written against "/v1/..." (the origin-relative
-	// paths a `voidbind relay` serves) and voidbind-go's client appends those
+	// paths a `void-which-binds relay` serves) and void-which-binds-go's client appends those
 	// paths to its configured base, so the node's prefix is stripped before the
 	// request reaches the mux: a client whose relay base is "<node>/pair" dials
 	// "<node>/pair/v1/sessions", exactly the paths a standalone relay serves,

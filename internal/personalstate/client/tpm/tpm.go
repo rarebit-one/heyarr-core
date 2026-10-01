@@ -2,7 +2,7 @@
 // X25519 encryption seed is SEALED to a TPM 2.0 under a policy that is
 // PolicyPCR(selection) AND PolicyAuthValue(PIN); it is released only after that
 // gate, and the ECDH then runs in RAM. TPM 2.0 has no Curve25519, so the TPM
-// GATES the seed — it does not compute X25519 (mirrors voidbind ADR-0001, and
+// GATES the seed — it does not compute X25519 (mirrors void-which-binds-go ADR-0001, and
 // unlike the yubikey backend where the key never leaves the card).
 //
 // RecipientID reads the recorded public point from the sealed-key blob, with NO

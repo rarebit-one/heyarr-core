@@ -11,7 +11,7 @@ import (
 // on a real phone (2026-09-03). The node's cap is the wire's stated bound.
 func TestSlotCapFitsAMembershipBearingCert(t *testing.T) {
 	if MaxMessageBytes != vbrelay.DefaultMaxMessageBytes {
-		t.Fatalf("MaxMessageBytes = %d, want voidbind-go's %d", MaxMessageBytes, vbrelay.DefaultMaxMessageBytes)
+		t.Fatalf("MaxMessageBytes = %d, want void-which-binds-go's %d", MaxMessageBytes, vbrelay.DefaultMaxMessageBytes)
 	}
 	if MaxMessageBytes < 32<<10 {
 		t.Fatalf("MaxMessageBytes = %d is too small for an op-bearing cert slot", MaxMessageBytes)

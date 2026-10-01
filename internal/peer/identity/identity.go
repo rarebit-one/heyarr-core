@@ -2,29 +2,29 @@
 //
 // The Ed25519 identity core — public-key format/parse, the Identity value and
 // its Signer, the key-file storage, and Ensure with its Peers/Marker interfaces
-// — was extracted into voidbind-go byte-for-byte. This package re-exports it.
+// — was extracted into void-which-binds-go byte-for-byte. This package re-exports it.
 //
 // The glue the migration keeps in heyarr lives ELSEWHERE and are
 // is unchanged by this shim: heyarr's DB implements the Peers and Marker interfaces
 // (re-exported below as aliases, so those implementations still satisfy them)
 // and passes them to Ensure; deviceauth keeps its DB/HTTP half.
-// Only the identity primitives are deduplicated here. Tests live in voidbind-go.
+// Only the identity primitives are deduplicated here. Tests live in void-which-binds-go.
 package identity
 
 import vb "github.com/rarebit-one/void-which-binds-go/identity"
 
-// Identity is re-exported from voidbind-go/identity.
+// Identity is re-exported from void-which-binds-go/identity.
 type Identity = vb.Identity
 
-// Options is re-exported from voidbind-go/identity.
+// Options is re-exported from void-which-binds-go/identity.
 type Options = vb.Options
 
-// Peers is re-exported from voidbind-go/identity. It is the interface heyarr's
-// peer database satisfies; as an alias it is the SAME interface voidbind-go's
+// Peers is re-exported from void-which-binds-go/identity. It is the interface heyarr's
+// peer database satisfies; as an alias it is the SAME interface void-which-binds-go's
 // Ensure expects, so heyarr's implementation passes to Ensure unchanged.
 type Peers = vb.Peers
 
-// Marker is re-exported from voidbind-go/identity. Like Peers, it is the SAME
+// Marker is re-exported from void-which-binds-go/identity. Like Peers, it is the SAME
 // interface Ensure expects, satisfied by heyarr's CAS root marker unchanged.
 type Marker = vb.Marker
 
