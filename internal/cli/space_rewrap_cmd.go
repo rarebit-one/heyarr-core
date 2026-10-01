@@ -30,6 +30,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/custody"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spacerecover"
 )
 
@@ -304,6 +305,29 @@ func runRewrapStage(cmd *cobra.Command, configPath *string, deviceDir, identityD
 		}
 		if err := sameSpaceSet("--expect's space_ids", expIDs, staged); err != nil {
 			return spaceRewrapView{}, err
+		}
+	}
+
+	// Authenticate every key against the frozen database, not the blob alone.
+	// The blob is sealed to a PUBLIC key, so anyone could forge one with the
+	// right space ids and keys of their choosing; the database's own gen1
+	// recovery wrap for each space, opened with the gen1 secret, must give the
+	// same key. A space with no gen1 recovery wrap in the database stops here.
+	dbWraps, err := expectDBRecoveryWraps(ctx, in.expectDB, g1.RecoveryRecipient())
+	if err != nil {
+		return spaceRewrapView{}, err
+	}
+	for _, s := range blob.Spaces {
+		w, ok := dbWraps[s.SpaceID]
+		if !ok {
+			return spaceRewrapView{}, fmt.Errorf("space %s: --expect-db holds no wrap for the gen1 recovery key %s, so its key cannot be checked; nothing was staged", s.SpaceID, g1.RecoveryRecipient())
+		}
+		dbKey, err := g1.UnwrapSpaceKey(w)
+		if err != nil {
+			return spaceRewrapView{}, fmt.Errorf("space %s: the gen1 secret does not open --expect-db's recovery wrap: %w; nothing was staged", s.SpaceID, err)
+		}
+		if !sameSpaceKey(dbKey, s.Key) {
+			return spaceRewrapView{}, fmt.Errorf("space %s: the blob's key is not the key in --expect-db (a forged or foreign blob); nothing was staged", s.SpaceID)
 		}
 	}
 
@@ -777,30 +801,72 @@ func hasStagedWraps(ctx context.Context, c *apiclient.Client, spaceID string, st
 	return true, nil
 }
 
-// verifyRemoteSpaceKey is verifyBlobKeys over the API: the key must open the
-// space's newest content. A rotation always pushes a snapshot under the new
-// key, so the latest snapshot, when there is one, is under the current key;
-// otherwise the newest change is. A space with no content cannot be checked;
-// it reports empty and is uploaded on the strength of the offline prove.
+// verifyRemoteSpaceKey checks the staged key against the space's NEWEST
+// content on the controller, in causal order. With a snapshot, the key must
+// open the snapshot and every change past its frontier (not the frontier or
+// one of its ancestors): a change appended after a rotation whose snapshot
+// never landed is under the newer key, so a stale stage is refused. With no
+// snapshot, the key must open every head change (one no other change names as
+// a parent). A space with no content reports empty: the stage's keys are
+// already bound to the frozen database, and writes are stopped from C2 step 3.
 func verifyRemoteSpaceKey(ctx context.Context, c *apiclient.Client, spaceID string, k encryption.SpaceKey) (empty bool, err error) {
-	snap, ok, err := c.Snapshot(ctx, spaceID)
+	snap, hasSnap, err := c.Snapshot(ctx, spaceID)
 	if err != nil {
 		return false, fmt.Errorf("space %s: reading its latest snapshot: %w", spaceID, err)
 	}
-	ct := snap.Ciphertext
-	if !ok {
-		changes, err := c.Changes(ctx, spaceID)
-		if err != nil {
-			return false, fmt.Errorf("space %s: reading its changes: %w", spaceID, err)
-		}
-		if len(changes) == 0 {
-			return true, nil
-		}
-		ct = changes[len(changes)-1].Ciphertext
+	changes, err := c.Changes(ctx, spaceID)
+	if err != nil {
+		return false, fmt.Errorf("space %s: reading its changes: %w", spaceID, err)
 	}
-	if _, err := encryption.DecryptChange(k, ct); err != nil {
-		return false, fmt.Errorf("space %s: the staged key does not open the space's newest content on the controller "+
+	if !hasSnap && len(changes) == 0 {
+		return true, nil
+	}
+	stale := func() error {
+		return fmt.Errorf("space %s: the staged key does not open the space's newest content on the controller "+
 			"(the space was re-keyed after the gen1 export, or the blob was not this controller's); nothing was uploaded", spaceID)
+	}
+	parents := make(map[string][]string, len(changes))
+	for _, ch := range changes {
+		parents[ch.ChangeID] = ch.Parents
+	}
+	var newest []protocol.EncryptedChange
+	if hasSnap {
+		if _, err := encryption.DecryptChange(k, snap.Ciphertext); err != nil {
+			return false, stale()
+		}
+		covered := make(map[string]bool)
+		stack := append([]string(nil), snap.Frontier...)
+		for len(stack) > 0 {
+			id := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if covered[id] {
+				continue
+			}
+			covered[id] = true
+			stack = append(stack, parents[id]...)
+		}
+		for _, ch := range changes {
+			if !covered[ch.ChangeID] {
+				newest = append(newest, ch)
+			}
+		}
+	} else {
+		named := make(map[string]bool)
+		for _, ch := range changes {
+			for _, p := range ch.Parents {
+				named[p] = true
+			}
+		}
+		for _, ch := range changes {
+			if !named[ch.ChangeID] {
+				newest = append(newest, ch)
+			}
+		}
+	}
+	for _, ch := range newest {
+		if _, err := encryption.DecryptChange(k, ch.Ciphertext); err != nil {
+			return false, stale()
+		}
 	}
 	return false, nil
 }
@@ -920,6 +986,34 @@ func expectDBSpaceIDs(ctx context.Context, path string) ([]string, error) {
 		return nil, fmt.Errorf("--expect-db: %w", err)
 	}
 	return ids, nil
+}
+
+// expectDBRecoveryWraps reads every space's wrap for the gen1 recovery
+// recipient from the read-only copy of the frozen controller database.
+func expectDBRecoveryWraps(ctx context.Context, path, recipient string) (map[string][]byte, error) {
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=query_only(true)")
+	if err != nil {
+		return nil, fmt.Errorf("--expect-db: opening read-only: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+	rows, err := db.QueryContext(ctx, `SELECT space_id, wrapped FROM wrapped_keys WHERE recipient = ?`, recipient)
+	if err != nil {
+		return nil, fmt.Errorf("--expect-db: reading wrapped_keys: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[string][]byte)
+	for rows.Next() {
+		var id string
+		var w []byte
+		if err := rows.Scan(&id, &w); err != nil {
+			return nil, fmt.Errorf("--expect-db: %w", err)
+		}
+		out[id] = w
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("--expect-db: %w", err)
+	}
+	return out, nil
 }
 
 // expectExportSpaceIDs reads the space_ids of a `space export-recovery --json`

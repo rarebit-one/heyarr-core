@@ -9,6 +9,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
+	"crypto/hkdf"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -25,6 +28,7 @@ import (
 	"github.com/rarebit-one/void-which-binds-go/recovery"
 	"github.com/rarebit-one/void-which-binds-go/recovery/slip39"
 	"github.com/spf13/pflag"
+	"golang.org/x/crypto/chacha20poly1305"
 
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
@@ -40,6 +44,7 @@ type gen1Vector struct {
 	Secret           string `json:"secret"`
 	Recipient        string `json:"recipient"`
 	SpaceKey         string `json:"space_key"`
+	Wrapped          string `json:"wrapped"`
 	ChangePlaintext  string `json:"change_plaintext"`
 	ChangeCiphertext string `json:"change_ciphertext"`
 	Blob             string `json:"blob"`
@@ -136,6 +141,15 @@ func (f rewrapFixture) expectDBWith(t *testing.T, name string, ids ...string) st
 	for _, id := range ids {
 		if _, err := db.Writer().Exec(`INSERT INTO encrypted_spaces (id, kind, created_at) VALUES (?, 'vault', ?)`,
 			id, "2026-09-25T00:00:00Z"); err != nil {
+			t.Fatal(err)
+		}
+		if id != gen1VectorSpace {
+			continue
+		}
+		// The frozen database's own gen1 recovery wrap, which staging checks
+		// every blob key against.
+		if _, err := db.Writer().Exec(`INSERT INTO wrapped_keys (id, space_id, recipient, wrapped, created_at) VALUES (?, ?, ?, ?, ?)`,
+			"0199a0b0-0000-7000-8000-0000000000aa", id, f.v.Recipient, mustHexDecode(t, f.v.Wrapped), "2026-09-25T00:00:00Z"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -756,6 +770,42 @@ func TestSpaceRewrapUploadRefusals(t *testing.T) {
 		}
 		c.assertNoGen2Wraps(t, f)
 	})
+	t.Run("a change newer than the snapshot", func(t *testing.T) {
+		// A rotation re-wrapped the keys but its snapshot never landed: the
+		// latest snapshot is under the staged key, and a later change (past
+		// its frontier) is under the new one. The stage is stale.
+		f := newRewrapFixture(t)
+		f.mustStage(t)
+		c := newRewrapController(t, f, gen1VectorSpace)
+		c.rekey(t, f)
+		ctx := context.Background()
+		cl := c.h.client(t)
+		existing, err := cl.Changes(ctx, gen1VectorSpace)
+		if err != nil || len(existing) != 1 {
+			t.Fatalf("changes = %v, %v", existing, err)
+		}
+		snap, err := protocol.NewSnapshot(gen1VectorSpace, []string{existing[0].ChangeID}, mustHexDecode(t, f.v.ChangeCiphertext))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.h.spaces.PutSnapshot(ctx, snap); err != nil {
+			t.Fatal(err)
+		}
+		k, _ := encryption.NewSpaceKey()
+		ct, _ := encryption.EncryptChange(k, []byte("after a rotation"))
+		ch, err := protocol.NewChange(gen1VectorSpace, []string{existing[0].ChangeID}, ct)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.h.spaces.PutChange(ctx, ch); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = c.upload(f)
+		if err == nil || !strings.Contains(err.Error(), "does not open the space's newest content") {
+			t.Fatalf("err = %v", err)
+		}
+		c.assertNoGen2Wraps(t, f)
+	})
 	t.Run("stale key", func(t *testing.T) {
 		f := newRewrapFixture(t)
 		f.mustStage(t)
@@ -790,4 +840,82 @@ func (c rewrapController) assertNoGen2Wraps(t *testing.T, f rewrapFixture) {
 			t.Fatalf("a gen2 wrap was uploaded despite the refusal: %s", k.Recipient)
 		}
 	}
+}
+
+// TestSpaceRewrapBindsKeysToTheFrozenDB: the gen1 blob is sealed to a public
+// key, so a forged blob could carry the right space ids with other keys. Every
+// blob key must equal the key in the frozen database's own gen1 recovery wrap.
+func TestSpaceRewrapBindsKeysToTheFrozenDB(t *testing.T) {
+	setWrap := func(t *testing.T, f rewrapFixture, wrapped []byte) {
+		t.Helper()
+		db, err := sqlite.Open(context.Background(), sqlite.Options{Path: f.expectDB})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = db.Close() }()
+		q, args := `DELETE FROM wrapped_keys WHERE space_id = ?`, []any{gen1VectorSpace}
+		if wrapped != nil {
+			q, args = `UPDATE wrapped_keys SET wrapped = ? WHERE space_id = ?`, []any{wrapped, gen1VectorSpace}
+		}
+		if _, err := db.Writer().Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := []struct {
+		name    string
+		wrapped func(t *testing.T, f rewrapFixture) []byte
+		want    string
+	}{
+		{"no gen1 recovery wrap", func(*testing.T, rewrapFixture) []byte { return nil }, "holds no wrap for the gen1 recovery key"},
+		{"unopenable wrap", func(*testing.T, rewrapFixture) []byte { return bytes.Repeat([]byte{1}, 104) }, "does not open --expect-db's recovery wrap"},
+		{"a different key", func(t *testing.T, f rewrapFixture) []byte {
+			return gen1SealForTest(t, bytes.Repeat([]byte{7}, 32), f.v.Recipient)
+		}, "is not the key in --expect-db"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newRewrapFixture(t)
+			setWrap(t, f, c.wrapped(t, f))
+			_, err := f.runStage(t)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want %q", err, c.want)
+			}
+			f.assertNoStage(t)
+		})
+	}
+}
+
+// gen1SealForTest seals key to an x25519 recipient under the retired gen1 wrap
+// label, which no production code can do any more; it stands in for a forger.
+func gen1SealForTest(t *testing.T, key []byte, recipient string) []byte {
+	t.Helper()
+	pubBytes := mustHexDecode(t, strings.TrimPrefix(recipient, "x25519:"))
+	pub, err := ecdh.X25519().NewPublicKey(pubBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eph, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared, err := eph.ECDH(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ephPub := eph.PublicKey().Bytes()
+	salt := append(append([]byte{}, ephPub...), pubBytes...)
+	wk, err := hkdf.Key(sha256.New, shared, salt, "heyarr/space-key-wrap/v1", chacha20poly1305.KeySize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aead, err := chacha20poly1305.NewX(wk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := make([]byte, chacha20poly1305.NonceSizeX)
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatal(err)
+	}
+	out := append(append([]byte{}, ephPub...), nonce...)
+	return append(out, aead.Seal(nil, nonce, key, salt)...)
 }
