@@ -164,6 +164,13 @@ const (
 	TypeDeviceEnrolled = "identity.device.enrolled"
 	TypeDeviceRevoked  = "identity.device.revoked"
 
+	// A user identity's pinned key replaced in place by the host operator
+	// (`heyarr admin user rekey`, void-which-binds ADR-0022 C2 step 6). Not a
+	// revoke plus an enrol: the principal and its row survive, and the old
+	// key's membership ops are dropped with it. The payload names both keys —
+	// "which key was this identity before?" is the question a rekey raises.
+	TypeUserRekeyed = "identity.user.rekeyed"
+
 	// ADR-0068 (voidbind-go ADR-0007): an identity is a set of device keys
 	// evolved by member-signed ops. Recording ops this node had not seen is a
 	// state transition of the op log; a device the evaluation removes is
