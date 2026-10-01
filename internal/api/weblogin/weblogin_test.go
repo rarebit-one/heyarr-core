@@ -37,6 +37,13 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return newHarnessWith(t, nil)
+}
+
+// newHarnessWith is newHarness with a hook to set the optional Options (the
+// notify-plane wakers) before the Handler is built.
+func newHarnessWith(t *testing.T, configure func(*weblogin.Options)) *harness {
+	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
 
@@ -55,7 +62,11 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := weblogin.New(weblogin.Options{Identities: store, Base: base})
+	opts := weblogin.Options{Identities: store, Base: base}
+	if configure != nil {
+		configure(&opts)
+	}
+	h, err := weblogin.New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +94,14 @@ func (h *harness) enrolledDevice(t *testing.T) (cert string, devicePriv ed25519.
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := h.store.EnrolUser(ctx, u.UserID(), "alice", ""); err != nil {
+	// A principal's name is unique, so a second user in one harness takes a
+	// suffix of its own key.
+	name := "alice"
+	if users, err := h.store.ListUsers(ctx); err == nil && len(users) > 0 {
+		id := u.UserID()
+		name += "-" + id[len(id)-8:]
+	}
+	if _, err := h.store.EnrolUser(ctx, u.UserID(), name, ""); err != nil {
 		t.Fatalf("enrol user: %v", err)
 	}
 	if _, err := h.store.EnrolDevice(ctx, cert, "phone"); err != nil {

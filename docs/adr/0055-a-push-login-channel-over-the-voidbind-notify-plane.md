@@ -1,7 +1,8 @@
 # 0055. A push-login channel over the Voidbind notify plane
 
-**Status:** Accepted
+**Status:** Accepted, superseded in part by [ADR-0102](0102-wakes-go-through-the-shared-notify-plane.md)
 **Date:** 2026-08-31
+**Amended:** 2026-10-01. The embedded `/v1/subscriptions` registry and the in-process ntfy notifier described below are gone. Phones subscribe only to the shared notify plane, so heyarr now calls that plane's `/v1/enqueue` (ADR-0102). The push on login initiation, the per-initiation user resolution and the fail-open stance still hold.
 
 ## Context
 

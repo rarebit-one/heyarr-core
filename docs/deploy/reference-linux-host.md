@@ -291,3 +291,41 @@ fixture:
   shutdown the file stands alone — SQLite removes the WAL on last close, and the
   acceptance demo asserts that. Copying a live database beside a populated `-wal`
   gives you a silently stale backup (§50).
+
+## Push login and the unwrap wake (ADR-0102)
+
+Heyarr does not hold device subscriptions. Phones subscribe to one shared
+Voidbind notify plane (`void-which-binds-notify`). Heyarr asks that plane to
+wake them, for a QR login and for a cruciform-offload unwrap. To turn this on,
+name the plane and give Heyarr the plane's enqueue bearer, which is the value
+of the plane's `VOID_WHICH_BINDS_NOTIFY_ENQUEUE_TOKEN`:
+
+```yaml
+notify:
+  url: https://notify.example:2587
+  enqueue_token_file: /etc/heyarr/notify-enqueue-token   # 0640 root:heyarr
+```
+
+```sh
+# Copy the bearer from the plane's env without printing it.
+sudo sh -c 'umask 027; . /etc/void-which-binds-notify/env &&
+  printf "%s\n" "$VOID_WHICH_BINDS_NOTIFY_ENQUEUE_TOKEN" > /etc/heyarr/notify-enqueue-token'
+sudo chown root:heyarr /etc/heyarr/notify-enqueue-token
+sudo systemctl restart heyarr
+```
+
+`HEYARR_NOTIFY_ENQUEUE_TOKEN` can stand in for the file, for example from a
+systemd credential or an `EnvironmentFile`. The bearer is never a config key,
+so `heyarr config print` does not show it. Heyarr refuses to start when
+`notify.url` is set and no bearer can be found. At startup it logs
+`web login wakes go through the notify plane` with the URL, and never the
+bearer.
+
+The plane URL must be https. Plain http is accepted only on loopback. The unit's
+`IPAddressAllow=` must let Heyarr reach the plane's address. Without
+`notify.url`, Heyarr still serves the QR login, and `/v1/unwrap-wake` answers
+`{"woken":0}`.
+
+`notify.ntfy_base_url` is gone, and Heyarr no longer serves
+`/v1/subscriptions`. A config file that still has that key loads without
+error, and the key is ignored.

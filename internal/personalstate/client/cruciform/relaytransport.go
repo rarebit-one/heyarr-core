@@ -32,9 +32,9 @@ var RelayUnwrapTypes = []string{RelayRequestType, RelayResponseType}
 var RelayPairTypes = []string{pairMsgConfirm}
 
 // WakeFunc wakes the paired phone so it opens the given relay session for an
-// unwrap. In production it asks the controller to fan an opaque
-// voidbind:unwrap?relay=&session= ping to the user's devices
-// (notify.EnqueueUnwrap); a nil WakeFunc skips the wake, for when the phone is
+// unwrap. In production it asks the node (POST /v1/unwrap-wake), which asks the
+// shared notify plane to fan an opaque voidbind:unwrap?relay=&session= ping to
+// the user's devices (ADR-0102); a nil WakeFunc skips the wake, for when the phone is
 // already reachable (a LAN-direct path, or a test with the phone already polling).
 type WakeFunc func(ctx context.Context, relayBase, session string) error
 

@@ -26,13 +26,12 @@ func (h *pushHarness) postWake(t *testing.T, body string) *http.Response {
 
 // TestUnwrapWakeWakesTheUsersPhone is the load-bearing behaviour: an enrolled
 // device (the offload desktop) asks to wake its user's phone for an unwrap, and
-// the subscribed phone receives exactly one opaque unwrap ping carrying the
-// relay/session pointer — nothing else.
+// heyarr asks the notify plane — with its bearer — to wake THAT cert's user at
+// exactly the relay/session pointer, nothing else, relaying the plane's count.
 func TestUnwrapWakeWakesTheUsersPhone(t *testing.T) {
 	h := newPushHarness(t)
 	cert, priv := h.enrolledDevice(t)
-	// The phone registers its wake endpoint (same user, cert-authed).
-	h.subscribe(t, cert, priv, "https://ntfy.example/phone-topic")
+	user := h.pinnedUserIDs(t)[0]
 
 	const relayBase, session = "https://heyarr.test/pair", "sess-offload-1"
 	resp := h.postWake(t, `{"cert":"`+cert+`","possession":"`+prove(t, priv, cert)+`","relay_base":"`+relayBase+`","session":"`+session+`"}`)
@@ -41,46 +40,99 @@ func TestUnwrapWakeWakesTheUsersPhone(t *testing.T) {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("unwrap-wake = %d (%s), want 200", resp.StatusCode, b)
 	}
+	if got := wokenOf(t, resp); got != 1 {
+		t.Fatalf("woken = %d, want 1", got)
+	}
+
+	got := h.plane.received()
+	if len(got) != 1 {
+		t.Fatalf("plane received %d calls, want 1", len(got))
+	}
+	c := got[0]
+	if c.Route != "/v1/enqueue-unwrap" || c.Bearer != planeBearer {
+		t.Fatalf("call = %s with bearer %q, want /v1/enqueue-unwrap with the configured bearer", c.Route, c.Bearer)
+	}
+	want := map[string]string{"user_id": user, "relay_base": relayBase, "session": session}
+	if len(c.Body) != len(want) {
+		t.Fatalf("enqueue-unwrap body %v, want exactly %v", c.Body, want)
+	}
+	for k, v := range want {
+		if c.Body[k] != v {
+			t.Fatalf("enqueue-unwrap %s = %q, want %q", k, c.Body[k], v)
+		}
+	}
+}
+
+// wokenOf decodes an unwrap-wake response's woken count.
+func wokenOf(t *testing.T, resp *http.Response) int {
+	t.Helper()
 	var out struct {
 		Woken int `json:"woken"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if out.Woken != 1 {
-		t.Fatalf("woken = %d, want 1", out.Woken)
-	}
-
-	got := h.ch.captured()
-	if len(got) != 1 {
-		t.Fatalf("captured %d pings, want 1", len(got))
-	}
-	tuple := got[0].Tuple
-	// The ping is the opaque unwrap pointer: it carries the relay session and
-	// nothing secret (there is no secret — the desktop's signed request rides the
-	// relay, not the ping).
-	if !strings.HasPrefix(tuple, "voidbind:unwrap?") || !strings.Contains(tuple, session) {
-		t.Fatalf("ping tuple %q is not the opaque unwrap pointer for the session", tuple)
-	}
-	if strings.Contains(tuple, cert) {
-		t.Fatalf("ping tuple leaked the cert: %q", tuple)
-	}
+	return out.Woken
 }
 
-// TestUnwrapWakeUnsubscribedUserWakesNobody: an enrolled desktop with no
-// subscribed phone wakes zero devices — a 200 with woken:0, not an error (the
-// desktop can still try the LAN-direct path).
+// TestUnwrapWakeUnsubscribedUserWakesNobody: when the plane wakes nobody (no
+// phone subscribed) the desktop gets a 200 with woken:0, not an error — it can
+// still try the LAN-direct path.
 func TestUnwrapWakeUnsubscribedUserWakesNobody(t *testing.T) {
 	h := newPushHarness(t)
-	cert, _ := h.enrolledDevice(t) // enrolled, but no phone subscribed
+	h.plane.woken = 0
+	cert, _ := h.enrolledDevice(t)
 
 	resp := h.postWake(t, `{"cert":"`+cert+`","relay_base":"r","session":"s"}`)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unwrap-wake = %d, want 200", resp.StatusCode)
 	}
-	if got := h.ch.captured(); len(got) != 0 {
-		t.Fatalf("captured %d pings, want 0", len(got))
+	if got := wokenOf(t, resp); got != 0 {
+		t.Fatalf("woken = %d, want 0", got)
+	}
+}
+
+// TestUnwrapWakeWithoutAPlaneWakesNobody: a node with no notify plane still
+// authenticates the request, then answers woken:0 — the same answer as an
+// unsubscribed user, so the desktop keeps polling the relay.
+func TestUnwrapWakeWithoutAPlaneWakesNobody(t *testing.T) {
+	h := newHarness(t)
+	cert, priv := h.enrolledDevice(t)
+
+	resp, err := h.ts.Client().Post(h.ts.URL+weblogin.UnwrapWakePrefix, "application/json",
+		strings.NewReader(`{"cert":"`+cert+`","possession":"`+prove(t, priv, cert)+`","relay_base":"r","session":"s"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unwrap-wake without a plane = %d, want 200", resp.StatusCode)
+	}
+	if got := wokenOf(t, resp); got != 0 {
+		t.Fatalf("woken = %d, want 0", got)
+	}
+}
+
+// TestUnwrapWakePlaneFailureIsBadGateway: a plane that refuses the bearer or
+// errors is a 502 to the desktop — the wake failed, not the request — and the
+// answer never carries the plane's error text.
+func TestUnwrapWakePlaneFailureIsBadGateway(t *testing.T) {
+	for _, code := range []int{http.StatusUnauthorized, http.StatusServiceUnavailable, http.StatusInternalServerError} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			h := newPushHarness(t)
+			h.plane.setStatus(code)
+			cert, priv := h.enrolledDevice(t)
+			resp := h.postWake(t, `{"cert":"`+cert+`","possession":"`+prove(t, priv, cert)+`","relay_base":"r","session":"s"}`)
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusBadGateway {
+				t.Fatalf("unwrap-wake with the plane answering %d = %d, want 502", code, resp.StatusCode)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			if strings.Contains(string(b), planeBearer) || strings.Contains(string(b), "notify") {
+				t.Fatalf("502 body leaked plane detail: %q", b)
+			}
+		})
 	}
 }
 

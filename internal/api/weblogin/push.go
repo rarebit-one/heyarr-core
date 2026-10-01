@@ -3,48 +3,42 @@ package weblogin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"time"
 
 	"github.com/rarebit-one/void-which-binds-go/notify"
-	"github.com/rarebit-one/void-which-binds-go/rp"
 )
 
-// This file wires heyarr as a relying party of Voidbind's push/wake plane
-// (voidbind-go/notify, v0.5.0) — the push counterpart to the QR web-login broker
-// (ADR-0053/0055). It adds two things behind the SAME pinned trust the broker and
-// the device-cert scheme already use (internal/deviceauth):
+// This file wires heyarr's push login to the SHARED Voidbind notify plane
+// (void-which-binds-notify, ADR-0102) — the push counterpart to the QR web-login
+// broker (ADR-0053). A successful POST /login also asks the plane to push the
+// opaque voidbind:login?rp=&id= ping to the paired devices of the pinned users, so
+// a phone can approve without the browser's QR being scanned. The QR stays the
+// primary channel — a push failure, an unconfigured plane or an unsubscribed user
+// never blocks the login (push is additive and fail-open).
 //
-//   - The subscription registry (POST/DELETE /v1/subscriptions): an ENROLLED
-//     device registers the ntfy wake endpoint its phone listens on. notify.Handler
-//     authenticates every registration with the device's enrolment cert against
-//     the pinned user set (rp.TrustStore — heyarr's userTrust), so only an enrolled
-//     device may subscribe and the subscription is bound to the authenticated
-//     (user, device), never to fields the client claimed.
-//   - A wake on login INITIATION: a successful POST /login also pushes the opaque
-//     voidbind:login?rp=&id= ping to the subscribed devices of the pinned users, so
-//     a phone can approve without the browser's QR being scanned. The QR stays the
-//     primary channel — a push failure or an unsubscribed user never blocks the
-//     login (push is additive and fail-open).
+// heyarr holds NO subscription registry of its own. A phone subscribes to exactly
+// one notify base, the shared plane, so a registry embedded here would never gain
+// a subscriber (void-which-binds-go#86). heyarr only calls the plane's
+// bearer-gated POST /v1/enqueue with rp_base set to itself; the plane, not heyarr,
+// builds the ping.
 //
 // The ping is opaque by construction (notify.NewPing → weblogin.EncodeLogin): it
 // carries ONLY the public (rp, id) tuple, byte-identical to the QR, never a cert,
-// a challenge, a match number, or any secret. See TestPushPingIsOpaque.
+// a challenge, a match number, or any secret — and heyarr sends the plane nothing
+// more than the pinned user id, its own base and the login id.
 //
-// It mirrors All Thing's ADR-0009 wiring (the first relying party of this plane),
-// with one adaptation: All Thing is single-user and pins a static user list at
-// construction, whereas heyarr resolves the pinned users from its device-identity
-// store on each initiation, so a user enrolled or revoked through the API is woken
-// (or not) on the very next login without a restart.
+// heyarr resolves the pinned users from its device-identity store on each
+// initiation, so a user enrolled or revoked through the API is woken (or not) on
+// the very next login without a restart.
 
-// SubscriptionsPrefix is where the notify plane's device-facing routes mount —
-// POST/DELETE /v1/subscriptions. Like /login it is OUTSIDE /api/v1 and its bearer
-// guard: the notify.Handler authenticates each request with the device's
-// enrolment cert against the pinned trust set itself, exactly as the login broker
-// verifies an approval offline.
-const SubscriptionsPrefix = "/v1/subscriptions"
+// loginPushTimeout bounds the whole fan-out for one login initiation, across every
+// pinned user. The browser already has its QR by then; this only stops a wedged
+// plane from holding a request goroutine open.
+const loginPushTimeout = 15 * time.Second
 
 // loginNotifier wakes paired devices when a QR web-login is initiated. It is the
 // seam loginInitPush calls; pushNotifier is the production implementation and a
@@ -57,16 +51,14 @@ type loginNotifier interface {
 	NotifyLogin(ctx context.Context, loginID string) (woken int, err error)
 }
 
-// pushNotifier fans a login's opaque ping to the subscribed devices of the pinned
-// users it resolves, over their wake channels (notify.Notifier). A QR login is
-// user-agnostic at initiation (any pinned device may approve), so heyarr wakes
-// every pinned user's paired devices; Enqueue is a no-op for any user who never
-// registered a subscription, which is exactly "only push to users who registered".
+// pushNotifier asks the notify plane to wake the subscribed devices of the pinned
+// users it resolves. A QR login is user-agnostic at initiation (any pinned device
+// may approve), so heyarr addresses every pinned user; the plane wakes nobody for
+// a user who never subscribed, which is exactly "only push to users who
+// registered".
 type pushNotifier struct {
-	// notifier is the voidbind-go fan-out half of the push plane (required). Its
-	// Store is the subscription address book and its Channels map a channel kind
-	// (notify.ChannelNtfy) to a transport.
-	notifier *notify.Notifier
+	// enqueuer is the plane (a notify.EnqueueClient in production; required).
+	enqueuer notify.LoginEnqueuer
 	// rpBase is this relying party's externally reachable origin — the `rp=` of the
 	// pushed tuple, byte-identical to the QR the browser shows.
 	rpBase string
@@ -74,14 +66,14 @@ type pushNotifier struct {
 	// is read on each initiation so runtime enrolment/revocation is honoured; a
 	// resolution error is fail-open (log, wake nobody), never a blocked login.
 	pinned func(ctx context.Context) ([]string, error)
-	log    *slog.Logger
 }
 
 // NotifyLogin implements loginNotifier. It is best-effort and fail-open: a wake
 // error for one user does not stop the others, and the caller never blocks the
-// login on it (the QR remains the fallback).
+// login on it (the QR remains the fallback). A refused or disabled enqueue bearer
+// is the same answer for every user, so it stops the fan-out at the first one.
 func (p *pushNotifier) NotifyLogin(ctx context.Context, loginID string) (int, error) {
-	if p == nil || p.notifier == nil {
+	if p == nil || p.enqueuer == nil {
 		return 0, nil
 	}
 	users, err := p.pinned(ctx)
@@ -93,7 +85,7 @@ func (p *pushNotifier) NotifyLogin(ctx context.Context, loginID string) (int, er
 		firstErr error
 	)
 	for _, u := range users {
-		n, err := p.notifier.Enqueue(ctx, notify.EnqueueRequest{
+		n, err := p.enqueuer.Enqueue(ctx, notify.EnqueueRequest{
 			UserID:  u,
 			RPBase:  p.rpBase,
 			LoginID: loginID,
@@ -102,42 +94,11 @@ func (p *pushNotifier) NotifyLogin(ctx context.Context, loginID string) (int, er
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
+		if errors.Is(err, notify.ErrEnqueueUnauthorized) || errors.Is(err, notify.ErrEnqueueDisabled) {
+			break
+		}
 	}
 	return woken, firstErr
-}
-
-// SubscriptionRoutes returns the notify plane's device-facing HTTP surface —
-// POST/DELETE /v1/subscriptions — bound to the given subscription store, the
-// RP's pinned trust set and its membership op log (ADR-0068). Registration and
-// unsubscription are authenticated by the device's admitting op, evaluated
-// against trust and membership (the plane's own Registry does the verify), so
-// this reuses the exact trust set and op log that back the device authenticator
-// and the login broker.
-//
-// A request carries the cert plus a possession proof for it (the `possession`
-// field, or `cert` as the Device credential `<cert>~<proof>`), and the ops it
-// presents are recorded only once that proof verifies (void-which-binds-go
-// v0.18, voidbind-go#70). A BARE cert — the wire deployed phones still send —
-// is accepted for compatibility (notify.Registry.AllowBareCert): it still has to
-// name a current member, but nothing it presents is recorded, and the device is
-// logged once as still to migrate. Refusing bare certs is a follow-up for when
-// the phones' notify client sends a proof.
-//
-// now supplies the verification clock; nil means time.Now (production). It is
-// injectable so a test can pin the verification instant against a
-// frozen-window op. log receives the bare-cert deprecation warnings; nil
-// discards them.
-func SubscriptionRoutes(store notify.Store, trust rp.TrustStore, membership rp.Membership, now func() time.Time, log *slog.Logger) http.Handler {
-	bare := newBareCertWarner(log, SubscriptionsPrefix)
-	h := &notify.Handler{Registry: notify.Registry{
-		Store:         store,
-		Trust:         trust,
-		Membership:    membership,
-		Now:           now,
-		AllowBareCert: true,
-		OnBareCert:    bare.warn,
-	}}
-	return h.Routes()
 }
 
 // loginInitPush wraps the weblogin routes so a successful login initiation (POST
@@ -152,6 +113,11 @@ func SubscriptionRoutes(store notify.Store, trust rp.TrustStore, membership rp.M
 // `nosniff` so the broker's id/QR — which trace from the request — can never be
 // interpreted as markup by a browser (defence in depth; the response was already
 // JSON).
+//
+// The relayed response is flushed BEFORE the wake, so the browser has its QR
+// while the plane is still being called; the wake then runs under its own bound
+// (loginPushTimeout), detached from the browser's cancellation so a browser that
+// has already read its QR and gone does not abort the push it is waiting on.
 //
 // A nil notifier returns next unchanged, so a node with no push plane is exactly
 // the unwrapped weblogin handler.
@@ -182,6 +148,9 @@ func loginInitPush(next http.Handler, n loginNotifier, log *slog.Logger) http.Ha
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(rec.Code)
 		_, _ = w.Write(rec.Body.Bytes())
+		// The browser's QR must not wait on the plane. A writer that cannot flush
+		// (none in production) just delivers on return, as before.
+		_ = http.NewResponseController(w).Flush()
 
 		if rec.Code != http.StatusOK {
 			return // create failed; nothing to wake for
@@ -191,9 +160,10 @@ func loginInitPush(next http.Handler, n loginNotifier, log *slog.Logger) http.Ha
 			return
 		}
 		// Best-effort: a wake error never surfaces to the browser (the QR the
-		// relayed response already carried is the fallback). r.Context() is still
-		// live because ServeHTTP has returned into this same goroutine.
-		if _, err := n.NotifyLogin(r.Context(), id); err != nil && log != nil {
+		// relayed response already carried is the fallback).
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), loginPushTimeout)
+		defer cancel()
+		if _, err := n.NotifyLogin(ctx, id); err != nil && log != nil {
 			log.Warn("push: waking devices for login", "login", id, "err", err)
 		}
 	})
