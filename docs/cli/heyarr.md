@@ -18,6 +18,7 @@ One logical library, multiple complete sovereign peers.
 
 ### See also
 
+* [heyarr admin](heyarr_admin.md)	 - Host administration of the controller database
 * [heyarr all](heyarr_all.md)	 - Run every role in one process (small deployments)
 * [heyarr assets](heyarr_assets.md)	 - Browse the files behind the catalog
 * [heyarr backup](heyarr_backup.md)	 - Take a whole-database backup of this peer's control plane (§49, ADR-0044)

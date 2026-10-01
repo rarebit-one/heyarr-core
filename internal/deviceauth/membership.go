@@ -360,7 +360,15 @@ func (s *Store) BackfillLegacyCerts(ctx context.Context) (int, error) {
 			// A row whose cert no longer parses is left as it is: it cannot
 			// authenticate under the new verifier either, and the admin's listing
 			// still shows it.
-			if _, err := enrolment.VerifyOp(cert); err != nil {
+			op, err := enrolment.VerifyOp(cert)
+			if err != nil {
+				continue
+			}
+			// A cert naming a different identity than the row's pinned key is
+			// a device of a key since replaced (RekeyUser): it cannot
+			// authenticate under the new key and is not part of its log, so it
+			// is left for the operator to revoke rather than refusing startup.
+			if op.User != usr {
 				continue
 			}
 			ops = append(ops, cert)

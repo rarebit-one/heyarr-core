@@ -11,6 +11,25 @@ stable.
 
 ### Added
 
+- **`heyarr admin user rekey <principal> <ed25519:…> --recovery-key <x25519:…>`
+  replaces a pinned user identity's key in place** (void-which-binds ADR-0022,
+  C2 step 6). It is the gen1-to-gen2 cutover's one write to `user_identities`:
+  the principal and its row keep their ids, the signing key and the recovery
+  encryption key change in a single transaction, and the membership ops signed
+  under the old key are deleted with it. It is not a revoke plus an enrol, so
+  `RevokeUser`'s principal cascade never runs and device rows are untouched;
+  old-key devices are revoked one by one with `heyarr device revoke
+  --no-rotate`. The principal is named by principal id, user identity id or
+  name and must match exactly one identity. A malformed key, a key pinned to
+  another identity, or the key already pinned is refused. The command opens
+  the controller database directly, like `heyarr token`, so it works with the
+  controller stopped or running; with it running, the command waits for the
+  write lock. It emits the new `identity.user.rekeyed` event, which names the
+  old and new keys and the number of ops deleted. `--json` is supported. The
+  startup legacy-cert backfill now skips a device cert that names a different
+  identity than its row's pinned key. Without that, the first restart after a
+  rekey would fail.
+
 - **`heyarr pair authorise` draws the invite as a terminal QR code** (#655), so
   the joining device (Cruciform's scanner, or a phone) can read it off the
   screen instead of the invite being copied across. It is drawn in half-block

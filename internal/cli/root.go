@@ -82,6 +82,7 @@ One logical library, multiple complete sovereign peers.`,
 		newVersionCommand(opts),
 		newConfigCommand(opts, &configPath),
 		newTokenCommand(opts, &configPath),
+		newAdminCommand(opts, &configPath),
 		newFsckCommand(opts, &configPath),
 		newBackupCommand(opts, &configPath),
 		// The device commands. Not a client of the controller and not host
