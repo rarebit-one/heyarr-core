@@ -2,17 +2,40 @@ package weblogin
 
 import "sync"
 
-// LoginWakes tracks every login wake started in this test binary, so a test can
-// wait for in-flight wakes (pushHarness.settle) now that they run off the
-// request path.
-var LoginWakes sync.WaitGroup
+// loginWakes counts login wakes still in flight across this test binary. A
+// mutex and condition variable, not a sync.WaitGroup: parallel tests start new
+// wakes while another test waits, which WaitGroup's reuse rules forbid.
+var loginWakes = struct {
+	mu   sync.Mutex
+	cond *sync.Cond
+	n    int
+}{}
 
 func init() {
+	loginWakes.cond = sync.NewCond(&loginWakes.mu)
 	runLoginWake = func(wake func()) {
-		LoginWakes.Add(1)
+		loginWakes.mu.Lock()
+		loginWakes.n++
+		loginWakes.mu.Unlock()
 		go func() {
-			defer LoginWakes.Done()
+			defer func() {
+				loginWakes.mu.Lock()
+				loginWakes.n--
+				if loginWakes.n == 0 {
+					loginWakes.cond.Broadcast()
+				}
+				loginWakes.mu.Unlock()
+			}()
 			wake()
 		}()
 	}
+}
+
+// WaitLoginWakes blocks until no login wake is in flight.
+func WaitLoginWakes() {
+	loginWakes.mu.Lock()
+	for loginWakes.n > 0 {
+		loginWakes.cond.Wait()
+	}
+	loginWakes.mu.Unlock()
 }

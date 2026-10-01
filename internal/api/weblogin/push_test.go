@@ -123,7 +123,7 @@ func newPushHarness(t *testing.T) *pushHarness {
 // wait for them.
 func (h *pushHarness) settle() {
 	h.ts.Close()
-	weblogin.LoginWakes.Wait()
+	weblogin.WaitLoginWakes()
 }
 
 // pinnedUserIDs lists the user ids heyarr has pinned, in store order.
