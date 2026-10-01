@@ -805,8 +805,9 @@ func hasStagedWraps(ctx context.Context, c *apiclient.Client, spaceID string, st
 // content on the controller, in causal order. With a snapshot, the key must
 // open the snapshot and every change past its frontier (not the frontier or
 // one of its ancestors): a change appended after a rotation whose snapshot
-// never landed is under the newer key, so a stale stage is refused. With no
-// snapshot, the key must open every head change (one no other change names as
+// never landed is under the newer key, so a stale stage is refused. The
+// frontier is used only when the snapshot's authenticated envelope vouches for
+// it. Otherwise (no snapshot, or a legacy one), the key must open every head change (one no other change names as
 // a parent). A space with no content reports empty: the stage's keys are
 // already bound to the frozen database, and writes are stopped from C2 step 3.
 func verifyRemoteSpaceKey(ctx context.Context, c *apiclient.Client, spaceID string, k encryption.SpaceKey) (empty bool, err error) {
@@ -830,10 +831,24 @@ func verifyRemoteSpaceKey(ctx context.Context, c *apiclient.Client, spaceID stri
 		parents[ch.ChangeID] = ch.Parents
 	}
 	var newest []protocol.EncryptedChange
+	// The snapshot's frontier is public and only trustworthy once its
+	// authenticated envelope (inside the ciphertext) is checked against it: a
+	// relabelled frontier would otherwise hide newer changes from the scan. A
+	// mismatched envelope is refused; a legacy snapshot with no envelope proves
+	// nothing about its frontier, so every head change is checked instead.
+	trustFrontier := false
 	if hasSnap {
-		if _, err := encryption.DecryptChange(k, snap.Ciphertext); err != nil {
+		pt, err := encryption.DecryptChange(k, snap.Ciphertext)
+		if err != nil {
 			return false, stale()
 		}
+		_, authenticated, err := protocol.OpenSnapshotPlaintext(snap, pt)
+		if err != nil {
+			return false, fmt.Errorf("space %s: the controller's latest snapshot does not match its own envelope (%w); nothing was uploaded", spaceID, err)
+		}
+		trustFrontier = authenticated
+	}
+	if trustFrontier {
 		covered := make(map[string]bool)
 		stack := append([]string(nil), snap.Frontier...)
 		for len(stack) > 0 {

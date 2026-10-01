@@ -806,6 +806,50 @@ func TestSpaceRewrapUploadRefusals(t *testing.T) {
 		}
 		c.assertNoGen2Wraps(t, f)
 	})
+	t.Run("a relabelled snapshot frontier", func(t *testing.T) {
+		// An authenticated snapshot under the staged key whose public frontier
+		// was relabelled to cover a newer change under another key: the
+		// envelope does not match, so nothing is uploaded.
+		f := newRewrapFixture(t)
+		f.mustStage(t)
+		c := newRewrapController(t, f, gen1VectorSpace)
+		c.rekey(t, f)
+		ctx := context.Background()
+		existing, err := c.h.client(t).Changes(ctx, gen1VectorSpace)
+		if err != nil || len(existing) != 1 {
+			t.Fatalf("changes = %v, %v", existing, err)
+		}
+		k, _ := encryption.NewSpaceKey()
+		ct, _ := encryption.EncryptChange(k, []byte("after a rotation"))
+		newer, err := protocol.NewChange(gen1VectorSpace, []string{existing[0].ChangeID}, ct)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.h.spaces.PutChange(ctx, newer); err != nil {
+			t.Fatal(err)
+		}
+		staged, err := encryption.SpaceKeyFromBytes(mustHexDecode(t, f.v.SpaceKey))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pt := protocol.SealSnapshotPlaintext(gen1VectorSpace, []string{existing[0].ChangeID}, []byte("{}"))
+		sct, err := encryption.EncryptChange(staged, pt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		forged, err := protocol.NewSnapshot(gen1VectorSpace, []string{newer.ChangeID}, sct)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.h.spaces.PutSnapshot(ctx, forged); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = c.upload(f)
+		if err == nil || !strings.Contains(err.Error(), "does not match its own envelope") {
+			t.Fatalf("err = %v", err)
+		}
+		c.assertNoGen2Wraps(t, f)
+	})
 	t.Run("stale key", func(t *testing.T) {
 		f := newRewrapFixture(t)
 		f.mustStage(t)
