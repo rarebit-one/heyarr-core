@@ -424,7 +424,7 @@ phone already polling the relay).
 ## Addendum (2026-09-17): the RP wake endpoint is built
 
 The server half of the away-path wake is now built — `POST /v1/unwrap-wake`
-(`internal/api/weblogin`, mounted beside `/v1/subscriptions`). An enrolled device
+(`internal/api/weblogin`, mounted beside `/v1/subscriptions` until ADR-0102 removed that registry; the wake now goes out through the shared plane's `/v1/enqueue-unwrap`). An enrolled device
 (the offload desktop) posts its enrolment cert plus the `(relay, session)` of the
 unwrap it is attempting; the node verifies the cert against the SAME pinned trust
 and membership the login broker and the subscription registry use (`rp.Verifier`),

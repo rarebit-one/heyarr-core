@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rarebit-one/void-which-binds-go/hashing"
+	"github.com/rarebit-one/void-which-binds-go/notify"
 	vbrelay "github.com/rarebit-one/void-which-binds-go/relay"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
@@ -601,25 +603,41 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	// It is stood up only when this node can name an origin a scanning device can
 	// dial back (renderBaseURL); a loopback- or socket-only node mounts no login,
 	// exactly as it mints no renderer URL.
+	// A configured notify plane needs its bearer, so resolve it here whether or
+	// not this node mounts web login: a set notify.url with no token stops
+	// startup on every node, including loopback- or socket-only ones.
+	var plane *notify.EnqueueClient
+	if c.cfg.Notify.Enabled() {
+		token, err := c.cfg.Notify.EnqueueToken()
+		if err != nil {
+			return nil, nil, fmt.Errorf("controller: %w", err)
+		}
+		plane = &notify.EnqueueClient{Base: strings.TrimSpace(c.cfg.Notify.URL), Token: token}
+	}
 	var sessions httpapi.SessionValidator
 	if base := renderBaseURL(c.cfg); base != "" {
-		loginHandler, err := weblogin.New(weblogin.Options{
-			Identities:  deviceIdentities,
-			Base:        base,
-			Logger:      c.log,
-			NtfyBaseURL: c.cfg.Notify.NtfyBaseURL,
-		})
+		opts := weblogin.Options{
+			Identities: deviceIdentities,
+			Base:       base,
+			Logger:     c.log,
+		}
+		// The shared notify plane (ADR-0102) carries the push login and the
+		// cruciform-offload unwrap wake. It is additive to the QR: unconfigured, the
+		// login is the QR flow and an unwrap wake wakes nobody.
+		if plane != nil {
+			opts.LoginWaker, opts.UnwrapWaker = plane, plane
+			// The URL is logged so an operator can see which plane wakes go to; the
+			// bearer never is.
+			c.log.Info("web login wakes go through the notify plane", "notify_url", plane.Base)
+		} else {
+			c.log.Info("no notify plane configured (notify.url): web login is QR-only and unwrap wakes wake nobody")
+		}
+		loginHandler, err := weblogin.New(opts)
 		if err != nil {
 			return nil, nil, fmt.Errorf("controller: standing up web login: %w", err)
 		}
 		publicMounts = append(publicMounts, loginHandler.Mount)
 		sessions = loginHandler.Sessions()
-		// The push/wake plane is additive to the QR (ADR-0055). Record which ntfy
-		// server a login push is meant for so it is visible in the logs; empty is a
-		// supported state (a device registers its full topic URL regardless).
-		c.log.Info("web login push plane mounted",
-			"subscriptions", weblogin.SubscriptionsPrefix,
-			"ntfy_base_url", c.cfg.Notify.NtfyBaseURL)
 	}
 	// What this binary knows how to migrate to, as opposed to what the database
 	// is actually at. The two are compared on GET /api/v1/system (#150), and

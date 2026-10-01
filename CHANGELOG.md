@@ -401,6 +401,21 @@ record independently agreeing on the bytes.
 
 ### Changed
 
+- **Push login and the cruciform-offload unwrap wake go through the shared
+  notify plane (ADR-0102, void-which-binds-go#86).** Phones subscribe only to
+  the standalone `void-which-binds-notify` plane, so the registry that heyarr
+  embedded never had a subscriber, and both wakes reached zero devices. Now a
+  login initiation calls the plane's `POST /v1/enqueue`, with `rp_base` set to
+  this node. `/v1/unwrap-wake` still authenticates the desktop as before, then
+  calls `POST /v1/enqueue-unwrap` for the cert's user. New config: `notify.url`,
+  plus the bearer from `notify.enqueue_token_file` or
+  `HEYARR_NOTIFY_ENQUEUE_TOKEN`. The bearer is never a config key and is never
+  logged. A set URL with no bearer stops startup. With no URL set, login is
+  QR-only and an unwrap wake answers `woken: 0`. The browser's QR response is
+  now flushed before the wake is sent, so a slow plane cannot delay it.
+  **Operators:** see *Push login and the unwrap wake* in
+  `docs/deploy/reference-linux-host.md`.
+
 - **The device library is `github.com/rarebit-one/void-which-binds-go` v0.18.0**
   (was `voidbind-go` v0.17.0; ADR-0013 R1 upstream renamed the module and its
   binaries, and the wire is byte-identical). The device and identity directory
@@ -455,6 +470,11 @@ record independently agreeing on the bytes.
 
 ### Removed
 
+- **heyarr's embedded notify registry** (ADR-0102). Gone: the
+  `/v1/subscriptions` routes, the in-process `notify.Notifier` and its ntfy
+  channel, `notify.ntfy_base_url`, and the registry's bare-cert allowance
+  (`AllowBareCert` / `OnBareCert`). `/v1/unwrap-wake` still accepts a bare cert
+  from heyarr desktops older than v0.5.3 (#685).
 - **The legacy `/pair/sessions` relay, `internal/pairflow` and
   `internal/pairrelay`** (#648). No client used them: heyarr-kmp and voidbind-kmp
   pair over `/pair/v1`. The relay keeps its caps (256 sessions, 10-minute TTL).

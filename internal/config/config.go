@@ -68,11 +68,13 @@ type Config struct {
 	// it, so they live under the data directory too unless pointed elsewhere.
 	Backup Backup `koanf:"backup"`
 
-	// Notify configures the Voidbind push/wake plane (ADR-0055): the self-hosted
-	// ntfy server that carries a login push to a paired device. Push is additive
-	// to the QR web-login (ADR-0053) — the QR stays the primary channel — so an
-	// empty configuration is fully supported: the login broker still mounts and
-	// still shows a QR, it simply wakes no device.
+	// Notify points this node at the SHARED Voidbind notify plane (ADR-0102,
+	// superseding ADR-0055's embedded registry): the one place a phone subscribes,
+	// which this node asks to wake devices for a push login and for a
+	// cruciform-offload unwrap. Push is additive to the QR web-login (ADR-0053) —
+	// the QR stays the primary channel — so an empty configuration is fully
+	// supported: the login broker still mounts and still shows a QR, it simply
+	// wakes no device.
 	Notify Notify `koanf:"notify"`
 
 	// Vault selects this device's space-key custody backend (ADR-0098): which
@@ -131,17 +133,76 @@ type VaultCruciform struct {
 	PairFile string `koanf:"pair_file"`
 }
 
-// Notify configures the push/wake login channel (ADR-0055). The subscription
-// address book and fan-out live in voidbind-go/notify; this records only the
-// operator-facing deployment detail.
+// Notify configures the wake plane this node calls (ADR-0102). The subscription
+// registry and the fan-out both live in the shared plane
+// (void-which-binds-notify); this node only asks it to enqueue a wake, over the
+// plane's bearer-gated POST /v1/enqueue and /v1/enqueue-unwrap.
+//
+// The enqueue bearer is a secret, so it is deliberately NOT a configuration key
+// (`config print` holds no secrets): it is read from EnqueueTokenFile, else from
+// the HEYARR_NOTIFY_ENQUEUE_TOKEN environment variable — see EnqueueToken.
 type Notify struct {
-	// NtfyBaseURL records this deployment's self-hosted ntfy origin. It is
-	// informational: a device registers its FULL ntfy topic URL as its
-	// subscription endpoint (the wake channel POSTs there directly), so the plane
-	// works without this being set. It is logged at startup so an operator can see
-	// which ntfy server a login push is meant for, and defaults empty (no default
-	// public server is assumed — push is opt-in on the device registering a topic).
-	NtfyBaseURL string `koanf:"ntfy_base_url"`
+	// URL is the shared notify plane's base URL, e.g. https://notify.example:2587.
+	// Empty turns push login and the unwrap wake off. It must be https; plain http
+	// is accepted only for a loopback host, because the bearer would otherwise
+	// cross the network in clear.
+	URL string `koanf:"url"`
+	// EnqueueTokenFile is a file holding the plane's enqueue bearer (trimmed).
+	// Empty falls back to HEYARR_NOTIFY_ENQUEUE_TOKEN.
+	EnqueueTokenFile string `koanf:"enqueue_token_file"`
+}
+
+// NotifyEnqueueTokenEnv is the environment variable the enqueue bearer is read
+// from when notify.enqueue_token_file is not set. It is read directly, never
+// through the layered loader, so the bearer never becomes a configuration value.
+const NotifyEnqueueTokenEnv = "HEYARR_NOTIFY_ENQUEUE_TOKEN" // #nosec G101 -- the name of a variable, not a credential
+
+// Enabled reports whether a notify plane is configured.
+func (n Notify) Enabled() bool { return strings.TrimSpace(n.URL) != "" }
+
+// EnqueueToken resolves the plane's enqueue bearer: the trimmed contents of
+// EnqueueTokenFile when it is set, else HEYARR_NOTIFY_ENQUEUE_TOKEN. A configured
+// plane with no bearer is an error — every enqueue would be refused, and a push
+// that silently never fires reads as the phone being broken. The returned error
+// never contains the token.
+func (n Notify) EnqueueToken() (string, error) {
+	if f := strings.TrimSpace(n.EnqueueTokenFile); f != "" {
+		raw, err := os.ReadFile(filepath.Clean(f))
+		if err != nil {
+			return "", fmt.Errorf("config: reading notify.enqueue_token_file %s: %w", f, err)
+		}
+		tok := strings.TrimSpace(string(raw))
+		if tok == "" {
+			return "", fmt.Errorf("config: notify.enqueue_token_file %s is empty", f)
+		}
+		return tok, nil
+	}
+	if tok := strings.TrimSpace(os.Getenv(NotifyEnqueueTokenEnv)); tok != "" {
+		return tok, nil
+	}
+	return "", fmt.Errorf("config: notify.url is set but there is no enqueue bearer — set notify.enqueue_token_file or %s", NotifyEnqueueTokenEnv)
+}
+
+// validate checks the plane URL's shape: an absolute https URL with a host and
+// no userinfo, query or fragment, or plain http to a loopback host.
+func (n Notify) validate() error {
+	raw := strings.TrimSpace(n.URL)
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return fmt.Errorf("config: notify.url %q is not a base URL (e.g. https://notify.example:2587)", raw)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if ip := net.ParseIP(u.Hostname()); strings.EqualFold(u.Hostname(), "localhost") || (ip != nil && ip.IsLoopback()) {
+			return nil
+		}
+	}
+	return fmt.Errorf("config: notify.url %q must be https (plain http only for a loopback host) — the enqueue bearer travels with every request", raw)
 }
 
 // Backup configures the control-plane backup cadence (§49, ADR-0044).
@@ -710,6 +771,9 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: log.format %q is not one of json, text, auto", f)
 	}
 	if _, err := c.BackupInterval(); err != nil {
+		return err
+	}
+	if err := c.Notify.validate(); err != nil {
 		return err
 	}
 	if c.Peer.Name == "" {

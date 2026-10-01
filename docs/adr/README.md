@@ -62,7 +62,7 @@ An ADR that merely describes the code is not worth having.
 | [0052](0052-a-disposable-download-daemon-earns-a-scheduled-lane.md) | A disposable download-client daemon earns a scheduled acceptance lane (amends 0026) | Accepted |
 | [0053](0053-a-weblogin-broker-for-browser-and-tv-qr-login.md) | A weblogin.Broker for browser/TV QR login (and, later, push) | Accepted |
 | [0054](0054-client-strategy-first-party-key-holder-compat-adapters-are-reach.md) | Client strategy: a first-party device-side key-holder is the product; compat adapters are reach | Accepted |
-| [0055](0055-a-push-login-channel-over-the-voidbind-notify-plane.md) | A push-login channel over the Voidbind notify plane | Accepted |
+| [0055](0055-a-push-login-channel-over-the-voidbind-notify-plane.md) | A push-login channel over the Voidbind notify plane | Accepted; superseded in part by 0102 |
 | [0056](0056-the-item-scope-is-the-sanctioned-addition.md) | The Item entity and the item scope are the sanctioned addition, not a retrofit | Accepted |
 | [0057](0057-a-followed-source-projects-items-onto-wants.md) | A followed source projects items onto wants; the follow beat is the search beat's sibling | Accepted |
 | [0058](0058-the-feed-provider-is-capability-metadata-tvdb-first.md) | The feed adapter is a CapabilityMetadata provider; TVDB is the first, TMDB is pluggable | Accepted |
@@ -96,3 +96,4 @@ An ADR that merely describes the code is not worth having.
 | [0099](0099-discovery-gains-a-want-scoped-candidate-and-book-music-search.md) | Discovery gains a want-scoped candidate; TMDB movies, Open Library books and MusicBrainz music become discoverable | Accepted |
 | [0100](0100-a-playlist-name-is-an-lww-register-inside-the-playlist-crdt.md) | A playlist's name is an LWW register inside the playlist CRDT, and unknown ops are ignored first | Proposed |
 | [0101](0101-a-vault-change-names-its-log-heads-and-compaction-is-the-peers-job.md) | A vault change names the log heads it saw, a device snapshots, and compaction stays the peer's job | Proposed |
+| [0102](0102-wakes-go-through-the-shared-notify-plane.md) | Wakes go through the shared notify plane, and heyarr holds no subscription registry | Accepted |

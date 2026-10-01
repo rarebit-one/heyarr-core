@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -580,4 +581,95 @@ func TestResolvePath(t *testing.T) {
 			t.Errorf("expected empty (defaults), got %q", got)
 		}
 	})
+}
+
+// The notify plane's URL is checked for shape at startup (ADR-0102): https, or
+// plain http only to loopback, since the enqueue bearer rides every request.
+func TestNotifyURLShape(t *testing.T) {
+	for _, tt := range []struct {
+		url string
+		ok  bool
+	}{
+		{"", true},
+		{"https://notify.example:2587", true},
+		{"https://notify.example/prefix", true},
+		{"http://127.0.0.1:2587", true},
+		{"http://localhost:2587", true},
+		{"http://notify.example:2587", false},
+		{"https://user:pw@notify.example", false},
+		{"https://notify.example/?q=1", false},
+		{"notify.example:2587", false},
+		{"ftp://notify.example", false},
+	} {
+		cfg := Defaults()
+		cfg.Notify.URL = tt.url
+		if err := cfg.Validate(); (err == nil) != tt.ok {
+			t.Errorf("notify.url %q: Validate() = %v, want ok=%v", tt.url, err, tt.ok)
+		}
+	}
+}
+
+// The notify URL and token file are ordinary keys, reachable from HEYARR_ env.
+func TestNotifyKeysFromEnvironment(t *testing.T) {
+	t.Setenv("HEYARR_NOTIFY_URL", "https://notify.example:2587")
+	t.Setenv("HEYARR_NOTIFY_ENQUEUE_TOKEN_FILE", "/etc/heyarr/notify-enqueue-token")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Notify.Enabled() || cfg.Notify.URL != "https://notify.example:2587" {
+		t.Fatalf("notify.url = %q, want it set from the environment", cfg.Notify.URL)
+	}
+	if cfg.Notify.EnqueueTokenFile != "/etc/heyarr/notify-enqueue-token" {
+		t.Fatalf("notify.enqueue_token_file = %q", cfg.Notify.EnqueueTokenFile)
+	}
+	if Defaults().Notify.Enabled() {
+		t.Fatal("a default configuration must not name a notify plane")
+	}
+}
+
+// The enqueue bearer is never a configuration value: it comes from the token
+// file, else HEYARR_NOTIFY_ENQUEUE_TOKEN, and a configured plane without one is
+// an error that does not echo any token.
+func TestNotifyEnqueueToken(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "token")
+	if err := os.WriteFile(file, []byte("  from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.Join(dir, "empty")
+	if err := os.WriteFile(empty, []byte("\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv(NotifyEnqueueTokenEnv, "from-env")
+	if got, err := (Notify{URL: "https://n.example", EnqueueTokenFile: file}).EnqueueToken(); err != nil || got != "from-file" {
+		t.Fatalf("file token = %q, %v; want from-file (the file wins over the env)", got, err)
+	}
+	if got, err := (Notify{URL: "https://n.example"}).EnqueueToken(); err != nil || got != "from-env" {
+		t.Fatalf("env token = %q, %v; want from-env", got, err)
+	}
+	if _, err := (Notify{URL: "https://n.example", EnqueueTokenFile: empty}).EnqueueToken(); err == nil {
+		t.Fatal("an empty token file must be an error")
+	}
+	if _, err := (Notify{URL: "https://n.example", EnqueueTokenFile: filepath.Join(dir, "missing")}).EnqueueToken(); err == nil {
+		t.Fatal("a missing token file must be an error")
+	}
+
+	t.Setenv(NotifyEnqueueTokenEnv, "")
+	_, err := (Notify{URL: "https://n.example"}).EnqueueToken()
+	if err == nil || !strings.Contains(err.Error(), NotifyEnqueueTokenEnv) {
+		t.Fatalf("no bearer: err = %v, want one naming %s", err, NotifyEnqueueTokenEnv)
+	}
+
+	// The bearer is not a key: setting the env var does not put it in the
+	// configuration `config print` shows.
+	t.Setenv(NotifyEnqueueTokenEnv, "secret-bearer")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", cfg), "secret-bearer") {
+		t.Fatal("the enqueue bearer leaked into the loaded configuration")
+	}
 }

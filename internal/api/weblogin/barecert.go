@@ -8,8 +8,12 @@ import (
 )
 
 // bareCertWarner logs, once per device per process, a device that authenticated
-// to a cert-authed public route (/v1/subscriptions, /v1/unwrap-wake) with a BARE
-// enrolment cert — no possession proof.
+// to /v1/unwrap-wake with a BARE enrolment cert — no possession proof. The
+// caller of that route is a heyarr desktop (internal/cli's cruciform wake), and
+// one older than heyarr v0.5.3 (#685, the library's v0.18 possession proofs)
+// sends no proof. The phones' bare-cert compatibility lived in the
+// /v1/subscriptions registry, which is gone (ADR-0102), so this warner now
+// tracks desktops only.
 //
 // A cert is a public token: anyone who saw one could present it. Since
 // void-which-binds-go v0.18 (voidbind-go#70) such a request is still served,
@@ -31,7 +35,7 @@ func newBareCertWarner(log *slog.Logger, route string) *bareCertWarner {
 }
 
 // warn records a bare-cert request from auth's device. It is safe for concurrent
-// use, as notify.Registry.OnBareCert requires.
+// use: every unwrap-wake request may call it.
 func (w *bareCertWarner) warn(auth rp.Authenticated) {
 	if _, loaded := w.seen.LoadOrStore(auth.DeviceKey, struct{}{}); loaded {
 		return
