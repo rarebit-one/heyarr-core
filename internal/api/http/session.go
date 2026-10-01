@@ -25,7 +25,7 @@ type SessionPrincipal struct {
 }
 
 // SessionValidator authenticates an opaque web-login session token — the
-// credential a browser or TV holds after a Voidbind QR login the broker approved
+// credential a browser or TV holds after a Void-Which-Binds QR login the broker approved
 // (ADR-0053) — and resolves the principal it was minted for. It is the seam
 // between this HTTP layer and the weblogin broker: the server need not know how a
 // token is made or what it maps to, only who (if anyone) it currently stands

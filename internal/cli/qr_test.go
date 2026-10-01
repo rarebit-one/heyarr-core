@@ -15,9 +15,9 @@ import (
 
 // A fixed invite of the real shape, so the golden file is a picture of what an
 // operator sees rather than of a random session.
-const sampleInvite = "voidbind:pair?relay=http%3A%2F%2F127.0.0.1%3A8420%2Fpair&session=" +
+const sampleInvite = "void-which-binds:pair?relay=http%3A%2F%2F127.0.0.1%3A8420%2Fpair&session=" +
 	"0123456789abcdef0123456789abcdef&salt=00112233445566778899aabbccddeeff" +
-	"&user=ed25519%3A" + "ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12"
+	"&user=ed25519%3A" + "ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12" + "&v=4"
 
 // parseRendered inverts renderModules: the four glyphs must be a bijection with
 // the four (top, bottom) module pairs, or a scanner reads a different code.

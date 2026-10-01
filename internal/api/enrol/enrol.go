@@ -4,7 +4,7 @@
 // exchange the signed ops an identity's device set is evaluated from
 // (ADR-0068).
 //
-// After pairing (ADR-0022; the Voidbind relay, ADR-0066) a phone holds its
+// After pairing (ADR-0022; the Void-Which-Binds relay, ADR-0066) a phone holds its
 // admitting op: a cert the user signed for its key or, since ADR-0068, an add
 // signed by any current member of the identity. Before this route the peer
 // honoured that only after an ADMIN posted it to /api/v1/identities/devices —
@@ -98,7 +98,7 @@ func (h *Handler) Mount(r chi.Router) {
 // (enrolment.SignPossession — the same proof the Device scheme takes after the
 // "~"), a display name for the device, and optionally the membership ops the
 // device knows (`ops`), merged into the evaluation exactly as the
-// Voidbind-Membership header is on an authenticated request. A device admitted
+// Void-Which-Binds-Membership header is on an authenticated request. A device admitted
 // by a member this node has never met MUST send that member's admission here
 // (or in the header), or its own admission cites a past the node cannot judge.
 type request struct {

@@ -18,12 +18,12 @@ import (
 // ErrMalformedOp is a membership op that does not parse, does not verify under
 // its own signer, or names a different identity than the one it is recorded
 // for. Recording it is refused as a whole: the op log is a set of structurally
-// valid ops (voidbind-go ADR-0007 rule 1), and the callers that feed it —
+// valid ops (void-which-binds-go ADR-0007 rule 1), and the callers that feed it —
 // rp.Verifier and the /membership route — evaluate first and hand over only
 // what evaluation accepted, so reaching this is a caller bug, not a client's.
 var ErrMalformedOp = errors.New("deviceauth: malformed membership op")
 
-// Membership adapts the Store to voidbind-go's rp.Membership for one request:
+// Membership adapts the Store to void-which-binds-go's rp.Membership for one request:
 // the op log the relying-party verifier evaluates an identity over and records
 // what it learns into (ADR-0068). The interface has no context parameter, so
 // the adapter carries the request's; the Store methods below are the real

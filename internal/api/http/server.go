@@ -82,7 +82,7 @@ type Options struct {
 	DeviceMembership DeviceMembership
 	// SessionValidator authenticates an opaque web-login session token presented
 	// under the "Bearer" scheme — the credential a browser or TV holds after a
-	// Voidbind QR login the broker approved (ADR-0053). Nil disables the scheme,
+	// Void-Which-Binds QR login the broker approved (ADR-0053). Nil disables the scheme,
 	// which is the correct state where no broker is stood up: a session token then
 	// falls through to a 401 like any other unrecognised bearer value. It is tried
 	// only after Verifier declines a bearer credential, so a real service token

@@ -13,7 +13,7 @@ import (
 )
 
 // TestOfflinePairOverRealRelay drives the whole pairing ceremony over a REAL
-// voidbind relay (Server + Client) against the reference fake phone — the live
+// void-which-binds relay (Server + Client) against the reference fake phone — the live
 // pairing path minus the actual device and its QR scan. It proves the desktop
 // half posts commit/reveal/confirm and reads the phone's over the real relay
 // wire, and that both sides derive the same SAS and pin each other's keys. The

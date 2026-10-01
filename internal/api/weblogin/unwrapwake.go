@@ -23,7 +23,7 @@ const UnwrapWakePrefix = "/v1/unwrap-wake" // #nosec G101 -- a URL path, not a c
 // unwrapWaker serves POST /v1/unwrap-wake: an enrolled device (the offload
 // desktop) asks the node to wake ITS user's paired phone for a vault-key unwrap.
 // The node asks the shared notify plane (ADR-0102) to fan an opaque
-// voidbind:unwrap?relay=&session= ping to that user's subscribed devices
+// void-which-binds:unwrap?relay=&session= ping to that user's subscribed devices
 // (POST /v1/enqueue-unwrap) — the away-path counterpart to the LAN-direct
 // discovery the desktop tries first. The desktop never holds the plane's bearer;
 // the node does, and it spends it only for a device it has authenticated.
@@ -38,14 +38,12 @@ const UnwrapWakePrefix = "/v1/unwrap-wake" // #nosec G101 -- a URL path, not a c
 // The cert is paired with a possession proof for it — the `possession` field, or
 // `cert` as the Device credential `<cert>~<proof>`, the two spellings the
 // notify plane's registry also takes — and the request is authenticated check →
-// possession → commit (rp.Verifier.VerifyWithPossession, voidbind-go#70), so
-// the membership ops it presents are recorded only once the caller has proved
-// it holds the device key. A BARE cert (the pre-v0.18 wire) is still served for
-// compatibility, but it is only CHECKED — nothing it presents is recorded — and
-// the device is logged once as still to migrate. (That compatibility is for
-// heyarr desktops older than v0.5.3 (#685), which predate the library's v0.18
-// possession proofs, not for phones, so it outlives the removed
-// /v1/subscriptions registry; see barecert.go.)
+// possession → commit (rp.Verifier.VerifyWithPossession, void-which-binds-go#70),
+// so the membership ops it presents are recorded only once the caller has proved
+// it holds the device key. A BARE cert, with no proof, is refused: a cert is a
+// public token, and the pre-v0.18 desktops that sent one bare are gen1 devices,
+// which the gen2 cutover re-enrols with a current binary (void-which-binds-go
+// ADR-0022, which also removes the notify plane's bare-cert allowance).
 //
 // The ping is opaque by construction (notify.NewUnwrapPing): it carries only the
 // public (relay, session) pointer — never a key, a wrapped blob, or a challenge —
@@ -59,7 +57,6 @@ type unwrapWaker struct {
 	enqueuer notify.UnwrapEnqueuer
 	now      func() time.Time
 	log      *slog.Logger
-	bare     *bareCertWarner
 }
 
 // unwrapWakeReq is the wire request: the device's enrolment cert and the
@@ -154,11 +151,9 @@ func writeWoken(w http.ResponseWriter, woken int) {
 	_ = json.NewEncoder(w).Encode(unwrapWakeResp{Woken: woken})
 }
 
-// authenticate is the check → possession → commit chain (voidbind-go#70). With a
-// proof it is rp.Verifier.VerifyWithPossession: the presented ops are persisted
-// only once the proof verifies. Without one the cert is only checked — it must
-// still name a current member, since that is what picks the user woken — and
-// nothing it presents is recorded, because a bare cert may be a replay.
+// authenticate is the check → possession → commit chain (void-which-binds-go#70):
+// rp.Verifier.VerifyWithPossession, so the presented ops are persisted only once
+// the proof verifies. A request without a proof is refused (errPossessionRequired).
 func (u *unwrapWaker) authenticate(cert, possession string, ops []string, now time.Time) (rp.Authenticated, error) {
 	cert, possession = strings.TrimSpace(cert), strings.TrimSpace(possession)
 	if cred, embedded, found := strings.Cut(cert, enrolment.CredentialSeparator); found {
@@ -167,20 +162,17 @@ func (u *unwrapWaker) authenticate(cert, possession string, ops []string, now ti
 		}
 		cert, possession = strings.TrimSpace(cred), strings.TrimSpace(embedded)
 	}
-	if possession != "" {
-		return u.verifier.VerifyWithPossession(cert, possession, ops, now)
+	if possession == "" {
+		return rp.Authenticated{}, errPossessionRequired
 	}
-	pending, err := u.verifier.Check(cert, ops, now)
-	if err != nil {
-		return rp.Authenticated{}, err
-	}
-	if u.bare != nil {
-		u.bare.warn(pending.Authenticated)
-	}
-	return pending.Authenticated, nil
+	return u.verifier.VerifyWithPossession(cert, possession, ops, now)
 }
 
 // errPossessionTwice is a request that carried a proof both in `possession` and
 // embedded in `cert`. Like every other authentication failure it answers the
 // opaque 401.
 var errPossessionTwice = errors.New("weblogin: possession proof given twice")
+
+// errPossessionRequired is a request with a bare cert and no possession proof.
+// It too answers the opaque 401.
+var errPossessionRequired = errors.New("weblogin: a possession proof is required")

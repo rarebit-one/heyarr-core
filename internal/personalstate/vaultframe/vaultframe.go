@@ -14,9 +14,9 @@
 // and redundant); it lives in the manifest, which is itself sealed and therefore
 // authenticated.
 //
-// This first implementation lives in heyarr and composes voidbind's per-frame
+// This first implementation lives in heyarr and composes void-which-binds' per-frame
 // primitive so W1 stays single-repo and dependency-free; it is lifted into
-// voidbind-go behind this same wire format once it has settled (ADR-0097).
+// void-which-binds-go behind this same wire format once it has settled (ADR-0097).
 package vaultframe
 
 import (
@@ -47,7 +47,7 @@ const (
 	// headerLen is version(1) + file_id(16) + frame_index(uint32 BE, 4).
 	headerLen = 1 + fileIDLen + 4
 
-	// nonceLen and tagLen mirror voidbind's XChaCha20-Poly1305 framing (a 24-byte
+	// nonceLen and tagLen mirror void-which-binds' XChaCha20-Poly1305 framing (a 24-byte
 	// nonce prefix and a 16-byte tag; ADR-0049). They are asserted against a real
 	// sealed frame in the tests, so a change to the underlying cipher is caught.
 	nonceLen = 24

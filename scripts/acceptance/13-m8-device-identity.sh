@@ -256,7 +256,7 @@ YAML
   assert_eq "$enc_cmp" "differ" \
     "a substituted responder ENCRYPTION key yields a DIFFERENT short code — the wrap-target swap the humans catch too"
 
-  # THE HONEST PAIRING, over the node's Voidbind relay (/pair/v1, ADR-0066):
+  # THE HONEST PAIRING, over the node's Void-Which-Binds relay (/pair/v1, ADR-0066):
   # authorise opens a session and prints an invite, the new device joins
   # through it, both sides derive the SAME code and the new device ends up a
   # member of the user. Run concurrently, as the two devices are; --yes stands
@@ -306,7 +306,7 @@ YAML
 
   # THE REFUSAL: told the codes did NOT match (a wrong --confirm-sas), the
   # identity refuses to sign and NO device is enrolled. It also posts a SIGNED
-  # refusal to the relay (voidbind-go ADR-0012), so the new device learns the
+  # refusal to the relay (void-which-binds-go ADR-0012), so the new device learns the
   # answer in one poll rather than waiting out its --timeout for an admission
   # that never comes. The refusal is the deliverable as much as the success.
   local refc rapid rarc auth_verdict ref_status ref_t0 ref_ms ref_erc ref_speed ref_out

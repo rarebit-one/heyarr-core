@@ -153,7 +153,7 @@ func (s *Server) list(args json.RawMessage) (any, error) {
 		"devices": device.NewViews(devices, heyarrdevice.CommandHint),
 		// The caveat rides on the LIST as well as on each record, because an
 		// empty list is also an answer somebody will act on. It names heyarr,
-		// not the voidbind CLI, like every other rendering here (#369).
+		// not the void-which-binds CLI, like every other rendering here (#369).
 		"authorises": heyarrdevice.NotYetAuthorisingFor(heyarrdevice.CommandHint),
 	}, nil
 }

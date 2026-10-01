@@ -595,7 +595,7 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 		return nil, nil, fmt.Errorf("controller: standing up device self-enrolment: %w", err)
 	}
 	publicMounts = append(publicMounts, enrolHandler.Mount)
-	// The Voidbind QR web-login (ADR-0053), stood up here rather than inside
+	// The Void-Which-Binds QR web-login (ADR-0053), stood up here rather than inside
 	// mounts because it is a distinct trust root — a browser/TV that holds no
 	// device cert, logging in through a device that does — and it feeds TWO of
 	// httpapi's seams at once: its /login + /signin routes join the public mounts,
@@ -1030,12 +1030,12 @@ func (c *Controller) renderAndRelayRoutes(secret []byte, blobHandler *blobs.Hand
 		return nil, fmt.Errorf("controller: %w", err)
 	}
 
-	// The device-pairing relay (§40, ADR-0022, ADR-0038, ADR-0066): voidbind-go's
+	// The device-pairing relay (§40, ADR-0022, ADR-0038, ADR-0066): void-which-binds-go's
 	// dumb, ephemeral, in-memory store-and-forward that two devices exchange
 	// through so one that can vouch for the identity admits a new one — the
-	// protocol `heyarr pair`, the voidbind CLI and the phone all speak, so this
+	// protocol `heyarr pair`, the void-which-binds CLI and the phone all speak, so this
 	// node is the rendezvous for its own devices without a separately-run
-	// `voidbind relay`. It is mounted publicly, like the renderer route, because
+	// `void-which-binds relay`. It is mounted publicly, like the renderer route, because
 	// a device being paired has no credential and the relay grants no authority.
 	// It carries the pairing default slots plus the cruciform-offload live path's
 	// slots (its one-time pairing `confirm` and the recurring unwrap request/
@@ -1046,10 +1046,10 @@ func (c *Controller) renderAndRelayRoutes(secret []byte, blobHandler *blobs.Hand
 	return []httpapi.MountFunc{renderHandler.Mount, relayV1Handler.Mount}, nil
 }
 
-// nodeRelayTypes is the slot allow-list of the node's /pair/v1 relay: voidbind-go's
+// nodeRelayTypes is the slot allow-list of the node's /pair/v1 relay: void-which-binds-go's
 // pairing set (relay.DefaultTypes — commit, reveal, cert and, since ADR-0012,
 // the signed `refuse`) plus the cruciform-offload slots. Building on DefaultTypes
-// is what makes a voidbind-go bump carry a new pairing slot to the node.
+// is what makes a void-which-binds-go bump carry a new pairing slot to the node.
 func nodeRelayTypes() []string {
 	return append(append([]string{}, vbrelay.DefaultTypes...),
 		append(cruciform.RelayPairTypes, cruciform.RelayUnwrapTypes...)...)

@@ -18,14 +18,14 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 )
 
-// The voidbind-go membership vectors (ADR-0007 + ADR-0008), replayed through the STORE rather than through enrolment.Evaluate
+// The void-which-binds-go membership vectors (ADR-0007 + ADR-0008), replayed through the STORE rather than through enrolment.Evaluate
 // directly: every op is recorded into membership_ops, read back, and evaluated,
 // and the device_identities view the store materialises must agree with the
-// vector's expected members and removals. A vector that passes in voidbind-go
+// vector's expected members and removals. A vector that passes in void-which-binds-go
 // and fails here is a defect in the store's persistence or reconciliation, never
-// a "flaky key". They are read from voidbind-go's testvectors package, so they
-// are always the ones minted by the voidbind-go version go.mod pins; nothing is
-// copied into this repo. Regenerate them in voidbind-go with
+// a "flaky key". They are read from void-which-binds-go's testvectors package, so they
+// are always the ones minted by the void-which-binds-go version go.mod pins; nothing is
+// copied into this repo. Regenerate them in void-which-binds-go with
 // `go test ./enrolment -run TestVectors -update` and bump the dependency.
 
 type vector struct {
@@ -60,7 +60,7 @@ func loadVectors(t *testing.T) []vector {
 	t.Helper()
 	names := testvectors.MembershipCases()
 	if len(names) == 0 {
-		t.Fatal("no membership vectors in voidbind-go/testvectors")
+		t.Fatal("no membership vectors in void-which-binds-go/testvectors")
 	}
 	out := make([]vector, 0, len(names))
 	for _, name := range names {
@@ -258,7 +258,7 @@ func vectorNamed(t *testing.T, name string) vector {
 
 // A device admitted by ANOTHER device (not genesis) authenticates on first
 // contact — provided it presents the ops the node has not seen (the
-// Voidbind-Membership header) — and the view materialises it. Without them
+// Void-Which-Binds-Membership header) — and the view materialises it. Without them
 // its admission cites a past the node cannot judge, and it is refused.
 func TestDeviceAdmittedByAMemberAuthenticatesOnFirstContact(t *testing.T) {
 	t.Parallel()

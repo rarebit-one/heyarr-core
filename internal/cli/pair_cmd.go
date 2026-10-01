@@ -37,8 +37,8 @@ import (
 // commit-before-reveal ordering stops it choosing its key after seeing the
 // peer's, so the short code is the whole gate.
 //
-// The handshake is voidbind-go's pairflow over voidbind-go's relay protocol, the
-// same one the Voidbind apps speak, served by the node at httpapi.RelayV1Prefix.
+// The handshake is void-which-binds-go's pairflow over void-which-binds-go's relay protocol, the
+// same one the Void-Which-Binds apps speak, served by the node at httpapi.RelayV1Prefix.
 //
 // Like `heyarr device` and `heyarr identity`, these are CLIENT commands: they
 // hold the person's keys, in the person's own config directory, and reach a
@@ -324,7 +324,7 @@ node by a different address. It takes the same forms as authorise's --relay.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if strings.TrimSpace(invite) == "" {
-				return errors.New("pair enrol needs --invite, the voidbind:pair?... invite `heyarr pair authorise` printed")
+				return errors.New("pair enrol needs --invite, the void-which-binds:pair?... invite `heyarr pair authorise` printed")
 			}
 			inv, err := pairflow.DecodeInvite(strings.TrimSpace(invite))
 			if err != nil {
@@ -395,7 +395,7 @@ node by a different address. It takes the same forms as authorise's --relay.`,
 	}
 	f.register(cmd)
 	cmd.Flags().StringVar(&invite, "invite", "",
-		"the voidbind:pair?... invite printed by `heyarr pair authorise`")
+		"the void-which-binds:pair?... invite printed by `heyarr pair authorise`")
 	cmd.Flags().StringVar(&relayAddr, "relay", "",
 		"reach the relay at this address instead of the invite's (a unix socket path, unix:///path, http://host:port or host:port)")
 	cmd.Flags().StringVar(&deviceDir, "device-dir", "",
@@ -480,7 +480,7 @@ func parseOptionalEnc(s string) ([]byte, error) {
 var errSASRefused = errors.New("pairing refused: the codes did not match, so no device was admitted")
 
 // errPairRefusedByPeer is `pair enrol` hearing the authorising side's signed
-// refusal (ADR-0012 in voidbind-go): its operator rejected the code, or
+// refusal (ADR-0012 in void-which-binds-go): its operator rejected the code, or
 // cancelled. The refusal verifies under the key this device compared codes
 // with, so it is the other device's answer, not the relay's.
 var errPairRefusedByPeer = errors.New("pair: the other device refused the pairing, so this device was not admitted; " +
@@ -535,8 +535,8 @@ func normaliseSAS(s string) string {
 	return strings.ReplaceAll(strings.TrimSpace(s), " ", "")
 }
 
-// relayEndpoint is how this CLI reaches a node's Voidbind relay: the HTTP client
-// (a unix-socket dialer, or plain TCP), the relay BASE voidbind-go's client
+// relayEndpoint is how this CLI reaches a node's Void-Which-Binds relay: the HTTP client
+// (a unix-socket dialer, or plain TCP), the relay BASE void-which-binds-go's client
 // appends "/v1/..." to, and the form of that address the invite carries.
 type relayEndpoint struct {
 	httpc  *http.Client
@@ -550,11 +550,11 @@ const unixRelayHost = "http://relay.heyarr.invalid"
 
 // relayForNode resolves a node address — a unix socket path, unix:///path,
 // http(s)://host:port or a bare host:port — to the node's relay. The node serves
-// the Voidbind relay under httpapi.RelayPrefix, so that is the base.
+// the Void-Which-Binds relay under httpapi.RelayPrefix, so that is the base.
 //
 // A unix-socket relay is carried in the invite as unix:///abs/path, which only
 // another `heyarr pair enrol` on the same machine can use; an HTTP relay is
-// carried as its base URL, which any Voidbind client can.
+// carried as its base URL, which any Void-Which-Binds client can.
 func relayForNode(addr string) (relayEndpoint, error) {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
@@ -601,7 +601,7 @@ func relayFromInvite(relayBase string) (relayEndpoint, error) {
 }
 
 // transport binds the endpoint to one session and one role — the pairflow
-// Transport voidbind-go's relay client implements.
+// Transport void-which-binds-go's relay client implements.
 func (e relayEndpoint) transport(session string, role pairflow.Role, poll time.Duration) *vbrelay.Client {
 	return &vbrelay.Client{Base: e.base, Session: session, Role: string(role), HTTP: e.httpc, PollInterval: poll}
 }

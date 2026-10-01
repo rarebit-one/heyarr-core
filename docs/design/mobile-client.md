@@ -147,14 +147,14 @@ scope; the public login, streaming-capability and compat surfaces sit outside it
 
 ## 1. Getting a session: two credential shapes
 
-A `heyarr-mobile` install is a Voidbind **device** and should hold its own key —
+A `heyarr-mobile` install is a Void-Which-Binds **device** and should hold its own key —
 so its primary credential is the Device scheme, and QR login is the fallback / the
 first-run bootstrap before it is paired.
 
 ### 1a. Device credential (the product path, ADR-0048)
 
 The client generates on-device Ed25519 (signing) + X25519 (encryption) keypairs
-(the `voidbind-kmp` `DeviceIdentity`), is enrolled under the owner's user identity
+(the `void-which-binds-kmp` `DeviceIdentity`), is enrolled under the owner's user identity
 by pairing (§4 above, #336), and then presents on every request:
 
 ```
@@ -196,7 +196,7 @@ device self-enrols through, presenting its own cert and possession proof
 (ADR-0067). `POST /api/v1/devices` is NOT enrolment — it is the playback
 renderer upsert (§68), a different resource that happens to be called a device.
 `GET /api/v1/identities/users/{key}/devices` lists what a user has vouched for.
-Pairing exchanges public values through the dumb Voidbind relay: the client's
+Pairing exchanges public values through the dumb Void-Which-Binds relay: the client's
 relay base is `<node>/pair`, it opens a session with `POST /pair/v1/sessions`,
 and each side writes and polls `PUT|GET /pair/v1/sessions/{id}/{role}/{type}`
 (ADR-0022, ADR-0066, unauthenticated — it carries only commitments, public keys
@@ -210,7 +210,7 @@ standing key (a browser, a TV). Public routes, no credential to start:
 
 | Verb & path | Purpose |
 |---|---|
-| `POST /login` | mint a login → `{ "id", "qr" }` where `qr` = `voidbind:login?rp=<origin>&id=<id>` |
+| `POST /login` | mint a login → `{ "id", "qr" }` where `qr` = `void-which-binds:login?rp=<origin>&id=<id>` |
 | `GET /login/{id}` | poll → `{ "status": "pending\|approved\|expired", "token"?, "user"? }` |
 | `GET /login/{id}/challenge` | the *approving* device fetches what to sign → `{ id, nonce, audience, expires_at }` |
 | `POST /login/{id}/approve` | the approving device submits `{ "cert", "sig" }` |
@@ -221,7 +221,7 @@ On `approved`, carry the minted token as `Authorization: Bearer <token>` on
 the session pins the approving device key, and that pin is re-checked on every
 request — revoking the device that approved a session refuses that session on
 the next request rather than at its own expiry (#420). The **approving** half (fetch
-challenge → hardware-gated sign → approve) is the `voidbind-kmp` authenticator's
+challenge → hardware-gated sign → approve) is the `void-which-binds-kmp` authenticator's
 existing `LoginApproval` flow — `heyarr-mobile` reuses it verbatim.
 
 ## 2. Library + playback (reach; a stock client also gets this)
@@ -287,6 +287,6 @@ advertisement so a TV is discoverable is deferred (#202/#382); browse+serve exis
   renderer control (§4). `heyarr-mobile` can build its auth, browse, stream and
   device-side-decrypt layers against these routes now.
 - **Deferred (do not scaffold against yet):** the **push** login channel (needs
-  `voidbind-go` v0.5.0's notify plane + number-matching — QR is the shipping
+  `void-which-binds-go` v0.5.0's notify plane + number-matching — QR is the shipping
   channel); a rendered **QR image** on `/signin`; **SSDP** TV discovery. Each is a
   tracked follow-up and none changes the routes above.

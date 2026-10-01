@@ -9,7 +9,7 @@ import (
 	"github.com/rarebit-one/void-which-binds-go/relay"
 )
 
-// The offload exchange rides the voidbind pairing relay (ADR-0002) as a second
+// The offload exchange rides the void-which-binds pairing relay (ADR-0002) as a second
 // two-party protocol: the desktop is the "initiator", the phone the "responder",
 // and the two message slots are the request and the response. A relay carrying
 // the offload must accept these slot names (relay.Options.Types) alongside its
@@ -33,12 +33,12 @@ var RelayPairTypes = []string{pairMsgConfirm}
 
 // WakeFunc wakes the paired phone so it opens the given relay session for an
 // unwrap. In production it asks the node (POST /v1/unwrap-wake), which asks the
-// shared notify plane to fan an opaque voidbind:unwrap?relay=&session= ping to
+// shared notify plane to fan an opaque void-which-binds:unwrap?relay=&session= ping to
 // the user's devices (ADR-0102); a nil WakeFunc skips the wake, for when the phone is
 // already reachable (a LAN-direct path, or a test with the phone already polling).
 type WakeFunc func(ctx context.Context, relayBase, session string) error
 
-// RelayTransport is the offload [Transport] over the voidbind relay plus a wake.
+// RelayTransport is the offload [Transport] over the void-which-binds relay plus a wake.
 // On each unwrap it creates a fresh relay session, posts the desktop's signed
 // request into it, wakes the phone at that session, and polls for the phone's
 // signed, sealed reply. It carries only opaque bytes — the request is signed and

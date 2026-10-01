@@ -8,9 +8,9 @@ package cli
 // its own, and it reaches no further into the standard library than `image`
 // and `image/color`. That last property is not incidental. §69's render guard
 // (internal/controller/render_guard_test.go) forbids an image codec anywhere in
-// the import graph, and the encoder voidbind-go uses for the same invite,
+// the import graph, and the encoder void-which-binds-go uses for the same invite,
 // skip2/go-qrcode, imports image/png for its PNG output. The half-block
-// rendering matches voidbind's, so the two tools draw the code the same way.
+// rendering matches void-which-binds', so the two tools draw the code the same way.
 
 import (
 	"fmt"

@@ -21,13 +21,27 @@ import (
 // 2026-09-25). It is both the file's leading magic and a field inside the sealed
 // body, so a reader refuses a file of another format or version before and after
 // opening it.
-const BlobFormat = "heyarr-recovery-blob-v1"
+//
+// v2 is the gen2 (Void-Which-Binds) blob: its body and every wrapped copy in it
+// are sealed under the gen2 space-key-wrap label to a gen2 recovery key
+// (void-which-binds-go ADR-0022). A v1 file is the gen1 (Voidbind) blob, which
+// this binary cannot open: only void-which-binds-go's read-only migrate/gen1
+// package reads it, for the cutover's rewrap (ADR-0022 C2 step 4).
+const BlobFormat = "heyarr-recovery-blob-v2"
 
 // blobMagic prefixes every blob file: the format name and a NUL.
 var blobMagic = []byte(BlobFormat + "\x00")
 
+// gen1BlobMagic is the gen1 blob's magic. It is recognised only to say why the
+// file is refused; nothing here reads past it.
+var gen1BlobMagic = []byte("heyarr-recovery-blob-v1\x00")
+
 // ErrNotABlob is a file that is not a recovery blob of this version.
 var ErrNotABlob = errors.New("spacerecover: not a " + BlobFormat + " file")
+
+// errGen1Blob is the ErrNotABlob a gen1 (v1) blob gets, saying where it goes.
+var errGen1Blob = fmt.Errorf("%w: it is a gen1 heyarr-recovery-blob-v1 file, sealed under the retired Voidbind labels; "+
+	"only the gen2 cutover's rewrap (void-which-binds-go migrate/gen1, `heyarr space rewrap`) reads it", ErrNotABlob)
 
 // ErrBlobSecret is a blob this recovery secret does not open: the wrong secret,
 // or a damaged file. Like Unwrap, it deliberately does not say which.
@@ -117,6 +131,9 @@ func SealBlob(b Blob) ([]byte, error) {
 // are still wrapped: pass [Blob.Wrapped] to [UnwrapAll].
 func OpenBlob(secret recovery.Secret, data []byte) (Blob, error) {
 	data = decodeBlobText(data)
+	if bytes.HasPrefix(data, gen1BlobMagic) {
+		return Blob{}, errGen1Blob
+	}
 	rest, ok := bytes.CutPrefix(data, blobMagic)
 	if !ok || len(rest) < 4 {
 		return Blob{}, ErrNotABlob
@@ -167,7 +184,7 @@ func EncodeBlobText(data []byte) string { return base64.StdEncoding.EncodeToStri
 // decodeBlobText turns base64 text (whitespace and line breaks allowed) back
 // into blob bytes; anything else is returned unchanged for the magic check.
 func decodeBlobText(data []byte) []byte {
-	if bytes.HasPrefix(data, blobMagic) {
+	if bytes.HasPrefix(data, blobMagic) || bytes.HasPrefix(data, gen1BlobMagic) {
 		return data
 	}
 	decoded, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(string(data)), ""))

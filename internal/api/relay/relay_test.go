@@ -31,15 +31,15 @@ func newNode(t *testing.T) *httptest.Server {
 	return ts
 }
 
-// TestVoidbindPairflowCompletesThroughTheNode is the acceptance: a voidbind-go
+// TestVoidWhichBindsPairflowCompletesThroughTheNode is the acceptance: a void-which-binds-go
 // initiator (the machine holding the user identity) and responder (the phone)
-// pair through the node's /pair/v1 with voidbind-go's OWN relay client — the
-// exact client code path voidbind-kmp mirrors — and the responder ends up with
+// pair through the node's /pair/v1 with void-which-binds-go's OWN relay client — the
+// exact client code path void-which-binds-kmp mirrors — and the responder ends up with
 // a cert the user key verifies. If the wire contract drifted from what the
 // clients speak, the handshake fails here.
-func TestVoidbindPairflowCompletesThroughTheNode(t *testing.T) {
+func TestVoidWhichBindsPairflowCompletesThroughTheNode(t *testing.T) {
 	ts := newNode(t)
-	// A Voidbind client's relay BASE is the node's /pair: voidbind-go's client
+	// A Void-Which-Binds client's relay BASE is the node's /pair: void-which-binds-go's client
 	// appends the /v1/... paths itself, which is how the routes land under
 	// httpapi.RelayV1Prefix. Handing a client "<node>/pair/v1" would dial
 	// /pair/v1/v1/sessions and 404 — the mistake this line exists to document.
@@ -195,7 +195,7 @@ func TestRelayContract(t *testing.T) {
 	}
 
 	// The relay is write-once per slot and refuses an unknown role/type — the
-	// contract voidbind-kmp relies on — and does not answer the legacy shape.
+	// contract void-which-binds-kmp relies on — and does not answer the legacy shape.
 	base := ts.URL + httpapi.RelayPrefix
 	session, err := vbrelay.CreateSession(ctx, ts.Client(), base)
 	if err != nil {

@@ -141,7 +141,7 @@ func (h *harness) pinnedUserIDs(t *testing.T) []string {
 }
 
 // prove signs a fresh possession proof for cert with the device key — what a
-// client sends beside its cert since void-which-binds-go v0.18 (voidbind-go#70).
+// client sends beside its cert since void-which-binds-go v0.18 (void-which-binds-go#70).
 func prove(t *testing.T, devicePriv ed25519.PrivateKey, cert string) string {
 	t.Helper()
 	proof, err := enrolment.SignPossession(devicePriv, cert, time.Now().UTC(), 0)

@@ -145,7 +145,7 @@ fi
 CONTAINER=$(podman ps -q --filter "label=devcontainer.local_folder=${PROJECT_ROOT}" | head -1)
 
 # Bring the container up if it isn't running. Provisioning (postCreateCommand)
-# fetches the private voidbind-go module, so hand `devcontainer up` a read token
+# fetches the private void-which-binds-go module, so hand `devcontainer up` a read token
 # via env only — never written to disk, never echoed.
 if [[ -z "$CONTAINER" ]]; then
   echo "Container not running. Starting devcontainer..." >&2

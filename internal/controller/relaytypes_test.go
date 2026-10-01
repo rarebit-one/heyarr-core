@@ -19,7 +19,7 @@ import (
 )
 
 // TestNodeRelayCarriesThePairingDefaults: the node's relay is built on
-// voidbind-go's DefaultTypes, so every pairing slot voidbind-go defines —
+// void-which-binds-go's DefaultTypes, so every pairing slot void-which-binds-go defines —
 // including ADR-0012's `refuse` — is served at /pair/v1 without a node change.
 func TestNodeRelayCarriesThePairingDefaults(t *testing.T) {
 	types := nodeRelayTypes()

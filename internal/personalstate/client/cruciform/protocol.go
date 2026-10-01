@@ -30,8 +30,8 @@ import (
 const wireVersion byte = 1
 
 // Domain tags separate the request and response signature inputs so a signature
-// over one can never be replayed as the other (voidbind's cosig tag convention,
-// e.g. "voidbind-cosig-v1\x00").
+// over one can never be replayed as the other (void-which-binds' cosig tag convention,
+// e.g. "void-which-binds-cosig-v1\x00").
 const (
 	requestDomain  = "heyarr-cruciform-unwrap-req-v1\x00"
 	responseDomain = "heyarr-cruciform-unwrap-resp-v1\x00"

@@ -46,7 +46,7 @@ func runIsolated(ctx context.Context, out *lockedBuffer, args ...string) error {
 	return cmd.ExecuteContext(ctx)
 }
 
-// relayServer stands up the node's Voidbind relay mount (the one the controller
+// relayServer stands up the node's Void-Which-Binds relay mount (the one the controller
 // serves under /pair/v1) on an httptest server, and returns the node address.
 func relayServer(t *testing.T) string {
 	t.Helper()
