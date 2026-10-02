@@ -1,7 +1,9 @@
 {
   "mode": "upload",
   "stage": "<dir>/stage",
-  "proof": "device-only",
+  "proof": "full",
+  "stage_id": "<stage-id>",
+  "gen1_blob_blake3": "968747c9edb16c8d0fe11796d9f2fb3bfc3198d221f1d37ea3a549e8fe094741",
   "gen1_user": "ed25519:<hex>",
   "gen1_recovery": "x25519:<hex>",
   "gen2_user": "ed25519:<hex>",
