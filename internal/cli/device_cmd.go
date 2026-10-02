@@ -264,16 +264,11 @@ required and is matched exactly, because an unrecoverable command that accepts
 			if err != nil {
 				return err
 			}
-			dev, err := store.Remove(args[0])
+			// The sealed file of a custody device goes first, so a failed
+			// unlink leaves the record for a retry (devicekeys.RemoveDevice).
+			dev, err := devicekeys.RemoveDevice(store, args[0])
 			if err != nil {
 				return err
-			}
-			// The device library leaves a custody device's sealed file to its
-			// caller (ADR-0021); removing the device removes its keys too.
-			if dev.KeyCustody == device.KeyCustodyExternal {
-				if err := devicekeys.RemoveSealed(store.Dir()); err != nil {
-					return err
-				}
 			}
 			if asJSON {
 				return emitJSON(cmd.OutOrStdout(), device.NewView(dev, heyarrdevice.CommandHint))

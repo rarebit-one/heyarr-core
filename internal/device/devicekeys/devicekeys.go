@@ -167,11 +167,36 @@ func Unlock(opts Options, ttl time.Duration) error {
 // missing file is not an error.
 func RemoveSealed(dir string) error {
 	path := SealedPath(dir)
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := removeFile(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("devicekeys: removing the sealed file %s: %w", path, err)
 	}
 	forget(path)
 	return nil
+}
+
+// removeFile is os.Remove, replaceable by a test that needs an unlink to fail.
+var removeFile = os.Remove
+
+// RemoveDevice removes the device id from store, and for a custody device its
+// sealed file. The sealed file goes FIRST: if it cannot be removed, the record
+// stays, so the device is still listed and a retry finds it. The other order
+// would leave the sealed keys on disk with no record pointing at them and no
+// command to remove them.
+func RemoveDevice(store *device.Store, id string) (device.Device, error) {
+	if id == "" {
+		// Let the library refuse it, in its words.
+		return store.Remove(id)
+	}
+	dev, err := store.Get(id)
+	if err != nil {
+		return device.Device{}, err
+	}
+	if dev.KeyCustody == device.KeyCustodyExternal {
+		if err := RemoveSealed(store.Dir()); err != nil {
+			return device.Device{}, fmt.Errorf("%w; the device record is kept, so the remove can be retried", err)
+		}
+	}
+	return store.Remove(id)
 }
 
 // The process-wide sealed files, by path. One entry holds one sealed file's

@@ -180,17 +180,12 @@ func (s *Server) remove(args json.RawMessage) (any, error) {
 	if err := decode(args, &in); err != nil {
 		return nil, err
 	}
-	dev, err := s.store.Remove(in.DeviceID)
+	// A custody device's sealed file goes with it, removed before the record
+	// so a failed unlink can be retried (devicekeys.RemoveDevice), as
+	// `heyarr device remove` does.
+	dev, err := devicekeys.RemoveDevice(s.store, in.DeviceID)
 	if err != nil {
 		return nil, err
-	}
-	// A custody device's keys are its sealed file, which the device library
-	// leaves to its caller (void-which-binds-go ADR-0021): it goes with the
-	// device, as `heyarr device remove` removes it.
-	if dev.KeyCustody == device.KeyCustodyExternal {
-		if err := devicekeys.RemoveSealed(s.store.Dir()); err != nil {
-			return nil, err
-		}
 	}
 	return map[string]any{"removed": device.NewView(dev, heyarrdevice.CommandHint)}, nil
 }

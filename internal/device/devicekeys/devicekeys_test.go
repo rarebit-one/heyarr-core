@@ -309,3 +309,53 @@ func TestNewPassphraseMinimumLength(t *testing.T) {
 		t.Fatalf("a refused passphrase left a device: %v", err)
 	}
 }
+
+// RemoveDevice removes a custody device's sealed file before its record: an
+// unlink that fails leaves both, so the device is still listed and the remove
+// can be retried, rather than orphaning the sealed keys behind no record. Not
+// parallel: it replaces removeFile.
+func TestRemoveDeviceRemovesTheSealedFileFirst(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "device")
+	store := newStore(t, dir)
+	dev, err := store.GenerateInto("laptop", false, keysProvisioner{softwareKeys(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// RemoveDevice reads only the record, so the sealed file's bytes do not
+	// matter here.
+	if err := os.WriteFile(SealedPath(dir), []byte("sealed keys"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	unlinkErr := errors.New("injected unlink failure")
+	removeFile = func(path string) error {
+		if path == SealedPath(dir) {
+			return unlinkErr
+		}
+		return os.Remove(path)
+	}
+	t.Cleanup(func() { removeFile = os.Remove })
+	if _, err := RemoveDevice(store, dev.ID); !errors.Is(err, unlinkErr) {
+		t.Fatalf("RemoveDevice with a failing unlink: %v, want the unlink error", err)
+	}
+	if _, err := os.Stat(SealedPath(dir)); err != nil {
+		t.Fatalf("the sealed file is gone after a failed remove: %v", err)
+	}
+	if _, err := store.Get(dev.ID); err != nil {
+		t.Fatalf("the record is gone after a failed remove, so nothing can retry it: %v", err)
+	}
+
+	removeFile = os.Remove
+	if _, err := RemoveDevice(store, dev.ID); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if _, err := os.Stat(SealedPath(dir)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the sealed file survived the retry: %v", err)
+	}
+	if _, err := store.Get(""); !errors.Is(err, device.ErrNoDevice) {
+		t.Fatalf("the record survived the retry: %v", err)
+	}
+	if _, err := RemoveDevice(store, ""); err == nil {
+		t.Fatal("RemoveDevice with no id was accepted")
+	}
+}

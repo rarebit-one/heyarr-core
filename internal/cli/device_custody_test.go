@@ -14,6 +14,8 @@ package cli
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -24,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/void-which-binds-go/custody"
 	"github.com/rarebit-one/void-which-binds-go/custody/sealedfile"
 	"github.com/rarebit-one/void-which-binds-go/device"
 	"github.com/rarebit-one/void-which-binds-go/encryption"
@@ -221,5 +224,81 @@ func TestSealedFileDeviceThroughTheCLI(t *testing.T) {
 	}
 	if _, err := os.Stat(devicekeys.SealedPath(copyDir)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("the sealed file survived device remove: %v", err)
+	}
+}
+
+// keysProvisioner hands out keys it was given, so a custody device RECORD can
+// be made with no sealed file and no key derivation.
+type keysProvisioner struct{ keys custody.Keys }
+
+func (p keysProvisioner) Provision(custody.Spec) (custody.Keys, error) { return p.keys, nil }
+
+// TestPairAsIdentityWithTheSealedFileLost: the identity signs an admission
+// itself and uses the local device only as an optional replica of known ops,
+// so a custody device whose sealed file is lost does not stop the identity
+// admitting a replacement — and the replica still records the add. Authorising
+// AS that device still needs its keys, and says so.
+func TestPairAsIdentityWithTheSealedFileLost(t *testing.T) {
+	relayAddr := relayServer(t)
+	idDir := identityDir(t)
+	lostDir := deviceDir(t)
+	newDir := deviceDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, _, err := run(t, ctx, "identity", "generate", "--identity-dir", idDir, "--name", "owner"); err != nil {
+		t.Fatalf("identity generate: %v", err)
+	}
+	// A custody device enrolled under the identity, whose device.sealed is gone.
+	_, sign, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, err := encryption.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lost, err := device.NewStore(device.StoreOptions{Dir: lostDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev, err := lost.GenerateInto("lost-laptop", false, keysProvisioner{custody.SoftwareKeys(sign, enc)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idStore, err := openUserIdentityStore(idDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := idStore.SignCert(dev.PublicKey, dev.EncryptionKeyString(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lost.Enrol(cert); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openDeviceStore(lostDir); !errors.Is(err, devicekeys.ErrNoSealedFile) {
+		t.Fatalf("the lost device opens with its keys: %v, want ErrNoSealedFile", err)
+	}
+
+	res := runPair(t, ctx,
+		[]string{"--identity-dir", idDir, "--device-dir", lostDir, "--relay", relayAddr, "--yes", "--poll", "10ms"},
+		[]string{"--device-dir", newDir, "--yes", "--poll", "10ms"})
+	assertPaired(t, res)
+	replacement := showDeviceJSON(t, ctx, newDir)
+	if replacement.EnrolmentStatus != device.EnrolmentEnrolled {
+		t.Fatalf("the replacement is %q", replacement.EnrolmentStatus)
+	}
+	view, err := lost.Membership(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.IsMember(replacement.PublicKey) {
+		t.Fatal("the local replica did not record the identity's add")
+	}
+
+	if _, _, err := run(t, ctx, "pair", "authorise", "--as", "device", "--identity-dir", idDir,
+		"--device-dir", lostDir, "--relay", relayAddr, "--yes"); !errors.Is(err, devicekeys.ErrNoSealedFile) {
+		t.Fatalf("authorising as the lost device: %v, want ErrNoSealedFile", err)
 	}
 }

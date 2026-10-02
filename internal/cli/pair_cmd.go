@@ -23,6 +23,7 @@ import (
 	"github.com/spf13/cobra"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
+	"github.com/rarebit-one/heyarr-core/internal/device/devicekeys"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 )
 
@@ -211,10 +212,6 @@ The invite string is printed either way, on its own line, for scripts.`,
 func buildInitiator(as, identityDir, deviceDir string, salt []byte, lifetime time.Duration,
 ) (*pairflow.Initiator, func([]string) error, error) {
 	now := time.Now().UTC()
-	devStore, err := openDeviceStore(deviceDir)
-	if err != nil {
-		return nil, nil, err
-	}
 	idStore, err := openUserIdentityStore(identityDir)
 	if err != nil {
 		return nil, nil, err
@@ -231,6 +228,18 @@ func buildInitiator(as, identityDir, deviceDir string, salt []byte, lifetime tim
 	}
 
 	if as == pairAsIdentity {
+		// The identity signs; the local device is only an optional replica
+		// of known ops, and recording them needs no private key. So it opens
+		// without its custody keys: a custody device whose sealed file is lost
+		// must not stop the identity admitting its replacement.
+		resolved, err := devicekeys.ResolveDir(deviceDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		devStore, err := device.NewStore(device.StoreOptions{Dir: resolved})
+		if err != nil {
+			return nil, nil, err
+		}
 		id, err := idStore.Get()
 		if err != nil {
 			return nil, nil, err
@@ -258,6 +267,10 @@ func buildInitiator(as, identityDir, deviceDir string, salt []byte, lifetime tim
 		return in, record, nil
 	}
 
+	devStore, err := openDeviceStore(deviceDir)
+	if err != nil {
+		return nil, nil, err
+	}
 	dev, err := devStore.Get("")
 	if err != nil {
 		return nil, nil, fmt.Errorf("pair: this machine has no device to authorise from (%w); "+
