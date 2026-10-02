@@ -521,7 +521,7 @@ record independently agreeing on the bytes.
   and every device key is now gen2. The command and its flags remain, so an old
   invocation gets the explanation rather than "unknown command". The vault's
   `tpm` backend still opens an existing legacy blob.
-- **void-which-binds-go is pinned at a pre-release pseudo-version of v0.19.1**
+- **void-which-binds-go moves to v0.19.1**, the custody release
   (the custody seam, `custody/sealedfile`, the `device.Store` custody mode and
   the `…With(crypto.Signer)` variants). `client.Unwrapper`, `client.Custody` and
   `client.KeyUnwrapper` are now aliases of the library's `custody` types, and
