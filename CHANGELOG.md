@@ -9,6 +9,16 @@ stable.
 
 ## [Unreleased]
 
+### Security
+- **void-which-binds-go v0.19.2** (void-which-binds-go#116). Device enrolment
+  now accepts a key only in its single canonical spelling. Before, a
+  whitespace-padded or upper-case rendering of one device key counted as a
+  second member. That let one device supply both signatures of a k=2 remove,
+  and it raised the fleet high-water. `deviceauth` judges membership through
+  the library alone (`enrolment.Evaluate`, `VerifyOp`, `rp.Verifier`) and stores
+  user keys in canonical form, so the bump is the whole fix. Ops minted by
+  heyarr or the kmp clients are unaffected.
+
 ### Changed (BREAKING: gen2-only, void-which-binds ADR-0022)
 
 > **Do not deploy this before ADR-0022's C2 cutover.** This build accepts only

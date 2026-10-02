@@ -91,12 +91,8 @@ github.com/prometheus/common v0.70.1 h1:1HvjP4D5oL3t8RsPlwxA9onvvStjtIHYE5XuuwOi
 github.com/prometheus/common v0.70.1/go.mod h1:VdFUQDMZK3VLkurFUVhia6uys/0suUp86TJz5qbJRhc=
 github.com/prometheus/procfs v0.21.1 h1:GljZCt+zSTS+NZq88cyQ1LjZ+RCHp3uVuabBWA5+OJI=
 github.com/prometheus/procfs v0.21.1/go.mod h1:aB55Cww9pdSJVHk0hUf0inxWyyjPogFIjmHKYgMKmtY=
-github.com/rarebit-one/void-which-binds-go v0.19.1-0.20261002014619-d55dc8ec5f81 h1:8ciDCARVDYoFeG63ssHBs2K+A1/szY6Fh677i4tX9ds=
-github.com/rarebit-one/void-which-binds-go v0.19.1-0.20261002014619-d55dc8ec5f81/go.mod h1:XYsCYWFMu1KVxTowKzqAw9A7Uh+GHGd2pQowIqAvUV0=
-github.com/rarebit-one/void-which-binds-go v0.19.1-0.20261002035503-18f49adbbc64 h1:nQXP8ccu6Gba6dmtqBPJJne8Wc3lxVpx7ZgzPfOS5fM=
-github.com/rarebit-one/void-which-binds-go v0.19.1-0.20261002035503-18f49adbbc64/go.mod h1:XYsCYWFMu1KVxTowKzqAw9A7Uh+GHGd2pQowIqAvUV0=
-github.com/rarebit-one/void-which-binds-go v0.19.1 h1:LU08/q5ZiCa17fdhHbaBAz+1gaK8Ns1vBiu1jnKBX5s=
-github.com/rarebit-one/void-which-binds-go v0.19.1/go.mod h1:XYsCYWFMu1KVxTowKzqAw9A7Uh+GHGd2pQowIqAvUV0=
+github.com/rarebit-one/void-which-binds-go v0.19.2 h1:IJFAFy/Tb/dquetiYbr0TqGGub9BnAmWvrof7uAiftw=
+github.com/rarebit-one/void-which-binds-go v0.19.2/go.mod h1:XYsCYWFMu1KVxTowKzqAw9A7Uh+GHGd2pQowIqAvUV0=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
