@@ -8,6 +8,7 @@ import (
 	"github.com/rarebit-one/void-which-binds-go/device"
 
 	heyarrdevice "github.com/rarebit-one/heyarr-core/internal/device"
+	"github.com/rarebit-one/heyarr-core/internal/device/devicekeys"
 )
 
 // instructions are what an agent reads before it chooses a tool. The caveat is
@@ -179,7 +180,10 @@ func (s *Server) remove(args json.RawMessage) (any, error) {
 	if err := decode(args, &in); err != nil {
 		return nil, err
 	}
-	dev, err := s.store.Remove(in.DeviceID)
+	// A custody device's sealed file goes with it, removed before the record
+	// so a failed unlink can be retried (devicekeys.RemoveDevice), as
+	// `heyarr device remove` does.
+	dev, err := devicekeys.RemoveDevice(s.store, in.DeviceID)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,8 @@
 # 0098. The device encryption key's custody is a pluggable `Unwrapper`, hardware-gated per platform
 
-**Status:** Proposed
+**Status:** Proposed. The seam and its backends move into the protocol library:
+void-which-binds-go ADR-0021 supersedes this record's *where*; this record stays
+the one for heyarr's own wiring (see the 2026-10-02 addendum).
 **Date:** 2026-09-16
 **Milestone:** M9 — Encrypted personal state (vault device-key custody)
 
@@ -468,6 +470,53 @@ mirroring this repo's `pairing.go` + `protocol.go` byte-for-byte); the optional
 mDNS LAN-direct discovery (needs the phone advertising); and a live round-trip on
 a real paired phone.
 
+## Addendum (2026-10-02): the seam is the library's, and a device can be born into a sealed file
+
+void-which-binds-go ADR-0021 moved the custody seam into the protocol library
+(`custody.Unwrapper`, `custody.Holder`, `custody.KeyUnwrapper`) and added a
+passphrase-sealed file backend (`custody/sealedfile`) for the C2 laptop, which
+has no TPM. heyarr takes it as follows.
+
+- **Shims.** `client.Unwrapper`, `client.Custody` and `client.KeyUnwrapper` are
+  type aliases of the library's, and `client.NewKeyUnwrapper` calls its
+  constructor. Every caller compiles unchanged, and `custody.Select` returns a
+  library holder with no adapter.
+- **Generating into custody.** `heyarr device generate --custody sealedfile`
+  draws the device's X25519 and Ed25519 seeds in memory and seals them straight
+  into one file (`device.Store.GenerateInto`). No seed file is written. The
+  default stays `--custody software`.
+- **One convention, no config.** The sealed file is always `device.sealed` in
+  the device directory, and the device record's `"key_custody": "external"`
+  says it is there. Every path that opens the device store goes through
+  `internal/device/devicekeys`, which reads the record and opens the sealed file
+  when it says so. The default `software` unwrapper is therefore "this device's
+  own key", from its seed file or its sealed file. A custody record without its
+  sealed file is an error, never a fallback to a seed file. A path is not
+  configurable because the record and the file must not be able to drift
+  apart.
+- **The passphrase is asked for once per process, and only when needed.**
+  Opening the store asks for nothing. The first unwrap or signature asks, on the
+  terminal (or from the file `HEYARR_DEVICE_PASSPHRASE_FILE` names), and unlocks
+  the file for five minutes. The unlock is shared by every store the process
+  opens on that file, so a command that both authenticates and unwraps asks
+  once. The gateway asks at start, before it serves, and holds the keys for
+  `--unlock-ttl` (12 hours by default).
+- **Raw keys.** Pairing (`NewResponderWith`, `NewDeviceInitiatorWithSigner`),
+  credentials, the wake proof and the rewrap all sign and unwrap through the
+  store's signer and holder. `space recover` reads only the device's public key.
+  The only raw-key read left is the software backend itself, which a custody
+  device refuses.
+- **A new passphrase is at least 12 characters** (Unicode code points), checked
+  when sealing only.
+- **`device seal-tpm` is disabled.** It wrote this repo's legacy TPM blob, which
+  the library's `custody/tpm` will not read, and every device key is now gen2.
+  A device moves to TPM custody through that backend once it lands, after C2.
+  The command stays, refusing with that explanation.
+
+The sealed file protects the keys at rest exactly as well as the passphrase
+does. It is not hardware, and no doc here may call it that (ADR-0021,
+backend 2).
+
 ## Relationship to existing records
 
 - **ADR-0049** — the device X25519 key and the wrap/seal format this leaves
@@ -479,3 +528,6 @@ a real paired phone.
   encryption key; **voidbind ADR-0005 / ADR-0002** — the notify wake and pairing
   relay the offload backend rides.
 - **Backends:** #569 (YubiKey), #570 (TPM-gated), #571 (cruciform-offload).
+- **void-which-binds-go ADR-0021** — the custody seam and its backends as a
+  protocol-library package, and the passphrase-sealed file the C2 laptop's
+  device is generated into.

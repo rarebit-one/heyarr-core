@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"crypto/ecdh"
 	"errors"
 	"fmt"
 	"sort"
@@ -435,14 +434,23 @@ and is refused.`,
 	return cmd
 }
 
-// loadDeviceEncKey opens this machine's device store and loads its X25519
-// encryption private key — the key that unwraps a space key sealed for it.
-func loadDeviceEncKey(deviceDir string) (*ecdh.PrivateKey, error) {
+// deviceRecipient is this machine's device encryption key as a wrap target,
+// "x25519:<hex>", read from the device record. Wrapping for the device needs
+// only its public key, so this asks for no passphrase and reads no seed, and it
+// serves a software and a custody device alike (void-which-binds-go ADR-0021).
+func deviceRecipient(deviceDir string) (string, error) {
 	ds, err := openDeviceStore(deviceDir)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	return ds.LoadEncryptionKey()
+	dev, err := ds.Get("")
+	if err != nil {
+		return "", err
+	}
+	if len(dev.EncryptionKey) == 0 {
+		return "", fmt.Errorf("device %s has no encryption key, so it is not a wrap target — regenerate it", dev.ID)
+	}
+	return dev.EncryptionKeyString(), nil
 }
 
 // resolveRecipients builds the wrap-target set for a new space: this device's own

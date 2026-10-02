@@ -24,6 +24,11 @@ The app authenticates to the DEVICE with a Subsonic username and password (set
 The device authenticates to the controller with its own bearer token. The two
 credentials are distinct by design.
 
+On a device whose keys are held in a sealed file (`heyarr device generate --custody sealedfile`),
+the gateway asks for the passphrase once, at start, before it serves, and holds
+the keys unlocked for --unlock-ttl. After that the next unwrap asks again (or
+reads HEYARR_DEVICE_PASSPHRASE_FILE when it is set).
+
 ```
 heyarr device gateway [flags]
 ```
@@ -43,6 +48,7 @@ heyarr device gateway [flags]
       --timeout duration              how long one request may take; streaming reads and the event stream are exempt (default 30s)
       --token string                  bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
       --token-file string             read the bearer token from this file (default: <data_dir>/cli.token when it exists)
+      --unlock-ttl duration           how long a sealed-file device's keys stay unlocked after the passphrase is given (default 12h0m0s)
 ```
 
 ### Options inherited from parent commands

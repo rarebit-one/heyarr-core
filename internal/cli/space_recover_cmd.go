@@ -182,11 +182,10 @@ func runSpaceRecover(ctx context.Context, cmd *cobra.Command, configPath, device
 // device reads the spaces going forward. It writes the control DB, so it is an
 // offline step (controller stopped). Returns the device recipient id it wrapped for.
 func rewrapForThisDevice(ctx context.Context, db *sqlite.DB, deviceDir string, keys map[string]encryption.SpaceKey, ids []string) (string, error) {
-	devPriv, err := loadDeviceEncKey(deviceDir)
+	deviceID, err := deviceRecipient(deviceDir)
 	if err != nil {
-		return "", fmt.Errorf("loading this machine's device key to re-wrap for (enrol it first with `heyarr identity recover`): %w", err)
+		return "", fmt.Errorf("reading this machine's device key to re-wrap for (enrol it first with `heyarr identity recover`): %w", err)
 	}
-	deviceID := encryption.FormatPublicKey(devPriv.PublicKey().Bytes())
 
 	rewrapped, err := spacerecover.RewrapForDevice(keys, deviceID)
 	if err != nil {

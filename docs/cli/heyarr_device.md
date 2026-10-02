@@ -38,5 +38,5 @@ token scope (ADR-0011) until Milestone 8. The key exists now so that Milestone
 * [heyarr device pair-offload](heyarr_device_pair-offload.md)	 - Pair this desktop with your phone for cruciform-offload custody (ADR-0098)
 * [heyarr device remove](heyarr_device_remove.md)	 - Remove a device key
 * [heyarr device revoke](heyarr_device_revoke.md)	 - Revoke a device at this peer and re-key the spaces it could read (ADR-0068, ADR-0049)
-* [heyarr device seal-tpm](heyarr_device_seal-tpm.md)	 - Seal this device's encryption key to the TPM for hardware-gated custody (ADR-0098)
+* [heyarr device seal-tpm](heyarr_device_seal-tpm.md)	 - Disabled: TPM custody returns with void-which-binds-go's custody/tpm (ADR-0021)
 * [heyarr device show](heyarr_device_show.md)	 - Show one device key

@@ -22,6 +22,11 @@ It speaks newline-delimited JSON-RPC 2.0 on stdin and stdout, so configure your
 agent to launch it as a command rather than to dial a URL. Nothing but protocol
 messages goes to stdout.
 
+On a device whose keys are held in a sealed file, the first read that unwraps
+asks for the passphrase on the terminal (never on stdin, which carries the
+protocol), or reads HEYARR_DEVICE_PASSPHRASE_FILE when it is set — which
+an agent-launched server with no terminal needs.
+
 ```
 heyarr device mcp [flags]
 ```

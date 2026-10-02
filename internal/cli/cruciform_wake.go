@@ -36,7 +36,9 @@ func buildCruciformWake(cfg config.Config, deviceDir string) (cruciform.WakeFunc
 	if err != nil {
 		return nil, err
 	}
-	ds, err := device.NewStore(device.StoreOptions{Dir: deviceDir})
+	// Opened through devicekeys, so a custody device's possession proof is
+	// signed by its sealed file (ADR-0021) rather than refused.
+	ds, err := openDeviceStore(deviceDir)
 	if err != nil {
 		return nil, err
 	}

@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/rarebit-one/void-which-binds-go/custody/sealedfile"
 	"github.com/rarebit-one/void-which-binds-go/device"
 	vbidentity "github.com/rarebit-one/void-which-binds-go/identity"
 	"github.com/rarebit-one/void-which-binds-go/recovery"
@@ -14,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	heyarrdevice "github.com/rarebit-one/heyarr-core/internal/device"
+	"github.com/rarebit-one/heyarr-core/internal/device/devicekeys"
 )
 
 // identityGenerateJSON is the --json shape of `identity generate` and
@@ -149,12 +153,13 @@ func recoverySecretNotice(secret recovery.Secret) string {
 
 func newIdentityRecoverCommand(_ Options, identityDir, deviceDir *string) *cobra.Command {
 	var (
-		secretStr  string
-		secretFile string
-		name       string
-		force      bool
-		lifetime   time.Duration
-		asJSON     bool
+		secretStr      string
+		secretFile     string
+		name           string
+		force          bool
+		lifetime       time.Duration
+		asJSON         bool
+		passphraseFile string
 	)
 	cmd := &cobra.Command{
 		Use:   "recover",
@@ -176,7 +181,13 @@ secret, derives the key and signs a cert, touching no server.
 The secret is read from --secret-file, or from --secret, or from standard input
 — prefer a file or a pipe, since a secret in argv is visible in ps and shell
 history. Instead of the secret, the same input may hold SLIP-39 recovery shares,
-one per line (` + "`void-which-binds recovery split`" + `): enough of them rebuild the secret.`,
+one per line (` + "`void-which-binds recovery split`" + `): enough of them rebuild the secret.
+
+A device whose keys are held in a sealed file whose file is missing or
+unreadable is replaced by a NEW sealed-file device, never by seed files: the
+new passphrase is asked for (twice, at least ` + strconv.Itoa(devicekeys.MinPassphraseLen) + ` characters) before
+anything is written, or read from --passphrase-file or
+` + devicekeys.PassphraseFileEnvVar + `. The unreadable file is moved aside, not deleted.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			raw, err := readRecoverySecret(cmd, secretStr, secretFile)
@@ -191,6 +202,41 @@ one per line (` + "`void-which-binds recovery split`" + `): enough of them rebui
 					"check it against what you wrote down — a single mistyped character is caught here "+
 					"rather than reconstructing a different identity", err)
 			}
+			// Settle the device BEFORE persisting the identity, so a device that
+			// cannot be used fails here with nothing half-written. Recovery signs
+			// with the identity and needs no device private key, so the device
+			// store opens without custody keys: a custody device whose sealed file
+			// is lost or unreadable is replaced, not a reason to stop.
+			resolvedDev, err := devicekeys.ResolveDir(*deviceDir)
+			if err != nil {
+				return err
+			}
+			devStore, err := device.NewStore(device.StoreOptions{Dir: resolvedDev})
+			if err != nil {
+				return err
+			}
+			existing, getErr := devStore.Get("")
+			if getErr != nil && !errors.Is(getErr, device.ErrNoDevice) {
+				// A device that is here but unreadable: generating over it is
+				// refused, so refuse now, before the identity is written.
+				return getErr
+			}
+			// A custody device stays a custody device: its replacement is a new
+			// sealed file, never seed files (void-which-binds-go ADR-0021). The
+			// passphrase is taken now, so a refused one writes nothing.
+			replace := false
+			var newPassphrase string
+			if getErr == nil && existing.KeyCustody == device.KeyCustodyExternal {
+				if uerr := devicekeys.Usable(resolvedDev); uerr != nil {
+					replace = true
+					fmt.Fprintf(cmd.ErrOrStderr(), "device %s cannot be used (%v); replacing it with a new sealed-file device\n",
+						existing.ID, uerr)
+					if newPassphrase, err = devicekeys.NewPassphrase(passphraseFile, cmd.InOrStdin())(); err != nil {
+						return err
+					}
+				}
+			}
+
 			idStore, err := openUserIdentityStore(*identityDir)
 			if err != nil {
 				return err
@@ -202,15 +248,29 @@ one per line (` + "`void-which-binds recovery split`" + `): enough of them rebui
 
 			// Enrol this machine's device under the recovered identity, so the
 			// recovered user can authenticate straight away. Generate a device
-			// key if this machine has none (the ordinary "all devices lost" case).
-			devStore, err := openDeviceStore(*deviceDir)
-			if err != nil {
-				return err
-			}
-			dev, err := devStore.Get("")
-			if err != nil {
-				dev, err = devStore.Generate("", false)
+			// key if this machine has none (the ordinary "all devices lost" case),
+			// or in place of a custody device whose keys cannot be opened — only
+			// that device is replaced, by a new sealed-file device, and its
+			// unusable sealed file is moved aside.
+			dev := existing
+			switch {
+			case replace:
+				moved, err := devicekeys.QuarantineSealed(resolvedDev, time.Now())
 				if err != nil {
+					return err
+				}
+				if moved != "" {
+					fmt.Fprintf(cmd.ErrOrStderr(), "the unusable sealed file is kept at %s\n", moved)
+				}
+				dev, err = devStore.GenerateInto("", true, &sealedfile.Provisioner{
+					Path: devicekeys.SealedPath(resolvedDev),
+					PIN:  func() (string, error) { return newPassphrase, nil },
+				})
+				if err != nil {
+					return err
+				}
+			case getErr != nil:
+				if dev, err = devStore.Generate("", false); err != nil {
 					return err
 				}
 			}
@@ -240,6 +300,9 @@ one per line (` + "`void-which-binds recovery split`" + `): enough of them rebui
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&passphraseFile, "passphrase-file", "",
+		"when an unusable sealed-file device is replaced, read the new passphrase from this file's first line "+
+			"(- for stdin) instead of the terminal; otherwise unused")
 	cmd.Flags().StringVar(&secretStr, "secret", "",
 		"the recovery secret (prefer --secret-file or a pipe: a secret in argv is visible in ps)")
 	cmd.Flags().StringVar(&secretFile, "secret-file", "",

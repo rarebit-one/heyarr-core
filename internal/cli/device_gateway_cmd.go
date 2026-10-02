@@ -16,6 +16,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/device/devicekeys"
 	"github.com/rarebit-one/heyarr-core/internal/device/gateway"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/custody"
 )
@@ -24,6 +25,11 @@ import (
 // gives one. An environment variable, never an argument, for the reason a token
 // is: a secret on the command line is in shell history and every user's `ps`.
 const GatewayPasswordEnvVar = "HEYARR_GATEWAY_PASSWORD" // #nosec G101 -- the name of a variable, not a credential
+
+// GatewayUnlockTTL is how long the gateway holds a sealed-file device's keys
+// unlocked by default: a working day, so a gateway started in the morning does
+// not ask again mid-listen, and a forgotten one does not hold them for ever.
+const GatewayUnlockTTL = 12 * time.Hour
 
 // newDeviceGatewayCommand runs the device-side compatibility gateway (§70, §73,
 // ADR-0051) on this machine.
@@ -43,6 +49,7 @@ func newDeviceGatewayCommand(_ Options, dir *string) *cobra.Command {
 		devicePasswdFile string
 		starredSpace     string
 		historySpace     string
+		unlockTTL        time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "gateway",
@@ -65,7 +72,12 @@ Two families of method, served from where each honestly lives:
 The app authenticates to the DEVICE with a Subsonic username and password (set
 --device-user and the password via --device-password-file or ` + GatewayPasswordEnvVar + `).
 The device authenticates to the controller with its own bearer token. The two
-credentials are distinct by design.`,
+credentials are distinct by design.
+
+On a device whose keys are held in a sealed file (` + "`heyarr device generate --custody sealedfile`" + `),
+the gateway asks for the passphrase once, at start, before it serves, and holds
+the keys unlocked for --unlock-ttl. After that the next unwrap asks again (or
+reads ` + devicekeys.PassphraseFileEnvVar + ` when it is set).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load(configPath)
@@ -116,6 +128,18 @@ credentials are distinct by design.`,
 					return err
 				}
 			}
+			// A custody device's own key is unlocked now, so the passphrase prompt
+			// comes before the gateway serves rather than inside a request, and
+			// is held for --unlock-ttl (void-which-binds-go ADR-0021).
+			if custOpts.Backend == "" || custOpts.Backend == custody.Software {
+				if unlockTTL <= 0 {
+					return errors.New("--unlock-ttl must be positive")
+				}
+				custOpts.DeviceUnlockTTL = unlockTTL
+				if err := devicekeys.Unlock(devicekeys.Options{Dir: deviceDir}, unlockTTL); err != nil {
+					return err
+				}
+			}
 			cust, err := custody.Select(custOpts)
 			if err != nil {
 				return err
@@ -152,6 +176,8 @@ credentials are distinct by design.`,
 		"space id holding your starred set, to serve getStarred2 and getAlbumList2?type=starred (§46)")
 	cmd.Flags().StringVar(&historySpace, "history-space", "",
 		"space id holding your play history, to serve getNowPlaying and getAlbumList2?type=recent|frequent (§46)")
+	cmd.Flags().DurationVar(&unlockTTL, "unlock-ttl", GatewayUnlockTTL,
+		"how long a sealed-file device's keys stay unlocked after the passphrase is given")
 	return cmd
 }
 

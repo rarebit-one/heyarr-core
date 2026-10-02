@@ -2,12 +2,10 @@ package gateway
 
 import (
 	"context"
-	"crypto/ecdh"
 	"fmt"
 
-	"github.com/rarebit-one/void-which-binds-go/device"
-
 	apiclient "github.com/rarebit-one/heyarr-core/internal/client"
+	"github.com/rarebit-one/heyarr-core/internal/device/devicekeys"
 	psclient "github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
@@ -70,18 +68,20 @@ func (l *SpaceLibrary) WithCustody(c psclient.Custody) *SpaceLibrary {
 	return l
 }
 
-// custody returns the selected backend, or the software default built from this
-// device's key. Software is built per call — a device key file is tiny — while a
-// configured backend (which may hold a card session) is reused.
+// custody returns the selected backend, or the default built from this device's
+// own key (devicekeys.Holder: its seed file, or its sealed file for a custody
+// device). The default is built per call — a device key file is tiny, and a
+// sealed file's unlock is shared across opens — while a configured backend
+// (which may hold a card session) is reused.
 func (l *SpaceLibrary) custody() (psclient.Custody, error) {
 	if l.cust != nil {
 		return l.cust, nil
 	}
-	priv, err := l.loadEncKey()
+	h, err := devicekeys.Holder(devicekeys.Options{Dir: l.deviceDir})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("gateway: this device's encryption key: %w", err)
 	}
-	return psclient.NewKeyUnwrapper(priv), nil
+	return h, nil
 }
 
 var _ Library = (*SpaceLibrary)(nil)
@@ -308,26 +308,6 @@ func decodeChanges[T any](ctx context.Context, l *SpaceLibrary, spaceID string) 
 		return nil, err
 	}
 	return statesync.DecodeAllChanges[T](mgr, changes)
-}
-
-func (l *SpaceLibrary) loadEncKey() (*ecdh.PrivateKey, error) {
-	dir := l.deviceDir
-	if dir == "" {
-		resolved, err := device.DefaultDir()
-		if err != nil {
-			return nil, err
-		}
-		dir = resolved
-	}
-	ds, err := device.NewStore(device.StoreOptions{Dir: dir})
-	if err != nil {
-		return nil, err
-	}
-	priv, err := ds.LoadEncryptionKey()
-	if err != nil {
-		return nil, fmt.Errorf("gateway: loading this device's encryption key: %w", err)
-	}
-	return priv, nil
 }
 
 // playlistName is the display name for a space's playlist. A playlist's own name

@@ -1102,7 +1102,7 @@ func offlineCustody(configPath *string, deviceDir string) (client.Custody, error
 	}
 	if cfg.Vault.Unwrapper == custody.Cruciform {
 		return nil, fmt.Errorf("vault.unwrapper is %q, which unwraps on a paired phone over the network; "+
-			"the rewrap is offline and needs a device key that unwraps here (the gen2 laptop device's software key)", custody.Cruciform)
+			"the rewrap is offline and needs a device key that unwraps here (the gen2 laptop device's own key: its sealed file, or its software key)", custody.Cruciform)
 	}
 	return selectCustody(configPath, deviceDir)
 }

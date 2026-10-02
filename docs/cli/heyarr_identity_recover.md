@@ -23,6 +23,12 @@ The secret is read from --secret-file, or from --secret, or from standard input
 history. Instead of the secret, the same input may hold SLIP-39 recovery shares,
 one per line (`void-which-binds recovery split`): enough of them rebuild the secret.
 
+A device whose keys are held in a sealed file whose file is missing or
+unreadable is replaced by a NEW sealed-file device, never by seed files: the
+new passphrase is asked for (twice, at least 12 characters) before
+anything is written, or read from --passphrase-file or
+HEYARR_DEVICE_PASSPHRASE_FILE. The unreadable file is moved aside, not deleted.
+
 ```
 heyarr identity recover [flags]
 ```
@@ -30,12 +36,13 @@ heyarr identity recover [flags]
 ### Options
 
 ```
-      --force                recover over an existing identity here — unrecoverable if it differs
-      --json                 emit machine-readable JSON
-      --lifetime duration    how long the fresh device cert is valid (default: the 90-day enrolment lifetime)
-      --name string          what to call the recovered identity (default: derived from this machine's hostname)
-      --secret string        the recovery secret (prefer --secret-file or a pipe: a secret in argv is visible in ps)
-      --secret-file string   read the recovery secret from this file
+      --force                    recover over an existing identity here — unrecoverable if it differs
+      --json                     emit machine-readable JSON
+      --lifetime duration        how long the fresh device cert is valid (default: the 90-day enrolment lifetime)
+      --name string              what to call the recovered identity (default: derived from this machine's hostname)
+      --passphrase-file string   when an unusable sealed-file device is replaced, read the new passphrase from this file's first line (- for stdin) instead of the terminal; otherwise unused
+      --secret string            the recovery secret (prefer --secret-file or a pipe: a secret in argv is visible in ps)
+      --secret-file string       read the recovery secret from this file
 ```
 
 ### Options inherited from parent commands

@@ -37,7 +37,7 @@ func TestSealUnsealAgainstSimulator(t *testing.T) {
 }
 
 // TestSealToFileRoundTrips proves the provisioning artifact: a sealed key written
-// to disk (Blob.WriteFile, as `heyarr device seal-tpm` does) reloads
+// to disk (Blob.WriteFile, as the now-disabled `heyarr device seal-tpm` did) reloads
 // (ReadBlobFile) into a backend that unwraps a space wrapped to it.
 func TestSealToFileRoundTrips(t *testing.T) {
 	sim, err := simulator.Get()

@@ -51,6 +51,30 @@ stable.
 
 ### Added
 
+- **`heyarr device generate --custody sealedfile` creates the device with its
+  keys in a passphrase-sealed file** (void-which-binds-go ADR-0021, C2 step 2).
+  The X25519 and Ed25519 seeds are drawn in memory and sealed straight into
+  `device.sealed` in the device directory (mode 0600, Argon2id and
+  XChaCha20-Poly1305); no seed file is ever written. The passphrase is asked for
+  twice on the terminal without echo, or read from `--passphrase-file <path|->`
+  or the file `HEYARR_DEVICE_PASSPHRASE_FILE` names, and must be at least 12
+  characters (Unicode code points). `--custody software`, the
+  default, is unchanged. Every command that opens the device store recognises a
+  custody device by its record (`"key_custody": "external"`) and opens the
+  sealed file: pairing (as the joining device or as the authorising member),
+  `identity credential`, the device-authenticated client, the offload wake
+  proof, `space` / `vault` reads and writes, `space rewrap` stage, prove and
+  upload, the Personal MCP and the gateway. The passphrase is asked for on the
+  first unwrap or signature and holds for five minutes across the process; the
+  gateway asks at start and holds it for `--unlock-ttl` (default 12h).
+  `device remove` deletes the sealed file with the record. `identity recover`
+  checks the device before writing the identity, and replaces a custody device
+  whose sealed file is missing or unreadable with a new sealed-file device,
+  never seed files (the passphrase is taken first, from the terminal or
+  `--passphrase-file`, so a refused one writes nothing; an unreadable file is
+  moved aside to `device.sealed.unusable-<time>`). A sealed file protects the keys at rest as well as
+  the passphrase does; it is not hardware.
+
 - **`heyarr space rewrap` moves every space key from gen1 to gen2 for the
   cutover** (void-which-binds ADR-0022, C2 steps 4 to 7). The space keys and
   content are unchanged; each key is sealed afresh to the gen2 laptop device
@@ -495,6 +519,21 @@ record independently agreeing on the bytes.
   same reason `fsck` exits non-zero on damage at all.
 
 ### Changed
+
+- **`heyarr device seal-tpm` is disabled** until void-which-binds-go's
+  `custody/tpm` backend lands after the C2 cutover (ADR-0021). It sealed a
+  device key into heyarr's legacy TPM blob, which the library will never read,
+  and every device key is now gen2. The command and its flags remain, so an old
+  invocation gets the explanation rather than "unknown command". The vault's
+  `tpm` backend still opens an existing legacy blob.
+- **void-which-binds-go moves to v0.19.1**, the custody release
+  (the custody seam, `custody/sealedfile`, the `device.Store` custody mode and
+  the `…With(crypto.Signer)` variants). `client.Unwrapper`, `client.Custody` and
+  `client.KeyUnwrapper` are now aliases of the library's `custody` types, and
+  every device-key signature and unwrap goes through the store's signer and
+  holder rather than a raw key. `space recover` reads only the device's public
+  key. `golang.org/x/term` (already in the module graph) is a direct
+  dependency, for the no-echo passphrase prompt.
 
 - **Push login and the cruciform-offload unwrap wake go through the shared
   notify plane (ADR-0102, void-which-binds-go#86).** Phones subscribe only to
