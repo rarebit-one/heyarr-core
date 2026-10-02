@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rarebit-one/void-which-binds-go/custody"
 	"github.com/rarebit-one/void-which-binds-go/encryption"
 
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
@@ -36,48 +37,36 @@ import (
 // hold — it was never created here or opened from a wrapped copy.
 var ErrSpaceNotOpen = errors.New("personalstate/client: space is not open on this device")
 
+// The custody seam is void-which-binds-go's custody package (its ADR-0021):
+// these are aliases of its types, so every caller here compiles unchanged and a
+// library custody backend (a sealed-file device's holder, say) is a Custody
+// with no adapter. Call sites move to the library names as they are touched.
+
 // Unwrapper turns a wrapped space key into a space key using a device's X25519
 // encryption private key. It is an interface, not a raw key, because a phone's
 // keystore key is non-exportable and does the ECDH in-enclave (#330): what a
 // caller supplies is "something that can unwrap", never the private key itself.
-type Unwrapper interface {
-	Unwrap(wrapped []byte) (encryption.SpaceKey, error)
-}
+type Unwrapper = custody.Unwrapper
 
 // Custody is an [Unwrapper] that also knows its own wrap-target id — the
 // "x25519:<hex>" recipient a space key must be sealed to for this backend to open
 // it. Opening a space needs both halves: the id, to pick out the copy the
 // controller wrapped for this device, and the Unwrapper, to open it. Making a
 // per-platform custody backend (ADR-0098) supply both lets the device gateway and
-// the vault CLI SELECT one — software, YubiKey-on-card, TPM-gated, cruciform —
-// without either caller changing, and keeps the create side (which wraps to this
-// same id) consistent with the open side.
-type Custody interface {
-	Unwrapper
-	// RecipientID is the "x25519:<hex>" wrap target this backend can open.
-	RecipientID() string
-}
+// the vault CLI SELECT one — software, sealed file, YubiKey-on-card, TPM-gated,
+// cruciform — without either caller changing, and keeps the create side (which
+// wraps to this same id) consistent with the open side. It is the library's
+// custody.Holder.
+type Custody = custody.Holder
 
-// KeyUnwrapper is the exportable-key stand-in: the desktop CLI's device key does
-// the ECDH in-process (ADR-0032 — the CLI is the first device). A phone drops in
-// an enclave-backed Unwrapper with the same interface and nothing else changes.
-type KeyUnwrapper struct{ priv *ecdh.PrivateKey }
+// KeyUnwrapper is the exportable-key stand-in: the desktop CLI's software device
+// key does the ECDH in-process (ADR-0032 — the CLI is the first device). It is
+// the library's software backend, custody.KeyUnwrapper.
+type KeyUnwrapper = custody.KeyUnwrapper
 
-// NewKeyUnwrapper wraps an exportable X25519 private key as an [Unwrapper].
-func NewKeyUnwrapper(priv *ecdh.PrivateKey) *KeyUnwrapper { return &KeyUnwrapper{priv: priv} }
-
-// Unwrap implements [Unwrapper] by an in-process ECDH.
-func (k *KeyUnwrapper) Unwrap(wrapped []byte) (encryption.SpaceKey, error) {
-	return encryption.Unwrap(wrapped, k.priv)
-}
-
-// RecipientID reports the software key's "x25519:<hex>" id, so KeyUnwrapper is a
-// [Custody].
-func (k *KeyUnwrapper) RecipientID() string {
-	return encryption.FormatPublicKey(k.priv.PublicKey().Bytes())
-}
-
-var _ Custody = (*KeyUnwrapper)(nil)
+// NewKeyUnwrapper wraps an exportable X25519 private key as a [Custody]
+// (custody.NewKeyUnwrapper).
+func NewKeyUnwrapper(priv *ecdh.PrivateKey) *KeyUnwrapper { return custody.NewKeyUnwrapper(priv) }
 
 // A Recipient is an authorised wrap target — a device or the recovery encryption
 // key — by its rendered "x25519:<hex>" id and parsed public key.

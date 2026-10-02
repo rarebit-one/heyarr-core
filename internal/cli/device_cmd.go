@@ -2,16 +2,20 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"time"
 
+	"github.com/rarebit-one/void-which-binds-go/custody/sealedfile"
 	"github.com/rarebit-one/void-which-binds-go/device"
 	"github.com/spf13/cobra"
 
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	apiclient "github.com/rarebit-one/heyarr-core/internal/client"
 	heyarrdevice "github.com/rarebit-one/heyarr-core/internal/device"
+	"github.com/rarebit-one/heyarr-core/internal/device/devicekeys"
 	"github.com/rarebit-one/heyarr-core/internal/device/personalmcp"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
@@ -60,50 +64,100 @@ token scope (ADR-0011) until Milestone 8. The key exists now so that Milestone
 	return cmd
 }
 
-// openDeviceStore resolves the device directory and opens the store.
+// openDeviceStore resolves the device directory and opens the store with its
+// keys wherever they are held (devicekeys.Open): seed files for a software
+// device, the sealed file for a custody device (void-which-binds-go ADR-0021).
+// It never asks for a passphrase; the first private operation does.
 func openDeviceStore(dir string) (*device.Store, error) {
-	if dir == "" {
-		resolved, err := device.DefaultDir()
-		if err != nil {
-			return nil, err
-		}
-		dir = resolved
-	}
-	return device.NewStore(device.StoreOptions{Dir: dir})
+	return devicekeys.Open(devicekeys.Options{Dir: dir})
 }
 
 func newDeviceGenerateCommand(_ Options, dir *string) *cobra.Command {
 	var (
-		name   string
-		force  bool
-		asJSON bool
+		name           string
+		force          bool
+		asJSON         bool
+		custodyKind    string
+		passphraseFile string
 	)
 	cmd := &cobra.Command{
 		Use:   "generate",
 		Short: "Generate this machine's device key",
-		Long: `Generate the Ed25519 keypair that identifies this machine.
+		Long: `Generate the Ed25519 signing key and X25519 encryption key that identify this
+machine.
 
-The private key is written with mode 0600 and is never printed, logged or
-returned by any command here — only its public half, as ed25519:<64 hex>.
+--custody decides where the private keys are held:
 
-Regenerating replaces the key, which is unrecoverable: Milestone 8 wraps space
-keys for a public key (§41), and a key that has been replaced cannot unwrap
-what the old one could. So a second generate refuses unless you pass --force.`,
+  software    (the default) two seed files in the device directory, mode 0600.
+  sealedfile  one passphrase-sealed file, ` + devicekeys.SealedFileName + ` in the device directory
+              (void-which-binds-go ADR-0021). The seeds are drawn in memory and
+              sealed straight into it, so no seed is ever written in the clear.
+              The passphrase is asked for twice on the terminal, without echo,
+              or read from --passphrase-file (or ` + devicekeys.PassphraseFileEnvVar + `).
+              It must be at least ` + strconv.Itoa(devicekeys.MinPassphraseLen) + ` characters.
+              Every later command that signs or unwraps with this device asks
+              for it again, once per command.
+
+A sealed file protects the keys at rest — a stolen disk, a lost laptop, a backup
+— as strongly as the passphrase does. It is not hardware: anyone with the file
+can guess offline, slowed only by its Argon2id cost, and code running as you can
+read the keys while they are unlocked.
+
+No private key is ever printed, logged or returned by any command here — only
+the public halves, as ed25519:<64 hex> and x25519:<64 hex>.
+
+Regenerating replaces the keys, which is unrecoverable: space keys are wrapped
+for a public key (§41), and a key that has been replaced cannot unwrap what the
+old one could. So a second generate refuses unless you pass --force.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			store, err := openDeviceStore(*dir)
+			resolved, err := devicekeys.ResolveDir(*dir)
 			if err != nil {
 				return err
 			}
-			dev, err := store.Generate(name, force)
+			// A plain store: whether a device already exists, and replacing one,
+			// does not depend on unlocking it.
+			store, err := device.NewStore(device.StoreOptions{Dir: resolved})
 			if err != nil {
 				return err
+			}
+			var dev device.Device
+			switch custodyKind {
+			case devicekeys.Software:
+				if passphraseFile != "" {
+					return errors.New("--passphrase-file is for --custody sealedfile; a software device has no passphrase")
+				}
+				if dev, err = store.Generate(name, force); err != nil {
+					return err
+				}
+				// A custody device replaced with --force leaves no sealed
+				// file behind. Without --force there was no device to
+				// replace, and a sealed file with no record is left alone.
+				if force {
+					if err := devicekeys.RemoveSealed(resolved); err != nil {
+						return err
+					}
+				}
+			case devicekeys.SealedFile:
+				dev, err = store.GenerateInto(name, force, &sealedfile.Provisioner{
+					Path:      devicekeys.SealedPath(resolved),
+					PIN:       devicekeys.NewPassphrase(passphraseFile, cmd.InOrStdin()),
+					Overwrite: force,
+				})
+				if err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("--custody must be %s or %s, not %q", devicekeys.Software, devicekeys.SealedFile, custodyKind)
 			}
 			if asJSON {
 				return emitJSON(cmd.OutOrStdout(), device.NewView(dev, heyarrdevice.CommandHint))
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "device key generated\n\n")
 			printDevice(cmd.OutOrStdout(), dev)
+			if dev.KeyCustody == device.KeyCustodyExternal {
+				fmt.Fprintf(cmd.OutOrStdout(), "  sealed file  %s (mode %#o)\n", devicekeys.SealedPath(resolved), sealedfile.FileMode)
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", caveat(dev))
 			return nil
 		},
@@ -111,6 +165,10 @@ what the old one could. So a second generate refuses unless you pass --force.`,
 	cmd.Flags().StringVar(&name, "name", "", "what to call this device (default: this machine's hostname)")
 	cmd.Flags().BoolVar(&force, "force", false, "replace an existing key — unrecoverable")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
+	cmd.Flags().StringVar(&custodyKind, "custody", devicekeys.Software,
+		"where the private keys are held: software (seed files) or sealedfile (a passphrase-sealed file)")
+	cmd.Flags().StringVar(&passphraseFile, "passphrase-file", "",
+		"with --custody sealedfile, read the passphrase from this file's first line (- for stdin) instead of the terminal")
 	return cmd
 }
 
@@ -188,14 +246,21 @@ func newDeviceRemoveCommand(_ Options, dir *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remove <id>",
 		Short: "Remove a device key",
-		Long: `Delete a device key and its record from this machine.
+		Long: `Delete a device key and its record from this machine — its seed files, or
+the sealed file of a custody device.
 
 There is no escrow and no copy: once removed, the key is gone. The id is
 required and is matched exactly, because an unrecoverable command that accepts
 "whatever is there" eventually runs against the wrong thing.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			store, err := openDeviceStore(*dir)
+			// A plain store, so a custody device whose sealed file is already
+			// gone can still be removed.
+			resolved, err := devicekeys.ResolveDir(*dir)
+			if err != nil {
+				return err
+			}
+			store, err := device.NewStore(device.StoreOptions{Dir: resolved})
 			if err != nil {
 				return err
 			}
@@ -203,10 +268,21 @@ required and is matched exactly, because an unrecoverable command that accepts
 			if err != nil {
 				return err
 			}
+			// The device library leaves a custody device's sealed file to its
+			// caller (ADR-0021); removing the device removes its keys too.
+			if dev.KeyCustody == device.KeyCustodyExternal {
+				if err := devicekeys.RemoveSealed(store.Dir()); err != nil {
+					return err
+				}
+			}
 			if asJSON {
 				return emitJSON(cmd.OutOrStdout(), device.NewView(dev, heyarrdevice.CommandHint))
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "removed %s (%s)\n", dev.ID, dev.Name)
+			if dev.KeyCustody == device.KeyCustodyExternal {
+				fmt.Fprintf(cmd.OutOrStdout(), "its sealed keys are gone from %s\n", devicekeys.SealedPath(store.Dir()))
+				return nil
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "its private key is gone from %s\n", dev.KeyPath)
 			return nil
 		},
@@ -241,7 +317,12 @@ device-key tools alone.
 
 It speaks newline-delimited JSON-RPC 2.0 on stdin and stdout, so configure your
 agent to launch it as a command rather than to dial a URL. Nothing but protocol
-messages goes to stdout.`,
+messages goes to stdout.
+
+On a device whose keys are held in a sealed file, the first read that unwraps
+asks for the passphrase on the terminal (never on stdin, which carries the
+protocol), or reads ` + devicekeys.PassphraseFileEnvVar + ` when it is set — which
+an agent-launched server with no terminal needs.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			store, err := openDeviceStore(*dir)
@@ -390,7 +471,12 @@ func printDevice(w io.Writer, d device.Device) {
 	fmt.Fprintf(w, "  algorithm    %s\n", d.Algorithm)
 	fmt.Fprintf(w, "  public key   %s\n", d.PublicKeyString())
 	fmt.Fprintf(w, "  created      %s\n", d.CreatedAt.UTC().Format(time.RFC3339))
-	fmt.Fprintf(w, "  private key  %s (mode %#o, never printed)\n", d.KeyPath, device.KeyFileMode)
+	if d.KeyCustody == device.KeyCustodyExternal {
+		fmt.Fprintf(w, "  private key  held in custody: the passphrase-sealed %s beside the record (never printed)\n",
+			devicekeys.SealedFileName)
+	} else {
+		fmt.Fprintf(w, "  private key  %s (mode %#o, never printed)\n", d.KeyPath, device.KeyFileMode)
+	}
 	fmt.Fprintf(w, "  enrolment    %s\n", d.EnrolmentStatus())
 	if u := d.EnrolledUser(); u != "" {
 		fmt.Fprintf(w, "  enrolled as  %s\n", u)

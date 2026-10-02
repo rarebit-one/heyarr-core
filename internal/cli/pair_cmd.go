@@ -268,7 +268,10 @@ func buildInitiator(as, identityDir, deviceDir string, salt []byte, lifetime tim
 		return nil, nil, fmt.Errorf("pair: device %s is not a member of any identity (%s), so it cannot admit another",
 			dev.PublicKeyString(), dev.AuthorisationNote())
 	}
-	signer, err := devStore.LoadSigningKey()
+	// The device signer serves a software device (its seed file, read per
+	// signature) and a custody device (its sealed file) alike, so this never
+	// holds a raw key (void-which-binds-go ADR-0021).
+	signer, err := devStore.Signer()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -276,7 +279,7 @@ func buildInitiator(as, identityDir, deviceDir string, salt []byte, lifetime tim
 	if err != nil {
 		return nil, nil, err
 	}
-	in, err := pairflow.NewDeviceInitiator(signer, dev.EncryptionKey, admitting, known, salt, now)
+	in, err := pairflow.NewDeviceInitiatorWithSigner(signer, dev.EncryptionKey, admitting, known, salt, now)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -353,15 +356,18 @@ node by a different address. It takes the same forms as authorise's --relay.`,
 				return fmt.Errorf("pair: this device is already a member of %s; the invite is for %s",
 					dev.EnrolledUser(), inv.User)
 			}
-			signPriv, err := devStore.LoadSigningKey()
+			// The responder reveals the device's public keys and opens the sealed
+			// admission through its holder: a software device's seed file or a
+			// custody device's sealed file, never a raw key here (ADR-0021).
+			signer, err := devStore.Signer()
 			if err != nil {
 				return err
 			}
-			encPriv, err := devStore.LoadEncryptionKey()
+			holder, err := devStore.Holder()
 			if err != nil {
 				return err
 			}
-			resp, err := pairflow.NewResponderWithKeys(inv.User, signPriv, encPriv, inv.Salt, time.Now().UTC())
+			resp, err := pairflow.NewResponderWith(inv.User, signer, holder, inv.Salt, time.Now().UTC())
 			if err != nil {
 				return err
 			}

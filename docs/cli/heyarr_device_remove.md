@@ -4,7 +4,8 @@ Remove a device key
 
 ### Synopsis
 
-Delete a device key and its record from this machine.
+Delete a device key and its record from this machine — its seed files, or
+the sealed file of a custody device.
 
 There is no escrow and no copy: once removed, the key is gone. The id is
 required and is matched exactly, because an unrecoverable command that accepts

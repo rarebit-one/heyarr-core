@@ -1,26 +1,21 @@
 ## heyarr device seal-tpm
 
-Seal this device's encryption key to the TPM for hardware-gated custody (ADR-0098)
+Disabled: TPM custody returns with void-which-binds-go's custody/tpm (ADR-0021)
 
 ### Synopsis
 
-Seal this device's X25519 encryption key to the local TPM, so the vault's
-`tpm` custody backend opens spaces by unsealing after a TPM gate — a PCR
-policy (the boot state) AND a PIN — rather than reading a key off disk.
+Disabled until void-which-binds-go's custody/tpm backend lands, after the C2
+cutover (void-which-binds-go ADR-0021).
 
-It seals the EXISTING device key, so the public point stays the same and every
-space already wrapped for this device keeps opening. The seed is written into a
-TPM sealed object; the on-disk blob holds only the public point and ciphertext
-the TPM alone can open.
+This command sealed a device's existing X25519 seed into heyarr's legacy TPM
+blob for the vault's `tpm` backend. Every device key is now gen2
+(ADR-0022), and the library's TPM backend will never read the legacy blob, so a
+gen2 key sealed with it would be stranded in a format nothing supports. It now
+refuses, whatever its flags.
 
-The PIN is the sealed object's auth value, read from vault.tpm.pin_file or the
-HEYARR_VAULT_TPM_PIN environment variable — the same source the backend
-presents at unseal, so provisioning and opening agree. Requires a TPM 2.0
-(Linux); the household Framework laptops (fTPM/PTT) are the target.
-
-After sealing, select it with vault.unwrapper: tpm and confirm a space opens;
-then you may remove the plaintext device key to complete the hardening — your
-paper recovery secret still restores access if the TPM is ever lost or reset.
+Until custody/tpm lands, a machine with no other gate holds its device keys in a
+passphrase-sealed file (`heyarr device generate --custody sealedfile`),
+and an unattended service device keeps a software device.
 
 ```
 heyarr device seal-tpm [flags]
@@ -29,9 +24,9 @@ heyarr device seal-tpm [flags]
 ### Options
 
 ```
-      --out string          where to write the sealed-key blob (default: vault.tpm.sealed_key_file)
-      --pcr ints            PCR indices to bind the policy to (default: 7, the UEFI Secure Boot state) (default [7])
-      --tpm-device string   TPM device to open (default: /dev/tpmrm0, or vault.tpm.device)
+      --out string          ignored: the command is disabled
+      --pcr ints            ignored: the command is disabled
+      --tpm-device string   ignored: the command is disabled
 ```
 
 ### Options inherited from parent commands

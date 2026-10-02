@@ -36,8 +36,11 @@ const DeviceScheme = "Device"
 // now is the instant the proof is minted for and ttl its lifetime (zero means
 // enrolment.PossessionTTL). It is called once per request by the transport, so
 // the proof presented is never older than the request that carries it. The
-// device key is loaded and consumed inside the implementation and never returned
-// — no caller holds the key merely to authenticate.
+// device key is used inside the implementation and never returned — no caller
+// holds the key merely to authenticate. For a device whose keys are held in a
+// sealed file (void-which-binds-go ADR-0021) the store signs through it: the
+// first request asks for the passphrase and unlocks it for the rest of the
+// command (internal/device/devicekeys), rather than once per request.
 type Credentialer interface {
 	Credential(now time.Time, ttl time.Duration) (string, error)
 }
