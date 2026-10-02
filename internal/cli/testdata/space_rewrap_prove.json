@@ -2,6 +2,8 @@
   "mode": "prove",
   "stage": "<dir>/stage",
   "proof": "full",
+  "stage_id": "<stage-id>",
+  "gen1_blob_sha256": "1c9816d64893351eaf74f30fc4cfeee73275c012e8a85492d6dd577301fb154d",
   "gen1_user": "ed25519:<hex>",
   "gen1_recovery": "x25519:<hex>",
   "gen2_user": "ed25519:<hex>",

@@ -74,7 +74,13 @@ stable.
   `--gen2-secret-file`, and `--prove` and `--upload` refuse a stage whose tag
   does not verify before they use anything in it. Without the MAC, anyone who
   could write to the stage could swap an empty space's wraps for ones of a key
-  they know and recompute `SHA256SUMS`. Secrets come only from
+  they know and recompute `SHA256SUMS`. `--stage` also draws a random 128-bit
+  stage id, records it in the MACed manifest and prints it. `--prove` and
+  `--upload` take it back as a required `--stage-id <hex>` and refuse any stage
+  whose id differs, so an older genuine stage under the same gen2 secret (one
+  from before a space-key rotation, say) cannot be replayed in place of this
+  run's. The manifest and every mode's output also carry the sha256 of the
+  gen1 blob the stage was made from, to check against the C2 step 4a export. Secrets come only from
   `--gen1-secret-file` and `--gen2-secret-file` (one of them may be `-` for
   standard input), never from argv or a prompt. The cruciform custody backend
   is refused for the offline modes. `--json` is supported.

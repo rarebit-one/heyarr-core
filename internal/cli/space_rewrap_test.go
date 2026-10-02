@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +83,8 @@ type rewrapFixture struct {
 	deviceDir   string
 	expectDB    string
 	stage       string
+	// stageID is the id the last mustStage printed, as the operator records it.
+	stageID string
 }
 
 func newRewrapFixture(t *testing.T) rewrapFixture {
@@ -174,21 +177,31 @@ func (f rewrapFixture) runStage(t *testing.T, extra ...string) (string, error) {
 	return out, err
 }
 
-func (f rewrapFixture) mustStage(t *testing.T, extra ...string) string {
+// mustStage stages and records the stage id from the command's own output,
+// as the operator does.
+func (f *rewrapFixture) mustStage(t *testing.T, extra ...string) string {
 	t.Helper()
 	out, err := f.runStage(t, extra...)
 	if err != nil {
 		t.Fatalf("rewrap --from: %v", err)
 	}
+	m := stageIDPattern.FindStringSubmatch(out)
+	if m == nil {
+		t.Fatalf("the stage output names no stage id:\n%s", out)
+	}
+	f.stageID = m[1]
 	return out
 }
+
+// stageIDPattern finds the stage id in stage output, human or --json.
+var stageIDPattern = regexp.MustCompile(`stage(?: id |_id": ")([0-9a-f]{32})`)
 
 // prove runs --prove with the fixture's gen2 secret file.
 func (f rewrapFixture) prove(t *testing.T, extra ...string) (string, error) {
 	t.Helper()
 	args := append([]string{
 		"--config", f.config, "space", "rewrap", "--device-dir", f.deviceDir, "--prove", f.stage,
-		"--gen2-secret-file", f.gen2File,
+		"--gen2-secret-file", f.gen2File, "--stage-id", f.stageID,
 	}, extra...)
 	out, _, err := run(t, context.Background(), args...)
 	return out, err
@@ -264,6 +277,9 @@ func (f rewrapFixture) reseal(t *testing.T, r reseal) {
 
 func normaliseRewrap(f rewrapFixture, s string) string {
 	s = strings.ReplaceAll(s, f.dir, "<dir>")
+	if f.stageID != "" {
+		s = strings.ReplaceAll(s, f.stageID, "<stage-id>")
+	}
 	s = publicKeyPattern.ReplaceAllString(s, "ed25519:<hex>")
 	return encryptionKeyPattern.ReplaceAllString(s, "x25519:<hex>")
 }
@@ -328,6 +344,13 @@ func TestSpaceRewrapEndToEnd(t *testing.T) {
 	}
 	if len(m.Spaces) != 1 || m.Spaces[0].SpaceID != gen1VectorSpace || m.Spaces[0].Kind != "vault" {
 		t.Fatalf("spaces = %+v", m.Spaces)
+	}
+	// The stage id the operator records is the manifest's, and the gen1 blob's
+	// sha256 is printed for checking against the export.
+	gen1Sum := sha256.Sum256(readFile(t, f.gen1Blob))
+	if m.StageID != f.stageID || m.Gen1BlobSHA256 != hex.EncodeToString(gen1Sum[:]) ||
+		!strings.Contains(out, "gen1 blob sha256 "+m.Gen1BlobSHA256) {
+		t.Fatalf("stage id %q (printed %q), gen1 blob sha256 %q; output:\n%s", m.StageID, f.stageID, m.Gen1BlobSHA256, out)
 	}
 
 	ct := mustHexDecode(t, f.v.ChangeCiphertext)
@@ -400,7 +423,7 @@ func TestSpaceRewrapFromSharesAndStdin(t *testing.T) {
 		t.Fatalf("stage from shares, gen2 on stdin: %v\n%s", err, out)
 	}
 	if _, err := runWithStdin(t, f.gen2.String(), "--config", f.config, "space", "rewrap", "--device-dir", f.deviceDir,
-		"--prove", f.stage, "--gen2-secret-file", "-"); err != nil {
+		"--prove", f.stage, "--gen2-secret-file", "-", "--stage-id", f.manifest(t).StageID); err != nil {
 		t.Fatalf("prove with gen2 on stdin: %v", err)
 	}
 }
@@ -707,6 +730,86 @@ func TestSpaceRewrapProveRefusals(t *testing.T) {
 	}
 }
 
+// TestSpaceRewrapStageID: --prove and --upload need the --stage-id this run's
+// --stage printed, refuse any other, and --from takes none.
+func TestSpaceRewrapStageID(t *testing.T) {
+	f := newRewrapFixture(t)
+	f.mustStage(t)
+	if len(f.stageID) != 32 {
+		t.Fatalf("stage id %q", f.stageID)
+	}
+	c := newRewrapController(t, f, gen1VectorSpace)
+	c.rekey(t, f)
+	other, err := newRewrapStageID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct{ name, id, want string }{
+		{"missing", "", "needs --stage-id"},
+		{"another stage's", other, "is not the stage this run wrote"},
+		{"malformed", "abc", "a stage id is 32 hex digits"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := f.prove(t, "--stage-id", tt.id); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("prove: err = %v, want %q", err, tt.want)
+			}
+			if _, _, err := c.upload(f, "--stage-id", tt.id); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("upload: err = %v, want %q", err, tt.want)
+			}
+			c.assertNoGen2Wraps(t, f)
+		})
+	}
+	// The operator may type the id in either case.
+	if _, err := f.prove(t, "--stage-id", strings.ToUpper(f.stageID)); err != nil {
+		t.Fatalf("prove with an uppercase stage id: %v", err)
+	}
+	f2 := f
+	f2.stage = filepath.Join(f.dir, "stage2")
+	if _, err := f2.runStage(t, "--stage-id", f.stageID); err == nil || !strings.Contains(err.Error(), "draws a new stage id") {
+		t.Fatalf("--from with --stage-id: err = %v", err)
+	}
+}
+
+// TestSpaceRewrapRefusesAReplayedStage: an older stage, made and MACed with the
+// same gen2 secret, put in place of this run's. Every check but the stage id
+// passes it (it is genuine, just not this run's), and for an empty space the
+// controller has nothing to tell its key from the current one, so only
+// --stage-id stops it.
+func TestSpaceRewrapRefusesAReplayedStage(t *testing.T) {
+	f := newRewrapFixture(t)
+	f.mustStage(t) // the older run's stage
+	older := f.stage
+	f.stage = filepath.Join(f.dir, "stage-now")
+	f.mustStage(t) // this run's: f.stageID is now its id
+	if f.manifest(t).StageID == stageIDOf(t, older) {
+		t.Fatal("two stages drew the same id")
+	}
+	c := newRewrapControllerWith(t, f, false, gen1VectorSpace)
+	c.rekey(t, f)
+
+	replayed := f
+	replayed.stage = older
+	if _, err := replayed.prove(t); err == nil || !strings.Contains(err.Error(), "is not the stage this run wrote") {
+		t.Fatalf("prove of the replayed stage: err = %v", err)
+	}
+	if _, _, err := c.upload(replayed); err == nil || !strings.Contains(err.Error(), "is not the stage this run wrote") {
+		t.Fatalf("upload of the replayed stage: err = %v", err)
+	}
+	c.assertNoGen2Wraps(t, f)
+	if out, _, err := c.upload(f); err != nil || !strings.Contains(out, "uploaded-empty") {
+		t.Fatalf("upload of this run's stage: %v\n%s", err, out)
+	}
+}
+
+func stageIDOf(t *testing.T, dir string) string {
+	t.Helper()
+	var m rewrapManifest
+	if err := json.Unmarshal(readFile(t, filepath.Join(dir, rewrapManifestFile)), &m); err != nil {
+		t.Fatal(err)
+	}
+	return m.StageID
+}
+
 // TestSpaceRewrapNeedsTheGen2Secret: no mode runs without --gen2-secret-file,
 // because the stage MAC is keyed from it.
 func TestSpaceRewrapNeedsTheGen2Secret(t *testing.T) {
@@ -802,7 +905,7 @@ func (c rewrapController) rekey(t *testing.T, f rewrapFixture) {
 func (c rewrapController) upload(f rewrapFixture, extra ...string) (string, string, error) {
 	args := append([]string{
 		"space", "rewrap", "--device-dir", f.deviceDir, "--upload", f.stage,
-		"--gen2-secret-file", f.gen2File,
+		"--gen2-secret-file", f.gen2File, "--stage-id", f.stageID,
 	}, extra...)
 	return c.h.run(args...)
 }
