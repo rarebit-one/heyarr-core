@@ -67,7 +67,12 @@ stable.
   upload, the Personal MCP and the gateway. The passphrase is asked for on the
   first unwrap or signature and holds for five minutes across the process; the
   gateway asks at start and holds it for `--unlock-ttl` (default 12h).
-  `device remove` deletes the sealed file with the record. A sealed file protects the keys at rest as well as
+  `device remove` deletes the sealed file with the record. `identity recover`
+  checks the device before writing the identity, and replaces a custody device
+  whose sealed file is missing or unreadable with a new sealed-file device,
+  never seed files (the passphrase is taken first, from the terminal or
+  `--passphrase-file`, so a refused one writes nothing; an unreadable file is
+  moved aside to `device.sealed.unusable-<time>`). A sealed file protects the keys at rest as well as
   the passphrase does; it is not hardware.
 
 - **`heyarr space rewrap` moves every space key from gen1 to gen2 for the

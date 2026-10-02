@@ -31,6 +31,7 @@ import (
 	"github.com/rarebit-one/void-which-binds-go/device"
 	"github.com/rarebit-one/void-which-binds-go/encryption"
 	"github.com/rarebit-one/void-which-binds-go/enrolment"
+	"github.com/rarebit-one/void-which-binds-go/recovery"
 
 	"github.com/rarebit-one/heyarr-core/internal/device/devicekeys"
 )
@@ -192,6 +193,18 @@ func TestSealedFileDeviceThroughTheCLI(t *testing.T) {
 	}
 	assertNoSeedFiles(t, custodyDir)
 
+	// Recovering the identity over a HEALTHY custody device keeps that device:
+	// it is re-enrolled as it is, with no passphrase asked and no replacement.
+	if _, _, err := run(t, ctx, "identity", "recover", "--identity-dir", f.identityDir, "--device-dir", custodyDir,
+		"--secret-file", f.gen2File, "--force"); err != nil {
+		t.Fatalf("identity recover over the custody device: %v", err)
+	}
+	if again := showDeviceJSON(t, ctx, custodyDir); again.ID != laptop.ID || again.KeyCustody != device.KeyCustodyExternal ||
+		again.EnrolmentStatus != device.EnrolmentEnrolled {
+		t.Fatalf("recover replaced or un-enrolled a healthy custody device: %+v", again)
+	}
+	assertNoSeedFiles(t, custodyDir)
+
 	// seal-tpm is disabled, for a custody device as for any other.
 	if _, _, err := run(t, ctx, "--config", f.config, "device", "seal-tpm", "--device-dir", custodyDir,
 		"--out", filepath.Join(f.dir, "tpm.blob")); !errors.Is(err, errSealTPMDisabled) {
@@ -300,5 +313,154 @@ func TestPairAsIdentityWithTheSealedFileLost(t *testing.T) {
 	if _, _, err := run(t, ctx, "pair", "authorise", "--as", "device", "--identity-dir", idDir,
 		"--device-dir", lostDir, "--relay", relayAddr, "--yes"); !errors.Is(err, devicekeys.ErrNoSealedFile) {
 		t.Fatalf("authorising as the lost device: %v, want ErrNoSealedFile", err)
+	}
+}
+
+// TestIdentityRecoverReplacesAnUnusableCustodyDevice: recovery signs with the
+// identity alone, so a custody device whose sealed file is missing or
+// unreadable does not stop it. That device — and only it — is replaced by a
+// NEW sealed-file device (never seed files), enrolled under the recovered
+// identity, and an unreadable sealed file is moved aside rather than deleted.
+// A passphrase below the minimum is refused before anything is written.
+// Each successful case seals once, at the real Argon2id floor.
+func TestIdentityRecoverReplacesAnUnusableCustodyDevice(t *testing.T) {
+	secret, err := recovery.GenerateSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// lostCustodyDevice makes a custody device record in a fresh root, with
+	// sealed as its sealed file (nil: none).
+	lostCustodyDevice := func(t *testing.T, sealed []byte) (root, idDir, devDir, secretFile string, old device.Device) {
+		t.Helper()
+		root = t.TempDir()
+		secretFile = filepath.Join(root, "secret")
+		writeFile(t, secretFile, []byte(secret.String()+"\n"))
+		idDir = filepath.Join(root, "identity")
+		devDir = filepath.Join(root, "device")
+		_, sign, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		enc, err := encryption.GenerateKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		lost, err := device.NewStore(device.StoreOptions{Dir: devDir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if old, err = lost.GenerateInto("lost-laptop", false, keysProvisioner{custody.SoftwareKeys(sign, enc)}); err != nil {
+			t.Fatal(err)
+		}
+		if sealed != nil {
+			writeFile(t, devicekeys.SealedPath(devDir), sealed)
+		}
+		return root, idDir, devDir, secretFile, old
+	}
+
+	for _, tc := range []struct {
+		name   string
+		sealed []byte
+	}{
+		{"the sealed file is missing", nil},
+		{"the sealed file is unreadable", []byte("not a sealed file")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			root, idDir, devDir, secretFile, old := lostCustodyDevice(t, tc.sealed)
+			pass := filepath.Join(root, "passphrase")
+			writeFile(t, pass, []byte("a new sealed-file passphrase\n"))
+
+			out, _, err := run(t, ctx, "identity", "recover", "--identity-dir", idDir, "--device-dir", devDir,
+				"--secret-file", secretFile, "--passphrase-file", pass, "--json")
+			if err != nil {
+				t.Fatalf("identity recover: %v", err)
+			}
+			var got struct {
+				Identity struct {
+					PublicKey string `json:"public_key"`
+				} `json:"identity"`
+				Device device.View `json:"device"`
+			}
+			if err := json.Unmarshal([]byte(out), &got); err != nil {
+				t.Fatalf("not JSON: %v\n%s", err, out)
+			}
+			if got.Device.ID == old.ID || got.Device.PublicKey == old.PublicKeyString() {
+				t.Fatal("the unusable device was kept")
+			}
+			if got.Device.KeyCustody != device.KeyCustodyExternal || got.Device.KeyPath != "" {
+				t.Fatalf("the replacement is not custody-held: key_custody %q, key_path %q",
+					got.Device.KeyCustody, got.Device.KeyPath)
+			}
+			if got.Device.EnrolmentStatus != device.EnrolmentEnrolled || got.Device.EnrolledUser != got.Identity.PublicKey {
+				t.Fatalf("the replacement is %q under %q, want enrolled under %q",
+					got.Device.EnrolmentStatus, got.Device.EnrolledUser, got.Identity.PublicKey)
+			}
+			assertNoSeedFiles(t, devDir)
+			st, err := os.Stat(devicekeys.SealedPath(devDir))
+			if err != nil || st.Mode().Perm() != 0o600 {
+				t.Fatalf("the replacement's sealed file: %v, %v (want mode 0600)", st, err)
+			}
+			if err := devicekeys.Usable(devDir); err != nil {
+				t.Fatalf("the replacement does not open with its sealed file: %v", err)
+			}
+			moved, _ := filepath.Glob(devicekeys.SealedPath(devDir) + ".unusable-*")
+			if (tc.sealed != nil) != (len(moved) == 1) {
+				t.Fatalf("moved-aside sealed files: %v", moved)
+			}
+			if len(moved) == 1 && string(readFile(t, moved[0])) != string(tc.sealed) {
+				t.Fatal("the moved-aside sealed file changed")
+			}
+		})
+	}
+
+	t.Run("a short passphrase writes nothing", func(t *testing.T) {
+		ctx := context.Background()
+		root, idDir, devDir, secretFile, old := lostCustodyDevice(t, []byte("not a sealed file"))
+		short := filepath.Join(root, "short")
+		writeFile(t, short, []byte("too short\n"))
+		if _, _, err := run(t, ctx, "identity", "recover", "--identity-dir", idDir, "--device-dir", devDir,
+			"--secret-file", secretFile, "--passphrase-file", short); !errors.Is(err, devicekeys.ErrPassphraseTooShort) {
+			t.Fatalf("recover with a short passphrase: %v, want ErrPassphraseTooShort", err)
+		}
+		if _, _, err := run(t, ctx, "identity", "show", "--identity-dir", idDir); err == nil {
+			t.Fatal("a refused passphrase left an identity behind")
+		}
+		plain, err := device.NewStore(device.StoreOptions{Dir: devDir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dev, err := plain.Get(""); err != nil || dev.ID != old.ID {
+			t.Fatalf("a refused passphrase changed the device: %+v, %v", dev, err)
+		}
+		if got := string(readFile(t, devicekeys.SealedPath(devDir))); got != "not a sealed file" {
+			t.Fatal("a refused passphrase moved the sealed file")
+		}
+	})
+}
+
+// TestIdentityRecoverChecksTheDeviceFirst: a device that is here but cannot be
+// read (a software device with a damaged key file) is refused before the
+// identity is written, so a failed recover leaves no half-recovered identity.
+func TestIdentityRecoverChecksTheDeviceFirst(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	secret, err := recovery.GenerateSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretFile := filepath.Join(root, "secret")
+	writeFile(t, secretFile, []byte(secret.String()+"\n"))
+	idDir := filepath.Join(root, "identity")
+	devDir := filepath.Join(root, "device")
+	generateDevice(t, devDir)
+	writeFile(t, filepath.Join(devDir, device.KeyFileName), []byte("damaged\n"))
+
+	if _, _, err := run(t, ctx, "identity", "recover", "--identity-dir", idDir, "--device-dir", devDir,
+		"--secret-file", secretFile); err == nil {
+		t.Fatal("recover over a damaged device succeeded")
+	}
+	if _, _, err := run(t, ctx, "identity", "show", "--identity-dir", idDir); err == nil {
+		t.Fatal("a failed recover left an identity behind")
 	}
 }

@@ -174,6 +174,46 @@ func RemoveSealed(dir string) error {
 	return nil
 }
 
+// Usable reports whether the device in dir can be opened with its keys: nil
+// for no device or a software device (whose own errors are the store's to
+// report), and for a custody device the reason it cannot — its sealed file is
+// missing, malformed, or holds keys other than the record's. It reads only the
+// sealed file's clear header and never asks for the passphrase.
+func Usable(dir string) error {
+	plain, err := device.NewStore(device.StoreOptions{Dir: dir})
+	if err != nil {
+		return err
+	}
+	if dev, err := plain.Get(""); err != nil || dev.KeyCustody != device.KeyCustodyExternal {
+		return nil //nolint:nilerr // not a custody device: its own errors are the store's to report
+	}
+	ds, err := Open(Options{Dir: dir})
+	if err != nil {
+		return err
+	}
+	_, err = ds.Get("")
+	return err
+}
+
+// QuarantineSealed moves an unusable sealed file aside, to
+// device.sealed.unusable-<UTC time>, rather than deleting it: it is replaced
+// because it cannot be opened, but a restored backup of the passphrase or the
+// file may yet make it useful. It returns the new path, or "" if there was no
+// sealed file.
+func QuarantineSealed(dir string, now time.Time) (string, error) {
+	path := SealedPath(dir)
+	dest := path + ".unusable-" + now.UTC().Format("20060102T150405Z")
+	if err := os.Rename(path, dest); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			forget(path)
+			return "", nil
+		}
+		return "", fmt.Errorf("devicekeys: moving the unusable sealed file aside: %w", err)
+	}
+	forget(path)
+	return dest, nil
+}
+
 // removeFile is os.Remove, replaceable by a test that needs an unlink to fail.
 var removeFile = os.Remove
 

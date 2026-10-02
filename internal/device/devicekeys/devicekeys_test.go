@@ -359,3 +359,33 @@ func TestRemoveDeviceRemovesTheSealedFileFirst(t *testing.T) {
 		t.Fatal("RemoveDevice with no id was accepted")
 	}
 }
+
+// Usable is nil for no device and a software device, and names why a custody
+// device cannot be opened: its sealed file is missing or malformed.
+func TestUsable(t *testing.T) {
+	t.Parallel()
+	none := filepath.Join(t.TempDir(), "none")
+	if err := Usable(none); err != nil {
+		t.Fatalf("no device: %v", err)
+	}
+	soft := filepath.Join(t.TempDir(), "soft")
+	if _, err := newStore(t, soft).Generate("laptop", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := Usable(soft); err != nil {
+		t.Fatalf("a software device: %v", err)
+	}
+	dir := filepath.Join(t.TempDir(), "custody")
+	if _, err := newStore(t, dir).GenerateInto("laptop", false, keysProvisioner{softwareKeys(t)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Usable(dir); !errors.Is(err, ErrNoSealedFile) {
+		t.Fatalf("a missing sealed file: %v, want ErrNoSealedFile", err)
+	}
+	if err := os.WriteFile(SealedPath(dir), []byte("not a sealed file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Usable(dir); err == nil {
+		t.Fatal("a malformed sealed file is usable")
+	}
+}
