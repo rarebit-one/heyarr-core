@@ -165,8 +165,10 @@ func TestSealedFileDeviceThroughTheCLI(t *testing.T) {
 	if m.DeviceRecipient != laptop.EncryptionPublicKey {
 		t.Fatalf("staged for %s, the custody device is %s", m.DeviceRecipient, laptop.EncryptionPublicKey)
 	}
-	if out, err := f.prove(t); err != nil || !strings.Contains(out, "(device-only)") {
-		t.Fatalf("prove (device-only): %v\n%s", err, out)
+	// --prove is always the full proof (#693): the stage MAC, the gen2 secret
+	// alone, and the custody device's holder.
+	if out, err := f.prove(t); err != nil {
+		t.Fatalf("prove: %v\n%s", err, out)
 	}
 	// And the space key itself, unwrapped through the selected custody.
 	cust, err := selectCustody(&f.config, custodyDir)
