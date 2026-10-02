@@ -21,8 +21,8 @@ laptop device and the gen2 recovery key. Three modes, one at a time:
     read-only), and exactly the space_ids of --expect when given. Any missing
     or extra space is a hard stop and nothing is written. It then proves the
     stage, and prints its stage id (128 random bits, new for every stage) and
-    the sha256 of the gen1 blob. Record the stage id, and check the sha256
-    against the export's.
+    the BLAKE3 digest of the gen1 blob. Record the stage id, and check the
+    digest against `b3sum gen1.blob` run where the export wrote it.
 
 --prove <dir> --stage-id <id>
     Checks STAGE-MAC under the gen2 secret, checks the stage's id is --stage-id,

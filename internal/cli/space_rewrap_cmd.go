@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/void-which-binds-go/encryption"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 	"github.com/rarebit-one/void-which-binds-go/migrate/gen1"
 	"github.com/rarebit-one/void-which-binds-go/recovery"
 	"github.com/rarebit-one/void-which-binds-go/useridentity"
@@ -76,9 +77,11 @@ type rewrapManifest struct {
 	// and --upload. The MAC covers it, so an older stage made with the same
 	// gen2 secret cannot be replayed in place of this run's.
 	StageID string `json:"stage_id"`
-	// Gen1BlobSHA256 is the sha256 (hex) of the gen1 recovery blob the stage
-	// was made from, for the operator to check against the C2 step 4a export.
-	Gen1BlobSHA256 string `json:"gen1_blob_sha256"`
+	// Gen1BlobBLAKE3 is the BLAKE3 digest (hex, unprefixed, as b3sum prints
+	// it) of the gen1 recovery blob the stage was made from, for the operator
+	// to check against the C2 step 4a export. BLAKE3, because bytes are
+	// identified by their BLAKE3 digest (invariant 1).
+	Gen1BlobBLAKE3 string `json:"gen1_blob_blake3"`
 }
 
 // rewrapStageIDBytes is the stage id's length: 128 bits.
@@ -142,8 +145,8 @@ type spaceRewrapView struct {
 	Proof string `json:"proof"`
 	// StageID is the stage's id, which --prove and --upload take as --stage-id.
 	StageID string `json:"stage_id"`
-	// Gen1BlobSHA256 is the sha256 of the gen1 blob the stage was made from.
-	Gen1BlobSHA256  string                 `json:"gen1_blob_sha256"`
+	// Gen1BlobBLAKE3 is the BLAKE3 (hex) of the gen1 blob the stage was made from.
+	Gen1BlobBLAKE3  string                 `json:"gen1_blob_blake3"`
 	Gen1User        string                 `json:"gen1_user"`
 	Gen1Recovery    string                 `json:"gen1_recovery"`
 	Gen2User        string                 `json:"gen2_user"`
@@ -198,8 +201,8 @@ laptop device and the gen2 recovery key. Three modes, one at a time:
     read-only), and exactly the space_ids of --expect when given. Any missing
     or extra space is a hard stop and nothing is written. It then proves the
     stage, and prints its stage id (128 random bits, new for every stage) and
-    the sha256 of the gen1 blob. Record the stage id, and check the sha256
-    against the export's.
+    the BLAKE3 digest of the gen1 blob. Record the stage id, and check the
+    digest against ` + "`b3sum gen1.blob`" + ` run where the export wrote it.
 
 --prove <dir> --stage-id <id>
     Checks STAGE-MAC under the gen2 secret, checks the stage's id is --stage-id,
@@ -368,7 +371,8 @@ func runRewrapStage(cmd *cobra.Command, configPath *string, deviceDir, identityD
 	if err != nil {
 		return spaceRewrapView{}, fmt.Errorf("reading the gen1 recovery blob: %w", err)
 	}
-	gen1Sum := sha256.Sum256(data)
+	gen1Sum := hashing.New()
+	_, _ = gen1Sum.Write(data)
 	blob, err := g1.OpenRecoveryBlob(data)
 	if err != nil {
 		return spaceRewrapView{}, fmt.Errorf("opening the gen1 recovery blob with the gen1 secret: %w", err)
@@ -462,7 +466,7 @@ func runRewrapStage(cmd *cobra.Command, configPath *string, deviceDir, identityD
 		BlobGeneratedAt:        blob.GeneratedAt.UTC().Format(time.RFC3339),
 		ExpectDBSpaceIDsSHA256: spaceIDsDigest(dbIDs),
 		StageID:                stageID,
-		Gen1BlobSHA256:         hex.EncodeToString(gen1Sum[:]),
+		Gen1BlobBLAKE3:         gen1Sum.Sum().Hex(),
 	}
 	gen2Blob := spacerecover.Blob{
 		UserID:            g2id.UserID,
@@ -645,7 +649,7 @@ func proveStage(dir string, secret recovery.Secret, stageID string, cust client.
 	v := spaceRewrapView{
 		Proof:           "full",
 		StageID:         m.StageID,
-		Gen1BlobSHA256:  m.Gen1BlobSHA256,
+		Gen1BlobBLAKE3:  m.Gen1BlobBLAKE3,
 		Gen1User:        m.Gen1User,
 		Gen1Recovery:    m.Gen1Recovery,
 		Gen2User:        m.Gen2User,
@@ -1252,7 +1256,7 @@ func printSpaceRewrap(w io.Writer, v spaceRewrapView) {
 		fmt.Fprintf(w, "Uploaded the stage %s.\n", v.Stage)
 	}
 	fmt.Fprintf(w, "  stage id %s\n", v.StageID)
-	fmt.Fprintf(w, "  gen1 blob sha256 %s\n", v.Gen1BlobSHA256)
+	fmt.Fprintf(w, "  gen1 blob blake3 %s\n", v.Gen1BlobBLAKE3)
 	fmt.Fprintf(w, "  gen1 %s (recovery %s)\n", v.Gen1User, v.Gen1Recovery)
 	fmt.Fprintf(w, "  gen2 %s (recovery %s)\n", v.Gen2User, v.Gen2Recovery)
 	fmt.Fprintf(w, "  device %s\n", v.DeviceRecipient)
@@ -1264,6 +1268,6 @@ func printSpaceRewrap(w io.Writer, v spaceRewrapView) {
 		fmt.Fprintln(w, line)
 	}
 	if v.Mode == "stage" {
-		fmt.Fprintln(w, "Record the stage id: --prove and --upload take it as --stage-id. Check the gen1 blob sha256 against the export's.")
+		fmt.Fprintln(w, "Record the stage id: --prove and --upload take it as --stage-id. Check the gen1 blob blake3 against `b3sum` of the exported blob.")
 	}
 }

@@ -26,6 +26,7 @@ import (
 
 	"github.com/rarebit-one/void-which-binds-go/encryption"
 	"github.com/rarebit-one/void-which-binds-go/enrolment"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 	"github.com/rarebit-one/void-which-binds-go/recovery"
 	"github.com/rarebit-one/void-which-binds-go/recovery/slip39"
 	"github.com/spf13/pflag"
@@ -347,10 +348,13 @@ func TestSpaceRewrapEndToEnd(t *testing.T) {
 	}
 	// The stage id the operator records is the manifest's, and the gen1 blob's
 	// sha256 is printed for checking against the export.
-	gen1Sum := sha256.Sum256(readFile(t, f.gen1Blob))
-	if m.StageID != f.stageID || m.Gen1BlobSHA256 != hex.EncodeToString(gen1Sum[:]) ||
-		!strings.Contains(out, "gen1 blob sha256 "+m.Gen1BlobSHA256) {
-		t.Fatalf("stage id %q (printed %q), gen1 blob sha256 %q; output:\n%s", m.StageID, f.stageID, m.Gen1BlobSHA256, out)
+	gen1Sum, _, err := hashing.HashFile(f.gen1Blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.StageID != f.stageID || m.Gen1BlobBLAKE3 != gen1Sum.Hex() ||
+		!strings.Contains(out, "gen1 blob blake3 "+m.Gen1BlobBLAKE3) {
+		t.Fatalf("stage id %q (printed %q), gen1 blob blake3 %q; output:\n%s", m.StageID, f.stageID, m.Gen1BlobBLAKE3, out)
 	}
 
 	ct := mustHexDecode(t, f.v.ChangeCiphertext)

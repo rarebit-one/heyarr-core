@@ -79,8 +79,10 @@ stable.
   `--upload` take it back as a required `--stage-id <hex>` and refuse any stage
   whose id differs, so an older genuine stage under the same gen2 secret (one
   from before a space-key rotation, say) cannot be replayed in place of this
-  run's. The manifest and every mode's output also carry the sha256 of the
-  gen1 blob the stage was made from, to check against the C2 step 4a export. Secrets come only from
+  run's. The manifest and every mode's output also carry the BLAKE3 digest
+  (`gen1_blob_blake3`, unprefixed hex as `b3sum` prints it) of the gen1 blob
+  the stage was made from; check it against `b3sum gen1.blob` run where the C2
+  step 4a export wrote the blob. Secrets come only from
   `--gen1-secret-file` and `--gen2-secret-file` (one of them may be `-` for
   standard input), never from argv or a prompt. The cruciform custody backend
   is refused for the offline modes. `--json` is supported.
