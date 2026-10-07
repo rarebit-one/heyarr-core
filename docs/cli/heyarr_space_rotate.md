@@ -16,6 +16,10 @@ from here on.
 This device must itself be a current recipient (only a device that can read a
 space may re-key it), and at least one recipient must remain.
 
+Only playlist spaces can be rotated for now. A vault drive, starred,
+play-history or reading-position space is refused, because rotating it would
+lose its contents (#698).
+
 ```
 heyarr space rotate <space-id> --revoke <recipient> [flags]
 ```
