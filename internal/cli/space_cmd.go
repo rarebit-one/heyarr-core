@@ -607,7 +607,11 @@ revocation is forward-looking, not retroactive — but can read nothing encrypte
 from here on.
 
 This device must itself be a current recipient (only a device that can read a
-space may re-key it), and at least one recipient must remain.`,
+space may re-key it), and at least one recipient must remain.
+
+Only playlist spaces can be rotated for now. A vault drive, starred,
+play-history or reading-position space is refused, because rotating it would
+lose its contents (#698).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID := args[0]
@@ -652,6 +656,9 @@ space may re-key it), and at least one recipient must remain.`,
 func rotateSpace(ctx context.Context, c *apiclient.Client, cust client.Custody, spaceID string, revoke []string) (spaceRotateView, error) {
 	mgr, err := openSpace(ctx, c, cust, spaceID)
 	if err != nil {
+		return spaceRotateView{}, err
+	}
+	if err := ensurePlaylistSpace(ctx, c, mgr, spaceID); err != nil {
 		return spaceRotateView{}, err
 	}
 	// Materialise the current state under the OLD key BEFORE rotating — after
@@ -704,6 +711,57 @@ func rotateSpace(ctx context.Context, c *apiclient.Client, cust client.Custody, 
 		SpaceID: spaceID, Revoked: revoked, Remaining: recipientIDs(remaining),
 		SnapshotID: snapID, Dropped: dropped,
 	}, nil
+}
+
+// errRotateNotPlaylist refuses to re-key a space that does not hold a playlist.
+var errRotateNotPlaylist = errors.New("space rotate: this space holds state rotation cannot preserve")
+
+// ensurePlaylistSpace refuses rotation for any space that is not a playlist
+// space (#698). Rotation materialises the log AS A PLAYLIST, snapshots that and
+// compacts the log away. For any other CRDT that loses every change, because the
+// lenient decode turns them into junk playlist ops and the drive, starred, play
+// history and reading-position readers do not read snapshots. For a vault drive
+// it is worse still: its file frames and manifests are sealed under the space
+// key, and rotation discards that key. So until rotation keeps a key history and
+// stops compacting, only a space whose every change, and whose snapshot if it
+// has one, strictly decodes as a playlist may be rotated. An empty space has
+// nothing to lose.
+func ensurePlaylistSpace(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spaceID string) error {
+	refuse := func(what string) error {
+		return fmt.Errorf("%w: space %s has a %s that is not a playlist (a vault drive, starred, "+
+			"play-history or reading-position space); re-keying it would lose its contents (#698)",
+			errRotateNotPlaylist, spaceID, what)
+	}
+	changes, err := c.Changes(ctx, spaceID)
+	if err != nil {
+		return err
+	}
+	for _, ec := range changes {
+		if err := ec.Validate(); err != nil {
+			return fmt.Errorf("space rotate: refusing a change: %w", err)
+		}
+		raw, err := mgr.Decrypt(spaceID, ec.Ciphertext)
+		if err != nil {
+			return err
+		}
+		if !crdt.IsPlaylistChange(raw) {
+			return refuse("change")
+		}
+	}
+	snap, ok, err := c.Snapshot(ctx, spaceID)
+	if err != nil {
+		return err
+	}
+	if ok {
+		raw, _, err := statesync.OpenSnapshot(mgr, snap)
+		if err != nil {
+			return err
+		}
+		if !crdt.IsPlaylistSnapshot(raw) {
+			return refuse("snapshot")
+		}
+	}
+	return nil
 }
 
 // partitionRecipients splits a space's current wrapped-key recipients into those

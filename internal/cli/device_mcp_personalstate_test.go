@@ -47,7 +47,9 @@ type psHarness struct {
 	deviceDir string
 }
 
-func newPSHarness(t *testing.T) *psHarness {
+// newPSHarness's device token carries read and write; pass extra scopes (admin,
+// for a rotation's compaction) when a test needs them.
+func newPSHarness(t *testing.T, extra ...auth.Scope) *psHarness {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -99,7 +101,7 @@ func newPSHarness(t *testing.T) *psHarness {
 	controller := httptest.NewServer(srv.Handler())
 	t.Cleanup(controller.Close)
 
-	created, err := authStore.Create(ctx, "device", []auth.Scope{auth.ScopeRead, auth.ScopeWrite}, nil)
+	created, err := authStore.Create(ctx, "device", append([]auth.Scope{auth.ScopeRead, auth.ScopeWrite}, extra...), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
