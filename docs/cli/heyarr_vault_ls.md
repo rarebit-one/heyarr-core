@@ -27,6 +27,9 @@ heyarr vault ls <space-id> [flags]
 ```
   -c, --config string       path to the configuration file (default: $HEYARR_CONFIG, else /etc/heyarr/config.yaml if present, else built-in defaults plus HEYARR_ environment)
       --device-dir string   where this machine's device key lives (default: your config directory; VOID_WHICH_BINDS_DEVICE_DIR overrides)
+      --pin-file string     an owner-only file holding the sealed key's PIN (default: vault.sealedfile.pin_file, else the systemd credential heyarr-recipient-pin)
+      --sealed-key file     the file holding the sealed recipient key from heyarr recipient init (implies --unwrapper sealedfile; default: vault.sealedfile.key_file)
+      --unwrapper string    the custody backend that opens space keys (default: vault.unwrapper); sealedfile is an executor's service-recipient key (ADR-0104)
 ```
 
 ### See also

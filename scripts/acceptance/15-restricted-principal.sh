@@ -8,6 +8,10 @@
 # (fingerprint compared), grants it a space with the key wrapped in the same
 # request, the executor fetches only its own wrap and decrypts with a key that
 # never left its host, and revoke-executor closes both gates.
+# Then EXECUTOR CUSTODY: the executor's host draws its key into a sealed file
+# (`recipient init`), the owner registers it by the fingerprint the host shows,
+# and the executor reads a sealed object by its vault ref and writes an answer
+# back that the owner's device reads.
 restricted_principal_demo() {
   local root="$WORK/restricted" data sock cfg dev
   data="$root/data"; sock="$data/heyarr.sock"; cfg="$WORK/restricted.yaml"
@@ -210,6 +214,68 @@ YAML
   evs=$(curl -sS --unix-socket "$sock" -H "Authorization: Bearer $admin" -m 1 \
     "http://heyarr/api/v1/events?after=0&types=personalstate.service_recipient.*" 2>/dev/null | grep '^event: ' || true)
   assert_contains "$evs" "personalstate.service_recipient.registered" "registering the key is an event (Invariant 7)"
+
+  # EXECUTOR CUSTODY: the executor's key is born in a passphrase-sealed file on
+  # its own host. Its PIN arrives as a systemd credential
+  # ($CREDENTIALS_DIRECTORY), never an argument or an environment value.
+  local xhost xcreds xsealed xinit xkey xfp xshown
+  xhost="$root/executor-host"; xcreds="$xhost/credentials"; xsealed="$xhost/recipient.sealed"
+  mkdir -p "$xcreds"; chmod 700 "$xcreds"
+  ( umask 077; printf 'acceptance-recipient-pin\n' > "$xcreds/heyarr-recipient-pin" )
+  xinit=$(env "CREDENTIALS_DIRECTORY=$xcreds" "$BIN" recipient init --sealed "$xsealed" --json)
+  xkey=$(jq -r .recipient <<<"$xinit")
+  xfp=$(jq -r .fingerprint <<<"$xinit")
+  got=$(python3 -c 'import sys,hashlib,base64; k=bytes.fromhex(sys.argv[1].split(":")[1]); d=hashlib.sha256(b"heyarr/service-recipient-fingerprint/v1\x00"+k).digest()[:10]; e=base64.b32encode(d).decode(); print(" ".join(e[i:i+4] for i in range(0,16,4)))' "$xkey")
+  assert_eq "$xfp" "$got" "recipient init prints the key's fingerprint, as the owner's device computes it"
+  xshown=$("$BIN" recipient show --sealed "$xsealed" --json | jq -r .fingerprint)
+  assert_eq "$xshown" "$xfp" "recipient show reads the same fingerprint back without the PIN"
+  assert_refuses "a second init never replaces the key spaces are wrapped for" "already exists" \
+    env "CREDENTIALS_DIRECTORY=$xcreds" "$BIN" recipient init --sealed "$xsealed"
+
+  # The owner registers it under the fingerprint the host showed, then writes a
+  # question into a collection space as a sealed object addressed by ref.
+  "${own[@]}" recipient add --executor executor-b --pub "$xkey" --label "sealed executor" --fingerprint "$xfp" >/dev/null 2>&1
+  local cspace qcanary acanary qref aref st
+  cspace=$("${own[@]}" space create --kind family --recovery=false --json | jq -r .id)
+  qcanary="question-$(python3 -c 'import uuid; print(uuid.uuid4())')"
+  acanary="answer-$(python3 -c 'import uuid; print(uuid.uuid4())')"
+  qref=$(printf '{"v":1,"type":"question","body":"%s"}' "$qcanary" | "${own[@]}" vault put-ref --space "hv1:$cspace" - | jq -r .ref)
+  assert_contains "$qref" "hv1:$cspace/" "put-ref returns an hv1:<space>/<object> ref"
+
+  local xex
+  xex=( env "HEYARR_TOKEN=${exb#Bearer }" "CREDENTIALS_DIRECTORY=$xcreds" "$BIN" --config "$cfg" )
+  st=0; "${xex[@]}" vault get-ref "$qref" --sealed-key "$xsealed" >/dev/null 2>&1 || st=$?
+  assert_eq "$st" "4" "before the grant, get-ref exits 4: the space is not visible to the executor"
+
+  "${own[@]}" space grant "$cspace" --executor executor-b --recipient "$xkey" --write --yes >/dev/null 2>&1
+  local xout xerr
+  xerr="$xhost/get-ref.stderr"
+  xout=$("${xex[@]}" vault get-ref "$qref" --sealed-key "$xsealed" 2>"$xerr")
+  got=$(jq -r .body <<<"$xout")
+  assert_eq "$got" "$qcanary" "the executor decrypts the question by ref with its sealed key"
+  got=$(grep -c "$qcanary" "$xerr" || true)
+  assert_eq "$got" "0" "and no plaintext reaches stderr"
+  "${xex[@]}" vault get-ref "$qref" --sealed-key "$xsealed" -o "$xhost/q.json" 2>/dev/null
+  got=$(jq -r .body "$xhost/q.json")
+  assert_eq "$got" "$qcanary" "get-ref -o writes the object to the caller's path"
+  st=0; "${xex[@]}" vault get-ref "$qref" --sealed-key "$xsealed" -o "$xhost/q.json" >/dev/null 2>&1 || st=$?
+  assert_eq "$st" "1" "and never over an existing file"
+
+  aref=$(printf '{"v":1,"type":"answer","body":"%s"}' "$acanary" | "${xex[@]}" vault put-ref --space "hv1:$cspace" - --sealed-key "$xsealed" | jq -r .ref)
+  assert_contains "$aref" "hv1:$cspace/" "the executor seals its answer into the space and gets a ref"
+  got=$("${own[@]}" vault get-ref "$aref" | jq -r .body)
+  assert_eq "$got" "$acanary" "the owner's device reads the executor's answer back by ref"
+
+  # Each refusal has its own exit status, so a runner maps it without prose.
+  printf 'not-the-pin\n' > "$xcreds/heyarr-recipient-pin"
+  st=0; "${xex[@]}" vault get-ref "$qref" --sealed-key "$xsealed" >/dev/null 2>&1 || st=$?
+  assert_eq "$st" "3" "a wrong PIN fails closed with exit 3"
+  printf 'acceptance-recipient-pin\n' > "$xcreds/heyarr-recipient-pin"
+  st=0; "${xex[@]}" vault get-ref "hv1:$cspace/$(python3 -c 'import uuid; print(uuid.uuid4())')" --sealed-key "$xsealed" >/dev/null 2>&1 || st=$?
+  assert_eq "$st" "6" "a ref naming no object exits 6"
+  "${own[@]}" space revoke-executor "$cspace" --executor executor-b >/dev/null 2>&1
+  st=0; "${xex[@]}" vault get-ref "$qref" --sealed-key "$xsealed" >/dev/null 2>&1 || st=$?
+  assert_eq "$st" "4" "after revoke-executor, get-ref exits 4 again"
 
   kill -TERM "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true

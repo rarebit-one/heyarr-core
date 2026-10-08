@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/recipientkey"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/vaultframe"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/vaultread"
@@ -37,7 +39,7 @@ import (
 // reverses it: materialise the drive, resolve the path to its manifest blob, and
 // range-read + decrypt the content frames (vaultread).
 func newVaultCommand(opts Options, configPath *string) *cobra.Command {
-	var deviceDir string
+	vc := &vaultCustody{configPath: configPath}
 	cmd := &cobra.Command{
 		Use:   "vault",
 		Short: "Push, pull and list files in an encrypted media vault (ADR-0021, ADR-0095)",
@@ -52,17 +54,38 @@ drive changes and opaque placement pins, and can open none of it (Invariant 6).
 
 Like the space commands these need both a running controller (--config) and this
 machine's device key (--device-dir): the controller stores the ciphertext, the
-device holds the only key that opens it.`,
+device holds the only key that opens it.
+
+An executor (ADR-0104) is not a device. It authenticates with its restricted
+token and opens spaces with its sealed service-recipient key instead:
+--sealed-key <file> (from ` + "`heyarr recipient init`" + `), its PIN read from the
+systemd credential ` + recipientkey.DefaultPINCredential + ` or --pin-file. It sees only the
+spaces an owner's device granted it, and decrypts only those wrapped for it.`,
 	}
-	cmd.PersistentFlags().StringVar(&deviceDir, "device-dir", "",
+	cmd.PersistentFlags().StringVar(&vc.deviceDir, "device-dir", "",
 		"where this machine's device key lives (default: your config directory; "+device.EnvDir+" overrides)")
+	vc.override.register(cmd)
 
 	cmd.AddCommand(
-		newVaultPushCommand(opts, configPath, &deviceDir),
-		newVaultPullCommand(opts, configPath, &deviceDir),
-		newVaultLsCommand(opts, configPath, &deviceDir),
+		newVaultPushCommand(opts, configPath, vc),
+		newVaultPullCommand(opts, configPath, vc),
+		newVaultLsCommand(opts, configPath, vc),
+		newVaultGetRefCommand(opts, configPath, vc),
+		newVaultPutRefCommand(opts, configPath, vc),
 	)
 	return cmd
+}
+
+// vaultCustody is how a vault command opens space keys: this machine's device
+// key by default, or the backend the --unwrapper/--sealed-key flags name.
+type vaultCustody struct {
+	configPath *string
+	deviceDir  string
+	override   custodyOverride
+}
+
+func (v *vaultCustody) selectCustody() (client.Custody, error) {
+	return selectCustodyWith(v.configPath, v.deviceDir, v.override)
 }
 
 // loadDrive materialises a space's vault DRIVE CRDT on this device: list the
@@ -137,7 +160,7 @@ type vaultPushView struct {
 	ChangeID     string `json:"change_id"`
 }
 
-func newVaultPushCommand(_ Options, configPath, deviceDir *string) *cobra.Command {
+func newVaultPushCommand(_ Options, configPath *string, vc *vaultCustody) *cobra.Command {
 	var (
 		flags     clientFlags
 		spaceID   string
@@ -157,7 +180,7 @@ peer stores ciphertext it cannot open.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			filePath := args[0]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				cust, err := selectCustody(configPath, *deviceDir)
+				cust, err := vc.selectCustody()
 				if err != nil {
 					return err
 				}
@@ -165,12 +188,6 @@ peer stores ciphertext it cannot open.`,
 				if err != nil {
 					return err
 				}
-				// A write seals under the CURRENT key only (ADR-0103).
-				sk, ok := mgr.SpaceKey(spaceID)
-				if !ok {
-					return fmt.Errorf("this device does not hold the key for space %s", spaceID)
-				}
-
 				f, err := os.Open(filePath) //nolint:gosec // a user-named file to seal is the whole point
 				if err != nil {
 					return err
@@ -180,55 +197,9 @@ peer stores ciphertext it cannot open.`,
 				if err != nil {
 					return err
 				}
-
-				// Seal the plaintext into ciphertext frames, holding the content
-				// blob in a buffer so it can be content-addressed and uploaded. The
-				// manifest carries the content blob's id (its BLAKE3, over the
-				// ciphertext) so a reader can fetch it.
-				var content bytes.Buffer
-				m, err := vaultframe.Seal(sk, f, &content)
+				view, err := vaultPut(ctx, c, mgr, spaceID, vaultPath, f, info.ModTime().Unix())
 				if err != nil {
 					return err
-				}
-				if err := c.PutVaultBlob(ctx, m.Content, bytes.NewReader(content.Bytes())); err != nil {
-					return err
-				}
-
-				// Seal the manifest and content-address it the same way, so a drive
-				// entry can reference it as a canonical blake3 blob id.
-				sealed, err := vaultframe.SealManifest(sk, m)
-				if err != nil {
-					return err
-				}
-				mh := hashing.New()
-				_, _ = mh.Write(sealed)
-				manifestID := mh.Sum().String()
-				if err := c.PutVaultBlob(ctx, manifestID, bytes.NewReader(sealed)); err != nil {
-					return err
-				}
-
-				// Record the manifest blob at the vault path in the drive CRDT, then
-				// ship the write as one encrypted change parented on the current heads.
-				drive, changes, err := loadDrive(ctx, c, mgr, spaceID)
-				if err != nil {
-					return err
-				}
-				change, err := drive.Put(vaultPath, manifestID, m.PlaintextSize, info.ModTime().Unix())
-				if err != nil {
-					return err
-				}
-				ec, err := statesync.EncodeChange(mgr, spaceID, protocol.Heads(changes), change)
-				if err != nil {
-					return err
-				}
-				id, err := c.PutChange(ctx, ec)
-				if err != nil {
-					return err
-				}
-
-				view := vaultPushView{
-					SpaceID: spaceID, Path: vaultPath, ManifestBlob: manifestID,
-					ContentBlob: m.Content, Size: m.PlaintextSize, ChangeID: id,
 				}
 				if flags.asJSON {
 					return emitJSON(cmd.OutOrStdout(), view)
@@ -248,7 +219,100 @@ peer stores ciphertext it cannot open.`,
 	return cmd
 }
 
-func newVaultPullCommand(_ Options, configPath, deviceDir *string) *cobra.Command {
+// vaultPut seals r under the space's current key, uploads the content blob and
+// the sealed manifest, and records the manifest at vaultPath in the space's
+// drive CRDT as one encrypted change parented on the current heads. The
+// plaintext never leaves this process.
+func vaultPut(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spaceID, vaultPath string,
+	r io.Reader, mtime int64,
+) (vaultPushView, error) {
+	// A write seals under the CURRENT key only (ADR-0103).
+	sk, ok := mgr.SpaceKey(spaceID)
+	if !ok {
+		return vaultPushView{}, fmt.Errorf("this device does not hold the key for space %s", spaceID)
+	}
+
+	// Seal the plaintext into ciphertext frames, holding the content blob in a
+	// buffer so it can be content-addressed and uploaded. The manifest carries
+	// the content blob's id (its BLAKE3, over the ciphertext) so a reader can
+	// fetch it.
+	var content bytes.Buffer
+	m, err := vaultframe.Seal(sk, r, &content)
+	if err != nil {
+		return vaultPushView{}, err
+	}
+	if err := c.PutVaultBlob(ctx, m.Content, bytes.NewReader(content.Bytes())); err != nil {
+		return vaultPushView{}, err
+	}
+
+	// Seal the manifest and content-address it the same way, so a drive entry
+	// can reference it as a canonical blake3 blob id.
+	sealed, err := vaultframe.SealManifest(sk, m)
+	if err != nil {
+		return vaultPushView{}, err
+	}
+	mh := hashing.New()
+	_, _ = mh.Write(sealed)
+	manifestID := mh.Sum().String()
+	if err := c.PutVaultBlob(ctx, manifestID, bytes.NewReader(sealed)); err != nil {
+		return vaultPushView{}, err
+	}
+
+	// Record the manifest blob at the vault path in the drive CRDT, then ship
+	// the write as one encrypted change parented on the current heads.
+	drive, changes, err := loadDrive(ctx, c, mgr, spaceID)
+	if err != nil {
+		return vaultPushView{}, err
+	}
+	change, err := drive.Put(vaultPath, manifestID, m.PlaintextSize, mtime)
+	if err != nil {
+		return vaultPushView{}, err
+	}
+	ec, err := statesync.EncodeChange(mgr, spaceID, protocol.Heads(changes), change)
+	if err != nil {
+		return vaultPushView{}, err
+	}
+	id, err := c.PutChange(ctx, ec)
+	if err != nil {
+		return vaultPushView{}, err
+	}
+	return vaultPushView{
+		SpaceID: spaceID, Path: vaultPath, ManifestBlob: manifestID,
+		ContentBlob: m.Content, Size: m.PlaintextSize, ChangeID: id,
+	}, nil
+}
+
+// vaultGet reads the file at vaultPath back, decrypting it on this machine
+// with every key on the space's ring. errVaultPathAbsent and
+// errVaultPathConflicted name the two refusals.
+func vaultGet(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spaceID, vaultPath string) ([]byte, error) {
+	// Every key on the ring, newest first: a file pushed before a rotation is
+	// sealed under the key of its epoch (ADR-0103).
+	keys, ok := mgr.Keys(spaceID)
+	if !ok {
+		return nil, fmt.Errorf("this device does not hold the key for space %s", spaceID)
+	}
+	drive, _, err := loadDrive(ctx, c, mgr, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	entry, ok := drive.Get(vaultPath)
+	if !ok {
+		return nil, fmt.Errorf("%w: %q in space %s", errVaultPathAbsent, vaultPath, spaceID)
+	}
+	if entry.Conflicted {
+		return nil, fmt.Errorf("%w: vault path %q on space %s — resolve the conflict before pulling",
+			errVaultPathConflicted, vaultPath, spaceID)
+	}
+	return vaultread.ReadAllWithKeys(ctx, blobFetcher{c: c}, keys, entry.Blob)
+}
+
+var (
+	errVaultPathAbsent     = errors.New("no file at that vault path")
+	errVaultPathConflicted = errors.New("conflicting versions")
+)
+
+func newVaultPullCommand(_ Options, configPath *string, vc *vaultCustody) *cobra.Command {
 	var (
 		flags   clientFlags
 		outPath string
@@ -266,7 +330,7 @@ conflict), is refused rather than guessing which bytes were meant.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID, vaultPath := args[0], args[1]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				cust, err := selectCustody(configPath, *deviceDir)
+				cust, err := vc.selectCustody()
 				if err != nil {
 					return err
 				}
@@ -274,25 +338,7 @@ conflict), is refused rather than guessing which bytes were meant.`,
 				if err != nil {
 					return err
 				}
-				// Every key on the ring, newest first: a file pushed before a
-				// rotation is sealed under the key of its epoch (ADR-0103).
-				keys, ok := mgr.Keys(spaceID)
-				if !ok {
-					return fmt.Errorf("this device does not hold the key for space %s", spaceID)
-				}
-				drive, _, err := loadDrive(ctx, c, mgr, spaceID)
-				if err != nil {
-					return err
-				}
-				entry, ok := drive.Get(vaultPath)
-				if !ok {
-					return fmt.Errorf("no file at vault path %q in space %s", vaultPath, spaceID)
-				}
-				if entry.Conflicted {
-					return fmt.Errorf("vault path %q has conflicting versions on this space — "+
-						"resolve the conflict before pulling", vaultPath)
-				}
-				data, err := vaultread.ReadAllWithKeys(ctx, blobFetcher{c: c}, keys, entry.Blob)
+				data, err := vaultGet(ctx, c, mgr, spaceID, vaultPath)
 				if err != nil {
 					return err
 				}
@@ -320,7 +366,7 @@ type vaultEntryView struct {
 	Conflicted bool   `json:"conflicted"`
 }
 
-func newVaultLsCommand(_ Options, configPath, deviceDir *string) *cobra.Command {
+func newVaultLsCommand(_ Options, configPath *string, vc *vaultCustody) *cobra.Command {
 	var flags clientFlags
 	cmd := &cobra.Command{
 		Use:   "ls <space-id>",
@@ -332,7 +378,7 @@ file's vault path, plaintext size, and whether the path is currently conflicted
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID := args[0]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				cust, err := selectCustody(configPath, *deviceDir)
+				cust, err := vc.selectCustody()
 				if err != nil {
 					return err
 				}

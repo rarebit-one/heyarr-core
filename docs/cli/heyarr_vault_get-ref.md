@@ -1,18 +1,27 @@
-## heyarr vault pull
+## heyarr vault get-ref
 
-Read a file from the vault, decrypting it on this device
+Read one sealed object by its vault ref, decrypting it on this machine
 
 ### Synopsis
 
-Materialise the space's drive, resolve the vault path to its manifest blob,
-and read the file back by range-fetching and decrypting only that manifest's
-content frames — all on this device. Write it to -o, or to stdout.
+Read the sealed object a vault ref names — hv1:<space uuid>/<object uuid>, the
+form an outside system that never decrypts holds — and write its JSON to -o, or
+to stdout. The object is the drive file .jumpdrive/objects/<object uuid>.json.
 
-A path that is absent, or one that currently has more than one live version (a
-conflict), is refused rather than guessing which bytes were meant.
+This is the read an executor makes (ADR-0104): with its restricted token, it
+sees only the spaces an owner's device granted it, and with its sealed
+recipient key (--sealed-key) it decrypts only those whose key was wrapped for
+it. The plaintext goes to stdout or to the -o file (created owner-only, never
+over an existing file) and nowhere else: never to stderr, never to a log. A
+caller should give a path on a tmpfs it wipes.
+
+Exit status: 3 the sealed key or its PIN is unavailable or wrong; 4 the space is
+not visible to this credential (no grant, revoked, or no such space); 5 the
+space cannot be decrypted with this key; 6 the ref names no object; 1 anything
+else.
 
 ```
-heyarr vault pull <space-id> <vault-path> [flags]
+heyarr vault get-ref hv1:<space>/<object> [flags]
 ```
 
 ### Options
@@ -20,7 +29,7 @@ heyarr vault pull <space-id> <vault-path> [flags]
 ```
       --addr string         where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
       --json                emit machine-readable JSON
-  -o, --out string          write to this file instead of stdout
+  -o, --out string          write the object to this new file (mode 0600) instead of stdout (default "-")
       --timeout duration    how long one request may take; streaming reads and the event stream are exempt (default 30s)
       --token string        bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
       --token-file string   read the bearer token from this file (default: <data_dir>/cli.token when it exists)

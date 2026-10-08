@@ -7,11 +7,13 @@ import (
 	"strings"
 
 	"github.com/rarebit-one/void-which-binds-go/device"
+	"github.com/spf13/cobra"
 
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/cruciform"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/custody"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/recipientkey"
 )
 
 // The hardware backends read their PIN from an environment variable when no pin
@@ -28,6 +30,30 @@ const (
 // rotate) turn a config selection into a client.Custody, so create wraps to and
 // open unwraps with the same key.
 func selectCustody(configPath *string, deviceDir string) (client.Custody, error) {
+	return selectCustodyWith(configPath, deviceDir, custodyOverride{})
+}
+
+// custodyOverride is a per-invocation custody selection that wins over the
+// config file: the vault commands' --unwrapper/--sealed-key/--pin-file, so an
+// executor can name its sealed recipient key without a config of its own.
+type custodyOverride struct {
+	unwrapper string
+	sealedKey string
+	pinFile   string
+}
+
+func (o *custodyOverride) register(cmd *cobra.Command) {
+	cmd.PersistentFlags().StringVar(&o.unwrapper, "unwrapper", "",
+		"the custody backend that opens space keys (default: vault.unwrapper); "+
+			"sealedfile is an executor's service-recipient key (ADR-0104)")
+	cmd.PersistentFlags().StringVar(&o.sealedKey, "sealed-key", "",
+		"the `file` holding the sealed recipient key from heyarr recipient init (implies --unwrapper sealedfile; default: vault.sealedfile.key_file)")
+	cmd.PersistentFlags().StringVar(&o.pinFile, "pin-file", "",
+		"an owner-only file holding the sealed key's PIN (default: vault.sealedfile.pin_file, else the systemd credential "+
+			recipientkey.DefaultPINCredential+")")
+}
+
+func selectCustodyWith(configPath *string, deviceDir string, ov custodyOverride) (client.Custody, error) {
 	path := ""
 	if configPath != nil {
 		path = *configPath
@@ -35,6 +61,27 @@ func selectCustody(configPath *string, deviceDir string) (client.Custody, error)
 	cfg, err := config.Load(path)
 	if err != nil {
 		return nil, err
+	}
+	if ov.sealedKey != "" && ov.unwrapper == "" {
+		ov.unwrapper = custody.SealedFile
+	}
+	if ov.unwrapper != "" {
+		cfg.Vault.Unwrapper = ov.unwrapper
+	}
+	if ov.sealedKey != "" {
+		cfg.Vault.SealedFile.KeyFile = ov.sealedKey
+	}
+	if ov.pinFile != "" {
+		cfg.Vault.SealedFile.PINFile = ov.pinFile
+	}
+	// The executor's key is not a device's: it needs no device directory, and
+	// resolving one could fail on a host with no config directory at all.
+	if cfg.Vault.Unwrapper == custody.SealedFile {
+		return custody.Select(custody.Options{
+			Backend:       custody.SealedFile,
+			SealedKeyFile: cfg.Vault.SealedFile.KeyFile,
+			SealedKeyPIN:  recipientkey.PIN(cfg.Vault.SealedFile.PINFile, cfg.Vault.SealedFile.PINCredential),
+		})
 	}
 	// Resolve the device directory once, so the cruciform pairing file defaults to
 	// the same directory the software backend loads its key from (custody.Select

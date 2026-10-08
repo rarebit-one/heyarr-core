@@ -1,18 +1,22 @@
-## heyarr vault pull
+## heyarr vault put-ref
 
-Read a file from the vault, decrypting it on this device
+Seal one JSON object into a vault space and print its new ref
 
 ### Synopsis
 
-Materialise the space's drive, resolve the vault path to its manifest blob,
-and read the file back by range-fetching and decrypting only that manifest's
-content frames — all on this device. Write it to -o, or to stdout.
+Seal a JSON object, read from the file or from stdin (-), into the space under
+a fresh random object id, and print its vault ref and where it landed as JSON.
+The object is written at .jumpdrive/objects/<object uuid>.json in the space's drive.
 
-A path that is absent, or one that currently has more than one live version (a
-conflict), is refused rather than guessing which bytes were meant.
+The object must be a versioned, typed envelope: a JSON object with "v": 1 and a
+non-empty "type"; the rest is the caller's. It is at most 8 MiB. The plaintext
+is sealed on this machine and never uploaded, and never echoed in an error.
+
+An executor (ADR-0104) needs a read,write grant on the space and a copy of its
+key wrapped for its sealed recipient key. Exit status as for get-ref.
 
 ```
-heyarr vault pull <space-id> <vault-path> [flags]
+heyarr vault put-ref --space <space | hv1:<space>> <file | -> [flags]
 ```
 
 ### Options
@@ -20,7 +24,7 @@ heyarr vault pull <space-id> <vault-path> [flags]
 ```
       --addr string         where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
       --json                emit machine-readable JSON
-  -o, --out string          write to this file instead of stdout
+      --space string        the vault space: its id, or its collection ref hv1:<space uuid> (required)
       --timeout duration    how long one request may take; streaming reads and the event stream are exempt (default 30s)
       --token string        bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
       --token-file string   read the bearer token from this file (default: <data_dir>/cli.token when it exists)

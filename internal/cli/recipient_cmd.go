@@ -15,6 +15,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/recipientkey"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/servicerecipient"
 )
 
@@ -36,8 +37,13 @@ a space key for it. Registering its public key here, from your own
 management-authorised device, is the explicit act that lets you then grant it
 spaces with ` + "`heyarr space grant`" + `.
 
-These commands authenticate as this machine's enrolled device (--device-dir),
-never with a bearer token: an admin token cannot register a recipient.`,
+add, list and remove authenticate as this machine's enrolled device
+(--device-dir), never with a bearer token: an admin token cannot register a
+recipient.
+
+init and show run on the EXECUTOR's host and need no controller: init draws the
+executor's key straight into a passphrase-sealed file and prints its public key
+and fingerprint, which the owner then types into ` + "`recipient add`" + `.`,
 	}
 	cmd.PersistentFlags().StringVar(&deviceDir, "device-dir", "",
 		"where this machine's device key lives (default: your config directory; "+device.EnvDir+" overrides)")
@@ -45,6 +51,8 @@ never with a bearer token: an admin token cannot register a recipient.`,
 		newRecipientAddCommand(opts, configPath, &deviceDir),
 		newRecipientListCommand(opts, configPath, &deviceDir),
 		newRecipientRemoveCommand(opts, configPath, &deviceDir),
+		newRecipientInitCommand(),
+		newRecipientShowCommand(),
 	)
 	return cmd
 }
@@ -236,5 +244,80 @@ and a peer that replicated a copy keeps it until a rotation. See
 		},
 	}
 	flags.register(cmd)
+	return cmd
+}
+
+// printRecipientKey shows an executor's key the way its host displays it for
+// the owner to compare.
+func printRecipientKey(cmd *cobra.Command, k recipientkey.Key, asJSON bool) error {
+	if asJSON {
+		return emitJSON(cmd.OutOrStdout(), k)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "  key:          %s\n  fingerprint:  %s\n  sealed file:  %s\n\n"+
+		"Register it from the owner's device with:\n  heyarr recipient add --executor <principal> --pub %s\n"+
+		"and type the fingerprint above when asked.\n", k.Recipient, k.Fingerprint, k.Path, k.Recipient)
+	return nil
+}
+
+func newRecipientInitCommand() *cobra.Command {
+	var sealed, pinFile, pinCredential string
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "init --sealed <path>",
+		Short: "Create this executor's recipient key in a sealed file (run on the executor's host)",
+		Long: `Create this executor's X25519 recipient key (ADR-0104). The key is drawn in
+memory and sealed straight into a passphrase-sealed file at --sealed; its
+private half is never written anywhere in the clear. An existing file is never
+replaced: every space wrapped for its key would become unreadable.
+
+The PIN that seals it comes from the systemd credential ` + recipientkey.DefaultPINCredential + `
+($CREDENTIALS_DIRECTORY, delivered by LoadCredentialEncrypted=), or from an
+owner-only --pin-file. It is never an argument or an environment variable.
+
+It prints the public key and its fingerprint. Read them off this host's console
+and give them to the owner, who types the fingerprint into ` + "`heyarr recipient add`" + `
+on their own device: nothing that relays the key is trusted to publish it.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			k, err := recipientkey.Init(sealed, recipientkey.PIN(pinFile, pinCredential))
+			if err != nil {
+				return err
+			}
+			if !asJSON {
+				fmt.Fprintln(cmd.OutOrStdout(), "recipient key created")
+			}
+			return printRecipientKey(cmd, k, asJSON)
+		},
+	}
+	cmd.Flags().StringVar(&sealed, "sealed", "", "where to write the sealed key file (required)")
+	cmd.Flags().StringVar(&pinFile, "pin-file", "", "an owner-only file holding the PIN (default: the systemd credential)")
+	cmd.Flags().StringVar(&pinCredential, "pin-credential", recipientkey.DefaultPINCredential,
+		"the systemd credential name the PIN is delivered under")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
+	_ = cmd.MarkFlagRequired("sealed")
+	return cmd
+}
+
+func newRecipientShowCommand() *cobra.Command {
+	var sealed string
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "show --sealed <path>",
+		Short: "Show this executor's recipient key and fingerprint, without unsealing it",
+		Long: `Print the public key and fingerprint of the recipient key sealed at --sealed:
+the same two values ` + "`recipient init`" + ` printed. They are read from the file's clear
+header, so no PIN is asked for and the seal is never opened.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			k, err := recipientkey.Show(sealed)
+			if err != nil {
+				return err
+			}
+			return printRecipientKey(cmd, k, asJSON)
+		},
+	}
+	cmd.Flags().StringVar(&sealed, "sealed", "", "the sealed key file (required)")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
+	_ = cmd.MarkFlagRequired("sealed")
 	return cmd
 }

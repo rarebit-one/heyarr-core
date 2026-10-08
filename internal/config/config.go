@@ -90,8 +90,9 @@ type Config struct {
 type Vault struct {
 	// Unwrapper selects the custody backend: "software" (default, in-process
 	// ECDH), "yubikey" (the X25519 agreement runs on an OpenPGP card), "tpm"
-	// (the key is sealed to a TPM under a PCR+PIN policy), or "cruciform" (the
-	// desktop holds no key and offloads each unwrap to the paired phone, ADR-0098).
+	// (the key is sealed to a TPM under a PCR+PIN policy), "cruciform" (the
+	// desktop holds no key and offloads each unwrap to the paired phone, ADR-0098),
+	// or "sealedfile" (an executor's passphrase-sealed recipient key, ADR-0104).
 	Unwrapper string `koanf:"unwrapper"`
 	// YubiKey configures the on-card backend; used only when unwrapper=yubikey.
 	YubiKey VaultYubiKey `koanf:"yubikey"`
@@ -99,6 +100,23 @@ type Vault struct {
 	TPM VaultTPM `koanf:"tpm"`
 	// Cruciform configures the offload backend; used only when unwrapper=cruciform.
 	Cruciform VaultCruciform `koanf:"cruciform"`
+	// SealedFile configures an executor's sealed service-recipient key; used
+	// only when unwrapper=sealedfile (ADR-0104).
+	SealedFile VaultSealedFile `koanf:"sealedfile"`
+}
+
+// VaultSealedFile configures the sealed-file custody backend an executor uses
+// for its service-recipient key (ADR-0104, `heyarr recipient init`).
+type VaultSealedFile struct {
+	// KeyFile is the sealed recipient key. Required when unwrapper=sealedfile.
+	KeyFile string `koanf:"key_file"`
+	// PINFile reads the sealed file's PIN from an owner-only file. Empty reads
+	// the systemd credential named by PINCredential instead. Never an
+	// environment variable.
+	PINFile string `koanf:"pin_file"`
+	// PINCredential is the systemd credential name the PIN is delivered under
+	// ($CREDENTIALS_DIRECTORY/<name>). Empty is heyarr-recipient-pin.
+	PINCredential string `koanf:"pin_credential"`
 }
 
 // VaultYubiKey configures the YubiKey-on-card custody backend.
@@ -752,7 +770,7 @@ var validLogLevels = []string{"debug", "info", "warn", "error"}
 // (ADR-0098). "cruciform" is named in the ADR and built (#582) but not yet wired
 // to the callers, so configuring it is refused here rather than failing later at
 // open time.
-var validVaultUnwrappers = []string{"software", "yubikey", "tpm", "cruciform"}
+var validVaultUnwrappers = []string{"software", "yubikey", "tpm", "cruciform", "sealedfile"}
 
 // Validate reports the first configuration problem, phrased so the operator can
 // act on it without reading the source. Configuration is checked before any

@@ -83,8 +83,10 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr quality-profile set`](heyarr_quality-profile_set.md) | Change an existing quality profile's rules or description (§62) |
 | [`heyarr quality-profile`](heyarr_quality-profile.md) | Author and inspect the quality profiles a want is measured against |
 | [`heyarr recipient add`](heyarr_recipient_add.md) | Register an executor's public key as a wrap recipient |
+| [`heyarr recipient init`](heyarr_recipient_init.md) | Create this executor's recipient key in a sealed file (run on the executor's host) |
 | [`heyarr recipient list`](heyarr_recipient_list.md) | List the registered service recipients |
 | [`heyarr recipient remove`](heyarr_recipient_remove.md) | Withdraw a service recipient, and every space-key copy wrapped for it |
+| [`heyarr recipient show`](heyarr_recipient_show.md) | Show this executor's recipient key and fingerprint, without unsealing it |
 | [`heyarr recipient`](heyarr_recipient.md) | Register executors' public keys as space-key recipients (ADR-0104) |
 | [`heyarr recover`](heyarr_recover.md) | Rebuild this peer's control plane from a surviving peer (§51, §82, M7-04) |
 | [`heyarr renderers discover`](heyarr_renderers_discover.md) | Search the local network for media renderers |
@@ -120,9 +122,11 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr token list`](heyarr_token_list.md) | List API tokens |
 | [`heyarr token revoke`](heyarr_token_revoke.md) | Revoke an API token |
 | [`heyarr token`](heyarr_token.md) | Manage API tokens (ADR-0011) |
+| [`heyarr vault get-ref`](heyarr_vault_get-ref.md) | Read one sealed object by its vault ref, decrypting it on this machine |
 | [`heyarr vault ls`](heyarr_vault_ls.md) | List the live files in a vault |
 | [`heyarr vault pull`](heyarr_vault_pull.md) | Read a file from the vault, decrypting it on this device |
 | [`heyarr vault push`](heyarr_vault_push.md) | Seal a local file into the vault and record it at a vault path |
+| [`heyarr vault put-ref`](heyarr_vault_put-ref.md) | Seal one JSON object into a vault space and print its new ref |
 | [`heyarr vault`](heyarr_vault.md) | Push, pull and list files in an encrypted media vault (ADR-0021, ADR-0095) |
 | [`heyarr version`](heyarr_version.md) | Print build information |
 | [`heyarr worker`](heyarr_worker.md) | Execute leased jobs |
