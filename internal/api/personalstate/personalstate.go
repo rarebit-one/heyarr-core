@@ -42,6 +42,8 @@ type API struct {
 	store      *store.Store
 	replicator Replicator
 	authorizer RecipientAuthorizer
+	principals PrincipalResolver
+	recipients PrincipalRecipients
 	log        *slog.Logger
 }
 
@@ -74,6 +76,20 @@ type RecipientAuthorizer interface {
 	RecoveryWrapRecipients(ctx context.Context) (map[string]bool, error)
 }
 
+// PrincipalResolver resolves the principal a grant names (ADR-0104): a
+// principal id or name, which must be an executor. *auth.Store satisfies it.
+type PrincipalResolver interface {
+	ExecutorPrincipal(ctx context.Context, ref string) (auth.Principal, error)
+}
+
+// PrincipalRecipients is the set of wrap recipients that belong to a principal
+// — the wraps a restricted caller is shown of a space's key, its own and no one
+// else's (ADR-0104). Service recipients land in a later change; until then nil
+// is wired and a restricted caller sees no wrap at all, which fails closed.
+type PrincipalRecipients interface {
+	RecipientsOf(ctx context.Context, principalID string) (map[string]bool, error)
+}
+
 // Options configure the API.
 type Options struct {
 	// Store is the peer-side opaque store (spaces, wrapped keys, changes).
@@ -85,6 +101,12 @@ type Options struct {
 	// Authorizer enforces enrol-before-wrap on the create/rewrap paths (ADR-0049).
 	// Optional: nil leaves the check off (pre-M9 behaviour). A controller wires it.
 	Authorizer RecipientAuthorizer
+	// Principals resolves the executor a grant names (ADR-0104). Optional: nil
+	// leaves the grant API answering 503.
+	Principals PrincipalResolver
+	// Recipients names a restricted caller's own wrap recipients. Optional: nil
+	// shows a restricted caller no wraps (fail closed).
+	Recipients PrincipalRecipients
 	Logger     *slog.Logger
 }
 
@@ -98,7 +120,11 @@ func New(opts Options) (*API, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &API{store: opts.Store, replicator: opts.Replicator, authorizer: opts.Authorizer, log: log.With("component", "personalstate-api")}, nil
+	return &API{
+		store: opts.Store, replicator: opts.Replicator, authorizer: opts.Authorizer,
+		principals: opts.Principals, recipients: opts.Recipients,
+		log: log.With("component", "personalstate-api"),
+	}, nil
 }
 
 // recipientsAllowed enforces enrol-before-wrap (ADR-0049): every wrap recipient
@@ -141,32 +167,44 @@ func (a *API) Mount(r chi.Router) {
 	// ADR-0049 still holds regardless: a read token fetches ciphertext, never
 	// plaintext. RefuseGuest is the coarser "an anonymous browser has no business
 	// here at all".)
+	//
+	// A restricted principal (ADR-0104) reaches the reads and the change and
+	// snapshot pushes, filtered to the spaces it holds a grant for (spaceAccess);
+	// every route that creates a space, wraps, deletes or rotates a key,
+	// compacts, replicates or grants is refused to it outright (RefuseRestricted),
+	// on top of the router's own confinement.
 	r.With(httpapi.RefuseGuest).Get("/spaces", a.listSpaces)
 	r.With(httpapi.RefuseGuest).Get("/spaces/{id}/keys", a.listWrappedKeys)
 	r.With(httpapi.RefuseGuest).Get("/spaces/{id}/key-history", a.listKeyHistory)
 	r.With(httpapi.RefuseGuest).Get("/spaces/{id}/changes", a.listChanges)
 	r.With(httpapi.RefuseGuest).Get("/spaces/{id}/snapshot", a.getSnapshot)
 
-	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces", a.createSpace)
-	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces/{id}/changes", a.putChange)
+	write := r.With(httpapi.RequireScope(auth.ScopeWrite))
+	admin := r.With(httpapi.RefuseRestricted, httpapi.RequireScope(auth.ScopeAdmin))
+	write.With(httpapi.RefuseRestricted).Post("/spaces", a.createSpace)
+	write.Post("/spaces/{id}/changes", a.putChange)
 	// Re-wrapping a space's key for the remaining recipients after a rotation
 	// stores ciphertext copies, exactly as create does — a write. The revoked
 	// device's copy is DELETED separately, an authority action that removes access,
 	// so it needs `admin` (§41, ADR-0049, #361).
-	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces/{id}/keys", a.rewrapKeys)
-	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Delete("/spaces/{id}/keys/{recipient}", a.revokeKey)
+	write.With(httpapi.RefuseRestricted).Post("/spaces/{id}/keys", a.rewrapKeys)
+	admin.Delete("/spaces/{id}/keys/{recipient}", a.revokeKey)
 	// Rotating a space's key (ADR-0103) re-wraps it for the listed recipients
 	// and drops every other copy — it removes access, like revokeKey, so it needs
 	// `admin`.
-	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/spaces/{id}/rotate", a.rotateKey)
+	admin.Post("/spaces/{id}/rotate", a.rotateKey)
 	// A snapshot is materialised and encrypted on the device (§44); pushing it is
 	// a write, like a change.
-	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces/{id}/snapshots", a.putSnapshot)
+	write.Post("/spaces/{id}/snapshots", a.putSnapshot)
 	// Compaction — dropping the changes a snapshot subsumes and every replica
 	// holds — and triggering replication are operator actions on this node's
 	// authority, so they need `admin`.
-	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/spaces/{id}/compact", a.compact)
-	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/state/replicate", a.replicate)
+	admin.Post("/spaces/{id}/compact", a.compact)
+	admin.Post("/state/replicate", a.replicate)
+	// Granting an executor access to a space's ciphertext (ADR-0104) is the
+	// owner's consent act: `write`, and from a Device credential only (grants.go).
+	write.With(httpapi.RefuseRestricted).Post("/spaces/{id}/grants", a.grantAccess)
+	write.With(httpapi.RefuseRestricted).Delete("/spaces/{id}/grants/{principal}", a.revokeAccess)
 }
 
 // replicateResult is the ack of an on-demand reconcile: how many (peer, space)
@@ -301,7 +339,7 @@ func (a *API) createSpace(w http.ResponseWriter, r *http.Request) {
 	if !a.recipientsAllowed(w, r, req.WrappedKeys) {
 		return
 	}
-	sp, err := a.store.PutSpace(r.Context(), req.ID, spaces.Kind(req.Kind))
+	sp, err := a.store.PutSpaceOwned(r.Context(), req.ID, spaces.Kind(req.Kind), spaceOwner(r))
 	if err != nil {
 		a.failStore(w, r, "recording a space", err)
 		return
@@ -323,8 +361,16 @@ func (a *API) listSpaces(w http.ResponseWriter, r *http.Request) {
 		a.failStore(w, r, "listing spaces", err)
 		return
 	}
+	granted, restricted, err := a.grantedSpaces(r)
+	if err != nil {
+		a.failStore(w, r, "listing grants", err)
+		return
+	}
 	out := spacesView{Spaces: make([]spaceView, 0, len(list))}
 	for _, sp := range list {
+		if restricted && !granted[sp.ID] {
+			continue
+		}
 		out.Spaces = append(out.Spaces, viewSpace(sp))
 	}
 	a.write(w, r, http.StatusOK, out)
@@ -332,6 +378,14 @@ func (a *API) listSpaces(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) listWrappedKeys(w http.ResponseWriter, r *http.Request) {
 	spaceID := chi.URLParam(r, "id")
+	if !a.spaceAccess(w, r, spaceID, false) {
+		return
+	}
+	own, restricted, err := a.ownRecipients(r)
+	if err != nil {
+		a.failStore(w, r, "resolving the caller's recipients", err)
+		return
+	}
 	// One read: the epoch and the wraps must describe the same moment, or a
 	// rotation landing in between pairs a new epoch with old copies.
 	epoch, keys, err := a.store.KeyState(r.Context(), spaceID)
@@ -341,6 +395,9 @@ func (a *API) listWrappedKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	out := wrappedKeysView{SpaceID: spaceID, KeyEpoch: epoch, WrappedKeys: make([]wrappedKeyView, 0, len(keys))}
 	for _, k := range keys {
+		if restricted && !own[k.Recipient] {
+			continue
+		}
 		out.WrappedKeys = append(out.WrappedKeys, wrappedKeyView{
 			Recipient: k.Recipient,
 			Wrapped:   k.Wrapped,
@@ -398,6 +455,9 @@ func (a *API) revokeKey(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) putChange(w http.ResponseWriter, r *http.Request) {
 	spaceID := chi.URLParam(r, "id")
+	if !a.spaceAccess(w, r, spaceID, true) {
+		return
+	}
 	var ch protocol.EncryptedChange
 	if err := httpapi.DecodeJSON(w, r, &ch, maxRequestBody); err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
@@ -428,6 +488,9 @@ func (a *API) putChange(w http.ResponseWriter, r *http.Request) {
 // timestamp, not a causal frontier, and not meaningful against another peer.
 func (a *API) listChanges(w http.ResponseWriter, r *http.Request) {
 	spaceID := chi.URLParam(r, "id")
+	if !a.spaceAccess(w, r, spaceID, false) {
+		return
+	}
 
 	raw := r.URL.Query().Get("since")
 	var since int64

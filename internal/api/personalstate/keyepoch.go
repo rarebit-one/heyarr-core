@@ -72,6 +72,9 @@ type rotateResult struct {
 
 func (a *API) listKeyHistory(w http.ResponseWriter, r *http.Request) {
 	spaceID := chi.URLParam(r, "id")
+	if !a.spaceAccess(w, r, spaceID, false) {
+		return
+	}
 	entries, err := a.store.KeyHistory(r.Context(), spaceID)
 	if err != nil {
 		a.failStore(w, r, "listing key history", err)

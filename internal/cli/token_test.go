@@ -136,6 +136,38 @@ func TestTokenCreatePrintsTheSecretExactlyOnceAndSaysItIsNotRecoverable(t *testi
 	}
 }
 
+// Revoking an executor token keeps the restriction marker in its --json
+// response, so an executor never reads as an ordinary token there (ADR-0104).
+func TestTokenRevokeJSONKeepsTheRestrictionMarker(t *testing.T) {
+	cfg := tokenConfig(t)
+	ctx := context.Background()
+
+	out, _, err := run(t, ctx, "--config", cfg, "token", "create", "exec", "--executor", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(out), &created); err != nil {
+		t.Fatal(err)
+	}
+	revoked, _, err := run(t, ctx, "--config", cfg, "token", "revoke", created.ID, "--json")
+	if err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	var view struct {
+		Status     string `json:"status"`
+		Restricted bool   `json:"restricted"`
+	}
+	if err := json.Unmarshal([]byte(revoked), &view); err != nil {
+		t.Fatalf("%v\n%s", err, revoked)
+	}
+	if view.Status != "revoked" || !view.Restricted {
+		t.Errorf("revoke --json = %+v, want status revoked and restricted true", view)
+	}
+}
+
 func TestTokenRevokeMarksAndThenRefuses(t *testing.T) {
 	cfg := tokenConfig(t)
 	ctx := context.Background()

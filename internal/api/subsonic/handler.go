@@ -210,6 +210,11 @@ func (h *Handler) authenticate(ctx context.Context, p params) (int, string) {
 	if err != nil {
 		return errBadAuth, "wrong username or password"
 	}
+	// A restricted credential reaches the vault surface only (ADR-0104), never
+	// the media library this adapter serves.
+	if id.Restricted {
+		return errNotAuthorized, "this credential is not allowed to read the library"
+	}
 	if !id.Allows(auth.ScopeRead) {
 		return errNotAuthorized, "this credential is not allowed to read the library"
 	}

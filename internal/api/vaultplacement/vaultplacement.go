@@ -45,12 +45,17 @@ type Options struct {
 	Pinner Pinner
 	// Logger records failures a client is not told about. Optional.
 	Logger *slog.Logger
+	// Grants lets a RESTRICTED caller record a pin only while it holds a write
+	// grant on some space (ADR-0104). Optional; nil refuses every restricted
+	// caller. Every other caller is unaffected.
+	Grants httpapi.SpaceWriteGrants
 }
 
 // Handler serves the device-facing placement-pin routes.
 type Handler struct {
 	pinner Pinner
 	log    *slog.Logger
+	grants httpapi.SpaceWriteGrants
 }
 
 // New builds the handler, failing at construction if the pinner is missing.
@@ -62,7 +67,7 @@ func New(opts Options) (*Handler, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Handler{pinner: opts.Pinner, log: log.With("component", "vaultplacement-api")}, nil
+	return &Handler{pinner: opts.Pinner, log: log.With("component", "vaultplacement-api"), grants: opts.Grants}, nil
 }
 
 // Mount registers the routes on the authenticated /api/v1 router. Recording or
@@ -70,8 +75,11 @@ func New(opts Options) (*Handler, error) {
 // blob does (ADR-0096: a device with write scope) — a pin changes where content
 // is kept, which is a write about the fabric even though it moves no bytes here.
 func (h *Handler) Mount(r chi.Router) {
-	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/vault/placements", h.pin)
-	r.With(httpapi.RequireScope(auth.ScopeWrite)).Delete("/vault/placements", h.unpin)
+	// A restricted caller (ADR-0104) may add a pin while it holds a write grant,
+	// so the content it pushes is placed like anyone's; it may never remove one,
+	// because unpinning is how a blob becomes eligible for collection.
+	r.With(httpapi.RequireScope(auth.ScopeWrite), httpapi.RequireRestrictedWriteGrant(h.grants)).Post("/vault/placements", h.pin)
+	r.With(httpapi.RefuseRestricted, httpapi.RequireScope(auth.ScopeWrite)).Delete("/vault/placements", h.unpin)
 }
 
 // placementInput is the wire shape of both routes: the opaque (blob, peer) pair.

@@ -80,3 +80,32 @@ func TestPinPlacementRejectsEmptyArgs(t *testing.T) {
 		t.Fatal("an empty peer id must be refused")
 	}
 }
+
+// TestIsVaultBlobExcludesMedia is what confines a restricted principal's blob
+// reads (ADR-0104): a pinned blob nothing else references is a vault blob; an
+// unpinned one is not; and media stays media even when someone pins its hash.
+func TestIsVaultBlobExcludesMedia(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	vault, loose, media := hashOf('a'), hashOf('b'), hashOf('c')
+	h.seedBlobs(t, vault, loose)
+	h.seedAsset(t, media, "e-media", "file", 1080)
+	for _, b := range []string{vault, media} {
+		if err := h.cat.PinPlacement(ctx, b, "peer-self"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		hash string
+		want bool
+	}{{vault, true}, {loose, false}, {media, false}} {
+		got, err := h.cat.IsVaultBlob(ctx, c.hash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != c.want {
+			t.Errorf("IsVaultBlob(%s) = %v, want %v", c.hash, got, c.want)
+		}
+	}
+}

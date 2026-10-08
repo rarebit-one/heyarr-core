@@ -68,6 +68,10 @@ type Options struct {
 	Logger *slog.Logger
 	// MaxBytes caps one upload body. Defaults to defaultMaxBytes when zero.
 	MaxBytes int64
+	// Grants lets a RESTRICTED caller upload only while it holds a write grant
+	// on some space (ADR-0104). Optional; nil refuses every restricted caller.
+	// Every other caller is unaffected.
+	Grants httpapi.SpaceWriteGrants
 }
 
 // Handler serves the vault-ingest route.
@@ -77,6 +81,7 @@ type Handler struct {
 	selfPeer string
 	log      *slog.Logger
 	maxBytes int64
+	grants   httpapi.SpaceWriteGrants
 }
 
 // New builds the handler, failing at construction if a dependency is missing
@@ -105,6 +110,7 @@ func New(opts Options) (*Handler, error) {
 		selfPeer: opts.SelfPeer,
 		log:      log.With("component", "vaultblob-api"),
 		maxBytes: maxBytes,
+		grants:   opts.Grants,
 	}, nil
 }
 
@@ -118,7 +124,7 @@ type uploadResult struct {
 // Mount registers the ingest route on the authenticated /api/v1 router. Storing a
 // vault blob needs the `write` scope (ADR-0096: a device with write scope, ADR-0065/0067).
 func (h *Handler) Mount(r chi.Router) {
-	r.With(httpapi.RequireScope(auth.ScopeWrite)).
+	r.With(httpapi.RequireScope(auth.ScopeWrite), httpapi.RequireRestrictedWriteGrant(h.grants)).
 		Method(http.MethodPut, "/vault/blobs/{hash}", http.HandlerFunc(h.upload))
 }
 

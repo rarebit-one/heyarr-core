@@ -29,6 +29,9 @@ type compactResult struct {
 
 func (a *API) getSnapshot(w http.ResponseWriter, r *http.Request) {
 	spaceID := chi.URLParam(r, "id")
+	if !a.spaceAccess(w, r, spaceID, false) {
+		return
+	}
 	snap, ok, err := a.store.LatestSnapshotFor(r.Context(), spaceID)
 	if err != nil {
 		a.failStore(w, r, "reading a snapshot", err)
@@ -43,6 +46,9 @@ func (a *API) getSnapshot(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) putSnapshot(w http.ResponseWriter, r *http.Request) {
 	spaceID := chi.URLParam(r, "id")
+	if !a.spaceAccess(w, r, spaceID, true) {
+		return
+	}
 	var snap protocol.EncryptedSnapshot
 	if err := httpapi.DecodeJSON(w, r, &snap, maxRequestBody); err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))

@@ -32,10 +32,28 @@ var (
 	ErrExpired = errors.New("auth: token expired")
 	// ErrBadSecret means the selector resolved but the verifier did not match.
 	ErrBadSecret = errors.New("auth: token secret does not match")
+	// ErrPrincipalKind means a name is already a principal of a different kind:
+	// an executor's name cannot be given an ordinary token, nor a service's name
+	// a restricted one (ADR-0104). Silently minting across kinds would be how a
+	// confined principal ends up holding an unconfined credential.
+	ErrPrincipalKind = errors.New("auth: that name is a principal of a different kind")
+)
+
+// The principal kinds (ADR-0011, ADR-0104).
+const (
+	// KindService is a named service holding ordinary bearer tokens.
+	KindService = "service"
+	// KindUser is an enrolled person, authenticated by a device credential.
+	KindUser = "user"
+	// KindExecutor is a service confined to the vault surface and to the
+	// encrypted spaces it holds a grant for (ADR-0104). Every token it holds is
+	// restricted; it is never a member device and never wraps a key.
+	KindExecutor = "executor"
 )
 
 // Principal is who a token acts as. Milestone 1 creates only `service`
-// principals; the `user` kind exists so Milestone 8 is additive (ADR-0011).
+// principals; the `user` kind exists so Milestone 8 is additive (ADR-0011), and
+// `executor` is the restricted kind of ADR-0104.
 type Principal struct {
 	ID        string    `json:"id"`
 	Kind      string    `json:"kind"`
@@ -54,6 +72,10 @@ type Token struct {
 	LastUsedAt  *time.Time `json:"last_used_at"`
 	ExpiresAt   *time.Time `json:"expires_at"`
 	RevokedAt   *time.Time `json:"revoked_at"`
+	// Restricted confines the token to the vault surface and to the spaces its
+	// principal holds a grant for (ADR-0104). False for every ordinary token,
+	// and omitted from JSON then, so an existing token's shape is unchanged.
+	Restricted bool `json:"restricted,omitempty"`
 }
 
 // Active reports whether the token may be used at t.
@@ -116,8 +138,27 @@ type CreatedToken struct {
 //
 // Principal-per-name is intentional for Milestone 1: `heyarr token create
 // jellyfin` twice gives one principal with two tokens, which is what rotation
-// looks like, rather than two identities that happen to share a name.
+// looks like, rather than two identities that happen to share a name. A name
+// that is already an executor principal is refused (ErrPrincipalKind): an
+// executor holds only restricted tokens (ADR-0104).
 func (s *Store) Create(ctx context.Context, name string, scopes []Scope, expiresAt *time.Time) (CreatedToken, error) {
+	return s.create(ctx, name, KindService, scopes, expiresAt, false)
+}
+
+// ExecutorScopes is what every executor token carries: read and write, never
+// admin. The restriction, not the scope, is what confines it (ADR-0104).
+var ExecutorScopes = []Scope{ScopeRead, ScopeWrite}
+
+// CreateExecutor mints a RESTRICTED token for the named executor principal,
+// creating the principal (kind executor) if it does not exist yet (ADR-0104).
+// The token carries read and write, and reaches only the vault surface and the
+// encrypted spaces the principal holds a grant for. A name already held by a
+// service or user principal is refused (ErrPrincipalKind).
+func (s *Store) CreateExecutor(ctx context.Context, name string, expiresAt *time.Time) (CreatedToken, error) {
+	return s.create(ctx, name, KindExecutor, ExecutorScopes, expiresAt, true)
+}
+
+func (s *Store) create(ctx context.Context, name, kind string, scopes []Scope, expiresAt *time.Time, restricted bool) (CreatedToken, error) {
 	if name == "" {
 		return CreatedToken{}, errors.New("auth: a token needs a name — it is how you will recognise it in `heyarr token list`")
 	}
@@ -141,28 +182,34 @@ func (s *Store) Create(ctx context.Context, name string, scopes []Scope, expires
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var principalID string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM principals WHERE name = ?`, name).Scan(&principalID)
+	var principalID, existingKind string
+	err = tx.QueryRowContext(ctx, `SELECT id, kind FROM principals WHERE name = ?`, name).Scan(&principalID, &existingKind)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		principalID = uuid.Must(uuid.NewV7()).String()
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO principals (id, kind, name, created_at) VALUES (?, 'service', ?, ?)`,
-			principalID, name, now.Format(timeFormat)); err != nil {
+			`INSERT INTO principals (id, kind, name, created_at) VALUES (?, ?, ?, ?)`,
+			principalID, kind, name, now.Format(timeFormat)); err != nil {
 			return CreatedToken{}, fmt.Errorf("auth: creating principal %q: %w", name, err)
 		}
 	case err != nil:
 		return CreatedToken{}, fmt.Errorf("auth: looking up principal %q: %w", name, err)
+	case (existingKind == KindExecutor) != restricted:
+		return CreatedToken{}, fmt.Errorf("%w: %q is a %s principal", ErrPrincipalKind, name, existingKind)
 	}
 
 	var expires any
 	if expiresAt != nil {
 		expires = expiresAt.UTC().Format(timeFormat)
 	}
+	restrictedCol := 0
+	if restricted {
+		restrictedCol = 1
+	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO api_tokens (id, principal_id, name, token_hash, scopes, created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, principalID, name, hash, Join(scopes), now.Format(timeFormat), expires); err != nil {
+		`INSERT INTO api_tokens (id, principal_id, name, token_hash, scopes, created_at, expires_at, restricted)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, principalID, name, hash, Join(scopes), now.Format(timeFormat), expires, restrictedCol); err != nil {
 		return CreatedToken{}, fmt.Errorf("auth: storing token: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -173,12 +220,13 @@ func (s *Store) Create(ctx context.Context, name string, scopes []Scope, expires
 		Token: Token{
 			ID: id, PrincipalID: principalID, Name: name,
 			Scopes: Sort(scopes), CreatedAt: now, ExpiresAt: expiresAt,
+			Restricted: restricted,
 		},
 		Secret: raw,
 	}, nil
 }
 
-const tokenColumns = `id, principal_id, name, scopes, created_at, last_used_at, expires_at, revoked_at`
+const tokenColumns = `id, principal_id, name, scopes, created_at, last_used_at, expires_at, revoked_at, restricted`
 
 func scanToken(rows interface{ Scan(...any) error }) (Token, error) {
 	var (
@@ -186,7 +234,7 @@ func scanToken(rows interface{ Scan(...any) error }) (Token, error) {
 		scopes, created            string
 		lastUsed, expires, revoked sql.NullString
 	)
-	if err := rows.Scan(&tk.ID, &tk.PrincipalID, &tk.Name, &scopes, &created, &lastUsed, &expires, &revoked); err != nil {
+	if err := rows.Scan(&tk.ID, &tk.PrincipalID, &tk.Name, &scopes, &created, &lastUsed, &expires, &revoked, &tk.Restricted); err != nil {
 		return Token{}, err
 	}
 	tk.Scopes = Split(scopes)
@@ -310,4 +358,34 @@ func (s *Store) hashOf(ctx context.Context, id string) (string, error) {
 		return "", fmt.Errorf("auth: reading token %s: %w", id, err)
 	}
 	return hash, nil
+}
+
+// ExecutorPrincipal resolves ref — a principal id or name — to an executor
+// principal (ADR-0104). A grant names the principal it admits, and only an
+// executor is worth admitting: a user or service principal is not confined by
+// a grant, so granting one would read as access control while changing nothing.
+// ErrNotFound when no principal matches; ErrPrincipalKind when one does but is
+// not an executor.
+func (s *Store) ExecutorPrincipal(ctx context.Context, ref string) (Principal, error) {
+	var (
+		p       Principal
+		created string
+	)
+	err := s.reader.QueryRowContext(ctx,
+		`SELECT id, kind, name, created_at FROM principals WHERE id = ? OR name = ?
+		 ORDER BY (id = ?) DESC LIMIT 1`, ref, ref, ref).
+		Scan(&p.ID, &p.Kind, &p.Name, &created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Principal{}, ErrNotFound
+	}
+	if err != nil {
+		return Principal{}, fmt.Errorf("auth: resolving principal %q: %w", ref, err)
+	}
+	if p.Kind != KindExecutor {
+		return Principal{}, fmt.Errorf("%w: %q is a %s principal, not an executor", ErrPrincipalKind, ref, p.Kind)
+	}
+	if p.CreatedAt, err = time.Parse(timeFormat, created); err != nil {
+		return Principal{}, fmt.Errorf("auth: principal %s has an unparseable created_at: %w", p.ID, err)
+	}
+	return p, nil
 }

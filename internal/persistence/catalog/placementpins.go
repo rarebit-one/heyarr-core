@@ -163,3 +163,21 @@ func (c *Catalog) UnpinPlacement(ctx context.Context, blobHash, peerID string) e
 	}
 	return nil
 }
+
+// IsVaultBlob reports whether a blob is a vault blob: pinned to some peer
+// (ADR-0096) and referenced by no asset and no scanned library file. It is what
+// confines a restricted principal's blob reads to ciphertext (ADR-0104): media
+// is never a vault blob, even if someone pins its hash, because media is always
+// reachable from an `assets` or `scanned_files` row.
+func (c *Catalog) IsVaultBlob(ctx context.Context, blobHash string) (bool, error) {
+	var ok bool
+	err := c.db.Reader().QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM placement_pins WHERE blob_hash = ?)
+		   AND NOT EXISTS (SELECT 1 FROM assets WHERE blob_hash = ?)
+		   AND NOT EXISTS (SELECT 1 FROM scanned_files WHERE blob_hash = ?)`,
+		blobHash, blobHash, blobHash).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("catalog: checking whether %s is a vault blob: %w", blobHash, err)
+	}
+	return ok, nil
+}
