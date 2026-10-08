@@ -1270,8 +1270,9 @@ paths:
           description: |
             The key epoch the change was sealed at. A mismatch is a `409` with
             code `change_key_epoch_mismatch`: re-open the space and seal the
-            change again under the current key. A negative or non-integer
-            value is a `400`. Omitted, the push is unconditional. It is a query
+            change again under the current key. A negative, non-integer,
+            empty or repeated value is a `400`. Omitted, the push is
+            unconditional. It is a query
             parameter so a peer that predates it ignores it rather than
             refusing the body.
       requestBody:

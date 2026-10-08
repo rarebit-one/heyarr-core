@@ -285,8 +285,9 @@ func vaultPut(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spa
 // (#712). It opens the space, seals and publishes; if the peer refuses the
 // change because the key epoch moved on, it re-opens the space, rewinds r and
 // seals once more under the new key. A second refusal is an error with nothing
-// recorded in the drive. The blobs a refused attempt uploaded stay behind as
-// unreferenced ciphertext: no change names them.
+// recorded in the drive. The blobs a refused attempt uploaded stay on the node,
+// self-pinned, with no change naming them: ciphertext under an unguessable id,
+// so not a disclosure, but storage nothing reclaims yet (#714).
 func vaultPutFresh(ctx context.Context, c *apiclient.Client, open func(context.Context) (*client.Manager, error),
 	spaceID, vaultPath string, r io.ReadSeeker, mtime int64,
 ) (vaultPushView, error) {

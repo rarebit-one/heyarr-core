@@ -503,11 +503,14 @@ func (a *API) putChange(w http.ResponseWriter, r *http.Request) {
 	// It is a query parameter, not a body field, so a peer that predates it
 	// ignores it instead of refusing the body as an unknown field. Without it the
 	// push is unconditional, as it always was.
+	// A parameter that is present but empty or repeated is refused, never read
+	// as absent: a caller that meant to send an epoch must not silently get the
+	// unconditional push.
 	var err error
-	if raw := r.URL.Query().Get("key_epoch"); raw != "" {
-		epoch, perr := strconv.Atoi(raw)
-		if perr != nil || epoch < 0 {
-			httpapi.Fail(w, r, problem.BadRequest("key_epoch must be a non-negative integer"))
+	if raw, present := r.URL.Query()["key_epoch"]; present {
+		epoch, perr := strconv.Atoi(raw[0])
+		if len(raw) != 1 || perr != nil || epoch < 0 {
+			httpapi.Fail(w, r, problem.BadRequest("key_epoch must be one non-negative integer"))
 			return
 		}
 		err = a.store.PutChangeAtEpoch(r.Context(), ch, epoch)
