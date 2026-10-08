@@ -22,9 +22,9 @@ simply run again. The same goes for a recipient added to or removed from the
 space while the rotation runs: the rotation is refused rather than dropping the
 new recipient or re-admitting the removed one, and is simply run again.
 
-Only playlist spaces can be rotated for now. A vault drive, starred,
-play-history or reading-position space is refused (#698): older clients do not
-yet understand key epochs and would lose access to it.
+Every kind of space rotates the same way — a playlist, a vault drive, starred,
+play history or reading position — because no content is touched: a remaining
+device reaches every earlier key through the history (ADR-0103).
 
 ```
 heyarr space rotate <space-id> --revoke <recipient> [flags]
