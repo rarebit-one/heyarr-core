@@ -18,6 +18,7 @@ import (
 	apiclient "github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaceopen"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/vaultread"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/vaultref"
 )
 
@@ -38,6 +39,12 @@ const (
 	// ExitVaultAbsent: the ref names no object, or one with conflicting
 	// versions.
 	ExitVaultAbsent = 6
+	// ExitVaultIntegrity: the node served bytes that are not the object the
+	// ref names — a manifest or content blob that does not hash to its id, or
+	// a frame that is not this file's (vaultread.ErrBlobIntegrity). Something
+	// was served, and it was wrong: not an absent object, and not one to
+	// retry as if it were.
+	ExitVaultIntegrity = 7
 )
 
 // exitError is an error that ends the process with a specific exit code.
@@ -70,14 +77,16 @@ type vaultObjectEnvelope struct {
 	Type string `json:"type"`
 }
 
-// classifyAPI turns an API refusal of a space or blob read into the
-// forbidden exit; any other error keeps its own (exit 1).
 // classifyOpenedRead maps a read failure AFTER the space opened. Access is
 // settled by then, so a 404 means the drive entry names a manifest or content
 // blob this node cannot serve (replication lag, storage loss): an absent
-// object, not a missing grant. A 401/403 still means access went away.
+// object, not a missing grant. Bytes that do not match their content address
+// are an integrity failure, checked first so a wrapped one is never read as
+// anything else. A 401/403 still means access went away.
 func classifyOpenedRead(ref string, err error) error {
 	switch {
+	case errors.Is(err, vaultread.ErrBlobIntegrity):
+		return withExit(ExitVaultIntegrity, fmt.Errorf("%s: %w", ref, err))
 	case errors.Is(err, errVaultPathAbsent), errors.Is(err, errVaultPathConflicted), isNotFound(err):
 		return withExit(ExitVaultAbsent, fmt.Errorf("%s: %w", ref, err))
 	default:
@@ -91,6 +100,8 @@ func isNotFound(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound
 }
 
+// classifyAPI turns an API refusal of a space or blob read into the
+// forbidden exit; any other error keeps its own (exit 1).
 func classifyAPI(err error) error {
 	var apiErr *apiclient.Error
 	if errors.As(err, &apiErr) {
@@ -148,8 +159,9 @@ caller should give a path on a tmpfs it wipes.
 
 Exit status: 3 the sealed key or its PIN is unavailable or wrong; 4 the space is
 not visible to this credential (no grant, revoked, or no such space); 5 the
-space cannot be decrypted with this key; 6 the ref names no object; 1 anything
-else.`,
+space cannot be decrypted with this key; 6 the ref names no object; 7 the node
+served bytes that do not match their content address (a substituted or
+corrupted manifest or content blob); 1 anything else.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref, err := vaultref.Parse(args[0])

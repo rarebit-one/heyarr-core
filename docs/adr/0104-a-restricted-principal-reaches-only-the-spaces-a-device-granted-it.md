@@ -134,8 +134,14 @@ add a third kind of pinned wrap target beside a device key and a recovery key.
   wrap and the key history (ADR-0103). Plaintext goes only to stdout or a new
   owner-only file the caller names, which should be on a tmpfs it wipes. It
   never goes to stderr or into an error. Exit codes separate an unavailable or
-  wrong key (3), a space it cannot see (4), one it cannot decrypt (5) and an
-  absent object (6), so a caller maps them without parsing prose.
+  wrong key (3), a space it cannot see (4), one it cannot decrypt (5), an
+  absent object (6) and bytes that do not match their content address (7), so
+  a caller maps them without parsing prose. Exit 7 is Invariant 1 on the read:
+  the manifest blob must hash to the drive entry's id before it is opened, and
+  the content to the manifest's content id (a range read rests on each frame's
+  AEAD-bound file id and index instead). Another manifest of the same space
+  decrypts under the same key, so a node could otherwise steer the executor to
+  a different object; that is a substituted or corrupted blob, never "absent".
 
 ## Threat model for hash-addressed blob reads
 
