@@ -27,9 +27,9 @@ any other recipient, so a rotation re-wraps it too unless it is named with
 --revoke. One whose grant has ended can no longer be wrapped for: name it with
 --revoke.
 
-Only playlist spaces can be rotated for now. A vault drive, starred,
-play-history or reading-position space is refused (#698): older clients do not
-yet understand key epochs and would lose access to it.
+Every kind of space rotates the same way — a playlist, a vault drive, an album,
+starred, play history or reading position — because no content is touched: a
+remaining device reaches every earlier key through the history (ADR-0103).
 
 ```
 heyarr space rotate <space-id> --revoke <recipient> [flags]

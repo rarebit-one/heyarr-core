@@ -74,8 +74,19 @@ seals, and the peer refuses a copy that is not at the current epoch.**
   snapshots trustworthy, nothing a rotation does may depend on one.
 
 This record covers the server and the wire. The client keyring and the
-re-keying `space rotate` follow in a separate change, and the #700 guard stays
-until that change lands.
+re-keying `space rotate` follow in a separate change; see Rollout for when the
+#700 guard lifted.
+
+## Rollout
+
+The client keyring and the re-keying `space rotate` landed in #702, with the
+#700 guard still in place: until then only playlist spaces rotated, and a
+rotation also carried the playlist forward as a snapshot under the new key and
+compacted the old log, for clients that held only the newest key. Both were
+lifted once the mobile client shipped its keyring
+([heyarr-kmp#118](https://github.com/rarebit-one/heyarr-kmp/issues/118)). Every
+kind of space now rotates as the pure re-key above, and `device revoke` re-keys
+every space the revoked device could read.
 
 ## Consequences
 
