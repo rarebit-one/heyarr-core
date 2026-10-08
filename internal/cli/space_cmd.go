@@ -576,10 +576,6 @@ type spaceRotateView struct {
 	Remaining []string `json:"remaining"`
 	// KeyEpoch is the space's key epoch after the rotation (ADR-0103).
 	KeyEpoch int `json:"key_epoch"`
-	// SnapshotID and Dropped report the playlist carried forward for clients
-	// without a keyring (see rotateSpace); absent for a pure re-key.
-	SnapshotID string `json:"snapshot_id,omitempty"`
-	Dropped    int    `json:"dropped,omitempty"`
 }
 
 // newSpaceRotateCommand builds `heyarr space rotate` — revoke recipients from a
@@ -610,9 +606,9 @@ simply run again. The same goes for a recipient added to or removed from the
 space while the rotation runs: the rotation is refused rather than dropping the
 new recipient or re-admitting the removed one, and is simply run again.
 
-Only playlist spaces can be rotated for now. A vault drive, starred,
-play-history or reading-position space is refused (#698): older clients do not
-yet understand key epochs and would lose access to it.`,
+Every kind of space rotates the same way — a playlist, a vault drive, starred,
+play history or reading position — because no content is touched: a remaining
+device reaches every earlier key through the history (ADR-0103).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID := args[0]
@@ -637,9 +633,6 @@ yet understand key epochs and would lose access to it.`,
 					fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", r)
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "  re-wrapped for %d remaining recipient(s)\n", len(view.Remaining))
-				if view.SnapshotID != "" {
-					fmt.Fprintf(cmd.OutOrStdout(), "  playlist carried forward as snapshot %s; %d old change(s) compacted\n", view.SnapshotID, view.Dropped)
-				}
 				return nil
 			})
 		},
@@ -649,52 +642,13 @@ yet understand key epochs and would lose access to it.`,
 	return cmd
 }
 
-// rotateSpace is the whole of `space rotate` (§41, ADR-0049, #361) as a
-// function, so that revoking a device (`device revoke`, ADR-0068) can re-key
-// each space that device could read without a second copy of the sequence. It
-// refuses a non-playlist space (ensurePlaylistSpace) and then re-keys it
-// (rekeySpace). This device must itself be a current recipient of the space.
+// rotateSpace is the whole of `space rotate` (§41, ADR-0049, ADR-0103, #361)
+// as a function, so that revoking a device (`device revoke`, ADR-0068) can
+// re-key each space that device could read without a second copy of the
+// sequence: open the space with its key history, then re-key it. It is the same
+// pure re-key for every kind of space. This device must itself be a current
+// recipient of the space.
 func rotateSpace(ctx context.Context, c *apiclient.Client, cust client.Custody, spaceID string, revoke []string) (spaceRotateView, error) {
-	mgr, err := openSpace(ctx, c, cust, spaceID)
-	if err != nil {
-		return spaceRotateView{}, err
-	}
-	if err := ensurePlaylistSpace(ctx, c, mgr, spaceID); err != nil {
-		return spaceRotateView{}, err
-	}
-	st, changes, _, err := materialise(ctx, c, mgr, spaceID)
-	if err != nil {
-		return spaceRotateView{}, err
-	}
-	view, err := rekeyOpenSpace(ctx, c, mgr, spaceID, revoke)
-	if err != nil {
-		return spaceRotateView{}, err
-	}
-	// Compatibility for clients without a keyring (heyarr-kmp before its
-	// ADR-0103 release): they hold only the newest key, so they read a playlist
-	// only from a snapshot under that key with the old log compacted, as
-	// rotation worked before ADR-0103. Carry the playlist forward that way.
-	// The re-key has already landed, so a failure here leaves a correct space
-	// that only keyring clients can read in full; it is reported, not undone.
-	// This goes when the guard does.
-	snap, err := statesync.EncodeSnapshot(mgr, spaceID, protocol.Heads(changes), st)
-	if err != nil {
-		return view, fmt.Errorf("space rotate: re-keyed to epoch %d, but carrying the playlist forward failed: %w", view.KeyEpoch, err)
-	}
-	if view.SnapshotID, err = c.PushSnapshot(ctx, snap); err != nil {
-		return view, fmt.Errorf("space rotate: re-keyed to epoch %d, but pushing the playlist snapshot failed: %w", view.KeyEpoch, err)
-	}
-	if view.Dropped, err = c.Compact(ctx, spaceID, snap.Frontier); err != nil {
-		return view, fmt.Errorf("space rotate: re-keyed to epoch %d, but compacting the old log failed: %w", view.KeyEpoch, err)
-	}
-	return view, nil
-}
-
-// rekeySpace is a rotation with no space-kind guard: open the space with its
-// key history, then re-key it (ADR-0103). It is what rotateSpace does once the
-// guard passes, and is safe for every kind of space in this binary; the guard
-// stays only for clients that predate key epochs.
-func rekeySpace(ctx context.Context, c *apiclient.Client, cust client.Custody, spaceID string, revoke []string) (spaceRotateView, error) {
 	mgr, err := openSpace(ctx, c, cust, spaceID)
 	if err != nil {
 		return spaceRotateView{}, err
@@ -793,58 +747,6 @@ func (p pendingRekey) commit(ctx context.Context, c *apiclient.Client) (spaceRot
 	return spaceRotateView{
 		SpaceID: p.spaceID, Revoked: p.revoked, Remaining: p.remaining, KeyEpoch: epoch,
 	}, nil
-}
-
-// errRotateNotPlaylist refuses to re-key a space that does not hold a playlist.
-var errRotateNotPlaylist = errors.New("space rotate: this space holds state rotation cannot preserve")
-
-// ensurePlaylistSpace refuses rotation for any space that is not a playlist
-// space (#698). This binary's rotation is a pure re-key with a key history
-// (ADR-0103), so it no longer loses anything itself. The guard stays for client
-// COMPATIBILITY: a client that predates key epochs opens a rotated space with
-// only its newest key, and so cannot read a vault file, a starred, play-history
-// or reading-position change sealed before the rotation. A playlist survives
-// that, because the older clients' rotation left a snapshot under the new key.
-// The guard lifts once every client (the mobile one included) unrolls the
-// history. Until then only a space whose every change, and whose snapshot if it
-// has one, strictly decodes as a playlist may be rotated. An empty space has
-// nothing to lose.
-func ensurePlaylistSpace(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spaceID string) error {
-	refuse := func(what string) error {
-		return fmt.Errorf("%w: space %s has a %s that is not a playlist (a vault drive, starred, "+
-			"play-history or reading-position space); clients that predate key epochs would lose its contents (#698)",
-			errRotateNotPlaylist, spaceID, what)
-	}
-	changes, err := c.Changes(ctx, spaceID)
-	if err != nil {
-		return err
-	}
-	for _, ec := range changes {
-		if err := ec.Validate(); err != nil {
-			return fmt.Errorf("space rotate: refusing a change: %w", err)
-		}
-		raw, err := mgr.Decrypt(spaceID, ec.Ciphertext)
-		if err != nil {
-			return err
-		}
-		if !crdt.IsPlaylistChange(raw) {
-			return refuse("change")
-		}
-	}
-	snap, ok, err := c.Snapshot(ctx, spaceID)
-	if err != nil {
-		return err
-	}
-	if ok {
-		raw, _, err := statesync.OpenSnapshot(mgr, snap)
-		if err != nil {
-			return err
-		}
-		if !crdt.IsPlaylistSnapshot(raw) {
-			return refuse("snapshot")
-		}
-	}
-	return nil
 }
 
 // partitionRecipients splits a space's current wrapped-key recipients into those

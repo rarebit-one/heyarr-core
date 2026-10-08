@@ -296,11 +296,9 @@ YAML
 # snapshotted or compacted, so the remaining devices read the past through the
 # history row, while the revoked device can read nothing written from here on.
 # It is forward-looking, not retroactive: the revoked device keeps whatever it
-# already decrypted. Only a playlist space is rotated here: the CLI still refuses
-# to rotate a vault, starred, play-history or reading-position space (#698)
-# until every client unrolls key history, so the vault re-key is covered by
-# internal/cli (TestRekeyVaultSpaceKeepsEveryFile) and joins this demo when that
-# guard lifts.
+# already decrypted. Every kind of space rotates the same way (#698): a playlist
+# space first, then a vault space, whose sealed file must pull back
+# byte-identical after the re-key.
 revocation_demo() {
   local root="$WORK/revocation" data sock cfg A B C
   data="$root/data"; sock="$data/heyarr.sock"; cfg="$WORK/revocation.yaml"
@@ -422,6 +420,38 @@ YAML
     "cannot read space" "${base[@]}" space read "$space_id" --device-dir "$B"
   assert_eq "$b_before" "midnight-jazz" \
     "the revoked device keeps the pre-revocation change it already decrypted — forward-only revocation, only future content is protected"
+
+  # A VAULT SPACE ROTATES TOO (#698, ADR-0103). A vault file's frames and
+  # manifest are sealed directly under the space key and cannot be
+  # re-materialised, so before key epochs a rotation stranded every file in the
+  # space. A re-key re-encrypts nothing: the remaining device unrolls the history
+  # row to the key the file was sealed under, and pulls it back byte-identical.
+  local vault_id vault_file vault_epoch vault_pulled vault_ls
+  vault_id=$("${base[@]}" space create --device-dir "$A" --kind personal \
+    --recipient "$bpub" --recipient "$cpub" --recovery=false --json | jq -r .id)
+  vault_file="$root/vault-original.bin"
+  head -c 300000 /dev/urandom >"$vault_file"
+  "${base[@]}" vault --device-dir "$A" push --space "$vault_id" --path docs/policy.bin "$vault_file" >/dev/null
+  assert_eq "$("${base[@]}" vault --device-dir "$B" pull "$vault_id" docs/policy.bin | shasum -a 256 | cut -d" " -f1)" \
+    "$(shasum -a 256 <"$vault_file" | cut -d" " -f1)" \
+    "before revocation the soon-to-be-revoked device can pull the vault file"
+
+  vault_epoch=$("${base[@]}" space rotate "$vault_id" --device-dir "$A" --revoke "$bpub" --json 2>/dev/null | jq -r .key_epoch)
+  assert_eq "$vault_epoch" "1" \
+    "a vault space rotates like any other — a pure re-key to key epoch 1, its files not re-encrypted"
+
+  vault_pulled="$root/vault-pulled.bin"
+  "${base[@]}" vault --device-dir "$C" pull "$vault_id" docs/policy.bin -o "$vault_pulled"
+  if cmp -s "$vault_file" "$vault_pulled"; then
+    pass "a remaining device pulls the pre-rotation vault file back byte-identical — the key history reaches the key it was sealed under"
+  else
+    fail "the pre-rotation vault file did not pull back byte-identical after the rotation"
+  fi
+  vault_ls=$("${base[@]}" vault --device-dir "$C" ls "$vault_id" --json | jq -r '[.[].path] | join(",")')
+  assert_eq "$vault_ls" "docs/policy.bin" \
+    "the rotated vault still lists the file — a re-key compacts nothing"
+  assert_refuses "the revoked device can no longer pull from the rotated vault — its wrapped key is gone" \
+    "cannot read space" "${base[@]}" vault --device-dir "$B" pull "$vault_id" docs/policy.bin
 
   kill -TERM "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
