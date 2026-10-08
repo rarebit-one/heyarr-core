@@ -10,6 +10,13 @@ stable.
 ## [Unreleased]
 
 ### Security
+- **Vault reads verify content addressing** (#710). `vault pull` and
+  `vault get-ref` check that the manifest blob hashes to the drive entry's id
+  before opening it, and that a whole-file read's content blob hashes to the
+  manifest's content id; a range read rests on each frame's AEAD-bound file id
+  and index. Before, a node could answer with another manifest of the same
+  space, which decrypts under the same key, and the client would follow it. A
+  mismatch is `vaultread.ErrBlobIntegrity`, and `vault get-ref` exits 7 for it.
 - **void-which-binds-go v0.19.2** (void-which-binds-go#116). Device enrolment
   now accepts a key only in its single canonical spelling. Before, a
   whitespace-padded or upper-case rendering of one device key counted as a

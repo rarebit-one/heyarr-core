@@ -17,8 +17,9 @@ caller should give a path on a tmpfs it wipes.
 
 Exit status: 3 the sealed key or its PIN is unavailable or wrong; 4 the space is
 not visible to this credential (no grant, revoked, or no such space); 5 the
-space cannot be decrypted with this key; 6 the ref names no object; 1 anything
-else.
+space cannot be decrypted with this key; 6 the ref names no object; 7 the node
+served bytes that do not match their content address (a substituted or
+corrupted manifest or content blob); 1 anything else.
 
 ```
 heyarr vault get-ref hv1:<space>/<object> [flags]

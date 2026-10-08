@@ -95,7 +95,7 @@ func TestOpenManifestWithKeysReturnsTheOpeningKey(t *testing.T) {
 	old, cur := mustKey(t), mustKey(t)
 	f := newMemFetcher()
 	id, want := seedVault(t, f, old, pattern(64))
-	m, sk, err := vaultread.OpenManifestWithKeys([]encryption.SpaceKey{cur, old}, f.blobs[id])
+	m, sk, err := vaultread.OpenManifestWithKeys([]encryption.SpaceKey{cur, old}, id, f.blobs[id])
 	if err != nil {
 		t.Fatal(err)
 	}

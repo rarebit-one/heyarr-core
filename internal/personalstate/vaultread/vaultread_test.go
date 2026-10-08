@@ -7,10 +7,18 @@ import (
 	"testing"
 
 	"github.com/rarebit-one/void-which-binds-go/encryption"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/vaultframe"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/vaultread"
 )
+
+// blobID is b's content address, "blake3:<hex>".
+func blobID(b []byte) string {
+	h := hashing.New()
+	_, _ = h.Write(b)
+	return h.Sum().String()
+}
 
 func mustKey(t *testing.T) encryption.SpaceKey {
 	t.Helper()
@@ -83,9 +91,9 @@ func seedVault(t *testing.T, f *memFetcher, sk encryption.SpaceKey, plaintext []
 	if err != nil {
 		t.Fatalf("vaultframe.SealManifest: %v", err)
 	}
-	// A manifest blob id is content-addressed like any other blob; for the
-	// fetcher's purposes any stable key works, so a fixed label is enough.
-	manifestBlobID = "blake3:" + "manifest-for-" + m.FileID
+	// A manifest blob id is content-addressed like any other blob, and the
+	// reader checks it, so it is the real BLAKE3 of the sealed manifest.
+	manifestBlobID = blobID(sealedManifest)
 	f.blobs[manifestBlobID] = sealedManifest
 	return manifestBlobID, m
 }
@@ -211,5 +219,179 @@ func TestReadRangeOutOfBounds(t *testing.T) {
 
 	if _, err := vaultread.ReadRange(context.Background(), f, sk, manifestBlobID, 50, 100); err == nil {
 		t.Fatal("expected a range past end-of-file to fail")
+	}
+}
+
+// TestSubstitutedManifestRejected: a node that answers the drive entry's
+// manifest id with ANOTHER manifest of the same space — sealed under the same
+// key, so it decrypts perfectly well — is refused before it is opened, as an
+// integrity failure rather than a wrong key or an absent object (Invariant 1).
+func TestSubstitutedManifestRejected(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	sk := mustKey(t)
+	f := newMemFetcher()
+	wantID, _ := seedVault(t, f, sk, pattern(vaultframe.FrameSize+10))
+	otherID, _ := seedVault(t, f, sk, []byte("a different file in the same space"))
+	f.blobs[wantID] = f.blobs[otherID]
+
+	reads := map[string]func() error{
+		"ReadAll": func() error { _, err := vaultread.ReadAll(ctx, f, sk, wantID); return err },
+		"ReadRange": func() error {
+			_, err := vaultread.ReadRange(ctx, f, sk, wantID, 0, 5)
+			return err
+		},
+		"OpenManifestWithKeys": func() error {
+			_, _, err := vaultread.OpenManifestWithKeys([]encryption.SpaceKey{sk}, wantID, f.blobs[wantID])
+			return err
+		},
+	}
+	for name, read := range reads {
+		if err := read(); !errors.Is(err, vaultread.ErrBlobIntegrity) {
+			t.Errorf("%s of a substituted manifest: %v, want ErrBlobIntegrity", name, err)
+		}
+	}
+}
+
+// TestTamperedContentRejected: one flipped byte in the content blob is an
+// integrity failure. A whole-file read catches it by hashing the content blob
+// against the manifest's content id before decrypting anything; a range read
+// over the tampered frame catches it by that frame's AEAD tag.
+func TestTamperedContentRejected(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	sk := mustKey(t)
+	size := int64(2*vaultframe.FrameSize + 3)
+	for _, tc := range []struct {
+		name   string
+		at     func(n int) int
+		off, n int64
+	}{
+		{"first byte", func(int) int { return 0 }, 0, 10},
+		{"last byte", func(n int) int { return n - 1 }, size - 3, 3},
+	} {
+		f := newMemFetcher()
+		id, m := seedVault(t, f, sk, pattern(size))
+		tampered := bytes.Clone(f.blobs[m.Content])
+		tampered[tc.at(len(tampered))] ^= 0x01
+		f.blobs[m.Content] = tampered
+		if _, err := vaultread.ReadAll(ctx, f, sk, id); !errors.Is(err, vaultread.ErrBlobIntegrity) {
+			t.Errorf("ReadAll with the %s of the content tampered: %v, want ErrBlobIntegrity", tc.name, err)
+		}
+		if _, err := vaultread.ReadRange(ctx, f, sk, id, tc.off, tc.n); !errors.Is(err, vaultread.ErrBlobIntegrity) {
+			t.Errorf("ReadRange over the tampered %s: %v, want ErrBlobIntegrity", tc.name, err)
+		}
+	}
+}
+
+// TestSubstitutedFrameRejected: a range read cannot check the whole content
+// blob, so it rests on the per-frame AEAD binding of (file_id, frame_index). A
+// frame lifted from ANOTHER file of the same space, at the same index and byte
+// range, decrypts under the space key but names the other file — refused as an
+// integrity failure; so is this file's own frame moved to another index.
+func TestSubstitutedFrameRejected(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	sk := mustKey(t)
+	size := int64(2*vaultframe.FrameSize + 3)
+
+	for _, tc := range []struct {
+		name   string
+		splice func(f *memFetcher, m, other vaultframe.Manifest) []byte
+	}{
+		{"a frame of another file", func(f *memFetcher, m, other vaultframe.Manifest) []byte {
+			b := bytes.Clone(f.blobs[m.Content])
+			s, e := m.FrameByteRange(1)
+			copy(b[s:e], f.blobs[other.Content][s:e])
+			return b
+		}},
+		{"this file's frame at another index", func(f *memFetcher, m, _ vaultframe.Manifest) []byte {
+			b := bytes.Clone(f.blobs[m.Content])
+			s0, e0 := m.FrameByteRange(0)
+			s1, _ := m.FrameByteRange(1)
+			copy(b[s1:], f.blobs[m.Content][s0:e0])
+			return b
+		}},
+	} {
+		f := newMemFetcher()
+		id, m := seedVault(t, f, sk, pattern(size))
+		_, other := seedVault(t, f, sk, pattern(size))
+		f.blobs[m.Content] = tc.splice(f, m, other)
+
+		off := int64(vaultframe.FrameSize) + 5
+		if _, err := vaultread.ReadRange(ctx, f, sk, id, off, 10); !errors.Is(err, vaultread.ErrBlobIntegrity) ||
+			!errors.Is(err, vaultframe.ErrFrame) {
+			t.Errorf("ReadRange over %s: %v, want ErrBlobIntegrity (ErrFrame)", tc.name, err)
+		}
+		if _, err := vaultread.ReadAll(ctx, f, sk, id); !errors.Is(err, vaultread.ErrBlobIntegrity) {
+			t.Errorf("ReadAll over %s: %v, want ErrBlobIntegrity", tc.name, err)
+		}
+		// The frame that was not touched still reads.
+		if got, err := vaultread.ReadRange(ctx, f, sk, id, 0, 10); err != nil || !bytes.Equal(got, pattern(size)[:10]) {
+			t.Errorf("ReadRange of the untouched frame beside %s: %v", tc.name, err)
+		}
+	}
+}
+
+// TestMissingBlobIsNotIntegrity: a blob the node cannot serve stays a fetch
+// error, so a caller can still tell "absent" from "wrong bytes".
+func TestMissingBlobIsNotIntegrity(t *testing.T) {
+	t.Parallel()
+	sk := mustKey(t)
+	f := newMemFetcher()
+	id, m := seedVault(t, f, sk, pattern(100))
+	delete(f.blobs, m.Content)
+	if _, err := vaultread.ReadAll(context.Background(), f, sk, id); err == nil || errors.Is(err, vaultread.ErrBlobIntegrity) {
+		t.Fatalf("a missing content blob: %v, want a fetch error that is not ErrBlobIntegrity", err)
+	}
+}
+
+// TestDigestMismatchReturnsNoPlaintext: a whole-file read decrypts as it
+// streams, so every frame can open cleanly and the content still not be the
+// blob the manifest names. Here the manifest records a content id the served
+// bytes do not hash to, though each frame is genuine: the read must fail as an
+// integrity error and hand back no plaintext at all. The last-byte tamper is
+// the same contract on a frame that does not open.
+func TestDigestMismatchReturnsNoPlaintext(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	sk := mustKey(t)
+	size := int64(2*vaultframe.FrameSize + 3)
+
+	// Frames that all open, under a manifest whose content id is wrong.
+	f := newMemFetcher()
+	_, m := seedVault(t, f, sk, pattern(size))
+	genuine := f.blobs[m.Content]
+	m.Content = blobID([]byte("not the content blob"))
+	f.blobs[m.Content] = genuine
+	sealed, err := vaultframe.SealManifest(sk, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := blobID(sealed)
+	f.blobs[id] = sealed
+
+	got, err := vaultread.ReadAll(ctx, f, sk, id)
+	if !errors.Is(err, vaultread.ErrBlobIntegrity) {
+		t.Fatalf("ReadAll with a final-digest mismatch: %v, want ErrBlobIntegrity", err)
+	}
+	if got != nil {
+		t.Fatalf("ReadAll returned %d bytes of plaintext on a digest mismatch", len(got))
+	}
+	// The frames themselves are genuine, so a range read (which rests on the
+	// per-frame binding, not the whole-blob id) still reads them.
+	if part, err := vaultread.ReadRange(ctx, f, sk, id, 0, 10); err != nil || !bytes.Equal(part, pattern(size)[:10]) {
+		t.Fatalf("ReadRange of genuine frames: %v", err)
+	}
+
+	// The last byte tampered: the last frame does not open.
+	f2 := newMemFetcher()
+	id2, m2 := seedVault(t, f2, sk, pattern(size))
+	tampered := bytes.Clone(f2.blobs[m2.Content])
+	tampered[len(tampered)-1] ^= 0x01
+	f2.blobs[m2.Content] = tampered
+	got, err = vaultread.ReadAll(ctx, f2, sk, id2)
+	if !errors.Is(err, vaultread.ErrBlobIntegrity) || got != nil {
+		t.Fatalf("ReadAll with the last byte tampered: %d bytes, %v; want no plaintext and ErrBlobIntegrity", len(got), err)
 	}
 }

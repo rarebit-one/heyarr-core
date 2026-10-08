@@ -5,6 +5,7 @@ import (
 	"crypto/ecdh"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	apiclient "github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/recipientkey"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/vaultread"
 )
 
 const (
@@ -123,6 +125,8 @@ func TestClassifyOpenedRead(t *testing.T) {
 	wantExit(t, "a missing blob", classifyOpenedRead(ref, &apiclient.Error{Status: http.StatusNotFound}), ExitVaultAbsent)
 	wantExit(t, "an absent path", classifyOpenedRead(ref, errVaultPathAbsent), ExitVaultAbsent)
 	wantExit(t, "access withdrawn mid-read", classifyOpenedRead(ref, &apiclient.Error{Status: http.StatusForbidden}), ExitVaultForbidden)
+	wantExit(t, "a substituted or corrupted blob",
+		classifyOpenedRead(ref, fmt.Errorf("vaultread: opening manifest x: %w", vaultread.ErrBlobIntegrity)), ExitVaultIntegrity)
 }
 
 // put-ref takes a versioned, typed envelope and never echoes a refused one.
