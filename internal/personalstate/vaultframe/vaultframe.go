@@ -250,10 +250,14 @@ func (m Manifest) Validate() error {
 		return fmt.Errorf("%w: file_id is not %d hex bytes", ErrManifest, fileIDLen)
 	case !isContentID(m.Content):
 		return fmt.Errorf("%w: content is not a blake3 blob id", ErrManifest)
-	case m.FrameSize < 1 || m.FrameSize > FrameSize:
-		return fmt.Errorf("%w: frame_size %d out of range", ErrManifest, m.FrameSize)
+	case m.FrameSize != FrameSize:
+		// Version 1 fixes the frame size (ADR-0097); another size is a new version.
+		return fmt.Errorf("%w: frame_size %d, version %d requires %d", ErrManifest, m.FrameSize, Version, FrameSize)
 	case m.PlaintextSize < 0:
 		return fmt.Errorf("%w: negative plaintext_size %d", ErrManifest, m.PlaintextSize)
+	}
+	if m.FrameCount < 0 || m.FrameCount > maxFrameCount {
+		return fmt.Errorf("%w: frame_count %d out of range", ErrManifest, m.FrameCount)
 	}
 	frameSize := int64(m.FrameSize)
 	if want := m.PlaintextSize/frameSize + min(m.PlaintextSize%frameSize, 1); int64(m.FrameCount) != want {
@@ -262,6 +266,11 @@ func (m Manifest) Validate() error {
 	}
 	return nil
 }
+
+// maxFrameCount bounds a manifest's frame count. The wire header indexes frames
+// with a uint32, but the Kotlin reader holds the count in an Int, so the bound
+// both readers share is the smaller one: math.MaxInt32 frames of 1 MiB, 2 PiB.
+const maxFrameCount = math.MaxInt32
 
 // contentIDPrefix is the blob-id scheme a manifest's content id carries.
 const contentIDPrefix = "blake3:"

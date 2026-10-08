@@ -3,6 +3,7 @@ package vaultframe_test
 import (
 	"bytes"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/rarebit-one/void-which-binds-go/encryption"
@@ -222,6 +223,11 @@ func TestOpenManifestRefusesImpossibleGeometry(t *testing.T) {
 		"a short content id":        func(m *vaultframe.Manifest) { m.Content = m.Content[:20] },
 		"a zero frame size":         func(m *vaultframe.Manifest) { m.FrameSize = 0 },
 		"a frame size over 1 MiB":   func(m *vaultframe.Manifest) { m.FrameSize = vaultframe.FrameSize + 1 },
+		"a frame size under 1 MiB":  func(m *vaultframe.Manifest) { m.FrameSize = 4096 },
+		"more frames than the index space": func(m *vaultframe.Manifest) {
+			m.FrameCount = math.MaxInt32 + 1
+			m.PlaintextSize = int64(m.FrameCount) * vaultframe.FrameSize
+		},
 		"a negative plaintext size": func(m *vaultframe.Manifest) { m.PlaintextSize = -1 },
 		"too few frames":            func(m *vaultframe.Manifest) { m.FrameCount = 1 },
 		"too many frames":           func(m *vaultframe.Manifest) { m.FrameCount = 3 },
