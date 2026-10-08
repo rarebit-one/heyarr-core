@@ -22,6 +22,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
@@ -506,8 +507,16 @@ func (a *API) putChange(w http.ResponseWriter, r *http.Request) {
 	// A parameter that is present but empty or repeated is refused, never read
 	// as absent: a caller that meant to send an epoch must not silently get the
 	// unconditional push.
+	// A query string that does not parse is refused too: URL.Query drops a
+	// malformed pair (an unescaped ';', a bad escape) without a word, which
+	// would read an intended epoch as absent.
+	query, qerr := url.ParseQuery(r.URL.RawQuery)
+	if qerr != nil {
+		httpapi.Fail(w, r, problem.BadRequest("the query string is malformed"))
+		return
+	}
 	var err error
-	if raw, present := r.URL.Query()["key_epoch"]; present {
+	if raw, present := query["key_epoch"]; present {
 		epoch, perr := strconv.Atoi(raw[0])
 		if len(raw) != 1 || perr != nil || epoch < 0 {
 			httpapi.Fail(w, r, problem.BadRequest("key_epoch must be one non-negative integer"))

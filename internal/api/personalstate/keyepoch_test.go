@@ -363,7 +363,7 @@ func TestPutChangeKeyEpoch(t *testing.T) {
 	if rec := push("", "d"); rec.Code != http.StatusCreated {
 		t.Fatalf("unconditional push: %d %s", rec.Code, rec.Body)
 	}
-	for _, bad := range []string{"?key_epoch=-1", "?key_epoch=one", "?key_epoch=1.0", "?key_epoch=", "?key_epoch", "?key_epoch=1&key_epoch=1"} {
+	for _, bad := range []string{"?key_epoch=-1", "?key_epoch=one", "?key_epoch=1.0", "?key_epoch=", "?key_epoch", "?key_epoch=1&key_epoch=1", "?key_epoch=0;foo=x", "?key_epoch=%zz"} {
 		if rec := push(bad, "e"); rec.Code != http.StatusBadRequest {
 			t.Fatalf("push %s: %d %s, want 400", bad, rec.Code, rec.Body)
 		}
