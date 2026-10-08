@@ -31,6 +31,10 @@ const (
 	// CodeRotationDropsRecovery: a rotation left out a recovery key that holds a
 	// copy of the current key (ADR-0022, ADR-0103).
 	CodeRotationDropsRecovery = "rotation_drops_recovery_key"
+	// CodeRotationRecipientsChanged: a rotation's wraps and revoke set do not
+	// account for exactly the recipients holding a copy of the current key — one
+	// was added or removed since the device read them (#703).
+	CodeRotationRecipientsChanged = "rotation_recipients_changed"
 )
 
 // keyHistoryEntryView is one link of the chain: the key of epoch Epoch-1 sealed
@@ -48,12 +52,16 @@ type keyHistoryView struct {
 }
 
 // rotateRequest is POST /spaces/{id}/rotate: the epoch the device rotated FROM
-// (the compare-and-swap), the previous key sealed under the new one, and the new
-// key's wrapped copies. A recipient left out loses its copy.
+// and the recipient set it read (together the compare-and-swap), the previous
+// key sealed under the new one, and the new key's wrapped copies. Revoke names
+// the current recipients the rotation leaves out, who lose their copy; it is
+// required (an empty list revokes nobody), so a recipient is never dropped by
+// omission (#703).
 type rotateRequest struct {
 	ExpectedEpoch int               `json:"expected_epoch"`
 	SealedPrev    []byte            `json:"sealed_prev"`
 	WrappedKeys   []wrappedKeyInput `json:"wrapped_keys"`
+	Revoke        *[]string         `json:"revoke"`
 }
 
 // rotateResult acks a rotation with the space's new epoch.
@@ -83,7 +91,8 @@ func (a *API) listKeyHistory(w http.ResponseWriter, r *http.Request) {
 // rotateKey moves a space to its next key epoch (ADR-0103). Every wrap is held to
 // enrol-before-wrap like create and re-wrap; a per-wrap epoch is meaningless here
 // (the rotation decides it) and is refused rather than ignored. A rotation that
-// lost a race to another is a 409 — the device re-opens and rotates again.
+// lost a race — to another rotation, or to a recipient added or removed since
+// the device read the set — is a 409; the device re-opens and rotates again.
 func (a *API) rotateKey(w http.ResponseWriter, r *http.Request) {
 	spaceID := chi.URLParam(r, "id")
 	var req rotateRequest
@@ -93,6 +102,11 @@ func (a *API) rotateKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.WrappedKeys) == 0 {
 		httpapi.Fail(w, r, problem.BadRequest("a rotation needs at least one wrapped key"))
+		return
+	}
+	if req.Revoke == nil {
+		httpapi.Fail(w, r, problem.BadRequest(
+			"a rotation must name the recipients it revokes in revoke (an empty list revokes nobody)"))
 		return
 	}
 	wraps := make([]store.RecipientWrap, 0, len(req.WrappedKeys))
@@ -119,11 +133,11 @@ func (a *API) rotateKey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	epoch, err := a.store.RotateKey(r.Context(), spaceID, req.ExpectedEpoch, req.SealedPrev, wraps, preserve)
+	epoch, err := a.store.RotateKey(r.Context(), spaceID, req.ExpectedEpoch, req.SealedPrev, wraps, *req.Revoke, preserve)
 	if err != nil {
 		a.failStore(w, r, "rotating a space key", err)
 		return
 	}
-	a.log.Info("rotated a space key", "space", spaceID, "epoch", epoch, "recipients", len(wraps))
+	a.log.Info("rotated a space key", "space", spaceID, "epoch", epoch, "recipients", len(wraps), "revoked", len(*req.Revoke))
 	a.write(w, r, http.StatusOK, rotateResult{SpaceID: spaceID, KeyEpoch: epoch})
 }

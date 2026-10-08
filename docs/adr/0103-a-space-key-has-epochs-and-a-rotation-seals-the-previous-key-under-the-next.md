@@ -56,6 +56,13 @@ seals, and the peer refuses a copy that is not at the current epoch.**
 - **Rotation cannot fork.** `POST /spaces/{id}/rotate` (`admin`) names the epoch
   it rotated from. A second rotation from the same epoch gets a 409 and must
   re-open the space.
+- **The compare-and-swap covers the recipient set too** ([#703](https://github.com/rarebit-one/heyarr-core/issues/703)).
+  Adding or removing a recipient does not move the epoch, so the rotation also
+  names the recipients it revokes. Its wraps plus that `revoke` list must be
+  exactly the recipients holding a copy of the current key. Otherwise it gets a
+  409 (`rotation_recipients_changed`): a recipient added since would silently
+  lose access, and one removed since would be handed the new key. `revoke` is
+  required, so a recipient is never dropped by omission.
 - **Replication cannot regress.** A peer pushes history rows first, in ascending
   order, and then its wraps tagged with their epoch. A row that becomes the
   target's newest epoch drops the older wraps there, which is how revocation

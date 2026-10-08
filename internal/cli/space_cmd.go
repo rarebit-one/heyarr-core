@@ -606,7 +606,9 @@ revocation is forward-looking, not retroactive.
 This device must itself be a current recipient (only a device that can read a
 space may re-key it), and at least one recipient must remain. Two rotations
 racing from the same epoch cannot both land: the second is refused, and is
-simply run again.
+simply run again. The same goes for a recipient added to or removed from the
+space while the rotation runs: the rotation is refused rather than dropping the
+new recipient or re-admitting the removed one, and is simply run again.
 
 Only playlist spaces can be rotated for now. A vault drive, starred,
 play-history or reading-position space is refused (#698): older clients do not
@@ -704,50 +706,92 @@ func rekeySpace(ctx context.Context, c *apiclient.Client, cust client.Custody, s
 // the space to a new epoch first.
 var errKeyEpochConflict = errors.New("space rotate: the space was re-keyed by someone else since it was opened")
 
+// errRecipientsChanged is a rotation that lost a race to a recipient change: a
+// recipient was added to or removed from the space between this device reading
+// the recipients and the rotation landing (#703). Rotating anyway would either
+// lock the new recipient out or hand the removed one the new key, so the
+// controller refuses it.
+var errRecipientsChanged = errors.New("space rotate: the space's recipients changed since it was opened")
+
 // rekeyOpenSpace is the pure re-key of ADR-0103 on a space already open on mgr:
 // mint the next key, wrap it for every recipient but the revoked, seal the
 // current key under it, and hand all of it to the controller in ONE
-// compare-and-swap on the epoch. The controller drops every older wrap — the
-// revoked recipients' included — in the same transaction, so there is no
-// separate revoke step to fail half way, and nothing is materialised,
-// snapshotted or compacted.
+// compare-and-swap on the epoch and the recipient set. The controller drops
+// every older wrap — the revoked recipients' included — in the same
+// transaction, so there is no separate revoke step to fail half way, and
+// nothing is materialised, snapshotted or compacted.
 func rekeyOpenSpace(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spaceID string, revoke []string) (spaceRotateView, error) {
-	expected, ok := mgr.Epoch(spaceID)
-	if !ok {
-		return spaceRotateView{}, fmt.Errorf("%w: %s", client.ErrSpaceNotOpen, spaceID)
-	}
-	// The recipients are read fresh, not from when the space was opened. If
-	// another rotation landed in between, this one's compare-and-swap on the
-	// epoch fails below, so a recipient list from the wrong epoch never lands.
-	keys, err := c.WrappedKeys(ctx, spaceID)
+	p, err := prepareRekey(ctx, c, mgr, spaceID, revoke)
 	if err != nil {
 		return spaceRotateView{}, err
+	}
+	return p.commit(ctx, c)
+}
+
+// A pendingRekey is a rotation built against the recipient set as read, not
+// yet handed to the controller. The gap between the two is the race the
+// controller's compare-and-swap closes (#703).
+type pendingRekey struct {
+	spaceID   string
+	expected  int
+	rot       client.Rotation
+	remaining []string
+	revoked   []string
+}
+
+// prepareRekey reads the space's current recipients, partitions them into the
+// kept and the revoked, and mints and wraps the next key for the kept.
+func prepareRekey(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spaceID string, revoke []string) (pendingRekey, error) {
+	expected, ok := mgr.Epoch(spaceID)
+	if !ok {
+		return pendingRekey{}, fmt.Errorf("%w: %s", client.ErrSpaceNotOpen, spaceID)
+	}
+	// The recipients are read fresh, not from when the space was opened. The
+	// rotation names both the kept (its wraps) and the revoked, so if the set
+	// or the epoch moves before it lands, the controller refuses it below and a
+	// recipient list from the wrong moment never lands.
+	keys, err := c.WrappedKeys(ctx, spaceID)
+	if err != nil {
+		return pendingRekey{}, err
 	}
 	remaining, revoked, err := partitionRecipients(keys, revoke)
 	if err != nil {
-		return spaceRotateView{}, err
+		return pendingRekey{}, err
 	}
 	rot, err := mgr.Rotate(spaceID, remaining)
 	if err != nil {
-		return spaceRotateView{}, err
+		return pendingRekey{}, err
 	}
-	inputs := make([]apiclient.WrappedKeyInput, 0, len(rot.Wrapped))
-	for _, w := range rot.Wrapped {
+	return pendingRekey{
+		spaceID: spaceID, expected: expected, rot: rot,
+		remaining: recipientIDs(remaining), revoked: revoked,
+	}, nil
+}
+
+// commit hands the prepared rotation to the controller.
+func (p pendingRekey) commit(ctx context.Context, c *apiclient.Client) (spaceRotateView, error) {
+	inputs := make([]apiclient.WrappedKeyInput, 0, len(p.rot.Wrapped))
+	for _, w := range p.rot.Wrapped {
 		inputs = append(inputs, apiclient.WrappedKeyInput{Recipient: w.Recipient, Wrapped: w.Wrapped})
 	}
-	epoch, err := c.RotateKey(ctx, spaceID, expected, rot.SealedPrev, inputs)
+	epoch, err := c.RotateKey(ctx, p.spaceID, p.expected, p.rot.SealedPrev, inputs, p.revoked)
 	if err != nil {
 		var apiErr *apiclient.Error
-		if errors.As(err, &apiErr) && apiErr.Problem != nil && apiErr.Problem.Code == psapi.CodeKeyEpochConflict {
-			return spaceRotateView{}, fmt.Errorf("%w (it was at epoch %d): %w — run the rotation again", errKeyEpochConflict, expected, err)
+		if errors.As(err, &apiErr) && apiErr.Problem != nil {
+			switch apiErr.Problem.Code {
+			case psapi.CodeKeyEpochConflict:
+				return spaceRotateView{}, fmt.Errorf("%w (it was at epoch %d): %w — run the rotation again", errKeyEpochConflict, p.expected, err)
+			case psapi.CodeRotationRecipientsChanged:
+				return spaceRotateView{}, fmt.Errorf("%w: %w — run the rotation again", errRecipientsChanged, err)
+			}
 		}
 		return spaceRotateView{}, err
 	}
-	if epoch != rot.Epoch {
-		return spaceRotateView{}, fmt.Errorf("space rotate: the controller moved space %s to epoch %d, not %d", spaceID, epoch, rot.Epoch)
+	if epoch != p.rot.Epoch {
+		return spaceRotateView{}, fmt.Errorf("space rotate: the controller moved space %s to epoch %d, not %d", p.spaceID, epoch, p.rot.Epoch)
 	}
 	return spaceRotateView{
-		SpaceID: spaceID, Revoked: revoked, Remaining: recipientIDs(remaining), KeyEpoch: epoch,
+		SpaceID: p.spaceID, Revoked: p.revoked, Remaining: p.remaining, KeyEpoch: epoch,
 	}, nil
 }
 

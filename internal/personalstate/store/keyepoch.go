@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
@@ -119,13 +120,24 @@ func (s *Store) KeyHistory(ctx context.Context, spaceID string) ([]KeyHistoryEnt
 // rotations cannot fork the chain. A rotation needs non-empty sealedPrev and at
 // least one wrap. Returns the new epoch.
 //
+// The compare-and-swap covers the recipient set too (#703). revoke names the
+// recipients the rotation deliberately leaves out, and together with wraps it
+// must account for exactly the recipients holding a copy at the current epoch:
+// one held but neither re-wrapped nor revoked was added after the device read
+// the set (dropping it would silently lock a new device out), and a wrap or a
+// revocation naming a recipient with no current copy means one was removed
+// since (re-wrapping it would reverse that revocation). Either is
+// ErrRotationRecipientsChanged and nothing is written. Adding a recipient is
+// not a rotation's job, so a wrap for a newcomer is refused the same way. A
+// recipient both re-wrapped and revoked is ErrRotationRevokesRewrapped.
+//
 // preserve names recipients a rotation may not silently drop — the recovery
 // keys (ADR-0022). Any of them holding a wrap at the current epoch must be among
 // wraps, or it is ErrRotationDropsPreserved and nothing is written: the history
 // seals backwards only, so a recovery key left on the old key could never reach
 // the new one, and offline recovery would be lost without anyone noticing. The
 // check runs inside the transaction, against the wraps the rotation replaces.
-func (s *Store) RotateKey(ctx context.Context, spaceID string, expectedEpoch int, sealedPrev []byte, wraps []RecipientWrap, preserve map[string]bool) (int, error) {
+func (s *Store) RotateKey(ctx context.Context, spaceID string, expectedEpoch int, sealedPrev []byte, wraps []RecipientWrap, revoke []string, preserve map[string]bool) (int, error) {
 	if expectedEpoch < 0 {
 		return 0, fmt.Errorf("%w: expected epoch %d", ErrInvalidKeyEpoch, expectedEpoch)
 	}
@@ -135,6 +147,7 @@ func (s *Store) RotateKey(ctx context.Context, spaceID string, expectedEpoch int
 	if len(wraps) == 0 {
 		return 0, ErrNoRotationWraps
 	}
+	rewrapping := make(map[string]bool, len(wraps))
 	for _, w := range wraps {
 		if w.Recipient == "" {
 			return 0, ErrEmptyRecipient
@@ -142,6 +155,17 @@ func (s *Store) RotateKey(ctx context.Context, spaceID string, expectedEpoch int
 		if len(w.Wrapped) == 0 {
 			return 0, ErrEmptyWrapped
 		}
+		rewrapping[w.Recipient] = true
+	}
+	revoking := make(map[string]bool, len(revoke))
+	for _, r := range revoke {
+		if r == "" {
+			return 0, ErrEmptyRecipient
+		}
+		if rewrapping[r] {
+			return 0, fmt.Errorf("%w: %s", ErrRotationRevokesRewrapped, r)
+		}
+		revoking[r] = true
 	}
 	now := s.clock.Now().UTC()
 
@@ -162,19 +186,16 @@ func (s *Store) RotateKey(ctx context.Context, spaceID string, expectedEpoch int
 		return 0, fmt.Errorf("%w: space %s is at epoch %d, the rotation expected %d",
 			ErrKeyEpochConflict, spaceID, current, expectedEpoch)
 	}
-	if len(preserve) > 0 {
-		held, err := wrappedKeysTx(ctx, tx, spaceID)
-		if err != nil {
-			return 0, err
-		}
-		rewrapping := make(map[string]bool, len(wraps))
-		for _, w := range wraps {
-			rewrapping[w.Recipient] = true
-		}
-		for _, h := range held {
-			if h.Epoch == current && preserve[h.Recipient] && !rewrapping[h.Recipient] {
-				return 0, fmt.Errorf("%w: %s", ErrRotationDropsPreserved, h.Recipient)
-			}
+	held, err := wrappedKeysTx(ctx, tx, spaceID)
+	if err != nil {
+		return 0, err
+	}
+	if err := checkRotationRecipients(held, current, rewrapping, revoking); err != nil {
+		return 0, fmt.Errorf("%w (space %s)", err, spaceID)
+	}
+	for _, h := range held {
+		if h.Epoch == current && preserve[h.Recipient] && !rewrapping[h.Recipient] {
+			return 0, fmt.Errorf("%w: %s", ErrRotationDropsPreserved, h.Recipient)
 		}
 	}
 	next := expectedEpoch + 1
@@ -217,6 +238,48 @@ func (s *Store) RotateKey(ctx context.Context, spaceID string, expectedEpoch int
 	}
 	s.events.Publish(evs...)
 	return next, nil
+}
+
+// checkRotationRecipients is the recipient half of a rotation's
+// compare-and-swap (#703): the recipients holding a copy at the current epoch
+// must be exactly the re-wrapped ones plus the revoked ones. Each mismatch is
+// named, sorted, so the refusal says what moved.
+func checkRotationRecipients(held []WrappedKey, current int, rewrapping, revoking map[string]bool) error {
+	holding := make(map[string]bool, len(held))
+	var added []string
+	for _, h := range held {
+		if h.Epoch != current {
+			continue
+		}
+		holding[h.Recipient] = true
+		if !rewrapping[h.Recipient] && !revoking[h.Recipient] {
+			added = append(added, h.Recipient)
+		}
+	}
+	var gone []string
+	for r := range rewrapping {
+		if !holding[r] {
+			gone = append(gone, r)
+		}
+	}
+	for r := range revoking {
+		if !holding[r] {
+			gone = append(gone, r)
+		}
+	}
+	if len(added) == 0 && len(gone) == 0 {
+		return nil
+	}
+	slices.Sort(added)
+	slices.Sort(gone)
+	var parts []string
+	if len(added) > 0 {
+		parts = append(parts, "neither re-wrapped nor revoked: "+strings.Join(added, ", "))
+	}
+	if len(gone) > 0 {
+		parts = append(parts, "holding no current copy: "+strings.Join(gone, ", "))
+	}
+	return fmt.Errorf("%w (%s)", ErrRotationRecipientsChanged, strings.Join(parts, "; "))
 }
 
 // PutKeyHistory accepts one history row by REPLICATION (§45): a sibling that

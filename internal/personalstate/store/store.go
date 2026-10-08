@@ -72,6 +72,16 @@ var (
 	// ErrRotationDropsPreserved is a rotation that leaves out a recipient it must
 	// keep — a recovery key holding a copy of the current key (ADR-0022).
 	ErrRotationDropsPreserved = errors.New("personalstate/store: a rotation must re-wrap the recovery key")
+	// ErrRotationRecipientsChanged is a rotation whose recipient selection no
+	// longer matches the space (#703): a recipient holding a copy of the current
+	// key is neither re-wrapped nor revoked (it was added since the device read
+	// the set), or a wrap or a revocation names a recipient that holds no current
+	// copy (it was removed since, or never had one). The device re-reads the
+	// recipients and rotates again.
+	ErrRotationRecipientsChanged = errors.New("personalstate/store: the space's recipients changed since the rotation read them")
+	// ErrRotationRevokesRewrapped is a rotation that both re-wraps and revokes the
+	// same recipient — a malformed request, not a race.
+	ErrRotationRevokesRewrapped = errors.New("personalstate/store: a rotation cannot both re-wrap and revoke a recipient")
 	// ErrNoRotationWraps is a rotation that re-wraps the new key for nobody — the
 	// space would become unreadable to everyone.
 	ErrNoRotationWraps = errors.New("personalstate/store: a rotation needs at least one wrapped key")

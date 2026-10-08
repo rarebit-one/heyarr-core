@@ -347,7 +347,7 @@ func TestReconcileKeyEpochs(t *testing.T) {
 	seedRotated := func(t *testing.T, s *store.Store, spaceID string) {
 		t.Helper()
 		if _, err := s.RotateKey(context.Background(), spaceID, 0, []byte("k0-under-k1"),
-			[]store.RecipientWrap{{Recipient: keep, Wrapped: []byte("k1-keep")}}, nil); err != nil {
+			[]store.RecipientWrap{{Recipient: keep, Wrapped: []byte("k1-keep")}}, []string{revoked}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -450,11 +450,12 @@ func TestReconcileSurfacesAForkedHistory(t *testing.T) {
 		t.Fatal(o[0].Err)
 	}
 	recip := "x25519:" + repeatHex("a1", 32)
+	other := "x25519:" + repeatHex("b2", 32)
 	for _, s := range []struct {
 		st     *store.Store
 		sealed string
 	}{{source, "fork-a"}, {target, "fork-b"}} {
-		if _, err := s.st.RotateKey(ctx, spaceID, 0, []byte(s.sealed), []store.RecipientWrap{{Recipient: recip, Wrapped: []byte(s.sealed)}}, nil); err != nil {
+		if _, err := s.st.RotateKey(ctx, spaceID, 0, []byte(s.sealed), []store.RecipientWrap{{Recipient: recip, Wrapped: []byte(s.sealed)}}, []string{other}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
