@@ -202,10 +202,30 @@ func frameError(m vaultframe.Manifest, err error) error {
 	return nil
 }
 
+// initialReadBuffer is readAll's first allocation: the plaintext buffer grows
+// from here as frames decrypt, never from the manifest's claim alone.
+const initialReadBuffer = 8 << 20
+
+// grow returns buf with room for n more bytes, at most limit in all. A larger
+// buffer is allocated, the plaintext copied in, and the old one ZEROED, so
+// growing never leaves a plaintext copy behind (which append's own growth
+// would).
+func grow(buf []byte, n int, limit int64) []byte {
+	if len(buf)+n <= cap(buf) {
+		return buf
+	}
+	size := min(max(int64(cap(buf))*2, int64(len(buf)+n)), limit)
+	next := make([]byte, len(buf), size)
+	copy(next, buf)
+	clear(buf[:cap(buf)])
+	return next
+}
+
 // readAll reads the whole file against an already-open manifest, streaming:
 // it fetches the frames in order, feeds each one's ciphertext to a running
 // BLAKE3 and decrypts it straight into the plaintext buffer, then drops it, so
-// peak memory is the plaintext plus one frame. The frames together are the
+// peak memory is about twice the plaintext read so far (while the buffer
+// grows) plus one frame. The frames together are the
 // whole content blob, so after the last one the digest must equal the
 // manifest's content id. Until it does, the plaintext is not released: on any
 // failure — a frame that does not open, or a final digest mismatch — the
@@ -214,7 +234,11 @@ func readAll(ctx context.Context, f BlobFetcher, sk encryption.SpaceKey, m vault
 	if m.FrameCount < 0 || m.PlaintextSize < 0 {
 		return nil, fmt.Errorf("vaultread: manifest records %d frames of %d bytes", m.FrameCount, m.PlaintextSize)
 	}
-	out := make([]byte, 0, m.PlaintextSize)
+	// The manifest's size is a claim until the frames bear it out, so it never
+	// sizes an allocation outright: the buffer starts small and grows as frames
+	// actually decrypt (grow), and a manifest claiming petabytes costs nothing
+	// until that much ciphertext has been fetched.
+	out := make([]byte, 0, min(m.PlaintextSize, initialReadBuffer))
 	defer func() {
 		if err != nil {
 			clear(out[:cap(out)])
@@ -242,6 +266,7 @@ func readAll(ctx context.Context, f BlobFetcher, sk encryption.SpaceKey, m vault
 			clear(data)
 			return nil, fmt.Errorf("vaultread: content %s decrypts past the %d bytes its manifest records", m.Content, m.PlaintextSize)
 		}
+		out = grow(out, len(data), m.PlaintextSize)
 		out = append(out, data...)
 		clear(data)
 	}

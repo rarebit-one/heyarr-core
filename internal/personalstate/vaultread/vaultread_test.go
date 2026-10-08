@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/rarebit-one/void-which-binds-go/encryption"
@@ -393,5 +394,43 @@ func TestDigestMismatchReturnsNoPlaintext(t *testing.T) {
 	got, err = vaultread.ReadAll(ctx, f2, sk, id2)
 	if !errors.Is(err, vaultread.ErrBlobIntegrity) || got != nil {
 		t.Fatalf("ReadAll with the last byte tampered: %d bytes, %v; want no plaintext and ErrBlobIntegrity", len(got), err)
+	}
+}
+
+// TestReadAllDoesNotTrustTheClaimedSize (#715): a manifest that validates but
+// claims far more plaintext than its content blob holds costs no allocation of
+// the claimed size — the read fails on the missing frames, without a panic.
+func TestReadAllDoesNotTrustTheClaimedSize(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	sk := mustKey(t)
+	f := newMemFetcher()
+	_, m := seedVault(t, f, sk, pattern(10))
+	m.FrameCount = math.MaxInt32
+	m.PlaintextSize = int64(math.MaxInt32) * vaultframe.FrameSize // 2 PiB
+	sealed, err := vaultframe.SealManifest(sk, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := blobID(sealed)
+	f.blobs[id] = sealed
+	got, err := vaultread.ReadAll(ctx, f, sk, id)
+	if err == nil || got != nil {
+		t.Fatalf("ReadAll of a 2 PiB claim over a 10-byte blob = %d bytes, %v; want an error", len(got), err)
+	}
+}
+
+// TestReadAllGrowsPastTheInitialBuffer: a file larger than the first
+// allocation reads back whole as the buffer grows frame by frame.
+func TestReadAllGrowsPastTheInitialBuffer(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	sk := mustKey(t)
+	f := newMemFetcher()
+	want := pattern(20<<20 + 7)
+	id, _ := seedVault(t, f, sk, want)
+	got, err := vaultread.ReadAll(ctx, f, sk, id)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("ReadAll of a 20 MiB file: %d bytes, %v", len(got), err)
 	}
 }
