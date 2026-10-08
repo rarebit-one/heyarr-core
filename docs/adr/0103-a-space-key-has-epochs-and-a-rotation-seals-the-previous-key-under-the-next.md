@@ -98,3 +98,27 @@ until that change lands.
   The fix would be a periodic re-wrap of a checkpoint key, not a change here.
 - Snapshots becoming trusted (#681). A rotation could then optionally compact
   under the new key and let the chain be truncated.
+
+## Amendment: a change push names its key epoch (2026-10-08, #712)
+
+Only rotation was a compare-and-swap. A writer that sealed a change, or a vault
+object and its drive change, under epoch N could publish after the rotation to
+N+1 had committed, leaving the content readable by a recipient that rotation
+revoked.
+
+- `POST /spaces/{id}/changes?key_epoch=N` stores the change only while N is the
+  space's current epoch, checked in the same transaction as the insert. A
+  mismatch is a 409 with code `change_key_epoch_mismatch` and nothing is
+  stored. Writers send the epoch whose key sealed the change; on a mismatch
+  they re-open the space and re-seal once, then give up with nothing recorded.
+- A change the peer already holds stays an idempotent `201`, whatever epoch a
+  re-send names, so a retry after a lost response cannot fail.
+- The epoch is a query parameter, not a body field. The body decoder refuses
+  unknown fields, so a field would break a new writer against an older peer;
+  an older peer ignores the parameter and behaves as before. Omitting it keeps
+  the push unconditional.
+- **Replication does not check it.** The peer-to-peer change route carries no
+  epoch, and a replica's epoch can lag its origin's, because history rows and
+  changes replicate separately. A check there would refuse changes the origin
+  accepted correctly. The guarantee is made once, at the peer a writer pushes
+  to.

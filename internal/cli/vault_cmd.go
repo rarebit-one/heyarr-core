@@ -184,10 +184,6 @@ peer stores ciphertext it cannot open.`,
 				if err != nil {
 					return err
 				}
-				mgr, err := openSpace(ctx, c, cust, spaceID)
-				if err != nil {
-					return err
-				}
 				f, err := os.Open(filePath) //nolint:gosec // a user-named file to seal is the whole point
 				if err != nil {
 					return err
@@ -197,7 +193,8 @@ peer stores ciphertext it cannot open.`,
 				if err != nil {
 					return err
 				}
-				view, err := vaultPut(ctx, c, mgr, spaceID, vaultPath, f, info.ModTime().Unix())
+				open := func(ctx context.Context) (*client.Manager, error) { return openSpace(ctx, c, cust, spaceID) }
+				view, err := vaultPutFresh(ctx, c, open, spaceID, vaultPath, f, info.ModTime().Unix())
 				if err != nil {
 					return err
 				}
@@ -226,11 +223,13 @@ peer stores ciphertext it cannot open.`,
 func vaultPut(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spaceID, vaultPath string,
 	r io.Reader, mtime int64,
 ) (vaultPushView, error) {
-	// A write seals under the CURRENT key only (ADR-0103).
+	// A write seals under the CURRENT key only (ADR-0103), and names that key's
+	// epoch when it publishes, so the peer refuses it if a rotation lands first.
 	sk, ok := mgr.SpaceKey(spaceID)
 	if !ok {
 		return vaultPushView{}, fmt.Errorf("this device does not hold the key for space %s", spaceID)
 	}
+	epoch, _ := mgr.Epoch(spaceID)
 
 	// Seal the plaintext into ciphertext frames, holding the content blob in a
 	// buffer so it can be content-addressed and uploaded. The manifest carries
@@ -272,7 +271,7 @@ func vaultPut(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spa
 	if err != nil {
 		return vaultPushView{}, err
 	}
-	id, err := c.PutChange(ctx, ec)
+	id, err := c.PutChangeAtEpoch(ctx, ec, epoch)
 	if err != nil {
 		return vaultPushView{}, err
 	}
@@ -281,6 +280,38 @@ func vaultPut(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spa
 		ContentBlob: m.Content, Size: m.PlaintextSize, ChangeID: id,
 	}, nil
 }
+
+// vaultPutFresh is vaultPut against a space that may be rotated mid-write
+// (#712). It opens the space, seals and publishes; if the peer refuses the
+// change because the key epoch moved on, it re-opens the space, rewinds r and
+// seals once more under the new key. A second refusal is an error with nothing
+// recorded in the drive. The blobs a refused attempt uploaded stay on the node,
+// self-pinned, with no change naming them: ciphertext under an unguessable id,
+// so not a disclosure, but storage nothing reclaims yet (#714).
+func vaultPutFresh(ctx context.Context, c *apiclient.Client, open func(context.Context) (*client.Manager, error),
+	spaceID, vaultPath string, r io.ReadSeeker, mtime int64,
+) (vaultPushView, error) {
+	for attempt := 1; ; attempt++ {
+		mgr, err := open(ctx)
+		if err != nil {
+			return vaultPushView{}, err
+		}
+		view, err := vaultPut(ctx, c, mgr, spaceID, vaultPath, r, mtime)
+		if !apiclient.IsChangeKeyEpochMismatch(err) {
+			return view, err
+		}
+		if attempt == maxVaultSealAttempts {
+			return vaultPushView{}, fmt.Errorf("space %s was rotated again while this write was re-sealed; nothing was recorded, retry: %w", spaceID, err)
+		}
+		if _, err := r.Seek(0, io.SeekStart); err != nil {
+			return vaultPushView{}, fmt.Errorf("rewinding to re-seal after a rotation: %w", err)
+		}
+	}
+}
+
+// maxVaultSealAttempts bounds vaultPutFresh: the first seal plus one re-seal
+// after a rotation.
+const maxVaultSealAttempts = 2
 
 // vaultGet reads the file at vaultPath back, decrypting it on this machine
 // with every key on the space's ring. errVaultPathAbsent and

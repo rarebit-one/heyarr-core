@@ -1255,7 +1255,26 @@ paths:
         The peer re-derives the change's blake3 id over its space, parents and
         ciphertext and refuses a mismatch — it never trusts a claimed id
         (Invariant 1). It stores the ciphertext without decrypting it.
-      parameters: [{ $ref: "#/components/parameters/id" }]
+
+        With `key_epoch` the push is conditional (ADR-0103, #712): the peer
+        stores the change only while that is still the space's current key
+        epoch, checked in the same transaction as the insert. A writer sends
+        the epoch whose key sealed the change, so nothing sealed under a key a
+        rotation replaced can land after the rotation. A change the peer
+        already holds is still a `201`, whatever epoch a re-send names.
+      parameters:
+        - $ref: "#/components/parameters/id"
+        - name: key_epoch
+          in: query
+          schema: { type: integer, minimum: 0 }
+          description: |
+            The key epoch the change was sealed at. A mismatch is a `409` with
+            code `change_key_epoch_mismatch`: re-open the space and seal the
+            change again under the current key. A negative, non-integer,
+            empty or repeated value is a `400`. Omitted, the push is
+            unconditional. It is a query
+            parameter so a peer that predates it ignores it rather than
+            refusing the body.
       requestBody:
         required: true
         content:
@@ -1275,6 +1294,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /api/v1/spaces/{id}/snapshot:
     get:

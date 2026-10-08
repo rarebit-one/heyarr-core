@@ -581,3 +581,57 @@ func TestRotateKeyComparesTheRecipientSet(t *testing.T) {
 		})
 	}
 }
+
+// TestPutChangeAtEpochIsConditional (#712): a change pushed at the space's
+// current epoch is stored; one sealed at a superseded or unreached epoch is
+// refused with nothing stored; a re-send of a change already held stays a no-op
+// whatever epoch it names; a negative epoch is invalid.
+func TestPutChangeAtEpochIsConditional(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	ctx := context.Background()
+	sp, _ := s.CreateSpace(ctx, spaces.KindPersonal)
+	_, aID := device(t)
+	if _, err := s.PutWrappedKey(ctx, sp.ID, aID, []byte{0xa0, 0}, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	atZero := change(t, sp.ID, nil, []byte("sealed at epoch 0"))
+	if err := s.PutChangeAtEpoch(ctx, atZero, 0); err != nil {
+		t.Fatalf("push at the current epoch: %v", err)
+	}
+	if _, err := s.RotateKey(ctx, sp.ID, 0, []byte("prev"), []store.RecipientWrap{{Recipient: aID, Wrapped: []byte{0xa0, 1}}}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := change(t, sp.ID, []string{atZero.ChangeID}, []byte("sealed at epoch 0, published late"))
+	if err := s.PutChangeAtEpoch(ctx, stale, 0); !errors.Is(err, store.ErrChangeKeyEpoch) {
+		t.Fatalf("push at a superseded epoch = %v, want ErrChangeKeyEpoch", err)
+	}
+	ahead := change(t, sp.ID, []string{atZero.ChangeID}, []byte("sealed at an epoch not reached"))
+	if err := s.PutChangeAtEpoch(ctx, ahead, 2); !errors.Is(err, store.ErrChangeKeyEpoch) {
+		t.Fatalf("push at an unreached epoch = %v, want ErrChangeKeyEpoch", err)
+	}
+	got, err := s.ChangesFor(ctx, sp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ChangeID != atZero.ChangeID {
+		t.Fatalf("held changes = %v, want only the epoch-0 change", got)
+	}
+
+	// A lost response: the writer re-sends what the peer already holds.
+	if err := s.PutChangeAtEpoch(ctx, atZero, 0); err != nil {
+		t.Fatalf("re-send of a held change = %v, want a no-op", err)
+	}
+	fresh := change(t, sp.ID, []string{atZero.ChangeID}, []byte("sealed at epoch 1"))
+	if err := s.PutChangeAtEpoch(ctx, fresh, 1); err != nil {
+		t.Fatalf("push at the new epoch: %v", err)
+	}
+	if err := s.PutChangeAtEpoch(ctx, fresh, -1); !errors.Is(err, store.ErrInvalidKeyEpoch) {
+		t.Fatalf("negative epoch = %v, want ErrInvalidKeyEpoch", err)
+	}
+	if err := s.PutChangeAtEpoch(ctx, change(t, mustUUIDStr(t), nil, []byte("x")), 0); !errors.Is(err, store.ErrUnknownSpace) {
+		t.Fatalf("unknown space = %v, want ErrUnknownSpace", err)
+	}
+}

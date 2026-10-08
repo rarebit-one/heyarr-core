@@ -1,8 +1,13 @@
 package client
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
 )
@@ -197,6 +202,36 @@ func (c *Client) PutChange(ctx context.Context, ch protocol.EncryptedChange) (st
 		return "", err
 	}
 	return out.ChangeID, nil
+}
+
+// PutChangeAtEpoch pushes one encrypted change on condition that epoch — the key
+// epoch that sealed it — is still the space's current one (ADR-0103, #712). A
+// rotation that landed since is a 409 with code change_key_epoch_mismatch
+// (IsChangeKeyEpochMismatch) and nothing is stored.
+func (c *Client) PutChangeAtEpoch(ctx context.Context, ch protocol.EncryptedChange, epoch int) (string, error) {
+	buf, err := json.Marshal(ch)
+	if err != nil {
+		return "", err
+	}
+	q := url.Values{"key_epoch": {strconv.Itoa(epoch)}}
+	req, err := c.newRequest(ctx, http.MethodPost, "/spaces/"+url.PathEscape(ch.SpaceID)+"/changes", q, bytes.NewReader(buf))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var out changeStored
+	if err := c.roundTrip(req, &out); err != nil {
+		return "", err
+	}
+	return out.ChangeID, nil
+}
+
+// IsChangeKeyEpochMismatch reports whether err is the peer refusing a change
+// because the space's key was rotated after it was sealed.
+func IsChangeKeyEpochMismatch(err error) bool {
+	var apiErr *Error
+	return errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict &&
+		apiErr.Problem != nil && apiErr.Problem.Code == "change_key_epoch_mismatch"
 }
 
 // Changes returns every encrypted change the peer holds for a space, oldest

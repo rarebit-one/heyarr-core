@@ -24,6 +24,31 @@ import (
 // change already held is a no-op (the id is the primary key) and emits no event,
 // so a re-sending relay cannot duplicate it.
 func (s *Store) PutChange(ctx context.Context, ch protocol.EncryptedChange) error {
+	return s.putChange(ctx, ch, nil)
+}
+
+// PutChangeAtEpoch is PutChange made conditional on the space's key epoch
+// (ADR-0103, #712): the writer names the epoch whose key sealed the change, and
+// the peer stores it only while that is still the space's current epoch. The
+// check and the insert share one transaction, so a rotation cannot commit
+// between them. A mismatch is ErrChangeKeyEpoch and nothing is written; the
+// writer re-opens the space and re-seals under the current key.
+//
+// Without this, a writer that sealed under epoch N could publish after the
+// rotation to N+1 committed, and the change would stay readable by a recipient
+// that rotation revoked.
+//
+// A change this peer already holds is still the idempotent no-op it is under
+// PutChange, whatever epoch the re-send names: the bytes were accepted when
+// they first arrived, so a retry after a lost response must not fail.
+func (s *Store) PutChangeAtEpoch(ctx context.Context, ch protocol.EncryptedChange, epoch int) error {
+	if epoch < 0 {
+		return fmt.Errorf("%w: %d", ErrInvalidKeyEpoch, epoch)
+	}
+	return s.putChange(ctx, ch, &epoch)
+}
+
+func (s *Store) putChange(ctx context.Context, ch protocol.EncryptedChange, epoch *int) error {
 	if err := ch.Validate(); err != nil {
 		return fmt.Errorf("personalstate/store: refusing a change: %w", err)
 	}
@@ -42,6 +67,25 @@ func (s *Store) PutChange(ctx context.Context, ch protocol.EncryptedChange) erro
 	}
 	if err != nil {
 		return fmt.Errorf("personalstate/store: checking space: %w", err)
+	}
+
+	if epoch != nil {
+		var held int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM encrypted_changes WHERE change_id = ?`, ch.ChangeID).Scan(&held); err != nil {
+			return fmt.Errorf("personalstate/store: checking change: %w", err)
+		}
+		if held > 0 {
+			return tx.Commit()
+		}
+		current, err := keyEpochTx(ctx, tx, ch.SpaceID)
+		if err != nil {
+			return err
+		}
+		if current != *epoch {
+			return fmt.Errorf("%w: space %s is at key epoch %d, the change was sealed at %d",
+				ErrChangeKeyEpoch, ch.SpaceID, current, *epoch)
+		}
 	}
 
 	// seq is this peer's arrival order, assigned inside the transaction. Single
