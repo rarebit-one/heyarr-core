@@ -190,6 +190,13 @@ func (s *Store) RotateKey(ctx context.Context, spaceID string, expectedEpoch int
 	if err != nil {
 		return 0, err
 	}
+	// A service recipient is re-wrapped only while its executor holds an
+	// active grant (ADR-0104), checked here, in the rotation's transaction.
+	for _, w := range wraps {
+		if err := serviceWrapAllowedTx(ctx, tx, spaceID, w.Recipient, now); err != nil {
+			return 0, err
+		}
+	}
 	if err := checkRotationRecipients(held, current, rewrapping, revoking); err != nil {
 		return 0, fmt.Errorf("%w (space %s)", err, spaceID)
 	}

@@ -780,8 +780,8 @@ paths:
         wraps at to add a recipient, and what a rotation names as its
         `expected_epoch`.
 
-        A restricted (executor) credential is shown only its own wraps
-        (ADR-0104).
+        A restricted (executor) credential is shown only the wraps of its own
+        registered service recipients, and no other recipient's (ADR-0104).
       parameters: [{ $ref: "#/components/parameters/id" }]
       responses:
         "200":
@@ -814,6 +814,11 @@ paths:
         = 0); a copy that is not at the space's current epoch is a `409` with
         code `key_epoch_stale` (the key was rotated since) or `key_epoch_ahead`,
         so a device holding a superseded key cannot hand it out (ADR-0103).
+
+        Enrol-before-wrap (ADR-0049): every recipient must be an enrolled
+        device's key, a recovery key, or a registered service recipient whose
+        executor holds an active grant on this space (ADR-0104); anything else
+        is a `403` with code `wrap_recipient_not_allowed`.
       parameters: [{ $ref: "#/components/parameters/id" }]
       requestBody:
         required: true
@@ -996,6 +1001,17 @@ paths:
         unless the space has no recorded owner. A re-grant replaces the caps and
         expiry and clears a revocation. Every grant emits
         `personalstate.space.access_granted`, naming the granting device.
+
+        `wrapped_keys` optionally carries the space's CURRENT key wrapped for
+        the executor's registered service recipients
+        (`POST /service-recipients`). They are recorded in the same
+        transaction as the grant, so the fetch and decryption gates open
+        together or not at all. A copy for a key that is not a live service
+        recipient of this executor is a `403` with code
+        `wrap_recipient_not_allowed`; a copy not at the current key epoch is a
+        `409` (`key_epoch_stale` / `key_epoch_ahead`); an `expires_at` that
+        is not in the future is a `400`. Either way nothing is recorded. A
+        grant without `wrapped_keys` opens the fetch gate alone.
       parameters: [{ $ref: "#/components/parameters/id" }]
       requestBody:
         required: true
@@ -1016,6 +1032,10 @@ paths:
                   type: string
                   format: date-time
                   description: Optional end of the grant, enforced on every fetch.
+                wrapped_keys:
+                  type: array
+                  description: Copies of the space's current key wrapped for the executor's service recipients.
+                  items: { $ref: "#/components/schemas/WrappedKeyInput" }
       responses:
         "201":
           description: The grant, as recorded.
@@ -1031,10 +1051,15 @@ paths:
                   granted_by_device: { type: string }
                   granted_at: { type: string, format: date-time }
                   expires_at: { type: string, format: date-time }
+                  wrapped_for:
+                    type: array
+                    items: { type: string }
+                    description: The service recipients the grant wrapped the key for.
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /api/v1/spaces/{id}/grants/{principal}:
     delete:
@@ -1042,10 +1067,14 @@ paths:
       operationId: revokeSpaceAccess
       summary: Withdraw an executor principal's access to a space (ADR-0104). Device credential with `write` only.
       description: |
-        The principal's next fetch of the space is refused. Same caller rule as
-        the grant. Revoking a grant that is not active is a `404`. This removes
-        the fetch gate only; removing the grantee's wrapped key is a separate
-        `DELETE /spaces/{id}/keys/{recipient}`.
+        The principal's next fetch of the space is refused, and in the same
+        transaction every copy of the space key wrapped for the executor's
+        service recipients is deleted, so both gates close together. Same
+        caller rule as the grant. Revoking when there is neither an active
+        grant nor a copy to delete is a `404`.
+
+        This is not forward secrecy: the executor keeps a key it already
+        unwrapped. Only a rotation that leaves it out ends that (ADR-0103).
       parameters:
         - { $ref: "#/components/parameters/id" }
         - name: principal
@@ -1057,6 +1086,117 @@ paths:
         "204":
           description: The grant is revoked.
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/service-recipients:
+    get:
+      tags: [personal-state]
+      operationId: listServiceRecipients
+      summary: List the registered service recipients (ADR-0104). Refused to a restricted credential and a Guest.
+      responses:
+        "200":
+          description: The live registrations, oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recipients]
+                properties:
+                  recipients:
+                    type: array
+                    items: { $ref: "#/components/schemas/ServiceRecipient" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [personal-state]
+      operationId: registerServiceRecipient
+      summary: Register an executor's X25519 public key as a wrap recipient (ADR-0104). Device credential with `write` only.
+      description: |
+        An executor is never enrolled as a member device, so enrol-before-wrap
+        (ADR-0049) refuses every wrap for it until a management-authorised
+        Device credential registers its key here, tied to one executor
+        principal. A bearer token or a session is a `403`. Even registered, the
+        key is a wrap target only on a space where its executor holds an active
+        grant.
+
+        `fingerprint` is the one the operator read off the executor's host:
+        when present and not the key's, the registration is a `400` with code
+        `recipient_fingerprint_mismatch`. A key that is an enrolled device's or
+        a recovery key, or is live for another executor, is a `409`.
+        Registering a key already live for the same executor is a `200` with
+        the existing registration. Emits
+        `personalstate.service_recipient.registered`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [principal, recipient]
+              additionalProperties: false
+              properties:
+                principal:
+                  type: string
+                  description: The executor principal's id or name.
+                recipient:
+                  type: string
+                  description: The executor's X25519 public key, `x25519:<64 lowercase hex>`.
+                label:
+                  type: string
+                  maxLength: 200
+                  description: An operator's note, stored in the clear.
+                fingerprint:
+                  type: string
+                  description: The fingerprint the executor's host displayed.
+      responses:
+        "200":
+          description: The key was already registered for this executor.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceRecipient" }
+        "201":
+          description: The registration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceRecipient" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/service-recipients/{ref}:
+    delete:
+      tags: [personal-state]
+      operationId: removeServiceRecipient
+      summary: Withdraw a service recipient, and every space-key copy wrapped for it (ADR-0104). Device credential with `write` only.
+      description: |
+        In one transaction the registration is withdrawn and every copy of a
+        space key wrapped for the key on this node is deleted. Copies a peer
+        already replicated are removed there only by a rotation (ADR-0103).
+        Emits `personalstate.service_recipient.removed`.
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          description: The registration's id, or the key itself.
+          schema: { type: string }
+      responses:
+        "200":
+          description: The withdrawn registration and the spaces whose copy was deleted.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ServiceRecipient" }
+                  - type: object
+                    required: [wraps_deleted_from]
+                    properties:
+                      wraps_deleted_from:
+                        type: array
+                        items: { type: string }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -6921,6 +7061,18 @@ components:
         kind:
           type: string
           enum: [personal, family, shared, research]
+        created_at: { type: string, format: date-time }
+    ServiceRecipient:
+      type: object
+      description: An executor's X25519 public key, registered as a wrap recipient (ADR-0104).
+      required: [id, principal_id, recipient, fingerprint, registered_by_device, created_at]
+      properties:
+        id: { type: string }
+        principal_id: { type: string }
+        recipient: { type: string, description: "`x25519:<hex>`" }
+        label: { type: string }
+        fingerprint: { type: string, description: Four groups of four base32 characters. }
+        registered_by_device: { type: string }
         created_at: { type: string, format: date-time }
     WrappedKeyInput:
       type: object

@@ -83,9 +83,9 @@ type PrincipalResolver interface {
 }
 
 // PrincipalRecipients is the set of wrap recipients that belong to a principal
-// — the wraps a restricted caller is shown of a space's key, its own and no one
-// else's (ADR-0104). Service recipients land in a later change; until then nil
-// is wired and a restricted caller sees no wrap at all, which fails closed.
+// — the wraps a restricted caller is shown of a space's key, its own service
+// recipients' and no one else's (ADR-0104). *store.Store satisfies it. nil
+// shows a restricted caller no wrap at all, which fails closed.
 type PrincipalRecipients interface {
 	RecipientsOf(ctx context.Context, principalID string) (map[string]bool, error)
 }
@@ -104,8 +104,9 @@ type Options struct {
 	// Principals resolves the executor a grant names (ADR-0104). Optional: nil
 	// leaves the grant API answering 503.
 	Principals PrincipalResolver
-	// Recipients names a restricted caller's own wrap recipients. Optional: nil
-	// shows a restricted caller no wraps (fail closed).
+	// Recipients names a restricted caller's own wrap recipients — its service
+	// recipients (ADR-0104). Optional: nil shows a restricted caller no wraps
+	// (fail closed).
 	Recipients PrincipalRecipients
 	Logger     *slog.Logger
 }
@@ -127,11 +128,19 @@ func New(opts Options) (*API, error) {
 	}, nil
 }
 
+// CodeWrapRecipientNotAllowed is the problem code of a wrap refused by
+// enrol-before-wrap: its recipient is not an enrolled device, a recovery key,
+// or a registered service recipient whose executor holds a grant on the space.
+const CodeWrapRecipientNotAllowed = "wrap_recipient_not_allowed"
+
 // recipientsAllowed enforces enrol-before-wrap (ADR-0049): every wrap recipient
-// must be a pinned device or recovery key. It writes the failure and returns
-// false when a recipient is not, or the authorizer errors; true when the wrap may
-// proceed (including when no authorizer is wired, which leaves the check off).
-func (a *API) recipientsAllowed(w http.ResponseWriter, r *http.Request, keys []wrappedKeyInput) bool {
+// must be a pinned device or recovery key, or — on an existing space — a
+// registered service recipient whose executor holds an active grant on it
+// (ADR-0104). A new space (spaceID "") has no grants, so no service recipient.
+// It writes the failure and returns false when a recipient is not allowed, or a
+// lookup errors; true when the wrap may proceed (including when no authorizer
+// is wired, which leaves the check off).
+func (a *API) recipientsAllowed(w http.ResponseWriter, r *http.Request, spaceID string, keys []wrappedKeyInput) bool {
 	if a.authorizer == nil {
 		return true
 	}
@@ -141,10 +150,20 @@ func (a *API) recipientsAllowed(w http.ResponseWriter, r *http.Request, keys []w
 		httpapi.Fail(w, r, problem.Internal())
 		return false
 	}
+	var services map[string]bool
+	if spaceID != "" {
+		if services, err = a.store.GrantedServiceRecipients(r.Context(), spaceID); err != nil {
+			a.log.Error("checking service wrap recipients", "error", err)
+			httpapi.Fail(w, r, problem.Internal())
+			return false
+		}
+	}
 	for _, k := range keys {
-		if !allowed[k.Recipient] {
+		if !allowed[k.Recipient] && !services[k.Recipient] {
 			httpapi.Fail(w, r, problem.Forbidden(
-				"recipient "+k.Recipient+" is not an enrolled device or recovery key — a space key is wrapped only for pinned recipients (enrol-before-wrap, ADR-0049)"))
+				"recipient "+k.Recipient+" is not an enrolled device or recovery key, nor a registered service recipient "+
+					"whose executor holds a grant on this space — a space key is wrapped only for pinned recipients "+
+					"(enrol-before-wrap, ADR-0049, ADR-0104)").WithCode(CodeWrapRecipientNotAllowed))
 			return false
 		}
 	}
@@ -205,6 +224,13 @@ func (a *API) Mount(r chi.Router) {
 	// owner's consent act: `write`, and from a Device credential only (grants.go).
 	write.With(httpapi.RefuseRestricted).Post("/spaces/{id}/grants", a.grantAccess)
 	write.With(httpapi.RefuseRestricted).Delete("/spaces/{id}/grants/{principal}", a.revokeAccess)
+	// Registering an executor's public key as a service recipient (ADR-0104)
+	// pins it as a wrap target, so it is consent too: `write`, from a Device
+	// credential only. Listing them is a read, closed to an executor (which
+	// learns its own wraps from /spaces/{id}/keys) and to a Guest.
+	r.With(httpapi.RefuseGuest, httpapi.RefuseRestricted).Get("/service-recipients", a.listRecipients)
+	write.With(httpapi.RefuseRestricted).Post("/service-recipients", a.registerRecipient)
+	write.With(httpapi.RefuseRestricted).Delete("/service-recipients/{ref}", a.removeRecipient)
 }
 
 // replicateResult is the ack of an on-demand reconcile: how many (peer, space)
@@ -336,7 +362,7 @@ func (a *API) createSpace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if !a.recipientsAllowed(w, r, req.WrappedKeys) {
+	if !a.recipientsAllowed(w, r, "", req.WrappedKeys) {
 		return
 	}
 	sp, err := a.store.PutSpaceOwned(r.Context(), req.ID, spaces.Kind(req.Kind), spaceOwner(r))
@@ -424,7 +450,7 @@ func (a *API) rewrapKeys(w http.ResponseWriter, r *http.Request) {
 		httpapi.Fail(w, r, problem.BadRequest("a re-wrap needs at least one wrapped key"))
 		return
 	}
-	if !a.recipientsAllowed(w, r, req.WrappedKeys) {
+	if !a.recipientsAllowed(w, r, spaceID, req.WrappedKeys) {
 		return
 	}
 	for _, k := range req.WrappedKeys {
@@ -522,6 +548,10 @@ func (a *API) failStore(w http.ResponseWriter, r *http.Request, doing string, er
 	switch {
 	case errors.Is(err, store.ErrUnknownSpace):
 		httpapi.Fail(w, r, problem.NotFound(err.Error()))
+	case errors.Is(err, store.ErrServiceRecipientUngranted):
+		httpapi.Fail(w, r, problem.Forbidden(err.Error()+
+			" — a space key is wrapped for an executor only while it holds an active grant on the space (ADR-0104)").
+			WithCode(CodeWrapRecipientNotAllowed))
 	case errors.Is(err, store.ErrStaleKeyEpoch):
 		httpapi.Fail(w, r, problem.Conflict(
 			"the space key has been rotated; re-open the space and wrap the current key ("+err.Error()+")").

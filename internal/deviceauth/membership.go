@@ -205,6 +205,14 @@ func (s *Store) reconcileTx(ctx context.Context, tx *sql.Tx, user User, now time
 			continue // cannot happen: a member's admitting op is in the state
 		}
 		expires := member.ExpiresAt.UTC().Format(timeFormat)
+		// A device whose encryption key is an executor's service recipient is
+		// never materialised or refreshed onto it (ADR-0104): that key would
+		// otherwise be both a member's and an executor's wrap target.
+		if err := refuseServiceRecipientKey(ctx, tx, member.DeviceEnc); errors.Is(err, ErrKeyIsServiceRecipient) {
+			continue
+		} else if err != nil {
+			return nil, err
+		}
 		if r, ok := existing[dev]; ok {
 			if r.cert == admitting.Token && r.enc == member.DeviceEnc && r.expires == expires {
 				continue

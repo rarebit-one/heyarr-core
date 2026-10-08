@@ -119,7 +119,7 @@ else
   snapshot_demo
   note "REVOCATION CUTS ACCESS: a device is revoked by rotating the space key (§41, ADR-0022, ADR-0049, #361)"
   revocation_demo
-  note "RESTRICTED PRINCIPALS: an executor reaches only the spaces an owner's device granted it (ADR-0104)"
+  note "RESTRICTED PRINCIPALS: an executor reaches only the spaces an owner's device granted it, and decrypts only what was wrapped for its registered key (ADR-0104)"
   restricted_principal_demo
   note "THE VAULT PLACEMENT PIN: a vault blob replicates and is retained by a pin, not an asset (ADR-0096, #540)"
   vault_placement_demo
