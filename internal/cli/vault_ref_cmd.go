@@ -18,6 +18,7 @@ import (
 	apiclient "github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaceopen"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/vaultframe"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/vaultread"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/vaultref"
 )
@@ -41,7 +42,8 @@ const (
 	ExitVaultAbsent = 6
 	// ExitVaultIntegrity: the node served bytes that are not the object the
 	// ref names — a manifest or content blob that does not hash to its id, or
-	// a frame that is not this file's (vaultread.ErrBlobIntegrity). Something
+	// a frame that is not this file's (vaultread.ErrBlobIntegrity), or a
+	// manifest whose geometry is impossible (vaultframe.ErrManifest). Something
 	// was served, and it was wrong: not an absent object, and not one to
 	// retry as if it were.
 	ExitVaultIntegrity = 7
@@ -85,7 +87,7 @@ type vaultObjectEnvelope struct {
 // anything else. A 401/403 still means access went away.
 func classifyOpenedRead(ref string, err error) error {
 	switch {
-	case errors.Is(err, vaultread.ErrBlobIntegrity):
+	case errors.Is(err, vaultread.ErrBlobIntegrity), errors.Is(err, vaultframe.ErrManifest):
 		return withExit(ExitVaultIntegrity, fmt.Errorf("%s: %w", ref, err))
 	case errors.Is(err, errVaultPathAbsent), errors.Is(err, errVaultPathConflicted), isNotFound(err):
 		return withExit(ExitVaultAbsent, fmt.Errorf("%s: %w", ref, err))

@@ -2,6 +2,7 @@ package vaultframe_test
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/rarebit-one/void-which-binds-go/encryption"
@@ -190,5 +191,65 @@ func TestEmptyFile(t *testing.T) {
 	got, err := m.OpenRange(sk, 0, 0, func(int64, int64) ([]byte, error) { return nil, nil })
 	if err != nil || len(got) != 0 {
 		t.Fatalf("empty range read: %v, %d bytes", err, len(got))
+	}
+}
+
+// TestOpenManifestRefusesImpossibleGeometry (#712): a manifest that opens under
+// the right key but could not have come from Seal is ErrManifest, never a
+// geometry a reader would size buffers or frame ranges from. Every case is a
+// manifest the Kotlin client's VaultFrame.validateManifest also refuses.
+func TestOpenManifestRefusesImpossibleGeometry(t *testing.T) {
+	t.Parallel()
+	sk := mustKey(t)
+	_, good := sealToBytes(t, sk, pattern(vaultframe.FrameSize+5)) // two frames, the last short
+	_, empty := sealToBytes(t, sk, nil)
+	for _, m := range []vaultframe.Manifest{good, empty} {
+		sealed, err := vaultframe.SealManifest(sk, m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := vaultframe.OpenManifest(sk, sealed); err != nil {
+			t.Fatalf("a manifest Seal wrote is refused: %v (%+v)", err, m)
+		}
+	}
+
+	cases := map[string]func(m *vaultframe.Manifest){
+		"another version":           func(m *vaultframe.Manifest) { m.Version = 2 },
+		"a short file id":           func(m *vaultframe.Manifest) { m.FileID = m.FileID[:30] },
+		"an upper-case file id":     func(m *vaultframe.Manifest) { m.FileID = "ABCDEF" + m.FileID[6:] },
+		"a non-hex file id":         func(m *vaultframe.Manifest) { m.FileID = "zz" + m.FileID[2:] },
+		"a content id of no scheme": func(m *vaultframe.Manifest) { m.Content = m.Content[len("blake3:"):] },
+		"a short content id":        func(m *vaultframe.Manifest) { m.Content = m.Content[:20] },
+		"a zero frame size":         func(m *vaultframe.Manifest) { m.FrameSize = 0 },
+		"a frame size over 1 MiB":   func(m *vaultframe.Manifest) { m.FrameSize = vaultframe.FrameSize + 1 },
+		"a negative plaintext size": func(m *vaultframe.Manifest) { m.PlaintextSize = -1 },
+		"too few frames":            func(m *vaultframe.Manifest) { m.FrameCount = 1 },
+		"too many frames":           func(m *vaultframe.Manifest) { m.FrameCount = 3 },
+		"a negative frame count":    func(m *vaultframe.Manifest) { m.FrameCount = -1 },
+		"frames for an empty file":  func(m *vaultframe.Manifest) { m.PlaintextSize = 0 },
+	}
+	for name, mutate := range cases {
+		m := good
+		mutate(&m)
+		sealed, err := vaultframe.SealManifest(sk, m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := vaultframe.OpenManifest(sk, sealed); !errors.Is(err, vaultframe.ErrManifest) {
+			t.Errorf("%s: OpenManifest = %v, want ErrManifest", name, err)
+		}
+	}
+
+	notJSON, err := encryption.EncryptChange(sk, []byte("not a manifest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vaultframe.OpenManifest(sk, notJSON); !errors.Is(err, vaultframe.ErrManifest) {
+		t.Errorf("undecodable manifest: OpenManifest = %v, want ErrManifest", err)
+	}
+	// A wrong key is still the library's decrypt refusal, so a keyring moves on.
+	sealed, _ := vaultframe.SealManifest(sk, good)
+	if _, err := vaultframe.OpenManifest(mustKey(t), sealed); !errors.Is(err, encryption.ErrDecrypt) {
+		t.Errorf("wrong key: OpenManifest = %v, want encryption.ErrDecrypt", err)
 	}
 }
