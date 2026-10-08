@@ -664,9 +664,13 @@ func (p personalStateBackend) PutSpace(ctx context.Context, spaceID, kind string
 	return translateStateErr(err)
 }
 
-func (p personalStateBackend) PutWrappedKey(ctx context.Context, spaceID, recipient string, wrapped []byte) error {
-	_, err := p.store.PutWrappedKey(ctx, spaceID, recipient, wrapped)
+func (p personalStateBackend) PutWrappedKey(ctx context.Context, spaceID, recipient string, wrapped []byte, epoch int) error {
+	_, err := p.store.PutWrappedKey(ctx, spaceID, recipient, wrapped, epoch)
 	return translateStateErr(err)
+}
+
+func (p personalStateBackend) PutKeyHistory(ctx context.Context, spaceID string, epoch int, sealedPrev []byte) error {
+	return translateStateErr(p.store.PutKeyHistory(ctx, spaceID, epoch, sealedPrev))
 }
 
 func (p personalStateBackend) LatestSnapshotFor(ctx context.Context, spaceID string) (protocol.EncryptedSnapshot, bool, error) {
@@ -679,18 +683,28 @@ func (p personalStateBackend) PutSnapshot(ctx context.Context, snap protocol.Enc
 }
 
 // translateStateErr maps the store's sentinels into the peer surface's own, so
-// peerapi answers 404/400 without importing persistence: an unknown space becomes
-// ErrNoSuchSpace, and a malformed push (bad kind, empty recipient or wrapped
-// bytes) becomes ErrInvalidState.
+// peerapi answers 404/409/400 without importing persistence: an unknown space
+// becomes ErrNoSuchSpace; a wrap at a superseded or unreached key epoch, or a
+// forked history row, becomes its key-epoch sentinel (ADR-0103); and a malformed
+// push (bad kind, empty recipient, wrapped or sealed bytes, a bad epoch) becomes
+// ErrInvalidState.
 func translateStateErr(err error) error {
 	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, psstore.ErrUnknownSpace):
 		return peerapi.ErrNoSuchSpace
+	case errors.Is(err, psstore.ErrStaleKeyEpoch):
+		return fmt.Errorf("%w: %w", peerapi.ErrKeySuperseded, err)
+	case errors.Is(err, psstore.ErrFutureKeyEpoch):
+		return fmt.Errorf("%w: %w", peerapi.ErrKeyEpochAhead, err)
+	case errors.Is(err, psstore.ErrKeyHistoryConflict):
+		return fmt.Errorf("%w: %w", peerapi.ErrKeyHistoryFork, err)
 	case errors.Is(err, spaces.ErrUnknownKind),
 		errors.Is(err, psstore.ErrEmptyRecipient),
-		errors.Is(err, psstore.ErrEmptyWrapped):
+		errors.Is(err, psstore.ErrEmptyWrapped),
+		errors.Is(err, psstore.ErrEmptySealedPrev),
+		errors.Is(err, psstore.ErrInvalidKeyEpoch):
 		return fmt.Errorf("%w: %w", peerapi.ErrInvalidState, err)
 	default:
 		return err

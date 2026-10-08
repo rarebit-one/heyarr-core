@@ -2,6 +2,7 @@ package replication
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -17,6 +18,9 @@ import (
 type ReadStore interface {
 	ListSpaces(ctx context.Context) ([]spaces.EncryptedSpace, error)
 	WrappedKeysFor(ctx context.Context, spaceID string) ([]store.WrappedKey, error)
+	// KeyHistory returns a space's opaque key chain, oldest epoch first
+	// (ADR-0103), so the reconciler moves a rotation before the wraps it made.
+	KeyHistory(ctx context.Context, spaceID string) ([]store.KeyHistoryEntry, error)
 	ChangesFor(ctx context.Context, spaceID string) ([]protocol.EncryptedChange, error)
 	// LatestSnapshotFor returns the newest snapshot held for a space (§44), and
 	// whether one exists, so the reconciler can replicate it too. ok is false with
@@ -80,18 +84,39 @@ func Reconcile(ctx context.Context, local ReadStore, pusher Pusher, targets []Ta
 	return outcomes
 }
 
-// replicateSpace reconciles one space to one target: push its identity, its
-// wrapped keys, then the changes the target is missing. Idempotent at every step.
+// replicateSpace reconciles one space to one target: push its identity, its key
+// history, its wrapped keys, then the changes the target is missing. Idempotent
+// at every step.
+//
+// History goes before wraps, oldest epoch first (ADR-0103): a row moves the
+// target to its epoch and drops the wraps below it, so the wraps that follow land
+// at the epoch they seal, and a recipient a rotation left out loses its copy on
+// the target too. A wrap the target refuses as superseded means THIS node is
+// behind (a newer rotation reached the target first); the copy is skipped rather
+// than failing the space, and it is never resurrected.
 func replicateSpace(ctx context.Context, local ReadStore, pusher Pusher, t Target, sp spaces.EncryptedSpace) (int, error) {
 	if err := pusher.PushSpace(ctx, t, sp.ID, string(sp.Kind)); err != nil {
 		return 0, err
+	}
+	history, err := local.KeyHistory(ctx, sp.ID)
+	if err != nil {
+		return 0, fmt.Errorf("reading key history for %s: %w", sp.ID, err)
+	}
+	for _, h := range history {
+		if err := pusher.PushKeyHistory(ctx, t, sp.ID, h.Epoch, h.SealedPrev); err != nil {
+			return 0, err
+		}
 	}
 	keys, err := local.WrappedKeysFor(ctx, sp.ID)
 	if err != nil {
 		return 0, fmt.Errorf("reading wrapped keys for %s: %w", sp.ID, err)
 	}
 	for _, k := range keys {
-		if err := pusher.PushWrappedKey(ctx, t, sp.ID, k.Recipient, k.Wrapped); err != nil {
+		err := pusher.PushWrappedKey(ctx, t, sp.ID, k.Recipient, k.Wrapped, k.Epoch)
+		if errors.Is(err, ErrWrapSuperseded) {
+			continue
+		}
+		if err != nil {
 			return 0, err
 		}
 	}

@@ -27,9 +27,11 @@ With --from-blob the wrapped copies come from an exported recovery blob
 (`heyarr space export-recovery`) instead of the control database, so recovery
 needs no database at all. Anyone who knows your recovery PUBLIC key could make a
 blob, so a key from one is not trusted for writing on its word: with --rewrap,
-each key must first decrypt the newest content this node's database holds for
-its space, and a key that does not (a stale blob from before the space was
-re-keyed, or a forged one) is refused (ADR-0022 addendum).
+each key must be its space's current key — it must open the newest entry of the
+space's key history, when there is one — and the newest content this node's
+database holds for the space must open under it or an earlier key it unrolls to.
+A key that fails either (a stale blob from before the space was re-keyed, or a
+forged one) is refused (ADR-0022 addendum, ADR-0103).
 
 The secret is read from --secret-file, or from --secret, or from standard input
 — prefer a file or a pipe, since a secret in argv is visible in ps and shell

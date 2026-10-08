@@ -66,6 +66,12 @@ type Replicator interface {
 // behaviour). A controller always wires one; the acceptance demo proves it is on.
 type RecipientAuthorizer interface {
 	AllowedWrapRecipients(ctx context.Context) (map[string]bool, error)
+	// RecoveryWrapRecipients is the subset of those keys that are users'
+	// recovery keys (ADR-0022). A rotation must re-wrap every one of them that
+	// holds a copy of the current key (ADR-0103), because the key history seals
+	// backwards only: a recovery key left on the old key never reaches the new
+	// one, and offline recovery would be lost without anyone noticing.
+	RecoveryWrapRecipients(ctx context.Context) (map[string]bool, error)
 }
 
 // Options configure the API.
@@ -137,6 +143,7 @@ func (a *API) Mount(r chi.Router) {
 	// here at all".)
 	r.With(httpapi.RefuseGuest).Get("/spaces", a.listSpaces)
 	r.With(httpapi.RefuseGuest).Get("/spaces/{id}/keys", a.listWrappedKeys)
+	r.With(httpapi.RefuseGuest).Get("/spaces/{id}/key-history", a.listKeyHistory)
 	r.With(httpapi.RefuseGuest).Get("/spaces/{id}/changes", a.listChanges)
 	r.With(httpapi.RefuseGuest).Get("/spaces/{id}/snapshot", a.getSnapshot)
 
@@ -148,6 +155,10 @@ func (a *API) Mount(r chi.Router) {
 	// so it needs `admin` (§41, ADR-0049, #361).
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces/{id}/keys", a.rewrapKeys)
 	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Delete("/spaces/{id}/keys/{recipient}", a.revokeKey)
+	// Rotating a space's key (ADR-0103) re-wraps it for the listed recipients
+	// and drops every other copy — it removes access, like revokeKey, so it needs
+	// `admin`.
+	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/spaces/{id}/rotate", a.rotateKey)
 	// A snapshot is materialised and encrypted on the device (§44); pushing it is
 	// a write, like a change.
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/spaces/{id}/snapshots", a.putSnapshot)
@@ -187,9 +198,13 @@ func (a *API) replicate(w http.ResponseWriter, r *http.Request) {
 // wrappedKeyInput is one recipient's sealed copy of a space key as a device
 // pushes it. Wrapped is opaque bytes (encryption.Seal output), base64 on the wire
 // via encoding/json's []byte handling — the peer stores it and cannot open it.
+//
+// Epoch is the key epoch the copy seals (ADR-0103); absent means 0, the space's
+// original key. It must be the space's current epoch, or the push is a 409.
 type wrappedKeyInput struct {
 	Recipient string `json:"recipient"`
 	Wrapped   []byte `json:"wrapped"`
+	Epoch     int    `json:"epoch,omitempty"`
 }
 
 // createSpaceRequest is POST /spaces: a client-minted space and the wrapped
@@ -236,12 +251,15 @@ type spacesView struct {
 type wrappedKeyView struct {
 	Recipient string `json:"recipient"`
 	Wrapped   []byte `json:"wrapped"`
+	Epoch     int    `json:"epoch"`
 	CreatedAt string `json:"created_at"`
 }
 
-// wrappedKeysView is the list envelope.
+// wrappedKeysView is the list envelope. KeyEpoch is the space's current key
+// epoch (ADR-0103) — what a device wraps at when it adds a recipient.
 type wrappedKeysView struct {
 	SpaceID     string           `json:"space_id"`
+	KeyEpoch    int              `json:"key_epoch"`
 	WrappedKeys []wrappedKeyView `json:"wrapped_keys"`
 }
 
@@ -272,6 +290,14 @@ func (a *API) createSpace(w http.ResponseWriter, r *http.Request) {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	}
+	// A new space has only its original key, epoch 0 (ADR-0103). Checked before
+	// the space is recorded, so a refused create leaves no orphan space behind.
+	for _, k := range req.WrappedKeys {
+		if k.Epoch != 0 {
+			httpapi.Fail(w, r, problem.BadRequest("a new space's wrapped keys seal its original key: epoch must be 0 or absent"))
+			return
+		}
+	}
 	if !a.recipientsAllowed(w, r, req.WrappedKeys) {
 		return
 	}
@@ -283,7 +309,7 @@ func (a *API) createSpace(w http.ResponseWriter, r *http.Request) {
 	// Wrap copies land after the space exists. Each is opaque; a bad recipient or
 	// empty blob is a 400, not a partial success left to confuse the device.
 	for _, k := range req.WrappedKeys {
-		if _, err := a.store.PutWrappedKey(r.Context(), sp.ID, k.Recipient, k.Wrapped); err != nil {
+		if _, err := a.store.PutWrappedKey(r.Context(), sp.ID, k.Recipient, k.Wrapped, k.Epoch); err != nil {
 			a.failStore(w, r, "recording a wrapped key", err)
 			return
 		}
@@ -306,25 +332,30 @@ func (a *API) listSpaces(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) listWrappedKeys(w http.ResponseWriter, r *http.Request) {
 	spaceID := chi.URLParam(r, "id")
-	keys, err := a.store.WrappedKeysFor(r.Context(), spaceID)
+	// One read: the epoch and the wraps must describe the same moment, or a
+	// rotation landing in between pairs a new epoch with old copies.
+	epoch, keys, err := a.store.KeyState(r.Context(), spaceID)
 	if err != nil {
 		a.failStore(w, r, "listing wrapped keys", err)
 		return
 	}
-	out := wrappedKeysView{SpaceID: spaceID, WrappedKeys: make([]wrappedKeyView, 0, len(keys))}
+	out := wrappedKeysView{SpaceID: spaceID, KeyEpoch: epoch, WrappedKeys: make([]wrappedKeyView, 0, len(keys))}
 	for _, k := range keys {
 		out.WrappedKeys = append(out.WrappedKeys, wrappedKeyView{
 			Recipient: k.Recipient,
 			Wrapped:   k.Wrapped,
+			Epoch:     k.Epoch,
 			CreatedAt: k.CreatedAt.UTC().Format(timeFormat),
 		})
 	}
 	a.write(w, r, http.StatusOK, out)
 }
 
-// rewrapKeys replaces the wrapped copies of a space's key after a rotation — the
-// remaining recipients' copies now seal the NEW key (#361). Each is opaque; the
-// peer upserts it and opens none. Idempotent per (space, recipient), like create.
+// rewrapKeys stores wrapped copies of a space's CURRENT key — how a recipient is
+// added (and how the pre-ADR-0103 playlist rotation re-wraps, #361). Each is
+// opaque; the peer upserts it and opens none. Idempotent per (space, recipient),
+// like create. Each copy names the key epoch it seals (absent = 0); a superseded
+// or unreached epoch is a 409, so a device holding an old key cannot hand it out.
 func (a *API) rewrapKeys(w http.ResponseWriter, r *http.Request) {
 	spaceID := chi.URLParam(r, "id")
 	var req rewrapRequest
@@ -340,7 +371,7 @@ func (a *API) rewrapKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, k := range req.WrappedKeys {
-		if _, err := a.store.PutWrappedKey(r.Context(), spaceID, k.Recipient, k.Wrapped); err != nil {
+		if _, err := a.store.PutWrappedKey(r.Context(), spaceID, k.Recipient, k.Wrapped, k.Epoch); err != nil {
 			a.failStore(w, r, "re-wrapping a space key", err)
 			return
 		}
@@ -420,16 +451,37 @@ func (a *API) listChanges(w http.ResponseWriter, r *http.Request) {
 // --- helpers ------------------------------------------------------------------
 
 // failStore maps a store/domain error to a problem document. An unknown space is
-// a 404; a bad kind, a malformed id, an empty wrapped key or a change that fails
-// its content-address check are the caller's 400; anything else is a 500 the
-// caller cannot act on and the log carries.
+// a 404; a wrap at a superseded or unreached key epoch, or a rotation that lost a
+// race, is a 409 (ADR-0103); a bad kind, a malformed id, an empty wrapped key or a
+// change that fails its content-address check are the caller's 400; anything
+// else is a 500 the caller cannot act on and the log carries.
 func (a *API) failStore(w http.ResponseWriter, r *http.Request, doing string, err error) {
 	switch {
 	case errors.Is(err, store.ErrUnknownSpace):
 		httpapi.Fail(w, r, problem.NotFound(err.Error()))
+	case errors.Is(err, store.ErrStaleKeyEpoch):
+		httpapi.Fail(w, r, problem.Conflict(
+			"the space key has been rotated; re-open the space and wrap the current key ("+err.Error()+")").
+			WithCode(CodeKeyEpochStale))
+	case errors.Is(err, store.ErrFutureKeyEpoch):
+		httpapi.Fail(w, r, problem.Conflict(
+			"the space key has been rotated; re-open the space and wrap the current key ("+err.Error()+")").
+			WithCode(CodeKeyEpochAhead))
+	case errors.Is(err, store.ErrKeyEpochConflict):
+		httpapi.Fail(w, r, problem.Conflict(
+			"another rotation of this space landed first; re-open the space and rotate from its current key ("+err.Error()+")").
+			WithCode(CodeKeyEpochConflict))
+	case errors.Is(err, store.ErrRotationDropsPreserved):
+		httpapi.Fail(w, r, problem.Conflict(
+			"a rotation must re-wrap the recovery key: it holds a copy of the current key, and leaving it out "+
+				"would end offline recovery for this space ("+err.Error()+")").
+			WithCode(CodeRotationDropsRecovery))
 	case errors.Is(err, spaces.ErrUnknownKind),
 		errors.Is(err, store.ErrEmptyRecipient),
 		errors.Is(err, store.ErrEmptyWrapped),
+		errors.Is(err, store.ErrInvalidKeyEpoch),
+		errors.Is(err, store.ErrEmptySealedPrev),
+		errors.Is(err, store.ErrNoRotationWraps),
 		errors.Is(err, protocol.ErrIncomplete),
 		errors.Is(err, protocol.ErrIDMismatch),
 		errors.Is(err, protocol.ErrSnapshotIncomplete),

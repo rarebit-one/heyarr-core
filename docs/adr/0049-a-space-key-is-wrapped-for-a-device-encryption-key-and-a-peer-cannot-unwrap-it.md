@@ -2,6 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-08-26
+**Amended:** 2026-10-08 by [ADR-0103](0103-a-space-key-has-epochs-and-a-rotation-seals-the-previous-key-under-the-next.md). A space has one *current* key, not one key: each rotation advances a key epoch and stores the previous key sealed under the new one, so rotation is a pure re-key and pre-rotation content stays readable. Revocation stays forward-only.
 
 ## Context
 

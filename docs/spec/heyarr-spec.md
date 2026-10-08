@@ -1010,6 +1010,10 @@ Each authorized device receives a wrapped version of relevant space keys.
 
 Full Peers store wrapped keys but cannot unwrap them.
 
+A space key has an epoch, and rotating it does not strand earlier content: each
+rotation stores the previous key sealed under the new one, an opaque row the
+peer cannot open, and every wrapped key names the epoch it seals (ADR-0103).
+
 42. CRDT-Native Personal State
 Private synchronized state should use client-side CRDT semantics.
 

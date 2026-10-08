@@ -3,6 +3,8 @@ package scenario_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -49,9 +51,18 @@ func (p storePusher) PushSpace(ctx context.Context, _ replication.Target, spaceI
 	return err
 }
 
-func (p storePusher) PushWrappedKey(ctx context.Context, _ replication.Target, spaceID, recipient string, wrapped []byte) error {
-	_, err := p.target.PutWrappedKey(ctx, spaceID, recipient, wrapped)
+func (p storePusher) PushWrappedKey(ctx context.Context, _ replication.Target, spaceID, recipient string, wrapped []byte, epoch int) error {
+	_, err := p.target.PutWrappedKey(ctx, spaceID, recipient, wrapped, epoch)
+	if errors.Is(err, store.ErrStaleKeyEpoch) {
+		// What the peer route answers (409 key_epoch_superseded) and the real
+		// client turns into ErrWrapSuperseded.
+		return fmt.Errorf("%w: %w", replication.ErrWrapSuperseded, err)
+	}
 	return err
+}
+
+func (p storePusher) PushKeyHistory(ctx context.Context, _ replication.Target, spaceID string, epoch int, sealedPrev []byte) error {
+	return p.target.PutKeyHistory(ctx, spaceID, epoch, sealedPrev)
 }
 
 func (p storePusher) Heads(ctx context.Context, _ replication.Target, spaceID string) ([]string, error) {
@@ -165,7 +176,7 @@ func TestConvergeAfterPartition(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, w := range wrapped {
-		if _, err := peerA.PutWrappedKey(ctx, sp.ID, w.Recipient, w.Wrapped); err != nil {
+		if _, err := peerA.PutWrappedKey(ctx, sp.ID, w.Recipient, w.Wrapped, 0); err != nil {
 			t.Fatal(err)
 		}
 	}

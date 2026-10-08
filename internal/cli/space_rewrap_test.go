@@ -925,7 +925,7 @@ func TestSpaceRewrapUpload(t *testing.T) {
 	}
 	c := newRewrapController(t, f, gen1VectorSpace)
 	gen1Wrap := mustHexDecode(t, "00")
-	if _, err := c.h.spaces.PutWrappedKey(context.Background(), gen1VectorSpace, f.v.Recipient, gen1Wrap); err != nil {
+	if _, err := c.h.spaces.PutWrappedKey(context.Background(), gen1VectorSpace, f.v.Recipient, gen1Wrap, 0); err != nil {
 		t.Fatal(err)
 	}
 

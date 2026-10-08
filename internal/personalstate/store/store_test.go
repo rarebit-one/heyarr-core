@@ -84,7 +84,7 @@ func TestUnknownSpaceRefused(t *testing.T) {
 	if _, err := s.Space(ctx, "missing"); !errors.Is(err, store.ErrUnknownSpace) {
 		t.Fatalf("Space(missing) = %v, want ErrUnknownSpace", err)
 	}
-	if _, err := s.PutWrappedKey(ctx, "missing", "x25519:aa", []byte{1}); !errors.Is(err, store.ErrUnknownSpace) {
+	if _, err := s.PutWrappedKey(ctx, "missing", "x25519:aa", []byte{1}, 0); !errors.Is(err, store.ErrUnknownSpace) {
 		t.Fatalf("PutWrappedKey(missing space) = %v, want ErrUnknownSpace", err)
 	}
 }
@@ -98,10 +98,10 @@ func TestPutAndFetchWrappedKeys(t *testing.T) {
 	_, aID := device(t)
 	_, bID := device(t)
 	blobA, blobB := []byte("wrapped-for-a"), []byte("wrapped-for-b")
-	if _, err := s.PutWrappedKey(ctx, sp.ID, aID, blobA); err != nil {
+	if _, err := s.PutWrappedKey(ctx, sp.ID, aID, blobA, 0); err != nil {
 		t.Fatalf("PutWrappedKey a: %v", err)
 	}
-	if _, err := s.PutWrappedKey(ctx, sp.ID, bID, blobB); err != nil {
+	if _, err := s.PutWrappedKey(ctx, sp.ID, bID, blobB, 0); err != nil {
 		t.Fatalf("PutWrappedKey b: %v", err)
 	}
 
@@ -145,7 +145,7 @@ func TestStoredWrappedKeyOpensOnlyForItsTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.PutWrappedKey(ctx, sp.ID, targetID, wrapped); err != nil {
+	if _, err := s.PutWrappedKey(ctx, sp.ID, targetID, wrapped, 0); err != nil {
 		t.Fatalf("PutWrappedKey: %v", err)
 	}
 
@@ -192,10 +192,10 @@ func TestReWrapReplacesInPlace(t *testing.T) {
 	sp, _ := s.CreateSpace(ctx, spaces.KindShared)
 	_, rID := device(t)
 
-	if _, err := s.PutWrappedKey(ctx, sp.ID, rID, []byte("old")); err != nil {
+	if _, err := s.PutWrappedKey(ctx, sp.ID, rID, []byte("old"), 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.PutWrappedKey(ctx, sp.ID, rID, []byte("new")); err != nil {
+	if _, err := s.PutWrappedKey(ctx, sp.ID, rID, []byte("new"), 0); err != nil {
 		t.Fatal(err)
 	}
 	keys, err := s.WrappedKeysFor(ctx, sp.ID)
@@ -215,10 +215,10 @@ func TestEmptyInputsRefused(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
 	sp, _ := s.CreateSpace(ctx, spaces.KindResearch)
-	if _, err := s.PutWrappedKey(ctx, sp.ID, "", []byte{1}); !errors.Is(err, store.ErrEmptyRecipient) {
+	if _, err := s.PutWrappedKey(ctx, sp.ID, "", []byte{1}, 0); !errors.Is(err, store.ErrEmptyRecipient) {
 		t.Fatalf("empty recipient = %v, want ErrEmptyRecipient", err)
 	}
-	if _, err := s.PutWrappedKey(ctx, sp.ID, "x25519:aa", nil); !errors.Is(err, store.ErrEmptyWrapped) {
+	if _, err := s.PutWrappedKey(ctx, sp.ID, "x25519:aa", nil, 0); !errors.Is(err, store.ErrEmptyWrapped) {
 		t.Fatalf("empty wrapped = %v, want ErrEmptyWrapped", err)
 	}
 }

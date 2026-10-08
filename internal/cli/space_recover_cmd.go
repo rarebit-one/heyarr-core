@@ -69,9 +69,11 @@ With --from-blob the wrapped copies come from an exported recovery blob
 (` + "`heyarr space export-recovery`" + `) instead of the control database, so recovery
 needs no database at all. Anyone who knows your recovery PUBLIC key could make a
 blob, so a key from one is not trusted for writing on its word: with --rewrap,
-each key must first decrypt the newest content this node's database holds for
-its space, and a key that does not (a stale blob from before the space was
-re-keyed, or a forged one) is refused (ADR-0022 addendum).
+each key must be its space's current key — it must open the newest entry of the
+space's key history, when there is one — and the newest content this node's
+database holds for the space must open under it or an earlier key it unrolls to.
+A key that fails either (a stale blob from before the space was re-keyed, or a
+forged one) is refused (ADR-0022 addendum, ADR-0103).
 
 The secret is read from --secret-file, or from --secret, or from standard input
 — prefer a file or a pipe, since a secret in argv is visible in ps and shell
@@ -157,12 +159,20 @@ func runSpaceRecover(ctx context.Context, cmd *cobra.Command, configPath, device
 	res.Recovered, res.SpaceIDs = len(ids), ids
 
 	if rewrap && len(keys) > 0 {
+		st, err := openRecoverStore(ctx, db)
+		if err != nil {
+			return err
+		}
+		chains, err := currentKeyChains(ctx, st, keys, ids, fromBlob != "")
+		if err != nil {
+			return err
+		}
 		if fromBlob != "" {
-			if err := verifyBlobKeys(ctx, db.Reader(), keys, ids); err != nil {
+			if err := verifyBlobKeys(ctx, db.Reader(), chains, ids); err != nil {
 				return err
 			}
 		}
-		device, err := rewrapForThisDevice(ctx, db, deviceDir, keys, ids)
+		device, err := rewrapForThisDevice(ctx, st, deviceDir, keys, chains, ids)
 		if err != nil {
 			return err
 		}
@@ -177,11 +187,94 @@ func runSpaceRecover(ctx context.Context, cmd *cobra.Command, configPath, device
 	return nil
 }
 
+// openRecoverStore migrates the control database and opens the personal-state
+// store over it — the --rewrap path reads the key history and writes wraps.
+func openRecoverStore(ctx context.Context, db *sqlite.DB) (*psstore.Store, error) {
+	if err := sqlite.Migrate(ctx, db); err != nil {
+		return nil, fmt.Errorf("migrating the control database: %w", err)
+	}
+	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		return nil, err
+	}
+	return psstore.New(psstore.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
+}
+
+// errKeyNotCurrent is what a keyUnroller returns when the key it is given does
+// not open the space's newest key-history row: it is not the current key.
+var errKeyNotCurrent = errors.New("the key is not the space's current key")
+
+// keyUnroller opens a space's key history (ADR-0103) from the key claimed to be
+// current at epoch, returning the keys newest first — key_epoch … key_0. It
+// returns an error wrapping errKeyNotCurrent when current does not open the
+// newest row. history is ascending, epochs 1..epoch.
+type keyUnroller func(current encryption.SpaceKey, epoch int, history []psstore.KeyHistoryEntry) ([]encryption.SpaceKey, error)
+
+// unrollKeyChain is the production keyUnroller; tests swap it.
+//
+// TODO(#698): wire client.Unroll from the client keyring change (PR 1.3) here
+// once both have landed. The sealed_prev format is that change's to define, so
+// until then this opens only a space that has never been rotated, and a rotated
+// space refuses recovery with --rewrap rather than guessing a format.
+var unrollKeyChain keyUnroller = func(current encryption.SpaceKey, epoch int, history []psstore.KeyHistoryEntry) ([]encryption.SpaceKey, error) {
+	if epoch == 0 && len(history) == 0 {
+		return []encryption.SpaceKey{current}, nil
+	}
+	return nil, fmt.Errorf("the space has been re-keyed (epoch %d), and this build cannot open its key history yet (#698)", epoch)
+}
+
+// currentKeyChains proves each recovered key is its space's CURRENT key and
+// unrolls the space's key history from it (ADR-0103), returning per space the
+// keys newest first (key_N … key_0). A key that does not open the newest history
+// row is not the current key — a blob exported before a rotation, or a forged
+// one — and nothing is re-wrapped. Re-wrapping it at the current epoch would hand
+// this device a superseded key, and at its own epoch the store refuses it.
+//
+// For a space never rotated this proves nothing (there is no row to open);
+// verifyBlobKeys covers that case for a blob, and a key read from this database's
+// own recovery wrap is the current one by construction (a rotation drops every
+// older wrap).
+func currentKeyChains(ctx context.Context, st *psstore.Store, keys map[string]encryption.SpaceKey, ids []string, fromBlob bool) (map[string][]encryption.SpaceKey, error) {
+	out := make(map[string][]encryption.SpaceKey, len(ids))
+	for _, id := range ids {
+		history, err := st.KeyHistory(ctx, id)
+		if errors.Is(err, psstore.ErrUnknownSpace) && fromBlob {
+			return nil, fmt.Errorf("space %s: this database does not hold it, so the blob's key cannot be checked or re-wrapped", id)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("space %s: reading its key history: %w", id, err)
+		}
+		epoch := 0
+		if len(history) > 0 {
+			epoch = history[len(history)-1].Epoch
+		}
+		chain, err := unrollKeyChain(keys[id], epoch, history)
+		if err == nil && len(chain) != epoch+1 {
+			err = fmt.Errorf("the key history unrolled to %d keys, want %d", len(chain), epoch+1)
+		}
+		if errors.Is(err, errKeyNotCurrent) {
+			if fromBlob {
+				return nil, fmt.Errorf("space %s: the blob's key is not the space's current key (epoch %d) — "+
+					"the blob is stale (the space was re-keyed after it was exported) or forged; nothing was re-wrapped. "+
+					"Re-export it with `heyarr space export-recovery`", id, epoch)
+			}
+			return nil, fmt.Errorf("space %s: the recovery copy in this database is not the space's current key (epoch %d); nothing was re-wrapped", id, epoch)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("space %s: %w", id, err)
+		}
+		out[id] = chain
+	}
+	return out, nil
+}
+
 // rewrapForThisDevice re-seals each recovered space key for this machine's device
 // encryption key and stores the wrapped copies (ADR-0022's recovery tail), so the
 // device reads the spaces going forward. It writes the control DB, so it is an
-// offline step (controller stopped). Returns the device recipient id it wrapped for.
-func rewrapForThisDevice(ctx context.Context, db *sqlite.DB, deviceDir string, keys map[string]encryption.SpaceKey, ids []string) (string, error) {
+// offline step (controller stopped). Each key has been proven current by
+// currentKeyChains, so it is wrapped at the space's current epoch — the length
+// of the chain below it (ADR-0103). Returns the device recipient id it wrapped for.
+func rewrapForThisDevice(ctx context.Context, st *psstore.Store, deviceDir string, keys map[string]encryption.SpaceKey, chains map[string][]encryption.SpaceKey, ids []string) (string, error) {
 	deviceID, err := deviceRecipient(deviceDir)
 	if err != nil {
 		return "", fmt.Errorf("reading this machine's device key to re-wrap for (enrol it first with `heyarr identity recover`): %w", err)
@@ -191,20 +284,9 @@ func rewrapForThisDevice(ctx context.Context, db *sqlite.DB, deviceDir string, k
 	if err != nil {
 		return "", err
 	}
-
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		return "", fmt.Errorf("migrating the control database: %w", err)
-	}
-	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
-	if err != nil {
-		return "", err
-	}
-	st, err := psstore.New(psstore.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
-	if err != nil {
-		return "", err
-	}
 	for _, id := range ids {
-		if _, err := st.PutWrappedKey(ctx, id, deviceID, rewrapped[id]); err != nil {
+		epoch := len(chains[id]) - 1
+		if _, err := st.PutWrappedKey(ctx, id, deviceID, rewrapped[id], epoch); err != nil {
 			return "", fmt.Errorf("storing the re-wrapped key for space %q: %w", id, err)
 		}
 	}
@@ -215,13 +297,16 @@ func rewrapForThisDevice(ctx context.Context, db *sqlite.DB, deviceDir string, k
 // it is re-wrapped for this device (ADR-0022 addendum). A blob is sealed to the
 // recovery PUBLIC key, so opening one proves nothing about who made it: a forger
 // can seal keys of their choosing, and re-wrapping such a key would have this
-// device write future content under a key the forger holds. So each key must
-// decrypt the NEWEST ciphertext (change or snapshot) this database holds for its
-// space. That ties the key to content the space's real writers produced, and to
-// the current key rather than one a rotation has since replaced (the rotation's
-// snapshot is newer than anything under the old key). A space with no content
-// here cannot be checked and is refused; nothing in it could be read anyway.
-func verifyBlobKeys(ctx context.Context, r *sql.DB, keys map[string]encryption.SpaceKey, ids []string) error {
+// device write future content under a key the forger holds. So the NEWEST
+// ciphertext (change or snapshot) this database holds for each space must open
+// under the key or one it unrolls to (ADR-0103). That ties the key to content the
+// space's real writers produced. It must be "or one it unrolls to" because a
+// rotation is a pure re-key: nothing is re-encrypted, so right after one the
+// newest content is still under an older key. Being the CURRENT key is proven
+// separately, by opening the newest history row (currentKeyChains). A space with
+// no content here cannot be checked and is refused; nothing in it could be read
+// anyway.
+func verifyBlobKeys(ctx context.Context, r *sql.DB, chains map[string][]encryption.SpaceKey, ids []string) error {
 	for _, id := range ids {
 		ct, ok, err := newestSpaceCiphertext(ctx, r, id)
 		if err != nil {
@@ -231,7 +316,14 @@ func verifyBlobKeys(ctx context.Context, r *sql.DB, keys map[string]encryption.S
 			return fmt.Errorf("space %s: this database holds no content for it to check the blob's key against, "+
 				"so the key is not re-wrapped (a blob can be forged; see `heyarr space recover --help`)", id)
 		}
-		if _, err := encryption.DecryptChange(keys[id], ct); err != nil {
+		opened := false
+		for _, k := range chains[id] {
+			if _, err := encryption.DecryptChange(k, ct); err == nil {
+				opened = true
+				break
+			}
+		}
+		if !opened {
 			return fmt.Errorf("space %s: the blob's key does not open this space's newest content — "+
 				"the blob is stale (the space was re-keyed after it was exported) or forged; nothing was re-wrapped", id)
 		}

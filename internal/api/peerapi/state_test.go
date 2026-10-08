@@ -26,9 +26,12 @@ type stubState struct {
 	changes   map[string][]protocol.EncryptedChange
 	unknown   map[string]bool
 	got       []protocol.EncryptedChange
-	gotSpaces map[string]string // space id -> kind
-	gotKeys   map[string]string // space id -> recipient (last)
-	badKind   string            // a kind PutSpace rejects as invalid
+	gotSpaces map[string]string         // space id -> kind
+	gotKeys   map[string]string         // space id -> recipient (last)
+	gotEpoch  map[string]int            // space id -> epoch of the last wrapped key
+	epochs    map[string]int            // space id -> the key epoch this stub holds
+	history   map[string]map[int]string // space id -> epoch -> sealed row
+	badKind   string                    // a kind PutSpace rejects as invalid
 
 	snapshots map[string]protocol.EncryptedSnapshot // space id -> latest snapshot
 	gotSnap   *protocol.EncryptedSnapshot           // the last snapshot PutSnapshot accepted
@@ -70,17 +73,53 @@ func (s *stubState) PutSpace(_ context.Context, spaceID, kind string) error {
 	return nil
 }
 
-func (s *stubState) PutWrappedKey(_ context.Context, spaceID, recipient string, wrapped []byte) error {
+func (s *stubState) PutWrappedKey(_ context.Context, spaceID, recipient string, wrapped []byte, epoch int) error {
 	if s.unknown[spaceID] {
 		return peerapi.ErrNoSuchSpace
 	}
 	if recipient == "" || len(wrapped) == 0 {
 		return peerapi.ErrInvalidState
 	}
+	switch current := s.epochs[spaceID]; {
+	case epoch < current:
+		return peerapi.ErrKeySuperseded
+	case epoch > current:
+		return peerapi.ErrKeyEpochAhead
+	}
 	if s.gotKeys == nil {
-		s.gotKeys = map[string]string{}
+		s.gotKeys, s.gotEpoch = map[string]string{}, map[string]int{}
 	}
 	s.gotKeys[spaceID] = recipient
+	s.gotEpoch[spaceID] = epoch
+	return nil
+}
+
+func (s *stubState) PutKeyHistory(_ context.Context, spaceID string, epoch int, sealedPrev []byte) error {
+	if s.unknown[spaceID] {
+		return peerapi.ErrNoSuchSpace
+	}
+	if epoch < 1 || len(sealedPrev) == 0 {
+		return peerapi.ErrInvalidState
+	}
+	if s.history == nil {
+		s.history = map[string]map[int]string{}
+	}
+	if s.history[spaceID] == nil {
+		s.history[spaceID] = map[int]string{}
+	}
+	if held, ok := s.history[spaceID][epoch]; ok {
+		if held != string(sealedPrev) {
+			return peerapi.ErrKeyHistoryFork
+		}
+		return nil
+	}
+	s.history[spaceID][epoch] = string(sealedPrev)
+	if s.epochs == nil {
+		s.epochs = map[string]int{}
+	}
+	if epoch > s.epochs[spaceID] {
+		s.epochs[spaceID] = epoch
+	}
 	return nil
 }
 
@@ -511,3 +550,72 @@ func repeatHexTest(unit string, n int) string {
 }
 
 func base64Std(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+
+// TestStateKeyEpochRoutes (ADR-0103): a sibling replicates a key-history row and
+// then a wrap at its epoch; a re-push of the same row is a 204, a forked one a
+// 409. A wrap at a superseded epoch is a 409 carrying key_epoch_superseded — the
+// code the replicator skips on — and one at an unreached epoch a 409 carrying
+// key_epoch_ahead.
+func TestStateKeyEpochRoutes(t *testing.T) {
+	t.Parallel()
+	const space = "0199a0a0-0000-7000-8000-0000000000bb"
+	a := newPeerNode(t, "peer-a-id", "peer-a")
+	b := newPeerNode(t, "peer-b-id", "peer-b")
+	root := newTrustRoot(a.member(), b.member())
+	st := &stubState{unknown: map[string]bool{"0199a0a0-0000-7000-8000-0000000000ff": true}}
+	l := serveState(t, a, root, st)
+	client := dialler(t, b, root)
+	recip := "x25519:" + repeatHexTest("cc", 32)
+	wrapBody := func(epoch string) string {
+		body := `{"recipient":"` + recip + `","wrapped":"` + base64Std("OPAQUE-WRAP") + `"`
+		if epoch != "" {
+			body += `,"epoch":` + epoch
+		}
+		return body + "}"
+	}
+
+	steps := []struct {
+		name     string
+		space    string
+		suffix   string
+		body     string
+		want     int
+		wantCode string
+	}{
+		{name: "a wrap with no epoch is epoch 0", suffix: "/keys", body: wrapBody(""), want: http.StatusNoContent},
+		{name: "a wrap ahead of the history", suffix: "/keys", body: wrapBody("1"), want: http.StatusConflict, wantCode: peerapi.CodeKeyEpochAhead},
+		{name: "the history row", suffix: "/key-history", body: `{"epoch":1,"sealed_prev":"` + base64Std("K0-UNDER-K1") + `"}`, want: http.StatusNoContent},
+		{name: "the same row again", suffix: "/key-history", body: `{"epoch":1,"sealed_prev":"` + base64Std("K0-UNDER-K1") + `"}`, want: http.StatusNoContent},
+		{name: "a forked row", suffix: "/key-history", body: `{"epoch":1,"sealed_prev":"` + base64Std("OTHER") + `"}`, want: http.StatusConflict, wantCode: peerapi.CodeKeyHistoryFork},
+		{name: "a wrap at the new epoch", suffix: "/keys", body: wrapBody("1"), want: http.StatusNoContent},
+		{name: "a superseded wrap", suffix: "/keys", body: wrapBody("0"), want: http.StatusConflict, wantCode: peerapi.CodeKeySuperseded},
+		{name: "a superseded wrap with no epoch", suffix: "/keys", body: wrapBody(""), want: http.StatusConflict, wantCode: peerapi.CodeKeySuperseded},
+		{name: "epoch 0 has no history row", suffix: "/key-history", body: `{"epoch":0,"sealed_prev":"AA=="}`, want: http.StatusBadRequest},
+		{name: "an unknown field", suffix: "/key-history", body: `{"epoch":2,"sealed_prev":"AA==","key":"x"}`, want: http.StatusBadRequest},
+		{name: "a space this peer does not hold", space: "0199a0a0-0000-7000-8000-0000000000ff", suffix: "/key-history", body: `{"epoch":1,"sealed_prev":"AA=="}`, want: http.StatusNotFound},
+	}
+	for _, step := range steps {
+		sp := space
+		if step.space != "" {
+			sp = step.space
+		}
+		status, body, _, err := peerSend(t, client, http.MethodPost, stateURL(l, sp, step.suffix), step.body)
+		if err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		if status != step.want {
+			t.Fatalf("%s: status %d, want %d: %s", step.name, status, step.want, body)
+		}
+		if step.wantCode != "" {
+			var doc struct {
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal([]byte(body), &doc); err != nil || doc.Code != step.wantCode {
+				t.Fatalf("%s: problem code %q (%v), want %q: %s", step.name, doc.Code, err, step.wantCode, body)
+			}
+		}
+	}
+	if st.gotEpoch[space] != 1 {
+		t.Fatalf("the last accepted wrap was at epoch %d, want 1", st.gotEpoch[space])
+	}
+}

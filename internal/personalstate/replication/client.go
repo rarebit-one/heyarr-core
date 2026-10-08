@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -36,8 +37,13 @@ type Target struct {
 type Pusher interface {
 	// PushSpace records a space's identity (id + kind) on the target. Idempotent.
 	PushSpace(ctx context.Context, t Target, spaceID, kind string) error
-	// PushWrappedKey stores one recipient's wrapped copy on the target. Idempotent.
-	PushWrappedKey(ctx context.Context, t Target, spaceID, recipient string, wrapped []byte) error
+	// PushWrappedKey stores one recipient's wrapped copy, at the key epoch it
+	// seals (ADR-0103), on the target. Idempotent. ErrWrapSuperseded when the
+	// target holds a newer epoch — the caller skips the copy, it does not fail.
+	PushWrappedKey(ctx context.Context, t Target, spaceID, recipient string, wrapped []byte, epoch int) error
+	// PushKeyHistory stores one opaque key-history row on the target (ADR-0103).
+	// Idempotent on identical bytes.
+	PushKeyHistory(ctx context.Context, t Target, spaceID string, epoch int, sealedPrev []byte) error
 	// Heads returns the target's causal frontier for a space, so this node can
 	// compute what the target is missing and push only that.
 	Heads(ctx context.Context, t Target, spaceID string) ([]string, error)
@@ -47,6 +53,12 @@ type Pusher interface {
 	// content-address. Idempotent on the id.
 	PushSnapshot(ctx context.Context, t Target, snap protocol.EncryptedSnapshot) error
 }
+
+// ErrWrapSuperseded is a wrapped copy the target refused because it holds a newer
+// key epoch for the space (ADR-0103): this node is behind, and the copy would
+// resurrect a key a rotation retired. It is not a failure of the reconcile — the
+// copy is skipped and the rest of the space still converges.
+var ErrWrapSuperseded = errors.New("replication: the target holds a newer key epoch; the wrapped copy is superseded")
 
 // Client is the mTLS-pinned [Pusher]: it dials each target's peer surface with
 // this node's certificate, pinned to the target's key (ADR-0012).
@@ -93,9 +105,25 @@ func (c *Client) PushSpace(ctx context.Context, t Target, spaceID, kind string) 
 	return c.post(ctx, t, statePath(spaceID, ""), map[string]string{"kind": kind})
 }
 
-// PushWrappedKey POSTs one wrapped copy to /peer/v1/state/{space}/keys.
-func (c *Client) PushWrappedKey(ctx context.Context, t Target, spaceID, recipient string, wrapped []byte) error {
-	return c.post(ctx, t, statePath(spaceID, "/keys"), map[string]any{"recipient": recipient, "wrapped": wrapped})
+// PushWrappedKey POSTs one wrapped copy to /peer/v1/state/{space}/keys. The
+// epoch is sent only when non-zero, so an epoch-0 push is byte-for-byte the body
+// a peer that predates key epochs (ADR-0103) accepts.
+func (c *Client) PushWrappedKey(ctx context.Context, t Target, spaceID, recipient string, wrapped []byte, epoch int) error {
+	body := map[string]any{"recipient": recipient, "wrapped": wrapped}
+	if epoch != 0 {
+		body["epoch"] = epoch
+	}
+	err := c.post(ctx, t, statePath(spaceID, "/keys"), body)
+	var pe *postError
+	if errors.As(err, &pe) && pe.status == http.StatusConflict && pe.code == peerapi.CodeKeySuperseded {
+		return fmt.Errorf("%w: %w", ErrWrapSuperseded, err)
+	}
+	return err
+}
+
+// PushKeyHistory POSTs one key-history row to /peer/v1/state/{space}/key-history.
+func (c *Client) PushKeyHistory(ctx context.Context, t Target, spaceID string, epoch int, sealedPrev []byte) error {
+	return c.post(ctx, t, statePath(spaceID, "/key-history"), map[string]any{"epoch": epoch, "sealed_prev": sealedPrev})
 }
 
 // PushChange POSTs one opaque change to /peer/v1/state/{space}/changes.
@@ -167,7 +195,25 @@ func (c *Client) post(ctx context.Context, t Target, path string, body any) erro
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return fmt.Errorf("replication: %s answered %d to POST %s: %s", t.Peer.PeerID, resp.StatusCode, path, strings.TrimSpace(string(raw)))
+		var doc struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(raw, &doc) // best effort: a non-problem body has no code
+		return &postError{
+			status: resp.StatusCode,
+			code:   doc.Code,
+			msg:    fmt.Sprintf("replication: %s answered %d to POST %s: %s", t.Peer.PeerID, resp.StatusCode, path, strings.TrimSpace(string(raw))),
+		}
 	}
 	return nil
 }
+
+// postError is a non-2xx answer to a push, carrying the status and the problem
+// document's code so a caller can branch on a refusal it expects.
+type postError struct {
+	status int
+	code   string
+	msg    string
+}
+
+func (e *postError) Error() string { return e.msg }

@@ -769,9 +769,12 @@ paths:
       operationId: listSpaceWrappedKeys
       summary: The wrapped copies of a space's key — a device finds the one sealed for it.
       description: |
-        Each entry names the recipient key the copy was sealed for and the
-        opaque wrapped bytes. The peer holds these and no private key, so it
-        cannot open any of them (Invariant 6).
+        Each entry names the recipient key the copy was sealed for, the
+        opaque wrapped bytes and the key epoch the copy seals. The peer holds
+        these and no private key, so it cannot open any of them (Invariant 6).
+        `key_epoch` is the space's current key epoch (ADR-0103) — what a device
+        wraps at to add a recipient, and what a rotation names as its
+        `expected_epoch`.
       parameters: [{ $ref: "#/components/parameters/id" }]
       responses:
         "200":
@@ -780,9 +783,13 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [space_id, wrapped_keys]
+                required: [space_id, key_epoch, wrapped_keys]
                 properties:
                   space_id: { type: string }
+                  key_epoch:
+                    type: integer
+                    minimum: 0
+                    description: The space's current key epoch; 0 until its first rotation.
                   wrapped_keys:
                     type: array
                     items: { $ref: "#/components/schemas/WrappedKey" }
@@ -792,12 +799,14 @@ paths:
     post:
       tags: [personal-state]
       operationId: rewrapSpaceKeys
-      summary: Re-wrap a space's key for the remaining recipients after a rotation. Requires `write`.
+      summary: Store wrapped copies of a space's current key (add a recipient). Requires `write`.
       description: |
-        Replaces the wrapped copies of a space's key — the remaining recipients'
-        copies now seal the NEW key minted by a rotation (§41, #361). Each copy is
-        opaque; the peer upserts it and opens none. The revoked recipient's copy is
-        deleted separately via DELETE /spaces/{id}/keys/{recipient}.
+        Upserts wrapped copies of a space's key, one per recipient — how a
+        recipient is added (§41, #361). Each copy is opaque; the peer upserts it
+        and opens none. Each copy names the key epoch it seals (`epoch`, absent
+        = 0); a copy that is not at the space's current epoch is a `409` with
+        code `key_epoch_stale` (the key was rotated since) or `key_epoch_ahead`,
+        so a device holding a superseded key cannot hand it out (ADR-0103).
       parameters: [{ $ref: "#/components/parameters/id" }]
       requestBody:
         required: true
@@ -825,6 +834,103 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/spaces/{id}/key-history:
+    get:
+      tags: [personal-state]
+      operationId: listSpaceKeyHistory
+      summary: A space's opaque key chain — earlier keys sealed under later ones (ADR-0103).
+      description: |
+        One entry per rotation, oldest epoch first: entry `epoch` N holds the key
+        of epoch N-1 sealed under the key of epoch N, by the client that rotated.
+        A current recipient unwraps the current key and unrolls the chain to
+        read content sealed before a rotation. The peer cannot open any entry
+        (Invariant 6). A space never rotated has none.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: The key chain (possibly empty).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [space_id, entries]
+                properties:
+                  space_id: { type: string }
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      required: [epoch, sealed_prev, created_at]
+                      additionalProperties: false
+                      properties:
+                        epoch: { type: integer, minimum: 1 }
+                        sealed_prev:
+                          type: string
+                          format: byte
+                          description: The key of epoch-1 sealed under the key of epoch (base64, opaque).
+                        created_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/spaces/{id}/rotate:
+    post:
+      tags: [personal-state]
+      operationId: rotateSpaceKey
+      summary: Move a space to its next key epoch. Requires `admin`.
+      description: |
+        A pure re-key (ADR-0103): the device mints a new key, seals the current
+        key under it (`sealed_prev`) and wraps the new key for every recipient
+        that keeps access. The peer stores the history row, upserts the wraps at
+        the new epoch and deletes every older wrap — a recipient left out loses
+        its copy, which is how revocation lands. It is a compare-and-swap on
+        `expected_epoch`: a rotation that lost a race is a `409` with code
+        `key_epoch_conflict`. Wraps carry no `epoch`; the rotation assigns it.
+        Every recipient must be enrolled (enrol-before-wrap, ADR-0049), and
+        every recovery key holding a copy of the current key must be among the
+        wraps — the history seals backwards only, so a recovery key left out
+        would lose the space for good — or it is a `409` with code
+        `rotation_drops_recovery_key` (ADR-0022).
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_epoch, sealed_prev, wrapped_keys]
+              additionalProperties: false
+              properties:
+                expected_epoch:
+                  type: integer
+                  minimum: 0
+                  description: The epoch the device rotated from — the space's current one.
+                sealed_prev:
+                  type: string
+                  format: byte
+                  description: The current key sealed under the new one (base64, opaque).
+                wrapped_keys:
+                  type: array
+                  minItems: 1
+                  items: { $ref: "#/components/schemas/WrappedKeyInput" }
+      responses:
+        "200":
+          description: The space's new key epoch.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [space_id, key_epoch]
+                properties:
+                  space_id: { type: string }
+                  key_epoch: { type: integer, minimum: 1 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /api/v1/spaces/{id}/keys/{recipient}:
     delete:
@@ -5398,7 +5504,11 @@ paths:
       description: |
         A replicating sibling pushes one recipient's sealed copy of a space's key.
         The bytes are opaque — the peer holds them and cannot open them.
-        Idempotent per (space, recipient); a re-push replaces the copy.
+        Idempotent per (space, recipient); a re-push replaces the copy. The copy
+        must be at the space's current key epoch here (ADR-0103): an older one
+        is a `409` with code `key_epoch_superseded`, which the sibling skips —
+        a stale copy is never resurrected — and a newer one a `409` with code
+        `key_epoch_ahead` (its history row has not landed).
       security:
         - peerCertificate: []
       requestBody:
@@ -5417,6 +5527,10 @@ paths:
                   type: string
                   format: byte
                   description: The opaque sealed bytes (base64).
+                epoch:
+                  type: integer
+                  minimum: 0
+                  description: The key epoch the copy seals; absent means 0.
       responses:
         "204":
           description: The wrapped key is stored (or replaced).
@@ -5424,6 +5538,54 @@ paths:
           description: The recipient or wrapped bytes are empty.
         "404":
           description: This peer does not hold that encrypted space.
+        "409":
+          description: The copy's key epoch is superseded or not yet reached here.
+        "503":
+          description: This node keeps no encrypted personal state to sync.
+
+  /peer/v1/state/{space}/key-history:
+    parameters:
+      - name: space
+        in: path
+        required: true
+        description: The opaque space id (a UUIDv7).
+        schema: { type: string }
+    post:
+      tags: [peer]
+      operationId: peerStatePutKeyHistory
+      summary: Replicate one link of a space's key chain to a Full Peer (ADR-0103).
+      description: |
+        A replicating sibling pushes one opaque history row — the key of
+        epoch-1 sealed under the key of epoch — before the wraps of that epoch.
+        Idempotent on identical bytes. A row that becomes the newest epoch here
+        deletes every older wrap, so a rotation's revocation replicates too. A
+        different row for an epoch already held is a `409` with code
+        `key_history_conflict`: a fork is surfaced, never overwritten.
+      security:
+        - peerCertificate: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [epoch, sealed_prev]
+              additionalProperties: false
+              properties:
+                epoch: { type: integer, minimum: 1 }
+                sealed_prev:
+                  type: string
+                  format: byte
+                  description: The key of epoch-1 sealed under the key of epoch (base64, opaque).
+      responses:
+        "204":
+          description: The row is stored (or was already held).
+        "400":
+          description: The epoch is below 1 or the bytes are empty.
+        "404":
+          description: This peer does not hold that encrypted space.
+        "409":
+          description: A different row is held for that epoch.
         "503":
           description: This node keeps no encrypted personal state to sync.
 
@@ -6658,6 +6820,12 @@ components:
           type: string
           format: byte
           description: The opaque sealed bytes (base64). The peer cannot open them.
+        epoch:
+          type: integer
+          minimum: 0
+          description: >-
+            The key epoch the copy seals (ADR-0103); absent means 0. Must be the
+            space's current epoch. Not sent on a rotation, which assigns it.
     PlacementPinInput:
       type: object
       description: >-
@@ -6677,11 +6845,12 @@ components:
     WrappedKey:
       type: object
       description: A stored wrapped copy of a space key.
-      required: [recipient, wrapped, created_at]
+      required: [recipient, wrapped, epoch, created_at]
       additionalProperties: false
       properties:
         recipient: { type: string }
         wrapped: { type: string, format: byte }
+        epoch: { type: integer, minimum: 0, description: "The key epoch this copy seals (ADR-0103)." }
         created_at: { type: string, format: date-time }
     EncryptedChange:
       type: object
