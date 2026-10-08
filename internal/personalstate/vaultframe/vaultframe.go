@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strings"
 
 	"github.com/rarebit-one/void-which-binds-go/encryption"
 	"github.com/rarebit-one/void-which-binds-go/hashing"
@@ -59,6 +60,13 @@ const (
 // encryption.ErrUnwrap, so a caller (and an attacker) learns only "this is not the
 // frame you asked for," not which check failed.
 var ErrFrame = errors.New("vaultframe: frame does not match its manifest")
+
+// ErrManifest is a manifest that opened under the space key but does not
+// describe a file Seal could have written: another version, a malformed file
+// or content id, a frame size out of range, or a frame count that does not
+// cover the plaintext size. The key was right, so it is a corrupt or hostile
+// object, not a wrong key.
+var ErrManifest = errors.New("vaultframe: manifest is malformed")
 
 // Manifest is a vault object's geometry. It is sealed under the space key
 // (SealManifest) and stored as its own ciphertext blob; a drive entry (ADR-0095)
@@ -98,8 +106,10 @@ func Seal(sk encryption.SpaceKey, r io.Reader, w io.Writer) (Manifest, error) {
 	for {
 		n, err := io.ReadFull(r, buf)
 		if n > 0 {
-			if index > math.MaxUint32 {
-				return Manifest{}, fmt.Errorf("vaultframe: file has more than %d frames", math.MaxUint32)
+			// The reader's bound (maxFrameCount), not just the header's uint32: a
+			// file no reader would open is refused here, before anything is sealed.
+			if index >= maxFrameCount {
+				return Manifest{}, fmt.Errorf("vaultframe: file has more than %d frames", maxFrameCount)
 			}
 			plaintext := append(frameHeader(fileID, uint32(index)), buf[:n]...)
 			sealed, serr := encryption.EncryptChange(sk, plaintext)
@@ -204,8 +214,13 @@ func (m Manifest) OpenRange(sk encryption.SpaceKey, off, n int64, fetch func(sta
 }
 
 // SealManifest seals a manifest under the space key, returning the ciphertext blob
-// a peer stores and a drive entry references.
+// a peer stores and a drive entry references. A manifest that does not Validate
+// is refused as ErrManifest.
 func SealManifest(sk encryption.SpaceKey, m Manifest) ([]byte, error) {
+	// Never seal what OpenManifest would refuse.
+	if err := m.Validate(); err != nil {
+		return nil, err
+	}
 	b, err := json.Marshal(m)
 	if err != nil {
 		return nil, fmt.Errorf("vaultframe: encoding manifest: %w", err)
@@ -213,7 +228,8 @@ func SealManifest(sk encryption.SpaceKey, m Manifest) ([]byte, error) {
 	return encryption.EncryptChange(sk, b)
 }
 
-// OpenManifest reverses SealManifest.
+// OpenManifest reverses SealManifest, and refuses a manifest that does not
+// Validate, or does not decode, as ErrManifest.
 func OpenManifest(sk encryption.SpaceKey, sealed []byte) (Manifest, error) {
 	b, err := encryption.DecryptChange(sk, sealed)
 	if err != nil {
@@ -221,7 +237,74 @@ func OpenManifest(sk encryption.SpaceKey, sealed []byte) (Manifest, error) {
 	}
 	var m Manifest
 	if err := json.Unmarshal(b, &m); err != nil {
-		return Manifest{}, fmt.Errorf("vaultframe: decoding manifest: %w", err)
+		return Manifest{}, fmt.Errorf("%w: decoding: %w", ErrManifest, err)
+	}
+	if err := m.Validate(); err != nil {
+		return Manifest{}, err
 	}
 	return m, nil
+}
+
+// Validate checks that m describes a file Seal could have written, so a reader
+// never sizes a buffer, a frame range or a loop from a manifest that cannot be
+// true. The same checks run in the Kotlin client (heyarr-kmp VaultFrame), so
+// the two refuse the same manifests.
+func (m Manifest) Validate() error {
+	switch {
+	case m.Version != Version:
+		return fmt.Errorf("%w: version %d, want %d", ErrManifest, m.Version, Version)
+	case !isLowerHex(m.FileID, 2*fileIDLen):
+		return fmt.Errorf("%w: file_id is not %d hex bytes", ErrManifest, fileIDLen)
+	case !isContentID(m.Content):
+		return fmt.Errorf("%w: content is not a blake3 blob id", ErrManifest)
+	case m.FrameSize < 1 || m.FrameSize > FrameSize:
+		// Seal always writes FrameSize, but the size is part of the sealed
+		// manifest and every reader computes frame ranges from it, so any size
+		// up to the cap is read correctly — the cross-language golden vectors
+		// use small frames for exactly that reason. Above the cap is refused:
+		// it would size a reader's per-frame buffer.
+		return fmt.Errorf("%w: frame_size %d out of range", ErrManifest, m.FrameSize)
+	case m.PlaintextSize < 0:
+		return fmt.Errorf("%w: negative plaintext_size %d", ErrManifest, m.PlaintextSize)
+	}
+	if m.FrameCount < 0 || m.FrameCount > maxFrameCount {
+		return fmt.Errorf("%w: frame_count %d out of range", ErrManifest, m.FrameCount)
+	}
+	frameSize := int64(m.FrameSize)
+	if want := m.PlaintextSize/frameSize + min(m.PlaintextSize%frameSize, 1); int64(m.FrameCount) != want {
+		return fmt.Errorf("%w: frame_count %d does not cover %d bytes in %d-byte frames (want %d)",
+			ErrManifest, m.FrameCount, m.PlaintextSize, m.FrameSize, want)
+	}
+	return nil
+}
+
+// maxFrameCount bounds a manifest's frame count. The wire header indexes frames
+// with a uint32, but the Kotlin reader holds the count in an Int, so the bound
+// both readers share is the smaller one: math.MaxInt32 frames of 1 MiB, 2 PiB.
+const maxFrameCount = math.MaxInt32
+
+// contentIDPrefix is the blob-id scheme a manifest's content id carries.
+const contentIDPrefix = "blake3:"
+
+func isContentID(s string) bool {
+	rest, ok := strings.CutPrefix(s, contentIDPrefix)
+	return ok && isLowerHex(rest, 2*hashLen)
+}
+
+// hashLen is a BLAKE3 digest's length in bytes.
+const hashLen = 32
+
+// isLowerHex reports whether s is exactly n lowercase hex digits — the form
+// hex.EncodeToString writes, and the only one a writer emits.
+func isLowerHex(s string, n int) bool {
+	if len(s) != n {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }

@@ -7188,6 +7188,12 @@ components:
         status: { type: integer }
         detail: { type: string }
         instance: { type: string }
+        code:
+          type: string
+          description: |
+            A stable, machine-readable reason some refusals carry alongside
+            `type` (for example `change_key_epoch_mismatch` on a 409), so a
+            client can tell two refusals of the same status apart.
         request_id:
           type: string
           description: Correlates the response with the server log line.
