@@ -6,19 +6,23 @@ Revoke recipients from a space by rotating its key (§41, #361)
 
 Revoke one or more recipients from an encrypted space.
 
-Rotation mints a FRESH space key, re-wraps it for every REMAINING recipient,
-deletes each revoked recipient's stored copy, and pushes a snapshot of the current
-state under the new key (then compacts the now-unreadable old change log the
-snapshot subsumes). The revoked device keeps whatever it already decrypted —
-revocation is forward-looking, not retroactive — but can read nothing encrypted
-from here on.
+Rotation mints a FRESH space key and moves the space to its next key epoch. The
+new key is wrapped for every REMAINING recipient (your recovery key included),
+and the previous key is sealed under the new one as an opaque history row, so a
+remaining device still reads everything written before the rotation. Nothing is
+re-encrypted, snapshotted or compacted. The controller drops every copy of the
+old key in the same step, so a revoked recipient never receives the new key and
+can read nothing written from here on. It keeps whatever it could already read —
+revocation is forward-looking, not retroactive.
 
 This device must itself be a current recipient (only a device that can read a
-space may re-key it), and at least one recipient must remain.
+space may re-key it), and at least one recipient must remain. Two rotations
+racing from the same epoch cannot both land: the second is refused, and is
+simply run again.
 
 Only playlist spaces can be rotated for now. A vault drive, starred,
-play-history or reading-position space is refused, because rotating it would
-lose its contents (#698).
+play-history or reading-position space is refused (#698): older clients do not
+yet understand key epochs and would lose access to it.
 
 ```
 heyarr space rotate <space-id> --revoke <recipient> [flags]

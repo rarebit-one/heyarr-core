@@ -289,11 +289,18 @@ YAML
 
 
 # REVOCATION CUTS ACCESS: a device is revoked from a space by rotating its key.
-# The revoked device's wrapped copy is DELETED and the space is re-keyed for
-# everyone else, then a snapshot re-encrypts the current state under the new key
-# and the old change log is compacted — so the revoked device can read nothing
-# encrypted from here on (§41, ADR-0022, ADR-0049, #361). It is forward-looking,
-# not retroactive: the revoked device keeps whatever it already decrypted.
+# The space moves to its next key epoch: the new key is wrapped for everyone
+# else, the previous key is sealed under it as an opaque history row, and the
+# controller drops every older wrap — the revoked device's included — in the
+# same step (§41, ADR-0022, ADR-0049, ADR-0103, #361). Nothing is re-encrypted,
+# snapshotted or compacted, so the remaining devices read the past through the
+# history row, while the revoked device can read nothing written from here on.
+# It is forward-looking, not retroactive: the revoked device keeps whatever it
+# already decrypted. Only a playlist space is rotated here: the CLI still refuses
+# to rotate a vault, starred, play-history or reading-position space (#698)
+# until every client unrolls key history, so the vault re-key is covered by
+# internal/cli (TestRekeyVaultSpaceKeepsEveryFile) and joins this demo when that
+# guard lifts.
 revocation_demo() {
   local root="$WORK/revocation" data sock cfg A B C
   data="$root/data"; sock="$data/heyarr.sock"; cfg="$WORK/revocation.yaml"
@@ -362,9 +369,12 @@ YAML
   assert_eq "$b_before" "midnight-jazz" \
     "before revocation the soon-to-be-revoked device can read the space"
 
-  # A revokes B: rotate the key, re-wrap for A and C, delete B's copy, snapshot,
-  # compact the old log the snapshot subsumes.
-  "${base[@]}" space rotate "$space_id" --device-dir "$A" --revoke "$bpub" >/dev/null
+  # A revokes B: rotate to key epoch 1, wrapping the new key for A and C only and
+  # sealing the old key under it; the controller drops B's copy in the same step.
+  local rotated_epoch
+  rotated_epoch=$("${base[@]}" space rotate "$space_id" --device-dir "$A" --revoke "$bpub" --json 2>/dev/null | jq -r .key_epoch)
+  assert_eq "$rotated_epoch" "1" \
+    "a rotation moves the space to key epoch 1 — a pure re-key, nothing re-encrypted"
 
   # THE INVARIANT: the revoked device can no longer read the space. Its wrapped key
   # is gone, so the read fails before any change is fetched (the confidentiality
@@ -373,12 +383,12 @@ YAML
   assert_refuses "a revoked device can no longer read the space — its wrapped key is gone and the space was re-keyed without it" \
     "cannot read space" "${base[@]}" space read "$space_id" --device-dir "$B"
 
-  # A remaining device still reads the state — re-keyed for it, reachable from the
-  # post-rotation snapshot without the old key.
+  # A remaining device still reads the state written BEFORE the rotation: it
+  # unwraps the new key and opens the history row to reach the old one.
   local c_after
   c_after=$("${base[@]}" space read "$space_id" --device-dir "$C" --json | jq -r '.items[0]')
   assert_eq "$c_after" "midnight-jazz" \
-    "a remaining device still reads the space after the rotation — re-keyed, and reachable from the new snapshot"
+    "a remaining device still reads the space after the rotation — re-keyed, and reaching the pre-rotation change through the key history"
 
   # And the peer holds no wrapped key for the revoked device: two remain (A, C).
   local remaining count_b

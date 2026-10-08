@@ -8,6 +8,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/device/devicekeys"
 	psclient "github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaceopen"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
 )
 
@@ -187,31 +188,21 @@ func (l *SpaceLibrary) materialise(ctx context.Context, cust psclient.Custody, s
 }
 
 // openWrapped finds the copy of the space key sealed for THIS device and opens
-// the space with it. ok is false (no error) when the controller holds no space of
-// that id, or no copy wrapped for this device — the ADR-0049 confidentiality gate,
-// reached before any change is decrypted. The controller is never handed a key.
+// the space with it, unrolling the key history so content sealed under earlier
+// keys stays readable (ADR-0103). ok is false (no error) when the controller
+// holds no space of that id, or no copy wrapped for this device — the ADR-0049
+// confidentiality gate, reached before any change is decrypted. The controller
+// is never handed a key.
 func (l *SpaceLibrary) openWrapped(ctx context.Context, cust psclient.Custody, spaceID string) (*psclient.Manager, bool, error) {
-	mine := cust.RecipientID()
-	keys, err := l.client.WrappedKeys(ctx, spaceID)
+	mgr, found, err := spaceopen.Open(ctx, l.client, cust, spaceID)
 	if err != nil {
 		if apiclient.IsNotFound(err) {
 			return nil, false, nil
 		}
 		return nil, false, err
 	}
-	var wrapped []byte
-	for _, k := range keys {
-		if k.Recipient == mine {
-			wrapped = k.Wrapped
-			break
-		}
-	}
-	if wrapped == nil {
+	if !found {
 		return nil, false, nil
-	}
-	mgr := psclient.New()
-	if err := mgr.Open(spaceID, wrapped, cust); err != nil {
-		return nil, false, err
 	}
 	return mgr, true, nil
 }

@@ -11,10 +11,12 @@ import (
 	"github.com/rarebit-one/void-which-binds-go/useridentity"
 	"github.com/spf13/cobra"
 
+	psapi "github.com/rarebit-one/heyarr-core/internal/api/personalstate"
 	apiclient "github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaceopen"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
 )
@@ -500,32 +502,21 @@ func resolveRecipients(selfID string, named []string, includeSelf bool, recovery
 	return out, nil
 }
 
-// openSpace fetches a space's wrapped keys, finds the one sealed for THIS device
-// (the selected custody backend's wrap-target), unwraps it through that backend,
-// and returns a manager holding the space key open. A device the space was not
-// wrapped for is refused here, before any change is fetched — the confidentiality
-// gate of ADR-0049. The custody backend (ADR-0098) is chosen by config; opening
-// takes a client.Custody, not a raw key, so a YubiKey/TPM/offloaded key drops in
+// openSpace fetches a space's wrapped keys and key epoch, finds the copy sealed
+// for THIS device (the selected custody backend's wrap-target), unwraps it
+// through that backend, unrolls the key history (ADR-0103), and returns a
+// manager holding the space's keyring open. A device the space was not wrapped
+// for is refused here, before any change is fetched — the confidentiality gate
+// of ADR-0049. The custody backend (ADR-0098) is chosen by config; opening takes
+// a client.Custody, not a raw key, so a YubiKey/TPM/offloaded key drops in
 // unchanged.
 func openSpace(ctx context.Context, c *apiclient.Client, cust client.Custody, spaceID string) (*client.Manager, error) {
-	mine := cust.RecipientID()
-	keys, err := c.WrappedKeys(ctx, spaceID)
+	mgr, found, err := spaceopen.Open(ctx, c, cust, spaceID)
 	if err != nil {
 		return nil, err
 	}
-	var wrapped []byte
-	for _, k := range keys {
-		if k.Recipient == mine {
-			wrapped = k.Wrapped
-			break
-		}
-	}
-	if wrapped == nil {
-		return nil, fmt.Errorf("this device cannot read space %s: no copy of its key is wrapped for %s", spaceID, mine)
-	}
-	mgr := client.New()
-	if err := mgr.Open(spaceID, wrapped, cust); err != nil {
-		return nil, err
+	if !found {
+		return nil, fmt.Errorf("this device cannot read space %s: no copy of its key is wrapped for %s", spaceID, cust.RecipientID())
 	}
 	return mgr, nil
 }
@@ -580,15 +571,19 @@ materialises the state.`,
 
 // spaceRotateView is the --json shape of `space rotate`.
 type spaceRotateView struct {
-	SpaceID    string   `json:"space_id"`
-	Revoked    []string `json:"revoked"`
-	Remaining  []string `json:"remaining"`
-	SnapshotID string   `json:"snapshot_id"`
-	Dropped    int      `json:"dropped"`
+	SpaceID   string   `json:"space_id"`
+	Revoked   []string `json:"revoked"`
+	Remaining []string `json:"remaining"`
+	// KeyEpoch is the space's key epoch after the rotation (ADR-0103).
+	KeyEpoch int `json:"key_epoch"`
+	// SnapshotID and Dropped report the playlist carried forward for clients
+	// without a keyring (see rotateSpace); absent for a pure re-key.
+	SnapshotID string `json:"snapshot_id,omitempty"`
+	Dropped    int    `json:"dropped,omitempty"`
 }
 
 // newSpaceRotateCommand builds `heyarr space rotate` — revoke recipients from a
-// space by re-keying it (§41, ADR-0049, #361).
+// space by re-keying it (§41, ADR-0049, ADR-0103, #361).
 func newSpaceRotateCommand(_ Options, configPath, deviceDir *string) *cobra.Command {
 	var (
 		flags  clientFlags
@@ -599,19 +594,23 @@ func newSpaceRotateCommand(_ Options, configPath, deviceDir *string) *cobra.Comm
 		Short: "Revoke recipients from a space by rotating its key (§41, #361)",
 		Long: `Revoke one or more recipients from an encrypted space.
 
-Rotation mints a FRESH space key, re-wraps it for every REMAINING recipient,
-deletes each revoked recipient's stored copy, and pushes a snapshot of the current
-state under the new key (then compacts the now-unreadable old change log the
-snapshot subsumes). The revoked device keeps whatever it already decrypted —
-revocation is forward-looking, not retroactive — but can read nothing encrypted
-from here on.
+Rotation mints a FRESH space key and moves the space to its next key epoch. The
+new key is wrapped for every REMAINING recipient (your recovery key included),
+and the previous key is sealed under the new one as an opaque history row, so a
+remaining device still reads everything written before the rotation. Nothing is
+re-encrypted, snapshotted or compacted. The controller drops every copy of the
+old key in the same step, so a revoked recipient never receives the new key and
+can read nothing written from here on. It keeps whatever it could already read —
+revocation is forward-looking, not retroactive.
 
 This device must itself be a current recipient (only a device that can read a
-space may re-key it), and at least one recipient must remain.
+space may re-key it), and at least one recipient must remain. Two rotations
+racing from the same epoch cannot both land: the second is refused, and is
+simply run again.
 
 Only playlist spaces can be rotated for now. A vault drive, starred,
-play-history or reading-position space is refused, because rotating it would
-lose its contents (#698).`,
+play-history or reading-position space is refused (#698): older clients do not
+yet understand key epochs and would lose access to it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID := args[0]
@@ -627,17 +626,18 @@ lose its contents (#698).`,
 				if err != nil {
 					return err
 				}
-				revoked, remainIDs, snapID, dropped := view.Revoked, view.Remaining, view.SnapshotID, view.Dropped
 				fmt.Fprintln(cmd.ErrOrStderr(), staleBlobHint)
 				if flags.asJSON {
 					return emitJSON(cmd.OutOrStdout(), view)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "space %s re-keyed\n\n  revoked %d recipient(s):\n", spaceID, len(revoked))
-				for _, r := range revoked {
+				fmt.Fprintf(cmd.OutOrStdout(), "space %s re-keyed to epoch %d\n\n  revoked %d recipient(s):\n", spaceID, view.KeyEpoch, len(view.Revoked))
+				for _, r := range view.Revoked {
 					fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", r)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "  re-wrapped for %d remaining recipient(s)\n", len(remainIDs))
-				fmt.Fprintf(cmd.OutOrStdout(), "  snapshot %s taken; %d old change(s) compacted\n", snapID, dropped)
+				fmt.Fprintf(cmd.OutOrStdout(), "  re-wrapped for %d remaining recipient(s)\n", len(view.Remaining))
+				if view.SnapshotID != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "  playlist carried forward as snapshot %s; %d old change(s) compacted\n", view.SnapshotID, view.Dropped)
+				}
 				return nil
 			})
 		},
@@ -649,10 +649,9 @@ lose its contents (#698).`,
 
 // rotateSpace is the whole of `space rotate` (§41, ADR-0049, #361) as a
 // function, so that revoking a device (`device revoke`, ADR-0068) can re-key
-// each space that device could read without a second copy of the sequence:
-// materialise under the OLD key, mint a fresh one, re-wrap for the remaining
-// recipients, delete the revoked copies, snapshot under the new key, compact.
-// This device must itself be a current recipient of the space.
+// each space that device could read without a second copy of the sequence. It
+// refuses a non-playlist space (ensurePlaylistSpace) and then re-keys it
+// (rekeySpace). This device must itself be a current recipient of the space.
 func rotateSpace(ctx context.Context, c *apiclient.Client, cust client.Custody, spaceID string, revoke []string) (spaceRotateView, error) {
 	mgr, err := openSpace(ctx, c, cust, spaceID)
 	if err != nil {
@@ -661,13 +660,65 @@ func rotateSpace(ctx context.Context, c *apiclient.Client, cust client.Custody, 
 	if err := ensurePlaylistSpace(ctx, c, mgr, spaceID); err != nil {
 		return spaceRotateView{}, err
 	}
-	// Materialise the current state under the OLD key BEFORE rotating — after
-	// Rotate the manager holds the new key and cannot read the old changes. The
-	// snapshot below re-encrypts this state under the new key.
 	st, changes, _, err := materialise(ctx, c, mgr, spaceID)
 	if err != nil {
 		return spaceRotateView{}, err
 	}
+	view, err := rekeyOpenSpace(ctx, c, mgr, spaceID, revoke)
+	if err != nil {
+		return spaceRotateView{}, err
+	}
+	// Compatibility for clients without a keyring (heyarr-kmp before its
+	// ADR-0103 release): they hold only the newest key, so they read a playlist
+	// only from a snapshot under that key with the old log compacted, as
+	// rotation worked before ADR-0103. Carry the playlist forward that way.
+	// The re-key has already landed, so a failure here leaves a correct space
+	// that only keyring clients can read in full; it is reported, not undone.
+	// This goes when the guard does.
+	snap, err := statesync.EncodeSnapshot(mgr, spaceID, protocol.Heads(changes), st)
+	if err != nil {
+		return view, fmt.Errorf("space rotate: re-keyed to epoch %d, but carrying the playlist forward failed: %w", view.KeyEpoch, err)
+	}
+	if view.SnapshotID, err = c.PushSnapshot(ctx, snap); err != nil {
+		return view, fmt.Errorf("space rotate: re-keyed to epoch %d, but pushing the playlist snapshot failed: %w", view.KeyEpoch, err)
+	}
+	if view.Dropped, err = c.Compact(ctx, spaceID, snap.Frontier); err != nil {
+		return view, fmt.Errorf("space rotate: re-keyed to epoch %d, but compacting the old log failed: %w", view.KeyEpoch, err)
+	}
+	return view, nil
+}
+
+// rekeySpace is a rotation with no space-kind guard: open the space with its
+// key history, then re-key it (ADR-0103). It is what rotateSpace does once the
+// guard passes, and is safe for every kind of space in this binary; the guard
+// stays only for clients that predate key epochs.
+func rekeySpace(ctx context.Context, c *apiclient.Client, cust client.Custody, spaceID string, revoke []string) (spaceRotateView, error) {
+	mgr, err := openSpace(ctx, c, cust, spaceID)
+	if err != nil {
+		return spaceRotateView{}, err
+	}
+	return rekeyOpenSpace(ctx, c, mgr, spaceID, revoke)
+}
+
+// errKeyEpochConflict is a rotation that lost a race: another rotation moved
+// the space to a new epoch first.
+var errKeyEpochConflict = errors.New("space rotate: the space was re-keyed by someone else since it was opened")
+
+// rekeyOpenSpace is the pure re-key of ADR-0103 on a space already open on mgr:
+// mint the next key, wrap it for every recipient but the revoked, seal the
+// current key under it, and hand all of it to the controller in ONE
+// compare-and-swap on the epoch. The controller drops every older wrap — the
+// revoked recipients' included — in the same transaction, so there is no
+// separate revoke step to fail half way, and nothing is materialised,
+// snapshotted or compacted.
+func rekeyOpenSpace(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spaceID string, revoke []string) (spaceRotateView, error) {
+	expected, ok := mgr.Epoch(spaceID)
+	if !ok {
+		return spaceRotateView{}, fmt.Errorf("%w: %s", client.ErrSpaceNotOpen, spaceID)
+	}
+	// The recipients are read fresh, not from when the space was opened. If
+	// another rotation landed in between, this one's compare-and-swap on the
+	// epoch fails below, so a recipient list from the wrong epoch never lands.
 	keys, err := c.WrappedKeys(ctx, spaceID)
 	if err != nil {
 		return spaceRotateView{}, err
@@ -676,40 +727,27 @@ func rotateSpace(ctx context.Context, c *apiclient.Client, cust client.Custody, 
 	if err != nil {
 		return spaceRotateView{}, err
 	}
-	wrapped, err := mgr.Rotate(spaceID, remaining)
+	rot, err := mgr.Rotate(spaceID, remaining)
 	if err != nil {
 		return spaceRotateView{}, err
 	}
-	inputs := make([]apiclient.WrappedKeyInput, 0, len(wrapped))
-	for _, w := range wrapped {
+	inputs := make([]apiclient.WrappedKeyInput, 0, len(rot.Wrapped))
+	for _, w := range rot.Wrapped {
 		inputs = append(inputs, apiclient.WrappedKeyInput{Recipient: w.Recipient, Wrapped: w.Wrapped})
 	}
-	if err := c.RewrapKeys(ctx, spaceID, inputs); err != nil {
-		return spaceRotateView{}, err
-	}
-	for _, r := range revoked {
-		if err := c.RevokeKey(ctx, spaceID, r); err != nil {
-			return spaceRotateView{}, err
+	epoch, err := c.RotateKey(ctx, spaceID, expected, rot.SealedPrev, inputs)
+	if err != nil {
+		var apiErr *apiclient.Error
+		if errors.As(err, &apiErr) && apiErr.Problem != nil && apiErr.Problem.Code == psapi.CodeKeyEpochConflict {
+			return spaceRotateView{}, fmt.Errorf("%w (it was at epoch %d): %w — run the rotation again", errKeyEpochConflict, expected, err)
 		}
-	}
-	// A snapshot of the current state under the NEW key, so remaining devices
-	// reach it without the old key; then compact the old, now-unreadable
-	// changes the snapshot subsumes.
-	snap, err := statesync.EncodeSnapshot(mgr, spaceID, protocol.Heads(changes), st)
-	if err != nil {
 		return spaceRotateView{}, err
 	}
-	snapID, err := c.PushSnapshot(ctx, snap)
-	if err != nil {
-		return spaceRotateView{}, err
-	}
-	dropped, err := c.Compact(ctx, spaceID, snap.Frontier)
-	if err != nil {
-		return spaceRotateView{}, err
+	if epoch != rot.Epoch {
+		return spaceRotateView{}, fmt.Errorf("space rotate: the controller moved space %s to epoch %d, not %d", spaceID, epoch, rot.Epoch)
 	}
 	return spaceRotateView{
-		SpaceID: spaceID, Revoked: revoked, Remaining: recipientIDs(remaining),
-		SnapshotID: snapID, Dropped: dropped,
+		SpaceID: spaceID, Revoked: revoked, Remaining: recipientIDs(remaining), KeyEpoch: epoch,
 	}, nil
 }
 
@@ -717,19 +755,20 @@ func rotateSpace(ctx context.Context, c *apiclient.Client, cust client.Custody, 
 var errRotateNotPlaylist = errors.New("space rotate: this space holds state rotation cannot preserve")
 
 // ensurePlaylistSpace refuses rotation for any space that is not a playlist
-// space (#698). Rotation materialises the log AS A PLAYLIST, snapshots that and
-// compacts the log away. For any other CRDT that loses every change, because the
-// lenient decode turns them into junk playlist ops and the drive, starred, play
-// history and reading-position readers do not read snapshots. For a vault drive
-// it is worse still: its file frames and manifests are sealed under the space
-// key, and rotation discards that key. So until rotation keeps a key history and
-// stops compacting, only a space whose every change, and whose snapshot if it
+// space (#698). This binary's rotation is a pure re-key with a key history
+// (ADR-0103), so it no longer loses anything itself. The guard stays for client
+// COMPATIBILITY: a client that predates key epochs opens a rotated space with
+// only its newest key, and so cannot read a vault file, a starred, play-history
+// or reading-position change sealed before the rotation. A playlist survives
+// that, because the older clients' rotation left a snapshot under the new key.
+// The guard lifts once every client (the mobile one included) unrolls the
+// history. Until then only a space whose every change, and whose snapshot if it
 // has one, strictly decodes as a playlist may be rotated. An empty space has
 // nothing to lose.
 func ensurePlaylistSpace(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spaceID string) error {
 	refuse := func(what string) error {
 		return fmt.Errorf("%w: space %s has a %s that is not a playlist (a vault drive, starred, "+
-			"play-history or reading-position space); re-keying it would lose its contents (#698)",
+			"play-history or reading-position space); clients that predate key epochs would lose its contents (#698)",
 			errRotateNotPlaylist, spaceID, what)
 	}
 	changes, err := c.Changes(ctx, spaceID)

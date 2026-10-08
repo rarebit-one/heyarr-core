@@ -16,6 +16,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spacerecover"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 )
@@ -210,17 +211,21 @@ var errKeyNotCurrent = errors.New("the key is not the space's current key")
 // newest row. history is ascending, epochs 1..epoch.
 type keyUnroller func(current encryption.SpaceKey, epoch int, history []psstore.KeyHistoryEntry) ([]encryption.SpaceKey, error)
 
-// unrollKeyChain is the production keyUnroller; tests swap it.
-//
-// TODO(#698): wire client.Unroll from the client keyring change (PR 1.3) here
-// once both have landed. The sealed_prev format is that change's to define, so
-// until then this opens only a space that has never been rotated, and a rotated
-// space refuses recovery with --rewrap rather than guessing a format.
+// unrollKeyChain is the production keyUnroller: the client keyring's
+// VerifyCurrent then Unroll (ADR-0103), over the sealed_prev format of
+// void-which-binds-go's encryption.SealSpaceKey. Tests may swap it.
 var unrollKeyChain keyUnroller = func(current encryption.SpaceKey, epoch int, history []psstore.KeyHistoryEntry) ([]encryption.SpaceKey, error) {
-	if epoch == 0 && len(history) == 0 {
-		return []encryption.SpaceKey{current}, nil
+	entries := make([]client.HistoryEntry, 0, len(history))
+	for _, h := range history {
+		entries = append(entries, client.HistoryEntry{Epoch: h.Epoch, SealedPrev: h.SealedPrev})
 	}
-	return nil, fmt.Errorf("the space has been re-keyed (epoch %d), and this build cannot open its key history yet (#698)", epoch)
+	if err := client.VerifyCurrent(current, epoch, entries); err != nil {
+		if errors.Is(err, client.ErrNotCurrentKey) {
+			return nil, fmt.Errorf("%w: %w", errKeyNotCurrent, err)
+		}
+		return nil, err
+	}
+	return client.Unroll(current, epoch, entries)
 }
 
 // currentKeyChains proves each recovered key is its space's CURRENT key and

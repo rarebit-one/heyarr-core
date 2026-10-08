@@ -24,6 +24,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	psclient "github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spacerecover"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
@@ -171,10 +172,11 @@ func newBlobFixture(t *testing.T) blobFixture {
 }
 
 // testSealPrev and testUnroller are a TEST-ONLY key-history format: the previous
-// key's raw bytes sealed with EncryptChange under the next key. The real
-// sealed_prev format belongs to the client keyring change (PR 1.3, #698); the
-// recovery path takes its unroller injected, so these tests pin the recovery
-// logic without fixing a wire format.
+// key's raw bytes sealed with EncryptChange under the next key. The recovery
+// path takes its unroller injected, so these tests pin the recovery logic apart
+// from the wire format; rotateReal and
+// TestRecoveryOfARotatedSpaceWithTheProductionUnroller cover the real one
+// (encryption.SealSpaceKey through client.Unroll).
 func testSealPrev(t *testing.T, next encryption.SpaceKey, prevRaw []byte) []byte {
 	t.Helper()
 	sealed, err := encryption.EncryptChange(next, prevRaw)
@@ -586,15 +588,63 @@ func TestRecoveryAfterARotation(t *testing.T) {
 	})
 }
 
-// TestRecoveryOfARotatedSpaceWaitsForTheUnroller: until the client keyring's
-// unroller is wired (PR 1.3), a rotated space refuses --rewrap rather than
-// guessing a history format — and writes nothing.
-func TestRecoveryOfARotatedSpaceWaitsForTheUnroller(t *testing.T) {
+// rotateReal is rotate with the production sealed_prev format
+// (client.SealPrevious, i.e. encryption.SealSpaceKey), for the production
+// unroller. Returns the new key.
+func (f *blobFixture) rotateReal(t *testing.T, id string) encryption.SpaceKey {
+	t.Helper()
+	ctx := context.Background()
+	raw, next := rawSpaceKey(t)
+	sealed, err := psclient.SealPrevious(next, f.keys[id])
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := encryption.ParsePublicKey(f.recipient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := encryption.Seal(next, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch, err := f.source.store.KeyEpoch(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.source.store.RotateKey(ctx, id, epoch, sealed,
+		[]psstore.RecipientWrap{{Recipient: f.recipient, Wrapped: w}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.target.store.PutKeyHistory(ctx, id, epoch+1, sealed); err != nil {
+		t.Fatal(err)
+	}
+	f.keys[id], f.raw[id] = next, raw
+	return next
+}
+
+// TestRecoveryOfARotatedSpaceWithTheProductionUnroller: with the client
+// keyring's unroller wired, a space rotated twice in the real sealed_prev
+// format recovers from a fresh blob at the current epoch, while a blob from
+// before the rotations is refused as stale and writes nothing.
+func TestRecoveryOfARotatedSpaceWithTheProductionUnroller(t *testing.T) {
 	f := newBlobFixture(t)
-	f.rotate(t, blobSpaceA)
-	_, err := f.recoverRewrap(t, f.export(t))
-	if err == nil || !strings.Contains(err.Error(), "cannot open its key history yet") {
-		t.Fatalf("recover of a rotated space with the production unroller: err = %v", err)
+	stale := filepath.Join(f.dir, "stale.blob")
+	if _, _, err := run(t, context.Background(), "--config", f.source.config, "space", "export-recovery",
+		"--out", stale, "--recipient", f.recipient); err != nil {
+		t.Fatal(err)
+	}
+	f.rotateReal(t, blobSpaceA)
+	f.rotateReal(t, blobSpaceA)
+
+	if _, err := f.recoverRewrap(t, stale); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("recover from a pre-rotation blob: err = %v, want a stale refusal", err)
 	}
 	f.assertNothingRewrapped(t)
+
+	if _, err := f.recoverRewrap(t, f.export(t)); err != nil {
+		t.Fatalf("recover from a fresh blob after two rotations: %v", err)
+	}
+	if _, epoch := f.deviceWrap(t, f.target, blobSpaceA); epoch != 2 {
+		t.Fatalf("the device copy is at epoch %d, want 2", epoch)
+	}
 }

@@ -93,13 +93,26 @@ type WrappedFor struct {
 
 // Manager holds the space keys this device has open, in memory only. A zero
 // Manager is unusable; construct with [New]. It is safe for concurrent use.
+//
+// Each open space is a KEYRING (ADR-0103): the current key, its epoch, and every
+// earlier key back to epoch 0. Encrypt always seals under the current key;
+// Decrypt opens content sealed under any key on the ring, so content written
+// before a rotation — or by a writer racing one — stays readable.
 type Manager struct {
-	mu   sync.RWMutex
-	keys map[string]encryption.SpaceKey
+	mu    sync.RWMutex
+	rings map[string]keyring
+}
+
+// keyring is one open space's keys: keys[0] is the current key, at epoch, and
+// keys[i] is the key of epoch-i. It is never mutated in place — a rotation
+// stores a new ring — so a reader holding an old slice is never raced.
+type keyring struct {
+	epoch int
+	keys  []encryption.SpaceKey
 }
 
 // New returns an empty manager with no spaces open.
-func New() *Manager { return &Manager{keys: make(map[string]encryption.SpaceKey)} }
+func New() *Manager { return &Manager{rings: make(map[string]keyring)} }
 
 // Create mints a new space and seals its key for every recipient, holding the
 // key open on this device. It returns the space to record and the wrapped copies
@@ -107,6 +120,7 @@ func New() *Manager { return &Manager{keys: make(map[string]encryption.SpaceKey)
 // devices and the recovery key; at least one is required, or the space could be
 // read by no one — and this device should be among them, or it just wrote a
 // space it cannot itself read (a caller's responsibility, not enforced here).
+// The new space is at key epoch 0.
 func (m *Manager) Create(kind spaces.Kind, now time.Time, recipients []Recipient) (spaces.EncryptedSpace, []WrappedFor, error) {
 	if len(recipients) == 0 {
 		return spaces.EncryptedSpace{}, nil, errors.New("personalstate/client: a space needs at least one recipient, or nobody could read it")
@@ -119,48 +133,72 @@ func (m *Manager) Create(kind spaces.Kind, now time.Time, recipients []Recipient
 	if err != nil {
 		return spaces.EncryptedSpace{}, nil, err
 	}
-	wrapped := make([]WrappedFor, 0, len(recipients))
-	for _, r := range recipients {
-		if r.Key == nil {
-			return spaces.EncryptedSpace{}, nil, fmt.Errorf("personalstate/client: recipient %q has no key", r.ID)
-		}
-		w, err := encryption.Seal(key, r.Key)
-		if err != nil {
-			return spaces.EncryptedSpace{}, nil, fmt.Errorf("personalstate/client: sealing for %s: %w", r.ID, err)
-		}
-		wrapped = append(wrapped, WrappedFor{Recipient: r.ID, Wrapped: w})
+	wrapped, err := sealFor(key, recipients)
+	if err != nil {
+		return spaces.EncryptedSpace{}, nil, err
 	}
 	m.mu.Lock()
-	m.keys[sp.ID] = key
+	m.rings[sp.ID] = keyring{epoch: 0, keys: []encryption.SpaceKey{key}}
 	m.mu.Unlock()
 	return sp, wrapped, nil
 }
 
-// Rotate mints a FRESH key for an already-open space and seals it for the given
-// recipients — the forward-looking half of device revocation (§41, ADR-0022,
-// ADR-0049). The recipients are the ones that REMAIN authorised: the revoked
-// device is simply left out, so it is not sealed the new key and cannot read
-// anything encrypted under it from here on. The new key replaces the old in
-// memory, so this device's subsequent Encrypt uses it; past changes under the old
-// key stay readable to whoever already held it (revocation is forward-looking,
-// not retroactive — that honesty is ADR-0022's, kept here).
+// A Rotation is what [Manager.Rotate] hands back for the peer
+// (POST /spaces/{id}/rotate, ADR-0103): the new key's wrapped copies, the
+// previous current key sealed under the new one (the history row), and the
+// epoch the space moves to. The caller names Epoch-1 as the rotation's expected
+// epoch.
+type Rotation struct {
+	Epoch      int
+	SealedPrev []byte
+	Wrapped    []WrappedFor
+}
+
+// Rotate mints a FRESH key for an already-open space, seals it for the given
+// recipients, and seals the previous current key under it — a pure re-key
+// (§41, ADR-0049, ADR-0103). The recipients are the ones that REMAIN authorised:
+// a revoked device is simply left out, so it is not sealed the new key and
+// cannot read anything encrypted under it from here on. Nothing is
+// re-encrypted: the new key becomes this device's current key (so Encrypt uses
+// it), and the old one moves onto the ring, so this device — and any remaining
+// recipient, through the history row — still reads every earlier change.
+// Revocation is forward-looking, not retroactive (ADR-0022): the revoked device
+// held the old keys already.
 //
-// The space must be open (only a device that can read a space may re-key it), and
-// at least one recipient is required, or the space would be re-keyed for no one.
-// It returns the new wrapped copies to push to the peer, replacing the remaining
-// recipients' copies; the caller deletes the revoked device's stored copy
-// separately (store.DeleteWrappedKey).
-func (m *Manager) Rotate(spaceID string, recipients []Recipient) ([]WrappedFor, error) {
-	if !m.IsOpen(spaceID) {
-		return nil, fmt.Errorf("%w: %s", ErrSpaceNotOpen, spaceID)
+// The space must be open (only a device that can read a space may re-key it),
+// and at least one recipient is required, or the space would be re-keyed for no
+// one. The manager holds the new key from here on even if the peer then refuses
+// the rotation (a 409 because another landed first); a caller that loses that
+// race discards this manager and re-opens the space.
+func (m *Manager) Rotate(spaceID string, recipients []Recipient) (Rotation, error) {
+	ring, ok := m.ring(spaceID)
+	if !ok {
+		return Rotation{}, fmt.Errorf("%w: %s", ErrSpaceNotOpen, spaceID)
 	}
 	if len(recipients) == 0 {
-		return nil, errors.New("personalstate/client: a rotation needs at least one recipient, or the space is re-keyed for no one")
+		return Rotation{}, errors.New("personalstate/client: a rotation needs at least one recipient, or the space is re-keyed for no one")
 	}
 	key, err := encryption.NewSpaceKey()
 	if err != nil {
-		return nil, err
+		return Rotation{}, err
 	}
+	wrapped, err := sealFor(key, recipients)
+	if err != nil {
+		return Rotation{}, err
+	}
+	sealedPrev, err := SealPrevious(key, ring.keys[0])
+	if err != nil {
+		return Rotation{}, err
+	}
+	next := keyring{epoch: ring.epoch + 1, keys: append([]encryption.SpaceKey{key}, ring.keys...)}
+	m.mu.Lock()
+	m.rings[spaceID] = next
+	m.mu.Unlock()
+	return Rotation{Epoch: next.epoch, SealedPrev: sealedPrev, Wrapped: wrapped}, nil
+}
+
+// sealFor wraps key for every recipient.
+func sealFor(key encryption.SpaceKey, recipients []Recipient) ([]WrappedFor, error) {
 	wrapped := make([]WrappedFor, 0, len(recipients))
 	for _, r := range recipients {
 		if r.Key == nil {
@@ -172,15 +210,24 @@ func (m *Manager) Rotate(spaceID string, recipients []Recipient) ([]WrappedFor, 
 		}
 		wrapped = append(wrapped, WrappedFor{Recipient: r.ID, Wrapped: w})
 	}
-	m.mu.Lock()
-	m.keys[spaceID] = key
-	m.mu.Unlock()
 	return wrapped, nil
 }
 
 // Open recovers a space key from the wrapped copy this device holds, via the
-// [Unwrapper], and remembers it so the device can read the space. Idempotent.
+// [Unwrapper], and remembers it so the device can read the space. It is for a
+// space at key epoch 0 — one never rotated; a rotated space opens with
+// [Manager.OpenWithHistory]. Idempotent.
 func (m *Manager) Open(spaceID string, wrapped []byte, u Unwrapper) error {
+	return m.OpenWithHistory(spaceID, wrapped, 0, nil, u)
+}
+
+// OpenWithHistory recovers the space key of epoch from this device's wrapped
+// copy and unrolls the space's key history back to epoch 0 (ADR-0103), so the
+// device reads content sealed under every earlier key. history is the space's
+// rows as the peer serves them (any order); every epoch 1..epoch must be
+// present, or the open fails rather than leaving content silently unreadable.
+// Idempotent.
+func (m *Manager) OpenWithHistory(spaceID string, wrapped []byte, epoch int, history []HistoryEntry, u Unwrapper) error {
 	if u == nil {
 		return errors.New("personalstate/client: an unwrapper is required")
 	}
@@ -188,59 +235,108 @@ func (m *Manager) Open(spaceID string, wrapped []byte, u Unwrapper) error {
 	if err != nil {
 		return fmt.Errorf("personalstate/client: opening space %s: %w", spaceID, err)
 	}
+	return m.Load(spaceID, key, epoch, history)
+}
+
+// Load opens a space from its CURRENT key held in the clear — a key recovered
+// from the paper secret (internal/personalstate/spacerecover), not unwrapped by
+// this device's custody — unrolling history exactly as
+// [Manager.OpenWithHistory] does.
+func (m *Manager) Load(spaceID string, current encryption.SpaceKey, epoch int, history []HistoryEntry) error {
+	keys, err := Unroll(current, epoch, history)
+	if err != nil {
+		return fmt.Errorf("personalstate/client: opening space %s: %w", spaceID, err)
+	}
 	m.mu.Lock()
-	m.keys[spaceID] = key
+	m.rings[spaceID] = keyring{epoch: epoch, keys: keys}
 	m.mu.Unlock()
 	return nil
 }
 
-// Encrypt seals a change under an open space's key, ready to ship to the peer as
-// an opaque blob (§42). The space must be open.
+// Encrypt seals a change under an open space's CURRENT key, ready to ship to the
+// peer as an opaque blob (§42). The space must be open.
 func (m *Manager) Encrypt(spaceID string, plaintext []byte) ([]byte, error) {
-	key, ok := m.key(spaceID)
+	ring, ok := m.ring(spaceID)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrSpaceNotOpen, spaceID)
 	}
-	return encryption.EncryptChange(key, plaintext)
+	return encryption.EncryptChange(ring.keys[0], plaintext)
 }
 
-// Decrypt opens a change fetched from the peer, under an open space's key.
+// Decrypt opens a change fetched from the peer under whichever key on the
+// space's ring sealed it, trying the current key first and then each earlier
+// one, newest to oldest (the AEAD refuses a wrong key). When none opens it, the
+// error is the current key's — the same opaque refusal a single-key space gave.
 func (m *Manager) Decrypt(spaceID string, ciphertext []byte) ([]byte, error) {
-	key, ok := m.key(spaceID)
+	ring, ok := m.ring(spaceID)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrSpaceNotOpen, spaceID)
 	}
-	return encryption.DecryptChange(key, ciphertext)
+	var first error
+	for _, k := range ring.keys {
+		pt, err := encryption.DecryptChange(k, ciphertext)
+		if err == nil {
+			return pt, nil
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return nil, first
 }
 
 // IsOpen reports whether this device holds the given space's key.
 func (m *Manager) IsOpen(spaceID string) bool {
-	_, ok := m.key(spaceID)
+	_, ok := m.ring(spaceID)
 	return ok
 }
 
-// SpaceKey returns an open space's key so the vault content path
-// (internal/personalstate/vaultframe, vaultread) can seal and open fixed
-// ciphertext frames directly under it, rather than through the change-oriented
-// [Manager.Encrypt]/[Manager.Decrypt]. ok is false when this device does not hold
-// the key — it was never created here or opened from a wrapped copy. The key stays
-// in memory on this device (§40): a caller must not persist it or hand it to a peer.
+// SpaceKey returns an open space's CURRENT key so the vault content path
+// (internal/personalstate/vaultframe, vaultread) can seal fixed ciphertext frames
+// directly under it, rather than through the change-oriented
+// [Manager.Encrypt]/[Manager.Decrypt]. A reader wants [Manager.Keys], since a
+// file sealed before a rotation is under an earlier key. ok is false when this
+// device does not hold the key — it was never created here or opened from a
+// wrapped copy. The key stays in memory on this device (§40): a caller must not
+// persist it or hand it to a peer.
 func (m *Manager) SpaceKey(spaceID string) (key encryption.SpaceKey, ok bool) {
-	return m.key(spaceID)
+	ring, ok := m.ring(spaceID)
+	if !ok {
+		return encryption.SpaceKey{}, false
+	}
+	return ring.keys[0], true
 }
 
-// Close forgets a space's key — on lock, or when this device is revoked from the
-// space. The wrapped copies the peer holds are untouched; this only drops the
-// in-memory key.
+// Keys returns every key on an open space's ring, newest (the current key)
+// first, for a vault reader that must try each against a manifest. The same
+// in-memory rule as [Manager.SpaceKey] applies. The slice is the caller's.
+func (m *Manager) Keys(spaceID string) ([]encryption.SpaceKey, bool) {
+	ring, ok := m.ring(spaceID)
+	if !ok {
+		return nil, false
+	}
+	return append([]encryption.SpaceKey(nil), ring.keys...), true
+}
+
+// Epoch returns an open space's current key epoch (ADR-0103) — the epoch a
+// rotation names as expected, and the one a new recipient's copy is wrapped at.
+func (m *Manager) Epoch(spaceID string) (int, bool) {
+	ring, ok := m.ring(spaceID)
+	return ring.epoch, ok
+}
+
+// Close forgets a space's keys — on lock, or when this device is revoked from
+// the space. The wrapped copies the peer holds are untouched; this only drops
+// the in-memory ring.
 func (m *Manager) Close(spaceID string) {
 	m.mu.Lock()
-	delete(m.keys, spaceID)
+	delete(m.rings, spaceID)
 	m.mu.Unlock()
 }
 
-func (m *Manager) key(spaceID string) (encryption.SpaceKey, bool) {
+func (m *Manager) ring(spaceID string) (keyring, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	k, ok := m.keys[spaceID]
-	return k, ok
+	r, ok := m.rings[spaceID]
+	return r, ok
 }

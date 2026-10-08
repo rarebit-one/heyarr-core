@@ -29,25 +29,34 @@ func TestRotateReKeysForRemainingOnly(t *testing.T) {
 	}
 
 	// Revoke B: rotate for A only.
-	newWrapped, err := m.Rotate(sp.ID, []client.Recipient{ra})
+	rot, err := m.Rotate(sp.ID, []client.Recipient{ra})
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
+	newWrapped := rot.Wrapped
 	if len(newWrapped) != 1 || newWrapped[0].Recipient != ra.ID {
 		t.Fatalf("rotation re-keyed for %v, want only A", newWrapped)
+	}
+	if rot.Epoch != 1 || len(rot.SealedPrev) == 0 {
+		t.Fatalf("rotation = epoch %d with %d-byte history row, want epoch 1 and a row", rot.Epoch, len(rot.SealedPrev))
 	}
 	newCt, err := m.Encrypt(sp.ID, []byte("new content"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// A, opening the NEW wrapped copy on a fresh device view, reads the new content.
+	// A, opening the NEW wrapped copy with the history row on a fresh device
+	// view, reads the new content AND the old (ADR-0103).
 	mA := client.New()
-	if err := mA.Open(sp.ID, newWrapped[0].Wrapped, ua); err != nil {
-		t.Fatalf("A.Open(new): %v", err)
+	history := []client.HistoryEntry{{Epoch: 1, SealedPrev: rot.SealedPrev}}
+	if err := mA.OpenWithHistory(sp.ID, newWrapped[0].Wrapped, 1, history, ua); err != nil {
+		t.Fatalf("A.OpenWithHistory(new): %v", err)
 	}
 	if got, _ := mA.Decrypt(sp.ID, newCt); string(got) != "new content" {
 		t.Fatalf("A could not read post-rotation content: %q", got)
+	}
+	if got, err := mA.Decrypt(sp.ID, oldCt); err != nil || string(got) != "old content" {
+		t.Fatalf("A could not read pre-rotation content through the history: %q %v", got, err)
 	}
 
 	// B holds only its ORIGINAL wrapped copy (the old key). It can still read the
