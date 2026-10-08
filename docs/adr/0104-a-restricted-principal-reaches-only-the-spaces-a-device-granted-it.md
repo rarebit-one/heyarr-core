@@ -112,6 +112,31 @@ add a third kind of pinned wrap target beside a device key and a recovery key.
   other. A rotation either re-wraps it (allowed only while its grant is
   active) or names it in `revoke`. Leaving it out is a `409`.
 
+## Executor custody: where the recipient key lives
+
+- **Born sealed.** `heyarr recipient init --sealed <file>` runs on the
+  executor's host. It draws the X25519 seed in memory and seals it straight
+  into a passphrase-sealed file (void-which-binds-go `custody/sealedfile`, its
+  ADR-0021), so the private half is never on disk in the clear. It prints the
+  public key and the fingerprint that `recipient add` asks the owner to type.
+  `recipient show` prints the same from the file's clear header, without the
+  PIN. A second `init` never replaces a key that spaces are wrapped for.
+- **The PIN is a credential.** It comes from the systemd credential
+  `heyarr-recipient-pin` (`LoadCredentialEncrypted=`), or an owner-only file.
+  It is never an argument or an environment variable, and a missing or loose
+  source refuses rather than falls back.
+- **Reads and writes by ref.** `heyarr vault get-ref hv1:<space>/<object>` and
+  `vault put-ref --space <space> -` address one sealed JSON object at
+  `.jumpdrive/objects/<object>.json` in the space's drive. The ref grammar is
+  the referring system's `^hv1:[0-9a-f-]{36}(/[0-9a-f-]{36})?$`, narrowed to
+  canonical UUIDs, and object ids are random. The executor authenticates with
+  its restricted token and opens the space with its sealed key through its own
+  wrap and the key history (ADR-0103). Plaintext goes only to stdout or a new
+  owner-only file the caller names, which should be on a tmpfs it wipes. It
+  never goes to stderr or into an error. Exit codes separate an unavailable or
+  wrong key (3), a space it cannot see (4), one it cannot decrypt (5) and an
+  absent object (6), so a caller maps them without parsing prose.
+
 ## Threat model for hash-addressed blob reads
 
 The unguessable BLAKE3 id is the capability, a 256-bit digest of ciphertext.

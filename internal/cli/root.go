@@ -8,6 +8,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -277,6 +278,16 @@ func roleNames(roles roleSet) []string {
 	return names
 }
 
+// exitCode is the process exit status for a failed command: the code an
+// error carries (the vault ref commands' documented statuses), else 1.
+func exitCode(err error) int {
+	var coded *exitError
+	if errors.As(err, &coded) {
+		return coded.ExitCode()
+	}
+	return 1
+}
+
 // Main is the process entry point. It wires signal handling to context
 // cancellation so that SIGTERM from systemd produces the same clean shutdown as
 // Ctrl-C from a terminal.
@@ -287,6 +298,6 @@ func Main() {
 	root := NewRootCommand(Options{})
 	if err := root.ExecuteContext(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "heyarr: %v\n", err)
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
 }

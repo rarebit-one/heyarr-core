@@ -26,6 +26,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/cruciform"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/tpm"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/client/yubikey"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/recipientkey"
 )
 
 // The selectable backend names (ADR-0098). Software, YubiKey and TPM are wired;
@@ -36,6 +37,10 @@ const (
 	YubiKey   = "yubikey"
 	TPM       = "tpm"
 	Cruciform = "cruciform"
+	// SealedFile is an executor's service-recipient key (ADR-0104), born into
+	// a passphrase-sealed file by `heyarr recipient init`. It is never a
+	// member device's key.
+	SealedFile = "sealedfile"
 )
 
 // Options selects and configures a backend.
@@ -77,6 +82,16 @@ type Options struct {
 	// wake (the RP wake endpoint the desktop calls) is wired by the caller; until
 	// it is, offload opens only when the phone is already reachable.
 	CruciformWake cruciform.WakeFunc
+
+	// SealedKeyFile is the executor's sealed recipient key (written by
+	// `heyarr recipient init`). Required when Backend is SealedFile.
+	SealedKeyFile string
+	// SealedKeyPIN yields the sealed file's PIN. Required when Backend is
+	// SealedFile; never persisted here.
+	SealedKeyPIN vbcustody.PINFunc
+	// SealedKeyUnlockTTL is how long the unsealed seed is held; zero is
+	// recipientkey.DefaultUnlockTTL. The seed is zeroed when it lapses.
+	SealedKeyUnlockTTL time.Duration
 }
 
 // Select builds the configured custody backend, or reports why it cannot.
@@ -119,6 +134,21 @@ func Select(opts Options) (client.Custody, error) {
 		}
 		transport := &cruciform.RelayTransport{RelayBase: cfg.RelayBase, Wake: opts.CruciformWake}
 		return cruciform.NewCustody(cfg, transport)
+	case SealedFile:
+		if opts.SealedKeyFile == "" {
+			return nil, fmt.Errorf("custody: the sealedfile backend needs a sealed key file (create one with `heyarr recipient init`)")
+		}
+		if opts.SealedKeyPIN == nil {
+			return nil, fmt.Errorf("custody: the sealedfile backend needs a PIN source")
+		}
+		// Unsealed up front, so a wrong PIN fails before anything is fetched.
+		// The seed is held only for the TTL; the timer zeroes it, so no close
+		// is threaded through client.Custody.
+		h, _, err := recipientkey.Open(opts.SealedKeyFile, opts.SealedKeyPIN, opts.SealedKeyUnlockTTL)
+		if err != nil {
+			return nil, err
+		}
+		return h, nil
 	default:
 		return nil, fmt.Errorf("custody: unknown backend %q", opts.Backend)
 	}
