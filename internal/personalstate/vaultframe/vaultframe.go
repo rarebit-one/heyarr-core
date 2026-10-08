@@ -250,9 +250,13 @@ func (m Manifest) Validate() error {
 		return fmt.Errorf("%w: file_id is not %d hex bytes", ErrManifest, fileIDLen)
 	case !isContentID(m.Content):
 		return fmt.Errorf("%w: content is not a blake3 blob id", ErrManifest)
-	case m.FrameSize != FrameSize:
-		// Version 1 fixes the frame size (ADR-0097); another size is a new version.
-		return fmt.Errorf("%w: frame_size %d, version %d requires %d", ErrManifest, m.FrameSize, Version, FrameSize)
+	case m.FrameSize < 1 || m.FrameSize > FrameSize:
+		// Seal always writes FrameSize, but the size is part of the sealed
+		// manifest and every reader computes frame ranges from it, so any size
+		// up to the cap is read correctly — the cross-language golden vectors
+		// use small frames for exactly that reason. Above the cap is refused:
+		// it would size a reader's per-frame buffer.
+		return fmt.Errorf("%w: frame_size %d out of range", ErrManifest, m.FrameSize)
 	case m.PlaintextSize < 0:
 		return fmt.Errorf("%w: negative plaintext_size %d", ErrManifest, m.PlaintextSize)
 	}

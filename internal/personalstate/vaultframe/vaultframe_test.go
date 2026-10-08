@@ -223,7 +223,6 @@ func TestOpenManifestRefusesImpossibleGeometry(t *testing.T) {
 		"a short content id":        func(m *vaultframe.Manifest) { m.Content = m.Content[:20] },
 		"a zero frame size":         func(m *vaultframe.Manifest) { m.FrameSize = 0 },
 		"a frame size over 1 MiB":   func(m *vaultframe.Manifest) { m.FrameSize = vaultframe.FrameSize + 1 },
-		"a frame size under 1 MiB":  func(m *vaultframe.Manifest) { m.FrameSize = 4096 },
 		"more frames than the index space": func(m *vaultframe.Manifest) {
 			m.FrameCount = math.MaxInt32 + 1
 			m.PlaintextSize = int64(m.FrameCount) * vaultframe.FrameSize
