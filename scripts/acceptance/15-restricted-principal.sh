@@ -4,6 +4,10 @@
 # and the spaces an owner's device granted it, and nothing else. The owner's
 # device grants and revokes; a bearer token — even an admin one — cannot. The
 # ordinary admin token keeps every route it had, which is the regression line.
+# Then SERVICE RECIPIENTS: the owner's device registers the executor's key
+# (fingerprint compared), grants it a space with the key wrapped in the same
+# request, the executor fetches only its own wrap and decrypts with a key that
+# never left its host, and revoke-executor closes both gates.
 restricted_principal_demo() {
   local root="$WORK/restricted" data sock cfg dev
   data="$root/data"; sock="$data/heyarr.sock"; cfg="$WORK/restricted.yaml"
@@ -140,6 +144,72 @@ YAML
     "http://heyarr/api/v1/events?after=0&types=personalstate.space.*" 2>/dev/null | grep '^event: ' || true)
   assert_contains "$evs" "personalstate.space.access_granted" "the grant is an event (Invariant 7)"
   assert_contains "$evs" "personalstate.space.access_revoked" "and so is the revocation"
+
+  # SERVICE RECIPIENTS: the consent act that lets an executor DECRYPT a space,
+  # not just fetch it. The executor's key lives on its own host and is never
+  # enrolled as a member device (a device dir here only holds the key).
+  local exdir exkey exfp
+  exdir="$root/executor"
+  "$BIN" device generate --device-dir "$exdir" --name executor >/dev/null 2>&1
+  exkey=$("$BIN" device show --device-dir "$exdir" --json | jq -r .encryption_public_key)
+  # The fingerprint the executor's host would display, computed independently
+  # of the Go code: the first 80 bits of SHA-256(label, 0x00, key), base32.
+  exfp=$(python3 -c 'import sys,hashlib,base64; k=bytes.fromhex(sys.argv[1].split(":")[1]); d=hashlib.sha256(b"heyarr/service-recipient-fingerprint/v1\x00"+k).digest()[:10]; e=base64.b32encode(d).decode(); print(" ".join(e[i:i+4] for i in range(0,16,4)))' "$exkey")
+
+  # The owner's device makes a family space and writes a canary into it.
+  local own vspace canary
+  own=( env "HEYARR_TOKEN=$admin" "VOID_WHICH_BINDS_IDENTITY_DIR=$dev/id" "VOID_WHICH_BINDS_DEVICE_DIR=$dev/dev" "$BIN" --config "$cfg" )
+  vspace=$("${own[@]}" space create --kind family --recovery=false --json | jq -r .id)
+  canary="canary-$(python3 -c 'import uuid; print(uuid.uuid4())')"
+  "${own[@]}" space put "$vspace" --item "$canary" >/dev/null
+
+  # Registration: never from a bearer; a fingerprint that is not the key's
+  # registers nothing; the right one, typed from the host, registers it.
+  code=$(rp_status POST /api/v1/service-recipients "Bearer $admin" \
+    "{\"principal\":\"executor-a\",\"recipient\":\"$exkey\"}")
+  assert_eq "$code" "403" "an admin bearer token cannot register a service recipient"
+  assert_refuses "a fingerprint that is not the key's registers nothing" "does not match" \
+    "${own[@]}" recipient add --executor executor-a --pub "$exkey" --fingerprint "AAAA AAAA AAAA AAAA"
+  assert_refuses "a key never registered cannot be granted a space" "not a registered service recipient" \
+    "${own[@]}" space grant "$vspace" --executor executor-a --recipient "$exkey" --yes
+  "${own[@]}" recipient add --executor executor-a --pub "$exkey" --label "home executor" --fingerprint "$exfp" >/dev/null 2>&1
+  got=$("${own[@]}" recipient list --json | jq -r '.[0].fingerprint')
+  assert_eq "$got" "$exfp" "the owner's device registers the executor's key under the fingerprint its host shows"
+
+  # The executor, ungranted, can neither fetch nor decrypt.
+  local ex
+  ex=( env "HEYARR_TOKEN=${exa#Bearer }" "$BIN" --config "$cfg" )
+  assert_refuses "before the grant the executor cannot read the space" "no such space" \
+    "${ex[@]}" space read "$vspace" --device-dir "$exdir"
+
+  # Grant: wrap the current key for the executor AND grant it, in one request.
+  local granted
+  granted=$("${own[@]}" space grant "$vspace" --executor executor-a --recipient "$exkey" --yes --json)
+  got=$(jq -r .caps <<<"$granted")
+  assert_eq "$got" "read" "space grant records a read grant"
+  got=$(jq -r .key_epoch <<<"$granted")
+  assert_eq "$got" "0" "and wraps the space's current key, at the current epoch"
+
+  # The executor fetches and sees only its own wrap.
+  got=$("${ex[@]}" space keys "$vspace" --json | jq -r '[.[].recipient] | join(",")')
+  assert_eq "$got" "$exkey" "the executor is shown its own wrap and no other recipient's"
+  got=$("${own[@]}" space keys "$vspace" --json | jq 'length')
+  assert_eq "$got" "2" "while the owner sees both copies"
+  # And decrypts with a key that never left its host.
+  got=$("${ex[@]}" space read "$vspace" --device-dir "$exdir" --json | jq -r '.items[0]')
+  assert_eq "$got" "$canary" "the granted executor decrypts the space with its own key"
+  code=$(rp_status POST "/api/v1/spaces/$vspace/changes" "$exa" '{}')
+  assert_eq "$code" "403" "a read grant does not let it push"
+
+  # Revoke: the grant and the wrap go together; the next fetch is refused.
+  "${own[@]}" space revoke-executor "$vspace" --executor executor-a >/dev/null 2>&1
+  assert_refuses "after revoke-executor the executor's next read is refused" "no such space" \
+    "${ex[@]}" space read "$vspace" --device-dir "$exdir"
+  got=$("${own[@]}" space keys "$vspace" --json | jq -r '[.[].recipient] | join(",")')
+  assert_not_contains "$got" "$exkey" "and its copy of the key is gone"
+  evs=$(curl -sS --unix-socket "$sock" -H "Authorization: Bearer $admin" -m 1 \
+    "http://heyarr/api/v1/events?after=0&types=personalstate.service_recipient.*" 2>/dev/null | grep '^event: ' || true)
+  assert_contains "$evs" "personalstate.service_recipient.registered" "registering the key is an event (Invariant 7)"
 
   kill -TERM "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true

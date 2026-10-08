@@ -85,6 +85,9 @@ func (s *Store) RekeyUser(ctx context.Context, principal, publicKey, recoveryKey
 		return Rekey{}, fmt.Errorf("deviceauth: checking for an existing user: %w", err)
 	}
 
+	if err := refuseServiceRecipientKey(ctx, tx, recovery); err != nil {
+		return Rekey{}, err
+	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE user_identities SET public_key = ?, recovery_encryption_key = ? WHERE id = ?`,
 		rendered, recovery, user.ID); err != nil {

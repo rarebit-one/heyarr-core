@@ -126,6 +126,9 @@ One logical library, multiple complete sovereign peers.`,
 		// machine's device key like a device command — the controller stores the
 		// ciphertext and only this device holds the key that opens it.
 		newSpaceCommand(opts, &configPath),
+		// Service recipients (ADR-0104): an owner's device registers an
+		// executor's public key, as this machine's enrolled device.
+		newRecipientCommand(opts, &configPath),
 		// The vault media client (ADR-0021, ADR-0095, ADR-0096, ADR-0097). A
 		// hybrid like `space`: it talks to the controller over /api/v1 and holds
 		// this machine's device key — the peer stores ciphertext blobs, encrypted

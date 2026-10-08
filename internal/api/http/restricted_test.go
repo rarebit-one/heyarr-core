@@ -58,6 +58,22 @@ func (pins) RecordVaultBlob(context.Context, string, int64, string) error { retu
 func (pins) PinPlacement(context.Context, string, string) error           { return nil }
 func (pins) UnpinPlacement(context.Context, string, string) error         { return nil }
 
+// The household's pinned wrap recipients: an enrolled device's key and another.
+var (
+	ownerRecipient = "x25519:" + strings.Repeat("11", 32)
+	otherRecipient = "x25519:" + strings.Repeat("22", 32)
+)
+
+// pinnedKeys is enrol-before-wrap's answer without the device store: these keys
+// are pinned, and none is a recovery key.
+type pinnedKeys map[string]bool
+
+func (p pinnedKeys) AllowedWrapRecipients(context.Context) (map[string]bool, error) { return p, nil }
+
+func (pinnedKeys) RecoveryWrapRecipients(context.Context) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+
 type restrictedHarness struct {
 	ts *httptest.Server
 
@@ -123,7 +139,12 @@ func newRestrictedHarness(t *testing.T) *restrictedHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	psAPI, err := psapi.New(psapi.Options{Store: ps, Principals: authStore, Logger: slog.New(slog.DiscardHandler)})
+	// Enrol-before-wrap is on: the household's two keys are pinned, and the
+	// store's service recipients are the executors' own wraps.
+	psAPI, err := psapi.New(psapi.Options{
+		Store: ps, Principals: authStore, Recipients: ps, Logger: slog.New(slog.DiscardHandler),
+		Authorizer: pinnedKeys{ownerRecipient: true, otherRecipient: true},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,8 +250,8 @@ func newRestrictedHarness(t *testing.T) *restrictedHarness {
 		h.mustStatus(t, http.MethodPost, "/spaces", h.deviceCredential(), map[string]any{
 			"id": id, "kind": "family",
 			"wrapped_keys": []map[string]any{
-				{"recipient": "x25519:" + strings.Repeat("11", 32), "wrapped": []byte("owner wrap")},
-				{"recipient": "x25519:" + strings.Repeat("22", 32), "wrapped": []byte("someone else's wrap")},
+				{"recipient": ownerRecipient, "wrapped": []byte("owner wrap")},
+				{"recipient": otherRecipient, "wrapped": []byte("someone else's wrap")},
 			},
 		}, http.StatusCreated)
 	}

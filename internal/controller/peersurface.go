@@ -694,7 +694,10 @@ func translateStateErr(err error) error {
 		return nil
 	case errors.Is(err, psstore.ErrUnknownSpace):
 		return peerapi.ErrNoSuchSpace
-	case errors.Is(err, psstore.ErrStaleKeyEpoch):
+	case errors.Is(err, psstore.ErrStaleKeyEpoch),
+		// A replicated copy for an executor this node has not granted the
+		// space (ADR-0104) is skipped like a superseded one: never resurrected.
+		errors.Is(err, psstore.ErrServiceRecipientUngranted):
 		return fmt.Errorf("%w: %w", peerapi.ErrKeySuperseded, err)
 	case errors.Is(err, psstore.ErrFutureKeyEpoch):
 		return fmt.Errorf("%w: %w", peerapi.ErrKeyEpochAhead, err)

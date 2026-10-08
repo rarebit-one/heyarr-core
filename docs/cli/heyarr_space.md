@@ -35,11 +35,13 @@ it.
 * [heyarr space compact](heyarr_space_compact.md)	 - Drop the changes the latest snapshot subsumes (§44)
 * [heyarr space create](heyarr_space_create.md)	 - Mint an encrypted space and wrap its key for the authorised devices
 * [heyarr space export-recovery](heyarr_space_export-recovery.md)	 - Export every space's recovery-wrapped key into one recovery blob (ADR-0022)
+* [heyarr space grant](heyarr_space_grant.md)	 - Let an executor fetch and decrypt a space (ADR-0104)
 * [heyarr space keys](heyarr_space_keys.md)	 - List the wrapped copies of a space's key (recipients only, no key material)
 * [heyarr space list](heyarr_space_list.md)	 - List the encrypted spaces the controller holds (metadata only)
 * [heyarr space put](heyarr_space_put.md)	 - Add an item to a space's playlist (encrypted client-side, then pushed)
 * [heyarr space read](heyarr_space_read.md)	 - Read a space's playlist on an authorised device (decrypts and merges locally)
 * [heyarr space recover](heyarr_space_recover.md)	 - Recover vault space keys from your recovery secret, offline (ADR-0022, ADR-0049)
+* [heyarr space revoke-executor](heyarr_space_revoke-executor.md)	 - Withdraw an executor's grant on a space and delete its copy of the key
 * [heyarr space rewrap](heyarr_space_rewrap.md)	 - Rewrap every space key from the gen1 recovery blob to gen2 (void-which-binds ADR-0022 cutover)
 * [heyarr space rotate](heyarr_space_rotate.md)	 - Revoke recipients from a space by rotating its key (§41, #361)
 * [heyarr space snapshot](heyarr_space_snapshot.md)	 - Take an encrypted snapshot at the current causal point (§44)

@@ -233,6 +233,15 @@ const (
 	// executor's next fetch of the space is refused. Opaque like its sibling —
 	// the space, the principal and the revoking device, never a key.
 	TypeSpaceAccessRevoked = "personalstate.space.access_revoked"
+	// TypeServiceRecipientRegistered is a management-authorised device
+	// registering an executor's X25519 public key as a wrap recipient for that
+	// executor principal (ADR-0104). It names the principal, the key, its
+	// fingerprint and the registering device: public material, never a secret.
+	TypeServiceRecipientRegistered = "personalstate.service_recipient.registered"
+	// TypeServiceRecipientRemoved is that registration withdrawn: the key is no
+	// longer a wrap target, and every copy of a space key wrapped for it on this
+	// node was deleted in the same transaction (each its own key_revoked event).
+	TypeServiceRecipientRemoved = "personalstate.service_recipient.removed"
 	// TypeChangeStored is a peer accepting an encrypted CRDT change into a space
 	// (§42, §44). Opaque like its siblings: it records that a change with this id
 	// landed, never the plaintext the peer cannot read.

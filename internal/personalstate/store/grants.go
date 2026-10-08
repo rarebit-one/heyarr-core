@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
@@ -37,6 +38,9 @@ var (
 	ErrNotSpaceOwner = errors.New("personalstate/store: only the space's owner may grant or revoke access to it")
 	// ErrNoGrant is a revoke of a grant that is not active.
 	ErrNoGrant = errors.New("personalstate/store: no active grant for that principal on that space")
+	// ErrInvalidExpiry is a grant whose expiry is not in the future: it would be
+	// inactive the moment it was written.
+	ErrInvalidExpiry = errors.New("personalstate/store: a grant's expiry must be in the future")
 )
 
 // SpaceGrant is one principal's access to one space.
@@ -58,16 +62,30 @@ func (g SpaceGrant) Writes() bool { return g.Caps == CapsReadWrite }
 // must exist, and by must own it unless it has no recorded owner. A re-grant
 // replaces the caps and expiry and clears a revocation. It emits
 // TypeSpaceAccessGranted in the same transaction (Invariant 7).
-func (s *Store) GrantAccess(ctx context.Context, spaceID, principalID, caps, by, device string, expiresAt *time.Time) (SpaceGrant, error) {
+//
+// wraps are copies of the space's current key wrapped for the executor's
+// service recipients, recorded in the SAME transaction as the grant, so the
+// fetch gate and the decryption gate open together or not at all. Each must be
+// for a live service recipient of principalID (ErrNotServiceRecipient) and seal
+// the current key epoch (ErrStaleKeyEpoch, ErrFutureKeyEpoch). A grant with no
+// wraps opens the fetch gate alone, as before.
+func (s *Store) GrantAccess(ctx context.Context, spaceID, principalID, caps, by, device string, expiresAt *time.Time, wraps ...GrantWrap) (SpaceGrant, error) {
 	if caps != CapsRead && caps != CapsReadWrite {
 		return SpaceGrant{}, ErrInvalidCaps
 	}
-	now := s.clock.Now().UTC()
 	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return SpaceGrant{}, fmt.Errorf("personalstate/store: beginning transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// The clock is read only once the single writer connection is held, so a
+	// call that queued behind another writer cannot admit a grant (and its
+	// wraps) that expired while it waited. This same instant decides wrap
+	// eligibility below.
+	now := s.clock.Now().UTC()
+	if expiresAt != nil && !expiresAt.After(now) {
+		return SpaceGrant{}, ErrInvalidExpiry
+	}
 
 	if err := ownerMayAct(ctx, tx, spaceID, by); err != nil {
 		return SpaceGrant{}, err
@@ -86,9 +104,20 @@ func (s *Store) GrantAccess(ctx context.Context, spaceID, principalID, caps, by,
 		spaceID, principalID, caps, by, device, now.Format(timeFormat), expires); err != nil {
 		return SpaceGrant{}, fmt.Errorf("personalstate/store: recording a grant: %w", err)
 	}
+	wrapEvs, err := s.putGrantWrapsTx(ctx, tx, spaceID, principalID, wraps, now)
+	if err != nil {
+		return SpaceGrant{}, err
+	}
 	payload := map[string]any{"principal_id": principalID, "caps": caps, "granted_by_device": device}
 	if expiresAt != nil {
 		payload["expires_at"] = expiresAt.UTC().Format(timeFormat)
+	}
+	if len(wraps) > 0 {
+		recips := make([]string, 0, len(wraps))
+		for _, w := range wraps {
+			recips = append(recips, w.Recipient)
+		}
+		payload["wrapped_for"] = recips
 	}
 	ev, err := s.events.EmitTx(ctx, tx, events.TypeSpaceAccessGranted, "encrypted_space", spaceID, payload)
 	if err != nil {
@@ -97,7 +126,7 @@ func (s *Store) GrantAccess(ctx context.Context, spaceID, principalID, caps, by,
 	if err := tx.Commit(); err != nil {
 		return SpaceGrant{}, fmt.Errorf("personalstate/store: committing: %w", err)
 	}
-	s.events.Publish(ev)
+	s.events.Publish(append(wrapEvs, ev)...)
 	return SpaceGrant{
 		SpaceID: spaceID, PrincipalID: principalID, Caps: caps,
 		GrantedByPrincipal: by, GrantedByDevice: device, GrantedAt: now, ExpiresAt: expiresAt,
@@ -105,64 +134,94 @@ func (s *Store) GrantAccess(ctx context.Context, spaceID, principalID, caps, by,
 }
 
 // RevokeAccess withdraws principalID's access to spaceID (ADR-0104), under the
-// same ownership rule as GrantAccess. Revoking a grant that is not active is
+// same ownership rule as GrantAccess, and in the same transaction deletes every
+// copy of the space's key wrapped for that executor's service recipients. Both
+// gates close together. It returns the recipients whose copy went.
+//
+// Revoking when there is neither an active grant nor a copy to delete is
 // ErrNoGrant, so a script cannot mistake "already gone" for "revoked just now".
-// It emits TypeSpaceAccessRevoked in the same transaction.
-func (s *Store) RevokeAccess(ctx context.Context, spaceID, principalID, by, device string) error {
+// An expired grant is not active, but its executor's copies, and a lingering
+// copy with no grant (a wrap a peer replicated back, ADR-0103), are still
+// deleted. It emits TypeSpaceAccessRevoked when it revoked an active grant, and
+// TypeSpaceKeyRevoked per deleted copy, in the same transaction.
+//
+// This is not forward secrecy: the executor keeps any key it already
+// unwrapped. Only a rotation that leaves it out does that (ADR-0103).
+func (s *Store) RevokeAccess(ctx context.Context, spaceID, principalID, by, device string) ([]string, error) {
 	now := s.clock.Now().UTC()
 	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("personalstate/store: beginning transaction: %w", err)
+		return nil, fmt.Errorf("personalstate/store: beginning transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	if err := ownerMayAct(ctx, tx, spaceID, by); err != nil {
-		return err
+		return nil, err
 	}
-	// An expired grant is already inactive (ActiveGrant treats it so), so revoking
-	// it is "nothing to revoke", not a fresh revocation event. Checked against the
+	// An expired grant is already inactive (ActiveGrant treats it so), so it is
+	// not revoked again and earns no revocation event. Checked against the
 	// store's clock in Go, because expires_at is RFC3339Nano text and does not
-	// compare reliably as a string.
+	// compare reliably as a string. Its executor's copies are still deleted.
+	active := true
 	var expires sql.NullString
 	err = tx.QueryRowContext(ctx,
 		`SELECT expires_at FROM space_grants WHERE space_id = ? AND principal_id = ? AND revoked_at IS NULL`,
 		spaceID, principalID).Scan(&expires)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrNoGrant
-	}
-	if err != nil {
-		return fmt.Errorf("personalstate/store: reading a grant: %w", err)
-	}
-	if expires.Valid {
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		active = false
+	case err != nil:
+		return nil, fmt.Errorf("personalstate/store: reading a grant: %w", err)
+	case expires.Valid:
 		exp, perr := time.Parse(timeFormat, expires.String)
 		if perr != nil {
-			return fmt.Errorf("personalstate/store: a grant has an unparseable expires_at: %w", perr)
+			return nil, fmt.Errorf("personalstate/store: a grant has an unparseable expires_at: %w", perr)
 		}
-		if !now.Before(exp) {
-			return ErrNoGrant
+		active = now.Before(exp)
+	}
+	if active {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE space_grants SET revoked_at = ? WHERE space_id = ? AND principal_id = ? AND revoked_at IS NULL`,
+			now.Format(timeFormat), spaceID, principalID); err != nil {
+			return nil, fmt.Errorf("personalstate/store: revoking a grant: %w", err)
 		}
 	}
-	res, err := tx.ExecContext(ctx,
-		`UPDATE space_grants SET revoked_at = ? WHERE space_id = ? AND principal_id = ? AND revoked_at IS NULL`,
-		now.Format(timeFormat), spaceID, principalID)
+	// Every key the executor ever registered, live or removed: a removed one's
+	// copies went with it, so this only ever finds copies of live ones, or of a
+	// key a peer pushed back.
+	keys, err := recipientSet(ctx, tx, `SELECT recipient FROM service_recipients WHERE principal_id = ?`, principalID)
 	if err != nil {
-		return fmt.Errorf("personalstate/store: revoking a grant: %w", err)
+		return nil, err
 	}
-	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("personalstate/store: revoking a grant: %w", err)
-	} else if n == 0 {
-		return ErrNoGrant
+	list := make([]string, 0, len(keys))
+	for k := range keys {
+		list = append(list, k)
 	}
-	ev, err := s.events.EmitTx(ctx, tx, events.TypeSpaceAccessRevoked, "encrypted_space", spaceID,
-		map[string]any{"principal_id": principalID, "revoked_by_device": device})
+	slices.Sort(list)
+	hit, evs, err := s.deleteWrapsForTx(ctx, tx, spaceID, list)
 	if err != nil {
-		return fmt.Errorf("personalstate/store: revoking a grant: %w", err)
+		return nil, err
+	}
+	if !active && len(hit) == 0 {
+		return nil, ErrNoGrant
+	}
+	dropped := make([]string, 0, len(hit))
+	for _, g := range hit {
+		dropped = append(dropped, g.recipient)
+	}
+	if active {
+		ev, err := s.events.EmitTx(ctx, tx, events.TypeSpaceAccessRevoked, "encrypted_space", spaceID,
+			map[string]any{"principal_id": principalID, "revoked_by_device": device, "wraps_deleted": len(dropped)})
+		if err != nil {
+			return nil, fmt.Errorf("personalstate/store: revoking a grant: %w", err)
+		}
+		evs = append(evs, ev)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("personalstate/store: committing: %w", err)
+		return nil, fmt.Errorf("personalstate/store: committing: %w", err)
 	}
-	s.events.Publish(ev)
-	return nil
+	s.events.Publish(evs...)
+	return dropped, nil
 }
 
 // ownerMayAct checks, inside tx, that spaceID exists and that by owns it or it

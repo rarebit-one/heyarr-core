@@ -205,6 +205,9 @@ func (s *Store) EnrolUser(ctx context.Context, publicKey, name, recoveryEncrypti
 		return User{}, fmt.Errorf("deviceauth: checking for an existing user: %w", err)
 	}
 
+	if err := refuseServiceRecipientKey(ctx, tx, recoveryKey); err != nil {
+		return User{}, err
+	}
 	principalID := uuid.Must(uuid.NewV7()).String()
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO principals (id, kind, name, created_at) VALUES (?, 'user', ?, ?)`,
@@ -273,6 +276,11 @@ func (s *Store) EnrolDevice(ctx context.Context, opToken, name string) (Device, 
 	op, err := enrolment.VerifyOp(opToken)
 	if err != nil {
 		return Device{}, fmt.Errorf("%w: %s", ErrCertMismatch, err.Error())
+	}
+	// Checked again, in the transaction that materialises the row (reconcileTx);
+	// here so an admin gets the reason rather than a missing device.
+	if err := refuseServiceRecipientKey(ctx, s.reader, op.DeviceEnc); err != nil {
+		return Device{}, err
 	}
 	if _, err := s.LookupDevice(ctx, op.Device); err == nil {
 		return Device{}, fmt.Errorf("%w: %s", ErrDeviceExists, op.Device)

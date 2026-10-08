@@ -23,10 +23,17 @@ import (
 
 // grantRequest is POST /spaces/{id}/grants: the executor principal (id or
 // name), its capabilities, and an optional expiry.
+//
+// WrappedKeys optionally carries copies of the space's CURRENT key wrapped for
+// the executor's registered service recipients. They are recorded in the same
+// transaction as the grant, so the fetch gate and the decryption gate open
+// together or not at all. Each must name a live service recipient of that
+// executor and seal the current key epoch.
 type grantRequest struct {
-	Principal string     `json:"principal"`
-	Caps      string     `json:"caps"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	Principal   string            `json:"principal"`
+	Caps        string            `json:"caps"`
+	ExpiresAt   *time.Time        `json:"expires_at,omitempty"`
+	WrappedKeys []wrappedKeyInput `json:"wrapped_keys,omitempty"`
 }
 
 // grantView is a recorded grant.
@@ -37,6 +44,8 @@ type grantView struct {
 	GrantedByDevice string `json:"granted_by_device"`
 	GrantedAt       string `json:"granted_at"`
 	ExpiresAt       string `json:"expires_at,omitempty"`
+	// WrappedFor names the service recipients the grant wrapped the key for.
+	WrappedFor []string `json:"wrapped_for,omitempty"`
 }
 
 // granter is the caller of a grant or revoke: only a Device credential carrying
@@ -72,16 +81,24 @@ func (a *API) grantAccess(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	wraps := make([]store.GrantWrap, 0, len(req.WrappedKeys))
+	var wrappedFor []string
+	for _, k := range req.WrappedKeys {
+		wraps = append(wraps, store.GrantWrap{Recipient: k.Recipient, Wrapped: k.Wrapped, Epoch: k.Epoch})
+		wrappedFor = append(wrappedFor, k.Recipient)
+	}
 	g, err := a.store.GrantAccess(r.Context(), chi.URLParam(r, "id"), principal.ID, req.Caps,
-		id.Principal.ID, id.DeviceKey, req.ExpiresAt)
+		id.Principal.ID, id.DeviceKey, req.ExpiresAt, wraps...)
 	if err != nil {
 		a.failGrant(w, r, "granting space access", err)
 		return
 	}
-	a.log.Info("granted space access", "space", g.SpaceID, "principal", g.PrincipalID, "caps", g.Caps)
+	a.log.Info("granted space access", "space", g.SpaceID, "principal", g.PrincipalID, "caps", g.Caps,
+		"wraps", len(wraps))
 	out := grantView{
 		SpaceID: g.SpaceID, PrincipalID: g.PrincipalID, Caps: g.Caps,
 		GrantedByDevice: g.GrantedByDevice, GrantedAt: g.GrantedAt.UTC().Format(timeFormat),
+		WrappedFor: wrappedFor,
 	}
 	if g.ExpiresAt != nil {
 		out.ExpiresAt = g.ExpiresAt.UTC().Format(timeFormat)
@@ -104,11 +121,12 @@ func (a *API) revokeAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	spaceID := chi.URLParam(r, "id")
-	if err := a.store.RevokeAccess(r.Context(), spaceID, principal.ID, id.Principal.ID, id.DeviceKey); err != nil {
+	dropped, err := a.store.RevokeAccess(r.Context(), spaceID, principal.ID, id.Principal.ID, id.DeviceKey)
+	if err != nil {
 		a.failGrant(w, r, "revoking space access", err)
 		return
 	}
-	a.log.Info("revoked space access", "space", spaceID, "principal", principal.ID)
+	a.log.Info("revoked space access", "space", spaceID, "principal", principal.ID, "wraps_deleted", len(dropped))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -140,8 +158,12 @@ func (a *API) failGrant(w http.ResponseWriter, r *http.Request, doing string, er
 		httpapi.Fail(w, r, problem.Forbidden(err.Error()))
 	case errors.Is(err, store.ErrNoGrant):
 		httpapi.Fail(w, r, problem.NotFound(err.Error()))
-	case errors.Is(err, store.ErrInvalidCaps):
+	case errors.Is(err, store.ErrInvalidCaps), errors.Is(err, store.ErrInvalidExpiry):
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	case errors.Is(err, store.ErrNotServiceRecipient):
+		httpapi.Fail(w, r, problem.Forbidden(err.Error()+
+			" — register the executor's key first (`heyarr recipient add`); a space key is wrapped only for a registered, granted recipient (ADR-0049, ADR-0104)").
+			WithCode(CodeWrapRecipientNotAllowed))
 	default:
 		a.failStore(w, r, doing, err)
 	}
@@ -221,6 +243,9 @@ func (a *API) ownRecipients(r *http.Request) (map[string]bool, bool, error) {
 
 // compile-time: the store is what the vault routes ask about write grants.
 var _ httpapi.SpaceWriteGrants = (*store.Store)(nil)
+
+// compile-time: the store names a restricted caller's own wrap recipients.
+var _ PrincipalRecipients = (*store.Store)(nil)
 
 // compile-time: the auth store resolves grant principals.
 var _ PrincipalResolver = (*auth.Store)(nil)

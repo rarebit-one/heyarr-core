@@ -294,13 +294,11 @@ func (s *Store) PutWrappedKey(ctx context.Context, spaceID, recipient string, wr
 	if err != nil {
 		return WrappedKey{}, err
 	}
-	switch {
-	case epoch < current:
-		return WrappedKey{}, fmt.Errorf("%w: space %s is at epoch %d, the copy seals epoch %d",
-			ErrStaleKeyEpoch, spaceID, current, epoch)
-	case epoch > current:
-		return WrappedKey{}, fmt.Errorf("%w: space %s is at epoch %d, the copy seals epoch %d",
-			ErrFutureKeyEpoch, spaceID, current, epoch)
+	if err := checkWrapEpoch(spaceID, current, epoch); err != nil {
+		return WrappedKey{}, err
+	}
+	if err := serviceWrapAllowedTx(ctx, tx, spaceID, recipient, now); err != nil {
+		return WrappedKey{}, err
 	}
 
 	ev, w, err := s.upsertWrapTx(ctx, tx, spaceID, recipient, wrapped, epoch, now)
@@ -312,6 +310,21 @@ func (s *Store) PutWrappedKey(ctx context.Context, spaceID, recipient string, wr
 	}
 	s.events.Publish(ev)
 	return w, nil
+}
+
+// checkWrapEpoch refuses a wrapped copy that does not seal the space's current
+// key epoch (ADR-0103): an older one hands out a superseded key, a newer one a
+// key this peer has not reached.
+func checkWrapEpoch(spaceID string, current, epoch int) error {
+	switch {
+	case epoch < current:
+		return fmt.Errorf("%w: space %s is at epoch %d, the copy seals epoch %d",
+			ErrStaleKeyEpoch, spaceID, current, epoch)
+	case epoch > current:
+		return fmt.Errorf("%w: space %s is at epoch %d, the copy seals epoch %d",
+			ErrFutureKeyEpoch, spaceID, current, epoch)
+	}
+	return nil
 }
 
 // upsertWrapTx writes one recipient's copy at an epoch inside tx and records it.

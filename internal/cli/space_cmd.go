@@ -63,6 +63,8 @@ it.`,
 		newSpaceRecoverCommand(opts, configPath, &deviceDir),
 		newSpaceExportRecoveryCommand(opts, configPath),
 		newSpaceRewrapCommand(opts, configPath, &deviceDir),
+		newSpaceGrantCommand(opts, configPath, &deviceDir),
+		newSpaceRevokeExecutorCommand(opts, configPath, &deviceDir),
 	)
 	return cmd
 }
@@ -610,6 +612,11 @@ simply run again. The same goes for a recipient added to or removed from the
 space while the rotation runs: the rotation is refused rather than dropping the
 new recipient or re-admitting the removed one, and is simply run again.
 
+An executor's service recipient (ADR-0104) holds a copy of the current key like
+any other recipient, so a rotation re-wraps it too unless it is named with
+--revoke. One whose grant has ended can no longer be wrapped for: name it with
+--revoke.
+
 Only playlist spaces can be rotated for now. A vault drive, starred,
 play-history or reading-position space is refused (#698): older clients do not
 yet understand key epochs and would lose access to it.`,
@@ -783,6 +790,9 @@ func (p pendingRekey) commit(ctx context.Context, c *apiclient.Client) (spaceRot
 				return spaceRotateView{}, fmt.Errorf("%w (it was at epoch %d): %w — run the rotation again", errKeyEpochConflict, p.expected, err)
 			case psapi.CodeRotationRecipientsChanged:
 				return spaceRotateView{}, fmt.Errorf("%w: %w — run the rotation again", errRecipientsChanged, err)
+			case psapi.CodeWrapRecipientNotAllowed:
+				return spaceRotateView{}, fmt.Errorf("space rotate: a current recipient may no longer be wrapped for "+
+					"(an executor whose grant ended, or a revoked device) — name it with --revoke: %w", err)
 			}
 		}
 		return spaceRotateView{}, err

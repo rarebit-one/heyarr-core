@@ -37,8 +37,8 @@ sees only the spaces for which an owner's device recorded a grant.**
   holds `read` or `read,write` and an optional expiry. Without an active grant
   every space route answers 404, the same as an unknown space, so an executor
   cannot enumerate. Pushing needs `read,write`. A restricted caller is shown
-  only its own wraps. Until service recipients exist it is shown none, which
-  fails closed. The grant never decrypts anything: that is still a wrapped key
+  only the wraps of its own service recipients (below), never another
+  recipient's. The grant never decrypts anything: that is still a wrapped key
   (ADR-0049).
 - **Only a device consents.** `POST`/`DELETE /spaces/{id}/grants` need a
   Device credential carrying write, which means an enrolled device that an
@@ -63,6 +63,55 @@ sees only the spaces for which an owner's device recorded a grant.**
   what a non-restricted caller can do, and the tests assert this route by
   route.
 
+## Service recipients: how an executor gets a wrap
+
+An executor must decrypt, but it is never a member device (it holds no
+enrolment cert), so enrol-before-wrap (ADR-0049) refuses every wrap for it. We
+add a third kind of pinned wrap target beside a device key and a recovery key.
+
+- **Registration.** A *service recipient* is an executor's X25519 public key,
+  registered for one executor principal (`service_recipients`, migration
+  00059) by a management-authorised Device credential. `heyarr recipient add`
+  prints the key's fingerprint and requires the operator to type the one the
+  executor's host displayed. The controller re-checks it when sent, so nothing
+  that relays the key is trusted to publish it. A key that is live for another
+  executor is refused. A key is never both a member's and an executor's: a
+  registration is refused for a non-revoked device's key or a recovery key,
+  and enrolling, re-keying or materialising a device onto a live service key
+  is refused too. Each side checks inside its own write transaction. Wraps
+  name their recipient only by key, and this exclusion is what lets removing a
+  registration delete every wrap of the key safely.
+- **Narrower than enrolment.** A registered key is a valid wrap target only on
+  a space where its executor holds an active grant. A re-wrap or a rotation
+  that names it anywhere else, or after the grant is revoked or expired, gets
+  `403 wrap_recipient_not_allowed`. The check runs inside the transaction
+  that writes the wrap, so a revoke or an expiry that lands first always wins.
+  A replicated copy that fails it is skipped as superseded. Registration alone
+  wraps nothing.
+- **Consent is one transaction.** `heyarr space grant <space> --executor <p>
+  --recipient x25519:<hex> [--write] [--expires …]` runs on a member device
+  that holds the space key. It wraps the current key at the current epoch for
+  the recipient and sends the wrap inside `POST /spaces/{id}/grants`. The
+  controller records the grant and the wrap in one transaction, so a partial
+  state cannot be observed. A grant whose expiry is not in the future is a
+  `400`. A refusal (an unregistered key, or a rotation that
+  landed in between, which gives `409 key_epoch_stale`) records nothing. A lost
+  reply is safe to retry: the grant is renewed and the copy replaced. One wrap
+  of the current key reaches the past through the key history (ADR-0103).
+- **Revocation closes both gates.** `DELETE /spaces/{id}/grants/{p}` (`heyarr
+  space revoke-executor`) revokes the grant and deletes the executor's copies
+  on that space in one transaction. Removing a registration deletes its copies
+  on every space. Neither is forward secrecy: the executor keeps any key it
+  already unwrapped, and a peer that replicated a copy keeps it. Only a
+  rotation that names the recipient in `revoke` ends that, so `space rotate
+  --revoke <key>` comes first when it is wanted. Until #706 lifts the #700
+  guard, a vault space cannot be rotated, and revoking an executor from it is
+  grant-and-wrap deletion only (owner gate G2).
+- **Rotation counts it.** A service recipient holds a copy of the current
+  key, so the recipient compare-and-swap of ADR-0103 (#703) counts it like any
+  other. A rotation either re-wraps it (allowed only while its grant is
+  active) or names it in `revoke`. Leaving it out is a `409`.
+
 ## Threat model for hash-addressed blob reads
 
 The unguessable BLAKE3 id is the capability, a 256-bit digest of ciphertext.
@@ -78,9 +127,14 @@ ADR-0096 exist to forbid.
 
 - An executor's authority is a list in one file plus rows an owner created.
   Widening it is a reviewed edit, never an accident of mounting.
-- Revocation closes fetch on the next request. Recalling a wrap and re-keying
-  are separate steps (`DELETE /spaces/{id}/keys/{r}`, rotation), and both
-  stay with the owner.
+- Revocation closes fetch on the next request and deletes the executor's
+  wraps on this node in the same step. Re-keying stays a separate, explicit
+  rotation, and it stays with the owner.
+- A registration and its wraps are this node's fact. An executor talks only to
+  the node that granted it, and that node shows a restricted caller nothing
+  without a grant. So a wrap that replication brings back is unreachable. The
+  next rotation must name it in `revoke`, because it can no longer be
+  re-wrapped.
 - A grant has no expiry unless one is set. Standing consent is the default.
 
 ## What would make us revisit

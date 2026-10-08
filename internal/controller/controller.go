@@ -1092,12 +1092,12 @@ func (c *Controller) personalStateAPI(d mountDeps) (*personalstateapi.API, error
 			fullPeerLister{members: d.members, self: d.selfPeerID},
 			d.eventLog, c.log)
 	}
-	// Principals resolves the executor a space grant names (ADR-0104). No
-	// PrincipalRecipients is wired yet: until service recipients exist, a
-	// restricted caller is shown no wrap of any space key (fail closed).
+	// Principals resolves the executor a space grant names (ADR-0104), and the
+	// store's service recipients are the only wraps a restricted caller is
+	// shown: its own.
 	psAPI, err := personalstateapi.New(personalstateapi.Options{
 		Store: psStore, Replicator: replicator, Authorizer: d.identities,
-		Principals: d.tokens, Logger: c.log,
+		Principals: d.tokens, Recipients: psStore, Logger: c.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)

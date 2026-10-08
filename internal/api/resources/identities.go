@@ -189,7 +189,8 @@ func (a *API) failIdentity(w http.ResponseWriter, r *http.Request, err error) {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 	case errors.Is(err, deviceauth.ErrUnknownUser), errors.Is(err, deviceauth.ErrUnknownDevice):
 		httpapi.Fail(w, r, problem.NotFound(err.Error()))
-	case errors.Is(err, deviceauth.ErrUserExists), errors.Is(err, deviceauth.ErrDeviceExists):
+	case errors.Is(err, deviceauth.ErrUserExists), errors.Is(err, deviceauth.ErrDeviceExists),
+		errors.Is(err, deviceauth.ErrKeyIsServiceRecipient):
 		httpapi.Fail(w, r, problem.Conflict(err.Error()))
 	default:
 		a.fail(w, r, "identity", err)

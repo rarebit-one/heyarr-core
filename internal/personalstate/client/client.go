@@ -325,6 +325,23 @@ func (m *Manager) Epoch(spaceID string) (int, bool) {
 	return ring.epoch, ok
 }
 
+// WrapCurrent seals an open space's CURRENT key for one more recipient and
+// returns the copy with the epoch it seals (ADR-0103). It is how a recipient is
+// added without a rotation: one wrap of the current key, which the recipient
+// unrolls back through the key history to read older content. ok-ness of the
+// recipient (enrol-before-wrap) is the peer's check, not this one's.
+func (m *Manager) WrapCurrent(spaceID string, r Recipient) (WrappedFor, int, error) {
+	ring, ok := m.ring(spaceID)
+	if !ok {
+		return WrappedFor{}, 0, fmt.Errorf("%w: %s", ErrSpaceNotOpen, spaceID)
+	}
+	wrapped, err := sealFor(ring.keys[0], []Recipient{r})
+	if err != nil {
+		return WrappedFor{}, 0, err
+	}
+	return wrapped[0], ring.epoch, nil
+}
+
 // Close forgets a space's keys — on lock, or when this device is revoked from
 // the space. The wrapped copies the peer holds are untouched; this only drops
 // the in-memory ring.

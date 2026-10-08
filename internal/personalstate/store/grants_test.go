@@ -9,19 +9,21 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
 type grantHarness struct {
+	db    *sqlite.DB
 	s     *store.Store
 	log   *events.Log
 	clock *fixedClock
 }
 
 // newGrantHarness is a store over a database holding an owner (user), another
-// user and an executor principal — grants reference real principals.
+// user and two executor principals — grants reference real principals.
 func newGrantHarness(t *testing.T) *grantHarness {
 	t.Helper()
 	db := testdb.Migrated(t)
@@ -34,13 +36,13 @@ func newGrantHarness(t *testing.T) *grantHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []struct{ id, kind string }{{"owner", "user"}, {"other", "user"}, {"exec", "executor"}} {
+	for _, p := range []struct{ id, kind string }{{"owner", "user"}, {"other", "user"}, {"exec", "executor"}, {"exec2", "executor"}} {
 		if _, err := db.Writer().Exec(`INSERT INTO principals (id, kind, name, created_at) VALUES (?, ?, ?, ?)`,
 			p.id, p.kind, p.id, now.Format(time.RFC3339Nano)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return &grantHarness{s: s, log: log, clock: clock}
+	return &grantHarness{db: db, s: s, log: log, clock: clock}
 }
 
 func (h *grantHarness) space(t *testing.T, owner string) string {
@@ -84,13 +86,13 @@ func TestAGrantIsActiveUntilRevoked(t *testing.T) {
 		t.Errorf("granted spaces = %v, %v", set, err)
 	}
 
-	if err := h.s.RevokeAccess(ctx, sp, "exec", "owner", "ed25519:dev"); err != nil {
+	if _, err := h.s.RevokeAccess(ctx, sp, "exec", "owner", "ed25519:dev"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, _ := h.s.ActiveGrant(ctx, sp, "exec"); ok {
 		t.Error("a revoked grant is still active")
 	}
-	if err := h.s.RevokeAccess(ctx, sp, "exec", "owner", "ed25519:dev"); !errors.Is(err, store.ErrNoGrant) {
+	if _, err := h.s.RevokeAccess(ctx, sp, "exec", "owner", "ed25519:dev"); !errors.Is(err, store.ErrNoGrant) {
 		t.Errorf("a second revoke: %v, want ErrNoGrant", err)
 	}
 	if _, err := h.s.GrantAccess(ctx, sp, "exec", store.CapsRead, "owner", "ed25519:dev", nil); err != nil {
@@ -164,7 +166,7 @@ func TestAnExpiredGrantIsInactive(t *testing.T) {
 		t.Errorf("an expired grant still lists its space: %v", set)
 	}
 	// Revoking it is "nothing to revoke", not a fresh revocation.
-	if err := h.s.RevokeAccess(ctx, sp, "exec", "owner", "ed25519:dev"); !errors.Is(err, store.ErrNoGrant) {
+	if _, err := h.s.RevokeAccess(ctx, sp, "exec", "owner", "ed25519:dev"); !errors.Is(err, store.ErrNoGrant) {
 		t.Errorf("revoking an expired grant = %v, want ErrNoGrant", err)
 	}
 	if n := len(eventsOfType(t, h.log, events.TypeSpaceAccessRevoked)); n != 0 {

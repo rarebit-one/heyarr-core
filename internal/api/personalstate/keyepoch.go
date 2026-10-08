@@ -120,7 +120,7 @@ func (a *API) rotateKey(w http.ResponseWriter, r *http.Request) {
 		}
 		wraps = append(wraps, store.RecipientWrap{Recipient: k.Recipient, Wrapped: k.Wrapped})
 	}
-	if !a.recipientsAllowed(w, r, req.WrappedKeys) {
+	if !a.recipientsAllowed(w, r, spaceID, req.WrappedKeys) {
 		return
 	}
 	// The recovery keys a rotation must keep. With no authorizer wired the check
