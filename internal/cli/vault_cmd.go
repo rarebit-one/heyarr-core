@@ -165,6 +165,7 @@ peer stores ciphertext it cannot open.`,
 				if err != nil {
 					return err
 				}
+				// A write seals under the CURRENT key only (ADR-0103).
 				sk, ok := mgr.SpaceKey(spaceID)
 				if !ok {
 					return fmt.Errorf("this device does not hold the key for space %s", spaceID)
@@ -273,7 +274,9 @@ conflict), is refused rather than guessing which bytes were meant.`,
 				if err != nil {
 					return err
 				}
-				sk, ok := mgr.SpaceKey(spaceID)
+				// Every key on the ring, newest first: a file pushed before a
+				// rotation is sealed under the key of its epoch (ADR-0103).
+				keys, ok := mgr.Keys(spaceID)
 				if !ok {
 					return fmt.Errorf("this device does not hold the key for space %s", spaceID)
 				}
@@ -289,7 +292,7 @@ conflict), is refused rather than guessing which bytes were meant.`,
 					return fmt.Errorf("vault path %q has conflicting versions on this space — "+
 						"resolve the conflict before pulling", vaultPath)
 				}
-				data, err := vaultread.ReadAll(ctx, blobFetcher{c: c}, sk, entry.Blob)
+				data, err := vaultread.ReadAllWithKeys(ctx, blobFetcher{c: c}, keys, entry.Blob)
 				if err != nil {
 					return err
 				}

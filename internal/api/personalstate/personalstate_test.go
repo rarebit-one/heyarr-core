@@ -347,7 +347,7 @@ func TestRewrapAndRevokeRotatesAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := rewrapRequest{}
-	for _, w := range rotated {
+	for _, w := range rotated.Wrapped {
 		body.WrappedKeys = append(body.WrappedKeys, wrappedKeyInput{Recipient: w.Recipient, Wrapped: w.Wrapped})
 	}
 	if rec := call(t, api.rewrapKeys, http.MethodPost, "/spaces/"+sp.ID+"/keys", body, map[string]string{"id": sp.ID}); rec.Code != http.StatusOK {

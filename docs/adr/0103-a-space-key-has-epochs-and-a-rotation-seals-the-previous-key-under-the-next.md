@@ -29,6 +29,10 @@ by the client. Rotation is a pure re-key, with no snapshot and no compaction.
 It is a compare-and-swap on the epoch. Every wrapped copy carries the epoch it
 seals, and the peer refuses a copy that is not at the current epoch.**
 
+- **The row's format.** `sealed_prev` is
+  `encryption.SealSpaceKey(key_N, key_{N-1})` from void-which-binds-go ≥ v0.26.0,
+  opened with `OpenSpaceKey`; its key-chain test vector pins the bytes, so every
+  client (the mobile one included) reads a chain any other wrote.
 - **Reading the past.** A current recipient unwraps key_N and opens each history
   row in turn back to epoch 0. Content sealed under any earlier key stays
   readable, including a change a racing writer sealed under the previous key.

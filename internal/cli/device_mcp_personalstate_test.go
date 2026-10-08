@@ -11,8 +11,10 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -20,8 +22,10 @@ import (
 	"github.com/rarebit-one/void-which-binds-go/device"
 	"github.com/rarebit-one/void-which-binds-go/encryption"
 
+	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	psapi "github.com/rarebit-one/heyarr-core/internal/api/personalstate"
+	"github.com/rarebit-one/heyarr-core/internal/api/vaultblob"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	apiclient "github.com/rarebit-one/heyarr-core/internal/client"
@@ -34,6 +38,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/spaces"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/statesync"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
@@ -45,6 +50,9 @@ type psHarness struct {
 	client    *apiclient.Client
 	mgr       *psclient.Manager
 	deviceDir string
+	// config, addr and token let a test drive the real cobra commands (h.cli)
+	// against the same controller.
+	config, addr, token string
 }
 
 // newPSHarness's device token carries read and write; pass extra scopes (admin,
@@ -81,6 +89,21 @@ func newPSHarness(t *testing.T, extra ...auth.Scope) *psHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The vault's byte path: ciphertext uploads into a real CAS, read back over
+	// the shared blob-content route (ADR-0096). The pin is recorded nowhere —
+	// there is no catalogue here, and nothing in these tests collects garbage.
+	casStore, err := cas.OpenFS(filepath.Join(dir, "cas"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vaultBlobs, err := vaultblob.New(vaultblob.Options{Store: casStore, Pinner: noPin{}, SelfPeer: "peer-self"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobContent, err := blobs.New(blobs.Options{Store: casStore, Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cfg := config.Defaults()
 	cfg.DataDir = dir
@@ -93,7 +116,7 @@ func newPSHarness(t *testing.T, extra ...auth.Scope) *psHarness {
 		Build:              buildinfo.Info{Version: "test", Commit: "abc", Date: "2026-08-01T00:00:00Z"},
 		SchemaVersion:      4,
 		KnownSchemaVersion: 4,
-		Mount:              []httpapi.MountFunc{ps.Mount},
+		Mount:              []httpapi.MountFunc{ps.Mount, vaultBlobs.Mount, blobContent.Mount},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +146,35 @@ func newPSHarness(t *testing.T, extra ...auth.Scope) *psHarness {
 	}
 	mgr := psclient.New()
 
-	return &psHarness{t: t, ctx: ctx, client: c, mgr: mgr, deviceDir: deviceDir}
+	cfgPath := filepath.Join(dir, "cli.yaml")
+	if err := os.WriteFile(cfgPath, []byte("data_dir: "+dir+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return &psHarness{
+		t: t, ctx: ctx, client: c, mgr: mgr, deviceDir: deviceDir,
+		config: cfgPath, addr: controller.URL, token: created.Secret,
+	}
+}
+
+// noPin is a vaultblob.Pinner that records nothing.
+type noPin struct{}
+
+func (noPin) RecordVaultBlob(context.Context, string, int64, string) error { return nil }
+
+// cli runs one `space`/`vault`-style command through the real cobra tree against
+// the harness controller, as this harness device. The group's --device-dir is
+// added after the group name; the client flags after the verb.
+func (h *psHarness) cli(group, verb string, args ...string) (string, error) {
+	h.t.Helper()
+	full := append([]string{
+		"--config", h.config, group, "--device-dir", h.deviceDir, verb,
+		"--addr", h.addr, "--token", h.token,
+	}, args...)
+	out, stderr, err := run(h.t, h.ctx, full...)
+	if err != nil {
+		return out, fmt.Errorf("%w (stderr: %s)", err, stderr)
+	}
+	return out, nil
 }
 
 // createSpace mints a space wrapped for this device and registers it with the

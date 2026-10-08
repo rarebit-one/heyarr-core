@@ -869,7 +869,7 @@ paths:
                         sealed_prev:
                           type: string
                           format: byte
-                          description: The key of epoch-1 sealed under the key of epoch (base64, opaque).
+                          description: The key of epoch-1 sealed under the key of epoch (base64, opaque to the peer) — encryption.SealSpaceKey(key_epoch, key_epoch-1) from void-which-binds-go >= v0.26.0, 72 bytes.
                         created_at: { type: string, format: date-time }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -910,7 +910,7 @@ paths:
                 sealed_prev:
                   type: string
                   format: byte
-                  description: The current key sealed under the new one (base64, opaque).
+                  description: The current key sealed under the new one (base64, opaque to the peer) — encryption.SealSpaceKey(new key, current key) from void-which-binds-go >= v0.26.0, 72 bytes.
                 wrapped_keys:
                   type: array
                   minItems: 1
@@ -5576,7 +5576,7 @@ paths:
                 sealed_prev:
                   type: string
                   format: byte
-                  description: The key of epoch-1 sealed under the key of epoch (base64, opaque).
+                  description: The key of epoch-1 sealed under the key of epoch (base64, opaque to the peer) — encryption.SealSpaceKey(key_epoch, key_epoch-1) from void-which-binds-go >= v0.26.0, 72 bytes.
       responses:
         "204":
           description: The row is stored (or was already held).

@@ -50,8 +50,9 @@ from the identity itself, a member device signs a remove and pushes it
 
 Revocation is forward-looking, not retroactive (ADR-0049): the device keeps
 whatever it already decrypted, so every space whose key is wrapped for its
-encryption key is re-keyed — a fresh key, re-wrapped for the remaining
-recipients, the revoked copy deleted, a snapshot under the new key. THIS device
+encryption key is re-keyed — a fresh key at the space's next key epoch,
+wrapped for the remaining recipients, the old key sealed under it so they keep
+reading the past, and the revoked copy dropped (ADR-0103). THIS device
 must itself be a recipient of a space to re-key it; a space it cannot read is
 reported as skipped, for a device that can. Only the named device is re-keyed
 away: the devices it admitted are untouched.`,
@@ -87,7 +88,7 @@ away: the devices it admitted are untouched.`,
 				default:
 					fmt.Fprintf(out, "  re-keyed %d space(s) away from %s\n", len(view.Rotated), revoked.EncryptionKey)
 					for _, r := range view.Rotated {
-						fmt.Fprintf(out, "    %s: snapshot %s, %d change(s) compacted\n", r.SpaceID, r.SnapshotID, r.Dropped)
+						fmt.Fprintf(out, "    %s: now at key epoch %d\n", r.SpaceID, r.KeyEpoch)
 					}
 					for _, sk := range view.Skipped {
 						fmt.Fprintf(out, "    %s: NOT re-keyed — %s\n", sk.SpaceID, sk.Reason)
