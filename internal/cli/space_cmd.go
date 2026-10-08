@@ -362,7 +362,13 @@ never sees the item.`,
 				if err != nil {
 					return err
 				}
-				id, err := c.PutChange(ctx, ec)
+				// Conditional on the key epoch that sealed it (#712): a rotation
+				// landing since is refused rather than published under the old key.
+				epoch, _ := mgr.Epoch(spaceID)
+				id, err := c.PutChangeAtEpoch(ctx, ec, epoch)
+				if apiclient.IsChangeKeyEpochMismatch(err) {
+					return fmt.Errorf("space %s was rotated while this item was added; nothing was recorded, run the command again: %w", spaceID, err)
+				}
 				if err != nil {
 					return err
 				}

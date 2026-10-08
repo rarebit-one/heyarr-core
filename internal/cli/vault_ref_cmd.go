@@ -259,12 +259,19 @@ key wrapped for its sealed recipient key. Exit status as for get-ref.`,
 				return err
 			}
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				mgr, err := openRefSpace(ctx, c, vc, spaceID)
-				if err != nil {
-					return err
+				// Open errors are classified by openRefSpace itself; anything
+				// later is an API refusal at most.
+				var opened bool
+				open := func(ctx context.Context) (*client.Manager, error) {
+					mgr, err := openRefSpace(ctx, c, vc, spaceID)
+					opened = err == nil
+					return mgr, err
 				}
-				view, err := vaultPut(ctx, c, mgr, spaceID, ref.Path(), bytes.NewReader(data), time.Now().Unix())
+				view, err := vaultPutFresh(ctx, c, open, spaceID, ref.Path(), bytes.NewReader(data), time.Now().Unix())
 				if err != nil {
+					if !opened {
+						return err
+					}
 					return classifyAPI(err)
 				}
 				return emitJSON(cmd.OutOrStdout(), vaultPutRefView{

@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/testutil"
 )
@@ -311,5 +313,59 @@ func TestRotationMustRewrapTheRecoveryKey(t *testing.T) {
 				t.Fatalf("after rotation: epoch %d, %d wraps; want 1 and 2", epoch, len(keys))
 			}
 		})
+	}
+}
+
+// TestPutChangeKeyEpoch (#712): ?key_epoch= makes a change push conditional on
+// the space's current epoch — a 409 with change_key_epoch_mismatch after a
+// rotation, a 400 when malformed — and without it the push is unconditional.
+func TestPutChangeKeyEpoch(t *testing.T) {
+	t.Parallel()
+	api := apiAt(t, fakeAuthorizer{allowed: map[string]bool{enrolledKey: true}})
+	create := createSpaceRequest{ID: goldenSpace, Kind: "personal", WrappedKeys: []wrappedKeyInput{
+		{Recipient: enrolledKey, Wrapped: []byte("k0")},
+	}}
+	if rec := call(t, api.createSpace, http.MethodPost, "/spaces", create, nil); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	push := func(query string, ct string) *httptest.ResponseRecorder {
+		t.Helper()
+		ch, err := protocol.NewChange(goldenSpace, nil, []byte(ct))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return call(t, api.putChange, http.MethodPost, "/spaces/"+goldenSpace+"/changes"+query, ch, idParam())
+	}
+
+	if rec := push("?key_epoch=0", "a"); rec.Code != http.StatusCreated {
+		t.Fatalf("push at epoch 0: %d %s", rec.Code, rec.Body)
+	}
+	rot := call(t, api.rotateKey, http.MethodPost, "/spaces/"+goldenSpace+"/rotate", rotateRequest{
+		SealedPrev: []byte("p"), WrappedKeys: []wrappedKeyInput{{Recipient: enrolledKey, Wrapped: []byte("k1")}}, Revoke: revoking(),
+	}, idParam())
+	if rot.Code != http.StatusOK {
+		t.Fatalf("rotate: %d %s", rot.Code, rot.Body)
+	}
+
+	rec := push("?key_epoch=0", "b")
+	var doc struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); rec.Code != http.StatusConflict || err != nil || doc.Code != CodeChangeKeyEpochMismatch {
+		t.Fatalf("stale push: %d %s, want 409 %s", rec.Code, rec.Body, CodeChangeKeyEpochMismatch)
+	}
+	if rec := push("?key_epoch=0", "a"); rec.Code != http.StatusCreated {
+		t.Fatalf("re-send of a held change: %d %s, want 201", rec.Code, rec.Body)
+	}
+	if rec := push("?key_epoch=1", "c"); rec.Code != http.StatusCreated {
+		t.Fatalf("push at epoch 1: %d %s", rec.Code, rec.Body)
+	}
+	if rec := push("", "d"); rec.Code != http.StatusCreated {
+		t.Fatalf("unconditional push: %d %s", rec.Code, rec.Body)
+	}
+	for _, bad := range []string{"?key_epoch=-1", "?key_epoch=one", "?key_epoch=1.0"} {
+		if rec := push(bad, "e"); rec.Code != http.StatusBadRequest {
+			t.Fatalf("push %s: %d %s, want 400", bad, rec.Code, rec.Body)
+		}
 	}
 }

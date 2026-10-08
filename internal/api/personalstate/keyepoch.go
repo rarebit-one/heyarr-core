@@ -28,6 +28,10 @@ const (
 	// CodeKeyEpochConflict: a rotation's expected_epoch is not the current one —
 	// another rotation landed first.
 	CodeKeyEpochConflict = "key_epoch_conflict"
+	// CodeChangeKeyEpochMismatch: a change pushed with ?key_epoch= was sealed at
+	// another epoch than the space's current one (#712). Re-open the space and
+	// re-seal under the current key.
+	CodeChangeKeyEpochMismatch = "change_key_epoch_mismatch"
 	// CodeRotationDropsRecovery: a rotation left out a recovery key that holds a
 	// copy of the current key (ADR-0022, ADR-0103).
 	CodeRotationDropsRecovery = "rotation_drops_recovery_key"

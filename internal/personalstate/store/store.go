@@ -61,6 +61,10 @@ var (
 	// ErrKeyEpochConflict is a rotation whose expected epoch is not the space's
 	// current one — another rotation landed first. Re-open the space and retry.
 	ErrKeyEpochConflict = errors.New("personalstate/store: the space key was rotated concurrently")
+	// ErrChangeKeyEpoch is a change pushed at a key epoch that is not the space's
+	// current one (#712): it was sealed under a key a rotation has replaced, or
+	// at an epoch this peer has not reached.
+	ErrChangeKeyEpoch = errors.New("personalstate/store: the change was sealed at another key epoch than the space's current one")
 	// ErrKeyHistoryConflict is a history row for an epoch already held with
 	// DIFFERENT bytes: two rotations forked the chain. Never overwritten.
 	ErrKeyHistoryConflict = errors.New("personalstate/store: a different key-history row is already held for that epoch")

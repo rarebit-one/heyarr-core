@@ -497,7 +497,24 @@ func (a *API) putChange(w http.ResponseWriter, r *http.Request) {
 		httpapi.Fail(w, r, problem.BadRequest("the change's space_id must match the route's space id"))
 		return
 	}
-	if err := a.store.PutChange(r.Context(), ch); err != nil {
+	// ?key_epoch=N makes the push conditional on the space's key epoch (#712):
+	// the peer stores the change only while N is still the current epoch, so a
+	// writer cannot publish something sealed under a key a rotation replaced.
+	// It is a query parameter, not a body field, so a peer that predates it
+	// ignores it instead of refusing the body as an unknown field. Without it the
+	// push is unconditional, as it always was.
+	var err error
+	if raw := r.URL.Query().Get("key_epoch"); raw != "" {
+		epoch, perr := strconv.Atoi(raw)
+		if perr != nil || epoch < 0 {
+			httpapi.Fail(w, r, problem.BadRequest("key_epoch must be a non-negative integer"))
+			return
+		}
+		err = a.store.PutChangeAtEpoch(r.Context(), ch, epoch)
+	} else {
+		err = a.store.PutChange(r.Context(), ch)
+	}
+	if err != nil {
 		a.failStore(w, r, "recording a change", err)
 		return
 	}
@@ -564,6 +581,10 @@ func (a *API) failStore(w http.ResponseWriter, r *http.Request, doing string, er
 		httpapi.Fail(w, r, problem.Conflict(
 			"another rotation of this space landed first; re-open the space and rotate from its current key ("+err.Error()+")").
 			WithCode(CodeKeyEpochConflict))
+	case errors.Is(err, store.ErrChangeKeyEpoch):
+		httpapi.Fail(w, r, problem.Conflict(
+			"the space key has been rotated since this change was sealed; re-open the space and seal it under the current key ("+err.Error()+")").
+			WithCode(CodeChangeKeyEpochMismatch))
 	case errors.Is(err, store.ErrRotationDropsPreserved):
 		httpapi.Fail(w, r, problem.Conflict(
 			"a rotation must re-wrap the recovery key: it holds a copy of the current key, and leaving it out "+
