@@ -98,3 +98,4 @@ An ADR that merely describes the code is not worth having.
 | [0101](0101-a-vault-change-names-its-log-heads-and-compaction-is-the-peers-job.md) | A vault change names the log heads it saw, a device snapshots, and compaction stays the peer's job | Proposed |
 | [0102](0102-wakes-go-through-the-shared-notify-plane.md) | Wakes go through the shared notify plane, and heyarr holds no subscription registry | Accepted |
 | [0103](0103-a-space-key-has-epochs-and-a-rotation-seals-the-previous-key-under-the-next.md) | A space key has epochs, and a rotation seals the previous key under the next | Proposed |
+| [0104](0104-a-restricted-principal-reaches-only-the-spaces-a-device-granted-it.md) | A restricted principal reaches only the spaces an owner's device granted it | Proposed |

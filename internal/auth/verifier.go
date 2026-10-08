@@ -32,6 +32,16 @@ type Identity struct {
 	// write-scoped route stays closed to it. Empty for an ordinary token, whose
 	// scope is the whole of its authority.
 	Capabilities []string
+	// Restricted confines this identity to the vault surface and to the
+	// encrypted spaces its principal holds a grant for (ADR-0104). It is set for
+	// a restricted token and for any token of an executor principal, so a row
+	// edited by hand cannot widen an executor. False for every other identity,
+	// whose behaviour is exactly what it was before ADR-0104.
+	Restricted bool
+	// DeviceKey is the device key of a Device credential (ADR-0048), empty for
+	// every other scheme. It is what lets a route demand a device rather than a
+	// replayable bearer or session — the space grant API does (ADR-0104).
+	DeviceKey string
 }
 
 // HasCapability reports whether this identity carries the named capability. The
@@ -174,7 +184,7 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Identity, error) {
 	}
 
 	v.recordUse(ctx, tk.ID, now)
-	return Identity{Token: tk, Principal: principal}, nil
+	return Identity{Token: tk, Principal: principal, Restricted: tk.Restricted || principal.Kind == KindExecutor}, nil
 }
 
 // load reads the token and its principal in one query. It is on the hot path of
@@ -183,7 +193,7 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Identity, error) {
 func (v *Verifier) load(ctx context.Context, id string) (Token, Principal, error) {
 	row := v.store.reader.QueryRowContext(ctx,
 		`SELECT t.id, t.principal_id, t.name, t.scopes, t.created_at, t.last_used_at,
-		        t.expires_at, t.revoked_at, p.kind, p.name, p.created_at
+		        t.expires_at, t.revoked_at, t.restricted, p.kind, p.name, p.created_at
 		 FROM api_tokens t JOIN principals p ON p.id = t.principal_id
 		 WHERE t.id = ?`, id)
 
@@ -194,7 +204,7 @@ func (v *Verifier) load(ctx context.Context, id string) (Token, Principal, error
 		pKind, pName, pCreated     string
 	)
 	err := row.Scan(&tk.ID, &tk.PrincipalID, &tk.Name, &scopes, &created, &lastUsed,
-		&expires, &revoked, &pKind, &pName, &pCreated)
+		&expires, &revoked, &tk.Restricted, &pKind, &pName, &pCreated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Token{}, Principal{}, ErrNotFound
 	}

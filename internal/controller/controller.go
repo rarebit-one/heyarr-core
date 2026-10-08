@@ -946,11 +946,21 @@ func (c *Controller) contentRoutes(d mountDeps, queue *jobs.Queue, cat *catalog.
 	// fetch-on-request, and the peer surface builds its own handler with neither
 	// this nor Partial, so its whole-blob contract is untouched (ADR-0042).
 	ensurer := blobTransferEnsurer{cat: cat, queue: queue, log: c.log}
+	// A restricted principal (ADR-0104) reads only vault blobs, and stores vault
+	// content only while it holds a write grant on some space. The grant store
+	// is a second handle over the personal-state tables, stateless over the
+	// pools like every other one here.
+	grants, err := psstore.New(psstore.Options{Writer: d.db.Writer(), Reader: d.db.Reader(), Events: d.eventLog})
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: opening the space-grant store: %w", err)
+	}
 	blobHandler, err := blobs.New(blobs.Options{
-		Store:   d.blobStore,
-		Logger:  c.log,
-		Partial: partialSource,
-		Ensure:  ensurer,
+		Store:      d.blobStore,
+		Logger:     c.log,
+		Partial:    partialSource,
+		Ensure:     ensurer,
+		VaultBlobs: cat,
+		Grants:     grants,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
@@ -965,6 +975,7 @@ func (c *Controller) contentRoutes(d mountDeps, queue *jobs.Queue, cat *catalog.
 		Pinner:   cat,
 		SelfPeer: d.selfPeerID,
 		Logger:   c.log,
+		Grants:   grants,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
@@ -979,6 +990,7 @@ func (c *Controller) contentRoutes(d mountDeps, queue *jobs.Queue, cat *catalog.
 	vaultPlacementHandler, err := vaultplacement.New(vaultplacement.Options{
 		Pinner: cat,
 		Logger: c.log,
+		Grants: grants,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
@@ -1080,7 +1092,13 @@ func (c *Controller) personalStateAPI(d mountDeps) (*personalstateapi.API, error
 			fullPeerLister{members: d.members, self: d.selfPeerID},
 			d.eventLog, c.log)
 	}
-	psAPI, err := personalstateapi.New(personalstateapi.Options{Store: psStore, Replicator: replicator, Authorizer: d.identities, Logger: c.log})
+	// Principals resolves the executor a space grant names (ADR-0104). No
+	// PrincipalRecipients is wired yet: until service recipients exist, a
+	// restricted caller is shown no wrap of any space key (fail closed).
+	psAPI, err := personalstateapi.New(personalstateapi.Options{
+		Store: psStore, Replicator: replicator, Authorizer: d.identities,
+		Principals: d.tokens, Logger: c.log,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)
 	}

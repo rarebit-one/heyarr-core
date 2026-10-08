@@ -152,7 +152,9 @@ func (h *Handler) authenticate(r *http.Request) int {
 	if err != nil {
 		return http.StatusUnauthorized
 	}
-	if !id.Allows(auth.ScopeRead) {
+	// A restricted credential reaches the vault surface only (ADR-0104), never
+	// the publication catalogue this adapter serves.
+	if id.Restricted || !id.Allows(auth.ScopeRead) {
 		return http.StatusForbidden
 	}
 	return http.StatusOK

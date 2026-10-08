@@ -79,7 +79,40 @@ type Options struct {
 	// a partial — before answering "still fetching" rather than hanging (#371).
 	// Defaults to defaultEnsureTimeout. Ignored when Ensure is nil.
 	EnsureTimeout time.Duration
+	// VaultBlobs decides which blobs a RESTRICTED caller may read (ADR-0104):
+	// only vault blobs — pinned ciphertext with no assets row — and never media.
+	// Optional; nil refuses a restricted caller every blob (fail closed). Every
+	// other caller is unaffected by it.
+	VaultBlobs VaultBlobIndex
+	// Grants answers whether a restricted caller holds any active space grant;
+	// one with none reads no blob at all (ADR-0104). Optional; nil refuses
+	// every restricted caller (fail closed).
+	Grants SpaceGrants
+	// RestrictedLimit is how many blob reads one restricted principal may make
+	// per minute. Zero means defaultRestrictedLimit.
+	RestrictedLimit int
+	// Now is the clock the restricted budget runs on (ADR-0017). Nil is the
+	// system clock.
+	Now func() time.Time
 }
+
+// VaultBlobIndex answers whether a blob is a vault blob (ADR-0096, ADR-0104).
+// *catalog.Catalog satisfies it.
+type VaultBlobIndex interface {
+	IsVaultBlob(ctx context.Context, blobHash string) (bool, error)
+}
+
+// SpaceGrants answers whether a principal holds an active grant on any space
+// (ADR-0104). *personalstate/store.Store satisfies it.
+type SpaceGrants interface {
+	HasAnyGrant(ctx context.Context, principalID string) (bool, error)
+}
+
+// defaultRestrictedLimit bounds a restricted principal's blob reads. A blob hash
+// is the capability a restricted caller reads by (ADR-0104), so the budget keeps
+// guessing from being a loop; an executor fetching a run's few dozen frames is
+// nowhere near it.
+const defaultRestrictedLimit = 600
 
 // defaultPollInterval paces a blocked partial read. Pieces land on network
 // timescales — hundreds of milliseconds to seconds — so a poll a few times a
@@ -109,6 +142,10 @@ type Handler struct {
 	wait func(context.Context) error
 	// ensureTimeout bounds the ensure-on-GET pre-serve wait (#371).
 	ensureTimeout time.Duration
+	// vault and limiter confine a restricted caller (ADR-0104).
+	vault   VaultBlobIndex
+	grants  SpaceGrants
+	limiter *httpapi.RateLimiter
 }
 
 // New builds the handler. It returns an error rather than panicking so that a
@@ -129,6 +166,10 @@ func New(opts Options) (*Handler, error) {
 	if ensureTimeout <= 0 {
 		ensureTimeout = defaultEnsureTimeout
 	}
+	limit := opts.RestrictedLimit
+	if limit <= 0 {
+		limit = defaultRestrictedLimit
+	}
 	return &Handler{
 		store:         opts.Store,
 		log:           log.With("component", "blobs"),
@@ -136,6 +177,9 @@ func New(opts Options) (*Handler, error) {
 		ensurer:       opts.Ensure,
 		wait:          pollWait(interval),
 		ensureTimeout: ensureTimeout,
+		vault:         opts.VaultBlobs,
+		grants:        opts.Grants,
+		limiter:       httpapi.NewRateLimiter(limit, restrictedWindow, opts.Now),
 	}, nil
 }
 
@@ -239,6 +283,10 @@ func (h *Handler) ContentAs(w http.ResponseWriter, r *http.Request, mime string)
 		// unvalidated should reach a store that turns identifiers into paths.
 		httpapi.Fail(w, r, problem.BadRequest(
 			"the blob identifier must be blake3:<64 lowercase hex characters>"))
+		return
+	}
+
+	if !h.restrictedMayRead(w, r, hash.String()) {
 		return
 	}
 
@@ -414,4 +462,49 @@ func wantsDownload(r *http.Request) bool {
 	default:
 		return false
 	}
+}
+
+// restrictedWindow is the period RestrictedLimit is counted over.
+const restrictedWindow = time.Minute
+
+// restrictedMayRead confines a restricted caller (ADR-0104) to vault blobs, under
+// a per-principal budget, and only while it holds some active space grant. A blob that is not a vault blob answers 404 — the same
+// as an absent one, so a restricted caller cannot tell media it may not read from
+// bytes this node lacks. Every other caller, and a request with no identity (the
+// renderer and compatibility routes delegating here), passes untouched. It writes
+// the refusal and returns false when the request must stop.
+func (h *Handler) restrictedMayRead(w http.ResponseWriter, r *http.Request, hash string) bool {
+	id, ok := httpapi.IdentityFrom(r.Context())
+	if !ok || !id.Restricted {
+		return true
+	}
+	if !h.limiter.Allow(id.Principal.ID) {
+		httpapi.TooManyRequests(w, r, restrictedWindow)
+		return false
+	}
+	if h.vault == nil || h.grants == nil {
+		httpapi.Fail(w, r, problem.NotFound("this peer holds no blob "+hash))
+		return false
+	}
+	granted, err := h.grants.HasAnyGrant(r.Context(), id.Principal.ID)
+	if err != nil {
+		h.log.Error("checking a restricted caller's grants", "request_id", httpapi.RequestIDFrom(r.Context()), "error", err)
+		httpapi.Fail(w, r, problem.Internal())
+		return false
+	}
+	if !granted {
+		httpapi.Fail(w, r, problem.NotFound("this peer holds no blob "+hash))
+		return false
+	}
+	isVault, err := h.vault.IsVaultBlob(r.Context(), hash)
+	if err != nil {
+		h.log.Error("checking a vault blob", "request_id", httpapi.RequestIDFrom(r.Context()), "error", err)
+		httpapi.Fail(w, r, problem.Internal())
+		return false
+	}
+	if !isVault {
+		httpapi.Fail(w, r, problem.NotFound("this peer holds no blob "+hash))
+		return false
+	}
+	return true
 }

@@ -223,6 +223,16 @@ const (
 	// TypeSpaceKeyRotated so a consumer of rotations never sees a stale epoch.
 	// Opaque: an epoch, never a key.
 	TypeSpaceKeyHistoryBackfilled = "personalstate.space.key_history_backfilled"
+	// TypeSpaceAccessGranted is a management-authorised device granting an
+	// executor principal access to a space's ciphertext (ADR-0104) — the fetch
+	// gate, not the decryption one, which is still a wrapped key. It names the
+	// space, the grantee principal, the capabilities and the granting device, so
+	// the log answers "who let this executor in" without a key or a name (§38).
+	TypeSpaceAccessGranted = "personalstate.space.access_granted"
+	// TypeSpaceAccessRevoked is that grant being withdrawn (ADR-0104): the
+	// executor's next fetch of the space is refused. Opaque like its sibling —
+	// the space, the principal and the revoking device, never a key.
+	TypeSpaceAccessRevoked = "personalstate.space.access_revoked"
 	// TypeChangeStored is a peer accepting an encrypted CRDT change into a space
 	// (§42, §44). Opaque like its siblings: it records that a change with this id
 	// landed, never the plaintext the peer cannot read.

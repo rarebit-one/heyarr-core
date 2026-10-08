@@ -78,6 +78,7 @@ func newTokenCreateCommand(_ Options, configPath *string) *cobra.Command {
 		scopeList string
 		expires   string
 		asJSON    bool
+		executor  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "create <name>",
@@ -86,9 +87,19 @@ func newTokenCreateCommand(_ Options, configPath *string) *cobra.Command {
 
 The token is printed once and cannot be recovered. Creating a second token for
 the same name is how rotation works: both are valid until you revoke the old
-one.`,
+one.
+
+With --executor the token is RESTRICTED (ADR-0104): it acts as an executor
+principal, carries read and write, and reaches only the vault surface and the
+encrypted spaces an owner's device has granted that principal. It cannot touch
+the media library, the catalog, MCP, admin routes, or rotate or delete a key.
+A name is either an executor or not: --executor on an ordinary token's name, or
+an ordinary token on an executor's name, is refused.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if executor && cmd.Flags().Changed("scopes") {
+				return errors.New("token: --executor fixes the scopes at read,write; drop --scopes")
+			}
 			scopes, err := auth.ParseScopes(scopeList)
 			if err != nil {
 				return err
@@ -103,7 +114,13 @@ one.`,
 				expiresAt = &t
 			}
 			return withStore(cmd.Context(), *configPath, func(ctx context.Context, store *auth.Store) error {
-				created, err := store.Create(ctx, args[0], scopes, expiresAt)
+				create := store.Create
+				if executor {
+					create = func(ctx context.Context, name string, _ []auth.Scope, expiresAt *time.Time) (auth.CreatedToken, error) {
+						return store.CreateExecutor(ctx, name, expiresAt)
+					}
+				}
+				created, err := create(ctx, args[0], scopes, expiresAt)
 				if err != nil {
 					return err
 				}
@@ -115,6 +132,8 @@ one.`,
 	cmd.Flags().StringVar(&expires, "expires", "",
 		"expiry as a duration from now, e.g. 90d, 12h, 1y (default: never)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
+	cmd.Flags().BoolVar(&executor, "executor", false,
+		"mint a restricted executor token: vault surface and granted spaces only (ADR-0104)")
 	return cmd
 }
 
@@ -122,13 +141,14 @@ one.`,
 // once, which is why the field is named plainly rather than hidden: a script
 // capturing it must be able to see that it is capturing a secret.
 type createdTokenJSON struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	Scopes    []string `json:"scopes"`
-	CreatedAt string   `json:"created_at"`
-	ExpiresAt string   `json:"expires_at,omitempty"`
-	Token     string   `json:"token"`
-	Warning   string   `json:"warning"`
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Scopes     []string `json:"scopes"`
+	CreatedAt  string   `json:"created_at"`
+	ExpiresAt  string   `json:"expires_at,omitempty"`
+	Restricted bool     `json:"restricted,omitempty"`
+	Token      string   `json:"token"`
+	Warning    string   `json:"warning"`
 }
 
 const notRecoverable = "this token is shown once and is not recoverable — it is stored only as an argon2id hash"
@@ -137,12 +157,13 @@ func printCreatedToken(w io.Writer, created auth.CreatedToken, asJSON bool) erro
 	tk := created.Token
 	if asJSON {
 		out := createdTokenJSON{
-			ID:        tk.ID,
-			Name:      tk.Name,
-			Scopes:    scopeStrings(tk.Scopes),
-			CreatedAt: tk.CreatedAt.UTC().Format(time.RFC3339Nano),
-			Token:     created.Secret,
-			Warning:   notRecoverable,
+			ID:         tk.ID,
+			Name:       tk.Name,
+			Scopes:     scopeStrings(tk.Scopes),
+			CreatedAt:  tk.CreatedAt.UTC().Format(time.RFC3339Nano),
+			Restricted: tk.Restricted,
+			Token:      created.Secret,
+			Warning:    notRecoverable,
 		}
 		if tk.ExpiresAt != nil {
 			out.ExpiresAt = tk.ExpiresAt.UTC().Format(time.RFC3339Nano)
@@ -158,7 +179,11 @@ func printCreatedToken(w io.Writer, created auth.CreatedToken, asJSON bool) erro
 	fmt.Fprintf(w, "  id       %s\n", tk.ID)
 	fmt.Fprintf(w, "  name     %s\n", tk.Name)
 	fmt.Fprintf(w, "  scopes   %s\n", auth.Join(tk.Scopes))
-	fmt.Fprintf(w, "  expires  %s\n\n", expiry)
+	fmt.Fprintf(w, "  expires  %s\n", expiry)
+	if tk.Restricted {
+		fmt.Fprintf(w, "  restricted to the vault surface and granted spaces (ADR-0104)\n")
+	}
+	fmt.Fprintln(w)
 	fmt.Fprintf(w, "  %s\n\n", created.Secret)
 	fmt.Fprintf(w, "Copy it now: %s.\n", notRecoverable)
 	fmt.Fprintf(w, "Use it as:   Authorization: Bearer <token>\n")
@@ -195,6 +220,7 @@ type tokenJSON struct {
 	LastUsedAt string   `json:"last_used_at,omitempty"`
 	ExpiresAt  string   `json:"expires_at,omitempty"`
 	RevokedAt  string   `json:"revoked_at,omitempty"`
+	Restricted bool     `json:"restricted,omitempty"`
 }
 
 // tokenStatus collapses revoked_at and expires_at into the one word an operator
@@ -217,11 +243,12 @@ func printTokens(w io.Writer, tokens []auth.Token, now time.Time, asJSON bool) e
 		out := make([]tokenJSON, 0, len(tokens))
 		for _, tk := range tokens {
 			row := tokenJSON{
-				ID:        tk.ID,
-				Name:      tk.Name,
-				Scopes:    scopeStrings(tk.Scopes),
-				Status:    tokenStatus(tk, now),
-				CreatedAt: tk.CreatedAt.UTC().Format(time.RFC3339Nano),
+				ID:         tk.ID,
+				Name:       tk.Name,
+				Scopes:     scopeStrings(tk.Scopes),
+				Status:     tokenStatus(tk, now),
+				CreatedAt:  tk.CreatedAt.UTC().Format(time.RFC3339Nano),
+				Restricted: tk.Restricted,
 			}
 			for _, f := range []struct {
 				src *time.Time
@@ -276,12 +303,13 @@ row on every call, so nothing is cached past it.`,
 				}
 				if asJSON {
 					return emitJSON(cmd.OutOrStdout(), tokenJSON{
-						ID:        tk.ID,
-						Name:      tk.Name,
-						Scopes:    scopeStrings(tk.Scopes),
-						Status:    "revoked",
-						CreatedAt: tk.CreatedAt.UTC().Format(time.RFC3339Nano),
-						RevokedAt: tk.RevokedAt.UTC().Format(time.RFC3339Nano),
+						ID:         tk.ID,
+						Name:       tk.Name,
+						Scopes:     scopeStrings(tk.Scopes),
+						Status:     "revoked",
+						CreatedAt:  tk.CreatedAt.UTC().Format(time.RFC3339Nano),
+						RevokedAt:  tk.RevokedAt.UTC().Format(time.RFC3339Nano),
+						Restricted: tk.Restricted,
 					})
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "revoked %s (%s)\n", tk.ID, tk.Name)

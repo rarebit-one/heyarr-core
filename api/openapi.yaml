@@ -713,6 +713,10 @@ paths:
         Returns each space's opaque id, structural kind and when the peer
         recorded it. There is no name, no member list and no key: those are
         encrypted state, never metadata a peer stores.
+
+        A restricted (executor) credential sees only the spaces it holds an
+        active grant for (ADR-0104); on any other space every route answers
+        `404`, as for an unknown space.
       responses:
         "200":
           description: The spaces this peer holds (possibly empty).
@@ -775,6 +779,9 @@ paths:
         `key_epoch` is the space's current key epoch (ADR-0103) — what a device
         wraps at to add a recipient, and what a rotation names as its
         `expected_epoch`.
+
+        A restricted (executor) credential is shown only its own wraps
+        (ADR-0104).
       parameters: [{ $ref: "#/components/parameters/id" }]
       responses:
         "200":
@@ -967,6 +974,89 @@ paths:
       responses:
         "204":
           description: The wrapped copy is gone (or was already).
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/spaces/{id}/grants:
+    post:
+      tags: [personal-state]
+      operationId: grantSpaceAccess
+      summary: Grant an executor principal access to a space's ciphertext (ADR-0104). Device credential with `write` only.
+      description: |
+        The owner's consent act. The grantee must be an executor principal
+        (`heyarr token create <name> --executor`); its restricted token may then
+        list the space, fetch its own wrap, the key history, changes and
+        snapshots, and with `read,write` push changes and snapshots. It never
+        rotates, compacts or deletes a key. A grant is the fetch gate only:
+        reading plaintext still needs a key wrapped for the grantee (ADR-0049).
+
+        Only a management-authorised Device credential may grant — a bearer
+        token or a web-login session is a `403` — and only the space's owner,
+        unless the space has no recorded owner. A re-grant replaces the caps and
+        expiry and clears a revocation. Every grant emits
+        `personalstate.space.access_granted`, naming the granting device.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [principal, caps]
+              additionalProperties: false
+              properties:
+                principal:
+                  type: string
+                  description: The executor principal's id or name.
+                caps:
+                  type: string
+                  enum: [read, "read,write"]
+                expires_at:
+                  type: string
+                  format: date-time
+                  description: Optional end of the grant, enforced on every fetch.
+      responses:
+        "201":
+          description: The grant, as recorded.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [space_id, principal_id, caps, granted_by_device, granted_at]
+                properties:
+                  space_id: { type: string }
+                  principal_id: { type: string }
+                  caps: { type: string, enum: [read, "read,write"] }
+                  granted_by_device: { type: string }
+                  granted_at: { type: string, format: date-time }
+                  expires_at: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/spaces/{id}/grants/{principal}:
+    delete:
+      tags: [personal-state]
+      operationId: revokeSpaceAccess
+      summary: Withdraw an executor principal's access to a space (ADR-0104). Device credential with `write` only.
+      description: |
+        The principal's next fetch of the space is refused. Same caller rule as
+        the grant. Revoking a grant that is not active is a `404`. This removes
+        the fetch gate only; removing the grantee's wrapped key is a separate
+        `DELETE /spaces/{id}/keys/{recipient}`.
+      parameters:
+        - { $ref: "#/components/parameters/id" }
+        - name: principal
+          in: path
+          required: true
+          description: The executor principal's id or name.
+          schema: { type: string }
+      responses:
+        "204":
+          description: The grant is revoked.
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -2262,6 +2352,12 @@ paths:
         The media type is always `application/octet-stream`: the content store
         knows the digest and the length and nothing else. What the bytes mean
         is catalog metadata.
+
+
+        A restricted (executor) credential reads only vault blobs — pinned
+        ciphertext no asset or library file references — under a per-principal
+        budget; any other blob answers `404`, and a spent budget `429`
+        (ADR-0104).
       parameters:
         - name: download
           in: query
@@ -2307,6 +2403,11 @@ paths:
         '403': { $ref: "#/components/responses/Forbidden" }
         '404':
           description: This peer holds no such blob. Ask another peer.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        '429':
+          description: A restricted credential spent its blob-read budget (ADR-0104).
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }

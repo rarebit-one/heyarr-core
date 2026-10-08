@@ -106,7 +106,7 @@ func (s *Server) routes(mounts []MountFunc) http.Handler {
 	// from another host, and an endpoint that leaks route names, library sizes
 	// and request patterns is not "just metrics".
 	r.Group(func(r chi.Router) {
-		r.Use(s.authenticate, RequireScope(auth.ScopeRead))
+		r.Use(s.authenticate, RequireScope(auth.ScopeRead), confineRestricted)
 		r.Method(http.MethodGet, "/metrics", promhttp.HandlerFor(s.registry, promhttp.HandlerOpts{
 			ErrorLog:          slogErrorLog{s.log},
 			ErrorHandling:     promhttp.ContinueOnError,
@@ -142,6 +142,12 @@ func (s *Server) routes(mounts []MountFunc) http.Handler {
 		if s.peers != nil {
 			r.Use(peerMembershipGuard(s.peers, s.peerLiveness, s.presentedKey, s.log))
 		}
+
+		// A restricted principal (ADR-0104) reaches only the vault surface.
+		// Mounted here, at the root of the group, for the same reason the
+		// membership guard is: a route added tomorrow is closed to it by
+		// default, and only an entry in restrictedAllowList opens one.
+		r.Use(confineRestricted)
 
 		r.Get("/system", s.handleSystem)
 

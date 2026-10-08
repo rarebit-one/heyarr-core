@@ -188,6 +188,17 @@ func (s *Store) CreateSpace(ctx context.Context, kind spaces.Kind) (spaces.Encry
 // let a relay re-categorise a space out from under its owner. created_at is the
 // peer's own clock, not the client's: the peer timestamps what it received.
 func (s *Store) PutSpace(ctx context.Context, id string, kind spaces.Kind) (spaces.EncryptedSpace, error) {
+	return s.PutSpaceOwned(ctx, id, kind, "")
+}
+
+// PutSpaceOwned is PutSpace recording the user principal that created the space
+// (ADR-0104) — the one principal, besides any management-authorised device on a
+// legacy space, whose device may grant an executor access to it. owner is
+// recorded only when the space is first stored: a re-push never changes it, so a
+// second device cannot claim a space another created. An empty owner records
+// NULL, which is a legacy household space (and what replication writes: the
+// owner is this node's fact, not the space's).
+func (s *Store) PutSpaceOwned(ctx context.Context, id string, kind spaces.Kind, owner string) (spaces.EncryptedSpace, error) {
 	if err := kind.Validate(); err != nil {
 		return spaces.EncryptedSpace{}, err
 	}
@@ -221,9 +232,13 @@ func (s *Store) PutSpace(ctx context.Context, id string, kind spaces.Kind) (spac
 		return spaces.EncryptedSpace{}, fmt.Errorf("personalstate/store: checking space: %w", err)
 	}
 
+	var ownerCol any
+	if owner != "" {
+		ownerCol = owner
+	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO encrypted_spaces (id, kind, created_at) VALUES (?, ?, ?)`,
-		id, string(kind), now.Format(timeFormat)); err != nil {
+		`INSERT INTO encrypted_spaces (id, kind, created_at, owner_principal_id) VALUES (?, ?, ?, ?)`,
+		id, string(kind), now.Format(timeFormat), ownerCol); err != nil {
 		return spaces.EncryptedSpace{}, fmt.Errorf("personalstate/store: recording space: %w", err)
 	}
 	ev, err := s.events.EmitTx(ctx, tx, events.TypeSpaceCreated, "encrypted_space", id,

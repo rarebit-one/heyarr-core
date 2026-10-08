@@ -325,7 +325,8 @@ func (s *Server) authenticateDevice(ctx context.Context, credential string, pres
 		scopes = []auth.Scope{auth.ScopeRead, auth.ScopeWrite}
 	}
 	return auth.Identity{
-		Principal: auth.Principal{ID: a.PrincipalID, Kind: "user", Name: a.PrincipalName},
+		DeviceKey: a.DeviceKey,
+		Principal: auth.Principal{ID: a.PrincipalID, Kind: auth.KindUser, Name: a.PrincipalName},
 		Token: auth.Token{
 			Name:        "device:" + a.DeviceKey,
 			PrincipalID: a.PrincipalID,
