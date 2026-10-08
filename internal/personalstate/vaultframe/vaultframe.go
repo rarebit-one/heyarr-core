@@ -106,8 +106,10 @@ func Seal(sk encryption.SpaceKey, r io.Reader, w io.Writer) (Manifest, error) {
 	for {
 		n, err := io.ReadFull(r, buf)
 		if n > 0 {
-			if index > math.MaxUint32 {
-				return Manifest{}, fmt.Errorf("vaultframe: file has more than %d frames", math.MaxUint32)
+			// The reader's bound (maxFrameCount), not just the header's uint32: a
+			// file no reader would open is refused here, before anything is sealed.
+			if index >= maxFrameCount {
+				return Manifest{}, fmt.Errorf("vaultframe: file has more than %d frames", maxFrameCount)
 			}
 			plaintext := append(frameHeader(fileID, uint32(index)), buf[:n]...)
 			sealed, serr := encryption.EncryptChange(sk, plaintext)
@@ -212,8 +214,13 @@ func (m Manifest) OpenRange(sk encryption.SpaceKey, off, n int64, fetch func(sta
 }
 
 // SealManifest seals a manifest under the space key, returning the ciphertext blob
-// a peer stores and a drive entry references.
+// a peer stores and a drive entry references. A manifest that does not Validate
+// is refused as ErrManifest.
 func SealManifest(sk encryption.SpaceKey, m Manifest) ([]byte, error) {
+	// Never seal what OpenManifest would refuse.
+	if err := m.Validate(); err != nil {
+		return nil, err
+	}
 	b, err := json.Marshal(m)
 	if err != nil {
 		return nil, fmt.Errorf("vaultframe: encoding manifest: %w", err)

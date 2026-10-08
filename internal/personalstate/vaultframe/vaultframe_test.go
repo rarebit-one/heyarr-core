@@ -2,6 +2,7 @@ package vaultframe_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"math"
 	"testing"
@@ -236,7 +237,16 @@ func TestOpenManifestRefusesImpossibleGeometry(t *testing.T) {
 	for name, mutate := range cases {
 		m := good
 		mutate(&m)
-		sealed, err := vaultframe.SealManifest(sk, m)
+		// SealManifest refuses to write it …
+		if _, err := vaultframe.SealManifest(sk, m); !errors.Is(err, vaultframe.ErrManifest) {
+			t.Errorf("%s: SealManifest = %v, want ErrManifest", name, err)
+		}
+		// … and OpenManifest refuses one another writer sealed anyway.
+		b, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sealed, err := encryption.EncryptChange(sk, b)
 		if err != nil {
 			t.Fatal(err)
 		}
