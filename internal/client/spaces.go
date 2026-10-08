@@ -20,9 +20,14 @@ import (
 // WrappedKeyInput is one recipient's sealed copy of a space key, pushed at
 // create time. Wrapped is opaque bytes (encryption.Seal output), base64 on the
 // wire via encoding/json's []byte handling.
+//
+// Epoch is the key epoch the copy seals (ADR-0103); zero — the space's original
+// key — is omitted from the wire. The peer refuses a copy that is not at the
+// space's current epoch with a 409.
 type WrappedKeyInput struct {
 	Recipient string `json:"recipient"`
 	Wrapped   []byte `json:"wrapped"`
+	Epoch     int    `json:"epoch,omitempty"`
 }
 
 // CreateSpaceRequest is the body of POST /spaces: a client-minted space and the
@@ -50,12 +55,43 @@ type spacesEnvelope struct {
 type WrappedKey struct {
 	Recipient string `json:"recipient"`
 	Wrapped   []byte `json:"wrapped"`
+	// Epoch is the key epoch this copy seals (ADR-0103).
+	Epoch     int    `json:"epoch"`
 	CreatedAt string `json:"created_at"`
 }
 
-type wrappedKeysEnvelope struct {
+// SpaceKeys is GET /spaces/{id}/keys whole: the wrapped copies and the space's
+// current key epoch (ADR-0103) — the epoch a device wraps at to add a recipient,
+// and the one a rotation names as its expected epoch.
+type SpaceKeys struct {
 	SpaceID     string       `json:"space_id"`
+	KeyEpoch    int          `json:"key_epoch"`
 	WrappedKeys []WrappedKey `json:"wrapped_keys"`
+}
+
+// KeyHistoryEntry is one link of a space's key chain (ADR-0103): the key of
+// epoch Epoch-1 sealed under the key of epoch Epoch. SealedPrev is opaque.
+type KeyHistoryEntry struct {
+	Epoch      int    `json:"epoch"`
+	SealedPrev []byte `json:"sealed_prev"`
+	CreatedAt  string `json:"created_at"`
+}
+
+type keyHistoryEnvelope struct {
+	SpaceID string            `json:"space_id"`
+	Entries []KeyHistoryEntry `json:"entries"`
+}
+
+// rotateRequest is the body of POST /spaces/{id}/rotate.
+type rotateRequest struct {
+	ExpectedEpoch int               `json:"expected_epoch"`
+	SealedPrev    []byte            `json:"sealed_prev"`
+	WrappedKeys   []WrappedKeyInput `json:"wrapped_keys"`
+}
+
+type rotateResult struct {
+	SpaceID  string `json:"space_id"`
+	KeyEpoch int    `json:"key_epoch"`
 }
 
 type changesEnvelope struct {
@@ -88,15 +124,49 @@ func (c *Client) ListSpaces(ctx context.Context) ([]Space, error) {
 // WrappedKeys returns the wrapped copies of a space's key — a device scans them
 // for the recipient matching its own encryption key.
 func (c *Client) WrappedKeys(ctx context.Context, spaceID string) ([]WrappedKey, error) {
-	var out wrappedKeysEnvelope
-	if err := c.Get(ctx, "/spaces/"+url.PathEscape(spaceID)+"/keys", nil, &out); err != nil {
+	keys, err := c.SpaceKeys(ctx, spaceID)
+	if err != nil {
 		return nil, err
 	}
-	return out.WrappedKeys, nil
+	return keys.WrappedKeys, nil
 }
 
-// rewrapRequest is the body of POST /spaces/{id}/keys: the wrapped copies of a
-// space's NEW key after a rotation (#361).
+// SpaceKeys returns a space's wrapped copies together with its current key
+// epoch (ADR-0103).
+func (c *Client) SpaceKeys(ctx context.Context, spaceID string) (SpaceKeys, error) {
+	var out SpaceKeys
+	if err := c.Get(ctx, "/spaces/"+url.PathEscape(spaceID)+"/keys", nil, &out); err != nil {
+		return SpaceKeys{}, err
+	}
+	return out, nil
+}
+
+// KeyHistory returns a space's opaque key chain, oldest epoch first (ADR-0103).
+// A space never rotated has none.
+func (c *Client) KeyHistory(ctx context.Context, spaceID string) ([]KeyHistoryEntry, error) {
+	var out keyHistoryEnvelope
+	if err := c.Get(ctx, "/spaces/"+url.PathEscape(spaceID)+"/key-history", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Entries, nil
+}
+
+// RotateKey moves a space to its next key epoch (ADR-0103): sealedPrev is the
+// current key sealed under the new one, wraps the new key's copies (their Epoch
+// is left zero — the rotation assigns it). A recipient left out loses its copy.
+// It is a compare-and-swap on expectedEpoch: losing a race is a 409. Needs
+// `admin`. Returns the new epoch.
+func (c *Client) RotateKey(ctx context.Context, spaceID string, expectedEpoch int, sealedPrev []byte, wraps []WrappedKeyInput) (int, error) {
+	var out rotateResult
+	req := rotateRequest{ExpectedEpoch: expectedEpoch, SealedPrev: sealedPrev, WrappedKeys: wraps}
+	if err := c.Post(ctx, "/spaces/"+url.PathEscape(spaceID)+"/rotate", req, &out); err != nil {
+		return 0, err
+	}
+	return out.KeyEpoch, nil
+}
+
+// rewrapRequest is the body of POST /spaces/{id}/keys: wrapped copies of a
+// space's current key, each naming the epoch it seals (ADR-0103).
 type rewrapRequest struct {
 	WrappedKeys []WrappedKeyInput `json:"wrapped_keys"`
 }

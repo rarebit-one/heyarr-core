@@ -82,3 +82,27 @@ func TestEnrolUserRecoveryKeyEmptyAndMalformed(t *testing.T) {
 		t.Fatalf("malformed recovery key error = %v, want ErrMalformedKey", err)
 	}
 }
+
+// TestRecoveryWrapRecipientsListsOnlyRecoveryKeys: the set a space-key rotation
+// must preserve (ADR-0103) is exactly the users' recovery keys — a user enrolled
+// without one contributes nothing.
+func TestRecoveryWrapRecipientsListsOnlyRecoveryKeys(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newFixture(t)
+	withKey, withoutKey := newActor(t), newActor(t)
+	recoveryPub := x25519Pub(t)
+	if _, err := f.store.EnrolUser(ctx, withKey.userKey, "alice", recoveryPub); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.EnrolUser(ctx, withoutKey.userKey, "bob", ""); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.store.RecoveryWrapRecipients(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[recoveryPub] {
+		t.Fatalf("RecoveryWrapRecipients = %v, want only %q", got, recoveryPub)
+	}
+}

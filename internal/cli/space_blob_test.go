@@ -9,6 +9,8 @@ package cli
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -108,7 +110,7 @@ func (n blobNode) wrapFor(t *testing.T, id string, sk encryption.SpaceKey, recip
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := n.store.PutWrappedKey(context.Background(), id, recipient, w); err != nil {
+	if _, err := n.store.PutWrappedKey(context.Background(), id, recipient, w, 0); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -127,8 +129,9 @@ type blobFixture struct {
 	secretFile string
 	recipient  string
 	keys       map[string]encryption.SpaceKey
-	source     blobNode // holds the recovery-wrapped copies
-	target     blobNode // holds the content but no wrapped keys
+	raw        map[string][]byte // each key's bytes, which a rotation seals (ADR-0103)
+	source     blobNode          // holds the recovery-wrapped copies
+	target     blobNode          // holds the content but no wrapped keys
 	deviceDir  string
 	dir        string
 }
@@ -150,16 +153,13 @@ func newBlobFixture(t *testing.T) blobFixture {
 	}
 	f := blobFixture{
 		secret: secret, secretFile: secretFile, recipient: recipient,
-		keys:   map[string]encryption.SpaceKey{},
+		keys: map[string]encryption.SpaceKey{}, raw: map[string][]byte{},
 		source: newBlobNode(t), target: newBlobNode(t),
 		deviceDir: filepath.Join(dir, "device"), dir: dir,
 	}
 	for _, id := range []string{blobSpaceA, blobSpaceB} {
-		sk, err := encryption.NewSpaceKey()
-		if err != nil {
-			t.Fatal(err)
-		}
-		f.keys[id] = sk
+		raw, sk := rawSpaceKey(t)
+		f.keys[id], f.raw[id] = sk, raw
 		f.source.space(t, id, sk)
 		f.source.wrapFor(t, id, sk, recipient)
 		f.target.space(t, id, sk) // replicated content, no wrapped keys
@@ -168,6 +168,97 @@ func newBlobFixture(t *testing.T) blobFixture {
 		t.Fatalf("device generate: %v", err)
 	}
 	return f
+}
+
+// testSealPrev and testUnroller are a TEST-ONLY key-history format: the previous
+// key's raw bytes sealed with EncryptChange under the next key. The real
+// sealed_prev format belongs to the client keyring change (PR 1.3, #698); the
+// recovery path takes its unroller injected, so these tests pin the recovery
+// logic without fixing a wire format.
+func testSealPrev(t *testing.T, next encryption.SpaceKey, prevRaw []byte) []byte {
+	t.Helper()
+	sealed, err := encryption.EncryptChange(next, prevRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sealed
+}
+
+func testUnroller(current encryption.SpaceKey, epoch int, history []psstore.KeyHistoryEntry) ([]encryption.SpaceKey, error) {
+	keys := []encryption.SpaceKey{current}
+	cur := current
+	for i := len(history) - 1; i >= 0; i-- {
+		raw, err := encryption.DecryptChange(cur, history[i].SealedPrev)
+		if err != nil {
+			if i == len(history)-1 {
+				return nil, fmt.Errorf("%w: epoch %d", errKeyNotCurrent, epoch)
+			}
+			return nil, err
+		}
+		prev, err := encryption.SpaceKeyFromBytes(raw)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, prev)
+		cur = prev
+	}
+	return keys, nil
+}
+
+// useTestUnroller swaps the recovery path's unroller for testUnroller for one
+// (non-parallel) test.
+func useTestUnroller(t *testing.T) {
+	t.Helper()
+	prev := unrollKeyChain
+	unrollKeyChain = testUnroller
+	t.Cleanup(func() { unrollKeyChain = prev })
+}
+
+// rawSpaceKey mints a space key from bytes the test keeps, because the test
+// history format seals the previous key's raw bytes and a SpaceKey exposes none.
+func rawSpaceKey(t *testing.T) ([]byte, encryption.SpaceKey) {
+	t.Helper()
+	raw := make([]byte, encryption.SpaceKeySize)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	sk, err := encryption.SpaceKeyFromBytes(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw, sk
+}
+
+// rotate re-keys space id to a fresh key as a pure re-key (ADR-0103): the source
+// stores the history row and the recovery key's new wrap, and the target gets the
+// history row by replication. No content is re-encrypted, so the newest content
+// on both is still under the old key. Returns the new key.
+func (f *blobFixture) rotate(t *testing.T, id string) encryption.SpaceKey {
+	t.Helper()
+	ctx := context.Background()
+	raw, next := rawSpaceKey(t)
+	sealed := testSealPrev(t, next, f.raw[id])
+	pub, err := encryption.ParsePublicKey(f.recipient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := encryption.Seal(next, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch, err := f.source.store.KeyEpoch(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.source.store.RotateKey(ctx, id, epoch, sealed,
+		[]psstore.RecipientWrap{{Recipient: f.recipient, Wrapped: w}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.target.store.PutKeyHistory(ctx, id, epoch+1, sealed); err != nil {
+		t.Fatal(err)
+	}
+	f.keys[id], f.raw[id] = next, raw
+	return next
 }
 
 func (f blobFixture) export(t *testing.T) string {
@@ -410,4 +501,100 @@ func TestExportRecoveryRefusesNothingToExport(t *testing.T) {
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
 		t.Fatal("an empty blob was written")
 	}
+}
+
+// deviceWrap returns this fixture device's wrapped copy of a space on node n and
+// the epoch it is stored at.
+func (f blobFixture) deviceWrap(t *testing.T, n blobNode, id string) (encryption.SpaceKey, int) {
+	t.Helper()
+	devPriv, err := loadDeviceEncKey(f.deviceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devID := encryption.FormatPublicKey(devPriv.PublicKey().Bytes())
+	keys, err := n.store.WrappedKeysFor(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range keys {
+		if k.Recipient == devID {
+			sk, err := encryption.Unwrap(k.Wrapped, devPriv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return sk, k.Epoch
+		}
+	}
+	t.Fatalf("space %s holds no copy for the device", id)
+	return encryption.SpaceKey{}, 0
+}
+
+// TestRecoveryAfterARotation (ADR-0103, #698): a rotation is a pure re-key, so
+// right after one the newest content is still under the OLD key. A blob exported
+// after the rotation carries the NEW key: it opens the newest history row (it is
+// current), unrolls to the old key that opens the content, and is re-wrapped for
+// the device at the new epoch. Recovering from the control database itself works
+// the same way.
+func TestRecoveryAfterARotation(t *testing.T) {
+	useTestUnroller(t)
+	t.Run("from a blob exported after the rotation", func(t *testing.T) {
+		f := newBlobFixture(t)
+		next := f.rotate(t, blobSpaceA)
+		blob := f.export(t)
+		if _, err := f.recoverRewrap(t, blob); err != nil {
+			t.Fatalf("recover --from-blob --rewrap after a rotation: %v", err)
+		}
+		sk, epoch := f.deviceWrap(t, f.target, blobSpaceA)
+		if epoch != 1 {
+			t.Fatalf("the device copy is at epoch %d, want 1", epoch)
+		}
+		probe, err := encryption.EncryptChange(next, []byte("probe"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := encryption.DecryptChange(sk, probe); err != nil {
+			t.Fatal("the device was wrapped a key other than the current one")
+		}
+		if _, epochB := f.deviceWrap(t, f.target, blobSpaceB); epochB != 0 {
+			t.Fatalf("the unrotated space's copy is at epoch %d, want 0", epochB)
+		}
+	})
+
+	t.Run("from the control database", func(t *testing.T) {
+		f := newBlobFixture(t)
+		f.rotate(t, blobSpaceA)
+		if _, _, err := run(t, context.Background(), "--config", f.source.config, "space", "recover",
+			"--device-dir", f.deviceDir, "--secret-file", f.secretFile, "--rewrap", "--json"); err != nil {
+			t.Fatalf("recover --rewrap after a rotation: %v", err)
+		}
+		if _, epoch := f.deviceWrap(t, f.source, blobSpaceA); epoch != 1 {
+			t.Fatalf("the device copy is at epoch %d, want 1", epoch)
+		}
+	})
+
+	t.Run("a blob exported before the rotation is stale", func(t *testing.T) {
+		f := newBlobFixture(t)
+		blob := f.export(t)
+		f.rotate(t, blobSpaceA)
+		// The old key still opens the newest content — only the history row
+		// shows it is no longer current.
+		_, err := f.recoverRewrap(t, blob)
+		if err == nil || !strings.Contains(err.Error(), "stale") || !strings.Contains(err.Error(), "export-recovery") {
+			t.Fatalf("stale blob after a rotation: err = %v", err)
+		}
+		f.assertNothingRewrapped(t)
+	})
+}
+
+// TestRecoveryOfARotatedSpaceWaitsForTheUnroller: until the client keyring's
+// unroller is wired (PR 1.3), a rotated space refuses --rewrap rather than
+// guessing a history format — and writes nothing.
+func TestRecoveryOfARotatedSpaceWaitsForTheUnroller(t *testing.T) {
+	f := newBlobFixture(t)
+	f.rotate(t, blobSpaceA)
+	_, err := f.recoverRewrap(t, f.export(t))
+	if err == nil || !strings.Contains(err.Error(), "cannot open its key history yet") {
+		t.Fatalf("recover of a rotated space with the production unroller: err = %v", err)
+	}
+	f.assertNothingRewrapped(t)
 }

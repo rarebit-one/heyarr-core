@@ -9,10 +9,14 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 )
 
-type fakeAuthorizer struct{ allowed map[string]bool }
+type fakeAuthorizer struct{ allowed, recovery map[string]bool }
 
 func (f fakeAuthorizer) AllowedWrapRecipients(context.Context) (map[string]bool, error) {
 	return f.allowed, nil
+}
+
+func (f fakeAuthorizer) RecoveryWrapRecipients(context.Context) (map[string]bool, error) {
+	return f.recovery, nil
 }
 
 func apiWithAuthorizer(t *testing.T, allowed map[string]bool) (*API, *store.Store) {

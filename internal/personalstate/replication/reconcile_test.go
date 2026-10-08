@@ -3,6 +3,7 @@ package replication_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -39,9 +40,18 @@ func (p storePusher) PushSpace(ctx context.Context, _ replication.Target, spaceI
 	return err
 }
 
-func (p storePusher) PushWrappedKey(ctx context.Context, _ replication.Target, spaceID, recipient string, wrapped []byte) error {
-	_, err := p.target.PutWrappedKey(ctx, spaceID, recipient, wrapped)
+func (p storePusher) PushWrappedKey(ctx context.Context, _ replication.Target, spaceID, recipient string, wrapped []byte, epoch int) error {
+	_, err := p.target.PutWrappedKey(ctx, spaceID, recipient, wrapped, epoch)
+	if errors.Is(err, store.ErrStaleKeyEpoch) {
+		// What the peer route answers (409 key_epoch_superseded) and the real
+		// client turns into ErrWrapSuperseded.
+		return fmt.Errorf("%w: %w", replication.ErrWrapSuperseded, err)
+	}
 	return err
+}
+
+func (p storePusher) PushKeyHistory(ctx context.Context, _ replication.Target, spaceID string, epoch int, sealedPrev []byte) error {
+	return p.target.PutKeyHistory(ctx, spaceID, epoch, sealedPrev)
 }
 
 func (p storePusher) Heads(ctx context.Context, _ replication.Target, spaceID string) ([]string, error) {
@@ -70,7 +80,11 @@ func (downPusher) PushSpace(context.Context, replication.Target, string, string)
 	return errDown
 }
 
-func (downPusher) PushWrappedKey(context.Context, replication.Target, string, string, []byte) error {
+func (downPusher) PushWrappedKey(context.Context, replication.Target, string, string, []byte, int) error {
+	return errDown
+}
+
+func (downPusher) PushKeyHistory(context.Context, replication.Target, string, int, []byte) error {
 	return errDown
 }
 
@@ -102,7 +116,7 @@ func seed(t *testing.T, s *store.Store) string {
 		"x25519:" + repeatHex("b2", 32),
 	}
 	for i, recip := range recipients {
-		if _, err := s.PutWrappedKey(ctx, sp.ID, recip, []byte{byte(i + 1), 0x00, 0xff}); err != nil {
+		if _, err := s.PutWrappedKey(ctx, sp.ID, recip, []byte{byte(i + 1), 0x00, 0xff}, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -277,8 +291,12 @@ func (r routingPusher) PushSpace(ctx context.Context, t replication.Target, s, k
 	return r.route(t).PushSpace(ctx, t, s, k)
 }
 
-func (r routingPusher) PushWrappedKey(ctx context.Context, t replication.Target, s, rec string, w []byte) error {
-	return r.route(t).PushWrappedKey(ctx, t, s, rec, w)
+func (r routingPusher) PushWrappedKey(ctx context.Context, t replication.Target, s, rec string, w []byte, epoch int) error {
+	return r.route(t).PushWrappedKey(ctx, t, s, rec, w, epoch)
+}
+
+func (r routingPusher) PushKeyHistory(ctx context.Context, t replication.Target, s string, epoch int, sealed []byte) error {
+	return r.route(t).PushKeyHistory(ctx, t, s, epoch, sealed)
 }
 
 func (r routingPusher) Heads(ctx context.Context, t replication.Target, s string) ([]string, error) {
@@ -291,4 +309,160 @@ func (r routingPusher) PushChange(ctx context.Context, t replication.Target, ch 
 
 func (r routingPusher) PushSnapshot(ctx context.Context, t replication.Target, snap protocol.EncryptedSnapshot) error {
 	return r.route(t).PushSnapshot(ctx, t, snap)
+}
+
+// keyState is what a peer holds of a space's key: its epoch and, per recipient,
+// the epoch and bytes of the copy it serves.
+func keyState(t *testing.T, s *store.Store, spaceID string) (int, map[string]store.WrappedKey) {
+	t.Helper()
+	ctx := context.Background()
+	epoch, err := s.KeyEpoch(ctx, spaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := s.WrappedKeysFor(ctx, spaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := make(map[string]store.WrappedKey, len(keys))
+	for _, k := range keys {
+		out[k.Recipient] = k
+	}
+	return epoch, out
+}
+
+// TestReconcileKeyEpochs is ADR-0103's replication half. A peer at epoch 1 must
+// not be regressed by a sibling still at epoch 0 — the stale sibling's old wraps
+// (including the one the rotation revoked) are skipped, not resurrected, and the
+// reconcile still converges the rest of the space. And a rotation replicates
+// forward: a target at epoch 0 ends at epoch 1 holding only the epoch-1 wraps, so
+// the revoked recipient loses its copy there too.
+func TestReconcileKeyEpochs(t *testing.T) {
+	t.Parallel()
+	keep := "x25519:" + repeatHex("a1", 32)
+	revoked := "x25519:" + repeatHex("b2", 32)
+
+	// seedRotated gives s the seed space (two epoch-0 wraps: keep + revoked) and
+	// rotates it to epoch 1 for keep only — the revocation.
+	seedRotated := func(t *testing.T, s *store.Store, spaceID string) {
+		t.Helper()
+		if _, err := s.RotateKey(context.Background(), spaceID, 0, []byte("k0-under-k1"),
+			[]store.RecipientWrap{{Recipient: keep, Wrapped: []byte("k1-keep")}}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cases := []struct {
+		name          string
+		rotateSource  bool
+		rotateTarget  bool
+		wantEpoch     int
+		wantRecipient map[string]string // recipient -> wrapped bytes the target serves
+	}{
+		{
+			name:          "a stale source cannot regress a rotated target",
+			rotateSource:  false,
+			rotateTarget:  true,
+			wantEpoch:     1,
+			wantRecipient: map[string]string{keep: "k1-keep"},
+		},
+		{
+			name:          "a rotation replicates forward and drops the revoked copy",
+			rotateSource:  true,
+			rotateTarget:  false,
+			wantEpoch:     1,
+			wantRecipient: map[string]string{keep: "k1-keep"},
+		},
+		{
+			name:          "two peers at the same epoch stay put",
+			rotateSource:  true,
+			rotateTarget:  true,
+			wantEpoch:     1,
+			wantRecipient: map[string]string{keep: "k1-keep"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			source := newStore(t)
+			target := newStore(t)
+			spaceID := seed(t, source)
+			// The target already held the space at epoch 0, exactly as an
+			// earlier reconcile would have left it.
+			tgt := replication.Target{Peer: mtls.Peer{PeerID: "peer-b"}}
+			if o := replication.Reconcile(ctx, source, storePusher{target: target}, []replication.Target{tgt}, nil, nil); o[0].Err != nil {
+				t.Fatalf("initial reconcile: %v", o[0].Err)
+			}
+			if tc.rotateSource {
+				seedRotated(t, source, spaceID)
+			}
+			if tc.rotateTarget {
+				seedRotated(t, target, spaceID)
+			}
+
+			for i := 0; i < 2; i++ { // twice: the second run is the idempotent one
+				outcomes := replication.Reconcile(ctx, source, storePusher{target: target}, []replication.Target{tgt}, nil, nil)
+				if len(outcomes) != 1 || outcomes[0].Err != nil {
+					t.Fatalf("reconcile %d: %+v", i, outcomes)
+				}
+			}
+
+			epoch, held := keyState(t, target, spaceID)
+			if epoch != tc.wantEpoch {
+				t.Fatalf("target epoch = %d, want %d", epoch, tc.wantEpoch)
+			}
+			if len(held) != len(tc.wantRecipient) {
+				t.Fatalf("target serves %d wraps, want %d: %v", len(held), len(tc.wantRecipient), held)
+			}
+			for r, want := range tc.wantRecipient {
+				if got := held[r]; string(got.Wrapped) != want || got.Epoch != tc.wantEpoch {
+					t.Fatalf("target wrap for %s = epoch %d %q, want epoch %d %q", r, got.Epoch, got.Wrapped, tc.wantEpoch, want)
+				}
+			}
+			if _, ok := held[revoked]; ok {
+				t.Fatal("the revoked recipient's copy was resurrected on the target")
+			}
+			history, err := target.KeyHistory(ctx, spaceID)
+			if err != nil || len(history) != 1 || string(history[0].SealedPrev) != "k0-under-k1" {
+				t.Fatalf("target history = %+v, %v; want the one rotation row", history, err)
+			}
+			// The changes still converged — a skipped stale wrap does not stall
+			// the space.
+			if changes, err := target.ChangesFor(ctx, spaceID); err != nil || len(changes) != 2 {
+				t.Fatalf("target changes = %d (%v), want 2", len(changes), err)
+			}
+		})
+	}
+}
+
+// TestReconcileSurfacesAForkedHistory: two peers that rotated the same epoch
+// independently hold different rows; replication refuses to overwrite either and
+// defers the space instead of silently picking one.
+func TestReconcileSurfacesAForkedHistory(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	source := newStore(t)
+	target := newStore(t)
+	spaceID := seed(t, source)
+	tgt := replication.Target{Peer: mtls.Peer{PeerID: "peer-b"}}
+	if o := replication.Reconcile(ctx, source, storePusher{target: target}, []replication.Target{tgt}, nil, nil); o[0].Err != nil {
+		t.Fatal(o[0].Err)
+	}
+	recip := "x25519:" + repeatHex("a1", 32)
+	for _, s := range []struct {
+		st     *store.Store
+		sealed string
+	}{{source, "fork-a"}, {target, "fork-b"}} {
+		if _, err := s.st.RotateKey(ctx, spaceID, 0, []byte(s.sealed), []store.RecipientWrap{{Recipient: recip, Wrapped: []byte(s.sealed)}}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outcomes := replication.Reconcile(ctx, source, storePusher{target: target}, []replication.Target{tgt}, nil, nil)
+	if len(outcomes) != 1 || !errors.Is(outcomes[0].Err, store.ErrKeyHistoryConflict) {
+		t.Fatalf("forked reconcile = %+v, want a deferred ErrKeyHistoryConflict", outcomes)
+	}
+	if h, _ := target.KeyHistory(ctx, spaceID); len(h) != 1 || string(h[0].SealedPrev) != "fork-b" {
+		t.Fatalf("the target's own row was overwritten: %+v", h)
+	}
 }

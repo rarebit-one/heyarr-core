@@ -48,6 +48,30 @@ var ErrNoSuchSpace = errors.New("peerapi: no such encrypted space")
 // translates the store's validation sentinels into this one.
 var ErrInvalidState = errors.New("peerapi: invalid personal-state push")
 
+// ErrKeySuperseded is a replicated wrapped key sealing a key epoch older than the
+// one this peer holds (ADR-0103): the space was rotated since, and the copy must
+// not be resurrected. It is answered 409 with CodeKeySuperseded, which a
+// replicating sibling treats as "skip this copy", not as a failed reconcile — a
+// stale source is normal, and it must not stall the rest of the space.
+var ErrKeySuperseded = errors.New("peerapi: the wrapped key seals a superseded key epoch")
+
+// ErrKeyEpochAhead is a replicated wrapped key sealing a key epoch this peer has
+// not reached — its history row has not landed. A 409 the sibling treats as an
+// error: it pushes history first, so this means something is out of order.
+var ErrKeyEpochAhead = errors.New("peerapi: the wrapped key seals a key epoch this peer has not reached")
+
+// ErrKeyHistoryFork is a replicated key-history row for an epoch this peer holds
+// with DIFFERENT bytes — two rotations forked the chain. A 409; never overwritten.
+var ErrKeyHistoryFork = errors.New("peerapi: a different key-history row is held for that epoch")
+
+// The problem codes the key-epoch refusals carry, so a sibling branches on a
+// stable code rather than on the prose.
+const (
+	CodeKeySuperseded  = "key_epoch_superseded"
+	CodeKeyEpochAhead  = "key_epoch_ahead"
+	CodeKeyHistoryFork = "key_history_conflict"
+)
+
 // StateStore is the peer's opaque personal-state storage, as this surface needs
 // it: the causal heads of a space, its changes (all, or those a caller is
 // missing), and a sink that accepts a change after verifying its content-address.
@@ -70,10 +94,17 @@ type StateStore interface {
 	// opaque id and its structural kind (§37, §45). Idempotent; a space already
 	// held is a no-op. The kind is a known §39 category, refused otherwise.
 	PutSpace(ctx context.Context, spaceID, kind string) error
-	// PutWrappedKey stores a wrapped copy of a space's key a sibling pushes. The
-	// bytes are opaque — the peer holds them and cannot open them. Idempotent per
-	// (space, recipient). ErrNoSuchSpace if the space is not held here.
-	PutWrappedKey(ctx context.Context, spaceID, recipient string, wrapped []byte) error
+	// PutWrappedKey stores a wrapped copy of a space's key a sibling pushes, at
+	// the key epoch it seals (ADR-0103). The bytes are opaque — the peer holds
+	// them and cannot open them. Idempotent per (space, recipient).
+	// ErrNoSuchSpace if the space is not held here; ErrKeySuperseded when the
+	// epoch is older than this peer's, ErrKeyEpochAhead when newer.
+	PutWrappedKey(ctx context.Context, spaceID, recipient string, wrapped []byte, epoch int) error
+	// PutKeyHistory stores one opaque key-history row a sibling pushes: the key of
+	// epoch-1 sealed under the key of epoch (ADR-0103). Idempotent on identical
+	// bytes; ErrKeyHistoryFork on different bytes for a held epoch. A row that
+	// becomes the newest epoch drops the older wraps. ErrNoSuchSpace if not held.
+	PutKeyHistory(ctx context.Context, spaceID string, epoch int, sealedPrev []byte) error
 	// LatestSnapshotFor returns the newest snapshot held for a space, and whether
 	// one exists (§44). ok is false — with a nil error — when the space is held but
 	// has no snapshot yet. ErrNoSuchSpace if the space itself is not held.
@@ -213,6 +244,14 @@ func (s *Server) failState(w http.ResponseWriter, r *http.Request, principal Pri
 	switch {
 	case errors.Is(err, ErrNoSuchSpace):
 		httpapi.Fail(w, r, problem.NotFound("this peer does not hold that encrypted space"))
+	case errors.Is(err, ErrKeySuperseded):
+		httpapi.Fail(w, r, problem.Conflict("this peer holds a newer key epoch for the space; the copy is superseded").
+			WithCode(CodeKeySuperseded))
+	case errors.Is(err, ErrKeyEpochAhead):
+		httpapi.Fail(w, r, problem.Conflict("this peer has not reached that key epoch; push the key history first").
+			WithCode(CodeKeyEpochAhead))
+	case errors.Is(err, ErrKeyHistoryFork):
+		httpapi.Fail(w, r, problem.Conflict(err.Error()).WithCode(CodeKeyHistoryFork))
 	case errors.Is(err, protocol.ErrIDMismatch), errors.Is(err, protocol.ErrIncomplete), errors.Is(err, ErrInvalidState),
 		errors.Is(err, protocol.ErrSnapshotIDMismatch), errors.Is(err, protocol.ErrSnapshotIncomplete):
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))

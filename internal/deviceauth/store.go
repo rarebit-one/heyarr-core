@@ -497,6 +497,23 @@ func (s *Store) AllowedWrapRecipients(ctx context.Context) (map[string]bool, err
 	return set, nil
 }
 
+// RecoveryWrapRecipients is the set of users' recovery encryption keys, rendered
+// "x25519:<hex>" — the wrap recipients a space-key rotation may not drop
+// (ADR-0022, ADR-0103). It is the recovery half of AllowedWrapRecipients.
+func (s *Store) RecoveryWrapRecipients(ctx context.Context) (map[string]bool, error) {
+	users, err := s.ListUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[string]bool)
+	for _, u := range users {
+		if u.RecoveryEncryptionKey != "" {
+			set[u.RecoveryEncryptionKey] = true
+		}
+	}
+	return set, nil
+}
+
 // rowScanner is satisfied by both *sql.Row (LookupDevice) and *sql.Rows
 // (ListDevices), so one scanner serves both.
 type rowScanner interface{ Scan(dest ...any) error }

@@ -49,6 +49,34 @@ var (
 	ErrEmptyRecipient = errors.New("personalstate/store: a recipient is required")
 )
 
+// Key-epoch errors (ADR-0103).
+var (
+	// ErrStaleKeyEpoch is a wrapped copy sealing an epoch older than the space's
+	// current one: the key was rotated since. Storing it would hand a recipient a
+	// superseded key, or let replication resurrect a copy a rotation dropped.
+	ErrStaleKeyEpoch = errors.New("personalstate/store: the wrapped key seals a superseded key epoch")
+	// ErrFutureKeyEpoch is a wrapped copy sealing an epoch newer than the space's
+	// current one: the history row that moves the space there has not landed.
+	ErrFutureKeyEpoch = errors.New("personalstate/store: the wrapped key seals a key epoch this peer has not reached")
+	// ErrKeyEpochConflict is a rotation whose expected epoch is not the space's
+	// current one — another rotation landed first. Re-open the space and retry.
+	ErrKeyEpochConflict = errors.New("personalstate/store: the space key was rotated concurrently")
+	// ErrKeyHistoryConflict is a history row for an epoch already held with
+	// DIFFERENT bytes: two rotations forked the chain. Never overwritten.
+	ErrKeyHistoryConflict = errors.New("personalstate/store: a different key-history row is already held for that epoch")
+	// ErrInvalidKeyEpoch is a history row for epoch < 1 (epoch 0 has no
+	// predecessor) or a rotation with a negative expected epoch.
+	ErrInvalidKeyEpoch = errors.New("personalstate/store: invalid key epoch")
+	// ErrEmptySealedPrev is a history row with no bytes.
+	ErrEmptySealedPrev = errors.New("personalstate/store: the sealed previous key is empty")
+	// ErrRotationDropsPreserved is a rotation that leaves out a recipient it must
+	// keep — a recovery key holding a copy of the current key (ADR-0022).
+	ErrRotationDropsPreserved = errors.New("personalstate/store: a rotation must re-wrap the recovery key")
+	// ErrNoRotationWraps is a rotation that re-wraps the new key for nobody — the
+	// space would become unreadable to everyone.
+	ErrNoRotationWraps = errors.New("personalstate/store: a rotation needs at least one wrapped key")
+)
+
 // A WrappedKey is one recipient's sealed copy of a space key, as the peer holds
 // it. Wrapped is opaque: it is encryption.Seal output (e_pub ‖ nonce ‖
 // ciphertext), and this package never looks inside it.
@@ -57,6 +85,10 @@ type WrappedKey struct {
 	SpaceID   string
 	Recipient string // "x25519:<hex>" — a device or the recovery encryption key
 	Wrapped   []byte
+	// Epoch is the key epoch this copy seals (ADR-0103): 0 for the space's
+	// original key, N after the Nth rotation. Only copies at the space's current
+	// epoch are ever held — a rotation drops the rest.
+	Epoch     int
 	CreatedAt time.Time
 }
 
@@ -198,10 +230,18 @@ func (s *Store) PutSpace(ctx context.Context, id string, kind spaces.Kind) (spac
 
 // PutWrappedKey stores (or replaces) the sealed copy of a space's key for one
 // recipient. The wrapped bytes are opaque — the peer holds them and cannot open
-// them. Replacing an existing copy for the same (space, recipient) is how a
-// re-wrap after revocation (§41, ADR-0022) lands: a recipient has exactly one
-// current wrapped copy. The space must exist.
-func (s *Store) PutWrappedKey(ctx context.Context, spaceID, recipient string, wrapped []byte) (WrappedKey, error) {
+// them. Replacing an existing copy for the same (space, recipient) is how adding
+// a recipient (or a re-wrap) lands: a recipient has exactly one current wrapped
+// copy. The space must exist.
+//
+// epoch is the key epoch the copy seals (ADR-0103), and it must be the space's
+// CURRENT epoch: an older one is ErrStaleKeyEpoch — the key was rotated since, so
+// the copy would hand a recipient a superseded key (or, arriving by replication,
+// resurrect a copy a rotation deliberately dropped); a newer one is
+// ErrFutureKeyEpoch — the history row that moves the space to that epoch has to
+// land first. Checked inside the write transaction, so a racing rotation cannot
+// slip between the check and the upsert.
+func (s *Store) PutWrappedKey(ctx context.Context, spaceID, recipient string, wrapped []byte, epoch int) (WrappedKey, error) {
 	if recipient == "" {
 		return WrappedKey{}, ErrEmptyRecipient
 	}
@@ -225,28 +265,51 @@ func (s *Store) PutWrappedKey(ctx context.Context, spaceID, recipient string, wr
 		return WrappedKey{}, fmt.Errorf("personalstate/store: checking space: %w", err)
 	}
 
-	id := uuid.Must(uuid.NewV7()).String()
-	// Upsert on (space_id, recipient): a re-wrap replaces the recipient's copy in
-	// place, keeping the row's identity stable is unimportant — the current bytes
-	// are — so the new id wins on conflict too.
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO wrapped_keys (id, space_id, recipient, wrapped, created_at)
-		 VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT (space_id, recipient)
-		 DO UPDATE SET id = excluded.id, wrapped = excluded.wrapped, created_at = excluded.created_at`,
-		id, spaceID, recipient, wrapped, now.Format(timeFormat)); err != nil {
-		return WrappedKey{}, fmt.Errorf("personalstate/store: storing wrapped key: %w", err)
-	}
-	ev, err := s.events.EmitTx(ctx, tx, events.TypeSpaceKeyWrapped, "encrypted_space", spaceID,
-		map[string]any{"recipient": recipient})
+	current, err := keyEpochTx(ctx, tx, spaceID)
 	if err != nil {
-		return WrappedKey{}, fmt.Errorf("personalstate/store: recording wrap: %w", err)
+		return WrappedKey{}, err
+	}
+	switch {
+	case epoch < current:
+		return WrappedKey{}, fmt.Errorf("%w: space %s is at epoch %d, the copy seals epoch %d",
+			ErrStaleKeyEpoch, spaceID, current, epoch)
+	case epoch > current:
+		return WrappedKey{}, fmt.Errorf("%w: space %s is at epoch %d, the copy seals epoch %d",
+			ErrFutureKeyEpoch, spaceID, current, epoch)
+	}
+
+	ev, w, err := s.upsertWrapTx(ctx, tx, spaceID, recipient, wrapped, epoch, now)
+	if err != nil {
+		return WrappedKey{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return WrappedKey{}, fmt.Errorf("personalstate/store: committing: %w", err)
 	}
 	s.events.Publish(ev)
-	return WrappedKey{ID: id, SpaceID: spaceID, Recipient: recipient, Wrapped: wrapped, CreatedAt: now}, nil
+	return w, nil
+}
+
+// upsertWrapTx writes one recipient's copy at an epoch inside tx and records it.
+// Upsert on (space_id, recipient): a re-wrap replaces the recipient's copy in
+// place; the row's identity is unimportant — the current bytes are — so the new
+// id wins on conflict too.
+func (s *Store) upsertWrapTx(ctx context.Context, tx *sql.Tx, spaceID, recipient string, wrapped []byte, epoch int, now time.Time) (events.Event, WrappedKey, error) {
+	id := uuid.Must(uuid.NewV7()).String()
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO wrapped_keys (id, space_id, recipient, wrapped, epoch, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (space_id, recipient)
+		 DO UPDATE SET id = excluded.id, wrapped = excluded.wrapped, epoch = excluded.epoch,
+		               created_at = excluded.created_at`,
+		id, spaceID, recipient, wrapped, epoch, now.Format(timeFormat)); err != nil {
+		return events.Event{}, WrappedKey{}, fmt.Errorf("personalstate/store: storing wrapped key: %w", err)
+	}
+	ev, err := s.events.EmitTx(ctx, tx, events.TypeSpaceKeyWrapped, "encrypted_space", spaceID,
+		map[string]any{"recipient": recipient, "epoch": epoch})
+	if err != nil {
+		return events.Event{}, WrappedKey{}, fmt.Errorf("personalstate/store: recording wrap: %w", err)
+	}
+	return ev, WrappedKey{ID: id, SpaceID: spaceID, Recipient: recipient, Wrapped: wrapped, Epoch: epoch, CreatedAt: now}, nil
 }
 
 // Space returns one encrypted space by id.
@@ -281,8 +344,18 @@ func (s *Store) WrappedKeysFor(ctx context.Context, spaceID string) ([]WrappedKe
 	if _, err := s.Space(ctx, spaceID); err != nil {
 		return nil, err
 	}
-	rows, err := s.reader.QueryContext(ctx,
-		`SELECT id, space_id, recipient, wrapped, created_at
+	return wrappedKeysTx(ctx, s.reader, spaceID)
+}
+
+// queryer is what both a pool and a transaction offer for reads.
+type queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// wrappedKeysTx lists a space's wrapped copies through q (a pool or a tx).
+func wrappedKeysTx(ctx context.Context, q queryer, spaceID string) ([]WrappedKey, error) {
+	rows, err := q.QueryContext(ctx,
+		`SELECT id, space_id, recipient, wrapped, epoch, created_at
 		 FROM wrapped_keys WHERE space_id = ? ORDER BY recipient`, spaceID)
 	if err != nil {
 		return nil, fmt.Errorf("personalstate/store: listing wrapped keys: %w", err)
@@ -292,7 +365,7 @@ func (s *Store) WrappedKeysFor(ctx context.Context, spaceID string) ([]WrappedKe
 	for rows.Next() {
 		var w WrappedKey
 		var created string
-		if err := rows.Scan(&w.ID, &w.SpaceID, &w.Recipient, &w.Wrapped, &created); err != nil {
+		if err := rows.Scan(&w.ID, &w.SpaceID, &w.Recipient, &w.Wrapped, &w.Epoch, &created); err != nil {
 			return nil, fmt.Errorf("personalstate/store: reading wrapped key: %w", err)
 		}
 		if w.CreatedAt, err = time.Parse(timeFormat, created); err != nil {

@@ -65,7 +65,7 @@ func TestRevocationIsForwardOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, w := range wrapped {
-		if _, err := peer.PutWrappedKey(ctx, sp.ID, w.Recipient, w.Wrapped); err != nil {
+		if _, err := peer.PutWrappedKey(ctx, sp.ID, w.Recipient, w.Wrapped, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -108,7 +108,7 @@ func TestRevocationIsForwardOnly(t *testing.T) {
 		t.Fatalf("Rotate: %v", err)
 	}
 	for _, w := range newWrapped {
-		if _, err := peer.PutWrappedKey(ctx, sp.ID, w.Recipient, w.Wrapped); err != nil {
+		if _, err := peer.PutWrappedKey(ctx, sp.ID, w.Recipient, w.Wrapped, 0); err != nil {
 			t.Fatal(err)
 		}
 	}

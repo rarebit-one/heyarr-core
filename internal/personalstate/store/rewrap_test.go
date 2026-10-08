@@ -16,10 +16,10 @@ func TestDeleteWrappedKeyRemovesOnlyThatRecipient(t *testing.T) {
 	sp, _ := s.CreateSpace(ctx, spaces.KindFamily)
 	_, aID := device(t)
 	_, bID := device(t)
-	if _, err := s.PutWrappedKey(ctx, sp.ID, aID, []byte("a")); err != nil {
+	if _, err := s.PutWrappedKey(ctx, sp.ID, aID, []byte("a"), 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.PutWrappedKey(ctx, sp.ID, bID, []byte("b")); err != nil {
+	if _, err := s.PutWrappedKey(ctx, sp.ID, bID, []byte("b"), 0); err != nil {
 		t.Fatal(err)
 	}
 

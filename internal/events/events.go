@@ -211,6 +211,18 @@ const (
 	// recipient — the storage side of device revocation (§41, ADR-0022). Opaque:
 	// it records that a recipient can no longer read the space, never a key.
 	TypeSpaceKeyRevoked = "personalstate.space.key_revoked"
+	// TypeSpaceKeyRotated is a space's key moving to a new epoch (ADR-0103): the
+	// opaque history row sealing the previous key under the new one landed, and
+	// every wrap below the new epoch was dropped. Emitted by the rotating peer
+	// (with how many recipients were re-wrapped) and by a peer that accepts the
+	// history row by replication. Opaque: an epoch and counts, never a key.
+	TypeSpaceKeyRotated = "personalstate.space.key_rotated"
+	// TypeSpaceKeyHistoryBackfilled is a peer accepting a history row OLDER than
+	// its current epoch by replication: a missing link of the chain filled in,
+	// with no change to the current epoch or its wraps (ADR-0103). Distinct from
+	// TypeSpaceKeyRotated so a consumer of rotations never sees a stale epoch.
+	// Opaque: an epoch, never a key.
+	TypeSpaceKeyHistoryBackfilled = "personalstate.space.key_history_backfilled"
 	// TypeChangeStored is a peer accepting an encrypted CRDT change into a space
 	// (§42, §44). Opaque like its siblings: it records that a change with this id
 	// landed, never the plaintext the peer cannot read.
