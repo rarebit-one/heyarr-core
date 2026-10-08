@@ -76,8 +76,11 @@ func TestKeyEpochIsDerivedFromHistory(t *testing.T) {
 	if h, err := s.KeyHistory(ctx, sp.ID); err != nil || len(h) != 0 {
 		t.Fatalf("fresh space history = %v, %v; want empty", h, err)
 	}
+	if _, err := s.PutWrappedKey(ctx, sp.ID, aID, []byte{0xa0, 0}, 0); err != nil {
+		t.Fatal(err)
+	}
 	for want := 1; want <= 3; want++ {
-		got, err := s.RotateKey(ctx, sp.ID, want-1, []byte{byte(want)}, []store.RecipientWrap{{Recipient: aID, Wrapped: []byte{0xa0, byte(want)}}}, nil)
+		got, err := s.RotateKey(ctx, sp.ID, want-1, []byte{byte(want)}, []store.RecipientWrap{{Recipient: aID, Wrapped: []byte{0xa0, byte(want)}}}, nil, nil)
 		if err != nil {
 			t.Fatalf("rotation %d: %v", want, err)
 		}
@@ -130,8 +133,13 @@ func TestPutWrappedKeyEpochGate(t *testing.T) {
 			s := newStore(t)
 			ctx := context.Background()
 			sp, _ := s.CreateSpace(ctx, spaces.KindFamily)
+			if tc.rotate > 0 {
+				if _, err := s.PutWrappedKey(ctx, sp.ID, aID, []byte("a"), 0); err != nil {
+					t.Fatal(err)
+				}
+			}
 			for i := 0; i < tc.rotate; i++ {
-				if _, err := s.RotateKey(ctx, sp.ID, i, []byte("prev"), []store.RecipientWrap{{Recipient: aID, Wrapped: []byte("a")}}, nil); err != nil {
+				if _, err := s.RotateKey(ctx, sp.ID, i, []byte("prev"), []store.RecipientWrap{{Recipient: aID, Wrapped: []byte("a")}}, nil, nil); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -177,7 +185,7 @@ func TestRotateKeyIsACompareAndSwapThatDropsStaleWraps(t *testing.T) {
 	next, err := s.RotateKey(ctx, sp.ID, 0, sealed, []store.RecipientWrap{
 		{Recipient: aID, Wrapped: []byte("k1-a")},
 		{Recipient: bID, Wrapped: []byte("k1-b")},
-	}, nil)
+	}, []string{revokedID}, nil)
 	if err != nil {
 		t.Fatalf("RotateKey: %v", err)
 	}
@@ -204,7 +212,7 @@ func TestRotateKeyIsACompareAndSwapThatDropsStaleWraps(t *testing.T) {
 
 	// The CAS: a second rotation from the stale expectation is refused, and
 	// nothing it carried lands.
-	if _, err := s.RotateKey(ctx, sp.ID, 0, []byte("fork"), []store.RecipientWrap{{Recipient: aID, Wrapped: []byte("fork-a")}}, nil); !errors.Is(err, store.ErrKeyEpochConflict) {
+	if _, err := s.RotateKey(ctx, sp.ID, 0, []byte("fork"), []store.RecipientWrap{{Recipient: aID, Wrapped: []byte("fork-a")}}, []string{bID}, nil); !errors.Is(err, store.ErrKeyEpochConflict) {
 		t.Fatalf("racing rotation = %v, want ErrKeyEpochConflict", err)
 	}
 	if got := wrapsByRecipient(t, s, sp.ID)[aID]; string(got.Wrapped) != "k1-a" {
@@ -265,7 +273,7 @@ func TestRotateKeyRefusesMalformedInput(t *testing.T) {
 			if tc.space != "" {
 				id = mustUUIDStr(t)
 			}
-			if _, err := s.RotateKey(ctx, id, tc.expected, tc.sealed, tc.wraps, nil); !errors.Is(err, tc.wantErr) {
+			if _, err := s.RotateKey(ctx, id, tc.expected, tc.sealed, tc.wraps, nil, nil); !errors.Is(err, tc.wantErr) {
 				t.Fatalf("RotateKey = %v, want %v", err, tc.wantErr)
 			}
 			if mustEpoch(t, s, sp.ID) != 0 {
@@ -392,13 +400,14 @@ func TestRotateKeyMustKeepPreservedRecipients(t *testing.T) {
 	cases := []struct {
 		name     string
 		wraps    []string
+		revoke   []string
 		preserve map[string]bool
 		wantErr  error
 	}{
 		{name: "the recovery key re-wrapped", wraps: []string{deviceID, recoveryID}, preserve: map[string]bool{recoveryID: true}},
-		{name: "the recovery key left out", wraps: []string{deviceID}, preserve: map[string]bool{recoveryID: true}, wantErr: store.ErrRotationDropsPreserved},
+		{name: "the recovery key revoked", wraps: []string{deviceID}, revoke: []string{recoveryID}, preserve: map[string]bool{recoveryID: true}, wantErr: store.ErrRotationDropsPreserved},
 		{name: "a recovery key holding no copy is not required", wraps: []string{deviceID, recoveryID}, preserve: map[string]bool{recoveryID: true, otherRecovery: true}},
-		{name: "no preserve set leaves the check off", wraps: []string{deviceID}, preserve: nil},
+		{name: "no preserve set leaves the check off", wraps: []string{deviceID}, revoke: []string{recoveryID}, preserve: nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -415,7 +424,7 @@ func TestRotateKeyMustKeepPreservedRecipients(t *testing.T) {
 			for _, r := range tc.wraps {
 				wraps = append(wraps, store.RecipientWrap{Recipient: r, Wrapped: []byte("k1")})
 			}
-			_, err := s.RotateKey(ctx, sp.ID, 0, []byte("prev"), wraps, tc.preserve)
+			_, err := s.RotateKey(ctx, sp.ID, 0, []byte("prev"), wraps, tc.revoke, tc.preserve)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("RotateKey = %v, want %v", err, tc.wantErr)
 			}
@@ -443,7 +452,7 @@ func TestKeyStateIsOneConsistentRead(t *testing.T) {
 	if err != nil || epoch != 0 || len(keys) != 1 || keys[0].Epoch != 0 {
 		t.Fatalf("KeyState before = %d %+v %v", epoch, keys, err)
 	}
-	if _, err := s.RotateKey(ctx, sp.ID, 0, []byte("p"), []store.RecipientWrap{{Recipient: aID, Wrapped: []byte("k1")}}, nil); err != nil {
+	if _, err := s.RotateKey(ctx, sp.ID, 0, []byte("p"), []store.RecipientWrap{{Recipient: aID, Wrapped: []byte("k1")}}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	epoch, keys, err = s.KeyState(ctx, sp.ID)
@@ -452,5 +461,123 @@ func TestKeyStateIsOneConsistentRead(t *testing.T) {
 	}
 	if _, _, err := s.KeyState(ctx, mustUUIDStr(t)); !errors.Is(err, store.ErrUnknownSpace) {
 		t.Fatalf("KeyState(unknown) = %v, want ErrUnknownSpace", err)
+	}
+}
+
+// TestRotateKeyComparesTheRecipientSet (#703): a rotation's wraps plus its
+// revoke set must name exactly the recipients holding a copy of the current key.
+// The device read that set before rotating; a recipient added since (through
+// the re-wrap path, which does not move the epoch) or removed since makes the
+// rotation stale, and it is refused with nothing written — so the newcomer's
+// wrap is not silently dropped and the removed recipient is not handed the new
+// key. A recipient both re-wrapped and revoked is malformed.
+func TestRotateKeyComparesTheRecipientSet(t *testing.T) {
+	t.Parallel()
+	_, keepID := device(t)
+	_, revokeID := device(t)
+	_, addedID := device(t)
+	_, strangerID := device(t)
+	cases := []struct {
+		name    string
+		between func(t *testing.T, s *store.Store, spaceID string) // after the device read {keep, revoke}
+		wraps   []string
+		revoke  []string
+		wantErr error
+	}{
+		{name: "the set unchanged", wraps: []string{keepID}, revoke: []string{revokeID}},
+		{name: "a pure re-key keeping everyone", wraps: []string{keepID, revokeID}, revoke: []string{}},
+		{
+			name: "a recipient added in between",
+			between: func(t *testing.T, s *store.Store, spaceID string) {
+				if _, err := s.PutWrappedKey(context.Background(), spaceID, addedID, []byte("k0-added"), 0); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wraps: []string{keepID}, revoke: []string{revokeID}, wantErr: store.ErrRotationRecipientsChanged,
+		},
+		{
+			name: "a kept recipient removed in between",
+			between: func(t *testing.T, s *store.Store, spaceID string) {
+				if err := s.DeleteWrappedKey(context.Background(), spaceID, keepID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wraps: []string{keepID, revokeID}, revoke: []string{}, wantErr: store.ErrRotationRecipientsChanged,
+		},
+		{
+			name: "a revoked recipient already removed",
+			between: func(t *testing.T, s *store.Store, spaceID string) {
+				if err := s.DeleteWrappedKey(context.Background(), spaceID, revokeID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wraps: []string{keepID}, revoke: []string{revokeID}, wantErr: store.ErrRotationRecipientsChanged,
+		},
+		{name: "a recipient left out without being revoked", wraps: []string{keepID}, revoke: []string{}, wantErr: store.ErrRotationRecipientsChanged},
+		{name: "a wrap for a recipient holding no copy", wraps: []string{keepID, revokeID, strangerID}, revoke: []string{}, wantErr: store.ErrRotationRecipientsChanged},
+		{name: "revoking a recipient holding no copy", wraps: []string{keepID}, revoke: []string{revokeID, strangerID}, wantErr: store.ErrRotationRecipientsChanged},
+		{name: "a recipient both re-wrapped and revoked", wraps: []string{keepID, revokeID}, revoke: []string{revokeID}, wantErr: store.ErrRotationRevokesRewrapped},
+		{name: "an empty revoked recipient", wraps: []string{keepID}, revoke: []string{revokeID, ""}, wantErr: store.ErrEmptyRecipient},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s, log := newStoreWithLog(t)
+			ctx := context.Background()
+			sp, _ := s.CreateSpace(ctx, spaces.KindShared)
+			for _, r := range []string{keepID, revokeID} {
+				if _, err := s.PutWrappedKey(ctx, sp.ID, r, []byte("k0-"+r), 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.between != nil {
+				tc.between(t, s, sp.ID)
+			}
+			before := wrapsByRecipient(t, s, sp.ID)
+			countEvents := func() int {
+				return len(eventsOfType(t, log, events.TypeSpaceKeyRotated)) + len(eventsOfType(t, log, events.TypeSpaceKeyRevoked))
+			}
+			eventsBefore := countEvents()
+			var wraps []store.RecipientWrap
+			for _, r := range tc.wraps {
+				wraps = append(wraps, store.RecipientWrap{Recipient: r, Wrapped: []byte("k1-" + r)})
+			}
+			_, err := s.RotateKey(ctx, sp.ID, 0, []byte("prev"), wraps, tc.revoke, nil)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("RotateKey = %v, want %v", err, tc.wantErr)
+			}
+			if tc.wantErr == nil {
+				held := wrapsByRecipient(t, s, sp.ID)
+				if mustEpoch(t, s, sp.ID) != 1 || len(held) != len(tc.wraps) {
+					t.Fatalf("after rotation: epoch %d, wraps %v", mustEpoch(t, s, sp.ID), held)
+				}
+				for _, r := range tc.wraps {
+					if held[r].Epoch != 1 {
+						t.Fatalf("%s not re-wrapped at epoch 1: %+v", r, held[r])
+					}
+				}
+				return
+			}
+			// Nothing written: the epoch, the history, every wrap (the newcomer's
+			// included) and the event log are as they were.
+			if mustEpoch(t, s, sp.ID) != 0 {
+				t.Fatal("a refused rotation moved the epoch")
+			}
+			if h, err := s.KeyHistory(ctx, sp.ID); err != nil || len(h) != 0 {
+				t.Fatalf("a refused rotation stored history: %v %v", h, err)
+			}
+			after := wrapsByRecipient(t, s, sp.ID)
+			if len(after) != len(before) {
+				t.Fatalf("a refused rotation changed the wraps: %v -> %v", before, after)
+			}
+			for r, w := range before {
+				if got := after[r]; got.Epoch != w.Epoch || !bytes.Equal(got.Wrapped, w.Wrapped) {
+					t.Fatalf("a refused rotation changed %s's wrap: %+v -> %+v", r, w, got)
+				}
+			}
+			if n := countEvents() - eventsBefore; n != 0 {
+				t.Fatalf("a refused rotation emitted %d events", n)
+			}
+		})
 	}
 }

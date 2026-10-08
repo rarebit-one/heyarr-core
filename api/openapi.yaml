@@ -883,11 +883,17 @@ paths:
       description: |
         A pure re-key (ADR-0103): the device mints a new key, seals the current
         key under it (`sealed_prev`) and wraps the new key for every recipient
-        that keeps access. The peer stores the history row, upserts the wraps at
-        the new epoch and deletes every older wrap — a recipient left out loses
-        its copy, which is how revocation lands. It is a compare-and-swap on
-        `expected_epoch`: a rotation that lost a race is a `409` with code
-        `key_epoch_conflict`. Wraps carry no `epoch`; the rotation assigns it.
+        that keeps access, naming the ones it drops in `revoke`. The peer stores
+        the history row, upserts the wraps at the new epoch and deletes every
+        older wrap — a revoked recipient loses its copy, which is how revocation
+        lands. It is a compare-and-swap on `expected_epoch`: a rotation that lost
+        a race is a `409` with code `key_epoch_conflict`. It is also a
+        compare-and-swap on the recipient set (#703): `wrapped_keys` plus
+        `revoke` must name exactly the recipients holding a copy of the current
+        key, or it is a `409` with code `rotation_recipients_changed` — a
+        recipient was added or removed since the device read the set, and the
+        device re-reads and rotates again. A recipient both wrapped and revoked
+        is a `400`. Wraps carry no `epoch`; the rotation assigns it.
         Every recipient must be enrolled (enrol-before-wrap, ADR-0049), and
         every recovery key holding a copy of the current key must be among the
         wraps — the history seals backwards only, so a recovery key left out
@@ -900,7 +906,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [expected_epoch, sealed_prev, wrapped_keys]
+              required: [expected_epoch, sealed_prev, wrapped_keys, revoke]
               additionalProperties: false
               properties:
                 expected_epoch:
@@ -915,6 +921,14 @@ paths:
                   type: array
                   minItems: 1
                   items: { $ref: "#/components/schemas/WrappedKeyInput" }
+                revoke:
+                  type: array
+                  description: >-
+                    The current recipients ("x25519:<hex>") the rotation drops.
+                    Required — an empty list revokes nobody — so a recipient is
+                    never dropped by omission. Each must hold a copy of the
+                    current key and must not also be in wrapped_keys.
+                  items: { type: string }
       responses:
         "200":
           description: The space's new key epoch.

@@ -43,6 +43,15 @@ func apiAt(t *testing.T, authorizer RecipientAuthorizer) *API {
 
 func idParam() map[string]string { return map[string]string{"id": goldenSpace} }
 
+// revoking is a rotation's revoke set; the field is required, so even an empty
+// one is a non-nil pointer.
+func revoking(recipients ...string) *[]string {
+	if recipients == nil {
+		recipients = []string{}
+	}
+	return &recipients
+}
+
 // indent re-renders a JSON body indented, for a readable golden diff.
 func indent(t *testing.T, body []byte) []byte {
 	t.Helper()
@@ -72,6 +81,7 @@ func TestKeyEpochWireShapes(t *testing.T) {
 		ExpectedEpoch: 0,
 		SealedPrev:    []byte("k0-sealed-under-k1"),
 		WrappedKeys:   []wrappedKeyInput{{Recipient: enrolledKey, Wrapped: []byte("k1-for-enrolled")}},
+		Revoke:        revoking(strangerKey),
 	}, idParam())
 	if rot.Code != http.StatusOK {
 		t.Fatalf("rotate: %d %s", rot.Code, rot.Body)
@@ -123,7 +133,7 @@ func TestKeyEpochRefusals(t *testing.T) {
 	}{
 		{
 			"a rotation for an unenrolled recipient", api.rotateKey,
-			rotateRequest{SealedPrev: []byte("p"), WrappedKeys: []wrappedKeyInput{{Recipient: strangerKey, Wrapped: []byte("k1")}}},
+			rotateRequest{SealedPrev: []byte("p"), WrappedKeys: []wrappedKeyInput{{Recipient: strangerKey, Wrapped: []byte("k1")}}, Revoke: revoking()},
 			http.StatusForbidden, "",
 		},
 		{
@@ -133,12 +143,12 @@ func TestKeyEpochRefusals(t *testing.T) {
 		},
 		{
 			"the rotation", api.rotateKey,
-			rotateRequest{SealedPrev: []byte("p"), WrappedKeys: enrolled},
+			rotateRequest{SealedPrev: []byte("p"), WrappedKeys: enrolled, Revoke: revoking()},
 			http.StatusOK, "",
 		},
 		{
 			"a racing rotation", api.rotateKey,
-			rotateRequest{SealedPrev: []byte("q"), WrappedKeys: enrolled},
+			rotateRequest{SealedPrev: []byte("q"), WrappedKeys: enrolled, Revoke: revoking()},
 			http.StatusConflict, CodeKeyEpochConflict,
 		},
 		{
@@ -152,18 +162,38 @@ func TestKeyEpochRefusals(t *testing.T) {
 			http.StatusOK, "",
 		},
 		{
+			"a rotation revoking a recipient that holds no copy", api.rotateKey,
+			rotateRequest{ExpectedEpoch: 1, SealedPrev: []byte("p"), WrappedKeys: enrolled, Revoke: revoking(strangerKey)},
+			http.StatusConflict, CodeRotationRecipientsChanged,
+		},
+		{
+			"a rotation both re-wrapping and revoking a recipient", api.rotateKey,
+			rotateRequest{ExpectedEpoch: 1, SealedPrev: []byte("p"), WrappedKeys: enrolled, Revoke: revoking(enrolledKey)},
+			http.StatusBadRequest, "",
+		},
+		{
+			"a rotation that omits revoke", api.rotateKey,
+			map[string]any{"expected_epoch": 1, "sealed_prev": []byte("p"), "wrapped_keys": enrolled},
+			http.StatusBadRequest, "",
+		},
+		{
+			"a rotation that names no revoke set", api.rotateKey,
+			rotateRequest{ExpectedEpoch: 1, SealedPrev: []byte("p"), WrappedKeys: enrolled},
+			http.StatusBadRequest, "",
+		},
+		{
 			"a rotation with no sealed key", api.rotateKey,
-			rotateRequest{ExpectedEpoch: 1, WrappedKeys: enrolled},
+			rotateRequest{ExpectedEpoch: 1, WrappedKeys: enrolled, Revoke: revoking()},
 			http.StatusBadRequest, "",
 		},
 		{
 			"a rotation with no wraps", api.rotateKey,
-			rotateRequest{ExpectedEpoch: 1, SealedPrev: []byte("p")},
+			rotateRequest{ExpectedEpoch: 1, SealedPrev: []byte("p"), Revoke: revoking()},
 			http.StatusBadRequest, "",
 		},
 		{
 			"a negative expected epoch", api.rotateKey,
-			rotateRequest{ExpectedEpoch: -1, SealedPrev: []byte("p"), WrappedKeys: enrolled},
+			rotateRequest{ExpectedEpoch: -1, SealedPrev: []byte("p"), WrappedKeys: enrolled, Revoke: revoking()},
 			http.StatusBadRequest, "",
 		},
 	}
@@ -214,14 +244,23 @@ func TestRotationMustRewrapTheRecoveryKey(t *testing.T) {
 	cases := []struct {
 		name     string
 		wraps    []wrappedKeyInput
+		revoke   *[]string
 		want     int
 		wantCode string
 	}{
 		{
-			name:     "the recovery key left out",
+			name:     "the recovery key revoked",
 			wraps:    []wrappedKeyInput{{Recipient: enrolledKey, Wrapped: []byte("k1")}},
+			revoke:   revoking(recoveryKey),
 			want:     http.StatusConflict,
 			wantCode: CodeRotationDropsRecovery,
+		},
+		{
+			name:     "the recovery key neither re-wrapped nor revoked",
+			wraps:    []wrappedKeyInput{{Recipient: enrolledKey, Wrapped: []byte("k1")}},
+			revoke:   revoking(),
+			want:     http.StatusConflict,
+			wantCode: CodeRotationRecipientsChanged,
 		},
 		{
 			name: "the recovery key re-wrapped",
@@ -229,7 +268,8 @@ func TestRotationMustRewrapTheRecoveryKey(t *testing.T) {
 				{Recipient: enrolledKey, Wrapped: []byte("k1")},
 				{Recipient: recoveryKey, Wrapped: []byte("k1-recovery")},
 			},
-			want: http.StatusOK,
+			revoke: revoking(),
+			want:   http.StatusOK,
 		},
 	}
 	for _, tc := range cases {
@@ -247,7 +287,7 @@ func TestRotationMustRewrapTheRecoveryKey(t *testing.T) {
 				t.Fatalf("create: %d %s", rec.Code, rec.Body)
 			}
 			rec := call(t, api.rotateKey, http.MethodPost, "/spaces/"+goldenSpace+"/rotate",
-				rotateRequest{SealedPrev: []byte("p"), WrappedKeys: tc.wraps}, idParam())
+				rotateRequest{SealedPrev: []byte("p"), WrappedKeys: tc.wraps, Revoke: tc.revoke}, idParam())
 			if rec.Code != tc.want {
 				t.Fatalf("rotate: %d %s, want %d", rec.Code, rec.Body, tc.want)
 			}

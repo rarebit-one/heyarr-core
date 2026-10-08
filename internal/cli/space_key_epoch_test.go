@@ -76,7 +76,7 @@ func TestSpaceKeyEpochOverTheAPI(t *testing.T) {
 		spaceID := h.createSpace()
 		recip := h.deviceRecipientID()
 		_, err := h.client.RotateKey(h.ctx, spaceID, 0, []byte("prev"),
-			[]apiclient.WrappedKeyInput{{Recipient: recip, Wrapped: h.wrapFresh()}})
+			[]apiclient.WrappedKeyInput{{Recipient: recip, Wrapped: h.wrapFresh()}}, nil)
 		problemOf(t, err, http.StatusForbidden, "")
 		keys, err := h.client.SpaceKeys(h.ctx, spaceID)
 		if err != nil {
@@ -105,7 +105,7 @@ func TestSpaceKeyEpochOverTheAPI(t *testing.T) {
 
 		newWrap := h.wrapFresh()
 		epoch, err := h.client.RotateKey(h.ctx, spaceID, 0, []byte("k0-sealed-under-k1"),
-			[]apiclient.WrappedKeyInput{{Recipient: recip, Wrapped: newWrap}})
+			[]apiclient.WrappedKeyInput{{Recipient: recip, Wrapped: newWrap}}, nil)
 		if err != nil {
 			t.Fatalf("RotateKey: %v", err)
 		}
@@ -130,7 +130,7 @@ func TestSpaceKeyEpochOverTheAPI(t *testing.T) {
 
 		// A rotation racing from the old epoch loses.
 		_, err = h.client.RotateKey(h.ctx, spaceID, 0, []byte("fork"),
-			[]apiclient.WrappedKeyInput{{Recipient: recip, Wrapped: h.wrapFresh()}})
+			[]apiclient.WrappedKeyInput{{Recipient: recip, Wrapped: h.wrapFresh()}}, nil)
 		problemOf(t, err, http.StatusConflict, psapi.CodeKeyEpochConflict)
 
 		// Adding a recipient with a copy of the superseded key is refused...
@@ -159,14 +159,14 @@ func TestSpaceKeyEpochOverTheAPI(t *testing.T) {
 			{"a wrap that names an epoch", []byte("p"), []apiclient.WrappedKeyInput{{Recipient: recip, Wrapped: h.wrapFresh(), Epoch: 1}}},
 		}
 		for _, tc := range cases {
-			_, err := h.client.RotateKey(h.ctx, spaceID, 0, tc.sealed, tc.wraps)
+			_, err := h.client.RotateKey(h.ctx, spaceID, 0, tc.sealed, tc.wraps, nil)
 			if err == nil {
 				t.Fatalf("%s: accepted", tc.name)
 			}
 			problemOf(t, err, http.StatusBadRequest, "")
 		}
 		_, err := h.client.RotateKey(h.ctx, "0199ffff-0000-7000-8000-000000000000", 0, []byte("p"),
-			[]apiclient.WrappedKeyInput{{Recipient: recip, Wrapped: h.wrapFresh()}})
+			[]apiclient.WrappedKeyInput{{Recipient: recip, Wrapped: h.wrapFresh()}}, nil)
 		problemOf(t, err, http.StatusNotFound, "")
 		if _, err := h.client.KeyHistory(h.ctx, "0199ffff-0000-7000-8000-000000000000"); err == nil {
 			t.Fatal("the history of an unknown space was served")

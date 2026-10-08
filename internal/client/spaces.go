@@ -87,6 +87,7 @@ type rotateRequest struct {
 	ExpectedEpoch int               `json:"expected_epoch"`
 	SealedPrev    []byte            `json:"sealed_prev"`
 	WrappedKeys   []WrappedKeyInput `json:"wrapped_keys"`
+	Revoke        []string          `json:"revoke"`
 }
 
 type rotateResult struct {
@@ -153,12 +154,17 @@ func (c *Client) KeyHistory(ctx context.Context, spaceID string) ([]KeyHistoryEn
 
 // RotateKey moves a space to its next key epoch (ADR-0103): sealedPrev is the
 // current key sealed under the new one, wraps the new key's copies (their Epoch
-// is left zero — the rotation assigns it). A recipient left out loses its copy.
-// It is a compare-and-swap on expectedEpoch: losing a race is a 409. Needs
-// `admin`. Returns the new epoch.
-func (c *Client) RotateKey(ctx context.Context, spaceID string, expectedEpoch int, sealedPrev []byte, wraps []WrappedKeyInput) (int, error) {
+// is left zero — the rotation assigns it), and revoke the current recipients
+// left out, who lose their copy. It is a compare-and-swap on expectedEpoch AND
+// on the recipient set (#703): wraps plus revoke must name exactly the
+// recipients holding a current copy, or it is a 409 — as is losing a race to
+// another rotation. Needs `admin`. Returns the new epoch.
+func (c *Client) RotateKey(ctx context.Context, spaceID string, expectedEpoch int, sealedPrev []byte, wraps []WrappedKeyInput, revoke []string) (int, error) {
 	var out rotateResult
-	req := rotateRequest{ExpectedEpoch: expectedEpoch, SealedPrev: sealedPrev, WrappedKeys: wraps}
+	if revoke == nil {
+		revoke = []string{} // the field is required; null is not an empty set
+	}
+	req := rotateRequest{ExpectedEpoch: expectedEpoch, SealedPrev: sealedPrev, WrappedKeys: wraps, Revoke: revoke}
 	if err := c.Post(ctx, "/spaces/"+url.PathEscape(spaceID)+"/rotate", req, &out); err != nil {
 		return 0, err
 	}

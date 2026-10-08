@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/rarebit-one/void-which-binds-go/hashing"
@@ -221,6 +223,101 @@ func TestRekeyRacingRotationsConflict(t *testing.T) {
 	// Re-opening and rotating again is the documented retry, and it lands.
 	if _, err := h.rekey(spaceID, other); err != nil {
 		t.Fatalf("the retry: %v", err)
+	}
+}
+
+// TestRekeyRefusesARecipientAddedMidRotation (#703): a device reads the
+// recipients and builds its rotation; before it lands, another client adds a
+// recipient through the re-wrap path, which does not move the epoch. The epoch
+// compare-and-swap alone would let the rotation land and drop the newcomer's
+// wrap as stale, locking the new device out without a word. The controller
+// compares the recipient set too: the rotation is refused, the newcomer keeps
+// its copy, and running the rotation again re-wraps it.
+func TestRekeyRefusesARecipientAddedMidRotation(t *testing.T) {
+	h := newPSHarness(t, auth.ScopeAdmin)
+	spaceID := h.createSpace()
+	revoked := h.addSecondRecipient(spaceID)
+
+	mgr, err := openSpace(h.ctx, h.client, h.custody(), spaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := prepareRekey(h.ctx, h.client, mgr, spaceID, []string{revoked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	added := h.addSecondRecipient(spaceID) // another client, between the read and the rotation
+
+	_, err = pending.commit(h.ctx, h.client)
+	if !errors.Is(err, errRecipientsChanged) || !strings.Contains(err.Error(), "run the rotation again") {
+		t.Fatalf("rotation after a concurrent add = %v, want errRecipientsChanged", err)
+	}
+	keys, err := h.client.SpaceKeys(h.ctx, spaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys.KeyEpoch != 0 || !wrappedFor(keys.WrappedKeys, added) || !wrappedFor(keys.WrappedKeys, revoked) {
+		t.Fatalf("after the refusal = epoch %d, wraps %+v; want epoch 0 with the added and the revoked copies intact", keys.KeyEpoch, keys.WrappedKeys)
+	}
+
+	view, err := h.rekey(spaceID, revoked)
+	if err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if view.KeyEpoch != 1 || !slices.Contains(view.Remaining, added) {
+		t.Fatalf("retry view = %+v, want epoch 1 keeping the added recipient", view)
+	}
+	keys, err = h.client.SpaceKeys(h.ctx, spaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !wrappedFor(keys.WrappedKeys, added) || wrappedFor(keys.WrappedKeys, revoked) {
+		t.Fatalf("after the retry = %+v, want the added recipient re-wrapped and the revoked gone", keys.WrappedKeys)
+	}
+}
+
+// TestRekeyRefusesARecipientRemovedMidRotation (#703): the mirror case. A
+// device builds a rotation that keeps a recipient; before it lands, another
+// client removes that recipient. Landing it would hand the removed recipient
+// the new key and reverse the revocation, so it is refused and the removed
+// recipient gets nothing.
+func TestRekeyRefusesARecipientRemovedMidRotation(t *testing.T) {
+	h := newPSHarness(t, auth.ScopeAdmin)
+	spaceID := h.createSpace()
+	removed := h.addSecondRecipient(spaceID)
+
+	mgr, err := openSpace(h.ctx, h.client, h.custody(), spaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := prepareRekey(h.ctx, h.client, mgr, spaceID, nil) // keeps everyone
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.client.RevokeKey(h.ctx, spaceID, removed); err != nil { // another client
+		t.Fatal(err)
+	}
+
+	if _, err := pending.commit(h.ctx, h.client); !errors.Is(err, errRecipientsChanged) {
+		t.Fatalf("rotation after a concurrent removal = %v, want errRecipientsChanged", err)
+	}
+	keys, err := h.client.SpaceKeys(h.ctx, spaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys.KeyEpoch != 0 || wrappedFor(keys.WrappedKeys, removed) {
+		t.Fatalf("after the refusal = epoch %d, wraps %+v; want epoch 0 and the removed recipient still without a copy", keys.KeyEpoch, keys.WrappedKeys)
+	}
+
+	if _, err := h.rekey(spaceID); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	keys, err = h.client.SpaceKeys(h.ctx, spaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys.KeyEpoch != 1 || wrappedFor(keys.WrappedKeys, removed) || len(keys.WrappedKeys) != 1 {
+		t.Fatalf("after the retry = epoch %d, wraps %+v; want epoch 1 with only this device", keys.KeyEpoch, keys.WrappedKeys)
 	}
 }
 

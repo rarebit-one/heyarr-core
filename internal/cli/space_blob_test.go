@@ -253,7 +253,7 @@ func (f *blobFixture) rotate(t *testing.T, id string) encryption.SpaceKey {
 		t.Fatal(err)
 	}
 	if _, err := f.source.store.RotateKey(ctx, id, epoch, sealed,
-		[]psstore.RecipientWrap{{Recipient: f.recipient, Wrapped: w}}, nil); err != nil {
+		[]psstore.RecipientWrap{{Recipient: f.recipient, Wrapped: w}}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.target.store.PutKeyHistory(ctx, id, epoch+1, sealed); err != nil {
@@ -612,7 +612,7 @@ func (f *blobFixture) rotateReal(t *testing.T, id string) encryption.SpaceKey {
 		t.Fatal(err)
 	}
 	if _, err := f.source.store.RotateKey(ctx, id, epoch, sealed,
-		[]psstore.RecipientWrap{{Recipient: f.recipient, Wrapped: w}}, nil); err != nil {
+		[]psstore.RecipientWrap{{Recipient: f.recipient, Wrapped: w}}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.target.store.PutKeyHistory(ctx, id, epoch+1, sealed); err != nil {

@@ -18,7 +18,9 @@ revocation is forward-looking, not retroactive.
 This device must itself be a current recipient (only a device that can read a
 space may re-key it), and at least one recipient must remain. Two rotations
 racing from the same epoch cannot both land: the second is refused, and is
-simply run again.
+simply run again. The same goes for a recipient added to or removed from the
+space while the rotation runs: the rotation is refused rather than dropping the
+new recipient or re-admitting the removed one, and is simply run again.
 
 Only playlist spaces can be rotated for now. A vault drive, starred,
 play-history or reading-position space is refused (#698): older clients do not

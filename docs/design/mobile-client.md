@@ -260,7 +260,7 @@ mounted under `/api/v1`, ADR-0049):
 | `GET /api/v1/spaces/{id}/snapshot` | read | a snapshot for a fresh/long-offline device (constraint 3, #325) |
 | `POST /api/v1/spaces` · `POST /spaces/{id}/changes` · `POST /spaces/{id}/snapshots` | write | store ciphertext the client encrypted on-device |
 | `POST /api/v1/spaces/{id}/keys` (add a recipient at the current epoch) · `DELETE /spaces/{id}/keys/{recipient}` (revoke) | write / admin | device add/remove (#361) |
-| `POST /api/v1/spaces/{id}/rotate` | admin | re-key a space to its next epoch; recipients left out lose access (ADR-0103) |
+| `POST /api/v1/spaces/{id}/rotate` | admin | re-key a space to its next epoch; the wraps plus the required `revoke` list must name exactly the current recipients, and the revoked lose access (ADR-0103, #703) |
 
 **The controller never sees plaintext.** Decryption and CRDT merge happen only in
 the client, under a key it unwrapped in its secure element. On the device this is

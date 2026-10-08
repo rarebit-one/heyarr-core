@@ -476,12 +476,17 @@ func (a *API) failStore(w http.ResponseWriter, r *http.Request, doing string, er
 			"a rotation must re-wrap the recovery key: it holds a copy of the current key, and leaving it out "+
 				"would end offline recovery for this space ("+err.Error()+")").
 			WithCode(CodeRotationDropsRecovery))
+	case errors.Is(err, store.ErrRotationRecipientsChanged):
+		httpapi.Fail(w, r, problem.Conflict(
+			"the space's recipients changed since the rotation read them; re-open the space and rotate again ("+err.Error()+")").
+			WithCode(CodeRotationRecipientsChanged))
 	case errors.Is(err, spaces.ErrUnknownKind),
 		errors.Is(err, store.ErrEmptyRecipient),
 		errors.Is(err, store.ErrEmptyWrapped),
 		errors.Is(err, store.ErrInvalidKeyEpoch),
 		errors.Is(err, store.ErrEmptySealedPrev),
 		errors.Is(err, store.ErrNoRotationWraps),
+		errors.Is(err, store.ErrRotationRevokesRewrapped),
 		errors.Is(err, protocol.ErrIncomplete),
 		errors.Is(err, protocol.ErrIDMismatch),
 		errors.Is(err, protocol.ErrSnapshotIncomplete),
