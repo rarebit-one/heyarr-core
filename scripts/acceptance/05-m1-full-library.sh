@@ -1243,7 +1243,7 @@ YAML
   # already had to pass.
   local media_tools ffprobe_reported ffprobe_real
   media_tools=$(api /api/v1/system | jq -r '.media | length')
-  assert_eq "$media_tools" "2" "/api/v1/system reports both media tools"
+  assert_eq "$media_tools" "3" "/api/v1/system reports every media tool (ffprobe, ffmpeg, pdftoppm)"
 
   ffprobe_reported=$(api /api/v1/system | jq -r '.media[] | select(.name == "ffprobe") | .available')
   if command -v ffprobe >/dev/null 2>&1; then ffprobe_real=true; else ffprobe_real=false; fi
@@ -3109,8 +3109,8 @@ YAML
   bare_system=$(curl -sS --unix-socket "$bare_sock" http://heyarr/api/v1/system)
   assert_eq "$(jq -r '[.media[] | select(.available)] | length' <<<"$bare_system")" "0" \
     "and reports that it resolved no media toolchain"
-  assert_eq "$(jq -r '.media | length' <<<"$bare_system")" "2" \
-    "naming both tools rather than omitting them, so the degradation is legible"
+  assert_eq "$(jq -r '.media | length' <<<"$bare_system")" "3" \
+    "naming every tool rather than omitting them, so the degradation is legible"
   # `.providers`, not `.items`. This response has no `items` field, so
   # `null | length` was 0 and the assertion passed for ANY number of configured
   # providers — the same class of vacuity #164 is about, found next door to it.

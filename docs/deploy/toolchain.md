@@ -49,6 +49,20 @@ media:
 Without ffmpeg the plan still answers — `direct`, with the reason and a note
 that this node cannot repackage.
 
+## Book covers from PDFs: pdftoppm
+
+Poppler's `pdftoppm` is a third optional binary
+([ADR-0105](../adr/0105-a-books-own-file-is-its-first-cover-source.md)). With
+it, a PDF book with no cover gets its first page rendered as one; without it,
+EPUB covers are still extracted and the PDF cover jobs wait. It is not in
+`scripts/toolchain.sh` — install it from the distribution
+(`apt install poppler-utils`, Nix `poppler-utils`) and restart Heyarr, or name it:
+
+```yaml
+media:
+  pdftoppm_path: /usr/bin/pdftoppm
+```
+
 ## Not installing it at all
 
 Also supported, and tested on every build. Leave both paths empty and put

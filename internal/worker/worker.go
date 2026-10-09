@@ -101,9 +101,10 @@ func (w *Worker) Run(ctx context.Context) error {
 	// ABSENT toolchain is not a failure: this worker simply advertises fewer
 	// capabilities and never claims the jobs that need them.
 	toolchain, err := media.Resolve(startupCtx, media.Options{
-		FFprobePath: w.cfg.Media.FFprobePath,
-		FFmpegPath:  w.cfg.Media.FFmpegPath,
-		Logger:      w.log,
+		FFprobePath:  w.cfg.Media.FFprobePath,
+		FFmpegPath:   w.cfg.Media.FFmpegPath,
+		PdftoppmPath: w.cfg.Media.PdftoppmPath,
+		Logger:       w.log,
 	})
 	if err != nil {
 		return fmt.Errorf("worker: %w", err)

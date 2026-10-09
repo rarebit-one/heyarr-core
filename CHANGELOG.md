@@ -62,6 +62,14 @@ stable.
   `system.retention.cycled` with counts. A stream client whose `after` cursor
   predates the retained log gets `heyarr.stream.gap` and then the retained
   events.
+- **Books get their cover from their own file.** A cover beat looks inside
+  each held EPUB and PDF book once: an EPUB's declared cover image is copied
+  out, and a PDF's first page is rendered by poppler's `pdftoppm` when the node
+  has it (`media.pdftoppm_path`, or on `PATH`). The result is an ordinary
+  artwork asset, so every client shows it unchanged, and it outranks a cover
+  fetched from Open Library. The beat covers books already in the library as
+  well as new ones; there is nothing to run. Without `pdftoppm`, EPUB covers are
+  still extracted and PDF cover jobs wait, visible. (ADR-0105)
 - **Wants name the item or edition they are for.** `get_missing_content` and
   `get_upgrade_candidates` rows carry `scope`, and at item scope `item` (the
   item's title, else its key) or at edition scope `edition` (the label). A

@@ -398,3 +398,31 @@ func TestRecentOrderWithEmbedsIsStableWhileTheTableIsWrittenTo(t *testing.T) {
 		}
 	}
 }
+
+// ADR-0105: a cover the book file carried beats one fetched from an enrich
+// source, even when both are named cover.jpg and the fetched one sorts first by
+// id — the file's own cover is the exact one.
+func TestAnExtractedCoverOutranksAFetchedOne(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+	const (
+		fetchedID   = "01990000-0000-7000-8000-0000000000c1"
+		extractedID = "01990000-0000-7000-8000-0000000000c2"
+		fetchedBlob = "blake3:8888888888888888888888888888888888888888888888888888888888888888"
+		ownBlob     = "blake3:9999999999999999999999999999999999999999999999999999999999999999"
+	)
+	h.exec(`INSERT INTO blobs (hash, size, mime, first_seen_at) VALUES (?, 1, 'image/jpeg', ?), (?, 1, 'image/jpeg', ?)`,
+		fetchedBlob, seedTime, ownBlob, seedTime)
+	h.exec(`INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash, source_path,
+			role, filename, mime, identification_source, missing_since, created_at, updated_at) VALUES
+		(?, ?, ?, 'managed', ?, NULL, 'artwork', 'cover.jpg', 'image/jpeg', 'fetched', NULL, ?, ?),
+		(?, ?, ?, 'managed', ?, NULL, 'artwork', 'cover.jpg', 'image/jpeg', 'extracted', NULL, ?, ?)`,
+		fetchedID, edition1ID, libFilmsID, fetchedBlob, seedTime, seedTime,
+		extractedID, edition1ID, libFilmsID, ownBlob, seedTime, seedTime)
+
+	resp := h.noFollow(http.MethodGet, "/api/v1/works/"+work1ID+"/artwork")
+	want := "/api/v1/blobs/" + ownBlob + "/content"
+	if got := resp.Header.Get("Location"); got != want {
+		t.Fatalf("Location = %q, want the extracted cover %q", got, want)
+	}
+}

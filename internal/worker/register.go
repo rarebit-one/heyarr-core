@@ -16,6 +16,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/downloads"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
+	"github.com/rarebit-one/heyarr-core/internal/media/cover"
 	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
 	"github.com/rarebit-one/heyarr-core/internal/media/probe"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
@@ -343,8 +344,33 @@ func registerProviderJobs(reg *Registry, d workerDeps) {
 }
 
 // registerMediaJobs registers the handlers that need the media toolchain: probe,
-// remux and embedded-subtitle extraction.
+// remux, embedded-subtitle extraction and book-cover extraction.
 func registerMediaJobs(reg *Registry, d workerDeps) error {
+	// Book-cover extraction (ADR-0105). Registered on every worker, because an
+	// EPUB's cover needs nothing but archive/zip; the capability lives on the JOB
+	// instead — a PDF's job requires pdftoppm — so a node without it extracts
+	// every EPUB cover while its PDF jobs wait, visibly.
+	var renderer PageRenderer
+	if d.toolchain.Pdftoppm.Available {
+		renderer = cover.PDFRenderer{Path: d.toolchain.Pdftoppm.Path}
+		d.log.Info("PDF cover rendering is available", "pdftoppm", d.toolchain.Pdftoppm.Version)
+	} else {
+		d.log.Info("PDF cover rendering is unavailable; PDF cover jobs will wait",
+			"reason", d.toolchain.Pdftoppm.Detail)
+	}
+	reg.Register(cover.JobType, Registration{
+		Handler: ExtractCoverHandler(ExtractCoverHandlerOptions{
+			Source:   NewCASRemuxStore(d.store),
+			Blobs:    NewCASArtworkStore(d.store),
+			Recorder: d.cat,
+			Renderer: renderer,
+			Logger:   d.log,
+		}),
+		// Two at a time: each reads one book off the same disks the rest of
+		// the node is using, and the backlog is a one-off.
+		MaxConcurrent: 2,
+	})
+
 	// The probe handler, registered only when this worker can actually run it.
 	//
 	// Registering it unconditionally with RequiredCapability set would also
