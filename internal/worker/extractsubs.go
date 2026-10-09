@@ -121,7 +121,7 @@ func ExtractSubsHandler(opts ExtractSubsHandlerOptions) HandlerFunc {
 			}
 
 			if err := opts.Recorder.RecordExtractedSubtitle(ctx, payload.AssetID, catalog.ExtractedSubtitle{
-				BlobHash: hash, Size: size, Language: s.Language, Forced: s.Forced, Title: s.Title,
+				BlobHash: hash, Size: size, Language: s.Language, Forced: s.Forced, Title: s.Title, HearingImpaired: s.HearingImpaired,
 			}, now()); err != nil {
 				return fmt.Errorf("extract-subs: recording an extracted subtitle: %w", err)
 			}

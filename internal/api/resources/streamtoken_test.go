@@ -117,3 +117,35 @@ func TestStreamSecretIsNeverEmpty(t *testing.T) {
 		t.Error("signing with no subject succeeded — an unbound token is exactly what must not exist")
 	}
 }
+
+func TestAudioTrackIsSignedAndLegacyTokensKeepFirstAudio(t *testing.T) {
+	now := time.Now()
+	key := streamKey([]byte("secret"))
+	tok := streamToken{BlobHash: "blake3:abc", Subject: "p1", AudioTrack: 1, ExpiresAt: now.Add(time.Hour)}
+	signed, err := tok.sign(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := verifyStreamToken(key, signed, "p1", now)
+	if err != nil || got.AudioTrack != 1 {
+		t.Fatalf("track=%d err=%v", got.AudioTrack, err)
+	}
+	fields := strings.Split(tok.payload(), ".")
+	fields[6] = "0"
+	tampered := strings.Join(fields, ".") + "." + strings.Split(signed, ".")[7]
+	if _, err := verifyStreamToken(key, tampered, "p1", now); !errors.Is(err, errStreamTokenSignature) {
+		t.Fatalf("tampered audio err=%v", err)
+	}
+	fields = fields[:6]
+	fields[0] = "s1"
+	payload := strings.Join(fields, ".")
+	legacy := payload + "." + b64(streamMAC(key, payload))
+	got, err = verifyStreamToken(key, legacy, "p1", now)
+	if err != nil || got.AudioTrack != 0 {
+		t.Fatalf("legacy track=%d err=%v", got.AudioTrack, err)
+	}
+	tok.AudioTrack = -1
+	if _, err := tok.sign(key); err == nil {
+		t.Fatal("signed negative audio ordinal")
+	}
+}

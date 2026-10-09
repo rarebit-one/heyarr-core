@@ -7413,6 +7413,8 @@ components:
                 Null for a `linked` asset, which has no blob at all (ADR-0020) —
                 the same null `blob_hash` carries.
             blob_mime: { type: [string, "null"] }
+            language: { type: string, description: "Caption language from asset metadata." }
+            hearing_impaired: { type: boolean, description: "Caption marked SDH by its source." }
 
     Blob:
       type: object
@@ -8494,6 +8496,7 @@ components:
         sample_rate: { type: integer }
         bitrate_bps: { type: integer, format: int64 }
         language: { type: string }
+        commentary: { type: boolean }
 
     Publication:
       type: object
@@ -8615,6 +8618,13 @@ components:
         audio:
           type: array
           items: { type: string }
+        audio_languages:
+          type: array
+          items: { type: string }
+          description: |
+            Preferred audio languages in order, using language tags or ISO codes.
+            Omitted uses media.audio_languages; an empty list keeps original main
+            audio. Missing preferred dialogue falls back to original main audio.
         max_height:
           type: integer
           minimum: 0
@@ -8627,11 +8637,13 @@ components:
 
     PlaybackSource:
       type: object
-      description: What the probe found — the first video and audio stream.
+      description: What the probe found — the first video and selected main audio stream.
       properties:
         container: { type: string, description: "ffprobe's format_name, verbatim." }
         video: { type: string }
         audio: { type: string }
+        audio_track: { type: integer, minimum: 0, description: "Selected zero-based audio ordinal." }
+        audio_language: { type: string }
         width: { type: integer }
         height: { type: integer }
         duration_seconds:

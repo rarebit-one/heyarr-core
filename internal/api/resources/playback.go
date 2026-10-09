@@ -133,7 +133,7 @@ func (a *API) beginPlayback(ctx context.Context, assetID, deviceID, wantVerb str
 	if err != nil {
 		return playbackStart{}, a.problemFor(ctx, "device", err)
 	}
-	media, blobHash, err := a.mediaProfile(ctx, assetID)
+	media, blobHash, err := a.mediaProfile(ctx, assetID, nil)
 	if err != nil {
 		return playbackStart{}, a.problemFor(ctx, "asset", err)
 	}

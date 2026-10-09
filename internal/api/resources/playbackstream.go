@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/text/language"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
@@ -54,6 +55,8 @@ type ClientCaps struct {
 	// MaxHeight is the tallest picture the client will take. Zero means no
 	// limit.
 	MaxHeight int `json:"max_height"`
+	// AudioLanguages overrides the node preference. An explicit empty list keeps original main audio.
+	AudioLanguages []string `json:"audio_languages,omitempty"`
 }
 
 func (c ClientCaps) profile() playback.ClientProfile {
@@ -65,11 +68,13 @@ func (c ClientCaps) profile() playback.ClientProfile {
 // SourceInfo is what the probe found, rendered for a client deciding whether
 // to trust the plan.
 type SourceInfo struct {
-	Container string `json:"container"`
-	Video     string `json:"video,omitempty"`
-	Audio     string `json:"audio,omitempty"`
-	Width     int    `json:"width,omitempty"`
-	Height    int    `json:"height,omitempty"`
+	Container     string `json:"container"`
+	Video         string `json:"video,omitempty"`
+	Audio         string `json:"audio,omitempty"`
+	AudioTrack    int    `json:"audio_track"`
+	AudioLanguage string `json:"audio_language,omitempty"`
+	Width         int    `json:"width,omitempty"`
+	Height        int    `json:"height,omitempty"`
 	// Duration is the source's full runtime in seconds. The client uses it as
 	// the scrubber total for a `stream` plan, whose transcode cannot report its
 	// own length until it finishes producing.
@@ -118,8 +123,18 @@ type PlaybackStreamer interface {
 func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanRequest) {
 	ctx := r.Context()
 	client := body.Client.profile()
+	audioLanguages := body.Client.AudioLanguages
+	if audioLanguages == nil {
+		audioLanguages = a.audioLanguages
+	}
+	for _, tag := range audioLanguages {
+		if _, err := language.Parse(tag); err != nil {
+			httpapi.Fail(w, r, problem.BadRequest("audio_languages must contain valid language tags"))
+			return
+		}
+	}
 
-	media, blobHash, err := a.mediaProfile(ctx, body.AssetID)
+	media, blobHash, err := a.mediaProfile(ctx, body.AssetID, audioLanguages)
 	if err != nil {
 		a.fail(w, r, "asset", err)
 		return
@@ -128,7 +143,7 @@ func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanReq
 	// answer is a finding rather than a guess, and cache it where the worker
 	// would have (blob_probes, keyed by hash — invariant 1).
 	if !media.Known && blobHash != "" {
-		if probed, ok := a.probeOnDemand(ctx, blobHash); ok {
+		if probed, ok := a.probeOnDemand(ctx, blobHash, audioLanguages); ok {
 			media = probed
 		}
 	}
@@ -153,6 +168,7 @@ func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanReq
 		out.Source = &SourceInfo{
 			Container: media.Container, Video: media.VideoCodec, Audio: media.AudioCodec,
 			Width: media.Width, Height: media.Height, Duration: media.DurationSec,
+			AudioTrack: media.AudioTrack, AudioLanguage: media.AudioLanguage,
 		}
 	}
 
@@ -186,7 +202,8 @@ func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanReq
 		token, err := streamToken{
 			BlobHash: blobHash, Subject: streamSubject(id),
 			CopyVideo: leg.CopyVideo, CopyAudio: leg.CopyAudio, MaxHeight: leg.TargetHeight,
-			ExpiresAt: a.now().UTC().Add(streamTokenTTL),
+			AudioTrack: media.AudioTrack,
+			ExpiresAt:  a.now().UTC().Add(streamTokenTTL),
 		}.sign(a.streamKey)
 		if err != nil {
 			a.log.Error("signing a stream token", "request_id", httpapi.RequestIDFrom(ctx), "error", err)
@@ -202,7 +219,7 @@ func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanReq
 // reports whether it could. Every failure is a log line and "no": a plan for
 // media that cannot be probed is a direct plan with the guess declared, which
 // is the planner's existing answer to an unmeasured file.
-func (a *API) probeOnDemand(ctx context.Context, blobHash string) (playback.MediaProfile, bool) {
+func (a *API) probeOnDemand(ctx context.Context, blobHash string, audioLanguages []string) (playback.MediaProfile, bool) {
 	if a.prober == nil || a.blobs == nil {
 		return playback.MediaProfile{}, false
 	}
@@ -227,20 +244,21 @@ func (a *API) probeOnDemand(ctx context.Context, blobHash string) (playback.Medi
 				"blob", blobHash, "error", err)
 		}
 	}
-	return profileFromProbe(result), true
+	return profileFromProbe(result, audioLanguages), true
 }
 
 // profileFromProbe is mediaProfile's mapping, over a live result rather than
-// a stored row. The two must agree, which is why both take the FIRST stream of
-// each type and read HDR off the profile name the same way.
-func profileFromProbe(result probe.Result) playback.MediaProfile {
+// a stored row. Both paths use this mapping so codec negotiation and stream
+// selection describe the same preferred audio track.
+func profileFromProbe(result probe.Result, audioLanguages []string) playback.MediaProfile {
 	media := playback.MediaProfile{Known: true, Container: result.Container, BitrateBPS: result.BitrateBPS, DurationSec: result.DurationSec}
 	if v, ok := result.VideoStream(); ok {
 		media.VideoCodec, media.Width, media.Height = v.Codec, v.Width, v.Height
 		media.HDR = strings.Contains(strings.ToLower(v.Profile), "hdr")
 	}
-	if au, ok := result.AudioStream(); ok {
+	if au, ordinal, ok := result.AudioForLanguages(audioLanguages); ok {
 		media.AudioCodec, media.Channels = au.Codec, au.Channels
+		media.AudioTrack, media.AudioLanguage = ordinal, au.Language
 	}
 	return media
 }
@@ -310,7 +328,7 @@ func (a *API) streamPlayback(w http.ResponseWriter, r *http.Request) {
 	sw := &streamWriter{w: w, rc: http.NewResponseController(w)}
 	err = a.streamer.Stream(ctx, ffmpeg.StreamSpec{
 		Source: path, CopyVideo: tok.CopyVideo, CopyAudio: tok.CopyAudio,
-		MaxHeight: tok.MaxHeight, Start: start,
+		MaxHeight: tok.MaxHeight, Start: start, AudioTrack: tok.AudioTrack,
 	}, sw)
 	switch {
 	case err == nil, ctx.Err() != nil:

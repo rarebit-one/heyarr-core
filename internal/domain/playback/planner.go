@@ -81,14 +81,16 @@ type MediaProfile struct {
 	// Container is ffprobe's format_name: a comma-separated list of every name
 	// the demuxer answers to. Matching is by membership, because which of
 	// those a file "is" is a question with no answer.
-	Container  string
-	VideoCodec string
-	Width      int
-	Height     int
-	HDR        bool
-	AudioCodec string
-	Channels   int
-	BitrateBPS int64
+	Container     string
+	VideoCodec    string
+	Width         int
+	Height        int
+	HDR           bool
+	AudioCodec    string
+	AudioTrack    int
+	AudioLanguage string
+	Channels      int
+	BitrateBPS    int64
 	// DurationSec is the source's full runtime in seconds (0 when unprobed). A
 	// live transcode stream cannot advertise its own total — it is produced as
 	// it plays — so the client needs this to render a stable scrubber instead of

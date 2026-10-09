@@ -144,7 +144,8 @@ type Options struct {
 	Blobs BlobLocator
 	// Prober probes a blob nothing has probed when a client asks for a plan,
 	// so the answer is a finding rather than a guess. Optional.
-	Prober PathProber
+	Prober         PathProber
+	AudioLanguages []string
 	// StreamHeartbeat is how often the SSE stream writes a keep-alive comment.
 	// Zero means the default.
 	StreamHeartbeat time.Duration
@@ -185,10 +186,11 @@ type API struct {
 
 	// streamKey signs stream tokens (ADR-0069); streamer, blobs and prober
 	// are the leg's arms. See playbackstream.go.
-	streamKey []byte
-	streamer  PlaybackStreamer
-	blobs     BlobLocator
-	prober    PathProber
+	streamKey      []byte
+	streamer       PlaybackStreamer
+	blobs          BlobLocator
+	prober         PathProber
+	audioLanguages []string
 
 	// rendererCache and rendererClient are the renderer control lane
 	// (§68). Nil cache means this node does not drive renderers, which is
@@ -292,6 +294,7 @@ func New(opts Options) (*API, error) {
 		streamer:       opts.Streamer,
 		blobs:          opts.Blobs,
 		prober:         opts.Prober,
+		audioLanguages: append([]string(nil), opts.AudioLanguages...),
 		heartbeat:      heartbeat,
 		streamPoll:     streamPoll,
 		buffer:         buffer,

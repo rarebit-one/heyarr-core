@@ -519,7 +519,7 @@ func (a *API) listWorkAssets(w http.ResponseWriter, r *http.Request) {
 	// (ADR-0020): an INNER join would silently drop every linked file from a
 	// work's listing, which is the one place a person is counting the files.
 	//nolint:gosec // the query is assembled only from the literal fragments above; every value is bound
-	stmt := `SELECT ` + prefixed(assetColumns, "assets") + `, e.label, e.edition_type, b.size, b.mime
+	stmt := `SELECT ` + prefixed(assetColumns, "assets") + `, e.label, e.edition_type, b.size, b.mime, assets.attributes
 		FROM assets
 		JOIN editions e ON e.id = assets.edition_id
 		LEFT JOIN blobs b ON b.hash = assets.blob_hash
@@ -561,13 +561,24 @@ func scanWorkAsset(rows *sql.Rows) (WorkAsset, error) {
 	var item WorkAsset
 	var size sql.NullInt64
 	var blobMIME sql.NullString
+	var attributes string
 	asset, err := scanAsset(appendedScan{rows: rows, extra: []any{
-		&item.EditionLabel, &item.EditionType, &size, &blobMIME,
+		&item.EditionLabel, &item.EditionType, &size, &blobMIME, &attributes,
 	}})
 	if err != nil {
 		return WorkAsset{}, err
 	}
 	item.Asset = asset
+	var caption struct {
+		Language        string `json:"language"`
+		HearingImpaired bool   `json:"hearing_impaired"`
+		Title           string `json:"title"`
+	}
+	if err := json.Unmarshal([]byte(attributes), &caption); err != nil {
+		return WorkAsset{}, err
+	}
+	item.Language = caption.Language
+	item.HearingImpaired = caption.HearingImpaired || strings.EqualFold(caption.Title, "SDH") || strings.HasSuffix(strings.ToLower(caption.Title), " sdh")
 	if size.Valid {
 		v := size.Int64
 		item.BlobSize = &v

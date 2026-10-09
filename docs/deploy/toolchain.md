@@ -43,7 +43,14 @@ Each stream is one ffmpeg; one that re-encodes video is a core. Cap them:
 ```yaml
 media:
   stream_concurrency: 2   # the default; a client past the cap gets 429 + Retry-After
+  audio_languages: [en]   # optional preferred dialogue, with original-audio fallback
 ```
+
+Clients can override `media.audio_languages` with `client.audio_languages` on
+`POST /playback/plan`. An explicit empty list selects original main audio.
+The chosen track and its codec are planned together and signed into the stream
+URL, so seeking retains the language. Files without preferred dialogue retain
+their original audio. Direct-play clients select the same language themselves.
 
 `heyarr_playback_streams_active` on `/metrics` is how many are running.
 Without ffmpeg the plan still answers — `direct`, with the reason and a note

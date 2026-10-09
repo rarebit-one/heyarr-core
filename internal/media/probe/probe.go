@@ -86,6 +86,7 @@ type Stream struct {
 	SampleRate int    `json:"sample_rate,omitempty"`
 	BitrateBPS int64  `json:"bitrate_bps,omitempty"`
 	Language   string `json:"language,omitempty"`
+	Commentary bool   `json:"commentary,omitempty"`
 }
 
 // VideoStream returns the first video stream, if any.
@@ -610,6 +611,7 @@ func parse(raw []byte) (Result, error) {
 			SampleRate: parseSampleRate(s.SampleRate),
 			BitrateBPS: parseInt(s.BitRate),
 			Language:   s.Tags["language"],
+			Commentary: s.Disposition["comment"] == 1,
 		})
 	}
 	return out, nil
