@@ -9,7 +9,25 @@ stable.
 
 ## [Unreleased]
 
+### Upgrading
+- **Migration 00060 runs a one-time `VACUUM`** to switch the database to
+  `auto_vacuum=INCREMENTAL` (#721). On a large control plane this takes minutes
+  at startup and needs free space about the size of `heyarr.db`, so plan for a
+  short outage, or compact first. The migration's comments give a manual
+  alternative.
+
 ### Fixed
+- **GC no longer reclaims pinned vault blobs (#719).** A vault upload made
+  before #659 wrote a placement pin but no `blobs` row, and the untracked
+  sweep reclaimed those bytes as orphans. On one node that destroyed 70k vault
+  blobs, which then had to be re-uploaded from the device that held them. A pin
+  to this peer is now enough to keep bytes. GC spares them and lists them as
+  `pinned_untracked` in `heyarr gc --json`, so the gap is visible.
+- **`replicate_blob` no longer replans a lost blob forever (#720).** A self-pin
+  for a blob with no row and no bytes was planned every reconcile cycle and died
+  every time, about 2,900 dead jobs an hour, which grew one control plane from
+  124 MB to 6.4 GB. Convergence now skips such a pin and counts it as `missing`
+  on `sync.reconciled`. Held bytes are still adopted as before.
 - **A companion file never names a work after itself.** A scene release's
   `Screens/a00005.png` under a series library was identified by the
   `series/show` fallback as a series called "A00005" — nine of them, one per
@@ -37,6 +55,13 @@ stable.
   `GET /providers` already applied.
 
 ### Added
+- **Retention for the event log and finished jobs (#721).** A new
+  `retention:` section sets `events` (default `14d`), `jobs.succeeded` (`7d`)
+  and `jobs.dead` (`30d`). `"0"` or empty disables one of them. An hourly beat
+  prunes in small batches, runs `PRAGMA incremental_vacuum`, and emits
+  `system.retention.cycled` with counts. A stream client whose `after` cursor
+  predates the retained log gets `heyarr.stream.gap` and then the retained
+  events.
 - **Wants name the item or edition they are for.** `get_missing_content` and
   `get_upgrade_candidates` rows carry `scope`, and at item scope `item` (the
   item's title, else its key) or at edition scope `edition` (the label). A
