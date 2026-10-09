@@ -35,14 +35,17 @@ type pick struct {
 
 // artworkRank orders a work's artwork assets so that the front-facing image
 // wins: a poster or cover before an unnamed image, an unnamed image before
-// fanart, backdrops and banners (which are decoration, not identity). The id
-// breaks ties, so the answer is stable across reads (ADR-0017).
+// fanart, backdrops and banners (which are decoration, not identity). Within a
+// tier, a cover the release shipped or the book file carried beats one fetched
+// from an enrich source (ADR-0105): the file's own cover is the exact one, a
+// fetched cover is a search result's. The id breaks remaining ties, so the
+// answer is stable across reads (ADR-0017).
 const artworkRank = `CASE
 	WHEN lower(a2.filename) GLOB 'poster*' OR lower(a2.filename) GLOB 'cover*'
 	  OR lower(a2.filename) GLOB 'folder*' OR lower(a2.filename) GLOB 'front*' THEN 0
 	WHEN lower(a2.filename) GLOB 'fanart*' OR lower(a2.filename) GLOB 'backdrop*'
 	  OR lower(a2.filename) GLOB 'banner*' THEN 2
-	ELSE 1 END`
+	ELSE 1 END, (coalesce(a2.identification_source, '') = 'fetched')`
 
 // artworkPick selects the representative artwork asset of the work whose id
 // is at workRef (a column reference, e.g. `works.id`).

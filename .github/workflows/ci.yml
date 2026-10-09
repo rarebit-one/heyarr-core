@@ -217,6 +217,12 @@ jobs:
         # the build and it is confined to the tpmsim-tagged step below; the whole
         # matrix stays CGO_ENABLED=0.
         run: sudo apt-get update && sudo apt-get install -y libssl-dev
+      - name: poppler's pdftoppm for the PDF cover round-trip (ADR-0105)
+        if: runner.os == 'Linux'
+        # The Linux leg is the one that HAS the optional toolchain, and the step
+        # below fails on any skipped media test — so the PDF cover render must run
+        # here, not quietly skip. The macOS leg stays bare.
+        run: sudo apt-get install -y --no-install-recommends poppler-utils && pdftoppm -v
       # -timeout=20m, not the default 10m per package: internal/api/resources
       # can approach the default under load on a busy runner, and a per-package
       # test timeout is only a hang reported as a failure if the bound is

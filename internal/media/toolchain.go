@@ -53,6 +53,11 @@ import (
 const (
 	CapabilityFFprobe = "ffprobe"
 	CapabilityFFmpeg  = "ffmpeg"
+	// CapabilityPdftoppm is poppler's page rasteriser, which renders a PDF
+	// book's first page as its cover (ADR-0105). It is not part of FFmpeg, but
+	// it is the same kind of thing — an optional external binary a node may or
+	// may not have — so it is resolved and advertised the same way.
+	CapabilityPdftoppm = "pdftoppm"
 )
 
 // versionTimeout bounds `-version`. It is generous because the binary is 45 MB
@@ -87,12 +92,13 @@ type Tool struct {
 // possibility of a different answer than the one the node advertised. Restart
 // after installing it — which is what an operator does anyway.
 type Toolchain struct {
-	FFprobe Tool
-	FFmpeg  Tool
+	FFprobe  Tool
+	FFmpeg   Tool
+	Pdftoppm Tool
 }
 
-// Tools returns both, in a stable order, for reporting.
-func (t Toolchain) Tools() []Tool { return []Tool{t.FFprobe, t.FFmpeg} }
+// Tools returns every tool, in a stable order, for reporting.
+func (t Toolchain) Tools() []Tool { return []Tool{t.FFprobe, t.FFmpeg, t.Pdftoppm} }
 
 // Capabilities is what a worker built on this toolchain may advertise (§75).
 //
@@ -113,6 +119,9 @@ func (t Toolchain) Capabilities() []string {
 	if t.FFmpeg.Available {
 		out = append(out, CapabilityFFmpeg)
 	}
+	if t.Pdftoppm.Available {
+		out = append(out, CapabilityPdftoppm)
+	}
 	return out
 }
 
@@ -122,9 +131,10 @@ type Options struct {
 	// "look on PATH", and an empty result there is a degraded node rather than
 	// an error. A non-empty value that does not work IS an error — see the
 	// package comment.
-	FFprobePath string
-	FFmpegPath  string
-	Logger      *slog.Logger
+	FFprobePath  string
+	FFmpegPath   string
+	PdftoppmPath string
+	Logger       *slog.Logger
 
 	// LookPath resolves a bare tool name against PATH. Nil means exec.LookPath.
 	//
@@ -137,7 +147,7 @@ type Options struct {
 
 	// runVersion is a narrower seam, kept unexported because a real executable
 	// in a t.TempDir expresses everything it can express.
-	runVersion func(ctx context.Context, path string) (string, error)
+	runVersion func(ctx context.Context, name, path string) (string, error)
 }
 
 // Resolve locates the toolchain.
@@ -169,14 +179,18 @@ func Resolve(ctx context.Context, opts Options) (Toolchain, error) {
 	if err != nil {
 		return Toolchain{}, err
 	}
-	return Toolchain{FFprobe: probeTool, FFmpeg: ffmpegTool}, nil
+	pdfTool, err := resolveOne(ctx, CapabilityPdftoppm, opts.PdftoppmPath, look, run, log)
+	if err != nil {
+		return Toolchain{}, err
+	}
+	return Toolchain{FFprobe: probeTool, FFmpeg: ffmpegTool, Pdftoppm: pdfTool}, nil
 }
 
 func resolveOne(
 	ctx context.Context,
 	name, configured string,
 	look func(string) (string, error),
-	run func(context.Context, string) (string, error),
+	run func(context.Context, string, string) (string, error),
 	log *slog.Logger,
 ) (Tool, error) {
 	path := configured
@@ -190,7 +204,7 @@ func resolveOne(
 		path = found
 	}
 
-	version, err := run(ctx, path)
+	version, err := run(ctx, name, path)
 	if err != nil {
 		if configured != "" {
 			// Someone named this binary. Refusing to start is the honest
@@ -207,17 +221,23 @@ func resolveOne(
 	return Tool{Name: name, Path: path, Version: version, Available: true}, nil
 }
 
-// runVersion executes `<path> -version` and parses what it says.
-func runVersion(ctx context.Context, path string) (string, error) {
+// runVersion asks the binary for its version and parses what it says. The
+// FFmpeg tools answer `-version` on stdout; pdftoppm answers `-v` on stderr
+// (and rejects `-version`), so both streams are read.
+func runVersion(ctx context.Context, name, path string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, versionTimeout)
 	defer cancel()
 
+	flag := "-version"
+	if name == CapabilityPdftoppm {
+		flag = "-v"
+	}
 	// #nosec G204 -- path is either an operator-configured value or the result
 	// of exec.LookPath. Both are, by construction, "the binary this operator
 	// wants run"; there is no untrusted input on this line.
-	out, err := exec.CommandContext(ctx, path, "-version").Output()
+	out, err := exec.CommandContext(ctx, path, flag).CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("running -version: %w", err)
+		return "", fmt.Errorf("running %s: %w", flag, err)
 	}
 	return parseVersion(string(out))
 }
@@ -225,9 +245,10 @@ func runVersion(ctx context.Context, path string) (string, error) {
 // errNoVersion is what an unparseable banner produces.
 var errNoVersion = errors.New("no version in the -version output")
 
-// parseVersion reads the version out of an FFmpeg banner, whose first line is
+// parseVersion reads the version out of a tool banner, whose first line is
 //
 //	ffprobe version 6.1.1 Copyright (c) 2007-2023 the FFmpeg developers
+//	pdftoppm version 24.02.0
 //
 // A binary that prints nothing useful must NOT resolve to an empty version
 // reported as success. That is the specific way this goes wrong: `/bin/true`
