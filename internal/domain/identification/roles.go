@@ -16,6 +16,9 @@ var extrasDirs = newSet(
 	"featurettes", "featurette", "extras", "extra", "bonus", "behind the scenes",
 	"deleted scenes", "interviews", "scenes", "shorts", "trailers", "other",
 	"sample", "samples",
+	// A scene release's proof of quality: screenshots and proof images that
+	// describe the release, never a work of their own.
+	"screens", "screenshots", "screenshot", "proof", "proofs",
 )
 
 // Directories that hold companion files for the work beside them. They are

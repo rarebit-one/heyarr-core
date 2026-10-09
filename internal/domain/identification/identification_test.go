@@ -38,6 +38,52 @@ func TestParsePath(t *testing.T) {
 	}
 }
 
+// A companion file never names a work after itself. A scene release's
+// `Screens/a00005.png` under a series library made a series called "A00005"
+// on a live node — nine of them, one per screenshot, on the Watch shelf.
+func TestACompanionFileNeverNamesAWorkAfterItself(t *testing.T) {
+	r := Default()
+	for _, p := range []string{
+		"Screens/a00005.png",
+		"Season 1/a00005.png",
+		"Proof/proof-a00005.jpg",
+		"Season 1/a00005.srt",
+		"a00005.png",
+	} {
+		t.Run(p, func(t *testing.T) {
+			got := r.Identify(p, Series)
+			if got.Identified {
+				t.Fatalf("%q was identified as %s/%q by %s; a companion file cannot name a work", p, got.ContentType, got.WorkKey, got.Rule)
+			}
+			if got.WorkKey != UnidentifiedWorkKey {
+				t.Errorf("WorkKey = %q, want %q", got.WorkKey, UnidentifiedWorkKey)
+			}
+		})
+	}
+	// The companions that DO name their work keep doing so: a file named like a
+	// directory on its path, a generic name promoted to its directory, and a
+	// subtitle whose episode code names the show.
+	for _, tc := range []struct{ path, library, title string }{
+		{"Game of Thrones/Game of Thrones.jpg", Series, "Game of Thrones"},
+		{"Game of Thrones/Season 1/poster.jpg", Series, "Game of Thrones"},
+		{"Game of Thrones/Season 1/Game.of.Thrones.S01E01.1080p.srt", Series, "Game of Thrones"},
+		// Outside series a companion IS named by its stem: the book cover beside
+		// the book, the poster beside the film in a flat library.
+		{"Frank Herbert/Dune.jpg", Book, "Dune"},
+		{"Alien (1979).jpg", Movie, "Alien"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			got := r.Identify(tc.path, tc.library)
+			if !got.Identified || got.AssetRole == RolePrimary {
+				t.Fatalf("%q = %+v, want an identified companion", tc.path, got)
+			}
+			if !strings.EqualFold(got.Title, tc.title) {
+				t.Errorf("title = %q, want %q", got.Title, tc.title)
+			}
+		})
+	}
+}
+
 // TestUnparseablePathsStillIngest is the acceptance criterion that
 // identification failure must never be ingest failure.
 func TestUnparseablePathsStillIngest(t *testing.T) {
