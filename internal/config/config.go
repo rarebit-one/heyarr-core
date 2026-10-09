@@ -68,6 +68,15 @@ type Config struct {
 	// it, so they live under the data directory too unless pointed elsewhere.
 	Backup Backup `koanf:"backup"`
 
+	// Retention configures how long the events table and finished job rows are
+	// kept before the retention beat prunes them (#721). Old events and done
+	// jobs are safe to delete: the only consumer of old events is SSE catch-up
+	// (which already has heyarr.stream.gap for a client that falls behind), and
+	// a finished job row is not re-run (jobs_dedupe covers only pending and
+	// leased rows). Setting any field to "0" or leaving it empty disables that
+	// dimension's pruning.
+	Retention Retention `koanf:"retention"`
+
 	// Notify points this node at the SHARED Void-Which-Binds notify plane (ADR-0102,
 	// superseding ADR-0055's embedded registry): the one place a phone subscribes,
 	// which this node asks to wake devices for a push login and for a
@@ -238,6 +247,35 @@ type Backup struct {
 	// default. Keeping only the newest leaves nothing when the newest is the
 	// copy written during the incident, so the default is more than one.
 	PeerRetain int `koanf:"peer_retain"`
+}
+
+// Retention configures how long the events table and finished job rows survive
+// before the retention beat prunes them (#721).
+//
+// Durations accept standard Go suffixes (s, m, h) plus "d" for days (24h).
+// Empty or "0" disables pruning for that dimension; a negative value is
+// refused at startup.
+//
+// Defaults: events=14d, jobs.succeeded=7d, jobs.dead=30d. These are
+// deliberately conservative: they preserve a fortnight of the event log
+// (enough for SSE clients on a laptop that sleeps over weekends) while
+// recovering the ~5.7 GB the two tables occupy on a production node.
+type Retention struct {
+	// Events is how long the events table is kept. "14d" means events older
+	// than 14 days are pruned. "0" or empty disables pruning.
+	Events string `koanf:"events"`
+	// Jobs holds per-terminal-state retention windows.
+	Jobs RetentionJobs `koanf:"jobs"`
+}
+
+// RetentionJobs configures per-terminal-state job retention.
+type RetentionJobs struct {
+	// Succeeded is how long succeeded job rows survive. "7d" keeps one week.
+	// "0" or empty disables pruning of succeeded jobs.
+	Succeeded string `koanf:"succeeded"`
+	// Dead is how long dead (exhausted-retries) job rows survive. "30d" keeps
+	// a month for post-mortem review. "0" or empty disables pruning.
+	Dead string `koanf:"dead"`
 }
 
 // CAS configures the content-addressed store. Its on-disk layout is private to
@@ -621,7 +659,14 @@ func Defaults() Config {
 		Database: Database{},
 		Media:    Media{StreamConcurrency: 2},
 		Backup:   Backup{Interval: "5m"},
-		Vault:    Vault{Unwrapper: "software"},
+		Retention: Retention{
+			Events: "14d",
+			Jobs: RetentionJobs{
+				Succeeded: "7d",
+				Dead:      "30d",
+			},
+		},
+		Vault: Vault{Unwrapper: "software"},
 	}
 }
 
@@ -764,6 +809,50 @@ func (c Config) BackupInterval() (time.Duration, error) {
 	return d, nil
 }
 
+// parseRetentionDuration parses a retention window string. It supports
+// standard Go suffixes (s, m, h) and "d" for days (treated as 24h). Returns
+// 0 with no error when s is empty or "0" — the caller interprets 0 as
+// "disabled". Returns an error for a negative value or an unrecognised suffix.
+func parseRetentionDuration(field, s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "0" {
+		return 0, nil
+	}
+	// Handle the "d" (days) suffix before handing off to time.ParseDuration.
+	if strings.HasSuffix(s, "d") {
+		n, err := time.ParseDuration(s[:len(s)-1] + "h")
+		if err != nil {
+			return 0, fmt.Errorf("config: %s %q is not a duration (e.g. \"14d\", \"24h\"): %w", field, s, err)
+		}
+		n *= 24
+		if n < 0 {
+			return 0, fmt.Errorf("config: %s must not be negative, got %q", field, s)
+		}
+		return n, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("config: %s %q is not a duration (e.g. \"14d\", \"24h\"): %w", field, s, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("config: %s must not be negative, got %q", field, s)
+	}
+	return d, nil
+}
+
+// RetentionDurations parses all three retention windows, reporting the first
+// error. A zero value means that dimension is disabled.
+func (c Config) RetentionDurations() (events, succeeded, dead time.Duration, err error) {
+	if events, err = parseRetentionDuration("retention.events", c.Retention.Events); err != nil {
+		return
+	}
+	if succeeded, err = parseRetentionDuration("retention.jobs.succeeded", c.Retention.Jobs.Succeeded); err != nil {
+		return
+	}
+	dead, err = parseRetentionDuration("retention.jobs.dead", c.Retention.Jobs.Dead)
+	return
+}
+
 var validLogLevels = []string{"debug", "info", "warn", "error"}
 
 // validVaultUnwrappers is the set of currently SELECTABLE custody backends
@@ -789,6 +878,9 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: log.format %q is not one of json, text, auto", f)
 	}
 	if _, err := c.BackupInterval(); err != nil {
+		return err
+	}
+	if _, _, _, err := c.RetentionDurations(); err != nil {
 		return err
 	}
 	if err := c.Notify.validate(); err != nil {

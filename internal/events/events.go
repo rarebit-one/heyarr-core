@@ -144,7 +144,18 @@ const (
 	TypeWorkerCapabilitiesChanged = "system.worker.capabilities_changed"
 	TypeSystemStarted             = "system.started"
 	TypeSystemStopped             = "system.stopped"
-	TypePeerRegistered            = "peer.registered"
+	// TypeRetentionCycled is one retention-prune cycle completing (#721). It
+	// records how many rows were removed from the events table and from the
+	// jobs table in this pass, so an operator can confirm the beat is running
+	// and gauge how much work remains.
+	//
+	// One event per CYCLE, not one per deleted row — per-row would be a write
+	// amplification that defeats the point of pruning. A cycle that removed
+	// nothing still emits, because "everything is within the retention window"
+	// is also a fact worth confirming. Emitted under system.* because it
+	// describes the node's own housekeeping, not content or peers.
+	TypeRetentionCycled = "system.retention.cycled"
+	TypePeerRegistered  = "peer.registered"
 	// TypePeerIdentityEstablished is this node's Ed25519 keypair being
 	// generated and recorded for the first time (§26, ADR-0012). It is a
 	// distinct transition from peer.registered: the row can exist for a while
@@ -772,6 +783,17 @@ func (l *Log) Latest(ctx context.Context) (int64, error) {
 	var seq sql.NullInt64
 	if err := l.reader.QueryRowContext(ctx, `SELECT max(seq) FROM events`).Scan(&seq); err != nil {
 		return 0, fmt.Errorf("events: reading the latest sequence: %w", err)
+	}
+	return seq.Int64, nil
+}
+
+// Oldest returns the lowest sequence number currently in the log, or 0 when
+// the log is empty. A client reconnecting with an after= cursor below Oldest
+// has fallen behind the retention window and will receive a gap notice (#721).
+func (l *Log) Oldest(ctx context.Context) (int64, error) {
+	var seq sql.NullInt64
+	if err := l.reader.QueryRowContext(ctx, `SELECT min(seq) FROM events`).Scan(&seq); err != nil {
+		return 0, fmt.Errorf("events: reading the oldest sequence: %w", err)
 	}
 	return seq.Int64, nil
 }

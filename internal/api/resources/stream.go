@@ -127,6 +127,37 @@ func (a *API) streamEvents(w http.ResponseWriter, r *http.Request) {
 	s.raw(": ready\n\n")
 	s.flush()
 
+	// Gap check: if the client's cursor predates the oldest retained event, the
+	// requested history has been pruned and the client must be told (#721).
+	//
+	// The check happens after subscribing (the subscription is open, so no new
+	// event escapes from this point on) but before the catch-up read, which is
+	// the same reason the subscription opens before the catch-up: doing it the
+	// other way leaves a window.
+	//
+	// after=0 means "start from the beginning of the log" — there is no
+	// retained cursor to check. Only check when after > 0.
+	if after > 0 {
+		oldest, err := a.events.Oldest(r.Context())
+		if err != nil {
+			a.log.Error("reading the oldest retained event failed",
+				"request_id", httpapi.RequestIDFrom(r.Context()), "error", err)
+			s.gap(after, 0, "the oldest retained sequence could not be read")
+			return
+		}
+		// oldest=0 means the log is empty — nothing to gap about.
+		if oldest > 0 && oldest > after {
+			// The client's cursor is below the retention floor. Tell it where
+			// to resume so it can decide how to handle the gap (re-sync, alert
+			// the operator, etc.) rather than silently receiving a partial
+			// history.
+			s.gap(oldest-1, oldest-after-1, "events before this sequence were pruned by the retention policy")
+			// Do NOT return here: continue catching up from the oldest available
+			// event so the client gets a gap notice followed by the live stream,
+			// rather than being disconnected immediately.
+		}
+	}
+
 	// Catch up from the log.
 	catchUpTo := after
 	for {
