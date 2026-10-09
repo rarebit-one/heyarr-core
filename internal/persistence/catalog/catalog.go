@@ -23,12 +23,21 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
+
+// LocalHolder can report whether this node's content store holds a blob's bytes.
+// It is the minimum surface the planner needs to skip a self-pin whose blob row
+// is missing AND whose bytes have also been reclaimed (#720). *cas.Store
+// satisfies it; the full cas.Store import is not required here.
+type LocalHolder interface {
+	Has(ctx context.Context, h hashing.Hash) (bool, error)
+}
 
 // Catalog records what exists.
 //
@@ -37,12 +46,13 @@ import (
 // which statements make it so and holds them in one transaction (ADR-0006,
 // ADR-0007).
 type Catalog struct {
-	db       *sqlite.DB
-	events   *events.Log
-	peerName string
-	peerSite string
-	clock    Clock
-	log      *slog.Logger
+	db         *sqlite.DB
+	events     *events.Log
+	peerName   string
+	peerSite   string
+	clock      Clock
+	log        *slog.Logger
+	localStore LocalHolder
 
 	mu       sync.Mutex
 	selfPeer string
@@ -77,6 +87,13 @@ type Options struct {
 	//
 	// Stages, in order: blob, work, edition, asset, replica, commit.
 	RecordFault func(stage string) error
+
+	// LocalStore, when set, lets the planner check whether this node's content
+	// store holds a blob whose blobs row is missing. Without it a self-pin for
+	// an unknown, unheld blob is planned (the adoption path, #658); with it
+	// such a pin is skipped and counted as Missing, preventing the permanent-
+	// fail loop that results when the bytes have also been reclaimed (#720).
+	LocalStore LocalHolder
 }
 
 // New constructs a Catalog.
@@ -99,13 +116,14 @@ func New(opts Options) (*Catalog, error) {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &Catalog{
-		db:       opts.DB,
-		events:   opts.Events,
-		peerName: opts.PeerName,
-		peerSite: opts.PeerSite,
-		clock:    clock,
-		log:      logger,
-		fault:    opts.RecordFault,
+		db:         opts.DB,
+		events:     opts.Events,
+		peerName:   opts.PeerName,
+		peerSite:   opts.PeerSite,
+		clock:      clock,
+		log:        logger,
+		fault:      opts.RecordFault,
+		localStore: opts.LocalStore,
 	}, nil
 }
 
