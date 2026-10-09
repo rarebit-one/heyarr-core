@@ -97,6 +97,29 @@ func scanBlob(s rowScanner) (integrity.Blob, error) {
 	return b, nil
 }
 
+// SelfPinnedHashes returns the set of blob hashes pinned to this peer by a
+// placement pin (ADR-0096, #719). GC uses these to spare pinned-but-untracked
+// bytes from the orphan sweep: a vault blob uploaded before #659 had a pin but
+// no blobs row, and GC previously reclaimed its bytes as an orphan.
+func (c *Catalog) SelfPinnedHashes(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := c.db.Reader().QueryContext(ctx,
+		`SELECT p.blob_hash FROM placement_pins p
+		 INNER JOIN peers s ON s.id = p.peer_id AND s.is_self = 1`)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: reading self-pinned hashes: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, fmt.Errorf("catalog: reading self-pinned hash: %w", err)
+		}
+		out[h] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
 // Known reports which of these hashes still have a blobs row.
 func (c *Catalog) Known(ctx context.Context, hashes []hashing.Hash) (map[string]bool, error) {
 	out := make(map[string]bool, len(hashes))

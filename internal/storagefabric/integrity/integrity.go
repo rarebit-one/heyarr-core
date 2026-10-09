@@ -178,6 +178,22 @@ type Catalog interface {
 	// row may well no longer exist. That it still answers after the reclaim is
 	// the property the whole table was added for.
 	DurabilityEvidence(ctx context.Context, h hashing.Hash) ([]Evidence, error)
+
+	// SelfPinnedHashes returns the set of blob hashes that carry a placement
+	// pin addressed to this peer (ADR-0096).
+	//
+	// Garbage collection uses this to spare bytes that are pinned-but-untracked:
+	// a vault upload that wrote a pin but no blobs row (pre-#659) left bytes in
+	// the store that looked like orphans to GC. A placement pin is a commitment
+	// that the bytes belong here; reclaiming them while the pin stands destroys
+	// data. The set returned here is the single authoritative filter that keeps
+	// that from happening.
+	//
+	// Bytes in this set with no catalog row appear in Collection.PinnedUntracked
+	// as a data-loss signal. They are spared, not adopted, by the GC sweep; the
+	// convergence cycle's replicate_blob adoption path is the right place for
+	// them to earn their row.
+	SelfPinnedHashes(ctx context.Context) (map[string]struct{}, error)
 }
 
 // Store is the subset of the content-addressed store integrity uses.
