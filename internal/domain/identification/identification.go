@@ -219,6 +219,12 @@ func (r *Registry) Identify(relPath, libraryContentType string) Candidate {
 			if c.Language == "" {
 				c.Language = lang
 			}
+			if role != RolePrimary && c.ContentType == Series && namedAfterItself(p, view, c) {
+				// A series companion's own name never names a show. Stop here
+				// rather than try the next rule: the rules below are only
+				// more general, and would title the work from the same stem.
+				break
+			}
 			c.AssetRole = role
 			c.Source = SourcePathHeuristic
 			c.Identified = true
@@ -230,6 +236,41 @@ func (r *Registry) Identify(relPath, libraryContentType string) Candidate {
 	c.AssetRole = role
 	c.Language = lang
 	return c
+}
+
+// namedAfterItself reports whether a companion file (artwork, subtitle, extra)
+// would create a work titled by nothing but its own filename.
+//
+// For a SERIES that is never right. A show's artwork is generic ("poster.jpg",
+// which roleView promotes to its directory), season-coded or episode-coded
+// ("Show.S01E01.srt", titled from the show part), or named like the show's own
+// directory ("Show/Show.jpg"); a bare stem that is none of those is a stray.
+// A scene release's `Screens/a00005.png` reached series/show that way and made
+// a series called "A00005" on a live node, nine times over. The caller limits
+// the check to series candidates: a film ("Alien (1979).jpg" beside the file in
+// a flat library) or a book ("Frank Herbert/Dune.jpg") is legitimately named by
+// its companion's stem, and the golden corpus pins that.
+func namedAfterItself(p, view Path, c Candidate) bool {
+	own := p.Stem
+	switch {
+	case isSubtitleExt(p.Ext):
+		own, _ = splitSubtitleLang(own)
+	case isImageExt(p.Ext):
+		own = trimArtworkSuffix(own)
+	}
+	key := normalizeName(own)
+	if key == "" || normalizeName(view.Stem) != key {
+		return false // the stem the rule saw was promoted from a directory
+	}
+	if normalizeName(c.Title) != key {
+		return false // the title came from a directory or a marker, not the stem
+	}
+	for _, d := range p.Dirs {
+		if normalizeName(d) == key {
+			return false
+		}
+	}
+	return true
 }
 
 // ordered returns the rules with those matching ct first — a bias, not a

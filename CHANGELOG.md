@@ -10,6 +10,15 @@ stable.
 ## [Unreleased]
 
 ### Fixed
+- **A companion file never names a work after itself.** A scene release's
+  `Screens/a00005.png` under a series library was identified by the
+  `series/show` fallback as a series called "A00005" — nine of them, one per
+  screenshot, on the Watch shelf. Identification now refuses a candidate for
+  an artwork, subtitle or extra whose title is nothing but the file's own
+  stem (a file named like a directory on its path, `Show/Show.jpg`, still
+  attaches), and `Screens`, `Screenshots`, `Proof` join the extras
+  directories. Works already created this way are not removed; delete them
+  from a client's Remove door and they do not come back on the next scan.
 - **Multi-range blob reads survive Go 1.26.9 / 1.27.2.** Those releases cap
   the ranges a `Range` header may carry (CVE-2026-78667) and, for a module on a
   go line below 1.26, default that cap to one, so a replication or web-seed
