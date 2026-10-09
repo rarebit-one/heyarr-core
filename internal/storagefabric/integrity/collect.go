@@ -100,11 +100,21 @@ type Collection struct {
 	UntrackedSpared []Sparing `json:"untracked_spared"`
 	// UntrackedWaiting counts untracked files too recent to touch — most
 	// likely an ingest that has written its bytes and not yet committed.
-	UntrackedWaiting int           `json:"untracked_waiting"`
-	TempRemoved      []TempRemoval `json:"temp_removed"`
-	BytesReclaimed   int64         `json:"bytes_reclaimed"`
-	StartedAt        time.Time     `json:"started_at"`
-	FinishedAt       time.Time     `json:"finished_at"`
+	UntrackedWaiting int `json:"untracked_waiting"`
+	// PinnedUntracked are store files that carry a self-placement pin but have
+	// no catalog row. They are spared from reclamation — the pin is a commitment
+	// that the bytes belong here — but their presence is a data-loss signal.
+	//
+	// Each entry here means a vault blob was uploaded, the placement pin was
+	// written, but the blobs row was never written (the pre-#659 vault upload
+	// shape, #719). The bytes survive as long as the pin stands. To let them
+	// earn their row and vanish from this list, trigger a reconcile cycle so the
+	// convergence worker's replicate_blob adoption path can run.
+	PinnedUntracked []Candidate   `json:"pinned_untracked"`
+	TempRemoved     []TempRemoval `json:"temp_removed"`
+	BytesReclaimed  int64         `json:"bytes_reclaimed"`
+	StartedAt       time.Time     `json:"started_at"`
+	FinishedAt      time.Time     `json:"finished_at"`
 }
 
 // Collector reclaims bytes nothing references (ADR-0018).
@@ -173,6 +183,7 @@ func (c *Collector) Collect(ctx context.Context, opts CollectOptions) (Collectio
 		Marked: []Candidate{}, Waiting: []Candidate{}, Reclaimed: []Candidate{},
 		Untracked: []Candidate{}, TempRemoved: []TempRemoval{},
 		Spared: []Sparing{}, Refusals: []SweepRefusal{}, UntrackedSpared: []Sparing{},
+		PinnedUntracked: []Candidate{},
 	}
 	cutoff := now.Add(-grace)
 
@@ -266,7 +277,8 @@ func (c *Collector) Collect(ctx context.Context, opts CollectOptions) (Collectio
 	c.opts.Logger.Info("garbage collection swept",
 		"dry_run", out.DryRun, "considered", out.Considered, "referenced", out.Referenced,
 		"marked", len(out.Marked), "waiting", len(out.Waiting), "reclaimed", len(out.Reclaimed),
-		"untracked", len(out.Untracked), "temp_removed", len(out.TempRemoved),
+		"untracked", len(out.Untracked), "pinned_untracked", len(out.PinnedUntracked),
+		"temp_removed", len(out.TempRemoved),
 		"spared", len(out.Spared), "untracked_spared", len(out.UntrackedSpared),
 		"refusals", len(out.Refusals), "bytes_reclaimed", out.BytesReclaimed)
 	return out, nil
@@ -305,9 +317,24 @@ func (c *Collector) reclaim(ctx context.Context, h hashing.Hash, size int64, tra
 // arrives with Milestone 4's placement preconditions — but together they make
 // it require a commit inside the final round trip rather than anywhere in a
 // multi-minute sweep.
+//
+// Pinned-but-untracked bytes are an exception: a vault blob uploaded before
+// #659 recorded a placement pin but no blobs row. Those bytes look exactly like
+// an orphan to the walk above, yet they are not: a pin is a commitment that the
+// bytes belong here, and reclaiming them while the pin stands destroys data
+// (#719). They are reported in Collection.PinnedUntracked instead of being
+// reclaimed.
 func (c *Collector) collectUntracked(ctx context.Context, out *Collection,
 	known map[string]struct{}, cutoff, now time.Time, apply bool, g gate,
 ) error {
+	// Fetch the self-pinned set before the walk, so every candidate can be
+	// checked in O(1) without a per-file catalog round trip. An error here is
+	// fatal: proceeding without the set would reclaim pinned bytes.
+	selfPinned, err := c.opts.Catalog.SelfPinnedHashes(ctx)
+	if err != nil {
+		return fmt.Errorf("integrity: reading self-pinned hashes before untracked sweep: %w", err)
+	}
+
 	var (
 		candidates []cas.Descriptor
 		walked     int
@@ -315,6 +342,13 @@ func (c *Collector) collectUntracked(ctx context.Context, out *Collection,
 	if err := c.opts.Store.Walk(ctx, func(d cas.Descriptor) error {
 		walked++
 		if _, ok := known[d.Hash.String()]; ok {
+			return nil
+		}
+		if _, pinned := selfPinned[d.Hash.String()]; pinned {
+			// Pinned-but-untracked: the pin is a commitment that these bytes
+			// belong here. Spare them and report the entry so an operator can
+			// see that adoption has not completed yet. See #719.
+			out.PinnedUntracked = append(out.PinnedUntracked, Candidate{Hash: d.Hash.String(), Size: d.Size})
 			return nil
 		}
 		if !d.ModTime.Before(cutoff) {
