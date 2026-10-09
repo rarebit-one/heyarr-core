@@ -256,6 +256,16 @@ func reconcilePeerHandler(
 				"for them", "pins", plan.Unrecordable,
 				"note", "they are planned once the blob is known here")
 		}
+		if plan.Missing > 0 {
+			// A self-pin whose blob has no row AND whose bytes are not held:
+			// planning it produces a replicate_blob that fails with
+			// ErrPermanent, and the next cycle would plan it again forever
+			// (#720). The pin stays; this just says it was seen and skipped.
+			summary.Missing = plan.Missing
+			log.Info("self-pins skipped: blob unknown and bytes not held — planning would loop",
+				"pins", plan.Missing,
+				"note", "they are planned once the blob is known or held again")
+		}
 		if summary.Deferred > 0 {
 			// Logged rather than silently dropped. A cycle that hit its bound
 			// has NOT converged, and without this line it looks exactly like
