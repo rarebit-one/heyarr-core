@@ -88,8 +88,15 @@ jobs:
       - uses: ./.github/actions/private-modules
         with:
           token: ${{ secrets.AUTOLAND_PAT }}
+      # A pinned Go minor, not `stable`: golangci-lint is a pinned binary built
+      # against one Go release, and it typechecks the standard library of the Go
+      # it runs under. The day `stable` moved to the next minor (1.27.2,
+      # 2026-10-09) every lint job failed on `could not import runtime/debug`
+      # with no change here. Not go.mod's line either: the deadcode pin below
+      # (x/tools v0.50.0) needs 1.26, which go.mod's 1.25 cannot run. Bump this
+      # together with the golangci-lint and deadcode pins, after a clean local run.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version: stable, cache: true }
+        with: { go-version: "1.26", cache: true }
       - run: go vet ./...
       # Pinned, not `latest`: a new golangci-lint release can add or tighten
       # checks and turn main red with no change here. Bump it deliberately,
