@@ -55,6 +55,10 @@ type fakeCatalog struct {
 	cleared    int
 	forceKnown map[string]bool
 
+	// selfPins is the set of blob hashes with a self-placement pin but no
+	// blobs row — the pre-#659 vault upload shape (#719).
+	selfPins map[string]struct{}
+
 	// The peer-shaped state ADR-0018's placement precondition reads (M4-12).
 	peers    []integrity.Peer
 	replicas map[string][]integrity.Replica
@@ -104,6 +108,14 @@ func (f *fakeCatalog) Known(_ context.Context, hashes []hashing.Hash) (map[strin
 		}
 		_, ok := f.blobs[h.String()]
 		out[h.String()] = ok
+	}
+	return out, nil
+}
+
+func (f *fakeCatalog) SelfPinnedHashes(_ context.Context) (map[string]struct{}, error) {
+	out := make(map[string]struct{}, len(f.selfPins))
+	for k := range f.selfPins {
+		out[k] = struct{}{}
 	}
 	return out, nil
 }
@@ -221,6 +233,23 @@ func (f *fixture) putUnrecorded(contents string, age time.Duration) hashing.Hash
 		f.t.Fatal(err)
 	}
 	f.age(f.blobPath(desc.Hash), age)
+	return desc.Hash
+}
+
+// putPinned stores bytes without a catalog row but records a self-placement
+// pin — the shape a vault upload had before #659 (#719). The bytes are aged by
+// the given duration so they appear old enough for GC to consider them.
+func (f *fixture) putPinned(contents string, age time.Duration) hashing.Hash {
+	f.t.Helper()
+	desc, err := f.store.Put(f.t.Context(), strings.NewReader(contents))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.age(f.blobPath(desc.Hash), age)
+	if f.cat.selfPins == nil {
+		f.cat.selfPins = map[string]struct{}{}
+	}
+	f.cat.selfPins[desc.Hash.String()] = struct{}{}
 	return desc.Hash
 }
 
@@ -654,6 +683,68 @@ func TestReferencedBlobsAreNeverCandidates(t *testing.T) {
 	}
 	if f.cat.cleared != 1 {
 		t.Error("the stale mark was not cleared")
+	}
+}
+
+// TestPinnedVaultBlobSurvivesGCSweep is the production loss reproduction (#719).
+//
+// A vault blob uploaded before #659 recorded bytes in the store and a
+// self-placement pin, but wrote no blobs row. GC saw the file in the store,
+// did not find it in the catalog's blobs set, and reclaimed it as an orphan.
+// After the fix, the pin must keep the bytes alive regardless of their age.
+//
+// The test verifies both sides of the fix:
+//   - the bytes are NOT reclaimed
+//   - the sweep records the entry in PinnedUntracked so an operator can see
+//     that adoption has not completed yet
+func TestPinnedVaultBlobSurvivesGCSweep(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	// Bytes in the store, a self-pin, but no blobs row: exactly the pre-#659
+	// vault upload shape that caused the production data loss.
+	vaultBlob := f.putPinned("vault ciphertext content", 30*24*time.Hour)
+
+	result, err := f.collector().Collect(t.Context(), integrity.CollectOptions{Apply: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(result.Untracked) != 0 {
+		t.Fatalf("pinned vault blob was reclaimed as an untracked orphan: %+v", result.Untracked)
+	}
+	if len(result.PinnedUntracked) != 1 || result.PinnedUntracked[0].Hash != vaultBlob.String() {
+		t.Fatalf("expected pinned_untracked=[vault blob], got %+v", result.PinnedUntracked)
+	}
+	if has, err := f.store.Has(t.Context(), vaultBlob); err != nil {
+		t.Fatal(err)
+	} else if !has {
+		t.Error("the pinned vault blob's bytes were removed; this is the production data loss (#719)")
+	}
+}
+
+// TestUnpinnedOrphanIsStillReclaimedAfterPin is the positive control: an
+// untracked file with no placement pin must still be reclaimed after the grace
+// window, so the fix does not suppress ordinary orphan cleanup.
+func TestUnpinnedOrphanIsStillReclaimedAfterPin(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	orphan := f.putUnrecorded("left by an ingest that faulted", 30*24*time.Hour)
+
+	result, err := f.collector().Collect(t.Context(), integrity.CollectOptions{Apply: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(result.Untracked) != 1 || result.Untracked[0].Hash != orphan.String() {
+		t.Fatalf("expected the unpinned orphan to be reclaimed, got %+v", result.Untracked)
+	}
+	if len(result.PinnedUntracked) != 0 {
+		t.Fatalf("unpinned orphan incorrectly counted in pinned_untracked: %+v", result.PinnedUntracked)
+	}
+	if has, err := f.store.Has(t.Context(), orphan); err != nil {
+		t.Fatal(err)
+	} else if has {
+		t.Error("the unpinned orphan was not reclaimed after the grace window")
 	}
 }
 
