@@ -1,6 +1,6 @@
 module github.com/rarebit-one/heyarr-core
 
-go 1.25.7
+go 1.26.9
 
 require (
 	github.com/boombuler/barcode v1.1.0

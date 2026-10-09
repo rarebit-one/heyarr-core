@@ -10,6 +10,14 @@ stable.
 ## [Unreleased]
 
 ### Fixed
+- **Multi-range blob reads survive Go 1.26.9 / 1.27.2.** Those releases cap
+  the ranges a `Range` header may carry (CVE-2026-78667) and, for a module on a
+  go line below 1.26, default that cap to one, so a replication or web-seed
+  request for several pieces came back `200` with the whole blob. The binary
+  now declares `//go:debug httpservecontentmaxranges=200` (Go's own current
+  default) instead of inheriting the bound from the go directive, and the
+  module's go line moves to 1.26.9, the first 1.26 that knows the setting
+  (1.25 is out of security support and cannot install the pinned deadcode).
 - **Followed-source health reads the recorded check.** `list_followed`,
   `GET /followed-sources` and the follow views said `health: "unknown"` for
   every source on a node whose providers all reported healthy, because the
