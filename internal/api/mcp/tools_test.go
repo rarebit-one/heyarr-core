@@ -343,6 +343,54 @@ func TestGetMissingContent(t *testing.T) {
 	}
 }
 
+// A want narrower than its work says what it is for. A followed feed yields one
+// item-scoped want per article and a followed series one per episode; under the
+// work's title alone, forty of them read as forty copies of one want (a live
+// node's Missing list was a column of "Hackaday"). The work's title is kept so a
+// reader keyed on it is unchanged; the item's own name is added beside it.
+func TestAWantNarrowerThanItsWorkNamesItsItem(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, false)
+	h.exec(`INSERT INTO items (id, work_id, item_key, title, published_at, attributes, created_at, updated_at) VALUES
+		('it-titled', ?, 'ep-1', 'The First Article', NULL, '{}', ?, ?),
+		('it-bare', ?, 'ep-2', '', NULL, '{}', ?, ?)`,
+		workID, stamp, stamp, workID, stamp, stamp)
+	h.exec(`INSERT INTO desired_items
+		(id, scope, work_id, edition_id, item_id, quality_profile_id, monitor, reason, created_at, updated_at) VALUES
+		('di-titled', 'item', ?, NULL, 'it-titled', ?, 1, '', ?, ?),
+		('di-bare',   'item', ?, NULL, 'it-bare',   ?, 1, '', ?, ?)`,
+		workID, profileID, stamp, stamp, workID, profileID, stamp, stamp)
+	whole := h.wantOne("")
+
+	var out struct {
+		Wants []struct {
+			DesiredItemID string `json:"desired_item_id"`
+			Title         string `json:"title"`
+			Scope         string `json:"scope"`
+			Item          string `json:"item"`
+			Edition       string `json:"edition"`
+		} `json:"wants"`
+	}
+	h.call("", "get_missing_content", "").structured(t, &out)
+
+	byID := map[string]struct {
+		Title, Scope, Item, Edition string
+	}{}
+	for _, w := range out.Wants {
+		byID[w.DesiredItemID] = struct{ Title, Scope, Item, Edition string }{w.Title, w.Scope, w.Item, w.Edition}
+	}
+	if got := byID["di-titled"]; got.Scope != "item" || got.Item != "The First Article" || got.Title == "" {
+		t.Errorf("titled item want = %+v, want scope item named by its title under the work's title", got)
+	}
+	// A feed that gave the item no title still gave it a key; that beats nothing.
+	if got := byID["di-bare"]; got.Scope != "item" || got.Item != "ep-2" {
+		t.Errorf("untitled item want = %+v, want its item_key as the name", got)
+	}
+	if got := byID[whole]; got.Scope != "work" || got.Item != "" || got.Edition != "" {
+		t.Errorf("work-scoped want = %+v, want scope work and no narrower name", got)
+	}
+}
+
 // The flagship. The reasons come back with their stable rule codes intact.
 func TestExplainReleaseReturnsReasonsNotAVerdict(t *testing.T) {
 	t.Parallel()

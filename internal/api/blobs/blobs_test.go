@@ -1,3 +1,9 @@
+// The test binary needs the same multi-range bound the heyarr binary declares
+// (cmd/heyarr/main.go): under Go 1.26.9+ a module on go 1.25 defaults to ONE
+// range, and TestMultipleRangesInOneRequest would see 200 for a 206.
+//
+//go:debug httpservecontentmaxranges=200
+
 // Response bodies in this file are closed by the t.Cleanup that do() registers,
 // which bodyclose cannot see through — hence the file-wide exemption rather
 // than a comment on each of several dozen call sites.

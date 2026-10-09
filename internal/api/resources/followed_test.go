@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
 // Followed sources over the real HTTP surface (§55, M12). The follow op and its
@@ -61,6 +62,63 @@ func TestFollowASeriesByTitleInfersTVSeries(t *testing.T) {
 	// No metadata provider is configured in this harness, so health is unknown.
 	if v.Health != "unknown" {
 		t.Errorf("health = %q, want unknown with no feed adapter configured", v.Health)
+	}
+}
+
+// The health a follow view reports is the RECORDED check, not the registry's
+// memory. The worker's health pass writes provider_health; the controller that
+// answers the follow read holds a registry that never checked anything, so
+// reading its copy said "unknown" for every source on a node whose providers all
+// reported healthy — the same split GET /providers already resolves in favour of
+// the database.
+func TestFollowedHealthIsTheRecordedCheckNotTheRegistrysMemory(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		healthy int
+		want    string
+	}{
+		{"a recorded pass", 1, "healthy"},
+		{"a recorded failure", 0, "unhealthy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			reg := providers.New(nil)
+			if err := reg.Register(providers.NewFake("fake-tmdb", providers.CapabilityMetadata)); err != nil {
+				t.Fatal(err)
+			}
+			h := newHarness(t, withProviders(reg)).seed()
+			h.exec(`INSERT INTO provider_health
+				(name, capabilities, healthy, detail, version, checked_at, created_at, updated_at)
+				VALUES ('fake-tmdb', '["metadata"]', ?, 'observed', 'v3', ?, ?, ?)`,
+				tc.healthy, seedTime, seedTime, seedTime)
+
+			resp := follow(h, `{"tvdb_id":"12345","title":"The Series","quality_profile":"living-room","backfill":"full"}`)
+			if resp.StatusCode != http.StatusCreated {
+				t.Fatalf("follow = %d: %s", resp.StatusCode, h.body(resp))
+			}
+			var v followedView
+			if err := json.Unmarshal(h.body(resp), &v); err != nil {
+				t.Fatal(err)
+			}
+			if v.Health != tc.want {
+				t.Errorf("health on create = %q, want %q (the recorded check)", v.Health, tc.want)
+			}
+
+			list := h.get("/api/v1/followed-sources")
+			if list.StatusCode != http.StatusOK {
+				t.Fatalf("list = %d: %s", list.StatusCode, h.body(list))
+			}
+			var listed struct {
+				Sources []followedView `json:"followed_sources"`
+			}
+			if err := json.Unmarshal(h.body(list), &listed); err != nil {
+				t.Fatal(err)
+			}
+			if len(listed.Sources) != 1 || listed.Sources[0].Health != tc.want {
+				t.Errorf("health in the list = %+v, want %q", listed.Sources, tc.want)
+			}
+		})
 	}
 }
 

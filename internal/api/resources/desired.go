@@ -530,7 +530,7 @@ func (a *API) establishSeriesFollow(
 ) (FollowedSourceView, bool) {
 	if src, ok, err := a.catalog.FollowSourceForWork(ctx, workID); err == nil && ok {
 		a.pollFollowNow(ctx, src.ID)
-		return a.followViewFor(ctx, src, a.metadataHealthLabel()), true
+		return a.followViewFor(ctx, src, a.metadataHealthLabel(ctx)), true
 	}
 
 	feedRef := a.resolveSeriesFeedRef(ctx, title)
@@ -555,7 +555,7 @@ func (a *API) establishSeriesFollow(
 		return FollowedSourceView{}, false
 	}
 	a.pollFollowNow(ctx, src.ID)
-	return a.followViewFor(ctx, src, a.metadataHealthLabel()), true
+	return a.followViewFor(ctx, src, a.metadataHealthLabel(ctx)), true
 }
 
 // resolveSeriesFeedRef finds the metadata id to follow a series by, from its
