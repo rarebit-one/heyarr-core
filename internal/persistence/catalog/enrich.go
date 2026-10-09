@@ -86,63 +86,8 @@ func (c *Catalog) RecordFetchedArtwork(
 		if err != nil {
 			return err
 		}
-
-		stamp := now.Format(timestampFormat)
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO blobs (hash, size, mime, first_seen_at)
-			VALUES (?, ?, ?, ?)
-			ON CONFLICT (hash) DO NOTHING`,
-			art.BlobHash, art.Size, mime, stamp); err != nil {
-			return err
-		}
-
-		var existing string
-		lookErr := tx.QueryRowContext(ctx,
-			`SELECT id FROM assets WHERE edition_id = ? AND blob_hash = ? AND role = ?`,
-			editionID, art.BlobHash, artworkRole).Scan(&existing)
-		switch {
-		case lookErr == nil:
-			_, err = tx.ExecContext(ctx, `UPDATE assets SET updated_at = ? WHERE id = ?`, stamp, existing)
-			return err
-		case !errors.Is(lookErr, sql.ErrNoRows):
-			return lookErr
-		}
-
-		attrs, err := encodeAttributes(map[string]any{"source": art.Source})
-		if err != nil {
-			return err
-		}
-		assetID := uuid.Must(uuid.NewV7()).String()
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash,
-				source_path, role, filename, mime, identification_source, attributes,
-				item_id, created_at, updated_at)
-			VALUES (?, ?, ?, 'managed', ?, NULL, ?, ?, ?, 'fetched', ?, NULL, ?, ?)`,
-			assetID, editionID, libraryID, art.BlobHash,
-			artworkRole, artworkFilename, mime, attrs, stamp, stamp); err != nil {
-			return err
-		}
-
-		var peerID string
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM peers WHERE is_self = 1`).Scan(&peerID); err != nil {
-			return fmt.Errorf("catalog: resolving this peer for an artwork replica: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO replicas (blob_hash, peer_id, state, bytes_present, verified_at, updated_at)
-			VALUES (?, ?, 'present', ?, ?, ?)
-			ON CONFLICT (blob_hash, peer_id) DO UPDATE SET
-				state = 'present', bytes_present = excluded.bytes_present, updated_at = excluded.updated_at`,
-			art.BlobHash, peerID, art.Size, stamp, stamp); err != nil {
-			return err
-		}
-
-		e, err := c.events.EmitTx(ctx, tx, events.TypeAssetCreated, "asset", assetID,
-			map[string]any{
-				"asset_id": assetID, "edition_id": editionID,
-				"blob_hash": art.BlobHash, "role": artworkRole,
-				"work_id": workID, "source": art.Source,
-			})
-		if err != nil {
+		e, ok, err := c.recordArtworkTx(ctx, tx, editionID, libraryID, workID, art, mime, "fetched", now)
+		if err != nil || !ok {
 			return err
 		}
 		pending = append(pending, e)
@@ -153,6 +98,78 @@ func (c *Catalog) RecordFetchedArtwork(
 	}
 	c.events.Publish(pending...)
 	return nil
+}
+
+// recordArtworkTx is the shared body of RecordFetchedArtwork and
+// RecordExtractedCover: land a cover's blob as a managed role='artwork' asset on
+// editionID, with a self-peer replica and an asset.created event. identSource is
+// the asset's identification_source — 'fetched' for a network cover, 'extracted'
+// for one lifted out of the book file — which artworkRank reads to prefer the
+// file's own cover (ADR-0105). ok is false when the asset already existed (an
+// idempotent re-run), in which case there is no event to publish.
+func (c *Catalog) recordArtworkTx(
+	ctx context.Context, tx *sql.Tx, editionID string, libraryID any, workID string,
+	art FetchedArtwork, mime, identSource string, now time.Time,
+) (events.Event, bool, error) {
+	stamp := now.Format(timestampFormat)
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO blobs (hash, size, mime, first_seen_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (hash) DO NOTHING`,
+		art.BlobHash, art.Size, mime, stamp); err != nil {
+		return events.Event{}, false, err
+	}
+
+	var existing string
+	lookErr := tx.QueryRowContext(ctx,
+		`SELECT id FROM assets WHERE edition_id = ? AND blob_hash = ? AND role = ?`,
+		editionID, art.BlobHash, artworkRole).Scan(&existing)
+	switch {
+	case lookErr == nil:
+		_, err := tx.ExecContext(ctx, `UPDATE assets SET updated_at = ? WHERE id = ?`, stamp, existing)
+		return events.Event{}, false, err
+	case !errors.Is(lookErr, sql.ErrNoRows):
+		return events.Event{}, false, lookErr
+	}
+
+	attrs, err := encodeAttributes(map[string]any{"source": art.Source})
+	if err != nil {
+		return events.Event{}, false, err
+	}
+	assetID := uuid.Must(uuid.NewV7()).String()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash,
+			source_path, role, filename, mime, identification_source, attributes,
+			item_id, created_at, updated_at)
+		VALUES (?, ?, ?, 'managed', ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+		assetID, editionID, libraryID, art.BlobHash,
+		artworkRole, artworkFilename, mime, identSource, attrs, stamp, stamp); err != nil {
+		return events.Event{}, false, err
+	}
+
+	var peerID string
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM peers WHERE is_self = 1`).Scan(&peerID); err != nil {
+		return events.Event{}, false, fmt.Errorf("catalog: resolving this peer for an artwork replica: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO replicas (blob_hash, peer_id, state, bytes_present, verified_at, updated_at)
+		VALUES (?, ?, 'present', ?, ?, ?)
+		ON CONFLICT (blob_hash, peer_id) DO UPDATE SET
+			state = 'present', bytes_present = excluded.bytes_present, updated_at = excluded.updated_at`,
+		art.BlobHash, peerID, art.Size, stamp, stamp); err != nil {
+		return events.Event{}, false, err
+	}
+
+	e, err := c.events.EmitTx(ctx, tx, events.TypeAssetCreated, "asset", assetID,
+		map[string]any{
+			"asset_id": assetID, "edition_id": editionID,
+			"blob_hash": art.BlobHash, "role": artworkRole,
+			"work_id": workID, "source": art.Source,
+		})
+	if err != nil {
+		return events.Event{}, false, err
+	}
+	return e, true, nil
 }
 
 // representativeEdition resolves the Edition a Work's cover should attach to: the

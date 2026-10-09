@@ -29,6 +29,21 @@ func fakeTool(t *testing.T, name, banner string) string {
 	return path
 }
 
+// stderrTool writes an executable that answers only -v, on stderr, the way
+// poppler's tools do, and fails any other flag.
+func stderrTool(t *testing.T, name, banner string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake tools are shell scripts; the resolver itself is platform-neutral")
+	}
+	path := filepath.Join(t.TempDir(), name)
+	script := fmt.Sprintf("#!/bin/sh\n[ \"$1\" = -v ] || exit 99\ncat >&2 <<'BANNER'\n%s\nBANNER\n", banner)
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil { //nolint:gosec // a test fixture that must be executable
+		t.Fatal(err)
+	}
+	return path
+}
+
 // silentTool writes an executable that exits 0 and prints nothing — /bin/true
 // wearing a name. It is the case that makes "we found something" and "we found
 // ffprobe" different questions.
@@ -50,10 +65,14 @@ built with Apple clang version 15.0.0`
 const ffmpegBanner = `ffmpeg version 6.1.1 Copyright (c) 2000-2023 the FFmpeg developers
 built with Apple clang version 15.0.0`
 
-func TestResolveReportsBothToolsAndTheirCapabilities(t *testing.T) {
+const pdftoppmBanner = `pdftoppm version 24.02.0
+Copyright 2005-2024 The Poppler Developers - http://poppler.freedesktop.org`
+
+func TestResolveReportsEveryToolAndItsCapability(t *testing.T) {
 	tc, err := media.Resolve(t.Context(), media.Options{
-		FFprobePath: fakeTool(t, "ffprobe", ffprobeBanner),
-		FFmpegPath:  fakeTool(t, "ffmpeg", ffmpegBanner),
+		FFprobePath:  fakeTool(t, "ffprobe", ffprobeBanner),
+		FFmpegPath:   fakeTool(t, "ffmpeg", ffmpegBanner),
+		PdftoppmPath: stderrTool(t, "pdftoppm", pdftoppmBanner),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -64,9 +83,14 @@ func TestResolveReportsBothToolsAndTheirCapabilities(t *testing.T) {
 	if !tc.FFmpeg.Available || tc.FFmpeg.Version != "6.1.1" {
 		t.Errorf("ffmpeg = %+v", tc.FFmpeg)
 	}
-	if got := tc.Capabilities(); len(got) != 2 ||
-		got[0] != media.CapabilityFFprobe || got[1] != media.CapabilityFFmpeg {
-		t.Errorf("capabilities = %v, want [ffprobe ffmpeg]", got)
+	// pdftoppm prints its banner on stderr, in answer to -v; the fake does the
+	// same, so this asserts the resolver reads the stream the real tool uses.
+	if !tc.Pdftoppm.Available || tc.Pdftoppm.Version != "24.02.0" {
+		t.Errorf("pdftoppm = %+v", tc.Pdftoppm)
+	}
+	if got := tc.Capabilities(); len(got) != 3 ||
+		got[0] != media.CapabilityFFprobe || got[1] != media.CapabilityFFmpeg || got[2] != media.CapabilityPdftoppm {
+		t.Errorf("capabilities = %v, want [ffprobe ffmpeg pdftoppm]", got)
 	}
 }
 
@@ -78,7 +102,7 @@ func TestAnAbsentToolchainIsNotAnError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolving on a machine with no toolchain failed: %v", err)
 	}
-	if tc.FFprobe.Available || tc.FFmpeg.Available {
+	if tc.FFprobe.Available || tc.FFmpeg.Available || tc.Pdftoppm.Available {
 		t.Fatalf("something was reported available with no PATH: %+v", tc)
 	}
 	if got := tc.Capabilities(); len(got) != 0 {

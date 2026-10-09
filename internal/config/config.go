@@ -495,6 +495,9 @@ type Log struct {
 type Media struct {
 	FFprobePath string `koanf:"ffprobe_path"`
 	FFmpegPath  string `koanf:"ffmpeg_path"`
+	// PdftoppmPath names poppler's pdftoppm, which renders a PDF book's first
+	// page as its cover (ADR-0105). Same rules as the two above.
+	PdftoppmPath string `koanf:"pdftoppm_path"`
 	// StreamConcurrency caps the on-the-fly repackages a node runs at once
 	// (ADR-0069). Each is one ffmpeg, and one that re-encodes video is a
 	// core. Zero means the default of two; a client past the cap is told to
