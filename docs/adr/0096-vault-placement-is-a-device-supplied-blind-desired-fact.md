@@ -2,6 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-09-15
+**Amended:** 2026-10-09 — upload pins are provisional until a writer confirms them; see *Amendment: provisional upload pins (2026-10-09, #714)*.
 **Milestone:** M9 — Encrypted personal state (the vault drive surface)
 
 ## Context
@@ -181,3 +182,111 @@ the pin follows the CRDT, client-driven.
 - **ADR-0065 / ADR-0067** — the device write scope the placement surface requires.
 - **§37, §52** — the desired-state model and the materialised snapshot a peer
   already pulls against.
+
+## Amendment: provisional upload pins, confirmed by the writer (2026-10-09, #714)
+
+### Problem
+
+The original record stated that a pin's lifecycle is the device's: the device
+creates a pin when it uploads a blob and drops it when the drive CRDT no longer
+references that blob. This model assumes the upload and the drive-change push
+succeed together. In practice they are two separate network calls, and any failure
+between them — a transport error, an access refusal, or (since #713) a
+`change_key_epoch_mismatch` after a key rotation — leaves the blob pinned
+permanently with no drive entry naming it. There is no unpin path for restricted
+callers (`DELETE /vault/placements` refuses them by design, because unpinning is
+how a blob becomes eligible for collection), so orphaned ciphertext accumulates as
+an unbounded storage leak.
+
+### Decision
+
+**`PUT /vault/blobs/{hash}` records a provisional pin. The writer confirms it
+after the drive change is accepted, making it permanent. GC may reclaim an
+unconfirmed pin once its grace period expires.**
+
+#### 🔴 Upload creates a provisional pin
+
+The upload endpoint records two new fields per pin: `uploader` (the authenticated
+principal) and `provisional_until` (a wall-clock expiry, 24 hours from upload
+time). A pin in the store that carries no `provisional_until` is treated as
+permanent, so no existing row is disturbed by the migration (see *Migration*
+below).
+
+#### 🔴 `POST /vault/blobs/confirm` makes pins permanent
+
+After the drive change is accepted, the writer calls:
+
+```
+POST /vault/blobs/confirm
+{"blobs": ["blake3:<hex>", …]}
+```
+
+For each listed blob the server clears the `provisional_until` field (the pin is
+now permanent). Rules:
+
+- **Executor scope.** A restricted executor may confirm only blobs whose stored
+  `uploader` matches its own principal. An unrestricted (device-level) caller may
+  confirm any blob it can name.
+- **Idempotency.** Confirming a blob whose pin is already permanent is a no-op and
+  returns success.
+- **Unknown or unheld blob.** If the node does not hold the blob at all, the
+  response includes a per-blob error; the remaining blobs in the request continue
+  to be processed.
+
+#### 🔴 GC reclaims expired provisional pins
+
+A provisional pin whose `provisional_until` timestamp is in the past is treated by
+GC as absent — the blob is subject to the existing grace window (ADR-0018) and
+reclaimed if no other durability reason covers it (no permanent placement pin, no
+`assets` row, no `verified_remote` / `sole_peer` status). This is the only change
+to GC's durability basis.
+
+#### 🔴 A permanently pinned blob is never reclaimed by provisional-pin expiry
+
+If a blob is already permanently pinned — by any prior accepted change from any
+writer — an upload by a second writer creates a provisional pin alongside it, but
+the permanent pin takes precedence. When the provisional expires, GC sees the
+permanent pin and leaves the blob. Confirming that second upload is still accepted
+(idempotent). This covers the dedupe case: two writers uploading the same
+ciphertext, which is only possible when both hold the same space key and seal
+identical plaintext.
+
+#### 🔴 Interaction with `change_key_epoch_mismatch`
+
+The key-rotation race (#713): a writer uploads a manifest and content blob under
+epoch N, receives `change_key_epoch_mismatch`, re-seals, and uploads two new blobs
+under epoch N+1. Both uploads create provisional pins. After the epoch-N+1 change
+is accepted, the writer confirms the epoch-N+1 blob ids. The epoch-N provisional
+pins expire after 24 hours and GC reclaims those bytes without any manual
+intervention.
+
+#### 🔴 Migration: existing pins become permanent
+
+A migration adds `provisional_until TIMESTAMP` and `uploader TEXT` to the
+placement-pins store. Existing rows receive `provisional_until = NULL`, which the
+server interprets as permanent. No expiry sweep runs against them.
+
+#### 🔴 Compatibility
+
+Clients that predate this amendment never call `confirm`; their upload pins will
+expire after 24 hours, making their vault writes appear to have leaked. To handle
+this during rollout, the server SHOULD gate provisional-pin semantics behind a
+configuration flag, defaulting to the legacy permanent-pin behaviour until the
+operator is satisfied that all active clients send `confirm`. The flag and its
+effect MUST be documented in the configuration reference.
+
+### Changed invariants
+
+The sequence that produces a durable pin changes from `upload` to
+`upload → change-accepted → confirm`. A pin existing in the store before this
+amendment, or created while the compatibility flag is active, is permanent by
+definition.
+
+### Executor-rights note
+
+This amendment grants restricted executors the right to call `confirm` for blobs
+they uploaded themselves. It does not otherwise change the existing prohibition on
+restricted executors dropping placement pins. ADR-0104 (a restricted principal
+reaches only the spaces a device granted it) is the record of executor rights; this
+confirm-only carve-out sits inside its per-space grant, so an executor can confirm
+only blobs it uploaded into a space it was granted.
