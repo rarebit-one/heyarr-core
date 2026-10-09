@@ -146,11 +146,12 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 
 	cat, err := catalog.New(catalog.Options{
-		DB:       db,
-		Events:   eventLog,
-		PeerName: w.cfg.Peer.Name,
-		PeerSite: w.cfg.Peer.Site,
-		Logger:   w.log,
+		DB:         db,
+		Events:     eventLog,
+		PeerName:   w.cfg.Peer.Name,
+		PeerSite:   w.cfg.Peer.Site,
+		Logger:     w.log,
+		LocalStore: store,
 	})
 	if err != nil {
 		return fmt.Errorf("worker: opening the catalog: %w", err)

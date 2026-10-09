@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/rarebit-one/void-which-binds-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/domain/replication"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 )
@@ -57,6 +59,13 @@ type PeerConvergence struct {
 	// `blobs` — so planning it would be a job that fails every cycle. The pin
 	// stays; it is planned once the blob is known here.
 	Unrecordable int
+	// Missing counts self-pins left out of Gaps because this node has no
+	// `blobs` row for the pinned blob AND the content store confirms the bytes
+	// are not held (#720). Planning such a pin produces a replicate_blob job
+	// that fails permanently every cycle ("unknown blob, not held"), and the
+	// next reconcile cycle plans it again, forever. The pin stays; it is
+	// planned once the blob is known or held again.
+	Missing int
 }
 
 // PlanPeerConvergence diffs the desired blob set against what the peers hold.
@@ -120,11 +129,12 @@ func (c *Catalog) PlanPeerConvergence(ctx context.Context, scope string) (PeerCo
 	// per-(blob, peer) — never by adding a pinned hash to the flat `canonical`
 	// set, which would fan every pin to ALL Full Peers and replicate a device's
 	// one-peer pin across the whole fabric (the thing ADR-0096 forbids).
-	pinGaps, unrecordable, err := c.pinGaps(ctx, required, held, plan.Gaps)
+	pinGaps, unrecordable, missing, err := c.pinGaps(ctx, required, held, plan.Gaps)
 	if err != nil {
 		return PeerConvergence{}, err
 	}
 	plan.Unrecordable = unrecordable
+	plan.Missing = missing
 	if len(pinGaps) > 0 {
 		plan.Gaps = append(plan.Gaps, pinGaps...)
 		// Re-sort to preserve Diff's deterministic (blob, peer) order across the
@@ -167,21 +177,21 @@ func (c *Catalog) PlanPeerConvergence(ctx context.Context, scope string) (PeerCo
 // for, which is how such a node heals without an operator.
 func (c *Catalog) pinGaps(
 	ctx context.Context, required []string, held replication.Holdings, have []replication.Gap,
-) ([]replication.Gap, int, error) {
+) ([]replication.Gap, int, int, error) {
 	pins, err := c.AllPlacementPins(ctx)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	if len(pins) == 0 {
-		return nil, 0, nil
+		return nil, 0, 0, nil
 	}
 	known, err := c.pinnedBlobsKnown(ctx)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	self, err := c.SelfPeer(ctx)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	full := make(map[string]struct{}, len(required))
@@ -196,6 +206,7 @@ func (c *Catalog) pinGaps(
 	var (
 		out          []replication.Gap
 		unrecordable int
+		missing      int
 	)
 	for _, p := range pins {
 		if _, isFull := full[p.PeerID]; !isFull {
@@ -206,9 +217,35 @@ func (c *Catalog) pinGaps(
 		if _, holds := held[p.PeerID][p.BlobHash]; holds {
 			continue
 		}
-		if _, ok := known[p.BlobHash]; !ok && p.PeerID != self {
-			unrecordable++
-			continue
+		if _, ok := known[p.BlobHash]; !ok {
+			if p.PeerID != self {
+				// Another peer: the transfer could never be recorded, so skip
+				// it and count it (the Unrecordable case, #658).
+				unrecordable++
+				continue
+			}
+			// Self-pin, no blobs row: plan it only when the bytes are held,
+			// so the adoption path can run (#658). When the bytes are ALSO not
+			// held (#720) the job fails with ErrPermanent and the next cycle
+			// plans it again forever — skip it and count it as Missing.
+			if c.localStore != nil {
+				h, err := hashing.Parse(p.BlobHash)
+				if err != nil {
+					// A stored hash that cannot be parsed is a data error;
+					// treat it the same way as not held rather than hard-fail
+					// the whole cycle.
+					missing++
+					continue
+				}
+				held, err := c.localStore.Has(ctx, h)
+				if err != nil {
+					return nil, 0, 0, fmt.Errorf("catalog: checking local hold for blob %s: %w", p.BlobHash, err)
+				}
+				if !held {
+					missing++
+					continue
+				}
+			}
 		}
 		key := p.BlobHash + "\x00" + p.PeerID
 		if _, dup := already[key]; dup {
@@ -217,7 +254,7 @@ func (c *Catalog) pinGaps(
 		already[key] = struct{}{}
 		out = append(out, replication.Gap{BlobHash: p.BlobHash, PeerID: p.PeerID})
 	}
-	return out, unrecordable, nil
+	return out, unrecordable, missing, nil
 }
 
 // pinnedBlobsKnown is the set of pinned blobs the catalogue has a row for.
@@ -372,6 +409,10 @@ type PeerReconcileSummary struct {
 	// converged, and a summary that omitted this would look exactly like one
 	// that had.
 	Deferred int
+	// Missing is how many self-pins were skipped because this node has no
+	// blobs row for the blob AND confirmed the bytes are not held (#720).
+	// Planning them would produce jobs that fail permanently every cycle.
+	Missing int
 }
 
 // RecordPeerReconciled emits sync.reconciled — one event per cycle.
@@ -408,6 +449,7 @@ func (c *Catalog) RecordPeerReconciled(ctx context.Context, s PeerReconcileSumma
 		"in_flight":        s.InFlight,
 		"enqueued":         s.Enqueued,
 		"deferred":         s.Deferred,
+		"missing":          s.Missing,
 	}); err != nil {
 		return fmt.Errorf("catalog: recording a peer reconciliation cycle: %w", err)
 	}
