@@ -91,6 +91,11 @@ type StreamSpec struct {
 //	                    the first packet of every stream has been seen — a
 //	                    copied AC-3 track has no frame size until then, and
 //	                    without it the muxer refuses to write the header.
+//	-frag_duration      flush a fragment after one second of media, even when
+//	                    copying video with widely spaced source keyframes.
+//	-force_key_frames   encoded video gets a keyframe each second so the first
+//	                    playable fragment does not wait for x264's default GOP.
+//
 //	-f mp4 -            to stdout, which is the response.
 func StreamArgs(spec StreamSpec) []string {
 	args := []string{"-hide_banner", "-loglevel", "warning", "-nostdin"}
@@ -101,7 +106,8 @@ func StreamArgs(spec StreamSpec) []string {
 	if spec.CopyVideo {
 		args = append(args, "-c:v", "copy")
 	} else {
-		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p")
+		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+			"-force_key_frames", "expr:gte(t,n_forced*1)")
 		if spec.MaxHeight > 0 {
 			// -2 keeps the width even, which libx264 with yuv420p requires.
 			args = append(args, "-vf", fmt.Sprintf("scale=-2:'min(%d,ih)'", spec.MaxHeight))
@@ -114,7 +120,7 @@ func StreamArgs(spec StreamSpec) []string {
 	}
 	return append(args,
 		"-movflags", "frag_keyframe+empty_moov+default_base_moof+delay_moov",
-		"-f", "mp4", "-")
+		"-frag_duration", "1000000", "-f", "mp4", "-")
 }
 
 // StreamerOptions configure a Streamer.
