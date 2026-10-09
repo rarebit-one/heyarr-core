@@ -9,6 +9,25 @@ stable.
 
 ## [Unreleased]
 
+### Fixed
+- **Followed-source health reads the recorded check.** `list_followed`,
+  `GET /followed-sources` and the follow views said `health: "unknown"` for
+  every source on a node whose providers all reported healthy, because the
+  label read the API process's in-memory registry, which never ran the check:
+  the worker's health pass writes `provider_health`, and under a split
+  deployment (or `heyarr all`) the controller's copy stays unchecked. The label
+  now lays the recorded health over the registry's copy, the rule
+  `GET /providers` already applied.
+
+### Added
+- **Wants name the item or edition they are for.** `get_missing_content` and
+  `get_upgrade_candidates` rows carry `scope`, and at item scope `item` (the
+  item's title, else its key) or at edition scope `edition` (the label). A
+  followed feed yields one item-scoped want per article and a followed series
+  one per episode; under the work's title alone a Missing list read as forty
+  copies of one want. `title` stays the work's, so existing readers are
+  unchanged.
+
 ### Security
 - **Vault reads verify content addressing** (#710). `vault pull` and
   `vault get-ref` check that the manifest blob hashes to the drive entry's id

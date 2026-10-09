@@ -176,14 +176,26 @@ func (s *Server) getExternalIDs(ctx context.Context, raw json.RawMessage) (any, 
 // Deliberately not the full DesiredItem: an agent reading a list of forty wants
 // needs the target, the standard and the state, and a wall of timestamps and
 // identifiers costs it attention it should be spending on the answer.
+//
+// Scope says what the want is FOR, and Item / Edition name it when the scope is
+// narrower than the work: a followed feed yields one item-scoped want per
+// article, a followed series one per episode, and forty of those under the
+// work's title alone read as forty copies of the same want (a live node's
+// Missing list was a column of "Hackaday"). Title stays the work's, so a reader
+// keyed on it is unchanged; the narrower name is added beside it.
 type wantSummary struct {
 	DesiredItemID string `json:"desired_item_id"`
 	WorkID        string `json:"work_id"`
 	Title         string `json:"title"`
-	Profile       string `json:"quality_profile"`
-	State         string `json:"state"`
-	Monitor       bool   `json:"monitor"`
-	Reason        string `json:"reason,omitempty"`
+	Scope         string `json:"scope"`
+	// Item is the item's title at item scope (its key when the feed gave it
+	// no title); Edition the edition's label at edition scope. Absent otherwise.
+	Item    string `json:"item,omitempty"`
+	Edition string `json:"edition,omitempty"`
+	Profile string `json:"quality_profile"`
+	State   string `json:"state"`
+	Monitor bool   `json:"monitor"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // wantQuery is the shared read behind get_missing_content and
@@ -195,11 +207,15 @@ type wantSummary struct {
 func (s *Server) wantQuery(ctx context.Context, predicate string, limit int) (any, error) {
 	//nolint:gosec // predicate is a package-level literal, never caller input
 	stmt := `
-		SELECT d.id, d.work_id, w.title, q.name, d.monitor, d.reason,
+		SELECT d.id, d.work_id, w.title, d.scope,
+		       COALESCE(NULLIF(i.title, ''), i.item_key, ''), COALESCE(e.label, ''),
+		       q.name, d.monitor, d.reason,
 		       a.phase, a.managed, a.content, a.placement
 		FROM desired_items d
 		JOIN works w ON w.id = d.work_id
 		JOIN quality_profiles q ON q.id = d.quality_profile_id
+		LEFT JOIN items i ON i.id = d.item_id
+		LEFT JOIN editions e ON e.id = d.edition_id
 		LEFT JOIN acquisition_state a ON a.desired_item_id = d.id
 		WHERE ` + predicate + `
 		ORDER BY d.created_at, d.id
@@ -223,8 +239,8 @@ func (s *Server) wantQuery(ctx context.Context, predicate string, limit int) (an
 			phase, content, placement *string
 			managed                   *int64
 		)
-		if err := rows.Scan(&w.DesiredItemID, &w.WorkID, &w.Title, &w.Profile,
-			&monitor, &w.Reason, &phase, &managed, &content, &placement); err != nil {
+		if err := rows.Scan(&w.DesiredItemID, &w.WorkID, &w.Title, &w.Scope, &w.Item, &w.Edition,
+			&w.Profile, &monitor, &w.Reason, &phase, &managed, &content, &placement); err != nil {
 			return nil, err
 		}
 		w.Monitor = monitor == 1

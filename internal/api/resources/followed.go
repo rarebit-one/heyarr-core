@@ -374,7 +374,7 @@ func (a *API) FollowSource(ctx context.Context, req FollowSourceRequest) (Follow
 			"source_id", src.ID, "error", err)
 	}
 
-	view := a.followViewFor(ctx, src, a.metadataHealthLabel())
+	view := a.followViewFor(ctx, src, a.metadataHealthLabel(ctx))
 	return view, nil
 }
 
@@ -385,7 +385,7 @@ func (a *API) ListFollowed(ctx context.Context) ([]FollowedSourceView, error) {
 	if err != nil {
 		return nil, err
 	}
-	health := a.metadataHealthLabel()
+	health := a.metadataHealthLabel(ctx)
 	out := make([]FollowedSourceView, 0, len(sources))
 	for _, s := range sources {
 		out = append(out, a.followViewFor(ctx, s, health))
@@ -631,9 +631,26 @@ func (a *API) followViewFor(ctx context.Context, s catalog.StoredSource, health 
 // healthy, unhealthy if one exists and all are unhealthy, unknown otherwise
 // (none configured, or none yet checked). It is a property of the node, not of
 // one source, because Phase 1 polls every source through the one adapter.
-func (a *API) metadataHealthLabel() string {
+//
+// The health it reads is the RECORDED one (provider_health, written by the
+// worker's health pass) laid over the registry's in-memory copy — the same rule
+// GET /providers applies. The registry's copy is only meaningful in the process
+// that ran the check; in a controller whose worker lives elsewhere (or, under
+// `heyarr all`, simply in another goroutine's registry) every CheckedAt is zero
+// and this label said "unknown" for every source on a node whose providers all
+// reported healthy. If the recorded read fails the in-memory copy still answers:
+// a health label is not worth failing a follow read over.
+func (a *API) metadataHealthLabel(ctx context.Context) string {
 	if a.providers == nil {
 		return "unknown"
+	}
+	observed := map[string]providers.Health{}
+	if a.catalog != nil {
+		if found, err := a.catalog.ProviderHealth(ctx); err == nil {
+			observed = found
+		} else if a.log != nil {
+			a.log.Warn("could not read recorded provider health for the follow view", "error", err)
+		}
 	}
 	var sawMetadata, sawUnhealthy bool
 	for _, st := range a.providers.Statuses() {
@@ -641,10 +658,14 @@ func (a *API) metadataHealthLabel() string {
 			continue
 		}
 		sawMetadata = true
-		if st.Health.CheckedAt.IsZero() {
+		health := st.Health
+		if recorded, ok := observed[st.Name]; ok {
+			health = recorded
+		}
+		if health.CheckedAt.IsZero() {
 			continue // never checked — unknown, not unhealthy
 		}
-		if st.Health.Healthy {
+		if health.Healthy {
 			return "healthy"
 		}
 		sawUnhealthy = true
@@ -745,7 +766,7 @@ func (a *API) FollowedSourceDetail(ctx context.Context, id string) (FollowedSour
 	if err != nil {
 		return FollowedSourceView{}, err
 	}
-	return a.followViewFor(ctx, src, a.metadataHealthLabel()), nil
+	return a.followViewFor(ctx, src, a.metadataHealthLabel(ctx)), nil
 }
 
 // FollowedSourceItems pages the items one subscription has archived and merely
