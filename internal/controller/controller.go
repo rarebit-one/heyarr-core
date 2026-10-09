@@ -410,6 +410,10 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 	// enrichbeat.go.
 	startEnrichBeat(ctx, beatCatalog, reconcileQueue, c.log, wallTicker)
 
+	// The cover beat (ADR-0105): look inside each held book's own file once for
+	// its cover — an EPUB's declared image, a PDF's first page. See coverbeat.go.
+	startCoverBeat(ctx, beatCatalog, reconcileQueue, c.log, wallTicker)
+
 	// The download poll beat (#247). Same queue and the same serving context.
 	// See downloadbeat.go for why fifteen seconds rather than the health
 	// beat's minute, why the startup pass is the important one, and why this
@@ -499,9 +503,10 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	// discovered later, and so GET /api/v1/system can report what this node
 	// can actually do (ADR-0023). An absent toolchain is not an error.
 	toolchain, err := media.Resolve(context.Background(), media.Options{
-		FFprobePath: c.cfg.Media.FFprobePath,
-		FFmpegPath:  c.cfg.Media.FFmpegPath,
-		Logger:      c.log,
+		FFprobePath:  c.cfg.Media.FFprobePath,
+		FFmpegPath:   c.cfg.Media.FFmpegPath,
+		PdftoppmPath: c.cfg.Media.PdftoppmPath,
+		Logger:       c.log,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)

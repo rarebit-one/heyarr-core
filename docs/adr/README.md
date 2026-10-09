@@ -97,3 +97,4 @@ An ADR that merely describes the code is not worth having.
 | [0100](0100-a-playlist-name-is-an-lww-register-inside-the-playlist-crdt.md) | A playlist's name is an LWW register inside the playlist CRDT, and unknown ops are ignored first | Proposed |
 | [0101](0101-a-vault-change-names-its-log-heads-and-compaction-is-the-peers-job.md) | A vault change names the log heads it saw, a device snapshots, and compaction stays the peer's job | Proposed |
 | [0102](0102-wakes-go-through-the-shared-notify-plane.md) | Wakes go through the shared notify plane, and heyarr holds no subscription registry | Accepted |
+| [0105](0105-a-books-own-file-is-its-first-cover-source.md) | A book's own file is its first cover source | Accepted |
