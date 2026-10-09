@@ -673,3 +673,39 @@ func TestNotifyEnqueueToken(t *testing.T) {
 		t.Fatal("the enqueue bearer leaked into the loaded configuration")
 	}
 }
+
+func TestRetentionWindows(t *testing.T) {
+	// Defaults: a fortnight of events, a week of succeeded jobs, a month of dead ones.
+	cfg, err := Load(writeConfig(t, "data_dir: /srv/heyarr\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	events, succeeded, dead, err := cfg.RetentionDurations()
+	if err != nil {
+		t.Fatalf("RetentionDurations: %v", err)
+	}
+	if events != 14*24*time.Hour || succeeded != 7*24*time.Hour || dead != 30*24*time.Hour {
+		t.Errorf("defaults = (%v, %v, %v), want (336h, 168h, 720h)", events, succeeded, dead)
+	}
+
+	// "d" is days; ordinary Go durations work too; "0" and empty disable one dimension.
+	cfg, err = Load(writeConfig(t, "data_dir: /srv/heyarr\nretention:\n  events: 2d\n"+
+		"  jobs:\n    succeeded: 36h\n    dead: \"0\"\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	events, succeeded, dead, err = cfg.RetentionDurations()
+	if err != nil {
+		t.Fatalf("RetentionDurations: %v", err)
+	}
+	if events != 48*time.Hour || succeeded != 36*time.Hour || dead != 0 {
+		t.Errorf("got (%v, %v, %v), want (48h, 36h, 0)", events, succeeded, dead)
+	}
+
+	// A malformed or negative window is a startup error, not a silently-ignored one.
+	for _, bad := range []string{"events: fortnight", "events: -1d", "jobs:\n    dead: -5h"} {
+		if _, err := Load(writeConfig(t, "data_dir: /srv/heyarr\nretention:\n  "+bad+"\n")); err == nil {
+			t.Errorf("retention %q loaded without error", bad)
+		}
+	}
+}

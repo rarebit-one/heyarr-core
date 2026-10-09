@@ -729,3 +729,51 @@ func (h *harness) eventsHead() int64 {
 	}
 	return info.Events.Head
 }
+
+// A client whose cursor predates the retention floor (#721) is told so with a
+// gap frame naming where the retained log resumes, and then receives the
+// retained events rather than being disconnected.
+func TestACursorBehindRetentionGetsAGapThenTheRetainedLog(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	first := h.emit(events.TypeBlobCreated, "one")
+	pruned := h.emit(events.TypeBlobCreated, "two")
+	kept := h.emit(events.TypeBlobCreated, "three")
+	if _, err := h.db.Writer().ExecContext(context.Background(),
+		`DELETE FROM events WHERE seq <= ?`, pruned); err != nil {
+		t.Fatal(err)
+	}
+
+	c := h.openStream("?after=" + strconv.FormatInt(first, 10))
+	defer c.close()
+	gap := c.next()
+	if gap.Name != streamGapEventName {
+		t.Fatalf("first frame = %q, want a %s frame", gap.Name, streamGapEventName)
+	}
+	want := fmt.Sprintf(`"resume_after":%d,"dropped":%d`, kept-1, kept-first-1)
+	if !strings.Contains(gap.Data, want) {
+		t.Errorf("gap data = %s, want it to contain %s", gap.Data, want)
+	}
+	if next := c.next(); next.ID != kept {
+		t.Errorf("after the gap the stream delivered %d, want the oldest retained event %d", next.ID, kept)
+	}
+}
+
+// A cursor inside the retained log is not a gap, even after a prune.
+func TestACursorInsideRetentionGetsNoGap(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	pruned := h.emit(events.TypeBlobCreated, "one")
+	cursor := h.emit(events.TypeBlobCreated, "two")
+	next := h.emit(events.TypeBlobCreated, "three")
+	if _, err := h.db.Writer().ExecContext(context.Background(),
+		`DELETE FROM events WHERE seq <= ?`, pruned); err != nil {
+		t.Fatal(err)
+	}
+
+	c := h.openStream("?after=" + strconv.FormatInt(cursor, 10))
+	defer c.close()
+	if f := c.next(); f.Name == streamGapEventName || f.ID != next {
+		t.Errorf("first frame = %+v, want event %d with no gap", f, next)
+	}
+}

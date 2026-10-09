@@ -439,6 +439,15 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 	// the backup cadence for the reason the state beat does — both are peer-sync
 	// RPO intervals — and is a no-op on a single-site node with no peer surface.
 	startCatalogOpsSync(ctx, db, backupInterval, self.PeerID, c.log, material, members)
+
+	// Retention pruning (#721). Validated at config load, so the errors here
+	// cannot fire in production; they are read rather than dropped so a future
+	// change to RetentionDurations cannot silently pass an unparsed value
+	// through.
+	eventsWindow, succeededWindow, deadWindow, _ := c.cfg.RetentionDurations()
+	startRetention(ctx, db, reconcileEvents,
+		eventsWindow, succeededWindow, deadWindow, c.log, wallTicker)
+
 	return nil
 }
 
