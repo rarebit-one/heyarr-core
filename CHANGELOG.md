@@ -12,10 +12,13 @@ stable.
 ### Added
 - **Mnemosyne: a second binary for personal media (ADR-0107).** `cmd/mnemosyne`
   builds a focused service that mounts only the personal-state plane, vault blob
-  upload, vault placement pins, blob content serving, auth/tokens/device
-  enrolment/recovery, encrypted-state replication, GC, health/metrics/events
-  and backup. Libraries, scanner, ingest, MCP, render, relay and compat adapters
-  are excluded. Default data directory `/var/lib/mnemosyne`, default port 7778.
+  upload, vault placement pins, blob content serving, device enrolment,
+  encrypted-state replication, health/metrics and backup. Tokens, devices and
+  peers are managed through the CLI (direct database access), not HTTP routes.
+  GC, peer convergence and cross-site blob replication require the worker
+  subcommand and are deferred to Phase 1b. Libraries, scanner, ingest, MCP,
+  render, relay and compat adapters are excluded. Default data directory
+  `/var/lib/mnemosyne`, default port 7778.
 - **`config.Profile` type** with values `media` (default, existing behaviour
   unchanged) and `personal` (Mnemosyne). Validated at startup; a malformed
   value is a hard error.

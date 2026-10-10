@@ -111,6 +111,14 @@ func TestProfileRouting(t *testing.T) {
 				"/api/v1/jobs",     // scheduler (media profile only)
 				"/compat/subsonic", // compat adapters (media profile only)
 				"/compat/opds",     // compat adapters (media profile only)
+				// resources.API is not mounted on the personal profile: tokens,
+				// devices and peers are managed via the CLI (which opens the
+				// database directly) not via the HTTP surface.
+				"/api/v1/tokens",  // resources.API only
+				"/api/v1/devices", // resources.API only
+				"/api/v1/peers",   // resources.API only
+				"/api/v1/events",  // resources.API only (SSE stream)
+				"/api/v1/session", // resources.API only
 			},
 		},
 		{

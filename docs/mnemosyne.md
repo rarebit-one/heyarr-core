@@ -24,12 +24,22 @@ rather than hiding the distinction inside a feature flag.
 | Vault placement pins (`/api/v1/vault/placements`) | Always |
 | Personal-state plane (`/api/v1/spaces`, `/api/v1/state/replicate`) | Always |
 | Service recipients (`/api/v1/service-recipients`) | Always |
-| Device enrolment (`/enrol`, `/membership`, `/api/v1/devices`) | Always |
-| Token and auth (`/api/v1/tokens`, `/api/v1/session`) | Always |
-| Peer mTLS surface (replication, blob replication) | When `peer.listen` is set |
-| Health, metrics, events (`/healthz`, `/readyz`, `/metrics`, `/api/v1/events`) | Always |
+| Device enrolment (`/enrol`, `/membership`) | Always |
+| Health and metrics (`/healthz`, `/readyz`, `/metrics`) | Always |
 | Backup beat | Always |
-| GC | Always |
+| Encrypted-state replication beat | Always |
+
+**Not mounted on the HTTP surface:** `resources.API` (the monolithic route
+function that registers works, assets, libraries, jobs, tokens, devices, peers,
+events and sessions) is not mounted on the personal profile. Tokens, devices and
+peers are managed through the CLI (`mnemosyne token create`, `mnemosyne device
+list`, etc.), which opens the database directly rather than through HTTP.
+
+**Deferred to Phase 1b (needs the worker):** GC, pin-driven peer convergence
+(`PlanPeerConvergence`) and cross-site blob replication (`replicate_blob`) are
+jobs executed by the reconciliation sweep and the worker process. The personal
+profile starts no reconciliation and has no `worker` subcommand, so none of
+those jobs run in Phase 1. See the tracking issue.
 
 Mnemosyne **does not** mount: the resource API, library/scanner/ingest, search,
 acquisition, the MCP surface, render, relay, DLNA, OPDS, Subsonic, pair relay
@@ -62,7 +72,7 @@ mnemosyne --config /etc/mnemosyne/config.yaml serve
 # Inspect the fully resolved configuration
 mnemosyne config print
 
-# Manage tokens
+# Manage tokens (opens the database directly; no HTTP server needed)
 mnemosyne token create --scope read
 mnemosyne token list
 ```
@@ -94,8 +104,9 @@ deployments will run one or the other:
   Mnemosyne only. It is a small, quiet process with no media library.
 - A **media node** (library, ingest, transcode, playback) runs heyarr only.
   If vault.enabled is true (the default), it also serves vault routes.
-- A **combined node** runs both on different ports. The two processes replicate
-  vault blobs to each other through the peer fabric.
+- A **combined node** runs both on different ports. Each service holds its own
+  vault pins; cross-site blob replication between them arrives in Phase 1b
+  once the worker subcommand is available.
 
 ## Phase plan
 
@@ -104,7 +115,12 @@ and the architecture notes; they are not committed here until the spec is
 settled.
 
 - **Phase 1 (this PR):** Second binary, personal profile, vault.enabled flag,
-  goreleaser packaging, profile-routing tests.
+  goreleaser packaging, profile-routing tests. Personal-state plane, vault
+  upload/pins, blob reads, enrolment, backup and encrypted-state replication
+  are live. GC, peer convergence and cross-site blob replication are deferred.
+- **Phase 1b:** `mnemosyne worker` subcommand; reconciliation sweep (GC +
+  pin-driven peer convergence via `PlanPeerConvergence`); cross-site blob
+  replication via `replicate_blob`.
 - **Phase 2:** Mnemosyne-specific Docker image; CI acceptance for the personal
   profile; `mnemosyne fsck` reports vault completeness.
 - **Phase 3:** Operator guide for a combined personal+media node; peer pairing
