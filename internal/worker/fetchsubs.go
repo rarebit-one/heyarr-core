@@ -166,7 +166,7 @@ func FetchSubsHandler(opts FetchSubsHandlerOptions) HandlerFunc {
 		}
 
 		if err := opts.Recorder.RecordFetchedSubtitle(ctx, fctx.SourceVideoAssetID,
-			catalog.FetchedSubtitle{BlobHash: hash, Size: size, Language: fctx.Language},
+			catalog.FetchedSubtitle{BlobHash: hash, Size: size, Language: fctx.Language, HearingImpaired: cand.HearingImpaired},
 			now()); err != nil {
 			return fmt.Errorf("fetch-subtitle: recording the subtitle: %w", err) // db failure: retry.
 		}
@@ -188,7 +188,7 @@ func FetchSubsHandler(opts FetchSubsHandlerOptions) HandlerFunc {
 
 // findBest asks each provider in turn and returns the best candidate the first
 // one to answer offers, ranked for a caption worth serving: the wanted language,
-// a non-hearing-impaired file over an SDH one, then the most-downloaded (a rough
+// an SDH file over an ordinary one, then the most-downloaded (a rough
 // trust signal). A provider error is logged and the next is tried; an empty
 // result moves to the next too.
 func (o FetchSubsHandlerOptions) findBest(
@@ -228,9 +228,10 @@ func bestCandidate(cands []providers.SubtitleCandidate, lang string) (providers.
 		return providers.SubtitleCandidate{}, false
 	}
 	sort.SliceStable(matching, func(i, j int) bool {
-		// Prefer a clean subtitle over a hearing-impaired one.
+		// Prefer captions that include sound descriptions; ordinary dialogue is
+		// still a fallback when the provider has no SDH in the wanted language.
 		if matching[i].HearingImpaired != matching[j].HearingImpaired {
-			return !matching[i].HearingImpaired
+			return matching[i].HearingImpaired
 		}
 		// Then the most downloaded.
 		return matching[i].DownloadCount > matching[j].DownloadCount

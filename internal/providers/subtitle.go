@@ -109,7 +109,7 @@ type SubtitleCandidate struct {
 	// caller may show, never an identity.
 	Release string
 	// HearingImpaired reports the subtitle carries SDH/CC annotations. A ranking
-	// signal (most callers prefer a clean subtitle), not a filter here.
+	// signal for selecting sound descriptions, not a filter here.
 	HearingImpaired bool
 	// DownloadCount is how often the service has served this file, a rough trust
 	// signal the adapter ranks by. Zero means the service did not say.

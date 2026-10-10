@@ -44,13 +44,13 @@ type ExtractedSubtitle struct {
 
 // FetchedSubtitle is a subtitle downloaded from a provider (ADR-0085): a
 // role='subtitle' asset whose bytes came from the network rather than out of the
-// video's container. It carries only what a fetch knows — the adopted blob and
-// the language — because the provider adapter has already chosen the file and
-// there is nothing per-track (a forced flag, a track title) to record.
+// video's container. It preserves the provider's language and SDH flag so the
+// caption resolver can distinguish sound descriptions from ordinary dialogue.
 type FetchedSubtitle struct {
-	BlobHash string
-	Size     int64
-	Language string
+	BlobHash        string
+	Size            int64
+	Language        string
+	HearingImpaired bool
 }
 
 // subtitleRecord is the shape recordSubtitleAsset writes, common to an extracted
@@ -115,7 +115,8 @@ func (c *Catalog) RecordFetchedSubtitle(
 	}
 	return c.recordSubtitleAsset(ctx, sourceAssetID, subtitleRecord{
 		blobHash: sub.BlobHash, size: sub.Size, language: sub.Language,
-		source: "opensubtitles", identificationSource: "fetched",
+		hearingImpaired: sub.HearingImpaired,
+		source:          "opensubtitles", identificationSource: "fetched",
 	}, now)
 }
 

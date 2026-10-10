@@ -98,6 +98,33 @@ func TestFetchedSubtitleSatisfiesTheWant(t *testing.T) {
 	}
 }
 
+func TestFetchedSDHPreservesAccessibilityMetadata(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	_, itemID := seedSubtitleWant(t, h)
+	seedEpisodeVideo(t, h, itemID)
+	sub := catalog.FetchedSubtitle{
+		BlobHash: hexHash("sub-sdh"), Size: 4096, Language: "en", HearingImpaired: true,
+	}
+	for range 2 {
+		if err := h.cat.RecordFetchedSubtitle(ctx, "v-e01", sub, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var filename string
+	var hearingImpaired, count int
+	if err := h.db.Reader().QueryRowContext(ctx, `
+		SELECT filename, coalesce(json_extract(attributes,'$.hearing_impaired'),0), count(*)
+		FROM assets WHERE blob_hash = ?`, sub.BlobHash).
+		Scan(&filename, &hearingImpaired, &count); err != nil {
+		t.Fatal(err)
+	}
+	if filename != "Show.S01E01.en.sdh.srt" || hearingImpaired != 1 || count != 1 {
+		t.Fatalf("filename=%q, hearing_impaired=%d, count=%d; want one English SDH asset", filename, hearingImpaired, count)
+	}
+}
+
 func TestDueSubtitleFetchesRequiresHeldVideoAndExternalID(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
