@@ -729,7 +729,10 @@ func Defaults() Config {
 func MnemosyneDefaults() Config {
 	d := Defaults()
 	d.DataDir = "/var/lib/mnemosyne"
-	d.HTTP.Addr = "127.0.0.1:7778"
+	// 7779, not 7778: heyarr's optional plain-HTTP render listener
+	// (http.render_addr, ADR-0079) conventionally sits on 7778 next to the
+	// 7777 API, so a node running both services would collide there.
+	d.HTTP.Addr = "127.0.0.1:7779"
 	d.Profile = ProfilePersonal
 	// Vault is always enabled on the personal service.
 	d.Vault.Enabled = true

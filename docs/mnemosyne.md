@@ -50,7 +50,7 @@ or any provider integration.
 | Setting | Default |
 |---------|---------|
 | Data directory | `/var/lib/mnemosyne` |
-| Listen address | `127.0.0.1:7778` |
+| Listen address | `127.0.0.1:7779` (7778 is heyarr's conventional render-listener port, ADR-0079) |
 | Unix socket | `/var/lib/mnemosyne/mnemosyne.sock` |
 | Database | `/var/lib/mnemosyne/mnemosyne.db` |
 | Profile | `personal` (fixed; cannot be changed) |
