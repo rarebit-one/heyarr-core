@@ -354,9 +354,12 @@ func (c *Controller) bootstrapNode(startupCtx context.Context, db *sqlite.DB) (n
 func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identity.Identity,
 	material *mtls.Material, members *membership.Store, peerHealth *health.Tracker,
 ) error {
-	// Reconciliation runs on the SERVING context, not the startup one: it is
-	// ongoing work rather than schema-shaped setup, and it must stop when the
-	// controller does.
+	// The continuous control-plane backup (§49, ADR-0044, M7-02). Runs on both
+	// profiles — personal state is worth backing up as much as the catalog.
+	// The interval was validated at config load, so the error here cannot fire.
+	backupInterval, _ := c.cfg.BackupInterval()
+
+	// The event log and job queue shared by ALL beats on this profile.
 	reconcileEvents, err := events.New(events.Options{
 		Writer: db.Writer(), Reader: db.Reader(), Logger: c.log,
 	})
@@ -369,6 +372,24 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 	if err != nil {
 		return fmt.Errorf("controller: opening the job queue for reconciliation: %w", err)
 	}
+
+	// Personal profile (ADR-0107): only the beats that serve encrypted personal
+	// state. Media beats (search, follow, subtitle, enrich, cover, download,
+	// catalog-sync, reconciliation, upgrade-scan, provider-health) are excluded
+	// because Mnemosyne carries no library and no providers.
+	if c.cfg.Profile == config.ProfilePersonal {
+		startBackup(ctx, db, reconcileEvents, c.cfg.DataDir, c.cfg.Backup.Dir,
+			backupInterval, self.PeerID, c.log, material, members)
+		startStatePlaneReplication(ctx, db, reconcileEvents, backupInterval,
+			self.PeerID, c.log, material, members)
+
+		eventsWindow, succeededWindow, deadWindow, _ := c.cfg.RetentionDurations()
+		startRetention(ctx, db, reconcileEvents,
+			eventsWindow, succeededWindow, deadWindow, c.log, wallTicker)
+		return nil
+	}
+
+	// Media profile: full beat set (unchanged from before ADR-0107).
 	startReconciliation(ctx, reconcileQueue, peerHealth, c.log, wallTicker)
 	startUpgradeScan(ctx, reconcileQueue, c.log, wallTicker)
 	// The provider health beat (#164). Same queue and the same serving
@@ -420,11 +441,6 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 	// beat asks the configuration first where the health beat does not.
 	startDownloadPoll(ctx, c.cfg.Providers, reconcileQueue, c.log, wallTicker)
 
-	// The continuous control-plane backup (§49, ADR-0044, M7-02). Its interval
-	// was validated at config load, so the error here cannot fire; it is read
-	// rather than dropped so a future change to BackupInterval cannot silently
-	// pass an unparsed value through.
-	backupInterval, _ := c.cfg.BackupInterval()
 	startBackup(ctx, db, reconcileEvents, c.cfg.DataDir, c.cfg.Backup.Dir,
 		backupInterval, self.PeerID, c.log, material, members)
 
@@ -602,8 +618,8 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	// cert and a possession proof and is recorded under its pinned user, with no
 	// admin step. It is a public mount for the same reason the relay is — the
 	// device is not yet enrolled, so it cannot authenticate — and it is judged by
-	// the SAME store the Device scheme verifies against. Unconditional, unlike
-	// the web login below: it needs no dial-back origin.
+	// the SAME store the Device scheme verifies against. Unconditional on both
+	// profiles: Mnemosyne still enrolls devices (ADR-0107).
 	enrolHandler, err := enrol.New(enrol.Options{Identities: deviceIdentities, Logger: c.log})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: standing up device self-enrolment: %w", err)
@@ -614,9 +630,9 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	// device cert, logging in through a device that does — and it feeds TWO of
 	// httpapi's seams at once: its /login + /signin routes join the public mounts,
 	// and its broker becomes the SessionValidator that accepts the tokens it mints.
-	// It is stood up only when this node can name an origin a scanning device can
-	// dial back (renderBaseURL); a loopback- or socket-only node mounts no login,
-	// exactly as it mints no renderer URL.
+	// Excluded from the personal profile (ADR-0107): Mnemosyne has no render
+	// surface for the QR to dial back to. It is also always absent when
+	// renderBaseURL returns "", which covers a loopback-only Mnemosyne by default.
 	// A configured notify plane needs its bearer, so resolve it here whether or
 	// not this node mounts web login: a set notify.url with no token stops
 	// startup on every node, including loopback- or socket-only ones.
@@ -629,30 +645,35 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 		plane = &notify.EnqueueClient{Base: strings.TrimSpace(c.cfg.Notify.URL), Token: token}
 	}
 	var sessions httpapi.SessionValidator
-	if base := renderBaseURL(c.cfg); base != "" {
-		opts := weblogin.Options{
-			Identities: deviceIdentities,
-			Base:       base,
-			Logger:     c.log,
-		}
-		// The shared notify plane (ADR-0102) carries the push login and the
-		// cruciform-offload unwrap wake. It is additive to the QR: unconfigured, the
-		// login is the QR flow and an unwrap wake wakes nobody.
-		if plane != nil {
-			opts.LoginWaker, opts.UnwrapWaker = plane, plane
-			// The URL is logged so an operator can see which plane wakes go to; the
-			// bearer never is.
-			c.log.Info("web login wakes go through the notify plane", "notify_url", plane.Base)
-		} else {
-			c.log.Info("no notify plane configured (notify.url): web login is QR-only and unwrap wakes wake nobody")
-		}
-		loginHandler, err := weblogin.New(opts)
-		if err != nil {
-			return nil, nil, fmt.Errorf("controller: standing up web login: %w", err)
-		}
-		publicMounts = append(publicMounts, loginHandler.Mount)
-		sessions = loginHandler.Sessions()
-	}
+	// Personal profile (ADR-0107): no web login. Mnemosyne has no render
+	// surface for the QR to dial back to; devices authenticate via the Device
+	// scheme on the enrolled-cert path instead.
+	if c.cfg.Profile != config.ProfilePersonal {
+		if base := renderBaseURL(c.cfg); base != "" {
+			opts := weblogin.Options{
+				Identities: deviceIdentities,
+				Base:       base,
+				Logger:     c.log,
+			}
+			// The shared notify plane (ADR-0102) carries the push login and the
+			// cruciform-offload unwrap wake. It is additive to the QR: unconfigured, the
+			// login is the QR flow and an unwrap wake wakes nobody.
+			if plane != nil {
+				opts.LoginWaker, opts.UnwrapWaker = plane, plane
+				// The URL is logged so an operator can see which plane wakes go to; the
+				// bearer never is.
+				c.log.Info("web login wakes go through the notify plane", "notify_url", plane.Base)
+			} else {
+				c.log.Info("no notify plane configured (notify.url): web login is QR-only and unwrap wakes wake nobody")
+			}
+			loginHandler, err := weblogin.New(opts)
+			if err != nil {
+				return nil, nil, fmt.Errorf("controller: standing up web login: %w", err)
+			}
+			publicMounts = append(publicMounts, loginHandler.Mount)
+			sessions = loginHandler.Sessions()
+		} // end renderBaseURL check
+	} // end ProfilePersonal guard
 	// What this binary knows how to migrate to, as opposed to what the database
 	// is actually at. The two are compared on GET /api/v1/system (#150), and
 	// they are read from two different places on purpose: one is compiled in,
@@ -809,6 +830,26 @@ func (c *Controller) mounts(ctx context.Context, d mountDeps) (apiMounts, public
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: opening the catalog: %w", err)
 	}
+
+	// Personal profile (ADR-0107): only the personal-state plane, vault blob
+	// upload, placement pins and blob content serving. Libraries, scanner,
+	// ingest, search, acquisition, identification, render, relay, transcode,
+	// compat adapters, discovery and MCP are all excluded.
+	if c.cfg.Profile == config.ProfilePersonal {
+		_, contentMounts, err := c.contentRoutes(d, queue, cat)
+		if err != nil {
+			return nil, nil, err
+		}
+		psAPI, err := c.personalStateAPI(d)
+		if err != nil {
+			return nil, nil, err
+		}
+		// vault.enabled is always true on the personal profile, but be explicit.
+		apiMounts = append(contentMounts, psAPI.Mount)
+		return apiMounts, nil, nil
+	}
+
+	// Media profile: full stack (unchanged from before ADR-0107).
 	api, secret, err := c.resourceAPI(ctx, d, queue, cat)
 	if err != nil {
 		return nil, nil, err
@@ -834,7 +875,14 @@ func (c *Controller) mounts(ctx context.Context, d mountDeps) (apiMounts, public
 		return nil, nil, err
 	}
 
-	apiMounts = append(append([]httpapi.MountFunc{api.Mount}, contentMounts...), mcpServer.Mount, psAPI.Mount)
+	// vault.enabled (server-side flag, ADR-0107): when false, strip the vault
+	// upload and placement-pin routes from the media profile. Blob content
+	// serving (GET/HEAD) is always on — it serves non-vault blobs too.
+	if c.cfg.Vault.Enabled {
+		apiMounts = append(append([]httpapi.MountFunc{api.Mount}, contentMounts...), mcpServer.Mount, psAPI.Mount)
+	} else {
+		apiMounts = append([]httpapi.MountFunc{api.Mount, blobHandler.Mount}, mcpServer.Mount, psAPI.Mount)
+	}
 	publicMounts = append(renderMounts, compatMounts...)
 	return apiMounts, publicMounts, nil
 }

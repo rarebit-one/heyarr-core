@@ -1,0 +1,90 @@
+[Unit]
+Description=Mnemosyne — encrypted personal media vaults, drive CRDT and placement pins
+Documentation=https://github.com/rarebit-one/heyarr-core/blob/main/docs/mnemosyne.md
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/var/lib/mnemosyne
+
+[Service]
+# Type=exec, not notify: Mnemosyne does not speak sd_notify, and claiming it
+# does would make systemd wait for a READY=1 that never comes and then call a
+# healthy service failed. Type=exec at least means "started" is reported after
+# the binary successfully execs rather than after the fork.
+#
+# There is deliberately no ExecReload. Mnemosyne handles SIGINT and SIGTERM and
+# nothing else, so the obvious `kill -HUP $MAINPID` would not reload it — Go's
+# default disposition for SIGHUP is to terminate, so it would kill the service
+# while telling the operator it was reloading. Reload by restarting.
+Type=exec
+ExecStart=/usr/local/bin/mnemosyne --config /etc/mnemosyne/config.yaml serve
+Restart=on-failure
+RestartSec=5s
+
+# Shutdown drains in-flight requests. The supervisor's own grace period bounds
+# it; this must be longer, or systemd kills the process mid-drain.
+KillSignal=SIGTERM
+TimeoutStopSec=120
+
+User=mnemosyne
+Group=mnemosyne
+
+# ---------------------------------------------------------------------------
+# Containment. Mnemosyne writes only to its data directory and its CAS; it
+# never touches media mounts or renders, so its containment is tighter than
+# heyarr's.
+#
+# Every directive was verified with `systemd-analyze security mnemosyne`.
+# ---------------------------------------------------------------------------
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+# Mnemosyne speaks HTTP over TCP and a unix socket. Nothing else.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# No capabilities at all: it binds a high port, writes below its own data
+# directory, and never changes ownership.
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete @mount @swap @reboot
+
+# ProtectSystem=strict makes the whole filesystem read-only; every writable
+# path is named explicitly.
+StateDirectory=mnemosyne
+StateDirectoryMode=0700
+RuntimeDirectory=mnemosyne
+RuntimeDirectoryMode=0700
+ReadWritePaths=/var/lib/mnemosyne
+# If cas.root is moved outside the data directory, add that path here in a
+# drop-in. ProtectSystem=strict makes anything unlisted read-only.
+UMask=0077
+
+# ---------------------------------------------------------------------------
+# Resource limits. Mnemosyne serves personal-vault reads and encrypted-state
+# replication; both are IO-bound but neither moves bulk media.
+# ---------------------------------------------------------------------------
+MemoryMax=512M
+MemoryHigh=384M
+IOWeight=50
+CPUWeight=50
+TasksMax=256
+LimitNOFILE=32768
+
+[Install]
+WantedBy=multi-user.target

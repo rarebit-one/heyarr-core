@@ -27,12 +27,51 @@ import (
 // http.addr, HEYARR_LOG_LEVEL to log.level, and so on.
 const EnvPrefix = "HEYARR_"
 
+// MnemosyneEnvPrefix is the prefix for Mnemosyne environment overrides.
+// MNEMOSYNE_HTTP_ADDR maps to http.addr, and so on.
+const MnemosyneEnvPrefix = "MNEMOSYNE_"
+
+// MnemosyneSystemConfigPath is the conventional location of the Mnemosyne
+// configuration file on a host install.
+const MnemosyneSystemConfigPath = "/etc/mnemosyne/config.yaml"
+
+// MnemosyneConfigPathEnv names the environment variable that supplies the
+// config file path for Mnemosyne when --config is not given.
+const MnemosyneConfigPathEnv = "MNEMOSYNE_CONFIG"
+
+// Profile selects which API surfaces a controller mounts (ADR-0107). The
+// default, ProfileMedia, is heyarr's full stack. ProfilePersonal is the second
+// service, Mnemosyne: it mounts only the personal-state plane, vault blob
+// upload, placement pins, blob content serving, auth/tokens/device
+// enrolment/recovery, peer surface and encrypted-state replication, GC, health,
+// metrics, events and the backup beat.
+type Profile string
+
+const (
+	// ProfileMedia is the default: the full heyarr media stack. Byte-identical to
+	// today's behaviour; no existing deployment changes.
+	ProfileMedia Profile = "media"
+
+	// ProfilePersonal is the Mnemosyne personal-media service. It mounts only
+	// the personal-state plane and the infrastructure it needs. Libraries,
+	// scanner, ingest, search, acquisition, identification, render, relay,
+	// transcode, compat adapters, discovery and MCP are all excluded.
+	ProfilePersonal Profile = "personal"
+)
+
 // Config is the whole of Heyarr's configuration. It is passed to every role;
 // no package reads configuration from anywhere else.
 type Config struct {
 	// DataDir is the root beneath which Heyarr keeps everything it owns.
 	// CASRoot and Database default to paths inside it.
 	DataDir string `koanf:"data_dir"`
+
+	// Profile selects which API surfaces the controller mounts (ADR-0107).
+	// "media" is the default and gives full heyarr behaviour. "personal"
+	// is the Mnemosyne service: only the personal-state plane and its
+	// supporting infrastructure. The mnemosyne binary forces this to
+	// "personal" and refuses any other value.
+	Profile Profile `koanf:"profile"`
 
 	CAS       CAS       `koanf:"cas"`
 	Database  Database  `koanf:"database"`
@@ -98,6 +137,13 @@ type Config struct {
 // encryption key is reached only through an Unwrapper, whose custody is a
 // pluggable per-platform backend; this selects it.
 type Vault struct {
+	// Enabled is the server-side switch for the vault API surface (ADR-0107).
+	// When true (the default), the controller mounts the vault blob upload route
+	// and the placement-pin route. Set to false on a media-profile node that
+	// does not serve vault content — it removes those routes entirely. Always
+	// true for the personal profile (Mnemosyne): the vault IS the service.
+	Enabled bool `koanf:"enabled"`
+
 	// Unwrapper selects the custody backend: "software" (default, in-process
 	// ECDH), "yubikey" (the X25519 agreement runs on an OpenPGP card), "tpm"
 	// (the key is sealed to a TPM under a PCR+PIN policy), "cruciform" (the
@@ -642,6 +688,7 @@ func (l Language) Policy() policy.LanguageDefault {
 func Defaults() Config {
 	return Config{
 		DataDir: "/var/lib/heyarr",
+		Profile: ProfileMedia,
 		HTTP: HTTP{
 			Addr: "127.0.0.1:7777",
 			Auth: Auth{Enabled: true},
@@ -672,16 +719,54 @@ func Defaults() Config {
 				Dead:      "30d",
 			},
 		},
-		Vault: Vault{Unwrapper: "software"},
+		Vault: Vault{Unwrapper: "software", Enabled: true},
 	}
+}
+
+// MnemosyneDefaults returns the configuration Mnemosyne uses when nothing is
+// specified. It is Defaults with a different data directory, listen port, Unix
+// socket name and a forced personal profile (ADR-0107).
+func MnemosyneDefaults() Config {
+	d := Defaults()
+	d.DataDir = "/var/lib/mnemosyne"
+	d.HTTP.Addr = "127.0.0.1:7778"
+	d.Profile = ProfilePersonal
+	// Vault is always enabled on the personal service.
+	d.Vault.Enabled = true
+	return d
 }
 
 // Load resolves configuration from defaults, then the file at path if it is
 // non-empty, then HEYARR_ environment variables. The result is validated.
 func Load(path string) (Config, error) {
+	return loadWith(path, Defaults(), EnvPrefix, "heyarr")
+}
+
+// LoadMnemosyne resolves configuration from Mnemosyne defaults, then the file
+// at path if non-empty, then MNEMOSYNE_ environment variables. It forces the
+// personal profile (ADR-0107) and refuses any other value. The result is
+// validated.
+func LoadMnemosyne(path string) (Config, error) {
+	cfg, err := loadWith(path, MnemosyneDefaults(), MnemosyneEnvPrefix, "mnemosyne")
+	if err != nil {
+		return Config{}, err
+	}
+	// Mnemosyne is always personal. Refuse an operator who accidentally sets
+	// profile=media in /etc/mnemosyne/config.yaml or MNEMOSYNE_PROFILE=media.
+	if cfg.Profile != ProfilePersonal {
+		return Config{}, fmt.Errorf("config: mnemosyne only accepts profile=%q; got %q — "+
+			"use heyarr for the media profile", ProfilePersonal, cfg.Profile)
+	}
+	return cfg, nil
+}
+
+// loadWith is the shared loading kernel used by Load and LoadMnemosyne.
+// defaults seeds the koanf tree, envPrefix is the UPPER_ env prefix, and
+// serviceName drives the derived file/socket names in applyDerivedDefaultsFor.
+func loadWith(path string, defaults Config, envPrefix, serviceName string) (Config, error) {
 	k := koanf.New(".")
 
-	if err := k.Load(structs.Provider(Defaults(), "koanf"), nil); err != nil {
+	if err := k.Load(structs.Provider(defaults, "koanf"), nil); err != nil {
 		return Config{}, fmt.Errorf("loading defaults: %w", err)
 	}
 
@@ -703,9 +788,9 @@ func Load(path string) (Config, error) {
 	// than invented.
 	canonical := canonicalKeys(k.Keys())
 	if err := k.Load(env.Provider(".", env.Opt{
-		Prefix: EnvPrefix,
+		Prefix: envPrefix,
 		TransformFunc: func(key, value string) (string, any) {
-			bare := strings.ToLower(strings.TrimPrefix(key, EnvPrefix))
+			bare := strings.ToLower(strings.TrimPrefix(key, envPrefix))
 			if resolved, ok := canonical[squashSeparators(bare)]; ok {
 				return resolved, value
 			}
@@ -722,7 +807,7 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("parsing configuration: %w", err)
 	}
 
-	cfg.applyDerivedDefaults()
+	cfg.applyDerivedDefaultsFor(serviceName)
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -741,6 +826,9 @@ const SystemConfigPath = "/etc/heyarr/config.yaml"
 // direct use of the const, so a test can point discovery at a file it created
 // rather than needing one to exist at the real system path.
 var systemConfigPath = SystemConfigPath
+
+// mnemosyneSystemConfigPath is the path ResolveMnemosynePath actually probes.
+var mnemosyneSystemConfigPath = MnemosyneSystemConfigPath
 
 // ConfigPathEnv names the environment variable that supplies the config file
 // path when --config is not given. It is the path analogue of the HEYARR_
@@ -778,18 +866,35 @@ func ResolvePath(flagPath string) string {
 	return ""
 }
 
-// applyDerivedDefaults fills in the paths that hang off DataDir. It runs after
-// loading so that setting data_dir alone moves everything, while setting a path
-// explicitly still wins.
-func (c *Config) applyDerivedDefaults() {
+// ResolveMnemosynePath is ResolvePath's counterpart for the Mnemosyne service.
+// It checks MNEMOSYNE_CONFIG then MnemosyneSystemConfigPath.
+func ResolveMnemosynePath(flagPath string) string {
+	if strings.TrimSpace(flagPath) != "" {
+		return flagPath
+	}
+	if env := strings.TrimSpace(os.Getenv(MnemosyneConfigPathEnv)); env != "" {
+		return env
+	}
+	if _, err := os.Stat(mnemosyneSystemConfigPath); err == nil {
+		return mnemosyneSystemConfigPath
+	}
+	return ""
+}
+
+// applyDerivedDefaultsFor fills in the paths that hang off DataDir. It runs
+// after loading so that setting data_dir alone moves everything, while setting
+// a path explicitly still wins. serviceName is used as the stem for the
+// database and unix-socket filenames ("heyarr" → heyarr.db / heyarr.sock,
+// "mnemosyne" → mnemosyne.db / mnemosyne.sock).
+func (c *Config) applyDerivedDefaultsFor(serviceName string) {
 	if c.CAS.Root == "" && c.DataDir != "" {
 		c.CAS.Root = filepath.Join(c.DataDir, "cas")
 	}
 	if c.Database.Path == "" && c.DataDir != "" {
-		c.Database.Path = filepath.Join(c.DataDir, "heyarr.db")
+		c.Database.Path = filepath.Join(c.DataDir, serviceName+".db")
 	}
 	if c.HTTP.UnixSocket == "" && c.DataDir != "" {
-		c.HTTP.UnixSocket = filepath.Join(c.DataDir, "heyarr.sock")
+		c.HTTP.UnixSocket = filepath.Join(c.DataDir, serviceName+".sock")
 	}
 	if c.Backup.Dir == "" && c.DataDir != "" {
 		c.Backup.Dir = filepath.Join(c.DataDir, "backups")
@@ -867,6 +972,8 @@ var validLogLevels = []string{"debug", "info", "warn", "error"}
 // open time.
 var validVaultUnwrappers = []string{"software", "yubikey", "tpm", "cruciform", "sealedfile"}
 
+var validProfiles = []string{string(ProfileMedia), string(ProfilePersonal)}
+
 // Validate reports the first configuration problem, phrased so the operator can
 // act on it without reading the source. Configuration is checked before any
 // role starts: failing at startup is far cheaper than failing on first write.
@@ -876,6 +983,9 @@ func (c Config) Validate() error {
 	}
 	if !filepath.IsAbs(c.DataDir) {
 		return fmt.Errorf("config: data_dir must be an absolute path, got %q", c.DataDir)
+	}
+	if !slicesContains(validProfiles, string(c.Profile)) {
+		return fmt.Errorf("config: profile %q is not one of %s", c.Profile, strings.Join(validProfiles, ", "))
 	}
 	if !slicesContains(validLogLevels, c.Log.Level) {
 		return fmt.Errorf("config: log.level %q is not one of %s", c.Log.Level, strings.Join(validLogLevels, ", "))

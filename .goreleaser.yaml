@@ -26,8 +26,32 @@ builds:
         goarch: amd64
     mod_timestamp: "{{ .CommitTimestamp }}"
 
+  # Mnemosyne: the personal-plane companion binary (ADR-0107). Same targets and
+  # build settings as heyarr; a separate entry so the two archives are distinct
+  # and each carries only its own systemd unit.
+  - id: mnemosyne
+    main: ./cmd/mnemosyne
+    binary: mnemosyne
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/rarebit-one/heyarr-core/internal/buildinfo.Version={{.Version}}
+      - -X github.com/rarebit-one/heyarr-core/internal/buildinfo.Commit={{.FullCommit}}
+      - -X github.com/rarebit-one/heyarr-core/internal/buildinfo.Date={{.Date}}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: darwin
+        goarch: amd64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
 archives:
-  - formats: [tar.gz]
+  # Heyarr: the media-plane binary. Carries all systemd units because operators
+  # who run heyarr may also want to inspect the mnemosyne unit.
+  - id: heyarr
+    ids: [heyarr]
+    formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     files:
@@ -42,6 +66,24 @@ archives:
         dst: deploy/systemd
       - src: docs/deploy/*.md
         dst: docs/deploy/
+
+  # Mnemosyne: the personal-plane binary (ADR-0107). Carries only its own unit
+  # so the archive is self-contained for a node that runs only Mnemosyne.
+  - id: mnemosyne
+    ids: [mnemosyne]
+    formats: [tar.gz]
+    name_template: >-
+      mnemosyne_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+      - CHANGELOG.md
+      - src: deploy/systemd/mnemosyne.service
+        dst: deploy/systemd
+      - src: docs/deploy/*.md
+        dst: docs/deploy/
+      - src: docs/mnemosyne.md
+        dst: docs/
 
 # A software bill of materials per archive. It is the other half of provenance:
 # the attestation says who built it, the SBOM says what is in it.
