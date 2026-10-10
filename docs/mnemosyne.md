@@ -28,18 +28,18 @@ rather than hiding the distinction inside a feature flag.
 | Health and metrics (`/healthz`, `/readyz`, `/metrics`) | Always |
 | Backup beat | Always |
 | Encrypted-state replication beat | Always |
+| `gc_blobs` job type (reclaim orphaned vault bytes) | Worker role only (`mnemosyne worker` / `mnemosyne all`) |
+| GC beat (every 6 hours, no startup run) | Worker role only |
+| `reconcile_peer` job type (plan vault-blob convergence toward placement-pin desired set) | Worker role only |
+| Convergence beat (at startup, then every 5 minutes) | Worker role only |
+| `replicate_blob` job type (mTLS blob transfer to named peers, bounded concurrency) | Worker role only |
+| `chunk_blob` job type (produce chunk manifests for resumable large-blob transfers) | Worker role only |
 
 **Not mounted on the HTTP surface:** `resources.API` (the monolithic route
 function that registers works, assets, libraries, jobs, tokens, devices, peers,
 events and sessions) is not mounted on the personal profile. Tokens, devices and
 peers are managed through the CLI (`mnemosyne token create`, `mnemosyne device
 list`, etc.), which opens the database directly rather than through HTTP.
-
-**Deferred to Phase 1b (needs the worker):** GC, pin-driven peer convergence
-(`PlanPeerConvergence`) and cross-site blob replication (`replicate_blob`) are
-jobs executed by the reconciliation sweep and the worker process. The personal
-profile starts no reconciliation and has no `worker` subcommand, so none of
-those jobs run in Phase 1. See the tracking issue.
 
 Mnemosyne **does not** mount: the resource API, library/scanner/ingest, search,
 acquisition, the MCP surface, render, relay, DLNA, OPDS, Subsonic, pair relay
@@ -62,12 +62,24 @@ silently ignored.
 
 ## Running
 
-```
-# Minimal: built-in defaults, no config file
-mnemosyne serve
+`mnemosyne all` is the operator default. It runs the controller (personal
+profile) and the PersonalWorker in one process, which is what the systemd unit
+and the homelab-ops Nix module both use. Run `serve` and `worker` as separate
+processes only when they need to run on different machines or at different
+resource limits.
 
-# With a config file
+```
+# Operator default: controller + worker in one process (the systemd ExecStart)
+mnemosyne --config /etc/mnemosyne/config.yaml all
+
+# Controller only (no GC, no peer convergence, no blob replication)
 mnemosyne --config /etc/mnemosyne/config.yaml serve
+
+# Worker only (pair with a separately running serve process)
+mnemosyne --config /etc/mnemosyne/config.yaml worker
+
+# Minimal: built-in defaults, no config file
+mnemosyne all
 
 # Inspect the fully resolved configuration
 mnemosyne config print
@@ -114,13 +126,15 @@ This document tracks Phase 1 (ADR-0107). Future phases are tracked in the epic
 and the architecture notes; they are not committed here until the spec is
 settled.
 
-- **Phase 1 (this PR):** Second binary, personal profile, vault.enabled flag,
+- **Phase 1 (merged):** Second binary, personal profile, vault.enabled flag,
   goreleaser packaging, profile-routing tests. Personal-state plane, vault
   upload/pins, blob reads, enrolment, backup and encrypted-state replication
-  are live. GC, peer convergence and cross-site blob replication are deferred.
-- **Phase 1b:** `mnemosyne worker` subcommand; reconciliation sweep (GC +
-  pin-driven peer convergence via `PlanPeerConvergence`); cross-site blob
-  replication via `replicate_blob`.
+  are live.
+- **Phase 1b (this PR):** `mnemosyne worker` and `mnemosyne all` subcommands;
+  reconciliation sweep (GC + pin-driven peer convergence via
+  `PlanPeerConvergence`); cross-site blob replication via `replicate_blob`;
+  chunk-manifest generation via `chunk_blob`. The systemd unit now defaults to
+  `mnemosyne all`.
 - **Phase 2:** Mnemosyne-specific Docker image; CI acceptance for the personal
   profile; `mnemosyne fsck` reports vault completeness.
 - **Phase 3:** Operator guide for a combined personal+media node; peer pairing

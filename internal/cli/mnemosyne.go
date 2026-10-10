@@ -84,6 +84,8 @@ identification, render and compat adapters are not mounted.`,
 		newMnemosyneRoleCommand(opts, &configPath),
 		// The worker role: GC, peer convergence and blob transfer (Phase 1b).
 		newMnemosyneWorkerCommand(opts, &configPath),
+		// The operator default: controller + worker in one process (small nodes).
+		newMnemosyneAllCommand(opts, &configPath),
 	)
 	return root
 }
@@ -235,6 +237,72 @@ func runMnemosyneWorker(ctx context.Context, opts Options, configPath string) er
 
 	err = supervise(ctx, log, opts.ShutdownGrace, worker.NewPersonalWorker(cfg, log))
 	log.Info("mnemosyne worker stopped")
+	return err
+}
+
+// newMnemosyneAllCommand returns the "all" subcommand that runs the controller
+// and the PersonalWorker together in one process. This is the operator default
+// for small deployments (including the homelab-ops Nix module and the
+// deploy/systemd/mnemosyne.service unit). Larger deployments can run "serve"
+// and "worker" as separate processes on different machines.
+//
+// Invariant 4 of ADR-0002 still holds: the controller and the worker
+// communicate only through the job table and HTTP, never an in-process pointer.
+// supervise enforces this by coupling them only through context cancellation.
+func newMnemosyneAllCommand(opts Options, configPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "all",
+		Short: "Run the controller and worker together (operator default)",
+		Long: `Start the Mnemosyne controller (personal profile) and the PersonalWorker in one
+process. This is the default mode for small deployments, and the ExecStart used
+by deploy/systemd/mnemosyne.service and the homelab-ops Nix module.
+
+The two roles are coupled only through context cancellation (ADR-0002, Invariant
+4): they share no in-process pointer. A separate "serve" + "worker" deployment
+on two machines works identically; "all" is an operational convenience, not an
+architectural coupling.
+
+Job types registered by the worker:
+  gc_blobs          — reclaims orphaned vault bytes every six hours.
+  reconcile_peer    — drives vault-blob convergence at startup and every five minutes.
+  replicate_blob    — moves vault blobs to peers that reconcile_peer named as destinations.
+  chunk_blob        — produces chunk manifests for resumable large-blob transfers.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runMnemosyneAll(cmd.Context(), opts, *configPath)
+		},
+	}
+}
+
+// runMnemosyneAll loads Mnemosyne configuration and runs the controller and the
+// PersonalWorker under a single supervisor. It is the Mnemosyne analogue of the
+// heyarr `all` role set in runRoles.
+func runMnemosyneAll(ctx context.Context, opts Options, configPath string) error {
+	cfg, err := config.LoadMnemosyne(configPath)
+	if err != nil {
+		return err
+	}
+	if err := cfg.EnsureDataDir(); err != nil {
+		return err
+	}
+
+	log := newLogger(cfg.Log, opts.Stderr)
+	info := buildinfo.Get()
+	log.Info("mnemosyne starting",
+		"version", info.Version,
+		"commit", info.Commit,
+		"go", info.GoVersion,
+		"peer", cfg.Peer.Name,
+		"site", cfg.Peer.Site,
+		"data_dir", cfg.DataDir,
+		"profile", cfg.Profile,
+		"roles", []string{"controller", "worker"})
+
+	err = supervise(ctx, log, opts.ShutdownGrace,
+		controller.New(cfg, log),
+		worker.NewPersonalWorker(cfg, log),
+	)
+	log.Info("mnemosyne stopped")
 	return err
 }
 

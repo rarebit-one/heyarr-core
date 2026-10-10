@@ -16,7 +16,7 @@ RequiresMountsFor=/var/lib/mnemosyne
 # default disposition for SIGHUP is to terminate, so it would kill the service
 # while telling the operator it was reloading. Reload by restarting.
 Type=exec
-ExecStart=/usr/local/bin/mnemosyne --config /etc/mnemosyne/config.yaml serve
+ExecStart=/usr/local/bin/mnemosyne --config /etc/mnemosyne/config.yaml all
 Restart=on-failure
 RestartSec=5s
 
