@@ -16,7 +16,11 @@ stable.
   encrypted-state replication, health/metrics and backup. Tokens, devices and
   peers are managed through the CLI (direct database access), not HTTP routes.
   Libraries, scanner, ingest, MCP, render, relay and compat adapters are
-  excluded. Default data directory `/var/lib/mnemosyne`, default port 7778.
+  excluded. Default data directory `/var/lib/mnemosyne`, default port 7779
+  (7778 is where heyarr's render listener conventionally sits, ADR-0079).
+  The `mnemosyne_<version>_<os>_<arch>` release archive ships the binary with
+  its unit and docs; the v0.5.8 archive could not be catalogued because two
+  of those files were written under their directory's name, which is fixed.
 - **`mnemosyne worker` subcommand (Phase 1b).** Runs the PersonalWorker role:
   four background job types (`gc_blobs`, `reconcile_peer`, `replicate_blob`,
   `chunk_blob`) and two beats (GC every 6 hours; convergence at startup then

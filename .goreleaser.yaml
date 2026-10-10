@@ -78,12 +78,17 @@ archives:
       - README.md
       - LICENSE
       - CHANGELOG.md
+      # Literal src → dst is the destination FILE (see the note on the heyarr
+      # archive). v0.5.8's release failed here: `dst: docs/` put mnemosyne.md
+      # in the archive as a file named "docs", so syft could not create
+      # docs/deploy/ underneath it ("mkdir docs: not a directory"). Name the
+      # destination files in full.
       - src: deploy/systemd/mnemosyne.service
-        dst: deploy/systemd
+        dst: deploy/systemd/mnemosyne.service
       - src: docs/deploy/*.md
         dst: docs/deploy/
       - src: docs/mnemosyne.md
-        dst: docs/
+        dst: docs/mnemosyne.md
 
 # A software bill of materials per archive. It is the other half of provenance:
 # the attestation says who built it, the SBOM says what is in it.
