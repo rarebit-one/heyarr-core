@@ -19,6 +19,7 @@ package controller
 
 import (
 	"context"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,8 +28,6 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
-
-	"log/slog"
 )
 
 // newProfileHandler builds a real server handler for the given config.  It
@@ -97,14 +96,14 @@ func TestProfileRouting(t *testing.T) {
 				return cfg
 			},
 			mustHave: []string{
-				"/api/v1/blobs",             // blob content GET/HEAD
-				"/api/v1/vault/blobs",       // vault blob upload (PUT)
-				"/api/v1/vault/placements",  // placement pins
-				"/api/v1/spaces",            // personal-state plane
-				"/enrol",                    // device enrolment
-				"/healthz",                  // health
-				"/metrics",                  // metrics
-				"/readyz",                   // readiness
+				"/api/v1/blobs",            // blob content GET/HEAD
+				"/api/v1/vault/blobs",      // vault blob upload (PUT)
+				"/api/v1/vault/placements", // placement pins
+				"/api/v1/spaces",           // personal-state plane
+				"/enrol",                   // device enrolment
+				"/healthz",                 // health
+				"/metrics",                 // metrics
+				"/readyz",                  // readiness
 			},
 			mustAbsent: []string{
 				"/api/v1/works",    // library (media profile only)
