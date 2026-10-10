@@ -100,3 +100,4 @@ An ADR that merely describes the code is not worth having.
 | [0103](0103-a-space-key-has-epochs-and-a-rotation-seals-the-previous-key-under-the-next.md) | A space key has epochs, and a rotation seals the previous key under the next | Proposed |
 | [0104](0104-a-restricted-principal-reaches-only-the-spaces-a-device-granted-it.md) | A restricted principal reaches only the spaces an owner's device granted it | Proposed |
 | [0105](0105-a-books-own-file-is-its-first-cover-source.md) | A book's own file is its first cover source | Accepted |
+| [0106](0106-playback-selects-preferred-dialogue-before-streaming.md) | Playback selects preferred dialogue before streaming | Accepted |

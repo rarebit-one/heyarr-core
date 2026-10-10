@@ -264,7 +264,7 @@ func (a *API) enqueueRemux(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, "device", err)
 		return
 	}
-	media, blobHash, err := a.mediaProfile(r.Context(), body.AssetID)
+	media, blobHash, err := a.mediaProfile(r.Context(), body.AssetID, nil)
 	if err != nil {
 		a.fail(w, r, "asset", err)
 		return

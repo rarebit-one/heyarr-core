@@ -3,6 +3,7 @@ package ffmpeg_test
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"os"
 	"os/exec"
@@ -28,7 +29,7 @@ func TestStreamArgsAreTheContract(t *testing.T) {
 			spec: ffmpeg.StreamSpec{Source: "/srv/x.mp4", CopyVideo: true},
 			want: []string{
 				"-map 0:v:0? -map 0:a:0?", "-c:v copy", "-c:a aac -ac 2 -b:a 192k",
-				"-movflags frag_keyframe+empty_moov+default_base_moof+delay_moov -f mp4 -",
+				"-movflags frag_keyframe+empty_moov+default_base_moof+delay_moov -frag_duration 1000000 -f mp4 -",
 			},
 			wantNot: []string{"libx264", "-ss", "scale="},
 		},
@@ -274,5 +275,66 @@ func TestStreamReportsFFmpegFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Invalid data") && !strings.Contains(err.Error(), "invalid") {
 		t.Errorf("the failure carries no ffmpeg detail: %v", err)
+	}
+}
+
+func TestFirstStreamingFragmentIsPlayableBeforeTheLongSourceGopEnds(t *testing.T) {
+	ffmpegPath, ffprobePath := toolchain(t)
+	for _, tc := range []struct {
+		name      string
+		copyVideo bool
+		codec     string
+		start     float64
+	}{
+		{"copied AAC", true, "aac", 0},
+		{"encoded AAC", false, "aac", 0},
+		{"copied AC3 after seek", true, "ac3", 0.5},
+		{"encoded AC3 after seek", false, "ac3", 0.5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := generate(t, ffmpegPath, "long-gop.mp4", "-c:v", "libx264", "-preset", "ultrafast", "-g", "1000", "-sc_threshold", "0", "-c:a", tc.codec)
+			streamer, err := ffmpeg.NewStreamer(ffmpeg.StreamerOptions{FFmpegPath: ffmpegPath})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			if err := streamer.Stream(t.Context(), ffmpeg.StreamSpec{Source: source, CopyVideo: tc.copyVideo, CopyAudio: true, Start: tc.start}, &out); err != nil {
+				t.Fatal(err)
+			}
+			data := out.Bytes()
+			fragments, firstEnd := 0, 0
+			for offset := 0; offset < len(data); {
+				if len(data)-offset < 8 {
+					t.Fatal("truncated MP4 box")
+				}
+				size := int(binary.BigEndian.Uint32(data[offset : offset+4]))
+				if size < 8 || size > len(data)-offset {
+					t.Fatalf("invalid box size %d", size)
+				}
+				if string(data[offset+4:offset+8]) == "moof" {
+					fragments++
+				}
+				if fragments == 1 && string(data[offset+4:offset+8]) == "mdat" {
+					firstEnd = offset + size
+				}
+				offset += size
+			}
+			if fragments < 2 {
+				t.Fatalf("only %d fragment: output still waits for the long GOP or EOF", fragments)
+			}
+			if firstEnd == 0 {
+				t.Fatal("first fragment has no media")
+			}
+			prefix := filepath.Join(t.TempDir(), "first-fragment.mp4")
+			if err := os.WriteFile(prefix, data[:firstEnd], 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := streamShape(t, ffprobePath, prefix); got != "mov,mp4,m4a,3gp,3g2,mj2|h264,"+tc.codec {
+				t.Fatal(got)
+			}
+			if b, err := exec.CommandContext(t.Context(), ffmpegPath, "-v", "error", "-i", prefix, "-frames:v", "1", "-f", "null", "-").CombinedOutput(); err != nil {
+				t.Fatalf("first fragment is not playable: %v %s", err, b)
+			}
+		})
 	}
 }

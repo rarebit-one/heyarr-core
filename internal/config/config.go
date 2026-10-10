@@ -17,6 +17,7 @@ import (
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/providers/structs"
 	"github.com/knadh/koanf/v2"
+	"golang.org/x/text/language"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -559,6 +560,8 @@ type Media struct {
 	// core. Zero means the default of two; a client past the cap is told to
 	// retry rather than queued.
 	StreamConcurrency int `koanf:"stream_concurrency"`
+	// AudioLanguages is the node preference for clients that do not supply one.
+	AudioLanguages []string `koanf:"audio_languages"`
 }
 
 // PeerEndpoint is how another role reaches this node's API.
@@ -891,6 +894,11 @@ func (c Config) Validate() error {
 	}
 	if c.Peer.Name == "" {
 		return errors.New("config: peer.name must be set")
+	}
+	for _, tag := range c.Media.AudioLanguages {
+		if _, err := language.Parse(tag); err != nil {
+			return fmt.Errorf("config: media.audio_languages contains invalid language tag %q", tag)
+		}
 	}
 	if c.Media.StreamConcurrency < 0 {
 		return fmt.Errorf("config: media.stream_concurrency must be zero or more, got %d", c.Media.StreamConcurrency)

@@ -256,6 +256,7 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		Streamer:        hc.streamer,
 		Blobs:           hc.blobs,
 		Prober:          hc.prober,
+		AudioLanguages:  hc.cfg.Media.AudioLanguages,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -93,7 +93,8 @@ type SubtitleStream struct {
 	// Title is the track's title tag, "" when none — a human label like "SDH".
 	Title string
 	// Forced marks a track meant to show only foreign-dialogue lines.
-	Forced bool
+	Forced          bool
+	HearingImpaired bool
 }
 
 // ExtractorOptions configure an Extractor. Both binaries are the resolved
@@ -184,11 +185,12 @@ func (e *Extractor) List(ctx context.Context, srcPath string) ([]SubtitleStream,
 			continue
 		}
 		out = append(out, SubtitleStream{
-			Index:    s.Index,
-			Codec:    strings.ToLower(s.CodecName),
-			Language: normaliseLang(s.Tags["language"]),
-			Title:    strings.TrimSpace(s.Tags["title"]),
-			Forced:   s.Disposition["forced"] == 1,
+			Index:           s.Index,
+			Codec:           strings.ToLower(s.CodecName),
+			Language:        normaliseLang(s.Tags["language"]),
+			Title:           strings.TrimSpace(s.Tags["title"]),
+			Forced:          s.Disposition["forced"] == 1,
+			HearingImpaired: s.Disposition["hearing_impaired"] == 1,
 		})
 	}
 	return out, nil
@@ -245,7 +247,7 @@ func probeSubsArgs(src string) []string {
 	return []string{
 		"-v", "error",
 		"-select_streams", "s",
-		"-show_entries", "stream=index,codec_name,codec_type:stream_tags=language,title:stream_disposition=forced",
+		"-show_entries", "stream=index,codec_name,codec_type:stream_tags=language,title:stream_disposition=forced,hearing_impaired",
 		"-of", "json",
 		src,
 	}

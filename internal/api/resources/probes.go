@@ -43,6 +43,7 @@ type ProbeStream struct {
 	SampleRate int    `json:"sample_rate,omitempty"`
 	BitrateBPS int64  `json:"bitrate_bps,omitempty"`
 	Language   string `json:"language,omitempty"`
+	Commentary bool   `json:"commentary,omitempty"`
 }
 
 // getBlobProbe serves GET /api/v1/blobs/{hash}/probe.

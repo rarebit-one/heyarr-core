@@ -897,15 +897,16 @@ func (c *Controller) resourceAPI(ctx context.Context, d mountDeps, queue *jobs.Q
 	}
 
 	apiOpts := resources.Options{
-		DB:         d.db,
-		Jobs:       queue,
-		Events:     d.eventLog,
-		Tokens:     d.tokens,
-		Catalog:    cat,
-		Providers:  providerRegistry,
-		Membership: d.members,
-		Identities: d.identities,
-		Logger:     c.log,
+		AudioLanguages: c.cfg.Media.AudioLanguages,
+		DB:             d.db,
+		Jobs:           queue,
+		Events:         d.eventLog,
+		Tokens:         d.tokens,
+		Catalog:        cat,
+		Providers:      providerRegistry,
+		Membership:     d.members,
+		Identities:     d.identities,
+		Logger:         c.log,
 
 		CatalogTombstones: catalogTomb,
 		CatalogSigner:     catalogSigner,

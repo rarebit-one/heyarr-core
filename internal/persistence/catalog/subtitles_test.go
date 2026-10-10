@@ -3,6 +3,7 @@ package catalog_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -143,5 +144,53 @@ func TestRecordExtractedSubtitleIsIdempotentButKeepsDistinctTracks(t *testing.T)
 	}
 	if n != 2 {
 		t.Errorf("subtitle asset count = %d, want 2 (one per distinct track, re-runs converge)", n)
+	}
+}
+
+func TestEmbeddedEnglishSdhUsesCanonicalLanguageAndSdhFilename(t *testing.T) {
+	cat, ctx, db, source, _ := seedVideo(t)
+	if err := cat.RecordExtractedSubtitle(ctx, source, catalog.ExtractedSubtitle{BlobHash: subENBlob, Size: 512, Language: "eng", HearingImpaired: true}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	var filename, attrs string
+	if err := db.Reader().QueryRowContext(ctx, `SELECT filename,attributes FROM assets WHERE role='subtitle'`).Scan(&filename, &attrs); err != nil {
+		t.Fatal(err)
+	}
+	if filename != "Yellowstone S05E01.en.sdh.srt" || !strings.Contains(attrs, `"language":"en"`) || !strings.Contains(attrs, `"hearing_impaired":true`) {
+		t.Fatalf("filename=%s attrs=%s", filename, attrs)
+	}
+}
+
+func TestSubtitleLanguageDoesNotInferUnknownOrDiscardRegion(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{{"", ""}, {"und", ""}, {"und-Latn", ""}, {"eng", "en"}, {"zh-Hant", "zh-Hant"}, {"pt-BR", "pt-BR"}} {
+		name := tc.input
+		if name == "" {
+			name = "untagged"
+		}
+		t.Run(name, func(t *testing.T) {
+			cat, ctx, db, source, _ := seedVideo(t)
+			if err := cat.RecordExtractedSubtitle(ctx, source, catalog.ExtractedSubtitle{BlobHash: subENBlob, Size: 512, Language: tc.input}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			var filename, attrs string
+			if err := db.Reader().QueryRowContext(ctx, `SELECT filename,attributes FROM assets WHERE role='subtitle'`).Scan(&filename, &attrs); err != nil {
+				t.Fatal(err)
+			}
+			var metadata map[string]any
+			if err := json.Unmarshal([]byte(attrs), &metadata); err != nil {
+				t.Fatal(err)
+			}
+			got, _ := metadata["language"].(string)
+			if got != tc.want {
+				t.Fatalf("language=%q want=%q", got, tc.want)
+			}
+			wantName := "Yellowstone S05E01"
+			if tc.want != "" {
+				wantName += "." + tc.want
+			}
+			if filename != wantName+".srt" {
+				t.Fatalf("filename=%q want=%q", filename, wantName+".srt")
+			}
+		})
 	}
 }

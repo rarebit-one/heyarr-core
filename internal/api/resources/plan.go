@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/domain/playback"
 	"github.com/rarebit-one/heyarr-core/internal/domain/routing"
+	"github.com/rarebit-one/heyarr-core/internal/media/probe"
 )
 
 // The playback planner's API surface (§68).
@@ -122,7 +122,7 @@ func (a *API) planPlayback(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, "device", err)
 		return
 	}
-	media, blobHash, err := a.mediaProfile(r.Context(), body.AssetID)
+	media, blobHash, err := a.mediaProfile(r.Context(), body.AssetID, nil)
 	if err != nil {
 		a.fail(w, r, "asset", err)
 		return
@@ -216,7 +216,7 @@ func (a *API) deviceProfile(ctx context.Context, id string) (playback.DeviceProf
 // case rather than an edge one: it is the state of every blob on a node with
 // no ffprobe (ADR-0023), and the planner's answer for it is deliberate rather
 // than incidental.
-func (a *API) mediaProfile(ctx context.Context, assetID string) (playback.MediaProfile, string, error) {
+func (a *API) mediaProfile(ctx context.Context, assetID string, audioLanguages []string) (playback.MediaProfile, string, error) {
 	var blobHash sql.NullString
 	if err := a.reader.QueryRowContext(ctx,
 		`SELECT blob_hash FROM assets WHERE id = ?`, assetID).Scan(&blobHash); err != nil {
@@ -247,37 +247,18 @@ func (a *API) mediaProfile(ctx context.Context, assetID string) (playback.MediaP
 		return playback.MediaProfile{}, blobHash.String, err
 	}
 
-	var parsed []ProbeStream
+	var parsed []probe.Stream
 	if err := json.Unmarshal([]byte(streams), &parsed); err != nil {
 		return playback.MediaProfile{}, blobHash.String, err
 	}
-	media := playback.MediaProfile{Known: true, Container: container}
+	result := probe.Result{Container: container, Streams: parsed}
 	if bitrate.Valid {
-		media.BitrateBPS = bitrate.Int64
+		result.BitrateBPS = bitrate.Int64
 	}
 	if duration.Valid {
-		media.DurationSec = duration.Float64
+		result.DurationSec = duration.Float64
 	}
-	for _, s := range parsed {
-		switch s.Type {
-		case "video":
-			if media.VideoCodec == "" {
-				media.VideoCodec = s.Codec
-				media.Width, media.Height = s.Width, s.Height
-				// HDR detection from a stream profile is Milestone 3's
-				// identification work. Reporting false here is a claim the
-				// planner then acts on, so it is stated rather than implied:
-				// an HDR file on a non-HDR device will currently plan DIRECT
-				// and look wrong on the television, which is a visible,
-				// recoverable failure rather than a silent one.
-				media.HDR = strings.Contains(strings.ToLower(s.Profile), "hdr")
-			}
-		case "audio":
-			if media.AudioCodec == "" {
-				media.AudioCodec, media.Channels = s.Codec, s.Channels
-			}
-		}
-	}
+	media := profileFromProbe(result, audioLanguages)
 	return media, blobHash.String, nil
 }
 

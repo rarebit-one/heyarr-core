@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/text/language"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
 )
@@ -34,7 +36,8 @@ type ExtractedSubtitle struct {
 	// Language is the ISO code from the track's tags, "" when it was untagged.
 	Language string
 	// Forced marks a foreign-dialogue-only track.
-	Forced bool
+	Forced          bool
+	HearingImpaired bool
 	// Title is the track's own label ("SDH", "Commentary"), "" when none.
 	Title string
 }
@@ -59,6 +62,7 @@ type subtitleRecord struct {
 	size                 int64
 	language             string
 	forced               bool
+	hearingImpaired      bool
 	title                string
 	source               string // "embedded" | "opensubtitles"
 	identificationSource string // "extracted" | "fetched"
@@ -91,7 +95,7 @@ func (c *Catalog) RecordExtractedSubtitle(
 	}
 	return c.recordSubtitleAsset(ctx, sourceAssetID, subtitleRecord{
 		blobHash: sub.BlobHash, size: sub.Size, language: sub.Language,
-		forced: sub.Forced, title: sub.Title,
+		forced: sub.Forced, title: sub.Title, hearingImpaired: sub.HearingImpaired,
 		source: "embedded", identificationSource: "extracted",
 	}, now)
 }
@@ -123,6 +127,13 @@ func (c *Catalog) RecordFetchedSubtitle(
 func (c *Catalog) recordSubtitleAsset(
 	ctx context.Context, sourceAssetID string, rec subtitleRecord, now time.Time,
 ) error {
+	tag, parseErr := language.Parse(strings.TrimSpace(rec.language))
+	base, _, _ := tag.Raw()
+	rec.language = ""
+	if parseErr == nil && base.String() != "und" {
+		rec.language = tag.String()
+	}
+	rec.hearingImpaired = rec.hearingImpaired || strings.EqualFold(rec.title, "SDH") || strings.HasSuffix(strings.ToLower(rec.title), " sdh")
 	var pending []events.Event
 
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
@@ -220,6 +231,9 @@ func subtitleAttributes(rec subtitleRecord) map[string]any {
 	if rec.forced {
 		attrs["forced"] = true
 	}
+	if rec.hearingImpaired {
+		attrs["hearing_impaired"] = true
+	}
 	if rec.title != "" {
 		attrs["title"] = rec.title
 	}
@@ -244,6 +258,8 @@ func subtitleFilename(sourceName string, rec subtitleRecord) string {
 	}
 	if rec.forced {
 		base += ".forced"
+	} else if rec.hearingImpaired {
+		base += ".sdh"
 	}
 	return base + ".srt"
 }

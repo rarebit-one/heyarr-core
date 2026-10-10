@@ -43,7 +43,26 @@ Each stream is one ffmpeg; one that re-encodes video is a core. Cap them:
 ```yaml
 media:
   stream_concurrency: 2   # the default; a client past the cap gets 429 + Retry-After
+  audio_languages: [en]   # optional preferred dialogue, with original-audio fallback
 ```
+
+Clients can override `media.audio_languages` with `client.audio_languages` on
+`POST /playback/plan`. An explicit empty list selects original main audio.
+The chosen track and its codec are planned together and signed into the stream
+URL, so seeking retains the language. Files without preferred dialogue retain
+their original audio. Direct-play clients select the same language themselves.
+
+Streams flush fragments after one second of media. Re-encoded video receives
+one-second keyframes; copied video retains the source keyframes. These bounds
+reduce fragment startup waits but do not bound wall-clock seek latency. Frequent
+keyframes can increase bitrate at the same CRF, and the player still buffers.
+
+To compare the previous fragment settings against the shorter ones on a serving
+node, run `python3 scripts/measure-stream-startup.py <source> --audio-track 1`.
+Choose a source whose named audio ordinal is English. It alternates five samples
+per variant after warming both, decodes every first-fragment prefix, and reports
+median/range. The metric ends before network transfer and client buffering; do
+not report it as the TV's visible seek latency.
 
 `heyarr_playback_streams_active` on `/metrics` is how many are running.
 Without ffmpeg the plan still answers — `direct`, with the reason and a note

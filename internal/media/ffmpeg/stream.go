@@ -55,6 +55,8 @@ const killGrace = 2 * time.Second
 type StreamSpec struct {
 	// Source is the blob's local path. Immutable bytes; never written.
 	Source string
+	// AudioTrack is the zero-based audio ordinal selected by the playback plan.
+	AudioTrack int
 	// CopyVideo carries the source's first video stream unchanged; false
 	// re-encodes it with libx264.
 	CopyVideo bool
@@ -77,9 +79,9 @@ type StreamSpec struct {
 //	-nostdin            no terminal to block on (see remuxArgs).
 //	-ss before -i       an input seek, which lands on a keyframe fast rather
 //	                    than decoding up to the instant.
-//	-map 0:v:0 / 0:a:0  the FIRST video and audio stream. A client that could
-//	                    pick tracks would not need this route; a repackage that
-//	                    carried six audio tracks would re-encode five for nobody.
+//	-map 0:v:0 / 0:a:N  the first video and the planned audio track. Only that
+//	                    audio is encoded; selecting it before streaming preserves
+//	                    language preference without encoding unused tracks.
 //	-c:v copy           the contract when the client can decode the picture.
 //	-c:a aac -ac 2      stereo AAC is what every client on earth decodes; 5.1
 //	                    AAC is not, and a downmix is what a phone would do anyway.
@@ -89,17 +91,23 @@ type StreamSpec struct {
 //	                    the first packet of every stream has been seen — a
 //	                    copied AC-3 track has no frame size until then, and
 //	                    without it the muxer refuses to write the header.
+//	-frag_duration      flush a fragment after one second of media, even when
+//	                    copying video with widely spaced source keyframes.
+//	-force_key_frames   encoded video gets a keyframe each second so the first
+//	                    playable fragment does not wait for x264's default GOP.
+//
 //	-f mp4 -            to stdout, which is the response.
 func StreamArgs(spec StreamSpec) []string {
 	args := []string{"-hide_banner", "-loglevel", "warning", "-nostdin"}
 	if spec.Start > 0 {
 		args = append(args, "-ss", strconv.FormatFloat(spec.Start, 'f', 3, 64))
 	}
-	args = append(args, "-i", spec.Source, "-map", "0:v:0?", "-map", "0:a:0?")
+	args = append(args, "-i", spec.Source, "-map", "0:v:0?", "-map", fmt.Sprintf("0:a:%d?", spec.AudioTrack))
 	if spec.CopyVideo {
 		args = append(args, "-c:v", "copy")
 	} else {
-		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p")
+		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+			"-force_key_frames", "expr:gte(t,n_forced*1)")
 		if spec.MaxHeight > 0 {
 			// -2 keeps the width even, which libx264 with yuv420p requires.
 			args = append(args, "-vf", fmt.Sprintf("scale=-2:'min(%d,ih)'", spec.MaxHeight))
@@ -112,7 +120,7 @@ func StreamArgs(spec StreamSpec) []string {
 	}
 	return append(args,
 		"-movflags", "frag_keyframe+empty_moov+default_base_moof+delay_moov",
-		"-f", "mp4", "-")
+		"-frag_duration", "1000000", "-f", "mp4", "-")
 }
 
 // StreamerOptions configure a Streamer.

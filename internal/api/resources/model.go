@@ -344,6 +344,8 @@ func emptyToNil(s string) *string {
 // join, done once in SQL.
 type WorkAsset struct {
 	Asset
+	Language        string `json:"language,omitempty"`
+	HearingImpaired bool   `json:"hearing_impaired,omitempty"`
 	// The edition this asset belongs to, labelled — a screen groups by it, and
 	// an id alone is not something a person can read.
 	EditionLabel string `json:"edition_label"`

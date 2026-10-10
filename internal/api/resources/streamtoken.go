@@ -45,7 +45,7 @@ import (
 // streamTokenVersion prefixes every token, so a change to what is signed is a
 // token that fails to parse rather than one that verifies against the wrong
 // reading of its fields.
-const streamTokenVersion = "s1"
+const streamTokenVersion = "s2"
 
 // streamTokenTTL is how long a stream token may be presented for.
 //
@@ -71,10 +71,11 @@ type streamToken struct {
 	Subject string
 	// CopyVideo, CopyAudio and MaxHeight are the repackage, as the domain
 	// decided it. Signed, so a client cannot upgrade a copy to a transcode.
-	CopyVideo bool
-	CopyAudio bool
-	MaxHeight int
-	ExpiresAt time.Time
+	CopyVideo  bool
+	CopyAudio  bool
+	MaxHeight  int
+	AudioTrack int
+	ExpiresAt  time.Time
 }
 
 // streamSubject names the credential a request arrived with, in a form that
@@ -99,7 +100,7 @@ func streamSubject(id auth.Identity) string {
 // streamKey derives the signing key from the node's secret.
 func streamKey(secret []byte) []byte {
 	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte("heyarr playback stream token " + streamTokenVersion))
+	mac.Write([]byte("heyarr playback stream token s1"))
 	return mac.Sum(nil)
 }
 
@@ -129,6 +130,7 @@ func (t streamToken) payload() string {
 		strconv.Itoa(flags),
 		strconv.Itoa(t.MaxHeight),
 		strconv.FormatInt(t.ExpiresAt.Unix(), 10),
+		strconv.Itoa(t.AudioTrack),
 	}, ".")
 }
 
@@ -137,6 +139,9 @@ func (t streamToken) payload() string {
 func (t streamToken) sign(key []byte) (string, error) {
 	if len(key) == 0 {
 		return "", errors.New("stream token: a signing key is required")
+	}
+	if t.AudioTrack < 0 {
+		return "", errStreamTokenMalformed
 	}
 	if t.BlobHash == "" || t.Subject == "" || t.ExpiresAt.IsZero() {
 		return "", errors.New("stream token: a blob, a subject and an expiry are required")
@@ -166,7 +171,8 @@ func verifyStreamToken(key []byte, token, subject string, now time.Time) (stream
 	}
 
 	fields := strings.Split(payload, ".")
-	if len(fields) != 6 || fields[0] != streamTokenVersion {
+	legacy := len(fields) == 6 && fields[0] == "s1"
+	if !legacy && (len(fields) != 7 || fields[0] != streamTokenVersion) {
 		return streamToken{}, errStreamTokenMalformed
 	}
 	blob, err := unb64(fields[1])
@@ -189,13 +195,21 @@ func verifyStreamToken(key []byte, token, subject string, now time.Time) (stream
 	if err != nil {
 		return streamToken{}, errStreamTokenMalformed
 	}
+	audioTrack := 0
+	if !legacy {
+		audioTrack, err = strconv.Atoi(fields[6])
+		if err != nil || audioTrack < 0 {
+			return streamToken{}, errStreamTokenMalformed
+		}
+	}
 	t := streamToken{
-		BlobHash:  string(blob),
-		Subject:   string(subj),
-		CopyVideo: flags&1 != 0,
-		CopyAudio: flags&2 != 0,
-		MaxHeight: height,
-		ExpiresAt: time.Unix(unix, 0).UTC(),
+		AudioTrack: audioTrack,
+		BlobHash:   string(blob),
+		Subject:    string(subj),
+		CopyVideo:  flags&1 != 0,
+		CopyAudio:  flags&2 != 0,
+		MaxHeight:  height,
+		ExpiresAt:  time.Unix(unix, 0).UTC(),
 	}
 	if !now.Before(t.ExpiresAt) {
 		return streamToken{}, errStreamTokenExpired
