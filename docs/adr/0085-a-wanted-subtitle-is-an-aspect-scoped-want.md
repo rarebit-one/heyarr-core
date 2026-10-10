@@ -138,6 +138,11 @@ candidate subtitles (hearing-impaired vs not, download count, uploader trust)
 is the **adapter's** business, not the profile's — the direct-route stance that
 the source, not the profile, chooses which bytes (ADR-0060 §3).
 
+Within the wanted language, the fetch handler prefers SDH/CC annotations, then
+download count, and falls back to ordinary dialogue subtitles when no SDH is
+available. It preserves the provider's hearing-impaired flag on the imported
+asset so clients can identify and select those captions.
+
 ### 4. The provider searches inside the adapter; the pipeline sees a direct release
 
 OpenSubtitles must be *queried* — by the video's moviehash, or by external id +

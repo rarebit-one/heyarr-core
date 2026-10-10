@@ -141,7 +141,7 @@ func TestFetchSubsAttachesBestCandidate(t *testing.T) {
 	prov := &fakeSubtitleProvider{
 		name: "opensubtitles",
 		candidates: []providers.SubtitleCandidate{
-			{FileID: "1", Language: "en", HearingImpaired: true, DownloadCount: 5000},
+			{FileID: "1", Language: "en", HearingImpaired: true, DownloadCount: 5},
 			{FileID: "2", Language: "en", HearingImpaired: false, DownloadCount: 100},
 			{FileID: "3", Language: "de", HearingImpaired: false, DownloadCount: 9000},
 		},
@@ -157,10 +157,9 @@ func TestFetchSubsAttachesBestCandidate(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	// Candidate 2: English, not hearing-impaired, chosen over the more-downloaded
-	// SDH (1) and the German (3, wrong language).
-	if prov.lastFileID != "2" {
-		t.Errorf("resolved file %q, want 2 (clean English)", prov.lastFileID)
+	// English SDH wins over ordinary English and the wrong language.
+	if prov.lastFileID != "1" {
+		t.Errorf("resolved file %q, want 1 (English SDH)", prov.lastFileID)
 	}
 	if dl.fetched != "https://dl/x.srt" {
 		t.Errorf("downloaded %q", dl.fetched)
@@ -171,6 +170,9 @@ func TestFetchSubsAttachesBestCandidate(t *testing.T) {
 	if rec.recorded.Language != "en" {
 		t.Errorf("recorded language = %q, want en", rec.recorded.Language)
 	}
+	if !rec.recorded.HearingImpaired {
+		t.Error("recorded subtitle lost the selected provider's SDH flag")
+	}
 	// The query carried the ids the want had.
 	if prov.lastQuery.IMDBID != "0944947" || prov.lastQuery.Season != 1 || prov.lastQuery.Episode != 1 {
 		t.Errorf("query = %+v", prov.lastQuery)
@@ -178,6 +180,31 @@ func TestFetchSubsAttachesBestCandidate(t *testing.T) {
 	// Success resets the fruitless streak.
 	if len(rec.scheduled) != 1 || rec.scheduled[0].fruitless != 0 {
 		t.Errorf("schedule = %+v, want one reset to 0", rec.scheduled)
+	}
+}
+
+func TestFetchSubsFallsBackToOrdinaryEnglish(t *testing.T) {
+	t.Parallel()
+	rec := &recordingRecorder{ctx: baseCtx(), ctxOK: true}
+	prov := &fakeSubtitleProvider{
+		name: "opensubtitles",
+		candidates: []providers.SubtitleCandidate{
+			{FileID: "de-sdh", Language: "de", HearingImpaired: true, DownloadCount: 9000},
+			{FileID: "en-low", Language: "en", DownloadCount: 10},
+			{FileID: "en-high", Language: "en", DownloadCount: 100},
+		},
+		link: providers.SubtitleLink{URL: secret.Value("https://dl/en.srt")},
+	}
+	h := FetchSubsHandler(FetchSubsHandlerOptions{
+		Providers: []providers.SubtitleProvider{prov}, Recorder: rec,
+		Store:      &stringStore{hash: "blake3:fallback", size: 42},
+		Downloader: &stringDownloader{body: "ordinary English"},
+	})
+	if err := h(context.Background(), fetchJob(t, "want-1")); err != nil {
+		t.Fatal(err)
+	}
+	if prov.lastFileID != "en-high" || rec.recorded == nil || rec.recorded.Language != "en" {
+		t.Fatalf("resolved %q, recorded %+v; want ordinary English fallback", prov.lastFileID, rec.recorded)
 	}
 }
 
