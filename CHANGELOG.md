@@ -9,6 +9,28 @@ stable.
 
 ## [Unreleased]
 
+### Added
+- **Mnemosyne: a second binary for personal media (ADR-0107).** `cmd/mnemosyne`
+  builds a focused service that mounts only the personal-state plane, vault blob
+  upload, vault placement pins, blob content serving, device enrolment,
+  encrypted-state replication, health/metrics and backup. Tokens, devices and
+  peers are managed through the CLI (direct database access), not HTTP routes.
+  GC, peer convergence and cross-site blob replication require the worker
+  subcommand and are deferred to Phase 1b. Libraries, scanner, ingest, MCP,
+  render, relay and compat adapters are excluded. Default data directory
+  `/var/lib/mnemosyne`, default port 7778.
+- **`config.Profile` type** with values `media` (default, existing behaviour
+  unchanged) and `personal` (Mnemosyne). Validated at startup; a malformed
+  value is a hard error.
+- **`vault.enabled` config flag** (server-side, default `true`). When `false`,
+  vault blob upload and placement-pin routes are removed from the media profile.
+  Blob content serving stays on so non-vault blobs remain readable.
+- **`deploy/systemd/mnemosyne.service`** and release packaging in goreleaser.
+  The Mnemosyne archive is published alongside heyarr's.
+- **Table-driven profile routing tests** (`internal/controller/profile_test.go`)
+  covering personal profile, media profile with `vault.enabled=true`, and media
+  profile with `vault.enabled=false`.
+
 ### Upgrading
 - **Migration 00060 runs a one-time `VACUUM`** to switch the database to
   `auto_vacuum=INCREMENTAL` (#721). On a large control plane this takes minutes
