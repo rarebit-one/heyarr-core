@@ -15,10 +15,18 @@ stable.
   upload, vault placement pins, blob content serving, device enrolment,
   encrypted-state replication, health/metrics and backup. Tokens, devices and
   peers are managed through the CLI (direct database access), not HTTP routes.
-  GC, peer convergence and cross-site blob replication require the worker
-  subcommand and are deferred to Phase 1b. Libraries, scanner, ingest, MCP,
-  render, relay and compat adapters are excluded. Default data directory
-  `/var/lib/mnemosyne`, default port 7778.
+  Libraries, scanner, ingest, MCP, render, relay and compat adapters are
+  excluded. Default data directory `/var/lib/mnemosyne`, default port 7778.
+- **`mnemosyne worker` subcommand (Phase 1b).** Runs the PersonalWorker role:
+  four background job types (`gc_blobs`, `reconcile_peer`, `replicate_blob`,
+  `chunk_blob`) and two beats (GC every 6 hours; convergence at startup then
+  every 5 minutes). A Mnemosyne deployment without this process running will
+  never collect garbage or converge vault blobs to remote peers.
+- **`mnemosyne all` subcommand.** The operator default: runs the controller
+  (personal profile) and the PersonalWorker together in one process, mirroring
+  `heyarr all`. `deploy/systemd/mnemosyne.service` ExecStart is updated to use
+  `mnemosyne all`. ADR-0002 Invariant 4 still holds: the two roles communicate
+  only through the job table and HTTP, never an in-process pointer.
 - **`config.Profile` type** with values `media` (default, existing behaviour
   unchanged) and `personal` (Mnemosyne). Validated at startup; a malformed
   value is a hard error.
