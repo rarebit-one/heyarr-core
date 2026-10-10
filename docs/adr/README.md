@@ -101,3 +101,5 @@ An ADR that merely describes the code is not worth having.
 | [0104](0104-a-restricted-principal-reaches-only-the-spaces-a-device-granted-it.md) | A restricted principal reaches only the spaces an owner's device granted it | Proposed |
 | [0105](0105-a-books-own-file-is-its-first-cover-source.md) | A book's own file is its first cover source | Accepted |
 | [0106](0106-playback-selects-preferred-dialogue-before-streaming.md) | Playback selects preferred dialogue before streaming | Accepted |
+| [0107](0107-personal-media-is-a-second-service-that-mounts-only-the-personal-plane.md) | Personal media is a second service that mounts only the personal plane | Proposed |
+| [0108](0108-a-shared-space-is-wrapped-for-another-members-devices-and-only-an-owners-device-changes-membership.md) | A shared space is wrapped for another member's devices, and only an owner's device changes membership | Proposed |
