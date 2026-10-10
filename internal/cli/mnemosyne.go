@@ -12,6 +12,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/controller"
+	"github.com/rarebit-one/heyarr-core/internal/worker"
 )
 
 // NewMnemosyneRootCommand builds the cobra command tree for the mnemosyne
@@ -81,6 +82,8 @@ identification, render and compat adapters are not mounted.`,
 		newSystemCommand(opts, &configPath),
 		// Mnemosyne runs only the controller role: personal profile (ADR-0107).
 		newMnemosyneRoleCommand(opts, &configPath),
+		// The worker role: GC, peer convergence and blob transfer (Phase 1b).
+		newMnemosyneWorkerCommand(opts, &configPath),
 	)
 	return root
 }
@@ -175,6 +178,64 @@ have been layered and validated — which is what Mnemosyne will actually use.`,
 		"hide secret values (no-op today — configuration holds no secrets)")
 	cmd.AddCommand(print)
 	return cmd
+}
+
+// newMnemosyneWorkerCommand returns the "worker" subcommand that runs the
+// PersonalWorker: GC, peer convergence and blob transfer for the personal
+// profile. It is kept separate from "serve" because the two roles have
+// different resource requirements and are independently runnable (ADR-0002):
+// a small device may run only "serve", while a node with more disk runs both.
+func newMnemosyneWorkerCommand(opts Options, configPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "worker",
+		Short: "Run the Mnemosyne personal worker (GC, peer convergence, blob transfer)",
+		Long: `Start the Mnemosyne worker role for the personal profile (ADR-0107, Phase 1b).
+
+The worker runs three categories of background job:
+
+  gc_blobs          — reclaims orphaned vault bytes (apply=true, every six hours).
+  reconcile_peer    — drives vault-blob convergence toward the placement-pin desired
+                      set on every enrolled peer (every five minutes, at startup).
+  replicate_blob    — moves vault blobs to the peers that reconcile_peer named as
+                      destinations (mTLS, bounded concurrency).
+  chunk_blob        — produces chunk manifests for resumable large-blob transfers
+                      (lazy, §16, ADR-0035).
+
+The controller (mnemosyne serve) does not start a GC beat or a convergence beat.
+A Mnemosyne deployment without this process running will never collect garbage or
+converge vault blobs to remote peers.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runMnemosyneWorker(cmd.Context(), opts, *configPath)
+		},
+	}
+}
+
+// runMnemosyneWorker loads Mnemosyne configuration and runs the personal worker
+// role. It is the Phase 1b analogue of runMnemosyne.
+func runMnemosyneWorker(ctx context.Context, opts Options, configPath string) error {
+	cfg, err := config.LoadMnemosyne(configPath)
+	if err != nil {
+		return err
+	}
+	if err := cfg.EnsureDataDir(); err != nil {
+		return err
+	}
+
+	log := newLogger(cfg.Log, opts.Stderr)
+	info := buildinfo.Get()
+	log.Info("mnemosyne worker starting",
+		"version", info.Version,
+		"commit", info.Commit,
+		"go", info.GoVersion,
+		"peer", cfg.Peer.Name,
+		"site", cfg.Peer.Site,
+		"data_dir", cfg.DataDir,
+		"profile", cfg.Profile)
+
+	err = supervise(ctx, log, opts.ShutdownGrace, worker.NewPersonalWorker(cfg, log))
+	log.Info("mnemosyne worker stopped")
+	return err
 }
 
 // MnemosyneMain is the process entry point for the mnemosyne binary. It wires
