@@ -264,25 +264,61 @@ func (c *Catalog) RecordThumbnailReady(
 ) error {
 	var pending []events.Event
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		pending = nil
 		stamp := now.Format(timestampFormat)
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO blobs (hash, size, mime, first_seen_at)
-			VALUES (?, ?, 'image/jpeg', ?)
-			ON CONFLICT (hash) DO NOTHING`,
-			thumbHash, size, stamp); err != nil {
+		// The source may have been reclaimed while the job decoded it; a ready row
+		// for a reclaimed source would outlive it (Codex on #744). Record nothing:
+		// the stored thumbnail has no reference and the collector takes it.
+		var sourceKnown int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM blobs WHERE hash = ?`, sourceHash).
+			Scan(&sourceKnown); err != nil {
+			return fmt.Errorf("catalog: checking a thumbnail's source: %w", err)
+		}
+		if sourceKnown == 0 {
+			return nil
+		}
+		adopted, err := adoptBlob(ctx, tx, thumbHash, size, stamp)
+		if err != nil {
 			return fmt.Errorf("catalog: registering thumbnail blob: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE blobs SET mime = 'image/jpeg' WHERE hash = ? AND mime IS NULL`, thumbHash); err != nil {
+			return fmt.Errorf("catalog: typing thumbnail blob: %w", err)
+		}
+		if adopted {
+			ev, err := c.events.EmitTx(ctx, tx, events.TypeBlobCreated, "blob", thumbHash, map[string]any{
+				"size": size, "derived_from": sourceHash, "bucket": bucket,
+			})
+			if err != nil {
+				return err
+			}
+			pending = append(pending, ev)
 		}
 		var peerID string
 		if err := tx.QueryRowContext(ctx, `SELECT id FROM peers WHERE is_self = 1`).Scan(&peerID); err != nil {
 			return fmt.Errorf("catalog: resolving this peer for a thumbnail replica: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, `
+		res, err := tx.ExecContext(ctx, `
 			INSERT INTO replicas (blob_hash, peer_id, state, bytes_present, verified_at, updated_at)
 			VALUES (?, ?, 'present', ?, ?, ?)
 			ON CONFLICT (blob_hash, peer_id) DO UPDATE SET
-				state = 'present', bytes_present = excluded.bytes_present, updated_at = excluded.updated_at`,
-			thumbHash, peerID, size, stamp, stamp); err != nil {
+				state = 'present', bytes_present = excluded.bytes_present,
+				verified_at = excluded.verified_at, updated_at = excluded.updated_at
+			WHERE replicas.state <> 'present' OR replicas.bytes_present <> excluded.bytes_present`,
+			thumbHash, peerID, size, stamp, stamp)
+		if err != nil {
 			return fmt.Errorf("catalog: recording thumbnail replica: %w", err)
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return fmt.Errorf("catalog: recording thumbnail replica: %w", err)
+		} else if n == 1 {
+			ev, err := c.events.EmitTx(ctx, tx, events.TypeReplicaPresent, "blob", thumbHash, map[string]any{
+				"peer_id": peerID, "bytes_present": size,
+			})
+			if err != nil {
+				return err
+			}
+			pending = append(pending, ev)
 		}
 		evs, err := c.UpsertThumbnailReady(ctx, tx, sourceHash, bucket, recipe, thumbHash, now)
 		if err != nil {

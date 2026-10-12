@@ -285,3 +285,24 @@ func TestGCRefCountDropsAfterThumbnailDeletion(t *testing.T) {
 		t.Errorf("thumb blob References after deletion = %d, want 0 (should be GC-eligible)", got)
 	}
 }
+
+// TestRecordThumbnailReadyForAReclaimedSourceRecordsNothing: a derivation that
+// finishes after its source was reclaimed must not recreate a ready row for the
+// absent source (Codex on #744).
+func TestRecordThumbnailReadyForAReclaimedSourceRecordsNothing(t *testing.T) {
+	t.Parallel()
+	s := newBookSeed(t)
+	const gone = "blake3:0000000000000000000000000000000000000000000000000000000000000abc"
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	if err := s.cat.RecordThumbnailReady(s.ctx, gone, 256, thumbnail.Recipe, thumbDstBlob, 1234, now); err != nil {
+		t.Fatalf("RecordThumbnailReady: %v", err)
+	}
+	var rows int
+	if err := s.db.Reader().QueryRowContext(s.ctx,
+		`SELECT COUNT(*) FROM derived_thumbnails WHERE source_hash = ?`, gone).Scan(&rows); err != nil {
+		t.Fatalf("counting rows: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("derived_thumbnails rows for a reclaimed source = %d, want 0", rows)
+	}
+}

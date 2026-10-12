@@ -102,7 +102,11 @@ func TestAControllerWithADownloadClientEnqueuesAPollAtStartup(t *testing.T) {
 	// #220's lesson. A controller that failed to START would otherwise report
 	// here as "nothing schedules the poll", which is a claim about scheduling
 	// code that is working perfectly.
-	deadline := time.Now().Add(10 * time.Second)
+	// 30s, not 10s: this is a liveness bound, not a latency claim. CI shards packages
+	// by sorted index, so a new package elsewhere can put this test beside heavier
+	// race-instrumented ones, and a loaded runner needed more than 10s to start the
+	// controller and schedule the poll (seen on #744). A missing poll still fails.
+	deadline := time.Now().Add(30 * time.Second)
 	for countPollJobs(t, db.Reader()) == 0 {
 		select {
 		case err := <-done:

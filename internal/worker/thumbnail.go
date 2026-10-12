@@ -159,7 +159,9 @@ func DeriveThumbnailHandler(opts DeriveThumbnailHandlerOptions) HandlerFunc {
 		if err != nil {
 			if errors.Is(err, cas.ErrNotFound) {
 				// Transient: the bytes are not local. The job will retry.
-				return fmt.Errorf("derive-thumbnail: source blob %s not on this node: %w", p.SourceHash, err)
+				// ErrTransient keeps a node that never receives the bytes from
+				// exhausting the attempt cap and burying the job (Codex on #744).
+				return fmt.Errorf("derive-thumbnail: source blob %s not on this node: %w: %w", p.SourceHash, jobs.ErrTransient, err)
 			}
 			return fmt.Errorf("derive-thumbnail: opening source blob %s: %w", p.SourceHash, err)
 		}
