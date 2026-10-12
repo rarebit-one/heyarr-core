@@ -19,6 +19,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/media/cover"
 	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
 	"github.com/rarebit-one/heyarr-core/internal/media/probe"
+	"github.com/rarebit-one/heyarr-core/internal/media/thumbnail"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -368,6 +369,25 @@ func registerMediaJobs(reg *Registry, d workerDeps) error {
 		}),
 		// Two at a time: each reads one book off the same disks the rest of
 		// the node is using, and the backlog is a one-off.
+		MaxConcurrent: 2,
+	})
+
+	// Thumbnail derivation (ADR-0109). Registered unconditionally: it needs
+	// only stdlib image decoders and golang.org/x/image — no capability, no
+	// external toolchain. RequiredCapability is left unset for the same reason
+	// as cover extraction: the handler is the capability.
+	//
+	// Peer routing: the handler returns a transient error when the source blob
+	// is absent (cas.ErrNotFound). In the current single-node deployment the
+	// API and the worker are co-located with the CAS, so a job enqueued by a
+	// request handler is always retried on the node that holds the bytes.
+	reg.Register(thumbnail.JobType, Registration{
+		Handler: DeriveThumbnailHandler(DeriveThumbnailHandlerOptions{
+			Source:   NewCASThumbnailSource(d.store),
+			Store:    NewCASArtworkStore(d.store),
+			Recorder: d.cat,
+			Logger:   d.log,
+		}),
 		MaxConcurrent: 2,
 	})
 

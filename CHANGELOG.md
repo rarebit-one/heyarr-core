@@ -10,6 +10,16 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **Thumbnail derivation on demand (ADR-0109).** `GET /works/{id}/artwork?size=256`
+  (also `512`, `1024`) redirects to a derived JPEG thumbnail scaled to the
+  requested long edge. If the thumbnail is not yet ready the node enqueues a
+  background job and redirects to the original blob with `Cache-Control: no-store`
+  so the client retries; a `ready` derivation carries a short private `max-age`.
+  Decompression-bomb guard (40 MP / 16 384 px / 64 MiB), JPEG EXIF orientation
+  correction, Catmull-Rom scaling, and BLAKE3 content-addressing for derived
+  blobs. The `artwork` embed on work cards gains a `sizes` map pointing at each
+  bucket URL. GC counts derived blobs as references and cleans up derivation rows
+  when a source blob is reclaimed. Requires `golang.org/x/image`.
 - **Mnemosyne: a second binary for personal media (ADR-0107).** `cmd/mnemosyne`
   builds a focused service that mounts only the personal-state plane, vault blob
   upload, vault placement pins, blob content serving, device enrolment,

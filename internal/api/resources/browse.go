@@ -5,12 +5,16 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
+	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/media/thumbnail"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 )
 
 // Browse is a projection over the catalog (ADR-0075).
@@ -220,6 +224,7 @@ func scanCard(rows interface{ Scan(...any) error }) (cardRow, error) {
 			BlobHash:   artBlob.String,
 			MIME:       nullString(artMIME),
 			ContentURL: blobContentURL(artBlob.String),
+			Sizes:      artworkSizesURL(work.ID, artBlob.String),
 		}
 	}
 	if paID.Valid && paBlob.Valid {
@@ -392,6 +397,22 @@ func (a *API) BrowseWorks(ctx context.Context, req BrowseWorksRequest) (BrowseWo
 	return BrowseWorksResult{Cards: out, NextCursor: next}, nil
 }
 
+// artworkSizesURL returns the thumbnail redirect URLs for all supported bucket
+// sizes for a given work (ADR-0109). Each value is the artwork redirect URL
+// for that work with ?size=N&v=<blobHash> appended; the client follows the 307
+// to receive either the derived thumbnail or the original while derivation is
+// pending. The `v` parameter carries the source blob hash so Android image
+// caches treat a changed poster as a new URL; the server accepts and ignores it.
+func artworkSizesURL(workID, blobHash string) map[string]string {
+	base := httpapi.APIPrefix + "/works/" + workID + "/artwork"
+	out := make(map[string]string, len(thumbnail.Buckets))
+	for _, b := range thumbnail.Buckets {
+		s := strconv.Itoa(b)
+		out[s] = base + "?size=" + s + "&v=" + blobHash
+	}
+	return out
+}
+
 // getWorkArtwork answers a work's poster by REDIRECTING to its blob.
 //
 // It is a redirect and not a second byte route on purpose. The blob route is
@@ -401,8 +422,16 @@ func (a *API) BrowseWorks(ctx context.Context, req BrowseWorksRequest) (BrowseWo
 // carry those headers; a short private max-age here and the immutable ones on
 // the target give a client both. 307 rather than 302 so a HEAD stays a HEAD.
 //
-// There is no `?size=`. The node has no image library and no thumbnail cache;
-// a client sizes the poster it fetches. ADR-0075 records the revisit trigger.
+// When ?size=N is present the node acts as a thumbnail cache (ADR-0109): if
+// the derived thumbnail is ready it redirects to the thumb blob; if the source
+// is undecodable it falls back to the original; otherwise it enqueues a
+// derivation job and redirects to the original with Cache-Control: no-store so
+// the client retries. Only the buckets 256, 512 and 1024 are valid; anything
+// else is a 400.
+//
+// The guest boundary (ADR-0074) is enforced by artworkPick, which filters vault
+// assets from its result — the blob is NULL for a Guest on a vault work, and
+// the !blob.Valid check returns 404 before thumbnail logic runs.
 func (a *API) getWorkArtwork(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	p := artworkPick(r.Context(), "works.id")
@@ -422,6 +451,53 @@ func (a *API) getWorkArtwork(w http.ResponseWriter, r *http.Request) {
 		httpapi.Fail(w, r, problem.NotFound("the work has no artwork"))
 		return
 	}
+
+	// Thumbnail redirect (ADR-0109): only runs when ?size= is present.
+	if sizeStr := r.URL.Query().Get("size"); sizeStr != "" {
+		size, convErr := strconv.Atoi(sizeStr)
+		if convErr != nil || !thumbnail.ValidBucket(size) {
+			httpapi.Fail(w, r, problem.BadRequest(
+				fmt.Sprintf("size must be one of 256, 512, 1024; got %q", sizeStr)))
+			return
+		}
+		status, thumbHash, statusErr := a.catalog.ThumbnailStatus(r.Context(), blob.String, size, thumbnail.Recipe)
+		if statusErr != nil {
+			a.fail(w, r, "thumbnail", statusErr)
+			return
+		}
+		switch status {
+		case catalog.ThumbnailStatusReady:
+			// Derived thumbnail exists: redirect to the thumb blob.
+			w.Header().Set("Cache-Control", "private, max-age=300")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			http.Redirect(w, r, blobContentURL(thumbHash), http.StatusTemporaryRedirect)
+			return
+		case catalog.ThumbnailStatusUndecodable:
+			// Source cannot be thumbnailed: fall back to the original blob.
+			w.Header().Set("Cache-Control", "private, max-age=300")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			http.Redirect(w, r, blobContentURL(blob.String), http.StatusTemporaryRedirect)
+			return
+		default:
+			// Not yet derived: enqueue the derivation job idempotently, then
+			// redirect to the original so the client has something to render
+			// while the worker catches up. no-store prevents the client from
+			// caching this response and missing the ready redirect later.
+			if _, enqErr := a.jobs.Enqueue(r.Context(), jobs.EnqueueOptions{
+				Type:      thumbnail.JobType,
+				Payload:   thumbnail.Payload{SourceHash: blob.String, Bucket: size},
+				DedupeKey: thumbnail.DedupeKey(blob.String, size),
+			}); enqErr != nil {
+				a.fail(w, r, "thumbnail", enqErr)
+				return
+			}
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			http.Redirect(w, r, blobContentURL(blob.String), http.StatusTemporaryRedirect)
+			return
+		}
+	}
+
 	w.Header().Set("Cache-Control", "private, max-age=300")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.Redirect(w, r, blobContentURL(blob.String), http.StatusTemporaryRedirect)

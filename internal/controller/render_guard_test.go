@@ -54,10 +54,10 @@ var forbidden = []struct {
 	{"poppler", "a PDF renderer"},
 	{"epub", "an EPUB renderer or layout engine"},
 	{"mobi", "an ebook format converter"},
-	{"image/jpeg", "an image decoder — Heyarr serves comic pages, it does not decode them"},
-	{"image/png", "an image decoder"},
+	// ADR-0109 (thumbnail derivation) explicitly permits image/jpeg, image/png,
+	// and golang.org/x/image in the thumbnail worker. image/gif and third-party
+	// image-processing libraries remain forbidden everywhere.
 	{"image/gif", "an image decoder"},
-	{"golang.org/x/image", "image decoding and manipulation"},
 	{"disintegration/imaging", "image manipulation"},
 	{"nfnt/resize", "thumbnailing"},
 	{"h2non/bimg", "image processing"},

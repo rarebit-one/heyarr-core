@@ -400,6 +400,11 @@ type ArtworkRef struct {
 	// here). Null when the scan recorded none.
 	MIME       *string `json:"mime"`
 	ContentURL string  `json:"content_url"`
+	// Sizes maps each supported thumbnail bucket (256, 512, 1024) to the
+	// artwork redirect URL with ?size=N appended (ADR-0109). Requesting that
+	// URL returns a 307 to the derived thumbnail, enqueuing derivation when
+	// needed. Omitted when no work ID is available to build the redirect URL.
+	Sizes map[string]string `json:"sizes,omitempty"`
 }
 
 // PrimaryAssetRef is the one file a card tap plays (ADR-0075): the first

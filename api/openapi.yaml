@@ -298,20 +298,57 @@ paths:
         and the target carries the immutable one. `307`, not `302`, so a
         `HEAD` stays a `HEAD`.
 
-        No resizing: the node has no image library and no thumbnail cache. A
-        client that already holds the `artwork` embed can skip this route and
-        fetch `artwork.content_url` directly.
+        When `?size=N` is given the node acts as a thumbnail cache (ADR-0109):
+        if the derived JPEG thumbnail is ready the redirect goes to the thumb
+        blob (short private `max-age`); if the source is undecodable it falls
+        back to the original blob (short private `max-age`); otherwise it
+        enqueues a derivation job and redirects to the original with
+        `Cache-Control: no-store` so the client retries until the thumbnail is
+        ready. Only the long-edge buckets `256`, `512` and `1024` are valid;
+        any other value is a `400`.
 
         The guest boundary applies (ADR-0074): a `vault` poster is a 404 to a
         Guest, as the asset itself is.
-      parameters: [{ $ref: "#/components/parameters/id" }]
+      parameters:
+        - { $ref: "#/components/parameters/id" }
+        - name: size
+          in: query
+          required: false
+          description: |
+            Requested thumbnail long-edge bucket in pixels (ADR-0109).
+            Accepted values: `256`, `512`, `1024`. Omit for the original blob.
+          schema:
+            type: integer
+            enum: [256, 512, 1024]
+        - name: v
+          in: query
+          required: false
+          description: >-
+            Cache-busting token (the source blob's BLAKE3 hash). Accepted and
+            ignored by the server; present so Android image-cache clients treat
+            a changed poster as a new URL. Pre-built into the URLs in
+            `artwork.sizes` — clients should not need to construct it.
+          schema: { type: string }
       responses:
         "307":
-          description: Redirect to the blob route.
+          description: >-
+            Redirect to the blob route. `Location` is the thumb blob when the
+            derived thumbnail is ready, or the original blob otherwise.
           headers:
             Location:
               schema: { type: string }
               description: "`/api/v1/blobs/{hash}/content`"
+            Cache-Control:
+              schema: { type: string }
+              description: >-
+                `private, max-age=300` for ready/undecodable responses;
+                `no-store` while derivation is pending.
+        "400":
+          description: >-
+            `size` is present but not one of the supported values (256, 512, 1024).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404":
@@ -327,9 +364,23 @@ paths:
         Identical to `get`: a `307` with the same `Location`, so a client can
         learn whether a poster exists without following the redirect. A 307
         preserves the method, which is why the redirect is not a 302.
-      parameters: [{ $ref: "#/components/parameters/id" }]
+        Supports the same `?size=` and `?v=` parameters as `GET`.
+      parameters:
+        - { $ref: "#/components/parameters/id" }
+        - name: size
+          in: query
+          required: false
+          schema:
+            type: integer
+            enum: [256, 512, 1024]
+        - name: v
+          in: query
+          required: false
+          description: Cache-busting token; accepted and ignored by the server.
+          schema: { type: string }
       responses:
         "307": { description: Redirect to the blob route. }
+        "400": { description: size is not one of the supported values. }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { description: No such work, or the work has no artwork. }
@@ -7302,6 +7353,15 @@ components:
         image before `fanart`/`backdrop`/`banner` — among those that hold
         bytes and are not missing. `content_url` is the ordinary blob route
         (ADR-0013); `GET /works/{id}/artwork` redirects to the same place.
+
+        `sizes` maps each supported thumbnail bucket (256, 512, 1024) to the
+        artwork redirect URL with `?size=N&v=<blob_hash>` appended (ADR-0109).
+        A client follows that URL to receive the derived JPEG thumbnail when
+        ready, or the original while derivation is in progress. The `v`
+        parameter carries the source blob hash so that Android image caches
+        (which ignore `Cache-Control`) treat a changed poster as a new URL; the
+        server accepts and ignores it. `sizes` is present only on artwork
+        embedded in work cards, not on group (artist/author) artwork.
       required: [asset_id, blob_hash, mime, content_url]
       properties:
         asset_id: { type: string }
@@ -7310,6 +7370,19 @@ components:
           type: [string, "null"]
           description: The asset's recorded media type; the blob route itself declares octet-stream.
         content_url: { type: string }
+        sizes:
+          type: object
+          description: >-
+            Thumbnail bucket URLs (ADR-0109). Keys are `"256"`, `"512"`,
+            `"1024"`; values are the artwork redirect URL for this work with
+            `?size=N&v=<blob_hash>` appended. The `v` value equals `blob_hash`
+            and busts Android image caches when the poster changes. Present only
+            when artwork is embedded in a work card, not in group summaries.
+          additionalProperties: { type: string }
+          example:
+            "256": /api/v1/works/018f4a92-b7c3-7000-a5e0-000000000001/artwork?size=256&v=blake3:3333333333333333333333333333333333333333333333333333333333333333
+            "512": /api/v1/works/018f4a92-b7c3-7000-a5e0-000000000001/artwork?size=512&v=blake3:3333333333333333333333333333333333333333333333333333333333333333
+            "1024": /api/v1/works/018f4a92-b7c3-7000-a5e0-000000000001/artwork?size=1024&v=blake3:3333333333333333333333333333333333333333333333333333333333333333
 
     PrimaryAssetRef:
       type: object
