@@ -133,6 +133,61 @@ func TestRelayTransportWakeIsBestEffort(t *testing.T) {
 	}
 }
 
+// TestRelayTransportStalledWakeDoesNotSpendTheDeadline: a wake that stalls
+// (a node or plane that hangs rather than failing) runs beside the poll, so a
+// phone answering meanwhile still completes the round-trip, and the stalled
+// wake is cancelled, not reported as a failure (Codex on #739).
+func TestRelayTransportStalledWakeDoesNotSpendTheDeadline(t *testing.T) {
+	types := append(append([]string{}, relay.DefaultTypes...), RelayUnwrapTypes...)
+	relaySrv := httptest.NewServer(relay.NewServer(relay.Options{Types: types}).Routes())
+	t.Cleanup(relaySrv.Close)
+
+	sessions := make(chan string, 1)
+	stalled := make(chan struct{})
+	var reported []error
+	transport := &RelayTransport{
+		RelayBase: relaySrv.URL,
+		Poll:      5 * time.Millisecond,
+		Wake: func(ctx context.Context, _ string, session string) error {
+			sessions <- session
+			<-ctx.Done() // hangs until the round-trip cancels it
+			close(stalled)
+			return ctx.Err()
+		},
+		WakeFailed: func(err error) { reported = append(reported, err) },
+	}
+	go func() {
+		session := <-sessions
+		responder := &relay.Client{Base: relaySrv.URL, Session: session, Role: "responder", PollInterval: 5 * time.Millisecond}
+		if _, err := responder.Fetch(context.Background(), RelayRequestType); err != nil {
+			return
+		}
+		_ = responder.Post(context.Background(), RelayResponseType, []byte("reply"))
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	resp, err := transport.RoundTrip(ctx, []byte("request"))
+	if err != nil {
+		t.Fatalf("a stalled wake blocked the reply: %v", err)
+	}
+	if string(resp) != "reply" {
+		t.Fatalf("got %q, want the phone's reply", resp)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("the round-trip took %s: the stalled wake spent the deadline", d)
+	}
+	select {
+	case <-stalled:
+	default:
+		t.Fatal("RoundTrip returned before cancelling and awaiting the wake")
+	}
+	if len(reported) != 0 {
+		t.Fatalf("our own cancellation was reported as a failed wake: %v", reported)
+	}
+}
+
 // TestRelayTransportFailedWakeNamedOnTimeout: with no phone answering, the
 // round-trip fails only at its deadline, and the error names the failed wake.
 func TestRelayTransportFailedWakeNamedOnTimeout(t *testing.T) {

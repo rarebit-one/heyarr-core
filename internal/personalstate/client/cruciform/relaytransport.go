@@ -81,16 +81,33 @@ func (t *RelayTransport) RoundTrip(ctx context.Context, request []byte) ([]byte,
 	if err := desktop.Post(ctx, RelayRequestType, request); err != nil {
 		return nil, fmt.Errorf("cruciform: posting the unwrap request: %w", err)
 	}
-	var wakeErr error
+	// The wake runs beside the poll, not before it: a node or plane that stalls
+	// rather than failing must not spend the deadline before Fetch starts, and
+	// the phone may answer while the wake is still in flight (Codex on #739).
+	// It is cancelled once the round-trip ends and always awaited, so it never
+	// outlives RoundTrip; a cancellation of ours is not a failed wake.
+	wakeCtx, cancelWake := context.WithCancel(ctx)
+	wakeDone := make(chan error, 1)
 	if t.Wake != nil {
-		if wakeErr = t.Wake(ctx, t.RelayBase, session); wakeErr != nil && t.WakeFailed != nil {
-			t.WakeFailed(wakeErr)
-		}
+		go func() {
+			err := t.Wake(wakeCtx, t.RelayBase, session)
+			if err != nil && wakeCtx.Err() != nil {
+				err = nil
+			}
+			if err != nil && t.WakeFailed != nil {
+				t.WakeFailed(err)
+			}
+			wakeDone <- err
+		}()
+	} else {
+		wakeDone <- nil
 	}
 	// Fetch polls the PEER (responder) slot until the phone posts its reply or ctx
 	// is done — the phone is human-paced (a biometric approval), so "not yet" is
 	// the normal case, not an error.
 	resp, err := desktop.Fetch(ctx, RelayResponseType)
+	cancelWake()
+	wakeErr := <-wakeDone
 	if err != nil {
 		if wakeErr != nil {
 			return nil, fmt.Errorf("cruciform: awaiting the phone's reply after a failed wake (%w): %w", wakeErr, err)
