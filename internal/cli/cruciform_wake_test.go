@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -125,5 +126,32 @@ func TestBuildCruciformWakeNilWhenUnenrolled(t *testing.T) {
 	}
 	if wake != nil {
 		t.Fatal("an un-enrolled device should yield a nil WakeFunc")
+	}
+}
+
+// TestWarnWakeFailedOnSerialisesConcurrentWarnings: the gateway's concurrent
+// unwraps can fail their wakes together and share one callback; under -race an
+// unsynchronised bytes.Buffer would be reported, and every line must arrive whole.
+func TestWarnWakeFailedOnSerialisesConcurrentWarnings(t *testing.T) {
+	var buf bytes.Buffer
+	warn := warnWakeFailedOn(&buf)
+	const n = 32
+	var wg sync.WaitGroup
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			warn(errors.New("cruciform wake: node refused (503)"))
+		}()
+	}
+	wg.Wait()
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != n {
+		t.Fatalf("got %d lines, want %d", len(lines), n)
+	}
+	for _, l := range lines {
+		if !strings.HasPrefix(l, "heyarr: cruciform wake: node refused (503); still waiting") {
+			t.Fatalf("an interleaved or partial line: %q", l)
+		}
 	}
 }

@@ -39,7 +39,7 @@ import (
 // reverses it: materialise the drive, resolve the path to its manifest blob, and
 // range-read + decrypt the content frames (vaultread).
 func newVaultCommand(opts Options, configPath *string) *cobra.Command {
-	vc := &vaultCustody{configPath: configPath, stderr: opts.Stderr}
+	vc := &vaultCustody{configPath: configPath}
 	cmd := &cobra.Command{
 		Use:   "vault",
 		Short: "Push, pull and list files in an encrypted media vault (ADR-0021, ADR-0095)",
@@ -73,22 +73,27 @@ spaces an owner's device granted it, and decrypts only those wrapped for it.`,
 		newVaultGetRefCommand(opts, configPath, vc),
 		newVaultPutRefCommand(opts, configPath, vc),
 	)
+	vc.stderr = cmd.ErrOrStderr // cobra resolves it up to the root at call time
 	return cmd
 }
 
 // vaultCustody is how a vault command opens space keys: this machine's device
 // key by default, or the backend the --unwrapper/--sealed-key flags name.
-// stderr routes best-effort wake warnings; it is set at construction time from
-// the vault command's own ErrOrStderr.
+// stderr resolves where best-effort wake warnings go when custody is selected,
+// not when the command is built, so an embedder's later SetErr is honoured.
 type vaultCustody struct {
 	configPath *string
 	deviceDir  string
 	override   custodyOverride
-	stderr     io.Writer
+	stderr     func() io.Writer
 }
 
 func (v *vaultCustody) selectCustody() (client.Custody, error) {
-	return selectCustodyWith(v.configPath, v.deviceDir, v.override, v.stderr)
+	w := io.Writer(os.Stderr)
+	if v.stderr != nil {
+		w = v.stderr()
+	}
+	return selectCustodyWith(v.configPath, v.deviceDir, v.override, w)
 }
 
 // loadDrive materialises a space's vault DRIVE CRDT on this device: list the
