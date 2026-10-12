@@ -112,7 +112,7 @@ func selectCustodyWith(configPath *string, deviceDir string, ov custodyOverride)
 		if err != nil {
 			return nil, err
 		}
-		opts.CruciformWake = wake
+		opts.CruciformWake, opts.CruciformWakeFailed = wake, warnWakeFailed
 	}
 	return custody.Select(opts)
 }

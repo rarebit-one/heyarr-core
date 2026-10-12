@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -114,6 +115,10 @@ func newCruciformWake(base string, hc *http.Client, cert string, ops []string, p
 		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode/100 != 2 {
 			msg, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+				return fmt.Errorf("cruciform wake: the node refused this device's credentials (%d): %s — re-enrol this device",
+					resp.StatusCode, strings.TrimSpace(string(msg)))
+			}
 			return fmt.Errorf("cruciform wake: node refused (%d): %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
@@ -143,4 +148,11 @@ func nodeWakeClient(cfg config.Config) (string, *http.Client, error) {
 		return strings.TrimRight(base, "/"), &http.Client{Transport: transport, Timeout: cruciform.DefaultTimeout}, nil
 	}
 	return "", nil, fmt.Errorf("cruciform wake: no node address — set http.unix_socket or http.addr")
+}
+
+// warnWakeFailed tells the operator a wake failed. The wake is best-effort
+// (#688): the unwrap keeps waiting on the relay, because the phone may already
+// be awake there or poll it shortly.
+func warnWakeFailed(err error) {
+	fmt.Fprintf(os.Stderr, "heyarr: %v; still waiting for the phone on the relay (open Cruciform to approve)\n", err)
 }

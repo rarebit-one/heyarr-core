@@ -48,7 +48,14 @@ type RelayTransport struct {
 	// RelayBase is the relay origin the desktop and phone share.
 	RelayBase string
 	// Wake wakes the phone at the session created for this unwrap; nil skips it.
+	// The wake is best-effort (#688): a failed wake is reported through
+	// WakeFailed and the round-trip keeps waiting, because the phone may
+	// already be awake on the relay or poll it shortly.
 	Wake WakeFunc
+	// WakeFailed, if set, is told about a failed wake as it happens, so the
+	// operator sees it (a refused credential above all) while the round-trip
+	// still waits for the phone.
+	WakeFailed func(error)
 	// HTTP is the client for relay requests; nil uses http.DefaultClient.
 	HTTP *http.Client
 	// Poll overrides the relay client's default poll interval when non-zero.
@@ -74,9 +81,10 @@ func (t *RelayTransport) RoundTrip(ctx context.Context, request []byte) ([]byte,
 	if err := desktop.Post(ctx, RelayRequestType, request); err != nil {
 		return nil, fmt.Errorf("cruciform: posting the unwrap request: %w", err)
 	}
+	var wakeErr error
 	if t.Wake != nil {
-		if err := t.Wake(ctx, t.RelayBase, session); err != nil {
-			return nil, fmt.Errorf("cruciform: waking the phone: %w", err)
+		if wakeErr = t.Wake(ctx, t.RelayBase, session); wakeErr != nil && t.WakeFailed != nil {
+			t.WakeFailed(wakeErr)
 		}
 	}
 	// Fetch polls the PEER (responder) slot until the phone posts its reply or ctx
@@ -84,6 +92,9 @@ func (t *RelayTransport) RoundTrip(ctx context.Context, request []byte) ([]byte,
 	// the normal case, not an error.
 	resp, err := desktop.Fetch(ctx, RelayResponseType)
 	if err != nil {
+		if wakeErr != nil {
+			return nil, fmt.Errorf("cruciform: awaiting the phone's reply after a failed wake (%w): %w", wakeErr, err)
+		}
 		return nil, fmt.Errorf("cruciform: awaiting the phone's reply: %w", err)
 	}
 	return resp, nil

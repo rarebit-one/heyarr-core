@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,26 +77,83 @@ func TestOffloadOverRealRelay(t *testing.T) {
 	}
 }
 
-// TestRelayTransportSurfacesWakeError: a wake failure aborts the round-trip rather
-// than hanging on a phone that will never answer.
-func TestRelayTransportSurfacesWakeError(t *testing.T) {
+// TestRelayTransportWakeIsBestEffort: a failed wake does not abort the unwrap
+// (#688). The phone, already awake on the relay, still answers, the unwrap
+// succeeds, and WakeFailed hears about the failure once.
+func TestRelayTransportWakeIsBestEffort(t *testing.T) {
+	p := newPhone(t)
+	desktopPub, desktopPriv := desktopKeys(t)
+	canary := randBytes(t, 48)
+	wrapped, canaryCT := wrapForPhone(t, p, canary)
+
 	types := append(append([]string{}, relay.DefaultTypes...), RelayUnwrapTypes...)
 	relaySrv := httptest.NewServer(relay.NewServer(relay.Options{Types: types}).Routes())
 	t.Cleanup(relaySrv.Close)
+	answer := p.honestRoundTrip(desktopPub)
 
-	p := newPhone(t)
-	_, desktopPriv := desktopKeys(t)
-	wrapped, _ := wrapForPhone(t, p, randBytes(t, 8))
-
+	sessions := make(chan string, 1)
+	var reported []error
+	wakeErr := errors.New("cruciform wake: node refused (503): plane down")
 	transport := &RelayTransport{
 		RelayBase: relaySrv.URL,
-		Wake:      func(context.Context, string, string) error { return context.DeadlineExceeded },
+		Poll:      5 * time.Millisecond,
+		Wake: func(_ context.Context, _ string, session string) error {
+			sessions <- session // the phone is reachable another way
+			return wakeErr
+		},
+		WakeFailed: func(err error) { reported = append(reported, err) },
 	}
+	go func() {
+		session := <-sessions
+		responder := &relay.Client{Base: relaySrv.URL, Session: session, Role: "responder", PollInterval: 5 * time.Millisecond}
+		req, err := responder.Fetch(context.Background(), RelayRequestType)
+		if err != nil {
+			return
+		}
+		resp, err := answer(context.Background(), req)
+		if err != nil {
+			return
+		}
+		_ = responder.Post(context.Background(), RelayResponseType, resp)
+	}()
+
 	u, err := New(transport, desktopPriv, p.sign.Public().(ed25519.PublicKey))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := u.Unwrap(wrapped); err == nil {
-		t.Fatal("a wake failure should abort the unwrap")
+	key, err := u.Unwrap(wrapped)
+	if err != nil {
+		t.Fatalf("a failed wake aborted the unwrap: %v", err)
+	}
+	if got, err := encryption.DecryptChange(key, canaryCT); err != nil || !bytes.Equal(got, canary) {
+		t.Fatalf("the recovered key did not decrypt the canary: %v", err)
+	}
+	if len(reported) != 1 || !errors.Is(reported[0], wakeErr) {
+		t.Fatalf("WakeFailed got %v, want the wake error once", reported)
+	}
+}
+
+// TestRelayTransportFailedWakeNamedOnTimeout: with no phone answering, the
+// round-trip fails only at its deadline, and the error names the failed wake.
+func TestRelayTransportFailedWakeNamedOnTimeout(t *testing.T) {
+	types := append(append([]string{}, relay.DefaultTypes...), RelayUnwrapTypes...)
+	relaySrv := httptest.NewServer(relay.NewServer(relay.Options{Types: types}).Routes())
+	t.Cleanup(relaySrv.Close)
+
+	transport := &RelayTransport{
+		RelayBase: relaySrv.URL,
+		Poll:      5 * time.Millisecond,
+		Wake: func(context.Context, string, string) error {
+			return errors.New("cruciform wake: the node refused this device's credentials (401)")
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err := transport.RoundTrip(ctx, []byte("request"))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v, want the deadline", err)
+	}
+	if !strings.Contains(err.Error(), "failed wake") || !strings.Contains(err.Error(), "(401)") {
+		t.Fatalf("the timeout does not name the failed wake: %v", err)
 	}
 }

@@ -82,6 +82,9 @@ type Options struct {
 	// wake (the RP wake endpoint the desktop calls) is wired by the caller; until
 	// it is, offload opens only when the phone is already reachable.
 	CruciformWake cruciform.WakeFunc
+	// CruciformWakeFailed, if set, is told about a failed wake; the unwrap
+	// still waits for the phone (#688).
+	CruciformWakeFailed func(error)
 
 	// SealedKeyFile is the executor's sealed recipient key (written by
 	// `heyarr recipient init`). Required when Backend is SealedFile.
@@ -132,7 +135,7 @@ func Select(opts Options) (client.Custody, error) {
 		if err != nil {
 			return nil, fmt.Errorf("custody: loading the offload pairing config (run `heyarr device pair-offload` first): %w", err)
 		}
-		transport := &cruciform.RelayTransport{RelayBase: cfg.RelayBase, Wake: opts.CruciformWake}
+		transport := &cruciform.RelayTransport{RelayBase: cfg.RelayBase, Wake: opts.CruciformWake, WakeFailed: opts.CruciformWakeFailed}
 		return cruciform.NewCustody(cfg, transport)
 	case SealedFile:
 		if opts.SealedKeyFile == "" {
