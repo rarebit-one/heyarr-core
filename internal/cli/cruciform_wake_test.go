@@ -1,10 +1,14 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,6 +68,42 @@ func TestCruciformWakeSurfacesNodeError(t *testing.T) {
 	}
 }
 
+// warnWakeFailedOn returns a func(error) that writes the wake-failed warning to
+// the supplied writer, not to os.Stderr, so a caller that builds NewRootCommand
+// with Options.Stderr captures it (#740).
+func TestWarnWakeFailedOnWritesToWriter(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "network error",
+			err:  errors.New("dial tcp: connection refused"),
+			want: "heyarr: dial tcp: connection refused; still waiting for the phone on the relay (open Cruciform to approve)\n",
+		},
+		{
+			name: "timeout",
+			err:  errors.New("context deadline exceeded"),
+			want: "heyarr: context deadline exceeded; still waiting for the phone on the relay (open Cruciform to approve)\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			fn := warnWakeFailedOn(&buf)
+			fn(tc.err)
+			got := buf.String()
+			if got != tc.want {
+				t.Fatalf("warnWakeFailedOn wrote %q, want %q", got, tc.want)
+			}
+			if !strings.Contains(got, tc.err.Error()) {
+				t.Fatalf("output %q does not contain the error %q", got, tc.err.Error())
+			}
+		})
+	}
+}
+
 // An un-enrolled device (a generated key but no enrolment cert) yields a nil
 // WakeFunc, not an error: the offload still opens when the phone is already
 // reachable, and the away-path wake becomes available once the device is enrolled.
@@ -86,5 +126,32 @@ func TestBuildCruciformWakeNilWhenUnenrolled(t *testing.T) {
 	}
 	if wake != nil {
 		t.Fatal("an un-enrolled device should yield a nil WakeFunc")
+	}
+}
+
+// TestWarnWakeFailedOnSerialisesConcurrentWarnings: the gateway's concurrent
+// unwraps can fail their wakes together and share one callback; under -race an
+// unsynchronised bytes.Buffer would be reported, and every line must arrive whole.
+func TestWarnWakeFailedOnSerialisesConcurrentWarnings(t *testing.T) {
+	var buf bytes.Buffer
+	warn := warnWakeFailedOn(&buf)
+	const n = 32
+	var wg sync.WaitGroup
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			warn(errors.New("cruciform wake: node refused (503)"))
+		}()
+	}
+	wg.Wait()
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != n {
+		t.Fatalf("got %d lines, want %d", len(lines), n)
+	}
+	for _, l := range lines {
+		if !strings.HasPrefix(l, "heyarr: cruciform wake: node refused (503); still waiting") {
+			t.Fatalf("an interleaved or partial line: %q", l)
+		}
 	}
 }

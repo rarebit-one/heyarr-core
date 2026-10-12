@@ -339,7 +339,7 @@ an agent-launched server with no terminal needs.`,
 				if err != nil {
 					return err
 				}
-				cust, err := selectCustody(&configPath, *dir)
+				cust, err := selectCustody(&configPath, *dir, cmd.ErrOrStderr())
 				if err != nil {
 					return err
 				}

@@ -123,7 +123,7 @@ reads ` + devicekeys.PassphraseFileEnvVar + ` when it is set).`,
 			// The gateway serves unwraps for the Personal MCP, so it wires the offload
 			// away-path wake too (nil for other backends / an un-enrolled device).
 			if custOpts.Backend == custody.Cruciform {
-				custOpts.CruciformWakeFailed = warnWakeFailed
+				custOpts.CruciformWakeFailed = warnWakeFailedOn(cmd.ErrOrStderr())
 				custOpts.CruciformWake, err = buildCruciformWake(cfg, deviceDir)
 				if err != nil {
 					return err

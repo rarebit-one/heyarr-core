@@ -8,8 +8,8 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rarebit-one/void-which-binds-go/device"
@@ -150,9 +150,16 @@ func nodeWakeClient(cfg config.Config) (string, *http.Client, error) {
 	return "", nil, fmt.Errorf("cruciform wake: no node address — set http.unix_socket or http.addr")
 }
 
-// warnWakeFailed tells the operator a wake failed. The wake is best-effort
-// (#688): the unwrap keeps waiting on the relay, because the phone may already
-// be awake there or poll it shortly.
-func warnWakeFailed(err error) {
-	fmt.Fprintf(os.Stderr, "heyarr: %v; still waiting for the phone on the relay (open Cruciform to approve)\n", err)
+// warnWakeFailedOn returns a function that tells the operator a wake failed,
+// writing to w. The wake is best-effort (#688): the unwrap keeps waiting on the
+// relay, because the phone may already be awake there or poll it shortly.
+func warnWakeFailedOn(w io.Writer) func(error) {
+	// The gateway serves concurrent unwraps, and their wake goroutines can fail
+	// together; one lock per callback keeps their lines from interleaving.
+	var mu sync.Mutex
+	return func(err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		fmt.Fprintf(w, "heyarr: %v; still waiting for the phone on the relay (open Cruciform to approve)\n", err)
+	}
 }

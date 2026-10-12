@@ -73,19 +73,27 @@ spaces an owner's device granted it, and decrypts only those wrapped for it.`,
 		newVaultGetRefCommand(opts, configPath, vc),
 		newVaultPutRefCommand(opts, configPath, vc),
 	)
+	vc.stderr = cmd.ErrOrStderr // cobra resolves it up to the root at call time
 	return cmd
 }
 
 // vaultCustody is how a vault command opens space keys: this machine's device
 // key by default, or the backend the --unwrapper/--sealed-key flags name.
+// stderr resolves where best-effort wake warnings go when custody is selected,
+// not when the command is built, so an embedder's later SetErr is honoured.
 type vaultCustody struct {
 	configPath *string
 	deviceDir  string
 	override   custodyOverride
+	stderr     func() io.Writer
 }
 
 func (v *vaultCustody) selectCustody() (client.Custody, error) {
-	return selectCustodyWith(v.configPath, v.deviceDir, v.override)
+	w := io.Writer(os.Stderr)
+	if v.stderr != nil {
+		w = v.stderr()
+	}
+	return selectCustodyWith(v.configPath, v.deviceDir, v.override, w)
 }
 
 // loadDrive materialises a space's vault DRIVE CRDT on this device: list the

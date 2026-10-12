@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,9 +29,10 @@ const (
 // (ADR-0098) — software by default, or the one named by vault.unwrapper. It is
 // the single place the CLI's device-side paths (space/vault/device read, create,
 // rotate) turn a config selection into a client.Custody, so create wraps to and
-// open unwraps with the same key.
-func selectCustody(configPath *string, deviceDir string) (client.Custody, error) {
-	return selectCustodyWith(configPath, deviceDir, custodyOverride{})
+// open unwraps with the same key. stderr is used for best-effort wake warnings
+// when the Cruciform backend is selected; callers should pass cmd.ErrOrStderr().
+func selectCustody(configPath *string, deviceDir string, stderr io.Writer) (client.Custody, error) {
+	return selectCustodyWith(configPath, deviceDir, custodyOverride{}, stderr)
 }
 
 // custodyOverride is a per-invocation custody selection that wins over the
@@ -53,7 +55,7 @@ func (o *custodyOverride) register(cmd *cobra.Command) {
 			recipientkey.DefaultPINCredential+")")
 }
 
-func selectCustodyWith(configPath *string, deviceDir string, ov custodyOverride) (client.Custody, error) {
+func selectCustodyWith(configPath *string, deviceDir string, ov custodyOverride, stderr io.Writer) (client.Custody, error) {
 	path := ""
 	if configPath != nil {
 		path = *configPath
@@ -112,7 +114,7 @@ func selectCustodyWith(configPath *string, deviceDir string, ov custodyOverride)
 		if err != nil {
 			return nil, err
 		}
-		opts.CruciformWake, opts.CruciformWakeFailed = wake, warnWakeFailed
+		opts.CruciformWake, opts.CruciformWakeFailed = wake, warnWakeFailedOn(stderr)
 	}
 	return custody.Select(opts)
 }
