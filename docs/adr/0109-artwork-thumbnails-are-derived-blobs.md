@@ -1,6 +1,6 @@
 # 0109. Artwork thumbnails are derived blobs; `?size=` names a bucket
 
-**Status:** Proposed
+**Status:** Accepted (2026-10-12)
 **Date:** 2026-10-12
 **Supersedes clause:** ADR-0075 "Revisit when — poster bytes cost too much on a real library"
 **Builds on:** ADR-0005 (BLAKE3 identity), ADR-0008 (durable jobs), ADR-0013 (blob contract), ADR-0018 (logical delete / GC), ADR-0074 (guest boundary), ADR-0075 (artwork redirect shape)
@@ -75,6 +75,13 @@ durable idempotent job (invariants 4/9), and GC'd with its source (invariant 8).
    is the BLAKE3 hash (ADR-0013). The artwork redirect itself keeps its existing
    `private, max-age=300` so a work whose source artwork changes causes a
    re-check, which in turn may 307 to a new thumbnail hash.
+
+**Accepted with these defaults (2026-10-12):**
+- one `derived_thumbnails` table, keyed by `(source_hash, bucket)`, with a `status`
+  column (`ready` | `undecodable`), not a separate errors table;
+- first-party clients request `256` for cards and rails and `512` for a detail hero;
+  `1024` is for large screens;
+- pending stays a 307 to the original (above), never a 202.
 
 ## Consequences
 
