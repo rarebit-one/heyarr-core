@@ -49,7 +49,7 @@ func TestRecordThumbnailReadyEmitsEvent(t *testing.T) {
 	seedThumbSource(s)
 
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
-	if err := s.cat.RecordThumbnailReady(s.ctx, thumbSrcBlob, 256, thumbnail.Recipe, thumbDstBlob, now); err != nil {
+	if err := s.cat.RecordThumbnailReady(s.ctx, thumbSrcBlob, 256, thumbnail.Recipe, thumbDstBlob, 1234, now); err != nil {
 		t.Fatalf("RecordThumbnailReady: %v", err)
 	}
 
@@ -63,6 +63,21 @@ func TestRecordThumbnailReadyEmitsEvent(t *testing.T) {
 	}
 	if hash != thumbDstBlob {
 		t.Errorf("thumb_hash = %q, want %q", hash, thumbDstBlob)
+	}
+
+	// The thumbnail is a registered blob with this peer's present replica, so the
+	// blob route, integrity and the collector see it (Codex on #744).
+	var size int64
+	var replicaState string
+	if err := s.db.Reader().QueryRowContext(s.ctx,
+		`SELECT b.size, r.state FROM blobs b
+		 JOIN replicas r ON r.blob_hash = b.hash
+		 JOIN peers p ON p.id = r.peer_id AND p.is_self = 1
+		 WHERE b.hash = ?`, thumbDstBlob).Scan(&size, &replicaState); err != nil {
+		t.Fatalf("thumbnail blob/replica row: %v", err)
+	}
+	if size <= 0 || replicaState != "present" {
+		t.Errorf("blob size %d replica %q, want a sized blob with a present replica", size, replicaState)
 	}
 
 	// An event was emitted.
@@ -132,7 +147,7 @@ func TestRecipeBumpDeletesStaleRowsAndEmitsDeleted(t *testing.T) {
 		VALUES (?, 256, ?, 'ready', ?, ?)`, thumbSrcBlob, staleRecipe, thumbDstBlob, s.stamp)
 
 	// Record ready for the current recipe — this should delete the stale row.
-	if err := s.cat.RecordThumbnailReady(s.ctx, thumbSrcBlob, 256, thumbnail.Recipe, thumbDstBlob2, now); err != nil {
+	if err := s.cat.RecordThumbnailReady(s.ctx, thumbSrcBlob, 256, thumbnail.Recipe, thumbDstBlob2, 1234, now); err != nil {
 		t.Fatalf("RecordThumbnailReady: %v", err)
 	}
 
@@ -227,7 +242,7 @@ func TestGCRefCountDropsAfterThumbnailDeletion(t *testing.T) {
 
 	// Record a ready thumbnail.
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
-	if err := s.cat.RecordThumbnailReady(s.ctx, thumbSrcBlob, 256, thumbnail.Recipe, thumbDstBlob, now); err != nil {
+	if err := s.cat.RecordThumbnailReady(s.ctx, thumbSrcBlob, 256, thumbnail.Recipe, thumbDstBlob, 1234, now); err != nil {
 		t.Fatalf("RecordThumbnailReady: %v", err)
 	}
 

@@ -254,9 +254,36 @@ func (c *Catalog) deleteStaleRecipeRows(
 // opens its own transaction, emits events (invariant 7), and publishes them
 // after the transaction commits. Callers should use this rather than calling
 // UpsertThumbnailReady directly.
-func (c *Catalog) RecordThumbnailReady(ctx context.Context, sourceHash string, bucket, recipe int, thumbHash string, now time.Time) error {
+//
+// The thumbnail is registered as a blob with this peer's present replica in
+// the same transaction, the way RecordDerived registers a remux: without a
+// blobs row the collector, integrity checks and replication never see it, and
+// the blob route has nothing to serve (Codex on #744).
+func (c *Catalog) RecordThumbnailReady(
+	ctx context.Context, sourceHash string, bucket, recipe int, thumbHash string, size int64, now time.Time,
+) error {
 	var pending []events.Event
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		stamp := now.Format(timestampFormat)
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO blobs (hash, size, mime, first_seen_at)
+			VALUES (?, ?, 'image/jpeg', ?)
+			ON CONFLICT (hash) DO NOTHING`,
+			thumbHash, size, stamp); err != nil {
+			return fmt.Errorf("catalog: registering thumbnail blob: %w", err)
+		}
+		var peerID string
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM peers WHERE is_self = 1`).Scan(&peerID); err != nil {
+			return fmt.Errorf("catalog: resolving this peer for a thumbnail replica: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO replicas (blob_hash, peer_id, state, bytes_present, verified_at, updated_at)
+			VALUES (?, ?, 'present', ?, ?, ?)
+			ON CONFLICT (blob_hash, peer_id) DO UPDATE SET
+				state = 'present', bytes_present = excluded.bytes_present, updated_at = excluded.updated_at`,
+			thumbHash, peerID, size, stamp, stamp); err != nil {
+			return fmt.Errorf("catalog: recording thumbnail replica: %w", err)
+		}
 		evs, err := c.UpsertThumbnailReady(ctx, tx, sourceHash, bucket, recipe, thumbHash, now)
 		if err != nil {
 			return err

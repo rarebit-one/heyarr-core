@@ -58,7 +58,7 @@ func (f *fakeThumbnailRecorder) ThumbnailStatus(_ context.Context, _ string, _, 
 	return f.status, f.thumbHash, nil
 }
 
-func (f *fakeThumbnailRecorder) RecordThumbnailReady(_ context.Context, _ string, _, _ int, thumbHash string, _ time.Time) error {
+func (f *fakeThumbnailRecorder) RecordThumbnailReady(_ context.Context, _ string, _, _ int, thumbHash string, _ int64, _ time.Time) error {
 	f.ready = append(f.ready, thumbHash)
 	return nil
 }

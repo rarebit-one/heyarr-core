@@ -41,7 +41,7 @@ type ThumbnailBlobStore interface {
 // satisfies this interface via its RecordThumbnailReady / RecordThumbnailUndecodable
 // high-level wrappers (which open their own transactions and publish events).
 type ThumbnailRecorder interface {
-	RecordThumbnailReady(ctx context.Context, sourceHash string, bucket, recipe int, thumbHash string, now time.Time) error
+	RecordThumbnailReady(ctx context.Context, sourceHash string, bucket, recipe int, thumbHash string, size int64, now time.Time) error
 	RecordThumbnailUndecodable(ctx context.Context, sourceHash string, bucket, recipe int, now time.Time) error
 	ThumbnailStatus(ctx context.Context, sourceHash string, bucket, recipe int) (status, thumbHash string, err error)
 }
@@ -236,12 +236,12 @@ func DeriveThumbnailHandler(opts DeriveThumbnailHandlerOptions) HandlerFunc {
 		// the call is idempotent: storing the same bytes twice returns the same
 		// hash and simply increments the store's internal refcount (or is a
 		// no-op).
-		thumbHash, _, err := opts.Store.Put(ctx, &buf)
+		thumbHash, thumbSize, err := opts.Store.Put(ctx, &buf)
 		if err != nil {
 			return fmt.Errorf("derive-thumbnail: storing thumbnail for %s bucket %d: %w", p.SourceHash, p.Bucket, err)
 		}
 
-		if err := opts.Recorder.RecordThumbnailReady(ctx, p.SourceHash, p.Bucket, thumbnail.Recipe, thumbHash, now()); err != nil {
+		if err := opts.Recorder.RecordThumbnailReady(ctx, p.SourceHash, p.Bucket, thumbnail.Recipe, thumbHash, thumbSize, now()); err != nil {
 			return fmt.Errorf("derive-thumbnail: recording ready for %s bucket %d: %w", p.SourceHash, p.Bucket, err)
 		}
 
