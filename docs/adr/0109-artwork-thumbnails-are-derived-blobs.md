@@ -62,7 +62,10 @@ durable idempotent job (invariants 4/9), and GC'd with its source (invariant 8).
    re-encoding drops the tag and would otherwise turn phone-shot artwork sideways.
    Every transition — a thumbnail becoming `ready`, a source recorded
    `undecodable`, a derivation row removed with its source — emits its event in
-   the same transaction as the row write (invariant 7).
+   the same transaction as the row write (invariant 7). The job is claimable only
+   by a peer that holds the source bytes, and the result is stored through the
+   same path an ingested blob takes, so ordinary placement and replication apply
+   and the redirect target is fetchable wherever the blob route serves it.
 
 4. **Guest boundary.** A thumbnail is only generated for a blob that is already
    reachable by the requesting caller. The artwork picker (ADR-0075) already
@@ -76,7 +79,14 @@ durable idempotent job (invariants 4/9), and GC'd with its source (invariant 8).
    only; it is never a reference to the source. When the source is logically
    deleted or reclaimed, its derivation rows are removed in that same step, the
    thumbnail loses its only reference, and the ordinary grace-window sweep of
-   ADR-0018 reclaims it (invariant 8). Nothing is unlinked inline.
+   ADR-0018 reclaims it on every peer that holds a copy (invariant 8). Nothing
+   is unlinked inline, and nothing exempts a derived blob from collection.
+
+   **Recipe version.** A derivation is keyed `(source_hash, bucket, recipe)`. The
+   recipe is one number covering decoder, orientation handling, scaler, encoder
+   and quality. Lookups use the current recipe only; bumping it regenerates on
+   demand, and an older recipe's row is retired (with its event) once the current
+   one is ready, leaving its thumbnail to the collector.
 
 6. **Cache headers.** The derived blob is served with
    `Cache-Control: public, max-age=31536000, immutable` — correct because the URL
@@ -87,7 +97,7 @@ durable idempotent job (invariants 4/9), and GC'd with its source (invariant 8).
    thumbnail is ready.
 
 **Accepted with these defaults (2026-10-12):**
-- one `derived_thumbnails` table, keyed by `(source_hash, bucket)`, with a `status`
+- one `derived_thumbnails` table, keyed by `(source_hash, bucket, recipe)`, with a `status`
   column (`ready` | `undecodable`), not a separate errors table;
 - first-party clients request `256` for cards and rails and `512` for a detail hero;
   `1024` is for large screens;
