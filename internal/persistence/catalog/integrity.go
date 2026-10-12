@@ -29,6 +29,7 @@ func (c *Catalog) Blobs(ctx context.Context) ([]integrity.Blob, error) {
 		SELECT b.hash, b.size, b.unreferenced_since,
 		       (SELECT count(*) FROM assets a WHERE a.blob_hash = b.hash)
 		       + (SELECT count(*) FROM placement_pins p WHERE p.blob_hash = b.hash)
+		       + (SELECT count(*) FROM derived_thumbnails dt WHERE dt.thumb_hash = b.hash AND dt.status = 'ready')
 		FROM blobs b
 		ORDER BY b.hash`)
 	if err != nil {
@@ -56,6 +57,7 @@ func (c *Catalog) Blob(ctx context.Context, h hashing.Hash) (integrity.Blob, err
 		SELECT b.hash, b.size, b.unreferenced_since,
 		       (SELECT count(*) FROM assets a WHERE a.blob_hash = b.hash)
 		       + (SELECT count(*) FROM placement_pins p WHERE p.blob_hash = b.hash)
+		       + (SELECT count(*) FROM derived_thumbnails dt WHERE dt.thumb_hash = b.hash AND dt.status = 'ready')
 		FROM blobs b WHERE b.hash = ?`, h.String())
 	b, err := scanBlob(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -426,6 +428,14 @@ func (c *Catalog) Reclaim(ctx context.Context, h hashing.Hash, size int64, track
 					"precondition is evaluated and its evidence written before this call "+
 					"(ADR-0018, migration 00028)", hash)
 			}
+			// Delete derived thumbnail rows for this source blob (ADR-0109).
+			// Their thumb_hash loses its only reference and will be collected
+			// by the normal GC grace-window sweep.
+			derivedEvs, err := c.DeleteThumbnailsForSource(ctx, tx, hash)
+			if err != nil {
+				return err
+			}
+			pending = append(pending, derivedEvs...)
 			res, err := tx.ExecContext(ctx, `DELETE FROM blobs WHERE hash = ?`, hash)
 			if err != nil {
 				return fmt.Errorf("catalog: refusing to reclaim %s — the database rejected the "+

@@ -553,6 +553,18 @@ const (
 	// content.work.created says so in its payload, as its comment above
 	// promises.
 	TypeCatalogSnapshotBuilt = "catalog.snapshot_built"
+
+	// TypeThumbnailReady is a derived thumbnail being available for the first
+	// time (ADR-0109). Emitted in the same transaction as the derived_thumbnails
+	// row (invariant 7).
+	TypeThumbnailReady = "content.thumbnail.ready"
+	// TypeThumbnailUndecodable is a source blob recorded as impossible to
+	// thumbnail (ADR-0109). Permanent: no retry.
+	TypeThumbnailUndecodable = "content.thumbnail.undecodable"
+	// TypeThumbnailDeleted is derived_thumbnails rows being removed because
+	// their source blob was reclaimed (ADR-0109, ADR-0018). Emitted per row in
+	// the same transaction as the source blob's DELETE.
+	TypeThumbnailDeleted = "content.thumbnail.deleted"
 )
 
 const timeFormat = time.RFC3339Nano

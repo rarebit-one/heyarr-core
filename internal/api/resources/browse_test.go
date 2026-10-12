@@ -426,3 +426,133 @@ func TestAnExtractedCoverOutranksAFetchedOne(t *testing.T) {
 		t.Fatalf("Location = %q, want the extracted cover %q", got, want)
 	}
 }
+
+// Thumbnail redirect tests (ADR-0109) ──────────────────────────────────────
+
+const thumbBlobHash = "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+// seedThumbnail adds the thumb blob row and one ready derived_thumbnails row
+// for (posterBlobHash, 256, recipe 1) inside the test harness.
+func (h *harness) seedThumbnail() *harness {
+	h.t.Helper()
+	h.exec(`INSERT INTO blobs (hash, size, mime, first_seen_at) VALUES (?, 8192, 'image/jpeg', ?)`,
+		thumbBlobHash, seedTime)
+	h.exec(`INSERT INTO derived_thumbnails (source_hash, bucket, recipe, status, thumb_hash, created_at)
+		VALUES (?, 256, 1, 'ready', ?, ?)`, posterBlobHash, thumbBlobHash, seedTime)
+	return h
+}
+
+// TestGetWorkArtworkSizeReady: a ready derived row redirects to the thumb blob
+// with a cacheable Cache-Control policy.
+func TestGetWorkArtworkSizeReady(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed().seedBrowse().seedThumbnail()
+
+	resp := h.noFollow(http.MethodGet, "/api/v1/works/"+work1ID+"/artwork?size=256")
+	if resp.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want 307", resp.StatusCode)
+	}
+	wantLoc := "/api/v1/blobs/" + thumbBlobHash + "/content"
+	if got := resp.Header.Get("Location"); got != wantLoc {
+		t.Errorf("Location = %q, want %q (thumb blob, not source)", got, wantLoc)
+	}
+	cc := resp.Header.Get("Cache-Control")
+	if !strings.Contains(cc, "private") || !strings.Contains(cc, "max-age=300") {
+		t.Errorf("Cache-Control = %q, want private, max-age=300", cc)
+	}
+}
+
+// TestGetWorkArtworkSizePending: no derived row → enqueue job, redirect to
+// the original blob with no-store so the client retries when ready.
+func TestGetWorkArtworkSizePending(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed().seedBrowse() // no seedThumbnail
+
+	resp := h.noFollow(http.MethodGet, "/api/v1/works/"+work1ID+"/artwork?size=512")
+	if resp.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want 307", resp.StatusCode)
+	}
+	wantLoc := "/api/v1/blobs/" + posterBlobHash + "/content"
+	if got := resp.Header.Get("Location"); got != wantLoc {
+		t.Errorf("Location = %q, want original %q while pending", got, wantLoc)
+	}
+	if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store while pending", cc)
+	}
+
+	// The derivation job must have been enqueued.
+	n := h.countRows(t, `SELECT COUNT(*) FROM jobs WHERE type = ? AND dedupe_key = ?`,
+		"derive_thumbnail", "derive-thumbnail:"+posterBlobHash+":512")
+	if n != 1 {
+		t.Errorf("job count = %d, want 1 (idempotent enqueue on pending)", n)
+	}
+}
+
+// TestGetWorkArtworkSizeUndecodable: undecodable row → fall back to the original
+// blob with a cacheable response so the client stops retrying.
+func TestGetWorkArtworkSizeUndecodable(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed().seedBrowse()
+	h.exec(`INSERT INTO derived_thumbnails (source_hash, bucket, recipe, status, thumb_hash, created_at)
+		VALUES (?, 1024, 1, 'undecodable', NULL, ?)`, posterBlobHash, seedTime)
+
+	resp := h.noFollow(http.MethodGet, "/api/v1/works/"+work1ID+"/artwork?size=1024")
+	if resp.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want 307", resp.StatusCode)
+	}
+	wantLoc := "/api/v1/blobs/" + posterBlobHash + "/content"
+	if got := resp.Header.Get("Location"); got != wantLoc {
+		t.Errorf("Location = %q, want original %q for undecodable", got, wantLoc)
+	}
+	cc := resp.Header.Get("Cache-Control")
+	if !strings.Contains(cc, "private") || !strings.Contains(cc, "max-age=300") {
+		t.Errorf("Cache-Control = %q, want private, max-age=300 for undecodable", cc)
+	}
+}
+
+// TestGetWorkArtworkSizeInvalid: an unsupported size returns 400.
+func TestGetWorkArtworkSizeInvalid(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed().seedBrowse()
+
+	resp := h.noFollow(http.MethodGet, "/api/v1/works/"+work1ID+"/artwork?size=999")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for unsupported size", resp.StatusCode)
+	}
+}
+
+// TestArtworkSizesInEmbed: when ?include=artwork is present the embed's sizes
+// map contains all three buckets, and each URL carries both the ?size= and the
+// ?v= cache-buster set to the source blob hash.
+func TestArtworkSizesInEmbed(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed().seedBrowse()
+
+	var card struct {
+		Artwork *struct {
+			Sizes map[string]string `json:"sizes"`
+		} `json:"artwork"`
+	}
+	body := h.body(h.get("/api/v1/works/" + work1ID + "?include=artwork"))
+	if err := json.Unmarshal(body, &card); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, body)
+	}
+	if card.Artwork == nil {
+		t.Fatal("artwork embed is nil")
+	}
+	for _, b := range []string{"256", "512", "1024"} {
+		url, ok := card.Artwork.Sizes[b]
+		if !ok {
+			t.Errorf("sizes[%q] missing", b)
+			continue
+		}
+		wantSize := "size=" + b
+		wantV := "v=" + posterBlobHash
+		if !strings.Contains(url, wantSize) {
+			t.Errorf("sizes[%q] = %q, want ?size=%s", b, url, b)
+		}
+		if !strings.Contains(url, wantV) {
+			t.Errorf("sizes[%q] = %q, want &v=%s", b, url, posterBlobHash)
+		}
+	}
+}
