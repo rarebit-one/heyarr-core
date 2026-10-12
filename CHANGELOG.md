@@ -51,6 +51,13 @@ stable.
   alternative.
 
 ### Fixed
+- **A failed phone wake no longer aborts a cruciform-offload unwrap (#688).**
+  The wake is best-effort: when the notify plane is down, misconfigured or
+  rate-limited, the unwrap keeps waiting on the relay up to its timeout, since
+  the phone may already be awake there. The wake runs beside the relay poll, so
+  a stalled node or plane cannot spend the deadline. The failure is printed at once, a
+  refused device credential (401/403) says to re-enrol the device, and a
+  timeout names the failed wake.
 - **GC no longer reclaims pinned vault blobs (#719).** A vault upload made
   before #659 wrote a placement pin but no `blobs` row, and the untracked
   sweep reclaimed those bytes as orphans. On one node that destroyed 70k vault
