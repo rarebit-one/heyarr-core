@@ -2,6 +2,7 @@ package cruciform
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -91,8 +92,8 @@ func (t *RelayTransport) RoundTrip(ctx context.Context, request []byte) ([]byte,
 	if t.Wake != nil {
 		go func() {
 			err := t.Wake(wakeCtx, t.RelayBase, session)
-			if err != nil && wakeCtx.Err() != nil {
-				err = nil
+			if wakeCtx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				err = nil // our cancellation, not a failed wake; anything else is still reported (Codex on #739)
 			}
 			if err != nil && t.WakeFailed != nil {
 				t.WakeFailed(err)

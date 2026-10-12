@@ -188,6 +188,45 @@ func TestRelayTransportStalledWakeDoesNotSpendTheDeadline(t *testing.T) {
 	}
 }
 
+// TestRelayTransportLateWakeFailureStillReported: the phone answers first, and
+// the wake then fails for a reason of its own (a refused credential), not our
+// cancellation. That failure still reaches WakeFailed (Codex on #739).
+func TestRelayTransportLateWakeFailureStillReported(t *testing.T) {
+	types := append(append([]string{}, relay.DefaultTypes...), RelayUnwrapTypes...)
+	relaySrv := httptest.NewServer(relay.NewServer(relay.Options{Types: types}).Routes())
+	t.Cleanup(relaySrv.Close)
+
+	sessions := make(chan string, 1)
+	refused := errors.New("cruciform wake: the node refused this device's credentials (401)")
+	var reported []error
+	transport := &RelayTransport{
+		RelayBase: relaySrv.URL,
+		Poll:      5 * time.Millisecond,
+		Wake: func(ctx context.Context, _ string, session string) error {
+			sessions <- session
+			<-ctx.Done() // the phone answers first
+			return refused
+		},
+		WakeFailed: func(err error) { reported = append(reported, err) },
+	}
+	go func() {
+		session := <-sessions
+		responder := &relay.Client{Base: relaySrv.URL, Session: session, Role: "responder", PollInterval: 5 * time.Millisecond}
+		if _, err := responder.Fetch(context.Background(), RelayRequestType); err != nil {
+			return
+		}
+		_ = responder.Post(context.Background(), RelayResponseType, []byte("reply"))
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := transport.RoundTrip(ctx, []byte("request")); err != nil {
+		t.Fatal(err)
+	}
+	if len(reported) != 1 || !errors.Is(reported[0], refused) {
+		t.Fatalf("WakeFailed got %v, want the refused credential", reported)
+	}
+}
+
 // TestRelayTransportFailedWakeNamedOnTimeout: with no phone answering, the
 // round-trip fails only at its deadline, and the error names the failed wake.
 func TestRelayTransportFailedWakeNamedOnTimeout(t *testing.T) {
