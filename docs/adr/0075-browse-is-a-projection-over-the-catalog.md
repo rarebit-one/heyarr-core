@@ -1,6 +1,6 @@
 # 0075. Browse is a projection over the catalog
 
-**Status:** Accepted
+**Status:** Accepted; superseded in part by ADR-0109
 **Date:** 2026-09-05
 **Builds on:** ADR-0013 (one byte endpoint), ADR-0017 (time, identifiers, determinism), ADR-0020 (managed / linked / vault assets), ADR-0024 (one consumption-session model), ADR-0054 (the first-party client is the product; compat adapters are reach), ADR-0056 (the Item entity), ADR-0074 (guest is a first-class read-only mode)
 **Tracks:** #456
@@ -94,10 +94,11 @@ items 1–3 land with this record.
 
 ## Revisit when
 
-- **Poster bytes cost too much on a real library.** Measure first. If a phone
-  fetching a 4 MB scan for a 200 px card is what a real shelf looks like, an
-  image library and a content-addressed thumbnail cache earn `?size=`; the
-  redirect shape survives that (it would redirect to the thumbnail's blob).
+- **Poster bytes cost too much on a real library.** *(Trigger met 2026-10-12;
+  see ADR-0109.)* Measured on a library of 3,711 works from a phone: 0.3–2.1 MB
+  per card at ~200–300 px; 12 images ≈ 9 MB on one detail screen.
+  ADR-0109 introduces bucketed thumbnail blobs and the `?size=` parameter;
+  the redirect shape survived, as predicted here.
 - **A metadata provider supplies artist identifiers** (MusicBrainz ids). A
   name-keyed grouping cannot merge "Artist" and "Artist (feat. …)" or split two
   artists sharing a name; an id-keyed one can, and that is the day an artist
