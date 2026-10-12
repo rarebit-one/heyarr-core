@@ -54,7 +54,15 @@ durable idempotent job (invariants 4/9), and GC'd with its source (invariant 8).
    the job for the same `(source_hash, bucket)` that already has a `thumb_hash`
    is a no-op (invariant 9). AVIF and HEIC cannot be decoded without a CGO
    library; the job records the source as un-decodable, the route falls back to
-   the original blob permanently, and no further attempt is made.
+   the original blob permanently, and no further attempt is made. Before a full
+   decode the handler reads only the header (`image.DecodeConfig`) and records
+   any source whose declared dimensions or byte size exceed fixed limits as
+   un-decodable, so a small file declaring huge dimensions cannot exhaust the
+   worker. A JPEG's EXIF orientation is applied before scaling, because
+   re-encoding drops the tag and would otherwise turn phone-shot artwork sideways.
+   Every transition — a thumbnail becoming `ready`, a source recorded
+   `undecodable`, a derivation row removed with its source — emits its event in
+   the same transaction as the row write (invariant 7).
 
 4. **Guest boundary.** A thumbnail is only generated for a blob that is already
    reachable by the requesting caller. The artwork picker (ADR-0075) already
@@ -64,17 +72,19 @@ durable idempotent job (invariants 4/9), and GC'd with its source (invariant 8).
    to the server (invariant 6) and would produce a useless output even if
    attempted.
 
-5. **GC.** `derived_thumbnails` rows are refcount dependencies: the GC sweep
-   that would reclaim a source blob must first reclaim all its derived thumbnails
-   (invariant 8). A derived thumbnail is never unlinked inline; the grace window
-   and the logical-delete model of ADR-0018 apply to it the same way they apply
-   to any blob.
+5. **GC, one way.** A `derived_thumbnails` row references its thumbnail blob
+   only; it is never a reference to the source. When the source is logically
+   deleted or reclaimed, its derivation rows are removed in that same step, the
+   thumbnail loses its only reference, and the ordinary grace-window sweep of
+   ADR-0018 reclaims it (invariant 8). Nothing is unlinked inline.
 
 6. **Cache headers.** The derived blob is served with
    `Cache-Control: public, max-age=31536000, immutable` — correct because the URL
-   is the BLAKE3 hash (ADR-0013). The artwork redirect itself keeps its existing
-   `private, max-age=300` so a work whose source artwork changes causes a
-   re-check, which in turn may 307 to a new thumbnail hash.
+   is the BLAKE3 hash (ADR-0013). The ready and un-decodable redirects keep the
+   existing `private, max-age=300`, so a work whose source artwork changes is
+   re-checked. The pending redirect (307 to the original while the job runs) is
+   `no-store`: caching it would keep a client on the full-size original after the
+   thumbnail is ready.
 
 **Accepted with these defaults (2026-10-12):**
 - one `derived_thumbnails` table, keyed by `(source_hash, bucket)`, with a `status`
