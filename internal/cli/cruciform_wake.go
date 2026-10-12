@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -150,9 +149,11 @@ func nodeWakeClient(cfg config.Config) (string, *http.Client, error) {
 	return "", nil, fmt.Errorf("cruciform wake: no node address — set http.unix_socket or http.addr")
 }
 
-// warnWakeFailed tells the operator a wake failed. The wake is best-effort
-// (#688): the unwrap keeps waiting on the relay, because the phone may already
-// be awake there or poll it shortly.
-func warnWakeFailed(err error) {
-	fmt.Fprintf(os.Stderr, "heyarr: %v; still waiting for the phone on the relay (open Cruciform to approve)\n", err)
+// warnWakeFailedOn returns a function that tells the operator a wake failed,
+// writing to w. The wake is best-effort (#688): the unwrap keeps waiting on the
+// relay, because the phone may already be awake there or poll it shortly.
+func warnWakeFailedOn(w io.Writer) func(error) {
+	return func(err error) {
+		fmt.Fprintf(w, "heyarr: %v; still waiting for the phone on the relay (open Cruciform to approve)\n", err)
+	}
 }

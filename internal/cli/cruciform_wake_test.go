@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,6 +64,42 @@ func TestCruciformWakeSurfacesNodeError(t *testing.T) {
 	wake := newCruciformWake(srv.URL, srv.Client(), "cert", nil, prove)
 	if err := wake(context.Background(), "r", "s"); err == nil {
 		t.Fatal("a node refusal should surface as an error")
+	}
+}
+
+// warnWakeFailedOn returns a func(error) that writes the wake-failed warning to
+// the supplied writer, not to os.Stderr, so a caller that builds NewRootCommand
+// with Options.Stderr captures it (#740).
+func TestWarnWakeFailedOnWritesToWriter(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "network error",
+			err:  errors.New("dial tcp: connection refused"),
+			want: "heyarr: dial tcp: connection refused; still waiting for the phone on the relay (open Cruciform to approve)\n",
+		},
+		{
+			name: "timeout",
+			err:  errors.New("context deadline exceeded"),
+			want: "heyarr: context deadline exceeded; still waiting for the phone on the relay (open Cruciform to approve)\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			fn := warnWakeFailedOn(&buf)
+			fn(tc.err)
+			got := buf.String()
+			if got != tc.want {
+				t.Fatalf("warnWakeFailedOn wrote %q, want %q", got, tc.want)
+			}
+			if !strings.Contains(got, tc.err.Error()) {
+				t.Fatalf("output %q does not contain the error %q", got, tc.err.Error())
+			}
+		})
 	}
 }
 

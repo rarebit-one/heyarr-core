@@ -51,6 +51,11 @@ stable.
   alternative.
 
 ### Fixed
+- **A failed cruciform wake warning now respects the configured stderr writer (#740).**
+  `warnWakeFailed` wrote directly to `os.Stderr`, bypassing the `Options.Stderr`
+  writer injected via `NewRootCommand`. It is replaced by `warnWakeFailedOn(w io.Writer)`
+  which returns a closure bound to the supplied writer; all `selectCustody` call
+  sites pass `cmd.ErrOrStderr()`.
 - **A failed phone wake no longer aborts a cruciform-offload unwrap (#688).**
   The wake is best-effort: when the notify plane is down, misconfigured or
   rate-limited, the unwrap keeps waiting on the relay up to its timeout, since
