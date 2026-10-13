@@ -52,6 +52,11 @@ func jobFromQueue(j jobs.Job) Job {
 	return out
 }
 
+// CodeDedupeKeyHeld is the problem code of a retry refused because a live job
+// already holds the retried job's dedupe_key (#686). The response's live_job_id
+// names the holder, so a caller stops retrying instead of looping on a 500.
+const CodeDedupeKeyHeld = "dedupe_key_conflict"
+
 const jobColumns = `id, type, payload, state, priority, dedupe_key, required_capability,
 	run_after, attempts, max_attempts, lease_owner, lease_expires_at, last_error,
 	created_at, updated_at, finished_at`
@@ -203,6 +208,14 @@ func (a *API) retryJob(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, jobs.ErrLeaseLost) {
 			httpapi.Fail(w, r, problem.Conflict(
 				"this job is "+string(existing.State)+"; only a succeeded, failed or dead job can be retried"))
+			return
+		}
+		var dce *jobs.DedupeConflictError
+		if errors.As(err, &dce) {
+			httpapi.Fail(w, r, problem.Conflict(
+				"this job's dedupe_key is already held by a live job; cancel or wait for the live job to finish").
+				WithCode(CodeDedupeKeyHeld).
+				WithLiveJobID(dce.LiveJobID))
 			return
 		}
 		a.fail(w, r, "job", err)

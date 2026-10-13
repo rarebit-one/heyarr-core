@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -145,7 +146,38 @@ var (
 	// safe default. If a handler contradicts itself and wraps both, permanent
 	// wins: "cannot ever succeed" is the stronger claim (see Fail).
 	ErrTransient = errors.New("jobs: transient failure; will retry until it recovers")
+	// ErrDedupeConflict is the sentinel wrapped by DedupeConflictError. Use
+	// errors.Is(err, ErrDedupeConflict) for a quick test; use errors.As to
+	// reach the live job's id.
+	ErrDedupeConflict = errors.New("jobs: dedupe key held by a live job")
 )
+
+// DedupeConflictError is returned by Retry when the retried job's dedupe_key
+// is already held by a live (pending or leased) job. LiveJobID is the id of
+// that job, so the caller can surface it to the operator.
+type DedupeConflictError struct {
+	// LiveJobID is the id of the pending or leased job holding the key.
+	LiveJobID string
+}
+
+func (e *DedupeConflictError) Error() string {
+	return fmt.Sprintf("jobs: dedupe key held by live job %s", e.LiveJobID)
+}
+
+// Is lets errors.Is(err, ErrDedupeConflict) match without unwrapping.
+func (e *DedupeConflictError) Is(target error) bool { return target == ErrDedupeConflict }
+
+// isUniqueViolation reports a SQLite duplicate-key error without importing the
+// driver. Kept package-private so each package that needs it can define its
+// own rather than coupling through a shared helper.
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique constraint failed") ||
+		strings.Contains(msg, "constraint failed: unique")
+}
 
 // Defaults.
 const (
@@ -809,6 +841,19 @@ func (q *Queue) Retry(ctx context.Context, id string) error {
 			WHERE id = ? AND state IN ('dead', 'failed', 'succeeded')`,
 			format(now), format(now), id)
 		if err != nil {
+			if isUniqueViolation(err) {
+				// The job has a dedupe_key already held by a live job. Read the
+				// key from the transaction (still open; the failed UPDATE did not
+				// abort it in SQLite) and look up the holder via the reader.
+				var key string
+				if e := tx.QueryRowContext(ctx,
+					`SELECT coalesce(dedupe_key,'') FROM jobs WHERE id = ?`, id,
+				).Scan(&key); e == nil && key != "" {
+					if live, e := q.findLiveByDedupeKey(ctx, key); e == nil {
+						return nil, &DedupeConflictError{LiveJobID: live.ID}
+					}
+				}
+			}
 			return nil, fmt.Errorf("jobs: retrying %s: %w", id, err)
 		}
 		if err := expectOneRow(res, id); err != nil {

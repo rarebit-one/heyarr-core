@@ -539,6 +539,10 @@ const (
 	asset3ID   = "01990000-0000-7000-8000-0000000000a3"
 	job1ID     = "01990000-0000-7000-8000-0000000000j1"
 	job2ID     = "01990000-0000-7000-8000-0000000000j2"
+	// job3ID is a dead scan_library job whose dedupe_key matches job1. It is
+	// used by TestProblemShapes to exercise the dedupe-conflict 409 path: job1
+	// is pending (lives), job3 is dead; retrying job3 hits the unique index.
+	job3ID     = "01990000-0000-7000-8000-0000000000j3"
 	device1ID  = "01990000-0000-7000-8000-0000000000d1"
 	device2ID  = "01990000-0000-7000-8000-0000000000d2"
 	session1ID = "01990000-0000-7000-8000-0000000000s1"
@@ -697,9 +701,12 @@ func (h *harness) seed() *harness {
 		(?, 'scan_library', '{"root_id":"`+rootID+`"}', 'pending', 100, 'scan_library:seeded', '',
 			?, 0, 5, NULL, ?, ?, NULL),
 		(?, 'ingest_artifact', '{"path":"/srv/films/Broken.mkv"}', 'dead', 100, NULL, '',
-			?, 5, 5, 'the file could not be read', ?, ?, ?)`,
+			?, 5, 5, 'the file could not be read', ?, ?, ?),
+		(?, 'scan_library', '{"root_id":"`+rootID+`"}', 'dead', 100, 'scan_library:seeded', '',
+			?, 1, 1, 'the root was offline', ?, ?, ?)`,
 		job1ID, seedTime, seedTime, seedTime,
-		job2ID, seedTime, seedTime, seedTime, seedTime)
+		job2ID, seedTime, seedTime, seedTime, seedTime,
+		job3ID, seedTime, seedTime, seedTime, seedTime)
 
 	return h
 }

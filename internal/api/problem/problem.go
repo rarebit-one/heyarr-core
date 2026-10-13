@@ -70,6 +70,11 @@ type Problem struct {
 	// response shape changes; a guest capability refusal (ADR-0094) sets it to
 	// the grant reason the check yielded.
 	Code string `json:"code,omitempty"`
+	// LiveJobID is an optional extension member present on 409 dedupe-conflict
+	// responses (code "dedupe_key_conflict"). It carries the id of the pending
+	// or leased job that holds the dedupe key, so the operator can find it
+	// without a second lookup.
+	LiveJobID string `json:"live_job_id,omitempty"`
 }
 
 // Error lets a Problem be returned as an ordinary error and rendered later.
@@ -132,6 +137,10 @@ func Internal() *Problem {
 // WithCode stamps a stable, machine-readable reason code on the problem and
 // returns it, so a caller can branch on the code rather than the prose Detail.
 func (p *Problem) WithCode(code string) *Problem { p.Code = code; return p }
+
+// WithLiveJobID records the id of the live job holding the dedupe key on a
+// dedupe-conflict 409 response.
+func (p *Problem) WithLiveJobID(id string) *Problem { p.LiveJobID = id; return p }
 
 // WithInstance records the URI this problem occurred at.
 func (p *Problem) WithInstance(uri string) *Problem { p.Instance = uri; return p }

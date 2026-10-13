@@ -39,6 +39,26 @@
       "created_at": "2026-08-01T00:00:00Z",
       "updated_at": "2026-08-01T00:00:00Z",
       "finished_at": "2026-08-01T00:00:00Z"
+    },
+    {
+      "id": "01990000-0000-7000-8000-0000000000j3",
+      "type": "scan_library",
+      "payload": {
+        "root_id": "01990000-0000-7000-8000-0000000000r1"
+      },
+      "state": "dead",
+      "priority": 100,
+      "dedupe_key": "scan_library:seeded",
+      "required_capability": "",
+      "run_after": "2026-08-01T00:00:00Z",
+      "attempts": 1,
+      "max_attempts": 1,
+      "lease_owner": null,
+      "lease_expires_at": null,
+      "last_error": "the root was offline",
+      "created_at": "2026-08-01T00:00:00Z",
+      "updated_at": "2026-08-01T00:00:00Z",
+      "finished_at": "2026-08-01T00:00:00Z"
     }
   ]
 }
