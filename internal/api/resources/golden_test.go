@@ -108,6 +108,13 @@ func TestProblemShapes(t *testing.T) {
 		{"unknown work", http.MethodGet, "/api/v1/works/nope", "", 404, "problem_unknown_work.json"},
 		{"unknown blob", http.MethodGet, "/api/v1/blobs/blake3:deadbeef", "", 404, "problem_unknown_blob.json"},
 		{
+			// job3 is dead and shares its dedupe_key with job1 (pending). Retrying
+			// job3 must produce 409 with code "dedupe_key_conflict" and live_job_id.
+			"dedupe conflict on retry",
+			http.MethodPost, "/api/v1/jobs/" + job3ID + "/retry", "",
+			409, "problem_dedupe_conflict.json",
+		},
+		{
 			"a cursor from another collection", http.MethodGet,
 			"/api/v1/jobs?cursor=" + worksCursor(t, h), "", 400, "problem_foreign_cursor.json",
 		},

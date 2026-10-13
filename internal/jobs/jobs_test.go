@@ -518,6 +518,113 @@ func TestRetryRevivesADeadJob(t *testing.T) {
 	}
 }
 
+// TestRetryDedupeConflict covers the case where a dead or failed job is retried
+// while another live job already holds the same dedupe_key. Queue.Retry must
+// return a *DedupeConflictError (matching ErrDedupeConflict via errors.Is) that
+// names the live job, and the dead job must remain dead.
+func TestRetryDedupeConflict(t *testing.T) {
+	t.Parallel()
+
+	const key = "scan:library-conflict"
+
+	// Scenario table: the dead/failed job can be in either terminal state that
+	// Retry accepts.
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, q *Queue, id string)
+	}{
+		{
+			name: "dead",
+			setup: func(t *testing.T, q *Queue, id string) {
+				t.Helper()
+				job, err := q.Claim(t.Context(), ClaimOptions{Owner: "w"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if job.ID != id {
+					t.Fatalf("claimed unexpected job %s", job.ID)
+				}
+				if err := q.Fail(t.Context(), id, "w",
+					fmt.Errorf("%w: boom", ErrPermanent)); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			// 'succeeded' is also a terminal state that Retry accepts. The
+			// public Queue API has no way to write 'failed' directly (non-exhausted
+			// failures go to 'pending' with backoff), so we exercise succeeded here
+			// rather than fabricating DB rows.
+			name: "succeeded",
+			setup: func(t *testing.T, q *Queue, id string) {
+				t.Helper()
+				job, err := q.Claim(t.Context(), ClaimOptions{Owner: "w"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if job.ID != id {
+					t.Fatalf("claimed unexpected job %s", job.ID)
+				}
+				if err := q.Complete(t.Context(), id, "w"); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			q, clock := newQueue(t)
+
+			// Enqueue the job that will become dead/failed.
+			dead := enqueue(t, q, EnqueueOptions{
+				Type:        "scan_library",
+				DedupeKey:   key,
+				MaxAttempts: 1,
+			})
+			tc.setup(t, q, dead.ID)
+
+			// The partial UNIQUE index is only on (pending, leased), so once
+			// the first job is dead/failed, a second enqueue with the same key
+			// succeeds.
+			clock.Advance(time.Millisecond)
+			live := enqueue(t, q, EnqueueOptions{
+				Type:      "scan_library",
+				DedupeKey: key,
+			})
+			if live.ID == dead.ID {
+				t.Fatal("live job should be a new row")
+			}
+
+			// Retry the dead/failed job; must fail with DedupeConflictError.
+			err := q.Retry(t.Context(), dead.ID)
+			if err == nil {
+				t.Fatal("Retry returned nil, want DedupeConflictError")
+			}
+			if !errors.Is(err, ErrDedupeConflict) {
+				t.Fatalf("errors.Is(err, ErrDedupeConflict) = false; got %v", err)
+			}
+			var dce *DedupeConflictError
+			if !errors.As(err, &dce) {
+				t.Fatalf("errors.As(*DedupeConflictError) = false; got %T: %v", err, err)
+			}
+			if dce.LiveJobID != live.ID {
+				t.Errorf("LiveJobID = %q, want %q", dce.LiveJobID, live.ID)
+			}
+
+			// The dead/failed job must remain in its terminal state.
+			after, err := q.Get(t.Context(), dead.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.State == Pending {
+				t.Error("dead job was moved to pending despite the conflict")
+			}
+		})
+	}
+}
+
 func TestCompleteMarksSucceeded(t *testing.T) {
 	t.Parallel()
 	q, _ := newQueue(t)

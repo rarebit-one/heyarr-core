@@ -6642,6 +6642,11 @@ paths:
         succeeded, failed or dead job may be retried; a pending or leased one is
         a 409, because "retry" on a job that is already running would mean
         running it twice.
+
+        A second 409 case: the job has a `dedupe_key` that is already held by
+        a live (pending or leased) job. The response carries `code:
+        "dedupe_key_conflict"` and `live_job_id` with the id of the holder, so
+        the operator can find it without a second lookup.
       parameters: [{ $ref: "#/components/parameters/id" }]
       responses:
         "200":
@@ -7248,6 +7253,12 @@ components:
         request_id:
           type: string
           description: Correlates the response with the server log line.
+        live_job_id:
+          type: string
+          description: |
+            Present on 409 responses with `code: "dedupe_key_conflict"` only.
+            The id of the pending or leased job that holds the `dedupe_key` of
+            the job the operator tried to retry.
 
     Page:
       type: object

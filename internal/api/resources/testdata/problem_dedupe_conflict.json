@@ -1,0 +1,10 @@
+{
+  "type": "https://heyarr.dev/problems/conflict",
+  "title": "Conflict",
+  "status": 409,
+  "detail": "this job's dedupe_key is already held by a live job; cancel or wait for the live job to finish",
+  "instance": "/api/v1/jobs/01990000-0000-7000-8000-0000000000j3/retry",
+  "request_id": "golden-request-id",
+  "code": "dedupe_key_conflict",
+  "live_job_id": "01990000-0000-7000-8000-0000000000j1"
+}
