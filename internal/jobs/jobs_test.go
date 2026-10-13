@@ -621,7 +621,6 @@ func TestRetryDedupeConflict(t *testing.T) {
 			if after.State == Pending {
 				t.Error("dead job was moved to pending despite the conflict")
 			}
-
 		})
 	}
 }
