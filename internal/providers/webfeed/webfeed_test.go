@@ -103,9 +103,9 @@ func TestEnumerateRSS(t *testing.T) {
 		t.Errorf("published = %v, want %v", items[0].PublishedAt, wantPub)
 	}
 	got := items[0].EnclosureURL()
-	want := followed.WebCaptureSourceScheme + "https://journal.example.com/first"
-	if got != want {
-		t.Errorf("enclosure = %q, want %q", got, want)
+	wantPrefix := followed.WebCaptureSourceScheme + "https://journal.example.com/first"
+	if !strings.HasPrefix(got, wantPrefix) || !strings.Contains(got, "\tfeed:"+srv.URL) {
+		t.Errorf("enclosure = %q, want prefix %q and feed ref %q", got, wantPrefix, srv.URL)
 	}
 }
 
@@ -120,8 +120,10 @@ func TestEnumerateAtom(t *testing.T) {
 	if len(items) != 2 {
 		t.Fatalf("got %d items, want 2: %+v", len(items), items)
 	}
-	if items[1].EnclosureURL() != followed.WebCaptureSourceScheme+"https://journal.example.com/second" {
-		t.Errorf("second enclosure = %q", items[1].EnclosureURL())
+	gotSecond := items[1].EnclosureURL()
+	wantSecondPrefix := followed.WebCaptureSourceScheme + "https://journal.example.com/second"
+	if !strings.HasPrefix(gotSecond, wantSecondPrefix) || !strings.Contains(gotSecond, "\tfeed:"+srv.URL) {
+		t.Errorf("second enclosure = %q, want prefix %q and feed ref %q", gotSecond, wantSecondPrefix, srv.URL)
 	}
 	if items[1].Title != "Second Article" {
 		t.Errorf("second title = %q", items[1].Title)
@@ -220,8 +222,9 @@ func TestEnumerateParsesLenientAtom(t *testing.T) {
 	if !strings.Contains(items[0].Title, "&") {
 		t.Errorf("title %q does not contain &", items[0].Title)
 	}
-	wantLink := followed.WebCaptureSourceScheme + "https://example.com/buns-and-bits"
-	if items[0].EnclosureURL() != wantLink {
-		t.Errorf("enclosure = %q, want %q", items[0].EnclosureURL(), wantLink)
+	gotEnc := items[0].EnclosureURL()
+	wantEncPrefix := followed.WebCaptureSourceScheme + "https://example.com/buns-and-bits"
+	if !strings.HasPrefix(gotEnc, wantEncPrefix) || !strings.Contains(gotEnc, "\tfeed:"+srv.URL) {
+		t.Errorf("enclosure = %q, want prefix %q and feed ref %q", gotEnc, wantEncPrefix, srv.URL)
 	}
 }

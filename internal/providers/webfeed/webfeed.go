@@ -16,10 +16,19 @@
 // # It parses BOTH RSS and Atom
 //
 // A web feed is served as either, and a publication does not let a follower
-// choose — so the adapter sniffs the document's root element (<rss> vs <feed>)
-// and reads whichever it is, mapping both onto the same neutral FeedItem. The
-// two wire shapes are matched by local element name, so the content:, dc: and
-// media: namespaces a real feed also carries are simply ignored.
+// choose — so the adapter delegates parsing to webfeedparse, which sniffs the
+// document's root element (<rss> vs <feed>) and maps both onto the same neutral
+// Entry. The two wire shapes are matched by local element name, so the content:,
+// dc: and media: namespaces a real feed also carries are simply ignored.
+//
+// # The source carries the feed URL alongside the article URL
+//
+// Each item's source is encoded as webcapture:<articleURL>\tfeed:<feedURL>.
+// The tab separator is unambiguous — a tab is never valid in a URL (RFC 3986).
+// The download client (downloads/webcapture) parses this form and uses the feed
+// URL to fetch the feed's own full HTML content when the article page returns a
+// blocking HTTP error (ADR-0110). Legacy sources without the feed segment are
+// parsed as before: no tab means articleURL only, no fallback.
 //
 // # It is never exercised in CI against a live feed
 //
@@ -30,9 +39,7 @@
 package webfeed
 
 import (
-	"bytes"
 	"context"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -43,6 +50,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/webfeedparse"
 )
 
 // defaultTimeout bounds one feed fetch. A feed is a single document; this is
@@ -111,12 +119,14 @@ func (c *Client) Check(_ context.Context) providers.Health {
 // Enumerate returns a publication's articles as neutral FeedItems. ref is the
 // feed URL (RSS or Atom).
 //
-// It fetches the feed, sniffs whether it is RSS or Atom, and maps each entry to
+// It fetches the feed, delegates parsing to webfeedparse, and maps each entry to
 // a FeedItem keyed by the entry's guid/id (falling back to its link), carrying
-// followed.WebCaptureSourceScheme+articleURL in AttrEnclosureURL so the poll
-// projects it as a direct release the KindWebCapture client archives. An entry
-// with no resolvable article URL is skipped rather than projected: an article
-// heyarr cannot address is one it cannot capture.
+// webcapture:<articleURL>\tfeed:<feedURL> in AttrEnclosureURL so the poll
+// projects it as a direct release the KindWebCapture client archives. The feed
+// URL is embedded in the source so the download client can fall back to the
+// feed's own article content when the article page is blocked (ADR-0110).
+// An entry with no resolvable article URL is skipped rather than projected:
+// an article heyarr cannot address is one it cannot capture.
 func (c *Client) Enumerate(ctx context.Context, ref string) ([]followed.FeedItem, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -144,7 +154,7 @@ func (c *Client) Enumerate(ctx context.Context, ref string) ([]followed.FeedItem
 		return nil, fmt.Errorf("webfeed: the feed returned HTTP %d", resp.StatusCode)
 	}
 
-	entries, err := parseFeed(raw)
+	entries, err := webfeedparse.ParseFeed(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +162,7 @@ func (c *Client) Enumerate(ctx context.Context, ref string) ([]followed.FeedItem
 	items := make([]followed.FeedItem, 0, len(entries))
 	seen := make(map[string]bool)
 	for _, e := range entries {
-		article := strings.TrimSpace(e.link)
+		article := strings.TrimSpace(e.Link)
 		if article == "" {
 			// No article URL — nothing to capture. Skipped, not projected.
 			continue
@@ -160,7 +170,7 @@ func (c *Client) Enumerate(ctx context.Context, ref string) ([]followed.FeedItem
 		// The guid/id is the source-stable identity that dedupes an article
 		// across polls; an entry without one falls back to its link, which is
 		// stable for the same reason a re-publish keeps the same URL.
-		key := strings.TrimSpace(e.key)
+		key := strings.TrimSpace(e.Key)
 		if key == "" {
 			key = article
 		}
@@ -169,214 +179,18 @@ func (c *Client) Enumerate(ctx context.Context, ref string) ([]followed.FeedItem
 		}
 		seen[key] = true
 
+		// Embed the feed URL in the source so the download client can fall back
+		// to the feed's own content when the article page is blocked (ADR-0110).
+		source := followed.WebCaptureSourceScheme + article + "\tfeed:" + ref
+
 		items = append(items, followed.FeedItem{
 			Key:         key,
-			Title:       strings.TrimSpace(e.title),
-			PublishedAt: e.published,
+			Title:       strings.TrimSpace(e.Title),
+			PublishedAt: e.Published,
 			Attributes: map[string]string{
-				followed.AttrEnclosureURL: followed.WebCaptureSourceScheme + article,
+				followed.AttrEnclosureURL: source,
 			},
 		})
 	}
 	return items, nil
-}
-
-// entry is the neutral shape both RSS and Atom are mapped onto before becoming
-// FeedItems — the adapter's internal common denominator.
-type entry struct {
-	key       string
-	title     string
-	link      string
-	published time.Time
-}
-
-// parseFeed sniffs the document's root element and reads it as RSS or Atom.
-//
-// Sniffing rather than trying both keeps a malformed feed an honest error: a
-// document that is neither is reported as such, not silently read as an empty
-// feed that would look like a publication with no articles.
-//
-// Both the sniff and the full parse use a lenient decoder (Strict=false,
-// Entity=HTMLEntity) so that a feed containing a raw & in text or attribute
-// values — a common real-world defect — is tolerated rather than rejected with
-// a permanent XML syntax error. AutoClose is intentionally NOT set: the HTML
-// auto-close list includes <link>, which would empty the RSS/Atom <link> element
-// that carries the article URL.
-func parseFeed(raw []byte) ([]entry, error) {
-	root, err := rootElement(raw)
-	if err != nil {
-		return nil, err
-	}
-	switch root {
-	case "rss", "rdf":
-		var doc rssFeed
-		if err := lenientDecode(raw, &doc); err != nil {
-			return nil, fmt.Errorf("webfeed: parsing the RSS feed: %w", err)
-		}
-		channelItems := doc.channelItems()
-		out := make([]entry, 0, len(channelItems))
-		for _, it := range channelItems {
-			out = append(out, entry{
-				key:       firstNonEmpty(it.GUID.Value, it.Link),
-				title:     it.Title,
-				link:      it.Link,
-				published: parseTime(it.PubDate, it.Date),
-			})
-		}
-		return out, nil
-	case "feed":
-		var doc atomFeed
-		if err := lenientDecode(raw, &doc); err != nil {
-			return nil, fmt.Errorf("webfeed: parsing the Atom feed: %w", err)
-		}
-		out := make([]entry, 0, len(doc.Entries))
-		for _, e := range doc.Entries {
-			out = append(out, entry{
-				key:       firstNonEmpty(e.ID, alternateHref(e)),
-				title:     e.Title,
-				link:      alternateHref(e),
-				published: parseTime(e.Published, e.Updated),
-			})
-		}
-		return out, nil
-	default:
-		return nil, fmt.Errorf("webfeed: the document is neither RSS nor Atom (root <%s>)", root)
-	}
-}
-
-// lenientDecode unmarshals raw XML into v using a lenient decoder that accepts
-// bare & entities (a common authoring defect in real-world feeds). It does NOT
-// set AutoClose: xml.HTMLAutoClose treats <link> as a void self-closing element,
-// which would silently empty the RSS <link> and Atom <link> elements that carry
-// the article URL. Entity alone is the right knob here.
-func lenientDecode(raw []byte, v any) error {
-	dec := xml.NewDecoder(bytes.NewReader(raw))
-	dec.Strict = false
-	dec.Entity = xml.HTMLEntity
-	return dec.Decode(v)
-}
-
-// rootElement returns the local name of the document's first element.
-// It uses the same lenient decoder as parseFeed so that a feed with a bare &
-// before or inside its root tag does not fail the sniff pass.
-func rootElement(raw []byte) (string, error) {
-	dec := xml.NewDecoder(bytes.NewReader(raw))
-	dec.Strict = false
-	dec.Entity = xml.HTMLEntity
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			return "", fmt.Errorf("webfeed: the feed is not well-formed XML: %w", err)
-		}
-		if se, ok := tok.(xml.StartElement); ok {
-			return strings.ToLower(se.Name.Local), nil
-		}
-	}
-}
-
-// alternateHref returns an Atom entry's alternate (human-facing) link, the
-// article URL. It prefers rel="alternate" and falls back to a link with no rel,
-// which Atom defines to mean alternate.
-func alternateHref(e atomEntry) string {
-	for _, l := range e.Links {
-		if l.Rel == "alternate" {
-			if h := strings.TrimSpace(l.Href); h != "" {
-				return h
-			}
-		}
-	}
-	for _, l := range e.Links {
-		if l.Rel == "" {
-			if h := strings.TrimSpace(l.Href); h != "" {
-				return h
-			}
-		}
-	}
-	return ""
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if s := strings.TrimSpace(v); s != "" {
-			return s
-		}
-	}
-	return ""
-}
-
-// parseTime parses the first of the supplied timestamps that reads, trying RSS's
-// RFC 822 layouts and Atom/Dublin-Core's RFC 3339. A missing or unparseable date
-// is the zero time, which from_now backfill reads as "cannot show this is after
-// the follow" (see the poll's shouldProject).
-func parseTime(vals ...string) time.Time {
-	for _, v := range vals {
-		v = strings.TrimSpace(v)
-		if v == "" {
-			continue
-		}
-		for _, layout := range []string{
-			time.RFC1123Z, time.RFC1123, time.RFC822Z, time.RFC822,
-			time.RFC3339, time.RFC3339Nano, "2006-01-02T15:04:05Z07:00",
-		} {
-			if t, err := time.Parse(layout, v); err == nil {
-				return t.UTC()
-			}
-		}
-	}
-	return time.Time{}
-}
-
-// The wire shapes, kept unexported: nothing outside this package should couple
-// to RSS/Atom XML. Fields are matched by local element name, so the namespaces a
-// real feed also carries (content:, dc:, media:) are ignored — except dc:date,
-// which is read as a fallback pubDate because RSS 1.0/RDF feeds carry only that.
-
-type rssFeed struct {
-	Channel rssChannel `xml:"channel"`
-	// RSS 1.0 (RDF) puts <item> as a sibling of <channel>, not inside it; both
-	// are accepted so an RDF feed is not read as empty.
-	Items []rssItem `xml:"item"`
-}
-
-type rssChannel struct {
-	Items []rssItem `xml:"item"`
-}
-
-type rssItem struct {
-	Title   string  `xml:"title"`
-	Link    string  `xml:"link"`
-	GUID    rssGUID `xml:"guid"`
-	PubDate string  `xml:"pubDate"`
-	Date    string  `xml:"date"` // dc:date, matched by local name
-}
-
-type rssGUID struct {
-	Value string `xml:",chardata"`
-}
-
-type atomFeed struct {
-	Entries []atomEntry `xml:"entry"`
-}
-
-type atomEntry struct {
-	ID        string     `xml:"id"`
-	Title     string     `xml:"title"`
-	Published string     `xml:"published"`
-	Updated   string     `xml:"updated"`
-	Links     []atomLink `xml:"link"`
-}
-
-type atomLink struct {
-	Rel  string `xml:"rel,attr"`
-	Href string `xml:"href,attr"`
-}
-
-// channelItems folds the RDF sibling-item case into the channel so parseFeed
-// reads one place. It is a method rather than inline so the RSS branch stays a
-// straight range over Channel.Items.
-func (f rssFeed) channelItems() []rssItem {
-	if len(f.Channel.Items) > 0 {
-		return f.Channel.Items
-	}
-	return f.Items
 }

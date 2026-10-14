@@ -86,6 +86,12 @@ func webCaptureSource(article string) secret.Value {
 	return secret.Value(followed.WebCaptureSourceScheme + article)
 }
 
+// webCaptureFeedSource builds the new source format that carries both the
+// article URL and the feed URL, exactly as providers/webfeed.Enumerate emits.
+func webCaptureFeedSource(article, feedURL string) secret.Value {
+	return secret.Value(followed.WebCaptureSourceScheme + article + "\tfeed:" + feedURL)
+}
+
 // A source that is not web-capture-tagged is refused, so the client composes
 // with the other clients — even a plain article URL, which is http(s) and
 // belongs to the HTTP client unless a KindWebFeed adapter tagged it.
@@ -247,5 +253,215 @@ func TestWebCaptureSendsDescriptiveUserAgent(t *testing.T) {
 	}
 	if !final.Done {
 		t.Fatal("capture did not complete against a UA-gating server")
+	}
+}
+
+// rssWithContent is a minimal RSS feed whose single item carries a full
+// content:encoded body, so the fallback path can succeed.
+const rssWithContent = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>Blocked Article</title>
+      <link>ARTICLE_URL</link>
+      <guid isPermaLink="false">blocked-guid-001</guid>
+      <pubDate>Wed, 01 Oct 2026 10:00:00 +0000</pubDate>
+      <content:encoded><![CDATA[<p>Full article body from feed.</p>]]></content:encoded>
+    </item>
+  </channel>
+</rss>`
+
+// rssWithDescriptionOnly is a feed whose item carries only a description — the
+// fallback must NOT use it (description/summary is never full content).
+const rssWithDescriptionOnly = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>Blocked Article</title>
+      <link>ARTICLE_URL</link>
+      <guid isPermaLink="false">blocked-guid-001</guid>
+      <description>Just a short summary.</description>
+    </item>
+  </channel>
+</rss>`
+
+// feedFallbackFixture builds a test server that acts as both an article host
+// and a feed host. articleStatus is what the article endpoint returns;
+// feedBody is what the feed endpoint returns (with ARTICLE_URL replaced by the
+// article's real URL).
+func feedFallbackFixture(t *testing.T, articleStatus int, feedBody string) (articleURL, feedURL string) {
+	t.Helper()
+	var srvURL string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/article", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(articleStatus)
+	})
+	mux.HandleFunc("/feed", func(w http.ResponseWriter, _ *http.Request) {
+		body := strings.ReplaceAll(feedBody, "ARTICLE_URL", srvURL+"/article")
+		w.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = w.Write([]byte(body))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	srvURL = srv.URL
+	return srvURL + "/article", srvURL + "/feed"
+}
+
+// When an article page returns 403 and the feed carries content:encoded, the
+// capture should succeed using the feed's own HTML body and include the
+// provenance meta.
+func TestFeedFallbackOn403WithContent(t *testing.T) {
+	articleURL, feedURL := feedFallbackFixture(t, http.StatusForbidden, rssWithContent)
+	c := newWebCaptureClient(t)
+	added, err := c.Add(context.Background(), webCaptureFeedSource(articleURL, feedURL))
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	final := waitWebCapture(t, c, added.ID)
+	if final.Error != "" {
+		t.Fatalf("capture errored: %s", final.Error)
+	}
+	if !final.Done || final.Path == "" {
+		t.Fatalf("capture did not complete: %+v", final)
+	}
+	raw, err := os.ReadFile(final.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(raw)
+	if !strings.Contains(out, `heyarr-capture-source`) || !strings.Contains(out, `content="feed"`) {
+		t.Error("provenance meta tag not present in feed-fallback capture")
+	}
+	if !strings.Contains(out, "Full article body from feed") {
+		t.Error("feed body content not present in capture")
+	}
+}
+
+// When an article page returns 403 but the feed carries only a description
+// (not content:encoded), the capture must fail with the original 403 error and
+// not produce a file.
+func TestFeedFallbackOn403DescriptionOnly(t *testing.T) {
+	articleURL, feedURL := feedFallbackFixture(t, http.StatusForbidden, rssWithDescriptionOnly)
+	c := newWebCaptureClient(t)
+	added, err := c.Add(context.Background(), webCaptureFeedSource(articleURL, feedURL))
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	final := waitWebCapture(t, c, added.ID)
+	if final.Done {
+		t.Error("capture must not succeed when the feed has only a description")
+	}
+	if final.Error == "" {
+		t.Error("a failed fallback must surface an error on the transfer")
+	}
+}
+
+// A 5xx response from the article page must NOT attempt the feed fallback —
+// server errors are transient and the job will retry.
+func TestFeedFallbackNotAttemptedOn5xx(t *testing.T) {
+	var feedHits int
+	articleStatus := http.StatusInternalServerError
+	articleURL := ""
+	mux := http.NewServeMux()
+	mux.HandleFunc("/article", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(articleStatus)
+	})
+	mux.HandleFunc("/feed", func(w http.ResponseWriter, _ *http.Request) {
+		feedHits++
+		w.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = w.Write([]byte(rssWithContent))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	articleURL = srv.URL + "/article"
+	feedURL := srv.URL + "/feed"
+
+	c := newWebCaptureClient(t)
+	added, err := c.Add(context.Background(), webCaptureFeedSource(articleURL, feedURL))
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	waitWebCapture(t, c, added.ID)
+	if feedHits != 0 {
+		t.Errorf("feed was fetched %d time(s); must not be fetched on a 5xx article response", feedHits)
+	}
+}
+
+// A 200 article page must work exactly as before — no feed fetch.
+func TestFeedSourceWithSuccessfulArticle(t *testing.T) {
+	var feedHits int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/article", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><html><body><h1>OK</h1></body></html>`))
+	})
+	mux.HandleFunc("/feed", func(w http.ResponseWriter, _ *http.Request) {
+		feedHits++
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	c := newWebCaptureClient(t)
+	added, err := c.Add(context.Background(), webCaptureFeedSource(srv.URL+"/article", srv.URL+"/feed"))
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	final := waitWebCapture(t, c, added.ID)
+	if final.Error != "" {
+		t.Fatalf("capture errored: %s", final.Error)
+	}
+	if !final.Done {
+		t.Fatal("capture did not complete")
+	}
+	if feedHits != 0 {
+		t.Errorf("feed was fetched %d time(s); must not be fetched when article succeeds", feedHits)
+	}
+}
+
+// A legacy source (no feed segment) that encounters a 403 must fail as before —
+// no feed fallback attempted.
+func TestLegacySourceOn403NoFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := newWebCaptureClient(t)
+	added, err := c.Add(context.Background(), webCaptureSource(srv.URL+"/article"))
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	final := waitWebCapture(t, c, added.ID)
+	if final.Done {
+		t.Error("a 403 on a legacy source must not succeed")
+	}
+	if final.Error == "" {
+		t.Error("a 403 on a legacy source must surface an error")
+	}
+}
+
+// The source format round-trips: the article and feed URL parsed back from the
+// source string match what webfeed.Enumerate would have written.
+func TestFeedSourceRoundTrip(t *testing.T) {
+	article := "https://journal.example.com/first"
+	feedURL := "https://journal.example.com/feed"
+	src := string(webCaptureFeedSource(article, feedURL))
+
+	// Must start with the webcapture scheme.
+	if !strings.HasPrefix(src, followed.WebCaptureSourceScheme) {
+		t.Fatalf("source %q does not start with webcapture scheme", src)
+	}
+	body := strings.TrimPrefix(src, followed.WebCaptureSourceScheme)
+	parts := strings.SplitN(body, "\t", 2)
+	if parts[0] != article {
+		t.Errorf("article = %q, want %q", parts[0], article)
+	}
+	if len(parts) != 2 || parts[1] != "feed:"+feedURL {
+		t.Errorf("feed segment = %q, want %q", func() string {
+			if len(parts) < 2 {
+				return "(missing)"
+			}
+			return parts[1]
+		}(), "feed:"+feedURL)
 	}
 }
