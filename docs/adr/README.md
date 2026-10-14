@@ -104,3 +104,5 @@ An ADR that merely describes the code is not worth having.
 | [0107](0107-personal-media-is-a-second-service-that-mounts-only-the-personal-plane.md) | Personal media is a second service that mounts only the personal plane | Proposed |
 | [0108](0108-a-shared-space-is-wrapped-for-another-members-devices-and-only-an-owners-device-changes-membership.md) | A shared space is wrapped for another member's devices, and only an owner's device changes membership | Proposed |
 | [0109](0109-artwork-thumbnails-are-derived-blobs.md) | Artwork thumbnails are derived blobs; `?size=` names a bucket | Accepted |
+| [0110](0110-webcapture-falls-back-to-feed-content-when-article-page-is-blocked.md) | Webcapture falls back to the feed's own full content when an article page is blocked | Accepted |
+| [0111](0111-playback-picks-the-shortest-working-route-the-client-relays-only-when-needed.md) | Playback picks the shortest working route; the client relays only when needed | Proposed |
