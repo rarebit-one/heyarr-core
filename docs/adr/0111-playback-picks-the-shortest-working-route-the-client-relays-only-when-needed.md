@@ -50,26 +50,21 @@ reachability below).
 
 ### 2. Client location
 
-The controller derives the client's **site** from the source address of the
-request, matched against the configured site networks. Two levels of config:
+The controller derives the client's **site** from the request's source address
+alone, matched against an optional `sites:` map of `name → []CIDR` whose names
+are the `peer.site` labels (§35). A single-site deployment configures nothing:
+every estate address is this controller's site. An address matched by no entry
+is `"away"`. There is **no client-supplied location hint**: where a client is,
+is what the network says, so a client cannot talk itself into another site's
+renderers.
 
-- **Level 1 — reuse existing trusted nets.** `http.guest.trusted_nets`
-  (ADR-0094) is already a CIDR allow-list of the estate networks. A source
-  address that falls inside one of those CIDRs is "on the estate"; the
-  controller assigns it to the site whose CIDR range matches, when the ranges
-  are non-overlapping.
-- **Level 2 — optional `sites:` map.** When the trusted-nets CIDRs are not
-  sufficient to name sites distinctly (overlapping ranges, or an operator who
-  wants stable site labels), an optional `sites:` map of `name → []CIDR`
-  assigns a site name to each range. An address matched by no entry in either
-  level is assigned the site label `"away"`.
-
-The client may also send an optional site hint header; the hint is accepted only
-from addresses already matched to a known site (a hotel claiming to be Site A is
-ignored). Unknown source address + no hint = `"away"`.
+`http.guest.trusted_nets` (ADR-0094) is deliberately not reused: it is a guest
+trust allow-list with no site names, and conflating "may browse without an
+identity" with "is at Site B" would couple two decisions that change for
+different reasons.
 
 Renderer lists returned to a client are sorted: the client's own site first,
-then other estate sites, then renderers with no site label.
+then other sites, then renderers with no site label.
 
 ### 3. Route planner — R1, R2, R3
 
@@ -83,7 +78,8 @@ DIRECT/REMUX/TRANSCODE output with a route and controlling party. Inputs:
   (a cheap HTTP GET of its description document, cached briefly, not a
   per-request probe)
 - link capacity facts (operator-declared or passively measured inter-site
-  capacity, in Mbit/s) and the asset's declared bitrate
+  capacity, in Mbit/s, less any share the operator reserves for background
+  transfer such as replication) and the asset's declared bitrate
 
 Three ordered candidates:
 
@@ -102,8 +98,7 @@ met, the planner falls to the existing REMUX/TRANSCODE branch (ADR-0069) or
 returns an explanation with a stable reason code rather than a silent failure.
 
 **R3 — client relay.** No controller can reach the renderer's control URL, but
-the client can (it reported the renderer, and it is still reachable by the
-controller). The client drives the renderer and re-serves the bytes from a
+the client that reported it can, and the client can still reach a controller. The client drives the renderer and re-serves the bytes from a
 client-local HTTP origin, pulling from the controller over the client's existing
 authenticated path. The plan carries `client_must_stay_connected: true`.
 
@@ -152,9 +147,14 @@ scope for this ADR:
   receive from a controller.
 - The bearer token used to authenticate the client's pull from the controller
   is never forwarded to the renderer.
-- A client-reported renderer is not probed or driven by the controller unless
-  the controller can route to it independently. The report from the client is
-  sufficient to list the renderer; it is not sufficient to drive it.
+- **No server-side request forgery.** A client-reported description or control
+  URL makes the controller issue HTTP requests, so the controller fetches one
+  only when its host is a literal address inside a configured site network,
+  over plain HTTP to the renderer's own port, and only the description and
+  AV-transport paths that the description itself names — never a redirect, never
+  a hostname that resolves elsewhere. A reported renderer outside every site
+  network is listed for its reporter and eligible for R3 only; the controller
+  never fetches it.
 
 ### 7. Phasing
 
@@ -179,10 +179,8 @@ is stable. It is noted here but not required.
 - R2 introduces inter-site streaming. Bitrate gating mitigates overload, but an
   operator with a constrained inter-site link should set a declared capacity to
   prevent R2 from being chosen for high-bitrate assets.
-- The `sites:` map (Level 2) is optional. An operator who does not configure it
-  gets correct behaviour for any deployment whose site ranges are already
-  captured by `http.guest.trusted_nets`; only a multi-site operator with
-  overlapping ranges or a need for stable site labels needs it.
+- The `sites:` map is needed only by a multi-site operator; a single-site
+  deployment's behaviour is unchanged.
 - Client-assisted discovery makes the renderer list at the controller
   authoritative across all sites a client can see, but only while at least one
   client is connected. A headless cast (no client present) sees only the
