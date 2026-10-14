@@ -211,6 +211,9 @@ type API struct {
 	sites config.SiteMap
 	// ssdpSearchAddr, when non-empty, binds the M-SEARCH socket.
 	ssdpSearchAddr string
+	// allowLoopbackReports lets the renderer-report SSRF guard accept a
+	// loopback device URL. Tests only (export_test.go); never configurable.
+	allowLoopbackReports bool
 
 	heartbeat  time.Duration
 	streamPoll time.Duration

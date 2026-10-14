@@ -264,6 +264,9 @@ func (m SiteMap) SiteOf(addr netip.Addr) string {
 	return "away"
 }
 
+// Self is the site this controller sits in (peer.site).
+func (m SiteMap) Self() string { return m.peerSite }
+
 // ParseSites parses a sites map from config and returns a SiteMap.
 //
 // Each site name must be non-empty. Every CIDR must parse. No CIDR may appear

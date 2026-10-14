@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/renderer"
 )
 
 // ssrfError is the stable reason code vocabulary for renderer-report rejections.
@@ -29,9 +30,17 @@ const (
 	ssrfCodeUserinfo = "renderer-url-userinfo-not-allowed"
 	// ssrfCodeZeroPort is returned when the port is explicitly "0".
 	ssrfCodeZeroPort = "renderer-url-zero-port"
+	// ssrfCodeSpecialAddr is returned for loopback, link-local, multicast and
+	// unspecified addresses. No renderer lives there, and they are exactly
+	// where an attacker would point us: the controller's own loopback
+	// services and the cloud metadata endpoint (169.254.169.254).
+	ssrfCodeSpecialAddr = "renderer-url-special-address"
 	// ssrfCodeOutsideSites is returned when the IP is not inside any configured site.
 	// The caller may store the entry as r3_only (Phase 2 relay candidate).
 	ssrfCodeOutsideSites = "renderer-url-outside-sites"
+	// ssrfCodeControlHost is returned when a fetched description advertises a
+	// control URL on a different host:port from the description itself.
+	ssrfCodeControlHost = "renderer-control-url-off-host"
 )
 
 // ssrfResult distinguishes the three outcomes of checkRendererURL.
@@ -62,9 +71,13 @@ func (e *rendererURLError) Error() string { return e.detail }
 //   - host must be a literal IP (no hostname resolution)
 //   - no userinfo component
 //   - explicit port must not be "0" (any other port, or no port = default 80, is fine)
+//   - IP must not be loopback, link-local, multicast or unspecified
 //   - IP must be inside a configured site network (or, in single-site mode,
 //     non-public) → ssrfOK; otherwise → ssrfR3Only (deferred relay candidate)
-func checkRendererURL(raw string, sites config.SiteMap) (ssrfResult, *rendererURLError) {
+//
+// allowLoopback exists for tests alone, whose fake devices listen on
+// 127.0.0.1; nothing in configuration can set it.
+func checkRendererURL(raw string, sites config.SiteMap, allowLoopback bool) (ssrfResult, *rendererURLError) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return ssrfRejected, &rendererURLError{
@@ -122,6 +135,16 @@ func checkRendererURL(raw string, sites config.SiteMap) (ssrfResult, *rendererUR
 		}
 	}
 
+	// Special-purpose addresses are refused whatever the site map says, so a
+	// site CIDR written too broadly cannot reopen them.
+	if (ip.IsLoopback() && !allowLoopback) || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+		return ssrfRejected, &rendererURLError{
+			code:   ssrfCodeSpecialAddr,
+			detail: fmt.Sprintf("renderer URL host %s is a loopback, link-local, multicast or unspecified address", ip),
+		}
+	}
+
 	// Site check: the IP must be inside a configured site (or, in single-site
 	// mode, be a non-public address). If it is not, store as r3_only so it can
 	// be relayed in Phase 2, but do NOT fetch it now.
@@ -134,4 +157,32 @@ func checkRendererURL(raw string, sites config.SiteMap) (ssrfResult, *rendererUR
 	}
 
 	return ssrfOK, nil
+}
+
+// checkReportedControlURLs confirms every control URL a client-reported
+// description advertises stays on the host the description was fetched from.
+//
+// A description's controlURL may be absolute, and the play path POSTs SOAP to
+// it. Without this check a device (or anything answering at a LAN address) could
+// hand us a description whose controlURL names some other internal service,
+// and Play would send requests there: the SSRF the location check closed,
+// reopened one hop later.
+func checkReportedControlURLs(location string, rend renderer.Renderer) *rendererURLError {
+	loc, err := url.Parse(location)
+	if err != nil {
+		return &rendererURLError{code: ssrfCodeBadScheme, detail: "renderer URL is not a valid URL"}
+	}
+	for _, svc := range []renderer.Service{rend.AVTransport, rend.ConnectionManager} {
+		if svc.ControlURL == "" {
+			continue
+		}
+		u, err := url.Parse(svc.ControlURL)
+		if err != nil || u.Scheme != "http" || u.User != nil || u.Host != loc.Host {
+			return &rendererURLError{
+				code:   ssrfCodeControlHost,
+				detail: fmt.Sprintf("renderer description names a control URL %q that is not on %s", svc.ControlURL, loc.Host),
+			}
+		}
+	}
+	return nil
 }

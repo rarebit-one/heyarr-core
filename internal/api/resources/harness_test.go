@@ -270,6 +270,8 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Fake renderers are httptest servers on 127.0.0.1 (ADR-0111 SSRF guard).
+	resources.AllowLoopbackReports(api)
 
 	// The public self-enrolment route (ADR-0067), over the same identity store
 	// the Device scheme verifies against — so the acceptance test can walk pair →

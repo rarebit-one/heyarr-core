@@ -135,10 +135,8 @@ func (c *rendererCache) addReported(udn, site, principalID string, rend renderer
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, ok := c.byUDN[udn]; ok {
-		// Update location on the controller-discovered entry only.
-		r := c.byUDN[udn]
-		r.Location = rend.Location
-		c.byUDN[udn] = r
+		// The controller found this device itself; its own copy wins and a
+		// client report must not repoint it.
 		return
 	}
 	if c.reported == nil {
@@ -280,7 +278,7 @@ func (a *API) listRenderers(w http.ResponseWriter, r *http.Request) {
 		views = append(views, RendererView{
 			UDN: rm.r.UDN, Name: rm.r.FriendlyName, Manufacturer: rm.r.Manufacturer,
 			Model: rm.r.ModelName, Location: rm.r.Location,
-			Site: rm.site, DiscoveredBy: rm.discoveredBy,
+			Site: a.rendererSite(rm), DiscoveredBy: rm.discoveredBy,
 		})
 	}
 
@@ -579,7 +577,7 @@ func (a *API) reportRenderer(w http.ResponseWriter, r *http.Request) {
 	identity, _ := httpapi.IdentityFrom(r.Context())
 	principalID := identity.Principal.ID
 
-	result, rerr := checkRendererURL(body.Location, a.sites)
+	result, rerr := checkRendererURL(body.Location, a.sites, a.allowLoopbackReports)
 	switch result {
 	case ssrfRejected:
 		httpapi.Fail(w, r, problem.BadRequest(rerr.detail).WithCode(rerr.code))
@@ -606,6 +604,10 @@ func (a *API) reportRenderer(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpapi.Fail(w, r, problem.New(http.StatusBadGateway, problem.TypeConflict,
 			"Could not fetch renderer description", err.Error()))
+		return
+	}
+	if cerr := checkReportedControlURLs(body.Location, rend); cerr != nil {
+		httpapi.Fail(w, r, problem.BadRequest(cerr.detail).WithCode(cerr.code))
 		return
 	}
 
@@ -957,7 +959,7 @@ func (a *API) RenderersFor(ctx context.Context, refresh bool) ([]RendererView, e
 			Manufacturer: rm.r.Manufacturer,
 			Model:        rm.r.ModelName,
 			Location:     rm.r.Location,
-			Site:         rm.site,
+			Site:         a.rendererSite(rm),
 			DiscoveredBy: rm.discoveredBy,
 		})
 	}
@@ -1039,4 +1041,20 @@ func (a *API) RendererStatusFor(ctx context.Context, udn string) (map[string]any
 		}
 	}
 	return out, nil
+}
+
+// rendererSite is the site a listed renderer sits in. A client-reported entry
+// carries the site it was validated against; a controller-discovered one is
+// placed by the literal IP in its description URL, falling back to this node's
+// own site when that URL names no literal IP.
+func (a *API) rendererSite(rm rendererWithMeta) string {
+	if rm.site != "" {
+		return rm.site
+	}
+	if u, err := url.Parse(rm.r.Location); err == nil {
+		if ip, err := netip.ParseAddr(u.Hostname()); err == nil {
+			return a.sites.SiteOf(ip)
+		}
+	}
+	return a.sites.Self()
 }

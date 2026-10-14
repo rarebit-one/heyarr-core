@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/renderer"
 )
 
 // singleSite is the zero SiteMap (single-site mode, no configured CIDRs).
@@ -87,16 +88,45 @@ func TestCheckRendererURL(t *testing.T) {
 		},
 		// --- single-site OK (non-public) ---
 		{
-			name:       "single-site loopback is OK",
+			name:       "loopback refused",
 			url:        "http://127.0.0.1/desc",
 			sites:      func(t *testing.T) config.SiteMap { return singleSiteMap },
-			wantResult: ssrfOK,
+			wantResult: ssrfRejected,
+			wantCode:   ssrfCodeSpecialAddr,
 		},
 		{
-			name:       "single-site IPv6 link-local is OK",
+			name:       "IPv6 link-local refused",
 			url:        "http://[fe80::1]/desc",
 			sites:      func(t *testing.T) config.SiteMap { return singleSiteMap },
-			wantResult: ssrfOK,
+			wantResult: ssrfRejected,
+			wantCode:   ssrfCodeSpecialAddr,
+		},
+		{
+			name:       "cloud metadata address refused",
+			url:        "http://169.254.169.254/latest/meta-data/",
+			sites:      func(t *testing.T) config.SiteMap { return singleSiteMap },
+			wantResult: ssrfRejected,
+			wantCode:   ssrfCodeSpecialAddr,
+		},
+		{
+			name: "loopback refused even when a site covers it",
+			url:  "http://127.0.0.1:7777/",
+			sites: func(t *testing.T) config.SiteMap {
+				sm, err := config.ParseSites(map[string][]string{"lo": {"127.0.0.0/8"}}, "lo")
+				if err != nil {
+					t.Fatal(err)
+				}
+				return sm
+			},
+			wantResult: ssrfRejected,
+			wantCode:   ssrfCodeSpecialAddr,
+		},
+		{
+			name:       "multicast refused",
+			url:        "http://239.255.255.250:1900/",
+			sites:      func(t *testing.T) config.SiteMap { return singleSiteMap },
+			wantResult: ssrfRejected,
+			wantCode:   ssrfCodeSpecialAddr,
 		},
 		{
 			name:       "single-site private is OK",
@@ -131,7 +161,7 @@ func TestCheckRendererURL(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sm := tc.sites(t)
-			result, rerr := checkRendererURL(tc.url, sm)
+			result, rerr := checkRendererURL(tc.url, sm, false)
 			if result != tc.wantResult {
 				t.Errorf("result = %v, want %v", result, tc.wantResult)
 			}
@@ -167,13 +197,40 @@ func TestCheckRendererURLRedirectNotFollowed(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	// The server is on 127.0.0.1 (loopback) — single-site maps that to ssrfOK.
+	// The server is on 127.0.0.1 (loopback); the test seam admits it.
 	// The guard is pure; it must not fetch anything.
-	result, rerr := checkRendererURL(srv.URL+"/desc", singleSiteMap)
+	result, rerr := checkRendererURL(srv.URL+"/desc", singleSiteMap, true)
 	if result != ssrfOK {
 		t.Errorf("result = %v, want ssrfOK; rerr = %v", result, rerr)
 	}
 	if redirected {
 		t.Error("checkRendererURL should not have made an HTTP request")
+	}
+}
+
+func TestCheckReportedControlURLs(t *testing.T) {
+	const loc = "http://192.0.2.10:9197/dmr"
+	cases := []struct {
+		name    string
+		control string
+		wantErr bool
+	}{
+		{"same host and port", "http://192.0.2.10:9197/upnp/control/AVTransport1", false},
+		{"other host", "http://192.0.2.11:9197/upnp/control/AVTransport1", true},
+		{"loopback", "http://127.0.0.1:7777/api/v1/admin", true},
+		{"same host other port", "http://192.0.2.10:80/ctl", true},
+		{"https", "https://192.0.2.10:9197/ctl", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rend := renderer.Renderer{AVTransport: renderer.Service{Type: "urn:schemas-upnp-org:service:AVTransport:1", ControlURL: tc.control}}
+			err := checkReportedControlURLs(loc, rend)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err != nil && err.code != ssrfCodeControlHost {
+				t.Errorf("code = %q, want %q", err.code, ssrfCodeControlHost)
+			}
+		})
 	}
 }
