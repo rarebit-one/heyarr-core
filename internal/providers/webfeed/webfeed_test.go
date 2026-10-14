@@ -3,6 +3,7 @@ package webfeed
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -156,5 +157,71 @@ func TestCapabilityIsMetadataOnly(t *testing.T) {
 	caps := newClient(t).Capabilities()
 	if len(caps) != 1 || caps[0] != providers.CapabilityMetadata {
 		t.Errorf("capabilities = %v, want [metadata]", caps)
+	}
+}
+
+// A feed host whose WAF rejects requests without a descriptive User-Agent returns
+// 406 for the default Go-http-client UA. The adapter must send a heyarr/… UA so
+// that such a host answers 200.
+func TestEnumerateSendsDescriptiveUserAgent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Header.Get("User-Agent"), "heyarr/") {
+			w.WriteHeader(http.StatusNotAcceptable) // 406
+			return
+		}
+		w.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = w.Write([]byte(rssXML))
+	}))
+	t.Cleanup(srv.Close)
+
+	items, err := newClient(t).Enumerate(t.Context(), srv.URL)
+	if err != nil {
+		t.Fatalf("Enumerate against a UA-gating server: %v", err)
+	}
+	if len(items) == 0 {
+		t.Fatal("got no items from a server that requires a descriptive UA")
+	}
+}
+
+// atomAmpersandXML is a minimal Atom feed with a raw & in both a title element
+// and text content — a common authoring error that strict XML rejects but every
+// real feed reader tolerates.
+const atomAmpersandXML = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>tag:example.com,2026:ampersand-post</id>
+    <title>Cinnamon Buns & Commit Bits</title>
+    <link rel="alternate" href="https://example.com/buns-and-bits"/>
+    <published>2026-09-03T10:00:00Z</published>
+  </entry>
+</feed>`
+
+// A feed with a bare & (no semicolon) in element text must parse successfully
+// rather than returning an XML syntax error that would kill every subsequent
+// poll of that source.
+func TestEnumerateParsesLenientAtom(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Header.Get("User-Agent"), "heyarr/") {
+			w.WriteHeader(http.StatusNotAcceptable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/atom+xml")
+		_, _ = w.Write([]byte(atomAmpersandXML))
+	}))
+	t.Cleanup(srv.Close)
+
+	items, err := newClient(t).Enumerate(t.Context(), srv.URL)
+	if err != nil {
+		t.Fatalf("Enumerate with bare & in feed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1: %+v", len(items), items)
+	}
+	if !strings.Contains(items[0].Title, "&") {
+		t.Errorf("title %q does not contain &", items[0].Title)
+	}
+	wantLink := followed.WebCaptureSourceScheme + "https://example.com/buns-and-bits"
+	if items[0].EnclosureURL() != wantLink {
+		t.Errorf("enclosure = %q, want %q", items[0].EnclosureURL(), wantLink)
 	}
 }

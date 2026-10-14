@@ -30,6 +30,7 @@
 package webfeed
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"errors"
@@ -39,6 +40,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
@@ -126,6 +128,7 @@ func (c *Client) Enumerate(ctx context.Context, ref string) ([]followed.FeedItem
 		return nil, fmt.Errorf("webfeed: building the feed request: %w", err)
 	}
 	req.Header.Set("Accept", "application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.8")
+	req.Header.Set("User-Agent", fmt.Sprintf("heyarr/%s ( +https://github.com/rarebit-one/heyarr-core )", buildinfo.Version))
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -192,6 +195,13 @@ type entry struct {
 // Sniffing rather than trying both keeps a malformed feed an honest error: a
 // document that is neither is reported as such, not silently read as an empty
 // feed that would look like a publication with no articles.
+//
+// Both the sniff and the full parse use a lenient decoder (Strict=false,
+// Entity=HTMLEntity) so that a feed containing a raw & in text or attribute
+// values — a common real-world defect — is tolerated rather than rejected with
+// a permanent XML syntax error. AutoClose is intentionally NOT set: the HTML
+// auto-close list includes <link>, which would empty the RSS/Atom <link> element
+// that carries the article URL.
 func parseFeed(raw []byte) ([]entry, error) {
 	root, err := rootElement(raw)
 	if err != nil {
@@ -200,7 +210,7 @@ func parseFeed(raw []byte) ([]entry, error) {
 	switch root {
 	case "rss", "rdf":
 		var doc rssFeed
-		if err := xml.Unmarshal(raw, &doc); err != nil {
+		if err := lenientDecode(raw, &doc); err != nil {
 			return nil, fmt.Errorf("webfeed: parsing the RSS feed: %w", err)
 		}
 		channelItems := doc.channelItems()
@@ -216,7 +226,7 @@ func parseFeed(raw []byte) ([]entry, error) {
 		return out, nil
 	case "feed":
 		var doc atomFeed
-		if err := xml.Unmarshal(raw, &doc); err != nil {
+		if err := lenientDecode(raw, &doc); err != nil {
 			return nil, fmt.Errorf("webfeed: parsing the Atom feed: %w", err)
 		}
 		out := make([]entry, 0, len(doc.Entries))
@@ -234,9 +244,25 @@ func parseFeed(raw []byte) ([]entry, error) {
 	}
 }
 
+// lenientDecode unmarshals raw XML into v using a lenient decoder that accepts
+// bare & entities (a common authoring defect in real-world feeds). It does NOT
+// set AutoClose: xml.HTMLAutoClose treats <link> as a void self-closing element,
+// which would silently empty the RSS <link> and Atom <link> elements that carry
+// the article URL. Entity alone is the right knob here.
+func lenientDecode(raw []byte, v any) error {
+	dec := xml.NewDecoder(bytes.NewReader(raw))
+	dec.Strict = false
+	dec.Entity = xml.HTMLEntity
+	return dec.Decode(v)
+}
+
 // rootElement returns the local name of the document's first element.
+// It uses the same lenient decoder as parseFeed so that a feed with a bare &
+// before or inside its root tag does not fail the sniff pass.
 func rootElement(raw []byte) (string, error) {
-	dec := xml.NewDecoder(strings.NewReader(string(raw)))
+	dec := xml.NewDecoder(bytes.NewReader(raw))
+	dec.Strict = false
+	dec.Entity = xml.HTMLEntity
 	for {
 		tok, err := dec.Token()
 		if err != nil {
