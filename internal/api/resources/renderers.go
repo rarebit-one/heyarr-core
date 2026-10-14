@@ -112,16 +112,6 @@ func (c *rendererCache) replace(found []renderer.Renderer, now time.Time) {
 	c.refreshed = now
 }
 
-func (c *rendererCache) list() []renderer.Renderer {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]renderer.Renderer, 0, len(c.byUDN))
-	for _, r := range c.byUDN {
-		out = append(out, r)
-	}
-	return out
-}
-
 func (c *rendererCache) get(udn string) (renderer.Renderer, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -326,7 +316,7 @@ func (a *API) listRenderers(w http.ResponseWriter, r *http.Request) {
 
 // renderers refreshes the renderer cache when needed. It is called for its
 // side-effect of populating a.rendererCache; callers read back results via
-// a.rendererCache.list() / a.rendererCache.get().
+// a.rendererCache.listAllFor() / a.rendererCache.get().
 func (a *API) renderers(ctx context.Context, refresh bool) error {
 	if a.rendererCache == nil {
 		return errors.New("renderer control is not enabled on this node")
