@@ -218,11 +218,6 @@ type VaultCruciform struct {
 	PairFile string `koanf:"pair_file"`
 }
 
-// Notify configures the wake plane this node calls (ADR-0102). The subscription
-// registry and the fan-out both live in the shared plane
-// (void-which-binds-notify); this node only asks it to enqueue a wake, over the
-// plane's bearer-gated POST /v1/enqueue and /v1/enqueue-unwrap.
-//
 // Renderers holds renderer-discovery tuning (ADR-0111 phase 1a).
 type Renderers struct {
 	// SsdpSearchAddr, when set, binds the M-SEARCH socket to this host:port so
@@ -305,6 +300,11 @@ func ParseSites(sites map[string][]string, peerSite string) (SiteMap, error) {
 	return SiteMap{entries: entries, peerSite: peerSite}, nil
 }
 
+// Notify configures the wake plane this node calls (ADR-0102). The subscription
+// registry and the fan-out both live in the shared plane
+// (void-which-binds-notify); this node only asks it to enqueue a wake, over the
+// plane's bearer-gated POST /v1/enqueue and /v1/enqueue-unwrap.
+//
 // The enqueue bearer is a secret, so it is deliberately NOT a configuration key
 // (`config print` holds no secrets): it is read from EnqueueTokenFile, else from
 // the HEYARR_NOTIFY_ENQUEUE_TOKEN environment variable — see EnqueueToken.

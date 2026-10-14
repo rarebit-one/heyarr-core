@@ -263,7 +263,7 @@ type RendererView struct {
 func (a *API) listRenderers(w http.ResponseWriter, r *http.Request) {
 	refresh := r.URL.Query().Get("refresh") == "true"
 	// Trigger SSDP sweep to populate / refresh controller-discovered entries.
-	if _, err := a.renderers(r.Context(), refresh); err != nil {
+	if err := a.renderers(r.Context(), refresh); err != nil {
 		a.fail(w, r, "renderers", err)
 		return
 	}
@@ -324,13 +324,15 @@ func (a *API) listRenderers(w http.ResponseWriter, r *http.Request) {
 	a.write(w, r, http.StatusOK, map[string]any{"client_site": clientSite, "renderers": views})
 }
 
-// renderers returns the known renderers, discovering when the cache is cold.
-func (a *API) renderers(ctx context.Context, refresh bool) ([]renderer.Renderer, error) {
+// renderers refreshes the renderer cache when needed. It is called for its
+// side-effect of populating a.rendererCache; callers read back results via
+// a.rendererCache.list() / a.rendererCache.get().
+func (a *API) renderers(ctx context.Context, refresh bool) error {
 	if a.rendererCache == nil {
-		return nil, errors.New("renderer control is not enabled on this node")
+		return errors.New("renderer control is not enabled on this node")
 	}
 	if !refresh && a.rendererCache.fresh(a.now()) {
-		return a.rendererCache.list(), nil
+		return nil
 	}
 	sweep, cancel := context.WithTimeout(ctx, discoveryTimeout*2)
 	defer cancel()
@@ -352,7 +354,7 @@ func (a *API) renderers(ctx context.Context, refresh bool) ([]renderer.Renderer,
 		a.log.Warn("renderer discovery", "error", p)
 	}
 	a.rendererCache.replace(found, a.now())
-	return a.rendererCache.list(), nil
+	return nil
 }
 
 // controllerFor resolves a UDN to something that can be driven.
@@ -365,7 +367,7 @@ func (a *API) controllerFor(ctx context.Context, udn string) (renderer.Renderer,
 		// One rediscovery before giving up. The common case is a controller
 		// that restarted, or a client holding a UDN from yesterday, and
 		// failing that with "unknown renderer" would be true and useless.
-		if _, err := a.renderers(ctx, true); err != nil {
+		if err := a.renderers(ctx, true); err != nil {
 			return renderer.Renderer{}, nil, err
 		}
 		if rend, ok = a.rendererCache.get(udn); !ok {
@@ -950,7 +952,7 @@ func (a *API) assetTitle(ctx context.Context, assetID string) (title, mime strin
 // RenderersFor lists what can be played to (MCP context — no HTTP request, so
 // client site is not known; Site/DiscoveredBy are populated from cache metadata).
 func (a *API) RenderersFor(ctx context.Context, refresh bool) ([]RendererView, error) {
-	if _, err := a.renderers(ctx, refresh); err != nil {
+	if err := a.renderers(ctx, refresh); err != nil {
 		return nil, err
 	}
 	// In MCP context there is no HTTP request, so we have no principal or
