@@ -127,10 +127,9 @@ func (c *rendererCache) fresh(now time.Time) bool {
 
 // addReported stores a client-reported renderer.
 //
-// If the UDN is already in the controller-discovered cache, the location is
-// updated there (the controller's copy is never downgraded to a client entry),
-// and the reported map is left unchanged. Otherwise the entry is stored in
-// reported (or refreshed if it already exists there).
+// If the UDN is already in the controller-discovered cache the report is
+// ignored: the controller's own copy wins and a client cannot repoint it.
+// Otherwise the entry is stored in reported (or refreshed if already there).
 func (c *rendererCache) addReported(udn, site, principalID string, rend renderer.Renderer, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
