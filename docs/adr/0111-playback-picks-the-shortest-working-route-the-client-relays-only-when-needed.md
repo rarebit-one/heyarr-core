@@ -1,6 +1,6 @@
 # 0111. Playback picks the shortest working route; the client relays only when needed
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-10-14
 **Builds on:** [ADR-0024](0024-one-consumption-session-model.md) (one consumption session), [ADR-0030](0030-replication-is-a-destination-pull.md) (replication is a destination pull), [ADR-0040](0040-a-renderer-fetches-bytes-with-a-capability-not-a-credential.md) (capability URL trust root), [ADR-0069](0069-a-client-that-cannot-decode-the-source-gets-an-on-the-fly-repackage.md) (repackaged stream), [ADR-0079](0079-renderers-get-a-plain-http-origin-of-their-own.md) (plain-HTTP render origin), [ADR-0094](0094-a-guest-on-a-trusted-network-watches-without-an-identity.md) (trusted networks)
 
@@ -77,9 +77,12 @@ DIRECT/REMUX/TRANSCODE output with a route and controlling party. Inputs:
 - reachability: whether a controller can reach the renderer's control URL
   (a cheap HTTP GET of its description document, cached briefly, not a
   per-request probe)
-- link capacity facts (operator-declared or passively measured inter-site
-  capacity, in Mbit/s, less any share the operator reserves for background
-  transfer such as replication) and the asset's declared bitrate
+- link capacity: **operator-declared** per site pair, in Mbit/s, with a
+  headroom factor applied to the asset's bitrate. Not measured live: the
+  controller does not try to observe competing traffic. Background transfer
+  that shares the link (replication) is expected to yield to interactive
+  traffic by its own mechanism, so the declaration is the link's usable
+  ceiling, not ceiling minus a guess at current load
 
 Three ordered candidates:
 
@@ -93,9 +96,17 @@ traffic. Preferred unconditionally when available.
 controller elsewhere can reach the renderer's control URL. The controller drives
 it; bytes come from the nearest blob holder whose render address falls inside a
 known site network and is therefore reachable by the renderer. Gated on:
-`asset_bitrate_kbps ≤ declared_capacity_kbps` for the inter-site link; if not
-met, the planner falls to the existing REMUX/TRANSCODE branch (ADR-0069) or
-returns an explanation with a stable reason code rather than a silent failure.
+`asset_bitrate × headroom ≤ declared capacity` for the inter-site link. If not
+met, the planner **refuses with a stable reason code** and lists the
+alternatives that actually exist, never a silent downgrade and never "play
+anyway and stutter":
+- another held asset of the same work that does fit (a lower-resolution copy);
+- "copy it to the renderer's site first", which is a destination pull (ADR-0030)
+  after which R1 applies; offered only when that site's controller is an
+  enrolled peer;
+- a transcode, once the planner can produce one. TRANSCODE is not built today,
+  and when it is, it joins this list as an explicit choice rather than an
+  automatic fallback.
 
 **R3 — client relay.** No controller can reach the renderer's control URL, but
 the client that reported it can, and the client can still reach a controller. The client drives the renderer and re-serves the bytes from a
@@ -162,7 +173,11 @@ scope for this ADR:
 No new replication is required: R2 streams across sites without requiring a
 local replica at the renderer's site.
 
-**Phase 2:** R3 client relay.
+**Phase 2:** R3 client relay, Cast before DLNA. A hotel television is far more
+often a Cast receiver than a DLNA renderer, and Cast's receiver-fetches-a-URL
+model fits the relay directly. Phase 2 assumes the client reaches a controller
+over its existing authenticated path (in practice a VPN the client already runs);
+it does not depend on any particular away-access product.
 
 Peered renderer federation — peers sharing their discovered renderers over the
 peer replication surface — is the natural next step once multi-peer enrolment
