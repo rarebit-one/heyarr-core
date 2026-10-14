@@ -213,12 +213,12 @@ func (c *WebCaptureClient) Add(_ context.Context, source secret.Value) (provider
 	if !strings.HasPrefix(raw, followed.WebCaptureSourceScheme) {
 		return providers.Transfer{}, ErrNotWebCaptureSource
 	}
-	// Parse the source body, which may carry a feed URL after a null-byte separator.
-	// Format: webcapture:<articleURL>[\x00feed:<feedURL>]
-	// A legacy source without the null byte is treated as article-URL only (no fallback).
+	// Parse the source body, which may carry a feed URL after a tab separator.
+	// Format: webcapture:<articleURL>[\tfeed:<feedURL>]
+	// A legacy source without the tab is treated as article-URL only (no fallback).
 	body := strings.TrimPrefix(raw, followed.WebCaptureSourceScheme)
 	article, feedURL := body, ""
-	if idx := strings.IndexByte(body, '\x00'); idx >= 0 {
+	if idx := strings.IndexByte(body, '\t'); idx >= 0 {
 		article = body[:idx]
 		rest := body[idx+1:]
 		if strings.HasPrefix(rest, "feed:") {

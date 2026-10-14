@@ -89,7 +89,7 @@ func webCaptureSource(article string) secret.Value {
 // webCaptureFeedSource builds the new source format that carries both the
 // article URL and the feed URL, exactly as providers/webfeed.Enumerate emits.
 func webCaptureFeedSource(article, feedURL string) secret.Value {
-	return secret.Value(followed.WebCaptureSourceScheme + article + "\x00feed:" + feedURL)
+	return secret.Value(followed.WebCaptureSourceScheme + article + "\tfeed:" + feedURL)
 }
 
 // A source that is not web-capture-tagged is refused, so the client composes
@@ -452,7 +452,7 @@ func TestFeedSourceRoundTrip(t *testing.T) {
 		t.Fatalf("source %q does not start with webcapture scheme", src)
 	}
 	body := strings.TrimPrefix(src, followed.WebCaptureSourceScheme)
-	parts := strings.SplitN(body, "\x00", 2)
+	parts := strings.SplitN(body, "\t", 2)
 	if parts[0] != article {
 		t.Errorf("article = %q, want %q", parts[0], article)
 	}

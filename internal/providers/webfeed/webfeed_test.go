@@ -104,7 +104,7 @@ func TestEnumerateRSS(t *testing.T) {
 	}
 	got := items[0].EnclosureURL()
 	wantPrefix := followed.WebCaptureSourceScheme + "https://journal.example.com/first"
-	if !strings.HasPrefix(got, wantPrefix) || !strings.Contains(got, "\x00feed:"+srv.URL) {
+	if !strings.HasPrefix(got, wantPrefix) || !strings.Contains(got, "\tfeed:"+srv.URL) {
 		t.Errorf("enclosure = %q, want prefix %q and feed ref %q", got, wantPrefix, srv.URL)
 	}
 }
@@ -122,7 +122,7 @@ func TestEnumerateAtom(t *testing.T) {
 	}
 	gotSecond := items[1].EnclosureURL()
 	wantSecondPrefix := followed.WebCaptureSourceScheme + "https://journal.example.com/second"
-	if !strings.HasPrefix(gotSecond, wantSecondPrefix) || !strings.Contains(gotSecond, "\x00feed:"+srv.URL) {
+	if !strings.HasPrefix(gotSecond, wantSecondPrefix) || !strings.Contains(gotSecond, "\tfeed:"+srv.URL) {
 		t.Errorf("second enclosure = %q, want prefix %q and feed ref %q", gotSecond, wantSecondPrefix, srv.URL)
 	}
 	if items[1].Title != "Second Article" {
@@ -224,7 +224,7 @@ func TestEnumerateParsesLenientAtom(t *testing.T) {
 	}
 	gotEnc := items[0].EnclosureURL()
 	wantEncPrefix := followed.WebCaptureSourceScheme + "https://example.com/buns-and-bits"
-	if !strings.HasPrefix(gotEnc, wantEncPrefix) || !strings.Contains(gotEnc, "\x00feed:"+srv.URL) {
+	if !strings.HasPrefix(gotEnc, wantEncPrefix) || !strings.Contains(gotEnc, "\tfeed:"+srv.URL) {
 		t.Errorf("enclosure = %q, want prefix %q and feed ref %q", gotEnc, wantEncPrefix, srv.URL)
 	}
 }

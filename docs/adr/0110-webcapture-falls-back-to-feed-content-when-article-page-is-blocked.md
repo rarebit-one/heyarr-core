@@ -38,12 +38,17 @@ the transfer fails with the **original page error**, not the fallback error.
 ADR-0063 defined the source as `webcapture:<articleURL>`.  This ADR extends it to:
 
 ```
-webcapture:<articleURL>\x00feed:<feedURL>
+webcapture:<articleURL>\tfeed:<feedURL>
 ```
 
-A null byte (`\x00`) is the separator. A null byte is never valid in a URL
-(RFC 3986 §2), so the presence of `\x00` unambiguously distinguishes the new form.
-Legacy sources (no null byte) parse exactly as before — no fallback, no feed fetch.
+A tab (`\t`) is the separator. A tab is never valid in a URL (RFC 3986 §2), and
+feed adapters trim link whitespace, so its presence unambiguously marks the new form.
+A NUL byte would give the same guarantee, but this string is persisted as SQLite
+`TEXT` (`release_candidates.source`) and exposed through the API as the item's
+`enclosure_url`, where an embedded NUL truncates SQL functions, the sqlite3 CLI and
+many JSON/terminal consumers. A tab survives all of them.
+
+Legacy sources (no tab) parse exactly as before — no fallback, no feed fetch.
 
 The `sourceKey()` SHA-256 hashes the full string, so the same article URL but a
 different feed URL produces a different transfer ID; this is intentional and

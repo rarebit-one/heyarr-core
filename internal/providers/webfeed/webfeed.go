@@ -23,12 +23,12 @@
 //
 // # The source carries the feed URL alongside the article URL
 //
-// Each item's source is encoded as webcapture:<articleURL>\x00feed:<feedURL>.
-// The null-byte separator is unambiguous — a null byte is never valid in a URL.
+// Each item's source is encoded as webcapture:<articleURL>\tfeed:<feedURL>.
+// The tab separator is unambiguous — a tab is never valid in a URL (RFC 3986).
 // The download client (downloads/webcapture) parses this form and uses the feed
 // URL to fetch the feed's own full HTML content when the article page returns a
 // blocking HTTP error (ADR-0110). Legacy sources without the feed segment are
-// parsed as before: no null byte means articleURL only, no fallback.
+// parsed as before: no tab means articleURL only, no fallback.
 //
 // # It is never exercised in CI against a live feed
 //
@@ -121,7 +121,7 @@ func (c *Client) Check(_ context.Context) providers.Health {
 //
 // It fetches the feed, delegates parsing to webfeedparse, and maps each entry to
 // a FeedItem keyed by the entry's guid/id (falling back to its link), carrying
-// webcapture:<articleURL>\x00feed:<feedURL> in AttrEnclosureURL so the poll
+// webcapture:<articleURL>\tfeed:<feedURL> in AttrEnclosureURL so the poll
 // projects it as a direct release the KindWebCapture client archives. The feed
 // URL is embedded in the source so the download client can fall back to the
 // feed's own article content when the article page is blocked (ADR-0110).
@@ -181,7 +181,7 @@ func (c *Client) Enumerate(ctx context.Context, ref string) ([]followed.FeedItem
 
 		// Embed the feed URL in the source so the download client can fall back
 		// to the feed's own content when the article page is blocked (ADR-0110).
-		source := followed.WebCaptureSourceScheme + article + "\x00feed:" + ref
+		source := followed.WebCaptureSourceScheme + article + "\tfeed:" + ref
 
 		items = append(items, followed.FeedItem{
 			Key:         key,
