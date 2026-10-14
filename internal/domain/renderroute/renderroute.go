@@ -67,7 +67,7 @@ type Input struct {
 	RenderBaseURL string
 }
 
-// source mirrors the fields of routing.Candidate that Plan needs, without
+// Source mirrors the fields of routing.Candidate that Plan needs, without
 // importing the routing package (which would create a cross-package dependency
 // from an inner domain package).
 type Source struct {
