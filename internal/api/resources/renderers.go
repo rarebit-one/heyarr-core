@@ -381,8 +381,10 @@ func (a *API) controllerFor(ctx context.Context, udn string) (renderer.Renderer,
 	return rend, ctrl, err
 }
 
-var errNoSuchRenderer = errors.New("no renderer with that id answered; it may be switched off")
-var errR3OnlyRenderer = errors.New("renderer is r3_only: relay not implemented yet")
+var (
+	errNoSuchRenderer = errors.New("no renderer with that id answered; it may be switched off")
+	errR3OnlyRenderer = errors.New("renderer is r3_only: relay not implemented yet")
+)
 
 // playOnRendererRequest is the POST /renderers/{udn}/play body.
 type playOnRendererRequest struct {

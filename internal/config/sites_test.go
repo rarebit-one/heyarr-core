@@ -18,15 +18,15 @@ func TestSiteOfSingleSite(t *testing.T) {
 		addr string
 		want string
 	}{
-		{"10.0.0.1", "home"},       // private
-		{"172.16.5.1", "home"},     // private
-		{"192.168.1.1", "home"},    // private
-		{"127.0.0.1", "home"},      // loopback
-		{"::1", "home"},            // IPv6 loopback
-		{"169.254.1.1", "home"},    // link-local unicast
-		{"203.0.113.1", "away"},    // documentation range (public)
-		{"198.51.100.1", "away"},   // documentation range (public)
-		{"203.0.113.200", "away"},  // TEST-NET-3 (public, RFC 5737)
+		{"10.0.0.1", "home"},      // private
+		{"172.16.5.1", "home"},    // private
+		{"192.168.1.1", "home"},   // private
+		{"127.0.0.1", "home"},     // loopback
+		{"::1", "home"},           // IPv6 loopback
+		{"169.254.1.1", "home"},   // link-local unicast
+		{"203.0.113.1", "away"},   // documentation range (public)
+		{"198.51.100.1", "away"},  // documentation range (public)
+		{"203.0.113.200", "away"}, // TEST-NET-3 (public, RFC 5737)
 	}
 	for _, tc := range cases {
 		addr, err := netip.ParseAddr(tc.addr)
@@ -58,10 +58,10 @@ func TestSiteOfMultiSite(t *testing.T) {
 		{"192.0.2.1", "site-a"},
 		{"192.0.2.254", "site-a"},
 		{"198.51.100.1", "site-b"},
-		{"10.0.0.1", "away"},         // private but not in any configured site
-		{"127.0.0.1", "away"},        // loopback but not in any configured site
-		{"203.0.113.1", "away"},      // TEST-NET-3 not in any site
-		{"203.0.113.200", "away"},    // TEST-NET-3 not in any site (public, RFC 5737)
+		{"10.0.0.1", "away"},      // private but not in any configured site
+		{"127.0.0.1", "away"},     // loopback but not in any configured site
+		{"203.0.113.1", "away"},   // TEST-NET-3 not in any site
+		{"203.0.113.200", "away"}, // TEST-NET-3 not in any site (public, RFC 5737)
 	}
 	for _, tc := range cases {
 		addr, err := netip.ParseAddr(tc.addr)

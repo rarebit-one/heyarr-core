@@ -38,9 +38,9 @@ const (
 type ssrfResult int
 
 const (
-	ssrfOK        ssrfResult = iota // URL is safe to fetch
-	ssrfR3Only                      // IP outside sites — r3_only candidate, not fetchable now
-	ssrfRejected                    // Hard rejection (scheme, hostname, etc.)
+	ssrfOK       ssrfResult = iota // URL is safe to fetch
+	ssrfR3Only                     // IP outside sites — r3_only candidate, not fetchable now
+	ssrfRejected                   // Hard rejection (scheme, hostname, etc.)
 )
 
 // rendererURLError carries a stable code alongside the human-readable detail.
