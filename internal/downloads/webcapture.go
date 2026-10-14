@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/net/html"
 
+	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -391,6 +392,7 @@ func (c *WebCaptureClient) fetch(ctx context.Context, rawURL string) ([]byte, st
 	if err != nil {
 		return nil, "", errors.New("could not build a request for a resource")
 	}
+	req.Header.Set("User-Agent", fmt.Sprintf("heyarr/%s ( +https://github.com/rarebit-one/heyarr-core )", buildinfo.Version))
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, "", errors.New("a resource could not be fetched")

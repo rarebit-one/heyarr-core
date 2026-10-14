@@ -219,3 +219,33 @@ func TestNewWebCaptureRefusesNoDir(t *testing.T) {
 		t.Fatal("a web-capture client with no dir must be refused")
 	}
 }
+
+// A feed host whose WAF returns 404 to Go's default User-Agent but 200 to a
+// descriptive heyarr/… UA must still yield a successful capture.
+func TestWebCaptureSendsDescriptiveUserAgent(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Header.Get("User-Agent"), "heyarr/") {
+			// Simulate a WAF that rejects Go's default UA.
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><html><body><h1>Article</h1></body></html>`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	c := newWebCaptureClient(t)
+	added, err := c.Add(context.Background(), webCaptureSource(srv.URL+"/article"))
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	final := waitWebCapture(t, c, added.ID)
+	if final.Error != "" {
+		t.Fatalf("capture errored against a UA-gating server: %s", final.Error)
+	}
+	if !final.Done {
+		t.Fatal("capture did not complete against a UA-gating server")
+	}
+}

@@ -41,6 +41,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
@@ -134,6 +135,7 @@ func (c *Client) Enumerate(ctx context.Context, ref string) ([]followed.FeedItem
 		return nil, fmt.Errorf("youtube: building the feed request: %w", err)
 	}
 	req.Header.Set("Accept", "application/atom+xml, application/xml;q=0.9, */*;q=0.8")
+	req.Header.Set("User-Agent", fmt.Sprintf("heyarr/%s ( +https://github.com/rarebit-one/heyarr-core )", buildinfo.Version))
 
 	resp, err := c.http.Do(req)
 	if err != nil {
