@@ -1692,6 +1692,47 @@ paths:
         '200':
           description: What answered.
         '401': { $ref: "#/components/responses/Unauthorized" }
+  /api/v1/renderers/reported:
+    post:
+      tags: [playback]
+      operationId: reportRenderer
+      summary: Report a renderer the client can see (ADR-0111 phase 1a).
+      description: >-
+        A client that can see a UPnP renderer on its own network segment
+        supplies its HTTP description URL. The controller validates the URL
+        against SSRF rules, fetches and caches the device description, and
+        associates the entry with the reporting client's site.
+
+
+        If the device IP falls outside all configured site networks the
+        controller cannot fetch it directly; the response is `202 Accepted`
+        with `r3_only: true`, marking it as a candidate for the Phase 2
+        relay path.
+
+
+        The URL must contain a literal IP address (no hostnames). Redirects
+        are not followed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [location]
+              properties:
+                location:
+                  type: string
+                  description: HTTP URL of the renderer's UPnP description document (literal IP).
+      responses:
+        '200':
+          description: Renderer fetched and cached.
+        '202':
+          description: Accepted as r3_only (device outside all site networks).
+        '400':
+          description: Missing or rejected location (SSRF guard, non-literal host, etc.).
+        '502':
+          description: The renderer description URL did not respond.
+        '401': { $ref: "#/components/responses/Unauthorized" }
   /api/v1/renderers/{udn}/status:
     parameters:
       - name: udn
