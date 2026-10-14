@@ -26,7 +26,7 @@ func TestSiteOfSingleSite(t *testing.T) {
 		{"169.254.1.1", "home"},    // link-local unicast
 		{"203.0.113.1", "away"},    // documentation range (public)
 		{"198.51.100.1", "away"},   // documentation range (public)
-		{"8.8.8.8", "away"},        // public
+		{"203.0.113.200", "away"},  // TEST-NET-3 (public, RFC 5737)
 	}
 	for _, tc := range cases {
 		addr, err := netip.ParseAddr(tc.addr)
@@ -61,7 +61,7 @@ func TestSiteOfMultiSite(t *testing.T) {
 		{"10.0.0.1", "away"},         // private but not in any configured site
 		{"127.0.0.1", "away"},        // loopback but not in any configured site
 		{"203.0.113.1", "away"},      // TEST-NET-3 not in any site
-		{"8.8.8.8", "away"},          // public not in any site
+		{"203.0.113.200", "away"},    // TEST-NET-3 not in any site (public, RFC 5737)
 	}
 	for _, tc := range cases {
 		addr, err := netip.ParseAddr(tc.addr)
