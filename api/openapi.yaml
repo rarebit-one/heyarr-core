@@ -1788,10 +1788,81 @@ paths:
       responses:
         '200':
           description: Playing.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id: { type: string }
+                  renderer:
+                    type: object
+                    properties:
+                      udn: { type: string }
+                      name: { type: string }
+                      model: { type: string }
+                  asset_id: { type: string }
+                  title: { type: string }
+                  content_type: { type: string }
+                  route:
+                    type: string
+                    description: >-
+                      The ADR-0111 route chosen: "r1" (direct, same site) or
+                      "r2" (cross-site link). Empty when routing was skipped.
+                  route_reason_code:
+                    type: string
+                    description: >-
+                      Machine-readable reason code for the route decision.
+                      Clients branch on this, not on `route_reason`.
+                  route_reason:
+                    type: string
+                    description: Human-readable explanation of the route decision.
         '409':
           description: >-
-            Nothing to play from — most often a replica on another peer, since
-            a capability is only valid at the peer that signed it (ADR-0040).
+            Nothing to play from, or the route planner refused (ADR-0111).
+            The `code` field identifies the refusal reason; `alternatives`
+            lists options the client can offer (a smaller copy or waiting for
+            replication to the renderer's site).
+          content:
+            application/problem+json:
+              schema:
+                type: object
+                properties:
+                  type: { type: string }
+                  title: { type: string }
+                  status: { type: integer }
+                  detail: { type: string }
+                  code:
+                    type: string
+                    description: >-
+                      Stable machine-readable refusal code, e.g.
+                      `route-no-source`, `route-link-saturated`,
+                      `route-no-source-at-site`.
+                  alternatives:
+                    type: array
+                    description: >-
+                      Playback options the client can offer when the route is
+                      refused (ADR-0111 §R2). Empty for non-route refusals.
+                    items:
+                      type: object
+                      properties:
+                        kind:
+                          type: string
+                          description: >-
+                            `smaller_copy` — play a lower-bitrate asset that
+                            fits the link; `copy_to_site_first` — wait for a
+                            replica to land at the renderer's site.
+                        asset_id:
+                          type: string
+                          description: Set for `smaller_copy` alternatives.
+                        height_px:
+                          type: integer
+                          description: Set for `smaller_copy` alternatives.
+                        bitrate_kbps:
+                          type: number
+                          description: Set for `smaller_copy` alternatives.
+                        site:
+                          type: string
+                          description: Set for `copy_to_site_first` alternatives.
         '502':
           description: >-
             The renderer refused, with its own UPnP error. `714 Illegal

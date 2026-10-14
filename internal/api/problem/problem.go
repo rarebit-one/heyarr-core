@@ -75,6 +75,9 @@ type Problem struct {
 	// or leased job that holds the dedupe key, so the operator can find it
 	// without a second lookup.
 	LiveJobID string `json:"live_job_id,omitempty"`
+	// Alternatives lists playback options when the request is refused with a
+	// route-related code (ADR-0111 §R2). Empty for all other refusals.
+	Alternatives []RouteAlternative `json:"alternatives,omitempty"`
 }
 
 // Error lets a Problem be returned as an ordinary error and rendered later.
@@ -141,6 +144,32 @@ func (p *Problem) WithCode(code string) *Problem { p.Code = code; return p }
 // WithLiveJobID records the id of the live job holding the dedupe key on a
 // dedupe-conflict 409 response.
 func (p *Problem) WithLiveJobID(id string) *Problem { p.LiveJobID = id; return p }
+
+// RouteAlternative is one playback option surfaced on a route-refused 409. The
+// client uses it to suggest the operator either switch to a smaller copy
+// (kind "smaller_copy") or wait for a replica to land closer to the renderer
+// (kind "copy_to_site_first").
+type RouteAlternative struct {
+	// Kind is "smaller_copy" or "copy_to_site_first".
+	Kind string `json:"kind"`
+	// AssetID is set for smaller_copy alternatives.
+	AssetID string `json:"asset_id,omitempty"`
+	// HeightPx is set for smaller_copy alternatives.
+	HeightPx int `json:"height_px,omitempty"`
+	// BitrateKbps is set for smaller_copy alternatives.
+	BitrateKbps float64 `json:"bitrate_kbps,omitempty"`
+	// Site is set for copy_to_site_first alternatives.
+	Site string `json:"site,omitempty"`
+}
+
+// WithAlternatives attaches a list of route alternatives to the problem
+// (ADR-0111 §R2 refusal). It is a no-op when alts is empty.
+func (p *Problem) WithAlternatives(alts []RouteAlternative) *Problem {
+	if len(alts) > 0 {
+		p.Alternatives = alts
+	}
+	return p
+}
 
 // WithInstance records the URI this problem occurred at.
 func (p *Problem) WithInstance(uri string) *Problem { p.Instance = uri; return p }

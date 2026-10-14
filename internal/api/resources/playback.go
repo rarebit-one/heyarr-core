@@ -115,6 +115,9 @@ type playbackStart struct {
 	// Decision is the plan's verdict, carried out for a caller that wants to
 	// report it without walking into Plan.
 	Decision string
+	// RouteDecision is the §32 routing result, carried out so the renderer
+	// handler can inspect it for ADR-0111 route planning without re-querying.
+	RouteDecision routing.Decision
 }
 
 // beginPlayback plans, refuses or opens a session.
@@ -226,6 +229,7 @@ func (a *API) beginPlayback(ctx context.Context, assetID, deviceID, wantVerb str
 		RenderURL:         renderURL,
 		RenderUnavailable: unavailable,
 		Decision:          string(plan.Decision),
+		RouteDecision:     route,
 	}, nil
 }
 
