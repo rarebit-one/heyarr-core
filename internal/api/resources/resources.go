@@ -32,6 +32,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/catalogtomb"
+	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
@@ -156,6 +157,13 @@ type Options struct {
 	// the log gives up on it. Zero means the default. It is configurable so a
 	// test can actually drive the drop path rather than assuming it works.
 	StreamBuffer int
+
+	// Sites is the parsed site map for client location and SSRF gating
+	// (ADR-0111 phase 1a).
+	Sites config.SiteMap
+	// SsdpSearchAddr, when non-empty, is the host:port to bind the M-SEARCH
+	// socket. Parsed from config.Renderers.SsdpSearchAddr.
+	SsdpSearchAddr string
 }
 
 // API holds the handlers.
@@ -198,6 +206,14 @@ type API struct {
 	// televisions — see internal/api/resources/renderers.go.
 	rendererCache  *rendererCache
 	rendererClient *http.Client
+
+	// sites is the parsed site map (ADR-0111 phase 1a).
+	sites config.SiteMap
+	// ssdpSearchAddr, when non-empty, binds the M-SEARCH socket.
+	ssdpSearchAddr string
+	// allowLoopbackReports lets the renderer-report SSRF guard accept a
+	// loopback device URL. Tests only (export_test.go); never configurable.
+	allowLoopbackReports bool
 
 	heartbeat  time.Duration
 	streamPoll time.Duration
@@ -287,6 +303,8 @@ func New(opts Options) (*API, error) {
 
 		rendererCache:  &rendererCache{},
 		rendererClient: &http.Client{Timeout: 15 * time.Second},
+		sites:          opts.Sites,
+		ssdpSearchAddr: opts.SsdpSearchAddr,
 		renderSecret:   opts.RenderSecret,
 		renderBaseURL:  strings.TrimRight(opts.RenderBaseURL, "/"),
 		selfPeerID:     opts.SelfPeerID,
@@ -404,6 +422,9 @@ func (a *API) Mount(r chi.Router) {
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/renderers/{udn}/resume", a.transportAction("resume"))
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/renderers/{udn}/stop", a.transportAction("stop"))
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/renderers/{udn}/seek", a.seekRenderer)
+	// Client-reported renderers (ADR-0111 phase 1a): a client on the same site
+	// tells us about a renderer it can see.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/renderers/reported", a.reportRenderer)
 	// A quality profile is the standard desired state is measured against
 	// (§62). Authoring one is a write rather than an admin action: it is
 	// ordinary operator configuration, in the same class as creating a

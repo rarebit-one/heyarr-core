@@ -4,7 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +57,29 @@ const rendererCacheTTL = 5 * time.Minute
 // before answering, so anything shorter systematically misses the slow ones.
 const discoveryTimeout = 5 * time.Second
 
+// clientRendererTTL is how long a client-reported renderer is kept without
+// being refreshed.
+const clientRendererTTL = 10 * time.Minute
+
+// clientEntry holds a renderer that was reported by a client (not discovered
+// by the controller's own SSDP sweep).
+type clientEntry struct {
+	r           renderer.Renderer
+	site        string
+	expiresAt   time.Time
+	principalID string
+}
+
+// r3OnlyEntry holds an entry that was reported by a client but whose IP is
+// outside every configured site network. It is not fetchable now, but is kept
+// as a relay candidate for Phase 2 (ADR-0111 §7). Keyed by location URL
+// because the description was never fetched, so we do not know the UDN.
+type r3OnlyEntry struct {
+	location    string
+	expiresAt   time.Time
+	principalID string
+}
+
 // rendererCache holds what discovery last found, keyed by UDN.
 //
 // UDN rather than address, because the address is a lease and the UDN is the
@@ -63,6 +90,11 @@ type rendererCache struct {
 	mu        sync.Mutex
 	byUDN     map[string]renderer.Renderer
 	refreshed time.Time
+	// reported holds client-reported renderers keyed by UDN.
+	reported map[string]clientEntry
+	// r3Only holds client-reported entries whose IP is outside all configured
+	// site networks, keyed by location URL (UDN unknown — description not fetched).
+	r3Only map[string]r3OnlyEntry
 }
 
 func (c *rendererCache) replace(found []renderer.Renderer, now time.Time) {
@@ -80,16 +112,6 @@ func (c *rendererCache) replace(found []renderer.Renderer, now time.Time) {
 	c.refreshed = now
 }
 
-func (c *rendererCache) list() []renderer.Renderer {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]renderer.Renderer, 0, len(c.byUDN))
-	for _, r := range c.byUDN {
-		out = append(out, r)
-	}
-	return out
-}
-
 func (c *rendererCache) get(udn string) (renderer.Renderer, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -103,6 +125,106 @@ func (c *rendererCache) fresh(now time.Time) bool {
 	return !c.refreshed.IsZero() && now.Sub(c.refreshed) < rendererCacheTTL
 }
 
+// addReported stores a client-reported renderer.
+//
+// If the UDN is already in the controller-discovered cache the report is
+// ignored: the controller's own copy wins and a client cannot repoint it.
+// Otherwise the entry is stored in reported (or refreshed if already there).
+func (c *rendererCache) addReported(udn, site, principalID string, rend renderer.Renderer, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.byUDN[udn]; ok {
+		// The controller found this device itself; its own copy wins and a
+		// client report must not repoint it.
+		return
+	}
+	if c.reported == nil {
+		c.reported = make(map[string]clientEntry)
+	}
+	c.reported[udn] = clientEntry{
+		r:           rend,
+		site:        site,
+		expiresAt:   now.Add(clientRendererTTL),
+		principalID: principalID,
+	}
+}
+
+// addR3Only stores an r3_only entry (location URL outside all site networks).
+func (c *rendererCache) addR3Only(location, principalID string, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.r3Only == nil {
+		c.r3Only = make(map[string]r3OnlyEntry)
+	}
+	c.r3Only[location] = r3OnlyEntry{
+		location:    location,
+		expiresAt:   now.Add(clientRendererTTL),
+		principalID: principalID,
+	}
+}
+
+// getReported looks up a client-reported renderer by UDN. Returns the entry
+// and whether it was found and still valid.
+func (c *rendererCache) getReported(udn string, now time.Time) (clientEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.reported[udn]
+	if !ok || now.After(e.expiresAt) {
+		return clientEntry{}, false
+	}
+	return e, true
+}
+
+// listAllFor returns all renderers visible to principalID at now.
+//
+// Controller-discovered renderers are returned for everyone. Client-reported
+// renderers are returned for everyone (they are on the local network by the
+// SSRF guard). R3-only entries are returned only to the principal that
+// reported them.
+func (c *rendererCache) listAllFor(principalID string, now time.Time) ([]rendererWithMeta, []r3OnlyEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var out []rendererWithMeta
+	for _, r := range c.byUDN {
+		out = append(out, rendererWithMeta{
+			r:            r,
+			site:         "",
+			discoveredBy: "controller",
+		})
+	}
+	for udn, e := range c.reported {
+		if now.After(e.expiresAt) {
+			delete(c.reported, udn)
+			continue
+		}
+		out = append(out, rendererWithMeta{
+			r:            e.r,
+			site:         e.site,
+			discoveredBy: "client",
+		})
+	}
+
+	var r3s []r3OnlyEntry
+	for loc, e := range c.r3Only {
+		if now.After(e.expiresAt) {
+			delete(c.r3Only, loc)
+			continue
+		}
+		if e.principalID == principalID {
+			r3s = append(r3s, e)
+		}
+	}
+	return out, r3s
+}
+
+// rendererWithMeta bundles a Renderer with its site and discovery source.
+type rendererWithMeta struct {
+	r            renderer.Renderer
+	site         string
+	discoveredBy string
+}
+
 // RendererView is the wire shape.
 type RendererView struct {
 	UDN          string `json:"udn"`
@@ -114,39 +236,104 @@ type RendererView struct {
 	// not answer — which is normal for a screen that has gone to standby, and
 	// is reported rather than hidden.
 	State string `json:"state,omitempty"`
+	// Site is the network site this renderer was found on (ADR-0111).
+	Site string `json:"site,omitempty"`
+	// DiscoveredBy is "controller" for SSDP-found renderers, "client" for
+	// client-reported ones.
+	DiscoveredBy string `json:"discovered_by,omitempty"`
+	// R3Only is true when the renderer is outside all site networks and
+	// can only be reached via Phase 2 relay (not yet implemented).
+	R3Only bool `json:"r3_only,omitempty"`
 }
 
 // listRenderers answers GET /api/v1/renderers.
 func (a *API) listRenderers(w http.ResponseWriter, r *http.Request) {
 	refresh := r.URL.Query().Get("refresh") == "true"
-	found, err := a.renderers(r.Context(), refresh)
-	if err != nil {
+	// Trigger SSDP sweep to populate / refresh controller-discovered entries.
+	if err := a.renderers(r.Context(), refresh); err != nil {
 		a.fail(w, r, "renderers", err)
 		return
 	}
-	views := make([]RendererView, 0, len(found))
-	for _, rend := range found {
+
+	// Derive client's site from the remote address (no proxy headers — ADR-0111 §2).
+	addr := r.RemoteAddr
+	if i := strings.LastIndex(addr, ":"); i > 0 {
+		addr = addr[:i]
+	}
+	addr = strings.TrimPrefix(strings.TrimSuffix(addr, "]"), "[")
+	var clientSite string
+	if ip, err := netip.ParseAddr(addr); err == nil {
+		clientSite = a.sites.SiteOf(ip)
+	}
+
+	// Determine calling principal for r3_only visibility.
+	identity, _ := httpapi.IdentityFrom(r.Context())
+	principalID := identity.Principal.ID
+
+	rends, r3s := a.rendererCache.listAllFor(principalID, a.now())
+
+	views := make([]RendererView, 0, len(rends)+len(r3s))
+	for _, rm := range rends {
 		views = append(views, RendererView{
-			UDN: rend.UDN, Name: rend.FriendlyName, Manufacturer: rend.Manufacturer,
-			Model: rend.ModelName, Location: rend.Location,
+			UDN: rm.r.UDN, Name: rm.r.FriendlyName, Manufacturer: rm.r.Manufacturer,
+			Model: rm.r.ModelName, Location: rm.r.Location,
+			Site: a.rendererSite(rm), DiscoveredBy: rm.discoveredBy,
 		})
 	}
-	a.write(w, r, http.StatusOK, map[string]any{"renderers": views})
+
+	// Append r3_only entries: description never fetched, so UDN/name/etc are unknown;
+	// site is empty (outside all configured networks). These sort last.
+	for _, e := range r3s {
+		views = append(views, RendererView{
+			Location:     e.location,
+			DiscoveredBy: "client",
+			R3Only:       true,
+		})
+	}
+	// Sort: client's site first, then other sites alphabetically, then "away".
+	sort.SliceStable(views, func(i, j int) bool {
+		si, sj := views[i].Site, views[j].Site
+		if si == clientSite && sj != clientSite {
+			return true
+		}
+		if sj == clientSite && si != clientSite {
+			return false
+		}
+		if si == "away" && sj != "away" {
+			return false
+		}
+		if sj == "away" && si != "away" {
+			return true
+		}
+		return si < sj
+	})
+
+	a.write(w, r, http.StatusOK, map[string]any{"client_site": clientSite, "renderers": views})
 }
 
-// renderers returns the known renderers, discovering when the cache is cold.
-func (a *API) renderers(ctx context.Context, refresh bool) ([]renderer.Renderer, error) {
+// renderers refreshes the renderer cache when needed. It is called for its
+// side-effect of populating a.rendererCache; callers read back results via
+// a.rendererCache.listAllFor() / a.rendererCache.get().
+func (a *API) renderers(ctx context.Context, refresh bool) error {
 	if a.rendererCache == nil {
-		return nil, errors.New("renderer control is not enabled on this node")
+		return errors.New("renderer control is not enabled on this node")
 	}
 	if !refresh && a.rendererCache.fresh(a.now()) {
-		return a.rendererCache.list(), nil
+		return nil
 	}
 	sweep, cancel := context.WithTimeout(ctx, discoveryTimeout*2)
 	defer cancel()
 
-	found, problems := renderer.DiscoverRenderers(sweep, a.rendererClient,
-		renderer.DiscoverOptions{Timeout: discoveryTimeout})
+	opts := renderer.DiscoverOptions{Timeout: discoveryTimeout}
+	if a.ssdpSearchAddr != "" {
+		if addr, err := net.ResolveUDPAddr("udp4", a.ssdpSearchAddr); err == nil {
+			opts.Interface = addr
+		} else {
+			a.log.Warn("renderer discovery: invalid ssdp_search_addr", "addr", a.ssdpSearchAddr, "error", err)
+		}
+	}
+
+	found, problems := renderer.DiscoverRenderers(sweep, a.rendererClient, opts)
 	for _, p := range problems {
 		// Logged and not returned. One unreachable device must not hide the
 		// others, and a sweep that found three renderers and failed to
@@ -154,7 +341,7 @@ func (a *API) renderers(ctx context.Context, refresh bool) ([]renderer.Renderer,
 		a.log.Warn("renderer discovery", "error", p)
 	}
 	a.rendererCache.replace(found, a.now())
-	return a.rendererCache.list(), nil
+	return nil
 }
 
 // controllerFor resolves a UDN to something that can be driven.
@@ -167,10 +354,15 @@ func (a *API) controllerFor(ctx context.Context, udn string) (renderer.Renderer,
 		// One rediscovery before giving up. The common case is a controller
 		// that restarted, or a client holding a UDN from yesterday, and
 		// failing that with "unknown renderer" would be true and useless.
-		if _, err := a.renderers(ctx, true); err != nil {
+		if err := a.renderers(ctx, true); err != nil {
 			return renderer.Renderer{}, nil, err
 		}
 		if rend, ok = a.rendererCache.get(udn); !ok {
+			// Check client-reported cache before giving up.
+			if e, ok2 := a.rendererCache.getReported(udn, a.now()); ok2 {
+				ctrl, err := renderer.NewController(a.rendererClient, e.r)
+				return e.r, ctrl, err
+			}
 			return renderer.Renderer{}, nil, errNoSuchRenderer
 		}
 	}
@@ -178,7 +370,10 @@ func (a *API) controllerFor(ctx context.Context, udn string) (renderer.Renderer,
 	return rend, ctrl, err
 }
 
-var errNoSuchRenderer = errors.New("no renderer with that id answered; it may be switched off")
+var (
+	errNoSuchRenderer = errors.New("no renderer with that id answered; it may be switched off")
+	errR3OnlyRenderer = errors.New("renderer is r3_only: relay not implemented yet")
+)
 
 // playOnRendererRequest is the POST /renderers/{udn}/play body.
 type playOnRendererRequest struct {
@@ -351,7 +546,85 @@ func (a *API) failRenderer(w http.ResponseWriter, r *http.Request, err error) {
 		httpapi.Fail(w, r, problem.NotFound(err.Error()))
 		return
 	}
+	if errors.Is(err, errR3OnlyRenderer) {
+		httpapi.Fail(w, r, problem.New(http.StatusNotImplemented,
+			problem.TypeServiceUnavailable, "Renderer relay not implemented",
+			err.Error()).WithCode("renderer-r3-only"))
+		return
+	}
 	a.fail(w, r, "renderers", err)
+}
+
+// reportRenderer handles POST /api/v1/renderers/reported.
+//
+// A client supplies the HTTP description URL of a renderer it can see on its
+// local network. The controller validates the URL against the SSRF rules in
+// ADR-0111 §6 and, if safe, fetches and caches the description. If the device
+// is outside all site networks it is stored as r3_only — eligible for Phase 2
+// relay but not fetchable yet.
+func (a *API) reportRenderer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Location string `json:"location"`
+	}
+	if !decodeOr400(w, r, &body) {
+		return
+	}
+	if err := required("location", body.Location); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	identity, _ := httpapi.IdentityFrom(r.Context())
+	principalID := identity.Principal.ID
+
+	result, rerr := checkRendererURL(body.Location, a.sites, a.allowLoopbackReports)
+	switch result {
+	case ssrfRejected:
+		httpapi.Fail(w, r, problem.BadRequest(rerr.detail).WithCode(rerr.code))
+		return
+	case ssrfR3Only:
+		a.rendererCache.addR3Only(body.Location, principalID, a.now())
+		a.write(w, r, http.StatusAccepted, map[string]any{
+			"r3_only":  true,
+			"location": body.Location,
+			"detail":   rerr.detail,
+		})
+		return
+	}
+
+	// ssrfOK: fetch and parse the description. Redirects are disabled to
+	// prevent a device from redirecting us to an internal service.
+	fetchClient := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Timeout: 5 * time.Second,
+	}
+	rend, err := renderer.Describe(r.Context(), fetchClient, body.Location)
+	if err != nil {
+		httpapi.Fail(w, r, problem.New(http.StatusBadGateway, problem.TypeConflict,
+			"Could not fetch renderer description", err.Error()))
+		return
+	}
+	if cerr := checkReportedControlURLs(body.Location, rend); cerr != nil {
+		httpapi.Fail(w, r, problem.BadRequest(cerr.detail).WithCode(cerr.code))
+		return
+	}
+
+	// Derive site from the URL's literal IP (already validated as literal).
+	u, _ := url.Parse(body.Location)
+	ip, _ := netip.ParseAddr(u.Hostname())
+	site := a.sites.SiteOf(ip.Unmap())
+
+	a.rendererCache.addReported(rend.UDN, site, principalID, rend, a.now())
+	a.write(w, r, http.StatusOK, RendererView{
+		UDN:          rend.UDN,
+		Name:         rend.FriendlyName,
+		Manufacturer: rend.Manufacturer,
+		Model:        rend.ModelName,
+		Location:     rend.Location,
+		Site:         site,
+		DiscoveredBy: "client",
+	})
 }
 
 // startedPlayback is what playOnRenderer needs out of the playback lane.
@@ -667,17 +940,26 @@ func (a *API) assetTitle(ctx context.Context, assetID string) (title, mime strin
 // these.
 // ---------------------------------------------------------------------------
 
-// RenderersFor lists what can be played to.
+// RenderersFor lists what can be played to (MCP context — no HTTP request, so
+// client site is not known; Site/DiscoveredBy are populated from cache metadata).
 func (a *API) RenderersFor(ctx context.Context, refresh bool) ([]RendererView, error) {
-	found, err := a.renderers(ctx, refresh)
-	if err != nil {
+	if err := a.renderers(ctx, refresh); err != nil {
 		return nil, err
 	}
-	views := make([]RendererView, 0, len(found))
-	for _, rend := range found {
+	// In MCP context there is no HTTP request, so we have no principal or
+	// client site. Pass empty principalID so r3_only entries are omitted; they
+	// are only relevant to the specific reporting principal.
+	rends, _ := a.rendererCache.listAllFor("", a.now())
+	views := make([]RendererView, 0, len(rends))
+	for _, rm := range rends {
 		views = append(views, RendererView{
-			UDN: rend.UDN, Name: rend.FriendlyName, Manufacturer: rend.Manufacturer,
-			Model: rend.ModelName, Location: rend.Location,
+			UDN:          rm.r.UDN,
+			Name:         rm.r.FriendlyName,
+			Manufacturer: rm.r.Manufacturer,
+			Model:        rm.r.ModelName,
+			Location:     rm.r.Location,
+			Site:         a.rendererSite(rm),
+			DiscoveredBy: rm.discoveredBy,
 		})
 	}
 	return views, nil
@@ -758,4 +1040,20 @@ func (a *API) RendererStatusFor(ctx context.Context, udn string) (map[string]any
 		}
 	}
 	return out, nil
+}
+
+// rendererSite is the site a listed renderer sits in. A client-reported entry
+// carries the site it was validated against; a controller-discovered one is
+// placed by the literal IP in its description URL, falling back to this node's
+// own site when that URL names no literal IP.
+func (a *API) rendererSite(rm rendererWithMeta) string {
+	if rm.site != "" {
+		return rm.site
+	}
+	if u, err := url.Parse(rm.r.Location); err == nil {
+		if ip, err := netip.ParseAddr(u.Hostname()); err == nil {
+			return a.sites.SiteOf(ip)
+		}
+	}
+	return a.sites.Self()
 }

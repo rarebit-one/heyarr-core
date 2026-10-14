@@ -944,6 +944,14 @@ func (c *Controller) resourceAPI(ctx context.Context, d mountDeps, queue *jobs.Q
 			c.log)
 	}
 
+	// ADR-0111: the site map. Validate already parsed it at startup, so an
+	// error here means the config changed underneath us; fail rather than
+	// silently run single-site.
+	sites, err := config.ParseSites(c.cfg.Sites, c.cfg.Peer.Site)
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: %w", err)
+	}
+
 	apiOpts := resources.Options{
 		AudioLanguages: c.cfg.Media.AudioLanguages,
 		DB:             d.db,
@@ -965,6 +973,9 @@ func (c *Controller) resourceAPI(ctx context.Context, d mountDeps, queue *jobs.Q
 		SelfPeerID:    d.selfPeerID,
 
 		Blobs: casBlobLocator{store: d.blobStore},
+
+		Sites:          sites,
+		SsdpSearchAddr: strings.TrimSpace(c.cfg.Renderers.SsdpSearchAddr),
 	}
 	// Typed nils must not become non-nil interfaces: "no streamer" has to
 	// stay nil all the way down (ADR-0069).

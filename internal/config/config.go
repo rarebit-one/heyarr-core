@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -131,6 +132,16 @@ type Config struct {
 	// (the gateway and the vault CLI honour it); the default "software" needs no
 	// configuration.
 	Vault Vault `koanf:"vault"`
+
+	// Sites maps site names to their CIDR ranges (ADR-0111). Each site is a
+	// named network; an address is in a site when it falls inside one of its
+	// CIDRs. Empty or absent means single-site: every non-public address is
+	// local, every public address is "away".
+	Sites map[string][]string `koanf:"sites"`
+
+	// Renderers holds renderer-discovery tuning (ADR-0111 phase 1a). All
+	// fields are optional.
+	Renderers Renderers `koanf:"renderers"`
 }
 
 // Vault configures device-side space-key custody (ADR-0098). The device
@@ -205,6 +216,91 @@ type VaultCruciform struct {
 	// `heyarr device pair-offload`). Empty resolves to cruciform-pairing.json in
 	// the device directory — the default location the pairing writes.
 	PairFile string `koanf:"pair_file"`
+}
+
+// Renderers holds renderer-discovery tuning (ADR-0111 phase 1a).
+type Renderers struct {
+	// SsdpSearchAddr, when set, binds the M-SEARCH socket to this host:port so
+	// discovery goes out on a specific NIC. It must be a concrete (non-wildcard)
+	// address with a fixed non-zero port. Useful on a multi-homed host where
+	// only one interface faces the LAN the televisions are on.
+	SsdpSearchAddr string `koanf:"ssdp_search_addr"`
+}
+
+// SiteMap resolves an IP address to the site name it belongs to (ADR-0111).
+//
+// The zero value is a valid single-site map: every non-public address is
+// in the controller's own site ("" → peer.site), every public address is "away".
+type SiteMap struct {
+	entries  []siteEntry
+	peerSite string
+}
+
+type siteEntry struct {
+	name string
+	nets []netip.Prefix
+}
+
+// SiteOf returns the site name for addr, or "away" if it matches no site.
+//
+// On a single-site map (no entries), non-public addresses map to the
+// controller's own site and public addresses map to "away".
+func (m SiteMap) SiteOf(addr netip.Addr) string {
+	a := addr.Unmap() // normalise IPv4-in-IPv6
+	if len(m.entries) == 0 {
+		// Single-site: any non-public address is "here".
+		if a.IsPrivate() || a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() {
+			return m.peerSite
+		}
+		return "away"
+	}
+	for _, e := range m.entries {
+		for _, p := range e.nets {
+			if p.Contains(a) {
+				return e.name
+			}
+		}
+	}
+	return "away"
+}
+
+// Self is the site this controller sits in (peer.site).
+func (m SiteMap) Self() string { return m.peerSite }
+
+// ParseSites parses a sites map from config and returns a SiteMap.
+//
+// Each site name must be non-empty. Every CIDR must parse. No CIDR may appear
+// under two sites (overlap is an error — ambiguous routing). peerSite is the
+// name this controller returns for non-public addresses in single-site mode.
+func ParseSites(sites map[string][]string, peerSite string) (SiteMap, error) {
+	if len(sites) == 0 {
+		return SiteMap{peerSite: peerSite}, nil
+	}
+	var allPrefixes []netip.Prefix // for overlap detection
+	var entries []siteEntry
+	for name, cidrs := range sites {
+		if name == "" {
+			return SiteMap{}, errors.New("config: sites entry has an empty name")
+		}
+		var prefixes []netip.Prefix
+		for _, cidr := range cidrs {
+			p, err := netip.ParsePrefix(cidr)
+			if err != nil {
+				return SiteMap{}, fmt.Errorf("config: sites[%q]: %q is not a valid CIDR: %w", name, cidr, err)
+			}
+			p = p.Masked() // canonical form
+			// Overlap check against all earlier prefixes.
+			for _, prior := range allPrefixes {
+				if prior.Overlaps(p) {
+					return SiteMap{}, fmt.Errorf("config: sites CIDR %q overlaps with %q — a CIDR may belong to exactly one site", cidr, prior)
+				}
+			}
+			allPrefixes = append(allPrefixes, p)
+			prefixes = append(prefixes, p)
+		}
+		entries = append(entries, siteEntry{name: name, nets: prefixes})
+	}
+	return SiteMap{entries: entries, peerSite: peerSite}, nil
 }
 
 // Notify configures the wake plane this node calls (ADR-0102). The subscription
@@ -1128,6 +1224,29 @@ func (c Config) Validate() error {
 			}
 		}
 	}
+
+	// ADR-0111: sites are validated here so a broken config is caught at startup
+	// (same pattern as render_addr and trusted_nets above). The parsed form is
+	// thrown away — callers build it themselves via ParseSites using the values
+	// that pass this check.
+	if _, err := ParseSites(c.Sites, c.Peer.Site); err != nil {
+		return err
+	}
+
+	// ADR-0111: ssdp_search_addr, when set, must be a concrete host:port the
+	// M-SEARCH socket can bind to — no wildcard, no zero port. Same rules as
+	// render_addr.
+	if a := strings.TrimSpace(c.Renderers.SsdpSearchAddr); a != "" {
+		host, port, err := net.SplitHostPort(a)
+		if err != nil || port == "" || port == "0" {
+			return fmt.Errorf("config: renderers.ssdp_search_addr %q is not a host:port with a fixed port (e.g. 192.168.2.5:1900)", a)
+		}
+		switch host {
+		case "", "0.0.0.0", "::", "[::]":
+			return fmt.Errorf("config: renderers.ssdp_search_addr %q must name one address, not a wildcard", a)
+		}
+	}
+
 	return nil
 }
 
