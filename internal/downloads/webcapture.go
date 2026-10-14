@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	stdhtml "html"
 	"io"
 	"net/http"
 	"net/url"
@@ -21,6 +22,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/webfeedparse"
 )
 
 // WebCaptureClient is a download client for followed web articles (§58, M12
@@ -113,6 +115,33 @@ const (
 	maxCaptureBytes = 64 << 20 // the whole self-contained result
 )
 
+// httpStatusError is returned by fetch for non-2xx HTTP responses. Using a
+// named type rather than fmt.Errorf makes the status code type-assertable, so
+// the fallback path can distinguish blocking status codes (401/403/404/410/451)
+// from transient server errors (5xx) and network failures — only blocking
+// statuses trigger the feed-content fallback.
+type httpStatusError struct{ Code int }
+
+func (e *httpStatusError) Error() string { return fmt.Sprintf("a resource returned HTTP %d", e.Code) }
+
+// isBlockingStatus reports whether an HTTP status code is a definitive "no"
+// from the server to this client. Only these trigger the feed fallback:
+//   - 401 Unauthorized: requires credentials the crawler does not hold
+//   - 403 Forbidden: server explicitly denies this agent
+//   - 404 Not Found: article removed; feed content may still exist
+//   - 410 Gone: deliberately removed; ditto
+//   - 451 Unavailable for Legal Reasons: geo-blocked or legally restricted
+//
+// 5xx (server error) and network failures are transient and must keep retrying.
+func isBlockingStatus(code int) bool {
+	switch code {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound,
+		http.StatusGone, http.StatusUnavailableForLegalReasons:
+		return true
+	}
+	return false
+}
+
 // NewWebCapture builds a web-capture download client, refusing a mis-wired one.
 func NewWebCapture(opts WebCaptureOptions) (*WebCaptureClient, error) {
 	if strings.TrimSpace(opts.Name) == "" {
@@ -184,7 +213,19 @@ func (c *WebCaptureClient) Add(_ context.Context, source secret.Value) (provider
 	if !strings.HasPrefix(raw, followed.WebCaptureSourceScheme) {
 		return providers.Transfer{}, ErrNotWebCaptureSource
 	}
-	article := strings.TrimSpace(strings.TrimPrefix(raw, followed.WebCaptureSourceScheme))
+	// Parse the source body, which may carry a feed URL after a null-byte separator.
+	// Format: webcapture:<articleURL>[\x00feed:<feedURL>]
+	// A legacy source without the null byte is treated as article-URL only (no fallback).
+	body := strings.TrimPrefix(raw, followed.WebCaptureSourceScheme)
+	article, feedURL := body, ""
+	if idx := strings.IndexByte(body, '\x00'); idx >= 0 {
+		article = body[:idx]
+		rest := body[idx+1:]
+		if strings.HasPrefix(rest, "feed:") {
+			feedURL = strings.TrimPrefix(rest, "feed:")
+		}
+	}
+	article = strings.TrimSpace(article)
 	if article == "" {
 		return providers.Transfer{}, errors.New("downloads: a web-capture source has no article URL")
 	}
@@ -205,7 +246,7 @@ func (c *WebCaptureClient) Add(_ context.Context, source secret.Value) (provider
 	//nolint:gosec // G118: the capture DELIBERATELY outlives the grab job's context — it
 	// continues after Add returns, exactly like a torrent client's daemon; it runs on a
 	// detached, timeout-bounded context (see capture and the type comment).
-	go c.capture(id, article, name)
+	go c.capture(id, article, feedURL, name)
 	return t, nil
 }
 
@@ -213,7 +254,7 @@ func (c *WebCaptureClient) Add(_ context.Context, source secret.Value) (provider
 // single-file HTML. It runs on a detached, timeout-bound context — see the type
 // comment. It writes to a .part sibling and renames on success, so a
 // half-written file never looks complete.
-func (c *WebCaptureClient) capture(id, article, name string) {
+func (c *WebCaptureClient) capture(id, article, feedURL, name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
@@ -222,7 +263,7 @@ func (c *WebCaptureClient) capture(id, article, name string) {
 		return
 	}
 
-	single, err := c.render(ctx, article)
+	single, err := c.render(ctx, article, feedURL)
 	if err != nil {
 		// render's errors are already source-free.
 		c.failLocked(id, err.Error())
@@ -255,15 +296,21 @@ func (c *WebCaptureClient) capture(id, article, name string) {
 }
 
 // render fetches the article HTML and returns it rewritten to be self-contained.
-func (c *WebCaptureClient) render(ctx context.Context, article string) ([]byte, error) {
+// feedURL, when non-empty, is tried as a fallback source of article content when
+// the article page returns a blocking HTTP error (ADR-0110).
+func (c *WebCaptureClient) render(ctx context.Context, article, feedURL string) ([]byte, error) {
 	base, err := url.Parse(article)
 	if err != nil {
 		return nil, errors.New("the article URL is not a valid URL")
 	}
 
-	page, _, err := c.fetch(ctx, article)
-	if err != nil {
-		return nil, err
+	page, _, fetchErr := c.fetch(ctx, article)
+	if fetchErr != nil {
+		var statusErr *httpStatusError
+		if errors.As(fetchErr, &statusErr) && isBlockingStatus(statusErr.Code) && feedURL != "" {
+			return c.renderFromFeed(ctx, article, feedURL, fetchErr)
+		}
+		return nil, fetchErr
 	}
 	if len(page) > maxPageBytes {
 		return nil, errors.New("the article page is larger than the capture limit")
@@ -282,6 +329,68 @@ func (c *WebCaptureClient) render(ctx context.Context, article string) ([]byte, 
 	}
 	if buf.Len() > maxCaptureBytes {
 		return nil, errors.New("the captured page is larger than the capture limit")
+	}
+	return buf.Bytes(), nil
+}
+
+// renderFromFeed fetches the followed feed, finds the entry whose guid/link
+// matches article, and if it carries full HTML content builds a self-contained
+// page from that content. origErr is returned when the fallback is unavailable
+// or itself fails, so the caller always surfaces the original page error.
+func (c *WebCaptureClient) renderFromFeed(ctx context.Context, article, feedURL string, origErr error) ([]byte, error) {
+	feedRaw, _, err := c.fetch(ctx, feedURL)
+	if err != nil {
+		return nil, origErr
+	}
+	entries, err := webfeedparse.ParseFeed(feedRaw)
+	if err != nil {
+		return nil, origErr
+	}
+	for _, e := range entries {
+		if e.Key != article && e.Link != article {
+			continue
+		}
+		if strings.TrimSpace(e.Content) == "" {
+			return nil, origErr
+		}
+		return c.buildFeedHTML(ctx, article, e.Title, e.Published, e.Content)
+	}
+	return nil, origErr
+}
+
+// buildFeedHTML constructs a minimal, self-contained HTML page from a feed
+// entry's full content. It adds a provenance meta so readers know the bytes
+// came from the feed rather than the live article page.
+func (c *WebCaptureClient) buildFeedHTML(ctx context.Context, article, title string, published time.Time, content string) ([]byte, error) {
+	base, err := url.Parse(article)
+	if err != nil {
+		return nil, errors.New("the article URL is not a valid URL")
+	}
+	var pub string
+	if !published.IsZero() {
+		pub = published.UTC().Format(time.RFC3339)
+	}
+	raw := `<!doctype html><html><head><meta charset="utf-8">` +
+		`<meta name="heyarr-capture-source" content="feed">` +
+		`<title>` + stdhtml.EscapeString(title) + `</title></head><body>` +
+		`<header><h1>` + stdhtml.EscapeString(title) + `</h1>`
+	if pub != "" {
+		raw += `<time datetime="` + pub + `">` + pub + `</time>`
+	}
+	raw += `<p><a href="` + stdhtml.EscapeString(article) + `">Original article</a></p></header>` +
+		`<article>` + content + `</article>` +
+		`</body></html>`
+	doc, err := html.Parse(strings.NewReader(raw))
+	if err != nil {
+		return nil, errors.New("the feed content could not be parsed as HTML")
+	}
+	c.inline(ctx, doc, base)
+	var buf bytes.Buffer
+	if err := html.Render(&buf, doc); err != nil {
+		return nil, errors.New("the feed content page could not be rendered")
+	}
+	if buf.Len() > maxCaptureBytes {
+		return nil, errors.New("the feed content page is larger than the capture limit")
 	}
 	return buf.Bytes(), nil
 }
@@ -399,7 +508,7 @@ func (c *WebCaptureClient) fetch(ctx context.Context, rawURL string) ([]byte, st
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", fmt.Errorf("a resource returned HTTP %d", resp.StatusCode)
+		return nil, "", &httpStatusError{Code: resp.StatusCode}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAssetBytes+1))
 	if err != nil {
