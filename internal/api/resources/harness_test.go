@@ -75,6 +75,9 @@ type harness struct {
 	// happened. A test that asserted only the shape would pass on a build where
 	// nothing was measured.
 	requests *atomic.Int64
+	// api is the resource API under test, for the few internal seams a test
+	// drives directly (export_test.go).
+	api *resources.API
 }
 
 // controllerRequests is how many requests the controller has served.
@@ -325,7 +328,8 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	t.Cleanup(ts.Close)
 
 	return &harness{
-		t: t, db: db, server: srv, http: ts, store: store,
+		api: api,
+		t:   t, db: db, server: srv, http: ts, store: store,
 		jobs: queue, events: eventLog, clock: clock, ids: ids, requests: &requests,
 		catalogTomb: catalogTomb,
 	}

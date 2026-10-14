@@ -1805,15 +1805,33 @@ paths:
                   content_type: { type: string }
                   route:
                     type: string
+                    enum: [r1, r2]
                     description: >-
-                      The ADR-0111 route chosen: "r1" (direct, same site) or
-                      "r2" (cross-site link). Empty when routing was skipped.
-                  route_reason_code:
+                      The ADR-0111 route chosen: "r1" (byte source and renderer
+                      share a site) or "r2" (the bytes cross a declared
+                      inter-site link).
+                  controlling_party:
                     type: string
                     description: >-
-                      Machine-readable reason code for the route decision.
-                      Clients branch on this, not on `route_reason`.
-                  route_reason:
+                      The peer id of the controller driving the renderer.
+                  byte_origin:
+                    type: string
+                    description: >-
+                      The render base URL the renderer fetches bytes from.
+                  client_must_stay_connected:
+                    type: boolean
+                    description: >-
+                      false: the client can close — the controller drives the
+                      renderer and the bytes do not pass through the client.
+                      Always false until the client relay (R3) exists.
+                  reason_code:
+                    type: string
+                    description: >-
+                      Stable code for the route decision: `route-r1-local`,
+                      `route-r2-within-capacity`, `route-r2-capacity-undeclared`
+                      or `route-r2-bitrate-unknown`. Clients branch on this,
+                      not on `reason_human`.
+                  reason_human:
                     type: string
                     description: Human-readable explanation of the route decision.
         '409':
@@ -1834,9 +1852,9 @@ paths:
                   code:
                     type: string
                     description: >-
-                      Stable machine-readable refusal code, e.g.
-                      `route-no-source`, `route-link-saturated`,
-                      `route-no-source-at-site`.
+                      Stable machine-readable refusal code. Route refusals are
+                      `route-r2-over-capacity`, `route-no-source` and
+                      `route-r3-not-available`.
                   alternatives:
                     type: array
                     description: >-
