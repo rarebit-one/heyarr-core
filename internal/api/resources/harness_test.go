@@ -113,6 +113,8 @@ type harnessConfig struct {
 	catalogSigner ed25519.PrivateKey
 	// catalogSyncTrigger, when non-nil, backs POST /api/v1/catalog/sync (#449).
 	catalogSyncTrigger resources.CatalogSyncTrigger
+	// sites is the SiteMap passed to the API (ADR-0111). Zero value = single-site.
+	sites config.SiteMap
 }
 
 // withCatalogSyncTrigger wires the on-demand catalog-sync trigger behind
@@ -139,6 +141,11 @@ func withProviders(reg *providers.Registry) harnessOption {
 }
 
 type harnessOption func(*harnessConfig)
+
+// withSites sets the SiteMap for the harness (ADR-0111).
+func withSites(sm config.SiteMap) harnessOption {
+	return func(hc *harnessConfig) { hc.sites = sm }
+}
 
 // withAuth turns authentication on, which is what the scope tests need. Most
 // tests run with it off: they are testing resources, and every one of them
@@ -257,6 +264,8 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		Blobs:           hc.blobs,
 		Prober:          hc.prober,
 		AudioLanguages:  hc.cfg.Media.AudioLanguages,
+		Sites:           hc.sites,
+		SsdpSearchAddr:  hc.cfg.Renderers.SsdpSearchAddr,
 	})
 	if err != nil {
 		t.Fatal(err)
