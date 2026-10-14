@@ -976,6 +976,8 @@ func (c *Controller) resourceAPI(ctx context.Context, d mountDeps, queue *jobs.Q
 
 		Sites:          sites,
 		SsdpSearchAddr: strings.TrimSpace(c.cfg.Renderers.SsdpSearchAddr),
+		LinkCapacities: buildLinkCapacities(c.cfg.SiteLinks),
+		RouteHeadroom:  c.cfg.Route.Headroom,
 	}
 	// Typed nils must not become non-nil interfaces: "no streamer" has to
 	// stay nil all the way down (ADR-0069).
@@ -1259,6 +1261,24 @@ func liveness(t *health.Tracker) httpapi.PeerLiveness {
 // package stays free of the API's wire shape, and in the controller rather
 // than in the HTTP package so that the HTTP foundation does not import the
 // toolchain to describe it.
+// buildLinkCapacities converts the config.SiteLink slice into the map the
+// render-route planner consumes (ADR-0111 §R2). Keys are normalised
+// (lexicographically sorted) site pairs so lookup is order-independent.
+func buildLinkCapacities(links []config.SiteLink) map[[2]string]float64 {
+	if len(links) == 0 {
+		return nil
+	}
+	out := make(map[[2]string]float64, len(links))
+	for _, l := range links {
+		key := l.Sites
+		if key[0] > key[1] {
+			key[0], key[1] = key[1], key[0]
+		}
+		out[key] = l.Mbit
+	}
+	return out
+}
+
 func mediaInfo(tc media.Toolchain) []httpapi.ToolInfo {
 	tools := tc.Tools()
 	out := make([]httpapi.ToolInfo, 0, len(tools))

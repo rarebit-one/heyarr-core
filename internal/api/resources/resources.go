@@ -164,6 +164,12 @@ type Options struct {
 	// SsdpSearchAddr, when non-empty, is the host:port to bind the M-SEARCH
 	// socket. Parsed from config.Renderers.SsdpSearchAddr.
 	SsdpSearchAddr string
+	// LinkCapacities maps unordered site-pair keys to link capacity in Mbit/s
+	// (ADR-0111 §R2). Built from config.SiteLinks by the controller.
+	LinkCapacities map[[2]string]float64
+	// RouteHeadroom is passed straight to the render-route planner (ADR-0111).
+	// 0 means use the planner's built-in default (1.5).
+	RouteHeadroom float64
 }
 
 // API holds the handlers.
@@ -211,6 +217,10 @@ type API struct {
 	sites config.SiteMap
 	// ssdpSearchAddr, when non-empty, binds the M-SEARCH socket.
 	ssdpSearchAddr string
+	// linkCapacities is the R2 capacity table (ADR-0111 §R2).
+	linkCapacities map[[2]string]float64
+	// routeHeadroom is forwarded to the render-route planner.
+	routeHeadroom float64
 	// allowLoopbackReports lets the renderer-report SSRF guard accept a
 	// loopback device URL. Tests only (export_test.go); never configurable.
 	allowLoopbackReports bool
@@ -305,6 +315,8 @@ func New(opts Options) (*API, error) {
 		rendererClient: &http.Client{Timeout: 15 * time.Second},
 		sites:          opts.Sites,
 		ssdpSearchAddr: opts.SsdpSearchAddr,
+		linkCapacities: opts.LinkCapacities,
+		routeHeadroom:  opts.RouteHeadroom,
 		renderSecret:   opts.RenderSecret,
 		renderBaseURL:  strings.TrimRight(opts.RenderBaseURL, "/"),
 		selfPeerID:     opts.SelfPeerID,

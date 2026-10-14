@@ -128,7 +128,13 @@ type playbackStart struct {
 // device that decodes more than it declares (a TV that under-declares over DLNA).
 // It is a deliberate escape hatch, not a capability finding; the honest refusal
 // remains the default.
-func (a *API) beginPlayback(ctx context.Context, assetID, deviceID, wantVerb string, forceDirect bool) (playbackStart, *problem.Problem) {
+//
+// gate, when non-nil, runs after the plan is known to be DIRECT and before any
+// session is opened, with the §32 routing decision in hand. A non-nil problem
+// from it is returned unchanged and nothing is opened — the renderer path uses
+// it for the ADR-0111 route check, so a refused route leaves no session behind
+// in "continue watching".
+func (a *API) beginPlayback(ctx context.Context, assetID, deviceID, wantVerb string, forceDirect bool, gate func(routing.Decision) *problem.Problem) (playbackStart, *problem.Problem) {
 	device, err := a.deviceProfile(ctx, deviceID)
 	if err != nil {
 		return playbackStart{}, a.problemFor(ctx, "device", err)
@@ -170,6 +176,11 @@ func (a *API) beginPlayback(ctx context.Context, assetID, deviceID, wantVerb str
 	verb, err := resolveVerb(wantVerb, media)
 	if err != nil {
 		return playbackStart{}, problem.BadRequest(err.Error())
+	}
+	if gate != nil {
+		if prob := gate(route); prob != nil {
+			return playbackStart{}, prob
+		}
 	}
 
 	now := a.now().UTC()
@@ -246,7 +257,7 @@ func (a *API) startPlayback(w http.ResponseWriter, r *http.Request) {
 	// The direct-client endpoint keeps the honest refusal: a client that cannot
 	// direct-play has the /playback/plan fragmented-MP4 route (ADR-0069) as its
 	// path, so it needs no force-direct escape hatch. That is a renderer concern.
-	started, prob := a.beginPlayback(r.Context(), body.AssetID, body.DeviceID, body.Verb, false)
+	started, prob := a.beginPlayback(r.Context(), body.AssetID, body.DeviceID, body.Verb, false, nil)
 	if prob != nil {
 		httpapi.Fail(w, r, prob)
 		return

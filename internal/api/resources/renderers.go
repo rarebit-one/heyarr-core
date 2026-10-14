@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -19,6 +20,8 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/api/render"
 	"github.com/rarebit-one/heyarr-core/internal/domain/playback"
+	"github.com/rarebit-one/heyarr-core/internal/domain/renderroute"
+	"github.com/rarebit-one/heyarr-core/internal/domain/routing"
 	"github.com/rarebit-one/heyarr-core/internal/renderer"
 )
 
@@ -420,7 +423,20 @@ func (a *API) playOnRenderer(w http.ResponseWriter, r *http.Request) {
 			"request_id", httpapi.RequestIDFrom(r.Context()), "udn", udn, "error", err)
 	}
 
-	started, err := a.startForRendererCtx(r.Context(), body.AssetID, udn, rend, profile, body.ForceDirect)
+	// The route check (ADR-0111) runs inside beginPlayback, before a session
+	// opens, so a refused route leaves nothing behind.
+	var clientSite string
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		if ip, err := netip.ParseAddr(host); err == nil {
+			clientSite = a.sites.SiteOf(ip.Unmap())
+		}
+	}
+	var route renderroute.Result
+	gate := func(d routing.Decision) *problem.Problem {
+		route = a.planRendererRoute(r.Context(), rend, clientSite, body.AssetID, d)
+		return routeRefusal(route)
+	}
+	started, err := a.startForRendererCtx(r.Context(), body.AssetID, udn, rend, profile, body.ForceDirect, gate)
 	if err != nil {
 		a.failRenderer(w, r, err)
 		return
@@ -443,12 +459,18 @@ func (a *API) playOnRenderer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.write(w, r, http.StatusOK, map[string]any{
-		"session_id":   started.SessionID,
-		"renderer":     RendererView{UDN: rend.UDN, Name: rend.FriendlyName, Model: rend.ModelName},
-		"asset_id":     body.AssetID,
-		"title":        started.Title,
-		"decision":     started.Decision,
-		"content_type": started.MIME,
+		"session_id":                 started.SessionID,
+		"renderer":                   RendererView{UDN: rend.UDN, Name: rend.FriendlyName, Model: rend.ModelName},
+		"asset_id":                   body.AssetID,
+		"title":                      started.Title,
+		"decision":                   started.Decision,
+		"content_type":               started.MIME,
+		"route":                      route.Route,
+		"controlling_party":          route.ControllingParty,
+		"byte_origin":                route.ByteOrigin,
+		"client_must_stay_connected": route.ClientMustStayConnected,
+		"reason_code":                route.ReasonCode,
+		"reason_human":               route.ReasonHuman,
 	})
 }
 
@@ -654,7 +676,9 @@ type startedPlayback struct {
 // That closes the loop the first commit in this branch opened: the television
 // declares its codecs, the planner judges the file against them, and nobody
 // hand-maintains a list.
-func (a *API) startForRendererCtx(ctx context.Context, assetID, udn string, rend renderer.Renderer, profile playback.DeviceProfile, forceDirect bool) (startedPlayback, error) {
+//
+// gate is handed to beginPlayback unchanged: it runs before a session opens.
+func (a *API) startForRendererCtx(ctx context.Context, assetID, udn string, rend renderer.Renderer, profile playback.DeviceProfile, forceDirect bool, gate func(routing.Decision) *problem.Problem) (startedPlayback, error) {
 	deviceID, err := a.upsertRendererDevice(ctx, udn, rend, profile)
 	if err != nil {
 		return startedPlayback{}, err
@@ -664,7 +688,7 @@ func (a *API) startForRendererCtx(ctx context.Context, assetID, udn string, rend
 	// watch when there is video, listen when there is not. A renderer is not
 	// the right place to decide that — the Devialet has no screen, and the
 	// asset already knows whether it has a picture.
-	started, prob := a.beginPlayback(ctx, assetID, deviceID, "", forceDirect)
+	started, prob := a.beginPlayback(ctx, assetID, deviceID, "", forceDirect, gate)
 	if prob != nil {
 		return startedPlayback{}, prob
 	}
@@ -976,7 +1000,13 @@ func (a *API) PlayOnRenderer(ctx context.Context, udn, assetID string, forceDire
 	if err != nil {
 		a.log.Warn("reading a renderer's capabilities", "udn", udn, "error", err)
 	}
-	started, err := a.startForRendererCtx(ctx, assetID, udn, rend, profile, forceDirect)
+	// MCP callers sit on this node, so the client's site is this node's own.
+	var route renderroute.Result
+	gate := func(d routing.Decision) *problem.Problem {
+		route = a.planRendererRoute(ctx, rend, a.sites.Self(), assetID, d)
+		return routeRefusal(route)
+	}
+	started, err := a.startForRendererCtx(ctx, assetID, udn, rend, profile, forceDirect, gate)
 	if err != nil {
 		return nil, err
 	}
@@ -984,15 +1014,22 @@ func (a *API) PlayOnRenderer(ctx context.Context, udn, assetID string, forceDire
 		return nil, errors.New(cmpOr(started.RenderUnavailable,
 			"this peer cannot serve these bytes to a renderer"))
 	}
+
 	if err := ctrl.Start(ctx, started.RenderURL, started.Title, started.MIME,
 		renderer.Subtitle{URL: started.SubtitleURL, MIME: started.SubtitleMIME}); err != nil {
 		return nil, err
 	}
 	return map[string]any{
-		"playing":    started.Title,
-		"on":         rend.FriendlyName,
-		"session_id": started.SessionID,
-		"decision":   started.Decision,
+		"playing":                    started.Title,
+		"on":                         rend.FriendlyName,
+		"session_id":                 started.SessionID,
+		"decision":                   started.Decision,
+		"route":                      route.Route,
+		"controlling_party":          route.ControllingParty,
+		"byte_origin":                route.ByteOrigin,
+		"client_must_stay_connected": route.ClientMustStayConnected,
+		"reason_code":                route.ReasonCode,
+		"reason_human":               route.ReasonHuman,
 	}, nil
 }
 
@@ -1040,6 +1077,156 @@ func (a *API) RendererStatusFor(ctx context.Context, udn string) (map[string]any
 		}
 	}
 	return out, nil
+}
+
+// planRendererRoute runs the ADR-0111 route planner for one renderer playback,
+// given the §32 routing decision beginPlayback already made.
+func (a *API) planRendererRoute(ctx context.Context, rend renderer.Renderer, clientSite, assetID string, d routing.Decision) renderroute.Result {
+	rendSite := a.rendererSite(rendererWithMeta{r: rend})
+	srcSite := d.Source.Site
+	if d.Found && d.Source.IsSelf && srcSite == "" {
+		// This node's own peer row may predate peer.site; the config knows.
+		srcSite = a.sites.Self()
+	}
+	return renderroute.Plan(renderroute.Input{
+		RendererSite:        rendSite,
+		ClientSite:          clientSite,
+		RendererReachable:   true, // r3_only entries carry no UDN and never get this far
+		AssetBitrateKbps:    a.assetBitrateKbps(ctx, assetID),
+		LinkCapacities:      a.linkCapacities,
+		HeadroomFactor:      a.routeHeadroom,
+		SiblingAssets:       a.siblingAssets(ctx, assetID),
+		RendererSiteHasPeer: a.rendererSiteHasPeer(ctx, rendSite),
+		ControllerPeerID:    a.selfPeerID,
+		RenderBaseURL:       a.renderBaseURL,
+		SourceFound:         d.Found,
+		Source: renderroute.Source{
+			PeerID:   d.Source.PeerID,
+			Site:     srcSite,
+			IsSelf:   d.Source.IsSelf,
+			Endpoint: d.Source.Endpoint,
+		},
+	})
+}
+
+// routeRefusal is the 409 for a refused route, or nil when the route stands.
+func routeRefusal(res renderroute.Result) *problem.Problem {
+	if !res.Refused {
+		return nil
+	}
+	return problem.Conflict(res.ReasonHuman).
+		WithCode(res.ReasonCode).
+		WithAlternatives(convertRouteAlts(res.Alternatives))
+}
+
+// assetBitrateKbps returns the asset's streaming bitrate in kbit/s, or 0 when
+// no probe row exists or the row has no bitrate.
+func (a *API) assetBitrateKbps(ctx context.Context, assetID string) float64 {
+	var blobHash sql.NullString
+	if err := a.reader.QueryRowContext(ctx,
+		`SELECT blob_hash FROM assets WHERE id = ?`, assetID).Scan(&blobHash); err != nil || !blobHash.Valid {
+		return 0
+	}
+	var bitrate sql.NullInt64
+	if err := a.reader.QueryRowContext(ctx,
+		`SELECT bitrate_bps FROM blob_probes WHERE blob_hash = ?`, blobHash.String).Scan(&bitrate); err != nil || !bitrate.Valid {
+		return 0
+	}
+	return float64(bitrate.Int64) / 1000
+}
+
+// siblingAssets returns the other primary-role assets held by this node for the
+// same work as assetID. Used to surface smaller-copy alternatives in a
+// route-refused 409.
+func (a *API) siblingAssets(ctx context.Context, assetID string) []renderroute.SiblingAsset {
+	rows, err := a.reader.QueryContext(ctx, `
+		SELECT a2.id, bp.bitrate_bps, bp.streams
+		FROM assets a1
+		JOIN editions e1 ON e1.id = a1.edition_id
+		JOIN works w ON w.id = e1.work_id
+		JOIN editions e2 ON e2.work_id = w.id
+		JOIN assets a2 ON a2.edition_id = e2.id
+		JOIN blob_probes bp ON bp.blob_hash = a2.blob_hash
+		WHERE a1.id = ?
+		  AND a2.id != ?
+		  AND a2.role = 'primary'
+		  AND a2.blob_hash IS NOT NULL
+		  -- Another copy of the SAME thing: the same episode when both assets
+		  -- know their item, or any copy of a film. A season edition holds every
+		  -- episode, so "same work" alone would offer a different episode.
+		  AND ((a1.item_id IS NOT NULL AND a2.item_id = a1.item_id)
+		       OR (a1.item_id IS NULL AND w.content_type = 'movie'))`, assetID, assetID)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+	var out []renderroute.SiblingAsset
+	for rows.Next() {
+		var (
+			id      string
+			bitrate sql.NullInt64
+			streams string
+		)
+		if err := rows.Scan(&id, &bitrate, &streams); err != nil {
+			continue
+		}
+		var parsed []struct {
+			Type   string `json:"type"`
+			Height int    `json:"height"`
+		}
+		_ = json.Unmarshal([]byte(streams), &parsed)
+		height := 0
+		for _, s := range parsed {
+			if s.Type == "video" && s.Height > 0 {
+				height = s.Height
+				break
+			}
+		}
+		if height == 0 {
+			continue // no picture: not a copy of a video
+		}
+		out = append(out, renderroute.SiblingAsset{
+			AssetID:     id,
+			HeightPx:    height,
+			BitrateKbps: float64(bitrate.Int64) / 1000,
+		})
+	}
+	if rows.Err() != nil {
+		return nil
+	}
+	return out
+}
+
+// rendererSiteHasPeer reports whether any enrolled peer is recorded as sitting
+// in the named site. Used to distinguish "site has no replica peer at all" from
+// "site has a peer but bytes haven't arrived yet".
+func (a *API) rendererSiteHasPeer(ctx context.Context, site string) bool {
+	if site == "" {
+		return false
+	}
+	var n int
+	err := a.reader.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM peers WHERE enrolled_at IS NOT NULL AND site = ?`, site).Scan(&n)
+	return err == nil && n > 0
+}
+
+// convertRouteAlts maps the planner's alternative list to the problem package's
+// wire type.
+func convertRouteAlts(alts []renderroute.Alternative) []problem.RouteAlternative {
+	if len(alts) == 0 {
+		return nil
+	}
+	out := make([]problem.RouteAlternative, len(alts))
+	for i, a := range alts {
+		out[i] = problem.RouteAlternative{
+			Kind:        a.Kind,
+			AssetID:     a.AssetID,
+			HeightPx:    a.HeightPx,
+			BitrateKbps: a.BitrateKbps,
+			Site:        a.Site,
+		}
+	}
+	return out
 }
 
 // rendererSite is the site a listed renderer sits in. A client-reported entry

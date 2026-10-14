@@ -142,6 +142,15 @@ type Config struct {
 	// Renderers holds renderer-discovery tuning (ADR-0111 phase 1a). All
 	// fields are optional.
 	Renderers Renderers `koanf:"renderers"`
+
+	// SiteLinks declares the capacity of inter-site links (ADR-0111 §R2).
+	// Each entry names the two sites it connects and its capacity in Mbit/s.
+	// If a link between two sites is not listed, the planner allows traffic
+	// on that link but skips the capacity check.
+	SiteLinks []SiteLink `koanf:"site_links"`
+
+	// Route tunes the route planner (ADR-0111).
+	Route Route `koanf:"route"`
 }
 
 // Vault configures device-side space-key custody (ADR-0098). The device
@@ -227,6 +236,24 @@ type Renderers struct {
 	SsdpSearchAddr string `koanf:"ssdp_search_addr"`
 }
 
+// SiteLink declares the capacity of an inter-site link (ADR-0111 §R2).
+type SiteLink struct {
+	// Sites names the two ends of the link. Order does not matter; the planner
+	// normalises the pair before looking it up.
+	Sites [2]string `koanf:"sites"`
+	// Mbit is the link capacity in Mbit/s. Must be > 0.
+	Mbit float64 `koanf:"mbit"`
+}
+
+// Route holds planner tuning for the route decision (ADR-0111).
+type Route struct {
+	// Headroom is the multiplier applied to the asset bitrate before comparing
+	// it to the link capacity. Values > 1 reserve headroom (e.g. 1.5 means the
+	// link must have 50% more capacity than the stream needs). 0 is treated as
+	// the planner's built-in default (1.5). Must be ≥ 1 when set explicitly.
+	Headroom float64 `koanf:"headroom"`
+}
+
 // SiteMap resolves an IP address to the site name it belongs to (ADR-0111).
 //
 // The zero value is a valid single-site map: every non-public address is
@@ -266,6 +293,22 @@ func (m SiteMap) SiteOf(addr netip.Addr) string {
 
 // Self is the site this controller sits in (peer.site).
 func (m SiteMap) Self() string { return m.peerSite }
+
+// HasSite reports whether name is a site known to this map.
+//
+// In single-site mode (no CIDR entries), the only known site is the peer's
+// own site. In multi-site mode, every named entry is known.
+func (m SiteMap) HasSite(name string) bool {
+	if len(m.entries) == 0 {
+		return name == m.peerSite
+	}
+	for _, e := range m.entries {
+		if e.name == name {
+			return true
+		}
+	}
+	return false
+}
 
 // ParseSites parses a sites map from config and returns a SiteMap.
 //
@@ -1226,10 +1269,10 @@ func (c Config) Validate() error {
 	}
 
 	// ADR-0111: sites are validated here so a broken config is caught at startup
-	// (same pattern as render_addr and trusted_nets above). The parsed form is
-	// thrown away — callers build it themselves via ParseSites using the values
-	// that pass this check.
-	if _, err := ParseSites(c.Sites, c.Peer.Site); err != nil {
+	// (same pattern as render_addr and trusted_nets above). The parsed SiteMap
+	// is kept for the site_links validation that follows.
+	siteMap, err := ParseSites(c.Sites, c.Peer.Site)
+	if err != nil {
 		return err
 	}
 
@@ -1247,6 +1290,54 @@ func (c Config) Validate() error {
 		}
 	}
 
+	// ADR-0111: validate site_links. Each link must name two distinct known
+	// sites, have a positive capacity, and not duplicate a pair already listed.
+	if err := validateSiteLinks(c.SiteLinks, siteMap); err != nil {
+		return err
+	}
+
+	// ADR-0111: route.headroom, when set, must be ≥ 1.
+	if c.Route.Headroom != 0 && c.Route.Headroom < 1 {
+		return fmt.Errorf("config: route.headroom %.4g must be ≥ 1 (or 0 to use the planner default of 1.5)", c.Route.Headroom)
+	}
+
+	return nil
+}
+
+// validateSiteLinks checks every SiteLink entry for self-links, unknown sites,
+// non-positive capacity, and duplicate pairs.
+func validateSiteLinks(links []SiteLink, sm SiteMap) error {
+	seen := map[[2]string]bool{}
+	for i, l := range links {
+		a, b := l.Sites[0], l.Sites[1]
+		if a == b {
+			return fmt.Errorf("config: site_links[%d]: both ends are %q — a link must connect two different sites", i, a)
+		}
+		if a == "" || b == "" {
+			return fmt.Errorf("config: site_links[%d]: site names must not be empty", i)
+		}
+		if l.Mbit <= 0 {
+			return fmt.Errorf("config: site_links[%d] (%s↔%s): mbit must be > 0, got %g", i, a, b, l.Mbit)
+		}
+		// Validate that both sites are known. A site is known if it appears in
+		// the SiteMap (including the peer's own site) or in the declared Sites
+		// map. We re-check via SiteMap.Self() for the peer site and iterate the
+		// SiteMap entries for named ones.
+		for _, end := range []string{a, b} {
+			if !sm.HasSite(end) {
+				return fmt.Errorf("config: site_links[%d]: site %q is not declared in sites", i, end)
+			}
+		}
+		// Normalise the pair for duplicate detection.
+		key := l.Sites
+		if key[0] > key[1] {
+			key[0], key[1] = key[1], key[0]
+		}
+		if seen[key] {
+			return fmt.Errorf("config: site_links: duplicate link between %q and %q", a, b)
+		}
+		seen[key] = true
+	}
 	return nil
 }
 
