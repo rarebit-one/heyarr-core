@@ -85,7 +85,7 @@ func runRecover(ctx context.Context, configPath string, out io.Writer, f recover
 	if f.fromEndpoint == "" || f.fromKey == "" || f.identityKey == "" {
 		return fmt.Errorf("--from-endpoint, --from-key and --identity-key are all required")
 	}
-	cfg, err := config.Load(configPath)
+	cfg, err := config.LoadFromContext(ctx, configPath)
 	if err != nil {
 		return err
 	}

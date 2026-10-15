@@ -195,7 +195,7 @@ have been layered and validated — which is what Heyarr will actually use, and
 frequently not what any single source says.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := config.Load(*configPath)
+			cfg, err := config.LoadFromContext(cmd.Context(), *configPath)
 			if err != nil {
 				return err
 			}
@@ -229,7 +229,7 @@ func newRoleCommand(name, short string, opts Options, configPath *string, roles 
 // Every role is constructed the same way regardless of how many are running,
 // which is what keeps `heyarr all` honest about ADR-0002.
 func runRoles(ctx context.Context, opts Options, configPath string, roles roleSet) error {
-	cfg, err := config.Load(configPath)
+	cfg, err := config.LoadFromContext(ctx, configPath)
 	if err != nil {
 		return err
 	}

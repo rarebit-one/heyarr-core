@@ -80,7 +80,7 @@ the keys unlocked for --unlock-ttl. After that the next unwrap asks again (or
 reads ` + devicekeys.PassphraseFileEnvVar + ` when it is set).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := config.Load(configPath)
+			cfg, err := config.LoadFromContext(cmd.Context(), configPath)
 			if err != nil {
 				return err
 			}
@@ -100,7 +100,7 @@ reads ` + devicekeys.PassphraseFileEnvVar + ` when it is set).`,
 			if err != nil {
 				return err
 			}
-			apiClient, err := flags.newClient(configPath)
+			apiClient, err := flags.newClient(cmd.Context(), configPath)
 			if err != nil {
 				return err
 			}

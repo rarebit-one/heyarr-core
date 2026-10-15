@@ -80,7 +80,7 @@ func (f *deviceClientFlags) register(cmd *cobra.Command) {
 func (f *deviceClientFlags) withDeviceClient(cmd *cobra.Command, configPath *string, deviceDir string,
 	fn func(context.Context, *client.Client) error,
 ) error {
-	cfg, err := config.Load(*configPath)
+	cfg, err := config.LoadFromContext(cmd.Context(), *configPath)
 	if err != nil {
 		return err
 	}

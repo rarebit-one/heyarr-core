@@ -48,7 +48,7 @@ management, peer enrolment and policy are the admin surface, on the
 controller's client API, behind an admin-scoped bearer token.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(*configPath)
+			cfg, err := config.LoadFromContext(cmd.Context(), *configPath)
 			if err != nil {
 				return err
 			}

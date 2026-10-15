@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -31,8 +32,8 @@ const (
 // rotate) turn a config selection into a client.Custody, so create wraps to and
 // open unwraps with the same key. stderr is used for best-effort wake warnings
 // when the Cruciform backend is selected; callers should pass cmd.ErrOrStderr().
-func selectCustody(configPath *string, deviceDir string, stderr io.Writer) (client.Custody, error) {
-	return selectCustodyWith(configPath, deviceDir, custodyOverride{}, stderr)
+func selectCustody(ctx context.Context, configPath *string, deviceDir string, stderr io.Writer) (client.Custody, error) {
+	return selectCustodyWith(ctx, configPath, deviceDir, custodyOverride{}, stderr)
 }
 
 // custodyOverride is a per-invocation custody selection that wins over the
@@ -55,12 +56,12 @@ func (o *custodyOverride) register(cmd *cobra.Command) {
 			recipientkey.DefaultPINCredential+")")
 }
 
-func selectCustodyWith(configPath *string, deviceDir string, ov custodyOverride, stderr io.Writer) (client.Custody, error) {
+func selectCustodyWith(ctx context.Context, configPath *string, deviceDir string, ov custodyOverride, stderr io.Writer) (client.Custody, error) {
 	path := ""
 	if configPath != nil {
 		path = *configPath
 	}
-	cfg, err := config.Load(path)
+	cfg, err := config.LoadFromContext(ctx, path)
 	if err != nil {
 		return nil, err
 	}

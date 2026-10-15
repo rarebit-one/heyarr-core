@@ -64,7 +64,7 @@ generation behind even while that peer is unreachable.`,
 }
 
 func runBackupPush(ctx context.Context, configPath string, out io.Writer, asJSON bool) error {
-	cfg, err := config.Load(configPath)
+	cfg, err := config.LoadFromContext(ctx, configPath)
 	if err != nil {
 		return err
 	}

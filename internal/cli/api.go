@@ -126,8 +126,8 @@ func (f *listFlags) options() client.ListOptions {
 // The flag wins so that a script can override an inherited environment without
 // unsetting it. The file is last because it is the ambient default, and an
 // ambient default that overrode an explicit one would be a trap.
-func (f *clientFlags) newClient(configPath string) (*client.Client, error) {
-	cfg, err := config.Load(configPath)
+func (f *clientFlags) newClient(ctx context.Context, configPath string) (*client.Client, error) {
+	cfg, err := config.LoadFromContext(ctx, configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -375,7 +375,7 @@ func stampPtr(t *time.Time) string {
 func (f *clientFlags) withClient(cmd *cobra.Command, configPath *string,
 	fn func(context.Context, *client.Client) error,
 ) error {
-	c, err := f.newClient(*configPath)
+	c, err := f.newClient(cmd.Context(), *configPath)
 	if err != nil {
 		return err
 	}

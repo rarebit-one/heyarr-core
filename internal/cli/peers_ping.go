@@ -60,7 +60,7 @@ site, and a connection error means the endpoint is wrong or nothing is
 listening there.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(*configPath)
+			cfg, err := config.LoadFromContext(cmd.Context(), *configPath)
 			if err != nil {
 				return err
 			}

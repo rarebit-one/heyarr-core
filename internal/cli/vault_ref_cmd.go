@@ -118,7 +118,7 @@ func classifyAPI(err error) error {
 // openRefSpace opens spaceID for the selected custody and classifies each way
 // it can fail into the exit codes above.
 func openRefSpace(ctx context.Context, c *apiclient.Client, vc *vaultCustody, spaceID string) (*client.Manager, error) {
-	cust, err := vc.selectCustody()
+	cust, err := vc.selectCustody(ctx)
 	if err != nil {
 		return nil, withExit(ExitVaultCustody, err)
 	}

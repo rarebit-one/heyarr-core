@@ -42,7 +42,7 @@ than racing it.`,
 // withDeviceAuth opens and migrates the controller database and hands a device
 // identity store to fn, the deviceauth counterpart of withStore.
 func withDeviceAuth(ctx context.Context, configPath string, fn func(context.Context, *deviceauth.Store) error) error {
-	cfg, err := config.Load(configPath)
+	cfg, err := config.LoadFromContext(ctx, configPath)
 	if err != nil {
 		return err
 	}

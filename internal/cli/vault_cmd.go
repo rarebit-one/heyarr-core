@@ -88,12 +88,12 @@ type vaultCustody struct {
 	stderr     func() io.Writer
 }
 
-func (v *vaultCustody) selectCustody() (client.Custody, error) {
+func (v *vaultCustody) selectCustody(ctx context.Context) (client.Custody, error) {
 	w := io.Writer(os.Stderr)
 	if v.stderr != nil {
 		w = v.stderr()
 	}
-	return selectCustodyWith(v.configPath, v.deviceDir, v.override, w)
+	return selectCustodyWith(ctx, v.configPath, v.deviceDir, v.override, w)
 }
 
 // loadDrive materialises a space's vault DRIVE CRDT on this device: list the
@@ -188,7 +188,7 @@ peer stores ciphertext it cannot open.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			filePath := args[0]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				cust, err := vc.selectCustody()
+				cust, err := vc.selectCustody(cmd.Context())
 				if err != nil {
 					return err
 				}
@@ -369,7 +369,7 @@ conflict), is refused rather than guessing which bytes were meant.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID, vaultPath := args[0], args[1]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				cust, err := vc.selectCustody()
+				cust, err := vc.selectCustody(cmd.Context())
 				if err != nil {
 					return err
 				}
@@ -417,7 +417,7 @@ file's vault path, plaintext size, and whether the path is currently conflicted
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID := args[0]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				cust, err := vc.selectCustody()
+				cust, err := vc.selectCustody(cmd.Context())
 				if err != nil {
 					return err
 				}

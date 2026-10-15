@@ -66,7 +66,7 @@ away: the devices it admitted are untouched.`,
 				}
 				view := deviceRevokeView{Device: revoked, Rotated: []spaceRotateView{}, Skipped: []skippedSpace{}}
 				if !noRotate && revoked.EncryptionKey != "" {
-					cust, err := selectCustody(configPath, *deviceDir, cmd.ErrOrStderr())
+					cust, err := selectCustody(cmd.Context(), configPath, *deviceDir, cmd.ErrOrStderr())
 					if err != nil {
 						return err
 					}

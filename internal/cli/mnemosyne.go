@@ -53,8 +53,12 @@ identification, render and compat adapters are not mounted.`,
 		"path to the configuration file (default: $"+config.MnemosyneConfigPathEnv+", else "+
 			config.MnemosyneSystemConfigPath+" if present, else built-in defaults plus MNEMOSYNE_ environment)")
 
-	root.PersistentPreRunE = func(_ *cobra.Command, _ []string) error {
+	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		configPath = config.ResolveMnemosynePath(configPath)
+		// The shared subcommands (token, device, space, vault, …) load config
+		// through config.LoadFromContext; tell them this is the mnemosyne
+		// profile, or they derive heyarr.db beside the server's mnemosyne.db.
+		cmd.SetContext(config.WithLoader(cmd.Context(), config.LoadMnemosyne))
 		return nil
 	}
 

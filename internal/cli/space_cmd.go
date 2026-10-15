@@ -108,7 +108,7 @@ yet; run ` + "`heyarr identity generate`" + ` to enable it, or pass --recovery=f
 			}
 			var selfID string
 			if includeSelf {
-				cust, err := selectCustody(configPath, *deviceDir, cmd.ErrOrStderr())
+				cust, err := selectCustody(cmd.Context(), configPath, *deviceDir, cmd.ErrOrStderr())
 				if err != nil {
 					return err
 				}
@@ -341,7 +341,7 @@ never sees the item.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID := args[0]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				cust, err := selectCustody(configPath, *deviceDir, cmd.ErrOrStderr())
+				cust, err := selectCustody(cmd.Context(), configPath, *deviceDir, cmd.ErrOrStderr())
 				if err != nil {
 					return err
 				}
@@ -407,7 +407,7 @@ and is refused.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID := args[0]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				cust, err := selectCustody(configPath, *deviceDir, cmd.ErrOrStderr())
+				cust, err := selectCustody(cmd.Context(), configPath, *deviceDir, cmd.ErrOrStderr())
 				if err != nil {
 					return err
 				}
@@ -545,7 +545,7 @@ materialises the state.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID := args[0]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				cust, err := selectCustody(configPath, *deviceDir, cmd.ErrOrStderr())
+				cust, err := selectCustody(cmd.Context(), configPath, *deviceDir, cmd.ErrOrStderr())
 				if err != nil {
 					return err
 				}
@@ -633,7 +633,7 @@ yet understand key epochs and would lose access to it.`,
 				return fmt.Errorf("name at least one recipient to revoke with --revoke")
 			}
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				cust, err := selectCustody(configPath, *deviceDir, cmd.ErrOrStderr())
+				cust, err := selectCustody(cmd.Context(), configPath, *deviceDir, cmd.ErrOrStderr())
 				if err != nil {
 					return err
 				}
