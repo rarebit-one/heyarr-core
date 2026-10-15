@@ -1,12 +1,15 @@
 package httpapi
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
@@ -75,8 +78,43 @@ func WriteJSONWith(w http.ResponseWriter, r *http.Request, log *slog.Logger, sta
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Add("Vary", "Accept-Encoding")
+	if r.Method == http.MethodGet && len(buf) >= 1024 && acceptsGzip(r.Header.Values("Accept-Encoding")) {
+		var compressed bytes.Buffer
+		zipper, err := gzip.NewWriterLevel(&compressed, gzip.BestSpeed)
+		if err == nil {
+			_, err = zipper.Write(buf)
+			if closeErr := zipper.Close(); err == nil {
+				err = closeErr
+			}
+		}
+		if err == nil && compressed.Len() < len(buf) {
+			buf = compressed.Bytes()
+			w.Header().Set("Content-Encoding", "gzip")
+		}
+	}
 	w.WriteHeader(status)
 	// #nosec G705 -- the body is JSON produced by encoding/json and served as
 	// application/json with nosniff; there is no HTML context to escape into.
 	_, _ = w.Write(buf)
+}
+
+func acceptsGzip(values []string) bool {
+	for _, value := range values {
+		for _, coding := range strings.Split(value, ",") {
+			parts := strings.Split(strings.TrimSpace(coding), ";")
+			if !strings.EqualFold(strings.TrimSpace(parts[0]), "gzip") {
+				continue
+			}
+			for _, param := range parts[1:] {
+				name, value, found := strings.Cut(strings.TrimSpace(param), "=")
+				if found && strings.EqualFold(strings.TrimSpace(name), "q") {
+					q, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+					return err == nil && q > 0 && q <= 1
+				}
+			}
+			return true
+		}
+	}
+	return false
 }
