@@ -335,11 +335,11 @@ an agent-launched server with no terminal needs.`,
 			// serves ciphertext (§72, §73).
 			if configPath != "" {
 				var flags clientFlags
-				c, err := flags.newClient(configPath)
+				c, err := flags.newClient(cmd.Context(), configPath)
 				if err != nil {
 					return err
 				}
-				cust, err := selectCustody(&configPath, *dir, cmd.ErrOrStderr())
+				cust, err := selectCustody(cmd.Context(), &configPath, *dir, cmd.ErrOrStderr())
 				if err != nil {
 					return err
 				}

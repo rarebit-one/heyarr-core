@@ -70,7 +70,7 @@ a restore with it.`,
 }
 
 func runBackup(ctx context.Context, configPath string, out io.Writer, asJSON bool) error {
-	cfg, err := config.Load(configPath)
+	cfg, err := config.LoadFromContext(ctx, configPath)
 	if err != nil {
 		return err
 	}

@@ -102,7 +102,7 @@ func runSpaceExportRecovery(ctx context.Context, cmd *cobra.Command, configPath,
 		return fmt.Errorf("--recipient: %w", err)
 	}
 
-	cfg, err := config.Load(configPath)
+	cfg, err := config.LoadFromContext(ctx, configPath)
 	if err != nil {
 		return err
 	}

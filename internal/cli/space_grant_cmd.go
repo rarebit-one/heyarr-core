@@ -96,7 +96,7 @@ Undo with ` + "`heyarr space revoke-executor`" + `.`,
 						return err
 					}
 				}
-				cust, err := selectCustody(configPath, *deviceDir, cmd.ErrOrStderr())
+				cust, err := selectCustody(cmd.Context(), configPath, *deviceDir, cmd.ErrOrStderr())
 				if err != nil {
 					return err
 				}

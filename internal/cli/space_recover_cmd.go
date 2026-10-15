@@ -116,7 +116,7 @@ func runSpaceRecover(ctx context.Context, cmd *cobra.Command, configPath, device
 	// to store re-wrapped ones; a blob recovery without --rewrap needs none.
 	var db *sqlite.DB
 	if fromBlob == "" || rewrap {
-		cfg, err := config.Load(configPath)
+		cfg, err := config.LoadFromContext(ctx, configPath)
 		if err != nil {
 			return err
 		}

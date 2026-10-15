@@ -56,7 +56,7 @@ last report in this process, which for a scheduled reporter is the ordinary
 cycle; run without it to correct drift.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(*configPath)
+			cfg, err := config.LoadFromContext(cmd.Context(), *configPath)
 			if err != nil {
 				return err
 			}

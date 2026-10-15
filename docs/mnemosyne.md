@@ -39,7 +39,9 @@ rather than hiding the distinction inside a feature flag.
 function that registers works, assets, libraries, jobs, tokens, devices, peers,
 events and sessions) is not mounted on the personal profile. Tokens, devices and
 peers are managed through the CLI (`mnemosyne token create`, `mnemosyne device
-list`, etc.), which opens the database directly rather than through HTTP.
+list`, etc.), which opens the database directly rather than through HTTP. The CLI
+loads the same mnemosyne profile as the server, so it opens the same
+`mnemosyne.db` — a token minted on the command line is one the server knows.
 
 Mnemosyne **does not** mount: the resource API, library/scanner/ingest, search,
 acquisition, the MCP surface, render, relay, DLNA, OPDS, Subsonic, pair relay

@@ -36,7 +36,7 @@ import (
 func withIntegrity(ctx context.Context, configPath string,
 	fn func(context.Context, integrity.Options, *cas.FS, *catalog.Catalog, string) error,
 ) error {
-	cfg, err := config.Load(configPath)
+	cfg, err := config.LoadFromContext(ctx, configPath)
 	if err != nil {
 		return err
 	}

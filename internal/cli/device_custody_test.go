@@ -176,7 +176,7 @@ func TestSealedFileDeviceThroughTheCLI(t *testing.T) {
 		t.Fatalf("prove: %v\n%s", err, out)
 	}
 	// And the space key itself, unwrapped through the selected custody.
-	cust, err := selectCustody(&f.config, custodyDir, io.Discard)
+	cust, err := selectCustody(context.Background(), &f.config, custodyDir, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}

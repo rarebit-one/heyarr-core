@@ -430,7 +430,7 @@ func runRewrapStage(cmd *cobra.Command, configPath *string, deviceDir, identityD
 		}
 	}
 
-	cust, err := offlineCustody(configPath, deviceDir, cmd.ErrOrStderr())
+	cust, err := offlineCustody(ctx, configPath, deviceDir, cmd.ErrOrStderr())
 	if err != nil {
 		return spaceRewrapView{}, err
 	}
@@ -590,7 +590,7 @@ func runRewrapProve(cmd *cobra.Command, configPath *string, deviceDir, dir, gen2
 	if err != nil {
 		return spaceRewrapView{}, err
 	}
-	cust, err := offlineCustody(configPath, deviceDir, cmd.ErrOrStderr())
+	cust, err := offlineCustody(cmd.Context(), configPath, deviceDir, cmd.ErrOrStderr())
 	if err != nil {
 		return spaceRewrapView{}, err
 	}
@@ -830,7 +830,7 @@ func decodeStageWraps(m rewrapManifest) (map[string]map[string][]byte, error) {
 // server-side set and content checks for every space, then the uploads and
 // their read-back.
 func runRewrapUpload(ctx context.Context, c *apiclient.Client, configPath *string, deviceDir, dir string, secret recovery.Secret, stageID string, stderr io.Writer) (spaceRewrapView, error) {
-	cust, err := selectCustody(configPath, deviceDir, stderr)
+	cust, err := selectCustody(ctx, configPath, deviceDir, stderr)
 	if err != nil {
 		return spaceRewrapView{}, err
 	}
@@ -1091,12 +1091,12 @@ func checkLocalGen2Identity(identityDir string, g2 recoveryIdentity) error {
 // offlineCustody is selectCustody for the offline modes, which need a backend
 // that unwraps on this machine. The cruciform backend unwraps on a paired
 // phone over the relay, so it is refused.
-func offlineCustody(configPath *string, deviceDir string, stderr io.Writer) (client.Custody, error) {
+func offlineCustody(ctx context.Context, configPath *string, deviceDir string, stderr io.Writer) (client.Custody, error) {
 	path := ""
 	if configPath != nil {
 		path = *configPath
 	}
-	cfg, err := config.Load(path)
+	cfg, err := config.LoadFromContext(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -1104,7 +1104,7 @@ func offlineCustody(configPath *string, deviceDir string, stderr io.Writer) (cli
 		return nil, fmt.Errorf("vault.unwrapper is %q, which unwraps on a paired phone over the network; "+
 			"the rewrap is offline and needs a device key that unwraps here (the gen2 laptop device's own key: its sealed file, or its software key)", custody.Cruciform)
 	}
-	return selectCustody(configPath, deviceDir, stderr)
+	return selectCustody(ctx, configPath, deviceDir, stderr)
 }
 
 // expectDBSpaceIDs reads every encrypted_spaces id from a copy of the frozen

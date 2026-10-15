@@ -54,7 +54,7 @@ func checkPairing(
 		Return:   reachability.ResultUnknown,
 	}
 
-	cfg, err := config.Load(configPath)
+	cfg, err := config.LoadFromContext(ctx, configPath)
 	if err != nil {
 		pairing.Detail = "this node's configuration could not be read: " + err.Error()
 		return pairing

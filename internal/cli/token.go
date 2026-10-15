@@ -50,7 +50,7 @@ recovered afterwards.`,
 // first command run on a new install, before any role has started, and failing
 // with "no such table: api_tokens" would be a puzzle rather than an error.
 func withStore(ctx context.Context, configPath string, fn func(context.Context, *auth.Store) error) error {
-	cfg, err := config.Load(configPath)
+	cfg, err := config.LoadFromContext(ctx, configPath)
 	if err != nil {
 		return err
 	}
