@@ -34,22 +34,24 @@ func TestCatalogFetchAudit(t *testing.T) {
 		`SELECT id FROM works ORDER BY created_at DESC, id DESC LIMIT 51`,
 		`SELECT id FROM works WHERE content_type = 'music' ORDER BY sort_title, id LIMIT 201`,
 	} {
-		rows, err := h.db.Reader().Query("EXPLAIN QUERY PLAN " + statement)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for rows.Next() {
-			var id, parent, unused int
-			var detail string
-			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+		func() {
+			rows, err := h.db.Reader().Query("EXPLAIN QUERY PLAN " + statement)
+			if err != nil {
 				t.Fatal(err)
 			}
-			t.Logf("plan %s: %s", statement, detail)
-		}
-		if err := rows.Err(); err != nil {
-			t.Fatal(err)
-		}
-		_ = rows.Close()
+			defer rows.Close()
+			for rows.Next() {
+				var id, parent, unused int
+				var detail string
+				if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("plan %s: %s", statement, detail)
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+		}()
 	}
 
 	type scenario struct {
