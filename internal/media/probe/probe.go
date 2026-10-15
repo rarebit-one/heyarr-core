@@ -74,23 +74,31 @@ type Result struct {
 
 // Stream is one elementary stream.
 type Stream struct {
-	Index      int    `json:"index"`
-	Type       string `json:"type"` // video, audio, subtitle, data
-	Codec      string `json:"codec"`
-	Profile    string `json:"profile,omitempty"`
-	Level      int    `json:"level,omitempty"`
-	Width      int    `json:"width,omitempty"`
-	Height     int    `json:"height,omitempty"`
-	FrameRate  string `json:"frame_rate,omitempty"`
-	Channels   int    `json:"channels,omitempty"`
-	SampleRate int    `json:"sample_rate,omitempty"`
-	BitrateBPS int64  `json:"bitrate_bps,omitempty"`
-	Language   string `json:"language,omitempty"`
-	Commentary bool   `json:"commentary,omitempty"`
+	Index           int    `json:"index"`
+	Type            string `json:"type"` // video, audio, subtitle, data
+	Codec           string `json:"codec"`
+	Profile         string `json:"profile,omitempty"`
+	Level           int    `json:"level,omitempty"`
+	Width           int    `json:"width,omitempty"`
+	Height          int    `json:"height,omitempty"`
+	FrameRate       string `json:"frame_rate,omitempty"`
+	Channels        int    `json:"channels,omitempty"`
+	SampleRate      int    `json:"sample_rate,omitempty"`
+	BitrateBPS      int64  `json:"bitrate_bps,omitempty"`
+	Language        string `json:"language,omitempty"`
+	Commentary      bool   `json:"commentary,omitempty"`
+	AttachedPicture bool   `json:"attached_picture,omitempty"`
 }
 
-// VideoStream returns the first video stream, if any.
-func (r Result) VideoStream() (Stream, bool) { return r.firstOfType("video") }
+// VideoStream returns the first moving-picture stream, excluding embedded artwork.
+func (r Result) VideoStream() (Stream, bool) {
+	for _, s := range r.Streams {
+		if s.Type == "video" && !s.AttachedPicture {
+			return s, true
+		}
+	}
+	return Stream{}, false
+}
 
 // AudioStream returns the first audio stream, if any.
 func (r Result) AudioStream() (Stream, bool) { return r.firstOfType("audio") }
@@ -599,19 +607,20 @@ func parse(raw []byte) (Result, error) {
 	}
 	for _, s := range doc.Streams {
 		out.Streams = append(out.Streams, Stream{
-			Index:      s.Index,
-			Type:       s.CodecType,
-			Codec:      s.CodecName,
-			Profile:    s.Profile,
-			Level:      s.Level,
-			Width:      s.Width,
-			Height:     s.Height,
-			FrameRate:  s.RFrameRate,
-			Channels:   s.Channels,
-			SampleRate: parseSampleRate(s.SampleRate),
-			BitrateBPS: parseInt(s.BitRate),
-			Language:   s.Tags["language"],
-			Commentary: s.Disposition["comment"] == 1,
+			Index:           s.Index,
+			Type:            s.CodecType,
+			Codec:           s.CodecName,
+			Profile:         s.Profile,
+			Level:           s.Level,
+			Width:           s.Width,
+			Height:          s.Height,
+			FrameRate:       s.RFrameRate,
+			Channels:        s.Channels,
+			SampleRate:      parseSampleRate(s.SampleRate),
+			BitrateBPS:      parseInt(s.BitRate),
+			Language:        s.Tags["language"],
+			Commentary:      s.Disposition["comment"] == 1,
+			AttachedPicture: s.Disposition["attached_pic"] == 1,
 		})
 	}
 	return out, nil

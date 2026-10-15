@@ -1171,13 +1171,14 @@ func (a *API) siblingAssets(ctx context.Context, assetID string) []renderroute.S
 			continue
 		}
 		var parsed []struct {
-			Type   string `json:"type"`
-			Height int    `json:"height"`
+			Type            string `json:"type"`
+			Height          int    `json:"height"`
+			AttachedPicture bool   `json:"attached_picture"`
 		}
 		_ = json.Unmarshal([]byte(streams), &parsed)
 		height := 0
 		for _, s := range parsed {
-			if s.Type == "video" && s.Height > 0 {
+			if s.Type == "video" && !s.AttachedPicture && s.Height > 0 {
 				height = s.Height
 				break
 			}

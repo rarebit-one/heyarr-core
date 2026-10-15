@@ -28,7 +28,7 @@ func TestStreamArgsAreTheContract(t *testing.T) {
 			name: "copy video, transcode audio — the AC-3 case",
 			spec: ffmpeg.StreamSpec{Source: "/srv/x.mp4", CopyVideo: true},
 			want: []string{
-				"-map 0:v:0? -map 0:a:0?", "-c:v copy", "-c:a aac -ac 2 -b:a 192k",
+				"-map 0:V:0? -map 0:a:0?", "-c:v copy", "-c:a aac -ac 2 -b:a 192k",
 				"-movflags frag_keyframe+empty_moov+default_base_moof+delay_moov -frag_duration 1000000 -f mp4 -",
 			},
 			wantNot: []string{"libx264", "-ss", "scale="},
@@ -149,6 +149,15 @@ func TestStreamRepackagesWhatTheClientCannotDecode(t *testing.T) {
 			source: generate(t, ffmpegPath, "mp2.avi", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "mp2", "-f", "avi"),
 			spec:   ffmpeg.StreamSpec{CopyVideo: true},
 			want:   "mov,mp4,m4a,3gp,3g2,mj2|h264,aac",
+		},
+		{
+			name: "MP3 with embedded cover: audio to AAC, cover excluded",
+			source: generate(t, ffmpegPath, "album-art.mp3",
+				"-map", "1:a:0", "-map", "0:v:0",
+				"-c:a", "libmp3lame", "-c:v", "mjpeg", "-frames:v", "1",
+				"-disposition:v:0", "attached_pic", "-f", "mp3"),
+			spec: ffmpeg.StreamSpec{},
+			want: "mov,mp4,m4a,3gp,3g2,mj2|aac",
 		},
 		{
 			name:   "AC-3 the client declares: audio copied too",

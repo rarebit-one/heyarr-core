@@ -79,8 +79,9 @@ type StreamSpec struct {
 //	-nostdin            no terminal to block on (see remuxArgs).
 //	-ss before -i       an input seek, which lands on a keyframe fast rather
 //	                    than decoding up to the instant.
-//	-map 0:v:0 / 0:a:N  the first video and the planned audio track. Only that
-//	                    audio is encoded; selecting it before streaming preserves
+//	-map 0:V:0? / 0:a:N?  the first real video (excluding attached cover art)
+//	                    and the planned audio track. Only that audio is encoded;
+//	                    selecting it before streaming preserves
 //	                    language preference without encoding unused tracks.
 //	-c:v copy           the contract when the client can decode the picture.
 //	-c:a aac -ac 2      stereo AAC is what every client on earth decodes; 5.1
@@ -102,7 +103,7 @@ func StreamArgs(spec StreamSpec) []string {
 	if spec.Start > 0 {
 		args = append(args, "-ss", strconv.FormatFloat(spec.Start, 'f', 3, 64))
 	}
-	args = append(args, "-i", spec.Source, "-map", "0:v:0?", "-map", fmt.Sprintf("0:a:%d?", spec.AudioTrack))
+	args = append(args, "-i", spec.Source, "-map", "0:V:0?", "-map", fmt.Sprintf("0:a:%d?", spec.AudioTrack))
 	if spec.CopyVideo {
 		args = append(args, "-c:v", "copy")
 	} else {
