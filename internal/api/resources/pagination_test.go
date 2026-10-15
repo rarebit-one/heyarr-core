@@ -197,7 +197,7 @@ func TestCursorsAreOpaqueAndValidated(t *testing.T) {
 func TestLimitIsClamped(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	const total = 250
+	const total = 550
 	for i := range total {
 		h.exec(`INSERT INTO works (id, content_type, work_key, title, sort_title, year, attributes, created_at, updated_at)
 			VALUES (?, 'movie', ?, ?, ?, NULL, '{}', ?, ?)`,
@@ -208,8 +208,8 @@ func TestLimitIsClamped(t *testing.T) {
 
 	var page workPage
 	decode(t, h, "/api/v1/works?limit=100000", &page)
-	if len(page.Items) != 200 {
-		t.Errorf("limit=100000 returned %d rows; it must be clamped to 200", len(page.Items))
+	if len(page.Items) != 500 {
+		t.Errorf("limit=100000 returned %d rows; it must be clamped to 500", len(page.Items))
 	}
 	if page.NextCursor == "" {
 		t.Error("the clamped page reports no continuation, so the rest of the collection is unreachable")
