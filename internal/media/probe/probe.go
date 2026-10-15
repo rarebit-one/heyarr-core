@@ -86,6 +86,7 @@ type Stream struct {
 	SampleRate      int    `json:"sample_rate,omitempty"`
 	BitrateBPS      int64  `json:"bitrate_bps,omitempty"`
 	Language        string `json:"language,omitempty"`
+	Title           string `json:"title,omitempty"`
 	Commentary      bool   `json:"commentary,omitempty"`
 	AttachedPicture bool   `json:"attached_picture,omitempty"`
 }
@@ -619,6 +620,7 @@ func parse(raw []byte) (Result, error) {
 			SampleRate:      parseSampleRate(s.SampleRate),
 			BitrateBPS:      parseInt(s.BitRate),
 			Language:        s.Tags["language"],
+			Title:           s.Tags["title"],
 			Commentary:      s.Disposition["comment"] == 1,
 			AttachedPicture: s.Disposition["attached_pic"] == 1,
 		})

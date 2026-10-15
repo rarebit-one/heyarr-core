@@ -48,6 +48,11 @@ media:
 
 Clients can override `media.audio_languages` with `client.audio_languages` on
 `POST /playback/plan`. An explicit empty list selects original main audio.
+The plan's `source.audio_tracks` lists each audio stream by zero-based `ordinal`,
+language, title, codec, channel count, and commentary flag. A client can send
+`client.audio_track` with one of those ordinals to select a specific stream.
+An explicit track takes precedence over `client.audio_languages`; an unknown
+ordinal returns HTTP 400. This also selects two tracks with the same language.
 The chosen track and its codec are planned together and signed into the stream
 URL, so seeking retains the language. Files without preferred dialogue retain
 their original audio. Direct-play clients select the same language themselves.

@@ -124,10 +124,16 @@ type clientPlan struct {
 	MIME     string `json:"mime"`
 	Reason   string `json:"reason"`
 	Source   *struct {
-		Container string `json:"container"`
-		Video     string `json:"video"`
-		Audio     string `json:"audio"`
-		Height    int    `json:"height"`
+		Container   string `json:"container"`
+		Video       string `json:"video"`
+		Audio       string `json:"audio"`
+		AudioTrack  int    `json:"audio_track"`
+		AudioTracks []struct {
+			Ordinal    int    `json:"ordinal"`
+			Title      string `json:"title"`
+			Commentary bool   `json:"commentary"`
+		} `json:"audio_tracks"`
+		Height int `json:"height"`
 	} `json:"source"`
 }
 

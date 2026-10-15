@@ -8839,6 +8839,12 @@ components:
             Preferred audio languages in order, using language tags or ISO codes.
             Omitted uses media.audio_languages; an empty list keeps original main
             audio. Missing preferred dialogue falls back to original main audio.
+        audio_track:
+          type: integer
+          minimum: 0
+          description: |
+            Zero-based source audio ordinal. Overrides audio_languages. An
+            ordinal absent from the probe returns HTTP 400.
         max_height:
           type: integer
           minimum: 0
@@ -8858,6 +8864,10 @@ components:
         audio: { type: string }
         audio_track: { type: integer, minimum: 0, description: "Selected zero-based audio ordinal." }
         audio_language: { type: string }
+        audio_tracks:
+          type: array
+          description: Every probed source audio stream in ordinal order.
+          items: { $ref: "#/components/schemas/PlaybackAudioTrack" }
         width: { type: integer }
         height: { type: integer }
         duration_seconds:
@@ -8866,6 +8876,16 @@ components:
             The source's full runtime in seconds — the scrubber total for a
             `stream` plan, whose transcode cannot report its own length until
             it finishes. Absent when the probe found none.
+
+    PlaybackAudioTrack:
+      type: object
+      properties:
+        ordinal: { type: integer, minimum: 0 }
+        language: { type: string }
+        title: { type: string }
+        codec: { type: string }
+        channels: { type: integer, minimum: 0 }
+        commentary: { type: boolean }
 
     PlaybackPlan:
       type: object
