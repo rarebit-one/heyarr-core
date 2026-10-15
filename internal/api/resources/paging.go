@@ -89,6 +89,10 @@ type query struct {
 // client asks for state=finished is worse than an error, because the client
 // believes the answer.
 func parseQuery(r *http.Request, collection string, cursorArity int) (query, error) {
+	return parseQueryWithMax(r, collection, cursorArity, maxLimit)
+}
+
+func parseQueryWithMax(r *http.Request, collection string, cursorArity, pageMax int) (query, error) {
 	q := query{limit: defaultLimit, values: map[string]string{}}
 	raw := r.URL.Query()
 
@@ -97,8 +101,8 @@ func parseQuery(r *http.Request, collection string, cursorArity int) (query, err
 		if err != nil || n <= 0 {
 			return q, fmt.Errorf("limit must be a positive integer, not %q", v)
 		}
-		if n > maxLimit {
-			n = maxLimit
+		if n > pageMax {
+			n = pageMax
 		}
 		q.limit = n
 	}

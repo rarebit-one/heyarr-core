@@ -92,7 +92,7 @@ func (a *API) listWorks(w http.ResponseWriter, r *http.Request) {
 	if sortBy == "recent" {
 		collection = "works-recent"
 	}
-	q, err := parseQuery(r, collection, 2)
+	q, err := parseQueryWithMax(r, collection, 2, 500)
 	if err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return

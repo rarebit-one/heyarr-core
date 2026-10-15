@@ -205,7 +205,10 @@ paths:
         repeats rows exactly as OFFSET does.
       parameters:
         - $ref: "#/components/parameters/cursor"
-        - $ref: "#/components/parameters/limit"
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
+          description: Values above 500 are clamped. Other collections keep the 200-row maximum.
         - name: content_type
           in: query
           schema: { type: string }
