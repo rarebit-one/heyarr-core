@@ -28,6 +28,33 @@ func TestPreferredAudioChangesCodecNegotiation(t *testing.T) {
 	}
 }
 
+func TestClientCanChooseSameLanguageCommentaryTrack(t *testing.T) {
+	streamer := &fakeStreamer{}
+	h := newHarness(t, withStreamLeg(streamer, newFakeBlobs(t), nil)).seed()
+	h.seedProbe(blob1Hash, "matroska,webm", "h264", "aac", 1080)
+	h.exec(`UPDATE blob_probes SET streams=? WHERE blob_hash=?`, `[{"index":0,"type":"video","codec":"h264","height":1080},{"index":1,"type":"audio","codec":"aac","language":"eng","title":"Feature audio","channels":2},{"index":2,"type":"audio","codec":"ac3","language":"eng","title":"Director commentary","channels":6,"commentary":true}]`, blob1Hash)
+	client := `{"containers":["mp4"],"video":["h264"],"audio":["aac"],"audio_languages":["en"]`
+	resp, original := h.planForClient(t, "", asset1ID, client+`}`)
+	if resp.StatusCode != http.StatusOK || original.Source == nil || original.Source.AudioTrack != 0 || len(original.Source.AudioTracks) != 2 {
+		t.Fatalf("default status=%d source=%+v", resp.StatusCode, original.Source)
+	}
+	if track := original.Source.AudioTracks[1]; track.Ordinal != 1 || track.Title != "Director commentary" || !track.Commentary {
+		t.Fatalf("commentary track=%+v", track)
+	}
+	resp, alternate := h.planForClient(t, "", asset1ID, client+`,"audio_track":1}`)
+	if resp.StatusCode != http.StatusOK || alternate.Source == nil || alternate.Source.AudioTrack != 1 || alternate.Source.Audio != "ac3" || alternate.Mode != "stream" {
+		t.Fatalf("alternate status=%d plan=%+v", resp.StatusCode, alternate)
+	}
+	stream := h.do(http.MethodGet, alternate.URL+"?start=10", "", nil)
+	if stream.StatusCode != http.StatusOK || streamer.last(t).AudioTrack != 1 {
+		t.Fatalf("stream status=%d selected track=%d", stream.StatusCode, streamer.last(t).AudioTrack)
+	}
+	resp, _ = h.planForClient(t, "", asset1ID, client+`,"audio_track":2}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid track status=%d", resp.StatusCode)
+	}
+}
+
 func TestPreferredAudioIsInTheProducedStreamAfterASeek(t *testing.T) {
 	ffmpegPath, err := exec.LookPath("ffmpeg")
 	if err != nil {

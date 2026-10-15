@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -57,6 +58,8 @@ type ClientCaps struct {
 	MaxHeight int `json:"max_height"`
 	// AudioLanguages overrides the node preference. An explicit empty list keeps original main audio.
 	AudioLanguages []string `json:"audio_languages,omitempty"`
+	// AudioTrack selects a zero-based source audio ordinal, including commentary.
+	AudioTrack *int `json:"audio_track,omitempty"`
 }
 
 func (c ClientCaps) profile() playback.ClientProfile {
@@ -68,17 +71,28 @@ func (c ClientCaps) profile() playback.ClientProfile {
 // SourceInfo is what the probe found, rendered for a client deciding whether
 // to trust the plan.
 type SourceInfo struct {
-	Container     string `json:"container"`
-	Video         string `json:"video,omitempty"`
-	Audio         string `json:"audio,omitempty"`
-	AudioTrack    int    `json:"audio_track"`
-	AudioLanguage string `json:"audio_language,omitempty"`
-	Width         int    `json:"width,omitempty"`
-	Height        int    `json:"height,omitempty"`
+	Container     string           `json:"container"`
+	Video         string           `json:"video,omitempty"`
+	Audio         string           `json:"audio,omitempty"`
+	AudioTrack    int              `json:"audio_track"`
+	AudioLanguage string           `json:"audio_language,omitempty"`
+	AudioTracks   []AudioTrackInfo `json:"audio_tracks,omitempty"`
+	Width         int              `json:"width,omitempty"`
+	Height        int              `json:"height,omitempty"`
 	// Duration is the source's full runtime in seconds. The client uses it as
 	// the scrubber total for a `stream` plan, whose transcode cannot report its
 	// own length until it finishes producing.
 	Duration float64 `json:"duration_seconds,omitempty"`
+}
+
+// AudioTrackInfo describes a source track, including same-language alternatives.
+type AudioTrackInfo struct {
+	Ordinal    int    `json:"ordinal"`
+	Language   string `json:"language,omitempty"`
+	Title      string `json:"title,omitempty"`
+	Codec      string `json:"codec,omitempty"`
+	Channels   int    `json:"channels,omitempty"`
+	Commentary bool   `json:"commentary,omitempty"`
 }
 
 // Mode values on a plan answered for a client.
@@ -139,13 +153,30 @@ func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanReq
 		a.fail(w, r, "asset", err)
 		return
 	}
+	var streams []probe.Stream
+	if media.Known {
+		streams, err = a.probeStreams(ctx, blobHash)
+		if err != nil {
+			a.fail(w, r, "probe", err)
+			return
+		}
+	}
 	// Nothing has probed these bytes and this node can: probe now, so the
 	// answer is a finding rather than a guess, and cache it where the worker
 	// would have (blob_probes, keyed by hash — invariant 1).
 	if !media.Known && blobHash != "" {
-		if probed, ok := a.probeOnDemand(ctx, blobHash, audioLanguages); ok {
+		if probed, found, ok := a.probeOnDemand(ctx, blobHash, audioLanguages); ok {
 			media = probed
+			streams = found
 		}
+	}
+	if body.Client.AudioTrack != nil {
+		selected, ok := selectAudioTrack(media, streams, *body.Client.AudioTrack)
+		if !ok {
+			httpapi.Fail(w, r, problem.BadRequest("audio_track is not a source audio track"))
+			return
+		}
+		media = selected
 	}
 
 	device := client.DeviceProfile()
@@ -169,6 +200,7 @@ func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanReq
 			Container: media.Container, Video: media.VideoCodec, Audio: media.AudioCodec,
 			Width: media.Width, Height: media.Height, Duration: media.DurationSec,
 			AudioTrack: media.AudioTrack, AudioLanguage: media.AudioLanguage,
+			AudioTracks: audioTrackInfos(streams),
 		}
 	}
 
@@ -219,21 +251,21 @@ func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanReq
 // reports whether it could. Every failure is a log line and "no": a plan for
 // media that cannot be probed is a direct plan with the guess declared, which
 // is the planner's existing answer to an unmeasured file.
-func (a *API) probeOnDemand(ctx context.Context, blobHash string, audioLanguages []string) (playback.MediaProfile, bool) {
+func (a *API) probeOnDemand(ctx context.Context, blobHash string, audioLanguages []string) (playback.MediaProfile, []probe.Stream, bool) {
 	if a.prober == nil || a.blobs == nil {
-		return playback.MediaProfile{}, false
+		return playback.MediaProfile{}, nil, false
 	}
 	path, err := a.blobs.SourcePath(ctx, blobHash)
 	if err != nil {
 		// Not held here (a remote replica) or not a whole blob: nothing to
 		// probe, and not a fault.
-		return playback.MediaProfile{}, false
+		return playback.MediaProfile{}, nil, false
 	}
 	result, stats, err := a.prober.ProbePath(ctx, path)
 	if err != nil {
 		a.log.Warn("probing a blob for a playback plan", "request_id", httpapi.RequestIDFrom(ctx),
 			"blob", blobHash, "error", err)
-		return playback.MediaProfile{}, false
+		return playback.MediaProfile{}, nil, false
 	}
 	if a.catalog != nil {
 		if err := a.catalog.RecordProbe(ctx, blobHash, result, stats, a.now().UTC()); err != nil {
@@ -244,7 +276,42 @@ func (a *API) probeOnDemand(ctx context.Context, blobHash string, audioLanguages
 				"blob", blobHash, "error", err)
 		}
 	}
-	return profileFromProbe(result, audioLanguages), true
+	return profileFromProbe(result, audioLanguages), result.Streams, true
+}
+
+func (a *API) probeStreams(ctx context.Context, blobHash string) ([]probe.Stream, error) {
+	var raw string
+	if err := a.reader.QueryRowContext(ctx, `SELECT streams FROM blob_probes WHERE blob_hash = ?`, blobHash).Scan(&raw); err != nil {
+		return nil, err
+	}
+	var streams []probe.Stream
+	return streams, json.Unmarshal([]byte(raw), &streams)
+}
+
+func audioTrackInfos(streams []probe.Stream) []AudioTrackInfo {
+	var out []AudioTrackInfo
+	for _, stream := range streams {
+		if stream.Type != "audio" {
+			continue
+		}
+		out = append(out, AudioTrackInfo{
+			Ordinal: len(out), Language: stream.Language, Title: stream.Title,
+			Codec: stream.Codec, Channels: stream.Channels, Commentary: stream.Commentary,
+		})
+	}
+	return out
+}
+
+func selectAudioTrack(media playback.MediaProfile, streams []probe.Stream, ordinal int) (playback.MediaProfile, bool) {
+	for _, track := range audioTrackInfos(streams) {
+		if track.Ordinal != ordinal {
+			continue
+		}
+		media.AudioTrack, media.AudioCodec, media.AudioLanguage, media.Channels =
+			track.Ordinal, track.Codec, track.Language, track.Channels
+		return media, true
+	}
+	return media, false
 }
 
 // profileFromProbe is mediaProfile's mapping, over a live result rather than
