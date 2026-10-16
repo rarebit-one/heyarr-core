@@ -1,0 +1,19 @@
+{
+  "space_id": "0199a0a0-0000-7000-8000-000000000108",
+  "members": [
+    {
+      "space_id": "0199a0a0-0000-7000-8000-000000000108",
+      "principal_id": "p-owner",
+      "role": "owner",
+      "added_at": "2026-10-16T09:30:00Z",
+      "added_by_device": "ed25519:p-owner"
+    },
+    {
+      "space_id": "0199a0a0-0000-7000-8000-000000000108",
+      "principal_id": "p-bob",
+      "role": "member",
+      "added_at": "2026-10-16T09:30:00Z",
+      "added_by_device": "ed25519:p-owner"
+    }
+  ]
+}

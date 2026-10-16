@@ -1,0 +1,28 @@
+## heyarr space members list
+
+List a space's members, current and removed
+
+```
+heyarr space members list <space-id> [flags]
+```
+
+### Options
+
+```
+      --addr string         where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
+      --json                emit machine-readable JSON
+      --timeout duration    how long one request may take; streaming reads and the event stream are exempt (default 30s)
+      --token string        bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
+      --token-file string   read the bearer token from this file (default: <data_dir>/cli.token when it exists)
+```
+
+### Options inherited from parent commands
+
+```
+  -c, --config string       path to the configuration file (default: $HEYARR_CONFIG, else /etc/heyarr/config.yaml if present, else built-in defaults plus HEYARR_ environment)
+      --device-dir string   where this machine's device key lives (default: your config directory; VOID_WHICH_BINDS_DEVICE_DIR overrides)
+```
+
+### See also
+
+* [heyarr space members](heyarr_space_members.md)	 - List, add and remove the members of a shared space (ADR-0108)

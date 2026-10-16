@@ -133,6 +133,11 @@ type harnessOptions struct {
 	// personal-state API, as a controller wires it, so a wrap for a recipient
 	// that is not pinned is refused.
 	wrapAuthorizer bool
+	// deviceAuth lets a Device credential authenticate (ADR-0048) with the
+	// device store as the verifier, every enrolled device authorised for write,
+	// and the device store resolving shared-space members (ADR-0108) — what the
+	// owner-gated routes need in front of them.
+	deviceAuth bool
 }
 
 type harnessOption func(*harnessOptions)
@@ -144,6 +149,15 @@ func withAPIAuth(o *harnessOptions) { o.auth = true }
 // withWrapAuthorizer wires the device store as the personal-state API's
 // recipient authorizer.
 func withWrapAuthorizer(o *harnessOptions) { o.wrapAuthorizer = true }
+
+// withDeviceCredentials wires the device store as the Device-scheme verifier, with
+// every enrolled device management-authorised, and as the member resolver.
+func withDeviceCredentials(o *harnessOptions) { o.deviceAuth = true }
+
+// allManaged is a ManagementAuthorizer that authorises every device for write.
+type allManaged struct{}
+
+func (allManaged) ManagementAuthorized(context.Context, string) (bool, error) { return true, nil }
 
 // withDataDir puts the harness in a directory the test chose.
 func withDataDir(dir string) harnessOption {
@@ -255,6 +269,9 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 	if ho.wrapAuthorizer {
 		psOpts.Authorizer = identities
 	}
+	if ho.deviceAuth {
+		psOpts.Members = identities
+	}
 	psAPI, err := personalstateapi.New(psOpts)
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +289,7 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 		cfg.HTTP.UnixSocket = filepath.Join(dir, "heyarr.sock")
 	}
 
-	srv, err := httpapi.New(httpapi.Options{
+	srvOpts := httpapi.Options{
 		Config:        cfg,
 		Logger:        slog.New(slog.DiscardHandler),
 		DB:            db,
@@ -286,7 +303,12 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 		KnownSchemaVersion: harnessKnownSchemaVersion,
 		CASRoot:            store2.Root(),
 		Mount:              []httpapi.MountFunc{api.Mount, blobHandler.Mount, psAPI.Mount},
-	})
+	}
+	if ho.deviceAuth {
+		srvOpts.DeviceVerifier = identities
+		srvOpts.ManagementAuthorizer = allManaged{}
+	}
+	srv, err := httpapi.New(srvOpts)
 	if err != nil {
 		t.Fatal(err)
 	}

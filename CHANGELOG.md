@@ -10,6 +10,25 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **Shared-space membership (ADR-0108, #755).** A space now records who it is
+  shared with: `GET/POST /api/v1/spaces/{id}/members` and
+  `DELETE /api/v1/spaces/{id}/members/{member}` on the personal-state plane
+  (both profiles), changed only from the owner's device (any
+  management-authorised device on a `family` space or a space with no recorded
+  owner), and `heyarr`/`mnemosyne space members list|add|remove`. Adding a
+  member records the membership and the caller's device wraps the space key
+  for each of the member's enrolled devices through `POST /spaces/{id}/keys`;
+  the server never holds a key. Enrol-before-wrap now also consults
+  membership: on a `personal`, `shared` or `research` space with a membership
+  record, a wrap for an enrolled device whose user is not a current member is
+  refused with `wrap_recipient_not_member` (a recipient the space was created
+  for keeps being re-wrapped; recovery keys and granted service recipients pass
+  as before). Removal is a tombstone naming the recipients the completing
+  rotation must revoke; the rotation itself is still refused for non-playlist
+  spaces (#698, #706). Migration 00064 adds `space_members`; a space created
+  from a device records its owner as the first member, so from now on a new
+  owned space's key is wrapped only for its members' devices. Events
+  `personalstate.space.member_added` / `member_removed`.
 - **Album CRDT for Mnemosyne (Phase 3, #756).** `internal/personalstate/crdt`
   gains the `album` kind: an ordered, deduplicated collection of vault photos
   inside a space — create / title / caption / cover / add / remove / move /

@@ -1214,10 +1214,11 @@ func (c *Controller) personalStateAPI(d mountDeps) (*personalstateapi.API, error
 	}
 	// Principals resolves the executor a space grant names (ADR-0104), and the
 	// store's service recipients are the only wraps a restricted caller is
-	// shown: its own.
+	// shown: its own. Members resolves the users a shared-space membership
+	// change names and the device keys they hold (ADR-0108).
 	psAPI, err := personalstateapi.New(personalstateapi.Options{
 		Store: psStore, Replicator: replicator, Authorizer: d.identities,
-		Principals: d.tokens, Recipients: psStore, Logger: c.log,
+		Principals: d.tokens, Recipients: psStore, Members: d.identities, Logger: c.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)

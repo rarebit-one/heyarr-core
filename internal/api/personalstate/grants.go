@@ -169,15 +169,16 @@ func (a *API) failGrant(w http.ResponseWriter, r *http.Request, doing string, er
 	}
 }
 
-// spaceOwner is the principal a newly created space is recorded as owned by:
-// the user behind a Device credential. Any other caller records no owner — a
-// legacy household space, exactly as every space was before ADR-0104.
-func spaceOwner(r *http.Request) string {
+// spaceOwner is the principal a newly created space is recorded as owned by —
+// the user behind a Device credential — and the device key it was created
+// from. Any other caller records no owner — a legacy household space, exactly
+// as every space was before ADR-0104.
+func spaceOwner(r *http.Request) (owner, device string) {
 	id, ok := httpapi.IdentityFrom(r.Context())
 	if !ok || id.DeviceKey == "" || id.Principal.Kind != auth.KindUser {
-		return ""
+		return "", ""
 	}
-	return id.Principal.ID
+	return id.Principal.ID, id.DeviceKey
 }
 
 // restrictedCaller returns the identity when the caller is restricted.

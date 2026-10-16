@@ -130,9 +130,23 @@ func (s *Store) RekeyUser(ctx context.Context, principal, publicKey, recoveryKey
 	return out, nil
 }
 
+// ResolveUser finds the one user identity ref names: a principal id, a user
+// identity id, or a principal name. It is how a membership change (ADR-0108)
+// names the user it admits: ErrUnknownUser when no pinned identity matches,
+// ErrAmbiguousUser when more than one does.
+func (s *Store) ResolveUser(ctx context.Context, ref string) (User, error) {
+	return resolveUserTx(ctx, s.reader, ref)
+}
+
+// querier is the read half of *sql.DB and *sql.Tx, so one resolver serves a
+// transaction and a plain read.
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
 // resolveUserTx finds the one user identity a principal reference names: a
 // principal id, a user identity id, or a principal name.
-func resolveUserTx(ctx context.Context, tx *sql.Tx, principal string) (User, error) {
+func resolveUserTx(ctx context.Context, tx querier, principal string) (User, error) {
 	if principal == "" {
 		return User{}, fmt.Errorf("%w: no principal named", ErrUnknownUser)
 	}

@@ -1,7 +1,19 @@
 # 0108. A shared space is wrapped for another member's devices, and only an owner's device changes membership
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-10-10
+**Implementation note (2026-10-16, #755):** the membership record
+(`space_members`), `GET/POST /api/v1/spaces/{id}/members`,
+`DELETE /api/v1/spaces/{id}/members/{member}`, the membership gate on
+enrol-before-wrap (`wrap_recipient_not_member`) and `space members
+list|add|remove` are built. Two departures from the text below, both deliberate:
+the server records the membership and the *device* wraps through
+`POST /spaces/{id}/keys` (two requests, not one transaction — the server never
+holds a key to wrap, Invariant 6); and a removal records the tombstone and
+names the recipients to revoke but does not itself trigger the rotation, which
+the owner's device runs and the CLI still refuses for non-playlist spaces
+(#698, #706). The record does not yet replicate (ADR-0101 path); an owned space
+from before this record is gated from its first membership change on.
 **Milestone:** M9 — Encrypted personal state
 **Builds on:** [ADR-0049](0049-a-space-key-is-wrapped-for-a-device-encryption-key-and-a-peer-cannot-unwrap-it.md), [ADR-0095](0095-a-vault-is-a-filesystem-as-a-path-keyed-map-crdt.md), [ADR-0103](0103-a-space-key-has-epochs-and-a-rotation-seals-the-previous-key-under-the-next.md), [ADR-0104](0104-a-restricted-principal-reaches-only-the-spaces-a-device-granted-it.md)
 

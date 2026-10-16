@@ -104,6 +104,16 @@ func IdentityFrom(ctx context.Context) (auth.Identity, bool) {
 	return id, ok
 }
 
+// ContextWithIdentity returns ctx carrying id as the authenticated caller, as
+// the authentication middleware would have left it. It is for callers that
+// invoke a handler without the middleware in front — a handler-level test
+// asserting what an owner, a member or a stranger is told — and never for a
+// served request, where the middleware is the only thing that may name the
+// caller.
+func ContextWithIdentity(ctx context.Context, id auth.Identity) context.Context {
+	return context.WithValue(ctx, ctxKeyIdentity, id)
+}
+
 // anonymousIdentity is what every caller is when authentication is disabled —
 // which configuration and the server's own bind check together permit only on a
 // loopback listener. It holds admin so that scope requirements behave
