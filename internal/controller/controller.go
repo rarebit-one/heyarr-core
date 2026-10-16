@@ -833,11 +833,20 @@ func (c *Controller) mounts(ctx context.Context, d mountDeps) (apiMounts, public
 		return nil, nil, fmt.Errorf("controller: opening the catalog: %w", err)
 	}
 
-	// Personal profile (ADR-0107): only the personal-state plane, vault blob
-	// upload, placement pins and blob content serving. Libraries, scanner,
-	// ingest, search, acquisition, identification, render, relay, transcode,
-	// compat adapters and MCP are all excluded. (mDNS discovery stays, announcing
+	// Personal profile (ADR-0107): the personal-state plane, vault blob upload,
+	// placement pins, blob content serving — and the peer-membership routes
+	// (/peers, #762). The rest of the resource API (works, assets, libraries,
+	// jobs, tokens, devices, events, sessions) is not mounted, nor are the
+	// scanner, ingest, search, acquisition, identification, render, relay,
+	// transcode, compat adapters and MCP. (mDNS discovery stays, announcing
 	// `_mnemosyne._tcp` rather than `_heyarr._tcp` — see startDiscovery.)
+	//
+	// Peers are the exception because the fabric they name is built on this
+	// profile too: the mTLS peer surface, the encrypted-state replication beat,
+	// reconcile_peer and replicate_blob all run here, and a sibling becomes a
+	// destination for any of them only through a membership record — which
+	// `mnemosyne peers add` writes over the client API, exactly as heyarr's
+	// does. Tokens stay CLI-only: `token create` opens the database directly.
 	if c.cfg.Profile == config.ProfilePersonal {
 		_, contentMounts, err := c.contentRoutes(d, queue, cat)
 		if err != nil {
@@ -847,8 +856,12 @@ func (c *Controller) mounts(ctx context.Context, d mountDeps) (apiMounts, public
 		if err != nil {
 			return nil, nil, err
 		}
+		peersAPI, err := c.peersAPI(d, queue, cat)
+		if err != nil {
+			return nil, nil, err
+		}
 		// vault.enabled is always true on the personal profile, but be explicit.
-		apiMounts = append(contentMounts, psAPI.Mount)
+		apiMounts = append(contentMounts, psAPI.Mount, peersAPI.MountPeers)
 		return apiMounts, nil, nil
 	}
 
@@ -1000,6 +1013,34 @@ func (c *Controller) resourceAPI(ctx context.Context, d mountDeps, queue *jobs.Q
 	api.StartProgressBeat(ctx)
 
 	return api, secret, nil
+}
+
+// peersAPI builds the resource API with only what the peer-membership routes
+// need, for the personal profile (ADR-0107, #762). Only MountPeers is ever
+// mounted from the value it returns.
+//
+// It is deliberately not resourceAPI: that builds the provider registry,
+// validates download paths and mints the renderer secret, none of which a
+// node with no library has any use for. What the peer routes need is the
+// membership store (enrolment and revocation), the job queue (reconcile on
+// demand, and cancelling the transfers queued to a removed peer), the event
+// log and the token store the constructor insists on, and the catalog for the
+// snapshot state `peers show` reports.
+func (c *Controller) peersAPI(d mountDeps, queue *jobs.Queue, cat *catalog.Catalog) (*resources.API, error) {
+	api, err := resources.New(resources.Options{
+		DB:         d.db,
+		Jobs:       queue,
+		Events:     d.eventLog,
+		Tokens:     d.tokens,
+		Catalog:    cat,
+		Membership: d.members,
+		SelfPeerID: d.selfPeerID,
+		Logger:     c.log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
+	return api, nil
 }
 
 // contentRoutes builds the client blob route and the vault upload and placement

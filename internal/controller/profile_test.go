@@ -7,8 +7,9 @@ package controller
 // routes are present or absent. This is table-driven because there are three
 // interesting configurations:
 //
-//  1. Personal profile — only the personal-state plane, vault blob upload,
-//     vault placement pins and blob content serving.
+//  1. Personal profile — the personal-state plane, vault blob upload, vault
+//     placement pins, blob content serving and the peer-membership routes
+//     (#762); nothing else from the resource API.
 //  2. Media profile, vault.enabled=true (the default) — the full route table.
 //  3. Media profile, vault.enabled=false — full table minus vault upload and
 //     placement routes (blob content serving stays).
@@ -100,10 +101,15 @@ func TestProfileRouting(t *testing.T) {
 				"/api/v1/vault/blobs",      // vault blob upload (PUT)
 				"/api/v1/vault/placements", // placement pins
 				"/api/v1/spaces",           // personal-state plane
-				"/enrol",                   // device enrolment
-				"/healthz",                 // health
-				"/metrics",                 // metrics
-				"/readyz",                  // readiness
+				// Peer membership (#762): the fabric runs on this profile, and
+				// `mnemosyne peers add` enrols a sibling over the client API.
+				"/api/v1/peers",
+				"/api/v1/peers/{id}",
+				"/api/v1/peers/{id}/reconcile",
+				"/enrol",   // device enrolment
+				"/healthz", // health
+				"/metrics", // metrics
+				"/readyz",  // readiness
 			},
 			mustAbsent: []string{
 				"/api/v1/works",    // library (media profile only)
@@ -111,12 +117,11 @@ func TestProfileRouting(t *testing.T) {
 				"/api/v1/jobs",     // scheduler (media profile only)
 				"/compat/subsonic", // compat adapters (media profile only)
 				"/compat/opds",     // compat adapters (media profile only)
-				// resources.API is not mounted on the personal profile: tokens,
-				// devices and peers are managed via the CLI (which opens the
-				// database directly) not via the HTTP surface.
+				// The rest of resources.API is not mounted on the personal
+				// profile. Tokens are minted by the CLI, which opens the database
+				// directly; devices, events and sessions are media-client surface.
 				"/api/v1/tokens",  // resources.API only
 				"/api/v1/devices", // resources.API only
-				"/api/v1/peers",   // resources.API only
 				"/api/v1/events",  // resources.API only (SSE stream)
 				"/api/v1/session", // resources.API only
 			},
