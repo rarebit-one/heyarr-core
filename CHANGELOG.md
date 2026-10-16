@@ -10,6 +10,15 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **Album CRDT for Mnemosyne (Phase 3, #756).** `internal/personalstate/crdt`
+  gains the `album` kind: an ordered, deduplicated collection of vault photos
+  inside a space — create / title / caption / cover / add / remove / move /
+  delete — with the add-wins, order-independent write-set lattice the drive
+  uses, a `PhotoManifest` item payload (sealed manifest id, thumbnail and
+  sidecar blob ids, plaintext BLAKE3, dimensions, capture time) that lives
+  entirely inside the ciphertext, canonical snapshots, ingress validation and
+  cross-language parity vectors (`testdata/vectors/album.json`). Client-side
+  only: no server change, no migration.
 - **Thumbnail derivation on demand (ADR-0109).** `GET /works/{id}/artwork?size=256`
   (also `512`, `1024`) redirects to a derived JPEG thumbnail scaled to the
   requested long edge. If the thumbnail is not yet ready the node enqueues a

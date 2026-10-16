@@ -1,7 +1,7 @@
 // Package crdt is the client-side, plaintext merge logic for a user's PERSONAL
 // STATE — the family of conflict-free replicated types Milestone 9 and Milestone
 // 11 converge after a device decrypts concurrent offline edits (spec §42, §43;
-// issues #324, #386). It holds four independent CRDTs, one per kind of personal
+// issues #324, #386). It holds six independent CRDTs, one per kind of personal
 // state, each in its own file with its own tests:
 //
 //   - the PLAYLIST — an add-wins OR-Set with a Lamport total order (playlist.go,
@@ -11,9 +11,13 @@
 //   - READING-POSITION — a per-publication last-writer-wins register, feeding
 //     the OPDS reading-position surface (readingpos.go, §45);
 //   - PLAY-HISTORY — a grow-only set of play events, feeding Subsonic scrobble /
-//     getNowPlaying / getAlbumList2 recent|frequent (history.go, §46).
+//     getNowPlaying / getAlbumList2 recent|frequent (history.go, §46);
+//   - the vault DRIVE — a path-keyed map whose heads and history are derived
+//     from an accumulated write set (drive.go, ADR-0095);
+//   - the photo ALBUM — Mnemosyne's ordered, deduplicated collection of vault
+//     photos, on the drive's write-set lattice (album.go, ADR-0107/0108, #756).
 //
-// The four share one discipline — every merge is a semilattice JOIN, so it is
+// The six share one discipline — every merge is a semilattice JOIN, so it is
 // commutative, associative, and idempotent — and one guarantee: they operate on
 // plaintext, on the device, only after the encrypted change has been decrypted;
 // the controller never merges and never sees it (Invariant 6, §72). The rest of

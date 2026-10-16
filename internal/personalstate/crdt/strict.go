@@ -9,9 +9,10 @@ package crdt
 // dropped — so a caller that must not mistake one CRDT for another (rotation,
 // which re-snapshots and compacts the log, #698) decodes strictly instead. Every
 // other change type carries a field the playlist one lacks (drive: path/at/writer;
-// starred and play history: At; reading position: PubID), and every other
-// snapshot a top-level key the playlist one lacks, so a strict decode tells them
-// apart without a tag on the wire.
+// album: album_id/at/writer; starred and play history: At; reading position:
+// PubID), and every other snapshot a top-level key the playlist one lacks
+// (drive: entries; album: albums; …), so a strict decode tells them apart without
+// a tag on the wire.
 
 import (
 	"bytes"

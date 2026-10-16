@@ -818,8 +818,8 @@ var errRotateNotPlaylist = errors.New("space rotate: this space holds state rota
 // space (#698). This binary's rotation is a pure re-key with a key history
 // (ADR-0103), so it no longer loses anything itself. The guard stays for client
 // COMPATIBILITY: a client that predates key epochs opens a rotated space with
-// only its newest key, and so cannot read a vault file, a starred, play-history
-// or reading-position change sealed before the rotation. A playlist survives
+// only its newest key, and so cannot read a vault file, an album, a starred,
+// play-history or reading-position change sealed before the rotation. A playlist survives
 // that, because the older clients' rotation left a snapshot under the new key.
 // The guard lifts once every client (the mobile one included) unrolls the
 // history. Until then only a space whose every change, and whose snapshot if it
@@ -827,7 +827,7 @@ var errRotateNotPlaylist = errors.New("space rotate: this space holds state rota
 // nothing to lose.
 func ensurePlaylistSpace(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spaceID string) error {
 	refuse := func(what string) error {
-		return fmt.Errorf("%w: space %s has a %s that is not a playlist (a vault drive, starred, "+
+		return fmt.Errorf("%w: space %s has a %s that is not a playlist (a vault drive, album, starred, "+
 			"play-history or reading-position space); clients that predate key epochs would lose its contents (#698)",
 			errRotateNotPlaylist, spaceID, what)
 	}

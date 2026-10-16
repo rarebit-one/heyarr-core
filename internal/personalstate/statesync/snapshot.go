@@ -136,3 +136,17 @@ func EncodeDriveSnapshot(m *client.Manager, spaceID string, frontier []string, d
 func DecodeDriveSnapshot(m *client.Manager, snap protocol.EncryptedSnapshot) (*crdt.Drive, error) {
 	return DecodeSnapshotWith(m, snap, crdt.DriveFromSnapshot)
 }
+
+// EncodeAlbumSnapshot is the album snapshot bridge (Mnemosyne Phase 3, #756):
+// [EncodeSnapshotOf] pinned to [crdt.Albums]. Album changes ride the generic
+// [EncodeChange] / [DecodeChange] as every other kind does; nothing server-side
+// learns that a space holds albums.
+func EncodeAlbumSnapshot(m *client.Manager, spaceID string, frontier []string, a *crdt.Albums) (protocol.EncryptedSnapshot, error) {
+	return EncodeSnapshotOf(m, spaceID, frontier, a)
+}
+
+// DecodeAlbumSnapshot is the album snapshot bridge: [DecodeSnapshotWith] pinned
+// to [crdt.AlbumsFromSnapshot].
+func DecodeAlbumSnapshot(m *client.Manager, snap protocol.EncryptedSnapshot) (*crdt.Albums, error) {
+	return DecodeSnapshotWith(m, snap, crdt.AlbumsFromSnapshot)
+}

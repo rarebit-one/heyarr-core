@@ -1,7 +1,8 @@
 package crdt_test
 
-// parity_test.go mints CROSS-LANGUAGE PARITY VECTORS for the four personal-state
-// CRDTs (§42, §43, #386). Each vector is a sequence of wire changes — exactly the
+// parity_test.go mints CROSS-LANGUAGE PARITY VECTORS for the personal-state
+// CRDTs (§42, §43, #386; the album kind's generator lives in album_parity_test.go,
+// #756). Each vector is a sequence of wire changes — exactly the
 // bytes json.Marshal(change) produces, which is what statesync encrypts and a peer
 // stores opaque — paired with the deterministic State.Encode() the fold converges
 // to and the exact Snapshot() bytes it serialises to.
@@ -18,9 +19,10 @@ package crdt_test
 // membership vectors).
 //
 // The fold is a semilattice join, so the converged state is order-independent
-// (§43). The vectors carry the changes in one order; TestParityFoldIsOrderFree
-// proves reversing them changes neither Encode nor Snapshot, which is the property
-// the Kotlin port must also hold — so the vectors do double duty as a Go self-check.
+// (§43). The vectors carry the changes in one order; the per-kind convergence
+// tests (and, for the album, TestAlbumParityFoldIsOrderFree against the committed
+// file) prove reordering them changes neither Encode nor Snapshot, which is the
+// property the Kotlin port must also hold — so the vectors double as a Go self-check.
 
 import (
 	"encoding/json"
@@ -272,6 +274,7 @@ func TestParityVectors(t *testing.T) {
 		{"starred.json", starredVectors},
 		{"readingpos.json", readingposVectors},
 		{"history.json", historyVectors},
+		{"album.json", albumVectors}, // album_parity_test.go (#756)
 	} {
 		t.Run(tc.file, func(t *testing.T) {
 			got := indent(t, tc.gen(t))
@@ -321,6 +324,7 @@ func TestParityFoldConvergesToTheVector(t *testing.T) {
 		}
 		return l.Encode(), mustSnap(t, l.Snapshot)
 	})
+	replay(t, "album.json", foldAlbum)
 }
 
 // TestParitySnapshotRoundTrips proves each vector's `snapshot` string decodes
@@ -354,6 +358,13 @@ func TestParitySnapshotRoundTrips(t *testing.T) {
 			t.Fatal(err)
 		}
 		return l.Encode()
+	})
+	roundTrip(t, "album.json", func(t *testing.T, b []byte) string {
+		a, err := crdt.AlbumsFromSnapshot(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a.Encode()
 	})
 }
 

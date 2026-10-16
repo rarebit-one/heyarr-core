@@ -140,4 +140,12 @@ settled.
 - **Phase 2:** Mnemosyne-specific Docker image; CI acceptance for the personal
   profile; `mnemosyne fsck` reports vault completeness.
 - **Phase 3:** Operator guide for a combined personal+media node; peer pairing
-  between a Mnemosyne node and a heyarr node.
+  between a Mnemosyne node and a heyarr node. **Album CRDT (merged, #756):** the
+  first Mnemosyne-only kind — `internal/personalstate/crdt/album.go` — an
+  ordered, deduplicated collection of vault photos inside a space (create, title,
+  caption, cover, add / remove / move item, delete), each item a `PhotoManifest`
+  (sealed manifest id, thumbnail and sidecar blob ids, plaintext BLAKE3,
+  dimensions, capture time). Parity vectors for the Kotlin client are minted into
+  `internal/personalstate/crdt/testdata/vectors/album.json`. The server is
+  unchanged: it stores opaque changes and snapshots keyed by space and never
+  learns the kind (Invariant 6).
