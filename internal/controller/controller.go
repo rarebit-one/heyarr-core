@@ -175,13 +175,15 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 
 	// mDNS / DNS-SD advertisement (ADR-0094 §Discovery, Phase 2). The client-
-	// facing sibling of the renderer package's SSDP: it announces `_heyarr._tcp`
-	// on the trusted interfaces so a client finds this node without being told an
-	// address. It is started after srv.Start() because it advertises the port the
-	// TCP listener actually bound, and it is inert unless there is a trusted,
-	// multicast-capable interface AND a reachable port — a socket-only or
-	// loopback-only node names nothing a device on the LAN could dial, exactly as
-	// it mints no renderer URL.
+	// facing sibling of the renderer package's SSDP: it announces this node's
+	// service — `_heyarr._tcp` on the media profile, `_mnemosyne._tcp` on the
+	// personal one (ADR-0107) — on the trusted interfaces so a client finds this
+	// node without being told an address, and a heyarr client never finds a
+	// Mnemosyne node. It is started after srv.Start() because it advertises the
+	// port the TCP listener actually bound, and it is inert unless there is a
+	// trusted, multicast-capable interface AND a reachable port — a socket-only
+	// or loopback-only node names nothing a device on the LAN could dial,
+	// exactly as it mints no renderer URL.
 	advertiser := c.startDiscovery(ctx, srv.Addr())
 
 	if err := c.startBeats(ctx, db, self, material, members, peerHealth); err != nil {
@@ -834,7 +836,8 @@ func (c *Controller) mounts(ctx context.Context, d mountDeps) (apiMounts, public
 	// Personal profile (ADR-0107): only the personal-state plane, vault blob
 	// upload, placement pins and blob content serving. Libraries, scanner,
 	// ingest, search, acquisition, identification, render, relay, transcode,
-	// compat adapters, discovery and MCP are all excluded.
+	// compat adapters and MCP are all excluded. (mDNS discovery stays, announcing
+	// `_mnemosyne._tcp` rather than `_heyarr._tcp` — see startDiscovery.)
 	if c.cfg.Profile == config.ProfilePersonal {
 		_, contentMounts, err := c.contentRoutes(d, queue, cat)
 		if err != nil {
