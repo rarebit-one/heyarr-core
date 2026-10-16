@@ -505,6 +505,41 @@ func (s *Store) AllowedWrapRecipients(ctx context.Context) (map[string]bool, err
 	return set, nil
 }
 
+// DeviceWrapRecipients is the enrolled, unrevoked device encryption keys of the
+// given user principals, keyed by recipient ("x25519:<hex>") to the principal
+// id the device speaks for — what shared-space membership (ADR-0108) consults
+// to decide whose device a wrap is for, and what a member's devices are when
+// one is added. A device with no encryption key (a v1 cert) is never a
+// recipient. An unknown principal simply contributes nothing.
+func (s *Store) DeviceWrapRecipients(ctx context.Context, principalIDs []string) (map[string]string, error) {
+	out := make(map[string]string)
+	if len(principalIDs) == 0 {
+		return out, nil
+	}
+	args := make([]any, 0, len(principalIDs))
+	for _, id := range principalIDs {
+		args = append(args, id)
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(principalIDs)), ",")
+	// #nosec G202 -- the only thing concatenated is a run of `?`
+	rows, err := s.reader.QueryContext(ctx,
+		`SELECT d.encryption_key, u.principal_id
+		 FROM device_identities d JOIN user_identities u ON u.id = d.user_id
+		 WHERE d.revoked_at IS NULL AND d.encryption_key <> '' AND u.principal_id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("deviceauth: listing member devices: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var key, principal string
+		if err := rows.Scan(&key, &principal); err != nil {
+			return nil, fmt.Errorf("deviceauth: reading member device: %w", err)
+		}
+		out[key] = principal
+	}
+	return out, rows.Err()
+}
+
 // RecoveryWrapRecipients is the set of users' recovery encryption keys, rendered
 // "x25519:<hex>" — the wrap recipients a space-key rotation may not drop
 // (ADR-0022, ADR-0103). It is the recovery half of AllowedWrapRecipients.

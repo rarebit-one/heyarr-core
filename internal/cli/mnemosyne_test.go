@@ -132,3 +132,18 @@ func TestMnemosyneRolesStartAndStopCleanly(t *testing.T) {
 		})
 	}
 }
+
+// TestMnemosyneCarriesSpaceMembers: the shared `space` tree, members verbs
+// included (ADR-0108), is mounted under the mnemosyne root too — the
+// personal-state plane is Mnemosyne's, so the verbs that drive it must be.
+func TestMnemosyneCarriesSpaceMembers(t *testing.T) {
+	out, stderr, err := runMnemosyneCmd(t, context.Background(), "space", "members", "--help")
+	if err != nil {
+		t.Fatalf("space members --help: %v\n%s", err, stderr)
+	}
+	for _, verb := range []string{"list", "add", "remove"} {
+		if !strings.Contains(out, "\n  "+verb+" ") {
+			t.Errorf("mnemosyne space members lacks %q:\n%s", verb, out)
+		}
+	}
+}

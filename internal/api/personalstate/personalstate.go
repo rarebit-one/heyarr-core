@@ -45,6 +45,7 @@ type API struct {
 	authorizer RecipientAuthorizer
 	principals PrincipalResolver
 	recipients PrincipalRecipients
+	members    MemberResolver
 	log        *slog.Logger
 }
 
@@ -109,7 +110,11 @@ type Options struct {
 	// recipients (ADR-0104). Optional: nil shows a restricted caller no wraps
 	// (fail closed).
 	Recipients PrincipalRecipients
-	Logger     *slog.Logger
+	// Members resolves the users a shared-space membership change names and
+	// the device keys they hold (ADR-0108). Optional: nil leaves the members
+	// API answering 503 and membership out of the wrap gate.
+	Members MemberResolver
+	Logger  *slog.Logger
 }
 
 // New builds the API. It fails if no store is given rather than mounting routes
@@ -124,7 +129,7 @@ func New(opts Options) (*API, error) {
 	}
 	return &API{
 		store: opts.Store, replicator: opts.Replicator, authorizer: opts.Authorizer,
-		principals: opts.Principals, recipients: opts.Recipients,
+		principals: opts.Principals, recipients: opts.Recipients, members: opts.Members,
 		log: log.With("component", "personalstate-api"),
 	}, nil
 }
@@ -138,6 +143,14 @@ const CodeWrapRecipientNotAllowed = "wrap_recipient_not_allowed"
 // must be a pinned device or recovery key, or — on an existing space — a
 // registered service recipient whose executor holds an active grant on it
 // (ADR-0104). A new space (spaceID "") has no grants, so no service recipient.
+//
+// On an existing space with members (ADR-0108) it also applies the membership
+// gate: a device key is admitted only when its user is a current member, or it
+// already holds a copy of the current key; a removed member's device never is.
+// Recovery keys and granted service recipients are not member devices and pass
+// the gate as before. A family space, a space with no membership rows, and a
+// node with no member resolver are gated by the pin alone.
+//
 // It writes the failure and returns false when a recipient is not allowed, or a
 // lookup errors; true when the wrap may proceed (including when no authorizer
 // is wired, which leaves the check off).
@@ -151,12 +164,31 @@ func (a *API) recipientsAllowed(w http.ResponseWriter, r *http.Request, spaceID 
 		httpapi.Fail(w, r, problem.Internal())
 		return false
 	}
-	var services map[string]bool
+	var (
+		services, recovery map[string]bool
+		gate               *memberGate
+	)
 	if spaceID != "" {
 		if services, err = a.store.GrantedServiceRecipients(r.Context(), spaceID); err != nil {
 			a.log.Error("checking service wrap recipients", "error", err)
 			httpapi.Fail(w, r, problem.Internal())
 			return false
+		}
+		if gate, err = a.memberGateFor(r.Context(), spaceID); err != nil {
+			if errors.Is(err, store.ErrUnknownSpace) {
+				httpapi.Fail(w, r, problem.NotFound(err.Error()))
+				return false
+			}
+			a.log.Error("checking space membership", "error", err)
+			httpapi.Fail(w, r, problem.Internal())
+			return false
+		}
+		if gate != nil {
+			if recovery, err = a.authorizer.RecoveryWrapRecipients(r.Context()); err != nil {
+				a.log.Error("listing recovery recipients", "error", err)
+				httpapi.Fail(w, r, problem.Internal())
+				return false
+			}
 		}
 	}
 	for _, k := range keys {
@@ -165,6 +197,16 @@ func (a *API) recipientsAllowed(w http.ResponseWriter, r *http.Request, spaceID 
 				"recipient "+k.Recipient+" is not an enrolled device or recovery key, nor a registered service recipient "+
 					"whose executor holds a grant on this space — a space key is wrapped only for pinned recipients "+
 					"(enrol-before-wrap, ADR-0049, ADR-0104)").WithCode(CodeWrapRecipientNotAllowed))
+			return false
+		}
+		if gate == nil || recovery[k.Recipient] || services[k.Recipient] {
+			continue
+		}
+		if ok, why := gate.admits(k.Recipient); !ok {
+			httpapi.Fail(w, r, problem.Forbidden(
+				"recipient "+k.Recipient+" cannot be wrapped for: "+why+
+					" — a shared space's key is wrapped only for its members' devices (ADR-0108)").
+				WithCode(CodeWrapRecipientNotMember))
 			return false
 		}
 	}
@@ -225,6 +267,14 @@ func (a *API) Mount(r chi.Router) {
 	// owner's consent act: `write`, and from a Device credential only (grants.go).
 	write.With(httpapi.RefuseRestricted).Post("/spaces/{id}/grants", a.grantAccess)
 	write.With(httpapi.RefuseRestricted).Delete("/spaces/{id}/grants/{principal}", a.revokeAccess)
+	// Shared-space membership (ADR-0108): who a space is shared with. Changing
+	// it is the owner's consent act, like a grant — `write`, from a Device
+	// credential only, and the handler holds it to the owner (members.go).
+	// Listing is a read, closed to a Guest and to an executor, which has no
+	// business learning who shares a space it was granted.
+	r.With(httpapi.RefuseGuest, httpapi.RefuseRestricted).Get("/spaces/{id}/members", a.listMembers)
+	write.With(httpapi.RefuseRestricted).Post("/spaces/{id}/members", a.addMember)
+	write.With(httpapi.RefuseRestricted).Delete("/spaces/{id}/members/{member}", a.removeMember)
 	// Registering an executor's public key as a service recipient (ADR-0104)
 	// pins it as a wrap target, so it is consent too: `write`, from a Device
 	// credential only. Listing them is a read, closed to an executor (which
@@ -366,7 +416,8 @@ func (a *API) createSpace(w http.ResponseWriter, r *http.Request) {
 	if !a.recipientsAllowed(w, r, "", req.WrappedKeys) {
 		return
 	}
-	sp, err := a.store.PutSpaceOwned(r.Context(), req.ID, spaces.Kind(req.Kind), spaceOwner(r))
+	owner, device := spaceOwner(r)
+	sp, err := a.store.PutSpaceOwnedFrom(r.Context(), req.ID, spaces.Kind(req.Kind), owner, device)
 	if err != nil {
 		a.failStore(w, r, "recording a space", err)
 		return

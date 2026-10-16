@@ -1,0 +1,9 @@
+{
+  "space_id": "<space>",
+  "principal_id": "<bob>",
+  "removed_at": "<time>",
+  "revoke": [
+    "<bob-device-key>"
+  ],
+  "rotation": "space rotate <space> --revoke <bob-device-key>"
+}

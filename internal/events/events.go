@@ -244,6 +244,15 @@ const (
 	// executor's next fetch of the space is refused. Opaque like its sibling —
 	// the space, the principal and the revoking device, never a key.
 	TypeSpaceAccessRevoked = "personalstate.space.access_revoked"
+	// TypeSpaceMemberAdded is a device adding a user as a member of a shared
+	// space (ADR-0108): from then on the space key may be wrapped for that
+	// user's enrolled devices. It names the space, the member principal, the
+	// role and the acting device — structure, never a key or a name (§38).
+	TypeSpaceMemberAdded = "personalstate.space.member_added"
+	// TypeSpaceMemberRemoved is that membership withdrawn (ADR-0108): no new
+	// wrap for the user's devices is admitted, and the rotation that makes the
+	// removal forward-secret must leave them out. Opaque like its sibling.
+	TypeSpaceMemberRemoved = "personalstate.space.member_removed"
 	// TypeServiceRecipientRegistered is a management-authorised device
 	// registering an executor's X25519 public key as a wrap recipient for that
 	// executor principal (ADR-0104). It names the principal, the key, its

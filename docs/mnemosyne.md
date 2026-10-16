@@ -23,6 +23,7 @@ rather than hiding the distinction inside a feature flag.
 | Vault blob upload (PUT `/api/v1/vault/blobs/{hash}`) | Always (`vault.enabled` is unconditionally true) |
 | Vault placement pins (`/api/v1/vault/placements`) | Always |
 | Personal-state plane (`/api/v1/spaces`, `/api/v1/state/replicate`) | Always |
+| Shared-space membership (`GET/POST /api/v1/spaces/{id}/members`, `DELETE /api/v1/spaces/{id}/members/{member}`, ADR-0108) | Always (part of the personal-state plane; the media profile mounts it too) |
 | Service recipients (`/api/v1/service-recipients`) | Always |
 | Peer membership (`/api/v1/peers`, `/api/v1/peers/{id}`, `/api/v1/peers/{id}/reconcile`) | Always (#762) |
 | Device enrolment (`/enrol`, `/membership`) | Always |
@@ -56,6 +57,38 @@ loads the same mnemosyne profile as the server, so it opens the same
 Mnemosyne **does not** mount: the rest of the resource API, library/scanner/
 ingest, search, acquisition, the MCP surface, render, relay, DLNA, OPDS,
 Subsonic, pair relay or any provider integration.
+
+## Sharing a space (ADR-0108)
+
+The space is the unit of sharing. Only the owner's device changes who a
+`personal`, `shared` or `research` space is shared with (any
+management-authorised device on a `family` space, or on a space with no
+recorded owner); members may not re-share. Adding a member is two steps, and
+the CLI does both:
+
+```
+# From the owner's enrolled device: record the membership, then wrap the
+# space's current key for each of the member's enrolled devices.
+mnemosyne space members add <space-id> --user <principal>
+mnemosyne space members list <space-id>
+```
+
+From the first membership row on, a wrap for an enrolled device whose user is
+not a current member is refused with `wrap_recipient_not_member`. Recovery keys
+and granted service recipients are not member devices and pass as before; a
+recipient the space was created for keeps being re-wrapped.
+
+Removing a member records a tombstone and names the rotation that completes
+it. The server cannot rotate (it holds no key), so the removed member's devices
+keep the copies they hold until the owner's device re-keys the space without
+them — and that rotation is refused for every space that is not a playlist
+until older clients understand key epochs (#698, #706):
+
+```
+mnemosyne space members remove <space-id> --user <principal>
+# then, with an admin token, the rotation it prints:
+mnemosyne space rotate <space-id> --revoke <device-key> [...]
+```
 
 ## Default configuration
 
@@ -152,8 +185,16 @@ settled.
   `PlanPeerConvergence`); cross-site blob replication via `replicate_blob`;
   chunk-manifest generation via `chunk_blob`. The systemd unit now defaults to
   `mnemosyne all`.
-- **Phase 2:** Mnemosyne-specific Docker image; CI acceptance for the personal
-  profile; `mnemosyne fsck` reports vault completeness.
+- **Phase 2 (in progress):** ADR-0108 shared-space membership —
+  `space_members` record, `GET/POST /api/v1/spaces/{id}/members` and
+  `DELETE /api/v1/spaces/{id}/members/{member}`, the membership gate on
+  enrol-before-wrap (`wrap_recipient_not_member`), and
+  `mnemosyne space members list|add|remove` (shipped). Still open: the
+  membership record replicating with the space (ADR-0101 path), member removal
+  completing with a rotation on non-playlist spaces (gated on #698/#706), the
+  two-device acceptance scene. Also planned: Mnemosyne-specific Docker image;
+  CI acceptance for the personal profile; `mnemosyne fsck` reports vault
+  completeness.
 - **Phase 3:** Operator guide for a combined personal+media node; peer pairing
   between a Mnemosyne node and a heyarr node. **Album CRDT (merged, #756):** the
   first Mnemosyne-only kind — `internal/personalstate/crdt/album.go` — an

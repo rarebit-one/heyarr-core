@@ -203,6 +203,16 @@ func (s *Store) PutSpace(ctx context.Context, id string, kind spaces.Kind) (spac
 // NULL, which is a legacy household space (and what replication writes: the
 // owner is this node's fact, not the space's).
 func (s *Store) PutSpaceOwned(ctx context.Context, id string, kind spaces.Kind, owner string) (spaces.EncryptedSpace, error) {
+	return s.PutSpaceOwnedFrom(ctx, id, kind, owner, "")
+}
+
+// PutSpaceOwnedFrom is PutSpaceOwned naming the device key the owner created
+// the space from. With an owner it also records the owner as the space's first
+// member (ADR-0108, RoleOwner), in the same transaction: from then on the
+// space's key is wrapped only for its members' devices, so the owner must be
+// one. Without an owner no member row is written, and the space is gated by
+// the device pin alone, as before.
+func (s *Store) PutSpaceOwnedFrom(ctx context.Context, id string, kind spaces.Kind, owner, device string) (spaces.EncryptedSpace, error) {
 	if err := kind.Validate(); err != nil {
 		return spaces.EncryptedSpace{}, err
 	}
@@ -244,6 +254,11 @@ func (s *Store) PutSpaceOwned(ctx context.Context, id string, kind spaces.Kind, 
 		`INSERT INTO encrypted_spaces (id, kind, created_at, owner_principal_id) VALUES (?, ?, ?, ?)`,
 		id, string(kind), now.Format(timeFormat), ownerCol); err != nil {
 		return spaces.EncryptedSpace{}, fmt.Errorf("personalstate/store: recording space: %w", err)
+	}
+	if owner != "" {
+		if err := insertOwnerRowTx(ctx, tx, id, owner, device, now); err != nil {
+			return spaces.EncryptedSpace{}, err
+		}
 	}
 	ev, err := s.events.EmitTx(ctx, tx, events.TypeSpaceCreated, "encrypted_space", id,
 		map[string]any{"kind": string(kind)})

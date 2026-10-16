@@ -104,6 +104,10 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr space grant`](heyarr_space_grant.md) | Let an executor fetch and decrypt a space (ADR-0104) |
 | [`heyarr space keys`](heyarr_space_keys.md) | List the wrapped copies of a space's key (recipients only, no key material) |
 | [`heyarr space list`](heyarr_space_list.md) | List the encrypted spaces the controller holds (metadata only) |
+| [`heyarr space members add`](heyarr_space_members_add.md) | Share a space with a user: record the membership and wrap the key for their devices |
+| [`heyarr space members list`](heyarr_space_members_list.md) | List a space's members, current and removed |
+| [`heyarr space members remove`](heyarr_space_members_remove.md) | Stop sharing a space with a user: record the removal and name the rotation that completes it |
+| [`heyarr space members`](heyarr_space_members.md) | List, add and remove the members of a shared space (ADR-0108) |
 | [`heyarr space put`](heyarr_space_put.md) | Add an item to a space's playlist (encrypted client-side, then pushed) |
 | [`heyarr space read`](heyarr_space_read.md) | Read a space's playlist on an authorised device (decrypts and merges locally) |
 | [`heyarr space recover`](heyarr_space_recover.md) | Recover vault space keys from your recovery secret, offline (ADR-0022, ADR-0049) |

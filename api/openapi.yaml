@@ -1144,6 +1144,164 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/spaces/{id}/members:
+    get:
+      tags: [personal-state]
+      operationId: listSpaceMembers
+      summary: Who a space is shared with (ADR-0108). Refused to a restricted credential and a Guest.
+      description: |
+        Every membership row, current and removed, the owner first. A removed
+        member keeps its row with `removed_at` set: while it is set no new copy
+        of the space key is admitted for that user's devices, and the owner's
+        device reads it to know which recipients a rotation must leave out.
+
+        A space with no rows — created by a bearer token, or before membership
+        existed — is gated by device enrolment alone, as it always was.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: The membership rows (possibly empty).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [space_id, members]
+                properties:
+                  space_id: { type: string }
+                  members:
+                    type: array
+                    items: { $ref: "#/components/schemas/SpaceMember" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [personal-state]
+      operationId: addSpaceMember
+      summary: Share a space with a user (ADR-0108). Device credential with `write` only; the owner's device.
+      description: |
+        The space is the unit of sharing: a member's enrolled devices may each
+        hold a wrapped copy of the space key, and a user who is not a member may
+        not be given one. This is the first of two steps. It records the
+        membership and answers with `wrap_for`, the member's enrolled device
+        encryption keys, and `key_epoch`, the space's current epoch. The
+        caller's device then wraps the current key for each of them and pushes
+        the copies with `POST /spaces/{id}/keys`, which from now on admits
+        them. The server never wraps: it holds no key to wrap with
+        (Invariant 6).
+
+        Only a management-authorised Device credential may add — a bearer
+        token or a session is a `403` — and only the space owner's, unless the
+        space is a `family` space (every household member's by definition; any
+        such device may change it) or has no recorded owner (ADR-0104's
+        owner-less rule). Members may not re-share: a member's device is a
+        `403`. Adding a user who is already a member, or the owner, returns the
+        existing row. A user with no enrolled device carrying an encryption
+        key is a `409` with code `member_has_no_enrolled_device`: they enrol
+        first. An unknown user is a `404`; a reference that matches more than
+        one identity is a `400`. Every add emits
+        `personalstate.space.member_added`.
+
+        From the first membership row on, every wrap for an enrolled device on
+        a `personal`, `shared` or `research` space must be a current member's,
+        or the wrap is a `403` with code `wrap_recipient_not_member`. A
+        recipient the space was created for whose user never joined keeps
+        being re-wrapped (it already holds a copy); a removed member's device
+        never is, even while it holds one. Recovery keys and granted service
+        recipients are not member devices and pass as before.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user]
+              additionalProperties: false
+              properties:
+                user:
+                  type: string
+                  description: The user to add, by principal id or name, or user identity id.
+      responses:
+        "201":
+          description: The membership, with what to wrap for next.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SpaceMember"
+                  - type: object
+                    required: [key_epoch, wrap_for]
+                    properties:
+                      key_epoch:
+                        type: integer
+                        minimum: 0
+                        description: The space's current key epoch, which the wraps must seal.
+                      wrap_for:
+                        type: array
+                        items: { type: string }
+                        description: The member's enrolled device encryption keys (x25519:<hex>), sorted.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/spaces/{id}/members/{member}:
+    delete:
+      tags: [personal-state]
+      operationId: removeSpaceMember
+      summary: Stop sharing a space with a user (ADR-0108). Device credential with `write` only; the owner's device.
+      description: |
+        Records the removal as a tombstone. From then on no new copy of the
+        space key is admitted for the user's devices — not by a re-wrap and
+        not by a rotation, which must name them in `revoke` instead. The
+        answer carries `revoke`: the removed member's device keys that hold a
+        copy of the current key, the revoke list of the rotation
+        (`POST /spaces/{id}/rotate`, ADR-0103) that completes the removal.
+
+        This is not yet forward secrecy. The server cannot rotate — it holds
+        no key — so the removed member's devices keep every copy they hold
+        until the owner's device re-keys the space without them. That
+        rotation is refused by the CLI for every space that is not a playlist
+        until older clients understand key epochs (#698, #706); until then a
+        removal from such a space closes the gate on new copies and leaves
+        the current key with the devices that already hold it.
+
+        Same caller rule as the add. The owner cannot be removed (`409`,
+        `member_is_owner`); a user who is not a current member is a `404`.
+        Every removal emits `personalstate.space.member_removed`.
+      parameters:
+        - { $ref: "#/components/parameters/id" }
+        - name: member
+          in: path
+          required: true
+          description: The user, by principal id or name, or user identity id.
+          schema: { type: string }
+      responses:
+        "200":
+          description: The tombstoned membership, with the recipients a rotation must leave out.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SpaceMember"
+                  - type: object
+                    required: [revoke, key_epoch]
+                    properties:
+                      revoke:
+                        type: array
+                        items: { type: string }
+                        description: The removed member's device keys holding a copy of the current key, sorted.
+                      key_epoch:
+                        type: integer
+                        minimum: 0
+                        description: The space's current key epoch, which that rotation starts from.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /api/v1/service-recipients:
     get:
       tags: [personal-state]
@@ -7271,6 +7429,27 @@ components:
           type: string
           enum: [personal, family, shared, research]
         created_at: { type: string, format: date-time }
+    SpaceMember:
+      type: object
+      description: One user's membership of a space, current or removed (ADR-0108).
+      required: [space_id, principal_id, role, added_at]
+      properties:
+        space_id: { type: string }
+        principal_id:
+          type: string
+          description: The member's user principal. Opaque; never a name (§38).
+        role:
+          type: string
+          enum: [owner, member]
+          description: The owner is the user who created the space from a device; there is at most one and it cannot be removed.
+        added_at: { type: string, format: date-time }
+        added_by_device:
+          type: string
+          description: The device key whose credential added the member; absent on the owner row a creation wrote.
+        removed_at:
+          type: string
+          format: date-time
+          description: Set on a tombstone — the user was a member until then, and no new wrap for their devices is admitted while it is set.
     ServiceRecipient:
       type: object
       description: An executor's X25519 public key, registered as a wrap recipient (ADR-0104).
