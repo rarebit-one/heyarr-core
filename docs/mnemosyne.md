@@ -28,6 +28,7 @@ rather than hiding the distinction inside a feature flag.
 | Health and metrics (`/healthz`, `/readyz`, `/metrics`) | Always |
 | Backup beat | Always |
 | Encrypted-state replication beat | Always |
+| Discovery (mDNS / DNS-SD `_mnemosyne._tcp`, instance `mnemosyne`, SRV target `mnemosyne.local.`) | Same conditions as heyarr: a LAN-reachable port, a trusted multicast-capable interface (`http.guest.trusted_nets`), `http.discovery.disabled` unset. heyarr clients browsing `_heyarr._tcp` never see it; a Mnemosyne client browses `_mnemosyne._tcp` |
 | `gc_blobs` job type (reclaim orphaned vault bytes) | Worker role only (`mnemosyne worker` / `mnemosyne all`) |
 | GC beat (every 6 hours, no startup run) | Worker role only |
 | `reconcile_peer` job type (plan vault-blob convergence toward placement-pin desired set) | Worker role only |

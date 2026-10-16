@@ -6,11 +6,15 @@ import (
 	"strconv"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
+	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/discovery"
 )
 
 // startDiscovery builds the mDNS advertiser and starts it unless the node has
-// nothing worth announcing (ADR-0094 §Discovery, Phase 2).
+// nothing worth announcing (ADR-0094 §Discovery, Phase 2). The service it
+// announces as follows the profile (ADR-0107, #758): heyarr is `_heyarr._tcp`,
+// Mnemosyne is `_mnemosyne._tcp`, so a heyarr client browsing for heyarr
+// servers is never offered a node whose API and token namespace it cannot use.
 //
 // It always returns a non-nil Advertiser so the caller can Stop() it
 // unconditionally on shutdown: an advertiser that was never started, or was
@@ -33,6 +37,7 @@ func (c *Controller) startDiscovery(ctx context.Context, boundAddr string) *disc
 	port, ok := advertisePort(boundAddr)
 	adv := discovery.New(discovery.Options{
 		Params: discovery.Params{
+			Service: serviceForProfile(c.cfg.Profile),
 			Port:    port,
 			TLS:     c.cfg.HTTP.TLS.Enabled(),
 			APIPath: httpapi.APIPrefix,
@@ -57,6 +62,17 @@ func (c *Controller) startDiscovery(ctx context.Context, boundAddr string) *disc
 		c.log.Warn("mDNS advertisement failed to start", "error", err)
 	}
 	return adv
+}
+
+// serviceForProfile picks the DNS-SD service a node announces as. The media
+// profile — and anything that is not explicitly the personal profile, since
+// config validation already rejects unknown values — is heyarr's; only
+// Mnemosyne announces as itself.
+func serviceForProfile(p config.Profile) discovery.Service {
+	if p == config.ProfilePersonal {
+		return discovery.ServicePersonal
+	}
+	return discovery.ServiceMedia
 }
 
 // advertisePort reports the TCP port to advertise and whether the node is

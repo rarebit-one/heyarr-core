@@ -5,16 +5,20 @@
 // It is the client-facing sibling of the SSDP the renderer package speaks. There
 // the node is the SEARCHER — it M-SEARCHes for televisions and listens for their
 // replies (internal/renderer/ssdp.go). Here it is the one ANNOUNCING ITSELF: it
-// multicasts an unsolicited `_heyarr._tcp` DNS-SD response so a client that is
-// listening, or that queries later, learns where the API is.
+// multicasts an unsolicited DNS-SD response so a client that is listening, or
+// that queries later, learns where the API is. Which service it announces
+// follows the config profile (ADR-0107): a heyarr node announces
+// `_heyarr._tcp`, a Mnemosyne node `_mnemosyne._tcp`, so a heyarr client
+// browsing for heyarr servers is never offered a Mnemosyne node, whose API and
+// token namespace are different.
 //
 // The split has two halves, and only the second touches the network:
 //
 //   - record.go is a pure record builder. Given the resolved advertisement
-//     (a Params: the port, whether it is TLS, the API base path) and the
-//     addresses of one interface, it produces the DNS message — PTR, SRV, TXT
-//     and A/AAAA — with no host, site or person named in it (make hygiene). It
-//     is unit-tested without a socket.
+//     (a Params: the service, the port, whether it is TLS, the API base path)
+//     and the addresses of one interface, it produces the DNS message — PTR,
+//     SRV, TXT and A/AAAA — with no host, site or person named in it (make
+//     hygiene). It is unit-tested without a socket.
 //   - advertise.go is the multicast responder. It selects the interfaces whose
 //     addresses fall inside the guest trust boundary (config.Guest.TrustedNets),
 //     and on each of those — and ONLY those — periodically sends the record

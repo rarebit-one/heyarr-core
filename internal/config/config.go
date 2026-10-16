@@ -56,7 +56,8 @@ const (
 	// ProfilePersonal is the Mnemosyne personal-media service. It mounts only
 	// the personal-state plane and the infrastructure it needs. Libraries,
 	// scanner, ingest, search, acquisition, identification, render, relay,
-	// transcode, compat adapters, discovery and MCP are all excluded.
+	// transcode, compat adapters and MCP are all excluded. mDNS discovery stays
+	// but announces `_mnemosyne._tcp`, never `_heyarr._tcp` (#758).
 	ProfilePersonal Profile = "personal"
 )
 

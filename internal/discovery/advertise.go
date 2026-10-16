@@ -37,7 +37,9 @@ type Options struct {
 	Logger   *slog.Logger
 }
 
-// Advertiser announces `_heyarr._tcp` over mDNS on the trusted interfaces.
+// Advertiser announces the node's DNS-SD service (Params.Service: `_heyarr._tcp`
+// for heyarr, `_mnemosyne._tcp` for Mnemosyne) over mDNS on the trusted
+// interfaces.
 //
 // It owns a background goroutine that sends an unsolicited announcement at Start
 // and then every Interval, until Stop. The network and interface enumeration are
@@ -113,7 +115,7 @@ func (a *Advertiser) Start(ctx context.Context) (bool, error) {
 	go a.run(runCtx, selected, cast)
 
 	a.log.Info("mDNS advertisement started",
-		"service", ServiceName(), "interfaces", ifaceNames(selected),
+		"service", a.params.service().Name(), "interfaces", ifaceNames(selected),
 		"port", a.params.Port, "tls", a.params.TLS)
 	return true, nil
 }

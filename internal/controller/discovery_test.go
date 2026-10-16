@@ -1,6 +1,36 @@
 package controller
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/discovery"
+)
+
+// TestServiceForProfile pins which DNS-SD service each profile announces as
+// (#758): a Mnemosyne node must not show up to heyarr clients browsing
+// `_heyarr._tcp`, and the media profile must keep announcing exactly as before.
+func TestServiceForProfile(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile config.Profile
+		want    discovery.Service
+	}{
+		{name: "media profile is heyarr", profile: config.ProfileMedia, want: discovery.ServiceMedia},
+		{name: "unset profile is the media default", profile: "", want: discovery.ServiceMedia},
+		{name: "personal profile is mnemosyne", profile: config.ProfilePersonal, want: discovery.ServicePersonal},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := serviceForProfile(tt.profile); got != tt.want {
+				t.Errorf("serviceForProfile(%q) = %+v, want %+v", tt.profile, got, tt.want)
+			}
+		})
+	}
+	if got := serviceForProfile(config.ProfilePersonal).Name(); got != "_mnemosyne._tcp.local." {
+		t.Errorf("personal profile announces %q, want _mnemosyne._tcp.local.", got)
+	}
+}
 
 func TestAdvertisePort(t *testing.T) {
 	tests := []struct {
