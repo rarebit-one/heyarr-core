@@ -24,6 +24,7 @@ rather than hiding the distinction inside a feature flag.
 | Vault placement pins (`/api/v1/vault/placements`) | Always |
 | Personal-state plane (`/api/v1/spaces`, `/api/v1/state/replicate`) | Always |
 | Service recipients (`/api/v1/service-recipients`) | Always |
+| Peer membership (`/api/v1/peers`, `/api/v1/peers/{id}`, `/api/v1/peers/{id}/reconcile`) | Always (#762) |
 | Device enrolment (`/enrol`, `/membership`) | Always |
 | Health and metrics (`/healthz`, `/readyz`, `/metrics`) | Always |
 | Backup beat | Always |
@@ -36,17 +37,25 @@ rather than hiding the distinction inside a feature flag.
 | `replicate_blob` job type (mTLS blob transfer to named peers, bounded concurrency) | Worker role only |
 | `chunk_blob` job type (produce chunk manifests for resumable large-blob transfers) | Worker role only |
 
-**Not mounted on the HTTP surface:** `resources.API` (the monolithic route
-function that registers works, assets, libraries, jobs, tokens, devices, peers,
-events and sessions) is not mounted on the personal profile. Tokens, devices and
-peers are managed through the CLI (`mnemosyne token create`, `mnemosyne device
-list`, etc.), which opens the database directly rather than through HTTP. The CLI
+**Not mounted on the HTTP surface:** the rest of `resources.API` (the route
+function that registers works, assets, libraries, jobs, tokens, devices, events
+and sessions) is not mounted on the personal profile. The one piece of it that
+is mounted is peer membership (`MountPeers`): `mnemosyne peers add/list/show/
+remove/ping/attach/report-inventory` are thin clients over `/api/v1/peers`,
+exactly as heyarr's are, and without that route no membership record could ever
+be written — so the peer surface, the encrypted-state replication beat,
+`reconcile_peer` and `replicate_blob` would all be mounted with no sibling to
+reach (#762). Enrolment is admin-scoped in both directions (ADR-0012); the list
+is `read`.
+
+Tokens are different: `mnemosyne token create` opens the database directly
+rather than going through HTTP, so `/api/v1/tokens` stays unmounted. The CLI
 loads the same mnemosyne profile as the server, so it opens the same
 `mnemosyne.db` — a token minted on the command line is one the server knows.
 
-Mnemosyne **does not** mount: the resource API, library/scanner/ingest, search,
-acquisition, the MCP surface, render, relay, DLNA, OPDS, Subsonic, pair relay
-or any provider integration.
+Mnemosyne **does not** mount: the rest of the resource API, library/scanner/
+ingest, search, acquisition, the MCP surface, render, relay, DLNA, OPDS,
+Subsonic, pair relay or any provider integration.
 
 ## Default configuration
 
@@ -90,6 +99,11 @@ mnemosyne config print
 # Manage tokens (opens the database directly; no HTTP server needed)
 mnemosyne token create --scope read
 mnemosyne token list
+
+# Enrol the sibling at the other site (over the API, with an admin token;
+# the key is what `mnemosyne peers list` prints there)
+mnemosyne peers add --name peer-b --site site-b --endpoint <host>:<peer-port> --public-key ed25519:<hex>
+mnemosyne peers ping peer-b
 ```
 
 ## systemd

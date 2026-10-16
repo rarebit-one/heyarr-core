@@ -66,15 +66,23 @@ var adminSurfaceFloor = []string{
 // (httpapi.PresentedPeerKey), not the decision: everything downstream of it is
 // the production path.
 type peerSurfaceHarness struct {
-	server *httptest.Server
-	tokens *auth.Store
-	router chi.Routes
+	server  *httptest.Server
+	tokens  *auth.Store
+	members *membership.Store
+	router  chi.Routes
 }
 
 func newPeerSurfaceHarness(t *testing.T, presented httpapi.PresentedPeerKey) *peerSurfaceHarness {
 	t.Helper()
+	return newProfileSurfaceHarness(t, newTestController(t), presented)
+}
+
+// newProfileSurfaceHarness is newPeerSurfaceHarness over a controller the
+// caller built, so the same real router can be stood up for either profile
+// (ADR-0107) — see profile_peers_test.go.
+func newProfileSurfaceHarness(t *testing.T, c *Controller, presented httpapi.PresentedPeerKey) *peerSurfaceHarness {
+	t.Helper()
 	ctx := context.Background()
-	c := newTestController(t)
 
 	testdb.WriteMigrated(t, c.cfg.Database.Path)
 	db, err := sqlite.Open(ctx, sqlite.Options{Path: c.cfg.Database.Path})
@@ -143,7 +151,7 @@ func newPeerSurfaceHarness(t *testing.T, presented httpapi.PresentedPeerKey) *pe
 	}
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
-	return &peerSurfaceHarness{server: ts, tokens: tokens, router: router}
+	return &peerSurfaceHarness{server: ts, tokens: tokens, members: members, router: router}
 }
 
 // Two clients, because the two phases of this file want opposite things from a

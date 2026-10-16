@@ -23,8 +23,9 @@ stable.
 - **Mnemosyne: a second binary for personal media (ADR-0107).** `cmd/mnemosyne`
   builds a focused service that mounts only the personal-state plane, vault blob
   upload, vault placement pins, blob content serving, device enrolment,
-  encrypted-state replication, health/metrics and backup. Tokens, devices and
-  peers are managed through the CLI (direct database access), not HTTP routes.
+  encrypted-state replication, health/metrics and backup. Tokens and devices
+  are managed through the CLI (direct database access), not HTTP routes; peer
+  membership is the one resource route it mounts (see Fixed, #762).
   Libraries, scanner, ingest, MCP, render, relay and compat adapters are
   excluded. Default data directory `/var/lib/mnemosyne`, default port 7779
   (7778 is where heyarr's render listener conventionally sits, ADR-0079).
@@ -61,6 +62,15 @@ stable.
   alternative.
 
 ### Fixed
+- **Mnemosyne mounts `/api/v1/peers`, so `mnemosyne peers add` can enrol a
+  sibling (#762).** The personal profile (ADR-0107) left the whole resource API
+  unmounted, but every `peers` subcommand is a client over `/api/v1/peers` —
+  so on a Mnemosyne node they all answered `no route matches /api/v1/peers`, no
+  membership record could be written, and the peer surface, encrypted-state
+  replication beat, `reconcile_peer` and `replicate_blob` it does mount had no
+  sibling to reach. The peer-membership routes now live in their own mount
+  function (`resources.API.MountPeers`) which the personal profile includes;
+  the media profile's route table is unchanged. Tokens stay CLI-only.
 - **A failed cruciform wake warning now respects the configured stderr writer (#740).**
   `warnWakeFailed` wrote directly to `os.Stderr`, bypassing the `Options.Stderr`
   writer injected via `NewRootCommand`. It is replaced by `warnWakeFailedOn(w io.Writer)`

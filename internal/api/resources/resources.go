@@ -362,7 +362,9 @@ func (a *API) Mount(r chi.Router) {
 	r.Get("/libraries/{id}", a.getLibrary)
 	r.Get("/blobs/{hash}", a.getBlob)
 	r.Get("/blobs/{hash}/probe", a.getBlobProbe)
-	r.Get("/peers", a.listPeers)
+	// Peers live in MountPeers (below) so the personal profile can carry them
+	// without the rest of this table; the set registered here is unchanged.
+	a.MountPeers(r)
 	r.Get("/replicas", a.listReplicas)
 	r.Get("/devices", a.listDevices)
 	r.Get("/devices/{id}", a.getDevice)
@@ -551,22 +553,7 @@ func (a *API) Mount(r chi.Router) {
 	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Get("/tokens/{id}", a.getToken)
 	r.With(httpapi.RequireScope(auth.ScopeAdmin)).Delete("/tokens/{id}", a.revokeToken)
 
-	// Peer membership is admin in both directions, and for a stronger reason
-	// than tokens are (§26, ADR-0012, M4-04). Membership is the ONLY trust
-	// root in the inter-peer path: a credential that could enrol a peer could
-	// hand a complete replica of the library to a machine of its choosing, and
-	// one that could remove a peer could sever a site. Reading the list stays
-	// `read` — it is what an operator copies a public key out of.
-	if a.membership != nil {
-		r.Get("/peers/{id}", a.getPeer)
-		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/peers", a.createPeer)
-		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Delete("/peers/{id}", a.deletePeer)
-		// Convergence on demand (§19, §57, M4-08). `write`, not `admin`: it
-		// changes nothing about who is trusted, it only asks the fabric to
-		// notice now what the beat would notice within five minutes.
-		r.With(httpapi.RequireScope(auth.ScopeWrite)).
-			Post("/peers/{id}/reconcile", a.reconcilePeer)
-	}
+	// Peer membership: see MountPeers, called from the reads block above.
 
 	// Two-site catalog convergence on demand (§49, ADR-0073, #449): force the
 	// op-log exchange the beat runs on a cadence, so a delete made here reaches
@@ -588,6 +575,38 @@ func (a *API) Mount(r chi.Router) {
 		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Get("/identities/users/{key}/devices", a.listIdentityDevices)
 		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/identities/devices", a.enrolDevice)
 		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Delete("/identities/devices/{key}", a.revokeIdentityDevice)
+	}
+}
+
+// MountPeers registers the peer-membership routes (§26, ADR-0012, M4-04) on
+// their own, so a profile that carries no library can still enrol a sibling.
+//
+// It is a separate mount function rather than a block inside Mount because the
+// personal profile (ADR-0107) needs exactly this and nothing else from this
+// table: the peer fabric — the mTLS surface, the encrypted-state replication
+// beat, reconcile_peer and replicate_blob — is built on both profiles, and
+// membership is the only way a sibling becomes a destination for any of it. A
+// node that serves the fabric but cannot be told who its sibling is has
+// replication as dead code. Mount calls this too, so the media profile's route
+// table is exactly what it was before the routes moved here.
+//
+// Peer membership is admin in both directions, and for a stronger reason than
+// tokens are. Membership is the ONLY trust root in the inter-peer path: a
+// credential that could enrol a peer could hand a complete replica of the
+// library to a machine of its choosing, and one that could remove a peer could
+// sever a site. Reading the list stays `read` (the router's floor) — it is what
+// an operator copies a public key out of.
+func (a *API) MountPeers(r chi.Router) {
+	r.Get("/peers", a.listPeers)
+	if a.membership != nil {
+		r.Get("/peers/{id}", a.getPeer)
+		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/peers", a.createPeer)
+		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Delete("/peers/{id}", a.deletePeer)
+		// Convergence on demand (§19, §57, M4-08). `write`, not `admin`: it
+		// changes nothing about who is trusted, it only asks the fabric to
+		// notice now what the beat would notice within five minutes.
+		r.With(httpapi.RequireScope(auth.ScopeWrite)).
+			Post("/peers/{id}/reconcile", a.reconcilePeer)
 	}
 }
 

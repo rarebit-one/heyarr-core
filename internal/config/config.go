@@ -43,9 +43,9 @@ const MnemosyneConfigPathEnv = "MNEMOSYNE_CONFIG"
 // Profile selects which API surfaces a controller mounts (ADR-0107). The
 // default, ProfileMedia, is heyarr's full stack. ProfilePersonal is the second
 // service, Mnemosyne: it mounts only the personal-state plane, vault blob
-// upload, placement pins, blob content serving, auth/tokens/device
-// enrolment/recovery, peer surface and encrypted-state replication, GC, health,
-// metrics, events and the backup beat.
+// upload, placement pins, blob content serving, peer membership (/peers,
+// #762), auth/device enrolment/recovery, peer surface and encrypted-state
+// replication, GC, health, metrics, events and the backup beat.
 type Profile string
 
 const (
