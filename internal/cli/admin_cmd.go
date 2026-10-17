@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -34,6 +35,7 @@ than racing it.`,
 		Use:   "user",
 		Short: "Administer pinned user identities",
 	}
+	user.AddCommand(newAdminUserPinCommand(opts, configPath))
 	user.AddCommand(newAdminUserRekeyCommand(opts, configPath))
 	cmd.AddCommand(user)
 	return cmd
@@ -66,6 +68,78 @@ func withDeviceAuth(ctx context.Context, configPath string, fn func(context.Cont
 		return err
 	}
 	return fn(ctx, store)
+}
+
+// userPinJSON is the --json shape of `admin user pin`. Every key in it is a
+// PUBLIC key; nothing secret passes through this command.
+type userPinJSON struct {
+	UserIdentityID        string `json:"user_identity_id"`
+	PrincipalID           string `json:"principal_id"`
+	Name                  string `json:"name"`
+	PublicKey             string `json:"public_key"`
+	RecoveryEncryptionKey string `json:"recovery_encryption_key"`
+}
+
+func newAdminUserPinCommand(_ Options, configPath *string) *cobra.Command {
+	var (
+		recoveryKey string
+		asJSON      bool
+	)
+	cmd := &cobra.Command{
+		Use:   "pin <name> <ed25519:public-key>",
+		Short: "Pin a user identity's public key (ADR-0032), without the HTTP API",
+		Long: `Pin a user identity: create its principal (kind 'user') and register its
+signing key and recovery encryption key, the out-of-band step that ADR-0032
+requires before anything the user signs is honoured — the same write as
+POST /api/v1/identities/users.
+
+It exists for a controller that does not mount that route: the Mnemosyne
+personal profile mounts no identities API, so this is how its first user is
+pinned. On heyarr it is equivalent to the route.
+
+Both keys are PUBLIC. --recovery-key is required: an identity pinned without
+one cannot have new spaces wrapped for its paper recovery secret (§41).
+
+A pin is local to this controller's database; peers do not replicate it. Pin
+the user on every controller its devices enrol at.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(recoveryKey) == "" {
+				return errors.New("admin: --recovery-key is required (the identity's x25519 recovery public key)")
+			}
+			if strings.TrimSpace(args[0]) == "" {
+				return errors.New("admin: <name> must not be empty")
+			}
+			return withDeviceAuth(cmd.Context(), *configPath, func(ctx context.Context, store *deviceauth.Store) error {
+				u, err := store.EnrolUser(ctx, args[1], args[0], recoveryKey)
+				if err != nil {
+					return err
+				}
+				return printUserPin(cmd.OutOrStdout(), u, asJSON)
+			})
+		},
+	}
+	cmd.Flags().StringVar(&recoveryKey, "recovery-key", "",
+		"the identity's x25519 recovery encryption PUBLIC key (x25519:<hex>; required)")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
+	return cmd
+}
+
+func printUserPin(w io.Writer, u deviceauth.User, asJSON bool) error {
+	if asJSON {
+		return emitJSON(w, userPinJSON{
+			UserIdentityID:        u.ID,
+			PrincipalID:           u.PrincipalID,
+			Name:                  u.Name,
+			PublicKey:             u.PublicKey,
+			RecoveryEncryptionKey: u.RecoveryEncryptionKey,
+		})
+	}
+	fmt.Fprintf(w, "pinned user %s (principal %s)\n\n", u.Name, u.PrincipalID)
+	fmt.Fprintf(w, "  public key    %s\n", u.PublicKey)
+	fmt.Fprintf(w, "  recovery key  %s\n\n", u.RecoveryEncryptionKey)
+	fmt.Fprintln(w, "Pins are local to this controller: pin the same key on every controller the user's devices enrol at.")
+	return nil
 }
 
 // userRekeyJSON is the --json shape of `admin user rekey`. Every key in it is a
@@ -104,7 +178,7 @@ key. Once this runs, nothing signed by the old key authenticates here, and
 there is no undo short of rekeying back.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if recoveryKey == "" {
+			if strings.TrimSpace(recoveryKey) == "" {
 				return errors.New("admin: --recovery-key is required (the identity's x25519 recovery public key)")
 			}
 			return withDeviceAuth(cmd.Context(), *configPath, func(ctx context.Context, store *deviceauth.Store) error {

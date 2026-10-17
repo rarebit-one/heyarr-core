@@ -7,6 +7,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 
 | Command | Description |
 | --- | --- |
+| [`heyarr admin user pin`](heyarr_admin_user_pin.md) | Pin a user identity's public key (ADR-0032), without the HTTP API |
 | [`heyarr admin user rekey`](heyarr_admin_user_rekey.md) | Replace a user identity's pinned key in place (void-which-binds ADR-0022) |
 | [`heyarr admin user`](heyarr_admin_user.md) | Administer pinned user identities |
 | [`heyarr admin`](heyarr_admin.md) | Host administration of the controller database |

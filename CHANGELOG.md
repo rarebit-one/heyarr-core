@@ -10,6 +10,17 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **`heyarr admin user pin <name> <ed25519:…> --recovery-key <x25519:…>`
+  pins a user identity on the host**, the same write as
+  `POST /api/v1/identities/users` (ADR-0032). It is how Mnemosyne gets its
+  first user: the personal profile mounts no identities API, and
+  `mnemosyne admin user rekey` needs a user that is already pinned. The command
+  opens the controller database directly, like `token create` and
+  `admin user rekey`, so it works with the controller stopped or running.
+  `--recovery-key` is required, and a malformed key or a key already pinned is
+  refused. A pin is local to one controller and is not replicated to peers;
+  pin the user on each sibling. `--json` is supported.
+
 - **Shared-space membership (ADR-0108, #755).** A space now records who it is
   shared with: `GET/POST /api/v1/spaces/{id}/members` and
   `DELETE /api/v1/spaces/{id}/members/{member}` on the personal-state plane
