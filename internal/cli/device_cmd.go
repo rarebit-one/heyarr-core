@@ -58,6 +58,7 @@ token scope (ADR-0011) until Milestone 8. The key exists now so that Milestone
 		newDeviceRevokeCommand(opts, configPath, &dir),
 		newDeviceSealTPMCommand(opts, configPath, &dir),
 		newDevicePairOffloadCommand(opts, &dir),
+		newDeviceEnrolCommand(opts, &dir),
 		newDeviceMCPCommand(opts, &dir),
 		newDeviceGatewayCommand(opts, &dir),
 	)

@@ -61,6 +61,14 @@ opens `mnemosyne.db` directly. A pin is local to one controller: the encrypted
 state replication beat carries spaces, changes and wrapped keys, never pinned
 identities, so pin the user on each sibling its devices enrol at.
 
+A device paired on the command line enrols itself the way a phone does, with
+`mnemosyne device enrol --peer <url>`: it posts its admitting op, a fresh
+possession proof and the membership ops it knows to `POST /enrol` (ADR-0067).
+No admin token is involved, and the user must already be pinned. A space key
+can only be wrapped for an enrolled device (enrol-before-wrap, ADR-0049), so
+enrol at the controller the device creates or opens spaces through. A wrapped
+key replicated to a sibling is not gated on enrolment there.
+
 Mnemosyne **does not** mount: the rest of the resource API, library/scanner/
 ingest, search, acquisition, the MCP surface, render, relay, DLNA, OPDS,
 Subsonic, pair relay or any provider integration.
