@@ -10,6 +10,17 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **`heyarr device enrol --peer <url>` enrols this machine's paired device at
+  a peer** through `POST /enrol` (ADR-0067), the route the phone apps call
+  after pairing. It sends the admitting op, a fresh possession proof and the
+  membership ops the device knows, and no bearer token. A device paired with
+  `void-which-binds pair-join` or `heyarr pair enrol` can now be enrolled at a
+  Mnemosyne controller, which mounts no admin identities API. Until then,
+  nothing could be wrapped for such a device there. It works with software and
+  sealed-file devices; a sealed device asks for its passphrase once. A 401 is
+  explained as an unpinned user, an expired admission or a revoked device,
+  since the peer says no more. `--json` is supported.
+
 - **`heyarr admin user pin <name> <ed25519:…> --recovery-key <x25519:…>`
   pins a user identity on the host**, the same write as
   `POST /api/v1/identities/users` (ADR-0032). It is how Mnemosyne gets its
