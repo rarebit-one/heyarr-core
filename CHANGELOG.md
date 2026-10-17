@@ -10,6 +10,16 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **`heyarr admin management grant|revoke|list` authorises an enrolled device
+  for write on the host** (ADR-0065). These are the same records as
+  `POST/DELETE /api/v1/session/management-grants`, which the Mnemosyne personal
+  profile does not mount. Until now, no device there could carry write, so none
+  could create a space it owns, register an executor's service recipient or
+  grant an executor a space (ADR-0104). The device key is validated and stored
+  in the canonical form the auth path compares, so a misspelt key can't create
+  a grant that never matches. `--reason` is required. Revoking a device with no
+  grant is refused. `--json` is supported on `grant` and `list`.
+
 - **`heyarr device enrol --peer <url>` enrols this machine's paired device at
   a peer** through `POST /enrol` (ADR-0067), the route the phone apps call
   after pairing. It sends the admitting op, a fresh possession proof and the

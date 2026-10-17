@@ -59,6 +59,15 @@ func TestMnemosyneSharedCommandsUseMnemosyneProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Likewise management grants: the profile mounts no /session route, so the
+	// host-side grant is how a device there earns write (ADR-0065).
+	if out := mn("admin", "management", "grant", fixedUserKey(3), "--reason", "owner"); !strings.Contains(out, fixedUserKey(3)) {
+		t.Fatalf("expected the granted key, got %s", out)
+	}
+	if list := mn("admin", "management", "list", "--json"); !strings.Contains(list, fixedUserKey(3)) {
+		t.Fatalf("the grant did not land in the database the profile reads: %s", list)
+	}
+
 	if _, err := os.Stat(filepath.Join(dir, "mnemosyne.db")); err != nil {
 		t.Errorf("mnemosyne.db was not created in data_dir: %v", err)
 	}
