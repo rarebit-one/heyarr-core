@@ -7,6 +7,10 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 
 | Command | Description |
 | --- | --- |
+| [`heyarr admin management grant`](heyarr_admin_management_grant.md) | Authorise a device for write |
+| [`heyarr admin management list`](heyarr_admin_management_list.md) | List the devices authorised for write |
+| [`heyarr admin management revoke`](heyarr_admin_management_revoke.md) | Return a device to the read floor |
+| [`heyarr admin management`](heyarr_admin_management.md) | Authorise enrolled devices for write (ADR-0065), without the HTTP API |
 | [`heyarr admin user pin`](heyarr_admin_user_pin.md) | Pin a user identity's public key (ADR-0032), without the HTTP API |
 | [`heyarr admin user rekey`](heyarr_admin_user_rekey.md) | Replace a user identity's pinned key in place (void-which-binds ADR-0022) |
 | [`heyarr admin user`](heyarr_admin_user.md) | Administer pinned user identities |

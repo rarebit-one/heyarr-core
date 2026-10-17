@@ -37,7 +37,7 @@ than racing it.`,
 	}
 	user.AddCommand(newAdminUserPinCommand(opts, configPath))
 	user.AddCommand(newAdminUserRekeyCommand(opts, configPath))
-	cmd.AddCommand(user)
+	cmd.AddCommand(user, newAdminManagementCommand(opts, configPath))
 	return cmd
 }
 

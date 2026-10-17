@@ -21,4 +21,5 @@ than racing it.
 ### See also
 
 * [heyarr](heyarr.md)	 - Self-hosted content lifecycle, replication and consumption
+* [heyarr admin management](heyarr_admin_management.md)	 - Authorise enrolled devices for write (ADR-0065), without the HTTP API
 * [heyarr admin user](heyarr_admin_user.md)	 - Administer pinned user identities

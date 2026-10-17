@@ -69,6 +69,13 @@ can only be wrapped for an enrolled device (enrol-before-wrap, ADR-0049), so
 enrol at the controller the device creates or opens spaces through. A wrapped
 key replicated to a sibling is not gated on enrolment there.
 
+Write authorisation is the third such step. An enrolled device carries write
+once its key holds a management grant (ADR-0065); `/session/management-grants`
+is not mounted, so the host grants it with `mnemosyne admin management grant
+<ed25519:device-key> --reason <why>` (and `revoke` / `list`). A device needs
+write here to create the spaces it owns, register an executor's service
+recipient and grant the executor a space (ADR-0104).
+
 Mnemosyne **does not** mount: the rest of the resource API, library/scanner/
 ingest, search, acquisition, the MCP surface, render, relay, DLNA, OPDS,
 Subsonic, pair relay or any provider integration.
