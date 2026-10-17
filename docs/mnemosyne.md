@@ -170,6 +170,11 @@ deployments will run one or the other:
   vault pins; cross-site blob replication between them arrives in Phase 1b
   once the worker subcommand is available.
 
+On the client side the rule is one app, one device: a phone running both the
+heyarr app and the Mnemosyne app is two Voidbind devices, each paired, admitted
+and enrolled (`POST /enrol`) on its own, because the two app sandboxes cannot
+share a private key (ADR-0107 amendment, #765).
+
 ## Phase plan
 
 This document tracks Phase 1 (ADR-0107). Future phases are tracked in the epic

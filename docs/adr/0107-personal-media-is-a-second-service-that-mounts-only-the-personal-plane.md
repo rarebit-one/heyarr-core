@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-10-10
-**Refs:** [#733](https://github.com/rarebit-one/heyarr-core/issues/733)
+**Refs:** [#733](https://github.com/rarebit-one/heyarr-core/issues/733), [#765](https://github.com/rarebit-one/heyarr-core/issues/765) (amendment)
 **Builds on:** [ADR-0020](0020-managed-linked-and-vault-assets.md), [ADR-0021](0021-encrypted-vault-content.md), [ADR-0049](0049-a-space-key-is-wrapped-for-a-device-encryption-key-and-a-peer-cannot-unwrap-it.md), [ADR-0095](0095-a-vault-is-a-filesystem-as-a-path-keyed-map-crdt.md), [ADR-0096](0096-vault-placement-is-a-device-supplied-blind-desired-fact.md), [ADR-0097](0097-a-vault-blob-is-fixed-frame-ciphertext-with-an-encrypted-manifest.md), [ADR-0104](0104-a-restricted-principal-reaches-only-the-spaces-a-device-granted-it.md)
 
 ## Context
@@ -133,3 +133,43 @@ sessions.
   combination of flags, and the only combination that matters is "vault only"
   versus "media only." A named binary is clearer and has no combinatorial
   surface.
+
+## Amendment (2026-10-17): one app is one device, for v1
+
+**Decision (#765):** for v1, *one app is one Voidbind device*. The heyarr app
+and the Mnemosyne app on the same phone are two devices: each has its own
+Cruciform pairing, its own admission and its own `POST /enrol` (ADR-0067),
+and each appears as a separate enrolled device key in `device_identities`.
+A phone running both apps is two devices, and is approved twice.
+
+**Why.** "One device identity, many relying parties" above assumed the two
+apps could present one device certificate. On Android they cannot: the two
+apps are separate sandboxes, and a private key held in one app's keystore is
+not reachable from the other. The authenticator that pairs through Cruciform
+is therefore per app, not per phone, and the server sees what the platform
+allows it to see — a key per app. Working around the sandbox (a shared
+content provider, a system-level authenticator) is a Cruciform-and-platform
+item, not a server one, and it should not gate the first client release.
+
+**Cost.** Per phone, a second Cruciform approval by the admin, and a second
+recipient to wrap every space key for (ADR-0049, ADR-0108): a membership
+change wraps for every enrolled device key of the member, so a two-app phone
+costs two wraps where one was planned. Revocation is likewise per app. Both
+are linear in the number of apps a household installs, and today that number
+is two.
+
+**Not changed.** The device identity library is still shared by both
+services; enrolment with heyarr still does not enrol the device with
+Mnemosyne; each service still mints its own credential and keeps its own
+token namespace. Only the sentence "a device that wants both presents its
+cert to both" is narrowed: it holds for a device whose apps *can* share a key
+(a desktop or a CLI host), and does not hold for a phone running two
+sandboxed apps.
+
+**Later, not v1.** A single device identity minted by Cruciform and presented
+per relying party — so both apps on a phone present the same device and the
+admin approves once — is a possible refinement. It needs Cruciform (or a
+platform component it owns) to hold the device key and issue per-app
+credentials, and the server to accept a credential whose signing key is the
+phone's rather than the app's. It is recorded here as an option, not a goal:
+nothing in Phase 1 or Phase 4 depends on it.
