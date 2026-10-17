@@ -3,11 +3,15 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 )
 
 // The mnemosyne binary shares its subcommand tree with heyarr. Before the
@@ -37,6 +41,22 @@ func TestMnemosyneSharedCommandsUseMnemosyneProfile(t *testing.T) {
 	}
 	if list := mn("token", "list", "--json"); !strings.Contains(list, "laptop") {
 		t.Fatalf("token did not land in the database the list reads: %s", list)
+	}
+
+	// The personal profile mounts no identities API, so `admin user pin` is how
+	// its first user is pinned; the pin must land where the server reads it.
+	if out := mn("admin", "user", "pin", "owner", fixedUserKey(1), "--recovery-key", rekeyOldRecovery, "--json"); !strings.Contains(out, fixedUserKey(1)) {
+		t.Fatalf("expected the pinned key, got %s", out)
+	}
+	if err := withDeviceAuth(config.WithLoader(context.Background(), config.LoadMnemosyne), cfgPath,
+		func(ctx context.Context, s *deviceauth.Store) error {
+			_, err := s.EnrolUser(ctx, fixedUserKey(1), "dup", rekeyOldRecovery)
+			if !errors.Is(err, deviceauth.ErrUserExists) {
+				t.Errorf("the pin did not land in mnemosyne.db: re-enrolling it = %v, want ErrUserExists", err)
+			}
+			return nil
+		}); err != nil {
+		t.Fatal(err)
 	}
 
 	if _, err := os.Stat(filepath.Join(dir, "mnemosyne.db")); err != nil {

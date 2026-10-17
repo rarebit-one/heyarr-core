@@ -1,0 +1,7 @@
+{
+  "user_identity_id": "<uuid>",
+  "principal_id": "<uuid>",
+  "name": "owner",
+  "public_key": "ed25519:8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+  "recovery_encryption_key": "x25519:1111111111111111111111111111111111111111111111111111111111111111"
+}

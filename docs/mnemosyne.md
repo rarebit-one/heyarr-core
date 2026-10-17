@@ -54,6 +54,13 @@ rather than going through HTTP, so `/api/v1/tokens` stays unmounted. The CLI
 loads the same mnemosyne profile as the server, so it opens the same
 `mnemosyne.db` — a token minted on the command line is one the server knows.
 
+User pins are the same. `/api/v1/identities/users` is not mounted, so the
+first user is pinned on the host with `mnemosyne admin user pin <name>
+<ed25519:public-key> --recovery-key <x25519:public-key>` (ADR-0032), which also
+opens `mnemosyne.db` directly. A pin is local to one controller: the encrypted
+state replication beat carries spaces, changes and wrapped keys, never pinned
+identities, so pin the user on each sibling its devices enrol at.
+
 Mnemosyne **does not** mount: the rest of the resource API, library/scanner/
 ingest, search, acquisition, the MCP surface, render, relay, DLNA, OPDS,
 Subsonic, pair relay or any provider integration.
