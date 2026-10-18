@@ -275,6 +275,7 @@ func TestParityVectors(t *testing.T) {
 		{"readingpos.json", readingposVectors},
 		{"history.json", historyVectors},
 		{"album.json", albumVectors}, // album_parity_test.go (#756)
+		{"drive.json", driveVectors}, // drive_parity_test.go (ADR-0113, #774)
 	} {
 		t.Run(tc.file, func(t *testing.T) {
 			got := indent(t, tc.gen(t))
@@ -325,6 +326,7 @@ func TestParityFoldConvergesToTheVector(t *testing.T) {
 		return l.Encode(), mustSnap(t, l.Snapshot)
 	})
 	replay(t, "album.json", foldAlbum)
+	replay(t, "drive.json", foldDrive)
 }
 
 // TestParitySnapshotRoundTrips proves each vector's `snapshot` string decodes
@@ -365,6 +367,13 @@ func TestParitySnapshotRoundTrips(t *testing.T) {
 			t.Fatal(err)
 		}
 		return a.Encode()
+	})
+	roundTrip(t, "drive.json", func(t *testing.T, b []byte) string {
+		d, err := crdt.DriveFromSnapshot(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.Encode()
 	})
 }
 

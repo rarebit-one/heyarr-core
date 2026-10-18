@@ -20,9 +20,12 @@ import (
 )
 
 type driveValueSnapshot struct {
-	Blob     string `json:"blob"`
-	Size     int64  `json:"size"`
-	MTime    int64  `json:"mtime"`
+	Blob  string `json:"blob"`
+	Size  int64  `json:"size"`
+	MTime int64  `json:"mtime"`
+	// DriveMeta sits inline and omits zero fields, so a drive without metadata
+	// snapshots to the bytes it did before ADR-0113.
+	DriveMeta
 	At       uint64 `json:"at"`
 	Writer   PosTag `json:"writer"`
 	BaseAt   uint64 `json:"baseAt,omitempty"`
@@ -52,7 +55,7 @@ func (d *Drive) Snapshot() ([]byte, error) {
 		writes := make([]driveValueSnapshot, 0, len(rec.values))
 		for _, v := range rec.values {
 			writes = append(writes, driveValueSnapshot{
-				Blob: v.Blob, Size: v.Size, MTime: v.MTime,
+				Blob: v.Blob, Size: v.Size, MTime: v.MTime, DriveMeta: v.Meta,
 				At: v.key.At, Writer: v.key.Writer, BaseAt: v.base.At, BaseWrit: v.base.Writer,
 			})
 		}
@@ -83,7 +86,7 @@ func DriveFromSnapshot(b []byte) (*Drive, error) {
 		rec := driveRecord{values: make(map[posKey]driveValue, len(e.Writes)), delKey: posKey{At: e.DelAt, Writer: e.DelBy}}
 		for _, w := range e.Writes {
 			k := posKey{At: w.At, Writer: w.Writer}
-			rec.values[k] = driveValue{Blob: w.Blob, Size: w.Size, MTime: w.MTime, key: k, base: posKey{At: w.BaseAt, Writer: w.BaseWrit}}
+			rec.values[k] = driveValue{Blob: w.Blob, Size: w.Size, MTime: w.MTime, Meta: w.DriveMeta, key: k, base: posKey{At: w.BaseAt, Writer: w.BaseWrit}}
 		}
 		d.entries[e.Path] = rec
 	}

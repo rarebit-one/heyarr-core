@@ -63,6 +63,7 @@ package crdt
 // concurrency (the same follow-up the drive carries).
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -188,6 +189,7 @@ const (
 // the bytes (statesync.EncodeChange), so the shape is also the cross-language
 // parity contract pinned in testdata/vectors/album.json.
 type AlbumChange struct {
+	Kind    string         `json:"k,omitempty"` // ADR-0113 kind tag: "album", or absent on a legacy change
 	Op      AlbumOp        `json:"op"`
 	AlbumID string         `json:"album_id"`
 	Item    *PhotoManifest `json:"item,omitempty"`    // AlbumOpAddItem only
@@ -200,6 +202,33 @@ type AlbumChange struct {
 	// Base is the add key of the item this change targets (remove and move); zero
 	// for every other op.
 	Base WriteKey `json:"base"`
+}
+
+// UnmarshalJSON reads the `k` tag before anything else (ADR-0113): a change of
+// another kind decodes to just its tag, which [AlbumChange.Foreign] then skips,
+// whatever shape the rest of its payload has.
+func (c *AlbumChange) UnmarshalJSON(b []byte) error {
+	kind, foreign, err := foreignKind(b, KindAlbum)
+	if err != nil {
+		return err
+	}
+	if foreign {
+		*c = AlbumChange{Kind: kind}
+		return nil
+	}
+	type plain AlbumChange
+	return json.Unmarshal(b, (*plain)(c))
+}
+
+// Foreign reports whether the change belongs to ANOTHER kind sharing the space
+// (ADR-0113): it is tagged with a `k` other than [KindAlbum], or it is untagged and
+// names no album, which by shape makes it a legacy change of another kind (a drive
+// sync's file write). A fold skips it silently.
+func (c AlbumChange) Foreign() bool {
+	if c.Kind != "" {
+		return c.Kind != KindAlbum
+	}
+	return c.AlbumID == ""
 }
 
 // Validate reports whether the change is well-formed enough to enter the CRDT.
@@ -414,7 +443,7 @@ func (a *Albums) record(id string) albumRecord {
 }
 
 func (a *Albums) mint(op AlbumOp, albumID string) AlbumChange {
-	return AlbumChange{Op: op, AlbumID: albumID, At: a.peekAt(), Writer: newPosTag()}
+	return AlbumChange{Kind: KindAlbum, Op: op, AlbumID: albumID, At: a.peekAt(), Writer: newPosTag()}
 }
 
 // local validates, applies and returns a locally minted change. A malformed
@@ -511,8 +540,14 @@ func (a *Albums) Apply(changes ...AlbumChange) { a.ApplyReport(changes...) }
 
 // ApplyReport is [Apply] that also returns the changes it skipped as malformed, a
 // diagnostic for a caller that wants to surface a peer sending garbage.
+//
+// A change of another kind sharing the space ([AlbumChange.Foreign]) is skipped
+// silently, not reported (ADR-0113).
 func (a *Albums) ApplyReport(changes ...AlbumChange) (rejected []AlbumChange) {
 	for _, c := range changes {
+		if c.Foreign() {
+			continue // another kind's change: not ours, and not malformed (ADR-0113)
+		}
 		if err := c.Validate(); err != nil {
 			rejected = append(rejected, c)
 			continue

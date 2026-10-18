@@ -43,7 +43,10 @@ func buildDriveChangeset(t *testing.T) (changes []DriveChange, want *Drive) {
 	a := NewDrive()
 	c1 := mustPut(t, a, "Docs/tax.pdf", blobA, 10, 1)
 	c2 := mustPut(t, a, "Docs/tax.pdf", blobB, 20, 2) // observed blobA -> Base = c1's key
-	c3 := a.Delete("notes.txt")
+	c3, err := a.Delete("notes.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Devices B and D, offline, write different blobs to one fresh path with no
 	// live head observed (Base zero on both) — a genuine concurrent divergence.

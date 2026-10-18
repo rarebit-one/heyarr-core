@@ -554,9 +554,20 @@ materialises the state.`,
 				if err != nil {
 					return err
 				}
-				st, changes, _, err := materialise(ctx, c, mgr, spaceID)
+				st, changes, prior, err := materialise(ctx, c, mgr, spaceID)
 				if err != nil {
 					return err
+				}
+				// Check exactly the records the snapshot is built from: the playlist
+				// fold reads another kind's change or snapshot leniently as an empty
+				// playlist (ADR-0113), and the frontier is these changes' heads.
+				// A foreign snapshot installed between this read and the push below
+				// would still be replaced; closing that needs a conditional push the
+				// snapshot route does not offer.
+				if what, err := nonPlaylistIn(mgr, spaceID, changes, prior); err != nil {
+					return fmt.Errorf("space snapshot: %w", err)
+				} else if what != "" {
+					return fmt.Errorf("%w: space %s has a %s of another kind (a vault drive, album, …)", errSnapshotNotPlaylist, spaceID, what)
 				}
 				snap, err := statesync.EncodeSnapshot(mgr, spaceID, protocol.Heads(changes), st)
 				if err != nil {
@@ -832,37 +843,69 @@ func ensurePlaylistSpace(ctx context.Context, c *apiclient.Client, mgr *client.M
 			"play-history or reading-position space); clients that predate key epochs would lose its contents (#698)",
 			errRotateNotPlaylist, spaceID, what)
 	}
-	changes, err := c.Changes(ctx, spaceID)
+	what, err := nonPlaylistPart(ctx, c, mgr, spaceID)
 	if err != nil {
-		return err
+		return fmt.Errorf("space rotate: %w", err)
 	}
-	for _, ec := range changes {
-		if err := ec.Validate(); err != nil {
-			return fmt.Errorf("space rotate: refusing a change: %w", err)
-		}
-		raw, err := mgr.Decrypt(spaceID, ec.Ciphertext)
-		if err != nil {
-			return err
-		}
-		if !crdt.IsPlaylistChange(raw) {
-			return refuse("change")
-		}
-	}
-	snap, ok, err := c.Snapshot(ctx, spaceID)
-	if err != nil {
-		return err
-	}
-	if ok {
-		raw, _, err := statesync.OpenSnapshot(mgr, snap)
-		if err != nil {
-			return err
-		}
-		if !crdt.IsPlaylistSnapshot(raw) {
-			return refuse("snapshot")
-		}
+	if what != "" {
+		return refuse(what)
 	}
 	return nil
 }
+
+// nonPlaylistPart reports what in the space is not a playlist: "" when every
+// change, and the latest snapshot if there is one, strictly decodes as a
+// playlist; otherwise "change" or "snapshot". A malformed change is an error.
+func nonPlaylistPart(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spaceID string) (string, error) {
+	changes, err := c.Changes(ctx, spaceID)
+	if err != nil {
+		return "", err
+	}
+	snap, ok, err := c.Snapshot(ctx, spaceID)
+	if err != nil {
+		return "", err
+	}
+	var latest *protocol.EncryptedSnapshot
+	if ok {
+		latest = &snap
+	}
+	return nonPlaylistIn(mgr, spaceID, changes, latest)
+}
+
+// nonPlaylistIn is [nonPlaylistPart] over records already fetched, so a caller
+// can check exactly the state it is about to act on.
+func nonPlaylistIn(mgr *client.Manager, spaceID string, changes []protocol.EncryptedChange, snap *protocol.EncryptedSnapshot) (string, error) {
+	for _, ec := range changes {
+		if err := ec.Validate(); err != nil {
+			return "", fmt.Errorf("refusing a change: %w", err)
+		}
+		raw, err := mgr.Decrypt(spaceID, ec.Ciphertext)
+		if err != nil {
+			return "", err
+		}
+		if !crdt.IsPlaylistChange(raw) {
+			return "change", nil
+		}
+	}
+	if snap != nil {
+		raw, _, err := statesync.OpenSnapshot(mgr, *snap)
+		if err != nil {
+			return "", err
+		}
+		if !crdt.IsPlaylistSnapshot(raw) {
+			return "snapshot", nil
+		}
+	}
+	return "", nil
+}
+
+// errSnapshotNotPlaylist refuses to snapshot a space that holds anything but a
+// playlist. This command folds only the playlist CRDT, yet a snapshot's frontier
+// covers every change in the space and compaction drops what it subsumes: a
+// playlist snapshot of a vault space would let `space compact` delete the drive's
+// changes. A space holding other kinds is snapshotted only as an ADR-0113
+// composite, by a client that builds one.
+var errSnapshotNotPlaylist = errors.New("space snapshot: this command snapshots only a playlist space")
 
 // partitionRecipients splits a space's current wrapped-key recipients into those
 // that REMAIN (parsed, for re-wrapping under the new key) and those to revoke.

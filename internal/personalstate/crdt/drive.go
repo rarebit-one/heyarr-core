@@ -61,6 +61,7 @@ package crdt
 // bytes Retain reports (ADR-0018).
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"path"
@@ -84,11 +85,20 @@ var ErrInvalidChange = fmt.Errorf("crdt: invalid drive change")
 // key, and the key of the head it observed (base). It reuses [posKey]/[PosTag]
 // from readingpos.go — same package, same coordinator-free total order.
 type driveValue struct {
-	Blob  string // ciphertext blob id (BLAKE3 of ciphertext, ADR-0021)
-	Size  int64  // plaintext size, a client-side hint the peer never sees
-	MTime int64  // content modification time (unix seconds), display only
-	key   posKey // this write's own precedence key
-	base  posKey // the head this write observed (zero == observed nothing live)
+	Blob  string    // ciphertext blob id (BLAKE3 of ciphertext, ADR-0021)
+	Size  int64     // plaintext size, a client-side hint the peer never sees
+	MTime int64     // content modification time (unix seconds), display only
+	Meta  DriveMeta // this write's optional metadata (ADR-0113)
+	key   posKey    // this write's own precedence key
+	base  posKey    // the head this write observed (zero == observed nothing live)
+}
+
+// refs are the blob ids this write references: its content and its metadata's.
+func (v driveValue) refs() []string {
+	if v.Blob == "" {
+		return nil
+	}
+	return append([]string{v.Blob}, v.Meta.blobRefs()...)
 }
 
 // OpKind is what a [DriveChange] does at its path.
@@ -107,14 +117,20 @@ const (
 // the bytes (statesync.EncodeChange -> client.Manager.Encrypt), so the shape is
 // also the cross-language parity contract (§7). A rename emits TWO changes — an
 // OpDelete at the old path and an OpPut at the new.
+//
+// Kind is the ADR-0113 `k` tag. A write made here carries [KindDrive]; an untagged
+// change predates the tag. The embedded [DriveMeta] is OpPut-only optional metadata
+// whose fields sit inline in the JSON.
 type DriveChange struct {
-	Op     OpKind `json:"op"`
-	Path   string `json:"path"`            // normalised (see normalisePath)
-	Blob   string `json:"blob,omitempty"`  // OpPut only
-	Size   int64  `json:"size,omitempty"`  // OpPut only
-	MTime  int64  `json:"mtime,omitempty"` // OpPut only
-	At     uint64 `json:"at"`              // this write's Lamport counter
-	Writer PosTag `json:"writer"`          // this write's unique tie-break identity
+	Kind  string `json:"k,omitempty"` // ADR-0113 kind tag: "drive", or absent on a legacy change
+	Op    OpKind `json:"op"`
+	Path  string `json:"path"`            // normalised (see normalisePath)
+	Blob  string `json:"blob,omitempty"`  // OpPut only
+	Size  int64  `json:"size,omitempty"`  // OpPut only
+	MTime int64  `json:"mtime,omitempty"` // OpPut only
+	DriveMeta
+	At     uint64 `json:"at"`     // this write's Lamport counter
+	Writer PosTag `json:"writer"` // this write's unique tie-break identity
 	// Base is the total-order key of the head this write observed and means to
 	// replace (zero value == the writer saw no live head). A write whose key is
 	// some other write's Base is thereby a prior version. TODO(#538): promote this
@@ -139,9 +155,16 @@ type DriveChange struct {
 // A zero Writer is rejected too: the (At, Writer) total order needs a tie-break
 // tag, and a write with none could not be ordered deterministically against a
 // concurrent one.
+//
+// ADR-0113 adds: the path must be non-empty once normalised (a stray change could
+// otherwise tombstone ""), an OpPut's metadata must pass [DriveMeta.Validate], and
+// an OpDelete carries no metadata.
 func (c DriveChange) Validate() error {
 	if c.Writer == "" {
 		return fmt.Errorf("%w: write has no writer tag", ErrInvalidChange)
+	}
+	if normalisePath(c.Path) == "" {
+		return fmt.Errorf("%w: a change must name a path", ErrInvalidChange)
 	}
 	switch c.Op {
 	case OpPut:
@@ -151,14 +174,47 @@ func (c DriveChange) Validate() error {
 		if _, err := hashing.Parse(c.Blob); err != nil {
 			return fmt.Errorf("%w: blob %q is not a canonical blake3 id: %w", ErrInvalidChange, c.Blob, err)
 		}
+		if err := c.DriveMeta.Validate(); err != nil {
+			return err
+		}
 	case OpDelete:
 		if c.Blob != "" {
 			return fmt.Errorf("%w: an OpDelete carries no blob, got %q", ErrInvalidChange, c.Blob)
+		}
+		if !c.IsZero() {
+			return fmt.Errorf("%w: an OpDelete carries no metadata", ErrInvalidChange)
 		}
 	default:
 		return fmt.Errorf("%w: unknown op %d", ErrInvalidChange, c.Op)
 	}
 	return nil
+}
+
+// UnmarshalJSON reads the `k` tag before anything else (ADR-0113): a change of
+// another kind decodes to just its tag, which [DriveChange.Foreign] then skips,
+// whatever shape the rest of its payload has.
+func (c *DriveChange) UnmarshalJSON(b []byte) error {
+	kind, foreign, err := foreignKind(b, KindDrive)
+	if err != nil {
+		return err
+	}
+	if foreign {
+		*c = DriveChange{Kind: kind}
+		return nil
+	}
+	type plain DriveChange
+	return json.Unmarshal(b, (*plain)(c))
+}
+
+// Foreign reports whether the change belongs to ANOTHER kind sharing the space
+// (ADR-0113): it is tagged with a `k` other than [KindDrive], or it is untagged and
+// has no path, which by shape makes it a legacy change of another kind (an album
+// change). A fold skips a foreign change silently: it is not malformed.
+func (c DriveChange) Foreign() bool {
+	if c.Kind != "" {
+		return c.Kind != KindDrive
+	}
+	return c.Path == ""
 }
 
 // driveRecord is what is stored against a path: the accumulated set of writes
@@ -184,6 +240,7 @@ type DriveEntry struct {
 	Blob       string
 	Size       int64
 	MTime      int64
+	Meta       DriveMeta // the chosen head's metadata (ADR-0113); zero when it carried none
 	Conflicted bool
 }
 
@@ -257,28 +314,40 @@ func (r driveRecord) currentHead() (driveValue, bool, bool) {
 // CRDT (task W2/#538). This is the "fail at the source" half of the contract;
 // [Apply] silently skips the same malformation arriving from a peer.
 func (d *Drive) Put(p, blob string, size, mtime int64) (DriveChange, error) {
-	if blob == "" {
-		return DriveChange{}, fmt.Errorf("%w: an OpPut must name a blob", ErrInvalidChange)
-	}
-	if _, err := hashing.Parse(blob); err != nil {
-		return DriveChange{}, fmt.Errorf("%w: blob %q is not a canonical blake3 id: %w", ErrInvalidChange, blob, err)
-	}
+	return d.PutMeta(p, blob, size, mtime, DriveMeta{})
+}
+
+// PutMeta is [Put] carrying optional metadata (ADR-0113). Re-putting a path's
+// current blob with new metadata is how metadata is added to an existing file:
+// the write builds on the current head, so it supersedes rather than conflicts.
+// Malformed metadata is rejected with [ErrInvalidChange] and nothing is written.
+func (d *Drive) PutMeta(p, blob string, size, mtime int64, meta DriveMeta) (DriveChange, error) {
 	np := normalisePath(p)
 	var base posKey
 	if head, ok, _ := d.entries[np].currentHead(); ok {
 		base = head.key
 	}
-	c := DriveChange{Op: OpPut, Path: np, Blob: blob, Size: size, MTime: mtime, At: d.nextAt(), Writer: newPosTag(), Base: base}
+	c := DriveChange{Kind: KindDrive, Op: OpPut, Path: np, Blob: blob, Size: size, MTime: mtime, DriveMeta: meta, Writer: newPosTag(), Base: base}
+	if err := c.Validate(); err != nil {
+		return DriveChange{}, err
+	}
+	c.At = d.nextAt()
 	d.applyOne(c)
 	return c, nil
 }
 
-// Delete tombstones path and returns the [DriveChange] to ship.
-func (d *Drive) Delete(p string) DriveChange {
+// Delete tombstones path and returns the [DriveChange] to ship. A path that is
+// empty once normalised is rejected with [ErrInvalidChange] and nothing is written,
+// so a local delete can never record a tombstone its peers would refuse.
+func (d *Drive) Delete(p string) (DriveChange, error) {
 	np := normalisePath(p)
-	c := DriveChange{Op: OpDelete, Path: np, At: d.nextAt(), Writer: newPosTag()}
+	c := DriveChange{Kind: KindDrive, Op: OpDelete, Path: np, Writer: newPosTag()}
+	if err := c.Validate(); err != nil {
+		return DriveChange{}, err
+	}
+	c.At = d.nextAt()
 	d.applyOne(c)
-	return c
+	return c, nil
 }
 
 // Apply folds changes into the drive. It is the CRDT join over writes: idempotent,
@@ -290,6 +359,8 @@ func (d *Drive) Delete(p string) DriveChange {
 // reject decision is a pure function of the change's bytes, so every replica drops
 // the identical set and the survivors still converge regardless of order. Use
 // [Drive.ApplyReport] when the caller needs to know WHICH changes were rejected.
+// A change of another kind sharing the space ([DriveChange.Foreign]) is skipped
+// too, silently (ADR-0113).
 func (d *Drive) Apply(changes ...DriveChange) {
 	d.ApplyReport(changes...)
 }
@@ -299,6 +370,9 @@ func (d *Drive) Apply(changes ...DriveChange) {
 // exactly as under Apply; the rejected slice is a diagnostic, never CRDT state.
 func (d *Drive) ApplyReport(changes ...DriveChange) (rejected []DriveChange) {
 	for _, c := range changes {
+		if c.Foreign() {
+			continue // another kind's change: not ours, and not malformed (ADR-0113)
+		}
 		if err := c.Validate(); err != nil {
 			rejected = append(rejected, c)
 			continue
@@ -324,7 +398,7 @@ func (d *Drive) applyOne(c DriveChange) {
 			rec.delKey = key
 		}
 	case OpPut:
-		rec.values[key] = driveValue{Blob: c.Blob, Size: c.Size, MTime: c.MTime, key: key, base: c.Base}
+		rec.values[key] = driveValue{Blob: c.Blob, Size: c.Size, MTime: c.MTime, Meta: c.DriveMeta, key: key, base: c.Base}
 	}
 	d.entries[np] = rec
 }
@@ -369,7 +443,7 @@ func (d *Drive) Get(p string) (DriveEntry, bool) {
 	if !live || head.Blob == "" {
 		return DriveEntry{}, false
 	}
-	return DriveEntry{Path: normalisePath(p), Blob: head.Blob, Size: head.Size, MTime: head.MTime, Conflicted: conflicted}, true
+	return DriveEntry{Path: normalisePath(p), Blob: head.Blob, Size: head.Size, MTime: head.MTime, Meta: head.Meta, Conflicted: conflicted}, true
 }
 
 // List returns every live file, sorted by path for a deterministic read.
@@ -380,14 +454,16 @@ func (d *Drive) List() []DriveEntry {
 		if !live || head.Blob == "" {
 			continue
 		}
-		out = append(out, DriveEntry{Path: p, Blob: head.Blob, Size: head.Size, MTime: head.MTime, Conflicted: conflicted})
+		out = append(out, DriveEntry{Path: p, Blob: head.Blob, Size: head.Size, MTime: head.MTime, Meta: head.Meta, Conflicted: conflicted})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out
 }
 
 // Versions returns the superseded blob ids retained at path, newest-precedence
-// first — the version history a caller restores from (ADR-0095). Trash (a
+// first — the version history a caller restores from (ADR-0095). A superseded write
+// of a blob that is still live (a metadata-only rewrite, ADR-0113) is not a content
+// version and is left out. Trash (a
 // tombstoned path's covered blobs) is retained the same way. [Drive.Retain]
 // (drive_retention.go) reports which of these a retention policy leaves
 // unreferenced; a dedicated Trashed() reader is a separate follow-up.
@@ -396,20 +472,39 @@ func (d *Drive) Versions(p string) []string {
 	if !ok {
 		return nil
 	}
-	liveKeys := make(map[posKey]bool)
-	for _, h := range rec.liveHeads() {
-		liveKeys[h.key] = true
+	prior := rec.priorVersions()
+	out := make([]string, 0, len(prior))
+	for _, v := range prior {
+		out = append(out, v.Blob)
 	}
-	prior := make([]driveValue, 0, len(rec.values))
-	for k, v := range rec.values {
-		if !liveKeys[k] && v.Blob != "" {
+	return out
+}
+
+// priorVersions are the record's content version history, newest-precedence
+// first: one write per blob that is not also a live head's blob. A metadata-only
+// rewrite (ADR-0113) re-puts a blob, so a blob counts once, at its newest write.
+func (r driveRecord) priorVersions() []driveValue {
+	live := r.liveHeads()
+	liveKeys := make(map[posKey]bool, len(live))
+	liveBlobs := make(map[string]bool, len(live))
+	for _, h := range live {
+		liveKeys[h.key] = true
+		liveBlobs[h.Blob] = true
+	}
+	prior := make([]driveValue, 0, len(r.values))
+	for k, v := range r.values {
+		if !liveKeys[k] && v.Blob != "" && !liveBlobs[v.Blob] {
 			prior = append(prior, v)
 		}
 	}
 	sort.Slice(prior, func(i, j int) bool { return prior[i].key.greater(prior[j].key) })
-	out := make([]string, 0, len(prior))
+	seen := make(map[string]bool, len(prior))
+	out := prior[:0]
 	for _, v := range prior {
-		out = append(out, v.Blob)
+		if !seen[v.Blob] {
+			seen[v.Blob] = true
+			out = append(out, v)
+		}
 	}
 	return out
 }
@@ -430,9 +525,22 @@ func (d *Drive) Encode() string {
 		live := rec.liveHeads()
 		fmt.Fprintf(&b, "  %s tombstone=%d:%s heads=%d writes=%d\n", p, rec.delKey.At, rec.delKey.Writer, len(live), len(rec.values))
 		for _, h := range live {
-			fmt.Fprintf(&b, "    head %s size=%d@%d:%s\n", h.Blob, h.Size, h.key.At, h.key.Writer)
+			fmt.Fprintf(&b, "    head %s size=%d@%d:%s%s\n", h.Blob, h.Size, h.key.At, h.key.Writer, encodeMeta(h.Meta))
 		}
 	}
 	fmt.Fprintf(&b, "counter:%d\n", d.counter)
 	return b.String()
+}
+
+// encodeMeta renders metadata for [Drive.Encode]: empty when there is none, else
+// " meta=" and the canonical JSON (struct field order, zero fields omitted).
+func encodeMeta(m DriveMeta) string {
+	if m.IsZero() {
+		return ""
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		panic(err) // a struct of strings and integers always marshals
+	}
+	return " meta=" + string(b)
 }

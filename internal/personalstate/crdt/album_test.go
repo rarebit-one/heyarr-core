@@ -1,6 +1,7 @@
 package crdt
 
 import (
+	"encoding/json"
 	"math"
 	"math/rand"
 	"testing"
@@ -322,13 +323,19 @@ func TestAlbumApplySkipsMalformedChanges(t *testing.T) {
 		{Op: AlbumOpRemoveItem, AlbumID: "x", At: 4, Writer: "w"},                                                   // no base
 		{Op: AlbumOpDelete, AlbumID: "x", Item: &photoB, At: 5, Writer: "w"},                                        // delete carries an item
 		{Op: AlbumOpSetTitle, AlbumID: "x", Title: "t", Cover: photoA.Manifest, At: 6, Writer: "w"},                 // title carries a cover
-		{Op: AlbumOpCreate, AlbumID: "", At: 7, Writer: "w"},                                                        // no album id
 		{Op: AlbumOpCreate, AlbumID: "x", At: 8, Writer: ""},                                                        // no writer
 		{Op: AlbumOp(42), AlbumID: "x", At: 9, Writer: "w"},                                                         // unknown op
 		{Op: AlbumOpAddItem, AlbumID: "x", Item: &photoB, Base: WriteKey{At: 1, Writer: "w1"}, At: 10, Writer: "w"}, // add carries a base
 	}
+	// Another kind's changes sharing the space (ADR-0113) are skipped silently: an
+	// untagged change that names no album (a drive write, by shape) and a change
+	// tagged with another kind. Neither is applied, and neither is "rejected".
+	foreign := []AlbumChange{
+		{Op: AlbumOpCreate, AlbumID: "", At: 7, Writer: "w"},
+		{Kind: KindDrive, Op: AlbumOpCreate, AlbumID: "x", Title: "t", At: 11, Writer: "w"},
+	}
 	a := NewAlbums()
-	rejected := a.ApplyReport(append(append([]AlbumChange{}, valid...), bad...)...)
+	rejected := a.ApplyReport(append(append(append([]AlbumChange{}, valid...), bad...), foreign...)...)
 	if len(rejected) != len(bad) {
 		t.Fatalf("want %d rejected, got %d", len(bad), len(rejected))
 	}
@@ -455,5 +462,22 @@ func TestAlbumZeroChangeIsRejectedDeterministically(t *testing.T) {
 	b.Apply(real, AlbumChange{})
 	if a.Encode() != b.Encode() || a.counter != 1 {
 		t.Fatalf("a zero change made the set order-dependent or moved the clock:\n%s\nvs\n%s", a.Encode(), b.Encode())
+	}
+}
+
+// TestAlbumChangeDecodesAnotherKindByItsTagAlone: a change tagged with another
+// kind decodes to just its tag even when its payload clashes with the album
+// struct's types, so it cannot fail the decode of a mixed-kind space (ADR-0113).
+func TestAlbumChangeDecodesAnotherKindByItsTagAlone(t *testing.T) {
+	var c AlbumChange
+	if err := json.Unmarshal([]byte(`{"k":"policy","op":"set","album_id":7,"item":"x"}`), &c); err != nil {
+		t.Fatalf("a foreign change must decode by its tag: %v", err)
+	}
+	if !c.Foreign() || c.Kind != KindPolicy {
+		t.Fatalf("want a foreign policy change, got %+v", c)
+	}
+	var own AlbumChange
+	if err := json.Unmarshal([]byte(`{"k":"album","op":0,"album_id":"a","at":1,"writer":"w"}`), &own); err != nil || own.Foreign() || own.AlbumID != "a" {
+		t.Fatalf("an album change must decode in full: %+v, %v", own, err)
 	}
 }

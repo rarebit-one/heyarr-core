@@ -49,40 +49,36 @@ type RetentionReport struct {
 func (d *Drive) Retain(policy RetentionPolicy, now time.Time) RetentionReport {
 	kept := make(map[string]bool)
 	all := make(map[string]bool)
+	// A write references its content blob and its metadata's thumbnail and
+	// sidecar (ADR-0113); keeping a write keeps all three.
+	keep := func(v driveValue) {
+		for _, b := range v.refs() {
+			kept[b] = true
+		}
+	}
 
 	for _, rec := range d.entries {
 		for _, v := range rec.values {
-			if v.Blob != "" {
-				all[v.Blob] = true
+			for _, b := range v.refs() {
+				all[b] = true
 			}
 		}
 
 		live := rec.liveHeads()
 		for _, h := range live {
-			if h.Blob != "" {
-				kept[h.Blob] = true // the live head(s) are never dropped
-			}
+			keep(h) // the live head(s) are never dropped
 		}
 
 		if len(live) > 0 {
 			// A live path: its non-live writes are version history. Keep the newest
-			// MaxVersionsPerPath of them (all, if the policy is negative).
-			liveKeys := make(map[posKey]bool, len(live))
-			for _, h := range live {
-				liveKeys[h.key] = true
-			}
-			prior := make([]driveValue, 0, len(rec.values))
-			for k, v := range rec.values {
-				if !liveKeys[k] && v.Blob != "" {
-					prior = append(prior, v)
-				}
-			}
-			sort.Slice(prior, func(i, j int) bool { return prior[i].key.greater(prior[j].key) })
-			for i, v := range prior {
+			// MaxVersionsPerPath of them (all, if the policy is negative). A
+			// superseded write of a still-live blob (a metadata-only rewrite) is
+			// not a version and takes no slot.
+			for i, v := range rec.priorVersions() {
 				if policy.MaxVersionsPerPath >= 0 && i >= policy.MaxVersionsPerPath {
 					break
 				}
-				kept[v.Blob] = true
+				keep(v)
 			}
 			continue
 		}
@@ -91,9 +87,7 @@ func (d *Drive) Retain(policy RetentionPolicy, now time.Time) RetentionReport {
 		// trash is younger than the TTL (or forever, if the TTL is negative).
 		if policy.TrashTTL < 0 {
 			for _, v := range rec.values {
-				if v.Blob != "" {
-					kept[v.Blob] = true
-				}
+				keep(v)
 			}
 			continue
 		}
@@ -106,9 +100,7 @@ func (d *Drive) Retain(policy RetentionPolicy, now time.Time) RetentionReport {
 		age := time.Duration(now.Unix()-newest) * time.Second
 		if age <= policy.TrashTTL {
 			for _, v := range rec.values {
-				if v.Blob != "" {
-					kept[v.Blob] = true
-				}
+				keep(v)
 			}
 		}
 	}
