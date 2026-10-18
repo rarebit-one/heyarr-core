@@ -282,7 +282,14 @@ func (a *API) startPlayback(w http.ResponseWriter, r *http.Request) {
 // cannot tell "this peer does not mint these" from "something failed" retries
 // the wrong one forever.
 func (a *API) renderURL(ctx context.Context, route routing.Decision, blobHash, assetID string, now time.Time) (url, unavailable string) {
-	if len(a.renderSecret) == 0 || a.renderBaseURL == "" {
+	return a.renderURLAt(ctx, a.renderBaseURL, route, blobHash, assetID, now)
+}
+
+// renderURLAt is renderURL against an explicit origin: the renderer's
+// (http.render_addr when set) for a television, the public origin for a
+// first-party client minting ahead of a locked screen (rendercaps.go).
+func (a *API) renderURLAt(ctx context.Context, base string, route routing.Decision, blobHash, assetID string, now time.Time) (url, unavailable string) {
+	if len(a.renderSecret) == 0 || base == "" {
 		// Not configured, and not a fault. A node whose clients all send
 		// Authorization headers has no use for this route.
 		return "", ""
@@ -340,7 +347,7 @@ func (a *API) renderURL(ctx context.Context, route routing.Decision, blobHash, a
 	// issue a GET for a URL whose last segment looks like nothing they
 	// recognise. It decides nothing — the type and the bytes both come from
 	// the capability.
-	return a.renderBaseURL + render.Path(token) + "/" + renderFilename(mime.String), ""
+	return base + render.Path(token) + "/" + renderFilename(mime.String), ""
 }
 
 // renderFilename is a plausible last path segment for a renderer that sniffs
