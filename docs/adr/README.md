@@ -108,3 +108,4 @@ An ADR that merely describes the code is not worth having.
 | [0111](0111-playback-picks-the-shortest-working-route-the-client-relays-only-when-needed.md) | Playback picks the shortest working route; the client relays only when needed | Proposed |
 | [0112](0112-a-client-that-will-lose-its-key-takes-capabilities-ahead.md) | A client that is about to lose its key takes capabilities ahead | Accepted |
 | [0113](0113-a-space-change-names-its-kind-and-a-drive-entry-carries-its-own-metadata.md) | A space change names its kind, and a drive entry carries its own metadata | Proposed |
+| [0114](0114-a-site-asks-its-sibling-what-to-hold-and-pulls-it.md) | A site asks its sibling what to hold, and pulls it | Proposed |
