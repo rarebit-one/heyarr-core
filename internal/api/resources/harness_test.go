@@ -100,6 +100,9 @@ func (s *idSequence) next() string {
 type harnessConfig struct {
 	cfg          config.Config
 	streamBuffer int
+	// renderSecret and the two origins: see withRender.
+	renderSecret                 []byte
+	renderBase, renderPublicBase string
 	// providers is the registry the API reports on. Nil means "this node has
 	// none configured", which is the supported degrade path (ADR-0025) and the
 	// default for every test that is not about providers.
@@ -144,6 +147,15 @@ func withProviders(reg *providers.Registry) harnessOption {
 }
 
 type harnessOption func(*harnessConfig)
+
+// withRender gives the node a render secret and both origins (ADR-0040,
+// ADR-0112): rendererBase for a television, publicBase for a first-party
+// client. A harness without it mints no capabilities, like a bare node.
+func withRender(secret []byte, rendererBase, publicBase string) harnessOption {
+	return func(hc *harnessConfig) {
+		hc.renderSecret, hc.renderBase, hc.renderPublicBase = secret, rendererBase, publicBase
+	}
+}
 
 // withSites sets the SiteMap for the harness (ADR-0111).
 func withSites(sm config.SiteMap) harnessOption {
@@ -269,6 +281,10 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		AudioLanguages:  hc.cfg.Media.AudioLanguages,
 		Sites:           hc.sites,
 		SsdpSearchAddr:  hc.cfg.Renderers.SsdpSearchAddr,
+
+		RenderSecret:        hc.renderSecret,
+		RenderBaseURL:       hc.renderBase,
+		RenderPublicBaseURL: hc.renderPublicBase,
 	})
 	if err != nil {
 		t.Fatal(err)

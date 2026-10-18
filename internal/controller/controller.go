@@ -984,9 +984,10 @@ func (c *Controller) resourceAPI(ctx context.Context, d mountDeps, queue *jobs.Q
 		CatalogSigner:     catalogSigner,
 		CatalogSync:       catalogSync,
 
-		RenderSecret:  secret,
-		RenderBaseURL: rendererBaseURL(c.cfg),
-		SelfPeerID:    d.selfPeerID,
+		RenderSecret:        secret,
+		RenderBaseURL:       rendererBaseURL(c.cfg),
+		RenderPublicBaseURL: renderBaseURL(c.cfg),
+		SelfPeerID:          d.selfPeerID,
 
 		Blobs: casBlobLocator{store: d.blobStore},
 

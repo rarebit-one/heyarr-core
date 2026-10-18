@@ -3754,6 +3754,51 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/render/capabilities:
+    post:
+      tags: [playback]
+      operationId: mintRenderCapabilities
+      summary: Capability URLs for a queue, minted ahead of a locked screen (ADR-0112).
+      description: |
+        One `/render/{capability}` URL per asset (ADR-0040), for a
+        **first-party client that is about to lose the ability to sign**: a
+        phone queueing music before its screen locks. A locked phone's device
+        key cannot sign, so once its last possession proof is retired it can no
+        longer authenticate a range read. A capability needs no credential.
+
+        **It writes nothing.** No consumption session, no event, no token. That
+        is why it is not `POST /playback`, which opens a session per call: a
+        twelve-track album would be twelve plays nobody made. It needs only
+        `read`, the floor that already lets this caller fetch these bytes.
+
+        URLs are minted at the node's **public origin** (`http.public_origin`,
+        else the peer endpoint), the one the caller already reaches it at. They
+        are never minted at the plain-HTTP render listener (`http.render_addr`),
+        which is for televisions on the LAN (ADR-0079).
+
+        The answer has one entry per asset id, in request order. Each entry has
+        either `render_url` and `expires_at` (six hours) or `render_unavailable`
+        with the reason. The reasons are: no healthy peer holds the bytes, a
+        replica on another peer, no recorded media type or one that is not
+        audio/video, no such asset, or a node that mints no capabilities at
+        all. A Guest gets "no such asset" for anything outside the guest
+        content boundary (ADR-0074), as `GET /assets/{id}` answers. A
+        capability is stateless and cannot be revoked before it expires.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RenderCapabilitiesRequest" }
+      responses:
+        "200":
+          description: One capability or refusal per asset, in request order.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RenderCapabilities" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /api/v1/playback/stream/{token}:
     get:
       tags: [playback]
@@ -8980,6 +9025,33 @@ components:
         asset_id: { type: string }
         device_id: { type: string }
 
+    RenderCapabilitiesRequest:
+      type: object
+      required: [asset_ids]
+      properties:
+        asset_ids:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { type: string }
+    RenderCapabilities:
+      type: object
+      required: [capabilities]
+      properties:
+        capabilities:
+          type: array
+          items:
+            type: object
+            required: [asset_id]
+            properties:
+              asset_id: { type: string }
+              render_url:
+                type: string
+                description: Absolute `/render/{capability}/{name}` URL at the public origin.
+              render_unavailable:
+                type: string
+                description: Why no URL was minted. Present exactly when `render_url` is absent.
+              expires_at: { type: string, format: date-time }
     PlanRequest:
       type: object
       required: [asset_id]
