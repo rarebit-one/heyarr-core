@@ -15,6 +15,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/blobs"
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/catalogtomb"
+	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/leases"
 	"github.com/rarebit-one/heyarr-core/internal/peer/backupsync"
@@ -338,6 +339,14 @@ func (c *Controller) newPeerSurface(
 		return nil, fmt.Errorf("controller: opening the catalog-tombstone store for the peer surface: %w", err)
 	}
 
+	// Two-site vault placement (ADR-0114): the personal profile answers a
+	// sibling asking which blobs it wants kept there. The media profile offers
+	// none, and its route answers 503.
+	var placements peerapi.PlacementSource
+	if c.cfg.Profile == config.ProfilePersonal {
+		placements = newPlacementOffers(peerCatalog, c.cfg.Placement.Siblings)
+	}
+
 	srv, err := peerapi.New(peerapi.Options{
 		Addr:       c.cfg.Peer.Listen,
 		Material:   material,
@@ -381,6 +390,7 @@ func (c *Controller) newPeerSurface(
 		// #449). GET/POST /catalog/ops exchange the G-set; each op is signed and
 		// re-verified, so a sibling push writes no state it could not sign for.
 		CatalogOps: catalogTomb,
+		Placements: placements,
 		Logger:     c.log,
 	})
 	if err != nil {

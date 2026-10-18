@@ -134,6 +134,11 @@ type Config struct {
 	// configuration.
 	Vault Vault `koanf:"vault"`
 
+	// Placement configures two-site vault placement (ADR-0114): which siblings
+	// this node asks for the blobs they want kept here, and offers its own
+	// uploads to. Personal profile only.
+	Placement Placement `koanf:"placement"`
+
 	// Sites maps site names to their CIDR ranges (ADR-0111). Each site is a
 	// named network; an address is in a site when it falls inside one of its
 	// CIDRs. Empty or absent means single-site: every non-public address is
@@ -152,6 +157,23 @@ type Config struct {
 
 	// Route tunes the route planner (ADR-0111).
 	Route Route `koanf:"route"`
+}
+
+// Placement configures two-site vault placement (ADR-0114).
+//
+// A sibling is a peer this node treats as the other site of the same vault:
+// every blob uploaded HERE is offered to it, and this node asks it for every
+// blob uploaded THERE. Both operators list each other, so neither site can make
+// the other hold anything by itself. Ids are this node's ids for its peers, as
+// `peers list` shows them (ids are node-local, ADR-0012).
+type Placement struct {
+	// Siblings is the peer ids of this node's sibling sites. Empty means this
+	// node keeps uploads at this site only, and asks nobody.
+	Siblings []string `koanf:"siblings"`
+	// Interval is how often this node asks its siblings, as a duration
+	// ("5m"). Empty uses the default; "0" stops asking (this node still
+	// answers siblings that ask it).
+	Interval string `koanf:"interval"`
 }
 
 // Vault configures device-side space-key custody (ADR-0098). The device
@@ -1044,6 +1066,63 @@ func (c *Config) applyDerivedDefaultsFor(serviceName string) {
 	}
 }
 
+// defaultPlacementInterval is how often a node asks its siblings. Five minutes
+// matches the reconcile beat that plans the pulls it leads to: asking faster
+// would learn placements the planner could not act on yet.
+const defaultPlacementInterval = 5 * time.Minute
+
+// PlacementInterval parses placement.interval: the default when empty, 0 when
+// "0" (asking disabled).
+func (c Config) PlacementInterval() (time.Duration, error) {
+	s := strings.TrimSpace(c.Placement.Interval)
+	if s == "" {
+		return defaultPlacementInterval, nil
+	}
+	if s == "0" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("config: placement.interval %q is not a duration (e.g. \"5m\"): %w", s, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("config: placement.interval must not be negative, got %q", s)
+	}
+	return d, nil
+}
+
+// validatePlacement refuses siblings outside the personal profile and names
+// that cannot be peer ids.
+func (c Config) validatePlacement() error {
+	if _, err := c.PlacementInterval(); err != nil {
+		return err
+	}
+	if len(c.Placement.Siblings) == 0 {
+		return nil
+	}
+	if c.Profile != ProfilePersonal {
+		return fmt.Errorf("config: placement.siblings is for the personal profile only (ADR-0107, ADR-0114); "+
+			"profile is %q", c.Profile)
+	}
+	seen := map[string]bool{}
+	for _, id := range c.Placement.Siblings {
+		if id == "" {
+			return errors.New("config: placement.siblings contains an empty peer id")
+		}
+		if strings.TrimSpace(id) != id {
+			// Refused rather than trimmed: ids are compared exactly against
+			// membership, and a silently-normalised config would be one whose
+			// value on disk is not the value in force.
+			return fmt.Errorf("config: placement.siblings entry %q has surrounding whitespace", id)
+		}
+		if seen[id] {
+			return fmt.Errorf("config: placement.siblings lists peer %q twice", id)
+		}
+		seen[id] = true
+	}
+	return nil
+}
+
 // BackupInterval parses the configured cadence, or 0 when the background
 // cadence is disabled. A malformed value is a startup error rather than a
 // silently-ignored one — a backup nobody takes is the failure this exists to
@@ -1140,6 +1219,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if _, _, _, err := c.RetentionDurations(); err != nil {
+		return err
+	}
+	if err := c.validatePlacement(); err != nil {
 		return err
 	}
 	if err := c.Notify.validate(); err != nil {

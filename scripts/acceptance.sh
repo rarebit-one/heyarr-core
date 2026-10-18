@@ -37,6 +37,7 @@ cd "$(dirname "$0")/.."
 . scripts/acceptance/07-polled-acquisition.sh
 . scripts/acceptance/08-m4-peer-helpers.sh
 . scripts/acceptance/09-vault-placement.sh
+. scripts/acceptance/09-sibling-placement.sh
 . scripts/acceptance/10-m4-two-peer.sh
 . scripts/acceptance/11-m6-swarm.sh
 . scripts/acceptance/12-split-process.sh
@@ -123,6 +124,8 @@ else
   restricted_principal_demo
   note "THE VAULT PLACEMENT PIN: a vault blob replicates and is retained by a pin, not an asset (ADR-0096, #540)"
   vault_placement_demo
+  note "TWO SITES, ONE VAULT: a blob uploaded at one site is asked for and kept at the other (ADR-0114, #662)"
+  sibling_placement_demo
   note "THE SECOND PEER: placement, proven (§56, §64, M4-11) — heyarr all"
   two_peer_demo all
   note "THE SECOND PEER, again, as separate role processes (ADR-0002, M4-16)"

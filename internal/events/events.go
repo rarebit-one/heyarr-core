@@ -56,6 +56,12 @@ import (
 // Event namespaces from §76. Milestone 1 uses this subset.
 const (
 	TypeBlobCreated = "blob.created"
+	// TypeBlobSizeCorrected is a blob row whose recorded size was a hint (a
+	// sibling's offer, ADR-0114) being corrected to the length of bytes that
+	// arrived and verified by digest. Distinct from blob.created because the
+	// row already existed: what changed is that its size stopped being a claim
+	// and became a fact, and a later piece transfer plans from it.
+	TypeBlobSizeCorrected = "blob.size_corrected"
 	// TypeBlobReclaimed is a garbage collection sweep freeing bytes (ADR-0018).
 	// There is deliberately no matching "blob.verified": a deep fsck over a
 	// healthy library would emit one per blob, which is a hundred thousand
@@ -551,6 +557,15 @@ const (
 	// everything is sufficiently replicated" is the outcome an operator most
 	// needs and the one that leaves no job rows behind to prove it happened.
 	TypeSyncReconciled = "sync.reconciled"
+
+	// TypeSyncPlacementsExchanged is one answer from a sibling having changed
+	// what this node took from it (ADR-0114): one event per exchanged hash
+	// range that added, withdrew or restated (a new size or hold) placements,
+	// carrying the source, the range and the counts — never one per blob. An exchange that changed nothing
+	// does not emit: unlike sync.reconciled, an unchanged answer is the steady
+	// state of a converged pair, sixteen times a cycle, and the transfers it
+	// leads to already report themselves as replication.transfer_changed.
+	TypeSyncPlacementsExchanged = "sync.placements_exchanged"
 
 	// TypeCatalogSnapshotBuilt is one catalog snapshot being built for
 	// transfer to a peer (M4-13) — one event per build.

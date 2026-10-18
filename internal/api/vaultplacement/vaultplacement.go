@@ -37,6 +37,28 @@ type Pinner interface {
 	UnpinPlacement(ctx context.Context, blobHash, peerID string) error
 }
 
+// Status is where a blob is wanted and where it is known to be held
+// (ADR-0114): what a client waits on before it treats a blob as safe at both
+// sites.
+type Status struct {
+	// PinnedTo is every peer a placement names for the blob, in this node's
+	// peer ids: device pins, plus this node's siblings when it is pinned here.
+	PinnedTo []string
+	// HeldAt is every Full Peer recorded as holding the blob's bytes.
+	HeldAt []string
+	// TakenFrom is the sibling sites this node took the placement from.
+	TakenFrom []string
+	// Sites is how many distinct sites hold the bytes (failure domains, not
+	// peers).
+	Sites int
+}
+
+// StatusReader reads a blob's placement status. Optional on Options: without
+// one the status route answers 503.
+type StatusReader interface {
+	PlacementStatus(ctx context.Context, blobHash string) (Status, error)
+}
+
 // Options configure a Handler.
 type Options struct {
 	// Pinner records and removes the pins. Required — the routes are nothing
@@ -49,6 +71,9 @@ type Options struct {
 	// grant on some space (ADR-0104). Optional; nil refuses every restricted
 	// caller. Every other caller is unaffected.
 	Grants httpapi.SpaceWriteGrants
+	// Status reads a blob's placement status for GET
+	// /vault/blobs/{hash}/placement (ADR-0114). Optional.
+	Status StatusReader
 }
 
 // Handler serves the device-facing placement-pin routes.
@@ -56,6 +81,7 @@ type Handler struct {
 	pinner Pinner
 	log    *slog.Logger
 	grants httpapi.SpaceWriteGrants
+	status StatusReader
 }
 
 // New builds the handler, failing at construction if the pinner is missing.
@@ -67,7 +93,7 @@ func New(opts Options) (*Handler, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Handler{pinner: opts.Pinner, log: log.With("component", "vaultplacement-api"), grants: opts.Grants}, nil
+	return &Handler{pinner: opts.Pinner, log: log.With("component", "vaultplacement-api"), grants: opts.Grants, status: opts.Status}, nil
 }
 
 // Mount registers the routes on the authenticated /api/v1 router. Recording or
@@ -80,6 +106,54 @@ func (h *Handler) Mount(r chi.Router) {
 	// because unpinning is how a blob becomes eligible for collection.
 	r.With(httpapi.RequireScope(auth.ScopeWrite), httpapi.RequireRestrictedWriteGrant(h.grants)).Post("/vault/placements", h.pin)
 	r.With(httpapi.RefuseRestricted, httpapi.RequireScope(auth.ScopeWrite)).Delete("/vault/placements", h.unpin)
+	// Where a blob is wanted and held (ADR-0114). Read scope, and the same
+	// restricted-caller gate as pinning: a writer that may place a blob may
+	// ask whether its placement has landed.
+	r.With(httpapi.RequireScope(auth.ScopeRead), httpapi.RequireRestrictedWriteGrant(h.grants)).
+		Get("/vault/blobs/{hash}/placement", h.placementStatus)
+}
+
+// statusResult is the wire shape of the placement status. sites_durable is how
+// many distinct sites hold the bytes, counting another peer only while its claim
+// is fresh: a "move" lane deletes a device's own copy only once it is at least
+// the number of sites it wants (ADR-0114).
+type statusResult struct {
+	BlobHash     string   `json:"blob_hash"`
+	PinnedTo     []string `json:"pinned_to"`
+	HeldAt       []string `json:"held_at"`
+	TakenFrom    []string `json:"taken_from"`
+	SitesDurable int      `json:"sites_durable"`
+}
+
+// placementStatus answers GET /vault/blobs/{hash}/placement.
+func (h *Handler) placementStatus(w http.ResponseWriter, r *http.Request) {
+	if h.status == nil {
+		httpapi.Fail(w, r, problem.New(http.StatusServiceUnavailable, problem.TypeInternal,
+			"Service Unavailable", "this node reports no placement status"))
+		return
+	}
+	hash, err := hashing.Parse(chi.URLParam(r, "hash"))
+	if err != nil {
+		httpapi.Fail(w, r, problem.BadRequest("the path must name a blake3:<hex> digest: "+err.Error()))
+		return
+	}
+	st, err := h.status.PlacementStatus(r.Context(), hash.String())
+	if err != nil {
+		h.log.Error("reading a placement status", "blob_hash", hash.String(), "error", err)
+		httpapi.Fail(w, r, problem.Internal())
+		return
+	}
+	httpapi.WriteJSON(w, r, h.log, http.StatusOK, statusResult{
+		BlobHash: hash.String(), PinnedTo: nonNil(st.PinnedTo), HeldAt: nonNil(st.HeldAt),
+		TakenFrom: nonNil(st.TakenFrom), SitesDurable: st.Sites,
+	})
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // placementInput is the wire shape of both routes: the opaque (blob, peer) pair.

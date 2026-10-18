@@ -205,6 +205,18 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		{"bad log level", func(c *Config) { c.Log.Level = "verbose" }, "log.level"},
 		{"bad log format", func(c *Config) { c.Log.Format = "xml" }, "log.format"},
 		{"no peer name", func(c *Config) { c.Peer.Name = "" }, "peer.name"},
+		{"placement siblings on media", func(c *Config) {
+			c.Placement.Siblings = []string{"peer-b"}
+		}, "personal profile only"},
+		{"placement sibling with whitespace", func(c *Config) {
+			c.Profile = ProfilePersonal
+			c.Placement.Siblings = []string{" peer-b"}
+		}, "surrounding whitespace"},
+		{"placement sibling twice", func(c *Config) {
+			c.Profile = ProfilePersonal
+			c.Placement.Siblings = []string{"peer-b", "peer-b"}
+		}, "twice"},
+		{"bad placement interval", func(c *Config) { c.Placement.Interval = "soon" }, "placement.interval"},
 		{"library without name", func(c *Config) {
 			c.Libraries = []Library{{Roots: []string{"/srv/media"}}}
 		}, "has no name"},

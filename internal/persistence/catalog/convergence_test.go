@@ -25,10 +25,10 @@ func gapPairs(gaps []replication.Gap) []string {
 }
 
 // TestConvergenceUnionsPlacementPins is ADR-0096's replication half: a vault blob
-// has no `assets` row, so the canonical-set diff never names it, and it reaches a
-// peer ONLY because a placement pin says it should. The pin is unioned onto the
-// diff per-(blob, peer): a pin to one peer produces a gap for that peer and for
-// no other.
+// has no `assets` row, so the canonical-set diff never names it, and this node
+// pulls it ONLY because a pin says it belongs here. A pin naming ANOTHER peer is
+// never a gap in this node's queue (ADR-0114): replication is a destination pull,
+// so that peer asks for it and plans the pull itself.
 func TestConvergenceUnionsPlacementPins(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -38,13 +38,11 @@ func TestConvergenceUnionsPlacementPins(t *testing.T) {
 	// (seedRemotePeer enrols `remotePeer` and returns this node's id).
 	self := h.seedRemotePeer(t)
 
-	// A vault blob: bytes with a blob row but NO asset, so the canonical set does
-	// not contain it and the diff alone would produce nothing.
+	// A vault blob: a blob row but NO asset, so the canonical set does not
+	// contain it and the diff alone would produce nothing.
 	blob := hashOf('a')
 	h.seedBlobs(t, blob)
 
-	// With no pin, convergence finds no gap for it — the proof that the union, not
-	// the diff, is what carries a vault blob.
 	plan, err := h.cat.PlanPeerConvergence(ctx, "")
 	if err != nil {
 		t.Fatalf("PlanPeerConvergence: %v", err)
@@ -53,20 +51,59 @@ func TestConvergenceUnionsPlacementPins(t *testing.T) {
 		t.Fatalf("a vault blob with no pin should produce no gaps, got %v", gapPairs(plan.Gaps))
 	}
 
-	// Pin it to the remote peer only.
+	// Pinned to the remote peer: still no gap here. The remote peer's own
+	// queue is the only one that can run that pull.
 	if err := h.cat.PinPlacement(ctx, blob, remotePeer); err != nil {
 		t.Fatalf("PinPlacement: %v", err)
 	}
-
 	plan, err = h.cat.PlanPeerConvergence(ctx, "")
 	if err != nil {
 		t.Fatalf("PlanPeerConvergence: %v", err)
 	}
-	// Exactly one gap, and it names the pinned peer. NOT the self peer: a pin to
-	// one peer must not fan the blob to every Full Peer, which is the thing
-	// ADR-0096 forbids and unioning into the flat canonical set would do.
-	if got, want := gapPairs(plan.Gaps), []string{blob + "@" + remotePeer}; !equalStrings(got, want) {
-		t.Fatalf("pinned-blob gaps = %v, want %v (self is %s)", got, want, self)
+	if len(plan.Gaps) != 0 {
+		t.Fatalf("a pin naming another peer must not plan a transfer in this queue, got %v", gapPairs(plan.Gaps))
+	}
+
+	// Pinned here: exactly one gap, for this node, and NOT fanned to the remote
+	// peer: a pin to one peer must not spread the blob to every Full Peer, the
+	// thing ADR-0096 forbids and unioning into the flat canonical set would do.
+	if err := h.cat.PinPlacement(ctx, blob, self); err != nil {
+		t.Fatalf("PinPlacement: %v", err)
+	}
+	plan, err = h.cat.PlanPeerConvergence(ctx, "")
+	if err != nil {
+		t.Fatalf("PlanPeerConvergence: %v", err)
+	}
+	if got, want := gapPairs(plan.Gaps), []string{blob + "@" + self}; !equalStrings(got, want) {
+		t.Fatalf("pinned-blob gaps = %v, want %v", got, want)
+	}
+}
+
+// TestAPinNamingAnotherPeerIsOfferedNotPlanned is the loop ADR-0114 removes: a
+// pin naming another peer, for a blob this node holds, used to become a
+// replicate_blob in this node's queue that the handler refused every cycle.
+// Now it plans nothing and is counted as Offered.
+func TestAPinNamingAnotherPeerIsOfferedNotPlanned(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	self := h.seedRemotePeer(t)
+	blob := hashOf('9')
+	h.seedBlobs(t, blob)
+	h.exec(t, `INSERT INTO replicas (blob_hash, peer_id, state, bytes_present, updated_at)
+		VALUES (?, ?, 'present', 1024, ?)`, blob, self, stamp)
+	if err := h.cat.PinPlacement(ctx, blob, remotePeer); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := h.cat.PlanPeerConvergence(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Gaps) != 0 {
+		t.Fatalf("gaps = %v, want none", gapPairs(plan.Gaps))
+	}
+	if plan.Offered != 1 {
+		t.Fatalf("Offered = %d, want 1", plan.Offered)
 	}
 }
 
@@ -128,8 +165,8 @@ func TestConvergencePinSatisfiedByPresentReplica(t *testing.T) {
 }
 
 // TestConvergencePinRespectsScope: a cycle scoped to one peer produces pin gaps
-// only for that peer, exactly as the canonical-set diff is scoped — a pin to a
-// peer outside the scope is left for that peer's own cycle.
+// only for that peer, exactly as the canonical-set diff is scoped. A self-pin is
+// this node's own gap, so a cycle scoped to the remote peer leaves it alone.
 func TestConvergencePinRespectsScope(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -138,26 +175,24 @@ func TestConvergencePinRespectsScope(t *testing.T) {
 
 	blob := hashOf('d')
 	h.seedBlobs(t, blob)
-	if err := h.cat.PinPlacement(ctx, blob, remotePeer); err != nil {
+	if err := h.cat.PinPlacement(ctx, blob, self); err != nil {
 		t.Fatalf("PinPlacement: %v", err)
 	}
 
-	// Scoped to self: the pin names the remote peer, so this cycle sees no gap.
-	plan, err := h.cat.PlanPeerConvergence(ctx, self)
-	if err != nil {
-		t.Fatalf("PlanPeerConvergence(self): %v", err)
-	}
-	if len(plan.Gaps) != 0 {
-		t.Fatalf("a cycle scoped to self should not act on a pin to the remote peer, got %v", gapPairs(plan.Gaps))
-	}
-
-	// Scoped to the remote peer: the pin is in scope and produces its gap.
-	plan, err = h.cat.PlanPeerConvergence(ctx, remotePeer)
+	plan, err := h.cat.PlanPeerConvergence(ctx, remotePeer)
 	if err != nil {
 		t.Fatalf("PlanPeerConvergence(remote): %v", err)
 	}
-	if got, want := gapPairs(plan.Gaps), []string{blob + "@" + remotePeer}; !equalStrings(got, want) {
-		t.Fatalf("scoped-to-remote gaps = %v, want %v", got, want)
+	if len(plan.Gaps) != 0 {
+		t.Fatalf("a cycle scoped to the remote peer should not act on a self-pin, got %v", gapPairs(plan.Gaps))
+	}
+
+	plan, err = h.cat.PlanPeerConvergence(ctx, self)
+	if err != nil {
+		t.Fatalf("PlanPeerConvergence(self): %v", err)
+	}
+	if got, want := gapPairs(plan.Gaps), []string{blob + "@" + self}; !equalStrings(got, want) {
+		t.Fatalf("scoped-to-self gaps = %v, want %v", got, want)
 	}
 }
 

@@ -384,6 +384,12 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 			backupInterval, self.PeerID, c.log, material, members)
 		startStatePlaneReplication(ctx, db, reconcileEvents, backupInterval,
 			self.PeerID, c.log, material, members)
+		placementInterval, err := c.cfg.PlacementInterval()
+		if err != nil {
+			return err
+		}
+		startSiblingPlacement(ctx, db, reconcileEvents, placementInterval,
+			c.cfg.Placement.Siblings, c.cfg.Peer.Name, c.cfg.Peer.Site, c.log, material, members)
 
 		eventsWindow, succeededWindow, deadWindow, _ := c.cfg.RetentionDurations()
 		startRetention(ctx, db, reconcileEvents,
@@ -1112,6 +1118,9 @@ func (c *Controller) contentRoutes(d mountDeps, queue *jobs.Queue, cat *catalog.
 		Pinner: cat,
 		Logger: c.log,
 		Grants: grants,
+		// Where a blob is wanted and held (ADR-0114), for a client waiting
+		// until a blob is safe at both sites.
+		Status: placementStatus{cat: cat, siblings: c.cfg.Placement.Siblings},
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)

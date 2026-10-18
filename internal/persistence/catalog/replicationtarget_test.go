@@ -3,6 +3,8 @@ package catalog_test
 import (
 	"context"
 	"testing"
+
+	"github.com/rarebit-one/heyarr-core/internal/peer/placementsync"
 )
 
 // The catalogue's half of #658: a replica can only be recorded for a blob and a
@@ -10,9 +12,10 @@ import (
 // not leave — a (blob, peer) that ends in a refused insert.
 
 // TestAPinForABlobWithNoRowIsPlannedOnlyForThisNode: pins carry no foreign keys
-// (migration 00050), so one can name a blob the catalogue never recorded. For
-// another peer the transfer could never be recorded and is not planned; for this
-// node it is, because the bytes may already be here and the handler adopts them.
+// (migration 00050), so one can name a blob the catalogue never recorded. A self-
+// pin is still planned, because the bytes may already be here and the handler
+// adopts them. A pin naming another peer is never planned here at all
+// (ADR-0114), with or without a row.
 func TestAPinForABlobWithNoRowIsPlannedOnlyForThisNode(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -32,26 +35,24 @@ func TestAPinForABlobWithNoRowIsPlannedOnlyForThisNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{unknown + "@" + self, known + "@" + remotePeer} // gapPairs sorts
+	want := []string{unknown + "@" + self}
 	if got := gapPairs(plan.Gaps); !equalStrings(got, want) {
 		t.Fatalf("gaps = %v, want %v", got, want)
 	}
-	if plan.Unrecordable != 1 {
-		t.Fatalf("Unrecordable = %d, want 1 (the unknown blob pinned to the remote peer)", plan.Unrecordable)
-	}
 }
 
-// TestAPinNamingARemovedPeerPlansNothing: the planner's peers come from the
-// membership table, so removing a peer removes every gap to it — including a
-// pin's, which has no foreign key to cascade.
-func TestAPinNamingARemovedPeerPlansNothing(t *testing.T) {
+// TestAPlacementTakenFromARemovedPeerPlansNothing: a placement taken from a
+// sibling (ADR-0114) is about a member, so removing the peer cascades it away
+// and the pull it would have planned goes with it.
+func TestAPlacementTakenFromARemovedPeerPlansNothing(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
-	h.seedRemotePeer(t)
+	self := h.seedRemotePeer(t)
 	blob := hashOf('f')
-	h.seedBlobs(t, blob)
-	if err := h.cat.PinPlacement(ctx, blob, remotePeer); err != nil {
+	r := placementsync.Range{Lo: "f"}
+	if _, _, err := h.cat.ReplacePlacements(ctx, remotePeer, r,
+		[]placementsync.Entry{{BlobHash: blob, Size: 1024, Held: true}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -59,7 +60,7 @@ func TestAPinNamingARemovedPeerPlansNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := gapPairs(plan.Gaps), []string{blob + "@" + remotePeer}; !equalStrings(got, want) {
+	if got, want := gapPairs(plan.Gaps), []string{blob + "@" + self}; !equalStrings(got, want) {
 		t.Fatalf("before removal: gaps = %v, want %v", got, want)
 	}
 
