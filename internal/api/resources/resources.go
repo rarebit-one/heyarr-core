@@ -130,6 +130,11 @@ type Options struct {
 	// it has no notion of "the host you got the plan from" because it never
 	// spoke to the controller at all.
 	RenderBaseURL string
+	// RenderPublicBaseURL is the origin a FIRST-PARTY client is handed
+	// capabilities at (POST /render/capabilities, ADR-0112): the public origin
+	// it already reaches this node through, never the plain-HTTP render
+	// listener, which is LAN-only. Empty disables that route's minting.
+	RenderPublicBaseURL string
 	// SelfPeerID identifies this node, so playback can tell whether the routed
 	// replica is one this node can actually mint for. A capability is only
 	// valid at the peer that signed it (ADR-0040).
@@ -196,7 +201,9 @@ type API struct {
 
 	renderSecret  []byte
 	renderBaseURL string
-	selfPeerID    string
+	// renderPublicBaseURL: see Options.RenderPublicBaseURL.
+	renderPublicBaseURL string
+	selfPeerID          string
 
 	// streamKey signs stream tokens (ADR-0069); streamer, blobs and prober
 	// are the leg's arms. See playbackstream.go.
@@ -311,23 +318,24 @@ func New(opts Options) (*API, error) {
 		now:   now,
 		newID: newID,
 
-		rendererCache:  &rendererCache{},
-		rendererClient: &http.Client{Timeout: 15 * time.Second},
-		sites:          opts.Sites,
-		ssdpSearchAddr: opts.SsdpSearchAddr,
-		linkCapacities: opts.LinkCapacities,
-		routeHeadroom:  opts.RouteHeadroom,
-		renderSecret:   opts.RenderSecret,
-		renderBaseURL:  strings.TrimRight(opts.RenderBaseURL, "/"),
-		selfPeerID:     opts.SelfPeerID,
-		streamKey:      streamKey(streamSecret),
-		streamer:       opts.Streamer,
-		blobs:          opts.Blobs,
-		prober:         opts.Prober,
-		audioLanguages: append([]string(nil), opts.AudioLanguages...),
-		heartbeat:      heartbeat,
-		streamPoll:     streamPoll,
-		buffer:         buffer,
+		rendererCache:       &rendererCache{},
+		rendererClient:      &http.Client{Timeout: 15 * time.Second},
+		sites:               opts.Sites,
+		ssdpSearchAddr:      opts.SsdpSearchAddr,
+		linkCapacities:      opts.LinkCapacities,
+		routeHeadroom:       opts.RouteHeadroom,
+		renderSecret:        opts.RenderSecret,
+		renderBaseURL:       strings.TrimRight(opts.RenderBaseURL, "/"),
+		renderPublicBaseURL: strings.TrimRight(opts.RenderPublicBaseURL, "/"),
+		selfPeerID:          opts.SelfPeerID,
+		streamKey:           streamKey(streamSecret),
+		streamer:            opts.Streamer,
+		blobs:               opts.Blobs,
+		prober:              opts.Prober,
+		audioLanguages:      append([]string(nil), opts.AudioLanguages...),
+		heartbeat:           heartbeat,
+		streamPoll:          streamPoll,
+		buffer:              buffer,
 	}, nil
 }
 
@@ -525,6 +533,11 @@ func (a *API) Mount(r chi.Router) {
 	// reaches EXACTLY this route — nothing else write-scoped becomes reachable.
 	r.With(httpapi.RequireWriteOrGuestPlay).Post("/playback", a.startPlayback)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/playback/remux", a.enqueueRemux)
+	// Render capabilities for a key-holding client that is about to lose the
+	// ability to sign (a phone queueing music before its screen locks;
+	// ADR-0112). A read, under the floor: it opens no session, emits nothing
+	// and writes nothing, and grants only bytes this caller can already fetch.
+	r.Post("/render/capabilities", a.mintRenderCapabilities)
 	// Reprocess already-ingested video for embedded subtitles (ADR-0084): a
 	// write, because it queues work.
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/subtitles/backfill", a.backfillSubtitles)
