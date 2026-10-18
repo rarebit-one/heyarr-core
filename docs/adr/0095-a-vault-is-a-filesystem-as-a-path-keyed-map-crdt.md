@@ -184,7 +184,8 @@ drive model**, so a peer that peeks at a path or a filename does not compile.
   map to a move-tree CRDT — a change of the catalog's lattice, not of the byte
   model beneath it.
 - **Rich per-version metadata** (author, timestamp, a note) grows the entry; it
-  stays one CRDT kind.
+  stays one CRDT kind. *Fired: ADR-0113 adds optional entry metadata (type, capture time,
+  thumbnail, …) and a `k` kind tag so a drive shares its space with albums.*
 - **The shared-drive deliverable** triggers the §47 cross-user ADR.
 
 ## Open questions this record deliberately leaves

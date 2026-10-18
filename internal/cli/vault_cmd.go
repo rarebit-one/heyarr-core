@@ -399,9 +399,13 @@ conflict), is refused rather than guessing which bytes were meant.`,
 }
 
 // vaultEntryView is one live vault file in the --json shape of `vault ls`.
+// Mime and TakenAt come from the entry's optional metadata (ADR-0113) and are
+// omitted when the writer recorded none.
 type vaultEntryView struct {
 	Path       string `json:"path"`
 	Size       int64  `json:"size"`
+	Mime       string `json:"mime,omitempty"`
+	TakenAt    int64  `json:"taken_at,omitempty"`
 	Conflicted bool   `json:"conflicted"`
 }
 
@@ -411,8 +415,8 @@ func newVaultLsCommand(_ Options, configPath *string, vc *vaultCustody) *cobra.C
 		Use:   "ls <space-id>",
 		Short: "List the live files in a vault",
 		Long: `Materialise the space's drive on this device and list its live files — each
-file's vault path, plaintext size, and whether the path is currently conflicted
-(more than one live version).`,
+file's vault path, plaintext size, content type (when its writer recorded one),
+and whether the path is currently conflicted (more than one live version).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID := args[0]
@@ -433,7 +437,9 @@ file's vault path, plaintext size, and whether the path is currently conflicted
 				if flags.asJSON {
 					views := make([]vaultEntryView, 0, len(entries))
 					for _, e := range entries {
-						views = append(views, vaultEntryView{Path: e.Path, Size: e.Size, Conflicted: e.Conflicted})
+						views = append(views, vaultEntryView{
+							Path: e.Path, Size: e.Size, Mime: e.Meta.Mime, TakenAt: e.Meta.TakenAt, Conflicted: e.Conflicted,
+						})
 					}
 					return emitJSON(cmd.OutOrStdout(), views)
 				}
@@ -441,13 +447,13 @@ file's vault path, plaintext size, and whether the path is currently conflicted
 					fmt.Fprintln(cmd.OutOrStdout(), "(empty vault)")
 					return nil
 				}
-				t := newTable("PATH", "SIZE", "CONFLICTED")
+				t := newTable("PATH", "SIZE", "TYPE", "CONFLICTED")
 				for _, e := range entries {
 					conflicted := ""
 					if e.Conflicted {
 						conflicted = "conflicted"
 					}
-					t.add(e.Path, fmt.Sprintf("%d", e.Size), conflicted)
+					t.add(e.Path, fmt.Sprintf("%d", e.Size), e.Meta.Mime, conflicted)
 				}
 				return t.render(cmd.OutOrStdout(), "(empty vault)")
 			})

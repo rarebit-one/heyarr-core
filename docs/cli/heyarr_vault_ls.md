@@ -5,8 +5,8 @@ List the live files in a vault
 ### Synopsis
 
 Materialise the space's drive on this device and list its live files — each
-file's vault path, plaintext size, and whether the path is currently conflicted
-(more than one live version).
+file's vault path, plaintext size, content type (when its writer recorded one),
+and whether the path is currently conflicted (more than one live version).
 
 ```
 heyarr vault ls <space-id> [flags]

@@ -1,7 +1,9 @@
 package crdt
 
 import (
+	"errors"
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 )
@@ -251,7 +253,9 @@ func TestDriveRetentionCapsVersions(t *testing.T) {
 func TestDriveRetentionTrashTTL(t *testing.T) {
 	d := NewDrive()
 	mustPut(t, d, "old.txt", blobA, 1, 100) // content mtime = 100
-	d.Delete("old.txt")
+	if _, err := d.Delete("old.txt"); err != nil {
+		t.Fatal(err)
+	}
 
 	// now = 100 + 50; TTL = 100s -> trash still young -> kept.
 	if rep := d.Retain(RetentionPolicy{MaxVersionsPerPath: -1, TrashTTL: 100 * time.Second}, time.Unix(150, 0)); len(rep.Unreferenced) != 0 {
@@ -281,5 +285,44 @@ func TestDriveRetentionKeepsBlobReferencedElsewhere(t *testing.T) {
 		if u == blobA {
 			t.Fatal("blobA is live at b.txt and must not be reported unreferenced")
 		}
+	}
+}
+
+// TestDriveLocalWritesRejectAnEmptyPath: a path that is empty once normalised is
+// refused at the source by Put and Delete alike, so a device never records a
+// write its peers would skip (ADR-0113).
+func TestDriveLocalWritesRejectAnEmptyPath(t *testing.T) {
+	d := NewDrive()
+	for _, p := range []string{"", "/", "."} {
+		if _, err := d.Delete(p); !errors.Is(err, ErrInvalidChange) {
+			t.Fatalf("Delete(%q): want ErrInvalidChange, got %v", p, err)
+		}
+		if _, err := d.Put(p, blobA, 1, 1); !errors.Is(err, ErrInvalidChange) {
+			t.Fatalf("Put(%q): want ErrInvalidChange, got %v", p, err)
+		}
+	}
+	if d.counter != 0 || len(d.entries) != 0 {
+		t.Fatalf("a refused write moved the clock or recorded a path: counter=%d entries=%d", d.counter, len(d.entries))
+	}
+}
+
+// TestDriveMetadataRewritesAreNotExtraVersions: A, B, B-with-metadata, C keeps
+// A and B as the two content versions — the metadata rewrite of B neither shows
+// twice in Versions nor spends a retention slot (ADR-0113).
+func TestDriveMetadataRewritesAreNotExtraVersions(t *testing.T) {
+	blobC := "blake3:" + strings.Repeat("c3", 32)
+	d := NewDrive()
+	mustPut(t, d, "f.jpg", blobA, 1, 1)
+	mustPut(t, d, "f.jpg", blobB, 1, 2)
+	if _, err := d.PutMeta("f.jpg", blobB, 1, 2, DriveMeta{Mime: "image/jpeg"}); err != nil {
+		t.Fatal(err)
+	}
+	mustPut(t, d, "f.jpg", blobC, 1, 3)
+	if got := d.Versions("f.jpg"); len(got) != 2 || got[0] != blobB || got[1] != blobA {
+		t.Fatalf("versions = %v, want [B A]", got)
+	}
+	rep := d.Retain(RetentionPolicy{MaxVersionsPerPath: 2, TrashTTL: -1}, time.Unix(0, 0))
+	if len(rep.Unreferenced) != 0 {
+		t.Fatalf("two slots keep both content versions, got unreferenced %v", rep.Unreferenced)
 	}
 }

@@ -69,7 +69,7 @@ func (d *Drive) Resolved() []DriveEntry {
 			continue
 		}
 		winner := live[len(live)-1]
-		out = append(out, DriveEntry{Path: p, Blob: winner.Blob, Size: winner.Size, MTime: winner.MTime})
+		out = append(out, DriveEntry{Path: p, Blob: winner.Blob, Size: winner.Size, MTime: winner.MTime, Meta: winner.Meta})
 		for _, l := range live[:len(live)-1] {
 			losers = append(losers, reloc{orig: p, v: l})
 		}
@@ -88,7 +88,7 @@ func (d *Drive) Resolved() []DriveEntry {
 	for _, l := range losers {
 		dp := uniqueConflictPath(l.orig, l.v.key, occupied, placed)
 		placed[dp] = true
-		out = append(out, DriveEntry{Path: dp, Blob: l.v.Blob, Size: l.v.Size, MTime: l.v.MTime})
+		out = append(out, DriveEntry{Path: dp, Blob: l.v.Blob, Size: l.v.Size, MTime: l.v.MTime, Meta: l.v.Meta})
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
