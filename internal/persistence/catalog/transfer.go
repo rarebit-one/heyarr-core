@@ -228,6 +228,26 @@ func (c *Catalog) RecordBlobTransferred(ctx context.Context, t BlobTransfer) err
 				return err
 			}
 			pending = append(pending, ev)
+		} else if t.Bytes > 0 {
+			// The row may hold a size someone only claimed: a sibling's offer
+			// (ADR-0114). These bytes verified by digest, so their length is
+			// the fact, and a later piece transfer plans its geometry from it.
+			res, err := tx.ExecContext(ctx,
+				`UPDATE blobs SET size = ? WHERE hash = ? AND size <> ?`, t.Bytes, t.BlobHash, t.Bytes)
+			if err != nil {
+				return fmt.Errorf("catalog: correcting the size of %s: %w", t.BlobHash, err)
+			}
+			if n, err := res.RowsAffected(); err != nil {
+				return err
+			} else if n == 1 {
+				ev, err := c.events.EmitTx(ctx, tx, events.TypeBlobSizeCorrected, "blob", t.BlobHash, map[string]any{
+					"size": t.Bytes,
+				})
+				if err != nil {
+					return err
+				}
+				pending = append(pending, ev)
+			}
 		}
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO replicas (blob_hash, peer_id, state, bytes_present, verified_at, updated_at)

@@ -248,13 +248,12 @@ func reconcilePeerHandler(
 			}
 		}
 
-		if plan.Unrecordable > 0 {
-			// Said rather than silently dropped, for the reason the bound is:
-			// a pin that plans nothing looks exactly like a pin already
-			// satisfied (#658).
-			log.Info("placement pins name blobs this node has no record of, so no transfer was planned "+
-				"for them", "pins", plan.Unrecordable,
-				"note", "they are planned once the blob is known here")
+		if plan.Offered > 0 {
+			// Pins naming another peer are that peer's to pull (ADR-0114):
+			// it asks this node for them. Said at debug, because on a two-site
+			// vault it is every blob, every cycle.
+			log.Debug("placement pins name another peer; that peer asks for them and pulls",
+				"pins", plan.Offered)
 		}
 		if plan.Missing > 0 {
 			// A self-pin whose blob has no row AND whose bytes are not held:

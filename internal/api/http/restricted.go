@@ -51,6 +51,9 @@ var restrictedAllowList = []RestrictedRoute{
 	{http.MethodHead, APIPrefix + "/blobs/{hash}/content"},
 	{http.MethodPut, APIPrefix + "/vault/blobs/{hash}"},
 	{http.MethodPost, APIPrefix + "/vault/placements"},
+	// Where a blob it placed is held (ADR-0114), so a writer can wait until it
+	// is safe at two sites. The route repeats the write-grant gate itself.
+	{http.MethodGet, APIPrefix + "/vault/blobs/{hash}/placement"},
 }
 
 // RestrictedAllowList returns a copy of the allow-list, for the test that walks

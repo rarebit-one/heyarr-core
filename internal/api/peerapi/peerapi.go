@@ -93,6 +93,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
+	"github.com/rarebit-one/heyarr-core/internal/peer/placementsync"
 )
 
 // Prefix is where the peer fabric's routes live. It is deliberately not
@@ -215,6 +216,11 @@ type Options struct {
 	// keeps no personal state — the routes are still mounted and answer 503, like
 	// every other optional capability here.
 	State StateStore
+	// Placements answers a sibling asking which blobs this node wants it to
+	// keep (ADR-0114). Nil on a node that offers none (the media profile) —
+	// the route is still mounted and answers 503, like every other optional
+	// capability here.
+	Placements PlacementSource
 }
 
 // Server is the peer listener.
@@ -265,6 +271,9 @@ type Server struct {
 	// state is the encrypted personal-state sync backend (§42, §44). Nil on a
 	// node that keeps none.
 	state StateStore
+	// placements answers a sibling's placement question (ADR-0114). Nil on a
+	// node that offers none.
+	placements PlacementSource
 
 	http     *http.Server
 	bound    string
@@ -323,6 +332,7 @@ func New(opts Options) (*Server, error) {
 		leases:        opts.Leases,
 		catalogOps:    opts.CatalogOps,
 		state:         opts.State,
+		placements:    opts.Placements,
 	}
 	s.handler = s.routes()
 	s.http = &http.Server{
@@ -458,6 +468,12 @@ func (s *Server) routes() http.Handler {
 		// tail — ciphertext it cannot read.
 		r.Get("/state/{space}/snapshot", s.handleStateLatestSnapshot)
 		r.Post("/state/{space}/snapshots", s.handleStateSnapshotPush)
+		// Two-site vault placement (ADR-0114). The DESTINATION asks which
+		// blobs this node holds and wants kept there too, carrying its own
+		// held claim, and pulls what it is offered from the content route
+		// above. The question travels the same way as the bytes, so a
+		// one-way-reachable pair still converges in the direction it can.
+		r.Post(strings.TrimPrefix(placementsync.Path, Prefix), s.handlePlacements)
 	})
 
 	// There is no admin route on this router and there is not going to be one.

@@ -29,6 +29,7 @@ func (c *Catalog) Blobs(ctx context.Context) ([]integrity.Blob, error) {
 		SELECT b.hash, b.size, b.unreferenced_since,
 		       (SELECT count(*) FROM assets a WHERE a.blob_hash = b.hash)
 		       + (SELECT count(*) FROM placement_pins p WHERE p.blob_hash = b.hash)
+		       + (SELECT count(*) FROM peer_placements pp WHERE pp.blob_hash = b.hash)
 		       + (SELECT count(*) FROM derived_thumbnails dt WHERE dt.thumb_hash = b.hash AND dt.status = 'ready')
 		FROM blobs b
 		ORDER BY b.hash`)
@@ -57,6 +58,7 @@ func (c *Catalog) Blob(ctx context.Context, h hashing.Hash) (integrity.Blob, err
 		SELECT b.hash, b.size, b.unreferenced_since,
 		       (SELECT count(*) FROM assets a WHERE a.blob_hash = b.hash)
 		       + (SELECT count(*) FROM placement_pins p WHERE p.blob_hash = b.hash)
+		       + (SELECT count(*) FROM peer_placements pp WHERE pp.blob_hash = b.hash)
 		       + (SELECT count(*) FROM derived_thumbnails dt WHERE dt.thumb_hash = b.hash AND dt.status = 'ready')
 		FROM blobs b WHERE b.hash = ?`, h.String())
 	b, err := scanBlob(row)
@@ -100,13 +102,16 @@ func scanBlob(s rowScanner) (integrity.Blob, error) {
 }
 
 // SelfPinnedHashes returns the set of blob hashes pinned to this peer by a
-// placement pin (ADR-0096, #719). GC uses these to spare pinned-but-untracked
+// placement pin (ADR-0096, #719), or taken from a sibling (ADR-0114), which is
+// this node's own desire in the same way. GC uses these to spare pinned-but-untracked
 // bytes from the orphan sweep: a vault blob uploaded before #659 had a pin but
 // no blobs row, and GC previously reclaimed its bytes as an orphan.
 func (c *Catalog) SelfPinnedHashes(ctx context.Context) (map[string]struct{}, error) {
 	rows, err := c.db.Reader().QueryContext(ctx,
 		`SELECT p.blob_hash FROM placement_pins p
-		 INNER JOIN peers s ON s.id = p.peer_id AND s.is_self = 1`)
+		 INNER JOIN peers s ON s.id = p.peer_id AND s.is_self = 1
+		 UNION
+		 SELECT pp.blob_hash FROM peer_placements pp`)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: reading self-pinned hashes: %w", err)
 	}

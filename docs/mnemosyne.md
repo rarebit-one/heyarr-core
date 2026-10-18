@@ -161,6 +161,30 @@ mnemosyne peers add --name peer-b --site site-b --endpoint <host>:<peer-port> --
 mnemosyne peers ping peer-b
 ```
 
+## Two sites, one vault (ADR-0114)
+
+A blob uploaded at one site is kept at the other once each site lists the other
+as a sibling. Siblings are named by THIS node's id for the peer (`mnemosyne peers
+list`), because peer ids are node-local:
+
+```yaml
+placement:
+  siblings: ["<this node's id for the other site>"]
+  interval: 5m   # how often to ask; "0" stops asking, answering continues
+```
+
+Every blob pinned here (an upload's own pin) is then offered to the sibling, and
+this node asks the sibling, every `interval`, for the blobs it offers in return.
+The destination asks and pulls (`POST /peer/v1/placements`), so a pair where only
+one side can reach the other still converges in the direction it can. Both sites
+must list each other: neither can make the other hold anything by itself, and a
+node asks only the siblings it lists, so a device pin naming a peer that does not
+list this node is never acted on there. Unlisting a sibling drops what this node
+took from it at the next start; the bytes then go by GC's grace window.
+
+`GET /api/v1/vault/blobs/{hash}/placement` reports where a blob is wanted and
+held. `sites_durable` is the number of sites holding the bytes.
+
 ## systemd
 
 The release archive includes `deploy/systemd/mnemosyne.service`. Copy it to

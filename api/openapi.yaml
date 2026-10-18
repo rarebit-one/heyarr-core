@@ -3048,6 +3048,58 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/v1/vault/blobs/{hash}/placement:
+    parameters:
+      - name: hash
+        in: path
+        required: true
+        description: The BLAKE3 digest that names the ciphertext blob, as `blake3:<64 lowercase hex characters>`.
+        schema:
+          type: string
+          pattern: '^blake3:[0-9a-f]{64}$'
+    get:
+      tags: [personal-state]
+      operationId: getVaultBlobPlacement
+      summary: Where a vault blob is wanted and where it is held. Requires `read`.
+      description: >-
+        Two-site vault placement (ADR-0114). `pinned_to` is every peer a placement
+        names for the blob, in this node's peer ids: device pins, plus this node's
+        configured siblings when the blob is pinned or taken here. `held_at` is
+        every Full Peer recorded as holding the bytes, including this node, and a
+        sibling once it has pulled them and said so, while that claim is fresh.
+        `sites_durable` is how many distinct sites `held_at` spans: a client that deletes its own copy once a blob is safe ("move"
+        ingest) waits until it reaches the number of sites it wants. A restricted
+        caller needs a write grant on some space, as for pinning (ADR-0104).
+      responses:
+        "200":
+          description: The blob's placement status.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [blob_hash, pinned_to, held_at, taken_from, sites_durable]
+                additionalProperties: false
+                properties:
+                  blob_hash: { type: string }
+                  pinned_to:
+                    type: array
+                    items: { type: string }
+                  held_at:
+                    type: array
+                    items: { type: string }
+                  taken_from:
+                    type: array
+                    description: The sibling sites this node took the placement from (ADR-0114).
+                    items: { type: string }
+                  sites_durable:
+                    type: integer
+                    description: How many distinct sites (by peer site label; a peer with none is its own site) hold the bytes, counting another peer only while its claim is fresh (the hour GC's last-copy rule uses).
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503":
+          description: This node reports no placement status.
+
   /api/v1/peers:
     get:
       tags: [fabric]
@@ -6114,6 +6166,99 @@ paths:
           description: This peer does not hold that encrypted space.
         "503":
           description: This node keeps no encrypted personal state to sync.
+
+  /peer/v1/placements:
+    post:
+      tags: [peer]
+      operationId: peerAskPlacements
+      summary: Ask a sibling which blobs it holds and wants kept at the asker's site too (ADR-0114).
+      description: |
+        Two-site vault placement. The DESTINATION calls the site that holds the
+        bytes, which is the direction its pull will travel, so a
+        one-way-reachable pair still converges (ADR-0038). The request names
+        no peer: peer ids are node-local, and the asker is the certificate's
+        peer (ADR-0033).
+
+        An exchange covers one hash range `[lo, hi)` over the digest's hex (an
+        empty `hi` is the end of the space). The answer is the WHOLE set the
+        source offers the asker inside it, and the asker replaces what it took
+        from this source in that range with it, so a withdrawn placement is
+        simply absent and a lost exchange changes nothing. When the asker's
+        `digest` of what it took matches the source's, the answer is
+        `unchanged` with no entries.
+
+        With `claim`, `held` is the asker's COMPLETE claim about its OWN disk
+        in the range, folded as an inventory (see
+        `/peer/v1/inventory`): what it lists is present, and any of the asker's
+        present replicas in the range it omits becomes missing. It is how the
+        source learns a blob is held at two sites, and stops believing it.
+
+        A source offers the blobs a device pinned to the asker, plus, when the
+        asker is one of its configured siblings, every blob pinned here, each
+        with whether it holds the bytes now. It never offers a placement it
+        took from another peer.
+      security:
+        - peerCertificate: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lo, hi, digest, observed_at]
+              additionalProperties: false
+              properties:
+                lo: { type: string, pattern: '^[0-9a-f]*$' }
+                hi: { type: string, pattern: '^[0-9a-f]*$' }
+                digest:
+                  type: string
+                  description: '`sha256:<hex>` over the sorted, newline-joined `"<blob_hash> <size> <held>"` lines (`held` as `true`/`false`) of what the asker took from this source in the range, as last offered.'
+                observed_at: { type: string, format: date-time }
+                claim:
+                  type: boolean
+                  description: '`held` is included and is the asker''s COMPLETE claim for the range: any of its present replicas here that it omits is marked missing.'
+                held:
+                  type: array
+                  description: Every blob in the range the asker holds `present` (only with `claim`).
+                  items: { $ref: "#/components/schemas/InventoryEntry" }
+      responses:
+        "200":
+          description: What the source offers the asker inside the range.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [lo, hi, digest, unchanged, entries]
+                additionalProperties: false
+                properties:
+                  lo: { type: string }
+                  hi: { type: string }
+                  digest: { type: string }
+                  unchanged: { type: boolean }
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      required: [blob_hash, size, held]
+                      additionalProperties: false
+                      properties:
+                        blob_hash: { type: string }
+                        size: { type: integer, format: int64 }
+                        held:
+                          type: boolean
+                          description: Whether the source holds the bytes now. A pinned blob it lost is still offered, with `held` false, and is not a withdrawal.
+        "400":
+          description: The question is malformed, or its `held` claim is not a valid incremental inventory.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "403":
+          description: The asker is a member with no catalog row, so its claim cannot be recorded.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503":
+          description: This node offers no placements (only the personal profile does).
 
   /peer/v1/state/{space}:
     parameters:

@@ -19,9 +19,10 @@ DEADCODE      := golang.org/x/tools/cmd/deadcode@v0.50.0
 
 all: lint test build          ## lint, test and build
 
-build:                        ## build ./bin/heyarr
+build:                        ## build ./bin/heyarr and ./bin/mnemosyne
 	@mkdir -p bin
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/heyarr
+	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/mnemosyne ./cmd/mnemosyne
 
 fixtures:                     ## build the acceptance fixture generator (dev only, never released)
 	@mkdir -p bin
