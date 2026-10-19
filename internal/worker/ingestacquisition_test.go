@@ -71,7 +71,7 @@ func newIngestHarness(t *testing.T) *ingestHarness {
 	pipeline, err := ingest.New(ingest.Options{
 		Store:      NewCASByteStore(store),
 		Catalog:    base.cat,
-		Identifier: identification.NewRegistry(),
+		Identifier: identification.Default(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1158,16 +1158,18 @@ func TestMultiFileAcquisitionUsesWantedMediaType(t *testing.T) {
 		files       map[string][]byte
 	}{
 		{"music", map[string][]byte{
-			"CD1/01 - First.mp3":   []byte("first track"),
-			"CD1/02 - Second.flac": []byte("second track"),
-			"cover.jpg":            []byte("cover"),
-			"release.nfo":          []byte("notes"),
+			"CD1/01 - First.mp3":  []byte("first track"),
+			"CD1/02 - Second.mp3": []byte("second track"),
+			"Sample/preview.mp3":  []byte("sample clip"),
+			"cover.jpg":           []byte("cover"),
+			"release.nfo":         []byte("notes"),
 		}},
 		{"book", map[string][]byte{
-			"Volume 1.cbz":  []byte("first volume"),
-			"Volume 2.epub": []byte("second volume"),
-			"cover.jpg":     []byte("cover"),
-			"release.nfo":   []byte("notes"),
+			"Volume 1.cbz":         []byte("first volume"),
+			"Volume 2.epub":        []byte("second volume"),
+			"Samples/preview.epub": []byte("sample chapter"),
+			"cover.jpg":            []byte("cover"),
+			"release.nfo":          []byte("notes"),
 		}},
 	}
 	for _, tc := range cases {
@@ -1189,6 +1191,11 @@ func TestMultiFileAcquisitionUsesWantedMediaType(t *testing.T) {
 			}
 			if n := h.count(t, `SELECT count(*) FROM blobs`); n != 2 {
 				t.Errorf("blobs = %d, want two independently verified files", n)
+			}
+			if tc.contentType == "music" {
+				if n := h.count(t, `SELECT count(DISTINCT edition_id) FROM assets WHERE role = 'primary'`); n != 2 {
+					t.Errorf("track editions = %d, want one per playable track", n)
+				}
 			}
 		})
 	}

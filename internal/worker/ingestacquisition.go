@@ -402,7 +402,8 @@ func verifyDirectory(dir, contentType string) ([]artifact, error) {
 			return walkErr
 		}
 		if d.IsDir() {
-			if p != dir && video && isNonContentDir(d.Name()) {
+			name := strings.ToLower(strings.TrimSpace(d.Name()))
+			if p != dir && (name == "sample" || name == "samples" || video && isNonContentDir(d.Name())) {
 				return fs.SkipDir
 			}
 			return nil

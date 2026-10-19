@@ -14,7 +14,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:3:track",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -39,7 +39,7 @@
         "track": 1,
         "track_title": "Track"
       },
-      "EditionKey": "mp3",
+      "EditionKey": "mp3:0:1:track",
       "EditionLabel": "MP3",
       "EditionType": "lossy",
       "Language": "",
@@ -65,7 +65,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:1:3:track",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -90,7 +90,7 @@
         "track": 6,
         "track_title": "Karma Police"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:6:karma police",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -115,7 +115,7 @@
         "track": 6,
         "track_title": "Karma Police"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:6:karma police",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -140,7 +140,7 @@
         "track": 6,
         "track_title": "Karma Police"
       },
-      "EditionKey": "mp3",
+      "EditionKey": "mp3:0:6:karma police",
       "EditionLabel": "MP3",
       "EditionType": "lossy",
       "Language": "",
@@ -166,7 +166,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:1:3:track",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -192,7 +192,7 @@
         "track": 5,
         "track_title": "Track"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:2:5:track",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -217,7 +217,7 @@
         "track": 1,
         "track_title": "Someone Song"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:1:someone song",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -242,7 +242,7 @@
         "track": 1,
         "track_title": "Track"
       },
-      "EditionKey": "m4a",
+      "EditionKey": "m4a:0:1:track",
       "EditionLabel": "M4A",
       "EditionType": "lossy",
       "Language": "",
@@ -267,7 +267,7 @@
         "track": 1,
         "track_title": "Track"
       },
-      "EditionKey": "mp3",
+      "EditionKey": "mp3:0:1:track",
       "EditionLabel": "MP3",
       "EditionType": "lossy",
       "Language": "",
@@ -291,7 +291,7 @@
       "EditionAttributes": {
         "track_title": "Track"
       },
-      "EditionKey": "mp3",
+      "EditionKey": "mp3:0:0:track",
       "EditionLabel": "MP3",
       "EditionType": "lossy",
       "Language": "",
@@ -360,7 +360,7 @@
         "track": 1,
         "track_title": "So What"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:1:so what",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -385,7 +385,7 @@
         "track": 4,
         "track_title": "Crescendolls"
       },
-      "EditionKey": "mp3",
+      "EditionKey": "mp3:0:4:crescendolls",
       "EditionLabel": "MP3",
       "EditionType": "lossy",
       "Language": "",
@@ -410,7 +410,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:3:track",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -435,7 +435,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "opus",
+      "EditionKey": "opus:0:3:track",
       "EditionLabel": "OPUS",
       "EditionType": "lossy",
       "Language": "",
@@ -460,7 +460,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "wav",
+      "EditionKey": "wav:0:3:track",
       "EditionLabel": "WAV",
       "EditionType": "lossless",
       "Language": "",
@@ -485,7 +485,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "ogg",
+      "EditionKey": "ogg:0:3:track",
       "EditionLabel": "OGG",
       "EditionType": "lossy",
       "Language": "",
@@ -510,7 +510,7 @@
         "track": 1,
         "track_title": "Come Together"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:1:come together",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -536,7 +536,7 @@
         "track": 1,
         "track_title": "Track"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:2:1:track",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -562,7 +562,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:2:3:track",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -587,7 +587,7 @@
         "track": 12,
         "track_title": "Encore"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:12:encore",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -612,7 +612,7 @@
         "track": 5,
         "track_title": "Money"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:5:money",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -637,7 +637,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "alac",
+      "EditionKey": "alac:0:3:track",
       "EditionLabel": "ALAC",
       "EditionType": "lossless",
       "Language": "",
@@ -662,7 +662,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "wma",
+      "EditionKey": "wma:0:3:track",
       "EditionLabel": "WMA",
       "EditionType": "lossy",
       "Language": "",
@@ -687,7 +687,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "aac",
+      "EditionKey": "aac:0:3:track",
       "EditionLabel": "AAC",
       "EditionType": "lossy",
       "Language": "",
@@ -712,7 +712,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "ape",
+      "EditionKey": "ape:0:3:track",
       "EditionLabel": "APE",
       "EditionType": "lossless",
       "Language": "",
@@ -737,7 +737,7 @@
         "track": 2,
         "track_title": "In Bloom"
       },
-      "EditionKey": "mp3",
+      "EditionKey": "mp3:0:2:in bloom",
       "EditionLabel": "MP3",
       "EditionType": "lossy",
       "Language": "",
@@ -762,7 +762,7 @@
         "track": 2,
         "track_title": "In Bloom"
       },
-      "EditionKey": "mp3",
+      "EditionKey": "mp3:0:2:in bloom",
       "EditionLabel": "MP3",
       "EditionType": "lossy",
       "Language": "",
@@ -787,7 +787,7 @@
         "track": 2,
         "track_title": "In Bloom"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:2:in bloom",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -810,7 +810,7 @@
         "track": 1,
         "track_title": "Track"
       },
-      "EditionKey": "mp3",
+      "EditionKey": "mp3:0:1:track",
       "EditionLabel": "MP3",
       "EditionType": "lossy",
       "Language": "",
@@ -835,7 +835,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:3:track",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -860,7 +860,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:3:track",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -885,7 +885,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:3:track",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -910,7 +910,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:3:track",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -934,7 +934,7 @@
       "EditionAttributes": {
         "track_title": "A1 Track"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:0:a1 track",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -959,7 +959,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "dsf",
+      "EditionKey": "dsf:0:3:track",
       "EditionLabel": "DSF",
       "EditionType": "lossless",
       "Language": "",
@@ -984,7 +984,7 @@
         "track": 3,
         "track_title": "Svefn G Englar"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:3:svefn g englar",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -1009,7 +1009,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "m4a",
+      "EditionKey": "m4a:0:3:track",
       "EditionLabel": "M4A",
       "EditionType": "lossy",
       "Language": "",
@@ -1034,7 +1034,7 @@
         "track": 4,
         "track_title": "Telephasic Workshop"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:0:4:telephasic workshop",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -1060,7 +1060,7 @@
         "track": 1,
         "track_title": "Opener"
       },
-      "EditionKey": "flac",
+      "EditionKey": "flac:1:1:opener",
       "EditionLabel": "FLAC",
       "EditionType": "lossless",
       "Language": "",
@@ -1085,7 +1085,7 @@
         "track": 3,
         "track_title": "Track"
       },
-      "EditionKey": "aiff",
+      "EditionKey": "aiff:0:3:track",
       "EditionLabel": "AIFF",
       "EditionType": "lossless",
       "Language": "",

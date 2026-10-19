@@ -199,7 +199,7 @@ func TestLoadBearingFields(t *testing.T) {
 		{
 			path: "Artist/Album (2001)/03 - Track.flac", libraryType: Music,
 			contentType: Music, workKey: "music:artist:album:2001", title: "Album",
-			sortTitle: "album", year: 2001, editionKey: "flac", editionLabel: "FLAC",
+			sortTitle: "album", year: 2001, editionKey: "flac:0:3:track", editionLabel: "FLAC",
 			editionType: "lossless", assetRole: RolePrimary, rule: "music/artist-dir-album-dir",
 			work:    map[string]any{"artist": "Artist"},
 			edition: map[string]any{"track": 3, "track_title": "Track"},
@@ -207,7 +207,7 @@ func TestLoadBearingFields(t *testing.T) {
 		{
 			path: "Artist/2001 - Album/1-03 Track.flac", libraryType: Music,
 			contentType: Music, workKey: "music:artist:album:2001", title: "Album",
-			sortTitle: "album", year: 2001, editionKey: "flac", editionLabel: "FLAC",
+			sortTitle: "album", year: 2001, editionKey: "flac:1:3:track", editionLabel: "FLAC",
 			editionType: "lossless", assetRole: RolePrimary, rule: "music/artist-dir-album-dir",
 			work:    map[string]any{"artist": "Artist"},
 			edition: map[string]any{"disc": 1, "track": 3, "track_title": "Track"},
@@ -215,7 +215,7 @@ func TestLoadBearingFields(t *testing.T) {
 		{
 			path: "Artist - Album/01 Track.mp3", libraryType: Music,
 			contentType: Music, workKey: "music:artist:album", title: "Album",
-			sortTitle: "album", editionKey: "mp3", editionLabel: "MP3",
+			sortTitle: "album", editionKey: "mp3:0:1:track", editionLabel: "MP3",
 			editionType: "lossy", assetRole: RolePrimary, rule: "music/artist-album-dir",
 			work:    map[string]any{"artist": "Artist"},
 			edition: map[string]any{"track": 1, "track_title": "Track"},
