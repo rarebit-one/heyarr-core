@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -35,9 +36,10 @@ type WorkPatch struct {
 	Title       *string `json:"title"`
 	Year        *int    `json:"year"`
 	ContentType *string `json:"content_type"`
+	Artist      *string `json:"artist"`
 }
 
-// patchWork corrects a work's title, year or content type.
+// patchWork corrects a work's title, year, content type or music artist.
 //
 // # work_key is deliberately NOT recomputed
 //
@@ -56,9 +58,9 @@ func (a *API) patchWork(w http.ResponseWriter, r *http.Request) {
 	if !decodeOr400(w, r, &body) {
 		return
 	}
-	if body.Title == nil && body.Year == nil && body.ContentType == nil {
+	if body.Title == nil && body.Year == nil && body.ContentType == nil && body.Artist == nil {
 		httpapi.Fail(w, r, problem.BadRequest(
-			"a work patch must change something — title, year or content_type"))
+			"a work patch must change something — title, year, content_type or artist"))
 		return
 	}
 	if body.Title != nil && strings.TrimSpace(*body.Title) == "" {
@@ -77,8 +79,9 @@ func (a *API) patchWork(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		updated Work
-		ev      events.Event
+		updated        Work
+		ev             events.Event
+		previousArtist string
 	)
 	err := a.db.InTx(r.Context(), func(tx *sql.Tx) error {
 		before, err := scanWork(tx.QueryRowContext(r.Context(),
@@ -108,6 +111,40 @@ func (a *API) patchWork(w http.ResponseWriter, r *http.Request) {
 		if body.ContentType != nil {
 			after.ContentType = *body.ContentType
 		}
+		if body.Artist != nil {
+			if after.ContentType != "music" {
+				return &badRequest{errors.New("artist can only be corrected on a music work")}
+			}
+			attrs := map[string]json.RawMessage{}
+			if err := json.Unmarshal(before.Attributes, &attrs); err != nil {
+				return fmt.Errorf("decoding work attributes: %w", err)
+			}
+			if attrs == nil {
+				attrs = map[string]json.RawMessage{}
+			}
+			if raw, ok := attrs["artist"]; ok {
+				if err := json.Unmarshal(raw, &previousArtist); err != nil {
+					return fmt.Errorf("decoding work artist: %w", err)
+				}
+			}
+			artist := strings.TrimSpace(*body.Artist)
+			if artist == "" {
+				delete(attrs, "artist")
+				delete(attrs, "artist_override")
+			} else {
+				raw, err := json.Marshal(artist)
+				if err != nil {
+					return err
+				}
+				attrs["artist"] = raw
+				attrs["artist_override"] = json.RawMessage("true")
+			}
+			encoded, err := json.Marshal(attrs)
+			if err != nil {
+				return err
+			}
+			after.Attributes = encoded
+		}
 		// sort_title follows the title (and the content type it is normalised
 		// under); work_key does not — see the doc comment.
 		year := 0
@@ -122,24 +159,28 @@ func (a *API) patchWork(w http.ResponseWriter, r *http.Request) {
 			yearArg = *after.Year
 		}
 		if _, err := tx.ExecContext(r.Context(), `
-			UPDATE works SET content_type = ?, title = ?, sort_title = ?, year = ?, updated_at = ?
+			UPDATE works SET content_type = ?, title = ?, sort_title = ?, year = ?, attributes = ?, updated_at = ?
 			WHERE id = ?`,
-			after.ContentType, after.Title, after.SortTitle, yearArg,
+			after.ContentType, after.Title, after.SortTitle, yearArg, string(after.Attributes),
 			after.UpdatedAt.Format(time.RFC3339Nano), id); err != nil {
 			return err
 		}
 		updated = after
 
-		ev, err = a.events.EmitTx(r.Context(), tx, events.TypeWorkUpdated, "work", id,
-			map[string]any{
-				"work_id":      id,
-				"title":        after.Title,
-				"content_type": after.ContentType,
-				// The previous values, so the log answers "what was it called
-				// before" without a subscriber having to have been listening.
-				"previous_title":        before.Title,
-				"previous_content_type": before.ContentType,
-			})
+		payload := map[string]any{
+			"work_id":      id,
+			"title":        after.Title,
+			"content_type": after.ContentType,
+			// The previous values, so the log answers "what was it called
+			// before" without a subscriber having to have been listening.
+			"previous_title":        before.Title,
+			"previous_content_type": before.ContentType,
+		}
+		if body.Artist != nil {
+			payload["artist"] = strings.TrimSpace(*body.Artist)
+			payload["previous_artist"] = previousArtist
+		}
+		ev, err = a.events.EmitTx(r.Context(), tx, events.TypeWorkUpdated, "work", id, payload)
 		return err
 	})
 	if err != nil {
@@ -374,7 +415,10 @@ func wantIDsOfWork(ctx context.Context, tx *sql.Tx, workID string) ([]string, er
 // through to the shared mapping — where a missing work is a 404 rather than a
 // 500.
 func (a *API) failWorkWrite(w http.ResponseWriter, r *http.Request, err error) {
+	var bad *badRequest
 	switch {
+	case errors.As(err, &bad):
+		httpapi.Fail(w, r, problem.BadRequest(bad.err.Error()))
 	case errors.Is(err, errWorkIsFollowed):
 		httpapi.Fail(w, r, problem.Conflict(
 			"the work is still followed — unfollow the source first "+

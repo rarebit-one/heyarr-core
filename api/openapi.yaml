@@ -480,9 +480,11 @@ paths:
       operationId: patchWork
       summary: Correct a work's catalogue facts.
       description: |
-        Changes the title, year or content type (#428). Every field is optional;
-        omitting one leaves it alone, and `"year": 0` clears the year — the two
-        are different requests.
+        Changes the title, year, content type or music artist (#428). Every
+        field is optional; omitting one leaves it alone. `"year": 0` clears
+        the year. `"artist": ""` clears the artist and its manual override.
+        Artist corrections are accepted only for music works and take precedence
+        over later provider enrichment.
 
         **`work_key` is deliberately not recomputed.** It is the normalised
         identity a rescan converges on, derived from the title a SCANNER sees,
@@ -7941,6 +7943,11 @@ components:
         content_type:
           type: string
           description: Must be a content type this node knows.
+        artist:
+          type: string
+          description: |
+            Music works only. A nonempty value overrides later provider
+            corrections; an empty string clears the artist and that override.
 
     Edition:
       type: object
