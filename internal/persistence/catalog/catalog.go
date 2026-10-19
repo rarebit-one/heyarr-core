@@ -53,6 +53,9 @@ type Catalog struct {
 	clock      Clock
 	log        *slog.Logger
 	localStore LocalHolder
+	// placementSiblings is this node's configured placement siblings
+	// (ADR-0114): who its uploads are offered to.
+	placementSiblings []string
 
 	mu       sync.Mutex
 	selfPeer string
@@ -94,6 +97,12 @@ type Options struct {
 	// such a pin is skipped and counted as Missing, preventing the permanent-
 	// fail loop that results when the bytes have also been reclaimed (#720).
 	LocalStore LocalHolder
+
+	// PlacementSiblings is this node's placement.siblings (ADR-0114): the peers
+	// its uploads are offered to. The planner chunks an upload a sibling lacks,
+	// since that sibling is about to pull it from here. Empty on a node that
+	// offers its uploads to nobody.
+	PlacementSiblings []string
 }
 
 // New constructs a Catalog.
@@ -116,14 +125,15 @@ func New(opts Options) (*Catalog, error) {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &Catalog{
-		db:         opts.DB,
-		events:     opts.Events,
-		peerName:   opts.PeerName,
-		peerSite:   opts.PeerSite,
-		clock:      clock,
-		log:        logger,
-		fault:      opts.RecordFault,
-		localStore: opts.LocalStore,
+		db:                opts.DB,
+		events:            opts.Events,
+		peerName:          opts.PeerName,
+		peerSite:          opts.PeerSite,
+		clock:             clock,
+		log:               logger,
+		fault:             opts.RecordFault,
+		localStore:        opts.LocalStore,
+		placementSiblings: opts.PlacementSiblings,
 	}, nil
 }
 

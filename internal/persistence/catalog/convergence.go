@@ -67,6 +67,14 @@ type PeerConvergence struct {
 	// replicate_blob here would name a destination this queue must refuse,
 	// and be replanned every cycle.
 	Offered int
+	// OfferedBlobs is the blobs a peer is about to pull from here, deduplicated:
+	// offered pins whose peer lacks the blob, plus uploads (self-pins held here)
+	// a configured placement sibling lacks (ADR-0114).
+	// The destination pulls them, but only the SOURCE has the bytes to chunk
+	// (§16, ADR-0034): a large blob with no manifest can only move whole, and a
+	// whole pull that outlasts the peer client's timeout never completes. So the
+	// source's cycle chunks what it offers, as it chunks what it is about to send.
+	OfferedBlobs []string
 }
 
 // PlanPeerConvergence diffs the desired blob set against what the peers hold.
@@ -136,6 +144,7 @@ func (c *Catalog) PlanPeerConvergence(ctx context.Context, scope string) (PeerCo
 	}
 	plan.Missing = counts.missing
 	plan.Offered = counts.offered
+	plan.OfferedBlobs = counts.offeredBlobs
 	if len(pinGaps) > 0 {
 		plan.Gaps = append(plan.Gaps, pinGaps...)
 		// Re-sort to preserve Diff's deterministic (blob, peer) order across the
@@ -184,7 +193,10 @@ func (c *Catalog) PlanPeerConvergence(ctx context.Context, scope string) (PeerCo
 // bytes may be here already — a vault upload recorded before #658 wrote only
 // the pin — and the replicate_blob handler adopts a held blob it has no row
 // for, which is how such a node heals without an operator.
-type pinCounts struct{ missing, offered int }
+type pinCounts struct {
+	missing, offered int
+	offeredBlobs     []string
+}
 
 func (c *Catalog) pinGaps(
 	ctx context.Context, required []string, held replication.Holdings, have []replication.Gap,
@@ -225,14 +237,35 @@ func (c *Catalog) pinGaps(
 	}
 
 	var out []replication.Gap
+	offeredSeen := map[string]struct{}{}
 	for _, p := range pins {
 		if p.PeerID != self {
 			// Another peer's pin: that peer asks for it and pulls it
 			// (ADR-0114). Counted when this node can offer it.
 			if _, holds := held[self][p.BlobHash]; holds {
 				counts.offered++
+				// Chunking work only while that peer, a Full Peer of this
+				// cycle, still lacks it: a satisfied placement is never pulled.
+				_, isFull := full[p.PeerID]
+				_, theyHold := held[p.PeerID][p.BlobHash]
+				if _, seen := offeredSeen[p.BlobHash]; isFull && !theyHold && !seen {
+					offeredSeen[p.BlobHash] = struct{}{}
+					counts.offeredBlobs = append(counts.offeredBlobs, p.BlobHash)
+				}
 			}
 			continue
+		}
+		// An upload's self-pin is offered to every configured sibling too
+		// (ADR-0114): one a sibling of this cycle lacks is one it is about to
+		// pull from here, and only this node can chunk it. A placement taken
+		// from a sibling is not offered on, so it is not chunked for that reason.
+		if _, holds := held[self][p.BlobHash]; holds && len(c.placementSiblings) > 0 {
+			if _, isTaken := takenSet[p.BlobHash]; !isTaken && lackedBy(held, full, c.placementSiblings, p.BlobHash) {
+				if _, seen := offeredSeen[p.BlobHash]; !seen {
+					offeredSeen[p.BlobHash] = struct{}{}
+					counts.offeredBlobs = append(counts.offeredBlobs, p.BlobHash)
+				}
+			}
 		}
 		if _, isFull := full[p.PeerID]; !isFull {
 			// A pin to a non-Full peer, a peer outside this cycle's scope, or a
@@ -282,6 +315,20 @@ func (c *Catalog) pinGaps(
 		out = append(out, replication.Gap{BlobHash: p.BlobHash, PeerID: p.PeerID})
 	}
 	return out, counts, nil
+}
+
+// lackedBy reports whether one of the given peers, a Full Peer of this cycle,
+// does not hold the blob present.
+func lackedBy(held replication.Holdings, full map[string]struct{}, peers []string, blob string) bool {
+	for _, peer := range peers {
+		if _, isFull := full[peer]; !isFull {
+			continue
+		}
+		if _, ok := held[peer][blob]; !ok {
+			return true
+		}
+	}
+	return false
 }
 
 // heldElsewhere reports whether a peer other than self holds the blob present.
