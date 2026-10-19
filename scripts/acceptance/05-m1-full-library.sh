@@ -2335,10 +2335,14 @@ YAML
   assert_eq "$(jq -r '.status' <<<"$want_dup")" "409" \
     "the same work under the same profile twice is refused"
 
-  # A want with no standard cannot be evaluated (§56), so it is refused.
-  assert_contains "$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
-    -d '{"work":{"content_type":"movie","title":"Nostalghia"}}' | jq -r '.detail')" \
-    "quality profile" "a want with no quality profile is refused"
+  # An ordinary movie want gets a seeded starting standard without a caller
+  # choosing one. An explicit profile above still takes precedence.
+  local want_default_profile want_default
+  want_default_profile=$(jq -r '.items[] | select(.name == "everyday-indexed") | .id' <<<"$qp_json")
+  want_default=$(api /api/v1/desired -X POST -H 'Content-Type: application/json' \
+    -d '{"work":{"content_type":"movie","title":"Nostalghia"}}')
+  assert_eq "$(jq -r '.quality_profile_id' <<<"$want_default")" "$want_default_profile" \
+    "a movie want without a profile uses the seeded searchable starting profile"
 
   # Monitored and wanted are two axes (§60 keeps both words).
   assert_eq "$(api "/api/v1/desired/$want_id" -X PATCH -H 'Content-Type: application/json' \

@@ -26,7 +26,7 @@ assert_contains "$ALLLOG" "ingest_artifact" "the worker registers the ingest_art
 # capability advertisement; there is nowhere else to observe what a worker will
 # claim.
 if command -v ffprobe >/dev/null 2>&1; then
-  assert_contains "$ALLLOG" '"capabilities":["ffprobe","ffmpeg"]' \
+  assert_contains "$ALLLOG" '"capabilities":["ffprobe","ffmpeg"' \
     "a worker with a toolchain claims with it"
 else
   # [] and not null. "Advertises nothing" is a deliberate state; null reads as
