@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
+	"github.com/rarebit-one/heyarr-core/internal/config"
 )
 
 // TestARestrictedTokenIsConfinedOnTheRealRouter walks the router this
@@ -48,9 +49,13 @@ func TestARestrictedTokenIsConfinedOnTheRealRouter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The vault routes an executor writes through are the personal profile's
+	// alone (ADR-0107, #754), so an entry is real if either profile serves it.
+	personal := config.MnemosyneDefaults()
+	personalRoutes := buildRouteSet(t, newProfileHandler(t, personal))
 	for entry := range allowed {
-		if !served[entry] {
-			t.Errorf("the restricted allow-list names %q, which this controller does not serve", entry)
+		if !served[entry] && !personalRoutes[entry] {
+			t.Errorf("the restricted allow-list names %q, which neither profile serves", entry)
 		}
 	}
 	if len(closed) < 50 {

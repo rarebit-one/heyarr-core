@@ -123,11 +123,20 @@ func newTestPeerHandler(t *testing.T) http.Handler {
 	return srv.Handler()
 }
 
-// allRoutes is every route this binary serves, on either listener.
+// allRoutes is every route either binary serves, on either listener: heyarr's
+// media profile and Mnemosyne's personal profile share one specification
+// (ADR-0107), and since the vault left heyarr (#754) some documented routes are
+// served by the personal profile only.
 func allRoutes(t *testing.T) map[string]bool {
 	t.Helper()
 	out := routeSet(t, newTestHandler(t))
 	for route := range routeSet(t, newTestPeerHandler(t)) {
+		out[route] = true
+	}
+	personal := config.Defaults()
+	personal.Profile = config.ProfilePersonal
+	personal.Vault.Enabled = true
+	for route := range buildRouteSet(t, newProfileHandler(t, personal)) {
 		out[route] = true
 	}
 	return out

@@ -20,6 +20,8 @@ restricted_principal_demo() {
 
   cat > "$cfg" <<YAML
 data_dir: $data
+database:
+  path: $data/heyarr.db
 peer:
   name: acceptance-restricted
   site: test
@@ -215,6 +217,26 @@ YAML
     "http://heyarr/api/v1/events?after=0&types=personalstate.service_recipient.*" 2>/dev/null | grep '^event: ' || true)
   assert_contains "$evs" "personalstate.service_recipient.registered" "registering the key is an event (Invariant 7)"
 
+  # From here the scene drives Mnemosyne: an executor reading and writing sealed
+  # objects goes through the vault surface, which is the personal service's alone
+  # (ADR-0107, heyarr-core#754). Same database (database.path is explicit), so the
+  # owner, its device, both executors and every grant carry over.
+  local mbin=${MNEMOSYNE_BIN:-./bin/mnemosyne}
+  kill -TERM "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  "$mbin" --config "$cfg" serve >"$root/mnemosyne.log" 2>&1 &
+  pid=$!
+  waited=0
+  while (( waited < 600 )); do
+    curl -sf --unix-socket "$sock" http://heyarr/readyz >/dev/null 2>&1 && break
+    sleep 0.1; waited=$(( waited + 1 ))
+  done
+  if (( waited >= 600 )); then
+    fail "the restricted-principal node never came back up as Mnemosyne"; cat "$root/mnemosyne.log"
+    kill -KILL "$pid" 2>/dev/null || true; return 1
+  fi
+  own=( env "HEYARR_TOKEN=$admin" "VOID_WHICH_BINDS_IDENTITY_DIR=$dev/id" "VOID_WHICH_BINDS_DEVICE_DIR=$dev/dev" "$mbin" --config "$cfg" )
+
   # EXECUTOR CUSTODY: the executor's key is born in a passphrase-sealed file on
   # its own host. Its PIN arrives as a systemd credential
   # ($CREDENTIALS_DIRECTORY), never an argument or an environment value.
@@ -243,7 +265,7 @@ YAML
   assert_contains "$qref" "hv1:$cspace/" "put-ref returns an hv1:<space>/<object> ref"
 
   local xex
-  xex=( env "HEYARR_TOKEN=${exb#Bearer }" "CREDENTIALS_DIRECTORY=$xcreds" "$BIN" --config "$cfg" )
+  xex=( env "HEYARR_TOKEN=${exb#Bearer }" "CREDENTIALS_DIRECTORY=$xcreds" "$mbin" --config "$cfg" )
   st=0; "${xex[@]}" vault get-ref "$qref" --sealed-key "$xsealed" >/dev/null 2>&1 || st=$?
   assert_eq "$st" "4" "before the grant, get-ref exits 4: the space is not visible to the executor"
 

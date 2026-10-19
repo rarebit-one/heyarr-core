@@ -1,7 +1,8 @@
 # 0107. Personal media is a second service that mounts only the personal plane
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-10-10
+**Amended:** 2026-10-19 — heyarr no longer serves the vault: the media profile mounts no vault blob upload or placement routes, has no `vault` command, and refuses `vault.enabled` (#754). Mnemosyne is live at two sites and replicates between them (ADR-0114).
 **Refs:** [#733](https://github.com/rarebit-one/heyarr-core/issues/733), [#765](https://github.com/rarebit-one/heyarr-core/issues/765) (amendment)
 **Builds on:** [ADR-0020](0020-managed-linked-and-vault-assets.md), [ADR-0021](0021-encrypted-vault-content.md), [ADR-0049](0049-a-space-key-is-wrapped-for-a-device-encryption-key-and-a-peer-cannot-unwrap-it.md), [ADR-0095](0095-a-vault-is-a-filesystem-as-a-path-keyed-map-crdt.md), [ADR-0096](0096-vault-placement-is-a-device-supplied-blind-desired-fact.md), [ADR-0097](0097-a-vault-blob-is-fixed-frame-ciphertext-with-an-encrypted-manifest.md), [ADR-0104](0104-a-restricted-principal-reaches-only-the-spaces-a-device-granted-it.md)
 

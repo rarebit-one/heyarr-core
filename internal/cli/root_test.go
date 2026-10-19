@@ -34,10 +34,40 @@ func (b *syncBuffer) String() string {
 func run(t *testing.T, ctx context.Context, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	var out, errb bytes.Buffer
-	cmd := NewRootCommand(Options{Stdout: &out, Stderr: &errb, ShutdownGrace: 2 * time.Second})
+	newRoot := NewRootCommand
+	if commandGroup(args) == "vault" {
+		// The vault client is Mnemosyne's alone (#754): heyarr's tree has no
+		// `vault`, so a test driving it goes through the binary that serves it.
+		newRoot = NewMnemosyneRootCommand
+	}
+	cmd := newRoot(Options{Stdout: &out, Stderr: &errb, ShutdownGrace: 2 * time.Second})
 	cmd.SetArgs(args)
 	err = cmd.ExecuteContext(ctx)
 	return out.String(), errb.String(), err
+}
+
+// commandGroup is the first positional argument: the top-level command.
+func commandGroup(args []string) string {
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--config" || a == "-c" || a == "--addr" || a == "--token" || a == "--token-file":
+			i++ // a flag that takes the next argument as its value
+		case strings.HasPrefix(a, "-"):
+		default:
+			return a
+		}
+	}
+	return ""
+}
+
+// TestHeyarrHasNoVaultCommand: the vault client moved to Mnemosyne (#754).
+func TestHeyarrHasNoVaultCommand(t *testing.T) {
+	var out, errb bytes.Buffer
+	cmd := NewRootCommand(Options{Stdout: &out, Stderr: &errb})
+	cmd.SetArgs([]string{"vault", "ls"})
+	if err := cmd.ExecuteContext(context.Background()); err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("heyarr vault: err = %v, want unknown command", err)
+	}
 }
 
 func TestVersionJSON(t *testing.T) {

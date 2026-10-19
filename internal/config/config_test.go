@@ -205,6 +205,7 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		{"bad log level", func(c *Config) { c.Log.Level = "verbose" }, "log.level"},
 		{"bad log format", func(c *Config) { c.Log.Format = "xml" }, "log.format"},
 		{"no peer name", func(c *Config) { c.Peer.Name = "" }, "peer.name"},
+		{"vault on the media profile", func(c *Config) { c.Vault.Enabled = true }, "personal profile only"},
 		{"placement siblings on media", func(c *Config) {
 			c.Placement.Siblings = []string{"peer-b"}
 		}, "personal profile only"},
