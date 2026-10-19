@@ -285,7 +285,10 @@ func (c *Catalog) CorrectWorkIdentity(
 			}
 			newTitle = canonicalTitle
 		}
-		if canonicalAuthor != "" {
+		// A person's artist correction outranks a provider match. The marker is
+		// removed when the artist is cleared, so enrichment can resume then.
+		artistOverridden, _ := attrs["artist_override"].(bool)
+		if canonicalAuthor != "" && (contentType != "music" || !artistOverridden) {
 			if prev, _ := attrs[authorKey].(string); prev != canonicalAuthor {
 				if _, ok := attrs["identified_"+authorKey]; !ok && prev != "" {
 					attrs["identified_"+authorKey] = prev

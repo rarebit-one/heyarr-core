@@ -75,6 +75,42 @@ func TestPatchWorkLeavesOmittedFieldsAlone(t *testing.T) {
 	}
 }
 
+func TestPatchMusicArtistCorrectsTheBrowseCredit(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+	const id = "01990000-0000-7000-8000-00000000a501"
+	h.exec(`INSERT INTO works (id, content_type, work_key, title, sort_title, year, attributes, created_at, updated_at)
+		VALUES (?, 'music', 'music:record:2025', 'Record', 'record', 2025,
+		'{"artist":"Artist One","label":"Original"}', ?, ?)`, id, seedTime, seedTime)
+
+	resp := h.patchWork(t, id, `{"artist":"Artist Two"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch = %d: %s", resp.StatusCode, h.body(resp))
+	}
+	var got struct {
+		WorkKey    string         `json:"work_key"`
+		Attributes map[string]any `json:"attributes"`
+	}
+	if err := json.Unmarshal(h.body(h.get("/api/v1/works/"+id)), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Attributes["artist"] != "Artist Two" || got.Attributes["label"] != "Original" {
+		t.Errorf("attributes = %v, want corrected artist and untouched label", got.Attributes)
+	}
+	if got.Attributes["artist_override"] != true {
+		t.Errorf("artist_override = %v, want a durable manual correction", got.Attributes["artist_override"])
+	}
+	if got.WorkKey != "music:record:2025" {
+		t.Errorf("work_key = %q, want the stable catalog identity", got.WorkKey)
+	}
+	if n := h.eventsOfType(t, events.TypeWorkUpdated); n != 1 {
+		t.Errorf("work.updated events = %d, want 1", n)
+	}
+	if resp := h.patchWork(t, work1ID, `{"artist":"Artist Two"}`); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("artist patch on a movie = %d, want 400", resp.StatusCode)
+	}
+}
+
 // A year of 0 is "there is no year", which is a different request from omitting
 // the field.
 func TestPatchWorkClearsAYear(t *testing.T) {
