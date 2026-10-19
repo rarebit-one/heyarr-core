@@ -11,8 +11,8 @@ it is — a content type, a title and a year — and the Work is created for you
 using the same normalisation the scanner uses, so wanting a film and later
 scanning it converge on one Work rather than producing two.
 
-A quality profile is required: "this should exist", with no statement of what
-would count as existing, cannot be evaluated.
+Known media types use a starting quality profile when none is named. Pass
+--quality-profile to choose a different standard.
 
 ### Options inherited from parent commands
 

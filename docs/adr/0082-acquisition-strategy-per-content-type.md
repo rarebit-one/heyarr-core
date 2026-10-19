@@ -1,6 +1,6 @@
 # 0082. Acquisition strategy is chosen per content type
 
-**Status:** Accepted
+**Status:** Accepted; default-profile decision amended by ADR-0115
 **Date:** 2026-09-08
 **Milestone:** M12 — Followed Sources / The Archive (Phase 4, RSS / web archiving)
 
