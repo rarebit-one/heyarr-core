@@ -71,7 +71,7 @@ func newIngestHarness(t *testing.T) *ingestHarness {
 	pipeline, err := ingest.New(ingest.Options{
 		Store:      NewCASByteStore(store),
 		Catalog:    base.cat,
-		Identifier: identification.NewRegistry(),
+		Identifier: identification.Default(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1144,5 +1144,62 @@ func TestTheWantNamesTheWorkAndThePathStillNamesTheFile(t *testing.T) {
 	// And the file's own facts still come from the path.
 	if got := h.scalar(t, `SELECT role FROM assets`); got != "subtitle" {
 		t.Errorf("role = %q, want subtitle — the want named the Work, not the file", got)
+	}
+}
+
+// A completed album or book bundle is a directory just like a season pack,
+// but its primary files are audio or book files. The acquisition must reach
+// AVAILABLE with one managed asset per primary file, leaving covers and notes
+// out of the content count.
+func TestMultiFileAcquisitionUsesWantedMediaType(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		contentType string
+		files       map[string][]byte
+	}{
+		{"music", map[string][]byte{
+			"CD1/01 - First.mp3":      []byte("first track"),
+			"CD1/02 - Second.mp3":     []byte("second track"),
+			"CD1/Sample in a Jar.mp3": []byte("third track"),
+			"Sample/preview.mp3":      []byte("sample clip"),
+			"cover.jpg":               []byte("cover"),
+			"release.nfo":             []byte("notes"),
+		}},
+		{"book", map[string][]byte{
+			"Volume 1.cbz":         []byte("first volume"),
+			"Volume 2.epub":        []byte("second volume"),
+			"Sample Size.epub":     []byte("third volume"),
+			"Samples/preview.epub": []byte("sample chapter"),
+			"cover.jpg":            []byte("cover"),
+			"release.nfo":          []byte("notes"),
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.contentType, func(t *testing.T) {
+			h := newIngestHarness(t)
+			h.selectAndCompletePack(t, "Arrival bundle", tc.files)
+			h.exec(t, `UPDATE works SET content_type = ?, work_key = ? WHERE id = 'w1'`,
+				tc.contentType, tc.contentType+":arrival:2016")
+			h.exec(t, `UPDATE libraries SET content_type = ? WHERE id = 'lib1'`, tc.contentType)
+
+			if err := h.ingest(t); err != nil {
+				t.Fatal(err)
+			}
+			if got := h.state(t); got.Phase != acquisition.PhaseIdle || !got.Managed {
+				t.Fatalf("state = %+v, want idle and managed", got)
+			}
+			if n := h.count(t, `SELECT count(*) FROM assets`); n != 3 {
+				t.Errorf("assets = %d, want three primary files", n)
+			}
+			if n := h.count(t, `SELECT count(*) FROM blobs`); n != 3 {
+				t.Errorf("blobs = %d, want three independently verified files", n)
+			}
+			if tc.contentType == "music" {
+				if n := h.count(t, `SELECT count(DISTINCT json_extract(attributes, '$.track'))
+					FROM assets WHERE role = 'primary'`); n != 2 {
+					t.Errorf("identified track numbers = %d, want one per playable asset", n)
+				}
+			}
+		})
 	}
 }

@@ -38,9 +38,10 @@ type feed struct {
 }
 
 type link struct {
-	Rel  string `xml:"rel,attr"`
-	Href string `xml:"href,attr"`
-	Type string `xml:"type,attr"`
+	Rel   string `xml:"rel,attr"`
+	Href  string `xml:"href,attr"`
+	Type  string `xml:"type,attr"`
+	Title string `xml:"title,attr,omitempty"`
 }
 
 // entry is one row of a feed: a subsection (in a navigation feed) or a

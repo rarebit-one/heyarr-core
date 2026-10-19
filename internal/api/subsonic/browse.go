@@ -16,8 +16,9 @@ import (
 // is not an entity in Heyarr, so getArtists derives it by grouping music Works
 // on works.attributes.artist rather than inventing an artist table.
 //
-// A music Work IS an album; a music Edition IS a track; the Asset carries the
-// bytes. A track is listed only when it has a blob to stream (a managed or
+// A music Work is an album; its primary Assets are the playable tracks. An
+// Edition can hold several assets of the same format. A track is listed only
+// when it has a blob to stream (a managed or
 // vault asset, blob_hash present) — a linked asset has no blob (ADR-0020) and
 // nothing to serve, so listing it would advertise a song no client could play.
 
@@ -239,8 +240,16 @@ func (h *Handler) albumsWhere(ctx context.Context, where string, args []any, ord
 	//nolint:gosec // where/orderBy are fixed literals chosen by the caller from a closed set; every value is bound
 	stmt := `
 		SELECT w.id, w.title, w.year, COALESCE(json_extract(w.attributes, '$.artist'), ''),
-		       (SELECT COUNT(*) FROM editions e
-		          JOIN assets a ON a.edition_id = e.id AND a.blob_hash IS NOT NULL
+		       (SELECT COUNT(DISTINCT printf('%d:%d:%s',
+		              COALESCE(json_extract(a.attributes, '$.disc'), json_extract(e.attributes, '$.disc'), 0),
+		              COALESCE(json_extract(a.attributes, '$.track'), json_extract(e.attributes, '$.track'), 0),
+		              lower(COALESCE(json_extract(a.attributes, '$.track_title'),
+		                             json_extract(e.attributes, '$.track_title'),
+		                             CASE WHEN lower(substr(a.filename, -length(e.edition_key) - 1)) = '.' || lower(e.edition_key)
+		                                  THEN substr(a.filename, 1, length(a.filename) - length(e.edition_key) - 1)
+		                                  ELSE a.filename END, ''))))
+		          FROM editions e
+		          JOIN assets a ON a.edition_id = e.id AND a.blob_hash IS NOT NULL AND a.role = 'primary'
 		         WHERE e.work_id = w.id) AS song_count
 		FROM works w
 		WHERE ` + where + `
@@ -277,44 +286,40 @@ func (h *Handler) albumsWhere(ctx context.Context, where string, args []any, ord
 
 // songs projects the streamable tracks of one album.
 //
-// One asset per edition is chosen deterministically (the lowest asset id with a
-// blob), so a track resolves to exactly one blob and the listing is stable
-// across calls — a client caches by id and a shifting list breaks it.
+// Each primary asset can be a track. When the same disc/number/title exists in
+// multiple formats, the lossless asset wins; asset IDs keep the emitted song
+// IDs stable across rescans of an existing path.
 func (h *Handler) songs(ctx context.Context, workID, album, artist string, year int) ([]song, error) {
 	rows, err := h.reader.QueryContext(ctx, `
-		SELECT e.id,
-		       COALESCE(json_extract(e.attributes, '$.track_title'), ''),
-		       json_extract(e.attributes, '$.track'),
-		       json_extract(e.attributes, '$.disc'),
-		       e.edition_type,
+		SELECT a.id,
+		       COALESCE(json_extract(a.attributes, '$.track_title'), json_extract(e.attributes, '$.track_title'), ''),
+		       COALESCE(json_extract(a.attributes, '$.track'), json_extract(e.attributes, '$.track')),
+		       COALESCE(json_extract(a.attributes, '$.disc'), json_extract(e.attributes, '$.disc')),
+		       e.edition_type, e.edition_key,
 		       b.hash, b.size, COALESCE(a.mime, b.mime, ''), COALESCE(a.filename, ''),
 		       p.duration_seconds, p.bitrate_bps
 		FROM editions e
-		JOIN assets a ON a.id = (
-			SELECT a2.id FROM assets a2
-			WHERE a2.edition_id = e.id AND a2.blob_hash IS NOT NULL
-			ORDER BY a2.id LIMIT 1)
+		JOIN assets a ON a.edition_id = e.id AND a.blob_hash IS NOT NULL AND a.role = 'primary'
 		JOIN blobs b ON b.hash = a.blob_hash
 		LEFT JOIN blob_probes p ON p.blob_hash = b.hash
 		WHERE e.work_id = ?
-		ORDER BY COALESCE(json_extract(e.attributes, '$.disc'), 0),
-		         COALESCE(json_extract(e.attributes, '$.track'), 0),
-		         e.id`, workID)
+		ORDER BY a.id`, workID)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
 	out := []song{}
+	byTrack := map[string]int{}
 	for rows.Next() {
 		var (
-			editionID, trackTitle, editionType, hash, mime, filename string
-			size                                                     int64
-			track, disc                                              sql.NullInt64
-			duration                                                 sql.NullFloat64
-			bitrate                                                  sql.NullInt64
+			assetID, trackTitle, editionType, editionKey, hash, mime, filename string
+			size                                                               int64
+			track, disc                                                        sql.NullInt64
+			duration                                                           sql.NullFloat64
+			bitrate                                                            sql.NullInt64
 		)
-		if err := rows.Scan(&editionID, &trackTitle, &track, &disc, &editionType,
+		if err := rows.Scan(&assetID, &trackTitle, &track, &disc, &editionType, &editionKey,
 			&hash, &size, &mime, &filename, &duration, &bitrate); err != nil {
 			return nil, err
 		}
@@ -323,7 +328,7 @@ func (h *Handler) songs(ctx context.Context, workID, album, artist string, year 
 			title = titleFromFilename(filename)
 		}
 		s := song{
-			ID:          trackID(editionID),
+			ID:          trackID(assetID),
 			Parent:      albumID(workID),
 			IsDir:       false,
 			Title:       title,
@@ -347,9 +352,45 @@ func (h *Handler) songs(ctx context.Context, workID, album, artist string, year 
 		if bitrate.Valid {
 			s.BitRate = int(bitrate.Int64 / 1000)
 		}
+		keyTitle := trackTitle
+		if keyTitle == "" {
+			keyTitle = filename
+			if strings.HasSuffix(strings.ToLower(filename), "."+strings.ToLower(editionKey)) {
+				keyTitle = filename[:len(filename)-len(editionKey)-1]
+			}
+		}
+		key := strconv.FormatInt(disc.Int64, 10) + ":" + strconv.FormatInt(track.Int64, 10) + ":" + strings.ToLower(keyTitle)
+		if i, ok := byTrack[key]; ok {
+			if losslessSong(s) && !losslessSong(out[i]) {
+				out[i] = s
+			}
+			continue
+		}
+		byTrack[key] = len(out)
 		out = append(out, s)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].DiscNumber != out[j].DiscNumber {
+			return out[i].DiscNumber < out[j].DiscNumber
+		}
+		if out[i].Track != out[j].Track {
+			return out[i].Track < out[j].Track
+		}
+		return out[i].Title < out[j].Title
+	})
+	return out, nil
+}
+
+func losslessSong(s song) bool {
+	switch s.Suffix {
+	case "flac", "alac", "wav", "aiff", "aif", "ape", "wv", "dsf", "dff", "tta":
+		return true
+	default:
+		return false
+	}
 }
 
 // clampInt parses a query integer, falling back to def and bounding to [lo,hi].

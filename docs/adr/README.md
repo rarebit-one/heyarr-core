@@ -110,3 +110,5 @@ An ADR that merely describes the code is not worth having.
 | [0113](0113-a-space-change-names-its-kind-and-a-drive-entry-carries-its-own-metadata.md) | A space change names its kind, and a drive entry carries its own metadata | Proposed |
 | [0114](0114-a-site-asks-its-sibling-what-to-hold-and-pulls-it.md) | A site asks its sibling what to hold, and pulls it | Proposed |
 | [0115](0115-known-media-types-inherit-searchable-starting-profiles.md) | Known media types inherit searchable starting profiles | Proposed |
+| [0116](0116-subsonic-projects-music-assets-as-tracks.md) | Subsonic projects music assets as tracks | Proposed |
+| [0117](0117-opds-offers-each-book-asset.md) | OPDS offers each book asset | Proposed |

@@ -34,13 +34,14 @@ import (
 const stamp = "2026-08-01T00:00:00Z"
 
 type harness struct {
-	t       *testing.T
-	http    *httptest.Server
-	db      *sqlite.DB
-	store   *auth.Store
-	token   string            // a read-scoped bearer, sent as the Subsonic password
-	bytesOf map[string][]byte // track title -> its exact bytes, for stream assertions
-	hashOf  map[string]string // track title -> blob hash
+	t        *testing.T
+	http     *httptest.Server
+	db       *sqlite.DB
+	store    *auth.Store
+	casStore cas.Store
+	token    string            // a read-scoped bearer, sent as the Subsonic password
+	bytesOf  map[string][]byte // track title -> its exact bytes, for stream assertions
+	hashOf   map[string]string // track title -> blob hash
 }
 
 func newHarness(t *testing.T) *harness {
@@ -106,7 +107,7 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(ts.Close)
 
 	h := &harness{
-		t: t, http: ts, db: db, store: store,
+		t: t, http: ts, db: db, store: store, casStore: casStore,
 		bytesOf: map[string][]byte{}, hashOf: map[string]string{},
 	}
 	h.token = h.mint("player", auth.ScopeRead)
@@ -191,9 +192,12 @@ func (h *harness) track(ctx context.Context, store cas.Store, workID, editionID 
 	h.exec(`INSERT INTO blobs (hash, size, mime, first_seen_at) VALUES (?, ?, ?, ?)`,
 		hash, len(data), mime, stamp)
 	h.exec(`INSERT INTO assets
-		(id, edition_id, library_id, source_class, blob_hash, role, filename, mime, identification_source, created_at, updated_at)
-		VALUES (?, ?, 'lib-music', 'managed', ?, 'primary', ?, ?, 'scan', ?, ?)`,
-		"a"+editionID, editionID, hash, title+"."+suffix, mime, stamp, stamp)
+		(id, edition_id, library_id, source_class, blob_hash, role, filename, mime,
+		 attributes, identification_source, created_at, updated_at)
+		VALUES (?, ?, 'lib-music', 'managed', ?, 'primary', ?, ?,
+		 json_object('disc', ?, 'track', ?, 'track_title', ?), 'scan', ?, ?)`,
+		"a"+editionID, editionID, hash, title+"."+suffix, mime,
+		disc, trackNo, title, stamp, stamp)
 }
 
 // --- request helpers --------------------------------------------------------

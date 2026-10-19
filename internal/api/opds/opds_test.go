@@ -31,12 +31,13 @@ import (
 const stamp = "2026-08-01T00:00:00Z"
 
 type harness struct {
-	t       *testing.T
-	http    *httptest.Server
-	db      *sqlite.DB
-	store   *auth.Store
-	token   string            // a read-scoped bearer, sent as the Basic password
-	bytesOf map[string][]byte // edition id -> its exact bytes
+	t        *testing.T
+	http     *httptest.Server
+	db       *sqlite.DB
+	store    *auth.Store
+	casStore cas.Store
+	token    string            // a read-scoped bearer, sent as the Basic password
+	bytesOf  map[string][]byte // edition id -> its exact bytes
 }
 
 func newHarness(t *testing.T) *harness {
@@ -100,7 +101,7 @@ func newHarness(t *testing.T) *harness {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
-	h := &harness{t: t, http: ts, db: db, store: store, bytesOf: map[string][]byte{}}
+	h := &harness{t: t, http: ts, db: db, store: store, casStore: casStore, bytesOf: map[string][]byte{}}
 	h.token = h.mint("reader", auth.ScopeRead)
 	h.seed(ctx, casStore)
 	return h
@@ -237,9 +238,10 @@ type feedT struct {
 			Name string `xml:"name"`
 		} `xml:"author"`
 		Links []struct {
-			Rel  string `xml:"rel,attr"`
-			Href string `xml:"href,attr"`
-			Type string `xml:"type,attr"`
+			Rel   string `xml:"rel,attr"`
+			Href  string `xml:"href,attr"`
+			Type  string `xml:"type,attr"`
+			Title string `xml:"title,attr"`
 		} `xml:"link"`
 	} `xml:"entry"`
 }
