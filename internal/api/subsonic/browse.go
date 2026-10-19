@@ -244,7 +244,10 @@ func (h *Handler) albumsWhere(ctx context.Context, where string, args []any, ord
 		              COALESCE(json_extract(a.attributes, '$.disc'), json_extract(e.attributes, '$.disc'), 0),
 		              COALESCE(json_extract(a.attributes, '$.track'), json_extract(e.attributes, '$.track'), 0),
 		              lower(COALESCE(json_extract(a.attributes, '$.track_title'),
-		                             json_extract(e.attributes, '$.track_title'), a.filename, ''))))
+		                             json_extract(e.attributes, '$.track_title'),
+		                             CASE WHEN lower(substr(a.filename, -length(e.edition_key) - 1)) = '.' || lower(e.edition_key)
+		                                  THEN substr(a.filename, 1, length(a.filename) - length(e.edition_key) - 1)
+		                                  ELSE a.filename END, ''))))
 		          FROM editions e
 		          JOIN assets a ON a.edition_id = e.id AND a.blob_hash IS NOT NULL AND a.role = 'primary'
 		         WHERE e.work_id = w.id) AS song_count
@@ -292,7 +295,7 @@ func (h *Handler) songs(ctx context.Context, workID, album, artist string, year 
 		       COALESCE(json_extract(a.attributes, '$.track_title'), json_extract(e.attributes, '$.track_title'), ''),
 		       COALESCE(json_extract(a.attributes, '$.track'), json_extract(e.attributes, '$.track')),
 		       COALESCE(json_extract(a.attributes, '$.disc'), json_extract(e.attributes, '$.disc')),
-		       e.edition_type,
+		       e.edition_type, e.edition_key,
 		       b.hash, b.size, COALESCE(a.mime, b.mime, ''), COALESCE(a.filename, ''),
 		       p.duration_seconds, p.bitrate_bps
 		FROM editions e
@@ -310,13 +313,13 @@ func (h *Handler) songs(ctx context.Context, workID, album, artist string, year 
 	byTrack := map[string]int{}
 	for rows.Next() {
 		var (
-			assetID, trackTitle, editionType, hash, mime, filename string
-			size                                                   int64
-			track, disc                                            sql.NullInt64
-			duration                                               sql.NullFloat64
-			bitrate                                                sql.NullInt64
+			assetID, trackTitle, editionType, editionKey, hash, mime, filename string
+			size                                                               int64
+			track, disc                                                        sql.NullInt64
+			duration                                                           sql.NullFloat64
+			bitrate                                                            sql.NullInt64
 		)
-		if err := rows.Scan(&assetID, &trackTitle, &track, &disc, &editionType,
+		if err := rows.Scan(&assetID, &trackTitle, &track, &disc, &editionType, &editionKey,
 			&hash, &size, &mime, &filename, &duration, &bitrate); err != nil {
 			return nil, err
 		}
@@ -352,6 +355,9 @@ func (h *Handler) songs(ctx context.Context, workID, album, artist string, year 
 		keyTitle := trackTitle
 		if keyTitle == "" {
 			keyTitle = filename
+			if strings.HasSuffix(strings.ToLower(filename), "."+strings.ToLower(editionKey)) {
+				keyTitle = filename[:len(filename)-len(editionKey)-1]
+			}
 		}
 		key := strconv.FormatInt(disc.Int64, 10) + ":" + strconv.FormatInt(track.Int64, 10) + ":" + strings.ToLower(keyTitle)
 		if i, ok := byTrack[key]; ok {

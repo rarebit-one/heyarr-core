@@ -43,29 +43,26 @@ func acquisitionMediaType(storedMIME, format string) string {
 
 // handlePublications is the acquisition feed: every book or document with at
 // least one streamable format, one Atom entry each, an acquisition link per
-// format.
+// primary Asset. Several files can share an Edition and still get separate links.
 //
-// A publication is a book or document Work; a format is an Edition; the bytes
-// are the Asset. A captured article is book-like — a titled Work whose bytes a
+// A publication is a book or document Work; a format is an Edition, and each
+// downloadable file is an Asset. A captured article is book-like — a titled Work whose bytes a
 // reader downloads — so it surfaces through the same shelf the navigation feed
 // already promises ("every book, comic and document"), rather than a parallel
-// feed. Only editions with a managed or vault blob are offered — a linked asset
+// feed. Only assets with a managed or vault blob are offered — a linked asset
 // has no blob (ADR-0020) and nothing to download, so advertising it would be an
 // acquisition link that 404s. A work whose only formats are linked has no entry
 // at all rather than an entry a reader cannot acquire from.
 func (h *Handler) handlePublications(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.reader.QueryContext(r.Context(), `
 		SELECT w.id, w.title, COALESCE(json_extract(w.attributes, '$.author'), ''),
-		       e.id, e.edition_type, COALESCE(a.mime, b.mime, '')
+		       e.id, a.id, e.edition_type, COALESCE(a.mime, b.mime, ''), COALESCE(a.filename, '')
 		FROM works w
 		JOIN editions e ON e.work_id = w.id
-		JOIN assets a ON a.id = (
-			SELECT a2.id FROM assets a2
-			WHERE a2.edition_id = e.id AND a2.blob_hash IS NOT NULL
-			ORDER BY a2.id LIMIT 1)
+		JOIN assets a ON a.edition_id = e.id AND a.blob_hash IS NOT NULL AND a.role = 'primary'
 		JOIN blobs b ON b.hash = a.blob_hash
 		WHERE w.content_type IN ('book', 'document')
-		ORDER BY w.sort_title, w.id, e.edition_type, e.id
+		ORDER BY w.sort_title, w.id, e.edition_type, e.id, a.id
 		LIMIT 5000`)
 	if err != nil {
 		h.internalError(w, "publications", err)
@@ -77,9 +74,10 @@ func (h *Handler) handlePublications(w http.ResponseWriter, r *http.Request) {
 	var entries []entry
 	var cur *entry
 	var curWork string
+	var curEdition string
 	for rows.Next() {
-		var workID, title, authorName, editionID, format, mime string
-		if err := rows.Scan(&workID, &title, &authorName, &editionID, &format, &mime); err != nil {
+		var workID, title, authorName, editionID, assetID, format, mime, filename string
+		if err := rows.Scan(&workID, &title, &authorName, &editionID, &assetID, &format, &mime, &filename); err != nil {
 			h.internalError(w, "publications", err)
 			return
 		}
@@ -95,10 +93,20 @@ func (h *Handler) handlePublications(w http.ResponseWriter, r *http.Request) {
 				cur.Authors = []author{{Name: authorName}}
 			}
 		}
+		// Keep the first asset at its legacy edition URL. Each later file
+		// gets an asset URL, so old links remain valid and no volume vanishes.
+		downloadID := editionID
+		var linkTitle string
+		if editionID == curEdition {
+			downloadID = assetID
+			linkTitle = filename
+		}
+		curEdition = editionID
 		cur.Links = append(cur.Links, link{
-			Rel:  relAcquisition,
-			Href: Prefix + "/download/" + editionID,
-			Type: acquisitionMediaType(mime, format),
+			Rel:   relAcquisition,
+			Href:  Prefix + "/download/" + downloadID,
+			Type:  acquisitionMediaType(mime, format),
+			Title: linkTitle,
 		})
 	}
 	if err := rows.Err(); err != nil {

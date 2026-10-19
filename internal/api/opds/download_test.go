@@ -22,6 +22,41 @@ func TestDownloadReturnsExactBytes(t *testing.T) {
 	}
 }
 
+func TestSameFormatBookFilesAreSeparatelyDownloadable(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.edition(context.Background(), h.casStore, "wa", "ea4", "cbz-volume", "application/x-cbz", []byte("second comic volume"))
+	h.exec(`UPDATE assets SET edition_id = 'ea2', filename = 'Volume 2.cbz' WHERE id = 'aea4'`)
+
+	f := parseFeed(t, h.get("/opds/publications", true))
+	links := map[string]string{}
+	for _, entry := range f.Entries {
+		if entry.Title == "The Long Survey" {
+			for _, link := range entry.Links {
+				links[link.Href] = link.Title
+			}
+		}
+	}
+	if len(links) != 3 || links["/opds/download/aea4"] != "Volume 2.cbz" {
+		t.Fatalf("acquisition links = %v, want two old links plus the second comic volume", links)
+	}
+	if _, ok := links["/opds/download/ea1"]; !ok {
+		t.Fatalf("the existing EPUB link is missing: %v", links)
+	}
+	if _, ok := links["/opds/download/ea2"]; !ok {
+		t.Fatalf("the existing CBZ link is missing: %v", links)
+	}
+	for id, want := range map[string][]byte{
+		"ea2":  h.bytesOf["ea2"],
+		"aea4": h.bytesOf["ea4"],
+	} {
+		resp := h.get("/opds/download/"+id, true)
+		if resp.StatusCode != http.StatusOK || !bytes.Equal(body(t, resp), want) {
+			t.Fatalf("download %s did not return its own volume", id)
+		}
+	}
+}
+
 // TestDownloadHonoursRange proves byte serving is delegated to the blob handler
 // unchanged: a Range request gets a 206 with a Content-Range and only the
 // requested bytes. The adapter writes none of that itself.

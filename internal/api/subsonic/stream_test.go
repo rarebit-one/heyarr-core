@@ -83,6 +83,25 @@ func TestAlbumProjectsAssetsAndKeepsOldTrackIDs(t *testing.T) {
 	}
 }
 
+func TestLegacyFilenamesDedupeAcrossFormats(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.track(context.Background(), h.casStore, "wb", "eb2", 0, 0, "Traverse alternate", "mp3", "audio/mpeg", []byte("alternate format"))
+	h.exec(`UPDATE editions SET edition_key = 'flac', attributes = '{}' WHERE id = 'eb1'`)
+	h.exec(`UPDATE editions SET edition_key = 'mp3', attributes = '{}' WHERE id = 'eb2'`)
+	h.exec(`UPDATE assets SET attributes = '{}', filename = '01 Traverse.flac' WHERE id = 'aeb1'`)
+	h.exec(`UPDATE assets SET attributes = '{}', filename = '01 Traverse.mp3' WHERE id = 'aeb2'`)
+
+	album := h.get("getAlbum", url.Values{"id": {h.albumID(t, "Field Notes")}}).Album
+	if album == nil || album.SongCount != 1 || len(album.Song) != 1 {
+		t.Fatalf("legacy album = %+v, want one song for two formats", album)
+	}
+	list := h.get("getAlbumList2", nil).AlbumList2
+	if list == nil || findAlbum(t, list.Album, "Field Notes").SongCount != 1 {
+		t.Fatalf("legacy album-list count = %+v, want one", list)
+	}
+}
+
 func TestDownloadReturnsExactBytes(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
