@@ -134,6 +134,9 @@ func (pw *PersonalWorker) Run(ctx context.Context) error {
 		PeerSite:   pw.cfg.Peer.Site,
 		Logger:     pw.log,
 		LocalStore: store,
+		// Who this node's uploads are offered to (ADR-0114), so the planner
+		// chunks the large ones before a sibling tries to pull them whole.
+		PlacementSiblings: pw.cfg.Placement.Siblings,
 	})
 	if err != nil {
 		return fmt.Errorf("worker: opening the catalog: %w", err)

@@ -163,7 +163,7 @@ func reconcilePeerHandler(
 		// fabric takes no gaps, and a cycle that changes nothing should not
 		// scan the catalogue to discover that.
 		chunkStates := map[string]manifests.State{}
-		if len(taken) > 0 {
+		if len(taken) > 0 || len(plan.OfferedBlobs) > 0 {
 			chunkStates, err = cat.ChunkManifestStates(ctx)
 			if err != nil {
 				return err
@@ -248,6 +248,50 @@ func reconcilePeerHandler(
 			}
 		}
 
+		// What this node offers a sibling is what that sibling is about to
+		// pull FROM here (ADR-0114), and only this node has the bytes to chunk
+		// (§16). Without a manifest a large blob can only move whole, and a
+		// whole pull that outlasts the peer client's timeout never lands. Same
+		// rule as above: only `undecided` produces a job, bounded per cycle.
+		// A blob whose chunking is already queued or running is not counted
+		// against the bound, as an in-flight transfer is not above: otherwise a
+		// first batch of multi-GB chunkings would hold the bound every cycle and
+		// the blobs behind it would never be reached.
+		var liveChunks map[string]struct{}
+		if len(plan.OfferedBlobs) > 0 {
+			liveChunks, err = queue.LiveDedupeKeys(ctx, manifests.ChunkBlobJobType)
+			if err != nil {
+				return err
+			}
+		}
+		offeredChunks := 0
+		for _, hash := range plan.OfferedBlobs {
+			if (limit > 0 && offeredChunks >= limit) || ctx.Err() != nil {
+				break
+			}
+			if _, asked := chunkAsked[hash]; asked {
+				continue
+			}
+			chunkAsked[hash] = struct{}{}
+			if _, live := liveChunks[manifests.ChunkBlobDedupeKey(hash)]; live {
+				continue
+			}
+			if chunkStates[hash] != manifests.StateUndecided {
+				continue
+			}
+			if _, err := queue.Enqueue(ctx, jobs.EnqueueOptions{
+				Type:      manifests.ChunkBlobJobType,
+				Payload:   manifests.ChunkBlobPayload{BlobHash: hash},
+				DedupeKey: manifests.ChunkBlobDedupeKey(hash),
+			}); err != nil {
+				if errors.Is(err, context.Canceled) {
+					break
+				}
+				log.Warn("could not enqueue a chunking of an offered blob", "blob_hash", hash, "error", err)
+				continue
+			}
+			offeredChunks++
+		}
 		if plan.Offered > 0 {
 			// Pins naming another peer are that peer's to pull (ADR-0114):
 			// it asks this node for them. Said at debug, because on a two-site

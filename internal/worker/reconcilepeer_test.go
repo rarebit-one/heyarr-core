@@ -1088,3 +1088,113 @@ func TestAGapThisNodeMustCloseItselfIsNotChunkingWork(t *testing.T) {
 			"not here to read", len(got), got)
 	}
 }
+
+// A blob this node offers a sibling is a blob that sibling is about to pull
+// FROM here (ADR-0114), and only this node has the bytes to chunk (§16). With
+// no manifest a large blob can only move whole, and a whole pull that outlasts
+// the peer client's timeout never lands, so the source's cycle chunks what it
+// offers. It still plans no transfer: the destination's queue does that.
+func TestAnOfferedBlobIsChunkedAtTheSource(t *testing.T) {
+	t.Parallel()
+	h := newConvergeHarness(t)
+	h.exec(t, `INSERT INTO blobs (hash, size, first_seen_at) VALUES (?, 1024, ?)`, blobOne, h.stamp)
+	h.reports(t, h.self, blobOne)
+	h.exec(t, `INSERT INTO placement_pins (blob_hash, peer_id, created_at) VALUES (?, ?, ?)`,
+		blobOne, h.other, h.stamp)
+
+	if summary := h.cycle(t, "", 0); summary.Enqueued != 0 {
+		t.Fatalf("the source enqueued %d transfer(s), want 0: the destination pulls", summary.Enqueued)
+	}
+	got := h.chunkings(t)
+	if len(got) != 1 || got[0] != blobOne {
+		t.Fatalf("chunkings = %v, want exactly [%s]: the blob this node offers", got, blobOne)
+	}
+	h.cycle(t, "", 0)
+	if again := h.chunkings(t); len(again) != 1 {
+		t.Errorf("a second cycle brought the chunkings to %d, want 1: %v", len(again), again)
+	}
+}
+
+// An upload's self-pin is offered to a configured sibling (ADR-0114), which the
+// planner cannot see; it reads the fabric instead. A self-pinned blob held here
+// that the other Full Peer lacks is chunked, and once the other peer holds it,
+// nothing more is asked.
+func TestAnUploadTheOtherSiteLacksIsChunkedAtTheSource(t *testing.T) {
+	t.Parallel()
+	h := newConvergeHarness(t)
+	noSiblings := h.cat
+	// The same database, as the personal worker opens it: the other site is a
+	// configured placement sibling.
+	eventLog, err := events.New(events.Options{Writer: h.db.Writer(), Reader: h.db.Reader()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.cat, err = catalog.New(catalog.Options{
+		DB: h.db, Events: eventLog, PeerName: "site-a", PeerSite: "site-a",
+		PlacementSiblings: []string{h.other},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.exec(t, `INSERT INTO blobs (hash, size, first_seen_at) VALUES (?, 1024, ?)`, blobOne, h.stamp)
+	h.exec(t, `INSERT INTO blobs (hash, size, first_seen_at) VALUES (?, 1024, ?)`, blobTwo, h.stamp)
+	h.reports(t, h.self, blobOne, blobTwo)
+	h.reports(t, h.other, blobTwo)
+	for _, b := range []string{blobOne, blobTwo} {
+		h.exec(t, `INSERT INTO placement_pins (blob_hash, peer_id, created_at) VALUES (?, ?, ?)`, b, h.self, h.stamp)
+	}
+
+	// With no sibling configured the uploads are offered to nobody: nothing to chunk.
+	withSiblings := h.cat
+	h.cat = noSiblings
+	h.cycle(t, "", 0)
+	if got := h.chunkings(t); len(got) != 0 {
+		t.Fatalf("a node with no placement sibling chunked %v, want nothing", got)
+	}
+	h.cat = withSiblings
+
+	if summary := h.cycle(t, "", 0); summary.Enqueued != 0 {
+		t.Fatalf("enqueued %d transfer(s), want 0", summary.Enqueued)
+	}
+	got := h.chunkings(t)
+	if len(got) != 1 || got[0] != blobOne {
+		t.Fatalf("chunkings = %v, want exactly [%s]: the upload the sibling lacks", got, blobOne)
+	}
+}
+
+// A placement pin whose peer already holds the blob is satisfied: that peer will
+// not pull, so there is nothing to chunk for it.
+func TestASatisfiedPlacementIsNotChunked(t *testing.T) {
+	t.Parallel()
+	h := newConvergeHarness(t)
+	h.exec(t, `INSERT INTO blobs (hash, size, first_seen_at) VALUES (?, 1024, ?)`, blobOne, h.stamp)
+	h.reports(t, h.self, blobOne)
+	h.reports(t, h.other, blobOne)
+	h.exec(t, `INSERT INTO placement_pins (blob_hash, peer_id, created_at) VALUES (?, ?, ?)`,
+		blobOne, h.other, h.stamp)
+	h.cycle(t, "", 0)
+	if got := h.chunkings(t); len(got) != 0 {
+		t.Fatalf("chunkings = %v, want none: the pinned peer already holds it", got)
+	}
+}
+
+// A chunking already queued is not counted against the per-cycle bound, so a
+// slow first batch cannot keep the blobs behind it from ever being reached.
+func TestALiveChunkingDoesNotHoldTheOfferedBound(t *testing.T) {
+	t.Parallel()
+	h := newConvergeHarness(t)
+	for _, b := range []string{blobOne, blobTwo} {
+		h.exec(t, `INSERT INTO blobs (hash, size, first_seen_at) VALUES (?, 1024, ?)`, b, h.stamp)
+		h.exec(t, `INSERT INTO placement_pins (blob_hash, peer_id, created_at) VALUES (?, ?, ?)`, b, h.other, h.stamp)
+	}
+	h.reports(t, h.self, blobOne, blobTwo)
+
+	h.cycle(t, "", 1) // bound 1: the first offered blob is queued
+	if got := h.chunkings(t); len(got) != 1 {
+		t.Fatalf("first cycle chunkings = %v, want 1", got)
+	}
+	h.cycle(t, "", 1) // that one is still pending: the bound reaches the next
+	if got := h.chunkings(t); len(got) != 2 {
+		t.Fatalf("second cycle chunkings = %v, want both: a pending chunking held the bound", got)
+	}
+}
