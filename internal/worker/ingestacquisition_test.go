@@ -1158,15 +1158,17 @@ func TestMultiFileAcquisitionUsesWantedMediaType(t *testing.T) {
 		files       map[string][]byte
 	}{
 		{"music", map[string][]byte{
-			"CD1/01 - First.mp3":  []byte("first track"),
-			"CD1/02 - Second.mp3": []byte("second track"),
-			"Sample/preview.mp3":  []byte("sample clip"),
-			"cover.jpg":           []byte("cover"),
-			"release.nfo":         []byte("notes"),
+			"CD1/01 - First.mp3":      []byte("first track"),
+			"CD1/02 - Second.mp3":     []byte("second track"),
+			"CD1/Sample in a Jar.mp3": []byte("third track"),
+			"Sample/preview.mp3":      []byte("sample clip"),
+			"cover.jpg":               []byte("cover"),
+			"release.nfo":             []byte("notes"),
 		}},
 		{"book", map[string][]byte{
 			"Volume 1.cbz":         []byte("first volume"),
 			"Volume 2.epub":        []byte("second volume"),
+			"Sample Size.epub":     []byte("third volume"),
 			"Samples/preview.epub": []byte("sample chapter"),
 			"cover.jpg":            []byte("cover"),
 			"release.nfo":          []byte("notes"),
@@ -1186,11 +1188,11 @@ func TestMultiFileAcquisitionUsesWantedMediaType(t *testing.T) {
 			if got := h.state(t); got.Phase != acquisition.PhaseIdle || !got.Managed {
 				t.Fatalf("state = %+v, want idle and managed", got)
 			}
-			if n := h.count(t, `SELECT count(*) FROM assets`); n != 2 {
-				t.Errorf("assets = %d, want two primary files", n)
+			if n := h.count(t, `SELECT count(*) FROM assets`); n != 3 {
+				t.Errorf("assets = %d, want three primary files", n)
 			}
-			if n := h.count(t, `SELECT count(*) FROM blobs`); n != 2 {
-				t.Errorf("blobs = %d, want two independently verified files", n)
+			if n := h.count(t, `SELECT count(*) FROM blobs`); n != 3 {
+				t.Errorf("blobs = %d, want three independently verified files", n)
 			}
 			if tc.contentType == "music" {
 				if n := h.count(t, `SELECT count(DISTINCT json_extract(attributes, '$.track'))

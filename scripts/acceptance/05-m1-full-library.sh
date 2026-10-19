@@ -1039,18 +1039,18 @@ YAML
   assert_eq "$([[ -n "$album_id" && "$album_id" != "null" ]] && echo 1 || echo 0)" "1" \
     "at least one album has streamable songs (a real caller, not an empty projection)"
 
-  local sub_album song_id song_id_enc edition blob sub_sha blob_sha
+  local sub_album song_id song_id_enc asset blob sub_sha blob_sha
   sub_album=$(subsonic getAlbum "id=$album_id")
   song_id=$(jq -r '.["subsonic-response"].album.song[0].id' <<<"$sub_album")
   assert_contains "$song_id" "tr:" "a song carries the opaque track id a client streams by"
 
   # Play: stream the track and prove its bytes ARE the blob's bytes — the same
   # byte route (ADR-0013), not the adapter's invention. The song id encodes the
-  # edition, so the blob it maps to is found through the ordinary assets API and
+  # asset, so the blob it maps to is found through the ordinary assets API and
   # fetched through the ordinary blob route for the comparison.
   song_id_enc=$(printf '%s' "$song_id" | jq -sRr @uri)
-  edition=${song_id#tr:}
-  blob=$(api_all /api/v1/assets ".items[] | select(.edition_id==\"$edition\") | .blob_hash" | head -1)
+  asset=${song_id#tr:}
+  blob=$(api_all /api/v1/assets ".items[] | select(.id==\"$asset\") | .blob_hash" | head -1)
   sub_sha=$(subsonic stream "id=$song_id_enc" | shasum -a 256 | cut -d" " -f1)
   blob_sha=$(api "/api/v1/blobs/$blob/content" | shasum -a 256 | cut -d" " -f1)
   assert_eq "$sub_sha" "$blob_sha" \

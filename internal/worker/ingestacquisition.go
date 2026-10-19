@@ -411,7 +411,7 @@ func verifyDirectory(dir, contentType string) ([]artifact, error) {
 		if !d.Type().IsRegular() {
 			return nil
 		}
-		if !identification.IsPrimaryExt(contentType, filepath.Ext(d.Name())) || isSampleName(d.Name()) {
+		if !identification.IsPrimaryExt(contentType, filepath.Ext(d.Name())) || video && isSampleName(d.Name()) {
 			return nil
 		}
 		info, err := d.Info()
