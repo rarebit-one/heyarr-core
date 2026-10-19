@@ -41,15 +41,23 @@ var artworkSuffixes = []string{
 func isSubtitleExt(ext string) bool { return subtitleExts[ext] }
 func isImageExt(ext string) bool    { return imageExts[ext] }
 
-// IsVideoExt reports whether ext (with its leading dot) names a video container
-// Heyarr treats as primary content.
-//
-// It is exported for callers that must enumerate the video files of a multi-file
-// release — a season pack (ADR-0093) — before the pipeline sees any of them, so
-// that the one list of video extensions the scanner already trusts is the same
-// one that decides which files of a pack ingest. It is folded to lower case so a
-// caller need not.
-func IsVideoExt(ext string) bool { return videoExts[strings.ToLower(ext)] }
+// IsPrimaryExt reports whether a file extension carries primary content for
+// the wanted media type. The acquisition importer uses the scanner's own
+// extension sets to enumerate multi-file releases without ingesting artwork,
+// subtitles or scene metadata as the content itself.
+func IsPrimaryExt(contentType, ext string) bool {
+	ext = strings.ToLower(ext)
+	switch contentType {
+	case Movie, Series, "video":
+		return videoExts[ext]
+	case Music:
+		return losslessExts[ext] || lossyExts[ext]
+	case Book:
+		return isBookExt(ext)
+	default:
+		return false
+	}
+}
 
 // isAuxExt reports whether the extension belongs to a companion file rather
 // than to content.

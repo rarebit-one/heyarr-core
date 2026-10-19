@@ -165,7 +165,11 @@ func IngestAcquisitionHandler(
 			return err
 		}
 
-		batch, verifyErr := verifyArtifacts(acq)
+		sc, err := cat.SearchContextFor(ctx, payload.DesiredItemID)
+		if err != nil {
+			return err
+		}
+		batch, verifyErr := verifyArtifacts(acq, sc.ContentType)
 		if verifyErr != nil {
 			return failAcquisition(ctx, cat, payload.DesiredItemID, acq,
 				catalog.BlockVerificationFailed, verifyErr, log)
@@ -180,7 +184,7 @@ func IngestAcquisitionHandler(
 			}
 		}
 
-		results, linked, ingestErr := ingestArtifacts(ctx, cat, roots, pipeline, payload.DesiredItemID, batch)
+		results, linked, ingestErr := ingestArtifacts(ctx, cat, roots, pipeline, payload.DesiredItemID, sc, batch)
 		if ingestErr != nil {
 			// A local problem, most likely, rather than a bad release — which
 			// is why it is blocked under a DIFFERENT reason. See
@@ -216,9 +220,10 @@ func IngestAcquisitionHandler(
 		// particularly bad place to do it, because the bytes that just arrived
 		// are the ones nobody has evaluated yet.
 		if batch.pack {
-			log.Info("a season pack was ingested",
+			log.Info("a multi-file release was ingested",
 				"desired_item_id", payload.DesiredItemID,
-				"files", len(results), "linked_to_episodes", linked)
+				"content_type", batch.contentType,
+				"files", len(results), "linked_to_items", linked)
 		} else {
 			res := results[0]
 			log.Info("an acquisition was ingested",
@@ -256,14 +261,14 @@ type artifact struct {
 	Size    int64
 }
 
-// verifiedTransfer is what a completed download resolved to: one file, or the
-// video files of a multi-file release. `pack` distinguishes the two so the
-// ingest and the log say which happened, and `path` is the top-level thing the
+// verifiedTransfer is what a completed download resolved to: one file, or
+// the primary files of a multi-file release. `path` is the top-level thing the
 // client reported — the file, or the release directory.
 type verifiedTransfer struct {
-	artifacts []artifact
-	pack      bool
-	path      string
+	artifacts   []artifact
+	contentType string
+	pack        bool
+	path        string
 }
 
 func (v verifiedTransfer) totalSize() int64 {
@@ -287,11 +292,11 @@ func (v verifiedTransfer) verifiedDetail() string {
 
 // ingestedDetail is the transition note recorded on INGESTED. The single-file
 // wording is unchanged; a pack summarises the assets it produced and how many
-// were linked to an episode item.
+// were linked to an item.
 func ingestedDetail(v verifiedTransfer, results []ingest.Result, linked int) string {
 	if v.pack {
-		return fmt.Sprintf("%d assets from a season pack, %d linked to episodes",
-			len(results), linked)
+		return fmt.Sprintf("%d assets from a multi-file %s release, %d linked to items",
+			len(results), v.contentType, linked)
 	}
 	res := results[0]
 	return fmt.Sprintf("asset %s, blob %s, %s", res.AssetID, res.BlobHash, res.Materialised)
@@ -313,13 +318,11 @@ func resolveTransferPath(acq catalog.Acquisition) string {
 // (invariant 1 — the bytes are hashed by the CAS on the way in, never trusted
 // from a claim).
 //
-// A single file is the overwhelmingly common case and is unchanged: it yields
-// one artifact. A directory is a multi-file release — a season pack, most often
-// — and is NO LONGER refused (ADR-0093): its video files each become their own
-// artifact, so one download can satisfy a whole season. Ingesting a directory
-// as a single artifact would still be wrong (a plausible blob of the wrong
-// thing), so the directory is enumerated rather than hashed whole.
-func verifyArtifacts(acq catalog.Acquisition) (verifiedTransfer, error) {
+// A single file yields one artifact. A directory is a multi-file release:
+// each primary file for the wanted content type becomes its own artifact.
+// Ingesting the directory as one blob would record the wrong thing, so it is
+// enumerated rather than hashed whole.
+func verifyArtifacts(acq catalog.Acquisition, contentType string) (verifiedTransfer, error) {
 	path := resolveTransferPath(acq)
 	if path == "" {
 		return verifiedTransfer{}, errors.New("the download client did not say where the bytes are")
@@ -341,18 +344,18 @@ func verifyArtifacts(acq catalog.Acquisition) (verifiedTransfer, error) {
 	}
 
 	if info.IsDir() {
-		arts, derr := verifyDirectory(path)
+		arts, derr := verifyDirectory(path, contentType)
 		if derr != nil {
 			return verifiedTransfer{}, derr
 		}
-		return verifiedTransfer{artifacts: arts, pack: true, path: path}, nil
+		return verifiedTransfer{artifacts: arts, contentType: contentType, pack: true, path: path}, nil
 	}
 
 	a, ferr := verifyFile(path, filepath.Base(path), info)
 	if ferr != nil {
 		return verifiedTransfer{}, ferr
 	}
-	return verifiedTransfer{artifacts: []artifact{a}, path: path}, nil
+	return verifiedTransfer{artifacts: []artifact{a}, contentType: contentType, path: path}, nil
 }
 
 // verifyFile checks that one file is ingestable — present, non-empty, readable
@@ -382,22 +385,16 @@ func verifyFile(path, relPath string, info fs.FileInfo) (artifact, error) {
 	return artifact{Path: path, RelPath: relPath, Size: info.Size()}, nil
 }
 
-// verifyDirectory enumerates the ingestable video files inside a multi-file
-// release (ADR-0093, a season pack).
+// verifyDirectory enumerates the primary files inside a multi-file release.
+// The content type selects the scanner's video, audio or book extension set;
+// artwork, subtitles and scene metadata are left out. A single unreadable or
+// empty file is skipped so the other primary files can still be held. RelPath
+// includes the release directory for identification of nested seasons/discs.
 //
-// Only video files are taken. Subtitles arrive through the extract path
-// (ADR-0084) and are not double-handled here; samples, artwork, .nfo metadata
-// and the contents of extras/sample directories are not content. Each surviving
-// file is held to verifyFile's bar; a single unreadable or empty file is skipped
-// rather than failing the whole release, since the other episodes are still
-// worth having. A file's RelPath includes the release directory so that
-// identification can read a season that only a nested folder carries
-// ("Show S01/Show.S01E01.mkv").
-//
-// An empty directory, or one with no video files, is a clean failure — a
-// verification refusal, blocked with a reason — never a panic.
-func verifyDirectory(dir string) ([]artifact, error) {
+// A directory with no primary files is a verification refusal, never a panic.
+func verifyDirectory(dir, contentType string) ([]artifact, error) {
 	parent := filepath.Dir(dir)
+	video := contentType == identification.Movie || contentType == identification.Series || contentType == "video"
 	var arts []artifact
 
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, walkErr error) error {
@@ -405,7 +402,7 @@ func verifyDirectory(dir string) ([]artifact, error) {
 			return walkErr
 		}
 		if d.IsDir() {
-			if p != dir && isNonContentDir(d.Name()) {
+			if p != dir && video && isNonContentDir(d.Name()) {
 				return fs.SkipDir
 			}
 			return nil
@@ -413,7 +410,7 @@ func verifyDirectory(dir string) ([]artifact, error) {
 		if !d.Type().IsRegular() {
 			return nil
 		}
-		if !identification.IsVideoExt(filepath.Ext(d.Name())) || isSampleName(d.Name()) {
+		if !identification.IsPrimaryExt(contentType, filepath.Ext(d.Name())) || isSampleName(d.Name()) {
 			return nil
 		}
 		info, err := d.Info()
@@ -437,9 +434,13 @@ func verifyDirectory(dir string) ([]artifact, error) {
 		return nil, fmt.Errorf("could not read the release directory %s: %w", dir, err)
 	}
 	if len(arts) == 0 {
+		kind := contentType
+		if video {
+			kind = "video"
+		}
 		return nil, fmt.Errorf(
-			"%s is a directory with no ingestable video files — a multi-file "+
-				"release must carry at least one video file to ingest", dir)
+			"%s is a directory with no ingestable %s files — a multi-file "+
+				"release must carry at least one primary file to ingest", dir, kind)
 	}
 	return arts, nil
 }
@@ -506,12 +507,8 @@ func isSampleName(name string) bool {
 // null) rather than attached to the wrong episode.
 func ingestArtifacts(
 	ctx context.Context, cat IngestAcquisitionStore, roots acquisitionRoot,
-	pipeline *ingest.Pipeline, desiredItemID string, batch verifiedTransfer,
+	pipeline *ingest.Pipeline, desiredItemID string, sc catalog.SearchContext, batch verifiedTransfer,
 ) (results []ingest.Result, linked int, err error) {
-	sc, err := cat.SearchContextFor(ctx, desiredItemID)
-	if err != nil {
-		return nil, 0, err
-	}
 	root, err := roots.RootForContentType(ctx, sc.ContentType)
 	if err != nil {
 		return nil, 0, err
@@ -553,21 +550,22 @@ func ingestArtifacts(
 		return []ingest.Result{res}, linked, nil
 	}
 
-	// A season pack: the work's enumerated items, keyed by their source-stable
-	// item_key ("S01E01"), so each file can be mapped to the episode it is.
-	items, err := cat.ItemsForWork(ctx, dw.ID)
-	if err != nil {
-		return nil, 0, err
+	// Only a series pack maps files to enumerated episode items. An album or
+	// book bundle attaches each asset to the wanted Work without guessing an
+	// item from its filename.
+	itemByKey := map[string]string{}
+	var reg *identification.Registry
+	if sc.ContentType == identification.Series {
+		items, err := cat.ItemsForWork(ctx, dw.ID)
+		if err != nil {
+			return nil, 0, err
+		}
+		for _, it := range items {
+			itemByKey[strings.ToUpper(it.ItemKey)] = it.ID
+		}
+		// The same parser the scanner uses is shared by all episode files.
+		reg = identification.Default()
 	}
-	itemByKey := make(map[string]string, len(items))
-	for _, it := range items {
-		itemByKey[strings.ToUpper(it.ItemKey)] = it.ID
-	}
-
-	// One registry for the whole pack — Identify would otherwise rebuild the
-	// default rule set per file. This is the SAME parser the scanner uses, the
-	// one-vocabulary property ADR-0093 relies on.
-	reg := identification.Default()
 
 	results = make([]ingest.Result, 0, len(batch.artifacts))
 	for _, a := range batch.artifacts {
@@ -580,6 +578,9 @@ func ingestArtifacts(
 		results = append(results, res)
 		if res.AssetID == "" {
 			// Tombstoned (ADR-0073): no asset was recorded, nothing to link.
+			continue
+		}
+		if reg == nil {
 			continue
 		}
 		key, ok := episodeItemKey(reg, a.RelPath)

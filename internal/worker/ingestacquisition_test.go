@@ -1146,3 +1146,50 @@ func TestTheWantNamesTheWorkAndThePathStillNamesTheFile(t *testing.T) {
 		t.Errorf("role = %q, want subtitle — the want named the Work, not the file", got)
 	}
 }
+
+// A completed album or book bundle is a directory just like a season pack,
+// but its primary files are audio or book files. The acquisition must reach
+// AVAILABLE with one managed asset per primary file, leaving covers and notes
+// out of the content count.
+func TestMultiFileAcquisitionUsesWantedMediaType(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		contentType string
+		files       map[string][]byte
+	}{
+		{"music", map[string][]byte{
+			"CD1/01 - First.mp3":   []byte("first track"),
+			"CD1/02 - Second.flac": []byte("second track"),
+			"cover.jpg":            []byte("cover"),
+			"release.nfo":          []byte("notes"),
+		}},
+		{"book", map[string][]byte{
+			"Volume 1.cbz":  []byte("first volume"),
+			"Volume 2.epub": []byte("second volume"),
+			"cover.jpg":     []byte("cover"),
+			"release.nfo":   []byte("notes"),
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.contentType, func(t *testing.T) {
+			h := newIngestHarness(t)
+			h.selectAndCompletePack(t, "Arrival bundle", tc.files)
+			h.exec(t, `UPDATE works SET content_type = ?, work_key = ? WHERE id = 'w1'`,
+				tc.contentType, tc.contentType+":arrival:2016")
+			h.exec(t, `UPDATE libraries SET content_type = ? WHERE id = 'lib1'`, tc.contentType)
+
+			if err := h.ingest(t); err != nil {
+				t.Fatal(err)
+			}
+			if got := h.state(t); got.Phase != acquisition.PhaseIdle || !got.Managed {
+				t.Fatalf("state = %+v, want idle and managed", got)
+			}
+			if n := h.count(t, `SELECT count(*) FROM assets`); n != 2 {
+				t.Errorf("assets = %d, want two primary files", n)
+			}
+			if n := h.count(t, `SELECT count(*) FROM blobs`); n != 2 {
+				t.Errorf("blobs = %d, want two independently verified files", n)
+			}
+		})
+	}
+}
