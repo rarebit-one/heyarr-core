@@ -2,7 +2,6 @@ package identification
 
 import (
 	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -236,15 +235,6 @@ func musicCandidate(artist, album nameParts, year, disc int, trackSrc, ext strin
 	}
 
 	editionKey, editionLabel, editionType := audioEdition(ext)
-	if losslessExts[ext] || lossyExts[ext] {
-		// Subsonic exposes one song per edition, so each track needs its own
-		// stable key even when every file on the album has the same format.
-		identity := normalizeName(trackName)
-		if identity == "" {
-			identity = normalizeName(trackSrc)
-		}
-		editionKey = strings.Join([]string{editionKey, strconv.Itoa(disc), strconv.Itoa(track), identity}, ":")
-	}
 
 	return Candidate{
 		ContentType:       Music,

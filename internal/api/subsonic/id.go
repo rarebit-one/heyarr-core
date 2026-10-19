@@ -13,7 +13,9 @@ import (
 // Three shapes, each self-describing by a two-letter tag:
 //
 //	al:<work-id>     an album is a music Work; the id is the Work's UUID.
-//	tr:<edition-id>  a track is an Edition; the id is the Edition's UUID.
+//	tr:<asset-id>    a track is a primary Asset; the id is the Asset's UUID.
+//	tr:<edition-id>  older clients may retain this former track ID shape;
+//	                 stream/download still resolve it to the edition's first asset.
 //	ar:<b64(name)>   an artist is NOT an entity — it is a projection over
 //	                 works.attributes.artist — so the id carries the name
 //	                 itself, base64url-encoded so an arbitrary name (slashes,
@@ -27,8 +29,8 @@ const (
 	tagArtist = "ar:"
 )
 
-func albumID(workID string) string    { return tagAlbum + workID }
-func trackID(editionID string) string { return tagTrack + editionID }
+func albumID(workID string) string  { return tagAlbum + workID }
+func trackID(assetID string) string { return tagTrack + assetID }
 
 func artistID(name string) string {
 	return tagArtist + base64.RawURLEncoding.EncodeToString([]byte(name))
@@ -39,7 +41,7 @@ func decodeAlbumID(id string) (string, bool) {
 	return strings.TrimPrefix(id, tagAlbum), strings.HasPrefix(id, tagAlbum) && len(id) > len(tagAlbum)
 }
 
-// decodeTrackID recovers an Edition id from a track id.
+// decodeTrackID recovers an Asset id, or a legacy Edition id, from a track id.
 func decodeTrackID(id string) (string, bool) {
 	return strings.TrimPrefix(id, tagTrack), strings.HasPrefix(id, tagTrack) && len(id) > len(tagTrack)
 }

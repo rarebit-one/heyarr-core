@@ -1193,8 +1193,9 @@ func TestMultiFileAcquisitionUsesWantedMediaType(t *testing.T) {
 				t.Errorf("blobs = %d, want two independently verified files", n)
 			}
 			if tc.contentType == "music" {
-				if n := h.count(t, `SELECT count(DISTINCT edition_id) FROM assets WHERE role = 'primary'`); n != 2 {
-					t.Errorf("track editions = %d, want one per playable track", n)
+				if n := h.count(t, `SELECT count(DISTINCT json_extract(attributes, '$.track'))
+					FROM assets WHERE role = 'primary'`); n != 2 {
+					t.Errorf("identified track numbers = %d, want one per playable asset", n)
 				}
 			}
 		})

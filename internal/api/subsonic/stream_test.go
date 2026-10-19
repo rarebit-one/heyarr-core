@@ -48,6 +48,41 @@ func TestStreamReturnsExactBytes(t *testing.T) {
 	}
 }
 
+func TestAlbumProjectsAssetsAndKeepsOldTrackIDs(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.track(context.Background(), h.casStore, "wa", "ea3", 1, 3, "Elevation", "flac", "audio/flac", []byte("third track bytes"))
+	h.exec(`UPDATE assets SET edition_id = 'ea1' WHERE id = 'aea3'`)
+	h.track(context.Background(), h.casStore, "wa", "ea4", 1, 1, "Datum alternate", "mp3", "audio/mpeg", []byte("alternate datum bytes"))
+	h.exec(`UPDATE assets SET attributes = json_object('disc', 1, 'track', 1, 'track_title', 'Datum') WHERE id = 'aea4'`)
+
+	album := h.get("getAlbum", url.Values{"id": {h.albumID(t, "Contour Lines")}}).Album
+	if album == nil || album.SongCount != 3 || len(album.Song) != 3 {
+		t.Fatalf("album songs = %+v, want three tracks despite a shared edition and alternate format", album)
+	}
+	for i, title := range []string{"Datum", "Benchmark", "Elevation"} {
+		if album.Song[i].Title != title {
+			t.Fatalf("song %d = %q, want %q", i, album.Song[i].Title, title)
+		}
+	}
+	if list := h.get("getAlbumList2", nil).AlbumList2; list == nil || findAlbum(t, list.Album, "Contour Lines").SongCount != 3 {
+		t.Fatalf("album-list song count did not match the three visible tracks: %+v", list)
+	}
+	for _, id := range []string{album.Song[0].ID, "tr:ea1"} {
+		q := h.creds()
+		q.Set("id", id)
+		resp := h.raw("stream", q)
+		if resp.StatusCode != http.StatusOK || !bytes.Equal(readAll(t, resp), h.bytesOf["Datum"]) {
+			t.Fatalf("track %q did not stream the original Datum bytes", id)
+		}
+	}
+	q := h.creds()
+	q.Set("id", album.Song[2].ID)
+	if got := readAll(t, h.raw("stream", q)); !bytes.Equal(got, h.bytesOf["Elevation"]) {
+		t.Fatalf("third track streamed %q, want Elevation bytes", got)
+	}
+}
+
 func TestDownloadReturnsExactBytes(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -106,6 +141,20 @@ func TestStreamNotFound(t *testing.T) {
 	r := decode(t, h.raw("stream", q))
 	if r.Status != "failed" || r.Error == nil || r.Error.Code != 70 {
 		t.Fatalf("expected not-found envelope, got %+v / %+v", r.Status, r.Error)
+	}
+}
+
+func TestStreamDoesNotExposeNonMusicAsset(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.exec(`UPDATE works SET content_type = 'movie' WHERE id = 'wa'`)
+	for _, id := range []string{"tr:aea1", "tr:ea1"} {
+		q := h.creds()
+		q.Set("id", id)
+		r := decode(t, h.raw("stream", q))
+		if r.Status != "failed" || r.Error == nil || r.Error.Code != 70 {
+			t.Fatalf("non-music id %q was exposed: %+v", id, r)
+		}
 	}
 }
 

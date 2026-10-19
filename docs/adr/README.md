@@ -109,3 +109,4 @@ An ADR that merely describes the code is not worth having.
 | [0112](0112-a-client-that-will-lose-its-key-takes-capabilities-ahead.md) | A client that is about to lose its key takes capabilities ahead | Accepted |
 | [0113](0113-a-space-change-names-its-kind-and-a-drive-entry-carries-its-own-metadata.md) | A space change names its kind, and a drive entry carries its own metadata | Proposed |
 | [0114](0114-a-site-asks-its-sibling-what-to-hold-and-pulls-it.md) | A site asks its sibling what to hold, and pulls it | Proposed |
+| [0116](0116-subsonic-projects-music-assets-as-tracks.md) | Subsonic projects music assets as tracks | Proposed |

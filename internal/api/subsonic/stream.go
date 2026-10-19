@@ -38,13 +38,13 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	editionID, ok := decodeTrackID(r.URL.Query().Get("id"))
+	trackKey, ok := decodeTrackID(r.URL.Query().Get("id"))
 	if !ok {
 		h.write(w, p.format, h.fail(errNotFound, "track not found"))
 		return
 	}
 
-	hash, mime, err := h.resolveTrack(r.Context(), editionID)
+	hash, mime, err := h.resolveTrack(r.Context(), trackKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		h.write(w, p.format, h.fail(errNotFound, "track not found"))
 		return
@@ -67,17 +67,28 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request) {
 	h.blobs.ContentAs(w, inner, mime)
 }
 
-// resolveTrack maps a track (Edition) id to the blob it streams and the MIME to
-// serve it as, choosing the same single asset per edition the listing did.
-func (h *Handler) resolveTrack(ctx context.Context, editionID string) (hash, mime string, err error) {
+// resolveTrack uses an Asset id for newly emitted tracks. Existing clients may
+// still hold the old Edition id, so it keeps resolving to that edition's first asset.
+func (h *Handler) resolveTrack(ctx context.Context, id string) (hash, mime string, err error) {
+	err = h.reader.QueryRowContext(ctx, `
+		SELECT b.hash, COALESCE(a.mime, b.mime, '')
+		FROM assets a
+		JOIN editions e ON e.id = a.edition_id
+		JOIN works w ON w.id = e.work_id
+		JOIN blobs b ON b.hash = a.blob_hash
+		WHERE a.id = ? AND a.role = 'primary' AND w.content_type = 'music'`, id).Scan(&hash, &mime)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return hash, mime, err
+	}
 	err = h.reader.QueryRowContext(ctx, `
 		SELECT b.hash, COALESCE(a.mime, b.mime, '')
 		FROM editions e
+		JOIN works w ON w.id = e.work_id
 		JOIN assets a ON a.id = (
 			SELECT a2.id FROM assets a2
-			WHERE a2.edition_id = e.id AND a2.blob_hash IS NOT NULL
+			WHERE a2.edition_id = e.id AND a2.blob_hash IS NOT NULL AND a2.role = 'primary'
 			ORDER BY a2.id LIMIT 1)
 		JOIN blobs b ON b.hash = a.blob_hash
-		WHERE e.id = ?`, editionID).Scan(&hash, &mime)
+		WHERE e.id = ? AND w.content_type = 'music'`, id).Scan(&hash, &mime)
 	return hash, mime, err
 }
