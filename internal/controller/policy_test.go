@@ -103,7 +103,7 @@ func TestSeededMediaProfilesAdvertiseTheirContentTypes(t *testing.T) {
 		name  string
 		types []string
 	}{
-		{"everyday-indexed", []string{"movie", "series"}},
+		{"everyday-indexed", []string{"movie", "series", "video"}},
 		{"music-indexed", []string{"music"}},
 		{"book-indexed", []string{"book"}},
 	} {

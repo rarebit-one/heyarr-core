@@ -70,7 +70,7 @@ func Defaults() []Profile {
 		},
 		{
 			Name:         "everyday-indexed",
-			ContentTypes: []string{"movie", "series"},
+			ContentTypes: []string{"movie", "series", "video"},
 			Description: "Starting profile for searched video. Accepts 720p and up, " +
 				"penalises identified cam sources, and stops at 1080p. Unknown source " +
 				"does not block an otherwise acceptable release.",
