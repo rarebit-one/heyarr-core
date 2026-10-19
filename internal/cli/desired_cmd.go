@@ -25,8 +25,8 @@ it is — a content type, a title and a year — and the Work is created for you
 using the same normalisation the scanner uses, so wanting a film and later
 scanning it converge on one Work rather than producing two.
 
-A quality profile is required: "this should exist", with no statement of what
-would count as existing, cannot be evaluated.`,
+Known media types use a starting quality profile when none is named. Pass
+--quality-profile to choose a different standard.`,
 	}
 	cmd.AddCommand(
 		newDesiredAddCommand(opts, configPath),
@@ -152,11 +152,10 @@ content under the same profile twice is one want written twice, and is refused.`
 	cmd.Flags().StringVar(&editionID, "edition-id", "",
 		"want one edition — a season, a particular release — rather than the whole work")
 	cmd.Flags().StringVar(&profile, "quality-profile", "",
-		"the profile this want is measured against, by name (required)")
+		"the profile this want is measured against, by name (defaults by media type)")
 	cmd.Flags().StringVar(&reason, "reason", "", "a note to your future self")
 	cmd.Flags().BoolVar(&noMonitor, "no-monitor", false,
 		"get it once and stop — do not keep looking for something better")
-	_ = cmd.MarkFlagRequired("quality-profile")
 	return cmd
 }
 
@@ -210,7 +209,7 @@ func newDesiredListCommand(_ Options, configPath *string) *cobra.Command {
 						strconv.FormatBool(d.Monitor), state)
 				}
 				return t.render(cmd.OutOrStdout(),
-					"nothing is wanted — try `heyarr desired add \"A Title\" --content-type movie --quality-profile living-room`")
+					"nothing is wanted — try `heyarr desired add \"A Title\" --content-type movie`")
 			})
 		},
 	}

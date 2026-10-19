@@ -612,16 +612,9 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 	a.write(w, r, http.StatusCreated, out.Desired)
 }
 
-// resolveProfile turns a profile id or name into an id, refusing both an
-// unknown id and an unknown name by name.
-// resolveProfile turns a caller's profile id or name into a stored id. When it
-// is given neither, it falls back to the content type's default profile
-// (ADR-0082): a `document` follow inherits `published` rather than being refused
-// or, worse, inheriting a video profile whose resolution gate a document can
-// never pass. contentType may be "" — a caller that does not know it, or a type
-// with no default (music, book, whose satisfaction attributes do not exist yet)
-// — in which case the original refusal stands, because "this should exist" with
-// no statement of what would count as existing genuinely cannot be evaluated.
+// resolveProfile turns a caller's profile id or name into a stored id. When
+// neither is given, a known content type inherits its seeded starting profile
+// (ADR-0115). An unknown or absent type still needs an explicit profile.
 func (a *API) resolveProfile(ctx context.Context, tx *sql.Tx, id, name, contentType string) (string, error) {
 	switch {
 	case id != "":

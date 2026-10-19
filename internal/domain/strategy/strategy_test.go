@@ -71,22 +71,23 @@ func TestEveryDefaultProfileIsSeeded(t *testing.T) {
 	}
 }
 
-// The invariant ADR-0082 rests on: a default profile belongs to direct-route
-// content and only to it. A video's quality bar is a real choice, so a want with
-// no profile is refused (§56); a directly-taken document has no such choice, so
-// `published` is the one sensible default. If a search-route type ever grows a
-// default, this fails on purpose — that is a deliberate decision, not a drift.
-func TestOnlyDirectRouteContentHasADefaultProfile(t *testing.T) {
-	for _, ct := range []string{
-		identification.Movie, identification.Series, identification.Music,
-		identification.Book, identification.Document, video, podcast,
-	} {
-		s := For(ct)
-		hasDefault := s.DefaultProfile != ""
-		isDirect := s.Route == acquisition.RouteDirect
-		if hasDefault != isDirect {
-			t.Errorf("%q: has default profile = %v (%q), is direct route = %v — a default "+
-				"belongs to direct-route content and only to it", ct, hasDefault, s.DefaultProfile, isDirect)
-		}
+// Every known media type has a starting profile so an ordinary want can be
+// searched immediately. An explicit profile can still override this choice.
+func TestKnownContentTypesHaveDefaults(t *testing.T) {
+	cases := []struct{ contentType, profile string }{
+		{identification.Movie, "everyday-indexed"},
+		{identification.Series, "everyday-indexed"},
+		{video, "everyday-indexed"},
+		{identification.Music, "music-indexed"},
+		{identification.Book, "book-indexed"},
+		{identification.Document, "published"},
+		{podcast, "published"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.contentType, func(t *testing.T) {
+			if got := For(tc.contentType).DefaultProfile; got != tc.profile {
+				t.Errorf("default profile = %q, want %q", got, tc.profile)
+			}
+		})
 	}
 }

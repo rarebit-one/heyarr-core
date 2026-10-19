@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 )
 
 // Desired items (§55, M3-02).
@@ -140,16 +141,43 @@ func TestTwoProfilesOverOneWorkAreTwoWants(t *testing.T) {
 	}
 }
 
-// A profile is required, because §56 has nothing to evaluate without one.
-func TestAWantMustNameAQualityProfile(t *testing.T) {
+// Wanting a known content type without policy flags gets the seeded starting
+// profile. The returned profile ID is checked against the persisted row, not
+// merely against a table of names in the domain package.
+func TestWantingKnownContentUsesMediaDefault(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t).seed()
-	resp := postDesired(t, h, `{"work": {"content_type":"movie","title":"Solaris"}}`)
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400: %s", resp.StatusCode, h.body(resp))
+	cases := []struct{ contentType, profile string }{
+		{"movie", "everyday-indexed"},
+		{"series", "everyday-indexed"},
+		{"music", "music-indexed"},
+		{"book", "book-indexed"},
 	}
-	if detail := problemDetail(t, h, resp); !strings.Contains(detail, "quality profile") {
-		t.Errorf("the refusal should name what is missing; got: %s", detail)
+	for _, tc := range cases {
+		t.Run(tc.contentType, func(t *testing.T) {
+			h := newHarness(t).seed()
+			for _, p := range policy.Defaults() {
+				if p.Name != tc.profile {
+					continue
+				}
+				raw, err := json.Marshal(map[string]any{"name": p.Name, "description": p.Description, "accept": p.Accept, "prefer": p.Prefer, "terminal": p.Terminal})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if resp := postProfile(t, h, string(raw)); resp.StatusCode != http.StatusCreated {
+					t.Fatalf("seed profile: status = %d: %s", resp.StatusCode, h.body(resp))
+				}
+			}
+			body := fmt.Sprintf(`{"work":{"content_type":%q,"title":"A New Work"}}`, tc.contentType)
+			resp := postDesired(t, h, body)
+			if resp.StatusCode != http.StatusCreated {
+				t.Fatalf("status = %d, want 201: %s", resp.StatusCode, h.body(resp))
+			}
+			item := decodeDesired(t, h, resp)
+			profileID, _ := item["quality_profile_id"].(string)
+			if n := h.countRows(t, `SELECT count(*) FROM quality_profiles WHERE id = ? AND name = ?`, profileID, tc.profile); n != 1 {
+				t.Errorf("want profile %q does not name seeded %q", profileID, tc.profile)
+			}
+		})
 	}
 }
 
