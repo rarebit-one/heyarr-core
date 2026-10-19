@@ -10,22 +10,14 @@ package policy
 // recommendation about anyone's television; it is the difference between
 // "want this" working out of the box and not.
 //
-// # Why these three
+// # Why these profiles
 //
-// They differ along the axis that actually matters, which is what `terminal`
-// says — that is, when Heyarr stops looking:
-//
-//	living-room  a big screen. Terminal at 2160p remux: there is a ceiling
-//	             and it is reachable, so the upgrade loop ends.
-//	everyday     a laptop. Terminal at 1080p: a lower ceiling, reached sooner.
-//	archival     keep the best there is. NO terminal at all, so it never stops
-//	             looking — which is a real thing to want and the case that
-//	             proves an absent `terminal` is legal rather than a modelling
-//	             oversight.
-//
-// The third is there for that last reason as much as for its usefulness. A
-// default set where every profile terminates would leave the "never finished"
-// path unexercised by anything but a unit test.
+// Video retains a range of quality choices: living-room, everyday and the
+// open-ended archival profile. ADR-0115 adds an indexer-friendly starting
+// profile for searched video and size-based starting profiles for music and
+// books. The latter admit a held copy without claiming to judge bitrate,
+// format or edition. Direct publications and subtitles use their own profiles
+// because they carry neither a video resolution nor an indexer source.
 //
 // # These are values, not rows
 //
@@ -75,6 +67,38 @@ func Defaults() []Profile {
 			Terminal: []Rule{
 				{Attribute: AttrResolution, Op: OpGTE, Value: Num(1080)},
 			},
+		},
+		{
+			Name:         "everyday-indexed",
+			ContentTypes: []string{"movie", "series", "video"},
+			Description: "Starting profile for searched video. Accepts 720p and up, " +
+				"penalises identified cam sources, and stops at 1080p. Unknown source " +
+				"does not block an otherwise acceptable release.",
+			Accept: []Rule{
+				{Attribute: AttrResolution, Op: OpGTE, Value: Num(720)},
+			},
+			Prefer: []Rule{
+				{Attribute: AttrSource, Op: OpIn, Value: Texts("cam", "telesync", "workprint", "screener"), Weight: -200},
+			},
+			Terminal: []Rule{
+				{Attribute: AttrResolution, Op: OpGTE, Value: Num(1080)},
+			},
+		},
+		{
+			Name:         "music-indexed",
+			ContentTypes: []string{"music"},
+			Description: "Starting profile for searched music. Accepts a nonempty release " +
+				"and stops once held; bitrate and format are not judged yet.",
+			Accept:   []Rule{{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)}},
+			Terminal: []Rule{{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)}},
+		},
+		{
+			Name:         "book-indexed",
+			ContentTypes: []string{"book"},
+			Description: "Starting profile for searched books. Accepts a nonempty release " +
+				"and stops once held; format and edition are not judged yet.",
+			Accept:   []Rule{{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)}},
+			Terminal: []Rule{{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)}},
 		},
 		{
 			Name: "archival",

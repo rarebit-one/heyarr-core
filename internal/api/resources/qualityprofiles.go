@@ -158,6 +158,7 @@ func (p QualityProfile) domainProfile() policy.Profile {
 	return policy.Profile{
 		ID: p.ID, Name: p.Name, Description: p.Description,
 		Accept: p.Accept, Prefer: p.Prefer, Terminal: p.Terminal,
+		ContentTypes: p.ContentTypes,
 	}
 }
 
@@ -171,7 +172,8 @@ func fromDomain(d policy.Profile, seeded bool, created, updated time.Time) Quali
 	return QualityProfile{
 		ID: d.ID, Name: d.Name, Description: d.Description,
 		Accept: nonNil(d.Accept), Prefer: nonNil(d.Prefer), Terminal: nonNil(d.Terminal),
-		Seeded: seeded, CreatedAt: created, UpdatedAt: updated,
+		ContentTypes: d.ContentTypes,
+		Seeded:       seeded, CreatedAt: created, UpdatedAt: updated,
 	}
 }
 

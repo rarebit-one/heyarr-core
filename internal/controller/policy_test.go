@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"log/slog"
 	"path/filepath"
 	"testing"
@@ -90,6 +91,40 @@ func TestSeedingIsIdempotentAcrossRestarts(t *testing.T) {
 	if got := eventCount(t, db); got != eventsAfterFirst {
 		t.Errorf("re-seeding emitted %d event(s); a start that changes nothing must emit none",
 			got-eventsAfterFirst)
+	}
+}
+
+func TestSeededMediaProfilesAdvertiseTheirContentTypes(t *testing.T) {
+	db, cfg := seedHarness(t)
+	if err := seedQualityProfiles(context.Background(), db, cfg, slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		types []string
+	}{
+		{"everyday-indexed", []string{"movie", "series", "video"}},
+		{"music-indexed", []string{"music"}},
+		{"book-indexed", []string{"book"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var raw string
+			if err := db.Reader().QueryRow(`SELECT content_types FROM quality_profiles WHERE name = ?`, tc.name).Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			if err := json.Unmarshal([]byte(raw), &got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(tc.types) {
+				t.Fatalf("content_types = %v, want %v", got, tc.types)
+			}
+			for i := range got {
+				if got[i] != tc.types[i] {
+					t.Fatalf("content_types = %v, want %v", got, tc.types)
+				}
+			}
+		})
 	}
 }
 

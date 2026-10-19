@@ -38,10 +38,8 @@ type Strategy struct {
 	// Route is whether the bytes are searched for or taken directly (ADR-0082).
 	Route acquisition.Route
 	// DefaultProfile is the seeded quality-profile NAME a follow or want inherits
-	// when it names none. Empty means the type has no profile that fits yet — its
-	// satisfaction attributes do not exist in the policy vocabulary (music, book)
-	// — and a caller must still name one. resolveProfile treats "" as "no
-	// default", preserving its refusal exactly where the refusal is honest.
+	// when it names none. An explicit choice always wins. Unknown types have no
+	// default, so the caller must name one.
 	DefaultProfile string
 }
 
@@ -50,21 +48,16 @@ type Strategy struct {
 // the follow path invented that this table has not caught up with: search it
 // like ordinary content and make the caller name a profile.
 //
-// # Only direct-route content has a default profile
-//
-// Search-route content — a film, a series, an album — has no default, so a want
-// for it must still name a profile. That is not an omission: a video's quality
-// bar is a real choice (living-room vs everyday vs archival), and §56's refusal
-// of a want with no profile is the honest answer to "which one did you mean". A
-// directly-taken document or podcast has no such choice — any copy the feed
-// publishes is definitive — so there is one sensible default, `published`, and
-// nothing for the caller to have meant instead.
+// Known content types have a seeded starting profile (ADR-0115). Search-route
+// defaults use only attributes available from indexers: video resolution or
+// release size. Operators can still select a stricter quality profile. Direct
+// documents and podcasts keep their definitive `published` profile.
 var table = map[string]Strategy{
-	identification.Movie:  {ContentType: identification.Movie, Route: acquisition.RouteSearch},
-	identification.Series: {ContentType: identification.Series, Route: acquisition.RouteSearch},
-	video:                 {ContentType: video, Route: acquisition.RouteSearch},
-	identification.Music:  {ContentType: identification.Music, Route: acquisition.RouteSearch},
-	identification.Book:   {ContentType: identification.Book, Route: acquisition.RouteSearch},
+	identification.Movie:  {ContentType: identification.Movie, Route: acquisition.RouteSearch, DefaultProfile: "everyday-indexed"},
+	identification.Series: {ContentType: identification.Series, Route: acquisition.RouteSearch, DefaultProfile: "everyday-indexed"},
+	video:                 {ContentType: video, Route: acquisition.RouteSearch, DefaultProfile: "everyday-indexed"},
+	identification.Music:  {ContentType: identification.Music, Route: acquisition.RouteSearch, DefaultProfile: "music-indexed"},
+	identification.Book:   {ContentType: identification.Book, Route: acquisition.RouteSearch, DefaultProfile: "book-indexed"},
 	// Document and podcast are taken directly from the feed and judged by
 	// `published`, which carries no video gate and is terminal on any bytes: a
 	// copy from the source that publishes it is definitive.

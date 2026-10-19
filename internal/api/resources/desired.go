@@ -402,12 +402,21 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (WantOutc
 	var profileID, workID string
 	if err := a.db.InTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		// A descriptor carries its content type, so a want minted from one can
-		// inherit that type's default profile (ADR-0082); a want naming an
-		// existing work by id does not, and keeps the "name a profile" refusal.
+		// A descriptor carries its content type. For a profileless work-id
+		// request, read the existing work's type in the same transaction so both
+		// forms inherit the same seeded starting profile (ADR-0115).
 		var contentType string
 		if req.Work != nil {
-			contentType = req.Work.ContentType
+			contentType = strings.ToLower(strings.TrimSpace(req.Work.ContentType))
+		} else if req.QualityProfileID == "" && req.QualityProfile == "" {
+			err = tx.QueryRowContext(ctx,
+				`SELECT content_type FROM works WHERE id = ?`, req.WorkID).Scan(&contentType)
+			if errors.Is(err, sql.ErrNoRows) {
+				return &badRequest{fmt.Errorf("there is no work with the id %q", req.WorkID)}
+			}
+			if err != nil {
+				return err
+			}
 		}
 		profileID, err = a.resolveProfile(ctx, tx, req.QualityProfileID, req.QualityProfile, contentType)
 		if err != nil {
@@ -612,16 +621,9 @@ func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 	a.write(w, r, http.StatusCreated, out.Desired)
 }
 
-// resolveProfile turns a profile id or name into an id, refusing both an
-// unknown id and an unknown name by name.
-// resolveProfile turns a caller's profile id or name into a stored id. When it
-// is given neither, it falls back to the content type's default profile
-// (ADR-0082): a `document` follow inherits `published` rather than being refused
-// or, worse, inheriting a video profile whose resolution gate a document can
-// never pass. contentType may be "" — a caller that does not know it, or a type
-// with no default (music, book, whose satisfaction attributes do not exist yet)
-// — in which case the original refusal stands, because "this should exist" with
-// no statement of what would count as existing genuinely cannot be evaluated.
+// resolveProfile turns a caller's profile id or name into a stored id. When
+// neither is given, a known content type inherits its seeded starting profile
+// (ADR-0115). An unknown or absent type still needs an explicit profile.
 func (a *API) resolveProfile(ctx context.Context, tx *sql.Tx, id, name, contentType string) (string, error) {
 	switch {
 	case id != "":
