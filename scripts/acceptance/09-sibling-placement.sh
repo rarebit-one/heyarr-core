@@ -148,6 +148,19 @@ YAML
   assert_eq "$(jq -r '.status' <<<"$dr")" "current" "so placement is current, not drifted"
 
   # -------------------------------------------------------------------------
+  note "  while pinned, site A's garbage collector spares the asset-less vault blob (ADR-0096)"
+  # -------------------------------------------------------------------------
+  #
+  # A vault blob has no asset: by every measure the library uses it is garbage.
+  # Its upload's self-pin is a reference, so a one-nanosecond grace never even
+  # marks it.
+  local gca
+  gca=$("$mbin" --config "$cfg_a" gc --apply --grace 1ns --json 2>/dev/null)
+  assert_eq "$(jq -r --arg h "$blob" '[.marked[].hash] | index($h) != null' <<<"$gca")" "false" \
+    "the pinned vault blob is not even marked: a placement pin is a reference"
+  assert_eq "$(peer_holds "$root/a/data/cas" "$blob")" "1" "site A kept every byte of it"
+
+  # -------------------------------------------------------------------------
   note "  unpinned at site A, the placement is withdrawn from site B, and B's GC may take it"
   # -------------------------------------------------------------------------
   sp_a /api/v1/vault/placements -X DELETE -H 'Content-Type: application/json' \

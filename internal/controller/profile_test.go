@@ -4,15 +4,14 @@ package controller
 //
 // Each test case builds a real controller (against a migrated test database),
 // walks the chi router with chi.Walk, and asserts that exactly the expected
-// routes are present or absent. This is table-driven because there are three
-// interesting configurations:
+// routes are present or absent. Table-driven over the two profiles:
 //
 //  1. Personal profile — the personal-state plane, vault blob upload, vault
 //     placement pins, blob content serving and the peer-membership routes
 //     (#762); nothing else from the resource API.
-//  2. Media profile, vault.enabled=true (the default) — the full route table.
-//  3. Media profile, vault.enabled=false — full table minus vault upload and
-//     placement routes (blob content serving stays).
+//  2. Media profile — the full media route table, and no vault upload or
+//     placement routes: the vault is Mnemosyne's (#754). Blob content serving
+//     stays.
 //
 // The test intentionally shares infrastructure with openapi_test.go: it uses
 // routeSet and normalisePath from that file (both unexported, same package).
@@ -127,45 +126,21 @@ func TestProfileRouting(t *testing.T) {
 			},
 		},
 		{
-			name: "media profile vault.enabled=true: has full route table",
-			cfg: func() config.Config {
-				cfg := config.Defaults()
-				cfg.Vault.Enabled = true
-				return cfg
-			},
+			name: "media profile: the library, and no vault",
+			cfg:  config.Defaults,
 			mustHave: []string{
-				"/api/v1/blobs",            // blob content serving
-				"/api/v1/vault/blobs",      // vault blob upload
-				"/api/v1/vault/placements", // placement pins
-				"/api/v1/spaces",           // personal-state plane
-				"/api/v1/works",            // library
-				"/api/v1/assets",           // assets
-				"/enrol",                   // device enrolment
-				"/healthz",
-				"/readyz",
-				"/metrics",
-			},
-			mustAbsent: nil,
-		},
-		{
-			name: "media profile vault.enabled=false: removes vault upload and placement",
-			cfg: func() config.Config {
-				cfg := config.Defaults()
-				cfg.Vault.Enabled = false
-				return cfg
-			},
-			mustHave: []string{
-				"/api/v1/blobs",  // blob content serving STAYS
-				"/api/v1/spaces", // personal-state plane stays
-				"/api/v1/works",  // library stays
-				"/enrol",
+				"/api/v1/blobs",  // blob content serving stays: it serves the library
+				"/api/v1/spaces", // personal-state plane stays, for media state
+				"/api/v1/works",  // library
+				"/api/v1/assets", // assets
+				"/enrol",         // device enrolment
 				"/healthz",
 				"/readyz",
 				"/metrics",
 			},
 			mustAbsent: []string{
-				"/api/v1/vault/blobs",      // upload gone
-				"/api/v1/vault/placements", // placement gone
+				"/api/v1/vault/blobs",      // the vault is Mnemosyne's (#754)
+				"/api/v1/vault/placements", // and so are placement pins
 			},
 		},
 	}

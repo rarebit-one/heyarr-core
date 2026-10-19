@@ -132,12 +132,6 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr token list`](heyarr_token_list.md) | List API tokens |
 | [`heyarr token revoke`](heyarr_token_revoke.md) | Revoke an API token |
 | [`heyarr token`](heyarr_token.md) | Manage API tokens (ADR-0011) |
-| [`heyarr vault get-ref`](heyarr_vault_get-ref.md) | Read one sealed object by its vault ref, decrypting it on this machine |
-| [`heyarr vault ls`](heyarr_vault_ls.md) | List the live files in a vault |
-| [`heyarr vault pull`](heyarr_vault_pull.md) | Read a file from the vault, decrypting it on this device |
-| [`heyarr vault push`](heyarr_vault_push.md) | Seal a local file into the vault and record it at a vault path |
-| [`heyarr vault put-ref`](heyarr_vault_put-ref.md) | Seal one JSON object into a vault space and print its new ref |
-| [`heyarr vault`](heyarr_vault.md) | Push, pull and list files in an encrypted media vault (ADR-0021, ADR-0095) |
 | [`heyarr version`](heyarr_version.md) | Print build information |
 | [`heyarr worker`](heyarr_worker.md) | Execute leased jobs |
 | [`heyarr works list`](heyarr_works_list.md) | List works |

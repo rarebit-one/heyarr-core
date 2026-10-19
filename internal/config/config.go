@@ -180,11 +180,12 @@ type Placement struct {
 // encryption key is reached only through an Unwrapper, whose custody is a
 // pluggable per-platform backend; this selects it.
 type Vault struct {
-	// Enabled is the server-side switch for the vault API surface (ADR-0107).
-	// When true (the default), the controller mounts the vault blob upload route
-	// and the placement-pin route. Set to false on a media-profile node that
-	// does not serve vault content — it removes those routes entirely. Always
-	// true for the personal profile (Mnemosyne): the vault IS the service.
+	// Enabled is the server-side switch for the vault API surface (ADR-0107):
+	// the vault blob upload route and the placement-pin route. It is the
+	// personal profile's alone, and always true there (Mnemosyne): the vault IS
+	// the service. The media profile (heyarr) refuses it since the gen1 vault
+	// was retired (#754): heyarr serves media, and a person's files live in
+	// Mnemosyne. False, or unset, on heyarr.
 	Enabled bool `koanf:"enabled"`
 
 	// Unwrapper selects the custody backend: "software" (default, in-process
@@ -881,7 +882,9 @@ func Defaults() Config {
 				Dead:      "30d",
 			},
 		},
-		Vault: Vault{Unwrapper: "software", Enabled: true},
+		// Enabled is false: the vault is Mnemosyne's (ADR-0107, #754), and the
+		// media profile refuses it. MnemosyneDefaults turns it on.
+		Vault: Vault{Unwrapper: "software"},
 	}
 }
 
@@ -1223,6 +1226,10 @@ func (c Config) Validate() error {
 	}
 	if err := c.validatePlacement(); err != nil {
 		return err
+	}
+	if c.Vault.Enabled && c.Profile != ProfilePersonal {
+		return fmt.Errorf("config: vault.enabled is for the personal profile only: the vault moved to " +
+			"Mnemosyne (ADR-0107, heyarr-core#754). Remove vault.enabled from this heyarr config")
 	}
 	if err := c.Notify.validate(); err != nil {
 		return err

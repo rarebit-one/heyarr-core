@@ -901,7 +901,8 @@ func (c *Controller) mounts(ctx context.Context, d mountDeps) (apiMounts, public
 	if err != nil {
 		return nil, nil, err
 	}
-	blobHandler, contentMounts, err := c.contentRoutes(d, queue, cat)
+	// The vault routes contentRoutes also builds are not mounted here (#754).
+	blobHandler, _, err := c.contentRoutes(d, queue, cat)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -922,14 +923,12 @@ func (c *Controller) mounts(ctx context.Context, d mountDeps) (apiMounts, public
 		return nil, nil, err
 	}
 
-	// vault.enabled (server-side flag, ADR-0107): when false, strip the vault
-	// upload and placement-pin routes from the media profile. Blob content
-	// serving (GET/HEAD) is always on — it serves non-vault blobs too.
-	if c.cfg.Vault.Enabled {
-		apiMounts = append(append([]httpapi.MountFunc{api.Mount}, contentMounts...), mcpServer.Mount, psAPI.Mount)
-	} else {
-		apiMounts = append([]httpapi.MountFunc{api.Mount, blobHandler.Mount}, mcpServer.Mount, psAPI.Mount)
-	}
+	// The media profile serves no vault (ADR-0107, #754): no vault blob upload
+	// and no placement pins, which are Mnemosyne's. Blob content serving
+	// (GET/HEAD) stays: it serves the library. The personal-state API stays
+	// too, for heyarr's own media state (playlists, starred, history, reading
+	// position).
+	apiMounts = append([]httpapi.MountFunc{api.Mount, blobHandler.Mount}, mcpServer.Mount, psAPI.Mount)
 	publicMounts = append(renderMounts, compatMounts...)
 	return apiMounts, publicMounts, nil
 }

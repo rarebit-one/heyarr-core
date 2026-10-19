@@ -130,12 +130,8 @@ One logical library, multiple complete sovereign peers.`,
 		// Service recipients (ADR-0104): an owner's device registers an
 		// executor's public key, as this machine's enrolled device.
 		newRecipientCommand(opts, &configPath),
-		// The vault media client (ADR-0021, ADR-0095, ADR-0096, ADR-0097). A
-		// hybrid like `space`: it talks to the controller over /api/v1 and holds
-		// this machine's device key — the peer stores ciphertext blobs, encrypted
-		// drive changes and opaque placement pins, and this device alone holds the
-		// key that seals a file into frames and opens them back.
-		newVaultCommand(opts, &configPath),
+		// No `vault` here: the vault media client is Mnemosyne's (`mnemosyne
+		// vault`, ADR-0107, #754). heyarr serves media.
 		newPeersCommand(opts, &configPath),
 		newEventsCommand(opts, &configPath),
 		newSystemCommand(opts, &configPath),

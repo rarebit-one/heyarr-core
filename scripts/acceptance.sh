@@ -36,7 +36,6 @@ cd "$(dirname "$0")/.."
 . scripts/acceptance/06-provider-health-beat.sh
 . scripts/acceptance/07-polled-acquisition.sh
 . scripts/acceptance/08-m4-peer-helpers.sh
-. scripts/acceptance/09-vault-placement.sh
 . scripts/acceptance/09-sibling-placement.sh
 . scripts/acceptance/10-m4-two-peer.sh
 . scripts/acceptance/11-m6-swarm.sh
@@ -122,8 +121,6 @@ else
   revocation_demo
   note "RESTRICTED PRINCIPALS: an executor reaches only the spaces an owner's device granted it, and decrypts only what was wrapped for its registered key (ADR-0104)"
   restricted_principal_demo
-  note "THE VAULT PLACEMENT PIN: a vault blob replicates and is retained by a pin, not an asset (ADR-0096, #540)"
-  vault_placement_demo
   note "TWO SITES, ONE VAULT: a blob uploaded at one site is asked for and kept at the other (ADR-0114, #662)"
   sibling_placement_demo
   note "THE SECOND PEER: placement, proven (§56, §64, M4-11) — heyarr all"

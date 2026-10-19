@@ -211,10 +211,12 @@ deployments will run one or the other:
 - A **personal node** (phone backup, drive sync, vault replication) runs
   Mnemosyne only. It is a small, quiet process with no media library.
 - A **media node** (library, ingest, transcode, playback) runs heyarr only.
-  If vault.enabled is true (the default), it also serves vault routes.
-- A **combined node** runs both on different ports. Each service holds its own
-  vault pins; cross-site blob replication between them arrives in Phase 1b
-  once the worker subcommand is available.
+  heyarr serves no vault: the vault blob upload and placement routes, and the
+  `vault` command, are Mnemosyne's alone, and heyarr refuses `vault.enabled`
+  (#754). heyarr keeps the encrypted personal-state plane for its own media
+  state (playlists, starred, history, reading position).
+- A **combined node** runs both on different ports. A person's files go to
+  Mnemosyne; the two-site copy of them is Mnemosyne's too (ADR-0114).
 
 On the client side the rule is one app, one device: a phone running both the
 heyarr app and the Mnemosyne app is two Voidbind devices, each paired, admitted
@@ -227,6 +229,9 @@ This document tracks Phase 1 (ADR-0107). Future phases are tracked in the epic
 and the architecture notes; they are not committed here until the spec is
 settled.
 
+- **Phase 1 tail (#754):** heyarr sheds the vault: no vault blob upload, no
+  placement routes and no `heyarr vault` command on the media profile, and
+  `vault.enabled` is refused there. The vault acceptance scenes run Mnemosyne.
 - **Phase 1 (merged):** Second binary, personal profile, vault.enabled flag,
   goreleaser packaging, profile-routing tests. Personal-state plane, vault
   upload/pins, blob reads, enrolment, backup and encrypted-state replication
