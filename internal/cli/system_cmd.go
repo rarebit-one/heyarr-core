@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -179,14 +180,17 @@ func (f driftFlags) expectation() (client.Expectation, error) {
 
 // driftSummary is the one-line reason the command exited non-zero.
 func driftSummary(r client.DriftReport) string {
-	switch {
-	case r.Build.Drifted() && r.Schema.Drifted():
-		return fmt.Sprintf("the build is %s and the schema is %s", r.Build.Status, r.Schema.Status)
-	case r.Build.Drifted():
-		return "the build is " + string(r.Build.Status)
-	default:
-		return "the schema is " + string(r.Schema.Status)
+	var parts []string
+	if r.Build.Drifted() {
+		parts = append(parts, "the build is "+string(r.Build.Status))
 	}
+	if r.Schema.Drifted() {
+		parts = append(parts, "the schema is "+string(r.Schema.Status))
+	}
+	if r.Placement != nil && r.Placement.Drifted() {
+		parts = append(parts, "placement is "+string(r.Placement.Status))
+	}
+	return strings.Join(parts, " and ")
 }
 
 func printDrift(w io.Writer, r client.DriftReport) error {
@@ -195,12 +199,23 @@ func printDrift(w io.Writer, r client.DriftReport) error {
 		identityCell(r.Build.Expected), identityCell(r.Build.Actual))
 	t.add("schema", string(r.Schema.Status), schemaDistance(r.Schema),
 		fmt.Sprint(r.Schema.Expected), fmt.Sprint(r.Schema.Applied))
+	details := []string{r.Build.Detail, r.Schema.Detail}
+	if p := r.Placement; p != nil {
+		// Expected: every upload and every taken placement at both sites.
+		// Actual: how many are not yet; the distance is their sum.
+		t.add("placement", string(p.Status),
+			fmt.Sprintf("%d not yet at both sites", p.UploadsBehind+p.TakenBehind),
+			fmt.Sprintf("%d uploads, %d taken", p.Uploads, p.Taken),
+			fmt.Sprintf("%d uploads behind, %d taken behind (%d with no whole source)",
+				p.UploadsBehind, p.TakenBehind, p.TakenUnservable))
+		details = append(details, p.Detail)
+	}
 	if err := t.render(w, "nothing to compare"); err != nil {
 		return err
 	}
 	// The detail is where an "unknown" says why it could not compare, which is
 	// the line somebody actually needs when this reports nothing useful.
-	for _, d := range []string{r.Build.Detail, r.Schema.Detail} {
+	for _, d := range details {
 		if d == "" {
 			continue
 		}

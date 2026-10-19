@@ -20,6 +20,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/drift"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
@@ -120,6 +121,10 @@ type Options struct {
 	// catch is precisely an absent mechanism reading as a clean bill of health,
 	// so it must not be possible to wire it up without it.
 	KnownSchemaVersion int64
+	// PlacementDrift reports how far a two-site vault is from being held at
+	// both sites (ADR-0114, #662), as the drift report's placement section.
+	// Nil on a node with no placement siblings, which then reports none.
+	PlacementDrift func(ctx context.Context) (drift.Placement, error)
 	// CASRoot is checked for presence and writability by GET /readyz. Empty
 	// disables the check.
 	CASRoot string
@@ -180,6 +185,7 @@ type Server struct {
 	build         buildinfo.Info
 	schema        int64
 	known         int64
+	placement     func(ctx context.Context) (drift.Placement, error)
 	casRoot       string
 	now           func() time.Time
 
@@ -276,6 +282,7 @@ func New(opts Options) (*Server, error) {
 		build:        opts.Build,
 		schema:       opts.SchemaVersion,
 		known:        opts.KnownSchemaVersion,
+		placement:    opts.PlacementDrift,
 		casRoot:      opts.CASRoot,
 		now:          now,
 		peers:        opts.PeerMembership,

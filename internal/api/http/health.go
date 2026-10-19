@@ -253,7 +253,7 @@ func (s *Server) driftReport(r *http.Request) (drift.Report, *problem.Problem) {
 		expectedSchema = v
 	}
 
-	return drift.Report{
+	report := drift.Report{
 		Build: drift.CompareBuild(
 			drift.Identity{
 				Version: q.Get(expectedVersionParam),
@@ -262,7 +262,18 @@ func (s *Server) driftReport(r *http.Request) (drift.Report, *problem.Problem) {
 			drift.Identity{Version: s.build.Version, Commit: s.build.Commit},
 		),
 		Schema: drift.CompareSchema(expectedSchema, s.schema),
-	}, nil
+	}
+	if s.placement != nil {
+		p, err := s.placement(r.Context())
+		if err != nil {
+			// Reported, not failed: the other two halves still answer, and an
+			// unknown placement must not read as a converged one.
+			s.log.Warn("placement drift could not be read", "error", err)
+			p = drift.Placement{Status: drift.StatusUnknown, Detail: "could not be read: " + err.Error()}
+		}
+		report.Placement = &p
+	}
+	return report, nil
 }
 
 func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {

@@ -333,3 +333,28 @@ func TestUnknownIsNeverMistakenForCurrent(t *testing.T) {
 		t.Error("an unknown schema status says nothing about why")
 	}
 }
+
+func TestComparePlacement(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		in      drift.Placement
+		status  drift.Status
+		drifted bool
+	}{
+		{"converged", drift.Placement{Uploads: 10, Taken: 5}, drift.StatusCurrent, false},
+		{"uploads not yet at a sibling", drift.Placement{Uploads: 10, UploadsBehind: 3}, drift.StatusBehind, true},
+		{"pull backlog", drift.Placement{Taken: 5, TakenBehind: 2, TakenUnservable: 1}, drift.StatusBehind, true},
+	} {
+		got := drift.ComparePlacement(tc.in)
+		if got.Status != tc.status || got.Drifted() != tc.drifted {
+			t.Errorf("%s: status %s drifted %v, want %s %v", tc.name, got.Status, got.Drifted(), tc.status, tc.drifted)
+		}
+		if r := (drift.Report{Placement: &got}); r.Drifted() != tc.drifted {
+			t.Errorf("%s: the report's Drifted() = %v, want %v", tc.name, r.Drifted(), tc.drifted)
+		}
+	}
+	if (drift.Report{}).Drifted() {
+		t.Error("a report with no placement section drifted")
+	}
+}

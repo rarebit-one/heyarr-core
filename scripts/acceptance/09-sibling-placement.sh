@@ -141,6 +141,11 @@ YAML
   assert_eq "$(jq -r '.sites_durable' <<<"$st")" "2" "the blob is durable at both sites"
   assert_eq "$(jq -r --arg b "$b_at_a" '.pinned_to | index($b) != null' <<<"$st")" "true" \
     "and site A says it is wanted at its sibling"
+  local dr
+  dr=$(sp_a /api/v1/system | jq -c '.drift.placement')
+  assert_eq "$(jq -r '.uploads' <<<"$dr")" "1" "site A's drift report counts its one upload (#662)"
+  assert_eq "$(jq -r '.uploads_behind' <<<"$dr")" "0" "and none of it is behind: it is at both sites"
+  assert_eq "$(jq -r '.status' <<<"$dr")" "current" "so placement is current, not drifted"
 
   # -------------------------------------------------------------------------
   note "  unpinned at site A, the placement is withdrawn from site B, and B's GC may take it"
