@@ -8997,6 +8997,24 @@ components:
       properties:
         build: { $ref: "#/components/schemas/BuildDrift" }
         schema: { $ref: "#/components/schemas/SchemaDrift" }
+        placement: { $ref: "#/components/schemas/PlacementDrift" }
+
+    PlacementDrift:
+      type: object
+      description: |
+        How far a two-site vault is from being held at both sites (ADR-0114).
+        Present only on a node with placement siblings. A distance, not a
+        boolean: a site mid-backfill is behind by exactly the blobs still to
+        cross. A sibling's copy counts only while its claim is fresh.
+      required: [status, uploads, uploads_behind, taken, taken_behind, taken_unservable]
+      properties:
+        status: { type: string, enum: [unknown, current, behind] }
+        uploads: { type: integer, format: int64, description: Blobs uploaded here (self-pinned). }
+        uploads_behind: { type: integer, format: int64, description: "Uploads not known to be at both sites: lost here, or not freshly confirmed at a sibling." }
+        taken: { type: integer, format: int64, description: Placements taken from siblings. }
+        taken_behind: { type: integer, format: int64, description: Taken placements whose bytes are not held here yet. }
+        taken_unservable: { type: integer, format: int64, description: "Taken placements behind that no usable peer holds whole: no whole-blob source (a swarm may still assemble one from pieces)." }
+        detail: { type: string }
 
     EventsInfo:
       type: object

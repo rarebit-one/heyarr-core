@@ -402,3 +402,74 @@ func TestARestatedSizeIsKeptAsOffered(t *testing.T) {
 		t.Fatalf("taken = %+v, want it restated as %+v", taken, offered)
 	}
 }
+
+// TestPlacementDriftCountsWhatIsNotYetAtBothSites: an upload a sibling has not
+// confirmed is behind; a taken placement not held here is behind, and
+// unservable while no peer holds it.
+func TestPlacementDriftCountsWhatIsNotYetAtBothSites(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	self := h.seedRemotePeer(t)
+	// A usable source, as BlobSources ranks them: dialable and pinned.
+	h.exec(t, `UPDATE peers SET endpoint = 'https://peer-b.invalid:7780', public_key = ? WHERE id = ?`,
+		make([]byte, 32), remotePeer)
+	up := hashOf('1')
+	h.seedBlobs(t, up)
+	h.holdOn(t, up, self)
+	if err := h.cat.PinPlacement(ctx, up, self); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.cat.ReplacePlacements(ctx, remotePeer, all, []placementsync.Entry{
+		{BlobHash: hashOf('8'), Size: 8, Held: true}, {BlobHash: hashOf('9'), Size: 8, Held: false},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := h.cat.PlacementDrift(ctx, []string{remotePeer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := catalog.PlacementCounts{Uploads: 1, UploadsBehind: 1, Taken: 2, TakenBehind: 2, TakenUnservable: 1}
+	if got != want {
+		t.Fatalf("drift = %+v, want %+v", got, want)
+	}
+
+	// The sibling confirms the upload; this node pulls one taken blob.
+	h.exec(t, `INSERT INTO replicas (blob_hash, peer_id, state, bytes_present, reported_at, updated_at)
+		VALUES (?, ?, 'present', 1024, ?, ?)`, up, remotePeer, stamp, stamp)
+	h.holdOn(t, hashOf('8'), self)
+	got, err = h.cat.PlacementDrift(ctx, []string{remotePeer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = catalog.PlacementCounts{Uploads: 1, UploadsBehind: 0, Taken: 2, TakenBehind: 1, TakenUnservable: 1}
+	if got != want {
+		t.Fatalf("after convergence drift = %+v, want %+v", got, want)
+	}
+
+	// This site loses its copy of the upload; the sibling still holds one.
+	// Only one site has the bytes now, so the upload is behind again.
+	h.exec(t, `UPDATE replicas SET state = 'missing' WHERE blob_hash = ? AND peer_id = ?`, up, self)
+	got, err = h.cat.PlacementDrift(ctx, []string{remotePeer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.UploadsBehind != 1 || got.Uploads != 1 {
+		t.Fatalf("after a local loss drift = %+v, want the upload counted and behind", got)
+	}
+
+	// Held here again, and the sibling turns out to share this node's site:
+	// one failure domain, so still behind.
+	h.exec(t, `UPDATE replicas SET state = 'present' WHERE blob_hash = ? AND peer_id = ?`, up, self)
+	h.exec(t, `UPDATE peers SET site = (SELECT site FROM peers WHERE is_self = 1) WHERE id = ?`, remotePeer)
+	if got, err = h.cat.PlacementDrift(ctx, []string{remotePeer}); err != nil || got.UploadsBehind != 1 {
+		t.Fatalf("a same-site sibling: drift = %+v, %v, want the upload behind", got, err)
+	}
+
+	// Back at its own site but demoted from Full: not a placement sibling now.
+	h.exec(t, `UPDATE peers SET site = 'site-b', mode = 'cache' WHERE id = ?`, remotePeer)
+	if got, err = h.cat.PlacementDrift(ctx, []string{remotePeer}); err != nil || got.UploadsBehind != 1 {
+		t.Fatalf("a non-Full sibling: drift = %+v, %v, want the upload behind", got, err)
+	}
+}

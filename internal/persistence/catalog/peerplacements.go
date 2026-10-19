@@ -551,3 +551,74 @@ func (c *Catalog) collect(ctx context.Context, into *[]string, query string, arg
 	}
 	return rows.Err()
 }
+
+// PlacementCounts is how far a two-site vault is from being held at both sites
+// (ADR-0114, #662), for `system drift`.
+type PlacementCounts struct {
+	// Uploads is self-pinned blobs: what this node offers siblings.
+	Uploads int64
+	// UploadsBehind is uploads not known to be at both sites: not held here,
+	// or no configured sibling is known, freshly, to hold them. A copy lost
+	// at either site keeps it behind.
+	UploadsBehind int64
+	// Taken is placements taken from siblings.
+	Taken int64
+	// TakenBehind is taken placements whose bytes are not held here yet.
+	TakenBehind int64
+	// TakenUnservable is TakenBehind no usable peer holds WHOLE: no whole-blob
+	// source. A swarm may still assemble it from pieces (ADR-0042), so this is
+	// "no whole source", not "cannot converge".
+	TakenUnservable int64
+}
+
+// PlacementDrift counts the placements not yet at both sites. siblings is this
+// node's placement.siblings; another site's copy counts only while its claim is
+// fresh (integrity.DefaultFreshness), the rule PlacementStatusOf uses.
+func (c *Catalog) PlacementDrift(ctx context.Context, siblings []string) (PlacementCounts, error) {
+	self, err := c.SelfPeer(ctx)
+	if err != nil {
+		return PlacementCounts{}, err
+	}
+	sibJSON, err := json.Marshal(append([]string{}, siblings...))
+	if err != nil {
+		return PlacementCounts{}, err
+	}
+	fresh := c.clock.Now().UTC().Add(-integrity.DefaultFreshness).Format(timestampFormat)
+	var pc PlacementCounts
+	err = c.db.Reader().QueryRowContext(ctx, `
+		WITH uploads AS (
+			SELECT DISTINCT p.blob_hash AS hash FROM placement_pins p WHERE p.peer_id = ?
+		), taken AS (
+			SELECT DISTINCT pp.blob_hash AS hash FROM peer_placements pp
+		), taken_behind AS (
+			SELECT t.hash FROM taken t
+			 WHERE NOT EXISTS (SELECT 1 FROM replicas r
+			                    WHERE r.blob_hash = t.hash AND r.peer_id = ? AND r.state = 'present')
+		)
+		SELECT
+		  (SELECT count(*) FROM uploads),
+		  (SELECT count(*) FROM uploads u
+		    WHERE NOT EXISTS (SELECT 1 FROM replicas mine
+		                       WHERE mine.blob_hash = u.hash AND mine.peer_id = ? AND mine.state = 'present')
+		       OR NOT EXISTS (
+		      SELECT 1 FROM replicas r JOIN peers sp ON sp.id = r.peer_id AND sp.mode = 'full'
+		       WHERE r.blob_hash = u.hash AND r.state = 'present'
+		         AND r.peer_id IN (SELECT value FROM json_each(?))
+		         AND (coalesce(r.reported_at, '') >= ? OR coalesce(r.verified_at, '') >= ?)
+		         -- A sibling at this node's own site is the same failure domain.
+		         AND coalesce(nullif(sp.site, ''), sp.id) <>
+		             (SELECT coalesce(nullif(me.site, ''), me.id) FROM peers me WHERE me.is_self = 1))),
+		  (SELECT count(*) FROM taken),
+		  (SELECT count(*) FROM taken_behind),
+		  (SELECT count(*) FROM taken_behind tb WHERE NOT EXISTS (
+		      SELECT 1 FROM replicas r JOIN peers src ON src.id = r.peer_id
+		       WHERE r.blob_hash = tb.hash AND r.peer_id <> ? AND r.state = 'present'
+		         -- Usable as a source the way BlobSources ranks them: dialable and pinned.
+		         AND coalesce(src.endpoint, '') <> '' AND length(coalesce(src.public_key, x'')) > 0))`,
+		self, self, self, string(sibJSON), fresh, fresh, self,
+	).Scan(&pc.Uploads, &pc.UploadsBehind, &pc.Taken, &pc.TakenBehind, &pc.TakenUnservable)
+	if err != nil {
+		return PlacementCounts{}, fmt.Errorf("catalog: counting placement drift: %w", err)
+	}
+	return pc, nil
+}

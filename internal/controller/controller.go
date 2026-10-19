@@ -38,6 +38,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/heyarr-core/internal/discovery"
 	"github.com/rarebit-one/heyarr-core/internal/downloads"
+	"github.com/rarebit-one/heyarr-core/internal/drift"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/guest"
 	"github.com/rarebit-one/heyarr-core/internal/indexers"
@@ -731,6 +732,29 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 		guestLeases = guest.NewMinter(guestLeaseStore, guest.DefaultTTL)
 	}
 
+	// Placement drift (ADR-0114, #662): only a node with placement siblings has
+	// a two-site vault to report on.
+	var placementDrift func(context.Context) (drift.Placement, error)
+	if c.cfg.Profile == config.ProfilePersonal && len(c.cfg.Placement.Siblings) > 0 {
+		driftCat, err := catalog.New(catalog.Options{
+			DB: db, Events: eventLog, PeerName: c.cfg.Peer.Name, PeerSite: c.cfg.Peer.Site, Logger: c.log,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("controller: opening the catalog for placement drift: %w", err)
+		}
+		siblings := c.cfg.Placement.Siblings
+		placementDrift = func(ctx context.Context) (drift.Placement, error) {
+			pc, err := driftCat.PlacementDrift(ctx, siblings)
+			if err != nil {
+				return drift.Placement{}, err
+			}
+			return drift.ComparePlacement(drift.Placement{
+				Uploads: pc.Uploads, UploadsBehind: pc.UploadsBehind,
+				Taken: pc.Taken, TakenBehind: pc.TakenBehind, TakenUnservable: pc.TakenUnservable,
+			}), nil
+		}
+	}
+
 	srv, err := httpapi.New(httpapi.Options{
 		Config:           c.cfg,
 		Logger:           c.log,
@@ -750,6 +774,7 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 		Build:                buildinfo.Get(),
 		SchemaVersion:        schemaVersion,
 		KnownSchemaVersion:   knownSchema,
+		PlacementDrift:       placementDrift,
 		CASRoot:              c.cfg.CAS.Root,
 		Mount:                mounts,
 		MountPublic:          publicMounts,

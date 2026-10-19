@@ -112,10 +112,31 @@ func (s SchemaDrift) Drifted() bool {
 type DriftReport struct {
 	Build  BuildDrift  `json:"build"`
 	Schema SchemaDrift `json:"schema"`
+	// Placement is present only on a node with placement siblings (ADR-0114).
+	Placement *PlacementDrift `json:"placement,omitempty"`
 }
 
-// Drifted reports whether either half drifted.
-func (r DriftReport) Drifted() bool { return r.Build.Drifted() || r.Schema.Drifted() }
+// Drifted reports whether any half drifted.
+func (r DriftReport) Drifted() bool {
+	return r.Build.Drifted() || r.Schema.Drifted() || (r.Placement != nil && r.Placement.Drifted())
+}
+
+// PlacementDrift is how far a two-site vault is from being held at both sites
+// (ADR-0114, #662): blobs uploaded here not yet confirmed at a sibling, and
+// placements taken from a sibling not yet held here. TakenUnservable is those
+// with no whole-blob source (pieces may still be assembled).
+type PlacementDrift struct {
+	Status          DriftStatus `json:"status"`
+	Uploads         int64       `json:"uploads"`
+	UploadsBehind   int64       `json:"uploads_behind"`
+	Taken           int64       `json:"taken"`
+	TakenBehind     int64       `json:"taken_behind"`
+	TakenUnservable int64       `json:"taken_unservable"`
+	Detail          string      `json:"detail,omitempty"`
+}
+
+// Drifted reports whether blobs are not yet at both sites.
+func (p PlacementDrift) Drifted() bool { return p.Status == DriftBehind }
 
 // SystemInfo is GET /api/v1/system: what this node is, what it is running, how
 // far that has drifted from what was expected, and whether its dependencies

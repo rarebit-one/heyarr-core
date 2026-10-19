@@ -130,14 +130,61 @@ func (s Schema) Drifted() bool {
 }
 
 // Report is both checks, side by side and never merged. See the package comment
-// for why they are not reduced to one answer.
+// for why they are not reduced to one answer. Placement is a third, present only
+// on a node with placement siblings (ADR-0114).
 type Report struct {
-	Build  Build  `json:"build"`
-	Schema Schema `json:"schema"`
+	Build     Build      `json:"build"`
+	Schema    Schema     `json:"schema"`
+	Placement *Placement `json:"placement,omitempty"`
 }
 
-// Drifted reports whether EITHER half drifted.
-func (r Report) Drifted() bool { return r.Build.Drifted() || r.Schema.Drifted() }
+// Drifted reports whether ANY half drifted.
+func (r Report) Drifted() bool {
+	return r.Build.Drifted() || r.Schema.Drifted() || (r.Placement != nil && r.Placement.Drifted())
+}
+
+// Placement is how far a two-site vault is from being held at both sites
+// (ADR-0114, #662): the same distance-not-boolean rule as the other two. A site
+// mid-backfill is behind by exactly the number of blobs still to cross, and that
+// number falls to zero as it converges.
+type Placement struct {
+	Status Status `json:"status"`
+	// Uploads is the blobs uploaded here (self-pinned) that this site offers
+	// its siblings.
+	Uploads int64 `json:"uploads"`
+	// UploadsBehind is how many of those are not known to be at both sites:
+	// lost here, or not confirmed at a sibling within the freshness bound.
+	UploadsBehind int64 `json:"uploads_behind"`
+	// Taken is the placements this site took from its siblings.
+	Taken int64 `json:"taken"`
+	// TakenBehind is how many of those this site does not hold yet: its pull
+	// backlog.
+	TakenBehind int64 `json:"taken_behind"`
+	// TakenUnservable is how many of TakenBehind no usable peer holds whole:
+	// no whole-blob source. A swarm may still assemble one from pieces
+	// (ADR-0042), so it is a warning, not a verdict.
+	TakenUnservable int64  `json:"taken_unservable"`
+	Detail          string `json:"detail,omitempty"`
+}
+
+// Drifted reports whether either direction has blobs not yet at both sites.
+func (p Placement) Drifted() bool { return p.Status == StatusBehind }
+
+// ComparePlacement turns the counts into a Placement with its status.
+func ComparePlacement(p Placement) Placement {
+	switch {
+	case p.UploadsBehind > 0 || p.TakenBehind > 0:
+		p.Status = StatusBehind
+		p.Detail = fmt.Sprintf("%d upload(s) not yet confirmed at a sibling, %d taken placement(s) not yet held here",
+			p.UploadsBehind, p.TakenBehind)
+		if p.TakenUnservable > 0 {
+			p.Detail += fmt.Sprintf(" (%d with no whole-blob source)", p.TakenUnservable)
+		}
+	default:
+		p.Status = StatusCurrent
+	}
+	return p
+}
 
 // CompareBuild compares an expected build identity against a running one.
 //
