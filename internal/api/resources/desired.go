@@ -402,12 +402,21 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (WantOutc
 	var profileID, workID string
 	if err := a.db.InTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		// A descriptor carries its content type, so a want minted from one can
-		// inherit that type's default profile (ADR-0082); a want naming an
-		// existing work by id does not, and keeps the "name a profile" refusal.
+		// A descriptor carries its content type. For a profileless work-id
+		// request, read the existing work's type in the same transaction so both
+		// forms inherit the same seeded starting profile (ADR-0115).
 		var contentType string
 		if req.Work != nil {
 			contentType = req.Work.ContentType
+		} else if req.QualityProfileID == "" && req.QualityProfile == "" {
+			err = tx.QueryRowContext(ctx,
+				`SELECT content_type FROM works WHERE id = ?`, req.WorkID).Scan(&contentType)
+			if errors.Is(err, sql.ErrNoRows) {
+				return &badRequest{fmt.Errorf("there is no work with the id %q", req.WorkID)}
+			}
+			if err != nil {
+				return err
+			}
 		}
 		profileID, err = a.resolveProfile(ctx, tx, req.QualityProfileID, req.QualityProfile, contentType)
 		if err != nil {

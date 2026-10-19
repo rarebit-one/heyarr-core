@@ -177,6 +177,20 @@ func TestWantingKnownContentUsesMediaDefault(t *testing.T) {
 			if n := h.countRows(t, `SELECT count(*) FROM quality_profiles WHERE id = ? AND name = ?`, profileID, tc.profile); n != 1 {
 				t.Errorf("want profile %q does not name seeded %q", profileID, tc.profile)
 			}
+
+			const knownWorkID = "01990000-0000-7000-8000-0000000000ab"
+			h.exec(`INSERT INTO works (id, content_type, work_key, title, sort_title, attributes, created_at, updated_at)
+				VALUES (?, ?, ?, 'Already Catalogued', 'already catalogued', '{}', ?, ?)`,
+				knownWorkID, tc.contentType, tc.contentType+":already-catalogued", seedTime, seedTime)
+			resp = postDesired(t, h, fmt.Sprintf(`{"work_id":%q}`, knownWorkID))
+			if resp.StatusCode != http.StatusCreated {
+				t.Fatalf("work-id status = %d, want 201: %s", resp.StatusCode, h.body(resp))
+			}
+			item = decodeDesired(t, h, resp)
+			profileID, _ = item["quality_profile_id"].(string)
+			if n := h.countRows(t, `SELECT count(*) FROM quality_profiles WHERE id = ? AND name = ?`, profileID, tc.profile); n != 1 {
+				t.Errorf("work-id want profile %q does not name seeded %q", profileID, tc.profile)
+			}
 		})
 	}
 }
