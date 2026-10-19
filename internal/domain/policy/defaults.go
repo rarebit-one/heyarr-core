@@ -69,7 +69,8 @@ func Defaults() []Profile {
 			},
 		},
 		{
-			Name: "everyday-indexed",
+			Name:         "everyday-indexed",
+			ContentTypes: []string{"movie", "series"},
 			Description: "Starting profile for searched video. Accepts 720p and up, " +
 				"penalises identified cam sources, and stops at 1080p. Unknown source " +
 				"does not block an otherwise acceptable release.",
@@ -84,14 +85,16 @@ func Defaults() []Profile {
 			},
 		},
 		{
-			Name: "music-indexed",
+			Name:         "music-indexed",
+			ContentTypes: []string{"music"},
 			Description: "Starting profile for searched music. Accepts a nonempty release " +
 				"and stops once held; bitrate and format are not judged yet.",
 			Accept:   []Rule{{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)}},
 			Terminal: []Rule{{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)}},
 		},
 		{
-			Name: "book-indexed",
+			Name:         "book-indexed",
+			ContentTypes: []string{"book"},
 			Description: "Starting profile for searched books. Accepts a nonempty release " +
 				"and stops once held; format and edition are not judged yet.",
 			Accept:   []Rule{{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)}},

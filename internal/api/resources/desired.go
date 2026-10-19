@@ -407,7 +407,7 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (WantOutc
 		// forms inherit the same seeded starting profile (ADR-0115).
 		var contentType string
 		if req.Work != nil {
-			contentType = req.Work.ContentType
+			contentType = strings.ToLower(strings.TrimSpace(req.Work.ContentType))
 		} else if req.QualityProfileID == "" && req.QualityProfile == "" {
 			err = tx.QueryRowContext(ctx,
 				`SELECT content_type FROM works WHERE id = ?`, req.WorkID).Scan(&contentType)

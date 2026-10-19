@@ -167,7 +167,7 @@ func TestWantingKnownContentUsesMediaDefault(t *testing.T) {
 					t.Fatalf("seed profile: status = %d: %s", resp.StatusCode, h.body(resp))
 				}
 			}
-			body := fmt.Sprintf(`{"work":{"content_type":%q,"title":"A New Work"}}`, tc.contentType)
+			body := fmt.Sprintf(`{"work":{"content_type":%q,"title":"A New Work"}}`, " "+strings.ToUpper(tc.contentType)+" ")
 			resp := postDesired(t, h, body)
 			if resp.StatusCode != http.StatusCreated {
 				t.Fatalf("status = %d, want 201: %s", resp.StatusCode, h.body(resp))

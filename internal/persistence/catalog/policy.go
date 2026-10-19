@@ -64,6 +64,14 @@ func (c *Catalog) seedOneProfile(ctx context.Context, p policy.Profile) (bool, e
 	if err != nil {
 		return false, err
 	}
+	types := p.ContentTypes
+	if types == nil {
+		types = []string{}
+	}
+	contentTypes, err := json.Marshal(types)
+	if err != nil {
+		return false, fmt.Errorf("catalog: encoding content types for %q: %w", p.Name, err)
+	}
 	id := uuid.Must(uuid.NewV7()).String()
 	now := c.clock.Now().Format(timestampFormat)
 
@@ -74,10 +82,10 @@ func (c *Catalog) seedOneProfile(ctx context.Context, p policy.Profile) (bool, e
 	err = c.db.InTx(ctx, func(tx *sql.Tx) error {
 		res, execErr := tx.ExecContext(ctx, `
 			INSERT INTO quality_profiles
-				(id, name, description, accept, prefer, terminal, seeded, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+				(id, name, description, accept, prefer, terminal, content_types, seeded, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 			ON CONFLICT (name) DO NOTHING`,
-			id, p.Name, p.Description, accept, prefer, terminal, now, now)
+			id, p.Name, p.Description, accept, prefer, terminal, string(contentTypes), now, now)
 		if execErr != nil {
 			return fmt.Errorf("catalog: seeding the quality profile %q: %w", p.Name, execErr)
 		}

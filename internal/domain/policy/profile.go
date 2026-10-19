@@ -55,6 +55,9 @@ type Profile struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	// ContentTypes tells pickers which works to offer this profile for. Empty
+	// means unrestricted; it does not change how rules evaluate a candidate.
+	ContentTypes []string `json:"content_types,omitempty"`
 
 	// Accept are gates. Every one must pass or the candidate is rejected.
 	Accept []Rule `json:"accept"`
