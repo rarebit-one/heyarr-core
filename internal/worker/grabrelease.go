@@ -54,8 +54,12 @@ type GrabStore interface {
 // on a lease that expired mid-call, where the transfer was created and the row
 // was not.
 func GrabReleaseHandler(
-	reg *providers.Registry, cat GrabStore, log *slog.Logger,
+	reg *providers.Registry, cat GrabStore, log *slog.Logger, opts ...GrabOption,
 ) HandlerFunc {
+	var o grabOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	return func(ctx context.Context, job jobs.Job) error {
 		payload, err := decodePayload[acquisition.GrabPayload](job)
 		if err != nil {
@@ -155,6 +159,18 @@ func GrabReleaseHandler(
 			return err
 		}
 
+		// Publish the choice for siblings BEFORE the transition (ADR-0119).
+		// A failure here returns an error so the job retries: the want is
+		// still SELECTED, the client's Add is idempotent, the row is rewritten,
+		// and the op gets another chance. After the transition a retry would
+		// skip at the top ("not waiting to be queued") and the op would never
+		// be written.
+		if o.publisher != nil {
+			if err := o.publisher.Publish(ctx, payload.DesiredItemID, transfer.ID); err != nil {
+				return err
+			}
+		}
+
 		if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
 			acquisition.TransitionQueue,
 			fmt.Sprintf("queued %s at %s", candidateID, provider)); err != nil {
@@ -169,6 +185,23 @@ func GrabReleaseHandler(
 			"desired_item_id", payload.DesiredItemID,
 			"candidate", candidateID, "provider", provider, "transfer", transfer.ID)
 		return nil
+	}
+}
+
+// GrabOption tunes GrabReleaseHandler.
+type GrabOption func(*grabOptions)
+
+type grabOptions struct {
+	publisher AcquirePublisher
+}
+
+// WithAcquirePublisher publishes each grabbed release as an acquire op
+// (ADR-0119) so siblings acquire it themselves. Nil publishes nothing.
+func WithAcquirePublisher(p AcquirePublisher) GrabOption {
+	return func(o *grabOptions) {
+		if p != nil {
+			o.publisher = p
+		}
 	}
 }
 

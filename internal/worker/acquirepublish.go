@@ -1,0 +1,140 @@
+package worker
+
+import (
+	"context"
+	"crypto/ed25519"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/rarebit-one/heyarr-core/internal/catalogop"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
+)
+
+// AcquirePublisher publishes the release a grab handed to a download client as
+// an acquire op on the catalog op-log (ADR-0119), so a sibling with fan-out
+// enabled acquires the same bytes itself. A nil publisher publishes nothing:
+// that is a single-site node, or one without an identity key, and the grab is
+// unaffected either way.
+type AcquirePublisher interface {
+	// Publish records the op for the want. transferID is what the download
+	// client called the transfer: for a torrent client it is the infohash,
+	// which is the identity the op pins. A transfer that is not a torrent
+	// (an HTTP enclosure, a usenet article) has nothing a sibling could pin
+	// and is skipped without error.
+	Publish(ctx context.Context, desiredItemID, transferID string) error
+}
+
+// AcquireFactsReader is the catalog read the publisher needs.
+type AcquireFactsReader interface {
+	AcquireFacts(ctx context.Context, desiredItemID string) (catalog.AcquireFacts, error)
+}
+
+// AcquireOpStore is the op-log store the publisher appends to: the catalog
+// tombstone store satisfies it.
+type AcquireOpStore interface {
+	Heads(ctx context.Context) ([]string, error)
+	RecordOps(ctx context.Context, ops []string) error
+}
+
+// CatalogAcquirePublisher is the AcquirePublisher a two-site media node runs:
+// it signs the op under this peer's identity (ADR-0012) and appends it to the
+// same log the delete tombstones ride (ADR-0073); catalogsync carries it.
+type CatalogAcquirePublisher struct {
+	Facts  AcquireFactsReader
+	Ops    AcquireOpStore
+	Signer ed25519.PrivateKey
+	// Site is this node's site name (peer.site); the op names it as the origin.
+	Site string
+	Now  func() time.Time
+	Log  *slog.Logger
+}
+
+// Publish implements AcquirePublisher.
+func (p *CatalogAcquirePublisher) Publish(ctx context.Context, desiredItemID, transferID string) error {
+	if p == nil || p.Facts == nil || p.Ops == nil || len(p.Signer) != ed25519.PrivateKeySize {
+		return nil
+	}
+	infohash := infohashOf(transferID)
+	if infohash == "" {
+		// Not a torrent: an HTTP enclosure or a usenet article. There is no
+		// swarm identity a sibling could join, so nothing to publish. Direct-
+		// route content converges per site through its followed source.
+		return nil
+	}
+	facts, err := p.Facts.AcquireFacts(ctx, desiredItemID)
+	if errors.Is(err, catalog.ErrNoSelection) {
+		// The selection went away between the grab and now; the op would name
+		// a release the want no longer wants. Nothing to publish.
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	// A candidate whose id is the infohash must agree with the client's: a
+	// disagreement means the client took a different release than the one
+	// selected (a .torrent that resolved elsewhere), and publishing the
+	// client's hash would tell a sibling to fetch bytes this site did not
+	// choose. Refuse rather than guess.
+	if cid, ok := strings.CutPrefix(facts.CandidateID, "infohash:"); ok && !strings.EqualFold(cid, infohash) {
+		return fmt.Errorf("worker: want %s selected %s but the client took %s; not publishing", desiredItemID, facts.CandidateID, infohash)
+	}
+	site := p.Site
+	if site == "" {
+		site = "unnamed"
+	}
+	now := time.Now().UTC()
+	if p.Now != nil {
+		now = p.Now().UTC()
+	}
+	heads, err := p.Ops.Heads(ctx)
+	if err != nil {
+		return fmt.Errorf("worker: reading catalog-op heads: %w", err)
+	}
+	token, err := catalogop.SignAcquire(p.Signer, facts.ContentType, facts.WorkKey, catalogop.Acquire{
+		Scope:      facts.Scope,
+		Aspect:     facts.Aspect,
+		Profile:    facts.Profile,
+		Infohash:   infohash,
+		Title:      facts.CandidateTitle,
+		WorkTitle:  facts.WorkTitle,
+		Year:       facts.Year,
+		Size:       facts.Size,
+		SelectedAt: now,
+		Site:       site,
+		// Trackers are never published in this increment: the sibling joins
+		// the swarm by infohash (DHT), or resolves a private release through
+		// its own indexers. A tracker URL from the source would risk a passkey.
+		Trackers: nil,
+		Private:  false,
+	}, heads, now)
+	if err != nil {
+		return fmt.Errorf("worker: signing acquire op for %s: %w", desiredItemID, err)
+	}
+	if err := p.Ops.RecordOps(ctx, []string{token}); err != nil {
+		return fmt.Errorf("worker: recording acquire op for %s: %w", desiredItemID, err)
+	}
+	if p.Log != nil {
+		p.Log.Info("published the chosen release for siblings to acquire",
+			"desired_item_id", desiredItemID, "work_key", facts.WorkKey, "infohash", infohash)
+	}
+	return nil
+}
+
+// infohashOf returns the lower-case infohash a transfer id carries, or "" when
+// the id is not one (40 or 64 hex characters, case-insensitive).
+func infohashOf(transferID string) string {
+	s := strings.ToLower(strings.TrimSpace(transferID))
+	if len(s) != 40 && len(s) != 64 {
+		return ""
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return ""
+		}
+	}
+	return s
+}
