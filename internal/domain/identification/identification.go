@@ -20,6 +20,9 @@ const (
 	// single-file HTML (ADR-0063). The Work is the article; a followed feed
 	// names it, so it is not filename-identified on the capture path.
 	Document = "document"
+	// Game is a video game: the Work is the game, an edition is one store's
+	// package of it at one build (ADR-0118).
+	Game = "game"
 	// Unknown is the content type of the synthetic Unidentified Work, and the
 	// value a caller passes to Identify when the owning library's type should
 	// not bias rule selection.
@@ -97,6 +100,11 @@ type Rule struct {
 	Name        string
 	ContentType string
 	Match       func(p Path) (Candidate, bool)
+	// RequiresLibrary limits the rule to a library that declares ContentType.
+	// It is for shapes that are only evidence in context: a `.zip` under
+	// "<Title>/" in a game library is the game, but the same `.zip` in a music
+	// folder is not a game, and an unbiased registry must not say it is.
+	RequiresLibrary bool
 }
 
 // Path is the pre-split, pre-normalised input a rule matches against. It is
@@ -195,6 +203,9 @@ func (r *Registry) Identify(relPath, libraryContentType string) Candidate {
 	if view.Stem != "" {
 		for _, rule := range r.ordered(libraryContentType) {
 			if rule.Match == nil {
+				continue
+			}
+			if rule.RequiresLibrary && rule.ContentType != libraryContentType {
 				continue
 			}
 			c, ok := rule.Match(view)
@@ -296,10 +307,13 @@ func (r *Registry) ordered(ct string) []Rule {
 	return out
 }
 
-// Default returns a Registry with the built-in movie, series, music, book and
-// document rules, most specific first.
+// Default returns a Registry with the built-in game, movie, series, music, book
+// and document rules, most specific first. The game rules lead because the
+// unscoped ones match only shapes nothing else has (a GOG installer name, a
+// Steam depot tree), and a depot's intro video must not become a movie.
 func Default() *Registry {
 	r := NewRegistry()
+	r.Register(gameRules()...)
 	r.Register(seriesRules()...)
 	r.Register(movieRules()...)
 	r.Register(musicRules()...)
@@ -320,7 +334,7 @@ func Identify(relPath, libraryContentType string) Candidate {
 // Exported because they are a VOCABULARY and not this package's private
 // business: a library declares one, a want declares one, and until #227 nothing
 // checked that what was declared is one of these.
-func ContentTypes() []string { return []string{Movie, Series, Music, Book, Document} }
+func ContentTypes() []string { return []string{Movie, Series, Music, Book, Document, Game} }
 
 // IsContentType reports whether ct is one Heyarr understands.
 //

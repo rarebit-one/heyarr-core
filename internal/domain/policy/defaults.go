@@ -145,6 +145,30 @@ func Defaults() []Profile {
 			},
 		},
 		{
+			// The profile for a game (ADR-0118). A game's good copy is not a
+			// resolution or a size; it is one taken from a store the person
+			// owns it on. Gating on `store` is what makes an indexer's repack
+			// — which never carries a store — fail closed with a named reason
+			// instead of being admitted as if it were owned.
+			Name:         "owned",
+			ContentTypes: []string{"game"},
+			Description: "A game copied from a store you own it on. Accepts a copy whose " +
+				"store is known, prefers a DRM-free one, and stops once a DRM-free copy is " +
+				"held; a DRM-bound copy (a Steam depot) is kept but stays open to one.",
+			Accept: []Rule{
+				{Attribute: AttrStore, Op: OpIn, Value: Texts("gog", "steam", "epic", "itch", "humble")},
+			},
+			Prefer: []Rule{
+				{Attribute: AttrDRMFree, Op: OpEq, Value: Flag(true), Weight: 50},
+			},
+			Terminal: []Rule{
+				// An offline installer that runs without its store is as good as
+				// an owned copy gets; a newer build is the store fetch's concern,
+				// not an upgrade the profile chases.
+				{Attribute: AttrDRMFree, Op: OpEq, Value: Flag(true)},
+			},
+		},
+		{
 			// The profile for a fetched subtitle (ADR-0085). It cannot be judged
 			// on any of the video vocabulary the other profiles rank — a subtitle
 			// has no resolution, source or codec — and `published`'s `source NOT

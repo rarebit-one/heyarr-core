@@ -218,7 +218,11 @@ func (c *Catalog) profileForReconcile(ctx context.Context, id string) (policy.Pr
 // PROBE, which may not exist — a node with no ffprobe leaves probes pending by
 // design (ADR-0023). size_bytes comes from the blob and is always known.
 // source and language come from the edition, and are empty when identification
-// could not tell.
+// could not tell. store, drm_free and platform come from the EDITION's
+// attributes, which only a store fetch that verified the whole package writes
+// (ADR-0118). Never from the asset: a scanned filename's store facts describe
+// one file, and a lone installer part must not satisfy a game want as if the
+// package were held. Every other content type leaves them absent.
 //
 // Anything unknown is LEFT OUT rather than defaulted, so §63 reports
 // "undetermined" instead of confidently reporting a zero. That is what makes a
@@ -253,7 +257,7 @@ func (c *Catalog) assetsForWant(ctx context.Context, w desiredWant) ([]acquisiti
 	stmt := `
 		SELECT a.id, a.source_class, a.blob_hash,
 		       b.size,
-		       e.edition_type, e.language,
+		       e.edition_type, e.language, e.attributes,
 		       p.container, p.bitrate_bps, p.streams
 		FROM assets a
 		JOIN editions e ON e.id = a.edition_id
@@ -276,10 +280,11 @@ func (c *Catalog) assetsForWant(ctx context.Context, w desiredWant) ([]acquisiti
 			blobHash               sql.NullString
 			size, bitrate          sql.NullInt64
 			editionType, language  sql.NullString
+			editionAttrs           sql.NullString
 			container, streamsJSON sql.NullString
 		)
 		if err := rows.Scan(&id, &sourceClass, &blobHash, &size,
-			&editionType, &language, &container, &bitrate, &streamsJSON); err != nil {
+			&editionType, &language, &editionAttrs, &container, &bitrate, &streamsJSON); err != nil {
 			return nil, err
 		}
 
@@ -298,6 +303,9 @@ func (c *Catalog) assetsForWant(ctx context.Context, w desiredWant) ([]acquisiti
 		}
 		if language.Valid && strings.TrimSpace(language.String) != "" {
 			view.Attributes[policy.AttrLanguage] = policy.Text(language.String)
+		}
+		if editionAttrs.Valid {
+			applyEditionAttributes(view.Attributes, editionAttrs.String)
 		}
 		if streamsJSON.Valid {
 			applyProbeAttributes(view.Attributes, streamsJSON.String)
@@ -378,6 +386,30 @@ func (c *Catalog) subtitleAssetsForWant(ctx context.Context, w desiredWant) ([]a
 		out = append(out, view)
 	}
 	return out, rows.Err()
+}
+
+// applyEditionAttributes copies the edition facts a quality profile can judge
+// out of editions.attributes. Only the store facts are read (ADR-0118); a value
+// of the wrong JSON type is left out, so §63 says "undetermined" rather than
+// scoring a malformed row as a definite answer.
+func applyEditionAttributes(attrs acquisition.Attributes, raw string) {
+	var ed struct {
+		Store    any `json:"store"`
+		DRMFree  any `json:"drm_free"`
+		Platform any `json:"platform"`
+	}
+	if err := json.Unmarshal([]byte(raw), &ed); err != nil {
+		return
+	}
+	if s, ok := ed.Store.(string); ok && strings.TrimSpace(s) != "" {
+		attrs[policy.AttrStore] = policy.Text(s)
+	}
+	if b, ok := ed.DRMFree.(bool); ok {
+		attrs[policy.AttrDRMFree] = policy.Flag(b)
+	}
+	if s, ok := ed.Platform.(string); ok && strings.TrimSpace(s) != "" {
+		attrs[policy.AttrPlatform] = policy.Text(s)
+	}
 }
 
 // probeStream is the fragment of a probe result the quality attributes come

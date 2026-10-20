@@ -21,9 +21,20 @@ const (
 	// mean a different set of bytes than the one it was projected for. Documents
 	// and podcasts.
 	RouteDirect Route = "direct"
+	// RouteStore is the route where the bytes come from a store the person
+	// already owns the content on — a GOG offline installer, a Steam depot —
+	// fetched by that store's own tooling against their library (ADR-0118). A
+	// want on this route is NEVER enqueued for an indexer search: what an
+	// indexer has for a game is mostly repacks, which are not the owned copy
+	// the want asks for. Games.
+	RouteStore Route = "store"
 )
 
 // Searchable reports whether a want on this route is ever asked of an indexer.
 // It is the whole of what ScheduleFor needs to know about a route, named so the
 // short-circuit there reads as the fact it is rather than a string compare.
-func (r Route) Searchable() bool { return r != RouteDirect }
+//
+// It names the routes that are NOT searched rather than the one that is, so an
+// unknown or empty route keeps the conservative reading strategy.For gives an
+// unknown content type: ordinary searchable content.
+func (r Route) Searchable() bool { return r != RouteDirect && r != RouteStore }

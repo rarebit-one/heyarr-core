@@ -313,13 +313,18 @@ func TestOnlyTheKnownContentTypesAreAccepted(t *testing.T) {
 		t.Errorf("document must be an accepted content type spelled %q, got %q accepted=%v",
 			"document", Document, IsContentType(Document))
 	}
-	for _, ct := range []string{"show", "album", "tv", "film", "", "unknown", "Movie", " movie", "documents", "Document"} {
+	// game joined the set (ADR-0118).
+	if !IsContentType(Game) || Game != "game" {
+		t.Errorf("game must be an accepted content type spelled %q, got %q accepted=%v",
+			"game", Game, IsContentType(Game))
+	}
+	for _, ct := range []string{"show", "album", "tv", "film", "", "unknown", "Movie", " movie", "documents", "Document", "games", "Game"} {
 		if IsContentType(ct) {
 			t.Errorf("%q is accepted as a content type", ct)
 		}
 	}
-	if len(ContentTypes()) != 5 {
-		t.Errorf("%d content types, want §12's five (movie, series, music, book, document)", len(ContentTypes()))
+	if len(ContentTypes()) != 6 {
+		t.Errorf("%d content types, want six (movie, series, music, book, document, game)", len(ContentTypes()))
 	}
 }
 

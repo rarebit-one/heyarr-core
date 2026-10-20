@@ -706,7 +706,7 @@ func (a *API) resolveWorkDescriptor(ctx context.Context, tx *sql.Tx, d WorkDescr
 		INSERT INTO works (id, content_type, work_key, title, sort_title, year,
 			attributes, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)`,
-		id, contentType, key, identification.DisplayTitle(title), sortTitle, year, now, now)
+		id, contentType, key, identification.DisplayTitle(contentType, title), sortTitle, year, now, now)
 	if err != nil {
 		return "", err
 	}
