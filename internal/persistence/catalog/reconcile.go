@@ -68,7 +68,7 @@ func (c *Catalog) ReconcileDesired(ctx context.Context, desiredItemID string) (R
 		return ReconcileResult{}, err
 	}
 
-	assets, err := c.assetsForWant(ctx, want)
+	assets, packages, err := c.assetsAndPackagesForWant(ctx, want)
 	if err != nil {
 		return ReconcileResult{}, err
 	}
@@ -96,11 +96,27 @@ func (c *Catalog) ReconcileDesired(ctx context.Context, desiredItemID string) (R
 				break
 			}
 		}
-		replicas, err := c.replicasOf(ctx, satisfying.BlobHash)
-		if err != nil {
-			return ReconcileResult{}, err
+		if blobs, ok := packages[satisfying.ID]; ok {
+			// A verified store package is placed only when every file of it
+			// is (ADR-0120): one installer part at a second site is not a
+			// backup of the game.
+			byBlob := make(map[string][]acquisition.PeerReplica, len(blobs))
+			for _, b := range blobs {
+				r, err := c.replicasOf(ctx, b)
+				if err != nil {
+					return ReconcileResult{}, err
+				}
+				byBlob[b] = r
+			}
+			placement = acquisition.EvaluatePackagePlacement(blobs, required,
+				func(b string) []acquisition.PeerReplica { return byBlob[b] })
+		} else {
+			replicas, err := c.replicasOf(ctx, satisfying.BlobHash)
+			if err != nil {
+				return ReconcileResult{}, err
+			}
+			placement = acquisition.EvaluatePlacement(satisfying.BlobHash, required, replicas)
 		}
-		placement = acquisition.EvaluatePlacement(satisfying.BlobHash, required, replicas)
 	}
 
 	before, err := c.Acquisition(ctx, desiredItemID)
@@ -118,6 +134,16 @@ func (c *Catalog) ReconcileDesired(ctx context.Context, desiredItemID string) (R
 	after, err := c.SetSatisfaction(ctx, desiredItemID, content.Satisfaction, placement.Satisfaction)
 	if err != nil {
 		return ReconcileResult{}, err
+	}
+
+	// A satisfied want's store fetch succeeded: its fruitless streak is over. Should
+	// it later lose its bytes, the next fetch starts from the first delay, not from
+	// wherever the last loss left the backoff (ADR-0120). A no-op for anything
+	// that never had a store fetch.
+	if content.Satisfaction == acquisition.SatisfactionSatisfied {
+		if err := c.clearStoreFetchSchedule(ctx, desiredItemID); err != nil {
+			return ReconcileResult{}, err
+		}
 	}
 
 	return ReconcileResult{
@@ -229,8 +255,25 @@ func (c *Catalog) profileForReconcile(ctx context.Context, id string) (policy.Pr
 // node with no toolchain report "I cannot tell whether this satisfies you"
 // rather than "this does not satisfy you", which are different problems.
 func (c *Catalog) assetsForWant(ctx context.Context, w desiredWant) ([]acquisition.AssetView, error) {
+	assets, _, err := c.assetsAndPackagesForWant(ctx, w)
+	return assets, err
+}
+
+// assetsAndPackagesForWant is assetsForWant, also reporting the verified store
+// package (ADR-0120) each asset belongs to, keyed by asset id: the blobs the
+// store vouched for as one unit.
+//
+// A package's store facts count only while EVERY blob of it is held here. A
+// store vouched for the whole set, never for one file: a base installer whose
+// data part went missing, or a DLC installer held without its game, is not a
+// copy of the game, so its assets lose the store facts and §63 reports them
+// undetermined rather than letting one fragment satisfy the want.
+func (c *Catalog) assetsAndPackagesForWant(
+	ctx context.Context, w desiredWant,
+) ([]acquisition.AssetView, map[string][]string, error) {
 	if w.aspect == string(desired.AspectSubtitle) {
-		return c.subtitleAssetsForWant(ctx, w)
+		assets, err := c.subtitleAssetsForWant(ctx, w)
+		return assets, nil, err
 	}
 
 	// The scope of the want decides which assets can satisfy it. An item-scoped
@@ -269,11 +312,12 @@ func (c *Catalog) assetsForWant(ctx context.Context, w desiredWant) ([]acquisiti
 
 	rows, err := c.db.Reader().QueryContext(ctx, stmt, args...)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: reading the assets for %s: %w", w.id, err)
+		return nil, nil, fmt.Errorf("catalog: reading the assets for %s: %w", w.id, err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	var out []acquisition.AssetView
+	packages := map[string][]string{}
 	for rows.Next() {
 		var (
 			id, sourceClass        string
@@ -285,7 +329,7 @@ func (c *Catalog) assetsForWant(ctx context.Context, w desiredWant) ([]acquisiti
 		)
 		if err := rows.Scan(&id, &sourceClass, &blobHash, &size,
 			&editionType, &language, &editionAttrs, &container, &bitrate, &streamsJSON); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		view := acquisition.AssetView{
@@ -305,14 +349,45 @@ func (c *Catalog) assetsForWant(ctx context.Context, w desiredWant) ([]acquisiti
 			view.Attributes[policy.AttrLanguage] = policy.Text(language.String)
 		}
 		if editionAttrs.Valid {
-			applyEditionAttributes(view.Attributes, editionAttrs.String)
+			if blobs := applyEditionAttributes(view.Attributes, editionAttrs.String); len(blobs) > 0 {
+				packages[id] = blobs
+			}
 		}
 		if streamsJSON.Valid {
 			applyProbeAttributes(view.Attributes, streamsJSON.String)
 		}
 		out = append(out, view)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	if len(packages) == 0 {
+		return out, packages, nil
+	}
+	// A package spans editions (the base game and its DLC), so whether it is whole
+	// is a question about the Work, not about the assets this want's scope lets
+	// satisfy it: an edition-scoped want must not lose its store facts because
+	// the DLC edition sits outside its scope.
+	held, err := c.heldBlobsOfWork(ctx, w.workID)
+	if err != nil {
+		return nil, nil, err
+	}
+	for i, a := range out {
+		blobs, ok := packages[a.ID]
+		if !ok {
+			continue
+		}
+		for _, b := range blobs {
+			if !held[b] {
+				delete(out[i].Attributes, policy.AttrStore)
+				delete(out[i].Attributes, policy.AttrDRMFree)
+				delete(packages, a.ID)
+				break
+			}
+		}
+	}
+	return out, packages, nil
 }
 
 // subtitleAssetsForWant gathers the subtitle assets that could satisfy a
@@ -388,18 +463,42 @@ func (c *Catalog) subtitleAssetsForWant(ctx context.Context, w desiredWant) ([]a
 	return out, rows.Err()
 }
 
-// applyEditionAttributes copies the edition facts a quality profile can judge
-// out of editions.attributes. Only the store facts are read (ADR-0118); a value
-// of the wrong JSON type is left out, so §63 says "undetermined" rather than
-// scoring a malformed row as a definite answer.
-func applyEditionAttributes(attrs acquisition.Attributes, raw string) {
-	var ed struct {
-		Store    any `json:"store"`
-		DRMFree  any `json:"drm_free"`
-		Platform any `json:"platform"`
+// heldBlobsOfWork is every blob a Work holds through an asset that is not missing.
+func (c *Catalog) heldBlobsOfWork(ctx context.Context, workID string) (map[string]bool, error) {
+	rows, err := c.db.Reader().QueryContext(ctx, `
+		SELECT DISTINCT a.blob_hash
+		FROM assets a JOIN editions e ON e.id = a.edition_id
+		WHERE e.work_id = ? AND a.blob_hash IS NOT NULL AND a.missing_since IS NULL`, workID)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: reading the blobs work %s holds: %w", workID, err)
 	}
-	if err := json.Unmarshal([]byte(raw), &ed); err != nil {
-		return
+	defer func() { _ = rows.Close() }()
+	held := map[string]bool{}
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		held[h] = true
+	}
+	return held, rows.Err()
+}
+
+// applyEditionAttributes copies the edition facts a quality profile can judge
+// out of editions.attributes, and returns the verified package's blobs. Only the
+// store facts are read (ADR-0118); a value of the wrong JSON type is left out,
+// so §63 says "undetermined" rather than scoring a malformed row as a definite
+// answer. Store facts with no package list are not a verified package and are
+// not applied: they are a claim nobody can check is still whole.
+func applyEditionAttributes(attrs acquisition.Attributes, raw string) []string {
+	var ed struct {
+		Store        any      `json:"store"`
+		DRMFree      any      `json:"drm_free"`
+		Platform     any      `json:"platform"`
+		PackageBlobs []string `json:"package_blobs"`
+	}
+	if err := json.Unmarshal([]byte(raw), &ed); err != nil || len(ed.PackageBlobs) == 0 {
+		return nil
 	}
 	if s, ok := ed.Store.(string); ok && strings.TrimSpace(s) != "" {
 		attrs[policy.AttrStore] = policy.Text(s)
@@ -410,6 +509,7 @@ func applyEditionAttributes(attrs acquisition.Attributes, raw string) {
 	if s, ok := ed.Platform.(string); ok && strings.TrimSpace(s) != "" {
 		attrs[policy.AttrPlatform] = policy.Text(s)
 	}
+	return ed.PackageBlobs
 }
 
 // probeStream is the fragment of a probe result the quality attributes come

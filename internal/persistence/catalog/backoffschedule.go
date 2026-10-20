@@ -41,6 +41,10 @@ var (
 		table: "subtitle_fetch_schedule", key: "desired_item_id",
 		last: "last_fetched_at", next: "next_fetch_at",
 	}
+	storeFetchBackoff = backoffSchedule{
+		table: "store_fetch_schedule", key: "desired_item_id",
+		last: "last_attempted_at", next: "next_attempt_at",
+	}
 	enrichBackoff = backoffSchedule{
 		table: "enrich_schedule", key: "work_id",
 		last: "last_enriched_at", next: "next_enrich_at",

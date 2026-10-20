@@ -433,6 +433,7 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 	// held but whose caption is missing, on a quota-respecting cadence the fetch
 	// job itself paces. See subtitlebeat.go.
 	startSubtitleBeat(ctx, beatCatalog, reconcileQueue, c.log, wallTicker)
+	startStoreBeat(ctx, beatCatalog, reconcileQueue, c.log, wallTicker)
 
 	// The enrich beat (ADR-0087): it enqueues an enrich_work job for each held
 	// music/book Work that is under-enriched (no cover and/or no canonical id), on

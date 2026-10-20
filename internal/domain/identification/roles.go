@@ -54,6 +54,11 @@ func IsPrimaryExt(contentType, ext string) bool {
 		return losslessExts[ext] || lossyExts[ext]
 	case Book:
 		return isBookExt(ext)
+	case Game:
+		// A store package's installers and archives (ADR-0120). Not a depot's
+		// loose files: a Steam depot is ingested by its own fetch, not walked
+		// as a bundle of "primary" files.
+		return gameContainerExts[ext]
 	default:
 		return false
 	}

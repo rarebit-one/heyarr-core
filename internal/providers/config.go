@@ -154,6 +154,12 @@ const (
 	// refusing to start — and like every download client its byte-moving is
 	// exercised only against the live tool, never in CI (ADR-0026).
 	KindYtDlp Kind = "yt-dlp"
+	// KindLgogdownloader is a download client that fetches a game the operator
+	// owns on GOG by running `lgogdownloader` against their library, and verifies
+	// every file against GOG's manifest before the transfer completes. It takes
+	// only acquisition.GOGSourceScheme-tagged sources (ADR-0120). No endpoint and
+	// no credential: the GOG login lives in lgogdownloader's own config.
+	KindLgogdownloader Kind = "lgogdownloader"
 	// KindWebFeed is a metadata provider that parses a web publication's RSS or
 	// Atom feed (§59, M12 Phase 4): it enumerates a feed's article entries so a
 	// followed source can project a want per article. Like KindPodcast and
@@ -232,7 +238,7 @@ const (
 
 // Kinds lists every kind, in a stable order.
 func Kinds() []Kind {
-	return []Kind{KindTorznab, KindNewznab, KindProwlarr, KindTransmission, KindQBittorrent, KindSABnzbd, KindNZBGet, KindHTTP, KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindYtDlp, KindWebFeed, KindWebCapture, KindOpenSubtitles, KindMusicBrainz, KindOpenLibrary, KindFake}
+	return []Kind{KindTorznab, KindNewznab, KindProwlarr, KindTransmission, KindQBittorrent, KindSABnzbd, KindNZBGet, KindHTTP, KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindYtDlp, KindLgogdownloader, KindWebFeed, KindWebCapture, KindOpenSubtitles, KindMusicBrainz, KindOpenLibrary, KindFake}
 }
 
 // ParseKind validates a kind from configuration.
@@ -261,7 +267,7 @@ func DefaultCapabilities(k Kind) []Capability {
 	switch k {
 	case KindTorznab, KindNewznab, KindProwlarr:
 		return []Capability{CapabilityIndexer}
-	case KindTransmission, KindQBittorrent, KindSABnzbd, KindNZBGet, KindHTTP, KindYtDlp, KindWebCapture:
+	case KindTransmission, KindQBittorrent, KindSABnzbd, KindNZBGet, KindHTTP, KindYtDlp, KindLgogdownloader, KindWebCapture:
 		return []Capability{CapabilityDownload}
 	case KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindWebFeed:
 		return []Capability{CapabilityMetadata}
@@ -304,7 +310,7 @@ func DefaultCapabilities(k Kind) []Capability {
 // required).
 func needsEndpoint(k Kind) bool {
 	return k != KindFake && k != KindHTTP && k != KindTVDB && k != KindTMDB && k != KindPodcast &&
-		k != KindYoutube && k != KindYtDlp && k != KindWebFeed && k != KindWebCapture &&
+		k != KindYoutube && k != KindYtDlp && k != KindLgogdownloader && k != KindWebFeed && k != KindWebCapture &&
 		k != KindOpenSubtitles && k != KindMusicBrainz && k != KindOpenLibrary
 }
 

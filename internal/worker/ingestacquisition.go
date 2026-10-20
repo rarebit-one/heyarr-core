@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -78,6 +79,7 @@ type IngestAcquisitionStore interface {
 	ItemsForWork(ctx context.Context, workID string) ([]catalog.Item, error)
 	SearchContextFor(ctx context.Context, desiredItemID string) (catalog.SearchContext, error)
 	SelectedCandidate(ctx context.Context, desiredItemID string) (catalog.Candidate, error)
+	RecordVerifiedStoreEditions(ctx context.Context, editionIDs []string, pkg catalog.VerifiedStorePackage) error
 	SetAssetItem(ctx context.Context, assetID, itemID string) error
 	WorkForDesired(ctx context.Context, desiredItemID string) (catalog.DesiredWork, error)
 }
@@ -170,6 +172,12 @@ func IngestAcquisitionHandler(
 			return err
 		}
 		batch, verifyErr := verifyArtifacts(acq, sc.ContentType)
+		if verifyErr == nil {
+			batch, verifyErr, err = checkStoreManifest(ctx, cat, payload.DesiredItemID, batch)
+			if err != nil {
+				return err
+			}
+		}
 		if verifyErr != nil {
 			return failAcquisition(ctx, cat, payload.DesiredItemID, acq,
 				catalog.BlockVerificationFailed, verifyErr, log)
@@ -193,6 +201,22 @@ func IngestAcquisitionHandler(
 				catalog.BlockIngestFailed, ingestErr, log)
 		}
 
+		// A store package the store verified file by file earns its store facts
+		// on the editions it filled (ADR-0120). Before INGESTED, so a want is
+		// never reported ingested without them; idempotent, so a re-run is safe.
+		storeErr, err := recordStorePackage(ctx, cat, payload.DesiredItemID, batch, results)
+		if err != nil {
+			return err
+		}
+		if storeErr != nil {
+			// Ingested, but not the package the store vouched for: a file changed
+			// while it was being hashed. Its bytes are held without store facts
+			// (undetermined, never satisfying), and the acquisition fails like any
+			// other verification failure.
+			return failAcquisition(ctx, cat, payload.DesiredItemID, acq,
+				catalog.BlockVerificationFailed, storeErr, log)
+		}
+
 		if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
 			acquisition.TransitionIngested, ingestedDetail(batch, results, linked)); err != nil {
 			return err
@@ -202,7 +226,10 @@ func IngestAcquisitionHandler(
 		// for the same reason the scanner's path enqueues it: a probe is a job
 		// and may need a capability this worker does not have (ADR-0023). A pack
 		// produced one result per file, each probed on its own blob.
-		if probes != nil {
+		// A game is not probed: its files are installers and archives, which
+		// carry no stream for ffprobe to read, and reading tens of gigabytes of
+		// them to learn that is the whole cost of the probe.
+		if probes != nil && sc.ContentType != identification.Game {
 			for i, res := range results {
 				if res.AssetID == "" {
 					continue
@@ -269,6 +296,10 @@ type verifiedTransfer struct {
 	contentType string
 	pack        bool
 	path        string
+	// storeSizes is, for a store package, the size the store stated for each
+	// file by base name — carried through ingest so the bytes actually hashed
+	// are held to it too, not only the bytes seen before ingest began.
+	storeSizes map[string]int64
 }
 
 func (v verifiedTransfer) totalSize() int64 {
@@ -598,6 +629,121 @@ func ingestArtifacts(
 		linked++
 	}
 	return results, linked, nil
+}
+
+// checkStoreManifest holds a store release to what the store vouched for
+// (ADR-0120 §3). The store's check ran when the download finished; the files
+// can change before this job runs, and the bundle walk skips a file it cannot
+// read, so without this a package missing a part would be ingested — and
+// recorded as the whole package — as if nothing had happened.
+//
+// It returns the batch narrowed to exactly the manifest's files — anything
+// else in the directory (an older build's installer the store tool left
+// behind) is not what the store vouched for and is neither ingested nor made
+// part of the package — then the verification failure (the acquisition
+// fails, as for any bad bytes), then an infrastructure error (the job
+// retries). A release that is not a store release is returned unchanged.
+func checkStoreManifest(
+	ctx context.Context, cat IngestAcquisitionStore, desiredItemID string, batch verifiedTransfer,
+) (narrowed verifiedTransfer, verifyErr, err error) {
+	sel, err := cat.SelectedCandidate(ctx, desiredItemID)
+	if err != nil {
+		return batch, nil, fmt.Errorf("reading the selected release: %w", err)
+	}
+	if _, _, _, ok := acquisition.StoreFacts(sel.Attributes); !ok {
+		return batch, nil, nil
+	}
+	if !batch.pack {
+		return batch, errors.New("a store package must arrive as a directory with its manifest"), nil
+	}
+	raw, rerr := os.ReadFile(filepath.Join(batch.path, acquisition.StoreManifestName))
+	if rerr != nil {
+		return batch, errors.New("the store package has no readable manifest of what the store verified"), nil
+	}
+	var m acquisition.StoreManifest
+	if jerr := json.Unmarshal(raw, &m); jerr != nil {
+		return batch, errors.New("the store package's manifest is not readable JSON"), nil
+	}
+	// The store names files by base name only, so a name that appears twice —
+	// in the manifest, or among the files on disk — cannot be matched to one
+	// vouched-for file. It is refused as ambiguous rather than guessed at.
+	named := make(map[string]bool, len(m.Files))
+	for _, f := range m.Files {
+		if named[f.Name] {
+			return batch, fmt.Errorf("the store's manifest names %s twice; the package is ambiguous", f.Name), nil
+		}
+		named[f.Name] = true
+	}
+	held := make(map[string]int64, len(batch.artifacts))
+	kept := batch.artifacts[:0:0]
+	for _, a := range batch.artifacts {
+		base := filepath.Base(a.Path)
+		if !named[base] {
+			continue
+		}
+		if _, dup := held[base]; dup {
+			return batch, fmt.Errorf("two files named %s are in the package directory; the package is ambiguous", base), nil
+		}
+		held[base] = a.Size
+		kept = append(kept, a)
+	}
+	if unmet := m.Unmet(held); len(unmet) > 0 {
+		return batch, fmt.Errorf("the package no longer matches what the store verified: %s",
+			strings.Join(unmet, "; ")), nil
+	}
+	batch.artifacts = kept
+	batch.storeSizes = make(map[string]int64, len(m.Files))
+	for _, f := range m.Files {
+		batch.storeSizes[f.Name] = f.Size
+	}
+	return batch, nil, nil
+}
+
+// recordStorePackage writes a verified store package's facts onto the editions
+// an ingest filled, when the selected release was a store release. Any other
+// release is left alone: only a store fetch, which the GOG client completes only
+// after the store vouched for every file, may put store facts on an edition.
+//
+// Every result is held to the size the store stated for its file (batch's
+// storeSizes, from the manifest) before anything is recorded: the bytes hashed
+// into the CAS are the ones that must match, and a file replaced or truncated
+// after the pre-ingest check would otherwise be recorded as vouched for. A
+// mismatch is the first return value — a verification failure — and nothing is
+// recorded.
+func recordStorePackage(
+	ctx context.Context, cat IngestAcquisitionStore, desiredItemID string,
+	batch verifiedTransfer, results []ingest.Result,
+) (verifyErr, err error) {
+	sel, err := cat.SelectedCandidate(ctx, desiredItemID)
+	if err != nil {
+		return nil, fmt.Errorf("reading the selected release: %w", err)
+	}
+	store, drmFree, hasDRMFree, ok := acquisition.StoreFacts(sel.Attributes)
+	if !ok {
+		return nil, nil
+	}
+	if len(results) != len(batch.artifacts) {
+		return fmt.Errorf("ingested %d of the package's %d files", len(results), len(batch.artifacts)), nil
+	}
+	for i, r := range results {
+		name := filepath.Base(batch.artifacts[i].Path)
+		if want, ok := batch.storeSizes[name]; ok && want > 0 && r.BlobSize != want {
+			return fmt.Errorf("%s was %d bytes when hashed, the store vouched for %d", name, r.BlobSize, want), nil
+		}
+	}
+	ids := make([]string, 0, len(results))
+	blobs := make([]string, 0, len(results))
+	for _, r := range results {
+		if r.EditionID != "" {
+			ids = append(ids, r.EditionID)
+		}
+		if r.BlobHash != "" {
+			blobs = append(blobs, r.BlobHash)
+		}
+	}
+	return nil, cat.RecordVerifiedStoreEditions(ctx, ids, catalog.VerifiedStorePackage{
+		Store: store, DRMFree: drmFree, HasDRMFree: hasDRMFree, Blobs: blobs,
+	})
 }
 
 // episodeItemKey parses a pack file's season and episode and returns the

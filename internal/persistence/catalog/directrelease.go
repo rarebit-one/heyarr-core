@@ -58,6 +58,24 @@ import (
 // would spuriously reject every episode. The release is recorded accepted by
 // PROVENANCE (the feed adapter is the identity authority for its source), and this
 // is the one Reason that says so on the stored candidate.
+// storeReleaseReason is the provenance of a store package (ADR-0120): the
+// operator's own copy, fetched from the store they own it on, not a feed's.
+var storeReleaseReason = acquisition.Reason{
+	Rule:    "release/store-owned",
+	Section: "provenance",
+	Result:  acquisition.ResultPass,
+	Detail:  "the operator's own copy from the store it is owned on; no indexer search",
+}
+
+// directReasonFor names where a direct release came from: a store package, or
+// a followed source's feed.
+func directReasonFor(cand acquisition.ReleaseCandidate) acquisition.Reason {
+	if _, _, _, ok := acquisition.StoreFacts(cand.Attributes); ok {
+		return storeReleaseReason
+	}
+	return directReleaseReason
+}
+
 var directReleaseReason = acquisition.Reason{
 	Rule:    "release/direct-feed",
 	Section: "provenance",
@@ -86,7 +104,7 @@ func (c *Catalog) RecordDirectRelease(
 	eval := acquisition.Evaluation{
 		CandidateID: cand.ID,
 		Accepted:    true,
-		Reasons:     []acquisition.Reason{directReleaseReason},
+		Reasons:     []acquisition.Reason{directReasonFor(cand)},
 	}
 
 	var (
@@ -102,7 +120,15 @@ func (c *Catalog) RecordDirectRelease(
 		// flight or already ingested; managed means bytes are held. Either way a
 		// re-poll must not re-drive it — that is the idempotency this method owes
 		// invariant 9.
-		if before.State.Phase != acquisition.PhaseIdle || before.State.Managed {
+		//
+		// A store release is the exception to "managed means done" (ADR-0120): a
+		// game holding scanned files, or a package that lost a part, is managed
+		// but not satisfied — the store's verified package is exactly what it
+		// still lacks, and the held bytes stay held while it is fetched. It is
+		// refused once satisfied, which is when a store has nothing left to add.
+		_, _, _, store := acquisition.StoreFacts(cand.Attributes)
+		held := before.State.Managed && (!store || before.State.Content == acquisition.SatisfactionSatisfied)
+		if before.State.Phase != acquisition.PhaseIdle || held {
 			return nil
 		}
 

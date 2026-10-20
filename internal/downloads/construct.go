@@ -32,6 +32,9 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 	if r.Kind == providers.KindWebCapture {
 		return webCaptureFromConfig(r, now)
 	}
+	if r.Kind == providers.KindLgogdownloader {
+		return gogFromConfig(r, now)
+	}
 	if r.Kind != providers.KindTransmission && r.Kind != providers.KindQBittorrent &&
 		r.Kind != providers.KindSABnzbd && r.Kind != providers.KindNZBGet {
 		return nil, false, nil
@@ -300,6 +303,23 @@ func ytdlpFromConfig(r providers.Resolved, now func() time.Time) (providers.Prov
 		Label: r.Label,
 		Now:   now,
 	})
+	if err != nil {
+		return nil, true, err
+	}
+	return client, true, nil
+}
+
+// gogFromConfig builds the GOG store download client (ADR-0120). Like the
+// yt-dlp client its directory is the path map's local side, and a client with
+// no path_map is refused rather than defaulted to somewhere the ingest never
+// looks.
+func gogFromConfig(r providers.Resolved, now func() time.Time) (providers.Provider, bool, error) {
+	if len(r.PathMap) == 0 || r.PathMap[0].Local == "" {
+		return nil, true, fmt.Errorf(
+			"provider %q: a GOG download client needs a path_map with a local path so it has "+
+				"somewhere to write games", r.Name)
+	}
+	client, err := NewGOG(GOGOptions{Name: r.Name, Dir: r.PathMap[0].Local, Label: r.Label, Now: now})
 	if err != nil {
 		return nil, true, err
 	}
