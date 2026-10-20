@@ -88,22 +88,37 @@ const (
 	// AttrPlatform is the operating system a copy installs on: windows, linux,
 	// mac. Text, not ordered: no platform is better than another in general.
 	AttrPlatform Attribute = "platform"
+	// AttrIndexerPrivacy is the privacy class of the indexer a release came
+	// from, as the indexer manager reports it: "public", "private" or
+	// "semi_private". Provenance, not quality: a two-site fan-out (ADR-0119)
+	// reads it to decide whether a sibling may join the swarm by infohash or
+	// must resolve the release through its own credentialed indexer. Absent
+	// when the indexer does not say.
+	AttrIndexerPrivacy Attribute = "indexer_privacy"
+)
+
+// Indexer privacy classes, the normalised values AttrIndexerPrivacy carries.
+const (
+	IndexerPublic      = "public"
+	IndexerPrivate     = "private"
+	IndexerSemiPrivate = "semi_private"
 )
 
 // attributeKinds is the vocabulary. A rule naming anything not in here is
 // refused at write time.
 var attributeKinds = map[Attribute]Kind{
-	AttrResolution:    KindInt,
-	AttrSource:        KindText,
-	AttrVideoCodec:    KindText,
-	AttrAudioCodec:    KindText,
-	AttrAudioChannels: KindInt,
-	AttrHDR:           KindFlag,
-	AttrSizeBytes:     KindInt,
-	AttrLanguage:      KindText,
-	AttrStore:         KindText,
-	AttrDRMFree:       KindFlag,
-	AttrPlatform:      KindText,
+	AttrResolution:     KindInt,
+	AttrSource:         KindText,
+	AttrVideoCodec:     KindText,
+	AttrAudioCodec:     KindText,
+	AttrAudioChannels:  KindInt,
+	AttrHDR:            KindFlag,
+	AttrSizeBytes:      KindInt,
+	AttrLanguage:       KindText,
+	AttrStore:          KindText,
+	AttrDRMFree:        KindFlag,
+	AttrPlatform:       KindText,
+	AttrIndexerPrivacy: KindText,
 }
 
 // KindOf reports an attribute's kind, and whether it is known at all.

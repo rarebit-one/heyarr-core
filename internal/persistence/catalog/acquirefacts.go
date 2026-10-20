@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/catalogop"
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
@@ -32,6 +33,15 @@ type AcquireFacts struct {
 	CandidateID    string
 	CandidateTitle string
 	Size           int64
+	// SelectedAt is when the search that chose this release ran: the
+	// persisted selection time, stable across a retried grab, so a re-run
+	// republishes the SAME selection rather than a newer-looking one.
+	SelectedAt time.Time
+	// Private is whether the release came from a private (or semi-private)
+	// indexer, per the indexer manager's privacy class on the candidate. An
+	// indexer that reports no class is treated as public, which at worst sends
+	// a sibling to a swarm it cannot join, never a credential anywhere.
+	Private bool
 }
 
 // AcquireFacts reads the facts an acquire op carries for a want: its work's
@@ -48,11 +58,12 @@ func (c *Catalog) AcquireFacts(ctx context.Context, desiredItemID string) (Acqui
 		editionKey    sql.NullString
 		itemKey       sql.NullString
 		attrs         sql.NullString
+		searchedAt    string
 	)
 	err := c.db.Reader().QueryRowContext(ctx, `
 		SELECT w.content_type, w.work_key, w.title, w.year,
 		       d.scope, d.aspect, d.language, e.edition_key, i.item_key, q.name,
-		       rc.candidate_id, rc.title, rc.attributes
+		       rc.candidate_id, rc.title, rc.attributes, rc.searched_at
 		FROM desired_items d
 		JOIN works w ON w.id = d.work_id
 		JOIN quality_profiles q ON q.id = d.quality_profile_id
@@ -62,7 +73,7 @@ func (c *Catalog) AcquireFacts(ctx context.Context, desiredItemID string) (Acqui
 		WHERE d.id = ?`, desiredItemID).
 		Scan(&f.ContentType, &f.WorkKey, &f.WorkTitle, &year,
 			&scope, &aspect, &language, &editionKey, &itemKey, &f.Profile,
-			&f.CandidateID, &f.CandidateTitle, &attrs)
+			&f.CandidateID, &f.CandidateTitle, &attrs, &searchedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AcquireFacts{}, fmt.Errorf("%w: %s", ErrNoSelection, desiredItemID)
 	}
@@ -90,22 +101,25 @@ func (c *Catalog) AcquireFacts(ctx context.Context, desiredItemID string) (Acqui
 	} else {
 		f.Aspect = catalogop.AspectPrimary
 	}
+	f.SelectedAt = parseStamp(searchedAt)
 	if attrs.Valid {
-		f.Size = sizeFromAttributes(attrs.String)
+		f.Size, f.Private = candidateFacts(attrs.String)
 	}
 	return f, nil
 }
 
-// sizeFromAttributes pulls the indexer's size_bytes out of a candidate's stored
-// attributes; 0 when absent or unreadable (size is advisory in an op).
-func sizeFromAttributes(raw string) int64 {
+// candidateFacts pulls the indexer's size_bytes (0 when absent) and privacy
+// class out of a candidate's stored attributes.
+func candidateFacts(raw string) (size int64, private bool) {
 	var a acquisition.Attributes
 	if err := json.Unmarshal([]byte(raw), &a); err != nil {
-		return 0
+		return 0, false
 	}
-	v, ok := a[policy.AttrSizeBytes]
-	if !ok || v.Kind != policy.KindInt || v.Num < 0 {
-		return 0
+	if v, ok := a[policy.AttrSizeBytes]; ok && v.Kind == policy.KindInt && v.Num >= 0 {
+		size = v.Num
 	}
-	return v.Num
+	if v, ok := a[policy.AttrIndexerPrivacy]; ok && v.Kind == policy.KindText {
+		private = v.Text == policy.IndexerPrivate || v.Text == policy.IndexerSemiPrivate
+	}
+	return size, private
 }

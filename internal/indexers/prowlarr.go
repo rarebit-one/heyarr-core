@@ -186,6 +186,7 @@ type prowlarrRelease struct {
 	DownloadURL string             `json:"downloadUrl"`
 	MagnetURL   string             `json:"magnetUrl"`
 	Indexer     string             `json:"indexer"`
+	Privacy     string             `json:"privacy"` // "public" | "private" | "semiPrivate"
 	Categories  []prowlarrCategory `json:"categories"`
 }
 
@@ -319,6 +320,9 @@ func prowlarrAttributes(r prowlarrRelease, parseTitles bool) acquisition.Attribu
 	if r.Size != nil && *r.Size >= 0 {
 		attrs[policy.AttrSizeBytes] = policy.Num(*r.Size)
 	}
+	if p := indexerPrivacy(r.Privacy); p != "" {
+		attrs[policy.AttrIndexerPrivacy] = policy.Text(p)
+	}
 	if parseTitles {
 		fillAbsent(attrs, titleAttributes(r.Title))
 	}
@@ -405,4 +409,19 @@ func (c *prowlarrClient) detailFor(err error) string {
 		return pe.detail
 	}
 	return transporterr.Classify(err)
+}
+
+// indexerPrivacy normalises Prowlarr's privacy enum ("public", "private",
+// "semiPrivate") to the policy vocabulary; "" when absent or unrecognised,
+// so an unknown class is recorded as nothing rather than as public.
+func indexerPrivacy(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "public":
+		return policy.IndexerPublic
+	case "private":
+		return policy.IndexerPrivate
+	case "semiprivate", "semi_private", "semi-private":
+		return policy.IndexerSemiPrivate
+	}
+	return ""
 }

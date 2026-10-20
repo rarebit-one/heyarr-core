@@ -89,6 +89,14 @@ func (p *CatalogAcquirePublisher) Publish(ctx context.Context, desiredItemID, tr
 	if p.Now != nil {
 		now = p.Now().UTC()
 	}
+	// The op's selected-at is the PERSISTED selection time, not now: a grab
+	// re-run after a crash between RecordOps and the transition republishes
+	// the same selection with the same time, so it can never outrank a
+	// genuinely newer choice made elsewhere in the meantime.
+	selectedAt := facts.SelectedAt
+	if selectedAt.IsZero() {
+		selectedAt = now
+	}
 	heads, err := p.Ops.Heads(ctx)
 	if err != nil {
 		return fmt.Errorf("worker: reading catalog-op heads: %w", err)
@@ -102,13 +110,13 @@ func (p *CatalogAcquirePublisher) Publish(ctx context.Context, desiredItemID, tr
 		WorkTitle:  facts.WorkTitle,
 		Year:       facts.Year,
 		Size:       facts.Size,
-		SelectedAt: now,
+		SelectedAt: selectedAt,
 		Site:       site,
 		// Trackers are never published in this increment: the sibling joins
 		// the swarm by infohash (DHT), or resolves a private release through
 		// its own indexers. A tracker URL from the source would risk a passkey.
 		Trackers: nil,
-		Private:  false,
+		Private:  facts.Private,
 	}, heads, now)
 	if err != nil {
 		return fmt.Errorf("worker: signing acquire op for %s: %w", desiredItemID, err)

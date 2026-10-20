@@ -135,8 +135,11 @@ func newPublisher(t *testing.T, facts catalog.AcquireFacts) (*CatalogAcquirePubl
 	}, ops
 }
 
+var arrivalSelectedAt = time.Date(2026, 10, 19, 22, 15, 0, 0, time.UTC)
+
 func arrivalFacts() catalog.AcquireFacts {
 	return catalog.AcquireFacts{
+		SelectedAt:     arrivalSelectedAt,
 		ContentType:    "movie",
 		WorkKey:        "movie:arrival:2016",
 		WorkTitle:      "Arrival",
@@ -184,6 +187,42 @@ func TestThePublishedOpCarriesTheFactsAndNothingSecret(t *testing.T) {
 	}
 	if len(op.Prev) != 1 || op.Prev[0] != ops.heads[0] {
 		t.Errorf("prev = %v, want the store's heads", op.Prev)
+	}
+	// The op's selected-at is the persisted selection time, not the
+	// publisher's clock, so a re-publish after a crash ranks the same.
+	if !a.SelectedAt.Equal(arrivalSelectedAt) {
+		t.Errorf("selected-at = %v, want the persisted %v", a.SelectedAt, arrivalSelectedAt)
+	}
+	pub2, ops2 := newPublisher(t, arrivalFacts())
+	pub2.Now = func() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC) }
+	if err := pub2.Publish(t.Context(), "want-1", fakeInfohash); err != nil {
+		t.Fatal(err)
+	}
+	op2, err := catalogop.Verify(ops2.recorded[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !op2.Acquire.SelectedAt.Equal(arrivalSelectedAt) {
+		t.Errorf("a later re-publish moved selected-at to %v", op2.Acquire.SelectedAt)
+	}
+}
+
+// TestAPrivateIndexersReleaseIsPublishedPrivate: provenance travels, so the
+// sibling resolves it through its own indexer rather than a public swarm.
+func TestAPrivateIndexersReleaseIsPublishedPrivate(t *testing.T) {
+	t.Parallel()
+	f := arrivalFacts()
+	f.Private = true
+	pub, ops := newPublisher(t, f)
+	if err := pub.Publish(t.Context(), "want-1", fakeInfohash); err != nil {
+		t.Fatal(err)
+	}
+	op, err := catalogop.Verify(ops.recorded[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !op.Acquire.Private || len(op.Acquire.Trackers) != 0 {
+		t.Errorf("private release published as %+v", op.Acquire)
 	}
 }
 

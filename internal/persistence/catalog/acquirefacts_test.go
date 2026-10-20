@@ -44,9 +44,50 @@ func TestAcquireFactsSpellTheWantTheOpsWay(t *testing.T) {
 		ContentType: "movie", WorkKey: "movie:arrival:2016", WorkTitle: "Arrival", Year: 2016,
 		Scope: catalogop.ScopeWork, Aspect: catalogop.AspectPrimary, Profile: "living-room",
 		CandidateID: cand.ID, CandidateTitle: cand.Title, Size: 12_000_000_000,
+		SelectedAt: f.SelectedAt,
 	}
 	if f != want {
 		t.Errorf("facts =\n %+v\nwant\n %+v", f, want)
+	}
+	if f.SelectedAt.IsZero() {
+		t.Errorf("selected-at is zero, want the search's time")
+	}
+	// Read twice, the same time: the selection time is persisted, not now.
+	again, err := h.cat.AcquireFacts(context.Background(), h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.SelectedAt.Equal(f.SelectedAt) {
+		t.Errorf("selected-at moved between reads: %v then %v", f.SelectedAt, again.SelectedAt)
+	}
+}
+
+// TestAcquireFactsCarryTheIndexersPrivacy: a candidate from a private or
+// semi-private indexer reads back Private; a public one, or one whose
+// indexer says nothing, does not.
+func TestAcquireFactsCarryTheIndexersPrivacy(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		privacy string
+		want    bool
+	}{"private": {policy.IndexerPrivate, true}, "semi-private": {policy.IndexerSemiPrivate, true},
+		"public": {policy.IndexerPublic, false}, "unsaid": {"", false}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			cand := release("rel", 2160, "hevc")
+			if tc.privacy != "" {
+				cand.Attributes[policy.AttrIndexerPrivacy] = policy.Text(tc.privacy)
+			}
+			selectRelease(t, h, h.want, cand)
+			f, err := h.cat.AcquireFacts(context.Background(), h.want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.Private != tc.want {
+				t.Errorf("private = %v, want %v", f.Private, tc.want)
+			}
+		})
 	}
 }
 
