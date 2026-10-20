@@ -26,8 +26,8 @@ type recordingPublisher struct {
 	fail  error
 }
 
-func (p *recordingPublisher) Publish(_ context.Context, desiredItemID, transferID string) error {
-	p.calls = append(p.calls, desiredItemID+"|"+transferID)
+func (p *recordingPublisher) Publish(_ context.Context, desiredItemID, candidateID, transferID string) error {
+	p.calls = append(p.calls, desiredItemID+"|"+candidateID+"|"+transferID)
 	return p.fail
 }
 
@@ -161,7 +161,7 @@ func TestThePublishedOpCarriesTheFactsAndNothingSecret(t *testing.T) {
 	t.Parallel()
 	pub, ops := newPublisher(t, arrivalFacts())
 	// The client reports the hash upper-case; the op pins it lower-case.
-	if err := pub.Publish(t.Context(), "want-1", strings.ToUpper(fakeInfohash)); err != nil {
+	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, strings.ToUpper(fakeInfohash)); err != nil {
 		t.Fatal(err)
 	}
 	if len(ops.recorded) != 1 {
@@ -196,7 +196,7 @@ func TestThePublishedOpCarriesTheFactsAndNothingSecret(t *testing.T) {
 	}
 	pub2, ops2 := newPublisher(t, arrivalFacts())
 	pub2.Now = func() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC) }
-	if err := pub2.Publish(t.Context(), "want-1", fakeInfohash); err != nil {
+	if err := pub2.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, fakeInfohash); err != nil {
 		t.Fatal(err)
 	}
 	op2, err := catalogop.Verify(ops2.recorded[0])
@@ -215,7 +215,7 @@ func TestAPrivateIndexersReleaseIsPublishedPrivate(t *testing.T) {
 	f := arrivalFacts()
 	f.Private = true
 	pub, ops := newPublisher(t, f)
-	if err := pub.Publish(t.Context(), "want-1", fakeInfohash); err != nil {
+	if err := pub.Publish(t.Context(), "want-1", f.CandidateID, fakeInfohash); err != nil {
 		t.Fatal(err)
 	}
 	op, err := catalogop.Verify(ops.recorded[0])
@@ -233,7 +233,7 @@ func TestNonTorrentTransfersAreNotPublished(t *testing.T) {
 	t.Parallel()
 	pub, ops := newPublisher(t, arrivalFacts())
 	for _, id := range []string{"fake:1", "http-7", "", "nzb-abc"} {
-		if err := pub.Publish(t.Context(), "want-1", id); err != nil {
+		if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, id); err != nil {
 			t.Fatalf("transfer %q: %v", id, err)
 		}
 	}
@@ -250,7 +250,7 @@ func TestAClientThatTookADifferentReleaseIsNotPublished(t *testing.T) {
 	t.Parallel()
 	pub, ops := newPublisher(t, arrivalFacts())
 	other := strings.Repeat("f", 40)
-	if err := pub.Publish(t.Context(), "want-1", other); err == nil {
+	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, other); err == nil {
 		t.Fatal("a mismatched infohash was published")
 	}
 	if len(ops.recorded) != 0 {
@@ -261,7 +261,7 @@ func TestAClientThatTookADifferentReleaseIsNotPublished(t *testing.T) {
 	f := arrivalFacts()
 	f.CandidateID = "sha256:" + strings.Repeat("0", 64)
 	pub, ops = newPublisher(t, f)
-	if err := pub.Publish(t.Context(), "want-1", other); err != nil {
+	if err := pub.Publish(t.Context(), "want-1", f.CandidateID, other); err != nil {
 		t.Fatal(err)
 	}
 	if len(ops.recorded) != 1 {
@@ -275,7 +275,7 @@ func TestNoSelectionPublishesNothing(t *testing.T) {
 	t.Parallel()
 	pub, ops := newPublisher(t, catalog.AcquireFacts{})
 	pub.Facts = fakeFacts{err: catalog.ErrNoSelection}
-	if err := pub.Publish(t.Context(), "want-1", fakeInfohash); err != nil {
+	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, fakeInfohash); err != nil {
 		t.Fatal(err)
 	}
 	if len(ops.recorded) != 0 {
@@ -288,7 +288,7 @@ func TestNoSelectionPublishesNothing(t *testing.T) {
 func TestANilPublisherIsSafe(t *testing.T) {
 	t.Parallel()
 	var pub *CatalogAcquirePublisher
-	if err := pub.Publish(t.Context(), "want-1", fakeInfohash); err != nil {
+	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, fakeInfohash); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -302,7 +302,7 @@ func TestOversizedDisplayFieldsAreClippedNotRefused(t *testing.T) {
 	f.CandidateTitle = strings.Repeat("é", catalogop.MaxTitle) // 2 bytes each: twice the limit
 	f.WorkTitle = strings.Repeat("x", catalogop.MaxTitle+40)
 	pub, ops := newPublisher(t, f)
-	if err := pub.Publish(t.Context(), "want-1", fakeInfohash); err != nil {
+	if err := pub.Publish(t.Context(), "want-1", f.CandidateID, fakeInfohash); err != nil {
 		t.Fatalf("an oversized title refused the publish: %v", err)
 	}
 	op, err := catalogop.Verify(ops.recorded[0])
@@ -314,5 +314,22 @@ func TestOversizedDisplayFieldsAreClippedNotRefused(t *testing.T) {
 	}
 	if len(op.Acquire.WorkTitle) != catalogop.MaxTitle {
 		t.Errorf("work title clipped to %d bytes, want %d", len(op.Acquire.WorkTitle), catalogop.MaxTitle)
+	}
+}
+
+// TestASelectionThatChangedUnderTheGrabIsNotPublished: a by-hand override that
+// lands between the grab's SelectedSource and the publish swaps the selected
+// row; the facts no longer describe the grabbed release, so nothing is
+// published (the override's own grab publishes its own op).
+func TestASelectionThatChangedUnderTheGrabIsNotPublished(t *testing.T) {
+	t.Parallel()
+	f := arrivalFacts()
+	f.CandidateID = "sha256:" + strings.Repeat("0", 64) // the overriding pick, a hashed guid
+	pub, ops := newPublisher(t, f)
+	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, fakeInfohash); err != nil {
+		t.Fatal(err)
+	}
+	if len(ops.recorded) != 0 {
+		t.Fatalf("published %d ops for a selection that changed under the grab", len(ops.recorded))
 	}
 }

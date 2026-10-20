@@ -20,12 +20,14 @@ import (
 // that is a single-site node, or one without an identity key, and the grab is
 // unaffected either way.
 type AcquirePublisher interface {
-	// Publish records the op for the want. transferID is what the download
-	// client called the transfer: for a torrent client it is the infohash,
-	// which is the identity the op pins. A transfer that is not a torrent
-	// (an HTTP enclosure, a usenet article) has nothing a sibling could pin
-	// and is skipped without error.
-	Publish(ctx context.Context, desiredItemID, transferID string) error
+	// Publish records the op for the want. candidateID is the release the
+	// grab handed to the client, and transferID is what the client called the
+	// transfer: for a torrent client it is the infohash, which is the
+	// identity the op pins. A transfer that is not a torrent (an HTTP
+	// enclosure, a usenet article) has nothing a sibling could pin and is
+	// skipped without error. The facts published are those of candidateID,
+	// never of whatever is selected by the time the op is written.
+	Publish(ctx context.Context, desiredItemID, candidateID, transferID string) error
 }
 
 // AcquireFactsReader is the catalog read the publisher needs.
@@ -54,7 +56,7 @@ type CatalogAcquirePublisher struct {
 }
 
 // Publish implements AcquirePublisher.
-func (p *CatalogAcquirePublisher) Publish(ctx context.Context, desiredItemID, transferID string) error {
+func (p *CatalogAcquirePublisher) Publish(ctx context.Context, desiredItemID, candidateID, transferID string) error {
 	if p == nil || p.Facts == nil || p.Ops == nil || len(p.Signer) != ed25519.PrivateKeySize {
 		return nil
 	}
@@ -73,6 +75,19 @@ func (p *CatalogAcquirePublisher) Publish(ctx context.Context, desiredItemID, tr
 	}
 	if err != nil {
 		return err
+	}
+	// The facts must be the grabbed release's. A by-hand override that lands
+	// between the grab's SelectedSource and this read swaps the selected row
+	// under us; publishing its title, privacy and selected-at with the old
+	// transfer's infohash would tell siblings to fetch a release the origin
+	// did not choose. Skip: the override enqueues its own grab, which
+	// publishes its own op.
+	if candidateID != "" && facts.CandidateID != candidateID {
+		if p.Log != nil {
+			p.Log.Info("not publishing a grab whose selection changed under it",
+				"desired_item_id", desiredItemID, "grabbed", candidateID, "now_selected", facts.CandidateID)
+		}
+		return nil
 	}
 	// A candidate whose id is the infohash must agree with the client's: a
 	// disagreement means the client took a different release than the one

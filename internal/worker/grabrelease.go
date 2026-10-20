@@ -166,7 +166,7 @@ func GrabReleaseHandler(
 		// skip at the top ("not waiting to be queued") and the op would never
 		// be written.
 		if o.publisher != nil {
-			if err := o.publisher.Publish(ctx, payload.DesiredItemID, transfer.ID); err != nil {
+			if err := o.publisher.Publish(ctx, payload.DesiredItemID, candidateID, transfer.ID); err != nil {
 				return err
 			}
 		}
