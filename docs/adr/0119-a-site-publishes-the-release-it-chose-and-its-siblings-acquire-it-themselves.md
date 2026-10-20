@@ -46,8 +46,10 @@ converges on the same work.**
   `(content_type, work_key)`. It carries what a sibling needs to acquire the
   same bytes and nothing it must not: the scope within the work (the work, an
   edition, or an item), the aspect (primary, or a subtitle language), the
-  quality profile's name, the infohash, the release title and size, when it
-  was selected, and the origin's site name. It carries announce URLs only when
+  quality profile's name, the infohash, the release title and size, the
+  work's own title and year (so a sibling that has never seen the work can
+  create it under the same key), when it was selected, and the origin's site
+  name. It carries announce URLs only when
   they are credential-free; a release from a private indexer is published with
   `private: true` and no trackers.
 - **Credentials never ride an op.** The indexer URL the origin fetched the

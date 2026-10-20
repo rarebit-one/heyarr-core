@@ -123,6 +123,12 @@ type Acquire struct {
 	Infohash string
 	// Title is the release title as the indexer named it; display only.
 	Title string
+	// WorkTitle and Year are what the origin's work was described as: with
+	// the content type they re-derive the same work_key at a sibling that has
+	// never seen the work, so it can create it under the key the op names.
+	// Year is 0 when unknown.
+	WorkTitle string
+	Year      int
 	// Size is the release size in bytes as the indexer reported it (0 = unknown).
 	Size int64
 	// SelectedAt is when the origin selected the release; the newest wins.
@@ -228,6 +234,8 @@ type acquirePayload struct {
 	Profile    string   `json:"profile"`
 	Infohash   string   `json:"infohash"`
 	Title      string   `json:"title"`
+	WorkTitle  string   `json:"work_title"`
+	Year       int      `json:"year"`
 	Size       int64    `json:"size"`
 	SelectedAt int64    `json:"sel"`
 	Site       string   `json:"site"`
@@ -324,6 +332,8 @@ func (a Acquire) payload() *acquirePayload {
 		Profile:    a.Profile,
 		Infohash:   a.Infohash,
 		Title:      a.Title,
+		WorkTitle:  a.WorkTitle,
+		Year:       a.Year,
 		Size:       a.Size,
 		SelectedAt: sel,
 		Site:       a.Site,
@@ -339,6 +349,8 @@ func (ap *acquirePayload) acquire() *Acquire {
 		Profile:    ap.Profile,
 		Infohash:   ap.Infohash,
 		Title:      ap.Title,
+		WorkTitle:  ap.WorkTitle,
+		Year:       ap.Year,
 		Size:       ap.Size,
 		SelectedAt: time.Unix(ap.SelectedAt, 0).UTC(),
 		Site:       ap.Site,
@@ -373,6 +385,12 @@ func (ap *acquirePayload) validate() error {
 	}
 	if ap.Title == "" || len(ap.Title) > MaxTitle {
 		return fmt.Errorf("%w: acquire title", ErrMalformed)
+	}
+	if ap.WorkTitle == "" || len(ap.WorkTitle) > MaxTitle {
+		return fmt.Errorf("%w: acquire work title", ErrMalformed)
+	}
+	if ap.Year < 0 || ap.Year > 9999 {
+		return fmt.Errorf("%w: acquire year %d", ErrMalformed, ap.Year)
 	}
 	if ap.Size < 0 {
 		return fmt.Errorf("%w: acquire size %d", ErrMalformed, ap.Size)

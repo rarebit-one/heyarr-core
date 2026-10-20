@@ -25,6 +25,8 @@ func publicAcquire() catalogop.Acquire {
 		Profile:    "living-room",
 		Infohash:   hashA,
 		Title:      "A Film (1982) 2160p",
+		WorkTitle:  "A Film",
+		Year:       1982,
 		Size:       15_679_021_336,
 		SelectedAt: selAt,
 		Site:       "north",
@@ -57,6 +59,7 @@ func TestAcquireRoundTrip(t *testing.T) {
 	got := *op.Acquire
 	if got.Scope != want.Scope || got.Aspect != want.Aspect || got.Profile != want.Profile ||
 		got.Infohash != want.Infohash || got.Title != want.Title || got.Size != want.Size ||
+		got.WorkTitle != want.WorkTitle || got.Year != want.Year ||
 		!got.SelectedAt.Equal(want.SelectedAt) || got.Site != want.Site || got.Private != want.Private ||
 		strings.Join(got.Trackers, ",") != strings.Join(want.Trackers, ",") {
 		t.Errorf("acquire round trip:\n got %+v\nwant %+v", got, want)
@@ -83,7 +86,7 @@ func TestAcquireCarriesNoSecret(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload has no acq object: %v", body)
 	}
-	wantKeys := map[string]bool{"scope": true, "aspect": true, "profile": true, "infohash": true, "title": true, "size": true, "sel": true, "site": true, "trackers": true, "private": true}
+	wantKeys := map[string]bool{"scope": true, "aspect": true, "profile": true, "infohash": true, "title": true, "work_title": true, "year": true, "size": true, "sel": true, "site": true, "trackers": true, "private": true}
 	for k := range acq {
 		if !wantKeys[k] {
 			t.Errorf("acquire payload carries unexpected key %q", k)
@@ -141,6 +144,8 @@ func TestAcquireRejectsBadShape(t *testing.T) {
 		"short infohash":      func(a *catalogop.Acquire) { a.Infohash = hashA[:39] },
 		"empty profile":       func(a *catalogop.Acquire) { a.Profile = "" },
 		"empty title":         func(a *catalogop.Acquire) { a.Title = "" },
+		"empty work title":    func(a *catalogop.Acquire) { a.WorkTitle = "" },
+		"absurd year":         func(a *catalogop.Acquire) { a.Year = 10000 },
 		"negative size":       func(a *catalogop.Acquire) { a.Size = -1 },
 		"zero selected-at":    func(a *catalogop.Acquire) { a.SelectedAt = time.Time{} },
 		"empty site":          func(a *catalogop.Acquire) { a.Site = "" },
@@ -170,6 +175,7 @@ func TestAcquireRejectsBadShape(t *testing.T) {
 		func(a *catalogop.Acquire) { a.Aspect = catalogop.AspectSubtitlePrefix + "pt-BR" },
 		func(a *catalogop.Acquire) { a.Infohash = strings.Repeat("ab", 32) },
 		func(a *catalogop.Acquire) { a.Size = 0 },
+		func(a *catalogop.Acquire) { a.Year = 0 },
 		func(a *catalogop.Acquire) { a.Trackers = nil },
 	} {
 		a := publicAcquire()
