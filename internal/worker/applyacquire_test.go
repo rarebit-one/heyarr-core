@@ -446,3 +446,93 @@ func TestAWantHoldingThisSitesOwnChoiceIsHeld(t *testing.T) {
 		t.Fatalf("selected %s, want this site's own choice kept", got)
 	}
 }
+
+// TestANewerOpWhileFetchingAnEarlierOneIsDeferredThenApplied: the want is
+// still fetching the sibling's first choice when its newer one arrives. The
+// newer op is deferred, not held, and applies once the first has landed.
+func TestANewerOpWhileFetchingAnEarlierOneIsDeferredThenApplied(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	h.receive(t, h.sibling, "movie", "movie:arrival:2016", siblingAcquire())
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	upgrade := siblingAcquire()
+	upgrade.Infohash = strings.Repeat("cd", 20)
+	upgrade.SelectedAt = applyAt.Add(time.Hour)
+	hash := h.receive(t, h.sibling, "movie", "movie:arrival:2016", upgrade)
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if app := h.application(t, hash); app.Outcome != catalog.FanOutDeferred {
+		t.Fatalf("application = %+v, want deferred while the first is in flight", app)
+	}
+	h.holdContent(t)
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if app := h.application(t, hash); app.Outcome != catalog.FanOutApplied {
+		t.Fatalf("after the first landed the application = %+v, want applied", app)
+	}
+	if got := h.selectedID(t); got != "infohash:"+upgrade.Infohash {
+		t.Fatalf("selected %s, want the newer release", got)
+	}
+}
+
+// TestAnAppliedOpWhoseWantWasDeletedIsReapplied: the want an op was applied
+// to is gone (a delete, then a restore); the op is effective again, so the
+// next pass recreates the want and applies it.
+func TestAnAppliedOpWhoseWantWasDeletedIsReapplied(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	hash := h.receive(t, h.sibling, "movie", "movie:arrival:2016", siblingAcquire())
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Writer().Exec(`DELETE FROM desired_items WHERE id = ?`, h.want); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	app := h.application(t, hash)
+	if app.Outcome != catalog.FanOutApplied || app.DesiredItemID == "" || app.DesiredItemID == h.want {
+		t.Fatalf("application = %+v, want applied to a recreated want", app)
+	}
+}
+
+// TestAReleaseThatDidNotFetchHereIsNotSelectedAgain: the fan-out grab stalled,
+// the stuck-grab sweep blocked the release and the want fell back to idle.
+// The op is re-evaluated, finds its release blocked, and records no source
+// rather than re-selecting it into the same stall.
+func TestAReleaseThatDidNotFetchHereIsNotSelectedAgain(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	hash := h.receive(t, h.sibling, "movie", "movie:arrival:2016", siblingAcquire())
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.cat.BlockRelease(t.Context(), catalog.BlockedRelease{
+		DesiredItemID: h.want, Provider: catalog.FanOutProviderPrefix + "north",
+		CandidateID: "infohash:" + fakeInfohash, Title: "Arrival 2016 2160p",
+		Detail: "stalled", Reason: catalog.BlockGrabFailed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Writer().Exec(
+		`UPDATE acquisition_state SET phase = 'idle', managed = 0 WHERE desired_item_id = ?`, h.want); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Writer().Exec(`DELETE FROM jobs`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if app := h.application(t, hash); app.Outcome != catalog.FanOutNoSiteSource {
+		t.Fatalf("application = %+v, want no_site_source for a blocked release", app)
+	}
+	if got := h.pendingGrabs(t); got != 0 {
+		t.Fatalf("%d grabs queued for a release that did not fetch here", got)
+	}
+}

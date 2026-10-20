@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/catalogop"
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
@@ -23,6 +24,8 @@ type FanOutStore interface {
 	RecordDirectRelease(ctx context.Context, desiredItemID string, cand acquisition.ReleaseCandidate) (bool, error)
 	Acquisition(ctx context.Context, desiredItemID string) (catalog.AcquisitionRecord, error)
 	SelectedCandidate(ctx context.Context, desiredItemID string) (catalog.Candidate, error)
+	FanOutStale(ctx context.Context) (map[string]bool, error)
+	BlockedFor(ctx context.Context, desiredItemID string) ([]catalog.BlockedRelease, error)
 }
 
 // OpsReader is the op-log read the applier needs.
@@ -40,11 +43,18 @@ type OpsReader interface {
 //
 // # Each op is applied once, and the outcome is durable
 //
-// catalog_op_applications holds what was done per op hash. A final outcome is
-// not revisited; `scope_unresolved` (the op names an edition or item this
-// node has not materialised) is retried every pass until it resolves or a
-// newer op supersedes it. A newer op for the same (work, scope, aspect) is a
-// different hash and gets its own application.
+// catalog_op_applications holds what was done per op hash. A final outcome
+// (`applied`, `held`, `own`) is revisited only when what it settled no longer
+// stands: its want is gone (deleted, perhaps restored since) or back at idle
+// without content (its grab failed). The others (`scope_unresolved`,
+// `no_site_source`, `tombstoned`, `deferred`) are re-evaluated every pass
+// until they settle or a newer op supersedes them; an unchanged outcome is not
+// rewritten. A newer op for the same (work, scope, aspect) is a different hash
+// and gets its own application.
+//
+// A want fan-out created is never searched by this site's scorer (it fetches
+// the sibling's exact release or nothing), and a release this want already
+// failed to fetch here is not selected again.
 //
 // # The source is this node's own
 //
@@ -67,10 +77,14 @@ func ApplyAcquireHandler(ops OpsReader, cat FanOutStore, q ProbeEnqueuer, selfKe
 		if err != nil {
 			return err
 		}
+		stale, err := cat.FanOutStale(ctx)
+		if err != nil {
+			return err
+		}
 		var applied, skipped int
 		for _, op := range view.Acquisitions {
 			prior, seen := done[op.Hash]
-			if seen && prior.Outcome.Final() {
+			if seen && prior.Outcome.Final() && !stale[op.Hash] {
 				continue
 			}
 			outcome, wantID, detail, err := applyOne(ctx, cat, q, op, selfKey, log)
@@ -128,6 +142,20 @@ func applyOne(ctx context.Context, cat FanOutStore, q ProbeEnqueuer, op catalogo
 	if want.ProfileFallback != "" {
 		detail += fmt.Sprintf("; profile %q unknown here, used %q", a.Profile, want.ProfileFallback)
 	}
+	// A release this want already failed to fetch here (a dead swarm, a
+	// stalled transfer the stuck-grab sweep blocked) is not selected again:
+	// that would loop the want through the same stall. With no other source,
+	// the op waits for a newer one.
+	blocked, err := cat.BlockedFor(ctx, want.DesiredItemID)
+	if err != nil {
+		return "", "", "", err
+	}
+	for _, b := range blocked {
+		if b.CandidateID == "infohash:"+a.Infohash {
+			return catalog.FanOutNoSiteSource, want.DesiredItemID,
+				detail + "; the release did not fetch here and is blocked for this want", nil
+		}
+	}
 	cand := acquisition.ReleaseCandidate{
 		ID:       "infohash:" + a.Infohash,
 		Title:    a.Title,
@@ -147,9 +175,15 @@ func applyOne(ctx context.Context, cat FanOutStore, q ProbeEnqueuer, op catalogo
 		// release committed and the process died (or the enqueue failed)
 		// before the grab was queued, so the want rests SELECTED on this very
 		// candidate with no outcome recorded. That is resumed, not held.
-		resume, err := selectedOn(ctx, cat, want.DesiredItemID, cand.ID)
+		resume, fanOutInFlight, err := selectedOn(ctx, cat, want.DesiredItemID, cand.ID)
 		if err != nil {
 			return "", "", "", err
+		}
+		if fanOutInFlight {
+			// The want is still fetching a sibling's EARLIER choice. Once that
+			// finishes, the want follows the sibling to this newer one; until
+			// then the op is deferred, not held, so a later pass applies it.
+			return catalog.FanOutDeferred, want.DesiredItemID, detail + "; the want is still fetching a sibling's earlier choice", nil
 		}
 		if !resume {
 			// Otherwise the op changes nothing here: if the want is acquiring,
@@ -172,23 +206,28 @@ func applyOne(ctx context.Context, cat FanOutStore, q ProbeEnqueuer, op catalogo
 	return catalog.FanOutApplied, want.DesiredItemID, detail, nil
 }
 
-// selectedOn reports whether the want rests SELECTED on candidateID.
-func selectedOn(ctx context.Context, cat FanOutStore, desiredItemID, candidateID string) (bool, error) {
+// selectedOn reports whether the want rests SELECTED on candidateID (an
+// interrupted application to resume), and whether it is in flight on a
+// DIFFERENT release it took from a sibling's op (a newer op to defer).
+func selectedOn(ctx context.Context, cat FanOutStore, desiredItemID, candidateID string) (resume, fanOutInFlight bool, err error) {
 	state, err := cat.Acquisition(ctx, desiredItemID)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	if state.State.Phase != acquisition.PhaseSelected {
-		return false, nil
+	if state.State.Phase == acquisition.PhaseIdle {
+		return false, false, nil
 	}
 	sel, err := cat.SelectedCandidate(ctx, desiredItemID)
 	if errors.Is(err, catalog.ErrNoCandidate) {
-		return false, nil
+		return false, false, nil
 	}
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	return sel.CandidateID == candidateID, nil
+	if sel.CandidateID == candidateID {
+		return state.State.Phase == acquisition.PhaseSelected, false, nil
+	}
+	return false, strings.HasPrefix(sel.Provider, catalog.FanOutProviderPrefix), nil
 }
 
 // magnetFor renders the magnet for a public release: the exact topic for the

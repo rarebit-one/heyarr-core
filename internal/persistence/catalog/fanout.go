@@ -43,6 +43,10 @@ const (
 	// ignored while it is. Re-evaluated every pass: a restore makes the op
 	// effective again.
 	FanOutTombstoned FanOutOutcome = "tombstoned"
+	// FanOutDeferred means the want is still fetching a sibling's earlier
+	// choice; the newer op is re-evaluated every pass and applies once that
+	// grab has finished (a want following a sibling takes its newer choice).
+	FanOutDeferred FanOutOutcome = "deferred"
 	// FanOutScopeUnresolved means the op names an edition or item this node has
 	// not materialised. Retried on every pass until it appears.
 	FanOutScopeUnresolved FanOutOutcome = "scope_unresolved"
@@ -62,7 +66,11 @@ const (
 // Final reports whether an outcome is settled for its op: a non-final outcome
 // is retried on the next pass.
 func (o FanOutOutcome) Final() bool {
-	return o != FanOutScopeUnresolved && o != FanOutNoSiteSource && o != FanOutTombstoned
+	switch o {
+	case FanOutScopeUnresolved, FanOutNoSiteSource, FanOutTombstoned, FanOutDeferred:
+		return false
+	}
+	return true
 }
 
 // FanOutApplication is one recorded outcome.
@@ -144,6 +152,33 @@ func (c *Catalog) RecordFanOutApplication(ctx context.Context, opHash, desiredIt
 	}
 	c.events.Publish(pending...)
 	return nil
+}
+
+// FanOutStale returns the op hashes whose recorded outcome is final (applied
+// or held) but whose want has since gone (a delete, perhaps restored later) or
+// fallen back to idle without content (its grab failed and was cleared). The
+// applier re-evaluates them: a final outcome stands only while what it
+// settled still does.
+func (c *Catalog) FanOutStale(ctx context.Context) (map[string]bool, error) {
+	rows, err := c.db.Reader().QueryContext(ctx, `
+		SELECT o.op_hash FROM catalog_op_applications o
+		LEFT JOIN desired_items d ON d.id = o.desired_item_id
+		LEFT JOIN acquisition_state a ON a.desired_item_id = d.id
+		WHERE o.outcome IN ('applied', 'held')
+		  AND (d.id IS NULL OR (a.phase = 'idle' AND a.managed = 0))`)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: reading stale fan-out applications: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]bool{}
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, fmt.Errorf("catalog: reading stale fan-out applications: %w", err)
+		}
+		out[h] = true
+	}
+	return out, rows.Err()
 }
 
 // FanOutWant is the want an acquire op resolved to on this node.
@@ -318,6 +353,14 @@ func (c *Catalog) EnsureFanOutWant(ctx context.Context, op catalogop.Op) (FanOut
 	switch {
 	case err == nil:
 		out.DesiredItemID, out.Created = rec.Item.ID, true
+		// Marked as fan-out's own, so this site's scorer never searches it.
+		// A crash between the two leaves an unmarked want, which then behaves
+		// as this site's own: searched, never wrong, only not byte-identical.
+		if _, err := c.db.Writer().ExecContext(ctx,
+			`INSERT OR IGNORE INTO fan_out_wants (desired_item_id, origin_site, created_at) VALUES (?, ?, ?)`,
+			rec.Item.ID, a.Site, stamp); err != nil {
+			return FanOutWant{}, fmt.Errorf("catalog: marking fan-out want %s: %w", rec.Item.ID, err)
+		}
 		return out, nil
 	case IsDuplicateWant(err):
 		id, lookErr := existingWant(ctx, c.db.Reader(), item)

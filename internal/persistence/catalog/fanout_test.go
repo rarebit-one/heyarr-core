@@ -223,3 +223,33 @@ func TestFanOutApplicationsRoundTrip(t *testing.T) {
 		t.Errorf("%d fan_out_changed events, want 2 (recorded, then moved to applied)", n)
 	}
 }
+
+// TestAWantFanOutCreatedIsNeverSearchedHere: a want EnsureFanOutWant created
+// fetches the sibling's exact release or nothing, so it is never due a search
+// by this site's scorer; this site's own want beside it still is.
+func TestAWantFanOutCreatedIsNeverSearchedHere(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := t.Context()
+	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+		t.Fatal(err)
+	}
+	a := arrivalAcquire()
+	a.WorkTitle, a.Year, a.Title = "The Thing", 1982, "The Thing 1982 2160p"
+	got, err := h.cat.EnsureFanOutWant(ctx, acquireOp(t, "movie", "movie:the-thing:1982", a))
+	if err != nil || !got.Created {
+		t.Fatalf("setup: %+v %v", got, err)
+	}
+	due, err := h.cat.DueSearches(ctx, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range due {
+		if d.DesiredItemID == got.DesiredItemID {
+			t.Fatal("a fan-out want is due a search by this site's scorer")
+		}
+	}
+	if len(due) != 1 || due[0].DesiredItemID != h.want {
+		t.Fatalf("due = %+v, want only this site's own want", due)
+	}
+}
