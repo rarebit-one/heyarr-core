@@ -237,7 +237,7 @@ type acquirePayload struct {
 	WorkTitle  string   `json:"work_title"`
 	Year       int      `json:"year"`
 	Size       int64    `json:"size"`
-	SelectedAt int64    `json:"sel"`
+	SelectedAt int64    `json:"sel"` // UnixNano: sub-second order between selections matters
 	Site       string   `json:"site"`
 	Trackers   []string `json:"trackers"`
 	Private    bool     `json:"private"`
@@ -322,9 +322,12 @@ func (a Acquire) payload() *acquirePayload {
 	if trackers == nil {
 		trackers = []string{}
 	}
+	// Nanoseconds, not seconds: "newest selection wins" has to hold for two
+	// selections inside one second, which a re-search that upgrades a release
+	// straight after the first grab can produce.
 	var sel int64
 	if !a.SelectedAt.IsZero() {
-		sel = a.SelectedAt.UTC().Unix()
+		sel = a.SelectedAt.UTC().UnixNano()
 	}
 	return &acquirePayload{
 		Scope:      a.Scope,
@@ -352,7 +355,7 @@ func (ap *acquirePayload) acquire() *Acquire {
 		WorkTitle:  ap.WorkTitle,
 		Year:       ap.Year,
 		Size:       ap.Size,
-		SelectedAt: time.Unix(ap.SelectedAt, 0).UTC(),
+		SelectedAt: time.Unix(0, ap.SelectedAt).UTC(),
 		Site:       ap.Site,
 		Trackers:   append([]string(nil), ap.Trackers...),
 		Private:    ap.Private,
@@ -374,6 +377,12 @@ func (ap *acquirePayload) validate() error {
 	switch {
 	case ap.Aspect == AspectPrimary:
 	case strings.HasPrefix(ap.Aspect, AspectSubtitlePrefix) && isLangCode(ap.Aspect[len(AspectSubtitlePrefix):]):
+		// A subtitle is a caption for one edition's or item's video; a want
+		// for it cannot be work-scoped (desired.Item.Validate refuses it), so
+		// a sibling could never act on such an op.
+		if ap.Scope == ScopeWork {
+			return fmt.Errorf("%w: a subtitle acquire needs an edition or item scope", ErrMalformed)
+		}
 	default:
 		return fmt.Errorf("%w: acquire aspect %q", ErrMalformed, ap.Aspect)
 	}

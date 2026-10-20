@@ -248,3 +248,43 @@ func TestConcurrentRestoreDoesNotLift(t *testing.T) {
 		t.Error("a concurrent restore lifted the tombstone — remove-wins violated at the store")
 	}
 }
+
+// TestAcquireOpIsRecordedAndSurvivesReconcile: an acquire op (ADR-0119) is a
+// row in catalog_ops like any other kind — the schema admits it (00066) — it
+// tombstones nothing, and a reconcile leaves the work alone.
+func TestAcquireOpIsRecordedAndSurvivesReconcile(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+	peer := newKey(t)
+	f.insertWork(t, "movie", "the-thing-1982", "The Thing")
+
+	tok, err := catalogop.SignAcquire(peer, "movie", "the-thing-1982", catalogop.Acquire{
+		Scope: catalogop.ScopeWork, Aspect: catalogop.AspectPrimary, Profile: "living-room",
+		Infohash: "0123456789abcdef0123456789abcdef01234567", Title: "The Thing 1982 2160p",
+		WorkTitle: "The Thing", Year: 1982, SelectedAt: now, Site: "north",
+	}, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.RecordOps(ctx, []string{tok}); err != nil {
+		t.Fatalf("record acquire: %v", err)
+	}
+	ops, err := f.store.Ops(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 1 || ops[0] != tok {
+		t.Fatalf("ops = %d, want the acquire op back", len(ops))
+	}
+	if err := f.store.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !f.workExists(t, "movie", "the-thing-1982") {
+		t.Error("an acquire op removed the work")
+	}
+	view := catalogop.Evaluate(ops)
+	if _, ok := view.AcquisitionFor(catalogop.Target{ContentType: "movie", WorkKey: "the-thing-1982"}, catalogop.ScopeWork, catalogop.AspectPrimary); !ok {
+		t.Error("the recorded acquire op is not the effective acquisition")
+	}
+}

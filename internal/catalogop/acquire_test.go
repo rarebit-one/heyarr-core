@@ -153,6 +153,10 @@ func TestAcquireRejectsBadShape(t *testing.T) {
 		"unknown scope":       func(a *catalogop.Acquire) { a.Scope = "season:1" },
 		"unknown aspect":      func(a *catalogop.Acquire) { a.Aspect = "trailer" },
 		"bad subtitle lang":   func(a *catalogop.Acquire) { a.Aspect = "subtitle:English" },
+		"work-scoped subtitle": func(a *catalogop.Acquire) {
+			a.Scope = catalogop.ScopeWork
+			a.Aspect = catalogop.AspectSubtitlePrefix + "en"
+		},
 		"too many trackers": func(a *catalogop.Acquire) {
 			a.Trackers = make([]string, catalogop.MaxTrackers+1)
 			for i := range a.Trackers {
@@ -171,8 +175,14 @@ func TestAcquireRejectsBadShape(t *testing.T) {
 	for _, ok := range []func(*catalogop.Acquire){
 		func(a *catalogop.Acquire) { a.Scope = catalogop.ScopeEditionPrefix + "bluray-2160p" },
 		func(a *catalogop.Acquire) { a.Scope = catalogop.ScopeItemPrefix + "s01e04" },
-		func(a *catalogop.Acquire) { a.Aspect = catalogop.AspectSubtitlePrefix + "en" },
-		func(a *catalogop.Acquire) { a.Aspect = catalogop.AspectSubtitlePrefix + "pt-BR" },
+		func(a *catalogop.Acquire) {
+			a.Scope = catalogop.ScopeEditionPrefix + "bluray-2160p"
+			a.Aspect = catalogop.AspectSubtitlePrefix + "en"
+		},
+		func(a *catalogop.Acquire) {
+			a.Scope = catalogop.ScopeItemPrefix + "s01e04"
+			a.Aspect = catalogop.AspectSubtitlePrefix + "pt-BR"
+		},
 		func(a *catalogop.Acquire) { a.Infohash = strings.Repeat("ab", 32) },
 		func(a *catalogop.Acquire) { a.Size = 0 },
 		func(a *catalogop.Acquire) { a.Year = 0 },
@@ -215,6 +225,7 @@ func TestNewestSelectionWins(t *testing.T) {
 	later.Infohash = hashB
 	later.SelectedAt = selAt.Add(time.Hour)
 	subs := publicAcquire()
+	subs.Scope = catalogop.ScopeItemPrefix + "s01e04"
 	subs.Aspect = catalogop.AspectSubtitlePrefix + "en"
 
 	t1 := p.acquire("movie", "a-film-1982", first, nil, iat)
@@ -227,7 +238,7 @@ func TestNewestSelectionWins(t *testing.T) {
 		if !ok || eff.Acquire.Infohash != hashB {
 			t.Fatalf("effective primary = %v %+v, want %s", ok, eff.Acquire, hashB)
 		}
-		sub, ok := v.AcquisitionFor(tgt, catalogop.ScopeWork, catalogop.AspectSubtitlePrefix+"en")
+		sub, ok := v.AcquisitionFor(tgt, catalogop.ScopeItemPrefix+"s01e04", catalogop.AspectSubtitlePrefix+"en")
 		if !ok || sub.Acquire.Infohash != hashA {
 			t.Fatalf("effective subtitle = %v, want %s", ok, hashA)
 		}
@@ -295,4 +306,26 @@ func reencode(t *testing.T, tok string, body map[string]any) string {
 		t.Fatal(err)
 	}
 	return base64.RawURLEncoding.EncodeToString(raw) + "." + strings.SplitN(tok, ".", 2)[1]
+}
+
+// TestSubsecondSelectionsKeepTheirOrder: two selections inside one second are
+// still ordered by selected-at, not collapsed into a hash tie.
+func TestSubsecondSelectionsKeepTheirOrder(t *testing.T) {
+	p := newPeer(t)
+	tgt := target("movie", "a-film-1982")
+	first := publicAcquire()
+	later := publicAcquire()
+	later.Infohash = hashB
+	later.SelectedAt = selAt.Add(300 * time.Millisecond)
+	t1 := p.acquire("movie", "a-film-1982", first, nil, iat)
+	t2 := p.acquire("movie", "a-film-1982", later, nil, iat)
+	for _, order := range [][]string{{t1, t2}, {t2, t1}} {
+		eff, ok := catalogop.Evaluate(order).AcquisitionFor(tgt, catalogop.ScopeWork, catalogop.AspectPrimary)
+		if !ok || eff.Acquire.Infohash != hashB {
+			t.Fatalf("effective = %v %+v, want the 300ms-later selection %s", ok, eff.Acquire, hashB)
+		}
+		if !eff.Acquire.SelectedAt.Equal(later.SelectedAt) {
+			t.Fatalf("selected-at round-tripped as %v, want %v", eff.Acquire.SelectedAt, later.SelectedAt)
+		}
+	}
 }
