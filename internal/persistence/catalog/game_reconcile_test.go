@@ -38,7 +38,8 @@ func TestOnlyAVerifiedStorePackageSatisfiesAGameWant(t *testing.T) {
 		want         acquisition.Satisfaction
 	}{
 		{"a scanned installer part: filename facts on the asset only", `{}`, acquisition.SatisfactionNot},
-		{"a package a store fetch verified", `{"store":"gog","drm_free":true,"platform":"windows"}`, acquisition.SatisfactionSatisfied},
+		{"a package a store fetch verified", `{"store":"gog","drm_free":true,"platform":"windows","package_blobs":["blake3:` +
+			repeat("c", 64) + `"]}`, acquisition.SatisfactionSatisfied},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

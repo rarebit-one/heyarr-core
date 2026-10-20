@@ -103,7 +103,12 @@ const (
 	// parent work stays; only this grouping goes. Logical, like every deletion
 	// here (ADR-0018): no byte is unlinked, and the payload says so — a rescan
 	// re-derives the edition from the files that remain.
-	TypeEditionDeleted   = "content.edition.deleted"
+	TypeEditionDeleted = "content.edition.deleted"
+	// TypeEditionVerified is an edition's attributes recording that a store
+	// verified it as a complete package (ADR-0120): the store, and whether it
+	// is DRM-free. It is the only path by which store facts reach an edition,
+	// and the transition a game want's satisfaction turns on.
+	TypeEditionVerified  = "content.edition.verified"
 	TypeLibraryCreated   = "content.library.created"
 	TypeLibraryRootAdded = "content.library_root.added"
 	// TypeLibraryDeleted is a library leaving the catalog with its roots
