@@ -103,7 +103,12 @@ func TestAControllerEnqueuesAProviderHealthPassAtStartup(t *testing.T) {
 	// claim about scheduling code that is working perfectly, sending the
 	// reader to the wrong file (#220). This is #207's shape one layer up,
 	// where the precondition is that the process under test came up at all.
-	deadline := time.Now().Add(10 * time.Second)
+	//
+	// 30s, not 10s, for the reason downloadbeat_test.go gives (#744): this is a
+	// liveness bound, not a latency claim, and under -race on a loaded shard the
+	// controller took just over 10s to start and enqueue (four times on
+	// 2026-10-20, #716). A missing enqueue still fails.
+	deadline := time.Now().Add(30 * time.Second)
 	for countHealthJobs(t, db.Reader()) == 0 {
 		select {
 		case err := <-done:
