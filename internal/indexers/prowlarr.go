@@ -130,8 +130,31 @@ func (c *prowlarrClient) Capabilities() []providers.Capability {
 
 // prowlarrIndexer is one row of Prowlarr's `/api/v1/indexer`.
 type prowlarrIndexer struct {
-	Name   string `json:"name"`
-	Enable bool   `json:"enable"`
+	ID      int    `json:"id"`
+	Name    string `json:"name"`
+	Enable  bool   `json:"enable"`
+	Privacy string `json:"privacy"` // "public" | "private" | "semiPrivate"
+}
+
+// indexerPrivacyMap reads Prowlarr's indexer list and returns each indexer's
+// privacy class by id. A failure is reported, not fatal: a search can still
+// run, and a release whose class is unknown is recorded with none.
+func (c *prowlarrClient) indexerPrivacyMap(ctx context.Context) (map[int]string, error) {
+	body, err := c.get(ctx, "/api/v1/indexer", nil, prowlarrCheckTimeout)
+	if err != nil {
+		return nil, err
+	}
+	var idx []prowlarrIndexer
+	if err := json.Unmarshal(body, &idx); err != nil {
+		return nil, fmt.Errorf("prowlarr: the indexer list was not a list: %w", err)
+	}
+	out := make(map[int]string, len(idx))
+	for _, i := range idx {
+		if p := indexerPrivacy(i.Privacy); p != "" {
+			out[i.ID] = p
+		}
+	}
+	return out, nil
 }
 
 // Check reports reachability AND how many indexers Prowlarr has enabled.
@@ -186,7 +209,7 @@ type prowlarrRelease struct {
 	DownloadURL string             `json:"downloadUrl"`
 	MagnetURL   string             `json:"magnetUrl"`
 	Indexer     string             `json:"indexer"`
-	Privacy     string             `json:"privacy"` // "public" | "private" | "semiPrivate"
+	IndexerID   int                `json:"indexerId"`
 	Categories  []prowlarrCategory `json:"categories"`
 }
 
@@ -221,7 +244,15 @@ func (c *prowlarrClient) Search(ctx context.Context, q providers.Query) ([]acqui
 	if err := json.Unmarshal(body, &releases); err != nil {
 		return nil, fmt.Errorf("prowlarr: the search answer was not a release list: %w", err)
 	}
-	return prowlarrCandidates(c.name, releases, c.parseTitles), nil
+	// A release row names its indexer by id only; the privacy class lives on
+	// the indexer list (ADR-0119 needs it to say whether a sibling may join
+	// the swarm). One extra read per search, and a failure here costs the
+	// class, not the search.
+	privacy, err := c.indexerPrivacyMap(ctx)
+	if err != nil {
+		privacy = nil
+	}
+	return prowlarrCandidates(c.name, releases, c.parseTitles, privacy), nil
 }
 
 // prowlarrCategories maps §12's content type onto Torznab category ids, which
@@ -248,7 +279,7 @@ func prowlarrCategories(contentType string) string {
 // Mirrors indexers.candidates: skip the nameless, derive a stable id that is not
 // a position in the response, carry only what the release actually asserts, and
 // sort by id so §63's tie-breaks are deterministic.
-func prowlarrCandidates(provider string, releases []prowlarrRelease, parseTitles bool) []acquisition.ReleaseCandidate {
+func prowlarrCandidates(provider string, releases []prowlarrRelease, parseTitles bool, privacy map[int]string) []acquisition.ReleaseCandidate {
 	out := make([]acquisition.ReleaseCandidate, 0, len(releases))
 	for _, r := range releases {
 		title := strings.TrimSpace(r.Title)
@@ -261,7 +292,7 @@ func prowlarrCandidates(provider string, releases []prowlarrRelease, parseTitles
 			ID:         prowlarrCandidateID(r),
 			Title:      title,
 			Provider:   provider,
-			Attributes: prowlarrAttributes(r, parseTitles),
+			Attributes: prowlarrAttributes(r, parseTitles, privacy[r.IndexerID]),
 			Source:     prowlarrSource(r),
 		})
 	}
@@ -315,13 +346,13 @@ func prowlarrSource(r prowlarrRelease) secret.Value {
 // the truthful report rather than a guess. With it ON, the title's quality
 // tokens fill the attributes Prowlarr left out — marked Derived, and only where
 // nothing was asserted (which, for everything but size, is everywhere).
-func prowlarrAttributes(r prowlarrRelease, parseTitles bool) acquisition.Attributes {
+func prowlarrAttributes(r prowlarrRelease, parseTitles bool, privacy string) acquisition.Attributes {
 	attrs := acquisition.Attributes{}
 	if r.Size != nil && *r.Size >= 0 {
 		attrs[policy.AttrSizeBytes] = policy.Num(*r.Size)
 	}
-	if p := indexerPrivacy(r.Privacy); p != "" {
-		attrs[policy.AttrIndexerPrivacy] = policy.Text(p)
+	if privacy != "" {
+		attrs[policy.AttrIndexerPrivacy] = policy.Text(privacy)
 	}
 	if parseTitles {
 		fillAbsent(attrs, titleAttributes(r.Title))

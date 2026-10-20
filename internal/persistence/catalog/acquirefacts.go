@@ -33,9 +33,10 @@ type AcquireFacts struct {
 	CandidateID    string
 	CandidateTitle string
 	Size           int64
-	// SelectedAt is when the search that chose this release ran: the
-	// persisted selection time, stable across a retried grab, so a re-run
-	// republishes the SAME selection rather than a newer-looking one.
+	// SelectedAt is when this release was chosen (release_candidates.
+	// selected_at: the search's pick, a person's override, or a feed's direct
+	// release), the persisted selection time, stable across a retried grab, so
+	// a re-run republishes the SAME selection rather than a newer-looking one.
 	SelectedAt time.Time
 	// Private is whether the release came from a private (or semi-private)
 	// indexer, per the indexer manager's privacy class on the candidate. An
@@ -63,7 +64,7 @@ func (c *Catalog) AcquireFacts(ctx context.Context, desiredItemID string) (Acqui
 	err := c.db.Reader().QueryRowContext(ctx, `
 		SELECT w.content_type, w.work_key, w.title, w.year,
 		       d.scope, d.aspect, d.language, e.edition_key, i.item_key, q.name,
-		       rc.candidate_id, rc.title, rc.attributes, rc.searched_at
+		       rc.candidate_id, rc.title, rc.attributes, COALESCE(rc.selected_at, rc.searched_at)
 		FROM desired_items d
 		JOIN works w ON w.id = d.work_id
 		JOIN quality_profiles q ON q.id = d.quality_profile_id

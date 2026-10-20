@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rarebit-one/heyarr-core/internal/catalogop"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
@@ -81,7 +82,7 @@ func (p *CatalogAcquirePublisher) Publish(ctx context.Context, desiredItemID, tr
 	if cid, ok := strings.CutPrefix(facts.CandidateID, "infohash:"); ok && !strings.EqualFold(cid, infohash) {
 		return fmt.Errorf("worker: want %s selected %s but the client took %s; not publishing", desiredItemID, facts.CandidateID, infohash)
 	}
-	site := p.Site
+	site := clipBytes(p.Site, catalogop.MaxSite)
 	if site == "" {
 		site = "unnamed"
 	}
@@ -101,13 +102,18 @@ func (p *CatalogAcquirePublisher) Publish(ctx context.Context, desiredItemID, tr
 	if err != nil {
 		return fmt.Errorf("worker: reading catalog-op heads: %w", err)
 	}
+	// Display-only fields are clipped to the op's limits rather than refused:
+	// the client already holds the transfer and the row is written, so a
+	// refusal here would retry forever and leave the want SELECTED (invariant
+	// 9 cuts both ways). The profile and site names are identities a sibling
+	// matches on; clipping one only costs the sibling its profile fallback.
 	token, err := catalogop.SignAcquire(p.Signer, facts.ContentType, facts.WorkKey, catalogop.Acquire{
 		Scope:      facts.Scope,
 		Aspect:     facts.Aspect,
-		Profile:    facts.Profile,
+		Profile:    clipBytes(facts.Profile, catalogop.MaxProfile),
 		Infohash:   infohash,
-		Title:      facts.CandidateTitle,
-		WorkTitle:  facts.WorkTitle,
+		Title:      clipBytes(facts.CandidateTitle, catalogop.MaxTitle),
+		WorkTitle:  clipBytes(facts.WorkTitle, catalogop.MaxTitle),
 		Year:       facts.Year,
 		Size:       facts.Size,
 		SelectedAt: selectedAt,
@@ -145,4 +151,16 @@ func infohashOf(transferID string) string {
 		}
 	}
 	return s
+}
+
+// clipBytes truncates s to at most max bytes on a rune boundary.
+func clipBytes(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }

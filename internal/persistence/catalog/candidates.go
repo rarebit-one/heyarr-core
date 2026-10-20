@@ -174,18 +174,22 @@ func (c *Catalog) RecordSearch(
 			if r.Candidate.ID == outcome.SelectedCandidateID && r.Evaluation.Accepted {
 				selected = 1
 			}
+			var selectedAt any
+			if selected == 1 {
+				selectedAt = stamp
+			}
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO release_candidates
 					(id, desired_item_id, search_id, provider, candidate_id, title,
 					 attributes, evaluation, accepted, score, terminal, selected,
-					 overridden, override_detail, searched_at, created_at, source)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, ?)`,
+					 overridden, override_detail, searched_at, created_at, source, selected_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, ?, ?)`,
 				uuid.Must(uuid.NewV7()).String(), desiredItemID, searchID,
 				r.Candidate.Provider, r.Candidate.ID, r.Candidate.Title,
 				string(attrs), string(eval),
 				boolToInt(r.Evaluation.Accepted), r.Evaluation.Score,
 				boolToInt(r.Evaluation.Terminal), selected,
-				stamp, stamp, r.Candidate.Source.Reveal()); err != nil {
+				stamp, stamp, r.Candidate.Source.Reveal(), selectedAt); err != nil {
 				return fmt.Errorf("catalog: recording candidate %s: %w", r.Candidate.ID, err)
 			}
 		}
@@ -312,7 +316,7 @@ func (c *Catalog) OverrideSelection(
 		// row per want, so setting the new one before clearing the old would
 		// be refused by the database.
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE release_candidates SET selected = 0, overridden = 0, override_detail = ''
+			UPDATE release_candidates SET selected = 0, overridden = 0, override_detail = '', selected_at = NULL
 			WHERE desired_item_id = ? AND selected = 1`, desiredItemID); err != nil {
 			return err
 		}
@@ -322,10 +326,12 @@ func (c *Catalog) OverrideSelection(
 			// an override.
 			overridden = 0
 		}
+		// selected_at is the moment of THIS choice (ADR-0119 ranks siblings'
+		// selections by it), not the search that listed the row.
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE release_candidates
-			   SET selected = 1, overridden = ?, override_detail = ?
-			 WHERE id = ?`, overridden, detail, chosen.ID); err != nil {
+			   SET selected = 1, overridden = ?, override_detail = ?, selected_at = ?
+			 WHERE id = ?`, overridden, detail, sqlite.FormatTimestamp(c.clock.Now()), chosen.ID); err != nil {
 			return err
 		}
 		chosen.Selected = true

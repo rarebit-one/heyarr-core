@@ -1,5 +1,5 @@
 [
-  {"name": "LinuxTracker", "enable": true},
-  {"name": "Internet Archive", "enable": true},
-  {"name": "Disabled One", "enable": false}
+  {"id": 1, "name": "LinuxTracker", "enable": true, "privacy": "public"},
+  {"id": 2, "name": "Internet Archive", "enable": true, "privacy": "private"},
+  {"id": 3, "name": "Disabled One", "enable": false, "privacy": "semiPrivate"}
 ]

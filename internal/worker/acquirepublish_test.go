@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rarebit-one/heyarr-core/internal/catalogop"
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
@@ -289,5 +290,29 @@ func TestANilPublisherIsSafe(t *testing.T) {
 	var pub *CatalogAcquirePublisher
 	if err := pub.Publish(t.Context(), "want-1", fakeInfohash); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestOversizedDisplayFieldsAreClippedNotRefused: a release title longer than
+// the op allows must not wedge the grab (the client already has the
+// transfer); it is clipped on a rune boundary and the op still signs.
+func TestOversizedDisplayFieldsAreClippedNotRefused(t *testing.T) {
+	t.Parallel()
+	f := arrivalFacts()
+	f.CandidateTitle = strings.Repeat("é", catalogop.MaxTitle) // 2 bytes each: twice the limit
+	f.WorkTitle = strings.Repeat("x", catalogop.MaxTitle+40)
+	pub, ops := newPublisher(t, f)
+	if err := pub.Publish(t.Context(), "want-1", fakeInfohash); err != nil {
+		t.Fatalf("an oversized title refused the publish: %v", err)
+	}
+	op, err := catalogop.Verify(ops.recorded[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(op.Acquire.Title) > catalogop.MaxTitle || !utf8.ValidString(op.Acquire.Title) {
+		t.Errorf("title clipped to %d bytes, valid=%v", len(op.Acquire.Title), utf8.ValidString(op.Acquire.Title))
+	}
+	if len(op.Acquire.WorkTitle) != catalogop.MaxTitle {
+		t.Errorf("work title clipped to %d bytes, want %d", len(op.Acquire.WorkTitle), catalogop.MaxTitle)
 	}
 }

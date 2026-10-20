@@ -73,7 +73,7 @@ func TestProwlarrAttributesParseTitles(t *testing.T) {
 	size := int64(900_000_000)
 	r := prowlarrRelease{Title: "Slow.Horses.S01E01.1080p.WEB-DL.x265-GRP", Size: &size}
 
-	off := prowlarrAttributes(r, false)
+	off := prowlarrAttributes(r, false, "")
 	if _, ok := off[policy.AttrResolution]; ok {
 		t.Error("resolution present with parse_titles off — nothing should read the title")
 	}
@@ -81,7 +81,7 @@ func TestProwlarrAttributesParseTitles(t *testing.T) {
 		t.Errorf("size = %+v, want asserted %d", got, size)
 	}
 
-	on := prowlarrAttributes(r, true)
+	on := prowlarrAttributes(r, true, "")
 	if got := on[policy.AttrResolution]; got.Num != 1080 || !got.Derived {
 		t.Errorf("resolution with parse on = %+v, want derived 1080", got)
 	}

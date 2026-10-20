@@ -70,8 +70,10 @@ func TestAcquireFactsCarryTheIndexersPrivacy(t *testing.T) {
 	for name, tc := range map[string]struct {
 		privacy string
 		want    bool
-	}{"private": {policy.IndexerPrivate, true}, "semi-private": {policy.IndexerSemiPrivate, true},
-		"public": {policy.IndexerPublic, false}, "unsaid": {"", false}} {
+	}{
+		"private": {policy.IndexerPrivate, true}, "semi-private": {policy.IndexerSemiPrivate, true},
+		"public": {policy.IndexerPublic, false}, "unsaid": {"", false},
+	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			h := newHarness(t)
@@ -137,5 +139,52 @@ func TestAcquireFactsNeedASelection(t *testing.T) {
 	h := newHarness(t)
 	if _, err := h.cat.AcquireFacts(context.Background(), h.want); !errors.Is(err, catalog.ErrNoSelection) {
 		t.Fatalf("err = %v, want ErrNoSelection", err)
+	}
+}
+
+// TestAcquireFactsSelectedAtFollowsTheSelection: the time an op ranks by is
+// the row's selected_at, stamped by every selection path (a search's pick, a
+// direct release, a by-hand override) and cleared from the row that lost.
+func TestAcquireFactsSelectedAtFollowsTheSelection(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+		t.Fatal(err)
+	}
+	ranked := acquisition.EvaluateAll([]acquisition.ReleaseCandidate{
+		release("good", 2160, "hevc"), release("plain", 1080, "h264"),
+	}, candidateProfile())
+	if _, err := h.cat.RecordSearch(ctx, h.want, ranked, acquisition.Incumbent{}); err != nil {
+		t.Fatal(err)
+	}
+	var selectedStamped, unselectedNull int
+	if err := h.db.Reader().QueryRow(`SELECT
+		(SELECT count(*) FROM release_candidates WHERE desired_item_id = ? AND selected = 1 AND selected_at IS NOT NULL),
+		(SELECT count(*) FROM release_candidates WHERE desired_item_id = ? AND selected = 0 AND selected_at IS NULL)`,
+		h.want, h.want).Scan(&selectedStamped, &unselectedNull); err != nil {
+		t.Fatal(err)
+	}
+	if selectedStamped != 1 || unselectedNull != 1 {
+		t.Fatalf("after a search: %d selected rows stamped, %d unselected rows null; want 1 and 1", selectedStamped, unselectedNull)
+	}
+	// Override by hand: the new row is stamped, the old one cleared.
+	if _, err := h.cat.OverrideSelection(ctx, h.want, "plain"); err != nil {
+		t.Fatal(err)
+	}
+	var sel string
+	var stampedID string
+	if err := h.db.Reader().QueryRow(`SELECT candidate_id, selected_at FROM release_candidates WHERE desired_item_id = ? AND selected = 1`, h.want).Scan(&sel, &stampedID); err != nil {
+		t.Fatal(err)
+	}
+	if sel != "plain" || stampedID == "" {
+		t.Errorf("override: selected %q stamped %q", sel, stampedID)
+	}
+	f, err := h.cat.AcquireFacts(ctx, h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.CandidateID != "plain" || f.SelectedAt.IsZero() {
+		t.Errorf("facts after override = %+v", f)
 	}
 }
