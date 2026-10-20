@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/rarebit-one/heyarr-core/internal/catalogop"
+	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/desired"
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/strategy"
@@ -155,8 +156,9 @@ func (c *Catalog) RecordFanOutApplication(ctx context.Context, opHash, desiredIt
 }
 
 // FanOutStale returns the op hashes whose recorded outcome is final (applied
-// or held) but whose want has since gone (a delete, perhaps restored later) or
-// fallen back to idle without content (its grab failed and was cleared). The
+// or held) but whose want has since gone (a delete, perhaps restored later),
+// fallen back to idle without content (its grab failed and was cleared), or
+// rests SELECTED with no live grab job (the job died on its attempt cap). The
 // applier re-evaluates them: a final outcome stands only while what it
 // settled still does.
 func (c *Catalog) FanOutStale(ctx context.Context) (map[string]bool, error) {
@@ -165,7 +167,15 @@ func (c *Catalog) FanOutStale(ctx context.Context) (map[string]bool, error) {
 		LEFT JOIN desired_items d ON d.id = o.desired_item_id
 		LEFT JOIN acquisition_state a ON a.desired_item_id = d.id
 		WHERE o.outcome IN ('applied', 'held')
-		  AND (d.id IS NULL OR (a.phase = 'idle' AND a.managed = 0))`)
+		  AND (d.id IS NULL
+		       OR (a.phase = 'idle' AND a.managed = 0)
+		       -- SELECTED with no live grab: its job died on the attempt cap
+		       -- (a download client down for longer than the retries), and
+		       -- nothing else would queue it again.
+		       OR (a.phase = 'selected' AND NOT EXISTS (
+		             SELECT 1 FROM jobs j
+		             WHERE j.dedupe_key = ? || d.id AND j.state IN ('pending', 'leased'))))`,
+		acquisition.GrabDedupeKey(""))
 	if err != nil {
 		return nil, fmt.Errorf("catalog: reading stale fan-out applications: %w", err)
 	}

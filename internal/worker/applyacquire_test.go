@@ -568,3 +568,32 @@ func TestAStrandedEarlierSelectionIsRequeuedWhenANewerOpDefers(t *testing.T) {
 		t.Fatalf("queued grab %s, want the earlier selection's", payload)
 	}
 }
+
+// TestAFanOutGrabWhoseJobDiedIsRequeued: the grab job exhausted its attempts
+// (a download client down for longer than the retries) and is dead, leaving
+// the want SELECTED. The applied op is stale, and the next pass re-queues it.
+func TestAFanOutGrabWhoseJobDiedIsRequeued(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	hash := h.receive(t, h.sibling, "movie", "movie:arrival:2016", siblingAcquire())
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Writer().Exec(`UPDATE jobs SET state = 'dead' WHERE type = ?`, acquisition.GrabJobType); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	var live int
+	if err := h.db.Reader().QueryRow(
+		`SELECT count(*) FROM jobs WHERE type = ? AND state IN ('pending', 'leased')`, acquisition.GrabJobType).Scan(&live); err != nil {
+		t.Fatal(err)
+	}
+	if live != 1 {
+		t.Fatalf("%d live grabs after the dead one, want it re-queued", live)
+	}
+	if app := h.application(t, hash); app.Outcome != catalog.FanOutApplied {
+		t.Fatalf("application = %+v, want applied", app)
+	}
+}
