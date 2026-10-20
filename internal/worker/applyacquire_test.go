@@ -384,3 +384,65 @@ func TestATombstonedOpAppliesOnceTheWorkIsRestored(t *testing.T) {
 		t.Fatalf("after the restore the application = %+v, want applied", app)
 	}
 }
+
+// holdContent marks the harness want as holding its content, idle: what an
+// ingest leaves behind.
+func (h *applyHarness) holdContent(t *testing.T) {
+	t.Helper()
+	if _, err := h.db.Writer().Exec(
+		`UPDATE acquisition_state SET phase = ?, managed = 1, content = ? WHERE desired_item_id = ?`,
+		string(acquisition.PhaseIdle), string(acquisition.SatisfactionSatisfied), h.want); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAWantFollowingASiblingTakesItsNewerChoice: the want holds a release it
+// took from the sibling's op; the sibling upgrades and publishes a newer op.
+// Newest selection wins (ADR-0119): the want selects the newer release and
+// queues its grab, as a local upgrade would.
+func TestAWantFollowingASiblingTakesItsNewerChoice(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	h.receive(t, h.sibling, "movie", "movie:arrival:2016", siblingAcquire())
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	h.holdContent(t)
+
+	upgrade := siblingAcquire()
+	upgrade.Infohash = strings.Repeat("cd", 20)
+	upgrade.SelectedAt = applyAt.Add(time.Hour)
+	hash := h.receive(t, h.sibling, "movie", "movie:arrival:2016", upgrade)
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if app := h.application(t, hash); app.Outcome != catalog.FanOutApplied {
+		t.Fatalf("application = %+v, want the upgrade applied", app)
+	}
+	if got := h.selectedID(t); got != "infohash:"+upgrade.Infohash {
+		t.Fatalf("selected %s, want the sibling's newer release", got)
+	}
+}
+
+// TestAWantHoldingThisSitesOwnChoiceIsHeld: the want holds a release this
+// site's own search chose; a sibling's op for a different release does not
+// override it.
+func TestAWantHoldingThisSitesOwnChoiceIsHeld(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	h.fake.Offer("Arrival", offer("good", 2160, "hevc"))
+	if err := h.run(t); err != nil {
+		t.Fatal(err)
+	}
+	h.holdContent(t)
+	hash := h.receive(t, h.sibling, "movie", "movie:arrival:2016", siblingAcquire())
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if app := h.application(t, hash); app.Outcome != catalog.FanOutHeld {
+		t.Fatalf("application = %+v, want held", app)
+	}
+	if got := h.selectedID(t); got != "good" {
+		t.Fatalf("selected %s, want this site's own choice kept", got)
+	}
+}
