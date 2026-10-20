@@ -351,6 +351,21 @@ func TestAWantNoOpCanExpressIsNotPublishedAndDoesNotRetry(t *testing.T) {
 	}
 }
 
+// TestAReleaseTakenFromASiblingIsNotRepublished: the grab of a fan-out
+// release publishes nothing, so the op does not echo back to its origin.
+func TestAReleaseTakenFromASiblingIsNotRepublished(t *testing.T) {
+	t.Parallel()
+	f := arrivalFacts()
+	f.Provider = catalog.FanOutProviderPrefix + "north"
+	pub, ops := newPublisher(t, f)
+	if err := pub.Publish(t.Context(), "want-1", f.CandidateID, fakeInfohash); err != nil {
+		t.Fatal(err)
+	}
+	if len(ops.recorded) != 0 {
+		t.Fatalf("published %d ops for a release a sibling chose", len(ops.recorded))
+	}
+}
+
 // TestAGrabWhoseSelectionChangedRetriesForTheCurrentOne: when the publisher
 // reports the selection changed under the grab, the job neither advances (the
 // want would be QUEUED on the old transfer) nor completes (the override's

@@ -229,3 +229,12 @@ type GrabPayload struct {
 	// store (see indexers.candidateID).
 	CandidateID string `json:"candidate_id,omitempty"`
 }
+
+// ApplyAcquireJobType applies siblings' acquire ops (ADR-0119): one pass over
+// the catalog op-log that ensures the work and want for every effective
+// acquisition this node has not acted on, records the release as a direct
+// release, and queues the grab. The controller's fan-out beat enqueues it.
+const ApplyAcquireJobType = "apply_acquire_ops"
+
+// ApplyAcquireDedupeKey collapses concurrent passes into one.
+const ApplyAcquireDedupeKey = "apply_acquire_ops"

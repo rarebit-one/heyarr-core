@@ -401,6 +401,11 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 	// Media profile: full beat set (unchanged from before ADR-0107).
 	startReconciliation(ctx, reconcileQueue, peerHealth, c.log, wallTicker)
 	startUpgradeScan(ctx, reconcileQueue, c.log, wallTicker)
+	// Fan-out acquisition (ADR-0119): apply siblings' acquire ops on a beat.
+	if c.cfg.Acquisition.FanOut {
+		fanOutInterval, _ := c.cfg.FanOutInterval()
+		startFanOutBeat(ctx, reconcileQueue, fanOutInterval, c.log, wallTicker)
+	}
 	// The provider health beat (#164). Same queue and the same serving
 	// context: it is ongoing work and it must stop when the controller does.
 	// See healthbeat.go for why a minute, why it runs on a degraded node, and

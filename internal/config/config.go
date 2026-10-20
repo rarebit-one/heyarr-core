@@ -139,6 +139,11 @@ type Config struct {
 	// uploads to. Personal profile only.
 	Placement Placement `koanf:"placement"`
 
+	// Acquisition configures fan-out acquisition (ADR-0119): whether this
+	// node acquires, with its own download client, the releases its siblings
+	// publish on the catalog op-log. Media profile only.
+	Acquisition Acquisition `koanf:"acquisition"`
+
 	// Sites maps site names to their CIDR ranges (ADR-0111). Each site is a
 	// named network; an address is in a site when it falls inside one of its
 	// CIDRs. Empty or absent means single-site: every non-public address is
@@ -174,6 +179,58 @@ type Placement struct {
 	// ("5m"). Empty uses the default; "0" stops asking (this node still
 	// answers siblings that ask it).
 	Interval string `koanf:"interval"`
+}
+
+// Acquisition configures fan-out acquisition (ADR-0119).
+//
+// A sibling that grabs a release publishes its infohash as an `acquire` op;
+// with FanOut on, this node ensures the same work and want exist here and
+// hands the same release to its own download client, so the two sites hold
+// byte-identical copies without the bytes crossing the site-to-site link.
+// Publishing is unconditional on a node that can sign; applying is this switch.
+type Acquisition struct {
+	// FanOut turns on applying siblings' acquire ops. Off, the ops are stored
+	// and ignored, exactly as a site that lists no placement sibling ignores
+	// placement.
+	FanOut bool `koanf:"fan_out"`
+	// Interval is how often this node applies the ops it has received, as a
+	// duration ("5m"). Empty uses the default; "0" disables the beat.
+	Interval string `koanf:"interval"`
+}
+
+// defaultFanOutInterval is how often received acquire ops are applied.
+const defaultFanOutInterval = 5 * time.Minute
+
+// FanOutInterval parses acquisition.interval.
+func (c Config) FanOutInterval() (time.Duration, error) {
+	s := strings.TrimSpace(c.Acquisition.Interval)
+	if s == "" {
+		return defaultFanOutInterval, nil
+	}
+	if s == "0" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("config: acquisition.interval %q is not a duration (e.g. \"5m\"): %w", s, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("config: acquisition.interval must not be negative, got %q", s)
+	}
+	return d, nil
+}
+
+// validateAcquisition refuses fan-out outside the media profile: the personal
+// profile acquires nothing (ADR-0107).
+func (c Config) validateAcquisition() error {
+	if _, err := c.FanOutInterval(); err != nil {
+		return err
+	}
+	if c.Acquisition.FanOut && c.Profile != ProfileMedia {
+		return fmt.Errorf("config: acquisition.fan_out is for the media profile only (ADR-0107, ADR-0119); "+
+			"profile is %q", c.Profile)
+	}
+	return nil
 }
 
 // Vault configures device-side space-key custody (ADR-0098). The device
@@ -1225,6 +1282,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.validatePlacement(); err != nil {
+		return err
+	}
+	if err := c.validateAcquisition(); err != nil {
 		return err
 	}
 	if c.Vault.Enabled && c.Profile != ProfilePersonal {

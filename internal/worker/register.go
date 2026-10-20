@@ -52,6 +52,9 @@ type workerDeps struct {
 	// acquire publishes each grabbed release for siblings (ADR-0119); nil on
 	// a node that cannot sign.
 	acquire AcquirePublisher
+	// fanOut is set when this node applies siblings' acquire ops
+	// (acquisition.fan_out); nil otherwise.
+	fanOut *fanOutDeps
 }
 
 // registerStorageJobs registers the CAS and library jobs: ingest, the scanner,
@@ -303,6 +306,17 @@ func registerProviderJobs(reg *Registry, d workerDeps) {
 			Handler:            GrabReleaseHandler(d.providers, d.cat, d.log, WithAcquirePublisher(d.acquire)),
 			RequiredCapability: providers.CapabilityDownload.JobCapability(),
 		})
+		// Fan-out acquisition (ADR-0119): apply the releases siblings
+		// published. Under the same download-client condition, because every
+		// application ends in a grab, and a node that cannot grab would only
+		// accumulate wants it can never move.
+		if d.fanOut != nil {
+			reg.Register(acquisition.ApplyAcquireJobType, Registration{
+				Handler:            ApplyAcquireHandler(d.fanOut.ops, d.cat, d.queue, d.fanOut.selfKey, d.log),
+				MaxConcurrent:      1,
+				RequiredCapability: providers.CapabilityDownload.JobCapability(),
+			})
+		}
 	}
 
 	// The subtitle fetch handler (ADR-0085), registered only when this worker has

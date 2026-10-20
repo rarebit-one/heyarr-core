@@ -94,6 +94,16 @@ func (p *CatalogAcquirePublisher) Publish(ctx context.Context, desiredItemID, ca
 	if candidateID != "" && facts.CandidateID != candidateID {
 		return fmt.Errorf("%w: grabbed %s, now selected %s", ErrSelectionChanged, candidateID, facts.CandidateID)
 	}
+	// A release taken from a sibling's acquire op is not published again.
+	// The origin's op already reaches every site through the G-set, and an
+	// echo would come back to the origin as a "sibling's" choice: harmless
+	// when the profiles match (the want there is already acquiring), but
+	// where this site fell back to its default profile the echo names a
+	// profile the origin never wanted, and the origin would create a second
+	// want for it.
+	if strings.HasPrefix(facts.Provider, catalog.FanOutProviderPrefix) {
+		return nil
+	}
 	// A candidate whose id is the infohash must agree with the client's: a
 	// disagreement means the client took a different release than the one
 	// selected (a .torrent that resolved elsewhere), and publishing the
