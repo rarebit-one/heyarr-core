@@ -49,6 +49,9 @@ type workerDeps struct {
 	peerID    string
 	providers *providers.Registry
 	toolchain media.Toolchain
+	// acquire publishes each grabbed release for siblings (ADR-0119); nil on
+	// a node that cannot sign.
+	acquire AcquirePublisher
 }
 
 // registerStorageJobs registers the CAS and library jobs: ingest, the scanner,
@@ -297,7 +300,7 @@ func registerProviderJobs(reg *Registry, d workerDeps) {
 		// a library that just became satisfiable start its transfers one
 		// provider round trip at a time.
 		reg.Register(acquisition.GrabJobType, Registration{
-			Handler:            GrabReleaseHandler(d.providers, d.cat, d.log),
+			Handler:            GrabReleaseHandler(d.providers, d.cat, d.log, WithAcquirePublisher(d.acquire)),
 			RequiredCapability: providers.CapabilityDownload.JobCapability(),
 		})
 	}

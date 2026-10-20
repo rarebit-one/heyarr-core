@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/catalogop"
@@ -197,7 +198,7 @@ func verifyAll(ops []string) ([]catalogop.Op, error) {
 // provided transaction. Recording and reconciliation share the one transaction
 // so the log and its materialisation never disagree.
 func (s *Store) recordInto(ctx context.Context, tx *sql.Tx, parsed []catalogop.Op, now time.Time) error {
-	fresh := false
+	var fresh []string
 	for _, op := range parsed {
 		prev, err := json.Marshal(normalise(op.Prev))
 		if err != nil {
@@ -212,13 +213,66 @@ func (s *Store) recordInto(ctx context.Context, tx *sql.Tx, parsed []catalogop.O
 			return fmt.Errorf("catalogtomb: recording catalog op: %w", err)
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
-			fresh = true
+			fresh = append(fresh, op.Hash)
 		}
 	}
-	if !fresh {
+	if len(fresh) == 0 {
 		return nil
 	}
+	// An acquire op (ADR-0119) cannot change the tombstone view by itself, so
+	// a batch of nothing but acquires skips the re-materialisation: with one
+	// op per grabbed release, re-evaluating the whole log on every grab would
+	// make a large backfill quadratic in the log's length.
+	//
+	// It can change the view INDIRECTLY: a restore cites the heads it saw, and
+	// those may be acquires, directly or through a chain of acquires that cite
+	// each other. A restore that arrived before an op in its causal past is
+	// held as bad_prev; that op's arrival completes the restore, which now
+	// lifts its tombstone. So the skip holds only while nothing already
+	// recorded cites a fresh acquire. That is conservative (an acquire cited
+	// only by acquires also reconciles) and cheap: in-order delivery, a local
+	// publish included, never has a recorded op citing the newcomer, and
+	// following the chain to find out would cost more than reconciling.
+	if onlyAcquires(parsed) {
+		cited, err := citedByRecordedOp(ctx, tx, fresh)
+		if err != nil {
+			return err
+		}
+		if !cited {
+			return nil
+		}
+	}
 	return s.reconcileTx(ctx, tx, now)
+}
+
+// citedByRecordedOp reports whether any recorded op cites one of hashes in
+// its prev.
+func citedByRecordedOp(ctx context.Context, tx *sql.Tx, hashes []string) (bool, error) {
+	args := make([]any, 0, len(hashes))
+	for _, h := range hashes {
+		args = append(args, h)
+	}
+	var one int
+	err := tx.QueryRowContext(ctx,
+		`SELECT 1 FROM catalog_ops c, json_each(c.prev) p
+		  WHERE p.value IN (?`+strings.Repeat(",?", len(hashes)-1)+`)
+		  LIMIT 1`, args...).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("catalogtomb: checking what cites an acquire: %w", err)
+	}
+	return true, nil
+}
+
+func onlyAcquires(ops []catalogop.Op) bool {
+	for _, op := range ops {
+		if op.Kind != catalogop.OpAcquire {
+			return false
+		}
+	}
+	return len(ops) > 0
 }
 
 // Reconcile re-materialises work_tombstones from the whole log. It is what

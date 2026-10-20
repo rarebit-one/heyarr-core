@@ -57,9 +57,14 @@ converges on the same work.**
   them stay local (`release_candidates.source` is a secret today and remains
   one, ADR-0076). An op whose tracker list carries userinfo or a query string
   is malformed.
-- **The origin publishes at selection.** When a want reaches SELECTED, whether
-  the scorer chose the release or a person named it (ADR-0060), the origin
-  signs an `acquire` op. The op-log's existing sync carries it.
+- **The origin publishes when it grabs.** Every route to SELECTED (the
+  scorer, a person's direct choice, a feed's enclosure: ADR-0060) ends in the
+  one grab that hands the release to the download client, and that is where
+  the origin signs the `acquire` op, once the client has confirmed the
+  transfer's infohash. A transfer with no infohash (an HTTP enclosure, a
+  usenet article) publishes nothing: there is no swarm for a sibling to join.
+  The op is written before the want advances, so a failed write retries with
+  the grab rather than being lost. The op-log's existing sync carries it.
 - **A sibling acquires only with its own means.** A sibling with fan-out
   enabled evaluates the op by ensuring the work exists under the same
   `work_key`, ensuring a want for that scope and aspect under the named profile

@@ -139,6 +139,31 @@ func acquisitionInTx(ctx context.Context, tx *sql.Tx, id string) (AcquisitionRec
 func (c *Catalog) AdvanceAcquisition(
 	ctx context.Context, desiredItemID string, t acquisition.Transition, detail string,
 ) (AcquisitionRecord, error) {
+	return c.advanceAcquisition(ctx, desiredItemID, "", t, detail)
+}
+
+// ErrSelectionChanged reports that a want's selected release is no longer
+// the one the caller acted on: a search or a by-hand override replaced it.
+var ErrSelectionChanged = errors.New("catalog: the want's selection changed")
+
+// AdvanceAcquisitionIfSelected is AdvanceAcquisition guarded by the
+// selection: it applies t only while candidateID is still the want's selected
+// release, checked in the same transaction, and otherwise fails with
+// ErrSelectionChanged and writes nothing. The grab uses it for SELECTED →
+// QUEUED, so an override that commits while the client is taking the old
+// release cannot be overwritten by a QUEUED that names the old transfer.
+func (c *Catalog) AdvanceAcquisitionIfSelected(
+	ctx context.Context, desiredItemID, candidateID string, t acquisition.Transition, detail string,
+) (AcquisitionRecord, error) {
+	if candidateID == "" {
+		return AcquisitionRecord{}, errors.New("catalog: a guarded advance needs the candidate it acted on")
+	}
+	return c.advanceAcquisition(ctx, desiredItemID, candidateID, t, detail)
+}
+
+func (c *Catalog) advanceAcquisition(
+	ctx context.Context, desiredItemID, selectedCandidate string, t acquisition.Transition, detail string,
+) (AcquisitionRecord, error) {
 	now := sqlite.FormatTimestamp(c.clock.Now())
 
 	var (
@@ -146,6 +171,18 @@ func (c *Catalog) AdvanceAcquisition(
 		ev  events.Event
 	)
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		if selectedCandidate != "" {
+			var current string
+			err := tx.QueryRowContext(ctx,
+				`SELECT candidate_id FROM release_candidates WHERE desired_item_id = ? AND selected = 1`,
+				desiredItemID).Scan(&current)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("catalog: reading the selection for %s: %w", desiredItemID, err)
+			}
+			if current != selectedCandidate {
+				return fmt.Errorf("%w: acted on %s, now selected %q", ErrSelectionChanged, selectedCandidate, current)
+			}
+		}
 		before, err := acquisitionInTx(ctx, tx, desiredItemID)
 		if err != nil {
 			return err

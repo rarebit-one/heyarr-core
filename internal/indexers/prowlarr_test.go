@@ -242,3 +242,39 @@ func TestProwlarrServerErrorIsUnhealthy(t *testing.T) {
 		t.Errorf("an erroring Prowlarr should be unhealthy, got %q", got.Detail)
 	}
 }
+
+// ADR-0119: a release carries its indexer's privacy class, read from the
+// indexer list by indexerId (the search row names the indexer by id only), so
+// a sibling knows whether it may join the swarm or must use its own account.
+// When the indexer list cannot be read, the search still succeeds and no class
+// is recorded, which reads as "unsaid", never as "public".
+func TestProwlarrReleasesCarryTheirIndexersPrivacy(t *testing.T) {
+	h := newProwlarrHarness(t, "search-with-results.json", "indexers-two-enabled.json", "", 0)
+	got, err := prowlarrClientFor(t, h.srv.URL, "").Search(t.Context(), providers.Query{Title: "ubuntu"})
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	seen := map[string]int{}
+	for _, c := range got {
+		v, ok := c.Attributes[policy.AttrIndexerPrivacy]
+		if !ok {
+			t.Errorf("%s: no indexer_privacy attribute", c.Title)
+			continue
+		}
+		seen[v.Text]++
+	}
+	if seen[policy.IndexerPublic] == 0 || seen[policy.IndexerPrivate] == 0 {
+		t.Errorf("expected releases from both a public and a private indexer, got %v", seen)
+	}
+
+	noList := newProwlarrHarness(t, "search-with-results.json", "", "", 0)
+	got, err = prowlarrClientFor(t, noList.srv.URL, "").Search(t.Context(), providers.Query{Title: "ubuntu"})
+	if err != nil {
+		t.Fatalf("search without an indexer list failed: %v", err)
+	}
+	for _, c := range got {
+		if _, ok := c.Attributes[policy.AttrIndexerPrivacy]; ok {
+			t.Errorf("%s: a privacy class was recorded with no indexer list to read it from", c.Title)
+		}
+	}
+}

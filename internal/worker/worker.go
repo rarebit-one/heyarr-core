@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/rarebit-one/heyarr-core/internal/catalogtomb"
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
@@ -20,6 +21,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/media"
 	"github.com/rarebit-one/heyarr-core/internal/media/capability"
+	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -232,6 +234,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		cfg: w.cfg, log: w.log, db: db, store: store, cat: cat, queue: queue,
 		pipeline: pipeline, checker: checker, collector: collector, scan: scan,
 		peerID: peerID, providers: providerRegistry, toolchain: toolchain,
+		acquire: newAcquirePublisher(w.cfg, db, cat, w.log),
 	}
 	registry := NewRegistry()
 	registerStorageJobs(registry, deps)
@@ -373,4 +376,32 @@ func owner() string {
 		host = "worker"
 	}
 	return fmt.Sprintf("%s/%d/%s", host, os.Getpid(), uuid.Must(uuid.NewV7()).String()[:8])
+}
+
+// newAcquirePublisher builds the ADR-0119 publisher for a media node that has
+// an identity key: each grabbed release is published on the catalog op-log for
+// siblings to acquire. A node without a key (single-site, pre-enrolment) gets
+// nil and publishes nothing, the same degrade emitWorkDeleteOp takes. The
+// personal profile acquires nothing, so it gets nil too.
+func newAcquirePublisher(cfg config.Config, db *sqlite.DB, cat *catalog.Catalog, log *slog.Logger) AcquirePublisher {
+	if cfg.Profile != config.ProfileMedia {
+		return nil
+	}
+	signer, err := identity.Signer(cfg.DataDir)
+	if err != nil {
+		log.Debug("no identity key; grabbed releases are not published to siblings", "error", err)
+		return nil
+	}
+	ops, err := catalogtomb.New(catalogtomb.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		log.Warn("catalog op store unavailable; grabbed releases are not published to siblings", "error", err)
+		return nil
+	}
+	return &CatalogAcquirePublisher{
+		Facts:  cat,
+		Ops:    ops,
+		Signer: signer,
+		Site:   cfg.Peer.Site,
+		Log:    log,
+	}
 }

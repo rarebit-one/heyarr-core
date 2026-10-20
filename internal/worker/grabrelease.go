@@ -18,6 +18,7 @@ import (
 type GrabStore interface {
 	Acquisition(ctx context.Context, desiredItemID string) (catalog.AcquisitionRecord, error)
 	AdvanceAcquisition(ctx context.Context, desiredItemID string, t acquisition.Transition, detail string) (catalog.AcquisitionRecord, error)
+	AdvanceAcquisitionIfSelected(ctx context.Context, desiredItemID, candidateID string, t acquisition.Transition, detail string) (catalog.AcquisitionRecord, error)
 	RecordAcquisition(ctx context.Context, a catalog.Acquisition) (bool, error)
 	SelectedSource(ctx context.Context, desiredItemID string) (candidateID string, source secret.Value, err error)
 }
@@ -54,8 +55,12 @@ type GrabStore interface {
 // on a lease that expired mid-call, where the transfer was created and the row
 // was not.
 func GrabReleaseHandler(
-	reg *providers.Registry, cat GrabStore, log *slog.Logger,
+	reg *providers.Registry, cat GrabStore, log *slog.Logger, opts ...GrabOption,
 ) HandlerFunc {
+	var o grabOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	return func(ctx context.Context, job jobs.Job) error {
 		payload, err := decodePayload[acquisition.GrabPayload](job)
 		if err != nil {
@@ -95,18 +100,19 @@ func GrabReleaseHandler(
 		}
 		if payload.CandidateID != "" && payload.CandidateID != candidateID {
 			// A different release is selected than the one this job was
-			// created for. Fetching it anyway would be defensible — it is what
-			// the want currently wants — but it would also mean the job's own
-			// record of what it was for is untrue, and a duplicated grab of the
-			// superseded release would be indistinguishable from this.
+			// created for: a later search or a by-hand override replaced it.
+			// This job grabs what the want selects NOW.
 			//
-			// The want is left in SELECTED and the grab enqueued for the NEW
-			// selection does the work; it has its own dedupe key only in the
-			// sense that it replaced this one, so say so plainly.
-			log.Info("skipping a grab: the selection changed after it was queued",
+			// It cannot stand down and leave the work to "the grab queued for
+			// the new selection", because there may be no such grab: the queue
+			// dedupes on the want against pending AND leased jobs, so a
+			// selection that lands while this job is pending or running
+			// collapses its enqueue into this very job (#793). This job is
+			// the want's only grab, and its payload's candidate is a record of
+			// why it was queued, not a constraint on what it fetches.
+			log.Info("the selection changed after the grab was queued; grabbing the current one",
 				"desired_item_id", payload.DesiredItemID,
 				"queued_for", payload.CandidateID, "now", candidateID)
-			return nil
 		}
 
 		transfer, provider, err := reg.Grab(ctx, source)
@@ -155,9 +161,46 @@ func GrabReleaseHandler(
 			return err
 		}
 
-		if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
+		// Publish the choice for siblings BEFORE the transition (ADR-0119).
+		// A failure here returns an error so the job retries: the want is
+		// still SELECTED, the client's Add is idempotent, the row is rewritten,
+		// and the op gets another chance. After the transition a retry would
+		// skip at the top ("not waiting to be queued") and the op would never
+		// be written.
+		if o.publisher != nil {
+			err := o.publisher.Publish(ctx, payload.DesiredItemID, candidateID, transfer.ID)
+			if errors.Is(err, ErrSelectionChanged) {
+				// The same race as the check above, one step later: a by-hand
+				// override replaced the selection while the client was taking
+				// this release. Advancing now would mark the want QUEUED on
+				// the OLD transfer and the override's choice would never be
+				// grabbed; completing without advancing would strand the want
+				// in SELECTED, because the override's enqueue collapsed into
+				// this leased job (#793). So the job fails and retries: the
+				// want is still SELECTED, and the re-run grabs the current
+				// selection. The transfer already at the client keeps its row
+				// and is reconciled by the poll like any other.
+				return fmt.Errorf("worker: the selection for %s changed while %s was being grabbed; retrying for the current one: %w",
+					payload.DesiredItemID, candidateID, err)
+			}
+			if err != nil {
+				return err
+			}
+		}
+
+		// Guarded by the selection, in the transition's own transaction: an
+		// override that commits after the publish read the old selection
+		// would otherwise be overwritten by a QUEUED naming the old transfer,
+		// and its enqueue collapsed into this job (#793). The retry grabs the
+		// current selection and publishes it with its newer selected-at, which
+		// supersedes the op just written at every sibling.
+		if _, err := cat.AdvanceAcquisitionIfSelected(ctx, payload.DesiredItemID, candidateID,
 			acquisition.TransitionQueue,
 			fmt.Sprintf("queued %s at %s", candidateID, provider)); err != nil {
+			if errors.Is(err, catalog.ErrSelectionChanged) {
+				return fmt.Errorf("worker: the selection for %s changed before %s was queued; retrying for the current one: %w",
+					payload.DesiredItemID, candidateID, err)
+			}
 			return err
 		}
 
@@ -169,6 +212,23 @@ func GrabReleaseHandler(
 			"desired_item_id", payload.DesiredItemID,
 			"candidate", candidateID, "provider", provider, "transfer", transfer.ID)
 		return nil
+	}
+}
+
+// GrabOption tunes GrabReleaseHandler.
+type GrabOption func(*grabOptions)
+
+type grabOptions struct {
+	publisher AcquirePublisher
+}
+
+// WithAcquirePublisher publishes each grabbed release as an acquire op
+// (ADR-0119) so siblings acquire it themselves. Nil publishes nothing.
+func WithAcquirePublisher(p AcquirePublisher) GrabOption {
+	return func(o *grabOptions) {
+		if p != nil {
+			o.publisher = p
+		}
 	}
 }
 

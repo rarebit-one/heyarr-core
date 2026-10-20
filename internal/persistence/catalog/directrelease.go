@@ -165,11 +165,11 @@ func (c *Catalog) RecordDirectRelease(
 			INSERT INTO release_candidates
 				(id, desired_item_id, search_id, provider, candidate_id, title,
 				 attributes, evaluation, accepted, score, terminal, selected,
-				 overridden, override_detail, searched_at, created_at, source)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 0, 1, 0, '', ?, ?, ?)`,
+				 overridden, override_detail, searched_at, created_at, source, selected_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 0, 1, 0, '', ?, ?, ?, ?)`,
 			uuid.Must(uuid.NewV7()).String(), desiredItemID, searchID,
 			cand.Provider, cand.ID, cand.Title, string(attrs), string(evalJSON),
-			stamp, stamp, cand.Source.Reveal()); err != nil {
+			stamp, stamp, cand.Source.Reveal(), stamp); err != nil {
 			return fmt.Errorf("catalog: recording a direct release: %w", err)
 		}
 
