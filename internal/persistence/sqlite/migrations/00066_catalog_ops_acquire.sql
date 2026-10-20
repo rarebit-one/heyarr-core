@@ -1,13 +1,11 @@
--- +goose NO TRANSACTION
 -- +goose Up
 -- Let the catalog op-log hold `acquire` ops (ADR-0119). 00043 pinned the op
 -- column to the two tombstone kinds with a CHECK, and SQLite cannot alter a
 -- CHECK in place, so the table is rebuilt the way 00051 rebuilt
--- blocked_releases: copy, drop, rename, re-index. catalog_ops has no foreign
--- keys in either direction, so nothing dangles across the swap; foreign_keys is
--- toggled all the same, for the same reason as 00046 (an untoggleable PRAGMA
--- inside a transaction is a silent no-op, and NO TRANSACTION keeps it honest).
-PRAGMA foreign_keys = OFF;
+-- blocked_releases: copy, drop, rename, re-index. Unlike 00051 this runs INSIDE
+-- goose's transaction: catalog_ops has no foreign keys in either direction, so
+-- there is no foreign_keys toggle to make, and an interrupted upgrade rolls
+-- back whole instead of leaving catalog_ops_new behind or the log gone.
 CREATE TABLE catalog_ops_new (
     op_hash      TEXT PRIMARY KEY,
     content_type TEXT NOT NULL,
@@ -28,7 +26,6 @@ DROP INDEX catalog_ops_by_target;
 DROP TABLE catalog_ops;
 ALTER TABLE catalog_ops_new RENAME TO catalog_ops;
 CREATE INDEX catalog_ops_by_target ON catalog_ops (content_type, work_key, iat);
-PRAGMA foreign_keys = ON;
 
 -- +goose Down
 -- Back to the two tombstone kinds. An acquire op already in the log would fail
@@ -43,7 +40,7 @@ PRAGMA foreign_keys = ON;
 -- on a one-row guard table: the INSERT fails, and with it the migration, when
 -- such a citation exists. Resolve by staying on 66, or by having the sibling
 -- re-issue the delete with a prev that cites no acquire.
-DROP TABLE IF EXISTS catalog_ops_down_guard;  -- a refused run leaves it behind on this connection
+DROP TABLE IF EXISTS catalog_ops_down_guard;  -- belt and braces: a refused run rolls back with it
 CREATE TEMP TABLE catalog_ops_down_guard (
     cited_acquires INTEGER NOT NULL
         CHECK (cited_acquires = 0)  -- a delete/restore cites an acquire op; see above
@@ -57,7 +54,6 @@ WHERE a.op = 'acquire'
       WHERE d.op IN ('delete', 'restore') AND p.value = a.op_hash
   );
 DROP TABLE catalog_ops_down_guard;
-PRAGMA foreign_keys = OFF;
 CREATE TABLE catalog_ops_old (
     op_hash      TEXT PRIMARY KEY,
     content_type TEXT NOT NULL,
@@ -78,4 +74,3 @@ DROP INDEX catalog_ops_by_target;
 DROP TABLE catalog_ops;
 ALTER TABLE catalog_ops_old RENAME TO catalog_ops;
 CREATE INDEX catalog_ops_by_target ON catalog_ops (content_type, work_key, iat);
-PRAGMA foreign_keys = ON;
