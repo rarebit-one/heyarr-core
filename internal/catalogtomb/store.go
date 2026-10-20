@@ -218,7 +218,23 @@ func (s *Store) recordInto(ctx context.Context, tx *sql.Tx, parsed []catalogop.O
 	if !fresh {
 		return nil
 	}
+	// An acquire op (ADR-0119) cannot change the tombstone view, so a batch
+	// of nothing but acquires skips the re-materialisation: with one op per
+	// grabbed release, re-evaluating the whole log on every grab would make
+	// a large backfill quadratic in the log's length.
+	if onlyAcquires(parsed) {
+		return nil
+	}
 	return s.reconcileTx(ctx, tx, now)
+}
+
+func onlyAcquires(ops []catalogop.Op) bool {
+	for _, op := range ops {
+		if op.Kind != catalogop.OpAcquire {
+			return false
+		}
+	}
+	return len(ops) > 0
 }
 
 // Reconcile re-materialises work_tombstones from the whole log. It is what

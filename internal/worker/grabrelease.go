@@ -166,7 +166,20 @@ func GrabReleaseHandler(
 		// skip at the top ("not waiting to be queued") and the op would never
 		// be written.
 		if o.publisher != nil {
-			if err := o.publisher.Publish(ctx, payload.DesiredItemID, candidateID, transfer.ID); err != nil {
+			err := o.publisher.Publish(ctx, payload.DesiredItemID, candidateID, transfer.ID)
+			if errors.Is(err, ErrSelectionChanged) {
+				// The same race as the pre-grab check above, one step later: a
+				// by-hand override replaced the selection while the client was
+				// taking this release. Advancing now would mark the want QUEUED
+				// on the OLD transfer and the override's choice would never be
+				// grabbed. Leave the want SELECTED for the override's grab; the
+				// transfer already at the client is reconciled by the poll like
+				// any other labelled transfer with a row (it has one).
+				log.Info("not advancing a grab whose selection changed under it",
+					"desired_item_id", payload.DesiredItemID, "grabbed", candidateID, "error", err)
+				return nil
+			}
+			if err != nil {
 				return err
 			}
 		}

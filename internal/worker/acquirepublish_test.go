@@ -326,10 +326,31 @@ func TestASelectionThatChangedUnderTheGrabIsNotPublished(t *testing.T) {
 	f := arrivalFacts()
 	f.CandidateID = "sha256:" + strings.Repeat("0", 64) // the overriding pick, a hashed guid
 	pub, ops := newPublisher(t, f)
-	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, fakeInfohash); err != nil {
-		t.Fatal(err)
+	err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, fakeInfohash)
+	if !errors.Is(err, ErrSelectionChanged) {
+		t.Fatalf("err = %v, want ErrSelectionChanged", err)
 	}
 	if len(ops.recorded) != 0 {
 		t.Fatalf("published %d ops for a selection that changed under the grab", len(ops.recorded))
+	}
+}
+
+// TestAGrabWhoseSelectionChangedDoesNotAdvance: when the publisher reports
+// the selection changed, the grab neither fails nor advances: the want stays
+// SELECTED for the override's grab rather than being marked QUEUED on the
+// old transfer.
+func TestAGrabWhoseSelectionChangedDoesNotAdvance(t *testing.T) {
+	t.Parallel()
+	h := newGrabHarness(t)
+	h.fake.Offer("Arrival", offer("good", 2160, "hevc"))
+	if err := h.run(t); err != nil {
+		t.Fatal(err)
+	}
+	pub := &recordingPublisher{fail: ErrSelectionChanged}
+	if err := h.grabWith(t, h.selectedID(t), pub); err != nil {
+		t.Fatalf("a changed selection failed the job: %v", err)
+	}
+	if got := h.state(t).Name(); got != "SELECTED" {
+		t.Fatalf("after a changed selection the want is %s, want SELECTED", got)
 	}
 }

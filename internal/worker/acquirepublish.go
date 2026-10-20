@@ -30,6 +30,12 @@ type AcquirePublisher interface {
 	Publish(ctx context.Context, desiredItemID, candidateID, transferID string) error
 }
 
+// ErrSelectionChanged reports that the want's selected release is no longer
+// the one the grab handed to the client: a by-hand override landed between
+// the grab's SelectedSource and the publish. The grab must not advance the
+// want on the old transfer's behalf; the override's own grab takes over.
+var ErrSelectionChanged = errors.New("worker: the want's selection changed under the grab")
+
 // AcquireFactsReader is the catalog read the publisher needs.
 type AcquireFactsReader interface {
 	AcquireFacts(ctx context.Context, desiredItemID string) (catalog.AcquireFacts, error)
@@ -83,11 +89,7 @@ func (p *CatalogAcquirePublisher) Publish(ctx context.Context, desiredItemID, ca
 	// did not choose. Skip: the override enqueues its own grab, which
 	// publishes its own op.
 	if candidateID != "" && facts.CandidateID != candidateID {
-		if p.Log != nil {
-			p.Log.Info("not publishing a grab whose selection changed under it",
-				"desired_item_id", desiredItemID, "grabbed", candidateID, "now_selected", facts.CandidateID)
-		}
-		return nil
+		return fmt.Errorf("%w: grabbed %s, now selected %s", ErrSelectionChanged, candidateID, facts.CandidateID)
 	}
 	// A candidate whose id is the infohash must agree with the client's: a
 	// disagreement means the client took a different release than the one
