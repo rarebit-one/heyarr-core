@@ -39,7 +39,9 @@ const (
 	// FanOutHeld means the want already holds acceptable content or is already
 	// acquiring; the op changed nothing.
 	FanOutHeld FanOutOutcome = "held"
-	// FanOutTombstoned means the work is logically deleted here; the op is ignored.
+	// FanOutTombstoned means the work is logically deleted here; the op is
+	// ignored while it is. Re-evaluated every pass: a restore makes the op
+	// effective again.
 	FanOutTombstoned FanOutOutcome = "tombstoned"
 	// FanOutScopeUnresolved means the op names an edition or item this node has
 	// not materialised. Retried on every pass until it appears.
@@ -60,7 +62,7 @@ const (
 // Final reports whether an outcome is settled for its op: a non-final outcome
 // is retried on the next pass.
 func (o FanOutOutcome) Final() bool {
-	return o != FanOutScopeUnresolved && o != FanOutNoSiteSource
+	return o != FanOutScopeUnresolved && o != FanOutNoSiteSource && o != FanOutTombstoned
 }
 
 // FanOutApplication is one recorded outcome.
@@ -96,22 +98,51 @@ func (c *Catalog) FanOutApplications(ctx context.Context) (map[string]FanOutAppl
 	return out, nil
 }
 
-// RecordFanOutApplication upserts the outcome for an op.
+// RecordFanOutApplication upserts the outcome for an op and, when it is new or
+// differs from the stored one, emits acquisition.fan_out_changed in the same
+// transaction (invariant 7). An unchanged outcome writes nothing.
 func (c *Catalog) RecordFanOutApplication(ctx context.Context, opHash, desiredItemID string, outcome FanOutOutcome, detail string) error {
 	var want any
 	if desiredItemID != "" {
 		want = desiredItemID
 	}
-	_, err := c.db.Writer().ExecContext(ctx, `
-		INSERT INTO catalog_op_applications (op_hash, desired_item_id, outcome, detail, applied_at)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT (op_hash) DO UPDATE SET
-			desired_item_id = excluded.desired_item_id, outcome = excluded.outcome,
-			detail = excluded.detail, applied_at = excluded.applied_at`,
-		opHash, want, string(outcome), detail, sqlite.FormatTimestamp(c.clock.Now()))
+	var pending []events.Event
+	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		var prevWant, prevOutcome, prevDetail string
+		err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(desired_item_id, ''), outcome, detail FROM catalog_op_applications WHERE op_hash = ?`,
+			opHash).Scan(&prevWant, &prevOutcome, &prevDetail)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return err
+		case prevWant == desiredItemID && prevOutcome == string(outcome) && prevDetail == detail:
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO catalog_op_applications (op_hash, desired_item_id, outcome, detail, applied_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (op_hash) DO UPDATE SET
+				desired_item_id = excluded.desired_item_id, outcome = excluded.outcome,
+				detail = excluded.detail, applied_at = excluded.applied_at`,
+			opHash, want, string(outcome), detail, sqlite.FormatTimestamp(c.clock.Now())); err != nil {
+			return err
+		}
+		ev, err := c.events.EmitTx(ctx, tx, events.TypeFanOutApplicationChanged, "catalog_op", opHash,
+			map[string]any{
+				"op_hash": opHash, "desired_item_id": desiredItemID,
+				"outcome": string(outcome), "was": prevOutcome, "detail": detail,
+			})
+		if err != nil {
+			return err
+		}
+		pending = append(pending, ev)
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("catalog: recording fan-out application %s: %w", opHash, err)
 	}
+	c.events.Publish(pending...)
 	return nil
 }
 

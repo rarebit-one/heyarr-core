@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/catalogop"
+	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 )
 
@@ -204,7 +205,21 @@ func TestFanOutApplicationsRoundTrip(t *testing.T) {
 	if !ok || a.Outcome != catalog.FanOutApplied || a.DesiredItemID != h.want || a.Detail != "from site north" {
 		t.Errorf("application = %+v %v", a, ok)
 	}
-	if !catalog.FanOutApplied.Final() || catalog.FanOutScopeUnresolved.Final() {
-		t.Error("finality is wrong: applied is final, scope_unresolved is not")
+	if !catalog.FanOutApplied.Final() || catalog.FanOutScopeUnresolved.Final() ||
+		catalog.FanOutNoSiteSource.Final() || catalog.FanOutTombstoned.Final() {
+		t.Error("finality is wrong: applied is final; scope_unresolved, no_site_source and tombstoned are re-evaluated")
+	}
+	// Each change is a transition and emits (invariant 7); recording the same
+	// outcome again is not, and does not.
+	if err := h.cat.RecordFanOutApplication(ctx, op.Hash, h.want, catalog.FanOutApplied, "from site north"); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := h.db.Reader().QueryRowContext(ctx,
+		`SELECT count(*) FROM events WHERE type = ?`, events.TypeFanOutApplicationChanged).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("%d fan_out_changed events, want 2 (recorded, then moved to applied)", n)
 	}
 }

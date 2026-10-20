@@ -326,6 +326,13 @@ const (
 	TypeAcquisitionPhaseChanged = "acquisition.phase_changed"
 	TypeAcquisitionSatisfaction = "acquisition.satisfaction_changed"
 
+	// TypeFanOutApplicationChanged is this node's outcome for a sibling's
+	// acquire op changing (ADR-0119): first recorded, or moved, such as
+	// scope_unresolved to applied. Emitted in the same transaction as the
+	// catalog_op_applications row; an unchanged outcome re-evaluated on a
+	// later pass is not a transition and emits nothing.
+	TypeFanOutApplicationChanged = "acquisition.fan_out_changed"
+
 	// The upgrade workflow (§60, M3-06).
 	//
 	// TypeUpgradeFound is a strictly better release being available for

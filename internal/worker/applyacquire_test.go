@@ -342,3 +342,45 @@ func TestAPrivateOpCreatesNothingAndIsRetried(t *testing.T) {
 		t.Fatalf("an unchanged retried outcome was rewritten: %+v then %+v", first, again)
 	}
 }
+
+// TestAV2InfohashIsAMultihashMagnet: a 64-character (BitTorrent v2) infohash
+// is named urn:btmh with the sha2-256 multihash prefix; urn:btih is v1 only.
+func TestAV2InfohashIsAMultihashMagnet(t *testing.T) {
+	t.Parallel()
+	a := siblingAcquire()
+	if got := magnetFor(&a); !strings.HasPrefix(got, "magnet:?xt=urn:btih:"+fakeInfohash+"&") {
+		t.Errorf("v1 magnet = %s", got)
+	}
+	a.Infohash = strings.Repeat("ab", 32)
+	if got := magnetFor(&a); !strings.HasPrefix(got, "magnet:?xt=urn:btmh:1220"+a.Infohash+"&") {
+		t.Errorf("v2 magnet = %s", got)
+	}
+}
+
+// TestATombstonedOpAppliesOnceTheWorkIsRestored: the work was deleted here
+// when the op was first evaluated; a later restore makes the op effective
+// again and the next pass applies it, because tombstoned is re-evaluated.
+func TestATombstonedOpAppliesOnceTheWorkIsRestored(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	hash := h.receive(t, h.sibling, "movie", "movie:arrival:2016", siblingAcquire())
+	if _, err := h.db.Writer().Exec(
+		`INSERT INTO work_tombstones (content_type, work_key, op_hash, tombstoned_at) VALUES ('movie', 'movie:arrival:2016', 'x', '2026-10-20T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if app := h.application(t, hash); app.Outcome != catalog.FanOutTombstoned {
+		t.Fatalf("application = %+v, want tombstoned", app)
+	}
+	if _, err := h.db.Writer().Exec(`DELETE FROM work_tombstones`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if app := h.application(t, hash); app.Outcome != catalog.FanOutApplied {
+		t.Fatalf("after the restore the application = %+v, want applied", app)
+	}
+}

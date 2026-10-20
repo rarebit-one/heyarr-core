@@ -80,8 +80,8 @@ func ApplyAcquireHandler(ops OpsReader, cat FanOutStore, q ProbeEnqueuer, selfKe
 				return fmt.Errorf("worker: applying acquire op %s: %w", op.Hash, err)
 			}
 			if seen && prior.Outcome == outcome && prior.Detail == detail && prior.DesiredItemID == wantID {
-				// A retried outcome that has not moved: no write per pass.
-				skipped++
+				// A re-evaluated outcome that has not moved: nothing to record
+				// or report. (The store also refuses to write or emit for it.)
 				continue
 			}
 			if err := cat.RecordFanOutApplication(ctx, op.Hash, wantID, outcome, detail); err != nil {
@@ -191,14 +191,21 @@ func selectedOn(ctx context.Context, cat FanOutStore, desiredItemID, candidateID
 	return sel.CandidateID == candidateID, nil
 }
 
-// magnetFor renders the trackerless magnet for a public release: the
-// infohash and the display name. Trackers the op carries are appended as
-// `tr` parameters (they are credential-free by construction).
+// magnetFor renders the magnet for a public release: the exact topic for the
+// infohash and the display name. A 40-character hash is BitTorrent v1
+// (`urn:btih:`); a 64-character one is a v2 SHA-256 hash, which a magnet names
+// as a multihash (`urn:btmh:` with the sha2-256 prefix 0x12 0x20). Trackers
+// the op carries are appended as `tr` parameters (they are credential-free by
+// construction).
 func magnetFor(a *catalogop.Acquire) string {
 	v := url.Values{}
 	v.Set("dn", a.Title)
 	for _, t := range a.Trackers {
 		v.Add("tr", t)
 	}
-	return "magnet:?xt=urn:btih:" + a.Infohash + "&" + v.Encode()
+	xt := "urn:btih:" + a.Infohash
+	if len(a.Infohash) == 64 {
+		xt = "urn:btmh:1220" + a.Infohash
+	}
+	return "magnet:?xt=" + xt + "&" + v.Encode()
 }
