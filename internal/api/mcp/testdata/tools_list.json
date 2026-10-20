@@ -909,7 +909,7 @@
         "additionalProperties": false,
         "properties": {
           "content_type": {
-            "description": "Required with title: movie, series, music, book.",
+            "description": "Required with title: movie, series, music, book, document, game.",
             "type": "string"
           },
           "monitor": {
@@ -922,6 +922,10 @@
           },
           "reason": {
             "description": "A note for whoever reads this in six months. Never interpreted.",
+            "type": "string"
+          },
+          "store_ref": {
+            "description": "For a game: the store it is owned on and the store's own name for it, as gog:\u003cgamename\u003e (e.g. gog:the_witcher_3). The game is then fetched from that store and verified, never searched for on an indexer.",
             "type": "string"
           },
           "title": {

@@ -61,9 +61,19 @@ type wantContentArgs struct {
 	Title          string `json:"title"`
 	ContentType    string `json:"content_type"`
 	Year           int    `json:"year"`
+	StoreRef       string `json:"store_ref"`
 	QualityProfile string `json:"quality_profile"`
 	Monitor        *bool  `json:"monitor"`
 	Reason         string `json:"reason"`
+}
+
+// storeRefForExisting routes store_ref: onto the request for an existing work,
+// or (below) into the work descriptor for a new one — never dropped.
+func storeRefForExisting(args wantContentArgs) string {
+	if args.Title != "" {
+		return ""
+	}
+	return args.StoreRef
 }
 
 // wantContent is the write intent, shared with POST /api/v1/desired.
@@ -80,6 +90,7 @@ func (s *Server) wantContent(ctx context.Context, raw json.RawMessage) (any, err
 
 	req := resources.WantContentRequest{
 		WorkID:         args.WorkID,
+		StoreRef:       storeRefForExisting(args),
 		QualityProfile: args.QualityProfile,
 		Monitor:        args.Monitor,
 		Reason:         args.Reason,
@@ -89,6 +100,7 @@ func (s *Server) wantContent(ctx context.Context, raw json.RawMessage) (any, err
 			ContentType: args.ContentType,
 			Title:       args.Title,
 			Year:        args.Year,
+			StoreRef:    args.StoreRef,
 		}
 	}
 

@@ -82,6 +82,7 @@ func newDesiredAddCommand(_ Options, configPath *string) *cobra.Command {
 		profile     string
 		reason      string
 		noMonitor   bool
+		storeRef    string
 	)
 	cmd := &cobra.Command{
 		Use:   "add <title>",
@@ -111,6 +112,7 @@ content under the same profile twice is one want written twice, and is refused.`
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
 				req := client.CreateDesiredRequest{
 					WorkID:         workID,
+					StoreRef:       storeRefFor(workID, storeRef),
 					EditionID:      editionID,
 					QualityProfile: profile,
 					Reason:         reason,
@@ -121,6 +123,7 @@ content under the same profile twice is one want written twice, and is refused.`
 				if len(args) == 1 {
 					req.Work = &client.WorkDescriptor{
 						ContentType: contentType, Title: args[0], Year: year,
+						StoreRef: storeRef,
 					}
 				}
 				if noMonitor {
@@ -148,6 +151,8 @@ content under the same profile twice is one want written twice, and is refused.`
 	cmd.Flags().StringVar(&contentType, "content-type", "",
 		"what this is: movie, series, music, book (required when wanting by title)")
 	cmd.Flags().IntVar(&year, "year", 0, "the year, when it is part of the identity")
+	cmd.Flags().StringVar(&storeRef, "store-ref", "",
+		"a game's store and the store's name for it, e.g. gog:the_witcher_3 — fetched from that store")
 	cmd.Flags().StringVar(&workID, "work-id", "", "want something already in the catalog")
 	cmd.Flags().StringVar(&editionID, "edition-id", "",
 		"want one edition — a season, a particular release — rather than the whole work")
@@ -537,4 +542,13 @@ Use "create" to author one, "set" to change one, and "list" to read them.`,
 	cmd.AddCommand(createCmd)
 	cmd.AddCommand(setCmd)
 	return cmd
+}
+
+// storeRefFor puts --store-ref where the API reads it: on the request for an
+// existing work (--work-id), inside the work descriptor for a new one.
+func storeRefFor(workID, storeRef string) string {
+	if workID == "" {
+		return ""
+	}
+	return storeRef
 }

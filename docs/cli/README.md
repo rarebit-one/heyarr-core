@@ -122,6 +122,8 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr space rotate`](heyarr_space_rotate.md) | Revoke recipients from a space by rotating its key (§41, #361) |
 | [`heyarr space snapshot`](heyarr_space_snapshot.md) | Take an encrypted snapshot at the current causal point (§44) |
 | [`heyarr space`](heyarr_space.md) | Create and read encrypted personal-state spaces (§38, §42, ADR-0049) |
+| [`heyarr stores sync`](heyarr_stores_sync.md) | Want every game you own on GOG |
+| [`heyarr stores`](heyarr_stores.md) | Back up the games you own on a store |
 | [`heyarr subtitles backfill`](heyarr_subtitles_backfill.md) | Extract embedded subtitles from already-ingested video |
 | [`heyarr subtitles want`](heyarr_subtitles_want.md) | Request subtitles for held content that has none |
 | [`heyarr subtitles`](heyarr_subtitles.md) | Subtitle operations |

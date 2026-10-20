@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
@@ -120,8 +121,13 @@ type AcquisitionView struct {
 // Exactly one of WorkID and Work is required. The descriptor exists so that
 // wanting something absent does not require cataloguing it first.
 type WantContentRequest struct {
-	Scope     string `json:"scope"`
-	WorkID    string `json:"work_id"`
+	Scope  string `json:"scope"`
+	WorkID string `json:"work_id"`
+	// StoreRef names an EXISTING game Work (work_id) on its store — the same
+	// "gog:<gamename>" a work descriptor carries for a new one. Recorded on the
+	// Work in the same transaction as the want, so a want for a game already in
+	// the catalog is fetchable too; a work descriptor carries its own store_ref.
+	StoreRef  string `json:"store_ref"`
 	EditionID string `json:"edition_id"`
 	// Work names content that may not exist yet. Resolved through the same
 	// get-or-create as the scanner, so a want and a later scan converge.
@@ -144,6 +150,12 @@ type WorkDescriptor struct {
 	ContentType string `json:"content_type"`
 	Title       string `json:"title"`
 	Year        int    `json:"year"`
+	// StoreRef names a game on the store it is owned on, as a tagged source
+	// ("gog:<gamename>", ADR-0120). It is the store's identity for the game, so
+	// it is matched BEFORE the title — the store's name for a game is exact
+	// where a title is not — and recorded as the Work's external id, which is
+	// what the store fetch beat looks for. Games only.
+	StoreRef string `json:"store_ref"`
 }
 
 // UpdateDesiredRequest changes a want. Every field is a pointer: absent means
@@ -395,6 +407,19 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (WantOutc
 		monitor = *req.Monitor
 	}
 
+	// Validate the want's own fields BEFORE anything is written: resolving the
+	// Work can record a store_ref on it, and a request refused afterwards for a
+	// bad scope or edition must not have mutated the catalog (or named a game
+	// the store fetch would then go and download). The Work and profile are
+	// placeholders here; they are checked for real once resolved.
+	probe := desired.Item{
+		Scope: desired.Scope(req.Scope), WorkID: "probe", EditionID: req.EditionID,
+		QualityProfileID: "probe", Monitor: monitor, Reason: req.Reason,
+	}
+	if err := probe.Validate(); err != nil {
+		return WantOutcome{}, &badRequest{err}
+	}
+
 	// Resolving a profile name and getting-or-creating a work from a descriptor
 	// are the API's business — the catalog's CreateDesiredItem takes ids already
 	// resolved. Both happen first, in one transaction, so a want and its work
@@ -424,9 +449,27 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (WantOutc
 		}
 		workID = req.WorkID
 		if req.Work != nil {
+			if strings.TrimSpace(req.StoreRef) != "" {
+				return &badRequest{errors.New("put store_ref inside the work descriptor when wanting by work")}
+			}
 			workID, err = a.resolveWorkDescriptor(ctx, tx, *req.Work)
+			return err
 		}
-		return err
+		// An edition-scoped want names its edition: check it belongs to this
+		// Work before attaching anything, so a want refused for a missing edition
+		// never leaves a store_ref behind.
+		if req.EditionID != "" && strings.TrimSpace(req.StoreRef) != "" {
+			var one int
+			err := tx.QueryRowContext(ctx, `SELECT 1 FROM editions WHERE id = ? AND work_id = ?`,
+				req.EditionID, workID).Scan(&one)
+			if errors.Is(err, sql.ErrNoRows) {
+				return &badRequest{fmt.Errorf("work %s has no edition %q", workID, req.EditionID)}
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return a.attachStoreRef(ctx, tx, workID, req.StoreRef)
 	}); err != nil {
 		return WantOutcome{}, err
 	}
@@ -684,14 +727,37 @@ func (a *API) resolveWorkDescriptor(ctx context.Context, tx *sql.Tx, d WorkDescr
 		return "", &badRequest{fmt.Errorf("a year of %d is not a year", d.Year)}
 	}
 
-	key, sortTitle := identification.Describe(contentType, title, d.Year)
+	storeSource, storeID, err := parseStoreRef(contentType, d.StoreRef)
+	if err != nil {
+		return "", err
+	}
 	var id string
-	err := tx.QueryRowContext(ctx,
+	if storeID != "" {
+		// The store's own id for the game wins over the title: a Work already
+		// named by it is this game, whatever its title now says.
+		// Joined to works: an id whose Work was deleted names nothing, and must
+		// not stop a new Work being created for the game.
+		err := tx.QueryRowContext(ctx, `SELECT x.entity_id FROM external_ids x
+			JOIN works w ON w.id = x.entity_id
+			WHERE x.entity_type = 'work' AND x.source = ? AND x.value = ?`, storeSource, storeID).Scan(&id)
+		switch {
+		case err == nil:
+			return id, nil
+		case !errors.Is(err, sql.ErrNoRows):
+			return "", err
+		}
+	}
+
+	key, sortTitle := identification.Describe(contentType, title, d.Year)
+	err = tx.QueryRowContext(ctx,
 		`SELECT id FROM works WHERE content_type = ? AND work_key = ?`,
 		contentType, key).Scan(&id)
 	switch {
 	case err == nil:
-		return id, nil
+		if err := refuseSecondStoreID(ctx, tx, id, storeSource, storeID); err != nil {
+			return "", err
+		}
+		return id, a.recordStoreRef(ctx, tx, id, storeSource, storeID)
 	case !errors.Is(err, sql.ErrNoRows):
 		return "", err
 	}
@@ -723,7 +789,130 @@ func (a *API) resolveWorkDescriptor(ctx context.Context, tx *sql.Tx, d WorkDescr
 		return "", err
 	}
 	a.events.Publish(ev)
-	return id, nil
+	return id, a.recordStoreRef(ctx, tx, id, storeSource, storeID)
+}
+
+// parseStoreRef validates a descriptor's store_ref and splits it into the
+// external_ids source and value. Empty is fine; anything else must be a game
+// with a well-formed store id — a malformed one is refused, never stored, since
+// the store tool takes the id as a pattern.
+func parseStoreRef(contentType, ref string) (source, value string, err error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", "", nil
+	}
+	if contentType != identification.Game {
+		return "", "", &badRequest{fmt.Errorf(
+			"store_ref names a game on a store; a %s has none", contentType)}
+	}
+	// Exactly "gog:<gamename>": ParseGOGSource also reads the internal release
+	// form ("…@<want>"), whose suffix a store_ref must not carry.
+	name := strings.TrimPrefix(ref, acquisition.GOGSourceScheme)
+	if !strings.HasPrefix(ref, acquisition.GOGSourceScheme) || !acquisition.ValidGOGGameName(name) {
+		return "", "", &badRequest{fmt.Errorf(
+			"store_ref %q is not a store reference — use gog:<gamename> "+
+				"(lower-case letters, digits and underscores)", ref)}
+	}
+	return "gog", name, nil
+}
+
+// attachStoreRef records a store_ref on an existing Work, refusing one that
+// does not fit it (not a game, malformed) rather than accepting a want that
+// could never be fetched. Empty is a no-op.
+func (a *API) attachStoreRef(ctx context.Context, tx *sql.Tx, workID, ref string) error {
+	if strings.TrimSpace(ref) == "" {
+		return nil
+	}
+	var contentType string
+	err := tx.QueryRowContext(ctx, `SELECT content_type FROM works WHERE id = ?`, workID).Scan(&contentType)
+	if errors.Is(err, sql.ErrNoRows) {
+		return &badRequest{fmt.Errorf("there is no work with the id %q", workID)}
+	}
+	if err != nil {
+		return err
+	}
+	source, value, err := parseStoreRef(contentType, ref)
+	if err != nil {
+		return err
+	}
+	// The same two refusals a new Work gets: this Work is already a different
+	// product on the store, or this product already names a different Work.
+	if err := refuseSecondStoreID(ctx, tx, workID, source, value); err != nil {
+		return err
+	}
+	var owner string
+	err = tx.QueryRowContext(ctx, `SELECT x.entity_id FROM external_ids x
+		JOIN works w ON w.id = x.entity_id
+		WHERE x.entity_type = 'work' AND x.source = ? AND x.value = ?`, source, value).Scan(&owner)
+	switch {
+	case err == nil && owner != workID:
+		return &badRequest{fmt.Errorf("%s:%s already names another work (%s)", source, value, owner)}
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return err
+	}
+	return a.recordStoreRef(ctx, tx, workID, source, value)
+}
+
+// refuseSecondStoreID refuses to attach a store id to a Work the title matched
+// when that Work is already a different product on the same store. Two GOG
+// products that normalise to one title are two games; attaching the second id
+// would make one Work stand for both, and only one of them would ever be
+// fetched. Refused rather than guessed, so the person can tell them apart.
+func refuseSecondStoreID(ctx context.Context, tx *sql.Tx, workID, source, value string) error {
+	if source == "" {
+		return nil
+	}
+	var other string
+	err := tx.QueryRowContext(ctx, `SELECT value FROM external_ids
+		WHERE entity_type = 'work' AND entity_id = ? AND source = ? AND value != ?
+		LIMIT 1`, workID, source, value).Scan(&other)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return err
+	}
+	return &badRequest{fmt.Errorf(
+		"a different %s game (%s) already has this title; %s:%s is a separate product — "+
+			"want it under a distinguishing title", source, other, source, value)}
+}
+
+// recordStoreRef records a game's store id as its Work's external id, which is
+// what the store fetch beat looks for (ADR-0120). Idempotent on the table's
+// uniqueness. A Work that gains a store id has changed what it is known as, so
+// that emits content.work.updated in the same transaction (invariant 7); a
+// repeat that changes nothing emits nothing.
+func (a *API) recordStoreRef(ctx context.Context, tx *sql.Tx, workID, source, value string) error {
+	if source == "" {
+		return nil
+	}
+	// A row left by a deleted Work would swallow this insert (the table has no
+	// foreign key, and a deleted Work's ids are not cleaned up): clear it first,
+	// so a game re-wanted after its Work was removed is named again.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM external_ids
+		WHERE entity_type = 'work' AND source = ? AND value = ?
+		  AND entity_id NOT IN (SELECT id FROM works)`, source, value); err != nil {
+		return fmt.Errorf("clearing a deleted work's %s id: %w", source, err)
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO external_ids (id, entity_type, entity_id, source, value)
+		VALUES (?, 'work', ?, ?, ?)
+		ON CONFLICT (source, value, entity_type) DO NOTHING`,
+		uuid.Must(uuid.NewV7()).String(), workID, source, value)
+	if err != nil {
+		return fmt.Errorf("recording the %s id for the work: %w", source, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil
+	}
+	ev, err := a.events.EmitTx(ctx, tx, events.TypeWorkUpdated, "work", workID, map[string]any{
+		"work_id": workID, "external_id": map[string]any{"source": source, "value": value},
+	})
+	if err != nil {
+		return err
+	}
+	a.events.Publish(ev)
+	return nil
 }
 
 // UpdateDesired changes the conditions, the monitoring or the note on a want.

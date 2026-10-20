@@ -113,6 +113,7 @@ One logical library, multiple complete sovereign peers.`,
 		// will not start.
 		newLibraryCommand(opts, &configPath),
 		newDesiredCommand(opts, &configPath),
+		newStoresCommand(opts, &configPath),
 		newQualityProfileCommand(opts, &configPath),
 		newScanCommand(opts, &configPath),
 		newWorksCommand(opts, &configPath),
