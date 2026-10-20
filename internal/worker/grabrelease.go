@@ -99,18 +99,19 @@ func GrabReleaseHandler(
 		}
 		if payload.CandidateID != "" && payload.CandidateID != candidateID {
 			// A different release is selected than the one this job was
-			// created for. Fetching it anyway would be defensible — it is what
-			// the want currently wants — but it would also mean the job's own
-			// record of what it was for is untrue, and a duplicated grab of the
-			// superseded release would be indistinguishable from this.
+			// created for: a later search or a by-hand override replaced it.
+			// This job grabs what the want selects NOW.
 			//
-			// The want is left in SELECTED and the grab enqueued for the NEW
-			// selection does the work; it has its own dedupe key only in the
-			// sense that it replaced this one, so say so plainly.
-			log.Info("skipping a grab: the selection changed after it was queued",
+			// It cannot stand down and leave the work to "the grab queued for
+			// the new selection", because there may be no such grab: the queue
+			// dedupes on the want against pending AND leased jobs, so a
+			// selection that lands while this job is pending or running
+			// collapses its enqueue into this very job (#793). This job is
+			// the want's only grab, and its payload's candidate is a record of
+			// why it was queued, not a constraint on what it fetches.
+			log.Info("the selection changed after the grab was queued; grabbing the current one",
 				"desired_item_id", payload.DesiredItemID,
 				"queued_for", payload.CandidateID, "now", candidateID)
-			return nil
 		}
 
 		transfer, provider, err := reg.Grab(ctx, source)
@@ -168,16 +169,18 @@ func GrabReleaseHandler(
 		if o.publisher != nil {
 			err := o.publisher.Publish(ctx, payload.DesiredItemID, candidateID, transfer.ID)
 			if errors.Is(err, ErrSelectionChanged) {
-				// The same race as the pre-grab check above, one step later: a
-				// by-hand override replaced the selection while the client was
-				// taking this release. Advancing now would mark the want QUEUED
-				// on the OLD transfer and the override's choice would never be
-				// grabbed. Leave the want SELECTED for the override's grab; the
-				// transfer already at the client is reconciled by the poll like
-				// any other labelled transfer with a row (it has one).
-				log.Info("not advancing a grab whose selection changed under it",
-					"desired_item_id", payload.DesiredItemID, "grabbed", candidateID, "error", err)
-				return nil
+				// The same race as the check above, one step later: a by-hand
+				// override replaced the selection while the client was taking
+				// this release. Advancing now would mark the want QUEUED on
+				// the OLD transfer and the override's choice would never be
+				// grabbed; completing without advancing would strand the want
+				// in SELECTED, because the override's enqueue collapsed into
+				// this leased job (#793). So the job fails and retries: the
+				// want is still SELECTED, and the re-run grabs the current
+				// selection. The transfer already at the client keeps its row
+				// and is reconciled by the poll like any other.
+				return fmt.Errorf("worker: the selection for %s changed while %s was being grabbed; retrying for the current one: %w",
+					payload.DesiredItemID, candidateID, err)
 			}
 			if err != nil {
 				return err

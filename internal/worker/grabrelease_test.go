@@ -264,13 +264,13 @@ func TestAGrabAgainstADownClientFailsLoudlyAndKeepsTheSelection(t *testing.T) {
 	}
 }
 
-// A grab enqueued for one release must not fetch a different one.
+// A grab enqueued for one release fetches what the want selects when it runs.
 //
-// The window is real: a search can supersede a selection between the grab being
-// queued and being claimed. Fetching whatever is selected now would be
-// defensible, but it would make the job's own record of what it was for untrue,
-// and the grab queued for the NEW selection is the one that should do the work.
-func TestAGrabSkipsWhenTheSelectionChangedUnderIt(t *testing.T) {
+// The window is real: a search or a by-hand override can supersede a selection
+// between the grab being queued and being claimed, and the queue dedupes the
+// new selection's enqueue into this job (#793). Standing down would leave the
+// want SELECTED with no grab at all.
+func TestAGrabQueuedForASupersededReleaseGrabsTheCurrentSelection(t *testing.T) {
 	t.Parallel()
 	h := newGrabHarness(t)
 	h.fake.Offer("Arrival", offer("good", 2160, "hevc"))
@@ -281,14 +281,14 @@ func TestAGrabSkipsWhenTheSelectionChangedUnderIt(t *testing.T) {
 	// A candidate id that is NOT the one selected — as if this job had been
 	// queued for an earlier search's winner.
 	if err := h.grab(t, "a-superseded-release"); err != nil {
-		t.Fatalf("a superseded grab failed rather than standing down: %v", err)
+		t.Fatalf("a grab queued for a superseded release failed: %v", err)
 	}
 
-	if got := len(h.client.Added()); got != 0 {
-		t.Errorf("the client was asked %d times for a superseded release", got)
+	if got := len(h.client.Added()); got != 1 {
+		t.Errorf("the client was asked %d times, want once for the current selection", got)
 	}
-	if got := h.state(t).Name(); got != "SELECTED" {
-		t.Errorf("the want is %s, want SELECTED", got)
+	if got := h.state(t).Name(); got != "QUEUED" {
+		t.Errorf("the want is %s, want QUEUED on the current selection", got)
 	}
 }
 

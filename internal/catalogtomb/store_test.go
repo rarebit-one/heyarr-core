@@ -288,3 +288,48 @@ func TestAcquireOpIsRecordedAndSurvivesReconcile(t *testing.T) {
 		t.Error("the recorded acquire op is not the effective acquisition")
 	}
 }
+
+// TestAcquireArrivingLastCompletesARestore: a restore cites the heads its
+// signer saw, and those can be acquires. When the restore reaches this site
+// before an acquire it cites, it is held as bad_prev and the delete still
+// stands; the acquire's arrival completes the restore's causal past, so an
+// acquire-only append must still re-materialise and lift the tombstone.
+func TestAcquireArrivingLastCompletesARestore(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+	peer := newKey(t)
+	f.insertWork(t, "movie", "the-thing-1982", "The Thing")
+
+	del := mustSign(t, peer, catalogop.OpDelete, "movie", "the-thing-1982", nil, now)
+	acq, err := catalogop.SignAcquire(peer, "movie", "the-thing-1982", catalogop.Acquire{
+		Scope: catalogop.ScopeWork, Aspect: catalogop.AspectPrimary, Profile: "living-room",
+		Infohash: "0123456789abcdef0123456789abcdef01234567", Title: "The Thing 1982 2160p",
+		WorkTitle: "The Thing", Year: 1982, SelectedAt: now, Site: "north",
+	}, []string{catalogop.Hash(del)}, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	restore := mustSign(t, peer, catalogop.OpRestore, "movie", "the-thing-1982",
+		[]string{catalogop.Hash(acq)}, now.Add(2*time.Minute))
+
+	if err := f.store.RecordOps(ctx, []string{del, restore}); err != nil {
+		t.Fatal(err)
+	}
+	if tombstoned, err := f.store.Tombstoned(ctx, "movie", "the-thing-1982"); err != nil {
+		t.Fatal(err)
+	} else if !tombstoned {
+		t.Fatal("precondition: a restore whose causal past is missing must not lift the tombstone")
+	}
+
+	if err := f.store.RecordOps(ctx, []string{acq}); err != nil {
+		t.Fatal(err)
+	}
+	tombstoned, err := f.store.Tombstoned(ctx, "movie", "the-thing-1982")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tombstoned {
+		t.Error("the acquire completed the restore's history but the tombstone stayed materialised")
+	}
+}

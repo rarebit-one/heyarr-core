@@ -335,11 +335,12 @@ func TestASelectionThatChangedUnderTheGrabIsNotPublished(t *testing.T) {
 	}
 }
 
-// TestAGrabWhoseSelectionChangedDoesNotAdvance: when the publisher reports
-// the selection changed, the grab neither fails nor advances: the want stays
-// SELECTED for the override's grab rather than being marked QUEUED on the
-// old transfer.
-func TestAGrabWhoseSelectionChangedDoesNotAdvance(t *testing.T) {
+// TestAGrabWhoseSelectionChangedRetriesForTheCurrentOne: when the publisher
+// reports the selection changed under the grab, the job neither advances (the
+// want would be QUEUED on the old transfer) nor completes (the override's
+// enqueue collapsed into this job, so nothing else would grab, #793): it
+// fails, the want stays SELECTED, and the retry grabs and advances.
+func TestAGrabWhoseSelectionChangedRetriesForTheCurrentOne(t *testing.T) {
 	t.Parallel()
 	h := newGrabHarness(t)
 	h.fake.Offer("Arrival", offer("good", 2160, "hevc"))
@@ -347,10 +348,18 @@ func TestAGrabWhoseSelectionChangedDoesNotAdvance(t *testing.T) {
 		t.Fatal(err)
 	}
 	pub := &recordingPublisher{fail: ErrSelectionChanged}
-	if err := h.grabWith(t, h.selectedID(t), pub); err != nil {
-		t.Fatalf("a changed selection failed the job: %v", err)
+	err := h.grabWith(t, h.selectedID(t), pub)
+	if !errors.Is(err, ErrSelectionChanged) {
+		t.Fatalf("err = %v, want the job to fail with ErrSelectionChanged so it retries", err)
 	}
 	if got := h.state(t).Name(); got != "SELECTED" {
 		t.Fatalf("after a changed selection the want is %s, want SELECTED", got)
+	}
+
+	if err := h.grabWith(t, h.selectedID(t), &recordingPublisher{}); err != nil {
+		t.Fatalf("the retry failed: %v", err)
+	}
+	if got := h.state(t).Name(); got != "QUEUED" {
+		t.Fatalf("after the retry the want is %s, want QUEUED", got)
 	}
 }

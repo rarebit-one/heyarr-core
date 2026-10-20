@@ -33,7 +33,7 @@ type AcquirePublisher interface {
 // ErrSelectionChanged reports that the want's selected release is no longer
 // the one the grab handed to the client: a by-hand override landed between
 // the grab's SelectedSource and the publish. The grab must not advance the
-// want on the old transfer's behalf; the override's own grab takes over.
+// want on the old transfer's behalf; the grab fails and its retry takes the current one.
 var ErrSelectionChanged = errors.New("worker: the want's selection changed under the grab")
 
 // AcquireFactsReader is the catalog read the publisher needs.

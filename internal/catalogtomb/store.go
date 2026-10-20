@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/catalogop"
@@ -197,7 +198,7 @@ func verifyAll(ops []string) ([]catalogop.Op, error) {
 // provided transaction. Recording and reconciliation share the one transaction
 // so the log and its materialisation never disagree.
 func (s *Store) recordInto(ctx context.Context, tx *sql.Tx, parsed []catalogop.Op, now time.Time) error {
-	fresh := false
+	var fresh []string
 	for _, op := range parsed {
 		prev, err := json.Marshal(normalise(op.Prev))
 		if err != nil {
@@ -212,20 +213,54 @@ func (s *Store) recordInto(ctx context.Context, tx *sql.Tx, parsed []catalogop.O
 			return fmt.Errorf("catalogtomb: recording catalog op: %w", err)
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
-			fresh = true
+			fresh = append(fresh, op.Hash)
 		}
 	}
-	if !fresh {
+	if len(fresh) == 0 {
 		return nil
 	}
-	// An acquire op (ADR-0119) cannot change the tombstone view, so a batch
-	// of nothing but acquires skips the re-materialisation: with one op per
-	// grabbed release, re-evaluating the whole log on every grab would make
-	// a large backfill quadratic in the log's length.
+	// An acquire op (ADR-0119) cannot change the tombstone view by itself, so
+	// a batch of nothing but acquires skips the re-materialisation: with one
+	// op per grabbed release, re-evaluating the whole log on every grab would
+	// make a large backfill quadratic in the log's length.
+	//
+	// It can change the view INDIRECTLY: a restore cites the heads it saw, and
+	// those may be acquires. A restore that arrived before an acquire it cites
+	// is held as bad_prev; the acquire's arrival completes its causal past and
+	// the restore now lifts its tombstone. So the skip holds only while no
+	// delete or restore already recorded cites a fresh acquire.
 	if onlyAcquires(parsed) {
-		return nil
+		cited, err := citedByTombstoneOp(ctx, tx, fresh)
+		if err != nil {
+			return err
+		}
+		if !cited {
+			return nil
+		}
 	}
 	return s.reconcileTx(ctx, tx, now)
+}
+
+// citedByTombstoneOp reports whether any recorded op other than an acquire
+// cites one of hashes in its prev.
+func citedByTombstoneOp(ctx context.Context, tx *sql.Tx, hashes []string) (bool, error) {
+	args := make([]any, 0, len(hashes)+1)
+	args = append(args, string(catalogop.OpAcquire))
+	for _, h := range hashes {
+		args = append(args, h)
+	}
+	var one int
+	err := tx.QueryRowContext(ctx,
+		`SELECT 1 FROM catalog_ops c, json_each(c.prev) p
+		  WHERE c.op != ? AND p.value IN (?`+strings.Repeat(",?", len(hashes)-1)+`)
+		  LIMIT 1`, args...).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("catalogtomb: checking what cites an acquire: %w", err)
+	}
+	return true, nil
 }
 
 func onlyAcquires(ops []catalogop.Op) bool {
