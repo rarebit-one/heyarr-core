@@ -63,6 +63,9 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 	if limit <= 0 {
 		return nil, nil
 	}
+	// A want fan-out created (ADR-0119) is never searched here: it fetches a
+	// sibling's exact release or nothing, and a search could pick another.
+	//
 	// The phase filter is in the QUERY rather than in Go. Most of a library is
 	// resting most of the time, but a library mid-import is not, and reading
 	// every want in order to discard the ones that are downloading is the sort
@@ -78,6 +81,7 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 		JOIN works w ON w.id = d.work_id
 		`+searchBackoff.leftJoin("d.id")+`
 		WHERE a.phase = 'idle'
+		  AND NOT EXISTS (SELECT 1 FROM fan_out_wants f WHERE f.desired_item_id = d.id)
 		  AND `+searchBackoff.dueWhere()+`
 		ORDER BY `+searchBackoff.dueOrder()+`, d.id`, sqlite.FormatTimestamp(now))
 	if err != nil {

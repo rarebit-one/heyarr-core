@@ -57,6 +57,9 @@ func (c *Catalog) DueStoreFetches(ctx context.Context, now time.Time, limit int)
 		WHERE w.content_type = 'game'
 		  AND d.aspect != 'subtitle'
 		  AND a.phase = 'idle'
+		  -- A want fan-out created fetches its sibling's exact release or nothing
+		  -- (ADR-0119): no scheduler here may drive it to another.
+		  AND NOT EXISTS (SELECT 1 FROM fan_out_wants f WHERE f.desired_item_id = d.id)
 		  -- Managed is fine: a game holding scanned files, or a package missing a
 		  -- part, holds bytes that do not satisfy it, and the verified package is
 		  -- what it lacks (ADR-0120).

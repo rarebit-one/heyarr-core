@@ -3,6 +3,7 @@ package worker
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"log/slog"
 	"os"
@@ -234,8 +235,8 @@ func (w *Worker) Run(ctx context.Context) error {
 		cfg: w.cfg, log: w.log, db: db, store: store, cat: cat, queue: queue,
 		pipeline: pipeline, checker: checker, collector: collector, scan: scan,
 		peerID: peerID, providers: providerRegistry, toolchain: toolchain,
-		acquire: newAcquirePublisher(w.cfg, db, cat, w.log),
 	}
+	deps.acquire, deps.fanOut = newAcquireFanOut(w.cfg, db, cat, w.log)
 	registry := NewRegistry()
 	registerStorageJobs(registry, deps)
 	registerAcquisitionJobs(registry, deps)
@@ -378,30 +379,36 @@ func owner() string {
 	return fmt.Sprintf("%s/%d/%s", host, os.Getpid(), uuid.Must(uuid.NewV7()).String()[:8])
 }
 
-// newAcquirePublisher builds the ADR-0119 publisher for a media node that has
-// an identity key: each grabbed release is published on the catalog op-log for
-// siblings to acquire. A node without a key (single-site, pre-enrolment) gets
-// nil and publishes nothing, the same degrade emitWorkDeleteOp takes. The
-// personal profile acquires nothing, so it gets nil too.
-func newAcquirePublisher(cfg config.Config, db *sqlite.DB, cat *catalog.Catalog, log *slog.Logger) AcquirePublisher {
+// fanOutDeps is what the apply handler needs beyond the catalog: the op-log
+// to read and this peer's public key, to skip its own ops.
+type fanOutDeps struct {
+	ops     OpsReader
+	selfKey string
+}
+
+// newAcquireFanOut builds the ADR-0119 pieces for a media node with an
+// identity key: the publisher (each grabbed release goes on the catalog
+// op-log for siblings) and, when acquisition.fan_out is on, the applier's
+// dependencies. A node without a key (single-site, pre-enrolment) gets nil
+// for both and neither publishes nor applies, the same degrade
+// emitWorkDeleteOp takes. The personal profile acquires nothing.
+func newAcquireFanOut(cfg config.Config, db *sqlite.DB, cat *catalog.Catalog, log *slog.Logger) (AcquirePublisher, *fanOutDeps) {
 	if cfg.Profile != config.ProfileMedia {
-		return nil
+		return nil, nil
 	}
 	signer, err := identity.Signer(cfg.DataDir)
 	if err != nil {
 		log.Debug("no identity key; grabbed releases are not published to siblings", "error", err)
-		return nil
+		return nil, nil
 	}
 	ops, err := catalogtomb.New(catalogtomb.Options{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		log.Warn("catalog op store unavailable; grabbed releases are not published to siblings", "error", err)
-		return nil
+		return nil, nil
 	}
-	return &CatalogAcquirePublisher{
-		Facts:  cat,
-		Ops:    ops,
-		Signer: signer,
-		Site:   cfg.Peer.Site,
-		Log:    log,
+	pub := &CatalogAcquirePublisher{Facts: cat, Ops: ops, Signer: signer, Site: cfg.Peer.Site, Log: log}
+	if !cfg.Acquisition.FanOut {
+		return pub, nil
 	}
+	return pub, &fanOutDeps{ops: ops, selfKey: identity.FormatPublicKey(signer.Public().(ed25519.PublicKey))}
 }

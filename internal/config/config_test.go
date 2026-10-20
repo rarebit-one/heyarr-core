@@ -218,6 +218,11 @@ func TestValidateRejectsBadValues(t *testing.T) {
 			c.Placement.Siblings = []string{"peer-b", "peer-b"}
 		}, "twice"},
 		{"bad placement interval", func(c *Config) { c.Placement.Interval = "soon" }, "placement.interval"},
+		{"fan-out on the personal profile", func(c *Config) {
+			c.Profile = ProfilePersonal
+			c.Acquisition.FanOut = true
+		}, "media profile only"},
+		{"bad fan-out interval", func(c *Config) { c.Acquisition.Interval = "soon" }, "acquisition.interval"},
 		{"library without name", func(c *Config) {
 			c.Libraries = []Library{{Roots: []string{"/srv/media"}}}
 		}, "has no name"},

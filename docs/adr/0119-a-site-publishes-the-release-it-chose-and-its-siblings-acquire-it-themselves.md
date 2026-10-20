@@ -72,9 +72,12 @@ converges on the same work.**
   resolving a source it can use: a magnet from the infohash for a public
   release, or a hit from its own indexers whose candidate id is the same
   infohash for a private one. It records that as a direct release (ADR-0060)
-  and runs the ordinary grab. If it can resolve no source, the want stays idle
-  with the reason `no_site_source`. **It never grabs a different release for a
-  fan-out want:** the point is byte-identical copies.
+  and runs the ordinary grab. If it can resolve no source, it creates nothing
+  (an idle want would be searched by the site's own scorer, which could pick
+  another release) and records `no_site_source` against the op, re-evaluated
+  on every pass so a later means of resolving it acts on ops already received.
+  **It never grabs a different release for a fan-out want:** the point is
+  byte-identical copies.
 - **Convergence follows from ingest.** An acquired asset is keyed on its
   want's work (`applyWorkOverride`), so both sites land the same bytes under the
   same `work_key`, and the edition or item the scope names. The path-key

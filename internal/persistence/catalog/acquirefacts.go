@@ -33,6 +33,10 @@ type AcquireFacts struct {
 	CandidateID    string
 	CandidateTitle string
 	Size           int64
+	// Provider is who supplied the selected release: an indexer, a feed, or
+	// FanOutProviderPrefix plus a sibling's site for a release recorded from
+	// that sibling's acquire op.
+	Provider string
 	// SelectedAt is when this release was chosen (release_candidates.
 	// selected_at: the search's pick, a person's override, or a feed's direct
 	// release), the persisted selection time, stable across a retried grab, so
@@ -64,7 +68,7 @@ func (c *Catalog) AcquireFacts(ctx context.Context, desiredItemID string) (Acqui
 	err := c.db.Reader().QueryRowContext(ctx, `
 		SELECT w.content_type, w.work_key, w.title, w.year,
 		       d.scope, d.aspect, d.language, e.edition_key, i.item_key, q.name,
-		       rc.candidate_id, rc.title, rc.attributes, COALESCE(rc.selected_at, rc.searched_at)
+		       rc.candidate_id, rc.title, rc.provider, rc.attributes, COALESCE(rc.selected_at, rc.searched_at)
 		FROM desired_items d
 		JOIN works w ON w.id = d.work_id
 		JOIN quality_profiles q ON q.id = d.quality_profile_id
@@ -74,7 +78,7 @@ func (c *Catalog) AcquireFacts(ctx context.Context, desiredItemID string) (Acqui
 		WHERE d.id = ?`, desiredItemID).
 		Scan(&f.ContentType, &f.WorkKey, &f.WorkTitle, &year,
 			&scope, &aspect, &language, &editionKey, &itemKey, &f.Profile,
-			&f.CandidateID, &f.CandidateTitle, &attrs, &searchedAt)
+			&f.CandidateID, &f.CandidateTitle, &f.Provider, &attrs, &searchedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AcquireFacts{}, fmt.Errorf("%w: %s", ErrNoSelection, desiredItemID)
 	}

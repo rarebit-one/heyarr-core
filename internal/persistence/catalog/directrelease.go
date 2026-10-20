@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -83,6 +85,22 @@ var directReleaseReason = acquisition.Reason{
 	Detail:  "supplied directly by the followed source's feed; no indexer search",
 }
 
+// heldFromFanOut reports whether the want's selected release was recorded from
+// a sibling's acquire op and is not candidateID itself.
+func heldFromFanOut(ctx context.Context, tx *sql.Tx, desiredItemID, candidateID string) (bool, error) {
+	var provider, id string
+	err := tx.QueryRowContext(ctx,
+		`SELECT provider, candidate_id FROM release_candidates WHERE desired_item_id = ? AND selected = 1`,
+		desiredItemID).Scan(&provider, &id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("catalog: reading the held selection for %s: %w", desiredItemID, err)
+	}
+	return strings.HasPrefix(provider, FanOutProviderPrefix) && id != candidateID, nil
+}
+
 // RecordDirectRelease records cand as desiredItemID's single, pre-selected
 // release and advances the acquisition to SELECTED, in one transaction. It
 // reports whether it selected — false means the want was not resting in MISSING
@@ -128,6 +146,18 @@ func (c *Catalog) RecordDirectRelease(
 		// refused once satisfied, which is when a store has nothing left to add.
 		_, _, _, store := acquisition.StoreFacts(cand.Attributes)
 		held := before.State.Managed && (!store || before.State.Content == acquisition.SatisfactionSatisfied)
+		// A sibling's newer choice is the other exception (ADR-0119, newest
+		// selection wins): a want that holds a release it took from a
+		// sibling's acquire op follows that sibling to a newer one, as a
+		// local upgrade would (the held bytes stay held). A want holding a
+		// release THIS site chose is not overridden: its choice stands.
+		if held && strings.HasPrefix(cand.Provider, FanOutProviderPrefix) {
+			follows, err := heldFromFanOut(ctx, tx, desiredItemID, cand.ID)
+			if err != nil {
+				return err
+			}
+			held = !follows
+		}
 		if before.State.Phase != acquisition.PhaseIdle || held {
 			return nil
 		}

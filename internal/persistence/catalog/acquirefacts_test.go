@@ -43,7 +43,7 @@ func TestAcquireFactsSpellTheWantTheOpsWay(t *testing.T) {
 	want := catalog.AcquireFacts{
 		ContentType: "movie", WorkKey: "movie:arrival:2016", WorkTitle: "Arrival", Year: 2016,
 		Scope: catalogop.ScopeWork, Aspect: catalogop.AspectPrimary, Profile: "living-room",
-		CandidateID: cand.ID, CandidateTitle: cand.Title, Size: 12_000_000_000,
+		CandidateID: cand.ID, CandidateTitle: cand.Title, Size: 12_000_000_000, Provider: cand.Provider,
 		SelectedAt: f.SelectedAt,
 	}
 	if f != want {

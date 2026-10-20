@@ -67,6 +67,9 @@ func (c *Catalog) DueSubtitleFetches(ctx context.Context, now time.Time, limit i
 		`+subtitleFetchBackoff.leftJoin("d.id")+`
 		WHERE d.aspect = 'subtitle'
 		  AND a.phase = 'idle'
+		  -- A want fan-out created fetches its sibling's exact release or nothing
+		  -- (ADR-0119): no scheduler here may drive it to another.
+		  AND NOT EXISTS (SELECT 1 FROM fan_out_wants f WHERE f.desired_item_id = d.id)
 		  AND a.content != 'satisfied'
 		  AND (imdb.value IS NOT NULL OR tmdb.value IS NOT NULL)
 		  AND `+subtitleFetchBackoff.dueWhere()+`

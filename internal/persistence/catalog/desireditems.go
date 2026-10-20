@@ -55,6 +55,15 @@ import (
 // resolving a work descriptor or a profile name is the API's business, not this
 // method's. Returns the created want with its initial acquisition view.
 func (c *Catalog) CreateDesiredItem(ctx context.Context, item desired.Item) (DesiredItemRecord, error) {
+	return c.createDesiredItem(ctx, item, nil)
+}
+
+// createDesiredItem is CreateDesiredItem with alsoTx run inside the same
+// transaction once the want exists, for a caller whose own record of the want
+// must commit with it or not at all (fan-out's marker).
+func (c *Catalog) createDesiredItem(
+	ctx context.Context, item desired.Item, alsoTx func(tx *sql.Tx, id string) error,
+) (DesiredItemRecord, error) {
 	if err := item.Validate(); err != nil {
 		return DesiredItemRecord{}, err
 	}
@@ -71,6 +80,11 @@ func (c *Catalog) CreateDesiredItem(ctx context.Context, item desired.Item) (Des
 		}
 		if err := insertRestingAcquisition(ctx, tx, item.ID, initial, now); err != nil {
 			return err
+		}
+		if alsoTx != nil {
+			if err := alsoTx(tx, item.ID); err != nil {
+				return err
+			}
 		}
 		// The acquisition event first, then the desired.created event — the same
 		// order and the same reason as the API: a subscriber building a pipeline
