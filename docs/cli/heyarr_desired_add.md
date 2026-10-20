@@ -29,6 +29,7 @@ heyarr desired add <title> [flags]
       --no-monitor               get it once and stop — do not keep looking for something better
       --quality-profile string   the profile this want is measured against, by name (defaults by media type)
       --reason string            a note to your future self
+      --store-ref string         a game's store and the store's name for it, e.g. gog:the_witcher_3 — fetched from that store
       --timeout duration         how long one request may take; streaming reads and the event stream are exempt (default 30s)
       --token string             bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
       --token-file string        read the bearer token from this file (default: <data_dir>/cli.token when it exists)

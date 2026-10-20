@@ -10107,6 +10107,13 @@ components:
           description: Required at edition scope, refused at work scope.
         work:
           $ref: "#/components/schemas/WorkDescriptor"
+        store_ref:
+          type: string
+          description: |
+            With `work_id` only: names that existing game on its store
+            (`gog:<gamename>`), recorded on the Work so the store fetch can find
+            it (ADR-0120). A new work carries its own `work.store_ref`; giving
+            this alongside `work` is a 400, as is a malformed ref or a non-game.
         quality_profile_id: { type: string }
         quality_profile:
           type: string
@@ -10133,7 +10140,17 @@ components:
           description: |
             Optional, and part of the identity when present. A year in the
             title (`"Blade Runner (1982)"`) is understood too; an explicit year
-            wins, because the caller said so.
+            wins, because the caller said so. A game's year is never part of its
+            identity (ADR-0118).
+        store_ref:
+          type: string
+          description: |
+            A game only: the store it is owned on and the store's own name for
+            it, as `gog:<gamename>` (lower-case letters, digits, underscores).
+            Matched before the title, recorded as the Work's external id, and
+            what the store fetch looks for (ADR-0120). Malformed or on another
+            content type: 400.
+          example: "gog:the_witcher_3"
 
     UpdateDesired:
       type: object

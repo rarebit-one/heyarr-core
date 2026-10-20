@@ -30,6 +30,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
@@ -239,8 +240,18 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The catalog the API's write intents go through — wanting something
+	// creates an acquisition row (§57) — so `desired add` and `stores sync`
+	// have something real behind them.
+	cat, err := catalog.New(catalog.Options{
+		DB: db, Events: eventLog, PeerName: "peer-a", PeerSite: "site-a", Clock: clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	api, err := resources.New(resources.Options{
 		DB:              db,
+		Catalog:         cat,
 		Jobs:            queue,
 		Events:          eventLog,
 		Tokens:          store,

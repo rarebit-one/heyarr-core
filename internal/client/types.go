@@ -338,6 +338,8 @@ type WorkDescriptor struct {
 	ContentType string `json:"content_type"`
 	Title       string `json:"title"`
 	Year        int    `json:"year,omitempty"`
+	// StoreRef names a game on its store, "gog:<gamename>" (ADR-0120).
+	StoreRef string `json:"store_ref,omitempty"`
 }
 
 // CreateDesiredRequest is the POST /desired body.
@@ -349,6 +351,8 @@ type CreateDesiredRequest struct {
 	WorkID    string          `json:"work_id,omitempty"`
 	EditionID string          `json:"edition_id,omitempty"`
 	Work      *WorkDescriptor `json:"work,omitempty"`
+	// StoreRef names an existing game work (WorkID) on its store (ADR-0120).
+	StoreRef string `json:"store_ref,omitempty"`
 
 	QualityProfileID string `json:"quality_profile_id,omitempty"`
 	QualityProfile   string `json:"quality_profile,omitempty"`

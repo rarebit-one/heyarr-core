@@ -51,8 +51,15 @@ podcast enclosure takes, with its own `release/store-owned` provenance) and
 enqueues the ordinary grab. From there it is an ordinary acquisition: grab,
 poll, verify, ingest, with every phase event the download path already emits.
 
-Naming a game on a store is not this change's job. An owned-library sync, which
-lists what the account owns and wants each game with its store id, comes next.
+A game is named on its store by the want itself: a work descriptor's
+`store_ref` (`gog:<gamename>`) is matched before the title — the store's name for
+a game is exact where a title is not — and recorded as the Work's external id.
+`heyarr stores sync gog`, run as the service user, lists what the account owns
+(`lgogdownloader --list json`) and wants each game that way; re-running it wants
+nothing twice, so a host timer can keep a library backed up as purchases land.
+The sync is a CLI over the public API rather than a job: listing a library needs
+the store login, which lives with the service user, and the API's want path is
+the one every other door already goes through.
 
 ### 2. The fetch is a download client that refuses anything but `gog:`
 
