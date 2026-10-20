@@ -69,6 +69,12 @@ func TestScheduleForMapsStateToPolicy(t *testing.T) {
 		// (ADR-0082). The route is a fact about the content, not the lifecycle.
 		{"a direct-route want, missing", missing, true, RouteDirect, ""},
 		{"a direct-route want, satisfied and monitored", satisfied, true, RouteDirect, ""},
+		// A store-route want (a game) is fetched from the store it is owned on,
+		// never searched — a repack on an indexer is not the owned copy
+		// (ADR-0118). Missing is the case that matters: it is where an
+		// ordinary want is searched hardest.
+		{"a store-route want, missing", missing, true, RouteStore, ""},
+		{"a store-route want, satisfied and monitored", satisfied, true, RouteStore, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

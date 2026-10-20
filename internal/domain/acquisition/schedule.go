@@ -106,9 +106,10 @@ func Schedules() []Schedule { return []Schedule{MissingSearches(), UpgradeSearch
 //
 // Returns false when the want should not be searched at all:
 //
-//   - The want is on a DIRECT route (ADR-0082). Its bytes are taken from the
-//     feed that named them — a web capture, a podcast enclosure — and no indexer
-//     is ever asked. This is tested first because it is a fact about the
+//   - The want is on a DIRECT route (ADR-0082) or a STORE route (ADR-0118).
+//     Its bytes are taken from the feed that named them — a web capture, a
+//     podcast enclosure — or from a store the person owns the game on, and no
+//     indexer is ever asked. This is tested first because it is a fact about the
 //     content, not about where the want happens to be in its lifecycle: a
 //     document is not searched when it is missing, satisfied, or anything else.
 //   - Something is IN FLIGHT. A search now would race the acquisition this

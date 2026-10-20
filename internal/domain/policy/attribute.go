@@ -75,6 +75,19 @@ const (
 	AttrSizeBytes Attribute = "size_bytes"
 	// AttrLanguage is an audio language tag.
 	AttrLanguage Attribute = "language"
+	// AttrStore is the store a copy came from: gog, steam, epic (ADR-0118).
+	// Populated from the edition's attributes, which a store fetch writes once
+	// it has verified the whole package — never from a scanned filename. An
+	// indexer release never carries it, so a profile that gates on it refuses
+	// an indexer's repack as undetermined rather than guessing it is owned.
+	AttrStore Attribute = "store"
+	// AttrDRMFree is whether the copy runs without its store's client. Left
+	// ABSENT when the store does not say — a Steam depot may or may not — so
+	// §63 reports "could not determine", never a confident false.
+	AttrDRMFree Attribute = "drm_free"
+	// AttrPlatform is the operating system a copy installs on: windows, linux,
+	// mac. Text, not ordered: no platform is better than another in general.
+	AttrPlatform Attribute = "platform"
 )
 
 // attributeKinds is the vocabulary. A rule naming anything not in here is
@@ -88,6 +101,9 @@ var attributeKinds = map[Attribute]Kind{
 	AttrHDR:           KindFlag,
 	AttrSizeBytes:     KindInt,
 	AttrLanguage:      KindText,
+	AttrStore:         KindText,
+	AttrDRMFree:       KindFlag,
+	AttrPlatform:      KindText,
 }
 
 // KindOf reports an attribute's kind, and whether it is known at all.

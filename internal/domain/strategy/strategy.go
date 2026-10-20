@@ -1,6 +1,6 @@
 // Package strategy maps a content type to how its wants are acquired (ADR-0082).
 //
-// The system knows five content types (ADR-0080) plus the work content types
+// The system knows six content types (ADR-0080, ADR-0118) plus the work content types
 // the follow path derives from a source type (`video` for a YouTube channel,
 // `podcast` for a podcast feed). Acquisition used to treat them all alike: one
 // pipeline, one video-shaped quality profile, an indexer search for everything.
@@ -8,8 +8,8 @@
 // bytes a feed had already handed over — the two failures ADR-0082 traces.
 //
 // A Strategy is the per-type answer to two questions the rest of the system
-// asks: is this found by searching indexers or taken directly from the feed
-// (Route), and — when a follow or want names no profile — which profile judges
+// asks: is this found by searching indexers, taken directly from the feed, or
+// fetched from a store it is owned on (Route), and — when a follow or want names no profile — which profile judges
 // it (DefaultProfile). It is a pure lookup over a value table: no database, no
 // config, nothing to tune at runtime, so "a document is never searched" is a
 // table test and not a thing to watch a log for.
@@ -63,6 +63,9 @@ var table = map[string]Strategy{
 	// copy from the source that publishes it is definitive.
 	identification.Document: {ContentType: identification.Document, Route: acquisition.RouteDirect, DefaultProfile: "published"},
 	podcast:                 {ContentType: podcast, Route: acquisition.RouteDirect, DefaultProfile: "published"},
+	// A game is fetched from a store the person owns it on and judged by
+	// `owned`, which accepts only a copy whose store is known (ADR-0118).
+	identification.Game: {ContentType: identification.Game, Route: acquisition.RouteStore, DefaultProfile: "owned"},
 }
 
 // For returns the acquisition strategy for a content type. An unknown type gets

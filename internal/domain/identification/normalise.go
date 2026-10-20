@@ -211,6 +211,18 @@ func yearKey(year int) string {
 // The alternative — exporting normKey and workKey separately and asking each
 // caller to combine them correctly — is the same bug with more steps.
 func Describe(contentType, title string, year int) (key, sortTitle string) {
+	if contentType == Game {
+		// A game is keyed by its title alone, the way gameCandidate keys a
+		// scanned one: a store listing's year would otherwise split a wanted
+		// game from the installer that satisfies it (ADR-0118). Nor does it go
+		// through parseName, which reads "Cyberpunk 2077" as a title and a year.
+		toks, _ := gameTitle(title)
+		if norm := normKey(toks); norm != "" {
+			return workKey(Game, norm), norm
+		}
+		norm := strings.ToLower(strings.TrimSpace(title))
+		return workKey(Game, norm), norm
+	}
 	name := parseName(title)
 	// parseName pulls a trailing year out of the title, so "Blade Runner
 	// (1982)" and ("Blade Runner", 1982) agree. An explicit year wins: the
@@ -229,8 +241,17 @@ func Describe(contentType, title string, year int) (key, sortTitle string) {
 }
 
 // DisplayTitle renders a raw title the way the scanner would record it, so a
-// wanted Work and a scanned one read the same in a listing.
-func DisplayTitle(title string) string {
+// wanted Work and a scanned one read the same in a listing. It takes the
+// content type for the same reason Describe does: a game's title keeps its
+// numbers ("F1 2020", "Football Manager 2024"), where parseName would read the
+// trailing one as a release year and cut it off.
+func DisplayTitle(contentType, title string) string {
+	if contentType == Game {
+		if toks, _ := gameTitle(title); len(toks) > 0 {
+			return displayTitle(toks)
+		}
+		return strings.TrimSpace(title)
+	}
 	toks := parseName(title).Title
 	if len(toks) == 0 {
 		return strings.TrimSpace(title)

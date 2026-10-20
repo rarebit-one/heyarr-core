@@ -32,6 +32,23 @@ func TestPodcastIsDirect(t *testing.T) {
 	}
 }
 
+// A game is fetched from a store it is owned on, never searched (ADR-0118):
+// what an indexer carries for a game is mostly repacks, which are not the
+// owned copy. If games drift onto the search route, every game want starts
+// asking indexers for exactly the bytes the `owned` profile exists to refuse.
+func TestGameIsFetchedFromAStoreAndNeverSearched(t *testing.T) {
+	s := For(identification.Game)
+	if s.Route != acquisition.RouteStore {
+		t.Errorf("game route = %q, want %q", s.Route, acquisition.RouteStore)
+	}
+	if s.Route.Searchable() {
+		t.Error("a game want would be asked of an indexer")
+	}
+	if _, scheduled := acquisition.ScheduleFor(acquisition.State{}, true, s.Route); scheduled {
+		t.Error("a fresh, missing game want was put on a search schedule")
+	}
+}
+
 // An unknown content type — one the follow path minted that the table has not
 // caught up with — is the conservative default: searched, and no assumed
 // profile. Never RouteDirect, which would take random bytes from a feed as
@@ -58,7 +75,7 @@ func TestEveryDefaultProfileIsSeeded(t *testing.T) {
 	}
 	for _, ct := range []string{
 		identification.Movie, identification.Series, identification.Music,
-		identification.Book, identification.Document, video, podcast,
+		identification.Book, identification.Document, identification.Game, video, podcast,
 	} {
 		def := For(ct).DefaultProfile
 		if def == "" {
@@ -82,6 +99,7 @@ func TestKnownContentTypesHaveDefaults(t *testing.T) {
 		{identification.Book, "book-indexed"},
 		{identification.Document, "published"},
 		{podcast, "published"},
+		{identification.Game, "owned"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.contentType, func(t *testing.T) {

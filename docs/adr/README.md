@@ -112,3 +112,4 @@ An ADR that merely describes the code is not worth having.
 | [0115](0115-known-media-types-inherit-searchable-starting-profiles.md) | Known media types inherit searchable starting profiles | Proposed |
 | [0116](0116-subsonic-projects-music-assets-as-tracks.md) | Subsonic projects music assets as tracks | Proposed |
 | [0117](0117-opds-offers-each-book-asset.md) | OPDS offers each book asset | Proposed |
+| [0118](0118-game-is-a-first-class-content-type.md) | `game` is a first-class content type, fetched from a store it is owned on | Proposed |
