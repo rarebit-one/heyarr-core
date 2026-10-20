@@ -175,14 +175,22 @@ func applyOne(ctx context.Context, cat FanOutStore, q ProbeEnqueuer, op catalogo
 		// release committed and the process died (or the enqueue failed)
 		// before the grab was queued, so the want rests SELECTED on this very
 		// candidate with no outcome recorded. That is resumed, not held.
-		resume, fanOutInFlight, err := selectedOn(ctx, cat, want.DesiredItemID, cand.ID)
+		resume, earlier, err := selectedOn(ctx, cat, want.DesiredItemID, cand.ID)
 		if err != nil {
 			return "", "", "", err
 		}
-		if fanOutInFlight {
+		if earlier != "" {
 			// The want is still fetching a sibling's EARLIER choice. Once that
 			// finishes, the want follows the sibling to this newer one; until
 			// then the op is deferred, not held, so a later pass applies it.
+			//
+			// If the earlier one is still only SELECTED, its grab may never
+			// have been queued (an enqueue that failed before this newer op
+			// superseded it, so the older op is no longer evaluated). Queue it
+			// again, idempotently, so the deferral has something to wait for.
+			if err := queueGrabIfSelected(ctx, cat, q, want.DesiredItemID, earlier); err != nil {
+				return "", "", "", err
+			}
 			return catalog.FanOutDeferred, want.DesiredItemID, detail + "; the want is still fetching a sibling's earlier choice", nil
 		}
 		if !resume {
@@ -207,27 +215,51 @@ func applyOne(ctx context.Context, cat FanOutStore, q ProbeEnqueuer, op catalogo
 }
 
 // selectedOn reports whether the want rests SELECTED on candidateID (an
-// interrupted application to resume), and whether it is in flight on a
-// DIFFERENT release it took from a sibling's op (a newer op to defer).
-func selectedOn(ctx context.Context, cat FanOutStore, desiredItemID, candidateID string) (resume, fanOutInFlight bool, err error) {
+// interrupted application to resume) and, when it is in flight on a DIFFERENT
+// release it took from a sibling's op, that release's candidate id (a newer op
+// to defer).
+func selectedOn(ctx context.Context, cat FanOutStore, desiredItemID, candidateID string) (resume bool, earlier string, err error) {
 	state, err := cat.Acquisition(ctx, desiredItemID)
 	if err != nil {
-		return false, false, err
+		return false, "", err
 	}
 	if state.State.Phase == acquisition.PhaseIdle {
-		return false, false, nil
+		return false, "", nil
 	}
 	sel, err := cat.SelectedCandidate(ctx, desiredItemID)
 	if errors.Is(err, catalog.ErrNoCandidate) {
-		return false, false, nil
+		return false, "", nil
 	}
 	if err != nil {
-		return false, false, err
+		return false, "", err
 	}
 	if sel.CandidateID == candidateID {
-		return state.State.Phase == acquisition.PhaseSelected, false, nil
+		return state.State.Phase == acquisition.PhaseSelected, "", nil
 	}
-	return false, strings.HasPrefix(sel.Provider, catalog.FanOutProviderPrefix), nil
+	if strings.HasPrefix(sel.Provider, catalog.FanOutProviderPrefix) {
+		return false, sel.CandidateID, nil
+	}
+	return false, "", nil
+}
+
+// queueGrabIfSelected queues the grab for candidateID while the want still
+// rests SELECTED on it. The queue dedupes per want, so a grab already pending
+// or running absorbs it.
+func queueGrabIfSelected(ctx context.Context, cat FanOutStore, q ProbeEnqueuer, desiredItemID, candidateID string) error {
+	if q == nil {
+		return nil
+	}
+	state, err := cat.Acquisition(ctx, desiredItemID)
+	if err != nil {
+		return err
+	}
+	if state.State.Phase != acquisition.PhaseSelected {
+		return nil
+	}
+	if err := queueGrab(ctx, q, desiredItemID, candidateID); err != nil {
+		return fmt.Errorf("queueing the stranded grab for %s: %w", desiredItemID, err)
+	}
+	return nil
 }
 
 // magnetFor renders the magnet for a public release: the exact topic for the

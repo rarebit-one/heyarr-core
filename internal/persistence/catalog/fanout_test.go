@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/catalogop"
+	"github.com/rarebit-one/heyarr-core/internal/domain/desired"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 )
@@ -251,5 +252,42 @@ func TestAWantFanOutCreatedIsNeverSearchedHere(t *testing.T) {
 	}
 	if len(due) != 1 || due[0].DesiredItemID != h.want {
 		t.Fatalf("due = %+v, want only this site's own want", due)
+	}
+}
+
+// TestAGameWantFanOutCreatedIsNotStoreFetched: the store scheduler drives a
+// game want to its store's package, which is not the sibling's release, so a
+// fan-out want is excluded there too (as from the subtitle scheduler).
+func TestAGameWantFanOutCreatedIsNotStoreFetched(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := t.Context()
+	var profile string
+	if err := h.db.Reader().QueryRow(
+		`SELECT quality_profile_id FROM desired_items WHERE id = ?`, h.want).Scan(&profile); err != nil {
+		t.Fatal(err)
+	}
+	h.exec(t, `INSERT INTO works (id, content_type, work_key, title, sort_title, year, attributes, created_at, updated_at)
+		VALUES ('game-1', 'game', 'game:outer-wilds', 'Outer Wilds', 'Outer Wilds', 2019, '{}', ?, ?)`,
+		fanOutAt.Format(time.RFC3339), fanOutAt.Format(time.RFC3339))
+	h.exec(t, `INSERT INTO external_ids (id, entity_type, entity_id, source, value) VALUES ('x-1', 'work', 'game-1', 'gog', '1207664663')`)
+	rec, err := h.cat.CreateDesiredItem(ctx, desired.Item{
+		Scope: desired.ScopeWork, WorkID: "game-1", QualityProfileID: profile, Monitor: true,
+		Aspect: desired.AspectPrimary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := fanOutAt.Add(time.Hour)
+	due, err := h.cat.DueStoreFetches(ctx, now, 10)
+	if err != nil || len(due) != 1 {
+		t.Fatalf("setup: this site's own game want should be due, got %d (%v)", len(due), err)
+	}
+	h.exec(t, `INSERT INTO fan_out_wants (desired_item_id, origin_site, created_at) VALUES (?, 'north', ?)`,
+		rec.Item.ID, fanOutAt.Format(time.RFC3339))
+	if due, err := h.cat.DueStoreFetches(ctx, now, 10); err != nil {
+		t.Fatal(err)
+	} else if len(due) != 0 {
+		t.Fatalf("a fan-out game want is due a store fetch: %+v", due)
 	}
 }

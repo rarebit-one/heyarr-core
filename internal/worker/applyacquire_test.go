@@ -536,3 +536,35 @@ func TestAReleaseThatDidNotFetchHereIsNotSelectedAgain(t *testing.T) {
 		t.Fatalf("%d grabs queued for a release that did not fetch here", got)
 	}
 }
+
+// TestAStrandedEarlierSelectionIsRequeuedWhenANewerOpDefers: the first op's
+// grab was never queued (the enqueue failed) and a newer op superseded it
+// before the next pass, so the first is no longer evaluated. Deferring the
+// newer op must also re-queue the stranded grab, or the want waits forever.
+func TestAStrandedEarlierSelectionIsRequeuedWhenANewerOpDefers(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	h.receive(t, h.sibling, "movie", "movie:arrival:2016", siblingAcquire())
+	broken := ApplyAcquireHandler(h.ops, h.cat, failingQueue{}, h.selfKey, slog.New(slog.DiscardHandler))
+	if err := broken(t.Context(), jobs.Job{Type: acquisition.ApplyAcquireJobType}); err == nil {
+		t.Fatal("setup: the failing enqueue should fail the pass")
+	}
+	upgrade := siblingAcquire()
+	upgrade.Infohash = strings.Repeat("cd", 20)
+	upgrade.SelectedAt = applyAt.Add(time.Hour)
+	hash := h.receive(t, h.sibling, "movie", "movie:arrival:2016", upgrade)
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if app := h.application(t, hash); app.Outcome != catalog.FanOutDeferred {
+		t.Fatalf("application = %+v, want deferred", app)
+	}
+	var payload string
+	if err := h.db.Reader().QueryRow(
+		`SELECT payload FROM jobs WHERE type = ?`, acquisition.GrabJobType).Scan(&payload); err != nil {
+		t.Fatalf("no grab queued for the stranded earlier selection: %v", err)
+	}
+	if !strings.Contains(payload, "infohash:"+fakeInfohash) {
+		t.Fatalf("queued grab %s, want the earlier selection's", payload)
+	}
+}

@@ -349,18 +349,20 @@ func (c *Catalog) EnsureFanOutWant(ctx context.Context, op catalogop.Op) (FanOut
 	// Pass 2: the want, through the one implementation every caller shares
 	// (its own transaction, its resting state, its events). A duplicate here
 	// is a concurrent creator; take theirs.
-	rec, err := c.CreateDesiredItem(ctx, item)
+	// Created and marked as fan-out's own in ONE transaction, so this site's
+	// schedulers never drive it: an unmarked want left by a crash between the
+	// two would be indistinguishable from this site's own and be searched.
+	rec, err := c.createDesiredItem(ctx, item, func(tx *sql.Tx, id string) error {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO fan_out_wants (desired_item_id, origin_site, created_at) VALUES (?, ?, ?)`,
+			id, a.Site, stamp); err != nil {
+			return fmt.Errorf("catalog: marking fan-out want %s: %w", id, err)
+		}
+		return nil
+	})
 	switch {
 	case err == nil:
 		out.DesiredItemID, out.Created = rec.Item.ID, true
-		// Marked as fan-out's own, so this site's scorer never searches it.
-		// A crash between the two leaves an unmarked want, which then behaves
-		// as this site's own: searched, never wrong, only not byte-identical.
-		if _, err := c.db.Writer().ExecContext(ctx,
-			`INSERT OR IGNORE INTO fan_out_wants (desired_item_id, origin_site, created_at) VALUES (?, ?, ?)`,
-			rec.Item.ID, a.Site, stamp); err != nil {
-			return FanOutWant{}, fmt.Errorf("catalog: marking fan-out want %s: %w", rec.Item.ID, err)
-		}
 		return out, nil
 	case IsDuplicateWant(err):
 		id, lookErr := existingWant(ctx, c.db.Reader(), item)
