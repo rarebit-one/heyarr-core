@@ -35,6 +35,28 @@ PRAGMA foreign_keys = ON;
 -- the narrower CHECK, so it is dropped on the way down: the ops are
 -- re-derivable from the sibling that still holds them, and a downgraded node
 -- cannot act on them anyway.
+--
+-- REFUSED when a delete or restore cites an acquire op in its prev: dropping
+-- the acquire would leave that tombstone op with a missing past, Evaluate
+-- would reject it as bad_prev, and the next reconcile would lift a tombstone
+-- that is in force. SQLite's RAISE is trigger-only, so the refusal is a CHECK
+-- on a one-row guard table: the INSERT fails, and with it the migration, when
+-- such a citation exists. Resolve by staying on 66, or by having the sibling
+-- re-issue the delete with a prev that cites no acquire.
+DROP TABLE IF EXISTS catalog_ops_down_guard;  -- a refused run leaves it behind on this connection
+CREATE TEMP TABLE catalog_ops_down_guard (
+    cited_acquires INTEGER NOT NULL
+        CHECK (cited_acquires = 0)  -- a delete/restore cites an acquire op; see above
+);
+INSERT INTO catalog_ops_down_guard (cited_acquires)
+SELECT count(*)
+FROM catalog_ops a
+WHERE a.op = 'acquire'
+  AND EXISTS (
+      SELECT 1 FROM catalog_ops d, json_each(d.prev) p
+      WHERE d.op IN ('delete', 'restore') AND p.value = a.op_hash
+  );
+DROP TABLE catalog_ops_down_guard;
 PRAGMA foreign_keys = OFF;
 CREATE TABLE catalog_ops_old (
     op_hash      TEXT PRIMARY KEY,
