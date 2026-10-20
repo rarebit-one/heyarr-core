@@ -251,7 +251,16 @@ func enqueueGrab(
 		// endpoint into a panic for the sake of an optimisation.
 		return
 	}
-	if _, err := q.Enqueue(ctx, jobs.EnqueueOptions{
+	if err := queueGrab(ctx, q, desiredItemID, candidateID); err != nil {
+		log.Warn("could not queue the grab for a selected release",
+			"desired_item_id", desiredItemID, "candidate", candidateID, "error", err)
+	}
+}
+
+// queueGrab is enqueueGrab's enqueue, with the error returned for a caller
+// that must not record success without it (the fan-out applier).
+func queueGrab(ctx context.Context, q ProbeEnqueuer, desiredItemID, candidateID string) error {
+	_, err := q.Enqueue(ctx, jobs.EnqueueOptions{
 		Type: acquisition.GrabJobType,
 		Payload: acquisition.GrabPayload{
 			DesiredItemID: desiredItemID,
@@ -259,8 +268,6 @@ func enqueueGrab(
 		},
 		DedupeKey:          acquisition.GrabDedupeKey(desiredItemID),
 		RequiredCapability: providers.CapabilityDownload.JobCapability(),
-	}); err != nil {
-		log.Warn("could not queue the grab for a selected release",
-			"desired_item_id", desiredItemID, "candidate", candidateID, "error", err)
-	}
+	})
+	return err
 }

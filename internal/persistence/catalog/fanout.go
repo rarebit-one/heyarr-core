@@ -32,20 +32,24 @@ const FanOutProviderPrefix = "fan-out:"
 type FanOutOutcome string
 
 const (
-	// FanOutApplied: the want exists, the release is selected, the grab is queued.
+	// FanOutApplied means the want exists, the release is selected, the grab is queued.
 	FanOutApplied FanOutOutcome = "applied"
-	// FanOutOwn: this node signed the op; it is the origin, nothing to apply.
+	// FanOutOwn means this node signed the op; it is the origin, nothing to apply.
 	FanOutOwn FanOutOutcome = "own"
-	// FanOutHeld: the want already holds acceptable content or is already
+	// FanOutHeld means the want already holds acceptable content or is already
 	// acquiring; the op changed nothing.
 	FanOutHeld FanOutOutcome = "held"
-	// FanOutTombstoned: the work is logically deleted here; the op is ignored.
+	// FanOutTombstoned means the work is logically deleted here; the op is ignored.
 	FanOutTombstoned FanOutOutcome = "tombstoned"
-	// FanOutScopeUnresolved: the op names an edition or item this node has
+	// FanOutScopeUnresolved means the op names an edition or item this node has
 	// not materialised. Retried on every pass until it appears.
 	FanOutScopeUnresolved FanOutOutcome = "scope_unresolved"
-	// FanOutNoSiteSource: this node can resolve no source for the release (a
-	// private release it has no indexer account for). Final for this op.
+	// FanOutNoSiteSource means this node can resolve no source for the
+	// release (a private release, while resolving one through this site's own
+	// indexers is not built; or no profile to want it under). Nothing is
+	// created: a want would be searched by this site's scorer, which could
+	// grab a different release. Retried every pass, so a later means of
+	// resolving it acts on the ops already received.
 	FanOutNoSiteSource FanOutOutcome = "no_site_source"
 	// FanOutProfileUnknown is not an outcome of its own: an unknown profile
 	// name falls back to the content type's default and the fallback is
@@ -55,7 +59,9 @@ const (
 
 // Final reports whether an outcome is settled for its op: a non-final outcome
 // is retried on the next pass.
-func (o FanOutOutcome) Final() bool { return o != FanOutScopeUnresolved }
+func (o FanOutOutcome) Final() bool {
+	return o != FanOutScopeUnresolved && o != FanOutNoSiteSource
+}
 
 // FanOutApplication is one recorded outcome.
 type FanOutApplication struct {

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -20,6 +21,8 @@ type FanOutStore interface {
 	RecordFanOutApplication(ctx context.Context, opHash, desiredItemID string, outcome catalog.FanOutOutcome, detail string) error
 	EnsureFanOutWant(ctx context.Context, op catalogop.Op) (catalog.FanOutWant, error)
 	RecordDirectRelease(ctx context.Context, desiredItemID string, cand acquisition.ReleaseCandidate) (bool, error)
+	Acquisition(ctx context.Context, desiredItemID string) (catalog.AcquisitionRecord, error)
+	SelectedCandidate(ctx context.Context, desiredItemID string) (catalog.Candidate, error)
 }
 
 // OpsReader is the op-log read the applier needs.
@@ -66,14 +69,20 @@ func ApplyAcquireHandler(ops OpsReader, cat FanOutStore, q ProbeEnqueuer, selfKe
 		}
 		var applied, skipped int
 		for _, op := range view.Acquisitions {
-			if prior, ok := done[op.Hash]; ok && prior.Outcome.Final() {
+			prior, seen := done[op.Hash]
+			if seen && prior.Outcome.Final() {
 				continue
 			}
 			outcome, wantID, detail, err := applyOne(ctx, cat, q, op, selfKey, log)
 			if err != nil {
-				// A storage error: leave the op for the next pass rather than
-				// recording an outcome it did not reach.
+				// A storage or queue error: leave the op for the next pass
+				// rather than recording an outcome it did not reach.
 				return fmt.Errorf("worker: applying acquire op %s: %w", op.Hash, err)
+			}
+			if seen && prior.Outcome == outcome && prior.Detail == detail && prior.DesiredItemID == wantID {
+				// A retried outcome that has not moved: no write per pass.
+				skipped++
+				continue
 			}
 			if err := cat.RecordFanOutApplication(ctx, op.Hash, wantID, outcome, detail); err != nil {
 				return err
@@ -99,6 +108,9 @@ func applyOne(ctx context.Context, cat FanOutStore, q ProbeEnqueuer, op catalogo
 		return catalog.FanOutOwn, "", "signed by this peer", nil
 	}
 	if a.Private {
+		// Nothing is created for it: a want here would be searched by this
+		// site's own scorer and could grab a different release, which a
+		// fan-out want must never do (ADR-0119). Retried each pass.
 		return catalog.FanOutNoSiteSource, "", "a private release publishes no trackers; resolving it through this site's own indexers is not built yet", nil
 	}
 	want, err := cat.EnsureFanOutWant(ctx, op)
@@ -130,17 +142,53 @@ func applyOne(ctx context.Context, cat FanOutStore, q ProbeEnqueuer, op catalogo
 		return "", "", "", err
 	}
 	if !selected {
-		// The want is past idle or already holds the content: either way the
-		// op changes nothing here. If it is acquiring, it is acquiring what
-		// this site chose; convergence on the SAME bytes is the next pass's
-		// job once a newer op says so.
-		return catalog.FanOutHeld, want.DesiredItemID, detail + "; the want is already acquiring or satisfied", nil
+		// The want is past idle or already holds the content. One shape of
+		// that is this op's own earlier, interrupted application: the direct
+		// release committed and the process died (or the enqueue failed)
+		// before the grab was queued, so the want rests SELECTED on this very
+		// candidate with no outcome recorded. That is resumed, not held.
+		resume, err := selectedOn(ctx, cat, want.DesiredItemID, cand.ID)
+		if err != nil {
+			return "", "", "", err
+		}
+		if !resume {
+			// Otherwise the op changes nothing here: if the want is acquiring,
+			// it is acquiring what this site chose.
+			return catalog.FanOutHeld, want.DesiredItemID, detail + "; the want is already acquiring or satisfied", nil
+		}
+		detail += "; resumed an interrupted application"
 	}
-	enqueueGrab(ctx, q, want.DesiredItemID, cand.ID, log)
+	// The enqueue's error is returned, not logged and swallowed as the search
+	// beat does: an outcome recorded `applied` is final, so a grab that was
+	// never queued would never be.
+	if q != nil {
+		if err := queueGrab(ctx, q, want.DesiredItemID, cand.ID); err != nil {
+			return "", "", "", fmt.Errorf("queueing the grab for %s: %w", want.DesiredItemID, err)
+		}
+	}
 	log.Info("a sibling's release is queued for acquisition here",
 		"desired_item_id", want.DesiredItemID, "work_key", op.Target.WorkKey,
 		"infohash", a.Infohash, "site", a.Site, "work_created", want.WorkCreated, "want_created", want.Created)
 	return catalog.FanOutApplied, want.DesiredItemID, detail, nil
+}
+
+// selectedOn reports whether the want rests SELECTED on candidateID.
+func selectedOn(ctx context.Context, cat FanOutStore, desiredItemID, candidateID string) (bool, error) {
+	state, err := cat.Acquisition(ctx, desiredItemID)
+	if err != nil {
+		return false, err
+	}
+	if state.State.Phase != acquisition.PhaseSelected {
+		return false, nil
+	}
+	sel, err := cat.SelectedCandidate(ctx, desiredItemID)
+	if errors.Is(err, catalog.ErrNoCandidate) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return sel.CandidateID == candidateID, nil
 }
 
 // magnetFor renders the trackerless magnet for a public release: the

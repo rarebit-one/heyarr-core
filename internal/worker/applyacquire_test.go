@@ -1,7 +1,9 @@
 package worker
 
 import (
+	"context"
 	"crypto/ed25519"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -266,5 +268,77 @@ func TestANewerOpSupersedesAnOlderOne(t *testing.T) {
 	}
 	if app := h.application(t, oldHash); app.Outcome != "" {
 		t.Fatalf("the superseded op was applied: %+v", app)
+	}
+}
+
+// failingQueue refuses every enqueue.
+type failingQueue struct{}
+
+func (failingQueue) Enqueue(context.Context, jobs.EnqueueOptions) (jobs.Job, error) {
+	return jobs.Job{}, errors.New("queue unavailable")
+}
+
+// TestAnInterruptedApplicationIsResumedNotHeld: the direct release committed
+// but the grab was never queued (here the enqueue fails; a crash between the
+// two is the same shape). The pass fails without recording an outcome, and
+// the next pass finds the want SELECTED on this op's own candidate and queues
+// the grab, rather than calling it held and never grabbing.
+func TestAnInterruptedApplicationIsResumedNotHeld(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	hash := h.receive(t, h.sibling, "movie", "movie:arrival:2016", siblingAcquire())
+
+	broken := ApplyAcquireHandler(h.ops, h.cat, failingQueue{}, h.selfKey, slog.New(slog.DiscardHandler))
+	if err := broken(t.Context(), jobs.Job{Type: acquisition.ApplyAcquireJobType}); err == nil {
+		t.Fatal("a pass whose grab could not be queued reported success")
+	}
+	if got := h.state(t).Name(); got != "SELECTED" {
+		t.Fatalf("precondition: the want is %s, want SELECTED with no grab", got)
+	}
+	if app := h.application(t, hash); app.Outcome != "" {
+		t.Fatalf("an outcome was recorded for a pass that failed: %+v", app)
+	}
+
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if app := h.application(t, hash); app.Outcome != catalog.FanOutApplied {
+		t.Fatalf("application = %+v, want applied (resumed)", app)
+	}
+	if got := h.pendingGrabs(t); got != 1 {
+		t.Fatalf("%d grabs queued, want the resumed one", got)
+	}
+}
+
+// TestAPrivateOpCreatesNothingAndIsRetried: a private op for a work this
+// site does not have creates neither the work nor a want (a want would be
+// searched here and could grab a different release), and the outcome is
+// retried each pass without being rewritten while nothing changes.
+func TestAPrivateOpCreatesNothingAndIsRetried(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	a := siblingAcquire()
+	a.Private, a.WorkTitle, a.Year = true, "Dune", 2021
+	hash := h.receive(t, h.sibling, "movie", "movie:dune:2021", a)
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	first := h.application(t, hash)
+	if first.Outcome != catalog.FanOutNoSiteSource || first.Outcome.Final() {
+		t.Fatalf("application = %+v, want a retried no_site_source", first)
+	}
+	var works int
+	if err := h.db.Reader().QueryRow(
+		`SELECT count(*) FROM works WHERE work_key = 'movie:dune:2021'`).Scan(&works); err != nil {
+		t.Fatal(err)
+	}
+	if works != 0 {
+		t.Fatalf("a private op created %d works", works)
+	}
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if again := h.application(t, hash); again != first {
+		t.Fatalf("an unchanged retried outcome was rewritten: %+v then %+v", first, again)
 	}
 }
