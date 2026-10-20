@@ -225,12 +225,16 @@ func (s *Store) recordInto(ctx context.Context, tx *sql.Tx, parsed []catalogop.O
 	// make a large backfill quadratic in the log's length.
 	//
 	// It can change the view INDIRECTLY: a restore cites the heads it saw, and
-	// those may be acquires. A restore that arrived before an acquire it cites
-	// is held as bad_prev; the acquire's arrival completes its causal past and
-	// the restore now lifts its tombstone. So the skip holds only while no
-	// delete or restore already recorded cites a fresh acquire.
+	// those may be acquires, directly or through a chain of acquires that cite
+	// each other. A restore that arrived before an op in its causal past is
+	// held as bad_prev; that op's arrival completes the restore, which now
+	// lifts its tombstone. So the skip holds only while nothing already
+	// recorded cites a fresh acquire. That is conservative (an acquire cited
+	// only by acquires also reconciles) and cheap: in-order delivery, a local
+	// publish included, never has a recorded op citing the newcomer, and
+	// following the chain to find out would cost more than reconciling.
 	if onlyAcquires(parsed) {
-		cited, err := citedByTombstoneOp(ctx, tx, fresh)
+		cited, err := citedByRecordedOp(ctx, tx, fresh)
 		if err != nil {
 			return err
 		}
@@ -241,18 +245,17 @@ func (s *Store) recordInto(ctx context.Context, tx *sql.Tx, parsed []catalogop.O
 	return s.reconcileTx(ctx, tx, now)
 }
 
-// citedByTombstoneOp reports whether any recorded op other than an acquire
-// cites one of hashes in its prev.
-func citedByTombstoneOp(ctx context.Context, tx *sql.Tx, hashes []string) (bool, error) {
-	args := make([]any, 0, len(hashes)+1)
-	args = append(args, string(catalogop.OpAcquire))
+// citedByRecordedOp reports whether any recorded op cites one of hashes in
+// its prev.
+func citedByRecordedOp(ctx context.Context, tx *sql.Tx, hashes []string) (bool, error) {
+	args := make([]any, 0, len(hashes))
 	for _, h := range hashes {
 		args = append(args, h)
 	}
 	var one int
 	err := tx.QueryRowContext(ctx,
 		`SELECT 1 FROM catalog_ops c, json_each(c.prev) p
-		  WHERE c.op != ? AND p.value IN (?`+strings.Repeat(",?", len(hashes)-1)+`)
+		  WHERE p.value IN (?`+strings.Repeat(",?", len(hashes)-1)+`)
 		  LIMIT 1`, args...).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil

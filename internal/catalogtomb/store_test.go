@@ -333,3 +333,51 @@ func TestAcquireArrivingLastCompletesARestore(t *testing.T) {
 		t.Error("the acquire completed the restore's history but the tombstone stayed materialised")
 	}
 }
+
+// TestAnAcquireCompletingAChainOfAcquiresReconciles: the restore cites an
+// acquire that cites another acquire, and the first of the chain arrives
+// last. Only an acquire directly cites the newcomer, yet the restore is now
+// valid and must lift the tombstone.
+func TestAnAcquireCompletingAChainOfAcquiresReconciles(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+	peer := newKey(t)
+	f.insertWork(t, "movie", "the-thing-1982", "The Thing")
+
+	acquire := func(prev []string, at time.Time, hash string) string {
+		tok, err := catalogop.SignAcquire(peer, "movie", "the-thing-1982", catalogop.Acquire{
+			Scope: catalogop.ScopeWork, Aspect: catalogop.AspectPrimary, Profile: "living-room",
+			Infohash: hash, Title: "The Thing 1982 2160p",
+			WorkTitle: "The Thing", Year: 1982, SelectedAt: at, Site: "north",
+		}, prev, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok
+	}
+	del := mustSign(t, peer, catalogop.OpDelete, "movie", "the-thing-1982", nil, now)
+	first := acquire([]string{catalogop.Hash(del)}, now.Add(time.Minute), "0123456789abcdef0123456789abcdef01234567")
+	second := acquire([]string{catalogop.Hash(first)}, now.Add(2*time.Minute), "89abcdef0123456789abcdef0123456789abcdef")
+	restore := mustSign(t, peer, catalogop.OpRestore, "movie", "the-thing-1982",
+		[]string{catalogop.Hash(second)}, now.Add(3*time.Minute))
+
+	if err := f.store.RecordOps(ctx, []string{del, second, restore}); err != nil {
+		t.Fatal(err)
+	}
+	if tombstoned, err := f.store.Tombstoned(ctx, "movie", "the-thing-1982"); err != nil {
+		t.Fatal(err)
+	} else if !tombstoned {
+		t.Fatal("precondition: a restore whose causal past is missing must not lift the tombstone")
+	}
+	if err := f.store.RecordOps(ctx, []string{first}); err != nil {
+		t.Fatal(err)
+	}
+	tombstoned, err := f.store.Tombstoned(ctx, "movie", "the-thing-1982")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tombstoned {
+		t.Error("the first acquire completed the restore's chain but the tombstone stayed materialised")
+	}
+}

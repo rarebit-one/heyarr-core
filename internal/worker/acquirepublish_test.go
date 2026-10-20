@@ -335,6 +335,22 @@ func TestASelectionThatChangedUnderTheGrabIsNotPublished(t *testing.T) {
 	}
 }
 
+// TestAWantNoOpCanExpressIsNotPublishedAndDoesNotRetry: an item key past the
+// op's scope limit is a property of the want, so the publish records nothing
+// and succeeds rather than failing the grab on every retry.
+func TestAWantNoOpCanExpressIsNotPublishedAndDoesNotRetry(t *testing.T) {
+	t.Parallel()
+	f := arrivalFacts()
+	f.Scope = catalogop.ScopeItemPrefix + strings.Repeat("k", catalogop.MaxScope)
+	pub, ops := newPublisher(t, f)
+	if err := pub.Publish(t.Context(), "want-1", f.CandidateID, fakeInfohash); err != nil {
+		t.Fatalf("an inexpressible want failed the publish: %v", err)
+	}
+	if len(ops.recorded) != 0 {
+		t.Fatalf("published %d ops for a want no op can express", len(ops.recorded))
+	}
+}
+
 // TestAGrabWhoseSelectionChangedRetriesForTheCurrentOne: when the publisher
 // reports the selection changed under the grab, the job neither advances (the
 // want would be QUEUED on the old transfer) nor completes (the override's
@@ -358,6 +374,52 @@ func TestAGrabWhoseSelectionChangedRetriesForTheCurrentOne(t *testing.T) {
 
 	if err := h.grabWith(t, h.selectedID(t), &recordingPublisher{}); err != nil {
 		t.Fatalf("the retry failed: %v", err)
+	}
+	if got := h.state(t).Name(); got != "QUEUED" {
+		t.Fatalf("after the retry the want is %s, want QUEUED", got)
+	}
+}
+
+// hookPublisher runs a hook in place of publishing: a test's way to land a
+// by-hand override after the publish has read the selection.
+type hookPublisher struct {
+	hook func(ctx context.Context) error
+}
+
+func (p hookPublisher) Publish(ctx context.Context, _, _, _ string) error { return p.hook(ctx) }
+
+// TestAnOverrideAfterThePublishStopsTheGrabFromQueueingTheOldRelease: an
+// override that commits after the publish but before SELECTED → QUEUED must
+// not be overwritten by a QUEUED naming the old transfer. The guarded
+// transition refuses, the job fails, and the retry grabs the override.
+func TestAnOverrideAfterThePublishStopsTheGrabFromQueueingTheOldRelease(t *testing.T) {
+	t.Parallel()
+	h := newGrabHarness(t)
+	h.fake.Offer("Arrival", offer("good", 2160, "hevc"), offer("plain", 1080, "h264"))
+	if err := h.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.selectedID(t); got != "good" {
+		t.Fatalf("precondition: selected %s, want good", got)
+	}
+	override := hookPublisher{hook: func(ctx context.Context) error {
+		_, err := h.cat.OverrideSelection(ctx, h.want, "plain")
+		return err
+	}}
+	err := h.grabWith(t, "good", override)
+	if !errors.Is(err, ErrSelectionChanged) {
+		t.Fatalf("err = %v, want ErrSelectionChanged so the job retries", err)
+	}
+	if got := h.state(t).Name(); got != "SELECTED" {
+		t.Fatalf("after the override the want is %s, want SELECTED", got)
+	}
+
+	if err := h.grabWith(t, "good", &recordingPublisher{}); err != nil {
+		t.Fatalf("the retry failed: %v", err)
+	}
+	added := h.client.Added()
+	if len(added) != 2 || !strings.Contains(string(added[1]), "btih:plain") {
+		t.Fatalf("client was handed %v, want the override fetched on the retry", added)
 	}
 	if got := h.state(t).Name(); got != "QUEUED" {
 		t.Fatalf("after the retry the want is %s, want QUEUED", got)

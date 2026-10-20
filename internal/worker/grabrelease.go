@@ -18,6 +18,7 @@ import (
 type GrabStore interface {
 	Acquisition(ctx context.Context, desiredItemID string) (catalog.AcquisitionRecord, error)
 	AdvanceAcquisition(ctx context.Context, desiredItemID string, t acquisition.Transition, detail string) (catalog.AcquisitionRecord, error)
+	AdvanceAcquisitionIfSelected(ctx context.Context, desiredItemID, candidateID string, t acquisition.Transition, detail string) (catalog.AcquisitionRecord, error)
 	RecordAcquisition(ctx context.Context, a catalog.Acquisition) (bool, error)
 	SelectedSource(ctx context.Context, desiredItemID string) (candidateID string, source secret.Value, err error)
 }
@@ -187,9 +188,19 @@ func GrabReleaseHandler(
 			}
 		}
 
-		if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
+		// Guarded by the selection, in the transition's own transaction: an
+		// override that commits after the publish read the old selection
+		// would otherwise be overwritten by a QUEUED naming the old transfer,
+		// and its enqueue collapsed into this job (#793). The retry grabs the
+		// current selection and publishes it with its newer selected-at, which
+		// supersedes the op just written at every sibling.
+		if _, err := cat.AdvanceAcquisitionIfSelected(ctx, payload.DesiredItemID, candidateID,
 			acquisition.TransitionQueue,
 			fmt.Sprintf("queued %s at %s", candidateID, provider)); err != nil {
+			if errors.Is(err, catalog.ErrSelectionChanged) {
+				return fmt.Errorf("worker: the selection for %s changed before %s was queued; retrying for the current one: %w",
+					payload.DesiredItemID, candidateID, err)
+			}
 			return err
 		}
 

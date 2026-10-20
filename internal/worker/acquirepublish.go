@@ -34,7 +34,10 @@ type AcquirePublisher interface {
 // the one the grab handed to the client: a by-hand override landed between
 // the grab's SelectedSource and the publish. The grab must not advance the
 // want on the old transfer's behalf; the grab fails and its retry takes the current one.
-var ErrSelectionChanged = errors.New("worker: the want's selection changed under the grab")
+//
+// It is catalog.ErrSelectionChanged, so the grab treats the publisher's check
+// and the guarded transition's alike.
+var ErrSelectionChanged = catalog.ErrSelectionChanged
 
 // AcquireFactsReader is the catalog read the publisher needs.
 type AcquireFactsReader interface {
@@ -141,6 +144,19 @@ func (p *CatalogAcquirePublisher) Publish(ctx context.Context, desiredItemID, ca
 		Trackers: nil,
 		Private:  facts.Private,
 	}, heads, now)
+	if errors.Is(err, catalogop.ErrMalformed) {
+		// The want cannot be said as an op: a scope key past MaxScope (an item
+		// key a source supplied, unbounded here), a profile name the clip left
+		// empty. That is a property of the want, so a retry would fail the same
+		// way while the client already holds the transfer and the want rests in
+		// SELECTED. Publish nothing and let the grab advance; a sibling acquires
+		// this one through its own search.
+		if p.Log != nil {
+			p.Log.Warn("not publishing a grabbed release: the want cannot be expressed as an acquire op",
+				"desired_item_id", desiredItemID, "work_key", facts.WorkKey, "error", err)
+		}
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("worker: signing acquire op for %s: %w", desiredItemID, err)
 	}
