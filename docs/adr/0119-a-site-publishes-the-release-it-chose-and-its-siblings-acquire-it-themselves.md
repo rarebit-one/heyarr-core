@@ -65,6 +65,12 @@ converges on the same work.**
   usenet article) publishes nothing: there is no swarm for a sibling to join.
   The op is written before the want advances, so a failed write retries with
   the grab rather than being lost. The op-log's existing sync carries it.
+- **The siblings are Partial Peers of each other.** A Full Peer holds everything
+  (§19): enrolling the two sites as Full Peers would turn on blob convergence,
+  control-plane backups and state replication between them, the byte traffic this
+  decision exists to remove. So each site enrols the other in `partial` mode. The
+  catalog-ops sync runs between Full and Partial Peers; every byte-moving loop
+  stays Full-only, so the op-log is the only thing that crosses.
 - **A sibling acquires only with its own means.** A sibling with fan-out
   enabled evaluates the op by ensuring the work exists under the same
   `work_key`, ensuring a want for that scope and aspect under the named profile

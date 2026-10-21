@@ -2,10 +2,15 @@ package controller
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/rarebit-one/heyarr-core/internal/peer/backupsync"
+	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 )
 
 // countingCatalogSyncer records how many times the beat drove it.
@@ -57,5 +62,72 @@ func TestCatalogOpsSyncBeatRespectsAStoppedContext(t *testing.T) {
 	clock.awaitStop(t)
 	if s.calls.Load() != 0 {
 		t.Fatalf("a cancelled beat still drove the syncer %d times", s.calls.Load())
+	}
+}
+
+// TestPartialPeersSyncCatalogOpsButReceiveNoBytes: two sites that each fetch
+// their own media (ADR-0119) enrol each other as Partial Peers. The catalog-ops
+// sync reaches them, but the byte-moving fan-outs, which are Full-only by §19,
+// do not: state replication (fullPeerLister) and backups
+// (backupsync.FullPeerTargets) skip a Partial Peer, and so do cache, archive and
+// compute peers, which hold no catalog to agree on.
+func TestPartialPeersSyncCatalogOpsButReceiveNoBytes(t *testing.T) {
+	ctx := context.Background()
+	store := realFabric(t)
+	register := func(name, mode string, self bool) string {
+		t.Helper()
+		pub, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := store.Register(ctx, membership.Registration{
+			Name: name, Site: "site-" + name, Mode: mode, PublicKey: pub, IsSelf: self,
+			Endpoint: "https://" + name + ".invalid:7780",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Member.PeerID
+	}
+	self := register("self", "full", true)
+	full := register("north", "full", false)
+	partial := register("south", "partial", false)
+	register("edge", "cache", false)
+
+	ids := func(targets []string) map[string]bool {
+		out := map[string]bool{}
+		for _, id := range targets {
+			out[id] = true
+		}
+		return out
+	}
+
+	siblings, err := catalogSiblings{members: store, self: self}.Siblings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var syncIDs []string
+	for _, s := range siblings {
+		syncIDs = append(syncIDs, s.Peer.PeerID)
+	}
+	got := ids(syncIDs)
+	if len(got) != 2 || !got[full] || !got[partial] {
+		t.Fatalf("catalog-ops siblings = %v, want exactly the Full and the Partial peer", syncIDs)
+	}
+
+	state, err := fullPeerLister{members: store, self: self}.FullPeerTargets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state) != 1 || state[0].Peer.PeerID != full {
+		t.Fatalf("state-replication targets = %v, want only the Full peer", state)
+	}
+	all, err := store.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backups := backupsync.FullPeerTargets(all)
+	if len(backups) != 1 || backups[0].Peer.PeerID != full {
+		t.Fatalf("backup targets = %v, want only the Full peer", backups)
 	}
 }
