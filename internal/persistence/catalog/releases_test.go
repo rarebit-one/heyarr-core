@@ -171,6 +171,10 @@ func TestReclaimingAReleasedBlobRecordsTheBasisAndForgetsTheRelease(t *testing.T
 		t.Fatal(err)
 	}
 	parsed, _ := hashing.Parse(blob)
+	// The sweep after the release starts its grace window, as a real GC does.
+	if err := h.cat.MarkUnreferenced(ctx, []hashing.Hash{parsed}, time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
 	at := time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)
 	if err := h.cat.RecordDurability(ctx, integrity.Evidence{
 		BlobHash: parsed, Size: 1024, Basis: integrity.BasisReleased, RecordedAt: at,
@@ -364,5 +368,45 @@ func TestReleaseTransitionsAreEvents(t *testing.T) {
 	}
 	if n := h.eventsOfType(t, events.TypeBlobReleaseCleared); n != 1 {
 		t.Fatalf("re-pinning a released blob emitted %d blob.release_cleared, want 1", n)
+	}
+}
+
+// A blob re-pinned and released again while a sweep is between reading it and
+// reclaiming it is a new release generation: the old sweep's attempt must not
+// honour it, because its grace window has not run (#779).
+func TestReclaimRefusesANewerReleaseGeneration(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	self := h.seedRemotePeer(t)
+	blob := hashOf('5')
+	h.seedBlobs(t, blob)
+	parsed, _ := hashing.Parse(blob)
+	if err := h.cat.PinPlacement(ctx, blob, self); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cat.UnpinPlacement(ctx, blob, self); err != nil {
+		t.Fatal(err)
+	}
+	// The first sweep after the release starts its window.
+	if err := h.cat.MarkUnreferenced(ctx, []hashing.Hash{parsed}, time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	if err := h.cat.RecordDurability(ctx, integrity.Evidence{
+		BlobHash: parsed, Size: 1024, Basis: integrity.BasisReleased, RecordedAt: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mid-sweep: pinned and unpinned again.
+	if err := h.cat.PinPlacement(ctx, blob, self); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cat.UnpinPlacement(ctx, blob, self); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cat.Reclaim(ctx, parsed, 1024, true, at); !errors.Is(err, integrity.ErrWantedAgain) {
+		t.Fatalf("Reclaim = %v, want ErrWantedAgain for a release whose window has not run", err)
 	}
 }

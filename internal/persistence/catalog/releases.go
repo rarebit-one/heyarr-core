@@ -3,7 +3,9 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
 )
@@ -124,20 +126,45 @@ func deleteRelease(ctx context.Context, tx *sql.Tx, blobHash string) (int64, err
 //     Placement pins have no foreign key, so without this a pin added after
 //     the sweep read the blob would not stop the delete;
 //   - if THIS attempt's evidence (recorded at stamp) is the `released` basis,
-//     the release must still stand. A release cleared since means the blob was
-//     wanted again in between.
+//     the release must still stand AND be the generation whose grace window
+//     the sweep honoured. A release resets the grace-window mark, so the mark
+//     always postdates the release it is the window for. A release newer than
+//     the mark (or a mark gone NULL) is a blob wanted and released again since
+//     the sweep read it, and it gets its own full window.
 func wantedAtReclaim(ctx context.Context, tx *sql.Tx, blobHash, stamp string) (bool, error) {
-	var wanted bool
+	var wanted, reliedOnRelease bool
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS (SELECT 1 FROM placement_pins WHERE blob_hash = ?)
 		    OR EXISTS (SELECT 1 FROM peer_placements WHERE blob_hash = ?)
 		    OR EXISTS (SELECT 1 FROM scanned_files WHERE blob_hash = ?)
-		    OR EXISTS (SELECT 1 FROM derived_thumbnails WHERE thumb_hash = ? AND status = 'ready')
-		    OR (EXISTS (SELECT 1 FROM durability_evidence
-		                 WHERE blob_hash = ? AND basis = 'released' AND recorded_at = ?)
-		        AND NOT EXISTS (SELECT 1 FROM blob_releases WHERE blob_hash = ?))`,
-		blobHash, blobHash, blobHash, blobHash, blobHash, stamp, blobHash).Scan(&wanted); err != nil {
+		    OR EXISTS (SELECT 1 FROM derived_thumbnails WHERE thumb_hash = ? AND status = 'ready'),
+		       EXISTS (SELECT 1 FROM durability_evidence
+		                WHERE blob_hash = ? AND basis = 'released' AND recorded_at = ?)`,
+		blobHash, blobHash, blobHash, blobHash, blobHash, stamp).Scan(&wanted, &reliedOnRelease); err != nil {
 		return false, fmt.Errorf("catalog: checking %s is still garbage before reclaiming it: %w", blobHash, err)
 	}
-	return wanted, nil
+	if wanted || !reliedOnRelease {
+		return wanted, nil
+	}
+
+	var released, since sql.NullString
+	err := tx.QueryRowContext(ctx, `
+		SELECT r.released_at, b.unreferenced_since
+		  FROM blob_releases r JOIN blobs b ON b.hash = r.blob_hash
+		 WHERE r.blob_hash = ?`, blobHash).Scan(&released, &since)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return true, nil // the release no longer stands
+	case err != nil:
+		return false, fmt.Errorf("catalog: reading the release of %s: %w", blobHash, err)
+	case !released.Valid || !since.Valid:
+		return true, nil // a release with no window started since: not this sweep's to honour
+	}
+	releasedAt, err1 := time.Parse(timestampFormat, released.String)
+	markedAt, err2 := time.Parse(timestampFormat, since.String)
+	if err1 != nil || err2 != nil {
+		// Unreadable is not evidence: refuse rather than delete a last copy.
+		return true, nil
+	}
+	return releasedAt.After(markedAt), nil
 }
