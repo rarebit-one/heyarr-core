@@ -468,3 +468,10 @@ issuing device write leases for opted-in siblings (with re-issue below the
 refresh threshold, and revocation when the grant is deleted); a sibling fetch
 loop; the check after `Device` verification, which fails closed and names each
 refusal reason; and a demo claim, `lease-honoured-across-partition`.
+
+*(2026-10-21)* All four are now delivered. The claim
+`lease-honoured-across-partition` is `proven` in `scripts/claims.list`: with the
+issuer stopped, `make demo` shows a leased device's write succeeding at the
+sibling and a device with no lease refused (403). Expiry (the self-limiting
+revocation bound) stays a Go assertion with an injected clock; the demo records
+it as not exercised.
