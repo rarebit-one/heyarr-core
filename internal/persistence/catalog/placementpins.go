@@ -73,7 +73,7 @@ func (c *Catalog) PinPlacement(ctx context.Context, blobHash, peerID string) err
 // inside the transaction, which holds the write lock from its start, so it is
 // serialized with GC's guarded unlink of a released blob (#779): either the
 // unlink sees this row and keeps the bytes, or this sees the bytes gone and
-// records nothing, returning ErrVaultBytesGone for the uploader to retry.
+// records nothing, returning ErrBytesGone for the uploader to retry.
 func (c *Catalog) RecordVaultBlob(
 	ctx context.Context, blobHash string, size int64, peerID string, present func(context.Context) error,
 ) error {
@@ -86,7 +86,7 @@ func (c *Catalog) RecordVaultBlob(
 		pending = nil
 		if present != nil {
 			if err := present(ctx); err != nil {
-				return fmt.Errorf("%w: %s: %w", ErrVaultBytesGone, blobHash, err)
+				return fmt.Errorf("%w: %s: %w", ErrBytesGone, blobHash, err)
 			}
 		}
 		adopted, err := adoptBlob(ctx, tx, blobHash, size, now)
@@ -148,11 +148,11 @@ func (c *Catalog) RecordVaultBlob(
 	return nil
 }
 
-// ErrVaultBytesGone is RecordVaultBlob finding the bytes it was asked to
-// record no longer in the store: GC reclaimed a released blob of the same hash
-// between the upload's store write and this commit (#779). Nothing was
-// recorded; the upload should be retried.
-var ErrVaultBytesGone = errors.New("catalog: the vault blob's bytes are no longer in the store")
+// ErrBytesGone is RecordVaultBlob or RecordBlobTransferred finding the bytes
+// it was asked to record no longer in the store: GC reclaimed a released blob
+// of the same hash between the store write and this commit (#779). Nothing was
+// recorded; the upload or transfer should be retried.
+var ErrBytesGone = errors.New("catalog: the blob's bytes are no longer in the store")
 
 // PlacementPin is one recorded pin: a ciphertext blob a peer should hold
 // (ADR-0096). It is the (blob, peer) pair and nothing else — the table carries a

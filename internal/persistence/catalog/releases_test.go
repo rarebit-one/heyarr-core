@@ -483,8 +483,8 @@ func TestRecordVaultBlobRecordsNothingWhenItsBytesAreGone(t *testing.T) {
 	gone := func(context.Context) error { return errors.New("not in the store") }
 
 	err := h.cat.RecordVaultBlob(ctx, blob, 1024, self, gone)
-	if !errors.Is(err, catalog.ErrVaultBytesGone) {
-		t.Fatalf("RecordVaultBlob = %v, want ErrVaultBytesGone", err)
+	if !errors.Is(err, catalog.ErrBytesGone) {
+		t.Fatalf("RecordVaultBlob = %v, want ErrBytesGone", err)
 	}
 	var rows, pins int
 	if err := h.db.Reader().QueryRowContext(ctx, `SELECT count(*) FROM blobs WHERE hash = ?`, blob).Scan(&rows); err != nil {
@@ -495,5 +495,34 @@ func TestRecordVaultBlobRecordsNothingWhenItsBytesAreGone(t *testing.T) {
 	}
 	if rows != 0 || pins != 0 {
 		t.Fatalf("recorded %d blob rows and %d pins for bytes that are gone", rows, pins)
+	}
+}
+
+// A transfer's record confirms its bytes inside the write-locked transaction
+// too, so a replicate_blob racing GC's guarded unlink of a released blob
+// records nothing for bytes that are gone (#779).
+func TestRecordBlobTransferredRecordsNothingWhenItsBytesAreGone(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	self := h.seedRemotePeer(t)
+	blob := hashOf('2')
+
+	err := h.cat.RecordBlobTransferred(ctx, catalog.BlobTransfer{
+		BlobHash: blob, DestinationPeerID: self, Bytes: 1024,
+		Present: func(context.Context) error { return errors.New("not in the store") },
+	})
+	if !errors.Is(err, catalog.ErrBytesGone) {
+		t.Fatalf("RecordBlobTransferred = %v, want ErrBytesGone", err)
+	}
+	var rows, replicas int
+	if err := h.db.Reader().QueryRowContext(ctx, `SELECT count(*) FROM blobs WHERE hash = ?`, blob).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.Reader().QueryRowContext(ctx, `SELECT count(*) FROM replicas WHERE blob_hash = ?`, blob).Scan(&replicas); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 || replicas != 0 {
+		t.Fatalf("recorded %d blob rows and %d replicas for bytes that are gone", rows, replicas)
 	}
 }

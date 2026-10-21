@@ -55,7 +55,7 @@ func (f *fakePinner) RecordVaultBlob(ctx context.Context, blobHash string, size 
 	f.calls++
 	if present != nil {
 		if err := present(ctx); err != nil {
-			return fmt.Errorf("%w: %w", catalog.ErrVaultBytesGone, err)
+			return fmt.Errorf("%w: %w", catalog.ErrBytesGone, err)
 		}
 	}
 	f.pinnedHash = blobHash

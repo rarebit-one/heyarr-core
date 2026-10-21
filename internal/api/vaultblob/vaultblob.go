@@ -183,7 +183,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 	if err := h.pinner.RecordVaultBlob(r.Context(), expected.String(), desc.Size, h.selfPeer, present); err != nil {
-		if errors.Is(err, catalog.ErrVaultBytesGone) {
+		if errors.Is(err, catalog.ErrBytesGone) {
 			httpapi.Fail(w, r, problem.ServiceUnavailable(
 				"the blob was reclaimed while this upload was being recorded; upload it again"))
 			return
