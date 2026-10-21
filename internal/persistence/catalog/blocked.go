@@ -127,6 +127,71 @@ func (c *Catalog) BlockRelease(ctx context.Context, b BlockedRelease) (bool, err
 	return created, nil
 }
 
+// ErrNotBlocked is UnblockRelease asked to lift a block that is not there.
+var ErrNotBlocked = errors.New("catalog: that release is not blocked for this want")
+
+// UnblockRelease lifts a block: the want may choose candidateID again (#813).
+//
+// The operator's lever for a block that was wrong, most often one recorded
+// before node-configuration faults stopped blocking releases (a missing
+// library, a path map). It matches on the candidate id under any provider, the
+// way the fan-out applier recognises a blocked release, and emits
+// acquisition.release_unblocked in the same transaction (invariant 7).
+// ErrNotBlocked when there was nothing to lift.
+func (c *Catalog) UnblockRelease(ctx context.Context, desiredItemID, candidateID string) error {
+	var removed []BlockedRelease
+	var emitted []events.Event
+	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			DELETE FROM blocked_releases
+			 WHERE desired_item_id = ? AND candidate_id = ?
+			RETURNING provider, title, reason`, desiredItemID, candidateID)
+		if err != nil {
+			return fmt.Errorf("catalog: unblocking %s: %w", candidateID, err)
+		}
+		for rows.Next() {
+			b := BlockedRelease{DesiredItemID: desiredItemID, CandidateID: candidateID}
+			var reason string
+			if err := rows.Scan(&b.Provider, &b.Title, &reason); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			b.Reason = BlockReason(reason)
+			removed = append(removed, b)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if len(removed) == 0 {
+			return ErrNotBlocked
+		}
+		for _, b := range removed {
+			ev, err := c.events.EmitTx(ctx, tx, events.TypeReleaseUnblocked,
+				"desired_item", desiredItemID, map[string]any{
+					"desired_item_id": desiredItemID,
+					"provider":        b.Provider,
+					"candidate_id":    b.CandidateID,
+					"title":           b.Title,
+					"was":             string(b.Reason),
+				})
+			if err != nil {
+				return err
+			}
+			emitted = append(emitted, ev)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	c.events.Publish(emitted...)
+	return nil
+}
+
 // BlockedFor lists what a want will not choose again.
 //
 // Returned as a slice rather than a set so the caller decides the shape it

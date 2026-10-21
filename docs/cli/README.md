@@ -29,10 +29,12 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr config`](heyarr_config.md) | Inspect configuration |
 | [`heyarr controller`](heyarr_controller.md) | Own coordinated mutable state: catalog, policy, jobs, API |
 | [`heyarr desired add`](heyarr_desired_add.md) | Want something |
+| [`heyarr desired blocked`](heyarr_desired_blocked.md) | List the releases a want will not choose again, and why |
 | [`heyarr desired list`](heyarr_desired_list.md) | List what should exist |
 | [`heyarr desired reingest`](heyarr_desired_reingest.md) | Re-drive a wedged ingest — a finished download that never imported |
 | [`heyarr desired rm`](heyarr_desired_rm.md) | Stop wanting something |
 | [`heyarr desired set`](heyarr_desired_set.md) | Change the conditions, the monitoring or the note |
+| [`heyarr desired unblock`](heyarr_desired_unblock.md) | Let a want choose a blocked release again |
 | [`heyarr desired`](heyarr_desired.md) | Say what should exist, whether or not it does yet |
 | [`heyarr device enrol`](heyarr_device_enrol.md) | Enrol this machine's paired device at a peer (POST /enrol, ADR-0067) |
 | [`heyarr device gateway`](heyarr_device_gateway.md) | Run the device-side Subsonic compatibility gateway (§73, ADR-0051) |

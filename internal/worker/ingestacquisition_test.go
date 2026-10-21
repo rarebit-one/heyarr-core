@@ -331,14 +331,6 @@ func TestVerificationRefusals(t *testing.T) {
 		want    string
 	}{
 		{
-			// The most common operational failure in this class of software:
-			// the client says done, and the path it reported is not one Heyarr
-			// can open.
-			name:    "the file is not where the client said",
-			prepare: func(t *testing.T, path string) { t.Helper(); mustRemove(t, path) },
-			want:    "may need mapping",
-		},
-		{
 			// Hashes perfectly well, which is the problem — it would become a
 			// legitimate-looking asset that plays nothing.
 			name: "the file is empty",
@@ -414,6 +406,41 @@ func TestVerificationRefusals(t *testing.T) {
 	}
 }
 
+// A path this node cannot open is this node's fault, not the release's (#813).
+//
+// The most common operational failure in this class of software: the client
+// says done, and the path it reported is not one Heyarr can open, which is a
+// path mapping to fix. The want fails, but the release is NOT blocked, and the
+// reason survives on the want, so fixing the mapping lets the same release be
+// taken again.
+func TestAPathThisNodeCannotOpenDoesNotBlockTheRelease(t *testing.T) {
+	t.Parallel()
+	h := newIngestHarness(t)
+	path := h.selectAndComplete(t, "Arrival.2016.2160p.mkv", []byte("something"))
+	mustRemove(t, path)
+
+	if err := h.ingest(t); err != nil {
+		t.Fatalf("an unopenable path is an outcome, not a job failure: %v", err)
+	}
+	if st := h.state(t); st.Phase != acquisition.PhaseIdle || st.Managed {
+		t.Fatalf("state = %+v, want idle and holding nothing", st)
+	}
+	blocked, err := h.cat.BlockedFor(t.Context(), h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 0 {
+		t.Fatalf("a path-mapping fault blocked the release: %+v", blocked)
+	}
+	rec, err := h.cat.Acquisition(t.Context(), h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rec.Detail, "may need mapping") {
+		t.Errorf("the want should say why, said: %s", rec.Detail)
+	}
+}
+
 // THE loop this issue exists to break.
 //
 // A release that failed must not be selected again by the next search — and
@@ -423,7 +450,11 @@ func TestAFailedReleaseIsNotChosenAgain(t *testing.T) {
 	t.Parallel()
 	h := newIngestHarness(t)
 	path := h.selectAndComplete(t, "Arrival.2016.2160p.mkv", []byte("something"))
-	mustRemove(t, path)
+	// An empty file is the release's own fault. A missing one would not be:
+	// that is this node's path mapping, which blocks nothing (#813).
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := h.ingest(t); err != nil {
 		t.Fatal(err)
@@ -462,7 +493,9 @@ func TestASearchWhereEverythingHasAlreadyFailed(t *testing.T) {
 	t.Parallel()
 	h := newIngestHarness(t)
 	path := h.selectAndComplete(t, "Arrival.2016.2160p.mkv", []byte("x"))
-	mustRemove(t, path)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.ingest(t); err != nil {
 		t.Fatal(err)
 	}
@@ -607,6 +640,12 @@ func TestAnIngestForAWantThatMovedOnIsHarmless(t *testing.T) {
 // A content type nothing is configured to hold is named precisely, because
 // "no such root" would send an operator looking for a missing directory when
 // the actual problem is a library they have not made.
+//
+// And it is this node's fault, not the release's (#813): the want fails
+// WITHOUT blocking the release, so once the library exists the same release is
+// selected again, the client's completed transfer is ingested, and the want
+// holds its bytes. Blocking it, as this used to, made a missing library a
+// permanent verdict on a perfectly good download.
 func TestNoLibraryForTheContentType(t *testing.T) {
 	t.Parallel()
 	h := newIngestHarness(t)
@@ -621,17 +660,39 @@ func TestNoLibraryForTheContentType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(blocked) != 1 {
-		t.Fatalf("%d blocked, want 1", len(blocked))
+	if len(blocked) != 0 {
+		t.Fatalf("a missing library blocked the release: %+v", blocked)
 	}
-	if !strings.Contains(blocked[0].Detail, "create a library") {
-		t.Errorf("the reason should name the real problem, said: %s", blocked[0].Detail)
+	rec, err := h.cat.Acquisition(t.Context(), h.want)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Blocked as an INGEST failure rather than a verification one: the bytes
-	// were fine, and this is a local configuration problem.
-	if blocked[0].Reason != catalog.BlockIngestFailed {
-		t.Errorf("reason = %s, want ingest_failed — the release was not at fault",
-			blocked[0].Reason)
+	if rec.State.Phase != acquisition.PhaseIdle {
+		t.Fatalf("phase = %s, want idle", rec.State.Phase)
+	}
+	if !strings.Contains(rec.Detail, "create a library") {
+		t.Errorf("the want should name the real problem, said: %s", rec.Detail)
+	}
+
+	// The operator makes the library. The next search selects the same
+	// release (it is not blocked), and its completed transfer ingests.
+	h.exec(t, `UPDATE libraries SET content_type = 'movie' WHERE id = 'lib1'`)
+	h.selectAndComplete(t, "Arrival.2016.2160p.mkv", []byte("bytes"))
+	sel, err := h.cat.SelectedCandidate(t.Context(), h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.CandidateID != "good" {
+		t.Fatalf("after the fix the search selected %q, want the same release", sel.CandidateID)
+	}
+	if err := h.ingest(t); err != nil {
+		t.Fatal(err)
+	}
+	if st := h.state(t); !st.Managed {
+		t.Fatalf("after the fix the want holds nothing: %+v", st)
+	}
+	if n := h.count(t, `SELECT count(*) FROM assets`); n != 1 {
+		t.Fatalf("%d assets after the fix, want 1", n)
 	}
 }
 

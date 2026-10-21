@@ -4463,6 +4463,72 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/desired/{id}/blocked:
+    get:
+      tags: [desired]
+      operationId: listBlocked
+      summary: List the releases a want will not choose again, and why.
+      description: |
+        A release is blocked for a want when its download or verification
+        failed in a way that is the release's fault (a dead transfer, bytes
+        that did not verify). A fault of this node's configuration (no
+        library for the content type, a path map) does not block (#813).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The want's blocked releases.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  desired_item_id: { type: string }
+                  blocked:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        provider: { type: string }
+                        candidate_id: { type: string }
+                        title: { type: string }
+                        reason: { type: string, description: "verification_failed, ingest_failed, grab_failed or manual" }
+                        detail: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/desired/{id}/blocked/{candidate}:
+    delete:
+      tags: [desired]
+      operationId: unblockRelease
+      summary: Lift a block, so the want may choose that release again.
+      description: |
+        The operator's lever for a block that was wrong (#813), most often one
+        recorded before a node-configuration fault stopped blocking releases.
+        Matches the candidate id under any provider and emits
+        `acquisition.release_unblocked`. Percent-escape the candidate id: it
+        can carry a slash.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: candidate
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Lifted.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/desired/{id}/select:
     post:
       tags: [desired]

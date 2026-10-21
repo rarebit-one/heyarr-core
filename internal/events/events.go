@@ -398,6 +398,10 @@ const (
 	// want that keeps failing and a want that has stopped choosing the thing
 	// that keeps failing look identical from outside.
 	TypeReleaseBlocked = "acquisition.release_blocked"
+	// TypeReleaseUnblocked is a block lifted by an operator (#813): the want may
+	// choose that release again. Its payload names what the block had said, so
+	// the log reads as "blocked for X, lifted" rather than a row that vanished.
+	TypeReleaseUnblocked = "acquisition.release_unblocked"
 
 	TypeDesiredCreated   = "desired.created"
 	TypeDesiredUpdated   = "desired.updated"

@@ -367,9 +367,9 @@ func verifyArtifacts(acq catalog.Acquisition, contentType string) (verifiedTrans
 		// file": the transfer completed, the client says it is done, and the
 		// path it reported is not one Heyarr can open. That is a path mapping
 		// problem, not a missing file.
-		return verifiedTransfer{}, fmt.Errorf(
+		return verifiedTransfer{}, nodeLocal(fmt.Errorf(
 			"the completed transfer is not at %s — the download client's path may "+
-				"need mapping into one Heyarr can open", path)
+				"need mapping into one Heyarr can open", path))
 	case err != nil:
 		return verifiedTransfer{}, fmt.Errorf("could not examine %s: %w", path, err)
 	}
@@ -775,16 +775,62 @@ func intAttr(v any) (int, bool) {
 	}
 }
 
-// failAcquisition takes the failure edge and blocks the release.
+// errNodeLocal marks an ingest failure that is a property of THIS NODE rather
+// than of the release (#813): no library for the content type, a path the
+// download client reported that this node cannot open (path mapping), a
+// permission this node lacks. The bytes may be perfectly good.
+var errNodeLocal = errors.New("worker: a fault in this node's configuration")
+
+type nodeLocalError struct{ err error }
+
+func (e nodeLocalError) Error() string   { return e.err.Error() }
+func (e nodeLocalError) Unwrap() []error { return []error{e.err, errNodeLocal} }
+
+// nodeLocal marks err as this node's fault.
+func nodeLocal(err error) error { return nodeLocalError{err: err} }
+
+// isNodeLocal reports whether an ingest failure is this node's configuration
+// rather than the release: marked by nodeLocal, no library root for the
+// content type, a permission denied, or a file that is not where this node
+// looked (a path mapping, or a client that moved it).
+func isNodeLocal(err error) bool {
+	return errors.Is(err, errNodeLocal) ||
+		errors.Is(err, catalog.ErrNoRootForContent) ||
+		errors.Is(err, fs.ErrPermission) ||
+		errors.Is(err, fs.ErrNotExist)
+}
+
+// failAcquisition takes the failure edge, and blocks the release when the
+// release is at fault.
 //
-// Both halves matter and neither is sufficient. Without the transition the
-// want sticks in VERIFYING forever; without the block the next search selects
-// the same release and the download repeats until somebody notices the
-// bandwidth.
+// Both halves matter for a bad release. Without the transition the want sticks
+// in VERIFYING forever; without the block the next search selects the same
+// release and the download repeats until somebody notices the bandwidth.
+//
+// A fault of THIS NODE is not a verdict on the release (#813). Blocking it made
+// a missing library or a wrong path map permanent: once the operator fixed the
+// configuration, the want could never take the release it had already
+// downloaded, and a fan-out want (ADR-0119) recorded no_site_source for good.
+// So a node-local failure takes the failure edge WITHOUT a block and leaves the
+// completed transfer where it is. Once the configuration is fixed, the next
+// search (or, for a fan-out want, the next apply pass) selects the same
+// release, the client answers the grab with the transfer it already holds, and
+// the ingest runs again.
 func failAcquisition(
 	ctx context.Context, cat IngestAcquisitionStore, desiredItemID string,
 	acq catalog.Acquisition, reason catalog.BlockReason, cause error, log *slog.Logger,
 ) error {
+	if isNodeLocal(cause) {
+		if _, err := cat.AdvanceAcquisition(ctx, desiredItemID,
+			acquisition.TransitionFail, cause.Error()); err != nil {
+			return err
+		}
+		log.Warn("an acquisition failed on this node's configuration; its release is not blocked",
+			"desired_item_id", desiredItemID, "transfer", acq.ExternalID,
+			"reason", string(reason), "cause", cause)
+		return nil
+	}
+
 	selected, err := cat.SelectedCandidate(ctx, desiredItemID)
 	switch {
 	case errors.Is(err, catalog.ErrNoCandidate):

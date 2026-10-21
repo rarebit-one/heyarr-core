@@ -7,6 +7,7 @@ package resources_test
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -446,4 +447,54 @@ func TestCandidatesShape(t *testing.T) {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 	testutil.Golden(t, goldenPath("desired_candidates.json"), h.indent(resp))
+}
+
+// The block a want holds is readable and liftable over HTTP (#813). The
+// candidate here carries a slash, as a feed's enclosure URL does, so it only
+// survives the trip as an escaped path segment.
+func TestABlockedReleaseIsListedAndLifted(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+	const candidate = "https://feeds.example/ep/1.mp3"
+	h.exec(`INSERT INTO blocked_releases
+		(id, desired_item_id, provider, candidate_id, title, detail, reason, blocked_at)
+		VALUES (?, ?, 'fake-indexer', ?, 'Episode 1', 'no library for the content type',
+		        'ingest_failed', ?)`,
+		"01990000-0000-7000-8000-0000000000b1", desired1ID, candidate, seedTime)
+
+	resp := h.doStable(http.MethodGet, "/api/v1/desired/"+desired1ID+"/blocked", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list status = %d: %s", resp.StatusCode, h.body(resp))
+	}
+	var listed struct {
+		Blocked []struct {
+			CandidateID string `json:"candidate_id"`
+			Reason      string `json:"reason"`
+			Detail      string `json:"detail"`
+		} `json:"blocked"`
+	}
+	if err := json.Unmarshal(h.body(resp), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Blocked) != 1 || listed.Blocked[0].CandidateID != candidate ||
+		listed.Blocked[0].Reason != "ingest_failed" || listed.Blocked[0].Detail == "" {
+		t.Fatalf("listed = %+v", listed)
+	}
+
+	path := "/api/v1/desired/" + desired1ID + "/blocked/" + url.PathEscape(candidate)
+	if r := h.doStable(http.MethodDelete, path, nil); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("unblock status = %d, want 204: %s", r.StatusCode, h.body(r))
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM blocked_releases`); n != 0 {
+		t.Errorf("%d blocks left after lifting the only one", n)
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM events WHERE type = 'acquisition.release_unblocked'`); n != 1 {
+		t.Errorf("%d release_unblocked events, want 1", n)
+	}
+	if r := h.doStable(http.MethodDelete, path, nil); r.StatusCode != http.StatusNotFound {
+		t.Errorf("unblocking twice = %d, want 404", r.StatusCode)
+	}
+	if r := h.doStable(http.MethodDelete, "/api/v1/desired/nope/blocked/x", nil); r.StatusCode != http.StatusNotFound {
+		t.Errorf("unblocking for an unknown want = %d, want 404", r.StatusCode)
+	}
 }

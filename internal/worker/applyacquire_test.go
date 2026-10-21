@@ -12,6 +12,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/catalogop"
 	"github.com/rarebit-one/heyarr-core/internal/catalogtomb"
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
@@ -596,5 +597,98 @@ func TestAFanOutGrabWhoseJobDiedIsRequeued(t *testing.T) {
 	}
 	if app := h.application(t, hash); app.Outcome != catalog.FanOutApplied {
 		t.Fatalf("application = %+v, want applied", app)
+	}
+}
+
+// TestAFanOutWantThatFailedOnThisNodesConfigurationIsReapplied (#813): the
+// release downloaded but ingest failed on this node's configuration (no
+// library, a path map), which fails the want WITHOUT blocking the release. The
+// op is revisited because its want is back at idle holding nothing, so the next
+// pass selects the same release and queues the grab again, which the client
+// answers with the transfer it already holds.
+func TestAFanOutWantThatFailedOnThisNodesConfigurationIsReapplied(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	hash := h.receive(t, h.sibling, "movie", "movie:arrival:2016", siblingAcquire())
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	// What failAcquisition leaves for a node-local fault: idle, unmanaged, no block.
+	if _, err := h.db.Writer().Exec(
+		`UPDATE acquisition_state SET phase = 'idle', managed = 0 WHERE desired_item_id = ?`, h.want); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Writer().Exec(`DELETE FROM jobs`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if app := h.application(t, hash); app.Outcome != catalog.FanOutApplied {
+		t.Fatalf("application = %+v, want applied again", app)
+	}
+	if got := h.state(t).Name(); got != "SELECTED" {
+		t.Fatalf("the want is %s, want SELECTED on the same release", got)
+	}
+	if got := h.pendingGrabs(t); got != 1 {
+		t.Fatalf("%d grabs queued, want the re-grab", got)
+	}
+}
+
+// TestUnblockingAReleaseLetsTheFanOutApplyItAgain (#813): a block recorded
+// when this node could not place the download — before such faults stopped
+// blocking — leaves the fanned-out want with no site source. Lifting it is the
+// operator's lever: the next apply selects the release again, and the lift is
+// on the event stream.
+func TestUnblockingAReleaseLetsTheFanOutApplyItAgain(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	hash := h.receive(t, h.sibling, "movie", "movie:arrival:2016", siblingAcquire())
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	candidate := "infohash:" + fakeInfohash
+	if _, err := h.cat.BlockRelease(t.Context(), catalog.BlockedRelease{
+		DesiredItemID: h.want, Provider: catalog.FanOutProviderPrefix + "north",
+		CandidateID: candidate, Title: "Arrival 2016 2160p",
+		Detail: "no library for the content type", Reason: catalog.BlockIngestFailed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Writer().Exec(
+		`UPDATE acquisition_state SET phase = 'idle', managed = 0 WHERE desired_item_id = ?`, h.want); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Writer().Exec(`DELETE FROM jobs`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if app := h.application(t, hash); app.Outcome != catalog.FanOutNoSiteSource {
+		t.Fatalf("application = %+v, want no_site_source while blocked", app)
+	}
+
+	if err := h.cat.UnblockRelease(t.Context(), h.want, candidate); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cat.UnblockRelease(t.Context(), h.want, candidate); !errors.Is(err, catalog.ErrNotBlocked) {
+		t.Fatalf("unblocking twice = %v, want ErrNotBlocked", err)
+	}
+	var payload string
+	if err := h.db.Writer().QueryRow(
+		`SELECT payload FROM events WHERE type = ? AND subject_id = ?`,
+		events.TypeReleaseUnblocked, h.want).Scan(&payload); err != nil {
+		t.Fatalf("no %s event: %v", events.TypeReleaseUnblocked, err)
+	}
+	if !strings.Contains(payload, candidate) || !strings.Contains(payload, string(catalog.BlockIngestFailed)) {
+		t.Fatalf("event payload %s does not name the release and what it was", payload)
+	}
+
+	if err := h.apply(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.pendingGrabs(t); got != 1 {
+		t.Fatalf("%d grabs queued once the release was unblocked, want 1", got)
 	}
 }
