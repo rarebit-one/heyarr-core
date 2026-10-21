@@ -33,6 +33,8 @@ Known media types use a starting quality profile when none is named. Pass
 		newDesiredListCommand(opts, configPath),
 		newDesiredSetCommand(opts, configPath),
 		newDesiredReingestCommand(opts, configPath),
+		newDesiredBlockedCommand(opts, configPath),
+		newDesiredUnblockCommand(opts, configPath),
 		newDesiredRemoveCommand(opts, configPath),
 	)
 	return cmd
@@ -285,6 +287,84 @@ edit, it is a different want. Remove it and want the other thing.`,
 	cmd.Flags().StringVar(&reason, "reason", "", "replace the note")
 	cmd.Flags().BoolVar(&monitor, "monitor", false, "keep looking for something better")
 	cmd.Flags().BoolVar(&noMonitor, "no-monitor", false, "stop looking once it is satisfied")
+	return cmd
+}
+
+func newDesiredBlockedCommand(_ Options, configPath *string) *cobra.Command {
+	var flags clientFlags
+	cmd := &cobra.Command{
+		Use:   "blocked <id>",
+		Short: "List the releases a want will not choose again, and why",
+		Long: `List the releases this want has blocked.
+
+A release is blocked when it proved bad for this want — a dead swarm, a file
+that failed verification, a download that never matched what was searched for.
+The want will not choose it again, so the next search moves on. Pair with
+` + "`heyarr desired unblock`" + ` to lift a block that was wrong.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				var out client.BlockedReleases
+				if err := c.Get(ctx, "/desired/"+args[0]+"/blocked", nil, &out); err != nil {
+					return err
+				}
+				if flags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), out)
+				}
+				// DETAIL is the column that decides an unblock: one reason
+				// covers an empty file and a hash mismatch alike.
+				t := newTable("CANDIDATE", "PROVIDER", "REASON", "DETAIL", "TITLE")
+				for _, b := range out.Blocked {
+					t.add(b.CandidateID, b.Provider, b.Reason, b.Detail, b.Title)
+				}
+				return t.render(cmd.OutOrStdout(), "nothing is blocked for "+args[0])
+			})
+		},
+	}
+	flags.register(cmd)
+	return cmd
+}
+
+func newDesiredUnblockCommand(_ Options, configPath *string) *cobra.Command {
+	var (
+		flags    clientFlags
+		provider string
+	)
+	cmd := &cobra.Command{
+		Use:   "unblock <id> <candidate>",
+		Short: "Let a want choose a blocked release again",
+		Long: `Lift a block, so the want may choose that release again.
+
+For a block that was wrong — most often one recorded when this node could not
+place the download (no library for the content type, a completed path that
+needed mapping) rather than because the release itself was bad. Fix the
+configuration first; the next search can then pick the release up again, and a
+fanned-out want is re-applied without one. The candidate is the id
+` + "`heyarr desired blocked`" + ` lists; pass --provider too when two providers
+blocked the same id.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				path := "/desired/" + args[0] + "/blocked/" + url.PathEscape(args[1])
+				if provider != "" {
+					path += "?" + url.Values{"provider": {provider}}.Encode()
+				}
+				if err := c.Delete(ctx, path); err != nil {
+					return err
+				}
+				if flags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), map[string]string{
+						"id": args[0], "candidate_id": args[1], "status": "unblocked",
+					})
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "unblocked %s for %s\n", args[1], args[0])
+				return nil
+			})
+		},
+	}
+	flags.register(cmd)
+	cmd.Flags().StringVar(&provider, "provider", "",
+		"the provider whose candidate id this is, when two providers blocked the same id")
 	return cmd
 }
 

@@ -292,6 +292,21 @@ type UpdateQualityProfileRequest struct {
 	ContentTypes *[]string        `json:"content_types,omitempty"`
 }
 
+// BlockedRelease is one release a want will not choose again, and why.
+type BlockedRelease struct {
+	Provider    string `json:"provider"`
+	CandidateID string `json:"candidate_id"`
+	Title       string `json:"title"`
+	Reason      string `json:"reason"`
+	Detail      string `json:"detail"`
+}
+
+// BlockedReleases is GET /desired/{id}/blocked.
+type BlockedReleases struct {
+	DesiredItemID string           `json:"desired_item_id"`
+	Blocked       []BlockedRelease `json:"blocked"`
+}
+
 // DesiredItem is content that should exist, whether or not it does (§55).
 //
 // It anchors to a Work — the semantic entity, which exists whether or not any

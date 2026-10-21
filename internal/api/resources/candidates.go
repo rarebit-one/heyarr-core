@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 
 	"github.com/go-chi/chi/v5"
 
@@ -246,6 +247,77 @@ func (a *API) ReingestAcquisition(ctx context.Context, id string) (map[string]st
 		"job_id":          job.ID,
 		"status":          "queued",
 	}, nil
+}
+
+// BlockedReleaseView is one release a want will not choose again.
+type BlockedReleaseView struct {
+	Provider    string `json:"provider"`
+	CandidateID string `json:"candidate_id"`
+	Title       string `json:"title"`
+	Reason      string `json:"reason"`
+	Detail      string `json:"detail"`
+}
+
+// listBlocked is GET /api/v1/desired/{id}/blocked: what this want will not
+// choose again, and why. The read an operator needs before unblocking.
+func (a *API) listBlocked(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if _, err := desiredByID(r.Context(), a.reader, id); err != nil {
+		a.fail(w, r, "desired item", err)
+		return
+	}
+	blocked, err := a.catalog.BlockedFor(r.Context(), id)
+	if err != nil {
+		a.fail(w, r, "blocked release", err)
+		return
+	}
+	out := make([]BlockedReleaseView, 0, len(blocked))
+	for _, b := range blocked {
+		out = append(out, BlockedReleaseView{
+			Provider: b.Provider, CandidateID: b.CandidateID, Title: b.Title,
+			Reason: string(b.Reason), Detail: b.Detail,
+		})
+	}
+	a.write(w, r, http.StatusOK, map[string]any{"desired_item_id": id, "blocked": out})
+}
+
+// unblockRelease is DELETE /api/v1/desired/{id}/blocked/{candidate}: the want
+// may choose that release again (#813). For a block that was wrong, most often
+// one recorded before a node-configuration fault (a missing library, a path
+// map) stopped blocking releases. ?provider= names whose candidate id it is,
+// needed only when two providers blocked the same id. 204 when lifted, 404
+// when the release was not blocked for this want, 409 when it is ambiguous.
+func (a *API) unblockRelease(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	// A candidate id can carry a slash (a feed's enclosure URL), so clients
+	// percent-escape the segment. chi routes on the raw path when the request
+	// has one, and then hands the segment back still escaped.
+	candidate := chi.URLParam(r, "candidate")
+	if r.URL.RawPath != "" {
+		var err error
+		if candidate, err = url.PathUnescape(candidate); err != nil {
+			httpapi.Fail(w, r, problem.BadRequest("the candidate id is not a valid escaped path segment"))
+			return
+		}
+	}
+	if _, err := desiredByID(r.Context(), a.reader, id); err != nil {
+		a.fail(w, r, "desired item", err)
+		return
+	}
+	err := a.catalog.UnblockRelease(r.Context(), id, r.URL.Query().Get("provider"), candidate)
+	if errors.Is(err, catalog.ErrNotBlocked) {
+		httpapi.Fail(w, r, problem.NotFound("that release is not blocked for this want"))
+		return
+	}
+	if errors.Is(err, catalog.ErrAmbiguousBlock) {
+		httpapi.Fail(w, r, problem.Conflict(err.Error()+" — name one with ?provider="))
+		return
+	}
+	if err != nil {
+		a.fail(w, r, "blocked release", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // selectCandidate is POST /api/v1/desired/{id}/select — §60's manual override.
