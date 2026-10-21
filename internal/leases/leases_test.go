@@ -219,16 +219,17 @@ func TestActiveLeaseTokensExcludesExpiredAndRevoked(t *testing.T) {
 	t.Parallel()
 	store, _ := newStore(t)
 	ctx := context.Background()
+	write := []grant.Capability{grant.CapabilityWrite}
 
-	live, err := store.Issue(ctx, "user-a", "asset-1", []grant.Capability{grant.CapabilityRead}, time.Hour)
+	live, err := store.Issue(ctx, leases.DevicePrincipal("ed25519:aa"), leases.SiteResource("ed25519:b1"), write, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	short, err := store.Issue(ctx, "user-a", "asset-2", []grant.Capability{grant.CapabilityRead}, time.Minute)
+	short, err := store.Issue(ctx, leases.DevicePrincipal("ed25519:aa"), leases.SiteResource("ed25519:b2"), write, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	revoked, err := store.Issue(ctx, "user-a", "asset-3", []grant.Capability{grant.CapabilityRead}, time.Hour)
+	revoked, err := store.Issue(ctx, leases.DevicePrincipal("ed25519:aa"), leases.SiteResource("ed25519:b3"), write, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

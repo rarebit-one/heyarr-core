@@ -129,7 +129,9 @@ func TestBFetchesAndHonoursASiblingsLeaseWithTheIssuerDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	aStore := realLeaseStore(t, issuerA, nil)
-	lease, err := aStore.Issue(ctx, "user-x", "asset-1", []grant.Capability{grant.CapabilityRead}, time.Hour)
+	// A device write lease: the only kind a sibling is served (ADR-0048, #285).
+	principal, resource := leases.DevicePrincipal("ed25519:d1"), leases.SiteResource("ed25519:b1")
+	lease, err := aStore.Issue(ctx, principal, resource, []grant.Capability{grant.CapabilityWrite}, time.Hour)
 	if err != nil {
 		t.Fatalf("A issue: %v", err)
 	}
@@ -169,7 +171,7 @@ func TestBFetchesAndHonoursASiblingsLeaseWithTheIssuerDown(t *testing.T) {
 	}
 
 	// B honours the fetched lease with A unreachable — the signature is enough.
-	req := grant.Request{Principal: "user-x", Resource: "asset-1", Capability: grant.CapabilityRead}
+	req := grant.Request{Principal: principal, Resource: resource, Capability: grant.CapabilityWrite}
 	if _, err := bStore.Honour(ctx, fetched.Leases[0], req, leaseNow); err != nil {
 		t.Fatalf("B should honour A's cached lease with A down, got %v", err)
 	}

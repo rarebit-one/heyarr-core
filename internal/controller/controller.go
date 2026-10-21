@@ -395,7 +395,10 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 		eventsWindow, succeededWindow, deadWindow, _ := c.cfg.RetentionDurations()
 		startRetention(ctx, db, reconcileEvents,
 			eventsWindow, succeededWindow, deadWindow, c.log, wallTicker)
-		return nil
+		// Device write leases for siblings (ADR-0048, #285). Both profiles: a
+		// management grant authorises write on either, and a sibling honours
+		// a lease only after opting into this peer, so issuing is harmless.
+		return c.startDeviceLeases(ctx, db, reconcileEvents, members)
 	}
 
 	// Media profile: full beat set (unchanged from before ADR-0107).
@@ -483,7 +486,30 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 	startRetention(ctx, db, reconcileEvents,
 		eventsWindow, succeededWindow, deadWindow, c.log, wallTicker)
 
-	return nil
+	// The device write lease beat (ADR-0048, #285): every write-authorised
+	// device gets a write lease for each sibling site. See leasebeat.go.
+	return c.startDeviceLeases(ctx, db, reconcileEvents, members)
+}
+
+// startDeviceLeases starts the device write lease beat on the serving context,
+// signing with this node's identity key. A node with no membership store has no
+// siblings to issue for.
+func (c *Controller) startDeviceLeases(ctx context.Context, db *sqlite.DB, eventLog *events.Log, members *membership.Store) error {
+	if members == nil {
+		return nil
+	}
+	signer, err := identity.Signer(c.cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("controller: loading the identity key for device write leases: %w", err)
+	}
+	grants, err := catalog.New(catalog.Options{
+		DB: db, Events: eventLog,
+		PeerName: c.cfg.Peer.Name, PeerSite: c.cfg.Peer.Site, Logger: c.log,
+	})
+	if err != nil {
+		return fmt.Errorf("controller: opening the management-grant store for device write leases: %w", err)
+	}
+	return startDeviceLeaseIssuer(ctx, db, eventLog, signer, grants, members, nil, c.log, wallTicker)
 }
 
 // serve blocks until ctx is cancelled or a listener fails, then drains both

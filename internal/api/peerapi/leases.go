@@ -9,16 +9,17 @@ import (
 )
 
 // LeaseSource supplies the signed access-lease tokens this peer serves to a
-// sibling to cache ahead of an outage (§54, ADR-0048). A sibling that fetches
-// them can, once this peer is unreachable, still answer a read on whose
-// authority — the degraded-read property (§53).
+// sibling to cache ahead of an outage (§54, ADR-0048). They are device write
+// leases only: a sibling that fetches them can, once this peer is unreachable,
+// still lift a device this peer authorised to write there (#285). A guest
+// lease (ADR-0094) is node-local and is never served.
 //
 // nil is a legitimate state, not a wiring bug: a single-peer deployment issues
 // to nobody, and the route then answers 503 honestly, exactly like every other
 // optional capability on this surface.
 type LeaseSource interface {
-	// ActiveLeaseTokens returns the signed tokens worth caching: unrevoked, and
-	// unexpired on the source's own clock.
+	// ActiveLeaseTokens returns the signed tokens worth caching: device write
+	// leases, unrevoked, and unexpired on the source's own clock.
 	ActiveLeaseTokens(ctx context.Context) ([]string, error)
 }
 

@@ -296,18 +296,27 @@ func (s *Store) ActiveLeases(ctx context.Context, now time.Time) ([]Lease, error
 	return out, rows.Err()
 }
 
-// ActiveLeaseTokens returns the signed tokens of this peer's active leases, on
-// the store's own clock. It is the peer surface's view (peerapi.LeaseSource): a
-// sibling caches these to answer reads while this peer is unreachable, and each
-// token carries its own authority, so only the tokens cross — never the row.
+// ActiveLeaseTokens returns the signed tokens of this peer's active device
+// write leases, on the store's own clock. It is the peer surface's view
+// (peerapi.LeaseSource): a sibling caches these to authorise writes while this
+// peer is unreachable, and each token carries its own authority, so only the
+// tokens cross — never the row.
+//
+// It is an allow-list, not a deny-list: only a lease IsDeviceWriteLease
+// accepts is served. Every other kind is node-local. A guest lease (ADR-0094)
+// names a source address on this node's network and has no meaning at a
+// sibling, and a lease kind added later stays here until someone decides it
+// should travel.
 func (s *Store) ActiveLeaseTokens(ctx context.Context) ([]string, error) {
 	active, err := s.ActiveLeases(ctx, s.clock.Now())
 	if err != nil {
 		return nil, err
 	}
-	tokens := make([]string, len(active))
-	for i, l := range active {
-		tokens[i] = l.Token
+	tokens := make([]string, 0, len(active))
+	for _, l := range active {
+		if IsDeviceWriteLease(l) {
+			tokens = append(tokens, l.Token)
+		}
 	}
 	return tokens, nil
 }

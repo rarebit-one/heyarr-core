@@ -5859,10 +5859,13 @@ paths:
       operationId: listAccessLeases
       summary: This peer's access leases, for a sibling to cache (§54, ADR-0048).
       description: |
-        Returns the signed access-lease tokens this peer has issued and that are
+        Returns the signed device write leases this peer has issued and that are
         still live — unrevoked, and unexpired on this peer's clock — so a sibling
-        can cache them and, once this peer is unreachable, still answer a read on
-        whose authority (§53, §54, #285).
+        can cache them and, once this peer is unreachable, still lift a device
+        this peer authorised to write there (§53, §54, ADR-0048, #285). Only
+        device write leases are served (principal `device:<key>`, resource
+        `site:<peer key>`, capability `write`); a guest lease (ADR-0094) is
+        node-local and never leaves this peer.
 
         **The tokens carry their own authority.** Each is a capability grant
         (ADR-0048) signed by this peer's identity key; a fetching peer verifies
@@ -5875,7 +5878,7 @@ paths:
         - peerCertificate: []
       responses:
         "200":
-          description: The signed tokens of this peer's active leases (possibly empty).
+          description: The signed tokens of this peer's active device write leases (possibly empty).
           content:
             application/json:
               schema:
