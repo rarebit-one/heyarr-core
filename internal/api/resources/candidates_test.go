@@ -6,6 +6,7 @@ package resources_test
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -506,5 +507,69 @@ func TestABlockedReleaseIsListedAndLifted(t *testing.T) {
 	}
 	if r := h.doStable(http.MethodDelete, "/api/v1/desired/nope/blocked/x", nil); r.StatusCode != http.StatusNotFound {
 		t.Errorf("unblocking for an unknown want = %d, want 404", r.StatusCode)
+	}
+}
+
+// An operator can block a release by hand (#819): one the last search offered
+// is resolved to its provider and title, a repeat is not a second block, and a
+// release the search did not offer needs its provider named. The new block
+// then keeps the want from choosing the release.
+func TestABlockByHand(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+	h.seedCandidates(t)
+	path := "/api/v1/desired/" + desired1ID + "/blocked"
+
+	resp := h.doStable(http.MethodPost, path, strings.NewReader(`{"candidate_id":"plain","detail":"a program, not a film"}`))
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("block status = %d, want 201: %s", resp.StatusCode, h.body(resp))
+	}
+	var got map[string]string
+	if err := json.Unmarshal([]byte(h.body(resp)), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"provider": "fake-indexer", "candidate_id": "plain", "title": "Arrival 1080p web",
+		"reason": "manual", "detail": "a program, not a film",
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("blocked %+v, want %+v", got, want)
+	}
+	if r := h.doStable(http.MethodPost, path, strings.NewReader(`{"candidate_id":"plain"}`)); r.StatusCode != http.StatusOK {
+		t.Errorf("blocking twice = %d, want 200", r.StatusCode)
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM blocked_releases`); n != 1 {
+		t.Errorf("%d blocks, want 1", n)
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM events WHERE type = 'acquisition.release_blocked'`); n != 1 {
+		t.Errorf("%d release_blocked events, want 1", n)
+	}
+
+	unknown := `{"candidate_id":"infohash:0486e0bbc0b0bd83eed396e345fa32c5480b08a1"}`
+	if r := h.doStable(http.MethodPost, path, strings.NewReader(unknown)); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("blocking an unoffered candidate with no provider = %d, want 400", r.StatusCode)
+	}
+	named := `{"candidate_id":"infohash:0486e0bbc0b0bd83eed396e345fa32c5480b08a1","provider":"fan-out:north"}`
+	if r := h.doStable(http.MethodPost, path, strings.NewReader(named)); r.StatusCode != http.StatusCreated {
+		t.Errorf("blocking an unoffered candidate by provider = %d, want 201: %s", r.StatusCode, h.body(r))
+	}
+	if r := h.doStable(http.MethodPost, path, strings.NewReader(`{}`)); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("blocking without a candidate = %d, want 400", r.StatusCode)
+	}
+	if r := h.doStable(http.MethodPost, "/api/v1/desired/nope/blocked", strings.NewReader(`{"candidate_id":"plain"}`)); r.StatusCode != http.StatusNotFound {
+		t.Errorf("blocking for an unknown want = %d, want 404", r.StatusCode)
+	}
+}
+
+// Blocking is a write: a read token may list blocks but not add one.
+func TestABlockByHandNeedsWrite(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, withAuth).seed()
+	h.seedCandidates(t)
+	reader := h.mint("reader", auth.ScopeRead)
+	resp := h.do(http.MethodPost, "/api/v1/desired/"+desired1ID+"/blocked",
+		reader.Secret, strings.NewReader(`{"candidate_id":"plain"}`))
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("block with a read token = %d, want 403", resp.StatusCode)
 	}
 }

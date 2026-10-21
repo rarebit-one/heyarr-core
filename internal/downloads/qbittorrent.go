@@ -86,6 +86,8 @@ type QBClient struct {
 	stallAfter time.Duration
 	// progress dates each transfer's last fetched piece for the stall rule.
 	progress *progressClock
+	// payloads remembers which transfers carry only programs (#819).
+	payloads *payloadVerdicts
 
 	version string // the app version the last Check learnt, for Session-style reads.
 }
@@ -122,6 +124,7 @@ func NewQBittorrent(opts QBOptions) (*QBClient, error) {
 		now:        now,
 		stallAfter: opts.StallAfter,
 		progress:   newProgressClock(),
+		payloads:   newPayloadVerdicts(),
 		api: &qbTransport{
 			base: strings.TrimRight(strings.TrimSpace(opts.Endpoint), "/"),
 			user: opts.Username,
@@ -274,11 +277,50 @@ func (c *QBClient) Transfers(ctx context.Context) ([]providers.Transfer, error) 
 	if err != nil {
 		return nil, err
 	}
+	c.judgePayloads(ctx, ours)
 	out := make([]providers.Transfer, 0, len(ours))
 	for _, t := range ours {
-		out = append(out, c.toTransfer(t))
+		tr := c.toTransfer(t)
+		tr.Executable, _ = c.payloads.verdict(strings.ToLower(t.Hash))
+		out = append(out, tr)
 	}
 	return out, nil
+}
+
+// judgePayloads reads the file list of each transfer not yet judged (#819),
+// one torrents/files call per transfer, at most maxFileListLookups a pass. A
+// transfer still fetching its metadata has no file list yet and waits. Best
+// effort: a failure leaves the transfer unjudged and never fails the poll.
+func (c *QBClient) judgePayloads(ctx context.Context, ours []qbTorrent) {
+	present := make(map[string]bool, len(ours))
+	asked := 0
+	for _, t := range ours {
+		id := strings.ToLower(t.Hash)
+		present[id] = true
+		if _, judged := c.payloads.verdict(id); judged || asked >= maxFileListLookups {
+			continue
+		}
+		if t.State == "metaDL" || t.State == "forcedMetaDL" {
+			continue
+		}
+		asked++
+		body, err := c.api.get(ctx, "/api/v2/torrents/files", url.Values{"hash": {id}})
+		if err != nil {
+			continue
+		}
+		var files []struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(body, &files) != nil {
+			continue
+		}
+		names := make([]string, 0, len(files))
+		for _, f := range files {
+			names = append(names, f.Name)
+		}
+		c.payloads.record(id, names)
+	}
+	c.payloads.keepOnly(present)
 }
 
 // Remove takes a transfer out of the client, refusing anything that is not ours.

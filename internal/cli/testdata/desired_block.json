@@ -1,0 +1,7 @@
+{
+  "provider": "fake-indexer",
+  "candidate_id": "https://feeds.example/ep/1.mp3",
+  "title": "",
+  "reason": "manual",
+  "detail": "a program, not an episode"
+}

@@ -4496,10 +4496,71 @@ paths:
                         candidate_id: { type: string }
                         title: { type: string }
                         reason: { type: string, description: "verification_failed, ingest_failed, grab_failed or manual" }
-                        detail: { type: string }
+                        detail:
+                          type: string
+                          description: |
+                            What failed. A release refused for being a program
+                            posing as media (#819) reads `payload_executable: …`.
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [desired]
+      operationId: blockRelease
+      summary: Block a release by hand, so the want will not choose it. Requires `write`.
+      description: |
+        The operator's lever for a release that is bad in a way nothing
+        detected (#819): a fake, a wrong cut. Recorded with reason `manual`.
+        The provider is resolved from the want's last search when that search
+        offered the candidate from exactly one provider; name it otherwise (a
+        fan-out release, one a later search may find, or an id two providers
+        offered). Lift it again with DELETE …/blocked/{candidate}.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [candidate_id]
+              properties:
+                candidate_id: { type: string }
+                provider: { type: string, description: "whose candidate id this is; needed when the last search did not offer it, or offered it from two providers" }
+                detail: { type: string, description: "why, for whoever reads the block later; defaults to \"blocked by hand\"" }
+      responses:
+        "201":
+          description: Blocked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  provider: { type: string }
+                  candidate_id: { type: string }
+                  title: { type: string }
+                  reason: { type: string }
+                  detail: { type: string }
+        "200":
+          description: It was already blocked; nothing changed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  provider: { type: string }
+                  candidate_id: { type: string }
+                  title: { type: string }
+                  reason: { type: string }
+                  detail: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /api/v1/desired/{id}/blocked/{candidate}:
     delete:
@@ -10040,6 +10101,9 @@ components:
         edition_id:
           type: string
           description: Present only at edition scope — absent, not null, at work scope.
+        item_id:
+          type: string
+          description: The item an item-scoped want names (one episode, one track). Present only at item scope.
         quality_profile_id: { type: string }
         monitor:
           type: boolean

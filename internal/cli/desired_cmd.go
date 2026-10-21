@@ -34,6 +34,7 @@ Known media types use a starting quality profile when none is named. Pass
 		newDesiredSetCommand(opts, configPath),
 		newDesiredReingestCommand(opts, configPath),
 		newDesiredBlockedCommand(opts, configPath),
+		newDesiredBlockCommand(opts, configPath),
 		newDesiredUnblockCommand(opts, configPath),
 		newDesiredRemoveCommand(opts, configPath),
 	)
@@ -322,6 +323,45 @@ The want will not choose it again, so the next search moves on. Pair with
 		},
 	}
 	flags.register(cmd)
+	return cmd
+}
+
+func newDesiredBlockCommand(_ Options, configPath *string) *cobra.Command {
+	var (
+		flags            clientFlags
+		provider, detail string
+	)
+	cmd := &cobra.Command{
+		Use:   "block <id> <candidate>",
+		Short: "Stop a want choosing a release again",
+		Long: `Block a release by hand, so the want will not choose it again.
+
+For a release that is bad in a way nothing caught: a fake (a program named like
+an episode), a wrong cut, the wrong language. The candidate is the provider's id
+for the release, as the want's candidates list (GET /desired/{id}/candidates)
+shows it; for a torrent it is often ` + "`infohash:<hash>`" + `. Pass --provider when the
+want's last search did not offer that candidate (a fanned-out release), or
+offered it from two providers. Pair with ` + "`heyarr desired unblock`" + ` to lift it.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				body := map[string]string{"candidate_id": args[1], "provider": provider, "detail": detail}
+				var out client.BlockedRelease
+				if err := c.Post(ctx, "/desired/"+args[0]+"/blocked", body, &out); err != nil {
+					return err
+				}
+				if flags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), out)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "blocked %s (%s) for %s\n", out.CandidateID, out.Provider, args[0])
+				return nil
+			})
+		},
+	}
+	flags.register(cmd)
+	cmd.Flags().StringVar(&provider, "provider", "",
+		"the provider whose candidate id this is, when the last search did not offer it or two providers did")
+	cmd.Flags().StringVar(&detail, "detail", "", "why, for whoever reads the block later")
 	return cmd
 }
 

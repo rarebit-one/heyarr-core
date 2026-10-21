@@ -582,3 +582,26 @@ func TestWantingNeedsAWriteToken(t *testing.T) {
 		t.Fatalf("a write token should be enough, status = %d: %s", resp.StatusCode, h.body(resp))
 	}
 }
+
+// An item-scoped want (one episode) can be patched (#819). It could not: the
+// view dropped item_id, so the PATCH re-validated a want naming no item and
+// refused a body that only turned monitoring off. GET now says which item.
+func TestPatchAnItemScopedWant(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+	seedProjectedItems(h, work1ID)
+
+	got := h.doStable(http.MethodGet, "/api/v1/desired/di-1", nil)
+	if body := decodeDesired(t, h, got); body["item_id"] != "it-1" {
+		t.Errorf("GET item_id = %v, want it-1", body["item_id"])
+	}
+	patch := h.doStable(http.MethodPatch, "/api/v1/desired/di-1",
+		strings.NewReader(`{"monitor":false,"reason":"the last grab was a fake"}`))
+	if patch.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", patch.StatusCode, h.body(patch))
+	}
+	body := decodeDesired(t, h, patch)
+	if body["monitor"] != false || body["reason"] != "the last grab was a fake" || body["item_id"] != "it-1" {
+		t.Errorf("the patch did not apply cleanly: %v", body)
+	}
+}

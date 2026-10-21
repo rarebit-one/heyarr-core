@@ -43,6 +43,10 @@ type fakeQB struct {
 	// infohash in the source): when set, a non-magnet add registers a torrent
 	// with this hash, so a category-diff resolve has something new to find.
 	registerHash string
+	// files is each torrent's file list by hash, for torrents/files (#819).
+	files map[string][]string
+	// filesAsked counts torrents/files calls, to prove a verdict is cached.
+	filesAsked int
 }
 
 func newFakeQB() *fakeQB {
@@ -115,6 +119,15 @@ func (f *fakeQB) server(t *testing.T) *httptest.Server {
 			})
 		}
 		_, _ = w.Write([]byte("Ok."))
+	}))
+
+	mux.HandleFunc("/api/v2/torrents/files", guard(func(w http.ResponseWriter, r *http.Request) {
+		f.filesAsked++
+		out := []map[string]string{}
+		for _, n := range f.files[strings.ToLower(r.URL.Query().Get("hash"))] {
+			out = append(out, map[string]string{"name": n})
+		}
+		_ = json.NewEncoder(w).Encode(out)
 	}))
 
 	mux.HandleFunc("/api/v2/torrents/trackers", guard(func(w http.ResponseWriter, _ *http.Request) {

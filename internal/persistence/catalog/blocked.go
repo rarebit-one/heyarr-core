@@ -133,7 +133,8 @@ func (c *Catalog) BlockRelease(ctx context.Context, b BlockedRelease) (bool, err
 var ErrNotBlocked = errors.New("catalog: that release is not blocked for this want")
 
 // ErrAmbiguousBlock is UnblockRelease given a candidate id that more than one
-// provider has blocked for the want, without saying which provider's.
+// provider has blocked for the want (or BlockByHand one that more than one
+// provider offered), without saying which provider's.
 var ErrAmbiguousBlock = errors.New("catalog: more than one provider blocked that candidate id for this want")
 
 // UnblockRelease lifts a block: the want may choose candidateID again (#813).
@@ -196,6 +197,59 @@ func (c *Catalog) UnblockRelease(ctx context.Context, desiredItemID, provider, c
 	}
 	c.events.Publish(emitted...)
 	return nil
+}
+
+// ErrUnknownCandidate is BlockByHand asked to block a candidate id, with no
+// provider named, that the want's last search did not offer.
+var ErrUnknownCandidate = errors.New("catalog: that candidate id is not among this want's candidates")
+
+// BlockByHand is the operator's block (#819): the want must not choose
+// candidateID again, recorded as BlockManual. The other half of UnblockRelease.
+//
+// A candidate id is unique only within its provider, so the provider is
+// resolved the same way an unblock resolves it: named, or the only provider
+// whose candidate the want's last search offered under that id. Naming a
+// provider also blocks a release the last search did not offer (a fan-out
+// release, or one a later search may find). Idempotent: created is false when
+// the release was already blocked.
+func (c *Catalog) BlockByHand(
+	ctx context.Context, desiredItemID, provider, candidateID, detail string,
+) (b BlockedRelease, created bool, err error) {
+	cands, err := c.CandidatesFor(ctx, desiredItemID)
+	if err != nil {
+		return BlockedRelease{}, false, err
+	}
+	var match []Candidate
+	providers := map[string]bool{}
+	for _, cd := range cands {
+		if cd.CandidateID == candidateID && (provider == "" || cd.Provider == provider) {
+			match = append(match, cd)
+			providers[cd.Provider] = true
+		}
+	}
+	switch {
+	case provider == "" && len(match) == 0:
+		return BlockedRelease{}, false, ErrUnknownCandidate
+	case provider == "" && len(providers) > 1:
+		names := make([]string, 0, len(providers))
+		for p := range providers {
+			names = append(names, p)
+		}
+		slices.Sort(names)
+		return BlockedRelease{}, false, fmt.Errorf("%w: %s", ErrAmbiguousBlock, strings.Join(names, ", "))
+	}
+	b = BlockedRelease{
+		DesiredItemID: desiredItemID, Provider: provider, CandidateID: candidateID,
+		Detail: strings.TrimSpace(detail), Reason: BlockManual,
+	}
+	if len(match) > 0 {
+		b.Provider, b.Title = match[0].Provider, match[0].Title
+	}
+	if b.Detail == "" {
+		b.Detail = "blocked by hand"
+	}
+	created, err = c.BlockRelease(ctx, b)
+	return b, created, err
 }
 
 // blockingProviders lists the providers that blocked candidateID for a want.

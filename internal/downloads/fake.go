@@ -350,6 +350,20 @@ func (f *Fake) Fail(id string, reason TroubleReason, detail string) error {
 	return nil
 }
 
+// MarkExecutable reports a transfer's whole payload as programs (#819), the
+// verdict a real client reaches from the transfer's file list.
+func (f *Fake) MarkExecutable(id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	t, ok := f.transfers[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNotOurs, id)
+	}
+	t.transfer.Executable = true
+	return nil
+}
+
 // Remove drops a transfer, refusing one it does not hold.
 //
 // The same refusal the real client makes, for the same reason: a caller must

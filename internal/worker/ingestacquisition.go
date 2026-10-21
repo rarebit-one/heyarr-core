@@ -386,7 +386,24 @@ func verifyArtifacts(acq catalog.Acquisition, contentType string) (verifiedTrans
 	if ferr != nil {
 		return verifiedTransfer{}, ferr
 	}
+	if contentType != identification.Game {
+		if why := sniffExecutable(path); why != "" {
+			return verifiedTransfer{}, fmt.Errorf("%w: %s is a program, not %s (%s)",
+				errExecutablePayload, filepath.Base(path), contentKind(contentType), why)
+		}
+	}
 	return verifiedTransfer{artifacts: []artifact{a}, contentType: contentType, path: path}, nil
+}
+
+// contentKind names what a content type's primary files are, for a refusal.
+func contentKind(contentType string) string {
+	switch contentType {
+	case identification.Movie, identification.Series, "video":
+		return "video"
+	case "":
+		return "content"
+	}
+	return contentType
 }
 
 // verifyFile checks that one file is ingestable — present, non-empty, readable
@@ -428,8 +445,12 @@ func verifyFile(path, relPath string, info fs.FileInfo) (artifact, error) {
 func verifyDirectory(dir, contentType string) ([]artifact, error) {
 	parent := filepath.Dir(dir)
 	video := contentType == identification.Movie || contentType == identification.Series || contentType == "video"
+	game := contentType == identification.Game
 	var arts []artifact
 	var unreadable error
+	// programs counts files refused as executables (#819), so a release made
+	// only of them is named for what it is rather than as merely empty.
+	var programs []string
 
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -443,6 +464,10 @@ func verifyDirectory(dir, contentType string) ([]artifact, error) {
 			return nil
 		}
 		if !d.Type().IsRegular() {
+			return nil
+		}
+		if !game && hasExecutableExt(d.Name()) {
+			programs = append(programs, d.Name())
 			return nil
 		}
 		if !identification.IsPrimaryExt(contentType, filepath.Ext(d.Name())) || video && isSampleName(d.Name()) {
@@ -465,6 +490,12 @@ func verifyDirectory(dir, contentType string) ([]artifact, error) {
 			}
 			return nil
 		}
+		if !game && sniffExecutable(p) != "" {
+			// A program wearing a media extension: skipped like any other
+			// non-primary file, and counted so an all-program release is named.
+			programs = append(programs, d.Name())
+			return nil
+		}
 		arts = append(arts, a)
 		return nil
 	})
@@ -473,6 +504,10 @@ func verifyDirectory(dir, contentType string) ([]artifact, error) {
 	}
 	if len(arts) == 0 && unreadable != nil {
 		return nil, fmt.Errorf("%s holds primary files this node could not read: %w", dir, unreadable)
+	}
+	if len(arts) == 0 && len(programs) > 0 {
+		return nil, fmt.Errorf("%w: %s holds programs (%s), not %s files",
+			errExecutablePayload, filepath.Base(dir), namesForDetail(programs), contentKind(contentType))
 	}
 	if len(arts) == 0 {
 		kind := contentType
@@ -809,6 +844,14 @@ func isNodeLocal(err error) bool {
 		errors.Is(err, fs.ErrNotExist)
 }
 
+// releaseFailer is what failAcquisition needs: the ingest job's store and the
+// poll's both satisfy it.
+type releaseFailer interface {
+	AdvanceAcquisition(ctx context.Context, desiredItemID string, t acquisition.Transition, detail string) (catalog.AcquisitionRecord, error)
+	BlockRelease(ctx context.Context, b catalog.BlockedRelease) (bool, error)
+	SelectedCandidate(ctx context.Context, desiredItemID string) (catalog.Candidate, error)
+}
+
 // failAcquisition takes the failure edge, and blocks the release when the
 // release is at fault.
 //
@@ -826,7 +869,7 @@ func isNodeLocal(err error) bool {
 // release, the client answers the grab with the transfer it already holds, and
 // the ingest runs again.
 func failAcquisition(
-	ctx context.Context, cat IngestAcquisitionStore, desiredItemID string,
+	ctx context.Context, cat releaseFailer, desiredItemID string,
 	acq catalog.Acquisition, reason catalog.BlockReason, cause error, log *slog.Logger,
 ) error {
 	if isNodeLocal(cause) {

@@ -3,12 +3,14 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -47,6 +49,8 @@ type PollDownloadsStore interface {
 	DropAcquisition(ctx context.Context, desiredItemID string) error
 	OrphanedDownloads(ctx context.Context, grace time.Duration) ([]catalog.OrphanedDownload, error)
 	RecordAcquisition(ctx context.Context, a catalog.Acquisition) (bool, error)
+	SearchContextFor(ctx context.Context, desiredItemID string) (catalog.SearchContext, error)
+	SelectedCandidate(ctx context.Context, desiredItemID string) (catalog.Candidate, error)
 	StuckGrabs(ctx context.Context, grace time.Duration) ([]catalog.StuckGrab, error)
 	StuckIngests(ctx context.Context, grace time.Duration) ([]catalog.StuckIngest, error)
 }
@@ -109,7 +113,7 @@ func PollDownloadsHandler(
 			responded[client.Name()] = true
 
 			for _, t := range transfers {
-				n, err := reconcileTransfer(ctx, cat, ingests, client.Name(), t, log)
+				n, err := reconcileTransfer(ctx, cat, ingests, client, t, log)
 				if err != nil {
 					failed++
 					log.Warn("could not reconcile a transfer",
@@ -162,9 +166,10 @@ func PollDownloadsHandler(
 // Returns how many state transitions it caused, so the caller can log a pass
 // that did something and stay quiet about one that did not.
 func reconcileTransfer(
-	ctx context.Context, cat PollDownloadsStore, ingests ProbeEnqueuer, provider string,
+	ctx context.Context, cat PollDownloadsStore, ingests ProbeEnqueuer, client providers.Downloader,
 	t providers.Transfer, log *slog.Logger,
 ) (int, error) {
+	provider := client.Name()
 	existing, err := cat.AcquisitionByExternal(ctx, provider, t.ID)
 	switch {
 	case errors.Is(err, catalog.ErrNoAcquisitionRow):
@@ -195,10 +200,72 @@ func reconcileTransfer(
 		return 0, err
 	}
 
+	if t.Executable {
+		if n, handled, err := refuseProgramTransfer(ctx, cat, client, existing, t, log); handled || err != nil {
+			return n, err
+		}
+	}
+
 	// existing.BytesDone is last pass's figure — RecordAcquisition above has
 	// just overwritten the row with this pass's, so it is captured here, before,
 	// to let advancePipeline tell a stuck transfer from one still pulling bytes.
 	return advancePipeline(ctx, cat, ingests, existing.DesiredItemID, t, existing.BytesDone, log)
+}
+
+// refuseProgramTransfer stops a transfer whose every file is a program (#819)
+// as soon as its file list is known, rather than letting it finish, seed, and
+// fail at ingest.
+//
+// A game want is exempt: its payload is installers (ADR-0120). Only a want
+// still QUEUED or DOWNLOADING is acted on here; one already VERIFYING or
+// INGESTING is ingest's to refuse, and an idle one has nothing in flight.
+//
+// The release is blocked as a verification failure, the want falls back to
+// idle, its transfer row is dropped and its search re-runs now, so the next
+// search picks a different release (the stuck-grab recovery's shape). The
+// transfer is removed from the client WITH its data when the client can: the
+// bytes are a program nobody wants on disk, and leaving it would keep seeding
+// it. Returns handled=false when the rule does not apply.
+func refuseProgramTransfer(
+	ctx context.Context, cat PollDownloadsStore, client providers.Downloader,
+	acq catalog.Acquisition, t providers.Transfer, log *slog.Logger,
+) (applied int, handled bool, err error) {
+	sc, err := cat.SearchContextFor(ctx, acq.DesiredItemID)
+	if err != nil {
+		return 0, false, err
+	}
+	if sc.ContentType == identification.Game {
+		return 0, false, nil
+	}
+	state, err := cat.Acquisition(ctx, acq.DesiredItemID)
+	if err != nil {
+		return 0, false, err
+	}
+	if p := state.State.Phase; p != acquisition.PhaseQueued && p != acquisition.PhaseDownloading {
+		return 0, false, nil
+	}
+
+	cause := fmt.Errorf("%w: every file in %q is a program, not %s",
+		errExecutablePayload, t.Name, contentKind(sc.ContentType))
+	if err := failAcquisition(ctx, cat, acq.DesiredItemID, acq,
+		catalog.BlockVerificationFailed, cause, log); err != nil {
+		return 0, true, err
+	}
+	if err := cat.DropAcquisition(ctx, acq.DesiredItemID); err != nil {
+		log.Warn("refused a program's release but could not drop its transfer row",
+			"desired_item_id", acq.DesiredItemID, "error", err)
+	}
+	if err := cat.ClearSearchSchedule(ctx, acq.DesiredItemID); err != nil {
+		log.Warn("refused a program's release but could not clear its search schedule",
+			"desired_item_id", acq.DesiredItemID, "error", err)
+	}
+	if r, ok := client.(providers.Remover); ok {
+		if err := r.Remove(ctx, t.ID, true); err != nil {
+			log.Warn("refused a program's release but could not remove its transfer",
+				"provider", client.Name(), "transfer", t.ID, "error", err)
+		}
+	}
+	return 1, true, nil
 }
 
 // sweepOrphanedDownloads fails wants whose transfer has vanished from a client

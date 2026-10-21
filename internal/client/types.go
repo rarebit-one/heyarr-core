@@ -316,7 +316,9 @@ type DesiredItem struct {
 	Scope  string `json:"scope"`
 	WorkID string `json:"work_id"`
 	// EditionID is absent at work scope rather than null.
-	EditionID        string `json:"edition_id,omitempty"`
+	EditionID string `json:"edition_id,omitempty"`
+	// ItemID is the item an item-scoped want names, absent at the other scopes.
+	ItemID           string `json:"item_id,omitempty"`
 	QualityProfileID string `json:"quality_profile_id"`
 	Monitor          bool   `json:"monitor"`
 	Reason           string `json:"reason,omitempty"`
