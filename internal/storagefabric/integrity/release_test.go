@@ -177,3 +177,26 @@ func TestGCKeepsTheBytesOfAReleasedBlobReferencedBeforeTheUnlink(t *testing.T) {
 		t.Fatalf("the bytes were unlinked: %v", err)
 	}
 }
+
+// A single-peer node takes the release path too, so a released blob there gets
+// the generation check and the guarded unlink rather than sole_peer.
+func TestGCOnASolePeerRecordsTheReleasedBasis(t *testing.T) {
+	f := newFixture(t)
+	h := f.put("released on a node with no siblings", 0)
+	f.release(h, "unpinned")
+	opts := f.options()
+	opts.HonourReleases = true
+	c, err := integrity.NewCollector(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := sweepTwice(t, f, c)
+
+	if len(out.Reclaimed) != 1 {
+		t.Fatalf("reclaimed %+v, want the released blob", out.Reclaimed)
+	}
+	if ev := f.cat.evidence[h.String()]; len(ev) != 1 || ev[0].Basis != integrity.BasisReleased {
+		t.Fatalf("evidence = %+v, want basis %q", ev, integrity.BasisReleased)
+	}
+}

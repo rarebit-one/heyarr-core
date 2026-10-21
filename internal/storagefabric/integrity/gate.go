@@ -147,19 +147,13 @@ func (c *Collector) establish(
 			Hash: b.Hash.String(), Size: b.Size, Reason: r.Reason, Detail: r.Detail,
 		}, nil
 	}
-	if g.sole {
-		return Evidence{
-			BlobHash: b.Hash, Size: b.Size, Basis: BasisSolePeer, RecordedAt: now,
-			Detail: "this deployment has exactly one peer, so there is no other placement for the " +
-				"policy to be satisfied at; the grace window and the refcount are the whole gate " +
-				"(ADR-0010, ADR-0018)",
-		}, nil, nil
-	}
 	if c.opts.HonourReleases && !b.ReleasedAt.IsZero() {
-		// Release intent (#779, ADR-0114). The last-copy rule protects bytes
-		// somebody may still want; on the personal profile a vault blob's only
-		// wanting is a pin, and its owner removed the last one (or its source
-		// sibling withdrew it). Without this, whichever site reclaims second
+		// Release intent (#779, ADR-0114), checked before the sole-peer case
+		// so a released blob always takes the release protections (generation
+		// check, guarded unlink) whatever the topology. The last-copy rule
+		// protects bytes somebody may still want; on the personal profile a
+		// vault blob's only wanting is a pin, and its owner removed the last
+		// one (or its source sibling withdrew it). Without this, whichever site reclaims second
 		// spares the blob as no_other_peer forever. The sweep-wide refusals
 		// above still apply: a node cut off from its controller deletes nothing.
 		detail := fmt.Sprintf("released (%s) at %s: nothing pins this vault blob any more, so "+
@@ -168,6 +162,14 @@ func (c *Collector) establish(
 		return Evidence{
 			BlobHash: b.Hash, Size: b.Size, Basis: BasisReleased, RecordedAt: now, Detail: detail,
 			ReleasedAt: b.ReleasedAt, UnreferencedSince: b.UnreferencedSince,
+		}, nil, nil
+	}
+	if g.sole {
+		return Evidence{
+			BlobHash: b.Hash, Size: b.Size, Basis: BasisSolePeer, RecordedAt: now,
+			Detail: "this deployment has exactly one peer, so there is no other placement for the " +
+				"policy to be satisfied at; the grace window and the refcount are the whole gate " +
+				"(ADR-0010, ADR-0018)",
 		}, nil, nil
 	}
 
