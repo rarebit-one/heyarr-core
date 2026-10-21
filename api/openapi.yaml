@@ -4512,7 +4512,9 @@ paths:
         Emits `acquisition.release_unblocked`. Percent-escape the candidate id:
         it can carry a slash. A candidate id is unique only within its
         provider, so when two providers blocked the same id, `provider` names
-        which one; without it the request is refused with 409.
+        which one; without it the request is refused with 409. An
+        `infohash:` id names the bytes whoever offered them, so it is lifted
+        under every provider that blocked it.
       parameters:
         - name: id
           in: path

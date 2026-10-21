@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -139,60 +140,70 @@ var ErrAmbiguousBlock = errors.New("catalog: more than one provider blocked that
 //
 // The operator's lever for a block that was wrong, most often one recorded
 // before node-configuration faults stopped blocking releases (a missing
-// library, a path map). A candidate id is only unique within its provider, so
-// the block is named by provider and candidate. An empty provider means "the
-// only provider that blocked this candidate", and ErrAmbiguousBlock when there
-// is more than one. Emits acquisition.release_unblocked in the same
-// transaction (invariant 7). ErrNotBlocked when there was nothing to lift.
+// library, a path map). Most candidate ids are unique only within their
+// provider, so the block is named by provider and candidate. An empty provider
+// means "the only provider that blocked this candidate", and ErrAmbiguousBlock
+// when there is more than one. An infohash is the exception: it names the
+// bytes whoever offered them, and the fan-out applier honours a block on it
+// from any provider, so lifting one lifts it under every provider (a named
+// provider must still be one of them). Emits acquisition.release_unblocked per
+// lifted block, in the same transaction (invariant 7). ErrNotBlocked when there
+// was nothing to lift.
 func (c *Catalog) UnblockRelease(ctx context.Context, desiredItemID, provider, candidateID string) error {
-	var removed BlockedRelease
-	var emitted events.Event
+	var emitted []events.Event
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
-		providers, err := blockingProviders(ctx, tx, desiredItemID, provider, candidateID)
+		providers, err := blockingProviders(ctx, tx, desiredItemID, candidateID)
 		if err != nil {
 			return err
 		}
-		switch len(providers) {
-		case 0:
+		if len(providers) == 0 || provider != "" && !slices.Contains(providers, provider) {
 			return ErrNotBlocked
-		case 1:
-		default:
+		}
+		switch {
+		case strings.HasPrefix(candidateID, "infohash:"):
+		case provider != "":
+			providers = []string{provider}
+		case len(providers) > 1:
 			return fmt.Errorf("%w: %s", ErrAmbiguousBlock, strings.Join(providers, ", "))
 		}
-		removed = BlockedRelease{DesiredItemID: desiredItemID, Provider: providers[0], CandidateID: candidateID}
-		var reason string
-		if err := tx.QueryRowContext(ctx, `
-			DELETE FROM blocked_releases
-			 WHERE desired_item_id = ? AND provider = ? AND candidate_id = ?
-			RETURNING title, reason`, desiredItemID, removed.Provider, candidateID,
-		).Scan(&removed.Title, &reason); err != nil {
-			return fmt.Errorf("catalog: unblocking %s: %w", candidateID, err)
+		for _, p := range providers {
+			b := BlockedRelease{DesiredItemID: desiredItemID, Provider: p, CandidateID: candidateID}
+			var reason string
+			if err := tx.QueryRowContext(ctx, `
+				DELETE FROM blocked_releases
+				 WHERE desired_item_id = ? AND provider = ? AND candidate_id = ?
+				RETURNING title, reason`, desiredItemID, p, candidateID,
+			).Scan(&b.Title, &reason); err != nil {
+				return fmt.Errorf("catalog: unblocking %s: %w", candidateID, err)
+			}
+			ev, err := c.events.EmitTx(ctx, tx, events.TypeReleaseUnblocked,
+				"desired_item", desiredItemID, map[string]any{
+					"desired_item_id": desiredItemID,
+					"provider":        b.Provider,
+					"candidate_id":    b.CandidateID,
+					"title":           b.Title,
+					"was":             reason,
+				})
+			if err != nil {
+				return err
+			}
+			emitted = append(emitted, ev)
 		}
-		removed.Reason = BlockReason(reason)
-		emitted, err = c.events.EmitTx(ctx, tx, events.TypeReleaseUnblocked,
-			"desired_item", desiredItemID, map[string]any{
-				"desired_item_id": desiredItemID,
-				"provider":        removed.Provider,
-				"candidate_id":    removed.CandidateID,
-				"title":           removed.Title,
-				"was":             string(removed.Reason),
-			})
-		return err
+		return nil
 	})
 	if err != nil {
 		return err
 	}
-	c.events.Publish(emitted)
+	c.events.Publish(emitted...)
 	return nil
 }
 
-// blockingProviders lists the providers that blocked candidateID for a want,
-// narrowed to provider when one is named.
-func blockingProviders(ctx context.Context, tx *sql.Tx, desiredItemID, provider, candidateID string) ([]string, error) {
+// blockingProviders lists the providers that blocked candidateID for a want.
+func blockingProviders(ctx context.Context, tx *sql.Tx, desiredItemID, candidateID string) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT provider FROM blocked_releases
-		 WHERE desired_item_id = ? AND candidate_id = ? AND (? = '' OR provider = ?)
-		 ORDER BY provider`, desiredItemID, candidateID, provider, provider)
+		 WHERE desired_item_id = ? AND candidate_id = ?
+		 ORDER BY provider`, desiredItemID, candidateID)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: reading blocks on %s: %w", candidateID, err)
 	}

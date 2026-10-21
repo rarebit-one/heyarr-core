@@ -655,6 +655,16 @@ func TestUnblockingAReleaseLetsTheFanOutApplyItAgain(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// An indexer here offered the same bytes and blocked them too. An infohash
+	// names the release whoever offered it, so lifting it under one provider
+	// must lift it under both, or the fan-out pass still finds it blocked.
+	if _, err := h.cat.BlockRelease(t.Context(), catalog.BlockedRelease{
+		DesiredItemID: h.want, Provider: "an-indexer", CandidateID: candidate,
+		Title: "Arrival 2016 2160p", Detail: "no library for the content type",
+		Reason: catalog.BlockIngestFailed,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := h.db.Writer().Exec(
 		`UPDATE acquisition_state SET phase = 'idle', managed = 0 WHERE desired_item_id = ?`, h.want); err != nil {
 		t.Fatal(err)
@@ -669,15 +679,27 @@ func TestUnblockingAReleaseLetsTheFanOutApplyItAgain(t *testing.T) {
 		t.Fatalf("application = %+v, want no_site_source while blocked", app)
 	}
 
-	if err := h.cat.UnblockRelease(t.Context(), h.want, "", candidate); err != nil {
+	if err := h.cat.UnblockRelease(t.Context(), h.want, "a-provider-that-blocked-nothing", candidate); !errors.Is(err, catalog.ErrNotBlocked) {
+		t.Fatalf("unblocking under a provider that blocked nothing = %v, want ErrNotBlocked", err)
+	}
+	if err := h.cat.UnblockRelease(t.Context(), h.want, catalog.FanOutProviderPrefix+"north", candidate); err != nil {
 		t.Fatal(err)
+	}
+	if blocked, err := h.cat.BlockedFor(t.Context(), h.want); err != nil || len(blocked) != 0 {
+		t.Fatalf("blocks left after lifting an infohash = %+v, %v; want none", blocked, err)
 	}
 	if err := h.cat.UnblockRelease(t.Context(), h.want, "", candidate); !errors.Is(err, catalog.ErrNotBlocked) {
 		t.Fatalf("unblocking twice = %v, want ErrNotBlocked", err)
 	}
+	var lifted int
+	if err := h.db.Writer().QueryRow(
+		`SELECT count(*) FROM events WHERE type = ? AND subject_id = ?`,
+		events.TypeReleaseUnblocked, h.want).Scan(&lifted); err != nil || lifted != 2 {
+		t.Fatalf("%d %s events (%v), want one per lifted block", lifted, events.TypeReleaseUnblocked, err)
+	}
 	var payload string
 	if err := h.db.Writer().QueryRow(
-		`SELECT payload FROM events WHERE type = ? AND subject_id = ?`,
+		`SELECT payload FROM events WHERE type = ? AND subject_id = ? ORDER BY seq LIMIT 1`,
 		events.TypeReleaseUnblocked, h.want).Scan(&payload); err != nil {
 		t.Fatalf("no %s event: %v", events.TypeReleaseUnblocked, err)
 	}
