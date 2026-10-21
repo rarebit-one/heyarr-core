@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,11 +13,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rarebit-one/void-which-binds-go/hashing"
 
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
 
 type fakeStore struct {
 	corrupt     bool
+	gone        bool // GC reclaimed the bytes before the upload was recorded
 	gotExpected hashing.Hash
 	read        int64
 }
@@ -31,6 +34,13 @@ func (f *fakeStore) PutExpecting(_ context.Context, r io.Reader, expected hashin
 	return cas.Descriptor{Hash: expected, Size: n}, nil
 }
 
+func (f *fakeStore) Stat(_ context.Context, h hashing.Hash) (cas.Descriptor, error) {
+	if f.gone {
+		return cas.Descriptor{}, cas.ErrNotFound
+	}
+	return cas.Descriptor{Hash: h, Size: f.read}, nil
+}
+
 type fakePinner struct {
 	calls      int
 	pinnedHash string
@@ -39,8 +49,15 @@ type fakePinner struct {
 	err        error
 }
 
-func (f *fakePinner) RecordVaultBlob(_ context.Context, blobHash string, size int64, peerID string) error {
+func (f *fakePinner) RecordVaultBlob(ctx context.Context, blobHash string, size int64, peerID string,
+	present func(context.Context) error,
+) error {
 	f.calls++
+	if present != nil {
+		if err := present(ctx); err != nil {
+			return fmt.Errorf("%w: %w", catalog.ErrVaultBytesGone, err)
+		}
+	}
 	f.pinnedHash = blobHash
 	f.pinnedPeer = peerID
 	f.pinnedSize = size
@@ -175,5 +192,19 @@ func TestNewRequiresDeps(t *testing.T) {
 	}
 	if _, err := New(Options{Pinner: &fakePinner{}, SelfPeer: "p"}); err == nil {
 		t.Fatal("New must require a store")
+	}
+}
+
+// GC reclaimed a released blob of the same hash between the store write and
+// the record (#779): nothing is acknowledged, and the client is told to retry.
+func TestUploadWhoseBytesWereReclaimedBeforeRecordingIsRetryable(t *testing.T) {
+	store := &fakeStore{gone: true}
+	pinner := &fakePinner{}
+	h := newHandler(t, store, pinner)
+
+	rec := upload(t, h, goodHash, []byte("opaque ciphertext frames"))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d: %s", rec.Code, rec.Body.String())
 	}
 }

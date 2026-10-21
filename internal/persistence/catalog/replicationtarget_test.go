@@ -112,7 +112,7 @@ func TestRecordVaultBlobMakesTheUploadAReplica(t *testing.T) {
 	blob := hashOf('c')
 
 	before := h.eventCount(t)
-	if err := h.cat.RecordVaultBlob(ctx, blob, 4096, self); err != nil {
+	if err := h.cat.RecordVaultBlob(ctx, blob, 4096, self, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := h.eventCount(t) - before; got != 2 {
@@ -143,7 +143,7 @@ func TestRecordVaultBlobMakesTheUploadAReplica(t *testing.T) {
 	}
 
 	mid := h.eventCount(t)
-	if err := h.cat.RecordVaultBlob(ctx, blob, 4096, self); err != nil {
+	if err := h.cat.RecordVaultBlob(ctx, blob, 4096, self, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := h.eventCount(t) - mid; got != 0 {

@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
@@ -67,7 +68,15 @@ func (c *Catalog) PinPlacement(ctx context.Context, blobHash, peerID string) err
 //
 // Idempotent (invariant 9): a re-upload of bytes already recorded writes
 // nothing and emits nothing.
-func (c *Catalog) RecordVaultBlob(ctx context.Context, blobHash string, size int64, peerID string) error {
+//
+// present, when not nil, confirms the bytes are still in the store. It runs
+// inside the transaction, which holds the write lock from its start, so it is
+// serialized with GC's guarded unlink of a released blob (#779): either the
+// unlink sees this row and keeps the bytes, or this sees the bytes gone and
+// records nothing, returning ErrVaultBytesGone for the uploader to retry.
+func (c *Catalog) RecordVaultBlob(
+	ctx context.Context, blobHash string, size int64, peerID string, present func(context.Context) error,
+) error {
 	if blobHash == "" || peerID == "" {
 		return fmt.Errorf("catalog: a vault blob needs both a blob hash and a peer id")
 	}
@@ -75,6 +84,11 @@ func (c *Catalog) RecordVaultBlob(ctx context.Context, blobHash string, size int
 	var pending []events.Event
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
 		pending = nil
+		if present != nil {
+			if err := present(ctx); err != nil {
+				return fmt.Errorf("%w: %s: %w", ErrVaultBytesGone, blobHash, err)
+			}
+		}
 		adopted, err := adoptBlob(ctx, tx, blobHash, size, now)
 		if err != nil {
 			return err
@@ -133,6 +147,12 @@ func (c *Catalog) RecordVaultBlob(ctx context.Context, blobHash string, size int
 	}
 	return nil
 }
+
+// ErrVaultBytesGone is RecordVaultBlob finding the bytes it was asked to
+// record no longer in the store: GC reclaimed a released blob of the same hash
+// between the upload's store write and this commit (#779). Nothing was
+// recorded; the upload should be retried.
+var ErrVaultBytesGone = errors.New("catalog: the vault blob's bytes are no longer in the store")
 
 // PlacementPin is one recorded pin: a ciphertext blob a peer should hold
 // (ADR-0096). It is the (blob, peer) pair and nothing else — the table carries a

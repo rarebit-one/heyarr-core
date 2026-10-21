@@ -54,9 +54,11 @@ func (v vaultIndex) IsVaultBlob(_ context.Context, h string) (bool, error) { ret
 // pins records placement pins, accepting everything.
 type pins struct{}
 
-func (pins) RecordVaultBlob(context.Context, string, int64, string) error { return nil }
-func (pins) PinPlacement(context.Context, string, string) error           { return nil }
-func (pins) UnpinPlacement(context.Context, string, string) error         { return nil }
+func (pins) RecordVaultBlob(context.Context, string, int64, string, func(context.Context) error) error {
+	return nil
+}
+func (pins) PinPlacement(context.Context, string, string) error   { return nil }
+func (pins) UnpinPlacement(context.Context, string, string) error { return nil }
 
 // The household's pinned wrap recipients: an enrolled device's key and another.
 var (

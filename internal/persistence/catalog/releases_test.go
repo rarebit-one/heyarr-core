@@ -10,6 +10,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/peer/placementsync"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
 )
 
@@ -467,5 +468,32 @@ func TestGuardUnlinkRefusesABlobReferencedAfterItsRowWent(t *testing.T) {
 	}
 	if err := h.cat.GuardUnlink(ctx, parsed, unlink); !errors.Is(err, integrity.ErrWantedAgain) || called {
 		t.Fatalf("pinned: err=%v unlinked=%v, want ErrWantedAgain and no unlink", err, called)
+	}
+}
+
+// The upload's record confirms its bytes inside the write-locked transaction,
+// so it is serialized with GC's guarded unlink: bytes gone means nothing is
+// recorded (#779).
+func TestRecordVaultBlobRecordsNothingWhenItsBytesAreGone(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	self := h.seedRemotePeer(t)
+	blob := hashOf('3')
+	gone := func(context.Context) error { return errors.New("not in the store") }
+
+	err := h.cat.RecordVaultBlob(ctx, blob, 1024, self, gone)
+	if !errors.Is(err, catalog.ErrVaultBytesGone) {
+		t.Fatalf("RecordVaultBlob = %v, want ErrVaultBytesGone", err)
+	}
+	var rows, pins int
+	if err := h.db.Reader().QueryRowContext(ctx, `SELECT count(*) FROM blobs WHERE hash = ?`, blob).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.Reader().QueryRowContext(ctx, `SELECT count(*) FROM placement_pins WHERE blob_hash = ?`, blob).Scan(&pins); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 || pins != 0 {
+		t.Fatalf("recorded %d blob rows and %d pins for bytes that are gone", rows, pins)
 	}
 }

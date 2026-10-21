@@ -121,7 +121,7 @@ func TestSceneAReleasedVaultBlobIsReclaimedAtBothSitesAndMediaIsKept(t *testing.
 
 	// North: the owner's upload, pinned here.
 	vault := north.hold(t, "ciphertext the owner will delete")
-	if err := north.cat.RecordVaultBlob(ctx, vault.String(), int64(len("ciphertext the owner will delete")), north.self); err != nil {
+	if err := north.cat.RecordVaultBlob(ctx, vault.String(), int64(len("ciphertext the owner will delete")), north.self, nil); err != nil {
 		t.Fatal(err)
 	}
 	// South: took the placement from north and pulled the bytes.

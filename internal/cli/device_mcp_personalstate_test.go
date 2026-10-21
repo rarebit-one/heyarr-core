@@ -159,7 +159,9 @@ func newPSHarness(t *testing.T, extra ...auth.Scope) *psHarness {
 // noPin is a vaultblob.Pinner that records nothing.
 type noPin struct{}
 
-func (noPin) RecordVaultBlob(context.Context, string, int64, string) error { return nil }
+func (noPin) RecordVaultBlob(context.Context, string, int64, string, func(context.Context) error) error {
+	return nil
+}
 
 // cli runs one `space`/`vault`-style command through the real cobra tree against
 // the harness controller, as this harness device. The group's --device-dir is

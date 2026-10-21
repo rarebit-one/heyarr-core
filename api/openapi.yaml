@@ -2999,6 +2999,11 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "503":
+          description: >-
+            Garbage collection reclaimed a released blob of the same hash while
+            this upload was being recorded (#779). Nothing was recorded; upload it
+            again.
 
   /api/v1/vault/placements:
     post:
