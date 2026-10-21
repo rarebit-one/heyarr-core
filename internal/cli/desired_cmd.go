@@ -311,9 +311,11 @@ The want will not choose it again, so the next search moves on. Pair with
 				if flags.asJSON {
 					return emitJSON(cmd.OutOrStdout(), out)
 				}
-				t := newTable("CANDIDATE", "PROVIDER", "REASON", "TITLE")
+				// DETAIL is the column that decides an unblock: one reason
+				// covers an empty file and a hash mismatch alike.
+				t := newTable("CANDIDATE", "PROVIDER", "REASON", "DETAIL", "TITLE")
 				for _, b := range out.Blocked {
-					t.add(b.CandidateID, b.Provider, b.Reason, b.Title)
+					t.add(b.CandidateID, b.Provider, b.Reason, b.Detail, b.Title)
 				}
 				return t.render(cmd.OutOrStdout(), "nothing is blocked for "+args[0])
 			})

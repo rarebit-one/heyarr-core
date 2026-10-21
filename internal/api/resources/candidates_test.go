@@ -466,20 +466,8 @@ func TestABlockedReleaseIsListedAndLifted(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list status = %d: %s", resp.StatusCode, h.body(resp))
 	}
-	var listed struct {
-		Blocked []struct {
-			CandidateID string `json:"candidate_id"`
-			Reason      string `json:"reason"`
-			Detail      string `json:"detail"`
-		} `json:"blocked"`
-	}
-	if err := json.Unmarshal(h.body(resp), &listed); err != nil {
-		t.Fatal(err)
-	}
-	if len(listed.Blocked) != 1 || listed.Blocked[0].CandidateID != candidate ||
-		listed.Blocked[0].Reason != "ingest_failed" || listed.Blocked[0].Detail == "" {
-		t.Fatalf("listed = %+v", listed)
-	}
+	// The whole wire shape, so a renamed or dropped field shows up in review.
+	testutil.Golden(t, goldenPath("desired_blocked.json"), h.indent(resp))
 
 	path := "/api/v1/desired/" + desired1ID + "/blocked/" + url.PathEscape(candidate)
 	if r := h.doStable(http.MethodDelete, path, nil); r.StatusCode != http.StatusNoContent {

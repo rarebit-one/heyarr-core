@@ -142,28 +142,8 @@ func (c *Catalog) UnblockRelease(ctx context.Context, desiredItemID, candidateID
 	var removed []BlockedRelease
 	var emitted []events.Event
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			DELETE FROM blocked_releases
-			 WHERE desired_item_id = ? AND candidate_id = ?
-			RETURNING provider, title, reason`, desiredItemID, candidateID)
-		if err != nil {
-			return fmt.Errorf("catalog: unblocking %s: %w", candidateID, err)
-		}
-		for rows.Next() {
-			b := BlockedRelease{DesiredItemID: desiredItemID, CandidateID: candidateID}
-			var reason string
-			if err := rows.Scan(&b.Provider, &b.Title, &reason); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			b.Reason = BlockReason(reason)
-			removed = append(removed, b)
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		if err := rows.Close(); err != nil {
+		var err error
+		if removed, err = deleteBlocks(ctx, tx, desiredItemID, candidateID); err != nil {
 			return err
 		}
 		if len(removed) == 0 {
@@ -190,6 +170,30 @@ func (c *Catalog) UnblockRelease(ctx context.Context, desiredItemID, candidateID
 	}
 	c.events.Publish(emitted...)
 	return nil
+}
+
+// deleteBlocks removes a want's blocks on candidateID, under any provider, and
+// returns what it removed.
+func deleteBlocks(ctx context.Context, tx *sql.Tx, desiredItemID, candidateID string) ([]BlockedRelease, error) {
+	rows, err := tx.QueryContext(ctx, `
+		DELETE FROM blocked_releases
+		 WHERE desired_item_id = ? AND candidate_id = ?
+		RETURNING provider, title, reason`, desiredItemID, candidateID)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: unblocking %s: %w", candidateID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var removed []BlockedRelease
+	for rows.Next() {
+		b := BlockedRelease{DesiredItemID: desiredItemID, CandidateID: candidateID}
+		var reason string
+		if err := rows.Scan(&b.Provider, &b.Title, &reason); err != nil {
+			return nil, err
+		}
+		b.Reason = BlockReason(reason)
+		removed = append(removed, b)
+	}
+	return removed, rows.Err()
 }
 
 // BlockedFor lists what a want will not choose again.
