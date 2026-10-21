@@ -263,7 +263,7 @@ func (c *Catalog) ReplacePlacements(
 				source, e.BlobHash, e.Size, e.Held, now); err != nil {
 				return fmt.Errorf("catalog: recording a placement taken from %s: %w", source, err)
 			}
-			if err := clearRelease(ctx, tx, e.BlobHash); err != nil {
+			if err := markWanted(ctx, tx, e.BlobHash); err != nil {
 				return err
 			}
 			evs, err := c.recordSourceHold(ctx, tx, source, e, now)

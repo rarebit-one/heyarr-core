@@ -89,6 +89,10 @@ const (
 	// off from the control plane is working from a catalog nothing is
 	// correcting, and that is precisely the peer ADR-0018 warns about.
 	ReasonControllerUnreachable Reason = "controller_unreachable"
+	// ReasonWantedAgain is a released blob something wanted again between the
+	// sweep reading it and the reclaim (#779): a pin or taken placement came
+	// back, so its release no longer stands and its bytes stay.
+	ReasonWantedAgain Reason = "wanted_again"
 	// ReasonCatalogVacuous is the non-vacuity guard on the untracked sweep: a
 	// catalog that considered nothing, or implausibly little, against a store
 	// that is full of bytes.
@@ -126,6 +130,11 @@ var (
 	ErrPeerLacksBlob = errors.New("integrity: that peer does not hold these bytes")
 	// ErrControllerUnreachable means the control plane could not be reached.
 	ErrControllerUnreachable = errors.New("integrity: the controller could not be reached")
+	// ErrWantedAgain is Catalog.Reclaim refusing a blob reclaimed on the
+	// `released` basis whose release no longer stands, or that something
+	// references again, checked in the transaction that would delete it
+	// (#779). The sweep spares the blob rather than failing.
+	ErrWantedAgain = errors.New("integrity: that released blob is wanted again")
 )
 
 // DefaultFreshness is how recently another peer must have confirmed a replica

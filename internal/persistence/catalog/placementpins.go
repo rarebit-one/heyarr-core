@@ -29,7 +29,7 @@ func (c *Catalog) PinPlacement(ctx context.Context, blobHash, peerID string) err
 			return fmt.Errorf("catalog: recording a placement pin: %w", err)
 		}
 		// Pinned again: whatever release it carried no longer stands (#779).
-		return clearRelease(ctx, tx, blobHash)
+		return markWanted(ctx, tx, blobHash)
 	})
 }
 
@@ -108,7 +108,7 @@ func (c *Catalog) RecordVaultBlob(ctx context.Context, blobHash string, size int
 			blobHash, peerID, c.clock.Now().Format(timestampFormat)); err != nil {
 			return fmt.Errorf("catalog: recording a placement pin: %w", err)
 		}
-		return clearRelease(ctx, tx, blobHash)
+		return markWanted(ctx, tx, blobHash)
 	})
 	if err != nil {
 		return err

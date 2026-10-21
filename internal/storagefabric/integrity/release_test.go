@@ -132,3 +132,25 @@ func TestGCDoesNotHonourAReleaseWhileTheControllerIsUnreachable(t *testing.T) {
 		t.Errorf("reason = %q, want %q", s.Reason, integrity.ReasonControllerUnreachable)
 	}
 }
+
+// A release that went stale between the sweep's read and the delete (a pin
+// came back) is refused by the catalog in the deleting transaction; the sweep
+// spares the blob and carries on rather than failing.
+func TestGCSparesAReleasedBlobTheCatalogSaysIsWantedAgain(t *testing.T) {
+	f := newFixture(t)
+	dur := f.twoPeers()
+	h := f.put("released, then re-pinned mid-sweep", 0)
+	other := f.put("released and still unwanted", 0)
+	f.release(h, "unpinned")
+	f.release(other, "unpinned")
+	f.cat.wantedAgain = map[string]bool{h.String(): true}
+
+	out := sweepTwice(t, f, f.collectorHonouring(dur, true))
+
+	if s := sparedFor(t, out, h); s.Reason != integrity.ReasonWantedAgain {
+		t.Errorf("reason = %q, want %q", s.Reason, integrity.ReasonWantedAgain)
+	}
+	if len(out.Reclaimed) != 1 || out.Reclaimed[0].Hash != other.String() {
+		t.Fatalf("reclaimed %+v, want only the blob still released", out.Reclaimed)
+	}
+}

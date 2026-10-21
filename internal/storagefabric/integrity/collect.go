@@ -261,6 +261,16 @@ func (c *Collector) Collect(ctx context.Context, opts CollectOptions) (Collectio
 				return Collection{}, err
 			}
 			if err := c.reclaim(ctx, b.Hash, b.Size, true, now); err != nil {
+				if errors.Is(err, ErrWantedAgain) {
+					// The release this sweep read went stale before the
+					// delete: a pin or placement came back (#779).
+					out.Spared = append(out.Spared, Sparing{
+						Hash: b.Hash.String(), Size: b.Size, Reason: ReasonWantedAgain,
+						Detail: "released when the sweep read it, and wanted again before the reclaim; " +
+							"the bytes stay (ADR-0114, #779)",
+					})
+					continue
+				}
 				return Collection{}, err
 			}
 		}

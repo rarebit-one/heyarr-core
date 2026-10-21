@@ -2,6 +2,7 @@ package catalog_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -184,5 +185,93 @@ func TestReclaimingAReleasedBlobRecordsTheBasisAndForgetsTheRelease(t *testing.T
 	}
 	if n != 0 {
 		t.Fatal("the release outlived the blob it described")
+	}
+}
+
+// The reclaim revalidates a `released` basis in its own transaction: a pin that
+// came back after the sweep read the release stops the delete, and the
+// evidence written for the attempt is withdrawn (#779).
+func TestReclaimRefusesAReleaseThatWentStale(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	self := h.seedRemotePeer(t)
+	blob := hashOf('9')
+	h.seedBlobs(t, blob)
+	if err := h.cat.PinPlacement(ctx, blob, self); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cat.UnpinPlacement(ctx, blob, self); err != nil {
+		t.Fatal(err)
+	}
+	parsed, _ := hashing.Parse(blob)
+	at := time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)
+	if err := h.cat.RecordDurability(ctx, integrity.Evidence{
+		BlobHash: parsed, Size: 1024, Basis: integrity.BasisReleased, RecordedAt: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The owner pins it again before the delete.
+	if err := h.cat.PinPlacement(ctx, blob, self); err != nil {
+		t.Fatal(err)
+	}
+
+	err := h.cat.Reclaim(ctx, parsed, 1024, true, at)
+	if !errors.Is(err, integrity.ErrWantedAgain) {
+		t.Fatalf("Reclaim = %v, want ErrWantedAgain", err)
+	}
+	known, err := h.cat.Known(ctx, []hashing.Hash{parsed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !known[blob] {
+		t.Fatal("the re-pinned blob's row was deleted")
+	}
+	var n int
+	if err := h.db.Reader().QueryRowContext(ctx,
+		`SELECT count(*) FROM durability_evidence WHERE blob_hash = ? AND basis = 'released'`, blob).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatal("the refused attempt's released evidence was kept, and could vouch for a later delete")
+	}
+}
+
+// Wanted again, then released again: the grace window starts from the new
+// release, never from a mark left by an earlier unreferenced spell (#779).
+func TestARenewedWantRestartsTheGraceWindow(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	self := h.seedRemotePeer(t)
+	blob := hashOf('8')
+	h.seedBlobs(t, blob)
+	parsed, _ := hashing.Parse(blob)
+	marked := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	mark := func() {
+		t.Helper()
+		if err := h.cat.MarkUnreferenced(ctx, []hashing.Hash{parsed}, marked); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mark()
+	if err := h.cat.PinPlacement(ctx, blob, self); err != nil {
+		t.Fatal(err)
+	}
+	if b := h.releaseOf(t, blob); !b.UnreferencedSince.IsZero() {
+		t.Fatalf("a re-pinned blob kept its grace-window mark from %v", b.UnreferencedSince)
+	}
+
+	mark() // a sweep that has not yet seen the pin
+	if err := h.cat.UnpinPlacement(ctx, blob, self); err != nil {
+		t.Fatal(err)
+	}
+	b := h.releaseOf(t, blob)
+	if b.ReleasedAt.IsZero() {
+		t.Fatal("the unpin recorded no release")
+	}
+	if !b.UnreferencedSince.IsZero() {
+		t.Fatalf("the release inherited a grace-window mark from %v", b.UnreferencedSince)
 	}
 }

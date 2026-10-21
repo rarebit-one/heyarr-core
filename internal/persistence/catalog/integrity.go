@@ -419,9 +419,32 @@ func (c *Catalog) Reclaim(ctx context.Context, h hashing.Hash, size int64, track
 	hash := h.String()
 	stamp := at.UTC().Format(timestampFormat)
 
-	var pending []events.Event
+	var (
+		pending     []events.Event
+		wantedAgain bool
+	)
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		pending, wantedAgain = nil, false
 		if tracked {
+			// A blob reclaimed on the `released` basis is revalidated here,
+			// in the transaction that deletes it (#779). The sweep read the
+			// release earlier; a pin or taken placement that came back since
+			// cleared it, and nothing else in this transaction would notice:
+			// placement pins have no foreign key to stop the delete. The
+			// evidence written for this attempt is removed with the refusal,
+			// so it cannot vouch for a later delete.
+			stale, err := staleRelease(ctx, tx, hash)
+			if err != nil {
+				return err
+			}
+			if stale {
+				if _, err := tx.ExecContext(ctx,
+					`DELETE FROM durability_evidence WHERE blob_hash = ? AND basis = 'released'`, hash); err != nil {
+					return fmt.Errorf("catalog: withdrawing the released evidence for %s: %w", hash, err)
+				}
+				wantedAgain = true
+				return nil
+			}
 			// Defence in depth for ADR-0018's SECOND precondition, mirroring
 			// what ON DELETE RESTRICT does for the first (M4-12).
 			//
@@ -493,6 +516,9 @@ func (c *Catalog) Reclaim(ctx context.Context, h hashing.Hash, size int64, track
 	})
 	if err != nil {
 		return err
+	}
+	if wantedAgain {
+		return fmt.Errorf("catalog: not reclaiming %s: %w", hash, integrity.ErrWantedAgain)
 	}
 	c.events.Publish(pending...)
 	return nil

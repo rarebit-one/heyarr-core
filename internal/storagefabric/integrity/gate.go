@@ -297,7 +297,8 @@ func rank(r Reason) int {
 		return 2
 	case ReasonReplicaNotPresent:
 		return 1
-	case ReasonNoOtherPeer, ReasonDurabilityUnwired, ReasonControllerUnreachable, ReasonCatalogVacuous:
+	case ReasonNoOtherPeer, ReasonDurabilityUnwired, ReasonControllerUnreachable, ReasonCatalogVacuous,
+		ReasonWantedAgain:
 		return 0
 	default:
 		return 0
