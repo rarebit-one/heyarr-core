@@ -1,0 +1,12 @@
+{
+  "desired_item_id": "<uuid>",
+  "blocked": [
+    {
+      "provider": "fake-indexer",
+      "candidate_id": "https://feeds.example/ep/1.mp3",
+      "title": "Episode 1",
+      "reason": "ingest_failed",
+      "detail": "no library for the content type"
+    }
+  ]
+}

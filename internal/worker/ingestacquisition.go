@@ -423,10 +423,13 @@ func verifyFile(path, relPath string, info fs.FileInfo) (artifact, error) {
 // includes the release directory for identification of nested seasons/discs.
 //
 // A directory with no primary files is a verification refusal, never a panic.
+// When none survive because this node could not read them, the error says so
+// and stays node-local (#813), so the release is not blocked for it.
 func verifyDirectory(dir, contentType string) ([]artifact, error) {
 	parent := filepath.Dir(dir)
 	video := contentType == identification.Movie || contentType == identification.Series || contentType == "video"
 	var arts []artifact
+	var unreadable error
 
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -457,6 +460,9 @@ func verifyDirectory(dir, contentType string) ([]artifact, error) {
 		if ferr != nil {
 			// Skip the bad file, keep the pack. If none survive, the empty-pack
 			// error below is what the caller sees.
+			if unreadable == nil && isNodeLocal(ferr) {
+				unreadable = ferr
+			}
 			return nil
 		}
 		arts = append(arts, a)
@@ -464,6 +470,9 @@ func verifyDirectory(dir, contentType string) ([]artifact, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not read the release directory %s: %w", dir, err)
+	}
+	if len(arts) == 0 && unreadable != nil {
+		return nil, fmt.Errorf("%s holds primary files this node could not read: %w", dir, unreadable)
 	}
 	if len(arts) == 0 {
 		kind := contentType

@@ -633,3 +633,37 @@ func TestTheCLITalksOverTheUnixSocket(t *testing.T) {
 		t.Errorf("peers over the socket = %+v, want the one self peer", peers)
 	}
 }
+
+// `desired blocked` and `desired unblock` are script-facing (#813), so their
+// --json shapes are goldens. The candidate carries slashes, as a feed's
+// enclosure URL does, which only survive the trip as an escaped path segment.
+func TestDesiredBlockedAndUnblockJSONShapes(t *testing.T) {
+	h := newAPIHarness(t).seed()
+	const want, candidate = "01990000-0000-7000-8000-0000000000d1", "https://feeds.example/ep/1.mp3"
+	h.exec(`INSERT INTO quality_profiles
+		(id, name, description, accept, prefer, terminal, seeded, created_at, updated_at)
+		VALUES ('01990000-0000-7000-8000-0000000000q1', 'any', '', '[]', '[]', '[]', 0, ?, ?)`,
+		seedTime, seedTime)
+	h.exec(`INSERT INTO desired_items
+		(id, scope, work_id, edition_id, quality_profile_id, monitor, reason, created_at, updated_at)
+		VALUES (?, 'work', ?, NULL, '01990000-0000-7000-8000-0000000000q1', 1, '', ?, ?)`,
+		want, work1ID, seedTime, seedTime)
+	h.exec(`INSERT INTO blocked_releases
+		(id, desired_item_id, provider, candidate_id, title, detail, reason, blocked_at)
+		VALUES ('01990000-0000-7000-8000-0000000000b1', ?, 'fake-indexer', ?, 'Episode 1',
+		        'no library for the content type', 'ingest_failed', ?)`,
+		want, candidate, seedTime)
+
+	out := h.mustRun("desired", "blocked", want, "--json")
+	testutil.Golden(t, "testdata/desired_blocked.json", []byte(normalise(out)))
+
+	out = h.mustRun("desired", "unblock", want, candidate, "--json")
+	testutil.Golden(t, "testdata/desired_unblock.json", []byte(normalise(out)))
+
+	if out := h.mustRun("desired", "blocked", want); !strings.Contains(out, "nothing is blocked") {
+		t.Errorf("after unblocking the only block, blocked said %q", out)
+	}
+	if _, _, err := h.run("desired", "unblock", want, candidate); err == nil {
+		t.Error("unblocking a release that is not blocked succeeded")
+	}
+}

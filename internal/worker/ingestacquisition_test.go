@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1262,5 +1263,42 @@ func TestMultiFileAcquisitionUsesWantedMediaType(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A multi-file release whose primary files this node cannot read is this
+// node's fault, not the release's (#813): the directory walk keeps that cause
+// rather than reporting a release with nothing in it.
+func TestAPackThisNodeCannotReadIsNodeLocal(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("a file's mode does not stop this user reading it")
+	}
+	dir := filepath.Join(t.TempDir(), "Show.S01.1080p")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	ep := filepath.Join(dir, "Show.S01E01.1080p.mkv")
+	if err := os.WriteFile(ep, []byte("episode"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(ep, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := verifyDirectory(dir, identification.Series)
+	if err == nil || !isNodeLocal(err) {
+		t.Fatalf("verifyDirectory = %v, want a node-local error", err)
+	}
+
+	// The same pack with the file present but empty IS the release's fault.
+	if err := os.Chmod(ep, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ep, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifyDirectory(dir, identification.Series); err == nil || isNodeLocal(err) {
+		t.Fatalf("an empty pack = %v, want a release fault", err)
 	}
 }
