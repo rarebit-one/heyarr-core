@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
@@ -414,6 +415,12 @@ type Entry struct {
 	// TITLE for attributes it does not assert structurally (ADR-0091). Off by
 	// default and meaningful only for an indexer kind; ignored elsewhere.
 	ParseTitles bool `koanf:"parse_titles"`
+	// StallAfter is a torrent client's no-progress window (#811), as a
+	// duration ("6h"): an incomplete transfer that fetches nothing for longer
+	// is reported stalled, so its release is blocked and a fresh search runs.
+	// Empty is the default (6h); "0" turns the rule off. Ignored for every
+	// other kind.
+	StallAfter string `koanf:"stall_after"`
 	// PathMap translates the download client's filesystem namespace into
 	// Heyarr's. Meaningful only for a download provider.
 	//
@@ -487,6 +494,9 @@ type Resolved struct {
 	// ParseTitles is the resolved parse_titles flag (ADR-0091), carried to the
 	// indexer constructor. False for every non-indexer provider.
 	ParseTitles bool
+	// StallAfter is the resolved stall_after: zero for the default, negative
+	// for off (#811).
+	StallAfter time.Duration
 	// Offers is a fake indexer's canned answers, already converted into domain
 	// candidates so nothing downstream has to parse configuration.
 	Offers map[string][]acquisition.ReleaseCandidate
@@ -563,6 +573,10 @@ func Validate(entries []Entry) ([]Resolved, error) {
 			return nil, err
 		}
 
+		stallAfter, err := resolveStallAfter(name, e.StallAfter)
+		if err != nil {
+			return nil, err
+		}
 		offers, err := resolveOffers(name, kind, e.Offers)
 		if err != nil {
 			return nil, err
@@ -578,6 +592,7 @@ func Validate(entries []Entry) ([]Resolved, error) {
 			Label:        strings.TrimSpace(e.Label),
 			Enabled:      enabled,
 			ParseTitles:  e.ParseTitles,
+			StallAfter:   stallAfter,
 			Offers:       offers,
 		})
 	}
@@ -774,4 +789,22 @@ func validatePathMap(name string, maps []PathMapping) error {
 		seen[remote] = true
 	}
 	return nil
+}
+
+// resolveStallAfter reads a provider's stall_after (#811): empty is the
+// client's default (zero), "0" turns the rule off (negative), anything else
+// must be a positive duration.
+func resolveStallAfter(name, raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	switch raw {
+	case "":
+		return 0, nil
+	case "0":
+		return -1, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("provider %q: stall_after %q is not a positive duration (e.g. \"6h\"; \"0\" turns it off)", name, raw)
+	}
+	return d, nil
 }

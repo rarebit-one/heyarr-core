@@ -88,6 +88,9 @@ type Options struct {
 	HTTPClient *http.Client
 	// Now is injected so health timestamps are fixed in a test (ADR-0017).
 	Now func() time.Time
+	// StallAfter is the no-progress window (#811): zero is DefaultStallAfter,
+	// negative turns the rule off.
+	StallAfter time.Duration
 }
 
 // Client drives one Transmission instance.
@@ -98,6 +101,8 @@ type Client struct {
 	label   string
 	rpc     *transport
 	now     func() time.Time
+	// stallAfter is Options.StallAfter (#811).
+	stallAfter time.Duration
 
 	// httpc fetches an indexer's .torrent so Transmission is handed the bytes
 	// rather than a URL it may be unable to reach (Add, fetchTorrent, #492). It
@@ -163,12 +168,13 @@ func New(opts Options) (*Client, error) {
 	}
 
 	return &Client{
-		name:    strings.TrimSpace(opts.Name),
-		caps:    caps,
-		pathMap: opts.PathMap,
-		label:   label,
-		now:     now,
-		httpc:   httpc,
+		name:       strings.TrimSpace(opts.Name),
+		caps:       caps,
+		pathMap:    opts.PathMap,
+		label:      label,
+		now:        now,
+		stallAfter: opts.StallAfter,
+		httpc:      httpc,
 		rpc: &transport{
 			endpoint: rpcURL(opts.Endpoint),
 			user:     opts.Username,

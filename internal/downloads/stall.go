@@ -3,6 +3,7 @@ package downloads
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Detecting a stalled transfer.
@@ -66,7 +67,45 @@ const (
 	// TroubleTrackerUnreachable is the invisible one: every tracker failed to
 	// answer while the transfer reports no error of its own.
 	TroubleTrackerUnreachable TroubleReason = "tracker_unreachable"
+	// TroubleNoSeeders is a transfer that has fetched nothing for longer than
+	// its stall window (#811): every tracker answers, so nothing above fires,
+	// but the swarm has no complete copy (or no peers at all) and the transfer
+	// would sit at 0% forever. Reported, it takes the ordinary stuck-grab path:
+	// the poll fails the want, the sweep blocks this release for it, and a
+	// fresh search picks a different one.
+	TroubleNoSeeders TroubleReason = "no_seeders"
 )
+
+// DefaultStallAfter is how long an incomplete, actively downloading transfer
+// may go without fetching any piece data before it is reported as
+// TroubleNoSeeders. Hours, not minutes: a thin but live swarm can be quiet for a
+// while between peers, and a false stall costs a good release (it is blocked).
+// A provider's `stall_after` overrides it; "0" turns the rule off.
+const DefaultStallAfter = 6 * time.Hour
+
+// stallWindow resolves a client's configured window: zero is the default, a
+// negative value turns the rule off.
+func stallWindow(configured time.Duration) time.Duration {
+	if configured == 0 {
+		return DefaultStallAfter
+	}
+	return configured
+}
+
+// noProgress reports TroubleNoSeeders when an incomplete transfer the client is
+// actively downloading has fetched nothing since lastActivity for longer than
+// window. lastActivity is the zero time when the client does not say (an older
+// client, or a captured fixture without the field), and an unknown time never
+// reports: guessing would block good releases.
+func noProgress(now, lastActivity time.Time, window time.Duration, detail string) (Trouble, bool) {
+	if window <= 0 || lastActivity.IsZero() || now.Sub(lastActivity) <= window {
+		return Trouble{}, false
+	}
+	return Trouble{
+		Reason: TroubleNoSeeders,
+		Detail: fmt.Sprintf("no piece data for %s (%s)", now.Sub(lastActivity).Round(time.Minute), detail),
+	}, true
+}
 
 // inspect reports what is wrong with a transfer, if anything.
 //

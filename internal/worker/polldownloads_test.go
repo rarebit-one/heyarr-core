@@ -164,6 +164,39 @@ func TestAWantWhoseGrabIsRejectedIsBlockedAndReDriven(t *testing.T) {
 	}
 }
 
+// A dead swarm (#811): the client reports no_seeders for a transfer that
+// fetched nothing for hours. It takes the same path as any unfetchable
+// release: failed to idle, then blocked and re-driven, so the next search
+// picks a different release instead of the same dead one.
+func TestADeadSwarmIsBlockedAndReDriven(t *testing.T) {
+	t.Parallel()
+	h := newPollHarness(t)
+	h.grabAfterSearch(t, "Arrival.2016.2160p.mkv", []byte("the bytes of a film"))
+	id := h.transferID(t)
+	if err := h.client.Fail(id, downloads.TroubleNoSeeders,
+		"no piece data for 7h0m0s (metadata 100%, 24 peers connected, trackers report 0 seeders)"); err != nil {
+		t.Fatal(err)
+	}
+	h.poll(t)
+	if got := h.state(t).Phase; got != acquisition.PhaseIdle {
+		t.Fatalf("phase = %s, want idle: a dead swarm must be failed", got)
+	}
+	h.backdatePhaseEntered(t, 2*stuckGrabGrace)
+	h.poll(t)
+	blocked, err := h.cat.BlockedFor(t.Context(), h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 1 || blocked[0].Reason != catalog.BlockGrabFailed {
+		t.Fatalf("blocked = %+v, want the dead release blocked as grab_failed", blocked)
+	}
+	if _, found, err := h.cat.SearchSchedule(t.Context(), h.want); err != nil {
+		t.Fatal(err)
+	} else if found {
+		t.Fatal("search schedule still present; the want must be due a fresh search")
+	}
+}
+
 // The guard against racing the pass that failed it: a grab that only just failed
 // is left alone until the grace elapses — its release stays unblocked and its
 // row stays put.
