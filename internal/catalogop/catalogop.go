@@ -158,6 +158,9 @@ const (
 
 	// MaxTrackers bounds the announce list an op may carry.
 	MaxTrackers = 16
+	// MaxTrackerLen bounds one announce URL, so the list is bounded in bytes
+	// as well as count and a signed op always fits the catalog-sync transport.
+	MaxTrackerLen = 512
 	// MaxTitle bounds the release title in bytes.
 	MaxTitle = 512
 	// MaxSite bounds the origin site name in bytes.
@@ -432,6 +435,9 @@ func (ap *acquirePayload) validate() error {
 // A passkey in the PATH is indistinguishable from a route, which is why a
 // private release publishes no trackers at all rather than relying on this.
 func checkTracker(raw string) error {
+	if len(raw) > MaxTrackerLen {
+		return fmt.Errorf("%w: a tracker of %d bytes, max %d", ErrMalformed, len(raw), MaxTrackerLen)
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("%w: tracker %q: %w", ErrMalformed, raw, err)

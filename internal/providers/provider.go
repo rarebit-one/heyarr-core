@@ -130,6 +130,11 @@ type Transfer struct {
 	Path string
 	// Error is the client's own failure message, empty when it is fine.
 	Error string
+	// Trackers are the announce URLs the client holds for the transfer, as it
+	// reports them. Empty when the client does not say (or has no metadata
+	// yet). They can carry a private tracker's passkey, so nothing publishes
+	// them without the ADR-0119 filter (worker.publicTrackers).
+	Trackers []string
 }
 
 // Query is what to search for (§60's manual search, and M3-12's job).

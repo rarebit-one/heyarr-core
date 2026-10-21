@@ -49,9 +49,12 @@ converges on the same work.**
   quality profile's name, the infohash, the release title and size, the
   work's own title and year (so a sibling that has never seen the work can
   create it under the same key), when it was selected, and the origin's site
-  name. It carries announce URLs only when
-  they are credential-free; a release from a private indexer is published with
-  `private: true` and no trackers.
+  name. For a public release it carries the announce URLs the download client
+  reports, kept only in the shape a public tracker uses (udp, http(s) or ws(s),
+  a host, no userinfo, query or fragment, a path of nothing, `/` or
+  `/announce`), so a sibling finds the swarm through its trackers rather than
+  DHT alone, which is slow on a thin swarm. A release from a private indexer is
+  published with `private: true` and no trackers.
 - **Credentials never ride an op.** The indexer URL the origin fetched the
   `.torrent` from, the `.torrent` bytes, and anything a private tracker put in
   them stay local (`release_candidates.source` is a secret today and remains

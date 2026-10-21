@@ -230,12 +230,14 @@ func (c *QBClient) Add(ctx context.Context, source secret.Value) (providers.Tran
 
 	if hash != "" {
 		if t, ok := c.byHash(ctx, hash); ok {
-			return c.toTransfer(t), nil
+			return c.withTrackers(ctx, c.toTransfer(t)), nil
 		}
 		// Accepted but not yet registered in the queue. The caller gets a
 		// transfer keyed by the infohash it will carry, and the next poll fills
-		// in the rest — the hash is stable, so nothing is lost.
-		return providers.Transfer{ID: hash, Name: magnetName(raw)}, nil
+		// in the rest — the hash is stable, so nothing is lost. Its trackers
+		// come from the magnet's own tr= parameters: the grab publishes them
+		// now (ADR-0119) and would never see the client's list later.
+		return providers.Transfer{ID: hash, Name: magnetName(raw), Trackers: magnetTrackers(raw)}, nil
 	}
 
 	// The .torrent path: return the new arrival in our category.
@@ -245,7 +247,7 @@ func (c *QBClient) Add(ctx context.Context, source secret.Value) (providers.Tran
 	}
 	for _, t := range after {
 		if _, seen := before[strings.ToLower(t.Hash)]; !seen {
-			return c.toTransfer(t), nil
+			return c.withTrackers(ctx, c.toTransfer(t)), nil
 		}
 	}
 	return providers.Transfer{}, fmt.Errorf(
@@ -334,6 +336,36 @@ func (c *QBClient) ours(ctx context.Context) ([]qbTorrent, error) {
 		}
 	}
 	return out, nil
+}
+
+// withTrackers fills a transfer's announce URLs from torrents/trackers, best
+// effort: a failure costs the trackers a fan-out op could carry (ADR-0119),
+// never the grab. qBittorrent lists its DHT, PeX and LSD sources as pseudo
+// trackers ("** [DHT] **"), which are not URLs and are skipped.
+func (c *QBClient) withTrackers(ctx context.Context, t providers.Transfer) providers.Transfer {
+	if t.ID == "" {
+		return t
+	}
+	body, err := c.api.get(ctx, "/api/v2/torrents/trackers", url.Values{"hash": {t.ID}})
+	if err != nil {
+		return t
+	}
+	var list []struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return t
+	}
+	seen := map[string]bool{}
+	for _, tr := range list {
+		u := strings.TrimSpace(tr.URL)
+		if u == "" || strings.HasPrefix(u, "**") || seen[u] {
+			continue
+		}
+		seen[u] = true
+		t.Trackers = append(t.Trackers, u)
+	}
+	return t
 }
 
 // byHash returns the transfer with the given infohash if it is ours yet.
@@ -447,6 +479,32 @@ func magnetInfoHash(raw string) string {
 
 // magnetName reads the display name from a magnet URI, for a human reading a
 // queue before the client has reported the real name.
+// magnetTrackers returns a magnet's tr= announce URLs, once each and in order.
+// A private magnet's may carry a passkey, so only the ADR-0119 publisher's
+// filter (which also drops every tracker of a private release) decides what
+// leaves this node.
+func magnetTrackers(raw string) []string {
+	_, query, ok := strings.Cut(raw, "?")
+	if !ok {
+		return nil
+	}
+	values, err := url.ParseQuery(query)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, tr := range values["tr"] {
+		tr = strings.TrimSpace(tr)
+		if tr == "" || seen[tr] {
+			continue
+		}
+		seen[tr] = true
+		out = append(out, tr)
+	}
+	return out
+}
+
 func magnetName(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
