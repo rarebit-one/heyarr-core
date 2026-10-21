@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -42,6 +43,14 @@ type torrent struct {
 	// TrackerStats is where a tracker failure ACTUALLY appears. See stall.go —
 	// this field is the whole reason that file exists.
 	TrackerStats []trackerStat `json:"trackerStats"`
+	// AddedDate (Unix seconds) tells a re-added transfer from the same one, for
+	// the no-progress stall rule (#811). activityDate is deliberately not read:
+	// uploads move it too (see progressClock). PeersConnected and
+	// MetadataPercentComplete only describe the stall in the detail. They are
+	// absent from the 2026-08-21 capture and read as zero there.
+	AddedDate               int64   `json:"addedDate"`
+	PeersConnected          int     `json:"peersConnected"`
+	MetadataPercentComplete float64 `json:"metadataPercentComplete"`
 }
 
 type trackerStat struct {
@@ -49,6 +58,7 @@ type trackerStat struct {
 	HasAnnounced          bool   `json:"hasAnnounced"`
 	LastAnnounceResult    string `json:"lastAnnounceResult"`
 	LastAnnounceSucceeded bool   `json:"lastAnnounceSucceeded"`
+	SeederCount           int    `json:"seederCount"`
 }
 
 // torrentFields is what torrent-get is asked for.
@@ -59,14 +69,16 @@ type trackerStat struct {
 var torrentFields = []string{
 	"id", "name", "hashString", "status", "percentDone", "downloadDir",
 	"labels", "error", "errorString", "trackerStats", "isFinished", "eta", "totalSize",
+	"addedDate", "peersConnected", "metadataPercentComplete",
 }
 
 // Transmission's status codes. Only the ones that mean something to §64's
 // pipeline are named; the rest are checking and queue states that all mean
 // "in flight" for our purposes.
 const (
-	statusStopped = 0
-	statusSeeding = 6
+	statusStopped     = 0
+	statusDownloading = 4
+	statusSeeding     = 6
 )
 
 // sessionGet reads the instance's own description of itself.
@@ -173,6 +185,8 @@ func (c *Client) toTransfer(t torrent) providers.Transfer {
 		// This is where the invisible tracker failure becomes visible to
 		// everything above. Without stall.go it would arrive here as an empty
 		// string and the transfer would look healthy forever.
+		out.Error = string(trouble.Reason) + ": " + trouble.Detail
+	} else if trouble, bad := c.stalled(t); bad {
 		out.Error = string(trouble.Reason) + ": " + trouble.Detail
 	}
 
@@ -537,4 +551,39 @@ func (c *Client) downloadDir() string {
 		return c.session.DownloadDir
 	}
 	return "downloads"
+}
+
+// stalled applies the no-progress rule (#811) to a transfer Transmission is
+// actively downloading. Only status 4: a queued, checking or stopped transfer
+// is not fetching by choice, and a seeding one is complete.
+func (c *Client) stalled(t torrent) (Trouble, bool) {
+	if t.Status != statusDownloading || t.PercentDone >= 1 {
+		c.progress.inactive(t.HashString)
+		return Trouble{}, false
+	}
+	var added time.Time
+	if t.AddedDate > 0 {
+		added = time.Unix(t.AddedDate, 0)
+	}
+	// percentDone counts verified pieces only, so it moves exactly when piece
+	// data arrives. Parts per billion keeps a single piece of a large release
+	// visible.
+	since := c.progress.lastProgress(t.HashString, int64(t.PercentDone*1e9), added, c.now())
+	seeders := -1
+	for _, ts := range t.TrackerStats {
+		if ts.SeederCount > seeders {
+			seeders = ts.SeederCount
+		}
+	}
+	detail := fmt.Sprintf("metadata %.0f%%, %d peers connected, trackers report %s seeders",
+		t.MetadataPercentComplete*100, t.PeersConnected, countOrUnknown(seeders))
+	return noProgress(c.now(), since, stallWindow(c.stallAfter), detail)
+}
+
+// countOrUnknown renders a count a client may not know (negative).
+func countOrUnknown(n int) string {
+	if n < 0 {
+		return "unknown"
+	}
+	return fmt.Sprintf("%d", n)
 }

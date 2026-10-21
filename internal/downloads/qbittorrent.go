@@ -69,6 +69,9 @@ type QBOptions struct {
 	// of the Web API rather than a stub of the client.
 	HTTPClient *http.Client
 	Now        func() time.Time
+	// StallAfter is the no-progress window (#811): zero is DefaultStallAfter,
+	// negative turns the rule off.
+	StallAfter time.Duration
 }
 
 // QBClient drives one qBittorrent instance.
@@ -79,6 +82,10 @@ type QBClient struct {
 	label   string
 	now     func() time.Time
 	api     *qbTransport
+	// stallAfter is QBOptions.StallAfter (#811).
+	stallAfter time.Duration
+	// progress dates each transfer's last fetched piece for the stall rule.
+	progress *progressClock
 
 	version string // the app version the last Check learnt, for Session-style reads.
 }
@@ -108,11 +115,13 @@ func NewQBittorrent(opts QBOptions) (*QBClient, error) {
 		label = DefaultLabel
 	}
 	return &QBClient{
-		name:    strings.TrimSpace(opts.Name),
-		caps:    caps,
-		pathMap: opts.PathMap,
-		label:   label,
-		now:     now,
+		name:       strings.TrimSpace(opts.Name),
+		caps:       caps,
+		pathMap:    opts.PathMap,
+		label:      label,
+		now:        now,
+		stallAfter: opts.StallAfter,
+		progress:   newProgressClock(),
 		api: &qbTransport{
 			base: strings.TrimRight(strings.TrimSpace(opts.Endpoint), "/"),
 			user: opts.Username,
@@ -315,6 +324,13 @@ type qbTorrent struct {
 	SavePath    string  `json:"save_path"`
 	ContentPath string  `json:"content_path"`
 	Category    string  `json:"category"`
+	// AddedOn (Unix seconds) tells a re-added transfer from the same one, for
+	// the no-progress stall rule (#811). last_activity is deliberately not
+	// read: uploads move it too (see progressClock). NumSeeds and NumLeechs
+	// only describe the stall in the detail.
+	AddedOn   int64 `json:"added_on"`
+	NumSeeds  int   `json:"num_seeds"`
+	NumLeechs int   `json:"num_leechs"`
 }
 
 // ours reads the queue filtered to this client's category.
@@ -429,6 +445,10 @@ func (c *QBClient) toTransfer(t qbTorrent) providers.Transfer {
 	switch t.State {
 	case "error", "missingFiles":
 		out.Error = "qBittorrent reported state " + t.State
+	default:
+		if trouble, bad := c.stalled(t, done); bad {
+			out.Error = string(trouble.Reason) + ": " + trouble.Detail
+		}
 	}
 	// The path is resolved only on completion: before then content_path may name
 	// an incomplete file that ingest cannot open, which would read as an ingest
@@ -717,4 +737,32 @@ func (t *qbTransport) text(ctx context.Context, endpoint string) (string, error)
 		return "", err
 	}
 	return strings.TrimSpace(string(body)), nil
+}
+
+// stalled applies the no-progress rule (#811) to a transfer qBittorrent is
+// trying to download. Paused and queued states are not fetching by choice, and
+// a done transfer is complete.
+func (c *QBClient) stalled(t qbTorrent, done bool) (Trouble, bool) {
+	id := strings.ToLower(t.Hash)
+	switch t.State {
+	case "downloading", "stalledDL", "metaDL", "forcedDL", "forcedMetaDL":
+	default:
+		c.progress.inactive(id)
+		return Trouble{}, false
+	}
+	if done {
+		c.progress.inactive(id)
+		return Trouble{}, false
+	}
+	var added time.Time
+	if t.AddedOn > 0 {
+		added = time.Unix(t.AddedOn, 0)
+	}
+	fetched := t.Completed
+	if fetched == 0 {
+		fetched = t.Downloaded
+	}
+	since := c.progress.lastProgress(id, fetched, added, c.now())
+	detail := fmt.Sprintf("state %s, %d seeds and %d leechers connected", t.State, t.NumSeeds, t.NumLeechs)
+	return noProgress(c.now(), since, stallWindow(c.stallAfter), detail)
 }

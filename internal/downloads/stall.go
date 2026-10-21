@@ -3,6 +3,8 @@ package downloads
 import (
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Detecting a stalled transfer.
@@ -66,7 +68,131 @@ const (
 	// TroubleTrackerUnreachable is the invisible one: every tracker failed to
 	// answer while the transfer reports no error of its own.
 	TroubleTrackerUnreachable TroubleReason = "tracker_unreachable"
+	// TroubleNoSeeders is a transfer that has fetched nothing for longer than
+	// its stall window (#811): every tracker answers, so nothing above fires,
+	// but the swarm has no complete copy (or no peers at all) and the transfer
+	// would sit at 0% forever. Reported, it takes the ordinary stuck-grab path:
+	// the poll fails the want, the sweep blocks this release for it, and a
+	// fresh search picks a different one.
+	TroubleNoSeeders TroubleReason = "no_seeders"
 )
+
+// DefaultStallAfter is how long an incomplete, actively downloading transfer
+// may go without fetching any piece data before it is reported as
+// TroubleNoSeeders. Hours, not minutes: a thin but live swarm can be quiet for a
+// while between peers, and a false stall costs a good release (it is blocked).
+// A provider's `stall_after` overrides it; "0" turns the rule off.
+const DefaultStallAfter = 6 * time.Hour
+
+// stallWindow resolves a client's configured window: zero is the default, a
+// negative value turns the rule off.
+func stallWindow(configured time.Duration) time.Duration {
+	if configured == 0 {
+		return DefaultStallAfter
+	}
+	return configured
+}
+
+// noProgress reports TroubleNoSeeders when an incomplete transfer the client is
+// actively downloading has fetched nothing since lastActivity for longer than
+// window. lastActivity comes from progressClock; the zero time means nothing is
+// known, and an unknown time never reports, because guessing would block good
+// releases.
+func noProgress(now, lastActivity time.Time, window time.Duration, detail string) (Trouble, bool) {
+	if window <= 0 || lastActivity.IsZero() || now.Sub(lastActivity) <= window {
+		return Trouble{}, false
+	}
+	return Trouble{
+		Reason: TroubleNoSeeders,
+		Detail: fmt.Sprintf("no piece data for %s (%s)", now.Sub(lastActivity).Round(time.Minute), detail),
+	}, true
+}
+
+// progressClock remembers, per transfer, when its fetched data last grew while
+// the client was actively downloading it, for the no-progress rule.
+//
+// Neither client dates DOWNLOAD progress itself. Transmission's activityDate
+// and qBittorrent's last_activity both move when a piece is UPLOADED too, so a
+// partial transfer that keeps serving what it has to the swarm looks active
+// forever while fetching nothing, and would never be reported. The clock
+// watches the amount fetched instead.
+//
+// The window opens at the first poll that sees the transfer actively
+// downloading, never earlier. Its added date says nothing about how long it
+// has had a download slot: a transfer queued for a day and then started has
+// had no chance yet. So a transfer that goes inactive (queued, paused,
+// checking) is forgotten, and one re-added under the same infohash starts
+// over. The clock lives as long as the process, so after a restart every
+// window opens again: a report comes late, never early.
+type progressClock struct {
+	mu    sync.Mutex
+	marks map[string]progressMark
+	swept time.Time
+}
+
+type progressMark struct {
+	fetched int64
+	added   time.Time // the client's add date, to tell a re-add from the same transfer
+	since   time.Time // when fetched last changed, or when the window opened
+	seen    time.Time // the last poll that reported the transfer
+}
+
+// forgetAfter drops a transfer no poll has reported for this long: it was
+// removed from the client, or it finished and left the queue.
+const forgetAfter = 24 * time.Hour
+
+func newProgressClock() *progressClock {
+	return &progressClock{marks: map[string]progressMark{}}
+}
+
+// lastProgress records an active poll's view of transfer id and returns when
+// its fetched amount last changed, or when its window opened. fetched is any
+// measure that grows as piece data arrives; added is the client's add date,
+// zero when it does not say. A nil clock knows nothing and returns the zero
+// time, which never reports.
+func (p *progressClock) lastProgress(id string, fetched int64, added, now time.Time) time.Time {
+	if p == nil {
+		return time.Time{}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	m, ok := p.marks[id]
+	if ok && (now.Sub(m.seen) > forgetAfter || !m.added.Equal(added)) {
+		// Gone long enough to have been removed, or re-added since: a new
+		// attempt, which must not inherit the old one's window.
+		ok = false
+	}
+	switch {
+	case !ok:
+		m = progressMark{fetched: fetched, added: added, since: now}
+	case fetched != m.fetched:
+		// A drop counts too: a re-check that discards bad pieces is the client
+		// working, not a stall.
+		m.fetched, m.since = fetched, now
+	}
+	m.seen = now
+	p.marks[id] = m
+	if now.Sub(p.swept) > time.Hour {
+		for k, o := range p.marks {
+			if now.Sub(o.seen) > forgetAfter {
+				delete(p.marks, k)
+			}
+		}
+		p.swept = now
+	}
+	return m.since
+}
+
+// inactive forgets transfer id: it is queued, paused, checking or complete, so
+// it has no download slot, and its window must open afresh when it gets one.
+func (p *progressClock) inactive(id string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.marks, id)
+}
 
 // inspect reports what is wrong with a transfer, if anything.
 //

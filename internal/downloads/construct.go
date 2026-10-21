@@ -119,6 +119,7 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 			Label:        r.Label,
 			Capabilities: r.Capabilities,
 			Now:          now,
+			StallAfter:   r.StallAfter,
 		})
 		if err != nil {
 			return nil, true, err
@@ -135,6 +136,7 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 		Label:        r.Label,
 		Capabilities: r.Capabilities,
 		Now:          now,
+		StallAfter:   r.StallAfter,
 	})
 	if err != nil {
 		return nil, true, err

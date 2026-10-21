@@ -378,7 +378,7 @@ capture_transmission() {
 
   body=$(curl_rpc -X POST -H "X-Transmission-Session-Id: $sid" \
     -H 'Content-Type: application/json' \
-    -d '{"method":"torrent-get","arguments":{"fields":["id","name","hashString","status","percentDone","downloadDir","labels","error","errorString","trackerStats","isFinished","eta","totalSize"]}}' \
+    -d '{"method":"torrent-get","arguments":{"fields":["id","name","hashString","status","percentDone","downloadDir","labels","error","errorString","trackerStats","isFinished","eta","totalSize","addedDate","peersConnected","metadataPercentComplete"]}}' \
     "$base/transmission/rpc")
   write_exchange transmission torrent-get POST "/transmission/rpc" 200 "$body" \
     '{"Content-Type":"application/json"}' "$version"
