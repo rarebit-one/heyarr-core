@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"log/slog"
 	"os"
@@ -147,7 +148,7 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 	blobStore, self, material, peerHealth := node.blobStore, node.self, node.material, node.peerHealth
 
-	srv, members, err := c.newServer(ctx, db, blobStore, version, peerHealth, self.PeerID, material)
+	srv, members, err := c.newServer(ctx, db, blobStore, version, peerHealth, self.PeerID, self.PublicKey, material)
 	if err != nil {
 		// Shutdown may have been requested while the server was being built — its
 		// startup steps run on the shutdown context, so a cancel there (the
@@ -579,7 +580,11 @@ func (c *Controller) serve(ctx context.Context, srv *httpapi.Server, peerSrv *pe
 // reason: it is constructed before the server so that the peer guard mounted
 // on this router can record liveness through the same tracker the idle probe
 // and the reconciler read.
-func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas.Store, schemaVersion int64, peerHealth *health.Tracker, selfPeerID string, material *mtls.Material) (*httpapi.Server, *membership.Store, error) {
+//
+// selfKey is this node's public key: the site a sibling's write lease must name
+// to lift a device here. Nil (a test that builds no identity) wires no lease
+// check, which leaves every device on its grant or the read floor.
+func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas.Store, schemaVersion int64, peerHealth *health.Tracker, selfPeerID string, selfKey ed25519.PublicKey, material *mtls.Material) (*httpapi.Server, *membership.Store, error) {
 	store, err := auth.NewStore(auth.StoreOptions{Writer: db.Writer(), Reader: db.Reader()})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)
@@ -811,6 +816,11 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 		}
 	}
 
+	writeLeases, err := c.deviceWriteLeases(ctx, db, eventLog, members, selfKey)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	srv, err := httpapi.New(httpapi.Options{
 		Config:           c.cfg,
 		Logger:           c.log,
@@ -825,6 +835,7 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 		// request rather than at their own expiry.
 		DeviceMembership:     deviceIdentities,
 		ManagementAuthorizer: grantAuthorizer,
+		DeviceWriteLeases:    writeLeases,
 		Events:               eventLog,
 		Media:                mediaInfo(toolchain),
 		Build:                buildinfo.Get(),

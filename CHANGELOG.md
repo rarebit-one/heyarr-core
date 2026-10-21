@@ -10,6 +10,32 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **A sibling's lease can lift a device to write, on the sites that opt in**
+  (ADR-0048, #285). A new setting, `peer.lease_issuers`, lists the siblings
+  whose device write leases this node honours, by this node's peer id for each
+  (as `heyarr peers list` shows it). It is empty by default, which honours none,
+  so nothing changes on upgrade. To turn it on:
+  1. On the issuing node, grant the device write (`heyarr admin management
+     grant`). That node then issues the device a lease for each sibling.
+  2. On the honouring node, add the issuing node's peer id to
+     `peer.lease_issuers` and restart. The honouring node must also pin the
+     device's user, as for any `Device` credential.
+
+  A device with no management grant on the honouring node then gets write
+  there while that node holds an unexpired lease for it from an opted-in
+  sibling, including while the issuer is unreachable. The lease is looked up
+  by the key the `Device` credential proved: a client never presents one, and
+  web-login sessions and bearer tokens never consult leases. Each entry is
+  checked against membership on every request, so a sibling removed from
+  membership stops counting at once. Any refusal or failure leaves the device
+  on the read floor and never turns the request into a 401. The access log
+  marks a lifted request with `write_via=lease` and `lease_issuer`, and
+  `heyarr_http_device_lease_checks_total{outcome}` counts each check as
+  `lifted`, `no_lease`, `refused_<reason>` or `error`. A lease cache refusal
+  is now reported by name (`expired`, `principal_mismatch`,
+  `resource_mismatch`, `capability_denied`, `unknown_issuer`, ...), where a
+  lease for another device or from an untrusted issuer used to read as "no
+  lease".
 - **A peer caches the device write leases its siblings issue for it**
   (ADR-0048, #285). Every 5 minutes, and once at startup in the background, the
   controller fetches `GET /peer/v1/leases` from each sibling in membership over
@@ -20,8 +46,8 @@ stable.
   logged. An unreachable sibling is logged and its cached leases are kept until
   they expire; a failed fetch never clears the cache. Each fetch that changes a
   sibling's cache emits one `lease.cached` with the sibling and the counts added
-  and removed; a fetch that changes nothing emits nothing. Nothing reads the
-  cache on the request path yet: the opt-in check comes in a later change.
+  and removed; a fetch that changes nothing emits nothing. The request path
+  reads the cache only on a node that opts in (`peer.lease_issuers`, above).
 - **A peer issues device write leases for its siblings** (ADR-0048, #285). Every
   5 minutes, and at startup, the controller gives each device it has authorised
   for write (`heyarr admin management grant`, ADR-0065) a lease for every sibling
@@ -31,8 +57,8 @@ stable.
   slack covers the gap between issuer passes), so a sibling that fetches at any
   moment caches at least 12 hours of authority. Deleting the grant revokes its
   leases on the next pass. Each issue and revoke emits `lease.issued` /
-  `lease.revoked`. No sibling honours these leases yet: the fetch loop and the
-  opt-in check on the request path come in later changes.
+  `lease.revoked`. A sibling honours these leases only if it opts in
+  (`peer.lease_issuers`, above).
 - **`heyarr admin user list [--json]` shows which users this controller has
   pinned** (#802): each one's name, signing and recovery public keys, when it
   was pinned, and how many of its devices here are active, expired (past their admission without being revoked) and revoked. Pins are

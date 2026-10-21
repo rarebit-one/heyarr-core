@@ -96,6 +96,13 @@ type Options struct {
 	// before the grant existed. It is consulted only on the session path, never
 	// for a service token or a device credential.
 	ManagementAuthorizer ManagementAuthorizer
+	// DeviceWriteLeases lifts a device with no management grant here to write
+	// when this node holds an unexpired lease for it from a sibling it opted
+	// into (peer.lease_issuers; ADR-0048 amendment, #285). *leases.CacheStore
+	// satisfies it. It is consulted only on the Device scheme, only after the
+	// credential verified, and only when Config.Peer.LeaseIssuers is not empty.
+	// Nil, or any failure, leaves the device on the read floor.
+	DeviceWriteLeases DeviceWriteLeases
 	// Events reports the log's head sequence for GET /api/v1/system. Required:
 	// the alternative is a server that reports head 0 because it was wired
 	// without a log, which is indistinguishable from an empty log and would
@@ -178,6 +185,7 @@ type Server struct {
 	sessions      SessionValidator
 	deviceMembers DeviceMembership
 	mgmtAuth      ManagementAuthorizer
+	writeLeases   DeviceWriteLeases
 	events        EventHead
 	guestLeases   GuestLeaseIssuer
 	guestNets     []*net.IPNet
@@ -272,6 +280,7 @@ func New(opts Options) (*Server, error) {
 		sessions:      opts.SessionValidator,
 		deviceMembers: opts.DeviceMembership,
 		mgmtAuth:      opts.ManagementAuthorizer,
+		writeLeases:   opts.DeviceWriteLeases,
 		events:        opts.Events,
 		guestLeases:   opts.GuestLeases,
 		guestNets:     guestNets,

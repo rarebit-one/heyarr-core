@@ -790,6 +790,33 @@ type Peer struct {
 	// like one that never served pieces, and only a declaration tells them
 	// apart.
 	ServePieces *bool `koanf:"serve_pieces"`
+
+	// LeaseIssuers is the siblings whose device write leases this node honours
+	// (ADR-0048 amendment, #285): the peer ids of other members, as `heyarr
+	// peers list` shows them here. A device whose `Device` credential verifies
+	// at this node, and which has no management grant here, is lifted from the
+	// read floor to write while this node holds an unexpired lease for it from
+	// one of these siblings. The sibling issues that lease only for a device it
+	// has granted write itself (`heyarr admin management grant` there).
+	//
+	// Empty, the default, honours none: behaviour is exactly what it was
+	// before leases existed. The opt-in is this site's decision (ADR-0038), so
+	// a sibling cannot grant write here by issuing leases alone.
+	//
+	// # Why peer ids and not names or keys
+	//
+	// A peer id is the stable handle membership gives the record that pins a
+	// key: it survives an endpoint, site or mode change, and a peer removed and
+	// enrolled again gets a NEW id, so the opt-in lapses with the record and
+	// must be made again. A name does not have that property: once a peer is
+	// removed, its name may be enrolled for a different key, and a name-based
+	// opt-in would hand that key write here without anyone deciding to. Ids are
+	// node-local (ADR-0012), like placement.siblings.
+	//
+	// Each entry is checked against membership on every request, so a sibling
+	// removed from membership stops counting at once. An entry naming no
+	// current member, or this node, honours nothing.
+	LeaseIssuers []string `koanf:"lease_issuers"`
 }
 
 // ServesPieces reports whether this node answers piece exchange, defaulting to
@@ -1183,6 +1210,28 @@ func (c Config) validatePlacement() error {
 	return nil
 }
 
+// validatePlacement's sibling for peer.lease_issuers: entries that cannot be
+// peer ids are refused here, at startup. Whether each names a current member is
+// asked on every use, not here, because membership changes while the node runs.
+func (c Config) validateLeaseIssuers() error {
+	seen := map[string]bool{}
+	for _, id := range c.Peer.LeaseIssuers {
+		if id == "" {
+			return errors.New("config: peer.lease_issuers contains an empty peer id")
+		}
+		if strings.TrimSpace(id) != id {
+			// Refused rather than trimmed, as placement.siblings is: ids are
+			// compared exactly against membership.
+			return fmt.Errorf("config: peer.lease_issuers entry %q has surrounding whitespace", id)
+		}
+		if seen[id] {
+			return fmt.Errorf("config: peer.lease_issuers lists peer %q twice", id)
+		}
+		seen[id] = true
+	}
+	return nil
+}
+
 // BackupInterval parses the configured cadence, or 0 when the background
 // cadence is disabled. A malformed value is a startup error rather than a
 // silently-ignored one — a backup nobody takes is the failure this exists to
@@ -1282,6 +1331,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.validatePlacement(); err != nil {
+		return err
+	}
+	if err := c.validateLeaseIssuers(); err != nil {
 		return err
 	}
 	if err := c.validateAcquisition(); err != nil {

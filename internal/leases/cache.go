@@ -1,6 +1,7 @@
 package leases
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"database/sql"
@@ -17,14 +18,87 @@ import (
 )
 
 // ErrNoCachedLease means no cached lease is even ABOUT this request — the cache
-// is empty for it, or every cached lease names a different principal or resource.
+// is empty for it, or every cached lease names a different principal or resource,
+// or is signed by an issuer this peer does not trust for it.
 //
 // It is deliberately distinct from a lease that IS about the request but is
 // refused — expired, not yet valid, capability denied — which surfaces the
 // grant.Reason instead (via the wrapped grant error). A degraded peer must be
 // able to tell "I hold no authority for this" from "I hold one and it lapsed",
 // because only the second names `expired` to the caller (§54, #285).
+//
+// Every refusal Authorise returns is also a *RefusalError, so the reason can be
+// asserted by name ([RefusalFor]): a lease naming another device is
+// ErrNoCachedLease AND principal_mismatch, not just the first.
 var ErrNoCachedLease = errors.New("leases: no cached lease authorises this request")
+
+// A Refusal names why no cached lease authorised a request. It is a closed set,
+// safe as a metric label: each value is one of grant's reasons, folded where
+// an operator would act the same way, plus RefusalNoLease.
+//
+// The values share words (expired / not_yet_valid, principal_ / resource_
+// mismatch), so a caller compares them exactly, never by substring.
+type Refusal string
+
+// The refusals Authorise and LiftDeviceWrite report.
+const (
+	// RefusalNoLease is a cache holding nothing that could be checked against
+	// this request: no cached lease at all.
+	RefusalNoLease Refusal = "no_lease"
+	// RefusalExpired is a lease for exactly this request whose life, less
+	// grant.SkewMargin, is over on this peer's clock.
+	RefusalExpired Refusal = "expired"
+	// RefusalNotYetValid is a lease for exactly this request issued in this
+	// peer's future, beyond the skew margin.
+	RefusalNotYetValid Refusal = "not_yet_valid"
+	// RefusalCapabilityDenied is a lease for this principal and resource that
+	// does not carry the capability asked for (a read lease asked for write).
+	RefusalCapabilityDenied Refusal = "capability_denied"
+	// RefusalResourceMismatch is a lease for this principal at another resource
+	// (for a device write lease: another site).
+	RefusalResourceMismatch Refusal = "resource_mismatch"
+	// RefusalPrincipalMismatch is a trusted lease naming another principal (for
+	// a device write lease: another device key).
+	RefusalPrincipalMismatch Refusal = "principal_mismatch"
+	// RefusalUnknownIssuer is a lease signed by a key outside the trust set:
+	// not pinned, or, on the request path, pinned but not opted into.
+	RefusalUnknownIssuer Refusal = "unknown_issuer"
+	// RefusalInvalid is a cached token that does not verify at all: malformed,
+	// of another token type, or with a signature its trusted issuer's key
+	// rejects. Refresh never stores one, so it means a corrupted cache.
+	RefusalInvalid Refusal = "invalid"
+)
+
+// RefusalError is a request a cached lease did not authorise, with its reason
+// by name. It wraps the underlying error, so errors.Is still finds
+// ErrNoCachedLease and grant's sentinels (grant.ErrExpired, ...) through it.
+// An error that is NOT a RefusalError (a database or trust-set read failing)
+// is an operational failure, not a refusal.
+type RefusalError struct {
+	Reason Refusal
+	err    error
+}
+
+func (e *RefusalError) Error() string {
+	return fmt.Sprintf("leases: refused (%s): %v", e.Reason, e.err)
+}
+
+// Unwrap exposes the grant error or ErrNoCachedLease underneath.
+func (e *RefusalError) Unwrap() error { return e.err }
+
+// LeaseRefusal returns the reason as a plain string, so a caller can name the
+// refusal without importing this package (internal/api/http does).
+func (e *RefusalError) LeaseRefusal() string { return string(e.Reason) }
+
+// RefusalFor returns the named reason of a refusal Authorise or
+// LiftDeviceWrite returned, and false for nil or an operational error.
+func RefusalFor(err error) (Refusal, bool) {
+	var r *RefusalError
+	if errors.As(err, &r) {
+		return r.Reason, true
+	}
+	return "", false
+}
 
 // CacheStore is the CONSUMER half of the access-lease system (§53, §54, #285):
 // the signed lease tokens a peer fetched from its siblings BEFORE an outage, and
@@ -47,6 +121,7 @@ type CacheStore struct {
 	reader   *sql.DB
 	events   *events.Log
 	siblings SiblingKeys
+	honoured SiblingKeys
 	selfID   string
 	selfKey  ed25519.PublicKey
 }
@@ -74,6 +149,12 @@ type CacheOptions struct {
 	// a lease this peer issued and cached is honourable too. Both or neither.
 	SelfID  string
 	SelfKey ed25519.PublicKey
+	// Honoured supplies the siblings whose write leases LiftDeviceWrite honours:
+	// the peers this node opted into (peer.lease_issuers) that are still in
+	// membership, read on every call so a sibling removed from either stops
+	// counting at once. This peer is never in it, whatever the source says.
+	// Nil honours none, which is the default (ADR-0048 amendment, #285).
+	Honoured SiblingKeys
 }
 
 // NewCache constructs a CacheStore.
@@ -93,6 +174,7 @@ func NewCache(opts CacheOptions) (*CacheStore, error) {
 		reader:   reader,
 		events:   opts.Events,
 		siblings: opts.Siblings,
+		honoured: opts.Honoured,
 		selfID:   opts.SelfID,
 		selfKey:  opts.SelfKey,
 	}, nil
@@ -323,24 +405,94 @@ func heldTokens(ctx context.Context, q queryer, sourcePeer string) (map[string]b
 // Authorise reports whether any cached lease permits req at now, verified locally
 // against the pinned trust set — no controller, no network (§53).
 //
-// On success it returns the honoured grant. On failure it returns the refusal
-// that is ABOUT this request when one exists — a lease that named this principal
-// and resource but was expired surfaces grant's expiry error (so the caller can
-// say `expired`), a capability-denied likewise — and only when nothing even
-// named this request returns ErrNoCachedLease. A lease for a different resource
-// or principal is a different lease, not a refusal of this one.
+// On success it returns the honoured grant. On failure it returns a
+// *RefusalError naming the refusal of the cached lease that came CLOSEST to
+// authorising req ([refusalRank]), so the caller can say `expired` for a lease
+// that lapsed rather than "no lease". A refusal that is about this request
+// (expired, not yet valid, capability denied) unwraps to grant's error alone; one
+// that is about a different lease (another principal or resource, an issuer this
+// peer does not trust, a token that does not verify) also unwraps to
+// ErrNoCachedLease, as it always did. An empty cache is RefusalNoLease.
 func (c *CacheStore) Authorise(ctx context.Context, req grant.Request, now time.Time) (grant.Grant, error) {
 	trust, err := c.trust(ctx)
 	if err != nil {
 		return grant.Grant{}, err
 	}
+	return c.authorise(ctx, trust, req, now)
+}
+
+// LiftDeviceWrite reports whether a cached lease lifts deviceKey to write at
+// this site: an unexpired `{device:<deviceKey>, site:<this peer>, write}` lease
+// signed by a sibling in Honoured (ADR-0048 amendment, #285). It returns the
+// honoured lease's issuer, the sibling's rendered public key.
+//
+// deviceKey must be the key a Device credential's possession proof has just
+// proved. Nothing a client presents is read here: the lease is looked up, never
+// accepted, so a lease is never a bearer credential.
+//
+// The trust set is Honoured alone, with this peer removed. Unlike Authorise it
+// does not include every pinned sibling: a sibling that is pinned but not opted
+// into is refused `unknown_issuer`, the same as a key nobody pinned. With
+// Honoured nil or empty every cached lease is refused, so the answer is never a
+// lift. Refusals are *RefusalError; anything else is an operational failure,
+// and the caller must treat both as "no lift".
+func (c *CacheStore) LiftDeviceWrite(ctx context.Context, deviceKey string, now time.Time) (string, error) {
+	if c.selfID == "" {
+		return "", errors.New("leases: lifting a device to write needs this peer's own id (CacheOptions.SelfID)")
+	}
+	if deviceKey == "" {
+		return "", errors.New("leases: lifting a device to write needs the device key its credential proved")
+	}
+	trust, err := c.honouredTrust(ctx)
+	if err != nil {
+		return "", err
+	}
+	g, err := c.authorise(ctx, trust, grant.Request{
+		Principal:  DevicePrincipal(deviceKey),
+		Resource:   SiteResource(c.selfID),
+		Capability: grant.CapabilityWrite,
+	}, now)
+	if err != nil {
+		return "", err
+	}
+	return g.Issuer, nil
+}
+
+// honouredTrust is the trust set the request path verifies a write lease
+// against: the opted-in siblings Honoured reports, never this peer, and never
+// a key of the wrong size. It is read on every call, like trust.
+func (c *CacheStore) honouredTrust(ctx context.Context) (grant.Keys, error) {
+	trust := grant.Keys{}
+	if c.honoured == nil {
+		return trust, nil
+	}
+	keys, err := c.honoured.PeerKeys(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("leases: reading the honoured lease issuers: %w", err)
+	}
+	for id, pub := range keys {
+		if id == c.selfID || len(pub) != ed25519.PublicKeySize || bytes.Equal(pub, c.selfKey) {
+			continue
+		}
+		trust[id] = pub
+	}
+	return trust, nil
+}
+
+// authorise checks every cached lease against req under trust. Any lease that
+// verifies authorises; otherwise the refusal of the lease that got furthest
+// through grant.Verify is returned, named.
+func (c *CacheStore) authorise(ctx context.Context, trust grant.Keys, req grant.Request, now time.Time) (grant.Grant, error) {
 	rows, err := c.reader.QueryContext(ctx, `SELECT token FROM cached_leases`)
 	if err != nil {
 		return grant.Grant{}, fmt.Errorf("leases: reading cached leases: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var aboutRefusal error
+	var (
+		best     error
+		bestRank = -1
+	)
 	for rows.Next() {
 		var token string
 		if err := rows.Scan(&token); err != nil {
@@ -350,29 +502,80 @@ func (c *CacheStore) Authorise(ctx context.Context, req grant.Request, now time.
 		if verr == nil {
 			return g, nil
 		}
-		// A refusal of a lease that WAS about this request (expired, not yet
-		// valid, capability denied) is more informative than "wrong resource",
-		// which just means a different lease. Keep the first such refusal so the
-		// caller can name it.
-		if aboutRefusal == nil && aboutThisRequest(verr) {
-			aboutRefusal = verr
+		// Keep the first refusal of the highest rank, so the reason reported is
+		// the one about the lease nearest to authorising this request.
+		if r := refusalRank(verr); r > bestRank {
+			best, bestRank = verr, r
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return grant.Grant{}, err
 	}
-	if aboutRefusal != nil {
-		return grant.Grant{}, aboutRefusal
+	if best == nil {
+		return grant.Grant{}, &RefusalError{Reason: RefusalNoLease, err: ErrNoCachedLease}
 	}
-	return grant.Grant{}, ErrNoCachedLease
+	reason := refusalOf(best)
+	if !aboutThisRequest(reason) {
+		best = fmt.Errorf("%w: %w", ErrNoCachedLease, best)
+	}
+	return grant.Grant{}, &RefusalError{Reason: reason, err: best}
 }
 
-// aboutThisRequest reports whether a verify error refused a lease that named the
-// request's principal and resource — i.e. a lease meant for this read that could
-// not be honoured, versus a lease meant for something else.
-func aboutThisRequest(err error) bool {
+// refusalOf names a grant.Verify error.
+func refusalOf(err error) Refusal {
 	switch grant.ReasonFor(err) {
-	case grant.ReasonExpired, grant.ReasonNotYetValid, grant.ReasonCapabilityDenied:
+	case grant.ReasonExpired:
+		return RefusalExpired
+	case grant.ReasonNotYetValid:
+		return RefusalNotYetValid
+	case grant.ReasonCapabilityDenied:
+		return RefusalCapabilityDenied
+	case grant.ReasonResourceMismatch:
+		return RefusalResourceMismatch
+	case grant.ReasonPrincipalMismatch:
+		return RefusalPrincipalMismatch
+	case grant.ReasonUnknownIssuer:
+		return RefusalUnknownIssuer
+	default:
+		return RefusalInvalid
+	}
+}
+
+// refusalRank orders refusals by how far the lease got through grant.Verify,
+// which checks the issuer is trusted, then the signature, the principal, the
+// resource, the capability and last the clock. A lease that failed only on the
+// clock matched everything else, so it says the most about this request; one
+// from an untrusted issuer says the least. Ranking only picks which refusal is
+// REPORTED: it never turns a refusal into a lift.
+func refusalRank(err error) int {
+	switch refusalOf(err) {
+	case RefusalExpired, RefusalNotYetValid:
+		return 6
+	case RefusalCapabilityDenied:
+		return 5
+	case RefusalResourceMismatch:
+		return 4
+	case RefusalPrincipalMismatch:
+		return 3
+	case RefusalUnknownIssuer:
+		return 1
+	default:
+		// A token that does not parse, or whose trusted issuer's key rejects its
+		// signature (that one passed the issuer check, so it ranks above
+		// unknown_issuer).
+		if grant.ReasonFor(err) == grant.ReasonBadSignature {
+			return 2
+		}
+		return 0
+	}
+}
+
+// aboutThisRequest reports whether a refusal is of a lease that named the
+// request's principal and resource, i.e. a lease meant for this request that
+// could not be honoured, versus a lease meant for something else.
+func aboutThisRequest(r Refusal) bool {
+	switch r {
+	case RefusalExpired, RefusalNotYetValid, RefusalCapabilityDenied:
 		return true
 	default:
 		return false

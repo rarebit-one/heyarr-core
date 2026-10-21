@@ -21,6 +21,11 @@ type metrics struct {
 	inFlight  prometheus.Gauge
 	panics    prometheus.Counter
 	authFails *prometheus.CounterVec
+	// leaseLifts counts each time the request path asks the lease cache
+	// whether a device may write (ADR-0048 amendment, #285), by outcome. A
+	// metric and not an event: each check is one request, not a state
+	// transition, and internal/events keeps per-request outcomes out of the log.
+	leaseLifts *prometheus.CounterVec
 }
 
 func newMetrics(reg prometheus.Registerer) (*metrics, error) {
@@ -51,8 +56,15 @@ func newMetrics(reg prometheus.Registerer) (*metrics, error) {
 			Namespace: "heyarr", Subsystem: "http", Name: "auth_failures_total",
 			Help: "Rejected credentials by reason.",
 		}, []string{"reason"}),
+		leaseLifts: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "heyarr", Subsystem: "http", Name: "device_lease_checks_total",
+			Help: "Device credentials without a management grant checked for a sibling write lease, by outcome " +
+				"(lifted, no_lease, refused_<reason>, error).",
+			// A closed set (leaseOutcome), never a key, a device or an issuer:
+			// those would make the series count grow with the fleet.
+		}, []string{"outcome"}),
 	}
-	for _, c := range []prometheus.Collector{m.requests, m.duration, m.inFlight, m.panics, m.authFails} {
+	for _, c := range []prometheus.Collector{m.requests, m.duration, m.inFlight, m.panics, m.authFails, m.leaseLifts} {
 		if err := reg.Register(c); err != nil {
 			return nil, fmt.Errorf("httpapi: registering metrics: %w", err)
 		}

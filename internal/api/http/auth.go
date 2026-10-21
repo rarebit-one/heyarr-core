@@ -26,6 +26,27 @@ type DeviceVerifier interface {
 	Verify(ctx context.Context, credential string, presented []string, now time.Time) (deviceauth.Authenticated, error)
 }
 
+// DeviceWriteLeases looks up whether a cached sibling lease lifts a device to
+// write at this site (ADR-0048 amendment, #285). *leases.CacheStore satisfies
+// it; the interface keeps this package off the leases and grant imports.
+//
+// deviceKey is the key the Device credential's possession proof proved, and it
+// is the only input: a lease is looked up by it, never presented by the client.
+// The answer is the issuer of the lease that lifted (a sibling's rendered
+// public key). A refusal is an error carrying LeaseRefusal() (see
+// leaseOutcome); any other error is an operational failure. Either way the
+// device stays on the read floor.
+type DeviceWriteLeases interface {
+	LiftDeviceWrite(ctx context.Context, deviceKey string, now time.Time) (issuer string, err error)
+}
+
+// leaseRefusal is a DeviceWriteLeases error that names why no lease lifted.
+// *leases.RefusalError implements it.
+type leaseRefusal interface {
+	error
+	LeaseRefusal() string
+}
+
 // presentedMembership reads the ops a device sent beside its credential
 // (rp.MembershipHeader, ADR-0068) so a device admitted by a member this node
 // has never met is judged with the evidence it carries. Absent is no ops; over
@@ -325,24 +346,110 @@ func clockWindowHint(reason string) string {
 // CLOSED: an error keeps the device on the read floor rather than opening it,
 // the same stance the session lift took. Anything finer than write is a
 // capability grant (internal/grant, #304), not a scope.
+//
+// A device with no grant here may instead be lifted to write by a lease a
+// sibling issued for it (ADR-0048 amendment, #285; leaseLift). That is asked
+// only after Verify succeeded, so the lease is found by the key the possession
+// proof proved and a lease alone authenticates nobody; and only when the grant
+// said no, so a granted device never touches the lease cache. Whatever the
+// lease check says, it can only ADD write: it never turns a verified device
+// into a 401, and never takes away the read floor.
 func (s *Server) authenticateDevice(ctx context.Context, credential string, presented []string) (auth.Identity, error) {
 	a, err := s.deviceV.Verify(ctx, credential, presented, s.now())
 	if err != nil {
 		return auth.Identity{}, err
 	}
 	scopes := []auth.Scope{auth.ScopeRead}
+	var leaseIssuer string
 	if s.managementAuthorized(ctx, a.DeviceKey) {
 		scopes = []auth.Scope{auth.ScopeRead, auth.ScopeWrite}
+	} else if issuer, ok := s.leaseLift(ctx, a.DeviceKey); ok {
+		scopes = []auth.Scope{auth.ScopeRead, auth.ScopeWrite}
+		leaseIssuer = issuer
 	}
 	return auth.Identity{
-		DeviceKey: a.DeviceKey,
-		Principal: auth.Principal{ID: a.PrincipalID, Kind: auth.KindUser, Name: a.PrincipalName},
+		DeviceKey:   a.DeviceKey,
+		LeaseIssuer: leaseIssuer,
+		Principal:   auth.Principal{ID: a.PrincipalID, Kind: auth.KindUser, Name: a.PrincipalName},
 		Token: auth.Token{
 			Name:        "device:" + a.DeviceKey,
 			PrincipalID: a.PrincipalID,
 			Scopes:      scopes,
 		},
 	}, nil
+}
+
+// The outcomes of a lease check, the closed label set of
+// heyarr_http_device_lease_checks_total. A refusal is "refused_" + its reason.
+const (
+	leaseOutcomeLifted  = "lifted"
+	leaseOutcomeNoLease = "no_lease"
+	leaseOutcomeError   = "error"
+)
+
+// leaseRefusalReasons is every refusal a DeviceWriteLeases may name besides
+// no_lease (leases.Refusal). A reason outside it is counted as an error, so the
+// label set stays closed even if the two packages drift apart.
+var leaseRefusalReasons = map[string]bool{
+	"expired": true, "not_yet_valid": true, "capability_denied": true, "resource_mismatch": true,
+	"principal_mismatch": true, "unknown_issuer": true, "invalid": true,
+}
+
+// leaseLift asks whether a cached sibling lease lifts this device to write here
+// (ADR-0048 amendment, #285), and counts the answer. It returns the issuer and
+// true only for a lift. Every other branch returns false, so the device keeps
+// the read floor it already authenticated with:
+//
+//   - no DeviceWriteLeases wired: nothing to consult (no metric);
+//   - peer.lease_issuers empty: this node honours no sibling, the default
+//     (no metric, and the cache is not read: off means off);
+//   - no device key: there is no proved key to look a lease up by (no metric;
+//     Verify never returns one, so this is defence in depth);
+//   - a refusal naming why (no_lease, or refused_<reason>): Debug-logged;
+//   - any other error (the cache or membership could not be read): counted as
+//     error and Warn-logged, the same fail-closed stance managementAuthorized
+//     takes;
+//   - an answer with no error but no issuer: not a lift, counted as error.
+func (s *Server) leaseLift(ctx context.Context, deviceKey string) (string, bool) {
+	if s.writeLeases == nil || len(s.cfg.Peer.LeaseIssuers) == 0 || deviceKey == "" {
+		return "", false
+	}
+	issuer, err := s.writeLeases.LiftDeviceWrite(ctx, deviceKey, s.now())
+	outcome := leaseOutcome(issuer, err)
+	s.metrics.leaseLifts.WithLabelValues(outcome).Inc()
+	switch outcome {
+	case leaseOutcomeLifted:
+		return issuer, true
+	case leaseOutcomeError:
+		s.log.Warn("could not check the sibling lease cache; keeping the device on the read floor",
+			"request_id", RequestIDFrom(ctx), "error", err)
+	default:
+		s.log.Debug("no sibling lease lifts this device to write; it keeps the read floor",
+			"request_id", RequestIDFrom(ctx), "outcome", outcome)
+	}
+	return "", false
+}
+
+// leaseOutcome maps a DeviceWriteLeases answer onto the closed label set.
+func leaseOutcome(issuer string, err error) string {
+	if err == nil {
+		if issuer == "" {
+			return leaseOutcomeError
+		}
+		return leaseOutcomeLifted
+	}
+	var r leaseRefusal
+	if !errors.As(err, &r) {
+		return leaseOutcomeError
+	}
+	switch reason := r.LeaseRefusal(); {
+	case reason == leaseOutcomeNoLease:
+		return leaseOutcomeNoLease
+	case leaseRefusalReasons[reason]:
+		return "refused_" + reason
+	default:
+		return leaseOutcomeError
+	}
 }
 
 // approverStillAMember re-checks, on every request, that the device which

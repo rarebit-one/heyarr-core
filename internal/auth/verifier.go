@@ -42,6 +42,13 @@ type Identity struct {
 	// every other scheme. It is what lets a route demand a device rather than a
 	// replayable bearer or session — the space grant API does (ADR-0104).
 	DeviceKey string
+	// LeaseIssuer is set when this identity's write came from a cached sibling
+	// lease rather than from a management grant here (ADR-0048 amendment,
+	// #285): the rendered public key of the opted-in sibling that signed the
+	// lease. Empty for every other identity, including a device whose write is
+	// this node's own grant. It is what lets the access log, and any audit
+	// reading the identity, tell a lease-lifted write from a granted one.
+	LeaseIssuer string
 }
 
 // HasCapability reports whether this identity carries the named capability. The
