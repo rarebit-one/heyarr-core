@@ -43,13 +43,12 @@ type torrent struct {
 	// TrackerStats is where a tracker failure ACTUALLY appears. See stall.go —
 	// this field is the whole reason that file exists.
 	TrackerStats []trackerStat `json:"trackerStats"`
-	// AddedDate and ActivityDate (Unix seconds) date the last piece data the
-	// transfer moved, for the no-progress stall rule (#811). PeersConnected
-	// and MetadataPercentComplete only describe it in the detail. Absent from
-	// the 2026-08-21 capture, where they read as zero, which the rule treats
-	// as unknown and never reports.
+	// AddedDate (Unix seconds) dates a transfer that has fetched nothing, for
+	// the no-progress stall rule (#811). activityDate is deliberately not read:
+	// uploads move it too (see progressClock). PeersConnected and
+	// MetadataPercentComplete only describe the stall in the detail. They are
+	// absent from the 2026-08-21 capture and read as zero there.
 	AddedDate               int64   `json:"addedDate"`
-	ActivityDate            int64   `json:"activityDate"`
 	PeersConnected          int     `json:"peersConnected"`
 	MetadataPercentComplete float64 `json:"metadataPercentComplete"`
 }
@@ -70,7 +69,7 @@ type trackerStat struct {
 var torrentFields = []string{
 	"id", "name", "hashString", "status", "percentDone", "downloadDir",
 	"labels", "error", "errorString", "trackerStats", "isFinished", "eta", "totalSize",
-	"addedDate", "activityDate", "peersConnected", "metadataPercentComplete",
+	"addedDate", "peersConnected", "metadataPercentComplete",
 }
 
 // Transmission's status codes. Only the ones that mean something to §64's
@@ -561,14 +560,14 @@ func (c *Client) stalled(t torrent) (Trouble, bool) {
 	if t.Status != statusDownloading || t.PercentDone >= 1 {
 		return Trouble{}, false
 	}
-	last := t.ActivityDate
-	if t.AddedDate > last {
-		last = t.AddedDate
+	var added time.Time
+	if t.AddedDate > 0 {
+		added = time.Unix(t.AddedDate, 0)
 	}
-	var since time.Time
-	if last > 0 {
-		since = time.Unix(last, 0)
-	}
+	// percentDone counts verified pieces only, so it moves exactly when piece
+	// data arrives. Parts per billion keeps a single piece of a large release
+	// visible.
+	since := c.progress.lastProgress(t.HashString, int64(t.PercentDone*1e9), added, c.now())
 	seeders := -1
 	for _, ts := range t.TrackerStats {
 		if ts.SeederCount > seeders {

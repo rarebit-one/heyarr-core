@@ -84,6 +84,8 @@ type QBClient struct {
 	api     *qbTransport
 	// stallAfter is QBOptions.StallAfter (#811).
 	stallAfter time.Duration
+	// progress dates each transfer's last fetched piece for the stall rule.
+	progress *progressClock
 
 	version string // the app version the last Check learnt, for Session-style reads.
 }
@@ -119,6 +121,7 @@ func NewQBittorrent(opts QBOptions) (*QBClient, error) {
 		label:      label,
 		now:        now,
 		stallAfter: opts.StallAfter,
+		progress:   newProgressClock(),
 		api: &qbTransport{
 			base: strings.TrimRight(strings.TrimSpace(opts.Endpoint), "/"),
 			user: opts.Username,
@@ -321,13 +324,13 @@ type qbTorrent struct {
 	SavePath    string  `json:"save_path"`
 	ContentPath string  `json:"content_path"`
 	Category    string  `json:"category"`
-	// AddedOn and LastActivity (Unix seconds) date the last piece data the
-	// transfer moved, for the no-progress stall rule (#811). NumSeeds and
-	// NumLeechs only describe it in the detail.
-	AddedOn      int64 `json:"added_on"`
-	LastActivity int64 `json:"last_activity"`
-	NumSeeds     int   `json:"num_seeds"`
-	NumLeechs    int   `json:"num_leechs"`
+	// AddedOn (Unix seconds) dates a transfer that has fetched nothing, for
+	// the no-progress stall rule (#811). last_activity is deliberately not
+	// read: uploads move it too (see progressClock). NumSeeds and NumLeechs
+	// only describe the stall in the detail.
+	AddedOn   int64 `json:"added_on"`
+	NumSeeds  int   `json:"num_seeds"`
+	NumLeechs int   `json:"num_leechs"`
 }
 
 // ours reads the queue filtered to this client's category.
@@ -748,14 +751,15 @@ func (c *QBClient) stalled(t qbTorrent, done bool) (Trouble, bool) {
 	default:
 		return Trouble{}, false
 	}
-	last := t.LastActivity
-	if t.AddedOn > last {
-		last = t.AddedOn
+	var added time.Time
+	if t.AddedOn > 0 {
+		added = time.Unix(t.AddedOn, 0)
 	}
-	var since time.Time
-	if last > 0 {
-		since = time.Unix(last, 0)
+	fetched := t.Completed
+	if fetched == 0 {
+		fetched = t.Downloaded
 	}
+	since := c.progress.lastProgress(strings.ToLower(t.Hash), fetched, added, c.now())
 	detail := fmt.Sprintf("state %s, %d seeds and %d leechers connected", t.State, t.NumSeeds, t.NumLeechs)
 	return noProgress(c.now(), since, stallWindow(c.stallAfter), detail)
 }

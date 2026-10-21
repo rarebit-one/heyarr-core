@@ -103,6 +103,8 @@ type Client struct {
 	now     func() time.Time
 	// stallAfter is Options.StallAfter (#811).
 	stallAfter time.Duration
+	// progress dates each transfer's last fetched piece for the stall rule.
+	progress *progressClock
 
 	// httpc fetches an indexer's .torrent so Transmission is handed the bytes
 	// rather than a URL it may be unable to reach (Add, fetchTorrent, #492). It
@@ -174,6 +176,7 @@ func New(opts Options) (*Client, error) {
 		label:      label,
 		now:        now,
 		stallAfter: opts.StallAfter,
+		progress:   newProgressClock(),
 		httpc:      httpc,
 		rpc: &transport{
 			endpoint: rpcURL(opts.Endpoint),
