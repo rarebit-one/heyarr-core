@@ -103,8 +103,8 @@ recipient the space was created for keeps being re-wrapped.
 Removing a member records a tombstone and names the rotation that completes
 it. The server cannot rotate (it holds no key), so the removed member's devices
 keep the copies they hold until the owner's device re-keys the space without
-them — and that rotation is refused for every space that is not a playlist
-until older clients understand key epochs (#698, #706):
+them. That rotation works for every kind of space, because every client
+reads across key epochs through the key history (#698, #706):
 
 ```
 mnemosyne space members remove <space-id> --user <principal>
@@ -223,6 +223,94 @@ heyarr app and the Mnemosyne app is two Voidbind devices, each paired, admitted
 and enrolled (`POST /enrol`) on its own, because the two app sandboxes cannot
 share a private key (ADR-0107 amendment, #765).
 
+## Moving a vault from heyarr to Mnemosyne
+
+A vault that heyarr held before #754 does not move by copying a database. Its
+space is wrapped to the devices that wrote it, which are often older devices
+or ones about to be retired. The safe path re-seeds a fresh space wrapped to
+the device that will sync it, re-uploads the files, and only then retires the
+old space. Nothing is re-encrypted in place, and the old space stays readable
+until the new one is verified.
+
+1. **Bring Mnemosyne up and pin the user.** Run it as in [Running](#running),
+   at every site that will hold the vault. Pin the owner's user identity on
+   each one: pins are per controller, and the personal profile mounts no
+   identities API.
+
+   ```
+   mnemosyne admin user pin <name> <ed25519:user-key> --recovery-key <x25519:recovery-key>
+   ```
+
+   For two sites, enrol each as the other's sibling
+   ([Two sites, one vault](#two-sites-one-vault-adr-0114)).
+2. **Enrol the syncing device.** Pair it into the owner's identity
+   (`void-which-binds pair-join`, approved from an existing member device),
+   then enrol it at each Mnemosyne node and authorise it for write:
+
+   ```
+   mnemosyne device enrol --peer https://<node>    # on the device; no admin token
+   mnemosyne admin management grant <ed25519:device-key> --reason "vault sync"   # on the node
+   ```
+
+   A device whose keys are in sealed-file custody can't run an unattended
+   daemon. Pair a separate software service device for the daemon instead
+   (ADR-0021 allows software keys for unattended service devices). Don't try
+   to wrap the new space to the old device's key with
+   `space create --self=false --recipient <old key>`: enrol-before-wrap refuses
+   a recipient that isn't an enrolled device (ADR-0049).
+3. **Re-seed a fresh space.** `space create` authenticates with a bearer token,
+   not the device credential, so mint a short-lived write token on the node,
+   then create the space from the enrolled device against the node's address:
+
+   ```
+   mnemosyne token create vault-reseed --scopes write --expires 1d   # on the node
+   HEYARR_TOKEN=<token> mnemosyne space create --addr https://<node> \
+     --kind personal --recipient <x25519:recovery-key>              # on the device
+   ```
+
+   The device key wraps the new space key (`--self`), so run this where the
+   device directory is.
+
+   Name the user's recovery key (the one pinned in step 1) explicitly. `--recovery`
+   wraps for it only when this machine holds the user identity, and a freshly
+   paired sync or service device usually holds just its device key. Without the
+   recovery wrap, losing that device's key loses the vault. A pinned recovery key
+   passes enrol-before-wrap. Alternatively, run `space create` on a machine that
+   holds the user identity and add the sync device as a `--recipient`.
+
+   Point the sync client at the new space with a **new** local index, so it
+   re-uploads every file instead of trusting the old index's view of what the
+   server holds. Let the full upload finish.
+4. **Verify before retiring anything.**
+   - `mnemosyne vault ls <space-id>` lists every file.
+   - A spot `mnemosyne vault pull` comes back byte-identical.
+   - With two sites, every blob reports `sites_durable: 2` on
+     `GET /api/v1/vault/blobs/{hash}/placement`.
+5. **Stop the old writer, then switch heyarr's vault off.** Disable the sync
+   daemon that wrote the old space. Then run heyarr with `vault.enabled: false`,
+   the default since #754, at every site. Its vault routes then answer 404, and
+   any client still pointing at heyarr fails loudly instead of writing to the
+   old space.
+6. **Keep the old space for a grace period, then purge it.** The old space's
+   changes and blobs stay in heyarr's database and CAS, unreachable but intact,
+   so a missed file can still be recovered with the old devices' keys. Removing
+   the space alone does **not** free its bytes. Every vault upload recorded a
+   placement pin (blob, peer) with no link to its space, and GC counts a pin as
+   a live reference (ADR-0096). The purge must therefore also unpin each blob the
+   old space referenced (`DELETE /api/v1/vault/placements` with
+   `{"blob_hash", "peer_id"}`) before GC can reclaim it after its grace window
+   (ADR-0018). That route is part of the vault surface, so after step 5 it is
+   reached by running Mnemosyne over the old database, not heyarr. **Stop heyarr
+   first** and restart it only after that Mnemosyne process exits: two
+   controllers on one SQLite file break the single-writer rule (Invariant 5,
+   ADR-0003), whatever routes either one mounts. Nothing yet
+   lists a space's blob hashes and there is no `space delete` command, so the
+   purge is an operator step, tracked on #754.
+
+Once the new space holds everything, rotating it to revoke a retired device
+works for every kind of space (#698, #706). A remaining device reads the
+pre-rotation files through the key history.
+
 ## Phase plan
 
 This document tracks Phase 1 (ADR-0107). Future phases are tracked in the epic
@@ -246,9 +334,9 @@ settled.
   `DELETE /api/v1/spaces/{id}/members/{member}`, the membership gate on
   enrol-before-wrap (`wrap_recipient_not_member`), and
   `mnemosyne space members list|add|remove` (shipped). Still open: the
-  membership record replicating with the space (ADR-0101 path), member removal
-  completing with a rotation on non-playlist spaces (gated on #698/#706), the
-  two-device acceptance scene. Also planned: Mnemosyne-specific Docker image;
+  membership record replicating with the space (ADR-0101 path), the
+  two-device acceptance scene. (Member removal now completes with a rotation on
+  every kind of space, #706.) Also planned: Mnemosyne-specific Docker image;
   CI acceptance for the personal profile; `mnemosyne fsck` reports vault
   completeness.
 - **Phase 3:** Operator guide for a combined personal+media node; peer pairing
