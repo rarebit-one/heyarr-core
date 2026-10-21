@@ -230,7 +230,7 @@ func (c *QBClient) Add(ctx context.Context, source secret.Value) (providers.Tran
 
 	if hash != "" {
 		if t, ok := c.byHash(ctx, hash); ok {
-			return c.toTransfer(t), nil
+			return c.withTrackers(ctx, c.toTransfer(t)), nil
 		}
 		// Accepted but not yet registered in the queue. The caller gets a
 		// transfer keyed by the infohash it will carry, and the next poll fills
@@ -245,7 +245,7 @@ func (c *QBClient) Add(ctx context.Context, source secret.Value) (providers.Tran
 	}
 	for _, t := range after {
 		if _, seen := before[strings.ToLower(t.Hash)]; !seen {
-			return c.toTransfer(t), nil
+			return c.withTrackers(ctx, c.toTransfer(t)), nil
 		}
 	}
 	return providers.Transfer{}, fmt.Errorf(
@@ -334,6 +334,36 @@ func (c *QBClient) ours(ctx context.Context) ([]qbTorrent, error) {
 		}
 	}
 	return out, nil
+}
+
+// withTrackers fills a transfer's announce URLs from torrents/trackers, best
+// effort: a failure costs the trackers a fan-out op could carry (ADR-0119),
+// never the grab. qBittorrent lists its DHT, PeX and LSD sources as pseudo
+// trackers ("** [DHT] **"), which are not URLs and are skipped.
+func (c *QBClient) withTrackers(ctx context.Context, t providers.Transfer) providers.Transfer {
+	if t.ID == "" {
+		return t
+	}
+	body, err := c.api.get(ctx, "/api/v2/torrents/trackers", url.Values{"hash": {t.ID}})
+	if err != nil {
+		return t
+	}
+	var list []struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return t
+	}
+	seen := map[string]bool{}
+	for _, tr := range list {
+		u := strings.TrimSpace(tr.URL)
+		if u == "" || strings.HasPrefix(u, "**") || seen[u] {
+			continue
+		}
+		seen[u] = true
+		t.Trackers = append(t.Trackers, u)
+	}
+	return t
 }
 
 // byHash returns the transfer with the given infohash if it is ours yet.

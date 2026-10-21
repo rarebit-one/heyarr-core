@@ -458,11 +458,12 @@ func TestAPublicReleaseCarriesItsCredentialFreeTrackers(t *testing.T) {
 		"http://tracker.example.org/announce",
 		"https://tracker.example.org:443/",
 		"udp://open.example.net:6969",
-		"https://user:secret@tracker.example.org/announce",          // userinfo
-		"https://tracker.example.org/announce?passkey=abc",          // query
-		"https://tracker.example.org/0123456789abcdef0123/announce", // a path passkey
-		"magnet:?xt=urn:btih:" + fakeInfohash,                       // not a tracker
-		"ftp://tracker.example.org/announce",                        // scheme
+		"https://user:secret@tracker.example.org/announce",                                // userinfo
+		"https://tracker.example.org/announce?passkey=abc",                                // query
+		"https://tracker.example.org/0123456789abcdef0123/announce",                       // a path passkey
+		"magnet:?xt=urn:btih:" + fakeInfohash,                                             // not a tracker
+		"ftp://tracker.example.org/announce",                                              // scheme
+		"udp://" + strings.Repeat("x", catalogop.MaxTrackerLen) + ".example.org/announce", // too long
 	}
 	pub, ops := newPublisher(t, arrivalFacts())
 	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash,

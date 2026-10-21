@@ -237,12 +237,15 @@ func trackersFor(private bool, announce []string) []string {
 }
 
 // publicTracker admits an announce URL only in the shape a public tracker
-// uses: udp, http(s) or ws(s), a host, no userinfo, query or fragment, and a
-// path that is empty, "/" or "/announce". catalogop's own check stops at "no
+// uses: at most catalogop.MaxTrackerLen bytes, udp, http(s) or ws(s), a host,
+// no userinfo, query or fragment, and a path that is empty, "/" or "/announce". catalogop's own check stops at "no
 // userinfo/query/fragment" because a passkey in the PATH looks like a route;
 // a publisher can afford to be stricter and drop every other path, since a
 // public tracker never needs one.
 func publicTracker(raw string) bool {
+	if len(raw) > catalogop.MaxTrackerLen {
+		return false
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return false

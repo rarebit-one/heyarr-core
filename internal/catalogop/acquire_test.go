@@ -116,6 +116,7 @@ func TestAcquireRejectsCredentialBearingTrackers(t *testing.T) {
 		"https:///announce",
 		"ftp://tracker.example.org/announce",
 		"not a url at all\x00",
+		"udp://" + strings.Repeat("x", catalogop.MaxTrackerLen) + ".example.org/announce", // past the length cap
 	}
 	for _, tr := range bad {
 		a := publicAcquire()

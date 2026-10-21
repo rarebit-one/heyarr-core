@@ -111,6 +111,11 @@ func (f *fakeQB) server(t *testing.T) *httptest.Server {
 		_, _ = w.Write([]byte("Ok."))
 	}))
 
+	mux.HandleFunc("/api/v2/torrents/trackers", guard(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"url":"** [DHT] **"},{"url":"** [PeX] **"},` +
+			`{"url":"udp://tracker.example.org:1337/announce"},{"url":"udp://tracker.example.org:1337/announce"}]`))
+	}))
+
 	mux.HandleFunc("/api/v2/torrents/info", guard(func(w http.ResponseWriter, r *http.Request) {
 		cat := r.URL.Query().Get("category")
 		hashes := r.URL.Query().Get("hashes")
@@ -372,5 +377,19 @@ func TestCompareDotted(t *testing.T) {
 		if got := compareDotted(tc.a, tc.b); got != tc.want {
 			t.Errorf("compareDotted(%q,%q) = %d, want %d", tc.a, tc.b, got, tc.want)
 		}
+	}
+}
+
+// TestQBAddReportsTheTransfersTrackers: Add reads torrents/trackers back, keeps
+// the real announce URLs once each and drops qBittorrent's pseudo trackers.
+func TestQBAddReportsTheTransfersTrackers(t *testing.T) {
+	f := newFakeQB()
+	c := qbClient(t, f.server(t).URL)
+	tr, err := c.Add(context.Background(), secret.Value(qbMagnet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(tr.Trackers, " ") != "udp://tracker.example.org:1337/announce" {
+		t.Fatalf("Trackers = %v", tr.Trackers)
 	}
 }
