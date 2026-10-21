@@ -50,6 +50,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/peer/catalogsync"
 	"github.com/rarebit-one/heyarr-core/internal/peer/health"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
+	"github.com/rarebit-one/heyarr-core/internal/peer/leasesync"
 	"github.com/rarebit-one/heyarr-core/internal/peer/membership"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
@@ -398,7 +399,11 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 		// Device write leases for siblings (ADR-0048, #285). Both profiles: a
 		// management grant authorises write on either, and a sibling honours
 		// a lease only after opting into this peer, so issuing is harmless.
-		return c.startDeviceLeases(ctx, db, reconcileEvents, members)
+		// The fetch beat caches the leases siblings issued for this site.
+		if err := c.startDeviceLeases(ctx, db, reconcileEvents, members); err != nil {
+			return err
+		}
+		return c.startLeaseFetch(ctx, db, reconcileEvents, self, material, members)
 	}
 
 	// Media profile: full beat set (unchanged from before ADR-0107).
@@ -488,7 +493,25 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 
 	// The device write lease beat (ADR-0048, #285): every write-authorised
 	// device gets a write lease for each sibling site. See leasebeat.go.
-	return c.startDeviceLeases(ctx, db, reconcileEvents, members)
+	if err := c.startDeviceLeases(ctx, db, reconcileEvents, members); err != nil {
+		return err
+	}
+	// Its other half: fetch the leases each sibling issued for this site into
+	// the lease cache. See leasefetchbeat.go.
+	return c.startLeaseFetch(ctx, db, reconcileEvents, self, material, members)
+}
+
+// startLeaseFetch starts the sibling lease fetch beat on the serving context.
+// A node with no certificate material or no membership store has no peer
+// surface and no sibling to fetch from, so it is a supported no-op there.
+func (c *Controller) startLeaseFetch(ctx context.Context, db *sqlite.DB, eventLog *events.Log,
+	self identity.Identity, material *mtls.Material, members *membership.Store,
+) error {
+	if material == nil || members == nil {
+		return nil
+	}
+	return startSiblingLeaseFetch(ctx, db, eventLog, self.PublicKey, members,
+		leasesync.NewClient(material, c.log), nil, c.log, wallTicker)
 }
 
 // startDeviceLeases starts the device write lease beat on the serving context,

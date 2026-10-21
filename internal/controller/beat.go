@@ -30,23 +30,32 @@ type beat struct {
 	// Whether a restart is a reason to run is each beat's own decision — see
 	// startUpgradeScan and startBackup for the ones that deliberately wait.
 	startup bool
+	// startupInBackground runs that startup pass first thing on the beat's
+	// goroutine instead, before it takes a tick, so startBeat returns at once.
+	// For a pass that dials siblings: an unreachable one must not hold up the
+	// controller's startup for a dial timeout.
+	startupInBackground bool
 	// attrs are logged on the started line after "interval".
 	attrs []any
 	// pass is one unit of the beat's work; reason is "startup" or "beat".
 	pass func(reason string)
 }
 
-// startBeat runs b: its startup pass (if any) now, then one pass per tick of a
-// ticker made by newTicker, in its own goroutine, until ctx is done — at which
-// point the ticker is stopped. A pass is never fatal; the beat logs its own
-// failures and the next tick tries again.
+// startBeat runs b: its startup pass (if any) now, or first on its goroutine
+// when startupInBackground, then one pass per tick of a ticker made by
+// newTicker, in its own goroutine, until ctx is done — at which point the
+// ticker is stopped. A pass is never fatal; the beat logs its own failures and
+// the next tick tries again.
 func startBeat(ctx context.Context, log *slog.Logger, newTicker tickerFunc, b beat) {
-	if b.startup {
+	if b.startup && !b.startupInBackground {
 		b.pass("startup")
 	}
 	tick, stop := newTicker(b.interval)
 	go func() {
 		defer stop()
+		if b.startup && b.startupInBackground && ctx.Err() == nil {
+			b.pass("startup")
+		}
 		for {
 			select {
 			case <-ctx.Done():

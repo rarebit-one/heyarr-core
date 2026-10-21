@@ -104,3 +104,15 @@ func TestDeviceLeaseBeatIssuesAndRevokesFromTheControllersStores(t *testing.T) {
 	cancel()
 	ticker.awaitStop(t)
 }
+
+// The issuer re-issues a lease at DeviceWriteRefreshThreshold + DeviceWriteReissueSlack,
+// so every lease served between two passes keeps at least the threshold only if the beat
+// runs at least once per slack. Pin it well inside, so a slower beat cannot quietly break
+// the outage guarantee a sibling's cached lease relies on (Codex review on #808).
+func TestTheDeviceLeaseBeatRunsWellInsideTheReissueSlack(t *testing.T) {
+	t.Parallel()
+	if 2*deviceLeaseInterval > leases.DeviceWriteReissueSlack {
+		t.Fatalf("deviceLeaseInterval %v is not well inside DeviceWriteReissueSlack %v",
+			deviceLeaseInterval, leases.DeviceWriteReissueSlack)
+	}
+}

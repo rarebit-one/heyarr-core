@@ -213,8 +213,8 @@ that is a stated consequence, not a bug — 24 hours is how short the expiry has
 be for it to be acceptable.
 
 *(amended 2026-10-21)* **The re-issuer.** A controller beat (every few minutes)
-issues each write-authorised device a lease per sibling site, reuses one while at
-least half its life remains, and revokes a device's leases once its management
+issues each write-authorised device a lease per sibling site, reuses one while
+more than half its life plus one beat's slack remains, and revokes a device's leases once its management
 grant is gone (#285). Revocation at the issuer therefore takes effect within a
 beat. At a sibling it takes effect when that sibling next fetches, and is bounded
 by the lease's remaining life while the two cannot reach each other.
@@ -333,9 +333,9 @@ coverage), and the decomposition issues each carry "what would make it provable.
 - **Skew is safe** → a peer whose clock is ahead refuses a still-valid grant
   (safe); the verifier never honours a grant past `expiry` on its own clock.
 - **Every transition emits an event** (invariant 7) → a grant issued, cached,
-  honoured, refused. *(amended 2026-10-21)* Only `lease.issued` and
-  `lease.revoked` exist (`internal/events`). `lease.cached`, `lease.honoured` and
-  `lease.refused` are owed by the implementation work below.
+  honoured, refused. *(amended 2026-10-21)* `lease.issued`, `lease.revoked` and
+  `lease.cached` exist (`internal/events`). `lease.honoured` and `lease.refused`
+  are owed by the implementation work below.
 
 The two numbers the milestone owes, stated: **revocation window = 24 hours**
 (the partition worst case; steady-state revocation is a re-issue cadence of

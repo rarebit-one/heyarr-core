@@ -145,8 +145,9 @@ type issuerStep struct {
 func TestDeviceWriteIssuerReconcile(t *testing.T) {
 	t.Parallel()
 	ttl, threshold := leases.DeviceWriteTTL, leases.DeviceWriteRefreshThreshold
-	// The instant the first lease's remaining life equals the threshold.
-	atThreshold := ttl - threshold
+	// The instant the first lease's remaining life reaches the re-issue point,
+	// the threshold plus the slack that covers one issuer beat.
+	atThreshold := ttl - threshold - leases.DeviceWriteReissueSlack
 
 	tests := []struct {
 		name  string
@@ -198,8 +199,13 @@ func TestDeviceWriteIssuerReconcile(t *testing.T) {
 					active: []string{pair(devD, sibB), pair(devD, sibB)}, issued: 2,
 				},
 				{
+					// The first lease expires on its own (never revoked). With the
+					// re-issue slack a refresh falls due every TTL − threshold − slack,
+					// a little under half the TTL, so by now the second lease is due too
+					// and a third is issued: two live, the first gone.
 					name: "the old lease expires on its own", at: ttl, devices: []string{devD}, siblings: []string{sibB},
-					want: leases.DeviceWriteResult{Reused: 1}, active: []string{pair(devD, sibB)}, issued: 2,
+					want:   leases.DeviceWriteResult{Issued: 1},
+					active: []string{pair(devD, sibB), pair(devD, sibB)}, issued: 3,
 				},
 			},
 		},

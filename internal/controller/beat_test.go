@@ -62,9 +62,11 @@ func (f *fakeTicker) awaitStop(t *testing.T) {
 
 // startBeat runs the startup pass before it returns, a "beat" pass per tick,
 // and stops its ticker with its context; a beat that opts out of the startup
-// pass waits for its first tick.
+// pass waits for its first tick; a beat that runs it in the background runs it
+// before it takes its first tick.
 func TestStartBeat(t *testing.T) {
-	for _, startup := range []bool{true, false} {
+	for _, mode := range []struct{ startup, background bool }{{true, false}, {false, false}, {true, true}} {
+		startup := mode.startup
 		ctx, cancel := context.WithCancel(t.Context())
 		var mu sync.Mutex
 		var reasons []string
@@ -81,13 +83,14 @@ func TestStartBeat(t *testing.T) {
 
 		clock := newFakeTicker()
 		startBeat(ctx, discard(), clock.newTicker, beat{
-			name: "test", interval: time.Minute, startup: startup, pass: pass,
+			name: "test", interval: time.Minute, startup: startup,
+			startupInBackground: mode.background, pass: pass,
 		})
 		var want []string
 		if startup {
 			want = []string{"startup"}
 		}
-		if got := seen(); !slices.Equal(got, want) {
+		if got := seen(); !mode.background && !slices.Equal(got, want) {
 			t.Fatalf("startup=%v: passes before any tick = %v, want %v", startup, got, want)
 		}
 		if clock.interval != time.Minute {
