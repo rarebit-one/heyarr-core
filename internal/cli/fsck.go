@@ -66,7 +66,9 @@ func withIntegrity(ctx context.Context, configPath string,
 	if err != nil {
 		return fmt.Errorf("opening the content store: %w", err)
 	}
-	opts := integrity.Options{Store: store, Catalog: cat}
+	// Release intent is honoured where the worker honours it: the personal
+	// profile (#779, ADR-0114). `gc --honour-releases` can change it per run.
+	opts := integrity.Options{Store: store, Catalog: cat, HonourReleases: cfg.Profile == config.ProfilePersonal}
 	if v := durabilityFor(ctx, cfg.DataDir, cat, db); v != nil {
 		opts.Durability = v
 	}
@@ -522,6 +524,8 @@ func newGCCommand(_ Options, configPath *string) *cobra.Command {
 		grace     time.Duration
 		tempGrace time.Duration
 		asJSON    bool
+
+		honourReleases bool
 	)
 	cmd := &cobra.Command{
 		Use:   "gc",
@@ -537,7 +541,15 @@ Reclamation is two-pass. The first sweep that sees a blob with no references
 records when it noticed and reclaims nothing; a later sweep, once the grace
 window has passed, frees the bytes. So a mistaken delete stays reversible for
 the length of the window, and a blob that regains a reference gets a fresh
-window rather than a partly spent one.`,
+window rather than a partly spent one.
+
+A vault blob whose last placement pin was removed, or whose source sibling
+withdrew it, is RELEASED (#779, ADR-0114). On the personal profile the sweep
+reclaims a released blob's last copy once its window has passed, recording the
+basis "released", where otherwise a two-site fabric would keep it at one site
+forever. The media profile keeps ADR-0018's last-copy rule; --honour-releases
+opts one run in, for retiring vault data a media node still holds. Library media
+is never released, so that flag cannot reach it.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if apply && cmd.Flags().Changed("dry-run") && dryRun {
@@ -555,6 +567,9 @@ window rather than a partly spent one.`,
 			return withIntegrity(cmd.Context(), *configPath, func(
 				ctx context.Context, opts integrity.Options, _ *cas.FS, _ *catalog.Catalog, _ string,
 			) error {
+				if cmd.Flags().Changed("honour-releases") {
+					opts.HonourReleases = honourReleases
+				}
 				collector, err := integrity.NewCollector(opts)
 				if err != nil {
 					return err
@@ -578,6 +593,9 @@ window rather than a partly spent one.`,
 	cmd.Flags().DurationVar(&tempGrace, "temp-grace", integrity.DefaultTempGrace,
 		"how old a partial write must be before it is swept")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
+	cmd.Flags().BoolVar(&honourReleases, "honour-releases", false,
+		"reclaim the last copy of released vault blobs after the grace window "+
+			"(default: on for the personal profile, off for media)")
 	return cmd
 }
 

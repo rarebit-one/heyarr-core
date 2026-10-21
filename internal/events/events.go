@@ -67,9 +67,19 @@ const (
 	// healthy library would emit one per blob, which is a hundred thousand
 	// events recording that nothing happened. A successful verification is
 	// recorded as replicas.verified_at, which is state rather than a transition.
-	TypeBlobReclaimed  = "blob.reclaimed"
-	TypeReplicaPresent = "replica.present"
-	TypeReplicaCorrupt = "replica.corrupt"
+	TypeBlobReclaimed = "blob.reclaimed"
+	// TypeBlobReleased is the last thing wanting a vault blob letting it go:
+	// its last placement pin removed, or its source sibling withdrawing the
+	// placement (#779, ADR-0114). It is the transition that lets the personal
+	// profile's GC reclaim the blob's last copy after the grace window.
+	TypeBlobReleased = "blob.released"
+	// TypeBlobReleaseCleared is a released blob wanted again — a new pin or
+	// taken placement, or a sweep that saw it referenced — so its release no
+	// longer stands. A release that goes with its reclaimed blob emits only
+	// blob.reclaimed.
+	TypeBlobReleaseCleared = "blob.release_cleared"
+	TypeReplicaPresent     = "replica.present"
+	TypeReplicaCorrupt     = "replica.corrupt"
 	// TypeReplicaMissing is a blob the catalog knows about whose bytes are not
 	// on this peer at all. Distinct from corrupt: corrupt means we still hold
 	// evidence and it is quarantined, missing means we hold nothing.

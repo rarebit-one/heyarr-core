@@ -202,6 +202,14 @@ func ReplicateBlobHandler(deps TransferDeps) HandlerFunc {
 		}
 
 		record := catalog.BlobTransfer{BlobHash: hash.String(), DestinationPeerID: self}
+		// The bytes are confirmed present inside the recording transaction:
+		// GC may reclaim a released blob of the same hash between the pull or
+		// Stat below and the record (#779). If so nothing is recorded and the
+		// job is retried, rather than a replica recorded for missing bytes.
+		record.Present = func(ctx context.Context) error {
+			_, err := deps.Store.Stat(ctx, hash)
+			return err
+		}
 
 		// Already held. The re-run case, and the concurrent-ingest case: the
 		// bytes may have arrived by any route since the job was written.

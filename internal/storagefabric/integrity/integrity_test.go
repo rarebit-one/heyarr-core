@@ -59,6 +59,13 @@ type fakeCatalog struct {
 	// blobs row — the pre-#659 vault upload shape (#719).
 	selfPins map[string]struct{}
 
+	// wantedAgain makes Reclaim refuse these hashes as the real catalog does
+	// when a release went stale before the delete (#779).
+	wantedAgain map[string]bool
+	// referencedAtUnlink makes GuardUnlink find a reference that arrived
+	// after Reclaim committed (#779).
+	referencedAtUnlink map[string]bool
+
 	// The peer-shaped state ADR-0018's placement precondition reads (M4-12).
 	peers    []integrity.Peer
 	replicas map[string][]integrity.Replica
@@ -151,13 +158,24 @@ func (f *fakeCatalog) ClearUnreferenced(_ context.Context, hashes []hashing.Hash
 	for _, h := range hashes {
 		if b, ok := f.blobs[h.String()]; ok {
 			b.UnreferencedSince = time.Time{}
+			b.ReleasedAt, b.ReleaseCause = time.Time{}, ""
 			f.cleared++
 		}
 	}
 	return nil
 }
 
+func (f *fakeCatalog) GuardUnlink(_ context.Context, h hashing.Hash, unlink func() error) error {
+	if f.referencedAtUnlink[h.String()] {
+		return integrity.ErrWantedAgain
+	}
+	return unlink()
+}
+
 func (f *fakeCatalog) Reclaim(_ context.Context, h hashing.Hash, _ int64, tracked bool, _ time.Time) error {
+	if tracked && f.wantedAgain[h.String()] {
+		return integrity.ErrWantedAgain
+	}
 	if tracked {
 		delete(f.blobs, h.String())
 		f.reclaimed = append(f.reclaimed, h.String())

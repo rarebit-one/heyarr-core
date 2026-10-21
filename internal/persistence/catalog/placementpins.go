@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
@@ -21,12 +22,24 @@ func (c *Catalog) PinPlacement(ctx context.Context, blobHash, peerID string) err
 	if blobHash == "" || peerID == "" {
 		return fmt.Errorf("catalog: a placement pin needs both a blob hash and a peer id")
 	}
-	_, err := c.db.Writer().ExecContext(ctx,
-		`INSERT INTO placement_pins (blob_hash, peer_id, created_at) VALUES (?, ?, ?)
-		 ON CONFLICT (blob_hash, peer_id) DO NOTHING`,
-		blobHash, peerID, c.clock.Now().Format(timestampFormat))
+	var pending []events.Event
+	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO placement_pins (blob_hash, peer_id, created_at) VALUES (?, ?, ?)
+			 ON CONFLICT (blob_hash, peer_id) DO NOTHING`,
+			blobHash, peerID, c.clock.Now().Format(timestampFormat)); err != nil {
+			return fmt.Errorf("catalog: recording a placement pin: %w", err)
+		}
+		// Pinned again: whatever release it carried no longer stands (#779).
+		evs, err := c.markWanted(ctx, tx, blobHash, wantedByPin)
+		pending = evs
+		return err
+	})
 	if err != nil {
-		return fmt.Errorf("catalog: recording a placement pin: %w", err)
+		return err
+	}
+	if len(pending) > 0 {
+		c.events.Publish(pending...)
 	}
 	return nil
 }
@@ -55,7 +68,15 @@ func (c *Catalog) PinPlacement(ctx context.Context, blobHash, peerID string) err
 //
 // Idempotent (invariant 9): a re-upload of bytes already recorded writes
 // nothing and emits nothing.
-func (c *Catalog) RecordVaultBlob(ctx context.Context, blobHash string, size int64, peerID string) error {
+//
+// present, when not nil, confirms the bytes are still in the store. It runs
+// inside the transaction, which holds the write lock from its start, so it is
+// serialized with GC's guarded unlink of a released blob (#779): either the
+// unlink sees this row and keeps the bytes, or this sees the bytes gone and
+// records nothing, returning ErrBytesGone for the uploader to retry.
+func (c *Catalog) RecordVaultBlob(
+	ctx context.Context, blobHash string, size int64, peerID string, present func(context.Context) error,
+) error {
 	if blobHash == "" || peerID == "" {
 		return fmt.Errorf("catalog: a vault blob needs both a blob hash and a peer id")
 	}
@@ -63,6 +84,11 @@ func (c *Catalog) RecordVaultBlob(ctx context.Context, blobHash string, size int
 	var pending []events.Event
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
 		pending = nil
+		if present != nil {
+			if err := present(ctx); err != nil {
+				return fmt.Errorf("%w: %s: %w", ErrBytesGone, blobHash, err)
+			}
+		}
 		adopted, err := adoptBlob(ctx, tx, blobHash, size, now)
 		if err != nil {
 			return err
@@ -106,6 +132,11 @@ func (c *Catalog) RecordVaultBlob(ctx context.Context, blobHash string, size int
 			blobHash, peerID, c.clock.Now().Format(timestampFormat)); err != nil {
 			return fmt.Errorf("catalog: recording a placement pin: %w", err)
 		}
+		evs, err := c.markWanted(ctx, tx, blobHash, wantedByPin)
+		if err != nil {
+			return err
+		}
+		pending = append(pending, evs...)
 		return nil
 	})
 	if err != nil {
@@ -116,6 +147,12 @@ func (c *Catalog) RecordVaultBlob(ctx context.Context, blobHash string, size int
 	}
 	return nil
 }
+
+// ErrBytesGone is RecordVaultBlob or RecordBlobTransferred finding the bytes
+// it was asked to record no longer in the store: GC reclaimed a released blob
+// of the same hash between the store write and this commit (#779). Nothing was
+// recorded; the upload or transfer should be retried.
+var ErrBytesGone = errors.New("catalog: the blob's bytes are no longer in the store")
 
 // PlacementPin is one recorded pin: a ciphertext blob a peer should hold
 // (ADR-0096). It is the (blob, peer) pair and nothing else — the table carries a
@@ -155,11 +192,31 @@ func (c *Catalog) AllPlacementPins(ctx context.Context) ([]PlacementPin, error) 
 // blob or is a replication target for it. The device calls this when the drive
 // CRDT's retention lets the blob go (ADR-0096); dropping a pin that is not there
 // is not an error.
+//
+// Removing the LAST thing that wants a vault blob records release intent in the
+// same transaction (#779, ADR-0114), so the personal profile's GC may reclaim
+// its last copy after the grace window.
 func (c *Catalog) UnpinPlacement(ctx context.Context, blobHash, peerID string) error {
-	_, err := c.db.Writer().ExecContext(ctx,
-		`DELETE FROM placement_pins WHERE blob_hash = ? AND peer_id = ?`, blobHash, peerID)
+	now := c.clock.Now().UTC().Format(timestampFormat)
+	var pending []events.Event
+	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		pending = nil
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM placement_pins WHERE blob_hash = ? AND peer_id = ?`, blobHash, peerID)
+		if err != nil {
+			return fmt.Errorf("catalog: removing a placement pin: %w", err)
+		}
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
+			return err
+		}
+		pending, err = c.recordReleaseIfUnwanted(ctx, tx, blobHash, releaseUnpinned, "", now)
+		return err
+	})
 	if err != nil {
-		return fmt.Errorf("catalog: removing a placement pin: %w", err)
+		return err
+	}
+	if len(pending) > 0 {
+		c.events.Publish(pending...)
 	}
 	return nil
 }

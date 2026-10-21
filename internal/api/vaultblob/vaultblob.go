@@ -17,6 +17,7 @@ package vaultblob
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
 
@@ -41,6 +43,9 @@ const defaultMaxBytes = int64(16) << 30 // 16 GiB
 // ingest. *cas.FS (and the cas.Store interface) satisfies it.
 type Store interface {
 	PutExpecting(ctx context.Context, r io.Reader, expected hashing.Hash) (cas.Descriptor, error)
+	// Stat confirms the bytes are still there when the upload is recorded,
+	// because GC may reclaim a released blob of the same hash in between (#779).
+	Stat(ctx context.Context, h hashing.Hash) (cas.Descriptor, error)
 }
 
 // Pinner records a stored vault blob in the catalogue — its blob row, this
@@ -52,7 +57,10 @@ type Store interface {
 // node already held, whose replica could never be recorded, and garbage
 // collection saw untracked bytes (#658).
 type Pinner interface {
-	RecordVaultBlob(ctx context.Context, blobHash string, size int64, peerID string) error
+	// present runs inside the recording transaction and confirms the bytes are
+	// still stored; see catalog.Catalog.RecordVaultBlob.
+	RecordVaultBlob(ctx context.Context, blobHash string, size int64, peerID string,
+		present func(context.Context) error) error
 }
 
 // Options configure a Handler.
@@ -159,7 +167,27 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	// a pin outliving its blob (ADR-0096). This node is the pin target — it
 	// holds the bytes; cross-site placement is a device-supplied pin for another
 	// peer. The size is the store's, of bytes it has just verified.
-	if err := h.pinner.RecordVaultBlob(r.Context(), expected.String(), desc.Size, h.selfPeer); err != nil {
+	//
+	// The bytes are confirmed present inside the recording transaction: GC may
+	// have reclaimed a released blob of the same hash after the store write
+	// (#779). If so nothing is recorded and the client is told to retry, rather
+	// than acknowledged for bytes that are not here.
+	present := func(ctx context.Context) error {
+		d, err := h.store.Stat(ctx, expected)
+		if err != nil {
+			return err
+		}
+		if d.Size != desc.Size {
+			return fmt.Errorf("stored size %d, uploaded %d", d.Size, desc.Size)
+		}
+		return nil
+	}
+	if err := h.pinner.RecordVaultBlob(r.Context(), expected.String(), desc.Size, h.selfPeer, present); err != nil {
+		if errors.Is(err, catalog.ErrBytesGone) {
+			httpapi.Fail(w, r, problem.ServiceUnavailable(
+				"the blob was reclaimed while this upload was being recorded; upload it again"))
+			return
+		}
 		h.log.Error("pinning a vault blob", "hash", expected.String(), "error", err)
 		httpapi.Fail(w, r, problem.Internal())
 		return

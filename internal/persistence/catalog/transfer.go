@@ -141,6 +141,14 @@ type BlobTransfer struct {
 	// Reason explains a failure in one phrase, for the event payload. Empty on
 	// success.
 	Reason string
+
+	// Present, when not nil, confirms the transferred bytes are still in the
+	// store. RecordBlobTransferred runs it inside its transaction, which holds
+	// the write lock from its start, so it is serialized with GC's guarded
+	// unlink of a released blob (#779): either the unlink sees the recorded
+	// replica and keeps the bytes, or the record sees them gone, records
+	// nothing and returns ErrBytesGone, and the transfer is retried.
+	Present func(context.Context) error
 }
 
 // BeginBlobTransfer marks the replica `pending` and emits the started
@@ -216,6 +224,11 @@ func (c *Catalog) RecordBlobTransferred(ctx context.Context, t BlobTransfer) err
 	var pending []events.Event
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
 		pending = nil
+		if t.Present != nil {
+			if err := t.Present(ctx); err != nil {
+				return fmt.Errorf("%w: %s: %w", ErrBytesGone, t.BlobHash, err)
+			}
+		}
 		adopted, err := adoptBlob(ctx, tx, t.BlobHash, t.Bytes, now)
 		if err != nil {
 			return err

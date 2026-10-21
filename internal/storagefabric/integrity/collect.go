@@ -201,7 +201,9 @@ func (c *Collector) Collect(ctx context.Context, opts CollectOptions) (Collectio
 		known[b.Hash.String()] = struct{}{}
 		if b.References > 0 {
 			out.Referenced++
-			if !b.UnreferencedSince.IsZero() {
+			// A referenced blob ends its grace window, and any release intent
+			// it carried: it is wanted again (#779).
+			if !b.UnreferencedSince.IsZero() || !b.ReleasedAt.IsZero() {
 				toClear = append(toClear, b.Hash)
 			}
 			continue
@@ -258,7 +260,17 @@ func (c *Collector) Collect(ctx context.Context, opts CollectOptions) (Collectio
 			if err := c.opts.Catalog.RecordDurability(ctx, ev); err != nil {
 				return Collection{}, err
 			}
-			if err := c.reclaim(ctx, b.Hash, b.Size, true, now); err != nil {
+			if err := c.reclaimTracked(ctx, b.Hash, b.Size, ev.Basis == BasisReleased, now); err != nil {
+				if errors.Is(err, ErrWantedAgain) {
+					// The release this sweep read went stale before the
+					// delete: a pin or placement came back (#779).
+					out.Spared = append(out.Spared, Sparing{
+						Hash: b.Hash.String(), Size: b.Size, Reason: ReasonWantedAgain,
+						Detail: "released when the sweep read it, and wanted again before the reclaim; " +
+							"the bytes stay (ADR-0114, #779)",
+					})
+					continue
+				}
 				return Collection{}, err
 			}
 		}
@@ -304,6 +316,27 @@ func (c *Collector) reclaim(ctx context.Context, h hashing.Hash, size int64, tra
 		return c.opts.Catalog.Reclaim(ctx, h, size, false, at)
 	}
 	return nil
+}
+
+// reclaimTracked reclaims a tracked blob. A released blob's bytes are unlinked
+// under the catalog's write lock, after a final reference check (#779): the
+// release basis deletes a last copy, and a pin or taken placement written
+// between the row's delete and the unlink would otherwise point at nothing.
+// Every other basis has a verified copy elsewhere, so a reference that arrives
+// in that window is served by re-replication, and keeps the ordinary path.
+func (c *Collector) reclaimTracked(ctx context.Context, h hashing.Hash, size int64, released bool, at time.Time) error {
+	if !released {
+		return c.reclaim(ctx, h, size, true, at)
+	}
+	if err := c.opts.Catalog.Reclaim(ctx, h, size, true, at); err != nil {
+		return err
+	}
+	return c.opts.Catalog.GuardUnlink(ctx, h, func() error {
+		if err := c.opts.Store.Delete(ctx, h); err != nil && !errors.Is(err, cas.ErrNotFound) {
+			return err
+		}
+		return nil
+	})
 }
 
 // collectUntracked reclaims bytes with no catalog row — the orphan an ingest

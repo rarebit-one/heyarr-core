@@ -161,13 +161,22 @@ func (c *Catalog) MarkReplicaMissing(ctx context.Context, h hashing.Hash, peerID
 // the delete it authorised; that survival is the entire point, and asserting it
 // is one of this issue's acceptance conditions.
 func (c *Catalog) RecordDurability(ctx context.Context, e integrity.Evidence) error {
-	if e.Basis != integrity.BasisVerifiedRemote && e.Basis != integrity.BasisSolePeer {
+	switch e.Basis {
+	case integrity.BasisVerifiedRemote, integrity.BasisSolePeer, integrity.BasisReleased:
+	default:
 		// The CHECK constraint would catch this, and its message would name
 		// neither the blob nor the caller. A basis this package does not
 		// recognise is a new way of deciding it is safe to delete, and it
 		// should be refused where it can be explained.
 		return fmt.Errorf("catalog: refusing to record durability evidence for %s on the basis %q, "+
 			"which is not a basis this system establishes anything on", e.BlobHash, e.Basis)
+	}
+	if e.Basis == integrity.BasisReleased && (e.ReleasedAt.IsZero() || e.UnreferencedSince.IsZero()) {
+		// The reclaim binds to the generation recorded here (#779); evidence
+		// without one could never authorise a delete, so it is refused now,
+		// where the caller can be named.
+		return fmt.Errorf("catalog: released evidence for %s must name the release and the "+
+			"grace-window mark it was decided on", e.BlobHash)
 	}
 	recorded := e.RecordedAt
 	if recorded.IsZero() {
@@ -176,11 +185,11 @@ func (c *Catalog) RecordDurability(ctx context.Context, e integrity.Evidence) er
 	_, err := c.db.Writer().ExecContext(ctx, `
 		INSERT INTO durability_evidence
 			(id, blob_hash, peer_id, peer_name, endpoint, basis, reported_at, verified_at,
-			 size, detail, recorded_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 size, detail, recorded_at, released_at, unreferenced_since)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		uuid.Must(uuid.NewV7()).String(), e.BlobHash.String(), e.PeerID, e.PeerName, e.Endpoint,
 		e.Basis, stampOrNull(e.ReportedAt), stampOrNull(e.VerifiedAt), e.Size, e.Detail,
-		recorded.UTC().Format(timestampFormat))
+		recorded.UTC().Format(timestampFormat), stampOrNull(e.ReleasedAt), stampOrNull(e.UnreferencedSince))
 	if err != nil {
 		return fmt.Errorf("catalog: recording why %s was believed durable elsewhere: %w", e.BlobHash, err)
 	}
@@ -194,7 +203,7 @@ func (c *Catalog) RecordDurability(ctx context.Context, e integrity.Evidence) er
 func (c *Catalog) DurabilityEvidence(ctx context.Context, h hashing.Hash) ([]integrity.Evidence, error) {
 	rows, err := c.db.Reader().QueryContext(ctx, `
 		SELECT blob_hash, peer_id, peer_name, endpoint, basis, reported_at, verified_at,
-		       size, detail, recorded_at
+		       size, detail, recorded_at, released_at, unreferenced_since
 		FROM durability_evidence WHERE blob_hash = ? ORDER BY id DESC`, h.String())
 	if err != nil {
 		return nil, fmt.Errorf("catalog: reading the durability evidence for %s: %w", h, err)
@@ -207,9 +216,11 @@ func (c *Catalog) DurabilityEvidence(ctx context.Context, h hashing.Hash) ([]int
 			e                                  integrity.Evidence
 			hash                               string
 			reportedAt, verifiedAt, recordedAt sql.NullString
+			releasedAt, unreferencedSince      sql.NullString
 		)
 		if err := rows.Scan(&hash, &e.PeerID, &e.PeerName, &e.Endpoint, &e.Basis,
-			&reportedAt, &verifiedAt, &e.Size, &e.Detail, &recordedAt); err != nil {
+			&reportedAt, &verifiedAt, &e.Size, &e.Detail, &recordedAt,
+			&releasedAt, &unreferencedSince); err != nil {
 			return nil, fmt.Errorf("catalog: reading the durability evidence for %s: %w", h, err)
 		}
 		parsed, err := hashing.Parse(hash)
@@ -220,6 +231,8 @@ func (c *Catalog) DurabilityEvidence(ctx context.Context, h hashing.Hash) ([]int
 		e.ReportedAt = nullStamp(reportedAt)
 		e.VerifiedAt = nullStamp(verifiedAt)
 		e.RecordedAt = nullStamp(recordedAt)
+		e.ReleasedAt = nullStamp(releasedAt)
+		e.UnreferencedSince = nullStamp(unreferencedSince)
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {

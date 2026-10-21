@@ -63,6 +63,13 @@ type Blob struct {
 	// means either that the blob is referenced or that no sweep has seen it
 	// unreferenced yet — the two cases are distinguished by References.
 	UnreferencedSince time.Time
+	// ReleasedAt is when the last thing wanting this vault blob let it go: its
+	// last placement pin was removed, or the sibling it was taken from
+	// withdrew it (#779, ADR-0114). Zero means no release is recorded. Library
+	// media is never released.
+	ReleasedAt time.Time
+	// ReleaseCause is `unpinned` or `withdrawn`, beside ReleasedAt.
+	ReleaseCause string
 }
 
 // Corruption is a blob whose bytes no longer hash to their own name, together
@@ -119,7 +126,8 @@ type Catalog interface {
 
 	// ClearUnreferenced ends the grace window for blobs that regained a
 	// reference, so a returning blob gets a fresh full window rather than a
-	// partly spent one.
+	// partly spent one. It also clears their release intent (#779): a blob
+	// wanted again is no longer released.
 	ClearUnreferenced(ctx context.Context, hashes []hashing.Hash) error
 
 	// Reclaim removes the catalog's record of a blob and emits blob.reclaimed.
@@ -134,6 +142,16 @@ type Catalog interface {
 	// collector that deletes a referenced blob has destroyed user data with no
 	// way back, so it is worth being told twice.
 	Reclaim(ctx context.Context, h hashing.Hash, size int64, tracked bool, at time.Time) error
+
+	// GuardUnlink runs unlink, which removes a released blob's bytes, under
+	// the catalog's write lock, after checking that nothing references h:
+	// no placement pin, taken placement, scanned library file, ready
+	// thumbnail or re-adopted blob row (#779). Pins and taken placements have
+	// no foreign key, so a reference created between Reclaim's commit and the
+	// unlink would otherwise lose the last copy. When something does
+	// reference h it returns ErrWantedAgain without calling unlink, and the
+	// bytes stay for convergence to adopt.
+	GuardUnlink(ctx context.Context, h hashing.Hash, unlink func() error) error
 
 	// Peers lists every peer other than this node (M4-12).
 	//
@@ -229,6 +247,14 @@ type Options struct {
 	// collector with no business unlinking anything. See durability.go. A
 	// single-peer deployment needs none, because there is nothing to ask.
 	Durability Durability
+
+	// HonourReleases lets a sweep reclaim the last copy of a RELEASED vault
+	// blob without the durability gate, once its grace window has passed, and
+	// record the basis `released` (#779, ADR-0114). Only the personal profile
+	// sets it: there every reference to a vault blob is a pin or a taken
+	// placement, so a blob nothing pins is a blob nobody wants. The media
+	// profile leaves it false and keeps ADR-0018's last-copy rule unchanged.
+	HonourReleases bool
 
 	// Freshness is how recently another peer must have confirmed a replica for
 	// that claim to count. Zero means DefaultFreshness; negative is refused
