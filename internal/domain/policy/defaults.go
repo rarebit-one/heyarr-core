@@ -101,6 +101,19 @@ func Defaults() []Profile {
 			Terminal: []Rule{{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)}},
 		},
 		{
+			// The profile for a searched ROM (ADR-0121). Which platform a
+			// release is for is decided BEFORE this, by the platform match gate,
+			// because it is identity rather than quality. What is left to judge
+			// is only that the release has bytes; region and revision are read
+			// from names but certify nothing yet, so nothing gates on them.
+			Name:         "rom-indexed",
+			ContentTypes: []string{"rom"},
+			Description: "Starting profile for searched ROMs. Accepts a nonempty release " +
+				"for the wanted platform and stops once held; region and revision are not judged yet.",
+			Accept:   []Rule{{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)}},
+			Terminal: []Rule{{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)}},
+		},
+		{
 			Name: "archival",
 			Description: "Keep the best there is. Never terminal: there is no " +
 				"condition under which this profile stops looking for something better.",

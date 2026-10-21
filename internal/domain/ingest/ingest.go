@@ -149,9 +149,13 @@ type Result struct {
 	WorkCreated    bool
 	EditionID      string
 	EditionCreated bool
-	AssetID        string
-	AssetCreated   bool
-	ReplicaCreated bool
+	// EditionTypeFilled is an existing edition that had no type taking this
+	// recording's (ADR-0121: cover art can create a ROM edition before its
+	// dump), so the catalog emits the change.
+	EditionTypeFilled bool
+	AssetID           string
+	AssetCreated      bool
+	ReplicaCreated    bool
 	// Tombstoned reports that the recording resolved to a work another site
 	// logically deleted (ADR-0073, #449), so nothing was recorded: no work,
 	// edition, asset or replica. It is a skip, not a failure — the scan counts
@@ -367,7 +371,7 @@ func (p *Pipeline) Ingest(ctx context.Context, req Request) (Result, error) {
 	// A caller that KNOWS which Work this is overrides the guess. See
 	// Request.Work — this is the whole of #224.
 	if req.Work != nil {
-		candidate = applyWorkOverride(candidate, *req.Work)
+		candidate = applyWorkOverride(withROMPlatform(candidate, req.RelPath, *req.Work), *req.Work)
 	}
 
 	// Before the bytes move: a work another site logically deleted is not
@@ -590,6 +594,35 @@ var mimeByExtension = map[string]string{
 // unknown rather than guessed: probing in Milestone 2 can correct it, and a
 // wrong media type is harder to notice than a missing one.
 func MIMEForExtension(ext string) string { return mimeByExtension[strings.ToLower(ext)] }
+
+// withROMPlatform re-reads an acquired file for a ROM want with the want's
+// platform (ADR-0121). An acquisition's path rarely carries the platform
+// directory the scan rules read, so a shared shape (.bin, .iso) comes back
+// unidentified, and the override alone would leave its edition as
+// "unidentified" without region, revision, disc or type. A candidate the path
+// already identified as a ROM is kept as it is; any other want is untouched.
+func withROMPlatform(c identification.Candidate, relPath string, w WorkOverride) identification.Candidate {
+	if w.ContentType != identification.ROM {
+		return c
+	}
+	platform, ok := identification.ROMPlatformFromKey(w.WorkKey)
+	if !ok {
+		return c
+	}
+	// A path-identified ROM is kept only when it is for the wanted platform; a
+	// contradicting one ("psx/Game.bin" in a SNES acquisition) is re-read with
+	// the want's platform so no other platform's edition lands on the Work.
+	// Ingest's verification refuses such a payload first; this is the backstop.
+	if c.ContentType == identification.ROM && c.Identified {
+		if got, ok := identification.ROMPlatformFromKey(c.WorkKey); ok && got == platform {
+			return c
+		}
+	}
+	if rc, ok := identification.IdentifyROMFile(platform, relPath); ok {
+		return rc
+	}
+	return c
+}
 
 // applyWorkOverride replaces a candidate's WORK identity with a known one.
 //

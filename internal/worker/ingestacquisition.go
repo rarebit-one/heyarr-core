@@ -171,7 +171,7 @@ func IngestAcquisitionHandler(
 		if err != nil {
 			return err
 		}
-		batch, verifyErr := verifyArtifacts(acq, sc.ContentType)
+		batch, verifyErr := verifyArtifacts(acq, sc.ContentType, sc.Platform)
 		if verifyErr == nil {
 			batch, verifyErr, err = checkStoreManifest(ctx, cat, payload.DesiredItemID, batch)
 			if err != nil {
@@ -228,8 +228,9 @@ func IngestAcquisitionHandler(
 		// produced one result per file, each probed on its own blob.
 		// A game is not probed: its files are installers and archives, which
 		// carry no stream for ffprobe to read, and reading tens of gigabytes of
-		// them to learn that is the whole cost of the probe.
-		if probes != nil && sc.ContentType != identification.Game {
+		// them to learn that is the whole cost of the probe. A ROM is the same:
+		// a cartridge dump or disc image has no media stream either (ADR-0121).
+		if probes != nil && sc.ContentType != identification.Game && sc.ContentType != identification.ROM {
 			for i, res := range results {
 				if res.AssetID == "" {
 					continue
@@ -353,7 +354,7 @@ func resolveTransferPath(acq catalog.Acquisition) string {
 // each primary file for the wanted content type becomes its own artifact.
 // Ingesting the directory as one blob would record the wrong thing, so it is
 // enumerated rather than hashed whole.
-func verifyArtifacts(acq catalog.Acquisition, contentType string) (verifiedTransfer, error) {
+func verifyArtifacts(acq catalog.Acquisition, contentType, platform string) (verifiedTransfer, error) {
 	path := resolveTransferPath(acq)
 	if path == "" {
 		return verifiedTransfer{}, errors.New("the download client did not say where the bytes are")
@@ -379,6 +380,9 @@ func verifyArtifacts(acq catalog.Acquisition, contentType string) (verifiedTrans
 		if derr != nil {
 			return verifiedTransfer{}, derr
 		}
+		if err := requireROMData(arts, contentType, platform); err != nil {
+			return verifiedTransfer{}, err
+		}
 		return verifiedTransfer{artifacts: arts, contentType: contentType, pack: true, path: path}, nil
 	}
 
@@ -392,6 +396,9 @@ func verifyArtifacts(acq catalog.Acquisition, contentType string) (verifiedTrans
 				errExecutablePayload, filepath.Base(path), contentKind(contentType), why)
 		}
 	}
+	if err := requireROMData([]artifact{a}, contentType, platform); err != nil {
+		return verifiedTransfer{}, err
+	}
 	return verifiedTransfer{artifacts: []artifact{a}, contentType: contentType, path: path}, nil
 }
 
@@ -404,6 +411,50 @@ func contentKind(contentType string) string {
 		return "content"
 	}
 	return contentType
+}
+
+// requireROMData refuses a ROM release that holds no dump (ADR-0121): a lone
+// README, or only disc-set descriptors (.cue, .m3u, …) without the images they
+// name. Either is small but nonempty, so ingesting it would satisfy a
+// size-judged want with nothing playable and stop it searching. A pack's files
+// were already filtered to ROM shapes; a lone file was not, so it is checked
+// here. A file whose extension only another platform uses (a ".gba" in a
+// release taken for a SNES want) contradicts the want and is refused too: the
+// name passed the platform gate, the payload did not. A verification failure,
+// not node-local: the release itself is wrong, so blocking it lets the next
+// search pick another.
+func requireROMData(arts []artifact, contentType, platform string) error {
+	if contentType != identification.ROM {
+		return nil
+	}
+	for _, a := range arts {
+		if platform == "" {
+			break
+		}
+		if p, ok := identification.ROMExtPlatform(filepath.Ext(a.RelPath)); ok && p != platform {
+			return fmt.Errorf("%s is a %s dump, not %s — the release's payload contradicts the platform it was taken for",
+				a.RelPath, p, platform)
+		}
+		// A pack's RelPath starts with the release's own directory, whose name
+		// is the release title ("Switch/" for a game called Switch), not a
+		// platform layout; only the directories inside it are read.
+		inner := ""
+		if i := strings.IndexByte(a.RelPath, '/'); i >= 0 {
+			inner = a.RelPath[i+1:]
+		}
+		if p, ok := identification.ROMPlatformInPath(inner); ok && p != platform {
+			return fmt.Errorf("%s sits in a %s directory, not %s — the release's payload contradicts the platform it was taken for",
+				a.RelPath, p, platform)
+		}
+	}
+	for _, a := range arts {
+		ext := filepath.Ext(a.RelPath)
+		if identification.IsPrimaryExt(identification.ROM, ext) && !identification.IsROMDescriptorExt(ext) {
+			return nil
+		}
+	}
+	return fmt.Errorf("the release holds no ROM data (%d file(s), e.g. %s) — only files that "+
+		"are not a dump, or disc descriptors without the images they name", len(arts), arts[0].RelPath)
 }
 
 // verifyFile checks that one file is ingestable — present, non-empty, readable

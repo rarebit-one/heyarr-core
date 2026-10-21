@@ -118,7 +118,11 @@ const (
 	// verified it as a complete package (ADR-0120): the store, and whether it
 	// is DRM-free. It is the only path by which store facts reach an edition,
 	// and the transition a game want's satisfaction turns on.
-	TypeEditionVerified  = "content.edition.verified"
+	TypeEditionVerified = "content.edition.verified"
+	// TypeEditionUpdated is an edition's recorded facts changing in place:
+	// today, an edition created without a type (by a ROM's cover art,
+	// ADR-0121) taking the type of the first dump recorded into it.
+	TypeEditionUpdated   = "content.edition.updated"
 	TypeLibraryCreated   = "content.library.created"
 	TypeLibraryRootAdded = "content.library_root.added"
 	// TypeLibraryDeleted is a library leaving the catalog with its roots

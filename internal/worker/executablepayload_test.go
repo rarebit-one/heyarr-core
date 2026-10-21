@@ -55,14 +55,14 @@ func TestASingleProgramIsRefusedUnlessTheWantIsAGame(t *testing.T) {
 	}
 	acq := catalog.Acquisition{LocalPath: p}
 
-	_, err := verifyArtifacts(acq, identification.Series)
+	_, err := verifyArtifacts(acq, identification.Series, "")
 	if err == nil || !strings.HasPrefix(err.Error(), "payload_executable: ") {
 		t.Fatalf("a series want took a program: %v", err)
 	}
 	if isNodeLocal(err) {
 		t.Fatal("a program is the release's fault and must block it, not take the node-local edge")
 	}
-	if _, err := verifyArtifacts(acq, identification.Game); err != nil {
+	if _, err := verifyArtifacts(acq, identification.Game, ""); err != nil {
 		t.Fatalf("a game installer was refused: %v", err)
 	}
 }

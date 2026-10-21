@@ -1302,3 +1302,120 @@ func TestAPackThisNodeCannotReadIsNodeLocal(t *testing.T) {
 		t.Fatalf("an empty pack = %v, want a release fault", err)
 	}
 }
+
+// A ROM release with no dump in it holds no game: only disc descriptors (.cue,
+// .m3u), or a lone file that is no ROM shape. It is refused as the release's
+// fault, whether it arrived as a directory or a lone file, while a descriptor
+// beside its image is ingested with it (ADR-0121).
+func TestADescriptorOnlyROMReleaseIsRefused(t *testing.T) {
+	write := func(t *testing.T, path, body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := filepath.Join(t.TempDir(), "Final Fantasy VII (USA)")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "Final Fantasy VII (USA).cue"), "FILE \"Final Fantasy VII (USA).bin\" BINARY")
+	write(t, filepath.Join(dir, "Final Fantasy VII (USA).m3u"), "Final Fantasy VII (USA).cue")
+
+	if _, err := verifyArtifacts(catalog.Acquisition{LocalPath: dir}, identification.ROM, ""); err == nil || isNodeLocal(err) {
+		t.Fatalf("descriptor-only directory: err = %v, want a release-fault refusal", err)
+	}
+	if _, err := verifyArtifacts(catalog.Acquisition{LocalPath: filepath.Join(dir, "Final Fantasy VII (USA).cue")}, identification.ROM, ""); err == nil {
+		t.Fatal("a lone .cue was accepted as a ROM release")
+	}
+
+	readme := filepath.Join(t.TempDir(), "README.txt")
+	write(t, readme, "thanks for downloading")
+	if _, err := verifyArtifacts(catalog.Acquisition{LocalPath: readme}, identification.ROM, ""); err == nil {
+		t.Fatal("a lone README was accepted as a ROM release")
+	}
+	sfc := filepath.Join(t.TempDir(), "Super Mario World (USA).sfc")
+	write(t, sfc, "cartridge dump")
+	if _, err := verifyArtifacts(catalog.Acquisition{LocalPath: sfc}, identification.ROM, ""); err != nil {
+		t.Fatalf("a lone .sfc was refused: %v", err)
+	}
+
+	write(t, filepath.Join(dir, "Final Fantasy VII (USA).bin"), "disc image")
+	vt, err := verifyArtifacts(catalog.Acquisition{LocalPath: dir}, identification.ROM, "")
+	if err != nil {
+		t.Fatalf("with its image the disc set was refused: %v", err)
+	}
+	if len(vt.artifacts) != 3 {
+		t.Errorf("%d artifacts, want the image and both descriptors", len(vt.artifacts))
+	}
+
+	// CloneCD: the control and subchannel files ride with the image, and are
+	// not enough without it.
+	clone := filepath.Join(t.TempDir(), "Some Game (Europe)")
+	if err := os.Mkdir(clone, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(clone, "Some Game (Europe).ccd"), "[CloneCD]")
+	write(t, filepath.Join(clone, "Some Game (Europe).sub"), "subchannel")
+	if _, err := verifyArtifacts(catalog.Acquisition{LocalPath: clone}, identification.ROM, ""); err == nil {
+		t.Fatal("a CloneCD set without its image was accepted")
+	}
+	write(t, filepath.Join(clone, "Some Game (Europe).img"), "disc image")
+	cvt, err := verifyArtifacts(catalog.Acquisition{LocalPath: clone}, identification.ROM, "")
+	if err != nil {
+		t.Fatalf("a whole CloneCD set was refused: %v", err)
+	}
+	if len(cvt.artifacts) != 3 {
+		t.Errorf("%d CloneCD artifacts, want .img, .ccd and .sub", len(cvt.artifacts))
+	}
+}
+
+// A release taken for one platform whose payload is another platform's dump
+// (a ".gba" behind a "[SNES]" name) contradicts the want and is refused before
+// it can satisfy it (ADR-0121).
+func TestAROMPayloadForAnotherPlatformIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	gba := filepath.Join(dir, "Some Game (USA).gba")
+	sfc := filepath.Join(dir, "Some Game (USA).sfc")
+	for _, p := range []string{gba, sfc} {
+		if err := os.WriteFile(p, []byte("dump"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := verifyArtifacts(catalog.Acquisition{LocalPath: gba}, identification.ROM, "snes"); err == nil ||
+		!strings.Contains(err.Error(), "gba") {
+		t.Errorf("a .gba for a SNES want: err = %v, want a refusal naming the payload's platform", err)
+	}
+	if _, err := verifyArtifacts(catalog.Acquisition{LocalPath: sfc}, identification.ROM, "snes"); err != nil {
+		t.Errorf("a .sfc for a SNES want was refused: %v", err)
+	}
+	// A shared shape under another platform's directory contradicts it too.
+	rel := filepath.Join(t.TempDir(), "Some Game [SNES]")
+	if err := os.MkdirAll(filepath.Join(rel, "psx"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rel, "psx", "Some Game.bin"), []byte("dump"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifyArtifacts(catalog.Acquisition{LocalPath: rel}, identification.ROM, "snes"); err == nil ||
+		!strings.Contains(err.Error(), "psx") {
+		t.Errorf("a psx/ payload for a SNES want: err = %v, want a refusal naming psx", err)
+	}
+
+	// The release's own directory is its title, not a layout: a PSX game called
+	// "Switch" arriving as Switch/Switch.iso is not a Switch payload.
+	titled := filepath.Join(t.TempDir(), "Switch")
+	if err := os.Mkdir(titled, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(titled, "Switch (USA).iso"), []byte("dump"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifyArtifacts(catalog.Acquisition{LocalPath: titled}, identification.ROM, "psx"); err != nil {
+		t.Errorf("a release directory named after its title was read as a platform: %v", err)
+	}
+
+	// In a pack, one file of another platform is enough to refuse it.
+	if _, err := verifyArtifacts(catalog.Acquisition{LocalPath: dir}, identification.ROM, "gba"); err == nil {
+		t.Error("a directory holding a .sfc was accepted for a GBA want")
+	}
+}

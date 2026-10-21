@@ -269,6 +269,12 @@ func prowlarrCategories(contentType string) string {
 		return "3000"
 	case "book":
 		return "7000"
+	case "rom":
+		// Console (ADR-0121). The parent, not a subcategory: the Newznab
+		// console subcategories name only some platforms, and indexers file
+		// older ones under Console/Other, so a subcategory would miss them. The
+		// platform gate, not the category, decides which platform a release is.
+		return "1000"
 	default:
 		return ""
 	}

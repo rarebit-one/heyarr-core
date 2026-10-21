@@ -10,6 +10,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/desired"
+	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 )
 
@@ -301,9 +302,11 @@ func (c *Catalog) assetsAndPackagesForWant(
 		SELECT a.id, a.source_class, a.blob_hash,
 		       b.size,
 		       e.edition_type, e.language, e.attributes,
-		       p.container, p.bitrate_bps, p.streams
+		       p.container, p.bitrate_bps, p.streams,
+		       a.role, a.source_path, wk.content_type
 		FROM assets a
 		JOIN editions e ON e.id = a.edition_id
+		JOIN works wk ON wk.id = e.work_id
 		LEFT JOIN blobs b ON b.hash = a.blob_hash
 		LEFT JOIN blob_probes p ON p.blob_hash = a.blob_hash
 		WHERE ` + where + `
@@ -326,10 +329,19 @@ func (c *Catalog) assetsAndPackagesForWant(
 			editionType, language  sql.NullString
 			editionAttrs           sql.NullString
 			container, streamsJSON sql.NullString
+			role, sourcePath       sql.NullString
+			workContentType        string
 		)
 		if err := rows.Scan(&id, &sourceClass, &blobHash, &size,
-			&editionType, &language, &editionAttrs, &container, &bitrate, &streamsJSON); err != nil {
+			&editionType, &language, &editionAttrs, &container, &bitrate, &streamsJSON,
+			&role, &sourcePath, &workContentType); err != nil {
 			return nil, nil, err
+		}
+		// A ROM want is satisfied by a dump, never by the cover art or a cue
+		// sheet beside it (ADR-0121): `rom-indexed` judges size alone, and any
+		// nonempty companion would otherwise end the want with nothing playable.
+		if workContentType == identification.ROM && !identification.IsROMDump(role.String, sourcePath.String) {
+			continue
 		}
 
 		view := acquisition.AssetView{

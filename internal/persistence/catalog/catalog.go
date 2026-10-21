@@ -425,11 +425,11 @@ func (c *Catalog) Record(ctx context.Context, rec ingest.Recording) (ingest.Resu
 			return err
 		}
 
-		editionID, editionCreated, err := c.resolveEdition(ctx, tx, workID, rec.Candidate, now)
+		editionID, editionCreated, typeFilled, err := c.resolveEdition(ctx, tx, workID, rec.Candidate, now)
 		if err != nil {
 			return err
 		}
-		res.EditionID, res.EditionCreated = editionID, editionCreated
+		res.EditionID, res.EditionCreated, res.EditionTypeFilled = editionID, editionCreated, typeFilled
 		if err := c.injectFault("edition"); err != nil {
 			return err
 		}
@@ -580,7 +580,7 @@ func (c *Catalog) Tombstoned(ctx context.Context, contentType, workKey string) (
 // to the same edition row — so they go on the asset, not here. The edition's
 // own identity is carried by edition_key, label, edition_type and language.
 // Milestone 3's real identifier is what fills this in with edition-scoped facts.
-func (c *Catalog) resolveEdition(ctx context.Context, tx *sql.Tx, workID string, cand identification.Candidate, now string) (string, bool, error) {
+func (c *Catalog) resolveEdition(ctx context.Context, tx *sql.Tx, workID string, cand identification.Candidate, now string) (editionID string, created, typeFilled bool, err error) {
 	const attrs = "{}"
 	id := uuid.Must(uuid.NewV7()).String()
 	res, err := tx.ExecContext(ctx, `
@@ -589,21 +589,36 @@ func (c *Catalog) resolveEdition(ctx context.Context, tx *sql.Tx, workID string,
 		ON CONFLICT (work_id, edition_key) DO NOTHING`,
 		id, workID, cand.EditionKey, cand.EditionLabel, cand.EditionType, nullString(cand.Language), attrs, now)
 	if err != nil {
-		return "", false, fmt.Errorf("catalog: resolving edition %s/%s: %w", workID, cand.EditionKey, err)
+		return "", false, false, fmt.Errorf("catalog: resolving edition %s/%s: %w", workID, cand.EditionKey, err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return "", false, fmt.Errorf("catalog: resolving edition %s/%s: %w", workID, cand.EditionKey, err)
+		return "", false, false, fmt.Errorf("catalog: resolving edition %s/%s: %w", workID, cand.EditionKey, err)
 	}
 	if n == 1 {
-		return id, true, nil
+		return id, true, false, nil
 	}
 	var existing string
 	if err := tx.QueryRowContext(ctx,
 		`SELECT id FROM editions WHERE work_id = ? AND edition_key = ?`, workID, cand.EditionKey).Scan(&existing); err != nil {
-		return "", false, fmt.Errorf("catalog: re-reading edition %s/%s: %w", workID, cand.EditionKey, err)
+		return "", false, false, fmt.Errorf("catalog: re-reading edition %s/%s: %w", workID, cand.EditionKey, err)
 	}
-	return existing, false, nil
+	// An edition first created by a companion (a ROM's cover art, ADR-0121)
+	// has no type; the first file that states one fills it, and the caller
+	// emits that change. A type already recorded is never overwritten.
+	if cand.EditionType != "" {
+		upd, err := tx.ExecContext(ctx, `UPDATE editions SET edition_type = ?
+			WHERE id = ? AND (edition_type IS NULL OR edition_type = '')`, cand.EditionType, existing)
+		if err != nil {
+			return "", false, false, fmt.Errorf("catalog: filling the type of edition %s/%s: %w", workID, cand.EditionKey, err)
+		}
+		if n, err := upd.RowsAffected(); err != nil {
+			return "", false, false, fmt.Errorf("catalog: filling the type of edition %s/%s: %w", workID, cand.EditionKey, err)
+		} else if n == 1 {
+			typeFilled = true
+		}
+	}
+	return existing, false, typeFilled, nil
 }
 
 // recordAsset upserts on (library_id, source_path).
@@ -697,6 +712,15 @@ func (c *Catalog) recordEvents(ctx context.Context, tx *sql.Tx, rec ingest.Recor
 			"size":         res.BlobSize,
 			"mime":         rec.MIME,
 			"materialised": string(res.Materialised),
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if res.EditionTypeFilled {
+		if err := emit(events.TypeEditionUpdated, "edition", res.EditionID, map[string]any{
+			"work_id":      res.WorkID,
+			"edition_type": rec.Candidate.EditionType,
+			"changed":      []string{"edition_type"},
 		}); err != nil {
 			return nil, err
 		}

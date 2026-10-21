@@ -210,7 +210,21 @@ func yearKey(year int) string {
 // lives here with the rules that produce it, and both callers go through it.
 // The alternative — exporting normKey and workKey separately and asking each
 // caller to combine them correctly — is the same bug with more steps.
+//
+// A ROM's key needs its platform, which this signature does not carry, so for a
+// ROM the key is EMPTY and only the sort title is meaningful; DescribeROM is the
+// one way to key a ROM (ADR-0121). Empty rather than platform-less on purpose:
+// a platform-less key would quietly mint a Work no scan converges on, and the
+// only caller that keys from Describe (resolveWorkDescriptor) branches to
+// DescribeROM before it gets here.
 func Describe(contentType, title string, year int) (key, sortTitle string) {
+	if contentType == ROM {
+		toks := parseROMName(strings.TrimSpace(title)).title
+		if norm := normKey(toks); norm != "" {
+			return "", norm
+		}
+		return "", strings.ToLower(strings.TrimSpace(title))
+	}
 	if contentType == Game {
 		// A game is keyed by its title alone, the way gameCandidate keys a
 		// scanned one: a store listing's year would otherwise split a wanted
@@ -246,6 +260,12 @@ func Describe(contentType, title string, year int) (key, sortTitle string) {
 // numbers ("F1 2020", "Football Manager 2024"), where parseName would read the
 // trailing one as a release year and cut it off.
 func DisplayTitle(contentType, title string) string {
+	if contentType == ROM {
+		if toks := parseROMName(strings.TrimSpace(title)).title; len(toks) > 0 {
+			return displayTitle(toks)
+		}
+		return strings.TrimSpace(title)
+	}
 	if contentType == Game {
 		if toks, _ := gameTitle(title); len(toks) > 0 {
 			return displayTitle(toks)

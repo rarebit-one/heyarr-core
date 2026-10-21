@@ -159,6 +159,11 @@ type WorkDescriptor struct {
 	// where a title is not — and recorded as the Work's external id, which is
 	// what the store fetch beat looks for. Games only.
 	StoreRef string `json:"store_ref"`
+	// Platform is the console a ROM is for, from identification's ROM
+	// vocabulary (ADR-0121). Part of a ROM's identity — "Tetris" on two
+	// consoles is two Works — so it is required for a ROM and refused on
+	// anything else.
+	Platform string `json:"platform"`
 }
 
 // UpdateDesiredRequest changes a want. Every field is a pointer: absent means
@@ -734,6 +739,26 @@ func (a *API) resolveWorkDescriptor(ctx context.Context, tx *sql.Tx, d WorkDescr
 		return "", &badRequest{fmt.Errorf("a year of %d is not a year", d.Year)}
 	}
 
+	// platform is checked before anything is looked up, so a request is refused
+	// or accepted on its own fields — never let through because a store_ref
+	// happened to match an existing Work first.
+	platform := strings.TrimSpace(d.Platform)
+	var romKey, romSort string
+	switch {
+	case contentType == identification.ROM:
+		if platform == "" {
+			return "", &badRequest{fmt.Errorf("a rom descriptor needs a platform (one of %s)",
+				strings.Join(identification.ROMPlatforms(), ", "))}
+		}
+		k, st, err := identification.DescribeROM(platform, title)
+		if err != nil {
+			return "", &badRequest{err}
+		}
+		romKey, romSort = k, st
+	case platform != "":
+		return "", &badRequest{fmt.Errorf("platform names a ROM's console; a %s has none", contentType)}
+	}
+
 	storeSource, storeID, err := parseStoreRef(contentType, d.StoreRef)
 	if err != nil {
 		return "", err
@@ -756,6 +781,9 @@ func (a *API) resolveWorkDescriptor(ctx context.Context, tx *sql.Tx, d WorkDescr
 	}
 
 	key, sortTitle := identification.Describe(contentType, title, d.Year)
+	if contentType == identification.ROM {
+		key, sortTitle = romKey, romSort
+	}
 	err = tx.QueryRowContext(ctx,
 		`SELECT id FROM works WHERE content_type = ? AND work_key = ?`,
 		contentType, key).Scan(&id)

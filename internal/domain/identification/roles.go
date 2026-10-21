@@ -59,6 +59,12 @@ func IsPrimaryExt(contentType, ext string) bool {
 		// loose files: a Steam depot is ingested by its own fetch, not walked
 		// as a bundle of "primary" files.
 		return gameContainerExts[ext]
+	case ROM:
+		// Every dump, disc-image and archive shape a ROM library takes
+		// (ADR-0121), so a downloaded disc set's .cue and .bin files are all
+		// ingested rather than discarded as non-primary.
+		_, own := romExtPlatform[ext]
+		return own || romSharedExts[ext]
 	default:
 		return false
 	}

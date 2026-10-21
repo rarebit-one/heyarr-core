@@ -128,6 +128,13 @@ func SearchHandler(
 			ContentType: sc.ContentType,
 			Limit:       candidateLimit,
 		}
+		if sc.Platform != "" {
+			// A ROM is searched by its title alone (ADR-0121 §4): a year is not
+			// part of its identity, and No-Intro and Redump names carry none, so
+			// "Title YYYY" would only miss releases. A descriptor may still
+			// record one on the Work for display.
+			query.Year = 0
+		}
 		if sc.IsEpisode {
 			// An item-scoped series want carries the season/episode into the
 			// search, so the indexer is asked for the episode rather than the
@@ -260,7 +267,8 @@ func SearchHandler(
 		// dropping them, so an operator can read why. Only survivors reach the
 		// scorer; quality never again decides across seasons.
 		var ranked []acquisition.Ranked
-		if sc.IsEpisode {
+		switch {
+		case sc.IsEpisode:
 			survivors, rejected := gateSeasonEpisode(considered, sc.Season, sc.Episode)
 			if len(rejected) > 0 {
 				log.Info("a search rejected releases that cannot contain the wanted episode",
@@ -270,7 +278,17 @@ func SearchHandler(
 			ranked = acquisition.EvaluateAll(survivors, sc.Profile)
 			ranked = append(ranked, rejected...)
 			acquisition.SortRanked(ranked)
-		} else {
+		case sc.Platform != "":
+			survivors, rejected := gateROMPlatform(considered, sc.Platform, sc.Title)
+			if len(rejected) > 0 {
+				log.Info("a search rejected releases that are not for the wanted platform",
+					"desired_item_id", payload.DesiredItemID,
+					"platform", sc.Platform, "rejected", len(rejected))
+			}
+			ranked = acquisition.EvaluateAll(survivors, sc.Profile)
+			ranked = append(ranked, rejected...)
+			acquisition.SortRanked(ranked)
+		default:
 			// §63's scorer, and nothing else decides.
 			ranked = acquisition.EvaluateAll(considered, sc.Profile)
 		}
@@ -360,6 +378,27 @@ func gateSeasonEpisode(
 	for _, c := range candidates {
 		rel := identification.ParseReleaseSeasonEpisode(c.Title)
 		reason, kept := acquisition.GateEpisode(season, episode, rel.Determined, rel.Season, rel.Episodes)
+		if kept {
+			survivors = append(survivors, c)
+			continue
+		}
+		rejected = append(rejected, acquisition.RejectedByMatch(c, reason))
+	}
+	return survivors, rejected
+}
+
+// gateROMPlatform keeps only the candidates whose name spells out the wanted
+// ROM platform and returns the rest as rejected rankings carrying a durable
+// match reason (ADR-0121 §4). It is gateSeasonEpisode's twin: the scanner side
+// reads the title (identification.ParseReleasePlatform), the domain's
+// GatePlatform owns the verdict and the codes, and a rejection is reported,
+// never silently dropped.
+func gateROMPlatform(
+	candidates []acquisition.ReleaseCandidate, platform, workTitle string,
+) (survivors []acquisition.ReleaseCandidate, rejected []acquisition.Ranked) {
+	for _, c := range candidates {
+		rel := identification.ParseReleasePlatformFor(c.Title, workTitle)
+		reason, kept := acquisition.GatePlatform(platform, rel.Determined, rel.Platform, rel.Spelled)
 		if kept {
 			survivors = append(survivors, c)
 			continue

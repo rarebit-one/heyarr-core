@@ -72,3 +72,48 @@ func TestGateSeasonEpisodeNeverKeepsAWrongSeasonPack(t *testing.T) {
 		}
 	}
 }
+
+// The ROM platform gate as the search job runs it (ADR-0121 §4): a SNES want
+// keeps the SNES release and reports, with a coded reason, the Game Boy one, the
+// one that names no platform, and the multi-platform bundle — never drops them.
+func TestGateROMPlatform(t *testing.T) {
+	in := []acquisition.ReleaseCandidate{
+		{ID: "snes", Title: "Tetris Attack (USA) [SNES]"},
+		{ID: "gb", Title: "Tetris Attack (USA) [GB]"},
+		{ID: "bare", Title: "Tetris Attack (USA)"},
+		{ID: "bundle", Title: "Tetris Attack SNES + GB"},
+	}
+	survivors, rejected := gateROMPlatform(in, "snes", "Tetris Attack")
+	if len(survivors) != 1 || survivors[0].ID != "snes" {
+		t.Fatalf("survivors %+v, want only the SNES release", survivors)
+	}
+	want := map[string]string{
+		"gb":     acquisition.RulePlatformMatches,
+		"bare":   acquisition.RulePlatformUndetermined,
+		"bundle": acquisition.RulePlatformUndetermined,
+	}
+	if len(rejected) != len(want) {
+		t.Fatalf("%d rejected, want %d", len(rejected), len(want))
+	}
+	for _, r := range rejected {
+		if r.Evaluation.Accepted || len(r.Evaluation.Reasons) != 1 || r.Evaluation.Reasons[0].Rule != want[r.Candidate.ID] {
+			t.Errorf("%s: %+v, want one %q reason, not accepted", r.Candidate.ID, r.Evaluation, want[r.Candidate.ID])
+		}
+	}
+}
+
+// A game named after a platform is not rejected by its own title: "Switch" on
+// the PSX reads as a PSX release, not as Switch-and-PSX (ADR-0121 §4).
+func TestGateROMPlatformIgnoresTheWantedTitle(t *testing.T) {
+	in := []acquisition.ReleaseCandidate{
+		{ID: "psx", Title: "Switch (USA) [PSX]"},
+		{ID: "bare", Title: "Switch (USA)"},
+	}
+	survivors, rejected := gateROMPlatform(in, "psx", "Switch")
+	if len(survivors) != 1 || survivors[0].ID != "psx" {
+		t.Fatalf("survivors %+v, want the PSX release", survivors)
+	}
+	if len(rejected) != 1 || rejected[0].Evaluation.Reasons[0].Rule != acquisition.RulePlatformUndetermined {
+		t.Errorf("rejected %+v, want the untagged release as undetermined (its title is not evidence)", rejected)
+	}
+}

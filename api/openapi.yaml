@@ -10298,6 +10298,16 @@ components:
             what the store fetch looks for (ADR-0120). Malformed or on another
             content type: 400.
           example: "gog:the_witcher_3"
+        platform:
+          type: string
+          description: |
+            A rom only, and required for one: the console it is for, as an
+            ES-DE system name (`snes`, `gba`, `ps2`, `n3ds`, …). Part of the
+            identity — the same title on two consoles is two works — and the
+            search keeps only releases whose name spells out this console
+            (ADR-0121). Unknown, missing on a rom, or on another content type:
+            400.
+          example: "snes"
 
     UpdateDesired:
       type: object

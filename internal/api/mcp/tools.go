@@ -62,6 +62,7 @@ type wantContentArgs struct {
 	ContentType    string `json:"content_type"`
 	Year           int    `json:"year"`
 	StoreRef       string `json:"store_ref"`
+	Platform       string `json:"platform"`
 	QualityProfile string `json:"quality_profile"`
 	Monitor        *bool  `json:"monitor"`
 	Reason         string `json:"reason"`
@@ -101,6 +102,7 @@ func (s *Server) wantContent(ctx context.Context, raw json.RawMessage) (any, err
 			Title:       args.Title,
 			Year:        args.Year,
 			StoreRef:    args.StoreRef,
+			Platform:    args.Platform,
 		}
 	}
 

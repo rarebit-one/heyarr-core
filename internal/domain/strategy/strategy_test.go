@@ -75,7 +75,7 @@ func TestEveryDefaultProfileIsSeeded(t *testing.T) {
 	}
 	for _, ct := range []string{
 		identification.Movie, identification.Series, identification.Music,
-		identification.Book, identification.Document, identification.Game, video, podcast,
+		identification.Book, identification.Document, identification.Game, identification.ROM, video, podcast,
 	} {
 		def := For(ct).DefaultProfile
 		if def == "" {
@@ -100,6 +100,7 @@ func TestKnownContentTypesHaveDefaults(t *testing.T) {
 		{identification.Document, "published"},
 		{podcast, "published"},
 		{identification.Game, "owned"},
+		{identification.ROM, "rom-indexed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.contentType, func(t *testing.T) {
@@ -107,5 +108,20 @@ func TestKnownContentTypesHaveDefaults(t *testing.T) {
 				t.Errorf("default profile = %q, want %q", got, tc.profile)
 			}
 		})
+	}
+}
+
+// A ROM has no store, so it is searched (ADR-0121) — and never judged by
+// `owned`, which exists to refuse exactly the indexer copies a ROM want takes.
+func TestROMIsSearchedAndNeverJudgedAsOwned(t *testing.T) {
+	s := For(identification.ROM)
+	if s.Route != acquisition.RouteSearch || !s.Route.Searchable() {
+		t.Errorf("rom route = %q, want the searchable %q", s.Route, acquisition.RouteSearch)
+	}
+	if s.DefaultProfile == "owned" {
+		t.Error("a rom defaults to `owned`, which would refuse every indexer release")
+	}
+	if g := For(identification.Game); g.Route != acquisition.RouteStore {
+		t.Errorf("adding rom moved game off the store route: %q", g.Route)
 	}
 }

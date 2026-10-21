@@ -357,6 +357,8 @@ type WorkDescriptor struct {
 	Year        int    `json:"year,omitempty"`
 	// StoreRef names a game on its store, "gog:<gamename>" (ADR-0120).
 	StoreRef string `json:"store_ref,omitempty"`
+	// Platform is the console a ROM is for, e.g. "snes" (ADR-0121).
+	Platform string `json:"platform,omitempty"`
 }
 
 // CreateDesiredRequest is the POST /desired body.

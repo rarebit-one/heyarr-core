@@ -68,12 +68,15 @@ var schemaWantContent = obj(map[string]any{
 		"is created from it, using the same normalisation a scan would, so wanting " +
 		"something and later scanning it converge on one work. Give either this or " +
 		"work_id, never both."),
-	"content_type": str("Required with title: movie, series, music, book, document, game."),
+	"content_type": str("Required with title: movie, series, music, book, document, game, rom."),
 	"year": integer("Part of the identity when known. A year inside the title is " +
 		"understood too; an explicit one wins."),
 	"store_ref": str("For a game: the store it is owned on and the store's own name " +
 		"for it, as gog:<gamename> (e.g. gog:the_witcher_3). The game is then fetched " +
 		"from that store and verified, never searched for on an indexer."),
+	"platform": str("For a rom, required: the console it is for, as an ES-DE system " +
+		"name (snes, gba, ps2, n3ds, …). Part of its identity, so the same title on two " +
+		"consoles is two works, and a search keeps only releases for this console."),
 	"quality_profile": str("The standard this want is measured against, named as a person " +
 		"would: \"living-room\", \"everyday\", \"archival\". Required — \"this should " +
 		"exist\" with no statement of what would count as existing cannot be evaluated."),

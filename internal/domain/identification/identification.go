@@ -23,6 +23,10 @@ const (
 	// Game is a video game: the Work is the game, an edition is one store's
 	// package of it at one build (ADR-0118).
 	Game = "game"
+	// ROM is a console game's dump: the Work is the game on one platform, an
+	// edition is one dump of it (a region, a revision). It has no store, so it
+	// is searched, not fetched (ADR-0121).
+	ROM = "rom"
 	// Unknown is the content type of the synthetic Unidentified Work, and the
 	// value a caller passes to Identify when the owning library's type should
 	// not bias rule selection.
@@ -307,10 +311,12 @@ func (r *Registry) ordered(ct string) []Rule {
 	return out
 }
 
-// Default returns a Registry with the built-in game, movie, series, music, book
-// and document rules, most specific first. The game rules lead because the
+// Default returns a Registry with the built-in game, movie, series, music, book,
+// document and ROM rules, most specific first. The game rules lead because the
 // unscoped ones match only shapes nothing else has (a GOG installer name, a
-// Steam depot tree), and a depot's intro video must not become a movie.
+// Steam depot tree), and a depot's intro video must not become a movie. The ROM
+// rules all need a ROM library, so their place in the order matters only there,
+// where the library bias runs them first anyway.
 func Default() *Registry {
 	r := NewRegistry()
 	r.Register(gameRules()...)
@@ -319,6 +325,7 @@ func Default() *Registry {
 	r.Register(musicRules()...)
 	r.Register(bookRules()...)
 	r.Register(documentRules()...)
+	r.Register(romRules()...)
 	r.Register(fallbackRules()...)
 	return r
 }
@@ -334,7 +341,7 @@ func Identify(relPath, libraryContentType string) Candidate {
 // Exported because they are a VOCABULARY and not this package's private
 // business: a library declares one, a want declares one, and until #227 nothing
 // checked that what was declared is one of these.
-func ContentTypes() []string { return []string{Movie, Series, Music, Book, Document, Game} }
+func ContentTypes() []string { return []string{Movie, Series, Music, Book, Document, Game, ROM} }
 
 // IsContentType reports whether ct is one Heyarr understands.
 //

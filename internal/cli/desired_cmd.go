@@ -86,6 +86,7 @@ func newDesiredAddCommand(_ Options, configPath *string) *cobra.Command {
 		reason      string
 		noMonitor   bool
 		storeRef    string
+		platform    string
 	)
 	cmd := &cobra.Command{
 		Use:   "add <title>",
@@ -126,7 +127,7 @@ content under the same profile twice is one want written twice, and is refused.`
 				if len(args) == 1 {
 					req.Work = &client.WorkDescriptor{
 						ContentType: contentType, Title: args[0], Year: year,
-						StoreRef: storeRef,
+						StoreRef: storeRef, Platform: platform,
 					}
 				}
 				if noMonitor {
@@ -156,6 +157,8 @@ content under the same profile twice is one want written twice, and is refused.`
 	cmd.Flags().IntVar(&year, "year", 0, "the year, when it is part of the identity")
 	cmd.Flags().StringVar(&storeRef, "store-ref", "",
 		"a game's store and the store's name for it, e.g. gog:the_witcher_3 — fetched from that store")
+	cmd.Flags().StringVar(&platform, "platform", "",
+		"a ROM's console, e.g. snes or ps2 — part of its identity (required with --content-type rom)")
 	cmd.Flags().StringVar(&workID, "work-id", "", "want something already in the catalog")
 	cmd.Flags().StringVar(&editionID, "edition-id", "",
 		"want one edition — a season, a particular release — rather than the whole work")
