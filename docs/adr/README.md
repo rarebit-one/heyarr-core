@@ -55,7 +55,7 @@ An ADR that merely describes the code is not worth having.
 | [0045](0045-a-partial-holding-is-transfer-scoped-and-never-a-replica.md) | A partial holding is transfer-scoped, and is never a replica | Accepted |
 | [0046](0046-a-control-plane-backup-is-pushed-to-peers.md) | A control-plane backup is pushed to peers; content is pulled by them | Proposed |
 | [0047](0047-a-peer-says-what-it-speaks-and-a-web-seed-is-a-configuration.md) | A peer says what it speaks, and a web seed is a configuration | Accepted |
-| [0048](0048-a-cross-site-grant-is-a-signed-expiring-delegation.md) | A cross-site grant is a signed, expiring delegation verified against a pinned key | Proposed |
+| [0048](0048-a-cross-site-grant-is-a-signed-expiring-delegation.md) | A cross-site grant is a signed, expiring delegation verified against a pinned key | Accepted (amended: a lease lifts a device to write at an opted-in sibling) |
 | [0049](0049-a-space-key-is-wrapped-for-a-device-encryption-key-and-a-peer-cannot-unwrap-it.md) | A space key is wrapped for a device encryption key, and a peer cannot unwrap it | Proposed |
 | [0050](0050-external-identifiers-are-readable-for-knowledge-graph-reconciliation.md) | External identifiers are readable, for knowledge-graph reconciliation | Accepted |
 | [0051](0051-personal-state-reaches-clients-through-a-device-gateway-not-the-controller.md) | Personal state reaches clients through a device gateway, not the controller | Accepted |

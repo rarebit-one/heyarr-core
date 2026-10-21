@@ -1,7 +1,14 @@
 # 0048. A cross-site grant is a signed, expiring delegation verified against a pinned key
 
-**Status:** Proposed
+**Status:** Accepted (2026-10-21)
 **Date:** 2026-08-26
+**Amended:** 2026-10-21. A lease lifts an enrolled device to **write** at a
+sibling site that has opted into the issuing peer. Its principal is the device
+key and its resource is the honouring site's peer key. The read floor stays
+lease-free, only peers issue, and a lease is never a bearer credential. See
+*Amendment: a lease lifts a device to write at a sibling that opted in
+(2026-10-21, #285)*. Passages changed in place are marked *(amended
+2026-10-21)*.
 
 ## Context
 
@@ -57,6 +64,12 @@ resource, a capability set and an expiry; it is signed with an Ed25519 key; and 
 peer honours it iff that key is already pinned in the peer's membership, the four
 bindings match the request, and the peer's own clock says it has not expired.**
 
+*(amended 2026-10-21)* For the lease that is built, the issuer is a sibling
+peer and the pinned key is that peer's membership key. A peer honours it only
+if it has **explicitly opted into that sibling** as an issuer, and it fails
+closed. The lease lifts an already-authenticated device to write; it is never
+the credential itself.
+
 Three layers, one verification rule.
 
 ### The three keys, and why authentication and authorisation are separated
@@ -64,8 +77,8 @@ Three layers, one verification rule.
 | Key | Held by | Lifetime | Authorises |
 |---|---|---|---|
 | **User identity** (Ed25519) | the user (recovery secret restores it, ADR-0022) | account-lifetime | it is the root of authority; its *public* half is pinned into each peer's membership |
-| **Device key** (Ed25519) | one device, client-side (ADR-0032) | device-lifetime | **nothing on its own** |
-| **Capability grant** (signed record) | issued, cached, bearer-presented | short — the number below | one principal, one resource, one capability set, until one instant |
+| **Device key** (Ed25519) | one device, client-side (ADR-0032) | device-lifetime | *(amended 2026-10-21)* the **read floor** at a node that pinned its user (ADR-0067); write only where that node's admin authorised it (ADR-0065) or a lease lifts it |
+| **Capability grant** (signed record) | *(amended 2026-10-21)* issued by a peer, cached at the honouring peer, found by the device's authenticated key; never bearer-presented | short — the number below | one principal, one resource, one capability set, until one instant |
 
 The load-bearing separation is between the middle row and the bottom row.
 
@@ -75,10 +88,15 @@ The load-bearing separation is between the middle row and the bottom row.
   identity authorising many device keys," and it is signed by the **user**, not by
   a server — which is the acceptance sentence's first half, exactly. It works on
   *either* Full Peer because both pin U's public key in membership. It authorises
-  nothing.
+  nothing. *(amended 2026-10-21)* That last sentence no longer holds. ADR-0067
+  gives an enrolled device of a pinned user the **read floor** at that node, and
+  this record keeps it: reading needs no lease. What the device key still does
+  not carry on its own is **write**.
 - **A capability grant *authorises*** — it proves "principal U may `read`
   resource R until instant T." This is the short-lived, self-limiting thing, and
-  it is the whole of the answer to the hard question.
+  it is the whole of the answer to the hard question. *(amended 2026-10-21)* As
+  built, it proves "device key D may `write` at site S until instant T". It lifts
+  the read floor to write and does nothing else.
 
 Folding authentication into authorisation is the easy failure. It produces a
 long-lived credential that both says who you are and opens the library, so a lost
@@ -87,6 +105,13 @@ a lost phone can still *say* it is user U (its enrolment cert is long-lived and
 authorises nothing) but can only *read* what it already holds an unexpired grant
 for — and those age out. §54 states this separation outright: "long-lived device
 identity plus short/medium-lived cached grants."
+
+*(amended 2026-10-21)* With the read floor kept, a lost phone can still *read*
+at every node that pinned its user until the device is removed: by a
+member-signed remove (ADR-0068), or by each node's admin tombstone. What the
+lease bounds is **write**. A lost phone's write at a sibling ages out with its
+last lease, and its write at the issuing node ends when that node's admin
+deletes the device's management grant.
 
 ### 🔴 A grant is a signed expiring delegation, not a per-site fact
 
@@ -149,6 +174,15 @@ is *which pinned key* signed, and both keys are pinned through membership before
 they are ever needed. A grant fetched during an outage is a grant that does not
 exist, so caching is on the ordinary peer surface alongside §50's backup cycle.
 
+*(amended 2026-10-21)* **Only the second issuer is built.** Only peer keys sign
+grants today. The trust set a lease verifies against is this peer's own key plus
+its sibling peers' keys (`internal/leases`, `trustStore`); no user key is in it.
+The user-identity issuer is **future work, not built**, and nothing below depends
+on it. The peer issuer also changes direction. A peer does not lease its own
+site's holdings: under ADR-0038 it is already the authority there and needs
+nobody's lease. It leases a **sibling's** resource, "device D may write at site
+B", and only site B honours it. See the amendment for why.
+
 ### 🔴 The revocation window is 24 hours
 
 The number this milestone owes: **how long a grant is honoured after it is revoked
@@ -178,6 +212,11 @@ statement: a grant revoked during a partition is honoured until it expires, and
 that is a stated consequence, not a bug — 24 hours is how short the expiry has to
 be for it to be acceptable.
 
+*(amended 2026-10-21)* **No re-issuer exists yet.** The minutes cadence above is
+the decision. Nothing re-issues a lease today, so until the issuing work below
+lands, the steady-state revocation latency is the lease's whole remaining life.
+The re-issuer is owed.
+
 **The device enrolment certificate is long-lived and this is safe**, because it
 authorises nothing (above). A stale enrolment cert lets a device keep *claiming*
 to be user U; it opens no resource without a separate, short grant. So the 24-hour
@@ -186,6 +225,11 @@ enrolment cert's lifetime is an authentication-freshness question, not an
 authorisation-exposure one, and a lost device is contained by (a) the user
 ceasing to issue it grants and (b) the ≤24-hour ageing-out of what it holds, with
 re-wrapping (ADR-0022, M9) as the forward-looking measure.
+
+*(amended 2026-10-21)* Because only peers issue, (a) is the issuing node's admin
+deleting the device's management grant. That stops re-issue and revokes the
+leases already issued. Point (b) covers write only: the read floor is not leased,
+so ending a lost device's read takes its removal from membership (ADR-0068).
 
 ### 🔴 Clock skew fails toward refusal
 
@@ -246,6 +290,23 @@ immediately honoured" (ADR-0032) cannot be written down. Keys are pinned
 out-of-band at enrolment (pairing by short authentication string, ADR-0022) before
 any grant naming them is honoured.
 
+*(amended 2026-10-21)* With the principal a device key and the resource a site,
+the four proofs read:
+
+- **principal** — a lease naming device D does not lift a request that device E
+  authenticated (`principal_mismatch`). The request's principal comes from the
+  `Device` credential's possession proof, so this binding is what ties a lease
+  to its holder.
+- **resource** — a lease for `site:<B>` does not lift a write at site C
+  (`resource_mismatch`).
+- **capabilities** — a lease that does not carry `write` does not lift a write
+  (`capability_denied`).
+- **expiry** — unchanged.
+
+The trust set the request path checks a write lease against is the **opted-in
+siblings only**. A lease signed by a sibling that is pinned but not opted into is
+refused `unknown_issuer`, the same as one signed by a key nobody pinned.
+
 ## Consequences — the assertions this milestone now owes
 
 This ADR produces no code; it produces the list of assertions the rest of M8 must
@@ -258,7 +319,10 @@ coverage), and the decomposition issues each carry "what would make it provable.
   off in that change (ADR-0032).
 - **Honoured across a partition** → a cached grant permits a read with the issuer
   unreachable, and the same read **without** a grant is refused — the second half
-  is what makes the first mean anything (#285).
+  is what makes the first mean anything (#285). *(amended 2026-10-21)* Read is the
+  floor and needs no lease, so the assertion moves to write: a cached lease
+  permits a **write** with the issuer unreachable, and the same **write** without
+  a lease is refused (403).
 - **Self-limiting revocation** → a grant revoked at one site is still honoured at
   an unreachable site, and **stops being honoured within 24 hours**, asserted with
   an injected clock; the refusal names `expired`.
@@ -267,7 +331,9 @@ coverage), and the decomposition issues each carry "what would make it provable.
 - **Skew is safe** → a peer whose clock is ahead refuses a still-valid grant
   (safe); the verifier never honours a grant past `expiry` on its own clock.
 - **Every transition emits an event** (invariant 7) → a grant issued, cached,
-  honoured, refused.
+  honoured, refused. *(amended 2026-10-21)* Only `lease.issued` and
+  `lease.revoked` exist (`internal/events`). `lease.cached`, `lease.honoured` and
+  `lease.refused` are owed by the implementation work below.
 
 The two numbers the milestone owes, stated: **revocation window = 24 hours**
 (the partition worst case; steady-state revocation is a re-issue cadence of
@@ -286,14 +352,29 @@ minutes), **skew fails toward refusal** (strict local-clock expiry, no grace, a
   *enrolment-is-pairing* and *recovery-secret* decisions and depends on them; it
   moves to `Accepted` when the pairing and recovery **behaviour** ships (its
   deliverables), the way ADR-0038 was accepted on evidence rather than argument —
-  not by a document that ships nothing asserting it.
+  not by a document that ships nothing asserting it. *(amended 2026-10-21)*
+  ADR-0022 was accepted on 2026-08-26, when pairing (#305) and recovery (#306)
+  shipped.
 - **ADR-0032** (device keys land before they authorise) is the ordering this ADR
   honours; its revisit clause fires here.
+- *(added 2026-10-21)* **ADR-0065, ADR-0067 and ADR-0068** are Accepted and
+  already build on this record. ADR-0065 gives write to a device an admin
+  authorised at that node. ADR-0067 gives an enrolled device of a pinned user the
+  read floor. ADR-0068 replaces the single user-signed enrolment cert with a
+  membership op log. This amendment keeps all three: a lease is the cross-site
+  form of ADR-0065's per-node grant, and it never touches the floor.
+- *(added 2026-10-21)* **ADR-0094** (guest) mints its leases from the same store
+  but they are node-local. A guest lease names a source address, not a device,
+  and has no meaning at a sibling. Today `ActiveLeaseTokens` serves it to
+  siblings anyway; the issuing work below stops that.
+- *(added 2026-10-21)* **ADR-0104** (restricted principals) records its space
+  grants as this node's fact. They are not leases and nothing here changes them.
 
 ## What would make us revisit this
 
 - **Cross-user sharing (M9).** This record decides a user delegating to its **own**
-  devices, and a peer leasing its **own** holdings. §41/§47's shared spaces —
+  devices, and a peer leasing its **own** holdings (*amended 2026-10-21*: a peer
+  leasing write at a **sibling** that opted in). §41/§47's shared spaces —
   "wrapped for User A and User B" — add one user granting *another* user access,
   which is a grant whose issuer is not the recipient's own identity. The verify
   path here already accommodates it (any pinned issuer key), but the *policy* of
@@ -310,3 +391,72 @@ minutes), **skew fails toward refusal** (strict local-clock expiry, no grace, a
   hosts being NTP-synced to well under the 5-minute margin. A deployment where that
   is false wants a shorter TTL, not a wider margin — a wider margin is just a
   grace period wearing a disguise.
+
+## Amendment: a lease lifts a device to write at a sibling that opted in (2026-10-21, #285)
+
+By 2026-10-21 the lease format, store, cache and peer transport were built, but
+nothing on the request path used them (the gap is inventoried on #285). Write
+across sites still meant "pin the user at every node, then grant write at every
+node", which is the per-site-fact model this record rejects. The original text
+also missed one constraint: the `PrincipalID` a device authenticates as is local
+to each node, so a cross-site lease must name something that is the same at
+every site.
+
+### The decisions
+
+1. **A lease lifts to write, from an opted-in sibling only.** A node honours a
+   write lease only from a sibling it has explicitly opted into as an issuer.
+   With no opt-in, or one it cannot read, it honours none. ADR-0038's per-site
+   authority holds: the honouring site chooses to delegate, and can withdraw.
+2. **The principal is the device key** (`device:<key>`, ADR-0065's
+   granularity). A lease counts only for a request whose `Device` credential
+   has verified at this node, and only if it names the key that credential's
+   possession proof proved (`principal_mismatch` otherwise). Not the user: its
+   local id differs per node, and its key would lift every device of the user
+   to write.
+3. **The resource is the honouring site's peer key** (`site:<key>`). Site A
+   issues "device D may write at site B", and only B honours it. This replaces
+   "a peer leases its own site's holdings".
+4. **No pin attestation.** User pins stay hand-made at each node (ADR-0038;
+   ADR-0067, "the user pin stays the root of trust"). A device whose user is not
+   pinned at B fails `Device` verification before any lease is read.
+5. **The read floor stays lease-free** (ADR-0067). The acceptance assertion
+   becomes: with A unreachable, a write at B succeeds on a lease cached from A,
+   and the same write without one is refused (403).
+
+A cached lease must stay useful through an outage, so a peer re-issues a lease
+once its remaining life falls below a refresh threshold, rather than reusing it
+to the end. A sibling fetch then always caches a lease with at least that
+threshold left.
+
+**Rejected: a lease as a bearer credential on its own.** It carries no proof that
+its presenter is its principal, so anyone who saw it could replay it for up to
+24 hours: this record's own "easy failure". The device never presents a lease.
+The honouring node looks it up by the key the `Device` credential just proved.
+
+**Text the code contradicted, corrected in place:** only peers issue (the
+user-identity issuer is future work); a device key carries the read floor; only
+`lease.issued` and `lease.revoked` exist (whether honour and refusal are events
+or metrics is settled with the request path); no re-issuer exists yet; guest
+leases (ADR-0094) must stay out of what siblings are served.
+
+### What would make us revisit the amendment
+
+- **Per-user write.** If a household wants every device of a user to write, the
+  principal question reopens (ADR-0065's trigger).
+- **A user-identity issuer.** If one is built, the opt-in must name user issuers
+  as well as sibling peers.
+
+## What ratified this
+
+**Accepted 2026-10-21, by owner decision (#285).** The record's own condition is
+met: pairing and recovery shipped on 2026-08-26 (ADR-0022), and the Accepted ADRs
+0065, 0067 and 0068 already build on this record. The format, store, cache and
+peer transport are built and Go-tested (#311, #315, #316).
+
+The request path is **not** built, and this acceptance does not claim it is.
+What it obliges, in order, with what makes each provable tracked on #285: a peer
+issuing device write leases for opted-in siblings (with re-issue below the
+refresh threshold, and revocation when the grant is deleted); a sibling fetch
+loop; the check after `Device` verification, which fails closed and names each
+refusal reason; and a demo claim, `lease-honoured-across-partition`.
