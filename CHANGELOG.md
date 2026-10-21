@@ -10,6 +10,16 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **A peer issues device write leases for its siblings** (ADR-0048, #285). Every
+  5 minutes, and at startup, the controller gives each device it has authorised
+  for write (`heyarr admin management grant`, ADR-0065) a lease for every sibling
+  in membership. The lease is `device:<key>` may `write` at `site:<sibling peer
+  key>`, lasts 24 hours and is signed with this peer's key. A live lease is
+  reused while it has at least 12 hours left, so a sibling that fetches at any
+  moment caches at least 12 hours of authority. Deleting the grant revokes its
+  leases on the next pass. Each issue and revoke emits `lease.issued` /
+  `lease.revoked`. No sibling honours these leases yet: the fetch loop and the
+  opt-in check on the request path come in later changes.
 - **`heyarr admin user list [--json]` shows which users this controller has
   pinned** (#802): each one's name, signing and recovery public keys, when it
   was pinned, and how many of its devices here are active, expired (past their admission without being revoked) and revoked. Pins are
@@ -743,6 +753,10 @@ record independently agreeing on the bytes.
 
 ### Changed
 
+- **`GET /peer/v1/leases` serves only device write leases** (ADR-0048, ADR-0094,
+  #285). Until now it served every active lease, including guest leases. A guest
+  lease names a source address on this node's network and means nothing at a
+  sibling, so it now stays on this node. Guest admission here is unchanged.
 - **A request with no credential is now told "this endpoint requires a
   credential"**, not "requires a bearer token" (#802). The node also accepts the
   `Device` scheme and web-login sessions, so the old wording misled clients and

@@ -212,10 +212,12 @@ statement: a grant revoked during a partition is honoured until it expires, and
 that is a stated consequence, not a bug — 24 hours is how short the expiry has to
 be for it to be acceptable.
 
-*(amended 2026-10-21)* **No re-issuer exists yet.** The minutes cadence above is
-the decision. Nothing re-issues a lease today, so until the issuing work below
-lands, the steady-state revocation latency is the lease's whole remaining life.
-The re-issuer is owed.
+*(amended 2026-10-21)* **The re-issuer.** A controller beat (every few minutes)
+issues each write-authorised device a lease per sibling site, reuses one while at
+least half its life remains, and revokes a device's leases once its management
+grant is gone (#285). Revocation at the issuer therefore takes effect within a
+beat. At a sibling it takes effect when that sibling next fetches, and is bounded
+by the lease's remaining life while the two cannot reach each other.
 
 **The device enrolment certificate is long-lived and this is safe**, because it
 authorises nothing (above). A stale enrolment cert lets a device keep *claiming*
@@ -365,8 +367,8 @@ minutes), **skew fails toward refusal** (strict local-clock expiry, no grace, a
   form of ADR-0065's per-node grant, and it never touches the floor.
 - *(added 2026-10-21)* **ADR-0094** (guest) mints its leases from the same store
   but they are node-local. A guest lease names a source address, not a device,
-  and has no meaning at a sibling. Today `ActiveLeaseTokens` serves it to
-  siblings anyway; the issuing work below stops that.
+  and has no meaning at a sibling, so siblings are served only device write
+  leases, never a guest lease.
 - *(added 2026-10-21)* **ADR-0104** (restricted principals) records its space
   grants as this node's fact. They are not leases and nothing here changes them.
 
@@ -437,8 +439,8 @@ The honouring node looks it up by the key the `Device` credential just proved.
 **Text the code contradicted, corrected in place:** only peers issue (the
 user-identity issuer is future work); a device key carries the read floor; only
 `lease.issued` and `lease.revoked` exist (whether honour and refusal are events
-or metrics is settled with the request path); no re-issuer exists yet; guest
-leases (ADR-0094) must stay out of what siblings are served.
+or metrics is settled with the request path); the re-issuer was owed (now a
+controller beat); guest leases (ADR-0094) stay out of what siblings are served.
 
 ### What would make us revisit the amendment
 
