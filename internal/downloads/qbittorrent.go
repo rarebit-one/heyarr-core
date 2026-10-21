@@ -234,8 +234,10 @@ func (c *QBClient) Add(ctx context.Context, source secret.Value) (providers.Tran
 		}
 		// Accepted but not yet registered in the queue. The caller gets a
 		// transfer keyed by the infohash it will carry, and the next poll fills
-		// in the rest — the hash is stable, so nothing is lost.
-		return providers.Transfer{ID: hash, Name: magnetName(raw)}, nil
+		// in the rest — the hash is stable, so nothing is lost. Its trackers
+		// come from the magnet's own tr= parameters: the grab publishes them
+		// now (ADR-0119) and would never see the client's list later.
+		return providers.Transfer{ID: hash, Name: magnetName(raw), Trackers: magnetTrackers(raw)}, nil
 	}
 
 	// The .torrent path: return the new arrival in our category.
@@ -477,6 +479,32 @@ func magnetInfoHash(raw string) string {
 
 // magnetName reads the display name from a magnet URI, for a human reading a
 // queue before the client has reported the real name.
+// magnetTrackers returns a magnet's tr= announce URLs, once each and in order.
+// A private magnet's may carry a passkey, so only the ADR-0119 publisher's
+// filter (which also drops every tracker of a private release) decides what
+// leaves this node.
+func magnetTrackers(raw string) []string {
+	_, query, ok := strings.Cut(raw, "?")
+	if !ok {
+		return nil
+	}
+	values, err := url.ParseQuery(query)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, tr := range values["tr"] {
+		tr = strings.TrimSpace(tr)
+		if tr == "" || seen[tr] {
+			continue
+		}
+		seen[tr] = true
+		out = append(out, tr)
+	}
+	return out
+}
+
 func magnetName(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {

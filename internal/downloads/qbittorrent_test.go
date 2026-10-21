@@ -38,6 +38,7 @@ type fakeQB struct {
 	addFails      bool
 	torrents      []qbTorrent
 	addedURLs     []string // sources handed to torrents/add
+	pendingAdds   bool     // accept adds without registering them (an async add)
 	// registerHash models qBittorrent fetching a .torrent (which carries no
 	// infohash in the source): when set, a non-magnet add registers a torrent
 	// with this hash, so a category-diff resolve has something new to find.
@@ -97,6 +98,11 @@ func (f *fakeQB) server(t *testing.T) *httptest.Server {
 		src := r.FormValue("urls")
 		cat := r.FormValue("category")
 		f.addedURLs = append(f.addedURLs, src)
+		if f.pendingAdds {
+			// Accepted, not yet in the queue: qBittorrent's async add.
+			_, _ = w.Write([]byte("Ok."))
+			return
+		}
 		if h := magnetInfoHash(src); h != "" {
 			f.torrents = append(f.torrents, qbTorrent{
 				Hash: h, Name: magnetName(src), State: "downloading",
@@ -391,5 +397,29 @@ func TestQBAddReportsTheTransfersTrackers(t *testing.T) {
 	}
 	if strings.Join(tr.Trackers, " ") != "udp://tracker.example.org:1337/announce" {
 		t.Fatalf("Trackers = %v", tr.Trackers)
+	}
+}
+
+// TestQBAddKeepsAPendingMagnetsTrackers: a magnet qBittorrent accepted but has
+// not yet registered in the category returns an ID-only transfer; its trackers
+// come from the magnet's tr= parameters, since the grab publishes them now.
+func TestQBAddKeepsAPendingMagnetsTrackers(t *testing.T) {
+	f := newFakeQB()
+	f.pendingAdds = true
+	c := qbClient(t, f.server(t).URL)
+	magnet := "magnet:?xt=urn:btih:" + qbHash + "&dn=x" +
+		"&tr=udp%3A%2F%2Ftracker.example.org%3A1337%2Fannounce" +
+		"&tr=udp%3A%2F%2Ftracker.example.org%3A1337%2Fannounce" +
+		"&tr=http%3A%2F%2Fopen.example.net%2Fannounce"
+	tr, err := c.Add(context.Background(), secret.Value(magnet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.ID != qbHash {
+		t.Fatalf("pending transfer id = %q, want %q", tr.ID, qbHash)
+	}
+	want := []string{"udp://tracker.example.org:1337/announce", "http://open.example.net/announce"}
+	if strings.Join(tr.Trackers, " ") != strings.Join(want, " ") {
+		t.Fatalf("Trackers = %v, want %v", tr.Trackers, want)
 	}
 }
