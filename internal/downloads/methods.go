@@ -43,7 +43,7 @@ type torrent struct {
 	// TrackerStats is where a tracker failure ACTUALLY appears. See stall.go —
 	// this field is the whole reason that file exists.
 	TrackerStats []trackerStat `json:"trackerStats"`
-	// AddedDate (Unix seconds) dates a transfer that has fetched nothing, for
+	// AddedDate (Unix seconds) tells a re-added transfer from the same one, for
 	// the no-progress stall rule (#811). activityDate is deliberately not read:
 	// uploads move it too (see progressClock). PeersConnected and
 	// MetadataPercentComplete only describe the stall in the detail. They are
@@ -558,6 +558,7 @@ func (c *Client) downloadDir() string {
 // is not fetching by choice, and a seeding one is complete.
 func (c *Client) stalled(t torrent) (Trouble, bool) {
 	if t.Status != statusDownloading || t.PercentDone >= 1 {
+		c.progress.inactive(t.HashString)
 		return Trouble{}, false
 	}
 	var added time.Time

@@ -108,8 +108,8 @@ func noProgress(now, lastActivity time.Time, window time.Duration, detail string
 	}, true
 }
 
-// progressClock remembers, per transfer, when its fetched data last grew, for
-// the no-progress rule.
+// progressClock remembers, per transfer, when its fetched data last grew while
+// the client was actively downloading it, for the no-progress rule.
 //
 // Neither client dates DOWNLOAD progress itself. Transmission's activityDate
 // and qBittorrent's last_activity both move when a piece is UPLOADED too, so a
@@ -117,10 +117,13 @@ func noProgress(now, lastActivity time.Time, window time.Duration, detail string
 // forever while fetching nothing, and would never be reported. The clock
 // watches the amount fetched instead.
 //
-// It lives as long as the process. After a restart, a transfer that already
-// holds some data starts its window at first sight, so the report comes late,
-// never early. A transfer holding nothing is dated from when it was added,
-// because nothing has ever arrived.
+// The window opens at the first poll that sees the transfer actively
+// downloading, never earlier. Its added date says nothing about how long it
+// has had a download slot: a transfer queued for a day and then started has
+// had no chance yet. So a transfer that goes inactive (queued, paused,
+// checking) is forgotten, and one re-added under the same infohash starts
+// over. The clock lives as long as the process, so after a restart every
+// window opens again: a report comes late, never early.
 type progressClock struct {
 	mu    sync.Mutex
 	marks map[string]progressMark
@@ -129,6 +132,7 @@ type progressClock struct {
 
 type progressMark struct {
 	fetched int64
+	added   time.Time // the client's add date, to tell a re-add from the same transfer
 	since   time.Time // when fetched last changed, or when the window opened
 	seen    time.Time // the last poll that reported the transfer
 }
@@ -141,11 +145,11 @@ func newProgressClock() *progressClock {
 	return &progressClock{marks: map[string]progressMark{}}
 }
 
-// lastProgress records a poll's view of transfer id and returns when its
-// fetched amount last changed. fetched is any measure that grows as piece data
-// arrives; added is when the client took the transfer, zero when it does not
-// say. A nil clock knows nothing and returns the zero time, which never
-// reports.
+// lastProgress records an active poll's view of transfer id and returns when
+// its fetched amount last changed, or when its window opened. fetched is any
+// measure that grows as piece data arrives; added is the client's add date,
+// zero when it does not say. A nil clock knows nothing and returns the zero
+// time, which never reports.
 func (p *progressClock) lastProgress(id string, fetched int64, added, now time.Time) time.Time {
 	if p == nil {
 		return time.Time{}
@@ -153,12 +157,14 @@ func (p *progressClock) lastProgress(id string, fetched int64, added, now time.T
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	m, ok := p.marks[id]
+	if ok && (now.Sub(m.seen) > forgetAfter || !m.added.Equal(added)) {
+		// Gone long enough to have been removed, or re-added since: a new
+		// attempt, which must not inherit the old one's window.
+		ok = false
+	}
 	switch {
 	case !ok:
-		m = progressMark{fetched: fetched, since: now}
-		if fetched == 0 && !added.IsZero() && added.Before(now) {
-			m.since = added
-		}
+		m = progressMark{fetched: fetched, added: added, since: now}
 	case fetched != m.fetched:
 		// A drop counts too: a re-check that discards bad pieces is the client
 		// working, not a stall.
@@ -175,6 +181,17 @@ func (p *progressClock) lastProgress(id string, fetched int64, added, now time.T
 		p.swept = now
 	}
 	return m.since
+}
+
+// inactive forgets transfer id: it is queued, paused, checking or complete, so
+// it has no download slot, and its window must open afresh when it gets one.
+func (p *progressClock) inactive(id string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.marks, id)
 }
 
 // inspect reports what is wrong with a transfer, if anything.

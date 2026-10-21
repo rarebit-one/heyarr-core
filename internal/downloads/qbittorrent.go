@@ -324,7 +324,7 @@ type qbTorrent struct {
 	SavePath    string  `json:"save_path"`
 	ContentPath string  `json:"content_path"`
 	Category    string  `json:"category"`
-	// AddedOn (Unix seconds) dates a transfer that has fetched nothing, for
+	// AddedOn (Unix seconds) tells a re-added transfer from the same one, for
 	// the no-progress stall rule (#811). last_activity is deliberately not
 	// read: uploads move it too (see progressClock). NumSeeds and NumLeechs
 	// only describe the stall in the detail.
@@ -743,12 +743,15 @@ func (t *qbTransport) text(ctx context.Context, endpoint string) (string, error)
 // trying to download. Paused and queued states are not fetching by choice, and
 // a done transfer is complete.
 func (c *QBClient) stalled(t qbTorrent, done bool) (Trouble, bool) {
-	if done {
-		return Trouble{}, false
-	}
+	id := strings.ToLower(t.Hash)
 	switch t.State {
 	case "downloading", "stalledDL", "metaDL", "forcedDL", "forcedMetaDL":
 	default:
+		c.progress.inactive(id)
+		return Trouble{}, false
+	}
+	if done {
+		c.progress.inactive(id)
 		return Trouble{}, false
 	}
 	var added time.Time
@@ -759,7 +762,7 @@ func (c *QBClient) stalled(t qbTorrent, done bool) (Trouble, bool) {
 	if fetched == 0 {
 		fetched = t.Downloaded
 	}
-	since := c.progress.lastProgress(strings.ToLower(t.Hash), fetched, added, c.now())
+	since := c.progress.lastProgress(id, fetched, added, c.now())
 	detail := fmt.Sprintf("state %s, %d seeds and %d leechers connected", t.State, t.NumSeeds, t.NumLeechs)
 	return noProgress(c.now(), since, stallWindow(c.stallAfter), detail)
 }
