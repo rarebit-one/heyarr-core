@@ -244,7 +244,7 @@ func (s *Server) callTool(r *http.Request, req request) response {
 	// least that; this is what stops a read token calling a mutating verb.
 	id, authenticated := httpapi.IdentityFrom(r.Context())
 	if !authenticated {
-		return newError(req.ID, codeForbidden, "this endpoint requires a bearer token", nil)
+		return newError(req.ID, codeForbidden, "this endpoint requires a credential", nil)
 	}
 	if !id.Allows(tool.Scope) {
 		return newError(req.ID, codeForbidden,

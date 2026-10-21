@@ -307,6 +307,77 @@ func TestRevokeUserCascades(t *testing.T) {
 	}
 }
 
+// DeviceCountsByUser splits each user's devices into active, expired and revoked, and a
+// pinned user with no device has no entry (the zero value), which is what
+// `heyarr admin user list` reports as "pinned here, no device enrolled".
+func TestDeviceCountsByUser(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newFixture(t)
+	a := newActor(t)
+	f.enrol(t, a)
+	// A second device under the same user, then revoked.
+	pub2, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert2, err := enrolment.SignCert(a.userPriv, pub2, "", now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.EnrolDevice(ctx, cert2, "laptop"); err != nil {
+		t.Fatalf("enrol second device: %v", err)
+	}
+	if _, err := f.store.RevokeDevice(ctx, identity.FormatPublicKey(pub2)); err != nil {
+		t.Fatalf("revoke second device: %v", err)
+	}
+	// A third device whose admission lapses an hour after enrolment: once the
+	// clock passes it, it counts as expired, not active, though nothing revoked it.
+	pub3, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert3, err := enrolment.SignCert(a.userPriv, pub3, "", now, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.EnrolDevice(ctx, cert3, "tablet"); err != nil {
+		t.Fatalf("enrol third device: %v", err)
+	}
+	f.clock.t = now.Add(2 * time.Hour)
+	// A user pinned with no device at all.
+	bare := newActor(t)
+	bareUser, err := f.store.EnrolUser(ctx, bare.userKey, "bob", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice, err := f.store.LookupUser(ctx, a.userKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	counts, err := f.store.DeviceCountsByUser(ctx)
+	if err != nil {
+		t.Fatalf("DeviceCountsByUser: %v", err)
+	}
+	cases := []struct {
+		name   string
+		userID string
+		want   deviceauth.DeviceCounts
+	}{
+		{"one active, one expired, one revoked", alice.ID, deviceauth.DeviceCounts{Active: 1, Expired: 1, Revoked: 1}},
+		{"pinned with no device", bareUser.ID, deviceauth.DeviceCounts{}},
+	}
+	for _, tc := range cases {
+		if got := counts[tc.userID]; got != tc.want {
+			t.Errorf("%s: counts = %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+	if len(counts) != 1 {
+		t.Errorf("counts has %d entries, want 1 (a user with no device has none): %+v", len(counts), counts)
+	}
+}
+
 // A device key already enrolled cannot be enrolled again, and a user key already
 // pinned cannot be pinned again.
 func TestEnrolIsIdempotentlyRefused(t *testing.T) {

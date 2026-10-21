@@ -472,6 +472,57 @@ func (s *Store) ListDevices(ctx context.Context, userID string) ([]Device, error
 	return out, rows.Err()
 }
 
+// DeviceCounts is how many devices a pinned user has enrolled here, split by
+// whether they may still authenticate: Active ones can, Expired ones are past
+// their admission's expires_at without being revoked (authentication refuses
+// them, but time alone removes no row), and Revoked ones were revoked here.
+type DeviceCounts struct {
+	Active  int
+	Expired int
+	Revoked int
+}
+
+// DeviceCountsByUser returns each user's device counts, keyed by user identity
+// id, in one read. A user with no device has no entry; a caller reads the zero
+// value for it. It is what `heyarr admin user list` reports beside each pin, so
+// an operator can see that a user is pinned here but none of its devices are.
+//
+// Expiry is judged in Go on the store's clock, not in SQL: expires_at is
+// RFC3339Nano text, which is not fixed-width, so a string comparison would
+// misorder instants.
+func (s *Store) DeviceCountsByUser(ctx context.Context) (map[string]DeviceCounts, error) {
+	rows, err := s.reader.QueryContext(ctx,
+		`SELECT user_id, expires_at, revoked_at IS NOT NULL FROM device_identities`)
+	if err != nil {
+		return nil, fmt.Errorf("deviceauth: counting devices: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	now := s.clock.Now()
+	out := make(map[string]DeviceCounts)
+	for rows.Next() {
+		var userID, expiresAt string
+		var revoked bool
+		if err := rows.Scan(&userID, &expiresAt, &revoked); err != nil {
+			return nil, fmt.Errorf("deviceauth: reading device counts: %w", err)
+		}
+		exp, err := time.Parse(timeFormat, expiresAt)
+		if err != nil {
+			return nil, fmt.Errorf("deviceauth: device of user %s has an unparseable expires_at: %w", userID, err)
+		}
+		c := out[userID]
+		switch {
+		case revoked:
+			c.Revoked++
+		case !now.Before(exp):
+			c.Expired++
+		default:
+			c.Active++
+		}
+		out[userID] = c
+	}
+	return out, rows.Err()
+}
+
 // AllowedWrapRecipients returns the set of encryption keys a space key may be
 // wrapped for — enrol-before-wrap (ADR-0049): every enrolled, non-revoked
 // device's X25519 encryption key, plus every user's recovery encryption key. A

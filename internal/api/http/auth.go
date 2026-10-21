@@ -479,7 +479,7 @@ func RequireScope(want auth.Scope) func(http.Handler) http.Handler {
 			id, ok := IdentityFrom(r.Context())
 			if !ok {
 				w.Header().Set("WWW-Authenticate", `Bearer realm="heyarr"`)
-				Fail(w, r, problem.Unauthorized("this endpoint requires a bearer token"))
+				Fail(w, r, problem.Unauthorized("this endpoint requires a credential"))
 				return
 			}
 			// A peer is not an admin (ADR-0033).
@@ -548,7 +548,7 @@ func RequireWriteOrGuestPlay(next http.Handler) http.Handler {
 		id, ok := IdentityFrom(r.Context())
 		if !ok {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="heyarr"`)
-			Fail(w, r, problem.Unauthorized("this endpoint requires a bearer token"))
+			Fail(w, r, problem.Unauthorized("this endpoint requires a credential"))
 			return
 		}
 		if id.Allows(auth.ScopeWrite) {

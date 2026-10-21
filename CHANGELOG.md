@@ -10,6 +10,17 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **`heyarr admin user list [--json]` shows which users this controller has
+  pinned** (#802): each one's name, signing and recovery public keys, when it
+  was pinned, and how many of its devices here are active, expired (past their admission without being revoked) and revoked. Pins are
+  per-controller. `GET /api/v1/identities/users` lists them but carries no
+  device counts, and the Mnemosyne personal profile does not mount it, so there
+  the only way to see them was to query the database by hand. With none pinned,
+  it says devices cannot authenticate here and names `heyarr admin user pin`.
+- **A controller that authenticates but has no user pinned logs a warning at
+  startup** (#802): every device credential it sees will be refused as
+  `device_unknown_user`. The caller still gets the same opaque 401 as before;
+  only the operator's log changes.
 - **`heyarr admin management grant|revoke|list` authorises an enrolled device
   for write on the host** (ADR-0065). These are the same records as
   `POST/DELETE /api/v1/session/management-grants`, which the Mnemosyne personal
@@ -732,6 +743,11 @@ record independently agreeing on the bytes.
 
 ### Changed
 
+- **A request with no credential is now told "this endpoint requires a
+  credential"**, not "requires a bearer token" (#802). The node also accepts the
+  `Device` scheme and web-login sessions, so the old wording misled clients and
+  operators reading a refusal. The status, the `WWW-Authenticate` header and the
+  problem type are unchanged.
 - **`heyarr device seal-tpm` is disabled** until void-which-binds-go's
   `custody/tpm` backend lands after the C2 cutover (ADR-0021). It sealed a
   device key into heyarr's legacy TPM blob, which the library will never read,

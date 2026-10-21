@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -35,6 +36,7 @@ than racing it.`,
 		Use:   "user",
 		Short: "Administer pinned user identities",
 	}
+	user.AddCommand(newAdminUserListCommand(opts, configPath))
 	user.AddCommand(newAdminUserPinCommand(opts, configPath))
 	user.AddCommand(newAdminUserRekeyCommand(opts, configPath))
 	cmd.AddCommand(user, newAdminManagementCommand(opts, configPath))
@@ -68,6 +70,99 @@ func withDeviceAuth(ctx context.Context, configPath string, fn func(context.Cont
 		return err
 	}
 	return fn(ctx, store)
+}
+
+// userListJSON is one element of the --json shape of `admin user list`. Every
+// key in it is a PUBLIC key; nothing secret passes through this command.
+type userListJSON struct {
+	UserIdentityID        string    `json:"user_identity_id"`
+	PrincipalID           string    `json:"principal_id"`
+	Name                  string    `json:"name"`
+	PublicKey             string    `json:"public_key"`
+	RecoveryEncryptionKey string    `json:"recovery_encryption_key"`
+	EnrolledAt            time.Time `json:"enrolled_at"`
+	ActiveDevices         int       `json:"active_devices"`
+	ExpiredDevices        int       `json:"expired_devices"`
+	RevokedDevices        int       `json:"revoked_devices"`
+}
+
+// noUsersPinned is what `admin user list` says when the controller has pinned
+// no one. It names the consequence, not just the absence: a node with no pin
+// refuses every device credential with the same opaque 401 it gives a bad one,
+// so an empty list is the answer to "why can't my phone sign in here?".
+const noUsersPinned = "no users pinned on this controller; devices cannot authenticate here " +
+	"(pin with `heyarr admin user pin`)"
+
+func newAdminUserListCommand(_ Options, configPath *string) *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List the user identities pinned on this controller",
+		Long: `List every user identity pinned in this controller's database: its name, its
+signing and recovery public keys, when it was pinned, and how many of its
+devices are enrolled here (active, expired and revoked).
+
+A device authenticates at a controller only if its user is pinned THERE: pins
+are local and peers do not replicate them. A controller that lists no users
+refuses every device credential, with the same 401 any bad credential gets.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return withDeviceAuth(cmd.Context(), *configPath, func(ctx context.Context, store *deviceauth.Store) error {
+				users, err := store.ListUsers(ctx)
+				if err != nil {
+					return err
+				}
+				counts, err := store.DeviceCountsByUser(ctx)
+				if err != nil {
+					return err
+				}
+				return printUserList(cmd.OutOrStdout(), users, counts, asJSON)
+			})
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
+	return cmd
+}
+
+func printUserList(w io.Writer, users []deviceauth.User, counts map[string]deviceauth.DeviceCounts, asJSON bool) error {
+	if asJSON {
+		out := make([]userListJSON, 0, len(users))
+		for _, u := range users {
+			c := counts[u.ID]
+			out = append(out, userListJSON{
+				UserIdentityID:        u.ID,
+				PrincipalID:           u.PrincipalID,
+				Name:                  u.Name,
+				PublicKey:             u.PublicKey,
+				RecoveryEncryptionKey: u.RecoveryEncryptionKey,
+				EnrolledAt:            u.EnrolledAt.UTC(),
+				ActiveDevices:         c.Active,
+				ExpiredDevices:        c.Expired,
+				RevokedDevices:        c.Revoked,
+			})
+		}
+		return emitJSON(w, out)
+	}
+	if len(users) == 0 {
+		fmt.Fprintln(w, noUsersPinned)
+		return nil
+	}
+	for i, u := range users {
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
+		recovery := u.RecoveryEncryptionKey
+		if recovery == "" {
+			recovery = "(none)"
+		}
+		c := counts[u.ID]
+		fmt.Fprintf(w, "%s (principal %s)\n", u.Name, u.PrincipalID)
+		fmt.Fprintf(w, "  public key    %s\n", u.PublicKey)
+		fmt.Fprintf(w, "  recovery key  %s\n", recovery)
+		fmt.Fprintf(w, "  enrolled at   %s\n", u.EnrolledAt.UTC().Format(time.RFC3339))
+		fmt.Fprintf(w, "  devices       %d active, %d expired, %d revoked\n", c.Active, c.Expired, c.Revoked)
+	}
+	return nil
 }
 
 // userPinJSON is the --json shape of `admin user pin`. Every key in it is a
