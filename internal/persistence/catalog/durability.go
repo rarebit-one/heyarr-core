@@ -161,7 +161,9 @@ func (c *Catalog) MarkReplicaMissing(ctx context.Context, h hashing.Hash, peerID
 // the delete it authorised; that survival is the entire point, and asserting it
 // is one of this issue's acceptance conditions.
 func (c *Catalog) RecordDurability(ctx context.Context, e integrity.Evidence) error {
-	if e.Basis != integrity.BasisVerifiedRemote && e.Basis != integrity.BasisSolePeer {
+	switch e.Basis {
+	case integrity.BasisVerifiedRemote, integrity.BasisSolePeer, integrity.BasisReleased:
+	default:
 		// The CHECK constraint would catch this, and its message would name
 		// neither the blob nor the caller. A basis this package does not
 		// recognise is a new way of deciding it is safe to delete, and it

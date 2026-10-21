@@ -164,6 +164,11 @@ func (pw *PersonalWorker) Run(ctx context.Context) error {
 		// here (#723). lazyDurability resolves the peer key on first use, so the
 		// worker and controller can start concurrently (ADR-0002, ADR-0010).
 		Durability: newLazyDurability(pw.cfg.DataDir, peerID, db.Writer(), pw.log),
+		// Release intent (#779, ADR-0114): on this profile a vault blob is
+		// wanted only by pins and taken placements, so once the last one goes
+		// its last copy may be reclaimed after the grace window. Without it a
+		// two-site fabric keeps every deleted vault blob at one site forever.
+		HonourReleases: true,
 	}
 	checker, err := integrity.NewChecker(integrityOpts)
 	if err != nil {

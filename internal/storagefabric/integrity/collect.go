@@ -201,7 +201,9 @@ func (c *Collector) Collect(ctx context.Context, opts CollectOptions) (Collectio
 		known[b.Hash.String()] = struct{}{}
 		if b.References > 0 {
 			out.Referenced++
-			if !b.UnreferencedSince.IsZero() {
+			// A referenced blob ends its grace window, and any release intent
+			// it carried: it is wanted again (#779).
+			if !b.UnreferencedSince.IsZero() || !b.ReleasedAt.IsZero() {
 				toClear = append(toClear, b.Hash)
 			}
 			continue

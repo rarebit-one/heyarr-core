@@ -155,6 +155,20 @@ func (c *Collector) establish(
 				"(ADR-0010, ADR-0018)",
 		}, nil, nil
 	}
+	if c.opts.HonourReleases && !b.ReleasedAt.IsZero() {
+		// Release intent (#779, ADR-0114). The last-copy rule protects bytes
+		// somebody may still want; on the personal profile a vault blob's only
+		// wanting is a pin, and its owner removed the last one (or its source
+		// sibling withdrew it). Without this, whichever site reclaims second
+		// spares the blob as no_other_peer forever. The sweep-wide refusals
+		// above still apply: a node cut off from its controller deletes nothing.
+		detail := fmt.Sprintf("released (%s) at %s: nothing pins this vault blob any more, so "+
+			"its last copy may go once the grace window has passed (ADR-0114, #779)",
+			b.ReleaseCause, b.ReleasedAt.UTC().Format(time.RFC3339Nano))
+		return Evidence{
+			BlobHash: b.Hash, Size: b.Size, Basis: BasisReleased, RecordedAt: now, Detail: detail,
+		}, nil, nil
+	}
 
 	replicas, err := c.opts.Catalog.Replicas(ctx, b.Hash)
 	if err != nil {

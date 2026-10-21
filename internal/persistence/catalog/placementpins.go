@@ -21,14 +21,16 @@ func (c *Catalog) PinPlacement(ctx context.Context, blobHash, peerID string) err
 	if blobHash == "" || peerID == "" {
 		return fmt.Errorf("catalog: a placement pin needs both a blob hash and a peer id")
 	}
-	_, err := c.db.Writer().ExecContext(ctx,
-		`INSERT INTO placement_pins (blob_hash, peer_id, created_at) VALUES (?, ?, ?)
-		 ON CONFLICT (blob_hash, peer_id) DO NOTHING`,
-		blobHash, peerID, c.clock.Now().Format(timestampFormat))
-	if err != nil {
-		return fmt.Errorf("catalog: recording a placement pin: %w", err)
-	}
-	return nil
+	return c.db.InTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO placement_pins (blob_hash, peer_id, created_at) VALUES (?, ?, ?)
+			 ON CONFLICT (blob_hash, peer_id) DO NOTHING`,
+			blobHash, peerID, c.clock.Now().Format(timestampFormat)); err != nil {
+			return fmt.Errorf("catalog: recording a placement pin: %w", err)
+		}
+		// Pinned again: whatever release it carried no longer stands (#779).
+		return clearRelease(ctx, tx, blobHash)
+	})
 }
 
 // RecordVaultBlob records a vault blob this node has just stored and verified:
@@ -106,7 +108,7 @@ func (c *Catalog) RecordVaultBlob(ctx context.Context, blobHash string, size int
 			blobHash, peerID, c.clock.Now().Format(timestampFormat)); err != nil {
 			return fmt.Errorf("catalog: recording a placement pin: %w", err)
 		}
-		return nil
+		return clearRelease(ctx, tx, blobHash)
 	})
 	if err != nil {
 		return err
@@ -155,13 +157,23 @@ func (c *Catalog) AllPlacementPins(ctx context.Context) ([]PlacementPin, error) 
 // blob or is a replication target for it. The device calls this when the drive
 // CRDT's retention lets the blob go (ADR-0096); dropping a pin that is not there
 // is not an error.
+//
+// Removing the LAST thing that wants a vault blob records release intent in the
+// same transaction (#779, ADR-0114), so the personal profile's GC may reclaim
+// its last copy after the grace window.
 func (c *Catalog) UnpinPlacement(ctx context.Context, blobHash, peerID string) error {
-	_, err := c.db.Writer().ExecContext(ctx,
-		`DELETE FROM placement_pins WHERE blob_hash = ? AND peer_id = ?`, blobHash, peerID)
-	if err != nil {
-		return fmt.Errorf("catalog: removing a placement pin: %w", err)
-	}
-	return nil
+	now := c.clock.Now().UTC().Format(timestampFormat)
+	return c.db.InTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM placement_pins WHERE blob_hash = ? AND peer_id = ?`, blobHash, peerID)
+		if err != nil {
+			return fmt.Errorf("catalog: removing a placement pin: %w", err)
+		}
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
+			return err
+		}
+		return recordReleaseIfUnwanted(ctx, tx, blobHash, releaseUnpinned, "", now)
+	})
 }
 
 // IsVaultBlob reports whether a blob is a vault blob: pinned to some peer

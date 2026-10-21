@@ -151,6 +151,7 @@ func (f *fakeCatalog) ClearUnreferenced(_ context.Context, hashes []hashing.Hash
 	for _, h := range hashes {
 		if b, ok := f.blobs[h.String()]; ok {
 			b.UnreferencedSince = time.Time{}
+			b.ReleasedAt, b.ReleaseCause = time.Time{}, ""
 			f.cleared++
 		}
 	}

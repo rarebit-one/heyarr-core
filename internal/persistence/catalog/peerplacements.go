@@ -185,9 +185,9 @@ func (c *Catalog) entries(ctx context.Context, query string, args ...any) ([]pla
 // hint (metadata only: the pull verifies the bytes, invariant 1), and a
 // `present` replica for the source, which is the source's claim about its own
 // disk and what lets this node's planner name it as the source to pull from.
-// A withdrawn entry is a deleted placement row and nothing else: the bytes, if
-// this node holds them, go only by the GC sweep and its grace window
-// (invariant 8).
+// A withdrawn entry is a deleted placement row, plus release intent when nothing
+// else here wants the blob (#779): the bytes, if this node holds them, go only by
+// the GC sweep and its grace window (invariant 8).
 //
 // Emits sync.placements_exchanged when anything changed, plus blob.created for
 // an adopted row and replica.present for a replica that moved (invariant 7).
@@ -263,6 +263,9 @@ func (c *Catalog) ReplacePlacements(
 				source, e.BlobHash, e.Size, e.Held, now); err != nil {
 				return fmt.Errorf("catalog: recording a placement taken from %s: %w", source, err)
 			}
+			if err := clearRelease(ctx, tx, e.BlobHash); err != nil {
+				return err
+			}
 			evs, err := c.recordSourceHold(ctx, tx, source, e, now)
 			if err != nil {
 				return err
@@ -277,6 +280,12 @@ func (c *Catalog) ReplacePlacements(
 			if _, err := tx.ExecContext(ctx,
 				`DELETE FROM peer_placements WHERE source_peer_id = ? AND blob_hash = ?`, source, h); err != nil {
 				return fmt.Errorf("catalog: withdrawing a placement taken from %s: %w", source, err)
+			}
+			// The source withdrawing its placement is its owner letting the
+			// blob go there; if nothing else here wants it, that is release
+			// intent (#779, ADR-0114).
+			if err := recordReleaseIfUnwanted(ctx, tx, h, releaseWithdrawn, source, now); err != nil {
+				return err
 			}
 			removed++
 		}

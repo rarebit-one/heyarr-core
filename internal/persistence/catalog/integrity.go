@@ -30,8 +30,11 @@ func (c *Catalog) Blobs(ctx context.Context) ([]integrity.Blob, error) {
 		       (SELECT count(*) FROM assets a WHERE a.blob_hash = b.hash)
 		       + (SELECT count(*) FROM placement_pins p WHERE p.blob_hash = b.hash)
 		       + (SELECT count(*) FROM peer_placements pp WHERE pp.blob_hash = b.hash)
-		       + (SELECT count(*) FROM derived_thumbnails dt WHERE dt.thumb_hash = b.hash AND dt.status = 'ready')
+		       + (SELECT count(*) FROM derived_thumbnails dt WHERE dt.thumb_hash = b.hash AND dt.status = 'ready'),
+		       r.released_at, r.cause
 		FROM blobs b
+		LEFT JOIN blob_releases r ON r.blob_hash = b.hash
+		     AND NOT EXISTS (SELECT 1 FROM scanned_files sf WHERE sf.blob_hash = b.hash)
 		ORDER BY b.hash`)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: listing blobs: %w", err)
@@ -59,8 +62,11 @@ func (c *Catalog) Blob(ctx context.Context, h hashing.Hash) (integrity.Blob, err
 		       (SELECT count(*) FROM assets a WHERE a.blob_hash = b.hash)
 		       + (SELECT count(*) FROM placement_pins p WHERE p.blob_hash = b.hash)
 		       + (SELECT count(*) FROM peer_placements pp WHERE pp.blob_hash = b.hash)
-		       + (SELECT count(*) FROM derived_thumbnails dt WHERE dt.thumb_hash = b.hash AND dt.status = 'ready')
-		FROM blobs b WHERE b.hash = ?`, h.String())
+		       + (SELECT count(*) FROM derived_thumbnails dt WHERE dt.thumb_hash = b.hash AND dt.status = 'ready'),
+		       r.released_at, r.cause
+		FROM blobs b
+		LEFT JOIN blob_releases r ON r.blob_hash = b.hash
+		     AND NOT EXISTS (SELECT 1 FROM scanned_files sf WHERE sf.blob_hash = b.hash) WHERE b.hash = ?`, h.String())
 	b, err := scanBlob(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return integrity.Blob{}, fmt.Errorf("%w: %s", integrity.ErrUnknownBlob, h)
@@ -75,11 +81,12 @@ type rowScanner interface{ Scan(dest ...any) error }
 
 func scanBlob(s rowScanner) (integrity.Blob, error) {
 	var (
-		raw, since sql.NullString
-		size       int64
-		refs       int
+		raw, since      sql.NullString
+		released, cause sql.NullString
+		size            int64
+		refs            int
 	)
-	if err := s.Scan(&raw, &size, &since, &refs); err != nil {
+	if err := s.Scan(&raw, &size, &since, &refs, &released, &cause); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return integrity.Blob{}, err
 		}
@@ -96,6 +103,13 @@ func scanBlob(s rowScanner) (integrity.Blob, error) {
 	if since.Valid {
 		if t, err := time.Parse(timestampFormat, since.String); err == nil {
 			b.UnreferencedSince = t
+		}
+	}
+	// A release is read only for a blob no scanned library file reaches (the
+	// join above): library media is never released, whatever row says so.
+	if released.Valid {
+		if t, err := time.Parse(timestampFormat, released.String); err == nil {
+			b.ReleasedAt, b.ReleaseCause = t, cause.String
 		}
 	}
 	return b, nil
@@ -374,7 +388,8 @@ func (c *Catalog) MarkUnreferenced(ctx context.Context, hashes []hashing.Hash, a
 	})
 }
 
-// ClearUnreferenced ends the grace window for blobs that regained a reference.
+// ClearUnreferenced ends the grace window for blobs that regained a reference,
+// and any release intent they carried (#779).
 func (c *Catalog) ClearUnreferenced(ctx context.Context, hashes []hashing.Hash) error {
 	if len(hashes) == 0 {
 		return nil
@@ -384,6 +399,9 @@ func (c *Catalog) ClearUnreferenced(ctx context.Context, hashes []hashing.Hash) 
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE blobs SET unreferenced_since = NULL WHERE hash = ?`, h.String()); err != nil {
 				return fmt.Errorf("catalog: clearing the grace window on %s: %w", h, err)
+			}
+			if err := clearRelease(ctx, tx, h.String()); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -455,6 +473,11 @@ func (c *Catalog) Reclaim(ctx context.Context, h hashing.Hash, size int64, track
 				// Already gone. Another sweep got there first, which is an
 				// ordinary outcome for an idempotent job (ADR-0008).
 				return nil
+			}
+			// The release went with the bytes; a later re-upload of the same
+			// hash starts wanted, not released (#779).
+			if err := clearRelease(ctx, tx, hash); err != nil {
+				return err
 			}
 		}
 		ev, err := c.events.EmitTx(ctx, tx, events.TypeBlobReclaimed, "blob", hash, map[string]any{

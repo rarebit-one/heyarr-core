@@ -104,6 +104,13 @@ const (
 	// BasisSolePeer is a deployment with no other peer — see the package note
 	// above.
 	BasisSolePeer = "sole_peer"
+	// BasisReleased is a vault blob whose owner let it go (#779, ADR-0114):
+	// its last placement pin was removed, or its source sibling withdrew it,
+	// and the grace window has passed. It is admitted only where
+	// Options.HonourReleases is set (the personal profile), because there a
+	// pin is the only thing that wants a vault blob. It is not a claim that the
+	// bytes survive elsewhere; it is the record that nobody asked them to.
+	BasisReleased = "released"
 )
 
 // What a [Durability] implementation may report back.

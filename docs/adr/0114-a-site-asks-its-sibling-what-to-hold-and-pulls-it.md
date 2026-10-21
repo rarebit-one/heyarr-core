@@ -69,6 +69,13 @@ peer.
 - A withdrawn copy at the destination is reclaimed only while the source's
   claim about its own copy is fresh. Otherwise ADR-0018's last-copy rule spares
   it, which is safe but slow to free space (#779).
+- **Release intent, personal profile only (amended 2026-10-21, #779).** When a
+  vault blob's last pin is removed, or its source withdraws the placement
+  (`blob_releases`), the personal profile's GC may reclaim the last copy once
+  the grace window has passed, recording the basis `released`. On a two-site
+  fabric the last-copy rule would otherwise spare it at one site forever. The
+  media profile keeps ADR-0018's rule; `gc --honour-releases` opts one run in,
+  and library media is never released.
 
 ## Alternatives rejected
 
