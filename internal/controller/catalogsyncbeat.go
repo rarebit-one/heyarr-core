@@ -83,10 +83,19 @@ func runCatalogOpsSyncBeat(ctx context.Context, syncer catalogSyncer, interval t
 	})
 }
 
-// catalogSiblings enumerates the Full Peers this node converges its catalog with
-// — every Full Peer but this one, read fresh every cycle so a peer removed from
-// membership simply stops appearing, which is the whole of ADR-0012's revocation.
-// It mirrors fullPeerLister, in catalogsync's own Target type.
+// catalogSiblings enumerates the peers this node converges its catalog op-log
+// with: every Full or Partial Peer but this one, read fresh every cycle so a peer
+// removed from membership simply stops appearing, which is the whole of
+// ADR-0012's revocation.
+//
+// # Partial Peers too, unlike every byte-moving loop
+//
+// A Full Peer holds everything (§19), so blob convergence, control-plane backups
+// and state replication all stay Full-only. The op-log is editorial, not bytes:
+// a tombstone or an acquire op (ADR-0119) is what lets two sites that each fetch
+// their own media agree on the catalog without either holding the other's
+// library. Two such sites enrol each other as Partial Peers, and this is the one
+// loop that runs between them.
 type catalogSiblings struct {
 	members *membership.Store
 	self    string
@@ -99,7 +108,7 @@ func (l catalogSiblings) Siblings(ctx context.Context) ([]catalogsync.Target, er
 	}
 	var targets []catalogsync.Target
 	for _, m := range ms {
-		if m.IsSelf || m.Mode != "full" {
+		if m.IsSelf || !syncsCatalogOps(m.Mode) {
 			continue
 		}
 		targets = append(targets, catalogsync.Target{
@@ -108,4 +117,10 @@ func (l catalogSiblings) Siblings(ctx context.Context) ([]catalogsync.Target, er
 		})
 	}
 	return targets, nil
+}
+
+// syncsCatalogOps reports whether a peer of this mode exchanges catalog ops. The
+// cache, archive and compute modes (§9) hold no catalog of their own to agree on.
+func syncsCatalogOps(mode string) bool {
+	return mode == "full" || mode == "partial"
 }
