@@ -601,6 +601,7 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 	} else if n > 0 {
 		c.log.Info("recorded legacy device certs as membership ops", "count", n)
 	}
+	warnIfNoUsersPinned(ctx, c.log, c.cfg.HTTP.Auth.Enabled, deviceIdentities)
 	// The device-aware streaming leg's arms (ADR-0069): ffmpeg for the
 	// repackage and ffprobe for an on-demand probe, each only when this node
 	// resolved it. Absent, the plan still answers and says why (ADR-0023).
