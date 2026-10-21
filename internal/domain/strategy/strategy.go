@@ -1,6 +1,6 @@
 // Package strategy maps a content type to how its wants are acquired (ADR-0082).
 //
-// The system knows six content types (ADR-0080, ADR-0118) plus the work content types
+// The system knows seven content types (ADR-0080, ADR-0118, ADR-0121) plus the work content types
 // the follow path derives from a source type (`video` for a YouTube channel,
 // `podcast` for a podcast feed). Acquisition used to treat them all alike: one
 // pipeline, one video-shaped quality profile, an indexer search for everything.
@@ -66,6 +66,11 @@ var table = map[string]Strategy{
 	// A game is fetched from a store the person owns it on and judged by
 	// `owned`, which accepts only a copy whose store is known (ADR-0118).
 	identification.Game: {ContentType: identification.Game, Route: acquisition.RouteStore, DefaultProfile: "owned"},
+	// A ROM has no store to be fetched from, so it is searched, and judged by
+	// `rom-indexed` once the platform gate has kept only releases for the
+	// wanted platform (ADR-0121). Never by `owned`: an indexer's copy is not one
+	// a store says you own.
+	identification.ROM: {ContentType: identification.ROM, Route: acquisition.RouteSearch, DefaultProfile: "rom-indexed"},
 }
 
 // For returns the acquisition strategy for a content type. An unknown type gets

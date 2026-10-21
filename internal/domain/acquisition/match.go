@@ -146,3 +146,47 @@ func joinEpisodes(episodes []int) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// The ROM platform gate (ADR-0121 §4) is the same kind of gate: a SNES dump
+// and a Game Boy dump of "Tetris" are different games, so "is this release for
+// the wanted platform" is identity, not quality. Like GateEpisode it reasons
+// over what the caller already read from the title
+// (identification.ParseReleasePlatform), never over the title itself.
+const (
+	// RulePlatformMatches passes a release whose name spells out the wanted
+	// platform and fails one that spells out another.
+	RulePlatformMatches = "platform.matches"
+	// RulePlatformUndetermined fails a release whose name spells out no
+	// platform, or more than one, so it cannot be shown to be for the wanted
+	// platform.
+	RulePlatformUndetermined = "platform.undetermined"
+)
+
+// GatePlatform decides whether a release is for the wanted ROM platform and
+// returns the match Reason and whether the release is kept. spelled is every
+// platform the name spells out; determined is true when that is exactly one.
+// An undetermined release is rejected: the gate never keeps what it cannot
+// show to be for the wanted platform.
+func GatePlatform(want string, determined bool, relPlatform string, spelled []string) (Reason, bool) {
+	if !determined {
+		detail := "the release name does not spell out a platform, so it cannot be shown to be for " + want
+		if len(spelled) > 1 {
+			detail = fmt.Sprintf("the release name spells out %s (read from the release name), "+
+				"so it cannot be shown to be for %s alone", strings.Join(spelled, ", "), want)
+		}
+		return Reason{
+			Rule: RulePlatformUndetermined, Section: SectionMatch, Result: ResultUndetermined,
+			Detail: detail,
+		}, false
+	}
+	if relPlatform != want {
+		return Reason{
+			Rule: RulePlatformMatches, Section: SectionMatch, Result: ResultFail,
+			Detail: fmt.Sprintf("the release is for %s (read from the release name), not %s", relPlatform, want),
+		}, false
+	}
+	return Reason{
+		Rule: RulePlatformMatches, Section: SectionMatch, Result: ResultPass,
+		Detail: fmt.Sprintf("the release is for %s (read from the release name), the wanted platform", want),
+	}, true
+}

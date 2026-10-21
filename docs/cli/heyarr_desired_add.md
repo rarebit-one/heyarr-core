@@ -23,10 +23,11 @@ heyarr desired add <title> [flags]
 
 ```
       --addr string              where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
-      --content-type string      what this is: movie, series, music, book, document, game (required when wanting by title)
+      --content-type string      what this is: movie, series, music, book, document, game, rom (required when wanting by title)
       --edition-id string        want one edition — a season, a particular release — rather than the whole work
       --json                     emit machine-readable JSON
       --no-monitor               get it once and stop — do not keep looking for something better
+      --platform string          a ROM's console, e.g. snes or ps2 — part of its identity (required with --content-type rom)
       --quality-profile string   the profile this want is measured against, by name (defaults by media type)
       --reason string            a note to your future self
       --store-ref string         a game's store and the store's name for it, e.g. gog:the_witcher_3 — fetched from that store

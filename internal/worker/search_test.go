@@ -619,3 +619,38 @@ func TestASatisfiedWantStillTakesAGenuineUpgrade(t *testing.T) {
 		t.Errorf("selected %q, want the higher-scoring release", sel.CandidateID)
 	}
 }
+
+// A ROM want end to end (ADR-0121 §4): the indexer is asked for the title
+// alone, without the year the Work records for display, and of the releases it
+// offers only the one for the wanted platform is in the running; the Game Boy
+// release is reported as a platform mismatch, never selected.
+func TestAROMSearchAsksByTitleAndKeepsOnlyTheWantedPlatform(t *testing.T) {
+	t.Parallel()
+	h := newSearchHarness(t)
+	h.exec(t, `UPDATE works SET content_type = 'rom', work_key = 'rom:snes:tetris attack',
+		title = 'Tetris Attack', sort_title = 'tetris attack', year = 1996 WHERE id = 'w1'`)
+	h.exec(t, `UPDATE quality_profiles SET accept = '[{"attribute":"size_bytes","op":"gte","value":1}]',
+		prefer = '[]' WHERE id = 'q1'`)
+	sized := func(id, title string) acquisition.ReleaseCandidate {
+		return acquisition.ReleaseCandidate{ID: id, Title: title, Attributes: acquisition.Attributes{
+			policy.AttrSizeBytes: policy.Num(1 << 20),
+		}}
+	}
+	h.fake.Offer("Tetris Attack",
+		sized("gb", "Tetris Attack (USA) [GB]"),
+		sized("snes", "Tetris Attack (USA) [SNES]"))
+
+	if err := h.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if q := h.fake.LastQuery(); q.Year != 0 || q.SearchTerm() != "Tetris Attack" {
+		t.Errorf("asked the indexer for %q (year %d), want the title alone", q.SearchTerm(), q.Year)
+	}
+	sel, err := h.cat.SelectedCandidate(t.Context(), h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.CandidateID != "snes" {
+		t.Errorf("selected %q, want the SNES release", sel.CandidateID)
+	}
+}

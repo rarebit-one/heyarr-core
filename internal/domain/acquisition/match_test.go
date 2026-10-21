@@ -120,3 +120,38 @@ func TestMatchRejectionIsReportedAsRejectedBy(t *testing.T) {
 		}
 	}
 }
+
+// The ROM platform gate (ADR-0121 §4). It keeps a release only when its name
+// spells out exactly the wanted platform; another platform fails, and none or
+// several is undetermined — never kept.
+func TestGatePlatform(t *testing.T) {
+	cases := []struct {
+		name       string
+		determined bool
+		platform   string
+		spelled    []string
+		wantKept   bool
+		wantRule   string
+		wantResult Result
+	}{
+		{"the wanted platform", true, "snes", []string{"snes"}, true, RulePlatformMatches, ResultPass},
+		{"another platform", true, "gb", []string{"gb"}, false, RulePlatformMatches, ResultFail},
+		{"no platform spelled out", false, "", nil, false, RulePlatformUndetermined, ResultUndetermined},
+		{"several platforms, one of them wanted", false, "", []string{"gba", "snes"}, false, RulePlatformUndetermined, ResultUndetermined},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reason, kept := GatePlatform("snes", tc.determined, tc.platform, tc.spelled)
+			if kept != tc.wantKept || reason.Rule != tc.wantRule || reason.Result != tc.wantResult {
+				t.Errorf("kept=%v rule=%q result=%q, want kept=%v rule=%q result=%q",
+					kept, reason.Rule, reason.Result, tc.wantKept, tc.wantRule, tc.wantResult)
+			}
+			if reason.Section != SectionMatch {
+				t.Errorf("section %q, want %q: a platform rejection must read as a match gate, not quality", reason.Section, SectionMatch)
+			}
+			if len(tc.spelled) > 1 && !strings.Contains(reason.Detail, "gba, snes") {
+				t.Errorf("detail %q does not name what the release spelled out", reason.Detail)
+			}
+		})
+	}
+}

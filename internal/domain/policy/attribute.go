@@ -85,8 +85,9 @@ const (
 	// ABSENT when the store does not say — a Steam depot may or may not — so
 	// §63 reports "could not determine", never a confident false.
 	AttrDRMFree Attribute = "drm_free"
-	// AttrPlatform is the operating system a copy installs on: windows, linux,
-	// mac. Text, not ordered: no platform is better than another in general.
+	// AttrPlatform is the operating system a game copy installs on (windows,
+	// linux, mac), or the console a ROM is for (snes, ps2, …; ADR-0121). Text,
+	// not ordered: no platform is better than another in general.
 	AttrPlatform Attribute = "platform"
 	// AttrIndexerPrivacy is the privacy class of the indexer a release came
 	// from, as the indexer manager reports it: "public", "private" or

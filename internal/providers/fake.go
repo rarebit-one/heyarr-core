@@ -43,6 +43,9 @@ type Fake struct {
 	// rather than inferring it from a result that might have come from
 	// anywhere.
 	searches int
+	// lastQuery is the most recent query Search was handed, so a test can
+	// assert what the caller ASKED for, not only what came back.
+	lastQuery Query
 	// failWith, when set, makes Search fail — so the "one indexer is down and
 	// the others still answer" path is exercisable without a network.
 	failWith error
@@ -125,11 +128,19 @@ func (f *Fake) Searches() int {
 	return f.searches
 }
 
+// LastQuery is the query the most recent Search was handed.
+func (f *Fake) LastQuery() Query {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastQuery
+}
+
 // Search implements Indexer.
 func (f *Fake) Search(_ context.Context, q Query) ([]acquisition.ReleaseCandidate, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.searches++
+	f.lastQuery = q
 	if f.failWith != nil {
 		return nil, f.failWith
 	}

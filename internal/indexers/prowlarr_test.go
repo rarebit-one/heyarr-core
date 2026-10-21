@@ -278,3 +278,15 @@ func TestProwlarrReleasesCarryTheirIndexersPrivacy(t *testing.T) {
 		}
 	}
 }
+
+// A ROM search asks Prowlarr for the Console parent category (ADR-0121), not a
+// subcategory that would miss Console/Other; a game is never mapped, because it
+// is never searched (ADR-0118 §6).
+func TestProwlarrCategoriesForROMAndGame(t *testing.T) {
+	if got := prowlarrCategories("rom"); got != "1000" {
+		t.Errorf("rom categories = %q, want the Console parent 1000", got)
+	}
+	if got := prowlarrCategories("game"); got != "" {
+		t.Errorf("game categories = %q, want none: a game is fetched from its store, not searched", got)
+	}
+}

@@ -379,6 +379,10 @@ type SearchContext struct {
 	Season    int
 	Episode   int
 	IsEpisode bool
+	// Platform is a ROM want's platform (ADR-0121), read from its work key —
+	// the one place a fan-out Work keeps it — and "" for every other content
+	// type. When set, the platform gate runs on the candidates.
+	Platform string
 	// Incumbent is the evaluation of what this want ALREADY holds, and its
 	// AssetID is empty when it holds nothing acceptable.
 	//
@@ -410,19 +414,20 @@ func (c *Catalog) SearchContextFor(ctx context.Context, desiredItemID string) (S
 		scope     string
 		itemKey   sql.NullString
 		itemAttrs sql.NullString
+		workKey   string
 	)
 	// LEFT JOIN items so an item-scoped want reads the season/episode it points
 	// at (ADR-0093). The join is null for every other want — a work- or
 	// season-scoped one, or any non-series content type — and then the episode
 	// fields stay absent and the query is exactly what it was.
 	err := c.db.Reader().QueryRowContext(ctx, `
-		SELECT d.id, w.title, w.year, w.content_type, d.quality_profile_id,
+		SELECT d.id, w.title, w.year, w.content_type, w.work_key, d.quality_profile_id,
 		       d.scope, i.item_key, i.attributes
 		FROM desired_items d
 		JOIN works w ON w.id = d.work_id
 		LEFT JOIN items i ON i.id = d.item_id
 		WHERE d.id = ?`, desiredItemID).
-		Scan(&out.DesiredItemID, &out.Title, &year, &out.ContentType, &profileID,
+		Scan(&out.DesiredItemID, &out.Title, &year, &out.ContentType, &workKey, &profileID,
 			&scope, &itemKey, &itemAttrs)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SearchContext{}, fmt.Errorf("catalog: no desired item %s: %w", desiredItemID, err)
@@ -437,6 +442,16 @@ func (c *Catalog) SearchContextFor(ctx context.Context, desiredItemID string) (S
 		if season, episode, ok := episodeTarget(itemKey.String, itemAttrs.String); ok {
 			out.Season, out.Episode, out.IsEpisode = season, episode, true
 		}
+	}
+	if out.ContentType == identification.ROM {
+		// A ROM key always carries a vocabulary platform (DescribeROM and the
+		// scan rules both mint it). One that does not is refused rather than
+		// searched platform-blind, which would grab any platform's "Tetris".
+		platform, ok := identification.ROMPlatformFromKey(workKey)
+		if !ok {
+			return SearchContext{}, fmt.Errorf("catalog: ROM want %s has work key %q, which names no platform", desiredItemID, workKey)
+		}
+		out.Platform = platform
 	}
 
 	profile, err := c.profileForReconcile(ctx, profileID)

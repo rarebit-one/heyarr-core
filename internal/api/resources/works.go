@@ -110,6 +110,14 @@ func (a *API) patchWork(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.ContentType != nil {
 			after.ContentType = *body.ContentType
+			// A ROM's identity is its platform AND title, carried in its key
+			// (ADR-0121), and a correction keeps the old key: a Work relabelled
+			// as a rom would name no platform, and every search for it would
+			// fail. There is no platform to give here, so refuse it.
+			if after.ContentType == identification.ROM && before.ContentType != identification.ROM {
+				return &badRequest{errors.New("a work cannot be corrected into a rom: its platform is part of " +
+					"its identity, so want it as a rom with a platform instead")}
+			}
 		}
 		if body.Artist != nil {
 			if after.ContentType != "music" {
