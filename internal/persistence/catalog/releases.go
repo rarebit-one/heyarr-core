@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rarebit-one/void-which-binds-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
 )
 
 // Release intent for vault blobs (#779, ADR-0114).
@@ -168,4 +171,35 @@ func wantedAtReclaim(ctx context.Context, tx *sql.Tx, blobHash, stamp string) (b
 	// no release any more, a mark gone NULL, a newer release, a newer mark.
 	// Unreadable is not evidence either, so it refuses too.
 	return !same(observedRelease, released) || !same(observedMark, since), nil
+}
+
+// GuardUnlink runs unlink under the write lock (the writer connection takes it
+// up front, _txlock=immediate, so pin and placement writes from any process
+// wait), after checking that nothing references blobHash. See
+// integrity.Catalog.GuardUnlink.
+func (c *Catalog) GuardUnlink(ctx context.Context, h hashing.Hash, unlink func() error) error {
+	hash := h.String()
+	wanted := false
+	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS (SELECT 1 FROM blobs WHERE hash = ?)
+			    OR EXISTS (SELECT 1 FROM placement_pins WHERE blob_hash = ?)
+			    OR EXISTS (SELECT 1 FROM peer_placements WHERE blob_hash = ?)
+			    OR EXISTS (SELECT 1 FROM scanned_files WHERE blob_hash = ?)
+			    OR EXISTS (SELECT 1 FROM derived_thumbnails WHERE thumb_hash = ? AND status = 'ready')`,
+			hash, hash, hash, hash, hash).Scan(&wanted); err != nil {
+			return fmt.Errorf("catalog: checking %s is unreferenced before unlinking it: %w", hash, err)
+		}
+		if wanted {
+			return nil
+		}
+		return unlink()
+	})
+	if err != nil {
+		return err
+	}
+	if wanted {
+		return fmt.Errorf("catalog: not unlinking %s: %w", hash, integrity.ErrWantedAgain)
+	}
+	return nil
 }

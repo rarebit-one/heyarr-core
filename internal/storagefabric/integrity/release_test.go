@@ -154,3 +154,26 @@ func TestGCSparesAReleasedBlobTheCatalogSaysIsWantedAgain(t *testing.T) {
 		t.Fatalf("reclaimed %+v, want only the blob still released", out.Reclaimed)
 	}
 }
+
+// A reference that lands after Reclaim committed but before the unlink keeps
+// the bytes: the released unlink runs behind a final check under the catalog's
+// write lock, and the sweep spares the blob.
+func TestGCKeepsTheBytesOfAReleasedBlobReferencedBeforeTheUnlink(t *testing.T) {
+	f := newFixture(t)
+	dur := f.twoPeers()
+	h := f.put("re-pinned between the row delete and the unlink", 0)
+	f.release(h, "unpinned")
+	f.cat.referencedAtUnlink = map[string]bool{h.String(): true}
+
+	out := sweepTwice(t, f, f.collectorHonouring(dur, true))
+
+	if s := sparedFor(t, out, h); s.Reason != integrity.ReasonWantedAgain {
+		t.Errorf("reason = %q, want %q", s.Reason, integrity.ReasonWantedAgain)
+	}
+	if len(out.Reclaimed) != 0 {
+		t.Fatalf("reclaimed %+v", out.Reclaimed)
+	}
+	if _, err := f.store.Stat(t.Context(), h); err != nil {
+		t.Fatalf("the bytes were unlinked: %v", err)
+	}
+}

@@ -62,6 +62,9 @@ type fakeCatalog struct {
 	// wantedAgain makes Reclaim refuse these hashes as the real catalog does
 	// when a release went stale before the delete (#779).
 	wantedAgain map[string]bool
+	// referencedAtUnlink makes GuardUnlink find a reference that arrived
+	// after Reclaim committed (#779).
+	referencedAtUnlink map[string]bool
 
 	// The peer-shaped state ADR-0018's placement precondition reads (M4-12).
 	peers    []integrity.Peer
@@ -160,6 +163,13 @@ func (f *fakeCatalog) ClearUnreferenced(_ context.Context, hashes []hashing.Hash
 		}
 	}
 	return nil
+}
+
+func (f *fakeCatalog) GuardUnlink(_ context.Context, h hashing.Hash, unlink func() error) error {
+	if f.referencedAtUnlink[h.String()] {
+		return integrity.ErrWantedAgain
+	}
+	return unlink()
 }
 
 func (f *fakeCatalog) Reclaim(_ context.Context, h hashing.Hash, _ int64, tracked bool, _ time.Time) error {

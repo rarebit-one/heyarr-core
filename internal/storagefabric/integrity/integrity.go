@@ -143,6 +143,16 @@ type Catalog interface {
 	// way back, so it is worth being told twice.
 	Reclaim(ctx context.Context, h hashing.Hash, size int64, tracked bool, at time.Time) error
 
+	// GuardUnlink runs unlink, which removes a released blob's bytes, under
+	// the catalog's write lock, after checking that nothing references h:
+	// no placement pin, taken placement, scanned library file, ready
+	// thumbnail or re-adopted blob row (#779). Pins and taken placements have
+	// no foreign key, so a reference created between Reclaim's commit and the
+	// unlink would otherwise lose the last copy. When something does
+	// reference h it returns ErrWantedAgain without calling unlink, and the
+	// bytes stay for convergence to adopt.
+	GuardUnlink(ctx context.Context, h hashing.Hash, unlink func() error) error
+
 	// Peers lists every peer other than this node (M4-12).
 	//
 	// The self row is excluded here rather than by every caller, because the

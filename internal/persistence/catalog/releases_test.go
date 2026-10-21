@@ -441,3 +441,31 @@ func TestReclaimRefusesANewerReleaseGeneration(t *testing.T) {
 		t.Fatalf("Reclaim = %v, want ErrWantedAgain once another sweep marked the new generation", err)
 	}
 }
+
+// GuardUnlink unlinks only when nothing references the blob, checked under the
+// write lock, so a pin written after the row delete keeps the bytes (#779).
+func TestGuardUnlinkRefusesABlobReferencedAfterItsRowWent(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	self := h.seedRemotePeer(t)
+	blob := hashOf('4')
+	parsed, _ := hashing.Parse(blob)
+
+	called := false
+	unlink := func() error { called = true; return nil }
+
+	// No row and nothing referencing it: the unlink runs.
+	if err := h.cat.GuardUnlink(ctx, parsed, unlink); err != nil || !called {
+		t.Fatalf("unreferenced: err=%v unlinked=%v, want the unlink", err, called)
+	}
+
+	// A pin arrived (no foreign key needs the row): the unlink must not run.
+	called = false
+	if err := h.cat.PinPlacement(ctx, blob, self); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cat.GuardUnlink(ctx, parsed, unlink); !errors.Is(err, integrity.ErrWantedAgain) || called {
+		t.Fatalf("pinned: err=%v unlinked=%v, want ErrWantedAgain and no unlink", err, called)
+	}
+}

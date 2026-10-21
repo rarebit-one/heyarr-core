@@ -260,7 +260,7 @@ func (c *Collector) Collect(ctx context.Context, opts CollectOptions) (Collectio
 			if err := c.opts.Catalog.RecordDurability(ctx, ev); err != nil {
 				return Collection{}, err
 			}
-			if err := c.reclaim(ctx, b.Hash, b.Size, true, now); err != nil {
+			if err := c.reclaimTracked(ctx, b.Hash, b.Size, ev.Basis == BasisReleased, now); err != nil {
 				if errors.Is(err, ErrWantedAgain) {
 					// The release this sweep read went stale before the
 					// delete: a pin or placement came back (#779).
@@ -316,6 +316,27 @@ func (c *Collector) reclaim(ctx context.Context, h hashing.Hash, size int64, tra
 		return c.opts.Catalog.Reclaim(ctx, h, size, false, at)
 	}
 	return nil
+}
+
+// reclaimTracked reclaims a tracked blob. A released blob's bytes are unlinked
+// under the catalog's write lock, after a final reference check (#779): the
+// release basis deletes a last copy, and a pin or taken placement written
+// between the row's delete and the unlink would otherwise point at nothing.
+// Every other basis has a verified copy elsewhere, so a reference that arrives
+// in that window is served by re-replication, and keeps the ordinary path.
+func (c *Collector) reclaimTracked(ctx context.Context, h hashing.Hash, size int64, released bool, at time.Time) error {
+	if !released {
+		return c.reclaim(ctx, h, size, true, at)
+	}
+	if err := c.opts.Catalog.Reclaim(ctx, h, size, true, at); err != nil {
+		return err
+	}
+	return c.opts.Catalog.GuardUnlink(ctx, h, func() error {
+		if err := c.opts.Store.Delete(ctx, h); err != nil && !errors.Is(err, cas.ErrNotFound) {
+			return err
+		}
+		return nil
+	})
 }
 
 // collectUntracked reclaims bytes with no catalog row — the orphan an ingest
