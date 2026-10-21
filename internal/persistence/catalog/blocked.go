@@ -249,7 +249,19 @@ func (c *Catalog) BlockByHand(
 		b.Detail = "blocked by hand"
 	}
 	created, err = c.BlockRelease(ctx, b)
-	return b, created, err
+	if err != nil || created {
+		return b, created, err
+	}
+	// Already blocked: a repeat changes nothing, so report the block as it
+	// stands rather than the one this call would have written.
+	existing, err := c.BlockedKeys(ctx, desiredItemID)
+	if err != nil {
+		return BlockedRelease{}, false, err
+	}
+	if stored, ok := existing[b.Key()]; ok {
+		return stored, false, nil
+	}
+	return b, false, nil
 }
 
 // blockingProviders lists the providers that blocked candidateID for a want.

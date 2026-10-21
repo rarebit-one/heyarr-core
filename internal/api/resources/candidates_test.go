@@ -535,8 +535,16 @@ func TestABlockByHand(t *testing.T) {
 	if !maps.Equal(got, want) {
 		t.Errorf("blocked %+v, want %+v", got, want)
 	}
-	if r := h.doStable(http.MethodPost, path, strings.NewReader(`{"candidate_id":"plain"}`)); r.StatusCode != http.StatusOK {
-		t.Errorf("blocking twice = %d, want 200", r.StatusCode)
+	again := h.doStable(http.MethodPost, path, strings.NewReader(`{"candidate_id":"plain","detail":"something else"}`))
+	if again.StatusCode != http.StatusOK {
+		t.Errorf("blocking twice = %d, want 200", again.StatusCode)
+	}
+	var stored map[string]string
+	if err := json.Unmarshal([]byte(h.body(again)), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored["detail"] != "a program, not a film" {
+		t.Errorf("a repeat reported detail %q, want the stored block's", stored["detail"])
 	}
 	if n := h.countRows(t, `SELECT count(*) FROM blocked_releases`); n != 1 {
 		t.Errorf("%d blocks, want 1", n)

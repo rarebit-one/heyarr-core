@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,5 +182,37 @@ func TestAGameTransferOfInstallersIsNotStopped(t *testing.T) {
 	}
 	if blocked, err := h.cat.BlockedFor(t.Context(), h.want); err != nil || len(blocked) != 0 {
 		t.Fatalf("blocked = %+v (%v), want nothing blocked for a game", blocked, err)
+	}
+}
+
+// A removal that fails keeps the transfer row, so the next poll retries it
+// rather than forgetting a program that is still seeding.
+func TestAFailedRemovalOfAProgramIsRetried(t *testing.T) {
+	t.Parallel()
+	h := newPollHarness(t)
+	h.grabAfterSearch(t, "Arrival.2016.1080p.WEB.H264.exe", []byte("MZ a program"))
+	id := h.transferID(t)
+	if err := h.client.MarkExecutable(id); err != nil {
+		t.Fatal(err)
+	}
+	h.client.FailNextRemove(errors.New("the client is briefly unreachable"))
+	h.poll(t)
+
+	if got := h.state(t).Phase; got != acquisition.PhaseIdle {
+		t.Fatalf("phase = %s, want idle", got)
+	}
+	if left, _ := h.client.Transfers(t.Context()); len(left) != 1 {
+		t.Fatalf("setup: %d transfers, want the one whose removal failed", len(left))
+	}
+	if _, err := h.cat.AcquisitionFor(t.Context(), h.want); err != nil {
+		t.Fatalf("the transfer row was dropped before the removal succeeded: %v", err)
+	}
+
+	h.poll(t)
+	if left, _ := h.client.Transfers(t.Context()); len(left) != 0 {
+		t.Errorf("the next poll did not retry the removal: %+v", left)
+	}
+	if blocked, _ := h.cat.BlockedFor(t.Context(), h.want); len(blocked) != 1 {
+		t.Errorf("blocked = %+v, want the one block, not a second", blocked)
 	}
 }

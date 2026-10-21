@@ -216,16 +216,17 @@ func reconcileTransfer(
 // as soon as its file list is known, rather than letting it finish, seed, and
 // fail at ingest.
 //
-// A game want is exempt: its payload is installers (ADR-0120). Only a want
-// still QUEUED or DOWNLOADING is acted on here; one already VERIFYING or
-// INGESTING is ingest's to refuse, and an idle one has nothing in flight.
+// A game want is exempt: its payload is installers (ADR-0120). A want still
+// QUEUED or DOWNLOADING is failed and its release blocked as a verification
+// failure. One already VERIFYING or INGESTING is ingest's to refuse.
 //
-// The release is blocked as a verification failure, the want falls back to
-// idle, its transfer row is dropped and its search re-runs now, so the next
-// search picks a different release (the stuck-grab recovery's shape). The
-// transfer is removed from the client WITH its data when the client can: the
-// bytes are a program nobody wants on disk, and leaving it would keep seeding
-// it. Returns handled=false when the rule does not apply.
+// The transfer is then removed from the client WITH its data when the client
+// can: the bytes are a program nobody wants on disk, and leaving it would keep
+// seeding it. Only once that removal succeeds are the transfer row dropped and
+// the search re-run. The row is what brings this transfer back to this
+// function, so a failed removal keeps it, and the next poll, finding the want
+// already idle, retries the removal alone. Returns handled=false when the rule
+// does not apply.
 func refuseProgramTransfer(
 	ctx context.Context, cat PollDownloadsStore, client providers.Downloader,
 	acq catalog.Acquisition, t providers.Transfer, log *slog.Logger,
@@ -241,15 +242,27 @@ func refuseProgramTransfer(
 	if err != nil {
 		return 0, false, err
 	}
-	if p := state.State.Phase; p != acquisition.PhaseQueued && p != acquisition.PhaseDownloading {
+	switch state.State.Phase {
+	case acquisition.PhaseQueued, acquisition.PhaseDownloading:
+		cause := fmt.Errorf("%w: every file in %q is a program, not %s",
+			errExecutablePayload, t.Name, contentKind(sc.ContentType))
+		if err := failAcquisition(ctx, cat, acq.DesiredItemID, acq,
+			catalog.BlockVerificationFailed, cause, log); err != nil {
+			return 0, true, err
+		}
+		applied = 1
+	case acquisition.PhaseIdle:
+		// Failed on an earlier pass whose removal did not go through: retry it.
+	default:
 		return 0, false, nil
 	}
 
-	cause := fmt.Errorf("%w: every file in %q is a program, not %s",
-		errExecutablePayload, t.Name, contentKind(sc.ContentType))
-	if err := failAcquisition(ctx, cat, acq.DesiredItemID, acq,
-		catalog.BlockVerificationFailed, cause, log); err != nil {
-		return 0, true, err
+	if r, ok := client.(providers.Remover); ok {
+		if err := r.Remove(ctx, t.ID, true); err != nil {
+			log.Warn("refused a program's release but could not remove its transfer; the next poll retries",
+				"provider", client.Name(), "transfer", t.ID, "error", err)
+			return applied, true, nil
+		}
 	}
 	if err := cat.DropAcquisition(ctx, acq.DesiredItemID); err != nil {
 		log.Warn("refused a program's release but could not drop its transfer row",
@@ -259,13 +272,7 @@ func refuseProgramTransfer(
 		log.Warn("refused a program's release but could not clear its search schedule",
 			"desired_item_id", acq.DesiredItemID, "error", err)
 	}
-	if r, ok := client.(providers.Remover); ok {
-		if err := r.Remove(ctx, t.ID, true); err != nil {
-			log.Warn("refused a program's release but could not remove its transfer",
-				"provider", client.Name(), "transfer", t.ID, "error", err)
-		}
-	}
-	return 1, true, nil
+	return applied, true, nil
 }
 
 // sweepOrphanedDownloads fails wants whose transfer has vanished from a client
