@@ -23,7 +23,7 @@ heyarr desired add <title> [flags]
 
 ```
       --addr string              where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
-      --content-type string      what this is: movie, series, music, book (required when wanting by title)
+      --content-type string      what this is: movie, series, music, book, document, game (required when wanting by title)
       --edition-id string        want one edition — a season, a particular release — rather than the whole work
       --json                     emit machine-readable JSON
       --no-monitor               get it once and stop — do not keep looking for something better
