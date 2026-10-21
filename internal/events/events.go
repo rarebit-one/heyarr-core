@@ -219,6 +219,14 @@ const (
 	// standing rule is against one event per item.
 	TypeLeaseIssued  = "lease.issued"
 	TypeLeaseRevoked = "lease.revoked"
+	// TypeLeaseCached is this peer's cache of one sibling's leases changing
+	// after a fetch (ADR-0048, #285): the leases that sibling serves for this
+	// site, verified against its pinned key, replaced what was cached from it.
+	// One event per sibling per fetch that changed something, with counts —
+	// never one per lease, and never on a fetch that changed nothing, because a
+	// re-fetch of the same set is not a transition. A failed fetch is not one
+	// either: the cache is left as it was, so there is nothing to record.
+	TypeLeaseCached = "lease.cached"
 
 	// personalstate.* is the Milestone 9 encrypted personal-state plane (§38,
 	// §41, §79, ADR-0049). They are METADATA transitions only — a space came into

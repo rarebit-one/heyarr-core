@@ -5,8 +5,9 @@ package controller
 // (ADR-0065) and its siblings. A device authorised for write here gets, for
 // every sibling site, a lease "device D may write at site B", re-issued before
 // it is worth less than the refresh threshold and revoked when the grant is
-// deleted. A sibling fetches the leases (GET /peer/v1/leases) and honours one
-// only if it has opted into this peer as an issuer; both halves are later work.
+// deleted. A sibling fetches the leases (GET /peer/v1/leases; its fetch beat
+// is leasefetchbeat.go) and will honour one only if it has opted into this
+// peer as an issuer, which is later work.
 //
 // # Why a controller beat, and not a job
 //

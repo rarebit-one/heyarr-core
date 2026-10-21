@@ -55,6 +55,14 @@ const (
 	// often (one row and one event per device per sibling per TTL−threshold),
 	// a lower one shortens the outage a cached lease is guaranteed to cover.
 	DeviceWriteRefreshThreshold = DeviceWriteTTL / 2
+
+	// DeviceWriteReissueSlack is how far above DeviceWriteRefreshThreshold a
+	// lease is re-issued. The issuer runs on a beat, so a lease served between
+	// two passes is up to one beat older than the last pass saw (Codex review
+	// on #808). Re-issuing at threshold + slack keeps every served lease at or
+	// above the threshold as long as the issuer runs at least once per slack;
+	// the controller's beat is pinned well inside it (leasebeat_test.go).
+	DeviceWriteReissueSlack = 15 * time.Minute
 )
 
 // DevicePrincipal is the lease principal for a device key, in the canonical
@@ -196,7 +204,7 @@ func (i *DeviceWriteIssuer) Reconcile(ctx context.Context) (DeviceWriteResult, e
 		return strings.Compare(a.resource, b.resource)
 	})
 	for _, p := range pairs {
-		if exp, ok := freshest[p]; ok && exp.Sub(now) >= DeviceWriteRefreshThreshold {
+		if exp, ok := freshest[p]; ok && exp.Sub(now) >= DeviceWriteRefreshThreshold+DeviceWriteReissueSlack {
 			res.Reused++
 			continue
 		}

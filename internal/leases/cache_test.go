@@ -9,6 +9,7 @@ import (
 
 	"github.com/rarebit-one/void-which-binds-go/grant"
 
+	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/leases"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
@@ -19,7 +20,11 @@ import (
 func newCache(t *testing.T, siblings leases.SiblingKeys) *leases.CacheStore {
 	t.Helper()
 	db := testdb.Migrated(t)
-	c, err := leases.NewCache(leases.CacheOptions{Writer: db.Writer(), Reader: db.Reader(), Siblings: siblings})
+	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := leases.NewCache(leases.CacheOptions{Writer: db.Writer(), Reader: db.Reader(), Events: log, Siblings: siblings})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +52,7 @@ func TestCachedLeasePermitsAReadAndItsAbsenceRefuses(t *testing.T) {
 	if _, err := cache.Authorise(ctx, req, now); !errors.Is(err, leases.ErrNoCachedLease) {
 		t.Fatalf("an empty cache = %v, want ErrNoCachedLease", err)
 	}
-	if err := cache.Replace(ctx, idA, []string{lease.Token}, now); err != nil {
+	if _, err := cache.Replace(ctx, idA, []string{lease.Token}, now); err != nil {
 		t.Fatal(err)
 	}
 	g, err := cache.Authorise(ctx, req, now)
@@ -68,7 +73,7 @@ func TestCacheRefusesAnExpiredLeaseNamingExpired(t *testing.T) {
 	lease, _ := peerA.Issue(ctx, "user-a", "asset-1", []grant.Capability{grant.CapabilityRead}, time.Hour)
 	idA := idOf(keyA)
 	cache := newCache(t, fakeSiblings{idA: keyA.Public().(ed25519.PublicKey)})
-	if err := cache.Replace(ctx, idA, []string{lease.Token}, now); err != nil {
+	if _, err := cache.Replace(ctx, idA, []string{lease.Token}, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -90,7 +95,7 @@ func TestACachedLeaseForAnotherResourceOrPrincipalDoesNotOpenThisOne(t *testing.
 	lease, _ := peerA.Issue(ctx, "user-a", "asset-OTHER", []grant.Capability{grant.CapabilityRead}, time.Hour)
 	idA := idOf(keyA)
 	cache := newCache(t, fakeSiblings{idA: keyA.Public().(ed25519.PublicKey)})
-	if err := cache.Replace(ctx, idA, []string{lease.Token}, now); err != nil {
+	if _, err := cache.Replace(ctx, idA, []string{lease.Token}, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -111,7 +116,7 @@ func TestAReadLeaseDoesNotPermitAWrite(t *testing.T) {
 	lease, _ := peerA.Issue(ctx, "user-a", "asset-1", []grant.Capability{grant.CapabilityRead}, time.Hour)
 	idA := idOf(keyA)
 	cache := newCache(t, fakeSiblings{idA: keyA.Public().(ed25519.PublicKey)})
-	if err := cache.Replace(ctx, idA, []string{lease.Token}, now); err != nil {
+	if _, err := cache.Replace(ctx, idA, []string{lease.Token}, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -131,7 +136,7 @@ func TestALeaseFromAnUnpinnedIssuerIsNotHonoured(t *testing.T) {
 	lease, _ := peerX.Issue(ctx, "user-a", "asset-1", []grant.Capability{grant.CapabilityRead}, time.Hour)
 
 	cache := newCache(t, fakeSiblings{}) // nobody pinned
-	if err := cache.Replace(ctx, "stranger", []string{lease.Token}, now); err != nil {
+	if _, err := cache.Replace(ctx, "stranger", []string{lease.Token}, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := cache.Authorise(ctx, grant.Request{Principal: "user-a", Resource: "asset-1", Capability: grant.CapabilityRead}, now); !errors.Is(err, leases.ErrNoCachedLease) {
@@ -151,14 +156,14 @@ func TestReplaceMirrorsTheSiblingsActiveSet(t *testing.T) {
 	cache := newCache(t, fakeSiblings{idA: keyA.Public().(ed25519.PublicKey)})
 	req := grant.Request{Principal: "user-a", Resource: "asset-1", Capability: grant.CapabilityRead}
 
-	if err := cache.Replace(ctx, idA, []string{one.Token}, now); err != nil {
+	if _, err := cache.Replace(ctx, idA, []string{one.Token}, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := cache.Authorise(ctx, req, now); err != nil {
 		t.Fatalf("cached lease should authorise: %v", err)
 	}
 	// A refresh where the sibling now advertises nothing clears it.
-	if err := cache.Replace(ctx, idA, nil, now); err != nil {
+	if _, err := cache.Replace(ctx, idA, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := cache.Authorise(ctx, req, now); !errors.Is(err, leases.ErrNoCachedLease) {

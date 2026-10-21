@@ -10,12 +10,25 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **A peer caches the device write leases its siblings issue for it**
+  (ADR-0048, #285). Every 5 minutes, and once at startup in the background, the
+  controller fetches `GET /peer/v1/leases` from each sibling in membership over
+  the pinned peer link and mirrors the leases that name this site into its lease
+  cache. A lease is cached only if it verifies against the sibling's pinned key,
+  is a `device:<key>` `write` lease for `site:<this peer's key>` and has not
+  expired; a lease for another site is skipped, and anything else is refused and
+  logged. An unreachable sibling is logged and its cached leases are kept until
+  they expire; a failed fetch never clears the cache. Each fetch that changes a
+  sibling's cache emits one `lease.cached` with the sibling and the counts added
+  and removed; a fetch that changes nothing emits nothing. Nothing reads the
+  cache on the request path yet: the opt-in check comes in a later change.
 - **A peer issues device write leases for its siblings** (ADR-0048, #285). Every
   5 minutes, and at startup, the controller gives each device it has authorised
   for write (`heyarr admin management grant`, ADR-0065) a lease for every sibling
   in membership. The lease is `device:<key>` may `write` at `site:<sibling peer
   key>`, lasts 24 hours and is signed with this peer's key. A live lease is
-  reused while it has at least 12 hours left, so a sibling that fetches at any
+  re-issued once it has less than 12 hours plus a 15-minute slack left (the
+  slack covers the gap between issuer passes), so a sibling that fetches at any
   moment caches at least 12 hours of authority. Deleting the grant revokes its
   leases on the next pass. Each issue and revoke emits `lease.issued` /
   `lease.revoked`. No sibling honours these leases yet: the fetch loop and the
