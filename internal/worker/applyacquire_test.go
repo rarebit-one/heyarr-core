@@ -15,6 +15,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
+	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
 var applyAt = time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
@@ -142,7 +143,7 @@ func TestASiblingsAcquireOpBecomesASelectedWantAndAQueuedGrab(t *testing.T) {
 	// This site's grab of the sibling's release does not publish it back:
 	// the real publisher, over the real facts, records nothing.
 	pub := &CatalogAcquirePublisher{Facts: h.cat, Ops: h.ops, Signer: h.self, Site: "south"}
-	if err := pub.Publish(t.Context(), h.want, "infohash:"+fakeInfohash, fakeInfohash); err != nil {
+	if err := pub.Publish(t.Context(), h.want, "infohash:"+fakeInfohash, providers.Transfer{ID: fakeInfohash}); err != nil {
 		t.Fatal(err)
 	}
 	ops, err := h.ops.Ops(t.Context())

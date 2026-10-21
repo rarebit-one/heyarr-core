@@ -69,6 +69,13 @@ func transmissionAddStub(t *testing.T, gotArgs *map[string]any) *httptest.Server
 			*gotArgs = env.Arguments
 			_, _ = w.Write([]byte(`{"result":"success","arguments":{"torrent-added":` +
 				`{"id":1,"name":"fixture.bin","hashString":"` + hash + `"}}}`))
+		case "torrent-get":
+			// Add reads the announce list back (torrent-add answers without
+			// it). The same tracker twice proves the de-duplication.
+			_, _ = w.Write([]byte(`{"result":"success","arguments":{"torrents":[{"hashString":"` + hash + `",` +
+				`"trackerStats":[{"announce":"udp://tracker.example.org:1337/announce"},` +
+				`{"announce":"udp://tracker.example.org:1337/announce"},` +
+				`{"announce":"http://open.example.net/announce"}]}]}}`))
 		default:
 			_, _ = w.Write([]byte(`{"result":"success","arguments":{}}`))
 		}
@@ -209,5 +216,24 @@ func TestAFailedFetchDoesNotLeakTheURL(t *testing.T) {
 	}
 	if gotArgs != nil {
 		t.Error("torrent-add was still called after the fetch failed; nothing should have been queued")
+	}
+}
+
+// TestAddReportsTheTransfersTrackers: torrent-add answers with id, name and hash
+// only, so Add reads the announce list back in one torrent-get. The fan-out
+// publisher (ADR-0119) filters these before a sibling ever sees them.
+func TestAddReportsTheTransfersTrackers(t *testing.T) {
+	var got map[string]any
+	srv := transmissionAddStub(t, &got)
+	defer srv.Close()
+	c := stubbedClient(t, srv.URL)
+
+	tr, err := c.Add(context.Background(), secret.Value("magnet:?xt=urn:btih:"+strings.Repeat("a", 40)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"udp://tracker.example.org:1337/announce", "http://open.example.net/announce"}
+	if strings.Join(tr.Trackers, " ") != strings.Join(want, " ") {
+		t.Fatalf("Trackers = %v, want %v", tr.Trackers, want)
 	}
 }

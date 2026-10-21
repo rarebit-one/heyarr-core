@@ -168,7 +168,7 @@ func GrabReleaseHandler(
 		// skip at the top ("not waiting to be queued") and the op would never
 		// be written.
 		if o.publisher != nil {
-			err := o.publisher.Publish(ctx, payload.DesiredItemID, candidateID, transfer.ID)
+			err := o.publisher.Publish(ctx, payload.DesiredItemID, candidateID, transfer)
 			if errors.Is(err, ErrSelectionChanged) {
 				// The same race as the check above, one step later: a by-hand
 				// override replaced the selection while the client was taking

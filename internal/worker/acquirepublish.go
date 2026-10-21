@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/rarebit-one/heyarr-core/internal/catalogop"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
+	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
 // AcquirePublisher publishes the release a grab handed to a download client as
@@ -21,13 +23,13 @@ import (
 // unaffected either way.
 type AcquirePublisher interface {
 	// Publish records the op for the want. candidateID is the release the
-	// grab handed to the client, and transferID is what the client called the
-	// transfer: for a torrent client it is the infohash, which is the
+	// grab handed to the client, and transfer is what the client reports for
+	// it: its ID is the infohash for a torrent client, which is the
 	// identity the op pins. A transfer that is not a torrent (an HTTP
 	// enclosure, a usenet article) has nothing a sibling could pin and is
 	// skipped without error. The facts published are those of candidateID,
 	// never of whatever is selected by the time the op is written.
-	Publish(ctx context.Context, desiredItemID, candidateID, transferID string) error
+	Publish(ctx context.Context, desiredItemID, candidateID string, transfer providers.Transfer) error
 }
 
 // ErrSelectionChanged reports that the want's selected release is no longer
@@ -65,7 +67,8 @@ type CatalogAcquirePublisher struct {
 }
 
 // Publish implements AcquirePublisher.
-func (p *CatalogAcquirePublisher) Publish(ctx context.Context, desiredItemID, candidateID, transferID string) error {
+func (p *CatalogAcquirePublisher) Publish(ctx context.Context, desiredItemID, candidateID string, transfer providers.Transfer) error {
+	transferID := transfer.ID
 	if p == nil || p.Facts == nil || p.Ops == nil || len(p.Signer) != ed25519.PrivateKeySize {
 		return nil
 	}
@@ -148,10 +151,12 @@ func (p *CatalogAcquirePublisher) Publish(ctx context.Context, desiredItemID, ca
 		Size:       facts.Size,
 		SelectedAt: selectedAt,
 		Site:       site,
-		// Trackers are never published in this increment: the sibling joins
-		// the swarm by infohash (DHT), or resolves a private release through
-		// its own indexers. A tracker URL from the source would risk a passkey.
-		Trackers: nil,
+		// A public release carries the announce URLs the client reported,
+		// filtered to the ones that cannot hold a credential, so a sibling
+		// finds the swarm through its trackers rather than DHT alone (which
+		// is slow on a thin swarm). A private release carries none: it
+		// resolves through the sibling's own indexers.
+		Trackers: trackersFor(facts.Private, transfer.Trackers),
 		Private:  facts.Private,
 	}, heads, now)
 	if errors.Is(err, catalogop.ErrMalformed) {
@@ -206,4 +211,53 @@ func clipBytes(s string, max int) string {
 		cut--
 	}
 	return s[:cut]
+}
+
+// trackersFor is the announce list an acquire op may carry: none for a private
+// release, and otherwise the client's announce URLs that pass publicTracker,
+// once each, at most catalogop.MaxTrackers.
+func trackersFor(private bool, announce []string) []string {
+	if private {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, a := range announce {
+		a = strings.TrimSpace(a)
+		if seen[a] || !publicTracker(a) {
+			continue
+		}
+		seen[a] = true
+		out = append(out, a)
+		if len(out) == catalogop.MaxTrackers {
+			break
+		}
+	}
+	return out
+}
+
+// publicTracker admits an announce URL only in the shape a public tracker
+// uses: udp, http(s) or ws(s), a host, no userinfo, query or fragment, and a
+// path that is empty, "/" or "/announce". catalogop's own check stops at "no
+// userinfo/query/fragment" because a passkey in the PATH looks like a route;
+// a publisher can afford to be stricter and drop every other path, since a
+// public tracker never needs one.
+func publicTracker(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	switch u.Scheme {
+	case "udp", "http", "https", "ws", "wss":
+	default:
+		return false
+	}
+	if u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return false
+	}
+	switch u.Path {
+	case "", "/", "/announce":
+		return true
+	}
+	return false
 }

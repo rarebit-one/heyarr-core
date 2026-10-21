@@ -15,6 +15,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
+	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
 const fakeInfohash = "0123456789abcdef0123456789abcdef01234567"
@@ -26,7 +27,8 @@ type recordingPublisher struct {
 	fail  error
 }
 
-func (p *recordingPublisher) Publish(_ context.Context, desiredItemID, candidateID, transferID string) error {
+func (p *recordingPublisher) Publish(_ context.Context, desiredItemID, candidateID string, transfer providers.Transfer) error {
+	transferID := transfer.ID
 	p.calls = append(p.calls, desiredItemID+"|"+candidateID+"|"+transferID)
 	return p.fail
 }
@@ -161,7 +163,7 @@ func TestThePublishedOpCarriesTheFactsAndNothingSecret(t *testing.T) {
 	t.Parallel()
 	pub, ops := newPublisher(t, arrivalFacts())
 	// The client reports the hash upper-case; the op pins it lower-case.
-	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, strings.ToUpper(fakeInfohash)); err != nil {
+	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, providers.Transfer{ID: strings.ToUpper(fakeInfohash)}); err != nil {
 		t.Fatal(err)
 	}
 	if len(ops.recorded) != 1 {
@@ -196,7 +198,7 @@ func TestThePublishedOpCarriesTheFactsAndNothingSecret(t *testing.T) {
 	}
 	pub2, ops2 := newPublisher(t, arrivalFacts())
 	pub2.Now = func() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC) }
-	if err := pub2.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, fakeInfohash); err != nil {
+	if err := pub2.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, providers.Transfer{ID: fakeInfohash}); err != nil {
 		t.Fatal(err)
 	}
 	op2, err := catalogop.Verify(ops2.recorded[0])
@@ -215,7 +217,7 @@ func TestAPrivateIndexersReleaseIsPublishedPrivate(t *testing.T) {
 	f := arrivalFacts()
 	f.Private = true
 	pub, ops := newPublisher(t, f)
-	if err := pub.Publish(t.Context(), "want-1", f.CandidateID, fakeInfohash); err != nil {
+	if err := pub.Publish(t.Context(), "want-1", f.CandidateID, providers.Transfer{ID: fakeInfohash}); err != nil {
 		t.Fatal(err)
 	}
 	op, err := catalogop.Verify(ops.recorded[0])
@@ -233,7 +235,7 @@ func TestNonTorrentTransfersAreNotPublished(t *testing.T) {
 	t.Parallel()
 	pub, ops := newPublisher(t, arrivalFacts())
 	for _, id := range []string{"fake:1", "http-7", "", "nzb-abc"} {
-		if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, id); err != nil {
+		if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, providers.Transfer{ID: id}); err != nil {
 			t.Fatalf("transfer %q: %v", id, err)
 		}
 	}
@@ -250,7 +252,7 @@ func TestAClientThatTookADifferentReleaseIsNotPublished(t *testing.T) {
 	t.Parallel()
 	pub, ops := newPublisher(t, arrivalFacts())
 	other := strings.Repeat("f", 40)
-	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, other); err == nil {
+	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, providers.Transfer{ID: other}); err == nil {
 		t.Fatal("a mismatched infohash was published")
 	}
 	if len(ops.recorded) != 0 {
@@ -261,7 +263,7 @@ func TestAClientThatTookADifferentReleaseIsNotPublished(t *testing.T) {
 	f := arrivalFacts()
 	f.CandidateID = "sha256:" + strings.Repeat("0", 64)
 	pub, ops = newPublisher(t, f)
-	if err := pub.Publish(t.Context(), "want-1", f.CandidateID, other); err != nil {
+	if err := pub.Publish(t.Context(), "want-1", f.CandidateID, providers.Transfer{ID: other}); err != nil {
 		t.Fatal(err)
 	}
 	if len(ops.recorded) != 1 {
@@ -275,7 +277,7 @@ func TestNoSelectionPublishesNothing(t *testing.T) {
 	t.Parallel()
 	pub, ops := newPublisher(t, catalog.AcquireFacts{})
 	pub.Facts = fakeFacts{err: catalog.ErrNoSelection}
-	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, fakeInfohash); err != nil {
+	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, providers.Transfer{ID: fakeInfohash}); err != nil {
 		t.Fatal(err)
 	}
 	if len(ops.recorded) != 0 {
@@ -288,7 +290,7 @@ func TestNoSelectionPublishesNothing(t *testing.T) {
 func TestANilPublisherIsSafe(t *testing.T) {
 	t.Parallel()
 	var pub *CatalogAcquirePublisher
-	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, fakeInfohash); err != nil {
+	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, providers.Transfer{ID: fakeInfohash}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -302,7 +304,7 @@ func TestOversizedDisplayFieldsAreClippedNotRefused(t *testing.T) {
 	f.CandidateTitle = strings.Repeat("é", catalogop.MaxTitle) // 2 bytes each: twice the limit
 	f.WorkTitle = strings.Repeat("x", catalogop.MaxTitle+40)
 	pub, ops := newPublisher(t, f)
-	if err := pub.Publish(t.Context(), "want-1", f.CandidateID, fakeInfohash); err != nil {
+	if err := pub.Publish(t.Context(), "want-1", f.CandidateID, providers.Transfer{ID: fakeInfohash}); err != nil {
 		t.Fatalf("an oversized title refused the publish: %v", err)
 	}
 	op, err := catalogop.Verify(ops.recorded[0])
@@ -326,7 +328,7 @@ func TestASelectionThatChangedUnderTheGrabIsNotPublished(t *testing.T) {
 	f := arrivalFacts()
 	f.CandidateID = "sha256:" + strings.Repeat("0", 64) // the overriding pick, a hashed guid
 	pub, ops := newPublisher(t, f)
-	err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, fakeInfohash)
+	err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash, providers.Transfer{ID: fakeInfohash})
 	if !errors.Is(err, ErrSelectionChanged) {
 		t.Fatalf("err = %v, want ErrSelectionChanged", err)
 	}
@@ -343,7 +345,7 @@ func TestAWantNoOpCanExpressIsNotPublishedAndDoesNotRetry(t *testing.T) {
 	f := arrivalFacts()
 	f.Scope = catalogop.ScopeItemPrefix + strings.Repeat("k", catalogop.MaxScope)
 	pub, ops := newPublisher(t, f)
-	if err := pub.Publish(t.Context(), "want-1", f.CandidateID, fakeInfohash); err != nil {
+	if err := pub.Publish(t.Context(), "want-1", f.CandidateID, providers.Transfer{ID: fakeInfohash}); err != nil {
 		t.Fatalf("an inexpressible want failed the publish: %v", err)
 	}
 	if len(ops.recorded) != 0 {
@@ -358,7 +360,7 @@ func TestAReleaseTakenFromASiblingIsNotRepublished(t *testing.T) {
 	f := arrivalFacts()
 	f.Provider = catalog.FanOutProviderPrefix + "north"
 	pub, ops := newPublisher(t, f)
-	if err := pub.Publish(t.Context(), "want-1", f.CandidateID, fakeInfohash); err != nil {
+	if err := pub.Publish(t.Context(), "want-1", f.CandidateID, providers.Transfer{ID: fakeInfohash}); err != nil {
 		t.Fatal(err)
 	}
 	if len(ops.recorded) != 0 {
@@ -401,7 +403,9 @@ type hookPublisher struct {
 	hook func(ctx context.Context) error
 }
 
-func (p hookPublisher) Publish(ctx context.Context, _, _, _ string) error { return p.hook(ctx) }
+func (p hookPublisher) Publish(ctx context.Context, _, _ string, _ providers.Transfer) error {
+	return p.hook(ctx)
+}
 
 // TestAnOverrideAfterThePublishStopsTheGrabFromQueueingTheOldRelease: an
 // override that commits after the publish but before SELECTED → QUEUED must
@@ -438,5 +442,59 @@ func TestAnOverrideAfterThePublishStopsTheGrabFromQueueingTheOldRelease(t *testi
 	}
 	if got := h.state(t).Name(); got != "QUEUED" {
 		t.Fatalf("after the retry the want is %s, want QUEUED", got)
+	}
+}
+
+// TestAPublicReleaseCarriesItsCredentialFreeTrackers: the op lists the
+// client's announce URLs for a public release, so a sibling finds the swarm
+// through its trackers rather than DHT alone, but only those that cannot hold
+// a credential: no userinfo, query or fragment, and no path beyond /announce.
+// A private release carries none.
+func TestAPublicReleaseCarriesItsCredentialFreeTrackers(t *testing.T) {
+	t.Parallel()
+	announce := []string{
+		"udp://tracker.opentrackr.org:1337/announce",
+		"udp://tracker.opentrackr.org:1337/announce", // reported twice
+		"http://tracker.example.org/announce",
+		"https://tracker.example.org:443/",
+		"udp://open.example.net:6969",
+		"https://user:secret@tracker.example.org/announce",          // userinfo
+		"https://tracker.example.org/announce?passkey=abc",          // query
+		"https://tracker.example.org/0123456789abcdef0123/announce", // a path passkey
+		"magnet:?xt=urn:btih:" + fakeInfohash,                       // not a tracker
+		"ftp://tracker.example.org/announce",                        // scheme
+	}
+	pub, ops := newPublisher(t, arrivalFacts())
+	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash,
+		providers.Transfer{ID: fakeInfohash, Trackers: announce}); err != nil {
+		t.Fatal(err)
+	}
+	op, err := catalogop.Verify(ops.recorded[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"udp://tracker.opentrackr.org:1337/announce",
+		"http://tracker.example.org/announce",
+		"https://tracker.example.org:443/",
+		"udp://open.example.net:6969",
+	}
+	if strings.Join(op.Acquire.Trackers, " ") != strings.Join(want, " ") {
+		t.Fatalf("trackers = %v, want %v", op.Acquire.Trackers, want)
+	}
+
+	f := arrivalFacts()
+	f.Private = true
+	pub, ops = newPublisher(t, f)
+	if err := pub.Publish(t.Context(), "want-1", "infohash:"+fakeInfohash,
+		providers.Transfer{ID: fakeInfohash, Trackers: announce}); err != nil {
+		t.Fatal(err)
+	}
+	op, err = catalogop.Verify(ops.recorded[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(op.Acquire.Trackers) != 0 {
+		t.Fatalf("a private release published trackers: %v", op.Acquire.Trackers)
 	}
 }

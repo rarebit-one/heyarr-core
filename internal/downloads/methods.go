@@ -166,6 +166,7 @@ func (c *Client) toTransfer(t torrent) providers.Transfer {
 		Done:       done,
 		BytesTotal: t.TotalSize,
 		BytesDone:  int64(float64(t.TotalSize) * t.PercentDone),
+		Trackers:   announceURLs(t.TrackerStats),
 	}
 
 	if trouble, bad := inspect(t); bad {
@@ -245,17 +246,58 @@ func (c *Client) Add(ctx context.Context, source secret.Value) (providers.Transf
 	if err := c.rpc.call(ctx, "torrent-add", args, &res); err != nil {
 		return providers.Transfer{}, err
 	}
+	var added torrent
 	switch {
 	case res.Added != nil:
-		return c.toTransfer(*res.Added), nil
+		added = *res.Added
 	case res.Duplicate != nil:
 		// Already there. The caller gets the same value it would have got the
 		// first time, so a re-run is indistinguishable from the original.
-		return c.toTransfer(*res.Duplicate), nil
+		added = *res.Duplicate
 	default:
 		return providers.Transfer{}, fmt.Errorf(
 			"%w: torrent-add reported success but named no transfer", ErrRPCFailure)
 	}
+	out := c.toTransfer(added)
+	// torrent-add answers with id, name and hash only, so the announce list
+	// is read back in one torrent-get. Best effort: a failure here costs the
+	// trackers a fan-out op could carry (ADR-0119), never the grab itself.
+	if trackers, err := c.trackersOf(ctx, added.HashString); err == nil {
+		out.Trackers = trackers
+	}
+	return out, nil
+}
+
+// trackersOf reads one transfer's announce URLs.
+func (c *Client) trackersOf(ctx context.Context, hash string) ([]string, error) {
+	var raw struct {
+		Torrents []torrent `json:"torrents"`
+	}
+	args := map[string]any{"ids": []string{hash}, "fields": []string{"hashString", "trackerStats"}}
+	if err := c.rpc.call(ctx, "torrent-get", args, &raw); err != nil {
+		return nil, err
+	}
+	for _, t := range raw.Torrents {
+		if strings.EqualFold(t.HashString, hash) {
+			return announceURLs(t.TrackerStats), nil
+		}
+	}
+	return nil, nil
+}
+
+// announceURLs lists a transfer's announce URLs once each, in order.
+func announceURLs(stats []trackerStat) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, s := range stats {
+		a := strings.TrimSpace(s.Announce)
+		if a == "" || seen[a] {
+			continue
+		}
+		seen[a] = true
+		out = append(out, a)
+	}
+	return out
 }
 
 // addSource decides how the release reaches Transmission's torrent-add, and is
