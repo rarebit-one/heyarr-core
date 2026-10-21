@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -143,9 +144,12 @@ func (c *Catalog) blockReleaseTx(ctx context.Context, tx *sql.Tx, b BlockedRelea
 // halfway: the want must be in one of phases and its transfer row must still
 // name provider/externalID. Only then is the selected candidate the release
 // that produced this transfer, because a search would have moved the phase off
-// idle (or replaced the row through its grab). ours=false means the transfer is
-// no longer this want's to act on, and nothing was written. ours=true with no
-// selected candidate blocks nothing; there is no release to name.
+// idle (or replaced the row through its grab). The one change that moves the
+// selection without the phase, a by-hand override in flight, is caught by its
+// selected_at being later than the row's grab. ours=false means the transfer
+// is no longer this want's to act on, and nothing was written. ours=true with
+// no selected candidate, or a selection newer than the grab, blocks nothing:
+// there is no release this transfer can be said to have come from.
 func (c *Catalog) BlockTransferRelease(
 	ctx context.Context, desiredItemID, provider, externalID string,
 	phases []acquisition.Phase, detail string, reason BlockReason,
@@ -167,26 +171,41 @@ func (c *Catalog) BlockTransferRelease(
 		if !slices.Contains(phases, acquisition.Phase(phase)) {
 			return nil
 		}
-		var named int
-		if err := tx.QueryRowContext(ctx, `
-			SELECT count(*) FROM acquisitions
-			 WHERE desired_item_id = ? AND provider = ? AND external_id = ?`,
-			desiredItemID, provider, externalID).Scan(&named); err != nil {
-			return err
-		}
-		if named == 0 {
-			return nil
-		}
-		ours = true
-		b := BlockedRelease{DesiredItemID: desiredItemID, Detail: detail, Reason: reason}
+		var grabbedAt string
 		switch err := tx.QueryRowContext(ctx, `
-			SELECT provider, candidate_id, title FROM release_candidates
-			 WHERE desired_item_id = ? AND selected = 1`, desiredItemID,
-		).Scan(&b.Provider, &b.CandidateID, &b.Title); {
+			SELECT created_at FROM acquisitions
+			 WHERE desired_item_id = ? AND provider = ? AND external_id = ?`,
+			desiredItemID, provider, externalID).Scan(&grabbedAt); {
 		case errors.Is(err, sql.ErrNoRows):
 			return nil
 		case err != nil:
 			return err
+		}
+		ours = true
+		b := BlockedRelease{DesiredItemID: desiredItemID, Detail: detail, Reason: reason}
+		var selectedAt sql.NullString
+		switch err := tx.QueryRowContext(ctx, `
+			SELECT provider, candidate_id, title, selected_at FROM release_candidates
+			 WHERE desired_item_id = ? AND selected = 1`, desiredItemID,
+		).Scan(&b.Provider, &b.CandidateID, &b.Title, &selectedAt); {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		case err != nil:
+			return err
+		}
+		// A selection made AFTER this transfer was grabbed is not its release:
+		// a by-hand override while it was in flight (which moves the selection
+		// and not the phase), or a later search's pick. Blocking it would name
+		// the wrong release, so nothing is blocked. A selection with no stamp
+		// predates selected_at and has not changed since (every selection path
+		// stamps it), so it is the transfer's. Compared as times: the two
+		// columns are written in different layouts.
+		if selectedAt.Valid {
+			sel, serr := time.Parse(time.RFC3339Nano, selectedAt.String)
+			grab, gerr := time.Parse(time.RFC3339Nano, grabbedAt)
+			if serr == nil && gerr == nil && sel.After(grab) {
+				return nil
+			}
 		}
 		ev, created, err = c.blockReleaseTx(ctx, tx, b)
 		return err

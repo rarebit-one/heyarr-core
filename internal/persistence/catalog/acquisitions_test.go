@@ -317,3 +317,45 @@ func TestBlockTransferReleaseChecksTheWantIsStillTheTransfers(t *testing.T) {
 		}
 	}
 }
+
+// A by-hand override while the transfer is in flight moves the selection but
+// not the phase. The selection is then newer than the transfer's grab, so it is
+// not the transfer's release and is not blocked (#819).
+func TestBlockTransferReleaseSparesAnOverrideMadeInFlight(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+		t.Fatal(err)
+	}
+	ranked := acquisition.EvaluateAll([]acquisition.ReleaseCandidate{
+		release("good", 2160, "hevc"), release("plain", 1080, "h264"),
+	}, candidateProfile())
+	if _, err := h.cat.RecordSearch(ctx, h.want, ranked, acquisition.Incumbent{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.cat.RecordAcquisition(ctx, catalog.TransferToAcquisition(
+		"acq-1", h.want, "acquire", transfer(infohash, "x.exe"), "")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Writer().Exec(`UPDATE acquisition_state SET phase = 'downloading' WHERE desired_item_id = ?`, h.want); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.cat.OverrideSelection(ctx, h.want, "plain"); err != nil {
+		t.Fatal(err)
+	}
+	// The harness clock is fixed; make the override visibly later than the grab.
+	if _, err := h.db.Writer().Exec(`UPDATE release_candidates SET selected_at = '2099-01-01T00:00:00Z'
+		WHERE desired_item_id = ? AND selected = 1`, h.want); err != nil {
+		t.Fatal(err)
+	}
+
+	ours, err := h.cat.BlockTransferRelease(ctx, h.want, "acquire", infohash,
+		[]acquisition.Phase{acquisition.PhaseDownloading}, "x", catalog.BlockVerificationFailed)
+	if err != nil || !ours {
+		t.Fatalf("ours = %v (%v), want the transfer still the want's", ours, err)
+	}
+	if blocked, _ := h.cat.BlockedFor(ctx, h.want); len(blocked) != 0 {
+		t.Errorf("blocked %+v: the override's pick is not the transfer's release", blocked)
+	}
+}
