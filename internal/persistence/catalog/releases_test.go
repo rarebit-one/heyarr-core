@@ -30,6 +30,29 @@ func (h *harness) releaseOf(t *testing.T, hash string) integrity.Blob {
 	return b
 }
 
+// releasedEvidence is what the collector records for a released blob: the
+// release and the grace-window mark it observed.
+func (h *harness) releasedEvidence(t *testing.T, blob string, at time.Time) integrity.Evidence {
+	t.Helper()
+	b := h.releaseOf(t, blob)
+	return integrity.Evidence{
+		BlobHash: b.Hash, Size: 1024, Basis: integrity.BasisReleased, RecordedAt: at,
+		ReleasedAt: b.ReleasedAt, UnreferencedSince: b.UnreferencedSince,
+	}
+}
+
+// markOnce is the sweep that starts a released blob's grace window.
+func (h *harness) markOnce(t *testing.T, blob string, at time.Time) {
+	t.Helper()
+	parsed, err := hashing.Parse(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cat.MarkUnreferenced(context.Background(), []hashing.Hash{parsed}, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUnpinningTheLastPinRecordsRelease(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -176,9 +199,7 @@ func TestReclaimingAReleasedBlobRecordsTheBasisAndForgetsTheRelease(t *testing.T
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)
-	if err := h.cat.RecordDurability(ctx, integrity.Evidence{
-		BlobHash: parsed, Size: 1024, Basis: integrity.BasisReleased, RecordedAt: at,
-	}); err != nil {
+	if err := h.cat.RecordDurability(ctx, h.releasedEvidence(t, blob, at)); err != nil {
 		t.Fatalf("recording released evidence: %v", err)
 	}
 	if err := h.cat.Reclaim(ctx, parsed, 1024, true, at); err != nil {
@@ -211,9 +232,8 @@ func TestReclaimRefusesAReleaseThatWentStale(t *testing.T) {
 	}
 	parsed, _ := hashing.Parse(blob)
 	at := time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)
-	if err := h.cat.RecordDurability(ctx, integrity.Evidence{
-		BlobHash: parsed, Size: 1024, Basis: integrity.BasisReleased, RecordedAt: at,
-	}); err != nil {
+	h.markOnce(t, blob, time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC))
+	if err := h.cat.RecordDurability(ctx, h.releasedEvidence(t, blob, at)); err != nil {
 		t.Fatal(err)
 	}
 	// The owner pins it again before the delete.
@@ -316,9 +336,8 @@ func TestReclaimIsNotFooledByNewerEvidenceOnAnotherBasis(t *testing.T) {
 			if err := h.cat.UnpinPlacement(ctx, blob, self); err != nil {
 				t.Fatal(err)
 			}
-			if err := h.cat.RecordDurability(ctx, integrity.Evidence{
-				BlobHash: parsed, Size: 1024, Basis: integrity.BasisReleased, RecordedAt: at,
-			}); err != nil {
+			h.markOnce(t, blob, time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC))
+			if err := h.cat.RecordDurability(ctx, h.releasedEvidence(t, blob, at)); err != nil {
 				t.Fatal(err)
 			}
 			tc.wantBack(t, h, blob, parsed, self)
@@ -393,9 +412,8 @@ func TestReclaimRefusesANewerReleaseGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
-	if err := h.cat.RecordDurability(ctx, integrity.Evidence{
-		BlobHash: parsed, Size: 1024, Basis: integrity.BasisReleased, RecordedAt: at,
-	}); err != nil {
+	decided := h.releasedEvidence(t, blob, at)
+	if err := h.cat.RecordDurability(ctx, decided); err != nil {
 		t.Fatal(err)
 	}
 
@@ -408,5 +426,18 @@ func TestReclaimRefusesANewerReleaseGeneration(t *testing.T) {
 	}
 	if err := h.cat.Reclaim(ctx, parsed, 1024, true, at); !errors.Is(err, integrity.ErrWantedAgain) {
 		t.Fatalf("Reclaim = %v, want ErrWantedAgain for a release whose window has not run", err)
+	}
+
+	// Another sweep has since marked the new generation: still not the window
+	// this attempt decided on, so still refused.
+	if err := h.cat.RecordDurability(ctx, integrity.Evidence{
+		BlobHash: parsed, Size: 1024, Basis: integrity.BasisReleased, RecordedAt: at,
+		ReleasedAt: decided.ReleasedAt, UnreferencedSince: decided.UnreferencedSince,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.markOnce(t, blob, at.Add(-time.Hour))
+	if err := h.cat.Reclaim(ctx, parsed, 1024, true, at); !errors.Is(err, integrity.ErrWantedAgain) {
+		t.Fatalf("Reclaim = %v, want ErrWantedAgain once another sweep marked the new generation", err)
 	}
 }

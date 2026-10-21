@@ -259,6 +259,13 @@ type Evidence struct {
 	VerifiedAt time.Time
 	Detail     string
 	RecordedAt time.Time
+	// ReleasedAt and UnreferencedSince are, for the `released` basis, the
+	// release and the grace-window mark the sweep observed when it decided
+	// (#779). The reclaim refuses unless both are still exactly current, so a
+	// blob wanted and released again since (a new generation) is never
+	// deleted on an older generation's window. Zero on every other basis.
+	ReleasedAt        time.Time
+	UnreferencedSince time.Time
 }
 
 // Sparing is a blob a sweep declined to reclaim, and why.

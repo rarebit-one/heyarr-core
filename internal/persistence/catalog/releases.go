@@ -3,7 +3,6 @@ package catalog
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
@@ -126,11 +125,10 @@ func deleteRelease(ctx context.Context, tx *sql.Tx, blobHash string) (int64, err
 //     Placement pins have no foreign key, so without this a pin added after
 //     the sweep read the blob would not stop the delete;
 //   - if THIS attempt's evidence (recorded at stamp) is the `released` basis,
-//     the release must still stand AND be the generation whose grace window
-//     the sweep honoured. A release resets the grace-window mark, so the mark
-//     always postdates the release it is the window for. A release newer than
-//     the mark (or a mark gone NULL) is a blob wanted and released again since
-//     the sweep read it, and it gets its own full window.
+//     the release and the grace-window mark it recorded must both still be
+//     exactly current. A blob wanted and released again since is a new
+//     generation (a new released_at, and its mark reset), even if another
+//     sweep has already marked it again, and it gets its own full window.
 func wantedAtReclaim(ctx context.Context, tx *sql.Tx, blobHash, stamp string) (bool, error) {
 	var wanted, reliedOnRelease bool
 	if err := tx.QueryRowContext(ctx, `
@@ -147,24 +145,27 @@ func wantedAtReclaim(ctx context.Context, tx *sql.Tx, blobHash, stamp string) (b
 		return wanted, nil
 	}
 
-	var released, since sql.NullString
+	var observedRelease, observedMark, released, since sql.NullString
 	err := tx.QueryRowContext(ctx, `
-		SELECT r.released_at, b.unreferenced_since
-		  FROM blob_releases r JOIN blobs b ON b.hash = r.blob_hash
-		 WHERE r.blob_hash = ?`, blobHash).Scan(&released, &since)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return true, nil // the release no longer stands
-	case err != nil:
-		return false, fmt.Errorf("catalog: reading the release of %s: %w", blobHash, err)
-	case !released.Valid || !since.Valid:
-		return true, nil // a release with no window started since: not this sweep's to honour
+		SELECT e.released_at, e.unreferenced_since, r.released_at, b.unreferenced_since
+		  FROM durability_evidence e
+		  LEFT JOIN blob_releases r ON r.blob_hash = e.blob_hash
+		  LEFT JOIN blobs b ON b.hash = e.blob_hash
+		 WHERE e.blob_hash = ? AND e.basis = 'released' AND e.recorded_at = ?
+		 ORDER BY e.id DESC LIMIT 1`, blobHash, stamp).Scan(&observedRelease, &observedMark, &released, &since)
+	if err != nil {
+		return false, fmt.Errorf("catalog: reading the release generation of %s: %w", blobHash, err)
 	}
-	releasedAt, err1 := time.Parse(timestampFormat, released.String)
-	markedAt, err2 := time.Parse(timestampFormat, since.String)
-	if err1 != nil || err2 != nil {
-		// Unreadable is not evidence: refuse rather than delete a last copy.
-		return true, nil
+	same := func(a, b sql.NullString) bool {
+		if !a.Valid || !b.Valid {
+			return false
+		}
+		ta, errA := time.Parse(timestampFormat, a.String)
+		tb, errB := time.Parse(timestampFormat, b.String)
+		return errA == nil && errB == nil && ta.Equal(tb)
 	}
-	return releasedAt.After(markedAt), nil
+	// Anything but the exact generation this attempt decided on is wanted:
+	// no release any more, a mark gone NULL, a newer release, a newer mark.
+	// Unreadable is not evidence either, so it refuses too.
+	return !same(observedRelease, released) || !same(observedMark, since), nil
 }

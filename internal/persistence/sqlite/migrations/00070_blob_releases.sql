@@ -28,6 +28,10 @@
 --
 -- # durability_evidence.basis gains 'released'
 --
+-- It also gains released_at and unreferenced_since: for a released reclaim,
+-- the generation the sweep decided on, which the reclaim transaction compares
+-- with the current release and mark.
+--
 -- The evidence row is what Reclaim's defence in depth requires before it will
 -- delete a tracked blob (00028). A released blob's evidence names that basis, so
 -- an operator can read why a last copy went. SQLite cannot alter a table-level
@@ -58,7 +62,12 @@ CREATE TABLE durability_evidence_new (
     verified_at TEXT,
     size        INTEGER NOT NULL DEFAULT 0 CHECK (size >= 0),
     detail      TEXT NOT NULL DEFAULT '',
-    recorded_at TEXT NOT NULL
+    recorded_at TEXT NOT NULL,
+    -- For `released` only: the release and the grace-window mark the sweep
+    -- observed. The reclaim refuses unless both are still exactly current, so
+    -- a newer release generation is never deleted on an older one's window.
+    released_at        TEXT,
+    unreferenced_since TEXT
 ) STRICT;
 
 INSERT INTO durability_evidence_new

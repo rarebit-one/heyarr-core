@@ -167,6 +167,7 @@ func (c *Collector) establish(
 			b.ReleaseCause, b.ReleasedAt.UTC().Format(time.RFC3339Nano))
 		return Evidence{
 			BlobHash: b.Hash, Size: b.Size, Basis: BasisReleased, RecordedAt: now, Detail: detail,
+			ReleasedAt: b.ReleasedAt, UnreferencedSince: b.UnreferencedSince,
 		}, nil, nil
 	}
 
