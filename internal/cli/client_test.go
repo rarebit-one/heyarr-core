@@ -14,6 +14,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/client"
+	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/testutil"
 )
@@ -631,5 +632,30 @@ func TestTheCLITalksOverTheUnixSocket(t *testing.T) {
 	}
 	if len(peers) != 1 || !peers[0].IsSelf {
 		t.Errorf("peers over the socket = %+v, want the one self peer", peers)
+	}
+}
+
+// TestContentTypeHelpNamesTheValidatorsVocabulary (#814): every --content-type
+// flag that lists the vocabulary lists exactly what the server accepts. The
+// library flag said "movie, show, book, music" while the server refused "show"
+// and accepted series, document and game.
+func TestContentTypeHelpNamesTheValidatorsVocabulary(t *testing.T) {
+	root := NewRootCommand(Options{})
+	want := strings.Join(identification.ContentTypes(), ", ")
+	for _, path := range [][]string{{"library", "add"}, {"desired", "add"}} {
+		cmd, _, err := root.Find(path)
+		if err != nil {
+			t.Fatalf("%v: %v", path, err)
+		}
+		f := cmd.Flags().Lookup("content-type")
+		if f == nil {
+			t.Fatalf("%v has no --content-type", path)
+		}
+		if !strings.Contains(f.Usage, want) {
+			t.Errorf("%v --content-type usage %q does not list %q", path, f.Usage, want)
+		}
+		if strings.Contains(f.Usage, "show") {
+			t.Errorf("%v --content-type usage still names \"show\": %q", path, f.Usage)
+		}
 	}
 }
