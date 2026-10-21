@@ -216,3 +216,31 @@ func TestAFailedRemovalOfAProgramIsRetried(t *testing.T) {
 		t.Errorf("blocked = %+v, want the one block, not a second", blocked)
 	}
 }
+
+// An idle want whose transfer is found to be a program, without the earlier
+// pass that would have blocked it (it went idle for another reason), still has
+// its release blocked before the transfer is removed.
+func TestAnIdleProgramTransferIsBlockedBeforeRemoval(t *testing.T) {
+	t.Parallel()
+	h := newPollHarness(t)
+	h.grabAfterSearch(t, "Arrival.2016.1080p.WEB.H264.exe", []byte("MZ a program"))
+	if _, err := h.cat.AdvanceAcquisition(t.Context(), h.want, acquisition.TransitionFail,
+		"no library for the content type"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.client.MarkExecutable(h.transferID(t)); err != nil {
+		t.Fatal(err)
+	}
+	h.poll(t)
+
+	blocked, err := h.cat.BlockedFor(t.Context(), h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 1 || !strings.HasPrefix(blocked[0].Detail, "payload_executable: ") {
+		t.Fatalf("blocked = %+v, want the program's release blocked", blocked)
+	}
+	if left, _ := h.client.Transfers(t.Context()); len(left) != 0 {
+		t.Errorf("the program is still in the client: %+v", left)
+	}
+}

@@ -242,17 +242,23 @@ func refuseProgramTransfer(
 	if err != nil {
 		return 0, false, err
 	}
+	cause := fmt.Errorf("%w: every file in %q is a program, not %s",
+		errExecutablePayload, t.Name, contentKind(sc.ContentType))
 	switch state.State.Phase {
 	case acquisition.PhaseQueued, acquisition.PhaseDownloading:
-		cause := fmt.Errorf("%w: every file in %q is a program, not %s",
-			errExecutablePayload, t.Name, contentKind(sc.ContentType))
 		if err := failAcquisition(ctx, cat, acq.DesiredItemID, acq,
 			catalog.BlockVerificationFailed, cause, log); err != nil {
 			return 0, true, err
 		}
 		applied = 1
 	case acquisition.PhaseIdle:
-		// Failed on an earlier pass whose removal did not go through: retry it.
+		// Most often an earlier pass whose removal did not go through. But an
+		// idle want may also have got here another way (a node-local ingest
+		// failure before the file list was known), so the block is made sure
+		// of rather than assumed: BlockRelease is idempotent.
+		if err := blockProgramRelease(ctx, cat, acq.DesiredItemID, cause); err != nil {
+			return 0, true, err
+		}
 	default:
 		return 0, false, nil
 	}
@@ -273,6 +279,23 @@ func refuseProgramTransfer(
 			"desired_item_id", acq.DesiredItemID, "error", err)
 	}
 	return applied, true, nil
+}
+
+// blockProgramRelease blocks a want's selected release as a program, when it
+// has one. Idempotent.
+func blockProgramRelease(ctx context.Context, cat PollDownloadsStore, desiredItemID string, cause error) error {
+	sel, err := cat.SelectedCandidate(ctx, desiredItemID)
+	if errors.Is(err, catalog.ErrNoCandidate) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = cat.BlockRelease(ctx, catalog.BlockedRelease{
+		DesiredItemID: desiredItemID, Provider: sel.Provider, CandidateID: sel.CandidateID,
+		Title: sel.Title, Detail: cause.Error(), Reason: catalog.BlockVerificationFailed,
+	})
+	return err
 }
 
 // sweepOrphanedDownloads fails wants whose transfer has vanished from a client
