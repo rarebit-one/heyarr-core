@@ -3,6 +3,7 @@ package catalog_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
@@ -204,6 +205,29 @@ func TestDroppingAnAcquisitionLeavesTheTransferAlone(t *testing.T) {
 	}
 	if _, err := h.cat.AcquisitionFor(ctx, h.want); !errors.Is(err, catalog.ErrNoAcquisitionRow) {
 		t.Errorf("the row survived the drop: %v", err)
+	}
+}
+
+// A conditional drop removes the row only while it names that transfer, so a
+// row a newer grab wrote in its place survives (#819).
+func TestDropAcquisitionOfSparesAReplacementRow(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	other := strings.Repeat("f", 40)
+
+	if _, err := h.cat.RecordAcquisition(ctx, catalog.TransferToAcquisition(
+		"acq-1", h.want, "acquire", transfer(other, "replacement.mkv"), "/local/r")); err != nil {
+		t.Fatal(err)
+	}
+	if dropped, err := h.cat.DropAcquisitionOf(ctx, h.want, "acquire", infohash); err != nil || dropped {
+		t.Fatalf("dropped = %v (%v): a stale transfer id removed the replacement's row", dropped, err)
+	}
+	if _, err := h.cat.AcquisitionFor(ctx, h.want); err != nil {
+		t.Fatalf("the replacement row is gone: %v", err)
+	}
+	if dropped, err := h.cat.DropAcquisitionOf(ctx, h.want, "acquire", other); err != nil || !dropped {
+		t.Fatalf("dropped = %v (%v), want the named row removed", dropped, err)
 	}
 }
 

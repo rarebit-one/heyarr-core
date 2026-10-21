@@ -47,6 +47,7 @@ type PollDownloadsStore interface {
 	BlockRelease(ctx context.Context, b catalog.BlockedRelease) (bool, error)
 	ClearSearchSchedule(ctx context.Context, desiredItemID string) error
 	DropAcquisition(ctx context.Context, desiredItemID string) error
+	DropAcquisitionOf(ctx context.Context, desiredItemID, provider, externalID string) (bool, error)
 	OrphanedDownloads(ctx context.Context, grace time.Duration) ([]catalog.OrphanedDownload, error)
 	RecordAcquisition(ctx context.Context, a catalog.Acquisition) (bool, error)
 	SearchContextFor(ctx context.Context, desiredItemID string) (catalog.SearchContext, error)
@@ -216,18 +217,31 @@ func reconcileTransfer(
 // as soon as its file list is known, rather than letting it finish, seed, and
 // fail at ingest.
 //
-// A game want is exempt: its payload is installers (ADR-0120). A want still
-// QUEUED or DOWNLOADING is failed and its release blocked as a verification
-// failure. One already VERIFYING or INGESTING is ingest's to refuse.
+// A game want is exempt: its payload is installers (ADR-0120). One already
+// VERIFYING or INGESTING is ingest's to refuse.
 //
-// The transfer is then removed from the client WITH its data when the client
-// can: the bytes are a program nobody wants on disk, and leaving it would keep
-// seeding it. Everything that must happen is done while the transfer is still
-// in the client, because the transfer (and its row) is what brings the poll
-// back here: the search re-run comes first, then the removal, and the row is
-// dropped only after. A step that fails leaves the transfer in place, and the
-// next poll, finding the want already idle, retries from there. Returns
-// handled=false when the rule does not apply.
+// # The order is the design
+//
+// The transfer, while the client lists it, is what brings the poll back here,
+// so every step that must not be lost runs BEFORE it is removed, and a failed
+// step returns with the transfer still in place for the next poll to retry.
+// The want is made searchable (failed to idle) only AFTER the removal: the
+// search beat takes only idle wants, so nothing can grab a replacement while
+// the cleanup is half done. The transfer row is dropped last and only while
+// it still names this transfer, so a newer grab's row is never deleted.
+//
+//   - QUEUED or DOWNLOADING: clear the search schedule (so the eventual idle
+//     want searches at once), remove the transfer with its data (it is a
+//     program nobody wants on disk, and it would keep seeding), then fail the
+//     want and block the release, then drop the row. If the process dies after
+//     the removal, the orphan sweep fails the want back to idle; a search may
+//     then pick the same release, and this rule refuses it again.
+//   - IDLE: the want is already searchable (an earlier pass whose removal
+//     failed, or a node-local ingest failure before the file list was known).
+//     The release is blocked first, so a search can only choose something
+//     else, and then the removal is retried.
+//
+// Returns handled=false when the rule does not apply.
 func refuseProgramTransfer(
 	ctx context.Context, cat PollDownloadsStore, client providers.Downloader,
 	acq catalog.Acquisition, t providers.Transfer, log *slog.Logger,
@@ -245,18 +259,13 @@ func refuseProgramTransfer(
 	}
 	cause := fmt.Errorf("%w: every file in %q is a program, not %s",
 		errExecutablePayload, t.Name, contentKind(sc.ContentType))
-	switch state.State.Phase {
+	phase := state.State.Phase
+	switch phase {
 	case acquisition.PhaseQueued, acquisition.PhaseDownloading:
-		if err := failAcquisition(ctx, cat, acq.DesiredItemID, acq,
-			catalog.BlockVerificationFailed, cause, log); err != nil {
+		if err := cat.ClearSearchSchedule(ctx, acq.DesiredItemID); err != nil {
 			return 0, true, err
 		}
-		applied = 1
 	case acquisition.PhaseIdle:
-		// Most often an earlier pass whose removal did not go through. But an
-		// idle want may also have got here another way (a node-local ingest
-		// failure before the file list was known), so the block is made sure
-		// of rather than assumed: BlockRelease is idempotent.
 		if err := blockProgramRelease(ctx, cat, acq.DesiredItemID, cause); err != nil {
 			return 0, true, err
 		}
@@ -264,23 +273,22 @@ func refuseProgramTransfer(
 		return 0, false, nil
 	}
 
-	// The search is re-run BEFORE the transfer goes: while the transfer is in
-	// the client this path is reachable again, so a failure here is returned
-	// and the next poll retries it. Once the transfer is gone nothing would.
-	// Safe to run first, because the release is already blocked.
-	if err := cat.ClearSearchSchedule(ctx, acq.DesiredItemID); err != nil {
-		return applied, true, err
-	}
 	if r, ok := client.(providers.Remover); ok {
 		if err := r.Remove(ctx, t.ID, true); err != nil {
 			log.Warn("refused a program's release but could not remove its transfer; the next poll retries",
 				"provider", client.Name(), "transfer", t.ID, "error", err)
-			return applied, true, nil
+			return 0, true, nil
 		}
 	}
-	// Last, and harmless if lost: a row for a transfer the client no longer
-	// reports, on an idle want, is nothing any sweep acts on.
-	if err := cat.DropAcquisition(ctx, acq.DesiredItemID); err != nil {
+
+	if phase != acquisition.PhaseIdle {
+		if err := failAcquisition(ctx, cat, acq.DesiredItemID, acq,
+			catalog.BlockVerificationFailed, cause, log); err != nil {
+			return 0, true, err
+		}
+		applied = 1
+	}
+	if _, err := cat.DropAcquisitionOf(ctx, acq.DesiredItemID, client.Name(), t.ID); err != nil {
 		log.Warn("refused a program's release but could not drop its transfer row",
 			"desired_item_id", acq.DesiredItemID, "error", err)
 	}

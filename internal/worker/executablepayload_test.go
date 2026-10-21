@@ -185,8 +185,9 @@ func TestAGameTransferOfInstallersIsNotStopped(t *testing.T) {
 	}
 }
 
-// A removal that fails keeps the transfer row, so the next poll retries it
-// rather than forgetting a program that is still seeding.
+// A removal that fails changes nothing the next poll needs: the want stays in
+// flight (so no search can grab a replacement mid-cleanup) with its transfer
+// row, and the next poll retries the whole refusal.
 func TestAFailedRemovalOfAProgramIsRetried(t *testing.T) {
 	t.Parallel()
 	h := newPollHarness(t)
@@ -198,22 +199,25 @@ func TestAFailedRemovalOfAProgramIsRetried(t *testing.T) {
 	h.client.FailNextRemove(errors.New("the client is briefly unreachable"))
 	h.poll(t)
 
-	if got := h.state(t).Phase; got != acquisition.PhaseIdle {
-		t.Fatalf("phase = %s, want idle", got)
+	if got := h.state(t).Phase; got != acquisition.PhaseQueued {
+		t.Fatalf("phase = %s, want still queued: a want must not become searchable before its program is removed", got)
 	}
 	if left, _ := h.client.Transfers(t.Context()); len(left) != 1 {
 		t.Fatalf("setup: %d transfers, want the one whose removal failed", len(left))
 	}
-	if _, err := h.cat.AcquisitionFor(t.Context(), h.want); err != nil {
-		t.Fatalf("the transfer row was dropped before the removal succeeded: %v", err)
-	}
 
 	h.poll(t)
+	if got := h.state(t).Phase; got != acquisition.PhaseIdle {
+		t.Errorf("phase = %s after the retry, want idle", got)
+	}
 	if left, _ := h.client.Transfers(t.Context()); len(left) != 0 {
 		t.Errorf("the next poll did not retry the removal: %+v", left)
 	}
 	if blocked, _ := h.cat.BlockedFor(t.Context(), h.want); len(blocked) != 1 {
-		t.Errorf("blocked = %+v, want the one block, not a second", blocked)
+		t.Errorf("blocked = %+v, want the one block", blocked)
+	}
+	if _, err := h.cat.AcquisitionFor(t.Context(), h.want); err == nil {
+		t.Error("the refused transfer's row is still there")
 	}
 }
 
