@@ -394,18 +394,29 @@ func (c *Catalog) ClearUnreferenced(ctx context.Context, hashes []hashing.Hash) 
 	if len(hashes) == 0 {
 		return nil
 	}
-	return c.db.InTx(ctx, func(tx *sql.Tx) error {
+	var pending []events.Event
+	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		pending = nil
 		for _, h := range hashes {
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE blobs SET unreferenced_since = NULL WHERE hash = ?`, h.String()); err != nil {
 				return fmt.Errorf("catalog: clearing the grace window on %s: %w", h, err)
 			}
-			if err := clearRelease(ctx, tx, h.String()); err != nil {
+			evs, err := c.clearRelease(ctx, tx, h.String(), wantedByReference)
+			if err != nil {
 				return err
 			}
+			pending = append(pending, evs...)
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if len(pending) > 0 {
+		c.events.Publish(pending...)
+	}
+	return nil
 }
 
 // Reclaim removes the catalog's record of a blob and emits blob.reclaimed.
@@ -426,21 +437,20 @@ func (c *Catalog) Reclaim(ctx context.Context, h hashing.Hash, size int64, track
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
 		pending, wantedAgain = nil, false
 		if tracked {
-			// A blob reclaimed on the `released` basis is revalidated here,
-			// in the transaction that deletes it (#779). The sweep read the
-			// release earlier; a pin or taken placement that came back since
-			// cleared it, and nothing else in this transaction would notice:
-			// placement pins have no foreign key to stop the delete. The
-			// evidence written for this attempt is removed with the refusal,
-			// so it cannot vouch for a later delete.
-			stale, err := staleRelease(ctx, tx, hash)
+			// The blob is revalidated here, in the transaction that deletes
+			// it (#779): wanted again since the sweep read it (a pin or taken
+			// placement came back, which nothing else in this transaction
+			// would notice), or relied on a release that no longer stands.
+			// This attempt's evidence goes with the refusal, so it cannot
+			// vouch for a later delete.
+			wanted, err := wantedAtReclaim(ctx, tx, hash, stamp)
 			if err != nil {
 				return err
 			}
-			if stale {
+			if wanted {
 				if _, err := tx.ExecContext(ctx,
-					`DELETE FROM durability_evidence WHERE blob_hash = ? AND basis = 'released'`, hash); err != nil {
-					return fmt.Errorf("catalog: withdrawing the released evidence for %s: %w", hash, err)
+					`DELETE FROM durability_evidence WHERE blob_hash = ? AND recorded_at = ?`, hash, stamp); err != nil {
+					return fmt.Errorf("catalog: withdrawing the evidence for %s: %w", hash, err)
 				}
 				wantedAgain = true
 				return nil
@@ -498,8 +508,8 @@ func (c *Catalog) Reclaim(ctx context.Context, h hashing.Hash, size int64, track
 				return nil
 			}
 			// The release went with the bytes; a later re-upload of the same
-			// hash starts wanted, not released (#779).
-			if err := clearRelease(ctx, tx, hash); err != nil {
+			// hash starts wanted, not released (#779). blob.reclaimed says so.
+			if _, err := deleteRelease(ctx, tx, hash); err != nil {
 				return err
 			}
 		}

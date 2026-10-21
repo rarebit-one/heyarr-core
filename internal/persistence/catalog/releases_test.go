@@ -8,6 +8,7 @@ import (
 
 	"github.com/rarebit-one/void-which-binds-go/hashing"
 
+	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/peer/placementsync"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
 )
@@ -273,5 +274,95 @@ func TestARenewedWantRestartsTheGraceWindow(t *testing.T) {
 	}
 	if !b.UnreferencedSince.IsZero() {
 		t.Fatalf("the release inherited a grace-window mark from %v", b.UnreferencedSince)
+	}
+}
+
+// Overlapping sweeps: newer evidence on another basis must not mask this
+// attempt's `released` basis. The reclaim checks its own attempt's evidence
+// (by its timestamp) and the blob's references, not whichever row sorts last.
+func TestReclaimIsNotFooledByNewerEvidenceOnAnotherBasis(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	at := time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name     string
+		wantBack func(t *testing.T, h *harness, blob string, parsed hashing.Hash, self string)
+	}{
+		{"pinned again", func(t *testing.T, h *harness, blob string, _ hashing.Hash, self string) {
+			if err := h.cat.PinPlacement(ctx, blob, self); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"release cleared, nothing referencing it now", func(t *testing.T, h *harness, _ string, parsed hashing.Hash, _ string) {
+			if err := h.cat.ClearUnreferenced(ctx, []hashing.Hash{parsed}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			self := h.seedRemotePeer(t)
+			blob := hashOf('7')
+			h.seedBlobs(t, blob)
+			parsed, _ := hashing.Parse(blob)
+			if err := h.cat.PinPlacement(ctx, blob, self); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.cat.UnpinPlacement(ctx, blob, self); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.cat.RecordDurability(ctx, integrity.Evidence{
+				BlobHash: parsed, Size: 1024, Basis: integrity.BasisReleased, RecordedAt: at,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			tc.wantBack(t, h, blob, parsed, self)
+			// A concurrent, non-honouring sweep records newer evidence.
+			if err := h.cat.RecordDurability(ctx, integrity.Evidence{
+				BlobHash: parsed, Size: 1024, Basis: integrity.BasisVerifiedRemote, RecordedAt: at.Add(time.Second),
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := h.cat.Reclaim(ctx, parsed, 1024, true, at); !errors.Is(err, integrity.ErrWantedAgain) {
+				t.Fatalf("Reclaim = %v, want ErrWantedAgain", err)
+			}
+			known, err := h.cat.Known(ctx, []hashing.Hash{parsed})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !known[blob] {
+				t.Fatal("the blob's row was deleted on a release that no longer stood")
+			}
+		})
+	}
+}
+
+// Both release transitions are events, in the transactions that make them.
+func TestReleaseTransitionsAreEvents(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	self := h.seedRemotePeer(t)
+	blob := hashOf('6')
+	h.seedBlobs(t, blob)
+	if err := h.cat.PinPlacement(ctx, blob, self); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.eventsOfType(t, events.TypeBlobReleaseCleared); n != 0 {
+		t.Fatalf("pinning an unreleased blob emitted %d blob.release_cleared", n)
+	}
+	if err := h.cat.UnpinPlacement(ctx, blob, self); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.eventsOfType(t, events.TypeBlobReleased); n != 1 {
+		t.Fatalf("the last unpin emitted %d blob.released, want 1", n)
+	}
+	if err := h.cat.PinPlacement(ctx, blob, self); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.eventsOfType(t, events.TypeBlobReleaseCleared); n != 1 {
+		t.Fatalf("re-pinning a released blob emitted %d blob.release_cleared, want 1", n)
 	}
 }

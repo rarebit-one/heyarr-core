@@ -263,9 +263,11 @@ func (c *Catalog) ReplacePlacements(
 				source, e.BlobHash, e.Size, e.Held, now); err != nil {
 				return fmt.Errorf("catalog: recording a placement taken from %s: %w", source, err)
 			}
-			if err := markWanted(ctx, tx, e.BlobHash); err != nil {
+			wantedEvs, err := c.markWanted(ctx, tx, e.BlobHash, wantedByPlacement)
+			if err != nil {
 				return err
 			}
+			pending = append(pending, wantedEvs...)
 			evs, err := c.recordSourceHold(ctx, tx, source, e, now)
 			if err != nil {
 				return err
@@ -284,9 +286,11 @@ func (c *Catalog) ReplacePlacements(
 			// The source withdrawing its placement is its owner letting the
 			// blob go there; if nothing else here wants it, that is release
 			// intent (#779, ADR-0114).
-			if err := recordReleaseIfUnwanted(ctx, tx, h, releaseWithdrawn, source, now); err != nil {
+			releaseEvs, err := c.recordReleaseIfUnwanted(ctx, tx, h, releaseWithdrawn, source, now)
+			if err != nil {
 				return err
 			}
+			pending = append(pending, releaseEvs...)
 			removed++
 		}
 

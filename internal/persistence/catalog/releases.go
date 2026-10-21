@@ -3,8 +3,9 @@ package catalog
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
+
+	"github.com/rarebit-one/heyarr-core/internal/events"
 )
 
 // Release intent for vault blobs (#779, ADR-0114).
@@ -19,7 +20,9 @@ import (
 //
 // The row is written only for a vault blob: one no asset and no scanned library
 // file reaches. Library media is never released, and the read side
-// ([Catalog.Blobs]) re-checks scanned_files as well.
+// ([Catalog.Blobs]) re-checks scanned_files as well. Both transitions are
+// events (blob.released, blob.release_cleared), so the log says why a blob
+// became reclaimable and why it stopped being.
 
 // Release causes, matching blob_releases.cause.
 const (
@@ -27,12 +30,24 @@ const (
 	releaseWithdrawn = "withdrawn"
 )
 
+// Why a release was cleared, as blob.release_cleared names it.
+const (
+	wantedByPin       = "pinned"
+	wantedByPlacement = "placement_taken"
+	wantedByReference = "referenced"
+)
+
 // recordReleaseIfUnwanted records release intent for blobHash when nothing
 // wants it any more: no placement pin, no taken placement, no asset and no
 // scanned library file. It is called in the same transaction that removed a pin
 // or a taken placement, so the check sees the removal. A blob something still
 // wants records nothing.
-func recordReleaseIfUnwanted(ctx context.Context, tx *sql.Tx, blobHash, cause, source, now string) error {
+//
+// A recorded release also resets any older grace-window mark, so the window a
+// release is honoured after always starts from the release.
+func (c *Catalog) recordReleaseIfUnwanted(
+	ctx context.Context, tx *sql.Tx, blobHash, cause, source, now string,
+) ([]events.Event, error) {
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO blob_releases (blob_hash, cause, source_peer_id, released_at)
 		SELECT ?, ?, ?, ?
@@ -45,68 +60,84 @@ func recordReleaseIfUnwanted(ctx context.Context, tx *sql.Tx, blobHash, cause, s
 		   released_at = excluded.released_at`,
 		blobHash, cause, source, now, blobHash, blobHash, blobHash, blobHash)
 	if err != nil {
-		return fmt.Errorf("catalog: recording the release of %s: %w", blobHash, err)
+		return nil, fmt.Errorf("catalog: recording the release of %s: %w", blobHash, err)
 	}
 	if n, err := res.RowsAffected(); err != nil || n == 0 {
-		return err
+		return nil, err
 	}
-	// The grace window a release is honoured after starts from the release,
-	// never from an older mark left by an earlier unreferenced spell.
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE blobs SET unreferenced_since = NULL WHERE hash = ? AND unreferenced_since IS NOT NULL`,
 		blobHash); err != nil {
-		return fmt.Errorf("catalog: restarting the grace window on %s: %w", blobHash, err)
+		return nil, fmt.Errorf("catalog: restarting the grace window on %s: %w", blobHash, err)
 	}
-	return nil
+	payload := map[string]any{"cause": cause, "released_at": now}
+	if source != "" {
+		payload["source_peer_id"] = source
+	}
+	ev, err := c.events.EmitTx(ctx, tx, events.TypeBlobReleased, "blob", blobHash, payload)
+	if err != nil {
+		return nil, err
+	}
+	return []events.Event{ev}, nil
 }
 
 // markWanted is a blob wanted again by a new pin or taken placement: its
 // release no longer stands, and its grace window starts afresh the next time it
 // goes unreferenced, rather than resuming a mark from before (#779).
-func markWanted(ctx context.Context, tx *sql.Tx, blobHash string) error {
+func (c *Catalog) markWanted(ctx context.Context, tx *sql.Tx, blobHash, why string) ([]events.Event, error) {
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE blobs SET unreferenced_since = NULL WHERE hash = ? AND unreferenced_since IS NOT NULL`,
 		blobHash); err != nil {
-		return fmt.Errorf("catalog: restarting the grace window on %s: %w", blobHash, err)
+		return nil, fmt.Errorf("catalog: restarting the grace window on %s: %w", blobHash, err)
 	}
-	return clearRelease(ctx, tx, blobHash)
+	return c.clearRelease(ctx, tx, blobHash, why)
 }
 
-// staleRelease reports whether a blob whose latest durability evidence is the
-// `released` basis may NOT be reclaimed after all: its release is gone, or a
-// pin, taken placement, scanned library file or ready thumbnail reaches it.
-// Evidence on any other basis is not this check's business, and reports false.
-func staleRelease(ctx context.Context, tx *sql.Tx, blobHash string) (bool, error) {
-	var basis string
-	err := tx.QueryRowContext(ctx, `
-		SELECT basis FROM durability_evidence WHERE blob_hash = ?
-		 ORDER BY recorded_at DESC, id DESC LIMIT 1`, blobHash).Scan(&basis)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return false, nil
-	case err != nil:
-		return false, fmt.Errorf("catalog: reading the durability basis for %s: %w", blobHash, err)
-	case basis != "released":
-		return false, nil
+// clearRelease forgets release intent for a blob that is wanted again, and
+// emits blob.release_cleared when there was one to forget.
+func (c *Catalog) clearRelease(ctx context.Context, tx *sql.Tx, blobHash, why string) ([]events.Event, error) {
+	n, err := deleteRelease(ctx, tx, blobHash)
+	if err != nil || n == 0 {
+		return nil, err
 	}
-	var stale bool
+	ev, err := c.events.EmitTx(ctx, tx, events.TypeBlobReleaseCleared, "blob", blobHash, map[string]any{"why": why})
+	if err != nil {
+		return nil, err
+	}
+	return []events.Event{ev}, nil
+}
+
+// deleteRelease removes a release row, reporting how many went.
+func deleteRelease(ctx context.Context, tx *sql.Tx, blobHash string) (int64, error) {
+	res, err := tx.ExecContext(ctx, `DELETE FROM blob_releases WHERE blob_hash = ?`, blobHash)
+	if err != nil {
+		return 0, fmt.Errorf("catalog: clearing the release of %s: %w", blobHash, err)
+	}
+	return res.RowsAffected()
+}
+
+// wantedAtReclaim is the reclaim transaction's own check that a tracked blob
+// is still garbage (#779), independent of which evidence row sorts last:
+//
+//   - nothing may reach it: no placement pin, taken placement, scanned library
+//     file or ready thumbnail. Assets are refused by ON DELETE RESTRICT.
+//     Placement pins have no foreign key, so without this a pin added after
+//     the sweep read the blob would not stop the delete;
+//   - if THIS attempt's evidence (recorded at stamp) is the `released` basis,
+//     the release must still stand. A release cleared since means the blob was
+//     wanted again in between.
+func wantedAtReclaim(ctx context.Context, tx *sql.Tx, blobHash, stamp string) (bool, error) {
+	var wanted bool
 	if err := tx.QueryRowContext(ctx, `
-		SELECT NOT EXISTS (SELECT 1 FROM blob_releases WHERE blob_hash = ?)
-		    OR EXISTS (SELECT 1 FROM placement_pins WHERE blob_hash = ?)
+		SELECT EXISTS (SELECT 1 FROM placement_pins WHERE blob_hash = ?)
 		    OR EXISTS (SELECT 1 FROM peer_placements WHERE blob_hash = ?)
 		    OR EXISTS (SELECT 1 FROM scanned_files WHERE blob_hash = ?)
-		    OR EXISTS (SELECT 1 FROM derived_thumbnails WHERE thumb_hash = ? AND status = 'ready')`,
-		blobHash, blobHash, blobHash, blobHash, blobHash).Scan(&stale); err != nil {
-		return false, fmt.Errorf("catalog: revalidating the release of %s: %w", blobHash, err)
+		    OR EXISTS (SELECT 1 FROM derived_thumbnails WHERE thumb_hash = ? AND status = 'ready')
+		    OR (EXISTS (SELECT 1 FROM durability_evidence
+		                 WHERE blob_hash = ? AND basis = 'released' AND recorded_at = ?)
+		        AND NOT EXISTS (SELECT 1 FROM blob_releases WHERE blob_hash = ?))`,
+		blobHash, blobHash, blobHash, blobHash, blobHash, stamp, blobHash).Scan(&wanted); err != nil {
+		return false, fmt.Errorf("catalog: checking %s is still garbage before reclaiming it: %w", blobHash, err)
 	}
-	return stale, nil
-}
-
-// clearRelease forgets release intent for a blob that is wanted again (a new
-// pin or taken placement) or whose bytes are gone.
-func clearRelease(ctx context.Context, tx *sql.Tx, blobHash string) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM blob_releases WHERE blob_hash = ?`, blobHash); err != nil {
-		return fmt.Errorf("catalog: clearing the release of %s: %w", blobHash, err)
-	}
-	return nil
+	return wanted, nil
 }
