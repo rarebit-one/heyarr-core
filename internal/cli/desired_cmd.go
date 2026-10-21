@@ -326,7 +326,10 @@ The want will not choose it again, so the next search moves on. Pair with
 }
 
 func newDesiredUnblockCommand(_ Options, configPath *string) *cobra.Command {
-	var flags clientFlags
+	var (
+		flags    clientFlags
+		provider string
+	)
 	cmd := &cobra.Command{
 		Use:   "unblock <id> <candidate>",
 		Short: "Let a want choose a blocked release again",
@@ -337,11 +340,15 @@ place the download (no library for the content type, a completed path that
 needed mapping) rather than because the release itself was bad. Fix the
 configuration first; the next search can then pick the release up again, and a
 fanned-out want is re-applied without one. The candidate is the id
-` + "`heyarr desired blocked`" + ` lists.`,
+` + "`heyarr desired blocked`" + ` lists; pass --provider too when two providers
+blocked the same id.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
 				path := "/desired/" + args[0] + "/blocked/" + url.PathEscape(args[1])
+				if provider != "" {
+					path += "?" + url.Values{"provider": {provider}}.Encode()
+				}
 				if err := c.Delete(ctx, path); err != nil {
 					return err
 				}
@@ -356,6 +363,8 @@ fanned-out want is re-applied without one. The candidate is the id
 		},
 	}
 	flags.register(cmd)
+	cmd.Flags().StringVar(&provider, "provider", "",
+		"the provider whose candidate id this is, when two providers blocked the same id")
 	return cmd
 }
 

@@ -4509,9 +4509,10 @@ paths:
       description: |
         The operator's lever for a block that was wrong (#813), most often one
         recorded before a node-configuration fault stopped blocking releases.
-        Matches the candidate id under any provider and emits
-        `acquisition.release_unblocked`. Percent-escape the candidate id: it
-        can carry a slash.
+        Emits `acquisition.release_unblocked`. Percent-escape the candidate id:
+        it can carry a slash. A candidate id is unique only within its
+        provider, so when two providers blocked the same id, `provider` names
+        which one; without it the request is refused with 409.
       parameters:
         - name: id
           in: path
@@ -4521,6 +4522,11 @@ paths:
           in: path
           required: true
           schema: { type: string }
+        - name: provider
+          in: query
+          required: false
+          description: The provider whose candidate id this is, as the blocked list names it.
+          schema: { type: string }
       responses:
         "204":
           description: Lifted.
@@ -4528,6 +4534,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /api/v1/desired/{id}/select:
     post:

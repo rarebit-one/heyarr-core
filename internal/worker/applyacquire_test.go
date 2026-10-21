@@ -669,10 +669,10 @@ func TestUnblockingAReleaseLetsTheFanOutApplyItAgain(t *testing.T) {
 		t.Fatalf("application = %+v, want no_site_source while blocked", app)
 	}
 
-	if err := h.cat.UnblockRelease(t.Context(), h.want, candidate); err != nil {
+	if err := h.cat.UnblockRelease(t.Context(), h.want, "", candidate); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.cat.UnblockRelease(t.Context(), h.want, candidate); !errors.Is(err, catalog.ErrNotBlocked) {
+	if err := h.cat.UnblockRelease(t.Context(), h.want, "", candidate); !errors.Is(err, catalog.ErrNotBlocked) {
 		t.Fatalf("unblocking twice = %v, want ErrNotBlocked", err)
 	}
 	var payload string

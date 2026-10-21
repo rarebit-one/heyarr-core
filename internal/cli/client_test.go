@@ -657,7 +657,7 @@ func TestDesiredBlockedAndUnblockJSONShapes(t *testing.T) {
 	out := h.mustRun("desired", "blocked", want, "--json")
 	testutil.Golden(t, "testdata/desired_blocked.json", []byte(normalise(out)))
 
-	out = h.mustRun("desired", "unblock", want, candidate, "--json")
+	out = h.mustRun("desired", "unblock", want, candidate, "--provider", "fake-indexer", "--json")
 	testutil.Golden(t, "testdata/desired_unblock.json", []byte(normalise(out)))
 
 	if out := h.mustRun("desired", "blocked", want); !strings.Contains(out, "nothing is blocked") {

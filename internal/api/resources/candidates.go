@@ -284,8 +284,9 @@ func (a *API) listBlocked(w http.ResponseWriter, r *http.Request) {
 // unblockRelease is DELETE /api/v1/desired/{id}/blocked/{candidate}: the want
 // may choose that release again (#813). For a block that was wrong, most often
 // one recorded before a node-configuration fault (a missing library, a path
-// map) stopped blocking releases. 204 when lifted, 404 when the release was
-// not blocked for this want.
+// map) stopped blocking releases. ?provider= names whose candidate id it is,
+// needed only when two providers blocked the same id. 204 when lifted, 404
+// when the release was not blocked for this want, 409 when it is ambiguous.
 func (a *API) unblockRelease(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	// A candidate id can carry a slash (a feed's enclosure URL), so clients
@@ -303,9 +304,13 @@ func (a *API) unblockRelease(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, "desired item", err)
 		return
 	}
-	err := a.catalog.UnblockRelease(r.Context(), id, candidate)
+	err := a.catalog.UnblockRelease(r.Context(), id, r.URL.Query().Get("provider"), candidate)
 	if errors.Is(err, catalog.ErrNotBlocked) {
 		httpapi.Fail(w, r, problem.NotFound("that release is not blocked for this want"))
+		return
+	}
+	if errors.Is(err, catalog.ErrAmbiguousBlock) {
+		httpapi.Fail(w, r, problem.Conflict(err.Error()+" — name one with ?provider="))
 		return
 	}
 	if err != nil {

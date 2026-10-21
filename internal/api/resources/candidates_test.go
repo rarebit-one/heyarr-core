@@ -469,18 +469,40 @@ func TestABlockedReleaseIsListedAndLifted(t *testing.T) {
 	// The whole wire shape, so a renamed or dropped field shows up in review.
 	testutil.Golden(t, goldenPath("desired_blocked.json"), h.indent(resp))
 
+	// A candidate id is unique only within its provider. A second provider
+	// blocking the same id makes the bare id ambiguous, so it is refused.
+	h.exec(`INSERT INTO blocked_releases
+		(id, desired_item_id, provider, candidate_id, title, detail, reason, blocked_at)
+		VALUES (?, ?, 'other-indexer', ?, 'Episode 1 (mirror)', 'stalled', 'grab_failed', ?)`,
+		"01990000-0000-7000-8000-0000000000b2", desired1ID, candidate, seedTime)
 	path := "/api/v1/desired/" + desired1ID + "/blocked/" + url.PathEscape(candidate)
-	if r := h.doStable(http.MethodDelete, path, nil); r.StatusCode != http.StatusNoContent {
+	if r := h.doStable(http.MethodDelete, path, nil); r.StatusCode != http.StatusConflict {
+		t.Fatalf("unblocking an id two providers blocked = %d, want 409: %s", r.StatusCode, h.body(r))
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM blocked_releases`); n != 2 {
+		t.Fatalf("%d blocks left after a refused unblock, want 2", n)
+	}
+
+	named := path + "?provider=fake-indexer"
+	if r := h.doStable(http.MethodDelete, named, nil); r.StatusCode != http.StatusNoContent {
 		t.Fatalf("unblock status = %d, want 204: %s", r.StatusCode, h.body(r))
 	}
-	if n := h.countRows(t, `SELECT count(*) FROM blocked_releases`); n != 0 {
-		t.Errorf("%d blocks left after lifting the only one", n)
+	if n := h.countRows(t,
+		`SELECT count(*) FROM blocked_releases WHERE provider = 'other-indexer'`); n != 1 {
+		t.Errorf("lifting one provider's block touched the other's")
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM blocked_releases`); n != 1 {
+		t.Errorf("%d blocks left, want only the other provider's", n)
 	}
 	if n := h.countRows(t, `SELECT count(*) FROM events WHERE type = 'acquisition.release_unblocked'`); n != 1 {
 		t.Errorf("%d release_unblocked events, want 1", n)
 	}
-	if r := h.doStable(http.MethodDelete, path, nil); r.StatusCode != http.StatusNotFound {
+	if r := h.doStable(http.MethodDelete, named, nil); r.StatusCode != http.StatusNotFound {
 		t.Errorf("unblocking twice = %d, want 404", r.StatusCode)
+	}
+	// With one provider left, the bare id is no longer ambiguous.
+	if r := h.doStable(http.MethodDelete, path, nil); r.StatusCode != http.StatusNoContent {
+		t.Errorf("unblocking the only remaining block by bare id = %d, want 204", r.StatusCode)
 	}
 	if r := h.doStable(http.MethodDelete, "/api/v1/desired/nope/blocked/x", nil); r.StatusCode != http.StatusNotFound {
 		t.Errorf("unblocking for an unknown want = %d, want 404", r.StatusCode)

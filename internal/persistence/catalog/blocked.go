@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -130,70 +131,81 @@ func (c *Catalog) BlockRelease(ctx context.Context, b BlockedRelease) (bool, err
 // ErrNotBlocked is UnblockRelease asked to lift a block that is not there.
 var ErrNotBlocked = errors.New("catalog: that release is not blocked for this want")
 
+// ErrAmbiguousBlock is UnblockRelease given a candidate id that more than one
+// provider has blocked for the want, without saying which provider's.
+var ErrAmbiguousBlock = errors.New("catalog: more than one provider blocked that candidate id for this want")
+
 // UnblockRelease lifts a block: the want may choose candidateID again (#813).
 //
 // The operator's lever for a block that was wrong, most often one recorded
 // before node-configuration faults stopped blocking releases (a missing
-// library, a path map). It matches on the candidate id under any provider, the
-// way the fan-out applier recognises a blocked release, and emits
-// acquisition.release_unblocked in the same transaction (invariant 7).
-// ErrNotBlocked when there was nothing to lift.
-func (c *Catalog) UnblockRelease(ctx context.Context, desiredItemID, candidateID string) error {
-	var removed []BlockedRelease
-	var emitted []events.Event
+// library, a path map). A candidate id is only unique within its provider, so
+// the block is named by provider and candidate. An empty provider means "the
+// only provider that blocked this candidate", and ErrAmbiguousBlock when there
+// is more than one. Emits acquisition.release_unblocked in the same
+// transaction (invariant 7). ErrNotBlocked when there was nothing to lift.
+func (c *Catalog) UnblockRelease(ctx context.Context, desiredItemID, provider, candidateID string) error {
+	var removed BlockedRelease
+	var emitted events.Event
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
-		var err error
-		if removed, err = deleteBlocks(ctx, tx, desiredItemID, candidateID); err != nil {
+		providers, err := blockingProviders(ctx, tx, desiredItemID, provider, candidateID)
+		if err != nil {
 			return err
 		}
-		if len(removed) == 0 {
+		switch len(providers) {
+		case 0:
 			return ErrNotBlocked
+		case 1:
+		default:
+			return fmt.Errorf("%w: %s", ErrAmbiguousBlock, strings.Join(providers, ", "))
 		}
-		for _, b := range removed {
-			ev, err := c.events.EmitTx(ctx, tx, events.TypeReleaseUnblocked,
-				"desired_item", desiredItemID, map[string]any{
-					"desired_item_id": desiredItemID,
-					"provider":        b.Provider,
-					"candidate_id":    b.CandidateID,
-					"title":           b.Title,
-					"was":             string(b.Reason),
-				})
-			if err != nil {
-				return err
-			}
-			emitted = append(emitted, ev)
+		removed = BlockedRelease{DesiredItemID: desiredItemID, Provider: providers[0], CandidateID: candidateID}
+		var reason string
+		if err := tx.QueryRowContext(ctx, `
+			DELETE FROM blocked_releases
+			 WHERE desired_item_id = ? AND provider = ? AND candidate_id = ?
+			RETURNING title, reason`, desiredItemID, removed.Provider, candidateID,
+		).Scan(&removed.Title, &reason); err != nil {
+			return fmt.Errorf("catalog: unblocking %s: %w", candidateID, err)
 		}
-		return nil
+		removed.Reason = BlockReason(reason)
+		emitted, err = c.events.EmitTx(ctx, tx, events.TypeReleaseUnblocked,
+			"desired_item", desiredItemID, map[string]any{
+				"desired_item_id": desiredItemID,
+				"provider":        removed.Provider,
+				"candidate_id":    removed.CandidateID,
+				"title":           removed.Title,
+				"was":             string(removed.Reason),
+			})
+		return err
 	})
 	if err != nil {
 		return err
 	}
-	c.events.Publish(emitted...)
+	c.events.Publish(emitted)
 	return nil
 }
 
-// deleteBlocks removes a want's blocks on candidateID, under any provider, and
-// returns what it removed.
-func deleteBlocks(ctx context.Context, tx *sql.Tx, desiredItemID, candidateID string) ([]BlockedRelease, error) {
+// blockingProviders lists the providers that blocked candidateID for a want,
+// narrowed to provider when one is named.
+func blockingProviders(ctx context.Context, tx *sql.Tx, desiredItemID, provider, candidateID string) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, `
-		DELETE FROM blocked_releases
-		 WHERE desired_item_id = ? AND candidate_id = ?
-		RETURNING provider, title, reason`, desiredItemID, candidateID)
+		SELECT provider FROM blocked_releases
+		 WHERE desired_item_id = ? AND candidate_id = ? AND (? = '' OR provider = ?)
+		 ORDER BY provider`, desiredItemID, candidateID, provider, provider)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: unblocking %s: %w", candidateID, err)
+		return nil, fmt.Errorf("catalog: reading blocks on %s: %w", candidateID, err)
 	}
 	defer func() { _ = rows.Close() }()
-	var removed []BlockedRelease
+	var out []string
 	for rows.Next() {
-		b := BlockedRelease{DesiredItemID: desiredItemID, CandidateID: candidateID}
-		var reason string
-		if err := rows.Scan(&b.Provider, &b.Title, &reason); err != nil {
+		var p string
+		if err := rows.Scan(&p); err != nil {
 			return nil, err
 		}
-		b.Reason = BlockReason(reason)
-		removed = append(removed, b)
+		out = append(out, p)
 	}
-	return removed, rows.Err()
+	return out, rows.Err()
 }
 
 // BlockedFor lists what a want will not choose again.
