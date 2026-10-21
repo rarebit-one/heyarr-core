@@ -43,6 +43,7 @@ cd "$(dirname "$0")/.."
 . scripts/acceptance/13-m8-device-identity.sh
 . scripts/acceptance/14-m8-personal-state.sh
 . scripts/acceptance/15-restricted-principal.sh
+. scripts/acceptance/15-lease-across-partition.sh
 . scripts/acceptance/15-subtitle-extraction.sh
 
 # The gate is only a gate if people run it, and people stop running a gate
@@ -121,6 +122,8 @@ else
   revocation_demo
   note "RESTRICTED PRINCIPALS: an executor reaches only the spaces an owner's device granted it, and decrypts only what was wrapped for its registered key (ADR-0104)"
   restricted_principal_demo
+  note "A LEASE IS HONOURED ACROSS A PARTITION: the issuer is down, a device still writes at its sibling on the lease it cached (ADR-0048, #285)"
+  lease_partition_demo
   note "TWO SITES, ONE VAULT: a blob uploaded at one site is asked for and kept at the other (ADR-0114, #662)"
   sibling_placement_demo
   note "THE SECOND PEER: placement, proven (§56, §64, M4-11) — heyarr all"

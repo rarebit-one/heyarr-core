@@ -10,6 +10,18 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **`make demo` proves a lease is honoured across a partition** (ADR-0048,
+  #285; claim `lease-honoured-across-partition`). A new two-node scene stands up
+  two auth-enabled controllers, pins one user at both, grants device D write at
+  site A (`heyarr admin management grant`) and opts site B into A
+  (`peer.lease_issuers`). Restarting the nodes runs the issuing and fetching
+  beats' startup passes, so the scene needs no interval setting. It then stops
+  A. At B, D's write succeeds, the access log marks it `write_via=lease` with
+  A's key as `lease_issuer`, and the lease-check metric counts `lifted`. A second
+  device of the same user with no grant at A gets 403 on the same write (counted
+  as `refused_principal_mismatch`, since it cannot ride D's lease) and 200 on a
+  read. Lease expiry is not reachable without an injected clock, so the scene
+  records it as not exercised and points at the Go tests that assert it.
 - **A sibling's lease can lift a device to write, on the sites that opt in**
   (ADR-0048, #285). A new setting, `peer.lease_issuers`, lists the siblings
   whose device write leases this node honours, by this node's peer id for each
