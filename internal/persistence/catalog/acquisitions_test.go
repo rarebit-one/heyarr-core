@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
@@ -249,5 +250,70 @@ func TestDeletingAWantCascadesToItsAcquisition(t *testing.T) {
 	}
 	if len(all) != 0 {
 		t.Errorf("%d acquisition(s) outlived their want", len(all))
+	}
+}
+
+// BlockTransferRelease blocks the selected release only while the want is in
+// the phase the caller sampled and its row still names the transfer (#819), so
+// a search running in parallel can never make it block a replacement.
+func TestBlockTransferReleaseChecksTheWantIsStillTheTransfers(t *testing.T) {
+	t.Parallel()
+	setup := func(t *testing.T) *harness {
+		t.Helper()
+		h := newHarness(t)
+		ctx := context.Background()
+		if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+			t.Fatal(err)
+		}
+		ranked := acquisition.EvaluateAll([]acquisition.ReleaseCandidate{
+			release("good", 2160, "hevc"), release("plain", 1080, "h264"),
+		}, candidateProfile())
+		if _, err := h.cat.RecordSearch(ctx, h.want, ranked, acquisition.Incumbent{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.cat.RecordAcquisition(ctx, catalog.TransferToAcquisition(
+			"acq-1", h.want, "acquire", transfer(infohash, "x.exe"), "")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.db.Writer().Exec(`UPDATE acquisition_state SET phase = 'downloading' WHERE desired_item_id = ?`, h.want); err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	downloading := []acquisition.Phase{acquisition.PhaseDownloading}
+	ctx := context.Background()
+
+	h := setup(t)
+	ours, err := h.cat.BlockTransferRelease(ctx, h.want, "acquire", infohash, downloading,
+		"payload_executable: a program", catalog.BlockVerificationFailed)
+	if err != nil || !ours {
+		t.Fatalf("ours = %v (%v), want the transfer judged the want's", ours, err)
+	}
+	blocked, err := h.cat.BlockedFor(ctx, h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 1 || blocked[0].CandidateID != "good" {
+		t.Fatalf("blocked = %+v, want the selected release", blocked)
+	}
+
+	for name, call := range map[string]func(h *harness) (bool, error){
+		"the phase moved on": func(h *harness) (bool, error) {
+			return h.cat.BlockTransferRelease(ctx, h.want, "acquire", infohash,
+				[]acquisition.Phase{acquisition.PhaseIdle}, "x", catalog.BlockVerificationFailed)
+		},
+		"the row names another transfer": func(h *harness) (bool, error) {
+			return h.cat.BlockTransferRelease(ctx, h.want, "acquire", strings.Repeat("e", 40),
+				downloading, "x", catalog.BlockVerificationFailed)
+		},
+	} {
+		h := setup(t)
+		ours, err := call(h)
+		if err != nil || ours {
+			t.Errorf("%s: ours = %v (%v), want false", name, ours, err)
+		}
+		if blocked, _ := h.cat.BlockedFor(ctx, h.want); len(blocked) != 0 {
+			t.Errorf("%s: blocked %+v, want nothing written", name, blocked)
+		}
 	}
 }

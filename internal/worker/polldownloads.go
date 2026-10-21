@@ -45,13 +45,13 @@ type PollDownloadsStore interface {
 	AcquisitionByExternal(ctx context.Context, provider, externalID string) (catalog.Acquisition, error)
 	AdvanceAcquisition(ctx context.Context, desiredItemID string, t acquisition.Transition, detail string) (catalog.AcquisitionRecord, error)
 	BlockRelease(ctx context.Context, b catalog.BlockedRelease) (bool, error)
+	BlockTransferRelease(ctx context.Context, desiredItemID, provider, externalID string, phases []acquisition.Phase, detail string, reason catalog.BlockReason) (bool, error)
 	ClearSearchSchedule(ctx context.Context, desiredItemID string) error
 	DropAcquisition(ctx context.Context, desiredItemID string) error
 	DropAcquisitionOf(ctx context.Context, desiredItemID, provider, externalID string) (bool, error)
 	OrphanedDownloads(ctx context.Context, grace time.Duration) ([]catalog.OrphanedDownload, error)
 	RecordAcquisition(ctx context.Context, a catalog.Acquisition) (bool, error)
 	SearchContextFor(ctx context.Context, desiredItemID string) (catalog.SearchContext, error)
-	SelectedCandidate(ctx context.Context, desiredItemID string) (catalog.Candidate, error)
 	StuckGrabs(ctx context.Context, grace time.Duration) ([]catalog.StuckGrab, error)
 	StuckIngests(ctx context.Context, grace time.Duration) ([]catalog.StuckIngest, error)
 }
@@ -222,25 +222,26 @@ func reconcileTransfer(
 //
 // # The order is the design
 //
-// The transfer, while the client lists it, is what brings the poll back here,
-// so every step that must not be lost runs BEFORE it is removed, and a failed
-// step returns with the transfer still in place for the next poll to retry.
-// The want is made searchable (failed to idle) only AFTER the removal: the
-// search beat takes only idle wants, so nothing can grab a replacement while
-// the cleanup is half done. The transfer row is dropped last and only while
-// it still names this transfer, so a newer grab's row is never deleted.
+// The client's removal is the one step that cannot be undone, and the
+// transfer, while the client lists it, is what brings the poll back here. So
+// everything durable is written BEFORE the removal, and a failure there
+// returns with the transfer in place for the next poll to retry:
 //
-//   - QUEUED or DOWNLOADING: clear the search schedule (so the eventual idle
-//     want searches at once), remove the transfer with its data (it is a
-//     program nobody wants on disk, and it would keep seeding), then fail the
-//     want and block the release, then drop the row. If the process dies after
-//     the removal, the orphan sweep fails the want back to idle; a search may
-//     then pick the same release, and this rule refuses it again.
-//   - IDLE: the want is already searchable (an earlier pass whose removal
-//     failed, or a node-local ingest failure before the file list was known).
-//     The release is blocked first, so a search can only choose something
-//     else, and then the removal is retried.
+//  1. The search schedule is cleared (for an in-flight want), so the want
+//     searches at once when it reaches idle.
+//  2. The release is blocked, in one transaction that first checks the want
+//     is still in the phase sampled and its row still names this transfer,
+//     so a search running in parallel cannot make it block the wrong release.
+//  3. The transfer is removed with its data: a program nobody wants on disk,
+//     which would otherwise keep seeding.
+//  4. Only then is an in-flight want failed to idle, which is what makes it
+//     searchable (the search beat takes only idle wants). If this step is
+//     lost, the orphan sweep fails the want later, and the block from step 2
+//     still keeps the search off the program.
+//  5. The row is dropped last, and only while it still names this transfer.
 //
+// An idle want (an earlier pass whose removal failed, or a node-local ingest
+// failure before the file list was known) runs the same steps without 1 and 4.
 // Returns handled=false when the rule does not apply.
 func refuseProgramTransfer(
 	ctx context.Context, cat PollDownloadsStore, client providers.Downloader,
@@ -257,8 +258,6 @@ func refuseProgramTransfer(
 	if err != nil {
 		return 0, false, err
 	}
-	cause := fmt.Errorf("%w: every file in %q is a program, not %s",
-		errExecutablePayload, t.Name, contentKind(sc.ContentType))
 	phase := state.State.Phase
 	switch phase {
 	case acquisition.PhaseQueued, acquisition.PhaseDownloading:
@@ -266,11 +265,20 @@ func refuseProgramTransfer(
 			return 0, true, err
 		}
 	case acquisition.PhaseIdle:
-		if err := blockProgramRelease(ctx, cat, acq.DesiredItemID, cause); err != nil {
-			return 0, true, err
-		}
 	default:
 		return 0, false, nil
+	}
+
+	cause := fmt.Errorf("%w: every file in %q is a program, not %s",
+		errExecutablePayload, t.Name, contentKind(sc.ContentType))
+	ours, err := cat.BlockTransferRelease(ctx, acq.DesiredItemID, client.Name(), t.ID,
+		[]acquisition.Phase{phase}, cause.Error(), catalog.BlockVerificationFailed)
+	if err != nil {
+		return 0, true, err
+	}
+	if !ours {
+		// The want moved on between the two reads: the next poll re-judges it.
+		return 0, true, nil
 	}
 
 	if r, ok := client.(providers.Remover); ok {
@@ -282,34 +290,19 @@ func refuseProgramTransfer(
 	}
 
 	if phase != acquisition.PhaseIdle {
-		if err := failAcquisition(ctx, cat, acq.DesiredItemID, acq,
-			catalog.BlockVerificationFailed, cause, log); err != nil {
+		if _, err := cat.AdvanceAcquisition(ctx, acq.DesiredItemID,
+			acquisition.TransitionFail, cause.Error()); err != nil {
 			return 0, true, err
 		}
 		applied = 1
+		log.Warn("refused a release whose payload is a program",
+			"desired_item_id", acq.DesiredItemID, "transfer", t.ID, "cause", cause)
 	}
 	if _, err := cat.DropAcquisitionOf(ctx, acq.DesiredItemID, client.Name(), t.ID); err != nil {
 		log.Warn("refused a program's release but could not drop its transfer row",
 			"desired_item_id", acq.DesiredItemID, "error", err)
 	}
 	return applied, true, nil
-}
-
-// blockProgramRelease blocks a want's selected release as a program, when it
-// has one. Idempotent.
-func blockProgramRelease(ctx context.Context, cat PollDownloadsStore, desiredItemID string, cause error) error {
-	sel, err := cat.SelectedCandidate(ctx, desiredItemID)
-	if errors.Is(err, catalog.ErrNoCandidate) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	_, err = cat.BlockRelease(ctx, catalog.BlockedRelease{
-		DesiredItemID: desiredItemID, Provider: sel.Provider, CandidateID: sel.CandidateID,
-		Title: sel.Title, Detail: cause.Error(), Reason: catalog.BlockVerificationFailed,
-	})
-	return err
 }
 
 // sweepOrphanedDownloads fails wants whose transfer has vanished from a client

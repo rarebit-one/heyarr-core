@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 )
@@ -75,49 +76,13 @@ func (b BlockedRelease) Key() string { return b.Provider + "\x00" + b.CandidateI
 // and blocking twice is the same statement. A repeat is not an event — emitting
 // per poll pass would turn the log into a heartbeat.
 func (c *Catalog) BlockRelease(ctx context.Context, b BlockedRelease) (bool, error) {
-	if b.Reason == "" {
-		b.Reason = BlockVerificationFailed
-	}
-	now := c.clock.Now().Format(timestampFormat)
-
 	var (
 		ev      events.Event
 		created bool
 	)
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO blocked_releases
-				(id, desired_item_id, provider, candidate_id, title, detail, reason, blocked_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (desired_item_id, provider, candidate_id) DO NOTHING`,
-			uuid.Must(uuid.NewV7()).String(), b.DesiredItemID, b.Provider,
-			b.CandidateID, b.Title, b.Detail, string(b.Reason), now)
-		if err != nil {
-			return fmt.Errorf("catalog: blocking %s/%s: %w", b.Provider, b.CandidateID, err)
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			// Already blocked. Not a transition.
-			return nil
-		}
-		created = true
-
-		// Invariant 7, inside the transaction that wrote the row. A subscriber
-		// watching acquisition.* needs this one: it is the difference between
-		// "the search keeps choosing badly" and "the search is refusing to
-		// choose the thing that keeps failing".
-		ev, err = c.events.EmitTx(ctx, tx, events.TypeReleaseBlocked,
-			"desired_item", b.DesiredItemID, map[string]any{
-				"desired_item_id": b.DesiredItemID,
-				"provider":        b.Provider,
-				"candidate_id":    b.CandidateID,
-				"title":           b.Title,
-				"reason":          string(b.Reason),
-				"detail":          b.Detail,
-			})
+		var err error
+		ev, created, err = c.blockReleaseTx(ctx, tx, b)
 		return err
 	})
 	if err != nil {
@@ -127,6 +92,112 @@ func (c *Catalog) BlockRelease(ctx context.Context, b BlockedRelease) (bool, err
 		c.events.Publish(ev)
 	}
 	return created, nil
+}
+
+// blockReleaseTx is BlockRelease inside a caller's transaction. The event is
+// returned for the caller to publish once the transaction commits.
+func (c *Catalog) blockReleaseTx(ctx context.Context, tx *sql.Tx, b BlockedRelease) (events.Event, bool, error) {
+	if b.Reason == "" {
+		b.Reason = BlockVerificationFailed
+	}
+	now := c.clock.Now().Format(timestampFormat)
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO blocked_releases
+			(id, desired_item_id, provider, candidate_id, title, detail, reason, blocked_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (desired_item_id, provider, candidate_id) DO NOTHING`,
+		uuid.Must(uuid.NewV7()).String(), b.DesiredItemID, b.Provider,
+		b.CandidateID, b.Title, b.Detail, string(b.Reason), now)
+	if err != nil {
+		return events.Event{}, false, fmt.Errorf("catalog: blocking %s/%s: %w", b.Provider, b.CandidateID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return events.Event{}, false, err
+	}
+	if n == 0 {
+		// Already blocked. Not a transition.
+		return events.Event{}, false, nil
+	}
+
+	// Invariant 7, inside the transaction that wrote the row. A subscriber
+	// watching acquisition.* needs this one: it is the difference between
+	// "the search keeps choosing badly" and "the search is refusing to
+	// choose the thing that keeps failing".
+	ev, err := c.events.EmitTx(ctx, tx, events.TypeReleaseBlocked,
+		"desired_item", b.DesiredItemID, map[string]any{
+			"desired_item_id": b.DesiredItemID,
+			"provider":        b.Provider,
+			"candidate_id":    b.CandidateID,
+			"title":           b.Title,
+			"reason":          string(b.Reason),
+			"detail":          b.Detail,
+		})
+	return ev, err == nil, err
+}
+
+// BlockTransferRelease blocks the release a want's in-flight transfer came
+// from, and reports whether the transfer is still the want's (#819).
+//
+// One transaction, so a search running in parallel cannot change the answer
+// halfway: the want must be in one of phases and its transfer row must still
+// name provider/externalID. Only then is the selected candidate the release
+// that produced this transfer, because a search would have moved the phase off
+// idle (or replaced the row through its grab). ours=false means the transfer is
+// no longer this want's to act on, and nothing was written. ours=true with no
+// selected candidate blocks nothing; there is no release to name.
+func (c *Catalog) BlockTransferRelease(
+	ctx context.Context, desiredItemID, provider, externalID string,
+	phases []acquisition.Phase, detail string, reason BlockReason,
+) (ours bool, err error) {
+	var (
+		ev      events.Event
+		created bool
+	)
+	err = c.db.InTx(ctx, func(tx *sql.Tx) error {
+		var phase string
+		switch err := tx.QueryRowContext(ctx,
+			`SELECT phase FROM acquisition_state WHERE desired_item_id = ?`, desiredItemID,
+		).Scan(&phase); {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		case err != nil:
+			return err
+		}
+		if !slices.Contains(phases, acquisition.Phase(phase)) {
+			return nil
+		}
+		var named int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT count(*) FROM acquisitions
+			 WHERE desired_item_id = ? AND provider = ? AND external_id = ?`,
+			desiredItemID, provider, externalID).Scan(&named); err != nil {
+			return err
+		}
+		if named == 0 {
+			return nil
+		}
+		ours = true
+		b := BlockedRelease{DesiredItemID: desiredItemID, Detail: detail, Reason: reason}
+		switch err := tx.QueryRowContext(ctx, `
+			SELECT provider, candidate_id, title FROM release_candidates
+			 WHERE desired_item_id = ? AND selected = 1`, desiredItemID,
+		).Scan(&b.Provider, &b.CandidateID, &b.Title); {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		case err != nil:
+			return err
+		}
+		ev, created, err = c.blockReleaseTx(ctx, tx, b)
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	if created {
+		c.events.Publish(ev)
+	}
+	return ours, nil
 }
 
 // ErrNotBlocked is UnblockRelease asked to lift a block that is not there.
