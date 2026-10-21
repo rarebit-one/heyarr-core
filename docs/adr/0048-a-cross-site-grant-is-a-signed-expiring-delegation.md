@@ -334,8 +334,12 @@ coverage), and the decomposition issues each carry "what would make it provable.
   (safe); the verifier never honours a grant past `expiry` on its own clock.
 - **Every transition emits an event** (invariant 7) → a grant issued, cached,
   honoured, refused. *(amended 2026-10-21)* `lease.issued`, `lease.revoked` and
-  `lease.cached` exist (`internal/events`). `lease.honoured` and `lease.refused`
-  are owed by the implementation work below.
+  `lease.cached` exist (`internal/events`). Honouring and refusing a lease are
+  **metrics, not events**: each is the outcome of one request, not a change of
+  state, and `internal/events` keeps per-request outcomes out of the log. They
+  are counted in `heyarr_http_device_lease_checks_total{outcome}`, whose
+  bounded labels are `lifted`, `no_lease`, `refused_<reason>` (the refusal
+  reasons above, plus `not_yet_valid` and `invalid`) and `error`.
 
 The two numbers the milestone owes, stated: **revocation window = 24 hours**
 (the partition worst case; steady-state revocation is a re-issue cadence of
@@ -438,9 +442,11 @@ The honouring node looks it up by the key the `Device` credential just proved.
 
 **Text the code contradicted, corrected in place:** only peers issue (the
 user-identity issuer is future work); a device key carries the read floor; only
-`lease.issued` and `lease.revoked` exist (whether honour and refusal are events
-or metrics is settled with the request path); the re-issuer was owed (now a
-controller beat); guest leases (ADR-0094) stay out of what siblings are served.
+`lease.issued` and `lease.revoked` exist, and honour and refusal are metrics,
+not events, because they are per-request outcomes rather than state transitions
+(settled with the request path; see *Consequences*); the re-issuer was owed (now
+a controller beat); guest leases (ADR-0094) stay out of what siblings are
+served.
 
 ### What would make us revisit the amendment
 

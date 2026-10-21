@@ -218,6 +218,13 @@ func TestValidateRejectsBadValues(t *testing.T) {
 			c.Placement.Siblings = []string{"peer-b", "peer-b"}
 		}, "twice"},
 		{"bad placement interval", func(c *Config) { c.Placement.Interval = "soon" }, "placement.interval"},
+		{"empty lease issuer", func(c *Config) { c.Peer.LeaseIssuers = []string{""} }, "peer.lease_issuers contains an empty"},
+		{"lease issuer with whitespace", func(c *Config) {
+			c.Peer.LeaseIssuers = []string{"peer-b "}
+		}, "peer.lease_issuers entry \"peer-b \" has surrounding whitespace"},
+		{"lease issuer twice", func(c *Config) {
+			c.Peer.LeaseIssuers = []string{"peer-b", "peer-b"}
+		}, "peer.lease_issuers lists peer \"peer-b\" twice"},
 		{"fan-out on the personal profile", func(c *Config) {
 			c.Profile = ProfilePersonal
 			c.Acquisition.FanOut = true
@@ -725,5 +732,29 @@ func TestRetentionWindows(t *testing.T) {
 		if _, err := Load(writeConfig(t, "data_dir: /srv/heyarr\nretention:\n  "+bad+"\n")); err == nil {
 			t.Errorf("retention %q loaded without error", bad)
 		}
+	}
+}
+
+// peer.lease_issuers is off unless an operator names siblings (ADR-0048
+// amendment, #285): a node upgraded without touching its config honours no
+// sibling's write lease. Named, the ids load exactly as written.
+func TestLeaseIssuersDefaultOffAndLoadFromFile(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Peer.LeaseIssuers) != 0 {
+		t.Errorf("default peer.lease_issuers = %q, want none", cfg.Peer.LeaseIssuers)
+	}
+
+	cfg, err = Load(writeConfig(t, "data_dir: /srv/heyarr\npeer:\n  name: peer-a\n  lease_issuers: [peer-b, peer-c]\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := strings.Join(cfg.Peer.LeaseIssuers, ","); got != "peer-b,peer-c" {
+		t.Errorf("peer.lease_issuers = %q, want peer-b,peer-c", got)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("a well-formed opt-in should validate: %v", err)
 	}
 }

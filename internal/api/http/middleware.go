@@ -261,6 +261,11 @@ func (s *Server) accessLogMiddleware(next http.Handler) http.Handler {
 			}
 			if id := slot.identity; id != nil && !id.Anonymous {
 				attrs = append(attrs, "principal", id.Principal.Name, "token_id", id.Token.ID)
+				// A device lifted to write by a sibling's lease says so, and by
+				// whose (ADR-0048 amendment, #285). The issuer is a public key.
+				if id.LeaseIssuer != "" {
+					attrs = append(attrs, "write_via", "lease", "lease_issuer", id.LeaseIssuer)
+				}
 			}
 			s.log.Info("http request", attrs...)
 		}()

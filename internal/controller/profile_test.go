@@ -59,7 +59,7 @@ func buildRouteSet(t *testing.T, c *Controller) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, _, err := c.newServer(t.Context(), db, blobStore, 4, nil, "peer-under-test", nil)
+	srv, _, err := c.newServer(t.Context(), db, blobStore, 4, nil, "peer-under-test", nil, nil)
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}
