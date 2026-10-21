@@ -302,13 +302,17 @@ func TestReplicateEndpointDrivesTheReconciler(t *testing.T) {
 	_ = ctx
 }
 
-// TestRewrapAndRevokeRotatesAccess is the API-layer evidence for revocation (#361):
-// after a rotation the remaining recipient's copy seals the NEW key and the revoked
-// recipient's copy is DELETED, so the peer holds no copy the revoked device can
-// open. All opaque — the peer never reads a key.
+// TestRewrapAndRevokeRotatesAccess is the API-layer evidence for revocation
+// (#361, ADR-0103): a rotation is ONE call to the rotate route — the next key
+// epoch, the remaining recipient's copy sealing the NEW key, the previous key
+// sealed under it as an opaque history row, and the revoked recipient named. The
+// revoked copy is DELETED in the same step, so the peer holds no copy the revoked
+// device can open, and nothing is snapshotted or compacted. All opaque — the peer
+// never reads a key.
 //
-// SABOTAGE (the reviewer's break): make revokeKey a no-op (skip DeleteWrappedKey),
-// and the "B is gone" assertion below fires — B's stale copy would still be listed.
+// SABOTAGE (the reviewer's break): make RotateKey keep the wraps below the new
+// epoch (skip dropping them), and the "B is gone" assertion below fires — B's
+// stale copy would still be listed.
 func TestRewrapAndRevokeRotatesAccess(t *testing.T) {
 	t.Parallel()
 	api := newAPI(t)
@@ -340,32 +344,35 @@ func TestRewrapAndRevokeRotatesAccess(t *testing.T) {
 	// A's wrapped copy before rotation, to prove it changes.
 	aWrappedBefore := wrappedFor(t, api, sp.ID, aRecip.ID)
 
-	// Rotate: a fresh key sealed for A only (B revoked). This is exactly what the
-	// client's mgr.Rotate produces.
+	// Rotate: a fresh key sealed for A only, the previous key sealed under it,
+	// and B revoked. This is exactly what the client's mgr.Rotate produces and
+	// what `space rotate` sends.
 	rotated, err := mgr.Rotate(sp.ID, []psclient.Recipient{aRecip})
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := rewrapRequest{}
+	body := rotateRequest{ExpectedEpoch: 0, SealedPrev: rotated.SealedPrev, Revoke: &[]string{bRecip.ID}}
 	for _, w := range rotated.Wrapped {
 		body.WrappedKeys = append(body.WrappedKeys, wrappedKeyInput{Recipient: w.Recipient, Wrapped: w.Wrapped})
 	}
-	if rec := call(t, api.rewrapKeys, http.MethodPost, "/spaces/"+sp.ID+"/keys", body, map[string]string{"id": sp.ID}); rec.Code != http.StatusOK {
-		t.Fatalf("rewrap: %d %s", rec.Code, rec.Body)
+	if rec := call(t, api.rotateKey, http.MethodPost, "/spaces/"+sp.ID+"/rotate", body, map[string]string{"id": sp.ID}); rec.Code != http.StatusOK {
+		t.Fatalf("rotate: %d %s", rec.Code, rec.Body)
 	}
 
-	// Revoke B: delete its stored copy.
-	if rec := call(t, api.revokeKey, http.MethodDelete, "/spaces/"+sp.ID+"/keys/"+bRecip.ID, nil,
-		map[string]string{"id": sp.ID, "recipient": bRecip.ID}); rec.Code != http.StatusNoContent {
-		t.Fatalf("revoke B: %d %s", rec.Code, rec.Body)
+	// The history row is the previous key sealed under the new one, stored
+	// as the client sent it: one row, for epoch 1.
+	var hist keyHistoryView
+	mustJSON(t, call(t, api.listKeyHistory, http.MethodGet, "/spaces/"+sp.ID+"/key-history", nil, map[string]string{"id": sp.ID}), &hist)
+	if len(hist.Entries) != 1 || hist.Entries[0].Epoch != 1 || !bytes.Equal(hist.Entries[0].SealedPrev, rotated.SealedPrev) {
+		t.Fatalf("key history after rotation = %+v, want the one sealed row for epoch 1", hist.Entries)
 	}
 
 	// Exactly one key remains — A's — and its bytes changed (the new key).
 	var keys wrappedKeysView
 	rec := call(t, api.listWrappedKeys, http.MethodGet, "/spaces/"+sp.ID+"/keys", nil, map[string]string{"id": sp.ID})
 	mustJSON(t, rec, &keys)
-	if len(keys.WrappedKeys) != 1 || keys.WrappedKeys[0].Recipient != aRecip.ID {
-		t.Fatalf("after revocation, want only A's key, got %+v", keys.WrappedKeys)
+	if keys.KeyEpoch != 1 || len(keys.WrappedKeys) != 1 || keys.WrappedKeys[0].Recipient != aRecip.ID || keys.WrappedKeys[0].Epoch != 1 {
+		t.Fatalf("after revocation, want only A's key at epoch 1, got epoch %d %+v", keys.KeyEpoch, keys.WrappedKeys)
 	}
 	if bytes.Equal(keys.WrappedKeys[0].Wrapped, aWrappedBefore) {
 		t.Fatal("A's wrapped key did not change — the rotation did not re-key it")

@@ -56,7 +56,7 @@ type psHarness struct {
 }
 
 // newPSHarness's device token carries read and write; pass extra scopes (admin,
-// for a rotation's compaction) when a test needs them.
+// which the rotate route requires) when a test needs them.
 func newPSHarness(t *testing.T, extra ...auth.Scope) *psHarness {
 	t.Helper()
 	ctx := context.Background()

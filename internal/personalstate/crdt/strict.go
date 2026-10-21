@@ -6,8 +6,9 @@ package crdt
 // one is the caller's knowledge (statesync.EncodeChange). A lenient json.Unmarshal
 // into the playlist [Change] does NOT fail on another CRDT's change — a drive
 // change's "op" lands case-insensitively on Change.Op and every other field is
-// dropped — so a caller that must not mistake one CRDT for another (rotation,
-// which re-snapshots and compacts the log, #698) decodes strictly instead. Every
+// dropped — so a caller that must not mistake one CRDT for another (`space
+// snapshot`, whose snapshot lets compaction drop the log it covers) decodes
+// strictly instead. Every
 // other change type carries a field the playlist one lacks (drive: path/at/writer;
 // album: album_id/at/writer; starred and play history: At; reading position:
 // PubID), and every other snapshot a top-level key the playlist one lacks
