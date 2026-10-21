@@ -24,6 +24,7 @@ Known media types use a starting quality profile when none is named. Pass
 
 * [heyarr](heyarr.md)	 - Self-hosted content lifecycle, replication and consumption
 * [heyarr desired add](heyarr_desired_add.md)	 - Want something
+* [heyarr desired block](heyarr_desired_block.md)	 - Stop a want choosing a release again
 * [heyarr desired blocked](heyarr_desired_blocked.md)	 - List the releases a want will not choose again, and why
 * [heyarr desired list](heyarr_desired_list.md)	 - List what should exist
 * [heyarr desired reingest](heyarr_desired_reingest.md)	 - Re-drive a wedged ingest — a finished download that never imported

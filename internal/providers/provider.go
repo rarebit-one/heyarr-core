@@ -98,11 +98,17 @@ type Downloader interface {
 	// credential: on a private tracker it carries a passkey. Implementations
 	// must Reveal() it exactly where they put it on the wire and nowhere else.
 	//
-	// Remove is deliberately NOT here. It is on downloads.Client, it has no
-	// caller yet, and adding it now would recreate this issue's exact shape in
-	// the other direction — an interface method that exists because a comment
-	// promised it rather than because anything routes to it.
+	// Remove is deliberately NOT here: a client that cannot remove is still a
+	// complete Downloader. The one caller that needs it asks for Remover.
 	Add(ctx context.Context, source secret.Value) (Transfer, error)
+}
+
+// Remover is a Downloader that can take one of its own transfers out of the
+// client. Optional, and asked for only to stop a release Heyarr has refused
+// outright: a program posing as media (#819), which must not keep seeding.
+// Implementations refuse a transfer that is not Heyarr's.
+type Remover interface {
+	Remove(ctx context.Context, id string, deleteData bool) error
 }
 
 // Transfer is one external transfer, as a value.
@@ -135,6 +141,11 @@ type Transfer struct {
 	// yet). They can carry a private tracker's passkey, so nothing publishes
 	// them without the ADR-0119 filter (worker.publicTrackers).
 	Trackers []string
+	// Executable reports that every file the client lists for the transfer is
+	// a program (.exe, .msi, …), a fake release wearing a media name (#819).
+	// False when the client has not said or the file list is not known yet:
+	// unknown is never a verdict.
+	Executable bool
 }
 
 // Query is what to search for (§60's manual search, and M3-12's job).

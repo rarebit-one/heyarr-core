@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 )
@@ -75,49 +77,13 @@ func (b BlockedRelease) Key() string { return b.Provider + "\x00" + b.CandidateI
 // and blocking twice is the same statement. A repeat is not an event — emitting
 // per poll pass would turn the log into a heartbeat.
 func (c *Catalog) BlockRelease(ctx context.Context, b BlockedRelease) (bool, error) {
-	if b.Reason == "" {
-		b.Reason = BlockVerificationFailed
-	}
-	now := c.clock.Now().Format(timestampFormat)
-
 	var (
 		ev      events.Event
 		created bool
 	)
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO blocked_releases
-				(id, desired_item_id, provider, candidate_id, title, detail, reason, blocked_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (desired_item_id, provider, candidate_id) DO NOTHING`,
-			uuid.Must(uuid.NewV7()).String(), b.DesiredItemID, b.Provider,
-			b.CandidateID, b.Title, b.Detail, string(b.Reason), now)
-		if err != nil {
-			return fmt.Errorf("catalog: blocking %s/%s: %w", b.Provider, b.CandidateID, err)
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			// Already blocked. Not a transition.
-			return nil
-		}
-		created = true
-
-		// Invariant 7, inside the transaction that wrote the row. A subscriber
-		// watching acquisition.* needs this one: it is the difference between
-		// "the search keeps choosing badly" and "the search is refusing to
-		// choose the thing that keeps failing".
-		ev, err = c.events.EmitTx(ctx, tx, events.TypeReleaseBlocked,
-			"desired_item", b.DesiredItemID, map[string]any{
-				"desired_item_id": b.DesiredItemID,
-				"provider":        b.Provider,
-				"candidate_id":    b.CandidateID,
-				"title":           b.Title,
-				"reason":          string(b.Reason),
-				"detail":          b.Detail,
-			})
+		var err error
+		ev, created, err = c.blockReleaseTx(ctx, tx, b)
 		return err
 	})
 	if err != nil {
@@ -129,11 +95,136 @@ func (c *Catalog) BlockRelease(ctx context.Context, b BlockedRelease) (bool, err
 	return created, nil
 }
 
+// blockReleaseTx is BlockRelease inside a caller's transaction. The event is
+// returned for the caller to publish once the transaction commits.
+func (c *Catalog) blockReleaseTx(ctx context.Context, tx *sql.Tx, b BlockedRelease) (events.Event, bool, error) {
+	if b.Reason == "" {
+		b.Reason = BlockVerificationFailed
+	}
+	now := c.clock.Now().Format(timestampFormat)
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO blocked_releases
+			(id, desired_item_id, provider, candidate_id, title, detail, reason, blocked_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (desired_item_id, provider, candidate_id) DO NOTHING`,
+		uuid.Must(uuid.NewV7()).String(), b.DesiredItemID, b.Provider,
+		b.CandidateID, b.Title, b.Detail, string(b.Reason), now)
+	if err != nil {
+		return events.Event{}, false, fmt.Errorf("catalog: blocking %s/%s: %w", b.Provider, b.CandidateID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return events.Event{}, false, err
+	}
+	if n == 0 {
+		// Already blocked. Not a transition.
+		return events.Event{}, false, nil
+	}
+
+	// Invariant 7, inside the transaction that wrote the row. A subscriber
+	// watching acquisition.* needs this one: it is the difference between
+	// "the search keeps choosing badly" and "the search is refusing to
+	// choose the thing that keeps failing".
+	ev, err := c.events.EmitTx(ctx, tx, events.TypeReleaseBlocked,
+		"desired_item", b.DesiredItemID, map[string]any{
+			"desired_item_id": b.DesiredItemID,
+			"provider":        b.Provider,
+			"candidate_id":    b.CandidateID,
+			"title":           b.Title,
+			"reason":          string(b.Reason),
+			"detail":          b.Detail,
+		})
+	return ev, err == nil, err
+}
+
+// BlockTransferRelease blocks the release a want's in-flight transfer came
+// from, and reports whether the transfer is still the want's (#819).
+//
+// One transaction, so a search running in parallel cannot change the answer
+// halfway: the want must be in one of phases and its transfer row must still
+// name provider/externalID. Only then is the selected candidate the release
+// that produced this transfer, because a search would have moved the phase off
+// idle (or replaced the row through its grab). The one change that moves the
+// selection without the phase, a by-hand override in flight, is caught by its
+// selected_at being later than the row's grab. ours=false means the transfer
+// is no longer this want's to act on, and nothing was written. ours=true with
+// no selected candidate, or a selection newer than the grab, blocks nothing:
+// there is no release this transfer can be said to have come from.
+func (c *Catalog) BlockTransferRelease(
+	ctx context.Context, desiredItemID, provider, externalID string,
+	phases []acquisition.Phase, detail string, reason BlockReason,
+) (ours bool, err error) {
+	var (
+		ev      events.Event
+		created bool
+	)
+	err = c.db.InTx(ctx, func(tx *sql.Tx) error {
+		var phase string
+		switch err := tx.QueryRowContext(ctx,
+			`SELECT phase FROM acquisition_state WHERE desired_item_id = ?`, desiredItemID,
+		).Scan(&phase); {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		case err != nil:
+			return err
+		}
+		if !slices.Contains(phases, acquisition.Phase(phase)) {
+			return nil
+		}
+		var grabbedAt string
+		switch err := tx.QueryRowContext(ctx, `
+			SELECT created_at FROM acquisitions
+			 WHERE desired_item_id = ? AND provider = ? AND external_id = ?`,
+			desiredItemID, provider, externalID).Scan(&grabbedAt); {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		case err != nil:
+			return err
+		}
+		ours = true
+		b := BlockedRelease{DesiredItemID: desiredItemID, Detail: detail, Reason: reason}
+		var selectedAt sql.NullString
+		switch err := tx.QueryRowContext(ctx, `
+			SELECT provider, candidate_id, title, selected_at FROM release_candidates
+			 WHERE desired_item_id = ? AND selected = 1`, desiredItemID,
+		).Scan(&b.Provider, &b.CandidateID, &b.Title, &selectedAt); {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		case err != nil:
+			return err
+		}
+		// A selection made AFTER this transfer was grabbed is not its release:
+		// a by-hand override while it was in flight (which moves the selection
+		// and not the phase), or a later search's pick. Blocking it would name
+		// the wrong release, so nothing is blocked. A selection with no stamp
+		// predates selected_at and has not changed since (every selection path
+		// stamps it), so it is the transfer's. Compared as times: the two
+		// columns are written in different layouts.
+		if selectedAt.Valid {
+			sel, serr := time.Parse(time.RFC3339Nano, selectedAt.String)
+			grab, gerr := time.Parse(time.RFC3339Nano, grabbedAt)
+			if serr == nil && gerr == nil && sel.After(grab) {
+				return nil
+			}
+		}
+		ev, created, err = c.blockReleaseTx(ctx, tx, b)
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	if created {
+		c.events.Publish(ev)
+	}
+	return ours, nil
+}
+
 // ErrNotBlocked is UnblockRelease asked to lift a block that is not there.
 var ErrNotBlocked = errors.New("catalog: that release is not blocked for this want")
 
 // ErrAmbiguousBlock is UnblockRelease given a candidate id that more than one
-// provider has blocked for the want, without saying which provider's.
+// provider has blocked for the want (or BlockByHand one that more than one
+// provider offered), without saying which provider's.
 var ErrAmbiguousBlock = errors.New("catalog: more than one provider blocked that candidate id for this want")
 
 // UnblockRelease lifts a block: the want may choose candidateID again (#813).
@@ -196,6 +287,71 @@ func (c *Catalog) UnblockRelease(ctx context.Context, desiredItemID, provider, c
 	}
 	c.events.Publish(emitted...)
 	return nil
+}
+
+// ErrUnknownCandidate is BlockByHand asked to block a candidate id, with no
+// provider named, that the want's last search did not offer.
+var ErrUnknownCandidate = errors.New("catalog: that candidate id is not among this want's candidates")
+
+// BlockByHand is the operator's block (#819): the want must not choose
+// candidateID again, recorded as BlockManual. The other half of UnblockRelease.
+//
+// A candidate id is unique only within its provider, so the provider is
+// resolved the same way an unblock resolves it: named, or the only provider
+// whose candidate the want's last search offered under that id. Naming a
+// provider also blocks a release the last search did not offer (a fan-out
+// release, or one a later search may find). Idempotent: created is false when
+// the release was already blocked.
+func (c *Catalog) BlockByHand(
+	ctx context.Context, desiredItemID, provider, candidateID, detail string,
+) (b BlockedRelease, created bool, err error) {
+	cands, err := c.CandidatesFor(ctx, desiredItemID)
+	if err != nil {
+		return BlockedRelease{}, false, err
+	}
+	var match []Candidate
+	providers := map[string]bool{}
+	for _, cd := range cands {
+		if cd.CandidateID == candidateID && (provider == "" || cd.Provider == provider) {
+			match = append(match, cd)
+			providers[cd.Provider] = true
+		}
+	}
+	switch {
+	case provider == "" && len(match) == 0:
+		return BlockedRelease{}, false, ErrUnknownCandidate
+	case provider == "" && len(providers) > 1:
+		names := make([]string, 0, len(providers))
+		for p := range providers {
+			names = append(names, p)
+		}
+		slices.Sort(names)
+		return BlockedRelease{}, false, fmt.Errorf("%w: %s", ErrAmbiguousBlock, strings.Join(names, ", "))
+	}
+	b = BlockedRelease{
+		DesiredItemID: desiredItemID, Provider: provider, CandidateID: candidateID,
+		Detail: strings.TrimSpace(detail), Reason: BlockManual,
+	}
+	if len(match) > 0 {
+		b.Provider, b.Title = match[0].Provider, match[0].Title
+	}
+	if b.Detail == "" {
+		b.Detail = "blocked by hand"
+	}
+	created, err = c.BlockRelease(ctx, b)
+	if err != nil || created {
+		return b, created, err
+	}
+	// Already blocked: a repeat changes nothing, so report the block as it
+	// stands rather than the one this call would have written.
+	existing, err := c.BlockedKeys(ctx, desiredItemID)
+	if err != nil {
+		return BlockedRelease{}, false, err
+	}
+	if stored, ok := existing[b.Key()]; ok {
+		return stored, false, nil
+	}
+	return b, false, nil
 }
 
 // blockingProviders lists the providers that blocked candidateID for a want.

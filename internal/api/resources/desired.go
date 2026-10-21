@@ -49,6 +49,9 @@ type DesiredItem struct {
 	// EditionID is absent at work scope rather than null, so a client cannot
 	// read it without noticing the scope.
 	EditionID string `json:"edition_id,omitempty"`
+	// ItemID is the item an item-scoped want names (one episode, one track),
+	// absent at the other scopes for the same reason EditionID is.
+	ItemID string `json:"item_id,omitempty"`
 
 	QualityProfileID string `json:"quality_profile_id"`
 	Monitor          bool   `json:"monitor"`
@@ -175,7 +178,7 @@ type UpdateDesiredRequest struct {
 // time somebody paged a real library. LEFT rather than INNER because a want
 // whose acquisition row is missing must still be readable — the API says
 // nothing about its state rather than hiding the want.
-const desiredColumns = `d.id, d.scope, d.work_id, d.edition_id, d.quality_profile_id,
+const desiredColumns = `d.id, d.scope, d.work_id, d.edition_id, d.item_id, d.quality_profile_id,
 	d.monitor, d.reason, d.created_at, d.updated_at, ` + acquisitionSelect +
 	`, acq.bytes_total, acq.bytes_done`
 
@@ -188,12 +191,12 @@ const desiredFrom = ` FROM desired_items d
 
 func scanDesiredItem(row interface{ Scan(...any) error }) (DesiredItem, error) {
 	var d DesiredItem
-	var edition sql.NullString
+	var edition, item sql.NullString
 	var monitor int
 	var created, updated string
 	var phase, content, placement, detail sql.NullString
 	var managed, bytesTotal, bytesDone sql.NullInt64
-	if err := row.Scan(&d.ID, &d.Scope, &d.WorkID, &edition, &d.QualityProfileID,
+	if err := row.Scan(&d.ID, &d.Scope, &d.WorkID, &edition, &item, &d.QualityProfileID,
 		&monitor, &d.Reason, &created, &updated,
 		&phase, &managed, &content, &placement, &detail, &bytesTotal, &bytesDone); err != nil {
 		return DesiredItem{}, err
@@ -201,6 +204,9 @@ func scanDesiredItem(row interface{ Scan(...any) error }) (DesiredItem, error) {
 	d.Acquisition = scanAcquisitionView(phase, managed, content, placement, detail, bytesTotal, bytesDone)
 	if edition.Valid {
 		d.EditionID = edition.String
+	}
+	if item.Valid {
+		d.ItemID = item.String
 	}
 	d.Monitor = monitor == 1
 	d.CreatedAt = parseTime(created)
@@ -214,6 +220,7 @@ func (d DesiredItem) domainItem() desired.Item {
 		Scope:            desired.Scope(d.Scope),
 		WorkID:           d.WorkID,
 		EditionID:        d.EditionID,
+		ItemID:           d.ItemID,
 		QualityProfileID: d.QualityProfileID,
 		Monitor:          d.Monitor,
 		Reason:           d.Reason,

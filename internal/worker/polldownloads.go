@@ -3,12 +3,14 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -43,10 +45,13 @@ type PollDownloadsStore interface {
 	AcquisitionByExternal(ctx context.Context, provider, externalID string) (catalog.Acquisition, error)
 	AdvanceAcquisition(ctx context.Context, desiredItemID string, t acquisition.Transition, detail string) (catalog.AcquisitionRecord, error)
 	BlockRelease(ctx context.Context, b catalog.BlockedRelease) (bool, error)
+	BlockTransferRelease(ctx context.Context, desiredItemID, provider, externalID string, phases []acquisition.Phase, detail string, reason catalog.BlockReason) (bool, error)
 	ClearSearchSchedule(ctx context.Context, desiredItemID string) error
 	DropAcquisition(ctx context.Context, desiredItemID string) error
+	DropAcquisitionOf(ctx context.Context, desiredItemID, provider, externalID string) (bool, error)
 	OrphanedDownloads(ctx context.Context, grace time.Duration) ([]catalog.OrphanedDownload, error)
 	RecordAcquisition(ctx context.Context, a catalog.Acquisition) (bool, error)
+	SearchContextFor(ctx context.Context, desiredItemID string) (catalog.SearchContext, error)
 	StuckGrabs(ctx context.Context, grace time.Duration) ([]catalog.StuckGrab, error)
 	StuckIngests(ctx context.Context, grace time.Duration) ([]catalog.StuckIngest, error)
 }
@@ -109,7 +114,7 @@ func PollDownloadsHandler(
 			responded[client.Name()] = true
 
 			for _, t := range transfers {
-				n, err := reconcileTransfer(ctx, cat, ingests, client.Name(), t, log)
+				n, err := reconcileTransfer(ctx, cat, ingests, client, t, log)
 				if err != nil {
 					failed++
 					log.Warn("could not reconcile a transfer",
@@ -162,9 +167,10 @@ func PollDownloadsHandler(
 // Returns how many state transitions it caused, so the caller can log a pass
 // that did something and stay quiet about one that did not.
 func reconcileTransfer(
-	ctx context.Context, cat PollDownloadsStore, ingests ProbeEnqueuer, provider string,
+	ctx context.Context, cat PollDownloadsStore, ingests ProbeEnqueuer, client providers.Downloader,
 	t providers.Transfer, log *slog.Logger,
 ) (int, error) {
+	provider := client.Name()
 	existing, err := cat.AcquisitionByExternal(ctx, provider, t.ID)
 	switch {
 	case errors.Is(err, catalog.ErrNoAcquisitionRow):
@@ -195,10 +201,119 @@ func reconcileTransfer(
 		return 0, err
 	}
 
+	if t.Executable {
+		if n, handled, err := refuseProgramTransfer(ctx, cat, client, existing, t, log); handled || err != nil {
+			return n, err
+		}
+	}
+
 	// existing.BytesDone is last pass's figure — RecordAcquisition above has
 	// just overwritten the row with this pass's, so it is captured here, before,
 	// to let advancePipeline tell a stuck transfer from one still pulling bytes.
 	return advancePipeline(ctx, cat, ingests, existing.DesiredItemID, t, existing.BytesDone, log)
+}
+
+// refuseProgramTransfer stops a transfer whose every file is a program (#819)
+// as soon as its file list is known, rather than letting it finish, seed, and
+// fail at ingest.
+//
+// A game want is exempt: its payload is installers (ADR-0120). One already
+// VERIFYING or INGESTING is ingest's to refuse.
+//
+// # The order is the design
+//
+// The client's removal is the one step that cannot be undone, and the
+// transfer, while the client lists it, is what brings the poll back here. So
+// everything durable is written BEFORE the removal, and a failure there
+// returns with the transfer in place for the next poll to retry:
+//
+//  1. The search schedule is cleared (for an in-flight want), so the want
+//     searches at once when it reaches idle.
+//  2. The release is blocked, in one transaction that first checks the want
+//     is still in the phase sampled and its row still names this transfer,
+//     so a search running in parallel cannot make it block the wrong release.
+//  3. The transfer is removed with its data: a program nobody wants on disk,
+//     which would otherwise keep seeding.
+//  4. Only then is an in-flight want failed to idle, which is what makes it
+//     searchable (the search beat takes only idle wants). If this step is
+//     lost, the orphan sweep fails the want later, and the block from step 2
+//     still keeps the search off the program.
+//  5. The row is dropped last, and only while it still names this transfer.
+//
+// An idle want (an earlier pass whose removal failed, or a node-local ingest
+// failure before the file list was known) runs the same steps without 1 and 4.
+// One a search has just taken (SEARCHING to SELECTED) runs only 3 and 5. Its
+// row still names this transfer, but its selection may already be the new
+// pick, so nothing is blocked. Returns handled=false when the rule does not
+// apply.
+func refuseProgramTransfer(
+	ctx context.Context, cat PollDownloadsStore, client providers.Downloader,
+	acq catalog.Acquisition, t providers.Transfer, log *slog.Logger,
+) (applied int, handled bool, err error) {
+	sc, err := cat.SearchContextFor(ctx, acq.DesiredItemID)
+	if err != nil {
+		return 0, false, err
+	}
+	if sc.ContentType == identification.Game {
+		return 0, false, nil
+	}
+	state, err := cat.Acquisition(ctx, acq.DesiredItemID)
+	if err != nil {
+		return 0, false, err
+	}
+	phase := state.State.Phase
+	cause := fmt.Errorf("%w: every file in %q is a program, not %s",
+		errExecutablePayload, t.Name, contentKind(sc.ContentType))
+	switch phase {
+	case acquisition.PhaseQueued, acquisition.PhaseDownloading:
+		if err := cat.ClearSearchSchedule(ctx, acq.DesiredItemID); err != nil {
+			return 0, true, err
+		}
+		fallthrough
+	case acquisition.PhaseIdle:
+		ours, err := cat.BlockTransferRelease(ctx, acq.DesiredItemID, client.Name(), t.ID,
+			[]acquisition.Phase{phase}, cause.Error(), catalog.BlockVerificationFailed)
+		if err != nil {
+			return 0, true, err
+		}
+		if !ours {
+			// The want moved on between the two reads: the next poll re-judges it.
+			return 0, true, nil
+		}
+	case acquisition.PhaseSearching, acquisition.PhaseCandidatesFound, acquisition.PhaseSelected:
+		// An idle want a search has just taken. Its row still names this
+		// transfer (a row is replaced only when the next grab queues), but its
+		// selection may already be the search's new pick, so no block is
+		// written: blocking the selection could name the wrong release. The
+		// program is removed now, before the grab replaces the row and takes
+		// with it the only thing that leads back here. If a search ever picks
+		// the program again, the in-flight path refuses and blocks it.
+	default:
+		return 0, false, nil
+	}
+
+	if r, ok := client.(providers.Remover); ok {
+		if err := r.Remove(ctx, t.ID, true); err != nil {
+			log.Warn("refused a program's release but could not remove its transfer; the next poll retries",
+				"provider", client.Name(), "transfer", t.ID, "error", err)
+			return 0, true, nil
+		}
+	}
+
+	if phase == acquisition.PhaseQueued || phase == acquisition.PhaseDownloading {
+		if _, err := cat.AdvanceAcquisition(ctx, acq.DesiredItemID,
+			acquisition.TransitionFail, cause.Error()); err != nil {
+			return 0, true, err
+		}
+		applied = 1
+		log.Warn("refused a release whose payload is a program",
+			"desired_item_id", acq.DesiredItemID, "transfer", t.ID, "cause", cause)
+	}
+	if _, err := cat.DropAcquisitionOf(ctx, acq.DesiredItemID, client.Name(), t.ID); err != nil {
+		log.Warn("refused a program's release but could not drop its transfer row",
+			"desired_item_id", acq.DesiredItemID, "error", err)
+	}
+	return applied, true, nil
 }
 
 // sweepOrphanedDownloads fails wants whose transfer has vanished from a client

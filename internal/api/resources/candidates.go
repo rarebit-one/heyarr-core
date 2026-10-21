@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -279,6 +280,58 @@ func (a *API) listBlocked(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	a.write(w, r, http.StatusOK, map[string]any{"desired_item_id": id, "blocked": out})
+}
+
+// blockRequest is the body of POST /api/v1/desired/{id}/blocked.
+type blockRequest struct {
+	CandidateID string `json:"candidate_id"`
+	Provider    string `json:"provider"`
+	Detail      string `json:"detail"`
+}
+
+// blockRelease is POST /api/v1/desired/{id}/blocked: the want must not choose
+// that release again (#819), recorded as a manual block. The operator's lever
+// for a release that is bad in a way nothing detected: a fake, a wrong cut, a
+// language nobody here speaks. The provider is needed only when the want's
+// last search did not offer the candidate, or offered it from two providers.
+// 201 when blocked, 200 when it already was, 400 when the candidate is unknown
+// and no provider is named, 409 when it is ambiguous.
+func (a *API) blockRelease(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if _, err := desiredByID(r.Context(), a.reader, id); err != nil {
+		a.fail(w, r, "desired item", err)
+		return
+	}
+	var body blockRequest
+	if !decodeOr400(w, r, &body) {
+		return
+	}
+	if err := required("candidate_id", body.CandidateID); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	b, created, err := a.catalog.BlockByHand(r.Context(), id,
+		strings.TrimSpace(body.Provider), strings.TrimSpace(body.CandidateID), body.Detail)
+	switch {
+	case errors.Is(err, catalog.ErrUnknownCandidate):
+		httpapi.Fail(w, r, problem.BadRequest(
+			"this want's last search did not offer that candidate — name its provider to block it anyway"))
+		return
+	case errors.Is(err, catalog.ErrAmbiguousBlock):
+		httpapi.Fail(w, r, problem.Conflict(err.Error()+" — name one with \"provider\""))
+		return
+	case err != nil:
+		a.fail(w, r, "blocked release", err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	a.write(w, r, status, BlockedReleaseView{
+		Provider: b.Provider, CandidateID: b.CandidateID, Title: b.Title,
+		Reason: string(b.Reason), Detail: b.Detail,
+	})
 }
 
 // unblockRelease is DELETE /api/v1/desired/{id}/blocked/{candidate}: the want

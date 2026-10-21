@@ -360,6 +360,24 @@ func (c *Catalog) DropAcquisition(ctx context.Context, desiredItemID string) err
 	})
 }
 
+// DropAcquisitionOf removes a want's transfer row only while it still names
+// this provider's transfer, so a row a newer grab has written in its place
+// is never the one deleted. Reports whether a row was removed.
+func (c *Catalog) DropAcquisitionOf(ctx context.Context, desiredItemID, provider, externalID string) (bool, error) {
+	var n int64
+	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM acquisitions WHERE desired_item_id = ? AND provider = ? AND external_id = ?`,
+			desiredItemID, provider, externalID)
+		if err != nil {
+			return err
+		}
+		n, err = res.RowsAffected()
+		return err
+	})
+	return n > 0, err
+}
+
 // TransferToAcquisition maps a provider's value type onto a row.
 //
 // The mapping lives here rather than in internal/downloads so that the download

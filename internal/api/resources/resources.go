@@ -518,6 +518,8 @@ func (a *API) Mount(r chi.Router) {
 			Post("/desired/{id}/select", a.selectCandidate)
 		r.Get("/desired/{id}/blocked", a.listBlocked)
 		r.With(httpapi.RequireScope(auth.ScopeWrite)).
+			Post("/desired/{id}/blocked", a.blockRelease)
+		r.With(httpapi.RequireScope(auth.ScopeWrite)).
 			Delete("/desired/{id}/blocked/{candidate}", a.unblockRelease)
 	}
 	// Consumption is ordinary client traffic like device registration: a

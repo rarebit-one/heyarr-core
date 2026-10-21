@@ -116,11 +116,54 @@ func (c *Client) Transfers(ctx context.Context) ([]providers.Transfer, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.judgePayloads(ctx, torrents)
 	out := make([]providers.Transfer, 0, len(torrents))
 	for _, t := range torrents {
-		out = append(out, c.toTransfer(t))
+		tr := c.toTransfer(t)
+		tr.Executable, _ = c.payloads.verdict(t.HashString)
+		out = append(out, tr)
 	}
 	return out, nil
+}
+
+// judgePayloads reads the file list of each transfer not yet judged whose
+// metadata is complete (#819), in one torrent-get. Best effort: a failure here
+// leaves those transfers unjudged for the next pass and never fails the poll.
+func (c *Client) judgePayloads(ctx context.Context, torrents []torrent) {
+	present := make(map[string]bool, len(torrents))
+	var ask []any
+	for _, t := range torrents {
+		present[t.HashString] = true
+		if _, judged := c.payloads.verdict(t.HashString); judged || t.MetadataPercentComplete < 1 {
+			continue
+		}
+		if len(ask) < maxFileListLookups {
+			ask = append(ask, t.HashString)
+		}
+	}
+	c.payloads.keepOnly(present)
+	if len(ask) == 0 {
+		return
+	}
+	var raw struct {
+		Torrents []struct {
+			HashString string `json:"hashString"`
+			Files      []struct {
+				Name string `json:"name"`
+			} `json:"files"`
+		} `json:"torrents"`
+	}
+	args := map[string]any{"ids": ask, "fields": []string{"hashString", "files"}}
+	if err := c.rpc.call(ctx, "torrent-get", args, &raw); err != nil {
+		return
+	}
+	for _, t := range raw.Torrents {
+		names := make([]string, 0, len(t.Files))
+		for _, f := range t.Files {
+			names = append(names, f.Name)
+		}
+		c.payloads.record(t.HashString, names)
+	}
 }
 
 // ours reads the queue and keeps only Heyarr's transfers.

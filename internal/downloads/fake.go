@@ -54,6 +54,8 @@ type Fake struct {
 	transfers map[string]*fakeTransfer
 	// offers is what each source produces when grabbed — see Offer.
 	offers map[string]fakeOffer
+	// removeErr, when set, is what the next Remove fails with — see FailNextRemove.
+	removeErr error
 }
 
 // Simulate makes this fake produce and complete transfers WITHOUT being told
@@ -350,6 +352,28 @@ func (f *Fake) Fail(id string, reason TroubleReason, detail string) error {
 	return nil
 }
 
+// MarkExecutable reports a transfer's whole payload as programs (#819), the
+// verdict a real client reaches from the transfer's file list.
+func (f *Fake) MarkExecutable(id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	t, ok := f.transfers[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNotOurs, id)
+	}
+	t.transfer.Executable = true
+	return nil
+}
+
+// FailNextRemove makes the next Remove fail with err, as a client that is
+// briefly unreachable would.
+func (f *Fake) FailNextRemove(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removeErr = err
+}
+
 // Remove drops a transfer, refusing one it does not hold.
 //
 // The same refusal the real client makes, for the same reason: a caller must
@@ -357,6 +381,10 @@ func (f *Fake) Fail(id string, reason TroubleReason, detail string) error {
 func (f *Fake) Remove(_ context.Context, id string, deleteData bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.removeErr; err != nil {
+		f.removeErr = nil
+		return err
+	}
 
 	t, ok := f.transfers[id]
 	if !ok {

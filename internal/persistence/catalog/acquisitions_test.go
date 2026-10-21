@@ -3,8 +3,10 @@ package catalog_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
@@ -207,6 +209,29 @@ func TestDroppingAnAcquisitionLeavesTheTransferAlone(t *testing.T) {
 	}
 }
 
+// A conditional drop removes the row only while it names that transfer, so a
+// row a newer grab wrote in its place survives (#819).
+func TestDropAcquisitionOfSparesAReplacementRow(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	other := strings.Repeat("f", 40)
+
+	if _, err := h.cat.RecordAcquisition(ctx, catalog.TransferToAcquisition(
+		"acq-1", h.want, "acquire", transfer(other, "replacement.mkv"), "/local/r")); err != nil {
+		t.Fatal(err)
+	}
+	if dropped, err := h.cat.DropAcquisitionOf(ctx, h.want, "acquire", infohash); err != nil || dropped {
+		t.Fatalf("dropped = %v (%v): a stale transfer id removed the replacement's row", dropped, err)
+	}
+	if _, err := h.cat.AcquisitionFor(ctx, h.want); err != nil {
+		t.Fatalf("the replacement row is gone: %v", err)
+	}
+	if dropped, err := h.cat.DropAcquisitionOf(ctx, h.want, "acquire", other); err != nil || !dropped {
+		t.Fatalf("dropped = %v (%v), want the named row removed", dropped, err)
+	}
+}
+
 // A want's acquisition does not outlive it.
 func TestDeletingAWantCascadesToItsAcquisition(t *testing.T) {
 	t.Parallel()
@@ -225,5 +250,112 @@ func TestDeletingAWantCascadesToItsAcquisition(t *testing.T) {
 	}
 	if len(all) != 0 {
 		t.Errorf("%d acquisition(s) outlived their want", len(all))
+	}
+}
+
+// BlockTransferRelease blocks the selected release only while the want is in
+// the phase the caller sampled and its row still names the transfer (#819), so
+// a search running in parallel can never make it block a replacement.
+func TestBlockTransferReleaseChecksTheWantIsStillTheTransfers(t *testing.T) {
+	t.Parallel()
+	setup := func(t *testing.T) *harness {
+		t.Helper()
+		h := newHarness(t)
+		ctx := context.Background()
+		if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+			t.Fatal(err)
+		}
+		ranked := acquisition.EvaluateAll([]acquisition.ReleaseCandidate{
+			release("good", 2160, "hevc"), release("plain", 1080, "h264"),
+		}, candidateProfile())
+		if _, err := h.cat.RecordSearch(ctx, h.want, ranked, acquisition.Incumbent{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.cat.RecordAcquisition(ctx, catalog.TransferToAcquisition(
+			"acq-1", h.want, "acquire", transfer(infohash, "x.exe"), "")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.db.Writer().Exec(`UPDATE acquisition_state SET phase = 'downloading' WHERE desired_item_id = ?`, h.want); err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	downloading := []acquisition.Phase{acquisition.PhaseDownloading}
+	ctx := context.Background()
+
+	h := setup(t)
+	ours, err := h.cat.BlockTransferRelease(ctx, h.want, "acquire", infohash, downloading,
+		"payload_executable: a program", catalog.BlockVerificationFailed)
+	if err != nil || !ours {
+		t.Fatalf("ours = %v (%v), want the transfer judged the want's", ours, err)
+	}
+	blocked, err := h.cat.BlockedFor(ctx, h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 1 || blocked[0].CandidateID != "good" {
+		t.Fatalf("blocked = %+v, want the selected release", blocked)
+	}
+
+	for name, call := range map[string]func(h *harness) (bool, error){
+		"the phase moved on": func(h *harness) (bool, error) {
+			return h.cat.BlockTransferRelease(ctx, h.want, "acquire", infohash,
+				[]acquisition.Phase{acquisition.PhaseIdle}, "x", catalog.BlockVerificationFailed)
+		},
+		"the row names another transfer": func(h *harness) (bool, error) {
+			return h.cat.BlockTransferRelease(ctx, h.want, "acquire", strings.Repeat("e", 40),
+				downloading, "x", catalog.BlockVerificationFailed)
+		},
+	} {
+		h := setup(t)
+		ours, err := call(h)
+		if err != nil || ours {
+			t.Errorf("%s: ours = %v (%v), want false", name, ours, err)
+		}
+		if blocked, _ := h.cat.BlockedFor(ctx, h.want); len(blocked) != 0 {
+			t.Errorf("%s: blocked %+v, want nothing written", name, blocked)
+		}
+	}
+}
+
+// A by-hand override while the transfer is in flight moves the selection but
+// not the phase. The selection is then newer than the transfer's grab, so it is
+// not the transfer's release and is not blocked (#819).
+func TestBlockTransferReleaseSparesAnOverrideMadeInFlight(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+		t.Fatal(err)
+	}
+	ranked := acquisition.EvaluateAll([]acquisition.ReleaseCandidate{
+		release("good", 2160, "hevc"), release("plain", 1080, "h264"),
+	}, candidateProfile())
+	if _, err := h.cat.RecordSearch(ctx, h.want, ranked, acquisition.Incumbent{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.cat.RecordAcquisition(ctx, catalog.TransferToAcquisition(
+		"acq-1", h.want, "acquire", transfer(infohash, "x.exe"), "")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Writer().Exec(`UPDATE acquisition_state SET phase = 'downloading' WHERE desired_item_id = ?`, h.want); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.cat.OverrideSelection(ctx, h.want, "plain"); err != nil {
+		t.Fatal(err)
+	}
+	// The harness clock is fixed; make the override visibly later than the grab.
+	if _, err := h.db.Writer().Exec(`UPDATE release_candidates SET selected_at = '2099-01-01T00:00:00Z'
+		WHERE desired_item_id = ? AND selected = 1`, h.want); err != nil {
+		t.Fatal(err)
+	}
+
+	ours, err := h.cat.BlockTransferRelease(ctx, h.want, "acquire", infohash,
+		[]acquisition.Phase{acquisition.PhaseDownloading}, "x", catalog.BlockVerificationFailed)
+	if err != nil || !ours {
+		t.Fatalf("ours = %v (%v), want the transfer still the want's", ours, err)
+	}
+	if blocked, _ := h.cat.BlockedFor(ctx, h.want); len(blocked) != 0 {
+		t.Errorf("blocked %+v: the override's pick is not the transfer's release", blocked)
 	}
 }

@@ -667,6 +667,15 @@ func TestDesiredBlockedAndUnblockJSONShapes(t *testing.T) {
 	if _, _, err := h.run("desired", "unblock", want, candidate); err == nil {
 		t.Error("unblocking a release that is not blocked succeeded")
 	}
+
+	// `desired block` (#819) puts a block back by hand. The last search
+	// offered nothing here, so the provider is named.
+	out = h.mustRun("desired", "block", want, candidate, "--provider", "fake-indexer",
+		"--detail", "a program, not an episode", "--json")
+	testutil.Golden(t, "testdata/desired_block.json", []byte(normalise(out)))
+	if _, _, err := h.run("desired", "block", want, "infohash:unoffered"); err == nil {
+		t.Error("blocking an unoffered candidate with no provider succeeded")
+	}
 }
 
 // TestContentTypeHelpNamesTheValidatorsVocabulary (#814): every --content-type
