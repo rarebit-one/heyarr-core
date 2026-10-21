@@ -248,3 +248,28 @@ func TestAnIdleProgramTransferIsBlockedBeforeRemoval(t *testing.T) {
 		t.Errorf("the program is still in the client: %+v", left)
 	}
 }
+
+// An idle want a search has just taken still has its program removed: the row
+// that leads back to the transfer is about to be replaced by the next grab.
+// Nothing is blocked, because the selection may already be the new pick.
+func TestAProgramTransferOfAWantBeingSearchedIsStillRemoved(t *testing.T) {
+	t.Parallel()
+	h := newPollHarness(t)
+	h.grabAfterSearch(t, "Arrival.2016.1080p.WEB.H264.exe", []byte("MZ a program"))
+	id := h.transferID(t)
+	h.exec(t, `UPDATE acquisition_state SET phase = 'searching' WHERE desired_item_id = ?`, h.want)
+	if err := h.client.MarkExecutable(id); err != nil {
+		t.Fatal(err)
+	}
+	h.poll(t)
+
+	if left, _ := h.client.Transfers(t.Context()); len(left) != 0 {
+		t.Errorf("the program is still in the client: %+v", left)
+	}
+	if blocked, _ := h.cat.BlockedFor(t.Context(), h.want); len(blocked) != 0 {
+		t.Errorf("blocked %+v while the selection may be a new pick, want nothing", blocked)
+	}
+	if got := h.state(t).Phase; got != acquisition.PhaseSearching {
+		t.Errorf("phase = %s, want the search left alone", got)
+	}
+}

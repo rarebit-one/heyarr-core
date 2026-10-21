@@ -242,7 +242,10 @@ func reconcileTransfer(
 //
 // An idle want (an earlier pass whose removal failed, or a node-local ingest
 // failure before the file list was known) runs the same steps without 1 and 4.
-// Returns handled=false when the rule does not apply.
+// One a search has just taken (SEARCHING to SELECTED) runs only 3 and 5. Its
+// row still names this transfer, but its selection may already be the new
+// pick, so nothing is blocked. Returns handled=false when the rule does not
+// apply.
 func refuseProgramTransfer(
 	ctx context.Context, cat PollDownloadsStore, client providers.Downloader,
 	acq catalog.Acquisition, t providers.Transfer, log *slog.Logger,
@@ -259,26 +262,34 @@ func refuseProgramTransfer(
 		return 0, false, err
 	}
 	phase := state.State.Phase
+	cause := fmt.Errorf("%w: every file in %q is a program, not %s",
+		errExecutablePayload, t.Name, contentKind(sc.ContentType))
 	switch phase {
 	case acquisition.PhaseQueued, acquisition.PhaseDownloading:
 		if err := cat.ClearSearchSchedule(ctx, acq.DesiredItemID); err != nil {
 			return 0, true, err
 		}
+		fallthrough
 	case acquisition.PhaseIdle:
+		ours, err := cat.BlockTransferRelease(ctx, acq.DesiredItemID, client.Name(), t.ID,
+			[]acquisition.Phase{phase}, cause.Error(), catalog.BlockVerificationFailed)
+		if err != nil {
+			return 0, true, err
+		}
+		if !ours {
+			// The want moved on between the two reads: the next poll re-judges it.
+			return 0, true, nil
+		}
+	case acquisition.PhaseSearching, acquisition.PhaseCandidatesFound, acquisition.PhaseSelected:
+		// An idle want a search has just taken. Its row still names this
+		// transfer (a row is replaced only when the next grab queues), but its
+		// selection may already be the search's new pick, so no block is
+		// written: blocking the selection could name the wrong release. The
+		// program is removed now, before the grab replaces the row and takes
+		// with it the only thing that leads back here. If a search ever picks
+		// the program again, the in-flight path refuses and blocks it.
 	default:
 		return 0, false, nil
-	}
-
-	cause := fmt.Errorf("%w: every file in %q is a program, not %s",
-		errExecutablePayload, t.Name, contentKind(sc.ContentType))
-	ours, err := cat.BlockTransferRelease(ctx, acq.DesiredItemID, client.Name(), t.ID,
-		[]acquisition.Phase{phase}, cause.Error(), catalog.BlockVerificationFailed)
-	if err != nil {
-		return 0, true, err
-	}
-	if !ours {
-		// The want moved on between the two reads: the next poll re-judges it.
-		return 0, true, nil
 	}
 
 	if r, ok := client.(providers.Remover); ok {
@@ -289,7 +300,7 @@ func refuseProgramTransfer(
 		}
 	}
 
-	if phase != acquisition.PhaseIdle {
+	if phase == acquisition.PhaseQueued || phase == acquisition.PhaseDownloading {
 		if _, err := cat.AdvanceAcquisition(ctx, acq.DesiredItemID,
 			acquisition.TransitionFail, cause.Error()); err != nil {
 			return 0, true, err
