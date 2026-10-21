@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/rarebit-one/heyarr-core/internal/client"
+	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 )
 
 func newLibraryCommand(opts Options, configPath *string) *cobra.Command {
@@ -279,7 +281,8 @@ same name reports the conflict rather than silently making a second library.`,
 		},
 	}
 	flags.register(cmd)
-	cmd.Flags().StringVar(&contentType, "content-type", "", "what the library holds: movie, show, book, music (required)")
+	cmd.Flags().StringVar(&contentType, "content-type", "",
+		"what the library holds: "+contentTypeList()+" (required)")
 	cmd.Flags().StringArrayVar(&roots, "root", nil, "a directory to scan; repeat for several")
 	cmd.Flags().StringVar(&ingestMode, "ingest-mode", "reflink",
 		"how bytes are materialised for these roots: reflink, hardlink, copy or link (ADR-0014, ADR-0020)")
@@ -552,4 +555,11 @@ func resolveLibrary(ctx context.Context, c *client.Client, ref string) (client.L
 	default:
 		return client.Library{}, fmt.Errorf("%q matches %d libraries; name it by id", ref, len(exact))
 	}
+}
+
+// contentTypeList is the content-type vocabulary as flag help prints it: the
+// validator's own list (identification.ContentTypes), so the help can never
+// name a type the server refuses (#814: it said "show" for years).
+func contentTypeList() string {
+	return strings.Join(identification.ContentTypes(), ", ")
 }

@@ -18,7 +18,7 @@ heyarr library add <name> [flags]
 
 ```
       --addr string           where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
-      --content-type string   what the library holds: movie, show, book, music (required)
+      --content-type string   what the library holds: movie, series, music, book, document, game (required)
       --disabled              create the library but do not scan it yet
       --ingest-mode string    how bytes are materialised for these roots: reflink, hardlink, copy or link (ADR-0014, ADR-0020) (default "reflink")
       --json                  emit machine-readable JSON

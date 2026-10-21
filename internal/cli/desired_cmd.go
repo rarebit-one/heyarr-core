@@ -149,7 +149,7 @@ content under the same profile twice is one want written twice, and is refused.`
 	}
 	flags.register(cmd)
 	cmd.Flags().StringVar(&contentType, "content-type", "",
-		"what this is: movie, series, music, book (required when wanting by title)")
+		"what this is: "+contentTypeList()+" (required when wanting by title)")
 	cmd.Flags().IntVar(&year, "year", 0, "the year, when it is part of the identity")
 	cmd.Flags().StringVar(&storeRef, "store-ref", "",
 		"a game's store and the store's name for it, e.g. gog:the_witcher_3 — fetched from that store")
