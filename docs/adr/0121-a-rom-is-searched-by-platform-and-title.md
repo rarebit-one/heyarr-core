@@ -61,6 +61,10 @@ Every ROM rule needs a ROM library (ADR-0118's `RequiresLibrary`): `.bin`,
 - A shared shape (`.iso`, `.chd`, `.bin`, `.zip`) at the library root is left
   unidentified.
 
+No dump extension has a media type in the scanner's built-in table, so a scan
+of a rom library keeps exactly the files these rules identify, with no media
+type, and skips the rest. An operator's own extension table still overrides.
+
 Region, revision and disc are read off the name onto the edition. They describe
 the dump; they certify nothing. A hash match against a No-Intro or Redump DAT is
 a later change, and until then no profile gates on them.

@@ -481,7 +481,7 @@ func (w *walk) file(ctx context.Context, full, rel string) error {
 		}
 	}
 
-	mime, ok, reason := w.scanner.policy.AllowFile(rel)
+	mime, ok, reason := w.scanner.policy.AllowFileIn(rel, w.root.LibraryContentType)
 	if !ok {
 		w.scanner.log.Debug("skipping file", "path", full, "reason", reason)
 		w.run.Progress.FilesSkipped++

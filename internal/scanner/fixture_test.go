@@ -135,6 +135,7 @@ type fixture struct {
 
 type fixtureOptions struct {
 	policy           scanner.Policy
+	contentType      string
 	batchSize        int
 	progressInterval int
 }
@@ -164,8 +165,13 @@ func newFixture(t *testing.T, opts ...func(*fixtureOptions)) *fixture {
 	if err != nil {
 		t.Fatalf("opening the catalog: %v", err)
 	}
+	cfg := fixtureOptions{contentType: "movie", batchSize: 64, progressInterval: 128}
+	for _, apply := range opts {
+		apply(&cfg)
+	}
+
 	roots, err := cat.ReconcileLibraries(t.Context(), []catalog.LibrarySpec{{
-		Name: "films", ContentType: "movie", Roots: []string{library},
+		Name: "films", ContentType: cfg.contentType, Roots: []string{library},
 	}})
 	if err != nil {
 		t.Fatalf("reconciling libraries: %v", err)
@@ -177,11 +183,6 @@ func newFixture(t *testing.T, opts ...func(*fixtureOptions)) *fixture {
 	queue, err := jobs.New(jobs.Options{Writer: db.Writer(), Reader: db.Reader(), Events: eventLog})
 	if err != nil {
 		t.Fatalf("opening the job queue: %v", err)
-	}
-
-	cfg := fixtureOptions{batchSize: 64, progressInterval: 128}
-	for _, apply := range opts {
-		apply(&cfg)
 	}
 
 	fsys := newCountingFS()
