@@ -203,6 +203,8 @@ var schemaExplainRelease = obj(map[string]any{
 					"hdr":            boolean(""),
 					"size_bytes":     integer(""),
 					"language":       str(""),
+					"region": strArray("A ROM dump's regions as its name tags them: " +
+						"[\"usa\", \"europe\"] for \"(USA, Europe)\". A rule holds when any one matches."),
 				},
 				"additionalProperties": false,
 			},

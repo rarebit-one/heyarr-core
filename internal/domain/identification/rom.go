@@ -325,6 +325,35 @@ func parseROMName(name string) romName {
 	return out
 }
 
+// ParseReleaseRegions reads the regions a release name's No-Intro-style tag
+// names ("(USA, Europe)" → usa, europe), lower-cased, in the tag's order, for
+// the region preference (ADR-0121 §5). Nil when no bracketed tag is a region
+// list: an untagged name says nothing, and the preference then simply does not
+// apply to it.
+func ParseReleaseRegions(title string) []string {
+	for _, m := range reROMTag.FindAllStringSubmatch(title, -1) {
+		if regions := ROMRegions(m[1]); regions != nil {
+			return regions
+		}
+	}
+	return nil
+}
+
+// ROMRegions splits one region tag ("USA, Europe", as a ROM edition records
+// it) into the lower-cased set the region preference ranks by. Nil when the
+// tag is no region list.
+func ROMRegions(tag string) []string {
+	tag = strings.TrimSpace(tag)
+	if tag == "" || !isRegionTag(tag) {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(tag, ",") {
+		out = append(out, strings.ToLower(strings.TrimSpace(part)))
+	}
+	return out
+}
+
 func isRegionTag(tag string) bool {
 	parts := strings.Split(tag, ",")
 	for _, part := range parts {

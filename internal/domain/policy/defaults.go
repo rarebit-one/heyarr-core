@@ -104,13 +104,25 @@ func Defaults() []Profile {
 			// The profile for a searched ROM (ADR-0121). Which platform a
 			// release is for is decided BEFORE this, by the platform match gate,
 			// because it is identity rather than quality. What is left to judge
-			// is only that the release has bytes; region and revision are read
-			// from names but certify nothing yet, so nothing gates on them.
+			// is only that the release has bytes. Region, read from the name,
+			// only RANKS releases (USA, then World, then Europe, ADR-0121 §5): it
+			// never gates one, and the want still ends once any dump is held, so
+			// a held copy is never swapped for another region's.
 			Name:         "rom-indexed",
 			ContentTypes: []string{"rom"},
 			Description: "Starting profile for searched ROMs. Accepts a nonempty release " +
-				"for the wanted platform and stops once held; region and revision are not judged yet.",
-			Accept:   []Rule{{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)}},
+				"for the wanted platform, prefers USA, then World, then Europe, and stops once held.",
+			Accept: []Rule{{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)}},
+			// A section names each (attribute, op) once, so the three tiers are
+			// four rules that sum to USA 30, World 20, Europe 10. The last two
+			// cancel for any other region, which ties with an untagged release
+			// at 0, as an unset region contributes nothing.
+			Prefer: []Rule{
+				{Attribute: AttrRegion, Op: OpEq, Value: Text("usa"), Weight: 20},
+				{Attribute: AttrRegion, Op: OpIn, Value: Texts("usa", "world"), Weight: 10},
+				{Attribute: AttrRegion, Op: OpNeq, Value: Text("usa"), Weight: 10},
+				{Attribute: AttrRegion, Op: OpNotIn, Value: Texts("usa", "world", "europe"), Weight: -10},
+			},
 			Terminal: []Rule{{Attribute: AttrSizeBytes, Op: OpGTE, Value: Num(1)}},
 		},
 		{

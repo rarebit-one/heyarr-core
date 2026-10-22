@@ -562,6 +562,22 @@ func coerce(attr policy.Attribute, kind policy.Kind, value any) (policy.Value, e
 		}
 		return policy.Num(int64(n)), nil
 	case policy.KindText:
+		if list, isList := value.([]any); isList && attr == policy.AttrRegion {
+			// Region is the one set-valued attribute: a dump is often several
+			// regions at once (ADR-0121 §5), and a search records them all.
+			names := make([]string, 0, len(list))
+			for _, item := range list {
+				name, isName := item.(string)
+				if !isName {
+					return policy.Value{}, invalidParams("%s takes a list of names, not %v", attr, value)
+				}
+				names = append(names, name)
+			}
+			if len(names) == 0 {
+				return policy.Value{}, invalidParams("%s needs at least one name; leave it out when unknown", attr)
+			}
+			return policy.Texts(names...), nil
+		}
 		str, ok := value.(string)
 		if !ok {
 			return policy.Value{}, invalidParams("%s takes a name, not %v", attr, value)

@@ -675,3 +675,42 @@ func TestAROMSearchAsksByTitleAndKeepsOnlyTheWantedPlatform(t *testing.T) {
 		t.Errorf("selected %q, want the SNES release", sel.CandidateID)
 	}
 }
+
+// Of a ROM's releases for the wanted platform, the USA one is chosen over the
+// European and the untagged ones (ADR-0121 §5), and the reason names the region
+// as read from the release name.
+func TestAROMSearchPrefersTheUSARelease(t *testing.T) {
+	t.Parallel()
+	h := newSearchHarness(t)
+	h.exec(t, `UPDATE works SET content_type = 'rom', work_key = 'rom:snes:tetris attack',
+		title = 'Tetris Attack', sort_title = 'tetris attack' WHERE id = 'w1'`)
+	var rom policy.Profile
+	for _, p := range policy.Defaults() {
+		if p.Name == "rom-indexed" {
+			rom = p
+		}
+	}
+	accept, _ := json.Marshal(rom.Accept)
+	prefer, _ := json.Marshal(rom.Prefer)
+	h.exec(t, `UPDATE quality_profiles SET accept = ?, prefer = ? WHERE id = 'q1'`, string(accept), string(prefer))
+	sized := func(id, title string) acquisition.ReleaseCandidate {
+		return acquisition.ReleaseCandidate{ID: id, Title: title, Attributes: acquisition.Attributes{
+			policy.AttrSizeBytes: policy.Num(1 << 20),
+		}}
+	}
+	h.fake.Offer("Tetris Attack",
+		sized("eur", "Tetris Attack (Europe) [SNES]"),
+		sized("bare", "Tetris Attack [SNES]"),
+		sized("usa", "Tetris Attack (USA) [SNES]"))
+
+	if err := h.run(t); err != nil {
+		t.Fatal(err)
+	}
+	sel, err := h.cat.SelectedCandidate(t.Context(), h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.CandidateID != "usa" {
+		t.Errorf("selected %q, want the USA release", sel.CandidateID)
+	}
+}

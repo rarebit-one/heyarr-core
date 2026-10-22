@@ -364,6 +364,9 @@ func (c *Catalog) assetsAndPackagesForWant(
 			if blobs := applyEditionAttributes(view.Attributes, editionAttrs.String); len(blobs) > 0 {
 				packages[id] = blobs
 			}
+			if workContentType == identification.ROM {
+				applyROMRegion(view.Attributes, editionAttrs.String)
+			}
 		}
 		if streamsJSON.Valid {
 			applyProbeAttributes(view.Attributes, streamsJSON.String)
@@ -522,6 +525,23 @@ func applyEditionAttributes(attrs acquisition.Attributes, raw string) []string {
 		attrs[policy.AttrPlatform] = policy.Text(s)
 	}
 	return ed.PackageBlobs
+}
+
+// applyROMRegion gives a held dump the regions its edition read off the file
+// name, as the search gives a candidate the regions in its release name
+// (ADR-0121 §5). Without them a held USA dump would score below any USA
+// candidate, and a profile with region preferences and no terminal rule would
+// "upgrade" to an equivalent release on every search.
+func applyROMRegion(attrs acquisition.Attributes, raw string) {
+	var ed struct {
+		Region string `json:"region"`
+	}
+	if err := json.Unmarshal([]byte(raw), &ed); err != nil {
+		return
+	}
+	if regions := identification.ROMRegions(ed.Region); len(regions) > 0 {
+		attrs[policy.AttrRegion] = policy.Texts(regions...).AsDerived()
+	}
 }
 
 // probeStream is the fragment of a probe result the quality attributes come
