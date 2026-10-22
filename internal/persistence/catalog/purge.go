@@ -135,143 +135,232 @@ func (c *Catalog) PlacementPinPurgePreview(ctx context.Context, held HeldSize) (
 	return p, nil
 }
 
-// PurgePlacementPins removes every placement pin and taken placement, one blob
-// per transaction. Each transaction adopts held bytes that have no blobs row,
-// then records release intent when nothing else wants the blob. It returns what
-// it removed, adopted and released.
+// PurgePlacementPins removes every taken placement and every placement pin,
+// adopting held bytes that have no blobs row and recording release intent for
+// each blob nothing else wants in the transaction that removed the last thing
+// holding it. It returns what it removed, adopted and released.
+//
+// The taken placements go first, in one transaction with one
+// sync.placements_exchanged event for the lot (that event is per exchange,
+// never per blob); a blob also pinned here is released when its pins go. The
+// pins then go one blob per transaction, as a device's unpin would.
 //
 // It is a media-node operation (#823): on the personal profile the pins are a
 // device's live retention decisions, and the caller must refuse there. A pin
 // written while the purge runs is not removed; a second run is a no-op when
 // there are none.
 func (c *Catalog) PurgePlacementPins(ctx context.Context, held HeldSize) (PinPurge, error) {
-	blobs, _, _, err := c.purgeSet(ctx)
-	if err != nil {
-		return PinPurge{}, err
-	}
 	self, err := c.SelfPeer(ctx)
 	if err != nil {
 		return PinPurge{}, err
 	}
+	touched := map[string]bool{}
 	var out PinPurge
-	for _, b := range blobs {
+	taken, adopted, err := c.retireTakenPlacements(ctx, self, held, touched)
+	if err != nil {
+		return PinPurge{}, err
+	}
+	out.Taken, out.Adopted = taken, adopted
+
+	var pinned []string
+	if err := c.collect(ctx, &pinned, `SELECT DISTINCT blob_hash FROM placement_pins ORDER BY blob_hash`); err != nil {
+		return PinPurge{}, err
+	}
+	for _, hash := range pinned {
 		if err := ctx.Err(); err != nil {
 			return PinPurge{}, err
 		}
-		r, err := c.purgeBlob(ctx, b.hash, self, held)
+		pins, adopted, err := c.unpinBlob(ctx, hash, held)
 		if err != nil {
 			return PinPurge{}, err
 		}
-		if r.Pins+r.Taken == 0 {
-			continue
+		if pins > 0 {
+			out.Pins += pins
+			out.Adopted += adopted
+			touched[hash] = true
 		}
-		out.Pins += r.Pins
-		out.Taken += r.Taken
+	}
+
+	r := c.db.Reader()
+	for hash := range touched {
+		var (
+			size     sql.NullInt64
+			released bool
+		)
+		if err := r.QueryRowContext(ctx, `
+			SELECT (SELECT size FROM blobs WHERE hash = ?),
+			       EXISTS (SELECT 1 FROM blob_releases WHERE blob_hash = ?)`, hash, hash,
+		).Scan(&size, &released); err != nil {
+			return PinPurge{}, fmt.Errorf("catalog: reading the release of %s: %w", hash, err)
+		}
 		out.Blobs++
-		out.Bytes += r.Bytes
-		out.Adopted += r.Adopted
-		out.Releasable += r.Releasable
+		out.Bytes += size.Int64
+		if released {
+			out.Releasable++
+		}
 	}
 	out.StillWanted = out.Blobs - out.Releasable
 	return out, nil
 }
 
-// purgeBlob removes one blob's pins and taken placements in one transaction,
-// adopting its bytes first when it has no row, and records its release when
-// nothing else wants it.
-func (c *Catalog) purgeBlob(ctx context.Context, hash, self string, held HeldSize) (PinPurge, error) {
+// retireTakenPlacements removes every placement taken from a sibling in one
+// transaction, adopting held bytes without a row and releasing each blob no
+// pin, asset or scanned library file still wants (cause withdrawn). It adds
+// each blob it touched to touched and reports how many placements went and how
+// many blobs it adopted.
+func (c *Catalog) retireTakenPlacements(
+	ctx context.Context, self string, held HeldSize, touched map[string]bool,
+) (taken, adopted int, err error) {
 	now := c.clock.Now().UTC().Format(timestampFormat)
 	var (
-		out     PinPurge
 		pending []events.Event
+		hashes  []string
 	)
-	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
-		out, pending = PinPurge{}, nil
-		var size sql.NullInt64
-		switch err := tx.QueryRowContext(ctx, `SELECT size FROM blobs WHERE hash = ?`, hash).Scan(&size); {
-		case errors.Is(err, sql.ErrNoRows):
-		case err != nil:
-			return fmt.Errorf("catalog: reading blob %s: %w", hash, err)
-		}
-		if size.Valid {
-			out.Bytes = size.Int64
-		} else if held != nil {
-			n, ok, err := held(ctx, hash)
-			if err != nil {
-				return fmt.Errorf("catalog: checking the bytes of %s: %w", hash, err)
-			}
-			if ok {
-				if _, err := adoptBlob(ctx, tx, hash, n, now); err != nil {
-					return err
-				}
-				ev, err := c.events.EmitTx(ctx, tx, events.TypeBlobCreated, "blob", hash, map[string]any{
-					"size": n, "adopted": true,
-				})
-				if err != nil {
-					return err
-				}
-				pending = append(pending, ev)
-				out.Bytes, out.Adopted = n, 1
-			}
-		}
-
-		res, err := tx.ExecContext(ctx, `DELETE FROM placement_pins WHERE blob_hash = ?`, hash)
+	err = c.db.InTx(ctx, func(tx *sql.Tx) error {
+		taken, adopted, pending, hashes = 0, 0, nil, nil
+		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT blob_hash FROM peer_placements ORDER BY blob_hash`)
 		if err != nil {
-			return fmt.Errorf("catalog: removing the placement pins of %s: %w", hash, err)
+			return fmt.Errorf("catalog: reading the taken placements: %w", err)
 		}
-		pins, err := res.RowsAffected()
-		if err != nil {
+		for rows.Next() {
+			var h string
+			if err := rows.Scan(&h); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			hashes = append(hashes, h)
+		}
+		if err := rows.Close(); err != nil {
 			return err
 		}
-		res, err = tx.ExecContext(ctx, `DELETE FROM peer_placements WHERE blob_hash = ?`, hash)
-		if err != nil {
-			return fmt.Errorf("catalog: retiring the taken placements of %s: %w", hash, err)
-		}
-		taken, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if pins+taken == 0 {
-			return errNothingPurged
-		}
-		out.Pins, out.Taken = int(pins), int(taken)
-		if taken > 0 {
-			ev, err := c.events.EmitTx(ctx, tx, events.TypeSyncPlacementsExchanged, "peer", self, map[string]any{
-				"range": "blob", "blob_hash": hash, "added": 0, "removed": taken,
-				"reason": "legacy vault purge on a media node",
-			})
+		for _, hash := range hashes {
+			evs, ok, err := c.adoptHeld(ctx, tx, hash, held, now)
 			if err != nil {
 				return err
 			}
-			pending = append(pending, ev)
+			if ok {
+				adopted++
+			}
+			pending = append(pending, evs...)
+			res, err := tx.ExecContext(ctx, `DELETE FROM peer_placements WHERE blob_hash = ?`, hash)
+			if err != nil {
+				return fmt.Errorf("catalog: retiring the taken placements of %s: %w", hash, err)
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return err
+			}
+			taken += int(n)
+			evs, err = c.recordReleaseIfUnwanted(ctx, tx, hash, releaseWithdrawn, "", now)
+			if err != nil {
+				return err
+			}
+			pending = append(pending, evs...)
 		}
-		cause := releaseUnpinned
-		if pins == 0 {
-			cause = releaseWithdrawn
+		if taken == 0 {
+			return nil
 		}
-		evs, err := c.recordReleaseIfUnwanted(ctx, tx, hash, cause, "", now)
+		ev, err := c.events.EmitTx(ctx, tx, events.TypeSyncPlacementsExchanged, "peer", self, map[string]any{
+			"range": "all", "added": 0, "removed": taken,
+			"reason": "legacy vault purge on a media node",
+		})
 		if err != nil {
 			return err
 		}
-		pending = append(pending, evs...)
-		var released bool
-		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM blob_releases WHERE blob_hash = ?)`, hash).Scan(&released); err != nil {
-			return fmt.Errorf("catalog: reading the release of %s: %w", hash, err)
-		}
-		if released {
-			out.Releasable = 1
-		}
+		pending = append(pending, ev)
 		return nil
 	})
-	switch {
-	case errors.Is(err, errNothingPurged):
-		return PinPurge{}, nil
-	case err != nil:
-		return PinPurge{}, err
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, hash := range hashes {
+		touched[hash] = true
 	}
 	if len(pending) > 0 {
 		c.events.Publish(pending...)
 	}
-	return out, nil
+	return taken, adopted, nil
+}
+
+// unpinBlob removes one blob's placement pins in one transaction, adopting its
+// bytes first when it has no row, and records its release when nothing else
+// wants it. It reports how many pins went and whether it adopted the blob.
+func (c *Catalog) unpinBlob(ctx context.Context, hash string, held HeldSize) (pins, adopted int, err error) {
+	now := c.clock.Now().UTC().Format(timestampFormat)
+	var pending []events.Event
+	err = c.db.InTx(ctx, func(tx *sql.Tx) error {
+		pins, adopted, pending = 0, 0, nil
+		evs, ok, err := c.adoptHeld(ctx, tx, hash, held, now)
+		if err != nil {
+			return err
+		}
+		pending = append(pending, evs...)
+		res, err := tx.ExecContext(ctx, `DELETE FROM placement_pins WHERE blob_hash = ?`, hash)
+		if err != nil {
+			return fmt.Errorf("catalog: removing the placement pins of %s: %w", hash, err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			// Unpinned since the purge read it: keep no speculative adoption.
+			return errNothingPurged
+		}
+		pins = int(n)
+		if ok {
+			adopted = 1
+		}
+		evs, err = c.recordReleaseIfUnwanted(ctx, tx, hash, releaseUnpinned, "", now)
+		if err != nil {
+			return err
+		}
+		pending = append(pending, evs...)
+		return nil
+	})
+	switch {
+	case errors.Is(err, errNothingPurged):
+		return 0, 0, nil
+	case err != nil:
+		return 0, 0, err
+	}
+	if len(pending) > 0 {
+		c.events.Publish(pending...)
+	}
+	return pins, adopted, nil
+}
+
+// adoptHeld records a blobs row for bytes this node holds under hash when it
+// has none, so a release of them is honoured after the grace window rather
+// than their being swept as untracked. It reports whether it adopted them.
+func (c *Catalog) adoptHeld(
+	ctx context.Context, tx *sql.Tx, hash string, held HeldSize, now string,
+) ([]events.Event, bool, error) {
+	if held == nil {
+		return nil, false, nil
+	}
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM blobs WHERE hash = ?)`, hash).Scan(&exists); err != nil {
+		return nil, false, fmt.Errorf("catalog: reading blob %s: %w", hash, err)
+	}
+	if exists {
+		return nil, false, nil
+	}
+	size, ok, err := held(ctx, hash)
+	if err != nil {
+		return nil, false, fmt.Errorf("catalog: checking the bytes of %s: %w", hash, err)
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	if _, err := adoptBlob(ctx, tx, hash, size, now); err != nil {
+		return nil, false, err
+	}
+	ev, err := c.events.EmitTx(ctx, tx, events.TypeBlobCreated, "blob", hash, map[string]any{
+		"size": size, "adopted": true,
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return []events.Event{ev}, true, nil
 }

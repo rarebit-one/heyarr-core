@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 )
 
@@ -72,6 +73,10 @@ func TestPurgingPlacementPinsReleasesLegacyVaultOnly(t *testing.T) {
 	}
 	if n := h.countRows(t, `SELECT COUNT(*) FROM peer_placements`); n != 0 {
 		t.Fatalf("taken placements left after the purge: %d", n)
+	}
+	// One exchange event for the retired placements, never one per blob.
+	if n := h.countRows(t, `SELECT COUNT(*) FROM events WHERE type = ?`, events.TypeSyncPlacementsExchanged); n != 1 {
+		t.Fatalf("%d %s events, want 1 for the whole purge", n, events.TypeSyncPlacementsExchanged)
 	}
 	for blob, cause := range map[string]string{vaultA: "unpinned", vaultB: "unpinned", taken: "unpinned", takenOnly: "withdrawn"} {
 		if b := h.releaseOf(t, blob); b.ReleasedAt.IsZero() || b.ReleaseCause != cause {
