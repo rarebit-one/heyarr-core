@@ -48,6 +48,7 @@ One logical library, multiple complete sovereign peers.
 * [heyarr subtitles](heyarr_subtitles.md)	 - Subtitle operations
 * [heyarr system](heyarr_system.md)	 - Report what a running instance is and how far behind it has drifted
 * [heyarr token](heyarr_token.md)	 - Manage API tokens (ADR-0011)
+* [heyarr vault](heyarr_vault.md)	 - Retire the legacy vault data a media node still holds (#823)
 * [heyarr version](heyarr_version.md)	 - Print build information
 * [heyarr worker](heyarr_worker.md)	 - Execute leased jobs
 * [heyarr works](heyarr_works.md)	 - Browse the catalog

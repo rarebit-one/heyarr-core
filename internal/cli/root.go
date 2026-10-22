@@ -106,6 +106,9 @@ One logical library, multiple complete sovereign peers.`,
 		// before Heyarr is configured at all.
 		newRenderersCommand(opts, &configPath),
 		newGCCommand(opts, &configPath),
+		// `vault purge` is host administration like gc: it retires the legacy
+		// vault pins a media node kept from before the split (#823).
+		newVaultAdminCommand(opts, &configPath),
 		newRecoverCommand(opts, &configPath),
 		// The client commands. Everything below this line talks to a running
 		// controller over /api/v1; everything above it is host administration
@@ -131,8 +134,9 @@ One logical library, multiple complete sovereign peers.`,
 		// Service recipients (ADR-0104): an owner's device registers an
 		// executor's public key, as this machine's enrolled device.
 		newRecipientCommand(opts, &configPath),
-		// No `vault` here: the vault media client is Mnemosyne's (`mnemosyne
-		// vault`, ADR-0107, #754). heyarr serves media.
+		// No vault CLIENT here: the vault media client is Mnemosyne's
+		// (`mnemosyne vault`, ADR-0107, #754). heyarr serves media; its `vault`
+		// command (above) is only the legacy purge.
 		newPeersCommand(opts, &configPath),
 		newEventsCommand(opts, &configPath),
 		newSystemCommand(opts, &configPath),
