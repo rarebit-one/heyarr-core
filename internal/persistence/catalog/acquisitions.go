@@ -37,6 +37,12 @@ type Acquisition struct {
 	BytesTotal   int64
 	BytesDone    int64
 	Trouble      string
+	// Grab marks a record written by a grab rather than a poll. It restamps
+	// created_at when the row already exists: a want that re-grabs the same
+	// transfer after a fresh selection has grabbed it again, and created_at is
+	// the grab time BlockTransferRelease compares that selection against
+	// (#824). A poll keeps the stamp it found.
+	Grab bool
 }
 
 // ErrNoAcquisitionRow is returned when a want has no in-flight transfer.
@@ -127,11 +133,12 @@ func (c *Catalog) RecordAcquisition(ctx context.Context, a Acquisition) (bool, e
 				bytes_total   = excluded.bytes_total,
 				bytes_done    = excluded.bytes_done,
 				trouble       = excluded.trouble,
+				created_at    = CASE WHEN ? THEN excluded.created_at ELSE acquisitions.created_at END,
 				updated_at    = excluded.updated_at,
 				last_seen_at  = excluded.last_seen_at`,
 			a.ID, a.DesiredItemID, a.Provider, a.ExternalID, a.ExternalName,
 			a.RemotePath, a.LocalPath, a.BytesTotal, a.BytesDone, a.Trouble,
-			now, now, now)
+			now, now, now, a.Grab)
 		if err != nil {
 			return fmt.Errorf("catalog: recording acquisition %s: %w", a.ExternalID, err)
 		}

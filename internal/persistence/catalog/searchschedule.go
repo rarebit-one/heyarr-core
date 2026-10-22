@@ -66,6 +66,15 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 	// A want fan-out created (ADR-0119) is never searched here: it fetches a
 	// sibling's exact release or nothing, and a search could pick another.
 	//
+	// Nor is a want the stuck-grab sweep owns: idle, unsatisfied, a selected
+	// candidate and a troubled transfer row, StuckGrabs' own predicate. Its
+	// release is not blocked until the sweep's grace has passed, and a search
+	// that comes first picks the same dead release again. A want whose search
+	// fell due while it was downloading is due the moment it fails, so at a
+	// 30-second tick against a 2-minute grace the search always came first
+	// (#824). The sweep blocks the release and clears the schedule, and the
+	// want is due again then.
+	//
 	// The phase filter is in the QUERY rather than in Go. Most of a library is
 	// resting most of the time, but a library mid-import is not, and reading
 	// every want in order to discard the ones that are downloading is the sort
@@ -82,6 +91,10 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 		`+searchBackoff.leftJoin("d.id")+`
 		WHERE a.phase = 'idle'
 		  AND NOT EXISTS (SELECT 1 FROM fan_out_wants f WHERE f.desired_item_id = d.id)
+		  AND NOT (a.content <> 'satisfied' AND EXISTS (
+		      SELECT 1 FROM acquisitions q
+		      JOIN release_candidates rc ON rc.desired_item_id = q.desired_item_id AND rc.selected = 1
+		      WHERE q.desired_item_id = d.id AND q.trouble <> ''))
 		  AND `+searchBackoff.dueWhere()+`
 		ORDER BY `+searchBackoff.dueOrder()+`, d.id`, sqlite.FormatTimestamp(now))
 	if err != nil {

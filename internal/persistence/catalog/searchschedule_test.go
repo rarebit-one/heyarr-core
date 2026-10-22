@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 )
 
 // The search scheduler's storage half (#130).
@@ -320,5 +321,47 @@ func TestDueSearchLimitCountsOnlyEligibleWants(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A want a failed grab left at idle, with its troubled row and selected release
+// still in place, belongs to the stuck-grab sweep until the sweep has blocked
+// that release. A search before then would pick the same dead release again,
+// and a want whose search fell due while it was downloading is due the moment
+// it fails (#824). Once the sweep drops the row, the want is due again.
+func TestAStuckGrabIsNotDueUntilTheSweepHasBlockedItsRelease(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := t.Context()
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+		t.Fatal(err)
+	}
+	ranked := acquisition.EvaluateAll([]acquisition.ReleaseCandidate{
+		release("dead", 2160, "hevc"), release("plain", 1080, "h264"),
+	}, candidateProfile())
+	if _, err := h.cat.RecordSearch(ctx, h.want, ranked, acquisition.Incumbent{}); err != nil {
+		t.Fatal(err)
+	}
+	row := catalog.TransferToAcquisition("acq-1", h.want, "acquire", transfer(infohash, "x.mkv"), "")
+	row.Trouble = "no_seeders: no piece data for 6h0m0s"
+	if _, err := h.cat.RecordAcquisition(ctx, row); err != nil {
+		t.Fatal(err)
+	}
+	h.exec(t, `UPDATE acquisition_state SET phase = 'idle' WHERE desired_item_id = ?`, h.want)
+
+	if due, err := h.cat.DueSearches(ctx, now, 10); err != nil {
+		t.Fatal(err)
+	} else if len(due) != 0 {
+		t.Fatalf("due = %+v: the sweep has not blocked the dead release yet", due)
+	}
+
+	if err := h.cat.DropAcquisition(ctx, h.want); err != nil {
+		t.Fatal(err)
+	}
+	if due, err := h.cat.DueSearches(ctx, now, 10); err != nil {
+		t.Fatal(err)
+	} else if len(due) != 1 {
+		t.Fatalf("due = %+v: with the row dropped the want is the search beat's again", due)
 	}
 }
