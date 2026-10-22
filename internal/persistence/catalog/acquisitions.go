@@ -321,7 +321,10 @@ type StuckGrab struct {
 // idle — so a want that only just fell back, and might still be moved by the
 // same poll pass, is left for the next one. A want with NO selected candidate is
 // deliberately absent: without the release in hand to block, re-driving would
-// re-pick and re-fail, so those stay the search beat's business.
+// re-pick and re-fail, so those stay the search beat's business. So is a
+// satisfied want: its row may be the seeding transfer that satisfied it, whose
+// tracker error says nothing about the release, and a failed upgrade grab is
+// blocked by the poll that fails it instead (#830).
 func (c *Catalog) StuckGrabs(ctx context.Context, grace time.Duration) ([]StuckGrab, error) {
 	cutoff := sqlite.FormatTimestamp(c.clock.Now().Add(-grace))
 	rows, err := c.db.Reader().QueryContext(ctx, `

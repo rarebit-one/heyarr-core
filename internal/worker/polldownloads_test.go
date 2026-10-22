@@ -208,6 +208,38 @@ func TestADeadSwarmIsBlockedAndReDriven(t *testing.T) {
 	}
 }
 
+// A satisfied want's grab is an upgrade, and the stuck-grab sweep leaves
+// satisfied wants alone, so a dead upgrade was never blocked: the next upgrade
+// search could pick the same release and loop on it (#830). The poll that
+// fails it blocks it, with no grace to wait out.
+func TestADeadUpgradeIsBlockedWhenItFails(t *testing.T) {
+	t.Parallel()
+	h := newPollHarness(t)
+	h.grabAfterSearch(t, "Arrival.2016.2160p.mkv", []byte("the bytes of a film"))
+	// The want already holds a copy: this grab is an upgrade.
+	if _, err := h.db.Writer().ExecContext(t.Context(),
+		`UPDATE acquisition_state SET content = 'satisfied', managed = 1 WHERE desired_item_id = ?`,
+		h.want); err != nil {
+		t.Fatal(err)
+	}
+	id := h.transferID(t)
+	if err := h.client.Fail(id, downloads.TroubleNoSeeders,
+		"no piece data for 7h0m0s (metadata 100%, 24 peers connected, trackers report 0 seeders)"); err != nil {
+		t.Fatal(err)
+	}
+	h.poll(t)
+	if got := h.state(t).Phase; got != acquisition.PhaseIdle {
+		t.Fatalf("phase = %s, want idle: a dead swarm must be failed", got)
+	}
+	blocked, err := h.cat.BlockedFor(t.Context(), h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 1 || blocked[0].Reason != catalog.BlockGrabFailed {
+		t.Fatalf("blocked = %+v, want the dead upgrade blocked as grab_failed when it fails", blocked)
+	}
+}
+
 // The guard against racing the pass that failed it: a grab that only just failed
 // is left alone until the grace elapses — its release stays unblocked and its
 // row stays put.
