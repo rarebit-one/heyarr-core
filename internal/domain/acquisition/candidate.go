@@ -340,6 +340,22 @@ func holds(actual policy.Value, rule policy.Rule) bool {
 		// does.
 		return false
 	}
+	if actual.Texts != nil {
+		// A set-valued attribute (a ROM's regions, policy.AttrRegion) holds a
+		// rule when ANY member does: "(USA, Europe)" is a USA dump and a Europe
+		// dump at once. eq/in ask "is one of them this", neq/nin "is none".
+		switch rule.Op {
+		case policy.OpEq:
+			return inSet(actual.Texts, want.Text)
+		case policy.OpNeq:
+			return !inSet(actual.Texts, want.Text)
+		case policy.OpIn:
+			return overlaps(actual.Texts, want.Texts)
+		case policy.OpNotIn:
+			return !overlaps(actual.Texts, want.Texts)
+		}
+		return false
+	}
 	switch rule.Op {
 	case policy.OpEq:
 		return equalValues(actual, want)
@@ -365,6 +381,15 @@ func equalValues(a, b policy.Value) bool {
 		return a.Flag == b.Flag
 	case policy.KindText:
 		return a.Text == b.Text
+	}
+	return false
+}
+
+func overlaps(a, b []string) bool {
+	for _, v := range a {
+		if inSet(b, v) {
+			return true
+		}
 	}
 	return false
 }

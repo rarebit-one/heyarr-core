@@ -189,3 +189,18 @@ func TestIsROMDump(t *testing.T) {
 		}
 	}
 }
+
+// The regions a release name's tag lists, for the region preference.
+func TestParseReleaseRegions(t *testing.T) {
+	for title, want := range map[string][]string{
+		"Super Mario World (USA) [SNES]":       {"usa"},
+		"Pokemon Red Version (USA, Europe).gb": {"usa", "europe"},
+		"Tetris (World) (Rev 1)":               {"world"},
+		"Some Game (En,Fr,De) (Europe)":        {"europe"},
+		"Okami.PS2.NTSC":                       nil,
+	} {
+		if got := ParseReleaseRegions(title); !reflect.DeepEqual(got, want) {
+			t.Errorf("ParseReleaseRegions(%q) = %v, want %v", title, got, want)
+		}
+	}
+}

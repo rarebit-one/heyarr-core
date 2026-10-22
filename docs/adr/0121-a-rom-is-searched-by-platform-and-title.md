@@ -93,6 +93,33 @@ console subcategories name only some platforms and indexers file older ones
 under Console/Other. The plain Torznab client sends no categories and falls back
 to the general search, as for any type it has no function for.
 
+### 5. Region ranks releases; it never gates them
+
+When several releases of a ROM pass the platform gate, the household prefers
+USA, then World, then Europe. `region` joins the attribute vocabulary as a set:
+one dump is often several regions (`(USA, Europe)`). A rule on a set-valued
+attribute holds when any member does, so `eq`/`in` ask "is one of them this"
+and `neq`/`nin` ask "is none of them". The search reads the regions from the
+release name's tag, marked derived (ADR-0091), in the worker beside the
+platform gate. An indexer-asserted region would win.
+
+`rom-indexed` scores USA 30, World 20 and Europe 10. A profile section names
+each attribute and operator once, so the tiers are four rules that sum to those
+scores: `eq usa` +20, `in [usa, world]` +10, `neq usa` +10 and
+`nin [usa, world, europe]` −10. The last two cancel for any other region. A
+multi-region dump scores as its best region, so `(USA, Europe)` ties with a
+USA-only one. A Japan-only or untagged release scores 0: still accepted, just
+not preferred. The profile is terminal once any dump is held, so region never
+keeps a want open: a held European dump is not swapped for a later USA one.
+That keeps a held copy from looping against a release that names its region
+when the held file does not. For the same reason, profile validation refuses
+`region` in `accept` or `terminal`: a held dump carries no region, so such a
+rule could never hold and the want would search forever.
+
+Seeding never updates an existing profile, so migration 00071 brings an
+installation's `rom-indexed` up to these preferences, but only when the row is
+still exactly as it was seeded. A profile an operator edited is left alone.
+
 ## Consequences
 
 - A ROM want is searchable as soon as an indexer carries the Console category.
@@ -100,9 +127,9 @@ to the general search, as for any type it has no function for.
 - A release named without its platform, which is common for single-ROM uploads
   named the No-Intro way, is refused as undetermined. The safe direction costs
   recall; the reason names the rule, so the gap is visible.
-- `rom-indexed` accepts any nonempty release that passed the gate and stops
-  once one is held. Region preference, a size sanity bound, and DAT verification
-  are not built.
+- `rom-indexed` accepts any nonempty release that passed the gate, ranks it by
+  region (§5), and stops once one is held. A size sanity bound and DAT
+  verification are not built.
 - Only a dump satisfies a ROM want. Artwork and disc descriptors (`.cue`,
   `.m3u`, …) attach to the Work but never satisfy it. At ingest, a release that
   holds no dump, or whose payload is a dump for another platform, is refused as

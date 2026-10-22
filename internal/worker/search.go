@@ -9,6 +9,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
+	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -278,6 +279,7 @@ func SearchHandler(
 			acquisition.SortRanked(ranked)
 		case sc.Platform != "":
 			survivors, rejected := gateROMPlatform(considered, sc.Platform, sc.Title)
+			survivors = withROMRegions(survivors)
 			if len(rejected) > 0 {
 				log.Info("a search rejected releases that are not for the wanted platform",
 					"desired_item_id", payload.DesiredItemID,
@@ -404,6 +406,29 @@ func gateROMPlatform(
 		rejected = append(rejected, acquisition.RejectedByMatch(c, reason))
 	}
 	return survivors, rejected
+}
+
+// withROMRegions records on each ROM candidate the regions its name tags
+// (ADR-0121 §5), as a derived set the `region` preference ranks by. The title
+// is read here for the same reason the platform gate reads it here: a release
+// title is never parsed in the acquisition package (ADR-0091). An attribute the
+// indexer already asserted is left alone, and each candidate gets its own copy
+// of the map so the provider's result is not mutated.
+func withROMRegions(candidates []acquisition.ReleaseCandidate) []acquisition.ReleaseCandidate {
+	out := make([]acquisition.ReleaseCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		regions := identification.ParseReleaseRegions(c.Title)
+		if _, asserted := c.Attributes[policy.AttrRegion]; len(regions) > 0 && !asserted {
+			attrs := make(acquisition.Attributes, len(c.Attributes)+1)
+			for k, v := range c.Attributes {
+				attrs[k] = v
+			}
+			attrs[policy.AttrRegion] = policy.Texts(regions...).AsDerived()
+			c.Attributes = attrs
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // noCandidatesDetail is what a want durably records when a search found

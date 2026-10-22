@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 )
 
 // Every shipped tool, exercised end to end over a real router against a real
@@ -491,6 +493,50 @@ func TestExplainReleaseReportsUndeterminedRatherThanGuessing(t *testing.T) {
 	}
 	if !found {
 		t.Error("no reason for the undetermined gate")
+	}
+}
+
+// explain_release reproduces a ROM search's region ranking (ADR-0121 §5): a
+// region is supplied as the list a dump's name tags, and a multi-region dump
+// scores as its best region.
+func TestExplainReleaseRanksROMRegions(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, false)
+	for _, p := range policy.Defaults() {
+		if p.Name != "rom-indexed" {
+			continue
+		}
+		enc := func(rules []policy.Rule) string {
+			raw, err := json.Marshal(rules)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(raw)
+		}
+		h.exec(`INSERT INTO quality_profiles
+			(id, name, description, accept, prefer, terminal, seeded, created_at, updated_at)
+			VALUES ('01990000-0000-7000-8000-0000000000r1', ?, ?, ?, ?, ?, 1, ?, ?)`,
+			p.Name, p.Description, enc(p.Accept), enc(p.Prefer), enc(p.Terminal), stamp, stamp)
+	}
+
+	var out struct {
+		Ranked []struct {
+			ID    string `json:"id"`
+			Score int    `json:"score"`
+		} `json:"ranked"`
+	}
+	h.call("", "explain_release", `{"quality_profile":"rom-indexed","releases":[
+		{"id":"jp","attributes":{"size_bytes":1,"region":["japan"]}},
+		{"id":"eu","attributes":{"size_bytes":1,"region":"europe"}},
+		{"id":"world","attributes":{"size_bytes":1,"region":["world"]}},
+		{"id":"usa-eu","attributes":{"size_bytes":1,"region":["USA","Europe"]}}]}`).structured(t, &out)
+
+	scores := map[string]int{}
+	for _, r := range out.Ranked {
+		scores[r.ID] = r.Score
+	}
+	if scores["usa-eu"] != 30 || scores["world"] != 20 || scores["eu"] != 10 || scores["jp"] != 0 {
+		t.Errorf("scores %v, want usa-eu 30, world 20, eu 10, jp 0", scores)
 	}
 }
 

@@ -89,6 +89,12 @@ const (
 	// linux, mac), or the console a ROM is for (snes, ps2, …; ADR-0121). Text,
 	// not ordered: no platform is better than another in general.
 	AttrPlatform Attribute = "platform"
+	// AttrRegion is the regions a ROM dump is for, as its No-Intro/Redump name
+	// tags them: "usa", "europe", "world", "japan" (ADR-0121 §5). A SET, because
+	// one dump is often several regions ("(USA, Europe)"), so a rule holds when
+	// ANY of them matches. Read from the release name, never asserted, and only
+	// ever preferred: it ranks releases, it does not gate them.
+	AttrRegion Attribute = "region"
 	// AttrIndexerPrivacy is the privacy class of the indexer a release came
 	// from, as the indexer manager reports it: "public", "private" or
 	// "semi_private". Provenance, not quality: a two-site fan-out (ADR-0119)
@@ -119,6 +125,7 @@ var attributeKinds = map[Attribute]Kind{
 	AttrStore:          KindText,
 	AttrDRMFree:        KindFlag,
 	AttrPlatform:       KindText,
+	AttrRegion:         KindText,
 	AttrIndexerPrivacy: KindText,
 }
 

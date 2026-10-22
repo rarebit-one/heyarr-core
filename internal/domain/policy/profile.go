@@ -221,6 +221,13 @@ func validateRule(section Section, r *Rule) error {
 			return fmt.Errorf("carries a weight of %d, but %s rules are not scored — "+
 				"%s", r.Weight, section, sectionAdvice(section))
 		}
+		// Region is read only from a search candidate's name (ADR-0121 §5). A
+		// held dump never carries it, so a gate or stop condition on it could
+		// never hold for what is held, and the want would search forever.
+		if r.Attribute == AttrRegion {
+			return fmt.Errorf("region only ranks releases, but this is a %s rule — "+
+				"a held dump carries no region, so it could never hold. Move it to `prefer`", section)
+		}
 	}
 	return nil
 }

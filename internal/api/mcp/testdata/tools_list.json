@@ -204,6 +204,13 @@
                     "language": {
                       "type": "string"
                     },
+                    "region": {
+                      "description": "A ROM dump's regions as its name tags them: [\"usa\", \"europe\"] for \"(USA, Europe)\". A rule holds when any one matches.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
                     "resolution": {
                       "description": "Vertical lines: 480, 720, 1080, 2160. Not a label — \"4K\", \"2160p\" and \"UHD\" are three spellings of one number.",
                       "type": "integer"

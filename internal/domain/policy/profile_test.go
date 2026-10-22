@@ -231,6 +231,26 @@ func TestValidationErrorsNameTheSectionAndAttribute(t *testing.T) {
 	}
 }
 
+// Region ranks ROM releases and nothing else (ADR-0121 §5): a held dump never
+// carries it, so a gate or stop condition on it would leave the want searching
+// forever. Only `prefer` may name it.
+func TestRegionIsRefusedOutsidePrefer(t *testing.T) {
+	rule := Rule{Attribute: AttrRegion, Op: OpEq, Value: Text("usa")}
+	for _, p := range []Profile{
+		{Name: "gate", Accept: []Rule{rule}},
+		{Name: "stop", Terminal: []Rule{rule}},
+	} {
+		if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "prefer") {
+			t.Errorf("%s: a region rule outside prefer validated (err %v)", p.Name, err)
+		}
+	}
+	rule.Weight = 10
+	ranked := Profile{Name: "rank", Prefer: []Rule{rule}}
+	if err := ranked.Validate(); err != nil {
+		t.Errorf("a region preference was refused: %v", err)
+	}
+}
+
 // An absent `terminal` and an empty one are the SAME thing. This is the
 // "never stop looking" case, and it must not need a sentinel value.
 func TestTerminalAbsentAndEmptyAreTheSame(t *testing.T) {
