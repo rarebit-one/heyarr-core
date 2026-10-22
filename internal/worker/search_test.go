@@ -328,6 +328,27 @@ func TestASearchSkipsAWantThatIsAlreadyInFlight(t *testing.T) {
 	}
 }
 
+func TestASearchRetryResumesAfterItsWorkerLosesTheLease(t *testing.T) {
+	t.Parallel()
+	h := newSearchHarness(t)
+	if _, err := h.cat.AdvanceAcquisition(t.Context(), h.want, acquisition.TransitionSearch, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.state(t).Name(); got != "MISSING" {
+		t.Errorf("state = %s; the retried search must return the want to rest", got)
+	}
+	if got := h.fake.Searches(); got != 1 {
+		t.Errorf("the indexer was asked %d times, want one resumed search", got)
+	}
+	if detail := h.detailOf(t); !strings.Contains(detail, "had nothing") {
+		t.Errorf("the resumed search recorded %q, want the indexer's answer", detail)
+	}
+}
+
 // The stored evaluation is the evaluator's, driven all the way through the job
 // rather than only through the catalog.
 func TestTheJobStoresTheEvaluatorsOwnAnswer(t *testing.T) {
