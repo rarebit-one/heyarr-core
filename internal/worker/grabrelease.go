@@ -157,6 +157,7 @@ func GrabReleaseHandler(
 		// a permanently stranded want, from a crash in a one-line window.
 		row := catalog.TransferToAcquisition(
 			NewAcquisitionID(), payload.DesiredItemID, provider, transfer, "")
+		row.Grab = true
 		if _, err := cat.RecordAcquisition(ctx, row); err != nil {
 			return err
 		}

@@ -359,3 +359,92 @@ func TestBlockTransferReleaseSparesAnOverrideMadeInFlight(t *testing.T) {
 		t.Errorf("blocked %+v: the override's pick is not the transfer's release", blocked)
 	}
 }
+
+// A want that fails and re-selects the same release re-grabs the same transfer,
+// so its row already exists. The grab restamps the row; otherwise the fresh
+// selection reads as newer than the grab, nothing is ever blocked, and the want
+// re-grabs the same dead release forever (#824). A poll keeps the stamp.
+func TestBlockTransferReleaseBlocksARegrabOfTheSameTransfer(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	downloading := []acquisition.Phase{acquisition.PhaseDownloading}
+
+	for name, regrab := range map[string]bool{"a grab restamps": true, "a poll does not": false} {
+		h := newHarness(t)
+		if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+			t.Fatal(err)
+		}
+		ranked := acquisition.EvaluateAll([]acquisition.ReleaseCandidate{
+			release("good", 2160, "hevc"), release("plain", 1080, "h264"),
+		}, candidateProfile())
+		if _, err := h.cat.RecordSearch(ctx, h.want, ranked, acquisition.Incumbent{}); err != nil {
+			t.Fatal(err)
+		}
+		first := catalog.TransferToAcquisition("acq-1", h.want, "acquire", transfer(infohash, "x.mkv"), "")
+		first.Grab = true
+		if _, err := h.cat.RecordAcquisition(ctx, first); err != nil {
+			t.Fatal(err)
+		}
+		// The first grab was weeks ago; the re-search that chose the same
+		// release again came after it. The harness clock is fixed at a later
+		// instant, which is when the second record happens.
+		h.exec(t, `UPDATE acquisitions SET created_at = '2026-07-01T00:00:00Z' WHERE desired_item_id = ?`, h.want)
+		h.exec(t, `UPDATE release_candidates SET selected_at = '2026-07-15T00:00:00Z'
+			WHERE desired_item_id = ? AND selected = 1`, h.want)
+		again := catalog.TransferToAcquisition("acq-2", h.want, "acquire", transfer(infohash, "x.mkv"), "")
+		again.Grab = regrab
+		if _, err := h.cat.RecordAcquisition(ctx, again); err != nil {
+			t.Fatal(err)
+		}
+		h.exec(t, `UPDATE acquisition_state SET phase = 'downloading' WHERE desired_item_id = ?`, h.want)
+
+		ours, err := h.cat.BlockTransferRelease(ctx, h.want, "acquire", infohash, downloading,
+			"no_seeders: nothing for 6h", catalog.BlockGrabFailed)
+		if err != nil || !ours {
+			t.Fatalf("%s: ours = %v (%v), want the transfer judged the want's", name, ours, err)
+		}
+		blocked, err := h.cat.BlockedFor(ctx, h.want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if regrab && (len(blocked) != 1 || blocked[0].CandidateID != "good") {
+			t.Errorf("%s: blocked = %+v, want the re-grabbed release", name, blocked)
+		}
+		if !regrab && len(blocked) != 0 {
+			t.Errorf("%s: blocked = %+v, want the selection still newer than the grab", name, blocked)
+		}
+	}
+}
+
+// A selection that names the transfer's own infohash is that transfer's release
+// whatever the stamps say, so it is blocked even when it looks newer (#824).
+func TestBlockTransferReleaseBlocksASelectionNamingTheTransfer(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+		t.Fatal(err)
+	}
+	ranked := acquisition.EvaluateAll([]acquisition.ReleaseCandidate{
+		release("infohash:"+strings.ToUpper(infohash), 2160, "hevc"), release("plain", 1080, "h264"),
+	}, candidateProfile())
+	if _, err := h.cat.RecordSearch(ctx, h.want, ranked, acquisition.Incumbent{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.cat.RecordAcquisition(ctx, catalog.TransferToAcquisition(
+		"acq-1", h.want, "acquire", transfer(infohash, "x.mkv"), "")); err != nil {
+		t.Fatal(err)
+	}
+	h.exec(t, `UPDATE acquisition_state SET phase = 'downloading' WHERE desired_item_id = ?`, h.want)
+	h.exec(t, `UPDATE release_candidates SET selected_at = '2099-01-01T00:00:00Z'
+		WHERE desired_item_id = ? AND selected = 1`, h.want)
+
+	ours, err := h.cat.BlockTransferRelease(ctx, h.want, "acquire", infohash,
+		[]acquisition.Phase{acquisition.PhaseDownloading}, "x", catalog.BlockGrabFailed)
+	if err != nil || !ours {
+		t.Fatalf("ours = %v (%v), want the transfer still the want's", ours, err)
+	}
+	if blocked, _ := h.cat.BlockedFor(ctx, h.want); len(blocked) != 1 {
+		t.Errorf("blocked %+v, want the release that names the transfer", blocked)
+	}
+}

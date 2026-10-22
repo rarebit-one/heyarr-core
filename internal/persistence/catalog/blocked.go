@@ -199,8 +199,9 @@ func (c *Catalog) BlockTransferRelease(
 		// the wrong release, so nothing is blocked. A selection with no stamp
 		// predates selected_at and has not changed since (every selection path
 		// stamps it), so it is the transfer's. Compared as times: the two
-		// columns are written in different layouts.
-		if selectedAt.Valid {
+		// columns are written in different layouts. A selection that names this
+		// transfer's infohash is its release whatever the stamps say (#824).
+		if selectedAt.Valid && !strings.EqualFold(b.CandidateID, "infohash:"+externalID) {
 			sel, serr := time.Parse(time.RFC3339Nano, selectedAt.String)
 			grab, gerr := time.Parse(time.RFC3339Nano, grabbedAt)
 			if serr == nil && gerr == nil && sel.After(grab) {

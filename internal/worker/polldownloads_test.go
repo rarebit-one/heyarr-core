@@ -181,6 +181,17 @@ func TestADeadSwarmIsBlockedAndReDriven(t *testing.T) {
 	if got := h.state(t).Phase; got != acquisition.PhaseIdle {
 		t.Fatalf("phase = %s, want idle: a dead swarm must be failed", got)
 	}
+	// Even a want whose search fell due long ago is left to the sweep until its
+	// release is blocked, or the search beat re-picks the dead release (#824).
+	due, err := h.cat.DueSearches(t.Context(), time.Now().Add(48*time.Hour), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range due {
+		if d.DesiredItemID == h.want {
+			t.Fatal("the failed want is due a search before the sweep has blocked its release")
+		}
+	}
 	h.backdatePhaseEntered(t, 2*stuckGrabGrace)
 	h.poll(t)
 	blocked, err := h.cat.BlockedFor(t.Context(), h.want)
