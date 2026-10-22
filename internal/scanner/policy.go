@@ -4,6 +4,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
 )
 
@@ -134,6 +135,26 @@ func (p Policy) AllowFile(relPath string) (mime string, ok bool, reason string) 
 		return mime, true, ""
 	}
 	return "", false, reasonExtension
+}
+
+// AllowFileIn is AllowFile for a file in a library of the given content type.
+// A ROM's dumps (.sfc, .iso, .zip, …) have no media type in the built-in
+// table, so AllowFile skips every one of them. In a rom library a file the ROM
+// rules identify (ADR-0121) is no unidentifiable row, so it is kept, with no
+// media type, as an acquired dump is. Anything they do not identify, such as a
+// shared extension outside a platform directory, is still skipped. An
+// operator's own extension table stays the whole policy.
+func (p Policy) AllowFileIn(relPath, libraryContentType string) (mime string, ok bool, reason string) {
+	mime, ok, reason = p.AllowFile(relPath)
+	if ok || reason != reasonExtension || len(p.Extensions) > 0 ||
+		libraryContentType != identification.ROM {
+		return mime, ok, reason
+	}
+	if c := identification.Identify(relPath, libraryContentType); c.Identified &&
+		c.ContentType == identification.ROM {
+		return "", true, ""
+	}
+	return mime, ok, reason
 }
 
 // isHidden reports a dotfile. Hidden files and directories are skipped as a
