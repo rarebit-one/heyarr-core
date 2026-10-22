@@ -61,6 +61,8 @@ func commandGroup(args []string) string {
 }
 
 // TestHeyarrHasNoVaultCommand: the vault client moved to Mnemosyne (#754).
+// heyarr's `vault` holds only the legacy purge (#823), so a client verb is
+// still an unknown command.
 func TestHeyarrHasNoVaultCommand(t *testing.T) {
 	var out, errb bytes.Buffer
 	cmd := NewRootCommand(Options{Stdout: &out, Stderr: &errb})

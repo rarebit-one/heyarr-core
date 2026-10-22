@@ -138,6 +138,8 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr token list`](heyarr_token_list.md) | List API tokens |
 | [`heyarr token revoke`](heyarr_token_revoke.md) | Revoke an API token |
 | [`heyarr token`](heyarr_token.md) | Manage API tokens (ADR-0011) |
+| [`heyarr vault purge`](heyarr_vault_purge.md) | Release every legacy vault placement pin so GC can reclaim it (#823) |
+| [`heyarr vault`](heyarr_vault.md) | Retire the legacy vault data a media node still holds (#823) |
 | [`heyarr version`](heyarr_version.md) | Print build information |
 | [`heyarr worker`](heyarr_worker.md) | Execute leased jobs |
 | [`heyarr works list`](heyarr_works_list.md) | List works |
