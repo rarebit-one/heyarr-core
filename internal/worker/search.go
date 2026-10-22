@@ -105,21 +105,19 @@ func SearchHandler(
 			return err
 		}
 
-		// Something is already in flight for this want — it is downloading, or
-		// verifying. Searching now would be racing the acquisition it already
-		// started, so the honest answer is to do nothing.
-		//
-		// Returning nil rather than an error: the job did exactly what it
-		// should, and failing it would retry the same refusal on a backoff.
-		if _, err := acquisition.Advance(sc.State.Phase, acquisition.TransitionSearch); err != nil {
-			log.Info("skipping a search: something is already in flight",
-				"desired_item_id", payload.DesiredItemID, "phase", string(sc.State.Phase))
-			return nil
-		}
-
-		if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
-			acquisition.TransitionSearch, ""); err != nil {
-			return err
+		// A retry can find the want in SEARCHING after the first worker lost its
+		// lease. Resume the same durable search without recording another
+		// transition. Other active phases belong to different work.
+		if sc.State.Phase != acquisition.PhaseSearching {
+			if _, err := acquisition.Advance(sc.State.Phase, acquisition.TransitionSearch); err != nil {
+				log.Info("skipping a search: something is already in flight",
+					"desired_item_id", payload.DesiredItemID, "phase", string(sc.State.Phase))
+				return nil
+			}
+			if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
+				acquisition.TransitionSearch, ""); err != nil {
+				return err
+			}
 		}
 
 		query := providers.Query{
