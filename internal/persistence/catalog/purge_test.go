@@ -33,18 +33,21 @@ func TestPurgingPlacementPinsReleasesLegacyVaultOnly(t *testing.T) {
 		VALUES ('root-1', 'lib-1', '/srv/films', 'link', 1, ?)`, stamp)
 	h.exec(t, `INSERT INTO scanned_files (root_id, path, size, mtime_ns, blob_hash, scanned_at)
 		VALUES ('root-1', 'film.mkv', 1024, 1, ?, ?)`, media, stamp)
-	// Blobs taken from a sibling, one also pinned here: a media node runs no
+	// Blobs taken from two siblings, one also pinned here: a media node runs no
 	// placement exchange, so nothing else would ever withdraw them.
-	for _, blob := range []string{taken, takenOnly} {
+	const otherSibling = "01990000-0000-7000-8000-0000000other"
+	h.exec(t, `INSERT INTO peers (id, name, site, mode, is_self, created_at, enrolled_at)
+		VALUES (?, 'other-peer', 'site-c', 'full', 0, ?, ?)`, otherSibling, stamp, stamp)
+	for _, tp := range [][2]string{{remotePeer, taken}, {remotePeer, takenOnly}, {otherSibling, takenOnly}} {
 		h.exec(t, `INSERT INTO peer_placements (source_peer_id, blob_hash, size, received_at) VALUES (?, ?, 1024, ?)`,
-			remotePeer, blob, stamp)
+			tp[0], tp[1], stamp)
 	}
 
 	preview, err := h.cat.PlacementPinPurgePreview(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := catalog.PinPurge{Pins: 5, Taken: 2, Blobs: 5, Bytes: 5 * 1024, Releasable: 4, StillWanted: 1}
+	want := catalog.PinPurge{Pins: 5, Taken: 3, Blobs: 5, Bytes: 5 * 1024, Releasable: 4, StillWanted: 1}
 	if preview != want {
 		t.Fatalf("preview = %+v, want %+v", preview, want)
 	}
@@ -74,9 +77,16 @@ func TestPurgingPlacementPinsReleasesLegacyVaultOnly(t *testing.T) {
 	if n := h.countRows(t, `SELECT COUNT(*) FROM peer_placements`); n != 0 {
 		t.Fatalf("taken placements left after the purge: %d", n)
 	}
-	// One exchange event for the retired placements, never one per blob.
-	if n := h.countRows(t, `SELECT COUNT(*) FROM events WHERE type = ?`, events.TypeSyncPlacementsExchanged); n != 1 {
-		t.Fatalf("%d %s events, want 1 for the whole purge", n, events.TypeSyncPlacementsExchanged)
+	// One exchange event per source for what was retired from it, never one
+	// per blob.
+	for source, removed := range map[string]int{remotePeer: 2, otherSibling: 1} {
+		if n := h.countRows(t, `SELECT COUNT(*) FROM events WHERE type = ? AND subject_id = ?
+			AND json_extract(payload, '$.removed') = ?`, events.TypeSyncPlacementsExchanged, source, removed); n != 1 {
+			t.Fatalf("%d %s events for %s removing %d, want 1", n, events.TypeSyncPlacementsExchanged, source, removed)
+		}
+	}
+	if n := h.countRows(t, `SELECT COUNT(*) FROM events WHERE type = ?`, events.TypeSyncPlacementsExchanged); n != 2 {
+		t.Fatalf("%d %s events, want one per source (2)", n, events.TypeSyncPlacementsExchanged)
 	}
 	for blob, cause := range map[string]string{vaultA: "unpinned", vaultB: "unpinned", taken: "unpinned", takenOnly: "withdrawn"} {
 		if b := h.releaseOf(t, blob); b.ReleasedAt.IsZero() || b.ReleaseCause != cause {

@@ -141,8 +141,8 @@ func (c *Catalog) PlacementPinPurgePreview(ctx context.Context, held HeldSize) (
 // holding it. It returns what it removed, adopted and released.
 //
 // The taken placements go first, in one transaction with one
-// sync.placements_exchanged event for the lot (that event is per exchange,
-// never per blob); a blob also pinned here is released when its pins go. The
+// sync.placements_exchanged event per source (that event is per exchange, never
+// per blob); a blob also pinned here is released when its pins go. The
 // pins then go one blob per transaction, as a device's unpin would.
 //
 // It is a media-node operation (#823): on the personal profile the pins are a
@@ -150,13 +150,9 @@ func (c *Catalog) PlacementPinPurgePreview(ctx context.Context, held HeldSize) (
 // written while the purge runs is not removed; a second run is a no-op when
 // there are none.
 func (c *Catalog) PurgePlacementPins(ctx context.Context, held HeldSize) (PinPurge, error) {
-	self, err := c.SelfPeer(ctx)
-	if err != nil {
-		return PinPurge{}, err
-	}
 	touched := map[string]bool{}
 	var out PinPurge
-	taken, adopted, err := c.retireTakenPlacements(ctx, self, held, touched)
+	taken, adopted, err := c.retireTakenPlacements(ctx, held, touched)
 	if err != nil {
 		return PinPurge{}, err
 	}
@@ -205,11 +201,13 @@ func (c *Catalog) PurgePlacementPins(ctx context.Context, held HeldSize) (PinPur
 
 // retireTakenPlacements removes every placement taken from a sibling in one
 // transaction, adopting held bytes without a row and releasing each blob no
-// pin, asset or scanned library file still wants (cause withdrawn). It adds
-// each blob it touched to touched and reports how many placements went and how
-// many blobs it adopted.
+// pin, asset or scanned library file still wants (cause withdrawn). Each source
+// gets one sync.placements_exchanged event for what was retired from it, as a
+// withdrawing answer from that sibling would have. It adds each blob it touched
+// to touched and reports how many placements went and how many blobs it
+// adopted.
 func (c *Catalog) retireTakenPlacements(
-	ctx context.Context, self string, held HeldSize, touched map[string]bool,
+	ctx context.Context, held HeldSize, touched map[string]bool,
 ) (taken, adopted int, err error) {
 	now := c.clock.Now().UTC().Format(timestampFormat)
 	var (
@@ -217,20 +215,12 @@ func (c *Catalog) retireTakenPlacements(
 		hashes  []string
 	)
 	err = c.db.InTx(ctx, func(tx *sql.Tx) error {
-		taken, adopted, pending, hashes = 0, 0, nil, nil
-		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT blob_hash FROM peer_placements ORDER BY blob_hash`)
+		taken, adopted, pending = 0, 0, nil
+		bySource, err := takenBySource(ctx, tx)
 		if err != nil {
-			return fmt.Errorf("catalog: reading the taken placements: %w", err)
+			return err
 		}
-		for rows.Next() {
-			var h string
-			if err := rows.Scan(&h); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			hashes = append(hashes, h)
-		}
-		if err := rows.Close(); err != nil {
+		if hashes, err = takenHashes(ctx, tx); err != nil {
 			return err
 		}
 		for _, hash := range hashes {
@@ -257,17 +247,16 @@ func (c *Catalog) retireTakenPlacements(
 			}
 			pending = append(pending, evs...)
 		}
-		if taken == 0 {
-			return nil
+		for _, src := range bySource {
+			ev, err := c.events.EmitTx(ctx, tx, events.TypeSyncPlacementsExchanged, "peer", src.peer, map[string]any{
+				"range": "all", "added": 0, "removed": src.count,
+				"reason": "legacy vault purge on a media node",
+			})
+			if err != nil {
+				return err
+			}
+			pending = append(pending, ev)
 		}
-		ev, err := c.events.EmitTx(ctx, tx, events.TypeSyncPlacementsExchanged, "peer", self, map[string]any{
-			"range": "all", "added": 0, "removed": taken,
-			"reason": "legacy vault purge on a media node",
-		})
-		if err != nil {
-			return err
-		}
-		pending = append(pending, ev)
 		return nil
 	})
 	if err != nil {
@@ -280,6 +269,50 @@ func (c *Catalog) retireTakenPlacements(
 		c.events.Publish(pending...)
 	}
 	return taken, adopted, nil
+}
+
+// sourceCount is how many placements were taken from one sibling.
+type sourceCount struct {
+	peer  string
+	count int
+}
+
+// takenBySource counts the taken placements per source, inside tx.
+func takenBySource(ctx context.Context, tx *sql.Tx) ([]sourceCount, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT source_peer_id, COUNT(*) FROM peer_placements
+		 GROUP BY source_peer_id ORDER BY source_peer_id`)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: counting the taken placements: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []sourceCount
+	for rows.Next() {
+		var s sourceCount
+		if err := rows.Scan(&s.peer, &s.count); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// takenHashes is every blob a taken placement holds, inside tx.
+func takenHashes(ctx context.Context, tx *sql.Tx) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT blob_hash FROM peer_placements ORDER BY blob_hash`)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: reading the taken placements: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }
 
 // unpinBlob removes one blob's placement pins in one transaction, adopting its
