@@ -210,7 +210,7 @@ func reconcileTransfer(
 	// existing.BytesDone is last pass's figure — RecordAcquisition above has
 	// just overwritten the row with this pass's, so it is captured here, before,
 	// to let advancePipeline tell a stuck transfer from one still pulling bytes.
-	return advancePipeline(ctx, cat, ingests, existing.DesiredItemID, t, existing.BytesDone, log)
+	return advancePipeline(ctx, cat, ingests, provider, existing.DesiredItemID, t, existing.BytesDone, log)
 }
 
 // refuseProgramTransfer stops a transfer whose every file is a program (#819)
@@ -489,7 +489,7 @@ func sweepStuckGrabs(
 // and must move it exactly once.
 func advancePipeline(
 	ctx context.Context, cat PollDownloadsStore, ingests ProbeEnqueuer,
-	desiredItemID string, t providers.Transfer, prevBytesDone int64, log *slog.Logger,
+	provider, desiredItemID string, t providers.Transfer, prevBytesDone int64, log *slog.Logger,
 ) (int, error) {
 	state, err := cat.Acquisition(ctx, desiredItemID)
 	if err != nil {
@@ -567,6 +567,20 @@ func advancePipeline(
 			// the transfer is still complete and the want moved on three
 			// passes ago. Not an error and not worth logging.
 			continue
+		}
+		if want == acquisition.TransitionFail && state.State.Content == acquisition.SatisfactionSatisfied {
+			// A satisfied want's grab is an upgrade, and the stuck-grab sweep
+			// never looks at one: a satisfied want keeps the row of the transfer
+			// that satisfied it, and a seeding transfer's tracker error must not
+			// block the release it holds. So the dead upgrade is blocked here,
+			// while the want is still in flight and its row names this transfer,
+			// or the next upgrade search picks it again: grab, hours of nothing,
+			// fail, re-pick (#830). Blocked before the fail, so a lost fail
+			// still leaves the block in place.
+			if _, err := cat.BlockTransferRelease(ctx, desiredItemID, provider, t.ID,
+				[]acquisition.Phase{state.State.Phase}, detail, catalog.BlockGrabFailed); err != nil {
+				return applied, err
+			}
 		}
 		edgeDetail := detail
 		if want == acquisition.TransitionStartDownload && t.Done {
