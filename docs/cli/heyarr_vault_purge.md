@@ -4,18 +4,21 @@ Release every legacy vault placement pin so GC can reclaim it (#823)
 
 ### Synopsis
 
-Remove every placement pin on this media node, recording release intent for
-each blob nothing else wants (#779, ADR-0114), so a later
-"heyarr gc --honour-releases --apply" can reclaim its last copy.
+Remove every placement pin and every placement taken from a sibling on this
+media node, recording release intent for each blob nothing else wants (#779,
+ADR-0114), so a later "heyarr gc --honour-releases --apply" can reclaim its
+last copy.
 
-On a media node every placement pin is legacy vault: the media profile mounts no
-vault routes and writes none. Since no device can reach those pins any more,
-nothing else would ever release them, and GC's last-copy rule would keep the
-bytes forever.
+On a media node every placement pin and taken placement is legacy vault: the
+media profile mounts no vault routes and runs no placement exchange. Since no
+device or sibling can reach them any more, nothing else would ever release
+them, and GC's last-copy rule would keep the bytes forever.
+
+Bytes from an upload that predates their catalog row (#659) are adopted first,
+so their release waits out the grace window like any other.
 
 Library media is never released. A pin on a blob that an asset or a scanned
-library file reaches is removed, and the bytes stay. A blob also taken from a
-sibling is released only once that sibling withdraws it.
+library file reaches is removed, and the bytes stay.
 
 Like gc, this works on this node's database directly, as host administration,
 and changes nothing unless you pass --yes. Run it as the service's user.

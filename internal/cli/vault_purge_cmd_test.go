@@ -12,6 +12,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
+	"github.com/rarebit-one/heyarr-core/internal/testutil"
 	"github.com/rarebit-one/heyarr-core/internal/testutil/testdb"
 )
 
@@ -24,9 +25,38 @@ func (f *integrityFixture) pinVault(contents string) string {
 	if err != nil {
 		f.t.Fatal(err)
 	}
+	f.withCatalog(func(cat *catalog.Catalog, self string) error {
+		return cat.RecordVaultBlob(f.t.Context(), desc.Hash.String(), desc.Size, self, nil)
+	})
+	return desc.Hash.String()
+}
+
+// pinUntracked stores bytes the way a pre-#659 vault upload left them: the
+// bytes and this node's placement pin with no blobs row, aged past the grace
+// window, so that only the pin keeps the untracked sweep off them.
+func (f *integrityFixture) pinUntracked(contents string) string {
+	f.t.Helper()
+	desc, err := f.store.Put(f.t.Context(), strings.NewReader(contents))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	hash := desc.Hash.String()
+	f.withCatalog(func(cat *catalog.Catalog, self string) error {
+		return cat.PinPlacement(f.t.Context(), hash, self)
+	})
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	if err := os.Chtimes(f.blobFile(hash), old, old); err != nil {
+		f.t.Fatal(err)
+	}
+	return hash
+}
+
+// withCatalog opens the fixture's database and runs fn against it with this
+// node's peer id. seed writes a fresh template every time; this keeps whatever
+// is there, so seed the library media first and pin the vault blobs after.
+func (f *integrityFixture) withCatalog(fn func(cat *catalog.Catalog, self string) error) {
+	f.t.Helper()
 	dbPath := filepath.Join(f.dir, "heyarr.db")
-	// seed writes a fresh template every time; this keeps whatever is there, so
-	// seed the library media first and pin the vault blob after.
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		testdb.WriteMigrated(f.t, dbPath)
 	}
@@ -47,10 +77,9 @@ func (f *integrityFixture) pinVault(contents string) string {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	if err := cat.RecordVaultBlob(f.t.Context(), desc.Hash.String(), desc.Size, self, nil); err != nil {
+	if err := fn(cat, self); err != nil {
 		f.t.Fatal(err)
 	}
-	return desc.Hash.String()
 }
 
 // runHeyarr drives heyarr's own tree. The shared run helper sends every `vault`
@@ -155,6 +184,65 @@ func TestVaultPurgeReleasesLegacyVaultForGC(t *testing.T) {
 	if !f.hasBlob(media) {
 		t.Fatalf("library media was reclaimed:\n%s", out)
 	}
+}
+
+// A pre-#659 vault upload has bytes and a pin but no blobs row (#823). The
+// purge adopts the bytes before it releases them, so the first gc after it only
+// starts the grace window; without the adoption that sweep would judge the bytes
+// as untracked by their age and unlink them at once.
+func TestVaultPurgeAdoptsPreRowBytesSoGCWaitsOutTheWindow(t *testing.T) {
+	f := newIntegrityFixture(t)
+	media := f.seed("library media", true)
+	vault := f.pinUntracked("pre-659 vault ciphertext")
+	ctx := context.Background()
+
+	out, err := runHeyarr(t, ctx, "--config", f.configPath, "vault", "purge", "--yes")
+	if err != nil {
+		t.Fatalf("vault purge --yes: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "adopted             1") || !strings.Contains(out, "released            1") {
+		t.Fatalf("the purge did not adopt and release the untracked bytes:\n%s", out)
+	}
+
+	out, _, err = run(t, ctx, "--config", f.configPath, "gc", "--honour-releases", "--apply")
+	if err != nil {
+		t.Fatalf("gc: %v\n%s", err, out)
+	}
+	if !f.hasBlob(vault) {
+		t.Fatalf("the first gc after the purge unlinked the adopted bytes before the window:\n%s", out)
+	}
+
+	out, _, err = run(t, ctx, "--config", f.configPath, "gc", "--honour-releases", "--apply", "--grace", "1ns")
+	if err != nil {
+		t.Fatalf("gc: %v\n%s", err, out)
+	}
+	if f.hasBlob(vault) {
+		t.Fatalf("the released bytes are still in the store after the window:\n%s", out)
+	}
+	if !f.hasBlob(media) {
+		t.Fatalf("library media was reclaimed:\n%s", out)
+	}
+}
+
+// The --json shapes of a dry run and a real run are a contract (#823).
+func TestVaultPurgeJSON(t *testing.T) {
+	f := newIntegrityFixture(t)
+	f.seed("library media", true)
+	f.pinVault("legacy vault ciphertext")
+	f.pinUntracked("pre-659 vault ciphertext")
+	ctx := context.Background()
+
+	out, err := runHeyarr(t, ctx, "--config", f.configPath, "vault", "purge", "--json")
+	if err != nil {
+		t.Fatalf("vault purge --json: %v\n%s", err, out)
+	}
+	testutil.Golden(t, "testdata/vault_purge.json", []byte(out))
+
+	out, err = runHeyarr(t, ctx, "--config", f.configPath, "vault", "purge", "--yes", "--json")
+	if err != nil {
+		t.Fatalf("vault purge --yes --json: %v\n%s", err, out)
+	}
+	testutil.Golden(t, "testdata/vault_purge_applied.json", []byte(out))
 }
 
 func TestVaultPurgeRefusesThePersonalProfile(t *testing.T) {
