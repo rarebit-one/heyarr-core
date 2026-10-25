@@ -22,7 +22,13 @@ import (
 // interoperates. A literal ':' decodes to itself, so the Go CLI and peer
 // clients are unaffected; only the previously-rejected encoded form changes.
 func HashParam(r *http.Request) string {
-	raw := chi.URLParam(r, "hash")
+	return PathParam(r, "hash")
+}
+
+// PathParam percent-decodes one path segment after chi matches the raw target.
+// Clients may encode reserved characters such as the colon in a renderer UDN.
+func PathParam(r *http.Request, name string) string {
+	raw := chi.URLParam(r, name)
 	if dec, err := url.PathUnescape(raw); err == nil {
 		return dec
 	}

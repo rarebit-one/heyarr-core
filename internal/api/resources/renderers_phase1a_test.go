@@ -136,6 +136,46 @@ func TestReportAndListRenderer(t *testing.T) {
 	}
 }
 
+// TestRendererStatusAcceptsEncodedUDN exercises the URL sent by clients that
+// percent-encode the colon in a renderer's UDN. The status route must resolve
+// the same renderer as the literal-colon URL.
+func TestRendererStatusAcceptsEncodedUDN(t *testing.T) {
+	descSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/xml; charset=utf-8")
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(minimalUPnPDescription))
+			return
+		}
+		_, _ = w.Write([]byte(`<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:GetTransportInfoResponse xmlns:u="urn:schemas-upnp-org:service:AVTransport:1"><CurrentTransportState>NO_MEDIA_PRESENT</CurrentTransportState></u:GetTransportInfoResponse></s:Body></s:Envelope>`))
+	}))
+	t.Cleanup(descSrv.Close)
+	h := newHarness(t, withAuth, withSites(loopbackSiteMap(t)))
+	tok := h.mint("alice", auth.ScopeRead, auth.ScopeWrite)
+	resp := h.do(http.MethodPost, "/api/v1/renderers/reported", tok.Secret, reportBody(descSrv.URL+"/desc"))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST reported: status = %d; body: %s", resp.StatusCode, h.body(resp))
+	}
+
+	for _, udn := range []string{"uuid:test-renderer-0001", "uuid%3Atest-renderer-0001"} {
+		t.Run(udn, func(t *testing.T) {
+			resp := h.do(http.MethodGet, "/api/v1/renderers/"+udn+"/status", tok.Secret, nil)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, h.body(resp))
+			}
+			var got struct {
+				Renderer resources.RendererView `json:"renderer"`
+				State    string                 `json:"state"`
+			}
+			if err := json.Unmarshal(h.body(resp), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Renderer.UDN != "uuid:test-renderer-0001" || got.State != "NO_MEDIA_PRESENT" {
+				t.Fatalf("renderer = %q, state = %q", got.Renderer.UDN, got.State)
+			}
+		})
+	}
+}
+
 // TestClientRendererTTLExpiry reports a renderer, advances the clock past TTL,
 // and verifies it no longer appears in the list.
 func TestClientRendererTTLExpiry(t *testing.T) {
