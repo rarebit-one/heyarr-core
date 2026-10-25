@@ -14,8 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/api/render"
@@ -403,7 +401,7 @@ func (a *API) playOnRenderer(w http.ResponseWriter, r *http.Request) {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	}
-	udn := chi.URLParam(r, "udn")
+	udn := httpapi.PathParam(r, "udn")
 
 	rend, ctrl, err := a.controllerFor(r.Context(), udn)
 	if err != nil {
@@ -477,7 +475,7 @@ func (a *API) playOnRenderer(w http.ResponseWriter, r *http.Request) {
 // transportAction applies one transport verb.
 func (a *API) transportAction(verb string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		_, ctrl, err := a.controllerFor(r.Context(), chi.URLParam(r, "udn"))
+		_, ctrl, err := a.controllerFor(r.Context(), httpapi.PathParam(r, "udn"))
 		if err != nil {
 			a.failRenderer(w, r, err)
 			return
@@ -517,7 +515,7 @@ func (a *API) seekRenderer(w http.ResponseWriter, r *http.Request) {
 	if !decodeOr400(w, r, &body) {
 		return
 	}
-	_, ctrl, err := a.controllerFor(r.Context(), chi.URLParam(r, "udn"))
+	_, ctrl, err := a.controllerFor(r.Context(), httpapi.PathParam(r, "udn"))
 	if err != nil {
 		a.failRenderer(w, r, err)
 		return
@@ -532,7 +530,7 @@ func (a *API) seekRenderer(w http.ResponseWriter, r *http.Request) {
 
 // rendererStatus answers GET /api/v1/renderers/{udn}/status.
 func (a *API) rendererStatus(w http.ResponseWriter, r *http.Request) {
-	rend, ctrl, err := a.controllerFor(r.Context(), chi.URLParam(r, "udn"))
+	rend, ctrl, err := a.controllerFor(r.Context(), httpapi.PathParam(r, "udn"))
 	if err != nil {
 		a.failRenderer(w, r, err)
 		return

@@ -194,6 +194,10 @@ stable.
   alternative.
 
 ### Fixed
+- Renderer REST routes now decode percent-encoded UDNs. Desktop clients send
+  `uuid%3A…` in the path; the controller had compared that spelling with a
+  cached `uuid:…` and returned 404 before it contacted the renderer. Play,
+  status and transport controls now resolve both forms.
 - **Mnemosyne mounts `/api/v1/peers`, so `mnemosyne peers add` can enrol a
   sibling (#762).** The personal profile (ADR-0107) left the whole resource API
   unmounted, but every `peers` subcommand is a client over `/api/v1/peers` —
