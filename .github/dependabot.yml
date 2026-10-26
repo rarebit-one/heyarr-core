@@ -10,7 +10,18 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
-    cooldown: { default-days: 3, semver-major-days: 7 }
+    # github-actions and devcontainers accept only default-days.
+    cooldown: { default-days: 3 }
     groups:
       actions:
+        patterns: ["*"]
+  # Dev container features (.devcontainer/devcontainer.json). The deploy
+  # Dockerfile's base (distroless static-debian12:nonroot) has no version tag
+  # for Dependabot's docker updater to move, so docker is not listed.
+  - package-ecosystem: devcontainers
+    directory: /
+    schedule: { interval: weekly }
+    cooldown: { default-days: 3 }
+    groups:
+      devcontainers:
         patterns: ["*"]
