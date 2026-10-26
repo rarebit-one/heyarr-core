@@ -123,7 +123,12 @@ func waitForMigratedDatabase(t *testing.T, path string) {
 	// Poll the file rather than opening the database. Opening in a tight loop
 	// makes every attempt queue on busy_timeout, which starves the very
 	// migration this is waiting for — the wait causes the thing it detects.
-	deadline := time.Now().Add(10 * time.Second)
+	//
+	// 30s, not 10s, for the reason downloadbeat_test.go gives (#744): this is a
+	// liveness bound, not a latency claim, and under -race on a loaded shard
+	// controller startup can take that long (#716). A missing database still
+	// fails.
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
 			time.Sleep(50 * time.Millisecond) // let the migration commit
@@ -268,7 +273,12 @@ func TestNotifyPlaneWithoutBearerStopsStartupWithoutWebLogin(t *testing.T) {
 
 	// A live context: Run must fail while building the server. Had it started,
 	// it would serve until the deadline and then return nil.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	//
+	// 30s, not 10s, for the reason downloadbeat_test.go gives (#744): this is a
+	// liveness bound, not a latency claim. Under -race on a loaded runner the
+	// controller reached the deadline before startup failed (2026-10-20, #716);
+	// a refusal still returns at once, so a wider bound costs nothing.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	err := New(cfg, discard()).Run(ctx)
 	if err == nil {
