@@ -326,3 +326,71 @@ func TestDriveMetadataRewritesAreNotExtraVersions(t *testing.T) {
 		t.Fatalf("two slots keep both content versions, got unreferenced %v", rep.Unreferenced)
 	}
 }
+
+// TestDriveResolvedSkipsIdenticalLosers (#844): concurrent writes of the SAME plaintext
+// — re-sealed, so each carries its own blob id — are not a conflict worth a file. A loser
+// whose plaintext hash matches the winner, or matches a loser already kept, is not
+// relocated; a loser with different content still is, and an empty hash never matches.
+// The result still converges under reordering.
+func TestDriveResolvedSkipsIdenticalLosers(t *testing.T) {
+	const p = "Photos/trip.jpg"
+	hSame := hexBlob("e5")
+	hOther := hexBlob("f6")
+	same := DriveMeta{PlaintextHash: hSame}
+	other := DriveMeta{PlaintextHash: hOther}
+	var changes []DriveChange
+	for i, w := range []struct {
+		blob string
+		meta DriveMeta
+	}{
+		{blobX, same}, {blobY, same}, {blobA, same}, // one plaintext, three seals
+		{blobB, other}, {hexBlob("a7"), other}, // a real edit, sealed twice
+		{hexBlob("b8"), DriveMeta{}}, // no recorded hash: always relocated
+	} {
+		c, err := NewDrive().PutMeta(p, w.blob, 10, int64(i), w.meta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		changes = append(changes, c)
+	}
+
+	ref := NewDrive()
+	ref.Apply(changes...)
+	resolved := ref.Resolved()
+	byHash := map[string]int{}
+	for _, e := range resolved {
+		byHash[e.Meta.PlaintextHash]++
+	}
+	for h, n := range map[string]int{hSame: 1, hOther: 1, "": 1} {
+		if byHash[h] != n {
+			t.Fatalf("plaintext %q shown %d times, want %d (tree: %q)", h, byHash[h], n, encodeEntries(resolved))
+		}
+	}
+	if len(resolved) != 3 {
+		t.Fatalf("want 3 files (one per distinct content), got %d: %q", len(resolved), encodeEntries(resolved))
+	}
+
+	wantTree := encodeEntries(resolved)
+	src := rand.New(rand.NewSource(844))
+	for i := 0; i < 200; i++ {
+		got := NewDrive()
+		perm := append([]DriveChange(nil), changes...)
+		src.Shuffle(len(perm), func(a, b int) { perm[a], perm[b] = perm[b], perm[a] })
+		got.Apply(perm...)
+		if tree := encodeEntries(got.Resolved()); tree != wantTree {
+			t.Fatalf("order %d resolved differently:\n got=%q\nwant=%q", i, tree, wantTree)
+		}
+	}
+}
+
+// TestDriveResolvedSkipsSameBlobLoser: two heads naming the very same blob (no hash
+// recorded) show the file once.
+func TestDriveResolvedSkipsSameBlobLoser(t *testing.T) {
+	a, _ := NewDrive().Put("doc.txt", blobX, 5, 1)
+	b, _ := NewDrive().Put("doc.txt", blobX, 5, 2)
+	d := NewDrive()
+	d.Apply(a, b)
+	if got := d.Resolved(); len(got) != 1 || got[0].Path != "doc.txt" {
+		t.Fatalf("want one doc.txt, got %q", encodeEntries(got))
+	}
+}

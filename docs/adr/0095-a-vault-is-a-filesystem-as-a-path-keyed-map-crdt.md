@@ -86,6 +86,11 @@ merge keeps **both**:
   `name (conflicted copy — <device label> — <at>).ext`, computed from fields
   every replica already holds, so every replica performs the *identical* rename
   and the map converges byte-for-byte (§43).
+- Identical content is not a clash. Sealing uses fresh nonces, so the same
+  plaintext written twice carries two different blob ids. A losing head whose
+  bytes the path already shows (the winner's blob, or the same recorded
+  plaintext hash, ADR-0113, as the winner or as a loser already kept) is not
+  relocated, so nothing is discarded and nothing is shown twice (#844).
 
 A write with a clear happens-before is **not** a conflict: the later write is the
 current `blob` and the earlier one moves into `versions[]`. LWW-drop is rejected
