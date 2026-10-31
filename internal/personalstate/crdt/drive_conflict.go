@@ -5,6 +5,10 @@ package crdt
 // than one live head, the winner stays at the path and every loser becomes a
 // visible file at a derived path — "name (conflicted copy — <writer> — <at>).ext"
 // — so the merge discards no bytes and the user sees both edits as ordinary files.
+// A loser whose content the path already shows (the winner's, or a loser already
+// kept for that path) is not relocated: it would only duplicate bytes the user can
+// already see (#844). Re-sealing gives identical plaintext a new blob id, so
+// "identical" means the same blob OR the same recorded plaintext hash (ADR-0113).
 //
 // # Why this converges byte-for-byte
 //
@@ -70,8 +74,14 @@ func (d *Drive) Resolved() []DriveEntry {
 		}
 		winner := live[len(live)-1]
 		out = append(out, DriveEntry{Path: p, Blob: winner.Blob, Size: winner.Size, MTime: winner.MTime, Meta: winner.Meta})
-		for _, l := range live[:len(live)-1] {
-			losers = append(losers, reloc{orig: p, v: l})
+		// Newest loser first, so of several identical losers the newest is the one kept.
+		// live is sorted, so which one that is stays a pure function of the entry map.
+		seen := newContentSeen(winner)
+		for i := len(live) - 2; i >= 0; i-- {
+			if l := live[i]; !seen.has(l) {
+				seen.add(l)
+				losers = append(losers, reloc{orig: p, v: l})
+			}
 		}
 	}
 
@@ -93,6 +103,28 @@ func (d *Drive) Resolved() []DriveEntry {
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out
+}
+
+// contentSeen is the content one path already shows while its losers are relocated.
+type contentSeen struct{ blobs, hashes map[string]bool }
+
+func newContentSeen(v driveValue) contentSeen {
+	s := contentSeen{blobs: map[string]bool{}, hashes: map[string]bool{}}
+	s.add(v)
+	return s
+}
+
+// has reports whether v's bytes are already shown: the same blob, or the same
+// recorded plaintext hash (an empty hash never matches).
+func (s contentSeen) has(v driveValue) bool {
+	return s.blobs[v.Blob] || (v.Meta.PlaintextHash != "" && s.hashes[v.Meta.PlaintextHash])
+}
+
+func (s contentSeen) add(v driveValue) {
+	s.blobs[v.Blob] = true
+	if v.Meta.PlaintextHash != "" {
+		s.hashes[v.Meta.PlaintextHash] = true
+	}
 }
 
 // uniqueConflictPath derives the relocation path for one losing head and, if it
