@@ -189,3 +189,54 @@ func TestFetchedBackdropRanksBelowAShippedOne(t *testing.T) {
 		t.Fatalf("Location = %q, want the fetched backdrop", loc)
 	}
 }
+
+// A series whose release shipped only per-episode `-thumb.jpg` stills showed one
+// of those 16:9 frames as its card. The stills (and a logo) now rank below every
+// other image: a fetched poster wins, and with no poster the fanart does — a still
+// is a card only when it is all there is.
+func TestEpisodeStillsNeverBeatARealCardImage(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed().seedBrowse()
+	const (
+		stillBlob = "blake3:8888888888888888888888888888888888888888888888888888888888888888"
+		logoBlob  = "blake3:8888888888888888888888888888888888888888888888888888888888888889"
+		stillID   = "01990000-0000-7000-8000-0000000000c1"
+		logoID    = "01990000-0000-7000-8000-0000000000c2"
+	)
+	h.exec(`INSERT INTO blobs (hash, size, mime, first_seen_at) VALUES (?, 100, 'image/jpeg', ?), (?, 100, 'image/png', ?)`,
+		stillBlob, seedTime, logoBlob, seedTime)
+	// Ids that sort BEFORE every seeded asset, so only the rank can put them last.
+	h.exec(`INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash, source_path,
+			role, filename, mime, identification_source, missing_since, created_at, updated_at) VALUES
+		(?, ?, ?, 'managed', ?, '/srv/media/show/S01E01-thumb.jpg', 'artwork', 'Show - S01E01 - Pilot-thumb.jpg', 'image/jpeg', 'path', NULL, ?, ?),
+		(?, ?, ?, 'managed', ?, '/srv/media/show/clearlogo.png', 'artwork', 'clearlogo.png', 'image/png', 'path', NULL, ?, ?)`,
+		stillID, edition1ID, libFilmsID, stillBlob, seedTime, seedTime,
+		logoID, edition1ID, libFilmsID, logoBlob, seedTime, seedTime)
+
+	location := func() string {
+		return h.noFollow(http.MethodGet, "/api/v1/works/"+work1ID+"/artwork").Header.Get("Location")
+	}
+	if loc := location(); loc != "/api/v1/blobs/"+posterBlobHash+"/content" {
+		t.Fatalf("with a poster, Location = %q, want the poster", loc)
+	}
+	// No poster: the fanart, not the still or the logo.
+	h.exec(`DELETE FROM assets WHERE id = ?`, posterAssetID)
+	if loc := location(); loc != "/api/v1/blobs/"+fanartBlobHash+"/content" {
+		t.Fatalf("without a poster, Location = %q, want the fanart over the still and the logo", loc)
+	}
+	// Only the still and the logo left: the still is better than nothing.
+	h.exec(`DELETE FROM assets WHERE id = ?`, fanartAssetID)
+	if loc := location(); loc != "/api/v1/blobs/"+stillBlob+"/content" && loc != "/api/v1/blobs/"+logoBlob+"/content" {
+		t.Fatalf("with only unfit art, Location = %q, want one of them rather than a 404", loc)
+	}
+	// A fetched poster beats the shipped still, though the still was shipped.
+	const fetchedPoster = "blake3:8888888888888888888888888888888888888888888888888888888888888890"
+	h.exec(`INSERT INTO blobs (hash, size, mime, first_seen_at) VALUES (?, 100, 'image/jpeg', ?)`, fetchedPoster, seedTime)
+	h.exec(`INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash, source_path,
+			role, filename, mime, identification_source, missing_since, created_at, updated_at) VALUES
+		(?, ?, ?, 'managed', ?, NULL, 'artwork', 'cover.jpg', 'image/jpeg', 'fetched', NULL, ?, ?)`,
+		"01990000-0000-7000-8000-0000000000c3", edition1ID, libFilmsID, fetchedPoster, seedTime, seedTime)
+	if loc := location(); loc != "/api/v1/blobs/"+fetchedPoster+"/content" {
+		t.Fatalf("Location = %q, want the fetched poster over a shipped episode still", loc)
+	}
+}

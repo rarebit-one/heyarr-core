@@ -38,18 +38,16 @@ type pick struct {
 }
 
 // artworkRank orders a work's artwork assets so that the front-facing image
-// wins: a poster or cover before an unnamed image, an unnamed image before
-// fanart, backdrops and banners (which are decoration, not identity). Within a
-// tier, a cover the release shipped or the book file carried beats one fetched
-// from an enrich source (ADR-0105): the file's own cover is the exact one, a
-// fetched cover is a search result's. The id breaks remaining ties, so the
-// answer is stable across reads (ADR-0017).
-const artworkRank = `CASE
-	WHEN lower(a2.filename) GLOB 'poster*' OR lower(a2.filename) GLOB 'cover*'
-	  OR lower(a2.filename) GLOB 'folder*' OR lower(a2.filename) GLOB 'front*' THEN 0
-	WHEN lower(a2.filename) GLOB 'fanart*' OR lower(a2.filename) GLOB 'backdrop*'
-	  OR lower(a2.filename) GLOB 'banner*' THEN 2
-	ELSE 1 END, (coalesce(a2.identification_source, '') = 'fetched')`
+// wins: a poster or cover, then an unnamed image, then fanart, backdrops and
+// banners (decoration, not identity), and last the art that is never a card —
+// an episode's `-thumb` still, a logo, disc art (catalog.ArtworkCardRankSQL, the
+// one definition the enrich predicate shares). Within a tier, a cover the release
+// shipped or the book file carried beats one fetched from an enrich source
+// (ADR-0105): the file's own cover is the exact one, a fetched cover is a search
+// result's. The id breaks remaining ties, so the answer is stable across reads
+// (ADR-0017).
+var artworkRank = catalog.ArtworkCardRankSQL("a2.filename") +
+	", (coalesce(a2.identification_source, '') = 'fetched')"
 
 // artworkPick selects the representative artwork asset of the work whose id
 // is at workRef (a column reference, e.g. `works.id`).
@@ -64,10 +62,10 @@ func artworkPick(ctx context.Context, workRef string) pick {
 }
 
 // backdropFilter is the artwork that counts as a backdrop: a wide scene image a
-// release shipped as fanart.jpg or the enrich job fetched as backdrop.jpg (the
-// catalog's artworkIsBackdrop, kept in step by TestBackdropIsNeverThePoster).
-// A banner is decoration too but not a backdrop, and a poster is never one.
-const backdropFilter = `(lower(a2.filename) GLOB 'backdrop*' OR lower(a2.filename) GLOB 'fanart*')`
+// release shipped as fanart.jpg or the enrich job fetched as backdrop.jpg
+// (catalog.ArtworkIsBackdropSQL). A banner is decoration too but not a backdrop,
+// and a poster is never one.
+var backdropFilter = catalog.ArtworkIsBackdropSQL("a2.filename")
 
 // backdropRank orders a work's backdrops: one the release shipped before one
 // fetched from an enrich source (ADR-0105's rule, for the same reason), the id

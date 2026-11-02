@@ -63,15 +63,13 @@ const enrichSourceCase = `CASE w.content_type
 	WHEN 'book' THEN 'openlibrary'
 	ELSE 'tmdb' END`
 
-// Artwork faces, by filename. These mirror the cover resolver's ranking
-// (internal/api/resources/browse.go artworkRank): a fanart/backdrop/banner file
-// is decoration the poster pick ranks last, and a backdrop pick selects ONLY
-// from it. The enrich side names a fetched poster cover.jpg and a fetched
-// backdrop backdrop.jpg (enrich.go) so the two land in the right tier.
-const (
-	artworkIsDecoration = `(lower(aw.filename) GLOB 'fanart*' OR lower(aw.filename) GLOB 'backdrop*'
-		OR lower(aw.filename) GLOB 'banner*')`
-	artworkIsBackdrop = `(lower(aw.filename) GLOB 'fanart*' OR lower(aw.filename) GLOB 'backdrop*')`
+// Artwork faces, by filename: the shared classes in artworkclass.go, bound to
+// the `aw` alias the predicates below use. The enrich side names a fetched poster
+// cover.jpg and a fetched backdrop backdrop.jpg (enrich.go) so the two land in the
+// right class.
+var (
+	artworkIsDecoration = ArtworkIsNotAPosterSQL("aw.filename")
+	artworkIsBackdrop   = ArtworkIsBackdropSQL("aw.filename")
 )
 
 // enrichHeldWhere is "a Work enrichment covers that is HELD": a managed asset
@@ -90,7 +88,7 @@ const enrichHeldWhere = `
 // series, lacks a backdrop, OR lacks the id its enrich authority writes. A Work
 // with all of them is fully enriched and drops out; one missing any stays
 // eligible, paced by the schedule's backoff.
-const enrichLackingWhere = `(
+var enrichLackingWhere = `(
 		NOT EXISTS (
 			SELECT 1 FROM editions e2 JOIN assets aw ON aw.edition_id = e2.id
 			WHERE e2.work_id = w.id AND aw.role = 'artwork'
@@ -112,7 +110,7 @@ const enrichLackingWhere = `(
 
 // enrichDueWhere is the shared predicate for "a held Work that is
 // under-enriched" (ADR-0087's "no artwork and/or no enrich id", per content type).
-const enrichDueWhere = enrichHeldWhere + `
+var enrichDueWhere = enrichHeldWhere + `
 	AND ` + enrichLackingWhere
 
 // DueEnrichWorks lists the held Works due an enrich pass as of now.
