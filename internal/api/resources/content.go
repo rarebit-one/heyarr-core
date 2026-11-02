@@ -97,7 +97,7 @@ func (a *API) listWorks(w http.ResponseWriter, r *http.Request) {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	}
-	include, err := parseInclude(r, "artwork", "primary_asset")
+	include, err := parseInclude(r, "artwork", "backdrop", "primary_asset")
 	if err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
@@ -119,19 +119,20 @@ func (a *API) listWorks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := a.BrowseWorks(r.Context(), BrowseWorksRequest{
-		ContentType:    r.URL.Query().Get("content_type"),
-		LibraryID:      r.URL.Query().Get("library_id"),
-		Query:          r.URL.Query().Get("q"),
-		Artist:         r.URL.Query().Get("artist"),
-		Author:         r.URL.Query().Get("author"),
-		Year:           year,
-		YearFrom:       yearFrom,
-		YearTo:         yearTo,
-		Recent:         sortBy == "recent",
-		Cursor:         q.cursor,
-		Limit:          q.limit,
-		IncludeArtwork: include["artwork"],
-		IncludePrimary: include["primary_asset"],
+		ContentType:     r.URL.Query().Get("content_type"),
+		LibraryID:       r.URL.Query().Get("library_id"),
+		Query:           r.URL.Query().Get("q"),
+		Artist:          r.URL.Query().Get("artist"),
+		Author:          r.URL.Query().Get("author"),
+		Year:            year,
+		YearFrom:        yearFrom,
+		YearTo:          yearTo,
+		Recent:          sortBy == "recent",
+		Cursor:          q.cursor,
+		Limit:           q.limit,
+		IncludeArtwork:  include["artwork"],
+		IncludeBackdrop: include["backdrop"],
+		IncludePrimary:  include["primary_asset"],
 	})
 	if err != nil {
 		a.fail(w, r, "work", err)
@@ -154,7 +155,7 @@ func (a *API) listWorks(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) getWork(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	head, args := cardQuery(r.Context(), true, true)
+	head, args := cardQuery(r.Context(), cardEmbeds{artwork: true, backdrop: true, primary: true})
 	args = append(args, id)
 	//nolint:gosec // the query is assembled only from the literal fragments above; every value is bound
 	row := a.reader.QueryRowContext(r.Context(), head+` WHERE works.id = ?`, args...)
@@ -169,7 +170,7 @@ func (a *API) getWork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.write(w, r, http.StatusOK, WorkDetail{
-		Work: card.Work, ExternalIDs: ids, Artwork: card.artwork, PrimaryAsset: card.primary,
+		Work: card.Work, ExternalIDs: ids, Artwork: card.artwork, Backdrop: card.backdrop, PrimaryAsset: card.primary,
 	})
 }
 

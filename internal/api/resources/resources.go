@@ -359,6 +359,8 @@ func (a *API) Mount(r chi.Router) {
 	// vault poster is a 404 to a Guest, as the asset itself is.
 	r.Get("/works/{id}/artwork", a.getWorkArtwork)
 	r.Head("/works/{id}/artwork", a.getWorkArtwork)
+	r.Get("/works/{id}/backdrop", a.getWorkBackdrop)
+	r.Head("/works/{id}/backdrop", a.getWorkBackdrop)
 	// Artists and authors are groupings over works, not entities (ADR-0075):
 	// the name the identifier wrote, a count, a representative cover.
 	r.Get("/artists", a.listGrouped("artist", "music", "artists"))

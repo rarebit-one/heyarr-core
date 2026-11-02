@@ -116,3 +116,4 @@ An ADR that merely describes the code is not worth having.
 | [0119](0119-a-site-publishes-the-release-it-chose-and-its-siblings-acquire-it-themselves.md) | A site publishes the release it chose, and its siblings acquire it themselves | Proposed |
 | [0120](0120-a-game-is-fetched-from-its-store-and-verified-before-it-counts.md) | A game is fetched from its store, and verified before it counts | Proposed |
 | [0121](0121-a-rom-is-searched-by-platform-and-title.md) | A ROM is its own content type, searched by platform and title | Proposed |
+| [0122](0122-held-films-and-series-are-enriched-on-the-node-and-a-backdrop-is-its-own-face.md) | Held films and series are enriched on the node, and a backdrop is its own face | Proposed |

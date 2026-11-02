@@ -231,6 +231,8 @@ var schemaBrowseLibrary = obj(map[string]any{
 	"sort": strEnum("title (the default) is A–Z by the normalised title; recent is "+
 		"newest-added first.", "title", "recent"),
 	"include_artwork": boolean("Attach each work's poster (null when it has none). Defaults to true."),
+	"include_backdrop": boolean("Attach each work's backdrop — the wide image behind a film's or " +
+		"series' title — (null when it has none; never the poster). Defaults to false."),
 	"include_primary_asset": boolean("Attach the one file a card tap would play, with its size and " +
 		"duration when known (null when the work holds no file). Defaults to true."),
 	"limit": rowLimit("How many works at most. Defaults to the maximum."),

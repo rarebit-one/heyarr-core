@@ -63,6 +63,28 @@ func artworkPick(ctx context.Context, workRef string) pick {
 	return assetPick(ctx, "e2.work_id = "+workRef, "artwork", artworkRank)
 }
 
+// backdropFilter is the artwork that counts as a backdrop: a wide scene image a
+// release shipped as fanart.jpg or the enrich job fetched as backdrop.jpg (the
+// catalog's artworkIsBackdrop, kept in step by TestBackdropIsNeverThePoster).
+// A banner is decoration too but not a backdrop, and a poster is never one.
+const backdropFilter = `(lower(a2.filename) GLOB 'backdrop*' OR lower(a2.filename) GLOB 'fanart*')`
+
+// backdropRank orders a work's backdrops: one the release shipped before one
+// fetched from an enrich source (ADR-0105's rule, for the same reason), the id
+// breaking ties.
+const backdropRank = `(coalesce(a2.identification_source, '') = 'fetched')`
+
+// backdropPick (ADR-0122) selects the work's backdrop — the wide image a detail
+// screen shows behind the title — or nothing. It is a SEPARATE pick from
+// artworkPick and filters to backdrop-shaped files, on purpose: artworkPick falls
+// back to a backdrop when a work has no poster (a card with some image beats a
+// card with none), but the reverse is never done. A client asking for a backdrop
+// gets a backdrop or null, so it can decide for itself whether to show the poster
+// instead — the node does not make that substitution silently.
+func backdropPick(ctx context.Context, workRef string) pick {
+	return assetPick(ctx, "e2.work_id = "+workRef+" AND "+backdropFilter, "artwork", backdropRank)
+}
+
 // primaryPick selects the one file a card tap should play: the first
 // `primary`-role asset of the work, in creation order. A work with several
 // editions has several; the first is an arbitrary but STABLE answer, and a
@@ -112,22 +134,30 @@ func assetPick(ctx context.Context, scope, role, rank string) pick {
 // same arity: the scanner then has one shape, and a listing that asked for
 // nothing extra costs nothing extra.
 const (
-	artworkColumns = `art.id, art.blob_hash, art.mime`
-	primaryColumns = `pa.id, pa.edition_id, pa.blob_hash, COALESCE(pa.mime, pb.mime), pb.size, pp.duration_seconds`
-	nullArtwork    = `NULL, NULL, NULL`
-	nullPrimary    = `NULL, NULL, NULL, NULL, NULL, NULL`
+	artworkColumns  = `art.id, art.blob_hash, art.mime`
+	backdropColumns = `bd.id, bd.blob_hash, bd.mime`
+	primaryColumns  = `pa.id, pa.edition_id, pa.blob_hash, COALESCE(pa.mime, pb.mime), pb.size, pp.duration_seconds`
+	nullArtwork     = `NULL, NULL, NULL`
+	nullPrimary     = `NULL, NULL, NULL, NULL, NULL, NULL`
 )
+
+// cardEmbeds says which browse projections a card read should resolve. A
+// struct rather than positional booleans because a third embed made the call
+// sites unreadable — `cardQuery(ctx, true, false, true)` says nothing.
+type cardEmbeds struct {
+	artwork, backdrop, primary bool
+}
 
 // cardQuery assembles the SELECT/FROM half of a card read over `works`.
 //
 // The returned args are the picker bindings, which come BEFORE any WHERE
 // bindings the caller appends: SQLite binds positionally in textual order,
 // and the pickers live in the join clauses.
-func cardQuery(ctx context.Context, withArtwork, withPrimary bool) (string, []any) {
+func cardQuery(ctx context.Context, with cardEmbeds) (string, []any) {
 	cols := prefixed(workColumns, "works") + ", works.created_at"
 	from := ` FROM works`
 	var args []any
-	if withArtwork {
+	if with.artwork {
 		p := artworkPick(ctx, "works.id")
 		cols += ", " + artworkColumns
 		from += ` LEFT JOIN assets art ON art.id = ` + p.sql
@@ -135,13 +165,21 @@ func cardQuery(ctx context.Context, withArtwork, withPrimary bool) (string, []an
 	} else {
 		cols += ", " + nullArtwork
 	}
-	if withPrimary {
+	if with.primary {
 		p := primaryPick(ctx, "works.id")
 		cols += ", " + primaryColumns
 		from += primaryJoins(p)
 		args = append(args, p.args...)
 	} else {
 		cols += ", " + nullPrimary
+	}
+	if with.backdrop {
+		p := backdropPick(ctx, "works.id")
+		cols += ", " + backdropColumns
+		from += ` LEFT JOIN assets bd ON bd.id = ` + p.sql
+		args = append(args, p.args...)
+	} else {
+		cols += ", " + nullArtwork
 	}
 	return `SELECT ` + cols + from, args
 }
@@ -195,17 +233,19 @@ func (a *artworkScan) ref() *ArtworkRef {
 
 // cardRow is one scanned card: the work, the raw created_at the recent-first
 // cursor keys on (re-rendering a parsed time can differ from the stored text,
-// and a keyset boundary must be the stored text), and the two embeds.
+// and a keyset boundary must be the stored text), and the three embeds.
 type cardRow struct {
 	Work
 	createdRaw string
 	artwork    *ArtworkRef
+	backdrop   *ArtworkRef
 	primary    *PrimaryAssetRef
 }
 
 func scanCard(rows interface{ Scan(...any) error }) (cardRow, error) {
 	var c cardRow
 	var artID, artBlob, artMIME sql.NullString
+	var bdID, bdBlob, bdMIME sql.NullString
 	var paID, paEdition, paBlob, paMIME sql.NullString
 	var paSize sql.NullInt64
 	var paDuration sql.NullFloat64
@@ -213,6 +253,7 @@ func scanCard(rows interface{ Scan(...any) error }) (cardRow, error) {
 		&c.createdRaw,
 		&artID, &artBlob, &artMIME,
 		&paID, &paEdition, &paBlob, &paMIME, &paSize, &paDuration,
+		&bdID, &bdBlob, &bdMIME,
 	}})
 	if err != nil {
 		return cardRow{}, err
@@ -224,7 +265,16 @@ func scanCard(rows interface{ Scan(...any) error }) (cardRow, error) {
 			BlobHash:   artBlob.String,
 			MIME:       nullString(artMIME),
 			ContentURL: blobContentURL(artBlob.String),
-			Sizes:      artworkSizesURL(work.ID, artBlob.String),
+			Sizes:      artworkSizesURL(work.ID, artBlob.String, "artwork"),
+		}
+	}
+	if bdID.Valid && bdBlob.Valid {
+		c.backdrop = &ArtworkRef{
+			AssetID:    bdID.String,
+			BlobHash:   bdBlob.String,
+			MIME:       nullString(bdMIME),
+			ContentURL: blobContentURL(bdBlob.String),
+			Sizes:      artworkSizesURL(work.ID, bdBlob.String, "backdrop"),
 		}
 	}
 	if paID.Valid && paBlob.Valid {
@@ -277,10 +327,12 @@ type BrowseWorksRequest struct {
 	// Cursor is the decoded keyset position (arity 2), nil for the first page.
 	Cursor []string
 	Limit  int
-	// IncludeArtwork and IncludePrimary add the poster and the playable file to
-	// each card (ADR-0075). Neither embed set renders plain Work rows.
-	IncludeArtwork bool
-	IncludePrimary bool
+	// IncludeArtwork, IncludeBackdrop and IncludePrimary add the poster, the
+	// backdrop and the playable file to each card (ADR-0075, ADR-0122). No embed
+	// set renders plain Work rows.
+	IncludeArtwork  bool
+	IncludeBackdrop bool
+	IncludePrimary  bool
 }
 
 // BrowseWorksResult is one page of the catalog: the cards, each carrying the
@@ -296,7 +348,7 @@ type BrowseWorksResult struct {
 // boundary rides the context: a Guest's cards carry no vault poster and no
 // vault file, because the artwork and primary picks filter on source_class.
 func (a *API) BrowseWorks(ctx context.Context, req BrowseWorksRequest) (BrowseWorksResult, error) {
-	head, args := cardQuery(ctx, req.IncludeArtwork, req.IncludePrimary)
+	head, args := cardQuery(ctx, cardEmbeds{artwork: req.IncludeArtwork, backdrop: req.IncludeBackdrop, primary: req.IncludePrimary})
 	where := []string{"1 = 1"}
 	if req.ContentType != "" {
 		where = append(where, "works.content_type = ?")
@@ -391,6 +443,7 @@ func (a *API) BrowseWorks(ctx context.Context, req BrowseWorksRequest) (BrowseWo
 		out = append(out, WorkCard{
 			Work:         c.Work,
 			Artwork:      embed[ArtworkRef]{included: req.IncludeArtwork, value: c.artwork},
+			Backdrop:     embed[ArtworkRef]{included: req.IncludeBackdrop, value: c.backdrop},
 			PrimaryAsset: embed[PrimaryAssetRef]{included: req.IncludePrimary, value: c.primary},
 		})
 	}
@@ -398,13 +451,14 @@ func (a *API) BrowseWorks(ctx context.Context, req BrowseWorksRequest) (BrowseWo
 }
 
 // artworkSizesURL returns the thumbnail redirect URLs for all supported bucket
-// sizes for a given work (ADR-0109). Each value is the artwork redirect URL
-// for that work with ?size=N&v=<blobHash> appended; the client follows the 307
-// to receive either the derived thumbnail or the original while derivation is
-// pending. The `v` parameter carries the source blob hash so Android image
-// caches treat a changed poster as a new URL; the server accepts and ignores it.
-func artworkSizesURL(workID, blobHash string) map[string]string {
-	base := httpapi.APIPrefix + "/works/" + workID + "/artwork"
+// sizes for a given work (ADR-0109). Each value is the redirect URL for that
+// work's face (route is "artwork" or "backdrop") with ?size=N&v=<blobHash>
+// appended; the client follows the 307 to receive either the derived thumbnail
+// or the original while derivation is pending. The `v` parameter carries the
+// source blob hash so Android image caches treat a changed poster as a new URL;
+// the server accepts and ignores it.
+func artworkSizesURL(workID, blobHash, route string) map[string]string {
+	base := httpapi.APIPrefix + "/works/" + workID + "/" + route
 	out := make(map[string]string, len(thumbnail.Buckets))
 	for _, b := range thumbnail.Buckets {
 		s := strconv.Itoa(b)
@@ -433,8 +487,24 @@ func artworkSizesURL(workID, blobHash string) map[string]string {
 // assets from its result — the blob is NULL for a Guest on a vault work, and
 // the !blob.Valid check returns 404 before thumbnail logic runs.
 func (a *API) getWorkArtwork(w http.ResponseWriter, r *http.Request) {
+	a.redirectToFace(w, r, artworkPick(r.Context(), "works.id"), "the work has no artwork")
+}
+
+// getWorkBackdrop is getWorkArtwork for the work's backdrop (ADR-0122): the same
+// redirect, the same `?size=` thumbnail cache, over backdropPick — so a work with
+// a poster and no backdrop answers 404 here while /artwork still answers 307.
+// The two faces are two routes because a client must be able to ask for one
+// without being handed the other.
+func (a *API) getWorkBackdrop(w http.ResponseWriter, r *http.Request) {
+	a.redirectToFace(w, r, backdropPick(r.Context(), "works.id"), "the work has no backdrop")
+}
+
+// redirectToFace is the shared body of the artwork and backdrop redirects: it
+// resolves the pick for the work in the path and 307s to the blob (or its
+// thumbnail), or answers 404 with `missing` as the detail when the pick finds
+// nothing.
+func (a *API) redirectToFace(w http.ResponseWriter, r *http.Request, p pick, missing string) {
 	id := chi.URLParam(r, "id")
-	p := artworkPick(r.Context(), "works.id")
 	args := append(p.args, id)
 	var blob sql.NullString
 	//nolint:gosec // the query is assembled only from the literal fragments above; every value is bound
@@ -448,7 +518,7 @@ func (a *API) getWorkArtwork(w http.ResponseWriter, r *http.Request) {
 	if !blob.Valid {
 		// Distinct from the unknown-work 404 in its detail: "add a poster"
 		// and "you asked for the wrong thing" are different answers.
-		httpapi.Fail(w, r, problem.NotFound("the work has no artwork"))
+		httpapi.Fail(w, r, problem.NotFound(missing))
 		return
 	}
 
