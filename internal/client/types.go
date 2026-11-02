@@ -34,15 +34,18 @@ type Work struct {
 	// ExternalIDs is present on the detail read only (ADR-0050): source → id,
 	// never null there; absent on listings.
 	ExternalIDs map[string]string `json:"external_ids,omitempty"`
-	// Artwork and PrimaryAsset are the browse projections (ADR-0075): always
-	// present on the detail read (null when the work has none), and on a
-	// listing only when `include=` asked for them.
+	// Artwork, Backdrop and PrimaryAsset are the browse projections (ADR-0075,
+	// ADR-0122): always present on the detail read (null when the work has
+	// none), and on a listing only when `include=` asked for them. Backdrop is
+	// the wide image, resolved independently of the poster — never the poster.
 	Artwork      *ArtworkRef      `json:"artwork,omitempty"`
+	Backdrop     *ArtworkRef      `json:"backdrop,omitempty"`
 	PrimaryAsset *PrimaryAssetRef `json:"primary_asset,omitempty"`
 }
 
-// ArtworkRef points at a work's poster: the ranked artwork asset and its blob
-// (ADR-0075). ContentURL is the ordinary blob route.
+// ArtworkRef points at one of a work's images — its poster or its backdrop: the
+// ranked artwork asset and its blob (ADR-0075, ADR-0122). ContentURL is the
+// ordinary blob route.
 type ArtworkRef struct {
 	AssetID    string  `json:"asset_id"`
 	BlobHash   string  `json:"blob_hash"`

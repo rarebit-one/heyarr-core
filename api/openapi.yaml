@@ -259,7 +259,9 @@ paths:
           schema: { type: string }
           description: |
             Comma-separated browse embeds to add to each row (ADR-0075):
-            `artwork` (the poster) and `primary_asset` (the file a tap plays).
+            `artwork` (the poster), `backdrop` (the wide scene image a detail
+            screen shows behind the title — a film's or series' backdrop, never
+            the poster again, ADR-0122) and `primary_asset` (the file a tap plays).
             An embed not asked for is absent; one asked for that the work
             lacks is `null`. With no `include` the rows are plain `Work`s. An
             unknown name is a 400.
@@ -387,6 +389,93 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { description: No such work, or the work has no artwork. }
+
+  /api/v1/works/{id}/backdrop:
+    get:
+      tags: [content]
+      operationId: getWorkBackdrop
+      summary: A work's backdrop, by redirect to its blob (ADR-0122).
+      description: |
+        The sibling of `GET /works/{id}/artwork` for the work's other face: a
+        `307` to the blob route for its representative BACKDROP — an
+        `artwork`-role asset named `backdrop*` or `fanart*` (a release's shipped
+        fanart, or the backdrop the enrich job fetched from TMDB), one the
+        release shipped before one that was fetched, the id breaking ties.
+
+        It never falls back to the poster. A work with a poster and no
+        backdrop answers `404` here while `/artwork` answers `307`, so a client
+        decides for itself whether to show the poster in a wide slot; the node
+        does not make that substitution silently.
+
+        `?size=N` behaves exactly as on `/artwork` (ADR-0109). The guest
+        boundary applies (ADR-0074).
+      parameters:
+        - { $ref: "#/components/parameters/id" }
+        - name: size
+          in: query
+          required: false
+          description: Requested thumbnail long-edge bucket in pixels (ADR-0109).
+          schema:
+            type: integer
+            enum: [256, 512, 1024]
+        - name: v
+          in: query
+          required: false
+          description: Cache-busting token (the source blob's hash); accepted and ignored.
+          schema: { type: string }
+      responses:
+        "307":
+          description: >-
+            Redirect to the blob route — the thumb blob when the derived
+            thumbnail is ready, the original otherwise.
+          headers:
+            Location:
+              schema: { type: string }
+              description: "`/api/v1/blobs/{hash}/content`"
+            Cache-Control:
+              schema: { type: string }
+              description: >-
+                `private, max-age=300` for ready/undecodable responses;
+                `no-store` while derivation is pending.
+        "400":
+          description: >-
+            `size` is present but not one of the supported values (256, 512, 1024).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: No such work, or the work has no backdrop (the detail says which).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+    head:
+      tags: [content]
+      operationId: headWorkBackdrop
+      summary: The backdrop redirect, headers only.
+      description: >-
+        Identical to `get`: a `307` with the same `Location`, so a client can
+        learn whether a backdrop exists without following the redirect.
+      parameters:
+        - { $ref: "#/components/parameters/id" }
+        - name: size
+          in: query
+          required: false
+          schema:
+            type: integer
+            enum: [256, 512, 1024]
+        - name: v
+          in: query
+          required: false
+          description: Cache-busting token; accepted and ignored by the server.
+          schema: { type: string }
+      responses:
+        "307": { description: Redirect to the blob route. }
+        "400": { description: size is not one of the supported values. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: No such work, or the work has no backdrop. }
 
   /api/v1/artists:
     get:
@@ -3688,20 +3777,24 @@ paths:
     post:
       tags: [enrich]
       operationId: backfillEnrich
-      summary: Enrich held music/book works now (ADR-0087).
+      summary: Enrich held works now (ADR-0087, ADR-0122).
       description: |
-        Queues an `enrich_work` job for every held music/book work in scope that
-        still lacks a cover or a canonical id, ignoring the enrich beat's backoff
-        schedule.
+        Queues an `enrich_work` job for every held work in scope that is still
+        under-enriched, ignoring the enrich beat's backoff schedule. A music or
+        book work is under-enriched without a cover or its MusicBrainz/Open
+        Library id; a movie or series without a poster, a backdrop or its TMDB
+        id.
 
         Enrichment otherwise runs on a background beat. This is the operator's
         lever to enrich a scope now — after wiring an enrich provider, or after
-        ingesting a shelf of books. A scope is required — `library_id`, `work_id`,
-        `author`, or `all` — so "this one author" is never one forgotten flag
-        from "every book on the node". Only under-enriched works are touched and
-        the enrich job is idempotent, so a re-run is cheap and safe. Refused with
-        400 when the node has no enrich provider configured (the jobs would never
-        run).
+        ingesting a shelf of books or a batch of films. A scope is required —
+        `library_id`, `work_id`, `author`, or `all` — so "this one author" is
+        never one forgotten flag from "every book on the node". `content_type`
+        narrows any scope to one kind. Only under-enriched works are touched,
+        the job fetches only the images a work is missing, and it dedupes per
+        work, so a re-run is cheap and safe. Refused with 400 when the node has
+        no enrich provider configured (the jobs would never run) or the
+        `content_type` is not one enrichment covers.
       requestBody:
         required: true
         content:
@@ -3712,6 +3805,10 @@ paths:
                 library_id: { type: string }
                 work_id: { type: string }
                 author: { type: string }
+                content_type:
+                  type: string
+                  enum: [movie, series, music, book]
+                  description: Narrows the scope to one content type.
                 all: { type: boolean }
       responses:
         "202":
@@ -3731,11 +3828,12 @@ paths:
     get:
       tags: [enrich]
       operationId: enrichStatus
-      summary: How many held music/book works still need enrichment (ADR-0087).
+      summary: How many held works still need enrichment (ADR-0087).
       description: |
-        Reports the enrich backlog: how many held music/book works still lack a
-        cover or a canonical id, out of the total held, so a person can watch a
-        backfill drain.
+        Reports the enrich backlog: how many held works enrichment covers
+        (movie, series, music, book) are still under-enriched, out of the total
+        held — overall and per content type — so a person can watch a backfill
+        drain.
       responses:
         "200":
           description: The enrich backlog.
@@ -3747,6 +3845,16 @@ paths:
                   under_enriched: { type: integer }
                   total: { type: integer }
                   enriched: { type: integer }
+                  by_content_type:
+                    type: object
+                    description: >-
+                      The same counts per content type, for every covered type
+                      the node holds at least one work of.
+                    additionalProperties:
+                      type: object
+                      properties:
+                        under_enriched: { type: integer }
+                        total: { type: integer }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /api/v1/playback/plan:
@@ -7954,14 +8062,20 @@ components:
       description: |
         A work with its external identifiers and its browse embeds (ADR-0075).
         Returned by `GET /works/{id}`. The embeds are always present here —
-        one row, two cheap lookups — and `null` when the work has none.
+        one row, three cheap lookups — and `null` when the work has none.
+        `artwork` and `backdrop` are two faces resolved independently: a work
+        with only a poster has a `null` backdrop, never the poster twice.
       allOf:
         - $ref: "#/components/schemas/Work"
         - type: object
-          required: [external_ids, artwork, primary_asset]
+          required: [external_ids, artwork, backdrop, primary_asset]
           properties:
             external_ids: { $ref: "#/components/schemas/ExternalIDs" }
             artwork:
+              oneOf:
+                - $ref: "#/components/schemas/ArtworkRef"
+                - type: "null"
+            backdrop:
               oneOf:
                 - $ref: "#/components/schemas/ArtworkRef"
                 - type: "null"
@@ -7981,6 +8095,10 @@ components:
         - type: object
           properties:
             artwork:
+              oneOf:
+                - $ref: "#/components/schemas/ArtworkRef"
+                - type: "null"
+            backdrop:
               oneOf:
                 - $ref: "#/components/schemas/ArtworkRef"
                 - type: "null"
@@ -8007,14 +8125,23 @@ components:
     ArtworkRef:
       type: object
       description: |
-        A work's representative poster (ADR-0075): the `artwork`-role asset
-        that ranks first — `poster`/`cover`/`folder`/`front` before an unnamed
+        One of a work's images (ADR-0075). As `artwork` it is the
+        representative poster — the `artwork`-role asset that ranks first — `poster`/`cover`/`folder`/`front` before an unnamed
         image before `fanart`/`backdrop`/`banner` — among those that hold
-        bytes and are not missing. `content_url` is the ordinary blob route
-        (ADR-0013); `GET /works/{id}/artwork` redirects to the same place.
+        bytes and are not missing. As `backdrop` (ADR-0122) it is the
+        representative `backdrop*`/`fanart*` image, shipped before fetched, or
+        `null` — never the poster. `content_url` is the ordinary blob route
+        (ADR-0013); `GET /works/{id}/artwork` (or `/backdrop`) redirects to the
+        same place.
+
+        An image the enrich job fetched (ADR-0087) is an ordinary managed asset
+        like a shipped one, so it reaches every client through these same
+        embeds; the provider that produced it is recorded on the asset
+        (`attributes.source`), not here.
 
         `sizes` maps each supported thumbnail bucket (256, 512, 1024) to the
-        artwork redirect URL with `?size=N&v=<blob_hash>` appended (ADR-0109).
+        work's `/artwork` (or `/backdrop`) redirect URL with
+        `?size=N&v=<blob_hash>` appended (ADR-0109).
         A client follows that URL to receive the derived JPEG thumbnail when
         ready, or the original while derivation is in progress. The `v`
         parameter carries the source blob hash so that Android image caches

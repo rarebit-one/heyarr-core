@@ -52,6 +52,10 @@
             "description": "Attach each work's poster (null when it has none). Defaults to true.",
             "type": "boolean"
           },
+          "include_backdrop": {
+            "description": "Attach each work's backdrop — the wide image behind a film's or series' title — (null when it has none; never the poster). Defaults to false.",
+            "type": "boolean"
+          },
           "include_primary_asset": {
             "description": "Attach the one file a card tap would play, with its size and duration when known (null when the work holds no file). Defaults to true.",
             "type": "boolean"

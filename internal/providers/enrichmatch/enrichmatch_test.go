@@ -36,3 +36,28 @@ func TestTokenSetRatio(t *testing.T) {
 		})
 	}
 }
+
+// Jaccard is the tie-breaker: where TokenSetRatio asks "is the shorter title
+// contained in the other", Jaccard also counts the words the other side added,
+// so "Alien" prefers "Alien" over "Alien: Covenant".
+func TestJaccard(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want float64
+	}{
+		{"Alien", "Alien", 1},
+		{"Alien", "Alien: Covenant", 0.5},
+		{"The Matrix", "Matrix", 0.5},
+		{"Arrival", "Departure", 0},
+		{"", "Arrival", 0},
+	}
+	for _, tc := range cases {
+		if got := Jaccard(tc.a, tc.b); got != tc.want {
+			t.Errorf("Jaccard(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+	// Containment and Jaccard disagree exactly where the tie-break is needed.
+	if TokenSetRatio("Alien", "Alien: Covenant") != 1 {
+		t.Error("the shorter title is fully contained, so TokenSetRatio is 1 — Jaccard must be what tells the two apart")
+	}
+}

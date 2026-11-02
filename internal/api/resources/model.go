@@ -378,14 +378,19 @@ type WorkDetail struct {
 	// lexically-first value, the same determinism rule /search's tvdb_id takes.
 	// Always present, `{}` when the work carries none.
 	ExternalIDs map[string]string `json:"external_ids"`
-	// Artwork and PrimaryAsset are the browse projections (ADR-0075): the
-	// poster to show and the file a tap plays. Always present on the detail
-	// read — one row, two cheap lookups — and null when the work has none.
+	// Artwork, Backdrop and PrimaryAsset are the browse projections (ADR-0075,
+	// ADR-0122): the poster to show, the wide image behind a detail screen's
+	// title, and the file a tap plays. Always present on the detail read — one
+	// row, three cheap lookups — and null when the work has none. Artwork and
+	// Backdrop are two faces resolved independently: a work with only a poster
+	// has a null backdrop, never the poster again.
 	Artwork      *ArtworkRef      `json:"artwork"`
+	Backdrop     *ArtworkRef      `json:"backdrop"`
 	PrimaryAsset *PrimaryAssetRef `json:"primary_asset"`
 }
 
-// ArtworkRef points a client at a work's poster (ADR-0075).
+// ArtworkRef points a client at one of a work's images (ADR-0075): its poster
+// (`artwork`) or its backdrop (`backdrop`, ADR-0122), the same shape for both.
 //
 // It names the asset and its blob rather than carrying bytes or a work-keyed
 // image URL: the bytes live behind the blob route (ADR-0013), whose immutable
@@ -432,6 +437,7 @@ type PrimaryAssetRef struct {
 type WorkCard struct {
 	Work
 	Artwork      embed[ArtworkRef]      `json:"artwork,omitzero"`
+	Backdrop     embed[ArtworkRef]      `json:"backdrop,omitzero"`
 	PrimaryAsset embed[PrimaryAssetRef] `json:"primary_asset,omitzero"`
 }
 

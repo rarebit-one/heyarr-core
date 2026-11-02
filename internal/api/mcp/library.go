@@ -31,6 +31,7 @@ type browseLibraryArgs struct {
 	YearTo              *int64 `json:"year_to"`
 	Sort                string `json:"sort"`
 	IncludeArtwork      *bool  `json:"include_artwork"`
+	IncludeBackdrop     *bool  `json:"include_backdrop"`
 	IncludePrimaryAsset *bool  `json:"include_primary_asset"`
 	Limit               int    `json:"limit"`
 }
@@ -55,21 +56,25 @@ func (s *Server) browseLibrary(ctx context.Context, raw json.RawMessage) (any, e
 	// exception a person would think to request.
 	includeArtwork := args.IncludeArtwork == nil || *args.IncludeArtwork
 	includePrimary := args.IncludePrimaryAsset == nil || *args.IncludePrimaryAsset
+	// The backdrop defaults OFF: it is a detail-screen image, not a shelf one,
+	// and an agent that walks a shelf should not pay for a third embed per row.
+	includeBackdrop := args.IncludeBackdrop != nil && *args.IncludeBackdrop
 
 	limit := clampLimit(args.Limit)
 	res, err := s.resources.BrowseWorks(ctx, resources.BrowseWorksRequest{
-		ContentType:    args.ContentType,
-		LibraryID:      args.LibraryID,
-		Query:          args.Query,
-		Artist:         args.Artist,
-		Author:         args.Author,
-		Year:           args.Year,
-		YearFrom:       args.YearFrom,
-		YearTo:         args.YearTo,
-		Recent:         recent,
-		Limit:          limit,
-		IncludeArtwork: includeArtwork,
-		IncludePrimary: includePrimary,
+		ContentType:     args.ContentType,
+		LibraryID:       args.LibraryID,
+		Query:           args.Query,
+		Artist:          args.Artist,
+		Author:          args.Author,
+		Year:            args.Year,
+		YearFrom:        args.YearFrom,
+		YearTo:          args.YearTo,
+		Recent:          recent,
+		Limit:           limit,
+		IncludeArtwork:  includeArtwork,
+		IncludeBackdrop: includeBackdrop,
+		IncludePrimary:  includePrimary,
 	})
 	if err != nil {
 		return nil, classify(err)

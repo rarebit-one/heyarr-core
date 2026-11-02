@@ -66,13 +66,17 @@ type EnrichProvider interface {
 // external ids already recorded. A provider uses whatever subset it supports;
 // nothing here knows or cares which.
 type EnrichQuery struct {
-	// ContentType is the held Work's content type: "music" | "book". A provider
-	// that does not serve it returns the modelled empty result.
+	// ContentType is the held Work's content type: "music" | "book" | "movie" |
+	// "series". A provider that does not serve it returns the modelled empty
+	// result.
 	ContentType string
 	// Title is the Work's title as ingest identified it — the album title for
-	// music, the book title for a book. For a book this is the noisy string a
-	// filename produced (it may carry the author and provenance junk); the
-	// adapter cleans it before searching (ADR-0088).
+	// music, the book title for a book, the film or show title for video. For a
+	// book this is the noisy string a filename produced (it may carry the author
+	// and provenance junk); the adapter cleans it before searching (ADR-0088).
+	// For video it is the scene-name parse, usually clean, and the adapter
+	// validates a hit's title AND year against it rather than trusting the
+	// service's first result.
 	Title string
 	// Artist and Album narrow a music query. Artist is the Work's
 	// attributes.artist; Album is the Work title, repeated here so a music
@@ -88,7 +92,9 @@ type EnrichQuery struct {
 	Year int
 	// ExternalIDs is any id already recorded for the Work (source → value), so a
 	// provider that can look up by a strong key uses it before falling back to a
-	// title search. Empty when nothing has been recorded yet.
+	// title search — a series followed through TVDB carries a tvdb id TMDB can
+	// resolve directly, and a movie wanted from discovery already carries its
+	// tmdb id. Empty when nothing has been recorded yet.
 	ExternalIDs map[string]string
 }
 
@@ -103,16 +109,33 @@ type EnrichQuery struct {
 // tokened link, and a fixture must be indistinguishable from the live service.
 type EnrichResult struct {
 	// ExternalIDs is the canonical ids the authority holds for the Work, keyed by
-	// source ("musicbrainz" | "openlibrary" | …). The worker writes each to the
-	// external_ids table (ADR-0050) as the Work's first authoritative identity.
+	// source ("musicbrainz" | "openlibrary" | "tmdb" | "imdb" | "tvdb" | …). The
+	// worker writes each to the external_ids table (ADR-0050) as the Work's first
+	// authoritative identity.
 	ExternalIDs map[string]string
-	// CoverURL is where the Work's cover image can be fetched, empty when the
-	// authority has none. A secret.Value so a tokened link stays out of logs and
-	// the fixture corpus; Reveal() it only where it is put on the wire.
+	// CoverURL is where the Work's front-facing image can be fetched — a book or
+	// album cover, a film or series poster — empty when the authority has none. A
+	// secret.Value so a tokened link stays out of logs and the fixture corpus;
+	// Reveal() it only where it is put on the wire.
 	CoverURL secret.Value
+	// BackdropURL is where a WIDE scene image can be fetched — TMDB's backdrop for
+	// a film or series — empty when the authority has none or the content kind
+	// has no such face (books and music never do). It is a second artwork kind,
+	// not a fallback for CoverURL: the worker files it as a backdrop and never
+	// lets it stand in for a missing poster, so a client that asks for a poster
+	// gets a poster or nothing.
+	BackdropURL secret.Value
 	// Overview is a short description the authority holds, empty when none. Stored
 	// under the Work's attributes; never an identity.
 	Overview string
+	// Genres is the authority's genre names, in its order, empty when none. Stored
+	// under the Work's attributes as decoration a shelf can group on.
+	Genres []string
+	// Year is the authority's release or first-air year, zero when it did not
+	// say. Recorded as provenance beside the Work's own year — it is how a
+	// reviewer later sees that ingest's year and the authority's disagree — and
+	// never written over the Work's year, which is identity.
+	Year int
 	// Title and Author are the CANONICAL display identity the authority reports —
 	// the release/book title and its artist/author. Empty means "no correction
 	// offered". The worker adopts them (ADR-0088) only when Confidence clears

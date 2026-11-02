@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -12,14 +13,16 @@ import (
 func newEnrichCommand(opts Options, configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "enrich",
-		Short: "Enrich held music and book works with covers and canonical ids",
-		Long: `Held albums and books are identified from their filenames at ingest — a title,
-maybe a year, no cover. Enrichment fills that in from a keyed lookup (MusicBrainz
-and the Cover Art Archive for music, Open Library for books): it writes the work's
-canonical id, fetches its cover as an ordinary artwork asset the library already
-serves, and — when the match is confident — corrects a noisy filename-derived
-title and author (ADR-0087, ADR-0088). The sources are keyless; no credential is
-needed.`,
+		Short: "Enrich held works with artwork, descriptions and canonical ids",
+		Long: `Held films, series, albums and books are identified from their filenames at
+ingest — a title, maybe a year, no artwork. Enrichment fills that in from a keyed
+lookup (TMDB for films and series, MusicBrainz and the Cover Art Archive for
+music, Open Library for books): it writes the work's canonical ids and overview,
+and fetches its poster (and, for a film or series, its backdrop) as ordinary
+artwork assets the node stores and serves to every client. A confident book or
+album match also corrects a noisy filename-derived title and author (ADR-0087,
+ADR-0088); a film or series is decorated, never renamed (ADR-0122). MusicBrainz
+and Open Library are keyless; TMDB needs its API read-access token.`,
 	}
 	cmd.AddCommand(newEnrichBackfillCommand(opts, configPath))
 	cmd.AddCommand(newEnrichStatusCommand(opts, configPath))
@@ -28,17 +31,19 @@ needed.`,
 
 func newEnrichBackfillCommand(_ Options, configPath *string) *cobra.Command {
 	var (
-		flags   clientFlags
-		library string
-		work    string
-		author  string
-		all     bool
+		flags       clientFlags
+		library     string
+		work        string
+		author      string
+		contentType string
+		all         bool
 	)
 	cmd := &cobra.Command{
 		Use:   "backfill",
-		Short: "Enrich held music/book works now, ignoring the background cadence",
-		Long: `Queue an enrich job for every held music/book work in scope that still lacks a
-cover or a canonical id.
+		Short: "Enrich held works now, ignoring the background cadence",
+		Long: `Queue an enrich job for every held work in scope that is still under-enriched:
+an album or book without a cover or canonical id, a film or series without a
+poster, a backdrop or its TMDB id.
 
 Enrichment otherwise runs on a background beat that paces itself with a backoff
 schedule (ADR-0087). This is the one-time lever to enrich a scope NOW — after
@@ -51,9 +56,13 @@ book on the node":
   heyarr enrich backfill --author "Reads"
   heyarr enrich backfill --library <library-id>
   heyarr enrich backfill --all
+  heyarr enrich backfill --all --content-type movie
 
-Only works missing a cover or an id are touched, and the enrich job is idempotent
-— so a re-run is cheap and safe.`,
+--content-type narrows any scope to one kind (movie, series, music, book) — the
+films, after wiring TMDB, without re-asking Open Library about every book.
+
+Only under-enriched works are touched, the job fetches only the images a work is
+missing, and it dedupes per work — so a re-run is cheap and safe.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if library == "" && work == "" && author == "" && !all {
@@ -69,6 +78,9 @@ Only works missing a cover or an id are touched, and the enrich job is idempoten
 				}
 				if author != "" {
 					body["author"] = author
+				}
+				if contentType != "" {
+					body["content_type"] = contentType
 				}
 				if all {
 					body["all"] = true
@@ -94,7 +106,8 @@ Only works missing a cover or an id are touched, and the enrich job is idempoten
 	cmd.Flags().StringVar(&library, "library", "", "only works in this library id")
 	cmd.Flags().StringVar(&work, "work", "", "only this work id")
 	cmd.Flags().StringVar(&author, "author", "", "only works filed under this author/artist")
-	cmd.Flags().BoolVar(&all, "all", false, "every under-enriched music/book work on this node")
+	cmd.Flags().StringVar(&contentType, "content-type", "", "only works of this type: movie, series, music or book")
+	cmd.Flags().BoolVar(&all, "all", false, "every under-enriched work on this node")
 	return cmd
 }
 
@@ -102,14 +115,19 @@ func newEnrichStatusCommand(_ Options, configPath *string) *cobra.Command {
 	var flags clientFlags
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show how many held music/book works still lack a cover or id",
+		Short: "Show how many held works still lack their artwork or id",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
-				var res struct {
+				type count struct {
 					UnderEnriched int `json:"under_enriched"`
 					Total         int `json:"total"`
-					Enriched      int `json:"enriched"`
+				}
+				var res struct {
+					UnderEnriched int              `json:"under_enriched"`
+					Total         int              `json:"total"`
+					Enriched      int              `json:"enriched"`
+					ByContentType map[string]count `json:"by_content_type"`
 				}
 				if err := c.Get(ctx, "/enrich/status", nil, &res); err != nil {
 					return err
@@ -118,8 +136,18 @@ func newEnrichStatusCommand(_ Options, configPath *string) *cobra.Command {
 					return emitJSON(cmd.OutOrStdout(), res)
 				}
 				fmt.Fprintf(cmd.OutOrStdout(),
-					"%d of %d held music/book works enriched, %d still to do\n",
+					"%d of %d held works enriched, %d still to do\n",
 					res.Enriched, res.Total, res.UnderEnriched)
+				types := make([]string, 0, len(res.ByContentType))
+				for ct := range res.ByContentType {
+					types = append(types, ct)
+				}
+				sort.Strings(types)
+				for _, ct := range types {
+					n := res.ByContentType[ct]
+					fmt.Fprintf(cmd.OutOrStdout(), "  %-7s %d of %d enriched\n",
+						ct, n.Total-n.UnderEnriched, n.Total)
+				}
 				return nil
 			})
 		},

@@ -1,6 +1,6 @@
 ## heyarr enrich status
 
-Show how many held music/book works still lack a cover or id
+Show how many held works still lack their artwork or id
 
 ```
 heyarr enrich status [flags]
@@ -24,4 +24,4 @@ heyarr enrich status [flags]
 
 ### See also
 
-* [heyarr enrich](heyarr_enrich.md)	 - Enrich held music and book works with covers and canonical ids
+* [heyarr enrich](heyarr_enrich.md)	 - Enrich held works with artwork, descriptions and canonical ids

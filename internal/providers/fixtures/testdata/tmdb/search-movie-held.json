@@ -1,0 +1,22 @@
+{
+  "name": "search-movie-held",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tmdb",
+    "version": "v3",
+    "captured_at": "2026-11-02T00:00:00Z",
+    "procedure": "GET /search/movie?query=A+Held+Movie&page=1 with an Authorization: Bearer <v4 read access token>; synthesised from the published TMDB v3 contract (ADR-0026) because CI has no token and none may be committed. Regenerate against a real token with scripts/capture-fixtures.sh tmdb search-movie-held.",
+    "note": "Synthesised: the held-film enrich search. TMDB ranks a same-named 1999 decoy FIRST (id 701) and the 2016 film the library holds second (id 700), to prove the client validates a hit's year against the Work's rather than trusting rank; the third hit shares no title words and proves the overlap floor. The client reads only id, title/original_title and release_date here — the overview, artwork and ids come from the detail call."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/search/movie?query=A+Held+Movie&page=1"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"page\":1,\"results\":[{\"id\":701,\"title\":\"A Held Movie\",\"original_title\":\"A Held Movie\",\"release_date\":\"1999-05-05\",\"overview\":\"A same-named remake decoy.\",\"popularity\":40.1,\"poster_path\":\"/decoy-poster.jpg\",\"backdrop_path\":\"/decoy-backdrop.jpg\"},{\"id\":700,\"title\":\"A Held Movie\",\"original_title\":\"Un Film Tenu\",\"release_date\":\"2016-11-11\",\"overview\":\"A film used to exercise enrichment.\",\"popularity\":9.4,\"poster_path\":\"/held-poster.jpg\",\"backdrop_path\":\"/held-backdrop.jpg\"},{\"id\":702,\"title\":\"Something Else Entirely\",\"release_date\":\"2016-01-01\",\"overview\":\"\",\"poster_path\":null}],\"total_pages\":1,\"total_results\":3}"
+  }
+}

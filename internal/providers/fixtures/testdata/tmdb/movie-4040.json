@@ -1,0 +1,22 @@
+{
+  "name": "movie-4040",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tmdb",
+    "version": "v3",
+    "captured_at": "2026-11-02T00:00:00Z",
+    "procedure": "GET /movie/4040?append_to_response=external_ids with an Authorization: Bearer <v4 read access token>; synthesised from the published TMDB v3 contract (ADR-0026) because CI has no token and none may be committed. Regenerate against a real token with scripts/capture-fixtures.sh tmdb movie-4040.",
+    "note": "Synthesised: TMDB's 404 for an id it does not have (status_code 34). A Work carrying a tmdb id that no longer resolves must come back as found=false — the modelled 'no such title' — not as a transport error the worker would retry forever."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/movie/4040?append_to_response=external_ids"
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"success\":false,\"status_code\":34,\"status_message\":\"The resource you requested could not be found.\"}"
+  }
+}

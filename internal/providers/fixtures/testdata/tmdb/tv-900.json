@@ -1,0 +1,22 @@
+{
+  "name": "tv-900",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tmdb",
+    "version": "v3",
+    "captured_at": "2026-11-02T00:00:00Z",
+    "procedure": "GET /tv/900?append_to_response=external_ids with an Authorization: Bearer <v4 read access token>; synthesised from the published TMDB v3 contract (ADR-0026) because CI has no token and none may be committed. Regenerate against a real token with scripts/capture-fixtures.sh tmdb tv-900.",
+    "note": "Synthesised: a series' detail with external_ids appended. Unlike a movie it carries imdb_id ONLY under external_ids, beside tvdb_id as a NUMBER — the shape the client must read for a followed series' TVDB id to be confirmed. backdrop_path is null so the result's BackdropURL must be empty, never a poster standing in."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/tv/900?append_to_response=external_ids"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"id\":900,\"name\":\"A Held Series\",\"original_name\":\"A Held Series\",\"first_air_date\":\"2011-09-19\",\"overview\":\"A series used to exercise enrichment.\",\"poster_path\":\"/series-poster.jpg\",\"backdrop_path\":null,\"genres\":[{\"id\":10765,\"name\":\"Sci-Fi & Fantasy\"}],\"number_of_seasons\":2,\"external_ids\":{\"imdb_id\":\"tt0900900\",\"tvdb_id\":123456,\"facebook_id\":null}}"
+  }
+}

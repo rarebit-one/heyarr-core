@@ -49,6 +49,28 @@ func TokenSetRatio(a, b string) float64 {
 	return float64(shared) / float64(denom)
 }
 
+// Jaccard is the intersection-over-union of the two strings' token sets, 0..1:
+// the stricter sibling of TokenSetRatio that DOES punish extra words. It is a
+// tie-breaker, not a confidence: when two hits contain every word of the query
+// (TokenSetRatio 1.0 for both — "Alien" against "Alien" and against "Alien:
+// Covenant"), the one with the fewest words the query never had is the closer
+// title. Two empty sets score 0.
+func Jaccard(a, b string) float64 {
+	sa := tokenSet(a)
+	sb := tokenSet(b)
+	if len(sa) == 0 || len(sb) == 0 {
+		return 0
+	}
+	shared := 0
+	for tok := range sa {
+		if sb[tok] {
+			shared++
+		}
+	}
+	union := len(sa) + len(sb) - shared
+	return float64(shared) / float64(union)
+}
+
 // tokenSet normalises a string into a set of comparison tokens: lower-cased
 // words with punctuation folded to spaces, single characters dropped (a stray
 // "a"/"&" carries no match signal and only inflates the denominator).

@@ -1,0 +1,22 @@
+{
+  "name": "movie-700",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tmdb",
+    "version": "v3",
+    "captured_at": "2026-11-02T00:00:00Z",
+    "procedure": "GET /movie/700?append_to_response=external_ids with an Authorization: Bearer <v4 read access token>; synthesised from the published TMDB v3 contract (ADR-0026) because CI has no token and none may be committed. Regenerate against a real token with scripts/capture-fixtures.sh tmdb movie-700.",
+    "note": "Synthesised: a film's detail with external_ids appended in the same call (append_to_response), the one request a matched film costs after its search. The client reads id, title, release_date, overview, poster_path, backdrop_path, the genre names and the imdb id (present both at the top level and under external_ids for a movie), tolerating the rest."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/movie/700?append_to_response=external_ids"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"id\":700,\"title\":\"A Held Movie\",\"original_title\":\"Un Film Tenu\",\"release_date\":\"2016-11-11\",\"overview\":\"A film used to exercise enrichment.\",\"tagline\":\"Held, then enriched.\",\"runtime\":116,\"poster_path\":\"/held-poster.jpg\",\"backdrop_path\":\"/held-backdrop.jpg\",\"genres\":[{\"id\":878,\"name\":\"Science Fiction\"},{\"id\":18,\"name\":\"Drama\"}],\"imdb_id\":\"tt0700700\",\"external_ids\":{\"imdb_id\":\"tt0700700\",\"wikidata_id\":\"Q700\",\"facebook_id\":null}}"
+  }
+}
