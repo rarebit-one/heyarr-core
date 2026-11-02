@@ -14,7 +14,7 @@ import (
 )
 
 // heyarr-core#846: every pull built a fresh pinned client, and the keep-alive
-// connection it left in that client's idle pool was never closed. On hyperion-2
+// connection it left in that client's idle pool was never closed. On the reference host
 // that was one ESTABLISHED socket per pulled blob, until the 28,232-port
 // ephemeral range was full and every pull failed with EADDRNOTAVAIL. A pull
 // must leave no connection behind.

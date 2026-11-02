@@ -376,7 +376,7 @@ func (p *Puller) clientFor(src replication.Source) (*http.Client, error) {
 	// dropped. A kept-alive connection would go back to the idle pool of a
 	// transport nothing will use again, and stay open: one socket per pulled
 	// blob, until the ephemeral port range is full and every pull fails with
-	// EADDRNOTAVAIL (heyarr-core#846, hyperion-2: 28,232 sockets). Closing at
+	// EADDRNOTAVAIL (heyarr-core#846, the reference host: 28,232 sockets). Closing at
 	// the transport rather than at each call site also covers the paths that
 	// hand a response body back to their caller.
 	tr, ok := client.Transport.(*http.Transport)
