@@ -63,11 +63,15 @@ func TestClientSatisfiesDiscoverySearcher(t *testing.T) {
 	var _ providers.DiscoverySearcher = (*Client)(nil)
 }
 
-func TestCapabilityIsMetadata(t *testing.T) {
+// It declares BOTH capabilities: metadata, for the follow beat's episode
+// enumeration, and enrich, for the held film or series the enrich beat routes to
+// it. Each is routed on its own, so a node with only TMDB configured enriches
+// its video and leaves books to a provider it does not have.
+func TestCapabilitiesAreMetadataAndEnrich(t *testing.T) {
 	c := newClient(t, "http://example.invalid")
 	caps := c.Capabilities()
-	if len(caps) != 1 || caps[0] != providers.CapabilityMetadata {
-		t.Fatalf("capabilities = %v, want [metadata]", caps)
+	if len(caps) != 2 || caps[0] != providers.CapabilityMetadata || caps[1] != providers.CapabilityEnrich {
+		t.Fatalf("capabilities = %v, want [metadata enrich]", caps)
 	}
 }
 

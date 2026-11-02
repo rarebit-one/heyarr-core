@@ -43,6 +43,14 @@
 // supplied at construction (from a credential or an environment reference at the
 // edge) and is never committed.
 //
+// # Held films and series are enriched here too
+//
+// enrich.go makes this adapter a providers.EnrichProvider as well (ADR-0122):
+// keyed on a held movie or series Work it returns the canonical ids, overview
+// and genres, and the poster and backdrop the enrich job stores on the node.
+// The feed half and the enrich half share the client, the credential and the
+// transport, and nothing else.
+//
 // # Movies: no longer out of scope
 //
 // TMDB indexes movies as well as TV. ADR-0077 originally deferred movie
@@ -114,8 +122,8 @@ type Options struct {
 	Now func() time.Time
 }
 
-// Client is one TMDB metadata provider. It satisfies providers.FeedProvider and
-// providers.DiscoverySearcher.
+// Client is one TMDB metadata provider. It satisfies providers.FeedProvider,
+// providers.DiscoverySearcher and providers.EnrichProvider.
 type Client struct {
 	name     string
 	endpoint string
@@ -153,9 +161,12 @@ func New(o Options) (*Client, error) {
 // Name is the operator's name for this provider.
 func (c *Client) Name() string { return c.name }
 
-// Capabilities is what this provider does: it is a metadata feed provider.
+// Capabilities is what this provider does: it is a metadata feed provider for
+// followed series AND the enrich provider for held films and series (enrich.go).
+// Each capability is routed on its own, so the poll loop sees a FeedProvider and
+// the enrich worker an EnrichProvider, and neither learns the other exists.
 func (c *Client) Capabilities() []providers.Capability {
-	return []providers.Capability{providers.CapabilityMetadata}
+	return []providers.Capability{providers.CapabilityMetadata, providers.CapabilityEnrich}
 }
 
 // ServesType reports that this adapter enumerates tv_series sources. Movies are

@@ -186,6 +186,18 @@ func TestValidateAccepts(t *testing.T) {
 			},
 		},
 		{
+			// TMDB answers two questions — a followed series' episodes and a held
+			// film's identity and artwork — so by default it declares both
+			// capabilities, each routed on its own.
+			name:  "a tmdb provider is a metadata and an enrich provider",
+			entry: Entry{Name: "themoviedb", Type: "tmdb", APIKey: "a-token"},
+			check: func(t *testing.T, r Resolved) {
+				if len(r.Capabilities) != 2 || r.Capabilities[0] != CapabilityMetadata || r.Capabilities[1] != CapabilityEnrich {
+					t.Errorf("capabilities = %v, want [metadata enrich]", r.Capabilities)
+				}
+			},
+		},
+		{
 			// A youtube feed adapter needs neither endpoint nor credential: the
 			// channel feed URL is the source's own FeedRef (like podcast).
 			name:  "a youtube feed provider needs no endpoint or credential",

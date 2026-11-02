@@ -1,0 +1,22 @@
+{
+  "name": "search-movie-unknown",
+  "provenance": {
+    "origin": "synthesised",
+    "service": "tmdb",
+    "version": "v3",
+    "captured_at": "2026-11-02T00:00:00Z",
+    "procedure": "GET /search/movie?query=Totally+Unknown+Film&page=1 with an Authorization: Bearer <v4 read access token>; synthesised from the published TMDB v3 contract (ADR-0026) because CI has no token and none may be committed. Regenerate against a real token with scripts/capture-fixtures.sh tmdb search-movie-unknown.",
+    "note": "Synthesised: TMDB knows nothing by this name. An empty results array is the modelled 'nothing matched' outcome, which the client must report as found=false with no error so the worker backs the Work off rather than retrying."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/search/movie?query=Totally+Unknown+Film&page=1"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"page\":1,\"results\":[],\"total_pages\":0,\"total_results\":0}"
+  }
+}

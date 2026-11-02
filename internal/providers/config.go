@@ -113,8 +113,16 @@ const (
 	// an Authorization: Bearer header against the v3 endpoints — a header, not a
 	// query api_key, so the secret never travels in a URL. It names the service
 	// the way `tvdb` does, because the v3 API has no second implementation to
-	// abstract over (ADR-0028). Movies are out of scope — heyarr's follow model
-	// has no movie source type (ADR-0077).
+	// abstract over (ADR-0028).
+	//
+	// It is ALSO the enrich provider for held films and series (ADR-0122,
+	// ADR-0087's named revisit): keyed on a held movie or series Work — its
+	// title and year, or a tmdb/imdb/tvdb id already recorded — it returns the
+	// canonical ids, the overview and genres, and the poster AND backdrop the
+	// enrich job stores on the node, so every client is served the same
+	// artwork rather than each fetching its own. Movies are still never
+	// FOLLOWED — the follow model has no movie source type (ADR-0077) — but a
+	// held one is enriched like a held book is.
 	KindTMDB Kind = "tmdb"
 	// KindPodcast is a metadata provider that parses a podcast RSS feed (§59,
 	// M12 Phase 2): it enumerates a feed's <item> entries so a followed source
@@ -270,8 +278,16 @@ func DefaultCapabilities(k Kind) []Capability {
 		return []Capability{CapabilityIndexer}
 	case KindTransmission, KindQBittorrent, KindSABnzbd, KindNZBGet, KindHTTP, KindYtDlp, KindLgogdownloader, KindWebCapture:
 		return []Capability{CapabilityDownload}
-	case KindTVDB, KindTMDB, KindPodcast, KindYoutube, KindWebFeed:
+	case KindTVDB, KindPodcast, KindYoutube, KindWebFeed:
 		return []Capability{CapabilityMetadata}
+	case KindTMDB:
+		// TMDB is the one kind that answers two questions: it enumerates a
+		// followed series' episodes (metadata) AND, keyed on a held film or
+		// series, says what it is and where its poster and backdrop are
+		// (enrich). Two capabilities on one provider is the registry's ordinary
+		// shape — each is routed on its own — not the two-routing-modes-on-one-
+		// capability overload ADR-0085 and ADR-0087 refused.
+		return []Capability{CapabilityMetadata, CapabilityEnrich}
 	case KindOpenSubtitles:
 		return []Capability{CapabilitySubtitle}
 	case KindMusicBrainz, KindOpenLibrary:
