@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,10 +20,12 @@ import (
 
 // countingProxy forwards TCP to target and counts the connections still open.
 // TLS passes through it untouched, so the pin is still checked end to end.
+// Each connection that ends signals on closed, so a test waits for teardown
+// instead of sleeping and re-reading the count.
 type countingProxy struct {
-	ln   net.Listener
-	open atomic.Int64
-	wg   sync.WaitGroup
+	ln     net.Listener
+	open   atomic.Int64
+	closed chan struct{}
 }
 
 func startCountingProxy(t *testing.T, target string) *countingProxy {
@@ -33,7 +34,7 @@ func startCountingProxy(t *testing.T, target string) *countingProxy {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &countingProxy{ln: ln}
+	p := &countingProxy{ln: ln, closed: make(chan struct{}, 1024)}
 	go func() {
 		for {
 			in, err := ln.Accept()
@@ -46,10 +47,11 @@ func startCountingProxy(t *testing.T, target string) *countingProxy {
 				continue
 			}
 			p.open.Add(1)
-			p.wg.Add(1)
 			go func() {
-				defer p.wg.Done()
-				defer p.open.Add(-1)
+				defer func() {
+					p.open.Add(-1)
+					p.closed <- struct{}{}
+				}()
 				done := make(chan struct{}, 2)
 				pipe := func(dst, src net.Conn) {
 					_, _ = io.Copy(dst, src)
@@ -70,17 +72,19 @@ func startCountingProxy(t *testing.T, target string) *countingProxy {
 
 func (p *countingProxy) addr() string { return p.ln.Addr().String() }
 
-// settlesAt waits briefly for the open count to reach want, and reports the
-// count it last saw.
-func (p *countingProxy) settlesAt(want int64) (int64, bool) {
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		got := p.open.Load()
-		if got == want || time.Now().After(deadline) {
-			return got, got == want
+// drained waits for every connection the proxy accepted to close, giving up
+// after timeout, and returns how many are still open.
+func (p *countingProxy) drained(timeout time.Duration) int64 {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	for p.open.Load() > 0 {
+		select {
+		case <-p.closed:
+		case <-deadline.C:
+			return p.open.Load()
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
+	return 0
 }
 
 func TestPullsLeaveNoConnectionOpen(t *testing.T) {
@@ -112,7 +116,7 @@ func TestPullsLeaveNoConnectionOpen(t *testing.T) {
 	// A manifest read is a second client path through the same constructor.
 	_, _ = dest.puller.FetchManifest(t.Context(), via, hashes[0])
 
-	if got, ok := proxy.settlesAt(0); !ok {
+	if got := proxy.drained(5 * time.Second); got != 0 {
 		t.Errorf("%d connections still open after %d pulls and a manifest read, want 0: "+
 			"each pull's client leaves its connection behind (heyarr-core#846)", got, blobs)
 	}
