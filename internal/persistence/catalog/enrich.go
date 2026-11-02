@@ -22,10 +22,40 @@ import (
 // needs no consumer change.
 const artworkRole = "artwork"
 
+// Artwork kinds (FetchedArtwork.Kind): which face of a Work a fetched image is.
+// The kind decides the asset's FILENAME, and the filename is what the cover
+// resolver ranks on (browse.go artworkRank / backdropPick) — so a poster lands in
+// the tier a shipped poster.jpg would, a backdrop in the tier a shipped
+// fanart.jpg would, and neither is ever served in the other's place.
+const (
+	// ArtworkPoster is the front-facing image: a book or album cover, a film or
+	// series poster. The default when Kind is empty.
+	ArtworkPoster = "poster"
+	// ArtworkBackdrop is a wide scene image — TMDB's backdrop, a release's
+	// fanart.jpg — decoration a detail screen shows behind the title, never the
+	// card image.
+	ArtworkBackdrop = "backdrop"
+)
+
 // artworkFilename names a fetched cover so it wins artworkRank's `GLOB 'cover*'`
 // tier (browse.go) — the representative cover of the Work — regardless of the
 // bytes' real format.
 const artworkFilename = "cover.jpg"
+
+// backdropFilename names a fetched backdrop so it lands in artworkRank's
+// decoration tier and is what backdropPick selects (browse.go), regardless of
+// the bytes' real format.
+const backdropFilename = "backdrop.jpg"
+
+// artworkFilenameFor is the filename a fetched image of the kind is recorded
+// under. An unknown or empty kind is a poster, the only kind that existed
+// before backdrops did.
+func artworkFilenameFor(kind string) (filename, kindOut string) {
+	if kind == ArtworkBackdrop {
+		return backdropFilename, ArtworkBackdrop
+	}
+	return artworkFilename, ArtworkPoster
+}
 
 // defaultArtworkMIME is used when a fetch could not determine the image type. The
 // cover resolver serves whatever the asset's mime says; a wrong-but-plausible
@@ -44,17 +74,24 @@ type FetchedArtwork struct {
 	// falls back to defaultArtworkMIME.
 	MIME string
 	// Source is the enrich source that produced the cover ("coverartarchive",
-	// "openlibrary"), recorded in the asset's attributes.
+	// "openlibrary", "tmdb"), recorded in the asset's attributes.
 	Source string
+	// Kind is which face the image is — ArtworkPoster (the default) or
+	// ArtworkBackdrop — and decides the filename the asset is recorded under,
+	// which is what the cover resolver ranks on. Recorded in the asset's
+	// attributes too, so the provenance reads without decoding the filename.
+	Kind string
 }
 
-// RecordFetchedArtwork attaches a fetched cover to a Work's representative Edition
+// RecordFetchedArtwork attaches a fetched image to a Work's representative Edition
 // as a managed role='artwork' asset (ADR-0087) — the generalisation of ADR-0084/
 // 0085's recordSubtitleAsset for a different role and MIME. It is the import step
-// of an enrich job: the provider returned a cover URL, the download client adopted
-// its bytes into the CAS, and this lands them as an ordinary managed asset that
-// replication, integrity and the cover resolver (artworkPick) treat exactly like
-// a shipped folder.jpg — so every consumer serves it with no change.
+// of an enrich job: the provider returned an image URL, the download client
+// adopted its bytes into the CAS, and this lands them as an ordinary managed
+// asset that replication, integrity and the cover resolver (artworkPick,
+// backdropPick) treat exactly like a shipped folder.jpg or fanart.jpg — so every
+// consumer serves it with no change. art.Kind says which face it is; the
+// filename it decides is what keeps a backdrop out of the poster slot.
 //
 // # It attaches at an Edition and resolves at the Work (ADR-0087 §5)
 //
@@ -68,7 +105,8 @@ type FetchedArtwork struct {
 //
 // Keyed on (edition, blob, role): the enrich job will be re-run (invariant 9), and
 // a second run produces bytes the CAS deduplicates, converging on the same asset
-// row rather than adding a second one.
+// row rather than adding a second one. A poster and a backdrop are different
+// bytes, so the two kinds never collapse into one row.
 func (c *Catalog) RecordFetchedArtwork(
 	ctx context.Context, workID string, art FetchedArtwork, now time.Time,
 ) error {
@@ -132,7 +170,8 @@ func (c *Catalog) recordArtworkTx(
 		return events.Event{}, false, lookErr
 	}
 
-	attrs, err := encodeAttributes(map[string]any{"source": art.Source})
+	filename, kind := artworkFilenameFor(art.Kind)
+	attrs, err := encodeAttributes(map[string]any{"source": art.Source, "kind": kind})
 	if err != nil {
 		return events.Event{}, false, err
 	}
@@ -143,7 +182,7 @@ func (c *Catalog) recordArtworkTx(
 			item_id, created_at, updated_at)
 		VALUES (?, ?, ?, 'managed', ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?)`,
 		assetID, editionID, libraryID, art.BlobHash,
-		artworkRole, artworkFilename, mime, identSource, attrs, stamp, stamp); err != nil {
+		artworkRole, filename, mime, identSource, attrs, stamp, stamp); err != nil {
 		return events.Event{}, false, err
 	}
 
@@ -163,7 +202,7 @@ func (c *Catalog) recordArtworkTx(
 	e, err := c.events.EmitTx(ctx, tx, events.TypeAssetCreated, "asset", assetID,
 		map[string]any{
 			"asset_id": assetID, "edition_id": editionID,
-			"blob_hash": art.BlobHash, "role": artworkRole,
+			"blob_hash": art.BlobHash, "role": artworkRole, "kind": kind,
 			"work_id": workID, "source": art.Source,
 		})
 	if err != nil {
@@ -314,4 +353,126 @@ func (c *Catalog) CorrectWorkIdentity(
 			newTitle, newSort, encoded, stamp, workID)
 		return err
 	})
+}
+
+// EnrichedMetadata is what an enrich authority said about a Work beyond its ids
+// and artwork: the description a detail screen shows, the genres a shelf groups
+// on, and the authority's own year — decoration and provenance, never identity.
+type EnrichedMetadata struct {
+	// Source names the authority ("tmdb", "openlibrary", "musicbrainz"). Recorded
+	// as attributes.enrich_source so a reader knows where the overview came from,
+	// and so a later pass from the SAME source may refresh what it wrote while a
+	// value some other writer set is left alone.
+	Source   string
+	Overview string
+	Genres   []string
+	// Year is the authority's year, zero when it did not say. Recorded as
+	// attributes.enrich_year beside the Work's own year, which is NOT changed: a
+	// disagreement is for a reviewer to see, not for enrichment to resolve.
+	Year int
+}
+
+// RecordWorkMetadata writes an authority's description of a Work into its
+// attributes (ADR-0087 §4: enrichment ADDS; it does not overwrite identity). It
+// sets overview, genres, enrich_year, enrich_source and enriched_at, and never
+// blanks a field: an empty Overview leaves whatever overview the Work had.
+//
+// An overview or genres some OTHER writer set — a value present with no
+// enrich_source, or one recorded by a different source — is preserved, so a
+// person's or another tool's description is not replaced by a provider's. A
+// value this source wrote before is refreshed. The Work's title, year and
+// author/artist are not touched here; CorrectWorkIdentity owns those under
+// ADR-0088's gate.
+//
+// Idempotent, and emits content.work.updated only when something changed
+// (invariant 7): a re-run that writes the same overview again is silent.
+func (c *Catalog) RecordWorkMetadata(ctx context.Context, workID string, meta EnrichedMetadata, now time.Time) error {
+	meta.Source = strings.TrimSpace(meta.Source)
+	meta.Overview = strings.TrimSpace(meta.Overview)
+	if meta.Source == "" {
+		return errors.New("catalog: recording enriched metadata needs a source")
+	}
+	if meta.Overview == "" && len(meta.Genres) == 0 && meta.Year == 0 {
+		return nil
+	}
+
+	var pending []events.Event
+	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		var attrsJSON string
+		if err := tx.QueryRowContext(ctx, `SELECT attributes FROM works WHERE id = ?`, workID).
+			Scan(&attrsJSON); err != nil {
+			return fmt.Errorf("catalog: the work to describe is gone: %w", err)
+		}
+		attrs := map[string]any{}
+		if strings.TrimSpace(attrsJSON) != "" {
+			if err := json.Unmarshal([]byte(attrsJSON), &attrs); err != nil {
+				return fmt.Errorf("catalog: decoding work %s attributes: %w", workID, err)
+			}
+		}
+
+		// Ours to refresh when this source wrote it before, or nothing has
+		// written it yet; someone else's to keep otherwise.
+		prevSource, _ := attrs["enrich_source"].(string)
+		ours := func(key string) bool {
+			if _, present := attrs[key]; !present {
+				return true
+			}
+			if v, isString := attrs[key].(string); isString && strings.TrimSpace(v) == "" {
+				return true
+			}
+			return prevSource == meta.Source
+		}
+
+		var changed []string
+		if meta.Overview != "" && ours("overview") {
+			if prev, _ := attrs["overview"].(string); prev != meta.Overview {
+				attrs["overview"] = meta.Overview
+				changed = append(changed, "overview")
+			}
+		}
+		if len(meta.Genres) > 0 && ours("genres") {
+			genres := make([]any, 0, len(meta.Genres))
+			for _, g := range meta.Genres {
+				genres = append(genres, g)
+			}
+			if !sameStrings(attrs["genres"], meta.Genres) {
+				attrs["genres"] = genres
+				changed = append(changed, "genres")
+			}
+		}
+		if meta.Year != 0 {
+			if prev, _ := attrs["enrich_year"].(float64); int(prev) != meta.Year {
+				attrs["enrich_year"] = meta.Year
+				changed = append(changed, "enrich_year")
+			}
+		}
+		if len(changed) == 0 {
+			return nil
+		}
+		attrs["enrich_source"] = meta.Source
+		attrs["enriched_at"] = now.UTC().Format(time.RFC3339)
+
+		encoded, err := encodeAttributes(attrs)
+		if err != nil {
+			return err
+		}
+		stamp := now.Format(timestampFormat)
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE works SET attributes = ?, updated_at = ? WHERE id = ?`, encoded, stamp, workID); err != nil {
+			return err
+		}
+		e, err := c.events.EmitTx(ctx, tx, events.TypeWorkUpdated, "work", workID, map[string]any{
+			"work_id": workID, "enrich_source": meta.Source, "fields": changed,
+		})
+		if err != nil {
+			return err
+		}
+		pending = append(pending, e)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	c.events.Publish(pending...)
+	return nil
 }

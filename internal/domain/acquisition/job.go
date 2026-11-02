@@ -114,8 +114,9 @@ type FetchSubtitlePayload struct {
 	DesiredItemID string `json:"desired_item_id"`
 }
 
-// EnrichWorkJobType fills in a held music/book Work's canonical ids and cover
-// from a keyed lookup (ADR-0087, M12 Phase 6).
+// EnrichWorkJobType fills in a held Work's canonical ids, description and
+// artwork from a keyed lookup (ADR-0087, ADR-0122): an album's or book's
+// cover, a film's or series' poster and backdrop.
 //
 // It is a JOB over a held Work, not a want (ADR-0087 §6): the enrich beat
 // enqueues it for a due, under-enriched Work, and a worker with a
