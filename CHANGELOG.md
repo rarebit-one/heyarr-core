@@ -194,6 +194,12 @@ stable.
   alternative.
 
 ### Fixed
+- **Replication no longer leaks one connection per pulled blob** (#846). The
+  transfer puller builds a pinned client per operation, and each one left its
+  kept-alive connection in an idle pool nothing used again, so a node pulling a
+  backlog from one peer filled its ephemeral port range and every pull then
+  failed with `connect: cannot assign requested address`. The per-operation
+  transport now disables keep-alive (it never reused a connection anyway).
 - Renderer REST routes now decode percent-encoded UDNs. Desktop clients send
   `uuid%3A…` in the path; the controller had compared that spelling with a
   cached `uuid:…` and returned 404 before it contacted the renderer. Play,
