@@ -345,3 +345,44 @@ func (h *harness) eventsOf(t *testing.T, typ string) int {
 	}
 	return len(evs)
 }
+
+// Episode stills are not a poster. A series whose release shipped only
+// `<episode>-thumb.jpg` frames (and a logo) has no front-facing image, so it is
+// due for one — the case where a series showed a 16:9 episode still as its card
+// and enrichment never fetched its poster.
+func TestEpisodeStillsAndLogosAreNotAPoster(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	h.exec(t, `UPDATE works SET content_type = 'series' WHERE id = 'w1'`)
+	holdWork(t, h, "w1", "e1", "a1", "blake3:ffff000000000000000000000000000000000000000000000000000000000001")
+	shipArtwork(t, h, "e1", "art-thumb1", "blake3:ffff000000000000000000000000000000000000000000000000000000000002",
+		"Show (2018) - S04E01 - Pilot [HDTV-1080p]-thumb.jpg")
+	shipArtwork(t, h, "e1", "art-thumb2", "blake3:ffff000000000000000000000000000000000000000000000000000000000003",
+		"Show (2018) - S04E02 - Second-thumb.jpg")
+	shipArtwork(t, h, "e1", "art-logo", "blake3:ffff000000000000000000000000000000000000000000000000000000000004", "clearlogo.png")
+	shipArtwork(t, h, "e1", "art-fanart", "blake3:ffff000000000000000000000000000000000000000000000000000000000005", "fanart.jpg")
+	if err := h.cat.WriteWorkExternalID(ctx, "w1", "tmdb", "73586"); err != nil {
+		t.Fatal(err)
+	}
+
+	wctx, ok, err := h.cat.EnrichContext(ctx, "w1")
+	if err != nil || !ok {
+		t.Fatalf("context: ok=%v err=%v", ok, err)
+	}
+	if wctx.HasPoster {
+		t.Fatal("episode stills, a logo and fanart are not a poster — enrichment must fetch one")
+	}
+	if !wctx.HasBackdrop {
+		t.Fatal("the shipped fanart is the backdrop")
+	}
+	if ids := dueEnrichIDs(t, h); len(ids) != 1 {
+		t.Fatalf("a series with only stills is due for its poster, got %v", ids)
+	}
+
+	// A season poster is front-facing art, so it does count.
+	shipArtwork(t, h, "e1", "art-season", "blake3:ffff000000000000000000000000000000000000000000000000000000000006", "season01-poster.jpg")
+	if wctx, _, _ = h.cat.EnrichContext(ctx, "w1"); !wctx.HasPoster {
+		t.Fatal("a season poster is a portrait image and counts as one")
+	}
+}
