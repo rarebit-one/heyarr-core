@@ -144,7 +144,14 @@ func (h *harness) pinnedUserIDs(t *testing.T) []string {
 // client sends beside its cert since void-which-binds-go v0.18 (void-which-binds-go#70).
 func prove(t *testing.T, devicePriv ed25519.PrivateKey, cert string) string {
 	t.Helper()
-	proof, err := enrolment.SignPossession(devicePriv, cert, time.Now().UTC(), 0)
+	return proveFor(t, devicePriv, cert, 0)
+}
+
+// proveFor is prove with the window the device grants the proof (0 = the
+// reference TTL).
+func proveFor(t *testing.T, devicePriv ed25519.PrivateKey, cert string, ttl time.Duration) string {
+	t.Helper()
+	proof, err := enrolment.SignPossession(devicePriv, cert, time.Now().UTC(), ttl)
 	if err != nil {
 		t.Fatal(err)
 	}

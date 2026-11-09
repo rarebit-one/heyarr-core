@@ -12,6 +12,7 @@ import (
 	"github.com/rarebit-one/void-which-binds-go/enrolment"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/weblogin"
+	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 )
 
 // postWake calls POST /v1/unwrap-wake with a JSON body and returns the response.
@@ -218,6 +219,10 @@ func TestUnwrapWakeAuthenticatesPossession(t *testing.T) {
 		{"foreign proof", `{"cert":"` + cert + `","possession":"` + prove(t, otherPriv, cert) + tail, http.StatusUnauthorized},
 		{"malformed proof", `{"cert":"` + cert + `","possession":"not-a-proof` + tail, http.StatusUnauthorized},
 		{"proof twice", `{"cert":"` + cert + enrolment.CredentialSeparator + prove(t, priv, cert) + `","possession":"` + prove(t, priv, cert) + tail, http.StatusUnauthorized},
+		// #420's ceiling holds here as it does for every Device credential: a
+		// proof may live exactly MaxPossessionTTL, and not a minute more.
+		{"proof at the TTL ceiling", `{"cert":"` + cert + `","possession":"` + proveFor(t, priv, cert, deviceauth.MaxPossessionTTL) + tail, http.StatusOK},
+		{"proof past the TTL ceiling", `{"cert":"` + cert + `","possession":"` + proveFor(t, priv, cert, deviceauth.MaxPossessionTTL+time.Minute) + tail, http.StatusUnauthorized},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

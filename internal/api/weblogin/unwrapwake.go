@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rarebit-one/heyarr-core/internal/deviceauth"
 	"github.com/rarebit-one/void-which-binds-go/enrolment"
 	"github.com/rarebit-one/void-which-binds-go/notify"
 	"github.com/rarebit-one/void-which-binds-go/rp"
@@ -164,6 +165,14 @@ func (u *unwrapWaker) authenticate(cert, possession string, ops []string, now ti
 	}
 	if possession == "" {
 		return rp.Authenticated{}, errPossessionRequired
+	}
+	// The same ceiling deviceauth.Verify puts on every other Device credential
+	// (#420). It runs before VerifyWithPossession, not after the signature as
+	// Verify orders it, because that call commits the presented ops: a proof
+	// minted to live too long must leave nothing behind. Every refusal here is
+	// the same opaque 401, so the order tells an unsigned proof nothing.
+	if err := deviceauth.CheckPossessionTTL(possession); err != nil {
+		return rp.Authenticated{}, err
 	}
 	return u.verifier.VerifyWithPossession(cert, possession, ops, now)
 }

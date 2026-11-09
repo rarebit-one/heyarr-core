@@ -204,7 +204,7 @@ func verifyPossession(proof, deviceKey, opToken string, now time.Time) error {
 	// The window the proof gave ITSELF is checked only after the signature is,
 	// so a caller learns nothing from an unsigned proof, and so the TTL check
 	// can trust the numbers it reads.
-	return withinMaxPossessionTTL(proof)
+	return CheckPossessionTTL(proof)
 }
 
 // MaxPossessionTTL is the longest life this node honours on a possession proof,
@@ -241,9 +241,11 @@ type possessionWindow struct {
 	Expires  int64 `json:"exp"`
 }
 
-// withinMaxPossessionTTL refuses a proof that granted itself more than
-// MaxPossessionTTL.
-func withinMaxPossessionTTL(proof string) error {
+// CheckPossessionTTL refuses a proof that granted itself more than
+// MaxPossessionTTL. It reads the window and judges nothing else, so a caller
+// that verifies the proof by another route (weblogin's unwrap-wake, through
+// rp.Verifier) holds it to the same ceiling as Verify does.
+func CheckPossessionTTL(proof string) error {
 	bodyEnc, _, ok := strings.Cut(proof, ".")
 	if !ok {
 		return enrolment.ErrPossessionMalformed
