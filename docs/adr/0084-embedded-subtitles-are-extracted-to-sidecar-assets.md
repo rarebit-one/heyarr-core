@@ -15,7 +15,7 @@ those releases get captions everywhere with no special handling.
 
 Driving this for real surfaced the gap: a title whose subtitles live *inside* the
 container — `mov_text` in an `.mp4`, SubRip/ASS in an `.mkv` — has no such asset.
-The concrete case was Yellowstone (thesim-family session): 17 episodes, no
+The concrete case was a real series on the reference host: 17 episodes, no
 sidecar files, two embedded English `mov_text` tracks per `.mp4`. `ffprobe`
 already reports those streams during the §66 probe, but nothing lifts them out,
 so every caption consumer sees a video with no subtitle and the television shows

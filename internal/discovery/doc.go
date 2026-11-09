@@ -27,8 +27,8 @@
 //     nothing: the feature is off by construction, mirroring "empty allow-list =
 //     tier off" from the guest tier it borrows its boundary from.
 //
-// What it does NOT do: it does not answer the split-horizon DNS name
-// heyarr.thesim.family (mechanism 1 of the ADR, owned by AdGuard, and the app
-// stays unaware of it), and it does not read personal state. It announces a base
+// What it does NOT do: it does not answer the estate's split-horizon DNS name
+// for the node (mechanism 1 of the ADR, owned by the network's resolver, and
+// the app stays unaware of it), and it does not read personal state. It announces a base
 // URL and a port on trusted networks, nothing more.
 package discovery

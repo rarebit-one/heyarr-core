@@ -49,3 +49,5 @@ d6f12e4e2cb4b9fb9d3c4a498a2ea0f5456e4a187a15632b2c368dc40c86de96  retired refere
 6a259d3299684d8a1f5693be49dde21e5e22195158487a86c3d73d07c36a5cfc  premises name, scrubbed by #147
 7a3a052ab6bfe076f489545c904aa4584d595b4ddbe8fee8a3671412f1e2d9f9  private network name, legacy (#147 family)
 fb7134a5a2dfa59b14f9cc71fdbe52847c661018a69d65d02aacfc47d43b987a  author username (#211)
+6c5bb1fb74dd29e2e4bb2407cc0e5ca7c77066ecde98abb92eaf71f9a0668a63  family surname and household domain label
+9bfa3352f9a4613ff59c492c612564ded4478a1e8575010d8d7dfb4d3753c552  current reference host name (devcontainer host)

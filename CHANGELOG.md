@@ -467,7 +467,7 @@ stable.
   client-API port) and is inert on a socket-only or loopback-only node that names
   no LAN-reachable port. New `http.discovery.disabled` is the independent
   off-switch; advertisement is on by default where a trusted interface exists.
-  Split-horizon DNS (`heyarr.thesim.family`, mechanism 1) is untouched: the app
+  Split-horizon DNS (`heyarr.<home domain>`, mechanism 1) is untouched: the app
   stays unaware of that name.
 
 - **Device enrolment carries the identity's recovery encryption public key
