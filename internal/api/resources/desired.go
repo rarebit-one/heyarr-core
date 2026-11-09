@@ -247,7 +247,7 @@ func (a *API) listDesired(w http.ResponseWriter, r *http.Request) {
 
 	where := []string{"1 = 1"}
 	args := []any{}
-	if v, err := oneOf(r, "scope", "work", "edition"); err != nil {
+	if v, err := oneOf(r, "scope", "work", "edition", "item"); err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	} else if v != "" {

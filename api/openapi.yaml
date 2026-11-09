@@ -4275,7 +4275,7 @@ paths:
         - $ref: "#/components/parameters/limit"
         - name: scope
           in: query
-          schema: { type: string, enum: [work, edition] }
+          schema: { type: string, enum: [work, edition, item] }
         - name: monitor
           in: query
           description: Only monitored, or only unmonitored, wants.
@@ -10210,23 +10210,17 @@ components:
         id: { type: string }
         scope:
           type: string
-          enum: [work, edition]
+          enum: [work, edition, item]
           description: |
-            How much of the work is wanted — the whole thing, or one edition of
-            it (a season, a particular release, a language).
+            How much of the work is wanted: the whole thing, one edition of it
+            (a season, a particular release, a language), or one item of it
+            (an episode, a podcast entry, a video, an article; ADR-0056).
 
-            **There is no `episode` scope, and that is a limitation rather than
-            an omission.** §11 makes the *series* the Work and an edition the
-            season, so an episode is an Asset — a file that exists — and there
-            is no entity anywhere for an episode nobody has yet. Knowing which
-            episodes *should* exist is what a metadata provider is for, and
-            that is deferred out of Milestone 3.
-
-            What this costs today, stated rather than papered over: with no
-            metadata provider, content satisfaction for a series-scoped want is
-            "an acceptable asset exists", **not** "every episode exists". A
-            want for a series is not a completeness guarantee in this
-            milestone.
+            An item is the byte-less thing a source emitted. Item-scoped wants
+            are not created through `POST /desired`: a followed source projects
+            one onto each item its feed provider enumerates (ADR-0057, ADR-0058),
+            and wanting a whole series is following it (ADR-0089), so each
+            episode arrives as its own item-scoped want.
         work_id:
           type: string
           description: Always set, even at edition scope.
@@ -10375,6 +10369,9 @@ components:
           type: string
           enum: [work, edition]
           default: work
+          description: |
+            `item` is not accepted here: item-scoped wants are projected by a
+            followed source (ADR-0057), never asked for directly.
         work_id: { type: string }
         edition_id:
           type: string
