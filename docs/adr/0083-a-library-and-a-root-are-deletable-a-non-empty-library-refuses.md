@@ -14,7 +14,7 @@ throwaway probe libraries a verification session leaves behind, are in every
 `library list` forever, and a mis-typed `content_type` (#227) cannot be
 corrected because the library that carries it cannot be removed.
 
-The concrete consumer is thesim-family/homelab-ops#485: a reference host
+The concrete consumer was an operator's homelab ops issue: a reference host
 carrying three throwaway libraries (`verify-92`, `hardlink-probe`, a duplicate
 `shows-downloads`). Since #452 their *works* can be removed one by one
 (`DELETE /works/{id}` + `gc`), which empties them — but the empty library and
@@ -97,6 +97,6 @@ a root by id or exact path.
 
 ---
 
-*Provenance: #228, driven by thesim-family/homelab-ops#485. Mirrors the work and
+*Provenance: #228, driven by an operator's homelab ops issue. Mirrors the work and
 edition deletes (#428/ADR-0071, #439/ADR-0071) and ADR-0018's logical-delete
 invariant.*

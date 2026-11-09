@@ -52,7 +52,7 @@ follow, signs in and upgrades from the guest lease to a device principal.
 
 A guest is useless if it cannot find the node, so two mechanisms, in order:
 
-1. On the estate, split-horizon DNS already resolves `heyarr.thesim.family` to the
+1. On the estate, split-horizon DNS already resolves `heyarr.<home domain>` to the
    nearest healthy box (AdGuard). A client defaults to that name and is zero-config
    today, and — via nearest-server — lands on the closest of an active-active pair.
 2. For any network, the node advertises `_heyarr._tcp` over mDNS / DNS-SD. heyarr
