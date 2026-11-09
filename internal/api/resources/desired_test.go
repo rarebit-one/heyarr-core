@@ -605,3 +605,33 @@ func TestPatchAnItemScopedWant(t *testing.T) {
 		t.Errorf("the patch did not apply cleanly: %v", body)
 	}
 }
+
+// Item-scoped wants are filterable like the other scopes. The filter refused
+// `item`, so the wants a followed source projects could only be found by
+// paging every want.
+func TestListFiltersItemScopedWants(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+	seedProjectedItems(h, work1ID)
+
+	page := h.get("/api/v1/desired?scope=item")
+	if page.StatusCode != http.StatusOK {
+		t.Fatalf("scope=item = %d: %s", page.StatusCode, h.body(page))
+	}
+	var got struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(h.body(page), &got); err != nil {
+		t.Fatal(err)
+	}
+	ids := map[any]bool{}
+	for _, item := range got.Items {
+		if item["scope"] != "item" {
+			t.Errorf("scope=item returned a %v-scoped want: %v", item["scope"], item)
+		}
+		ids[item["id"]] = true
+	}
+	if !ids["di-1"] || !ids["di-2"] || len(got.Items) != 2 {
+		t.Errorf("scope=item = %v, want exactly di-1 and di-2", ids)
+	}
+}
