@@ -138,3 +138,7 @@ without a media toolchain.
 ## Licence
 
 [AGPL-3.0-or-later](LICENSE). Contributions under [DCO](CONTRIBUTING.md) sign-off; no CLA.
+
+Release archives and the container image (`/usr/share/doc/heyarr/`) include
+`THIRD_PARTY_LICENSES.txt`, the licence and notice texts of every module linked
+into the binaries. `scripts/third-party-licenses.sh` writes it at release time.

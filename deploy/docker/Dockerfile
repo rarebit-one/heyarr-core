@@ -19,6 +19,10 @@ FROM gcr.io/distroless/static-debian12:nonroot
 ARG TARGETPLATFORM
 COPY $TARGETPLATFORM/heyarr /usr/local/bin/heyarr
 
+# The licence of this software and of every module linked into it (written by
+# scripts/third-party-licenses.sh, a goreleaser before-hook).
+COPY LICENSE THIRD_PARTY_LICENSES.txt /usr/share/doc/heyarr/
+
 # The data directory must be a volume or a bind mount. The image is read-only
 # apart from it, which is the point.
 VOLUME ["/var/lib/heyarr"]

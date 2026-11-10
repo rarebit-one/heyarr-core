@@ -4,6 +4,9 @@ project_name: heyarr
 before:
   hooks:
     - go mod tidy
+    # The licence and notice texts of every module linked into the binaries,
+    # shipped in each archive and in the image (/usr/share/doc/heyarr/).
+    - ./scripts/third-party-licenses.sh THIRD_PARTY_LICENSES.txt
 
 builds:
   - id: heyarr
@@ -57,6 +60,7 @@ archives:
     files:
       - README.md
       - LICENSE
+      - THIRD_PARTY_LICENSES.txt
       - CHANGELOG.md
       # A glob, not a single path: with a literal src, goreleaser treats dst as
       # the destination FILE, so the unit lands in the archive as a file called
@@ -77,6 +81,7 @@ archives:
     files:
       - README.md
       - LICENSE
+      - THIRD_PARTY_LICENSES.txt
       - CHANGELOG.md
       # Literal src → dst is the destination FILE (see the note on the heyarr
       # archive). v0.5.8's release failed here: `dst: docs/` put mnemosyne.md
@@ -105,6 +110,7 @@ dockers_v2:
     tags: ["{{ .Version }}", "latest"]
     platforms: [linux/amd64, linux/arm64]
     dockerfile: deploy/docker/Dockerfile
+    extra_files: [LICENSE, THIRD_PARTY_LICENSES.txt]
     labels:
       org.opencontainers.image.title: "{{ .ProjectName }}"
       org.opencontainers.image.description: "Headless, self-hosted content lifecycle, replication and consumption"
