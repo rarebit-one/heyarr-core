@@ -20,3 +20,6 @@ __pycache__/
 # A dev helper built with a bare `go build ./internal/testutil/fixtures/cmd/stagepartial`
 # lands at the repo root; a 4MB binary reached main that way once (#498).
 /stagepartial
+
+# Written by scripts/third-party-licenses.sh during a release; never committed.
+/THIRD_PARTY_LICENSES.txt
