@@ -119,6 +119,7 @@ dockers_v2:
       org.opencontainers.image.created: "{{ .Date }}"
       org.opencontainers.image.source: "https://github.com/rarebit-one/heyarr-core"
       org.opencontainers.image.licenses: "AGPL-3.0-or-later"
+      org.opencontainers.image.vendor: "Rarebit One"
 
 checksum:
   name_template: checksums.txt
