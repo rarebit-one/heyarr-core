@@ -30,8 +30,8 @@ info:
     sort key of the last row returned, and a client that parses it breaks the
     first time a sort order changes.
   license:
-    name: AGPL-3.0-only
-    identifier: AGPL-3.0-only
+    name: AGPL-3.0-or-later
+    identifier: AGPL-3.0-or-later
 
 servers:
   - url: http://127.0.0.1:8385
