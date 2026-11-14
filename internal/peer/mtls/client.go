@@ -2,6 +2,7 @@ package mtls
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 )
@@ -34,6 +35,7 @@ func Client(opts Options) (*http.Client, error) {
 	return &http.Client{
 		Timeout: DialTimeout,
 		Transport: &http.Transport{
+			DialContext:         (&net.Dialer{Timeout: DialTimeout}).DialContext,
 			TLSClientConfig:     cfg,
 			TLSHandshakeTimeout: DialTimeout,
 			// One connection per peer, kept alive. Membership is consulted on

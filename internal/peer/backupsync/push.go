@@ -11,12 +11,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/peer/endpoint"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/backup"
 )
+
+// transferTimeout bounds the whole snapshot exchange, including the receiver's
+// verification and acknowledgement. Thirty minutes accommodates a 1 GiB backup
+// over a 10 Mbit/s link with headroom, without allowing a stalled peer to occupy
+// a backup cycle indefinitely. Dial and TLS handshakes retain their short limits;
+// metadata queries use the ordinary peer request budget. Caller cancellation or
+// an earlier caller deadline always wins.
+const transferTimeout = 30 * time.Minute
 
 // Pusher pushes this node's control-plane backups to the peers that trust it,
 // and asks a peer what it holds (§50, ADR-0046). It is the sender half; [Store]
@@ -63,7 +72,7 @@ func (p *Pusher) PushTo(ctx context.Context, target Target, backupDir string) (i
 	if err != nil {
 		return 0, err
 	}
-	client, closeIdle, err := p.clientFor(target.Peer)
+	client, closeIdle, err := p.clientFor(target.Peer, transferTimeout)
 	if err != nil {
 		return 0, err
 	}
@@ -113,7 +122,7 @@ func (p *Pusher) HeldBy(ctx context.Context, target Target) ([]int64, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, closeIdle, err := p.clientFor(target.Peer)
+	client, closeIdle, err := p.clientFor(target.Peer, mtls.DialTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +162,7 @@ func (p *Pusher) FetchBundle(ctx context.Context, target Target, generation int6
 	if err != nil {
 		return backup.Manifest{}, err
 	}
-	client, closeIdle, err := p.clientFor(target.Peer)
+	client, closeIdle, err := p.clientFor(target.Peer, transferTimeout)
 	if err != nil {
 		return backup.Manifest{}, err
 	}
@@ -197,7 +206,7 @@ func (p *Pusher) FetchBundle(ctx context.Context, target Target, generation int6
 
 // clientFor builds a pinned mTLS client for exactly one peer, and a function to
 // release its idle connection — this is a one-shot dial, not a pool.
-func (p *Pusher) clientFor(peer mtls.Peer) (*http.Client, func(), error) {
+func (p *Pusher) clientFor(peer mtls.Peer, timeout time.Duration) (*http.Client, func(), error) {
 	client, err := mtls.Client(mtls.Options{
 		Material: p.material,
 		Members:  mtls.PinnedKey(peer),
@@ -206,6 +215,9 @@ func (p *Pusher) clientFor(peer mtls.Peer) (*http.Client, func(), error) {
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("backupsync: building a pinned client for %s: %w", peer.PeerID, err)
 	}
+	// Adjust only the request budget; the pinned transport and its connection
+	// establishment limits must remain intact.
+	client.Timeout = timeout
 	closeIdle := func() {
 		if tr, ok := client.Transport.(*http.Transport); ok {
 			tr.CloseIdleConnections()
