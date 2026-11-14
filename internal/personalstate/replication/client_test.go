@@ -5,7 +5,9 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -24,9 +26,10 @@ type epochState struct {
 	epoch   int
 	history map[int]string
 	wraps   map[string]int // recipient -> epoch
+	heads   []string
 }
 
-func (s *epochState) HeadsFor(context.Context, string) ([]string, error) { return nil, nil }
+func (s *epochState) HeadsFor(context.Context, string) ([]string, error) { return s.heads, nil }
 func (s *epochState) ChangesFor(context.Context, string) ([]protocol.EncryptedChange, error) {
 	return nil, nil
 }
@@ -132,5 +135,42 @@ func TestClientKeyEpochWire(t *testing.T) {
 	defer st.mu.Unlock()
 	if st.epoch != 1 || st.wraps[recip] != 1 {
 		t.Fatalf("target ended at epoch %d with the wrap at %d, want 1 and 1", st.epoch, st.wraps[recip])
+	}
+}
+
+// A flat encrypted log can have one causal head per change (ADR-0101). The
+// heads response is not bounded by the size limit for an individual change.
+func TestClientHeadsLargeFrontier(t *testing.T) {
+	t.Parallel()
+	const space = "0199a0a0-0000-7000-8000-0000000000cc"
+	heads := make([]string, 50_000)
+	for i := range heads {
+		heads[i] = fmt.Sprintf("blake3:%064x", i)
+	}
+	serverMat, serverPeer := material(t, "peer-a")
+	clientMat, clientPeer := material(t, "peer-b")
+	srv, err := peerapi.New(peerapi.Options{
+		Addr: "127.0.0.1:0", Material: serverMat, Members: mtls.PinnedKey(clientPeer),
+		SelfPeerID: serverPeer.PeerID, State: &epochState{heads: heads},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	})
+	got, err := replication.NewClient(clientMat, nil).Heads(context.Background(), replication.Target{
+		Peer: serverPeer, Endpoint: "https://" + srv.Addr(),
+	}, space)
+	if err != nil {
+		t.Fatalf("large frontier: %v", err)
+	}
+	if !slices.Equal(got, heads) {
+		t.Fatalf("frontier changed: got %d heads, want all %d in order", len(got), len(heads))
 	}
 }

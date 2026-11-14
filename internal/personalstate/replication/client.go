@@ -159,11 +159,37 @@ func (c *Client) Heads(ctx context.Context, t Target, spaceID string) ([]string,
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("replication: %s answered %d offering heads for %s", t.Peer.PeerID, resp.StatusCode, spaceID)
 	}
+	heads, err := decodeHeads(resp.Body, maxHeadsResponseBytes)
+	if err != nil {
+		return nil, fmt.Errorf("replication: decoding heads from %s: %w", t.Peer.PeerID, err)
+	}
+	return heads, nil
+}
+
+// maxHeadsResponseBytes is a client memory bound, not the peer's per-change
+// request limit. The unpaginated frontier can contain every change in a flat
+// log (ADR-0101); 64 MiB accommodates over 900,000 canonical BLAKE3 ids. Keep a
+// finite ceiling even for an authenticated peer, and report overflow explicitly
+// rather than mistaking a truncated response for malformed JSON.
+const maxHeadsResponseBytes = 64 << 20
+
+func decodeHeads(body io.Reader, maxBytes int64) ([]string, error) {
+	// One extra byte distinguishes an exactly-at-limit response from overflow,
+	// including chunked responses and a valid JSON prefix followed by padding.
+	raw, err := io.ReadAll(io.LimitReader(body, maxBytes+1))
+	if int64(len(raw)) > maxBytes {
+		return nil, fmt.Errorf("heads response exceeds %d bytes", maxBytes)
+	}
+	if err != nil {
+		return nil, err
+	}
 	var out struct {
 		Heads []string `json:"heads"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
-		return nil, fmt.Errorf("replication: decoding heads from %s: %w", t.Peer.PeerID, err)
+	// Unmarshal requires one complete JSON document, so a valid prefix cannot
+	// hide a second document or trailing garbage. Unknown fields remain allowed.
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
 	}
 	return out.Heads, nil
 }
