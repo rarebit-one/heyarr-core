@@ -9,6 +9,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Required check + merge queue (planned org ruleset, ~2 Dec): the queue waits for
+  # this check on its merge group commit, so it must run there too or the queue
+  # deadlocks. Same reason as pin-gate.yml and ci.yml.
+  merge_group:
 
 permissions:
   contents: read
