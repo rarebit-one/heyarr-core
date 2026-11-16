@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
@@ -117,6 +118,11 @@ func TestProwlarrSearchBecomesCandidates(t *testing.T) {
 		}
 		if c.Source.Reveal() == "" {
 			t.Errorf("%q has no fetchable source", c.Title)
+		}
+		// Prowlarr's own protocol is carried, so the grab routes the release
+		// to a torrent client whatever order the clients are in (#836).
+		if c.Protocol != acquisition.ProtocolTorrent {
+			t.Errorf("%q has protocol %q, want torrent", c.Title, c.Protocol)
 		}
 	}
 

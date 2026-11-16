@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 )
 
@@ -31,7 +32,7 @@ func TestGrabRoutesToOneClientAndStops(t *testing.T) {
 		}
 	}
 
-	if _, _, err := reg.Grab(t.Context(), secret.Value(theSource)); err != nil {
+	if _, _, err := reg.Grab(t.Context(), secret.Value(theSource), acquisition.ProtocolUnknown); err != nil {
 		t.Fatal(err)
 	}
 
@@ -76,7 +77,7 @@ func TestGrabWalksPastARefusalAndStopsAtTheFirstSuccess(t *testing.T) {
 		}
 	}
 
-	transfer, provider, err := reg.Grab(t.Context(), secret.Value(theSource))
+	transfer, provider, err := reg.Grab(t.Context(), secret.Value(theSource), acquisition.ProtocolUnknown)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +111,7 @@ func TestGrabHandsTheClientTheSourceItWasGiven(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := reg.Grab(t.Context(), secret.Value(theSource)); err != nil {
+	if _, _, err := reg.Grab(t.Context(), secret.Value(theSource), acquisition.ProtocolUnknown); err != nil {
 		t.Fatal(err)
 	}
 
@@ -136,7 +137,7 @@ func TestGrabRefusesAnEmptySourceWithoutAskingAnybody(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err := reg.Grab(t.Context(), "")
+	_, _, err := reg.Grab(t.Context(), "", acquisition.ProtocolUnknown)
 	if !errors.Is(err, ErrNoSource) {
 		t.Fatalf("grab with no source returned %v, want ErrNoSource", err)
 	}
@@ -157,7 +158,7 @@ func TestGrabWithNoDownloadClientIsNotTheSameAsNoSource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err := reg.Grab(t.Context(), secret.Value(theSource))
+	_, _, err := reg.Grab(t.Context(), secret.Value(theSource), acquisition.ProtocolUnknown)
 	if !errors.Is(err, ErrNoProvider) {
 		t.Fatalf("grab with no download client returned %v, want ErrNoProvider", err)
 	}
@@ -184,7 +185,7 @@ func TestGrabReportsEveryRefusalWithoutQuotingTheSource(t *testing.T) {
 		}
 	}
 
-	_, _, err := reg.Grab(t.Context(), secret.Value(theSource))
+	_, _, err := reg.Grab(t.Context(), secret.Value(theSource), acquisition.ProtocolUnknown)
 	if err == nil {
 		t.Fatal("every client refused and the grab reported success")
 	}
@@ -195,5 +196,89 @@ func TestGrabReportsEveryRefusalWithoutQuotingTheSource(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "DO-NOT-LEAK") {
 		t.Fatalf("the source reached an error string: %v", err)
+	}
+}
+
+// protocolFake is a download client that says which protocol it fetches, as
+// every real client does (internal/downloads/protocol.go).
+type protocolFake struct {
+	*Fake
+	protocol acquisition.Protocol
+}
+
+func (p protocolFake) Protocol() acquisition.Protocol { return p.protocol }
+
+// A grab routes by the release's protocol, not by which client accepts first
+// (#836). A torrent client and a direct-download client both accept an http(s)
+// URL, so configuration order decided whether a direct link became a failed
+// torrent add or a .torrent was ingested as if it were the payload. Each order
+// is tried, because a fix that only held in one would be the bug again.
+func TestGrabRoutesByTheReleasesProtocolInEitherOrder(t *testing.T) {
+	const link = "https://downloads.example/files/release.bin"
+	for _, order := range []string{"torrent first", "direct first"} {
+		for _, tc := range []struct {
+			protocol acquisition.Protocol
+			want     string
+		}{
+			{acquisition.ProtocolTorrent, "transmission"},
+			{acquisition.ProtocolDirect, "http"},
+		} {
+			t.Run(order+"/"+string(tc.protocol), func(t *testing.T) {
+				torrent := protocolFake{NewFake("transmission", CapabilityDownload), acquisition.ProtocolTorrent}
+				direct := protocolFake{NewFake("http", CapabilityDownload), acquisition.ProtocolDirect}
+				clients := []protocolFake{torrent, direct}
+				if order == "direct first" {
+					clients = []protocolFake{direct, torrent}
+				}
+				reg := New(nil)
+				for _, c := range clients {
+					if err := reg.Register(c); err != nil {
+						t.Fatal(err)
+					}
+				}
+
+				_, provider, err := reg.Grab(t.Context(), secret.Value(link), tc.protocol)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if provider != tc.want {
+					t.Fatalf("a %s release went to %s, want %s", tc.protocol, provider, tc.want)
+				}
+				for _, c := range clients {
+					want := 0
+					if c.Name() == tc.want {
+						want = 1
+					}
+					if got := len(c.Added()); got != want {
+						t.Errorf("%s: Add called %d times, want %d", c.Name(), got, want)
+					}
+				}
+			})
+		}
+	}
+}
+
+// A release whose provider named no protocol is offered to every client, as
+// before (#836): rows written before the protocol existed must still grab.
+// And a protocol no configured client fetches is refused as the node not
+// being equipped, rather than handed to a client of another protocol.
+func TestGrabWithoutAProtocolOrWithoutAClientForIt(t *testing.T) {
+	torrent := protocolFake{NewFake("transmission", CapabilityDownload), acquisition.ProtocolTorrent}
+	reg := New(nil)
+	if err := reg.Register(torrent); err != nil {
+		t.Fatal(err)
+	}
+	if _, provider, err := reg.Grab(t.Context(), secret.Value(theSource), acquisition.ProtocolUnknown); err != nil || provider != "transmission" {
+		t.Fatalf("an unrouted release: provider=%q err=%v, want transmission", provider, err)
+	}
+	_, _, err := reg.Grab(t.Context(), secret.Value(theSource), acquisition.ProtocolUsenet)
+	if !errors.Is(err, ErrNoProvider) {
+		t.Fatalf("a usenet release with only a torrent client: err=%v, want ErrNoProvider", err)
+	}
+	if got := len(torrent.Added()); got != 1 {
+		t.Fatalf("the torrent client was handed %d releases, want only the unrouted one", got)
+	}
+	if strings.Contains(err.Error(), "DO-NOT-LEAK") {
+		t.Fatalf("the source reached the error: %v", err)
 	}
 }

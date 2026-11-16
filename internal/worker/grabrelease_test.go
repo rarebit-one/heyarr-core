@@ -354,11 +354,73 @@ func TestTheSourceIsNotInWhatTheAPIReturnsForACandidate(t *testing.T) {
 
 	// The control: the source really was stored, so the assertion above is
 	// about the listing rather than about a value that was never saved.
-	_, stored, err := h.cat.SelectedSource(context.Background(), h.want)
+	_, stored, _, err := h.cat.SelectedSource(context.Background(), h.want)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stored.Reveal(), passkey) {
 		t.Fatal("the source was not stored at all, so the leak assertion is vacuous")
+	}
+}
+
+// routedClient is a download client that says which protocol it fetches, as
+// every real one does (internal/downloads/protocol.go).
+type routedClient struct {
+	*providers.Fake
+	protocol acquisition.Protocol
+}
+
+func (c routedClient) Protocol() acquisition.Protocol { return c.protocol }
+
+// The grab hands a release only to a client of the protocol its selection was
+// stored with (#836), and the acquisition row names that client — what
+// get_acquisition_status reports as the transfer's provider. Both clients
+// accept the http(s) source, and the torrent client is configured first, so
+// without the routing it takes the direct link.
+func TestTheGrabRoutesTheSelectionByItsStoredProtocol(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		protocol acquisition.Protocol
+		want     string
+	}{
+		{acquisition.ProtocolDirect, "http"},
+		{acquisition.ProtocolTorrent, "transmission"},
+	} {
+		t.Run(string(tc.protocol), func(t *testing.T) {
+			t.Parallel()
+			h := newSearchHarness(t)
+			for _, c := range []routedClient{
+				{providers.NewFake("transmission", providers.CapabilityDownload), acquisition.ProtocolTorrent},
+				{providers.NewFake("http", providers.CapabilityDownload), acquisition.ProtocolDirect},
+			} {
+				if err := h.reg.Register(c); err != nil {
+					t.Fatal(err)
+				}
+			}
+			selected, err := h.cat.RecordDirectRelease(t.Context(), h.want, acquisition.ReleaseCandidate{
+				ID: "direct-1", Title: "Arrival.2016.2160p.mkv", Provider: "operator",
+				Source:   secret.Value("https://downloads.example/files/arrival.mkv"),
+				Protocol: tc.protocol,
+			})
+			if err != nil || !selected {
+				t.Fatalf("setup: selected=%v err=%v", selected, err)
+			}
+
+			payload, err := json.Marshal(acquisition.GrabPayload{DesiredItemID: h.want, CandidateID: "direct-1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := GrabReleaseHandler(h.reg, h.cat, slog.New(slog.DiscardHandler))(
+				t.Context(), jobs.Job{Type: acquisition.GrabJobType, Payload: payload}); err != nil {
+				t.Fatal(err)
+			}
+			row, err := h.cat.AcquisitionFor(t.Context(), h.want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if row.Provider != tc.want {
+				t.Fatalf("a %s release was taken by %s, want %s", tc.protocol, row.Provider, tc.want)
+			}
+		})
 	}
 }

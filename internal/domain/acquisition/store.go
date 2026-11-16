@@ -92,6 +92,8 @@ func StoreReleaseCandidate(gameName, title, desiredItemID string) ReleaseCandida
 		Title:    title,
 		Provider: "gog",
 		Source:   secret.Value(source),
+		// Fetched from the store itself (#836).
+		Protocol: ProtocolDirect,
 		Attributes: Attributes{
 			policy.AttrStore: policy.Text("gog"),
 			// GOG's offline installers run without its client by the store's

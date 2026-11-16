@@ -338,7 +338,7 @@ func TestAFollowedPodcastArchivesEachEpisodeDirectly(t *testing.T) {
 		if got := rec.State.Name(); got != "SELECTED" {
 			t.Fatalf("episode %s reached %s, want SELECTED (a direct release, no search)", it.ItemKey, got)
 		}
-		candID, source, err := h.cat.SelectedSource(t.Context(), desiredID)
+		candID, source, protocol, err := h.cat.SelectedSource(t.Context(), desiredID)
 		if err != nil {
 			t.Fatalf("episode %s has no selected release: %v", it.ItemKey, err)
 		}
@@ -347,6 +347,9 @@ func TestAFollowedPodcastArchivesEachEpisodeDirectly(t *testing.T) {
 		}
 		if got := source.Reveal(); got != enclosureByKey[it.ItemKey] {
 			t.Errorf("release source = %q, want the enclosure %q", got, enclosureByKey[it.ItemKey])
+		}
+		if protocol != acquisition.ProtocolDirect {
+			t.Errorf("release protocol = %q, want direct: an enclosure is the payload, never a .torrent (#836)", protocol)
 		}
 	}
 

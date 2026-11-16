@@ -103,6 +103,13 @@ type Downloader interface {
 	Add(ctx context.Context, source secret.Value) (Transfer, error)
 }
 
+// ProtocolDownloader is a Downloader that says which protocol it fetches, so a
+// grab offers it only releases of that protocol (#836). A Downloader that does
+// not say is offered every release, as before.
+type ProtocolDownloader interface {
+	Protocol() acquisition.Protocol
+}
+
 // Remover is a Downloader that can take one of its own transfers out of the
 // client. Optional, and asked for only to stop a release Heyarr has refused
 // outright: a program posing as media (#819), which must not keep seeding.

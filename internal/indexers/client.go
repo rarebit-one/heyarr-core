@@ -93,6 +93,11 @@ type Options struct {
 	// structurally (ADR-0091). Off by default: a torznab feed that emits real
 	// <attr> fields needs nothing here.
 	ParseTitles bool
+	// Protocol is how this indexer's releases are fetched (#836): a torznab
+	// provider's are torrents and a newznab provider's usenet. One wire
+	// protocol serves both, so the provider's kind says which, not the feed.
+	// Empty leaves its candidates unrouted, offered to every download client.
+	Protocol acquisition.Protocol
 	// HTTPClient is injected by tests. Nil means a client of this package's
 	// own making — callers outside a test have no business supplying one, and
 	// the registry's contract has no way to.
@@ -110,6 +115,7 @@ type Client struct {
 	apiKey      string
 	caps        []providers.Capability
 	parseTitles bool
+	protocol    acquisition.Protocol
 	http        *http.Client
 	now         func() time.Time
 	sleep       func(context.Context, time.Duration) error
@@ -168,6 +174,7 @@ func New(o Options) (*Client, error) {
 		apiKey:      o.APIKey,
 		caps:        o.Capabilities,
 		parseTitles: o.ParseTitles,
+		protocol:    o.Protocol,
 		http:        o.HTTPClient,
 		now:         o.Now,
 		sleep:       o.Sleep,
@@ -496,6 +503,7 @@ func (c *Client) candidates(f *feed) []acquisition.ReleaseCandidate {
 			Provider:   c.name,
 			Attributes: attributesOf(i, title, c.parseTitles),
 			Source:     sourceOf(i),
+			Protocol:   c.protocol,
 		})
 	}
 	// Sorted by identity, NOT left in the order the server sent.

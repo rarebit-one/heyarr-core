@@ -3,6 +3,7 @@ package indexers
 import (
 	"time"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
@@ -81,10 +82,19 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 		APIKey:       token.Reveal(),
 		Capabilities: r.Capabilities,
 		ParseTitles:  r.ParseTitles,
+		Protocol:     protocolOf(r.Kind),
 		Now:          now,
 	})
 	if err != nil {
 		return nil, true, err
 	}
 	return client, true, nil
+}
+
+// protocolOf is how a torznab-family provider's releases are fetched (#836).
+func protocolOf(kind providers.Kind) acquisition.Protocol {
+	if kind == providers.KindNewznab {
+		return acquisition.ProtocolUsenet
+	}
+	return acquisition.ProtocolTorrent
 }
