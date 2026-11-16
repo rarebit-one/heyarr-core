@@ -16,6 +16,9 @@ import (
 // lease.cached event when the cache changed.
 type Cache interface {
 	Refresh(ctx context.Context, sourcePeer string, tokens []string, now time.Time) (leases.CacheChange, error)
+	// PruneDeparted clears what is cached from sources that are no longer
+	// siblings, one lease.cached event each, and says how many it cleared.
+	PruneDeparted(ctx context.Context, now time.Time) (int, error)
 }
 
 // Siblings lists the peers to fetch from, read fresh each pass so a peer
@@ -44,6 +47,8 @@ type Result struct {
 	// Rejected is the served tokens, across all siblings, that did not verify
 	// and were not cached.
 	Rejected int
+	// Pruned is the departed siblings whose cached leases the pass cleared.
+	Pruned int
 }
 
 // Syncer mirrors each sibling's served device write leases into this peer's
@@ -74,6 +79,11 @@ func NewSyncer(cache Cache, fetch Fetcher, siblings Siblings, clock Clock, log *
 // SyncAll runs one pass over every sibling. It errors only on a local failure
 // (listing siblings, or writing the cache); a sibling that does not answer is
 // counted as Deferred.
+//
+// It ends by clearing what is cached from peers that are no longer siblings
+// (#828). Nothing else would: a departed sibling is never fetched again, so its
+// rows are never replaced. An unreachable sibling is still a member and keeps
+// its cache.
 func (s *Syncer) SyncAll(ctx context.Context) (Result, error) {
 	var res Result
 	targets, err := s.siblings.Siblings(ctx)
@@ -112,6 +122,18 @@ func (s *Syncer) SyncAll(ctx context.Context) (Result, error) {
 			s.log.Warn("a sibling served leases that did not verify; they were not cached",
 				"peer_id", t.Peer.PeerID, "rejected", change.Rejected)
 		}
+	}
+	if ctx.Err() != nil {
+		return res, nil
+	}
+	pruned, err := s.cache.PruneDeparted(ctx, s.clock.Now())
+	res.Pruned = pruned
+	res.Changed += pruned
+	if err != nil {
+		return res, fmt.Errorf("leasesync: clearing departed siblings' leases: %w", err)
+	}
+	if pruned > 0 {
+		s.log.Info("cleared the leases cached from siblings that left membership", "siblings", pruned)
 	}
 	return res, nil
 }

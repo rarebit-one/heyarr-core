@@ -368,6 +368,58 @@ func (c *CacheStore) Replace(ctx context.Context, sourcePeer string, tokens []st
 	return change, nil
 }
 
+// PruneDeparted clears what is cached from every source that is no longer a
+// pinned sibling (#828): a sibling removed from membership leaves rows that
+// Authorise and LiftDeviceWrite already refuse, because they read trust fresh,
+// so they only take space, and no fetch will ever replace them. Each departed
+// source is cleared through Replace, so it is one transaction and one
+// lease.cached event with `removed`, as a sibling that served nothing is.
+// Rows this peer cached from itself are never departed.
+//
+// It returns how many sources it cleared. An unreadable sibling set is an
+// error and clears nothing: a failed read must not look like everyone left.
+func (c *CacheStore) PruneDeparted(ctx context.Context, now time.Time) (int, error) {
+	keys := map[string]ed25519.PublicKey{}
+	if c.siblings != nil {
+		var err error
+		if keys, err = c.siblings.PeerKeys(ctx); err != nil {
+			return 0, fmt.Errorf("leases: reading sibling keys: %w", err)
+		}
+	}
+	sources, err := cachedSources(ctx, c.reader)
+	if err != nil {
+		return 0, err
+	}
+	pruned := 0
+	for _, source := range sources {
+		if _, ok := keys[source]; ok || source == c.selfID {
+			continue
+		}
+		if _, err := c.Replace(ctx, source, nil, now); err != nil {
+			return pruned, fmt.Errorf("leases: clearing the leases cached from departed %s: %w", source, err)
+		}
+		pruned++
+	}
+	return pruned, nil
+}
+
+func cachedSources(ctx context.Context, q queryer) ([]string, error) {
+	rows, err := q.QueryContext(ctx, `SELECT DISTINCT source_peer FROM cached_leases ORDER BY source_peer`)
+	if err != nil {
+		return nil, fmt.Errorf("leases: listing the sources leases are cached from: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var source string
+		if err := rows.Scan(&source); err != nil {
+			return nil, err
+		}
+		out = append(out, source)
+	}
+	return out, rows.Err()
+}
+
 // Cached returns the tokens held from one source, in no particular order.
 func (c *CacheStore) Cached(ctx context.Context, sourcePeer string) ([]string, error) {
 	held, err := heldTokens(ctx, c.reader, sourcePeer)

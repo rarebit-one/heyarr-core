@@ -296,3 +296,33 @@ func TestAuthoriseNamesALeaseForAnotherPrincipal(t *testing.T) {
 		t.Fatalf("err = %v, want both ErrNoCachedLease and grant.ErrPrincipalMismatch", err)
 	}
 }
+
+// A sibling set that cannot be read clears nothing: a failed membership read
+// must not look like every sibling left (#828).
+func TestPruneDepartedClearsNothingWhenTheSiblingsCannotBeRead(t *testing.T) {
+	w := newLiftWorld(t)
+	db := testdb.Migrated(t)
+	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Clock: &fixedClock{t: now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache, err := leases.NewCache(leases.CacheOptions{
+		Writer: db.Writer(), Reader: db.Reader(), Events: log,
+		Siblings: failingKeys{}, SelfID: w.selfID, SelfKey: pub(w.selfKey),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := signLease(t, w.keyA, leases.DevicePrincipal(w.devD), leases.SiteResource(w.selfID),
+		[]grant.Capability{grant.CapabilityWrite}, now)
+	if _, err := cache.Replace(context.Background(), w.idA, []string{lease}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if n, err := cache.PruneDeparted(context.Background(), now); err == nil || n != 0 {
+		t.Fatalf("PruneDeparted = (%d, %v), want an error and nothing cleared", n, err)
+	}
+	if held, err := cache.Cached(context.Background(), w.idA); err != nil || len(held) != 1 {
+		t.Fatalf("cached from A = %d (%v), want the lease kept", len(held), err)
+	}
+}
