@@ -356,6 +356,61 @@ func (c *Catalog) StuckGrabs(ctx context.Context, grace time.Duration) ([]StuckG
 	return out, rows.Err()
 }
 
+// StrandedSelection is a want resting in SELECTED with no grab job that could
+// ever move it: the grab died on its attempt cap (a download client down for
+// longer than the retries, #801), or its enqueue failed and nothing retried it.
+type StrandedSelection struct {
+	DesiredItemID string
+	// CandidateID is the selected candidate, carried into the re-queued grab's
+	// payload as the record of why it was queued.
+	CandidateID string
+}
+
+// StrandedSelections lists wants in SELECTED, entered at least `grace` ago,
+// with no live grab job and no grab job that finished within `grace`.
+//
+// SELECTED is a phase only a grab leaves, and nothing else re-queues one: the
+// search beat drives idle wants, and the stuck-grab sweep idle ones too. So a
+// grab that dies leaves the want looking like a transfer in flight, forever.
+//
+// The second half of the grace is what paces the re-queue. A grab that dies
+// again — the client still down, or refusing this release for good — is not
+// picked up until `grace` after it died, so the sweep costs at most one dead
+// job per want per grace rather than one per beat. The fan-out applier has
+// its own re-queue for a fan-out want (FanOutStale); the two collapse onto the
+// same dedupe key.
+func (c *Catalog) StrandedSelections(ctx context.Context, grace time.Duration) ([]StrandedSelection, error) {
+	cutoff := sqlite.FormatTimestamp(c.clock.Now().Add(-grace))
+	rows, err := c.db.Reader().QueryContext(ctx, `
+		SELECT s.desired_item_id, rc.candidate_id
+		FROM acquisition_state s
+		JOIN release_candidates rc
+		  ON rc.desired_item_id = s.desired_item_id AND rc.selected = 1
+		WHERE s.phase = ?
+		  AND s.phase_entered_at < ?
+		  AND NOT EXISTS (
+		      SELECT 1 FROM jobs j
+		      WHERE j.dedupe_key = ? || s.desired_item_id
+		        AND (j.state IN ('pending', 'leased')
+		             OR coalesce(j.finished_at, '') >= ?))
+		ORDER BY s.phase_entered_at, s.desired_item_id`,
+		string(acquisition.PhaseSelected), cutoff, acquisition.GrabDedupeKey(""), cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: listing stranded selections: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []StrandedSelection
+	for rows.Next() {
+		var s StrandedSelection
+		if err := rows.Scan(&s.DesiredItemID, &s.CandidateID); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // DropAcquisition removes the link between a want and a transfer.
 //
 // It does NOT touch the download client. Removing a transfer is a separate
