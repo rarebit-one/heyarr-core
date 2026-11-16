@@ -307,7 +307,10 @@ func (p *Prober) Probe(ctx context.Context, target Target) (Result, Stats, error
 	fallbackStats.Materialised = true
 	fallbackStats.Elapsed = time.Since(started)
 	if err != nil {
-		return Result{}, fallbackStats, fmt.Errorf("%w: %w", ErrProbeFailed, err)
+		// Not re-wrapped as ErrProbeFailed: probeWhole marks ffprobe's own
+		// verdict on the bytes itself, and everything else it can fail on —
+		// fetching the blob, a full disk, a timeout — is not a verdict (#670).
+		return Result{}, fallbackStats, err
 	}
 	return result, fallbackStats, nil
 }
@@ -395,7 +398,9 @@ func (p *Prober) probeWhole(ctx context.Context, target Target) (Result, Stats, 
 	// answer is a rule that will be wrong on whichever path is used less.
 	result, err := parseAndCheck(out)
 	if err != nil {
-		return Result{}, stats, err
+		// ffprobe ran and what it said is not a usable description: a
+		// verdict on the bytes, so it is marked here, where it is known.
+		return Result{}, stats, fmt.Errorf("%w: %w", ErrProbeFailed, err)
 	}
 	if result.SizeBytes == 0 {
 		result.SizeBytes = n
@@ -540,7 +545,14 @@ func (p *Prober) runFFprobe(ctx context.Context, target string) ([]byte, error) 
 		"-show_streams",
 		target)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrProbeFailed, err)
+		// Only ffprobe READING the input and refusing it says something about
+		// the bytes. A timeout, or a binary that would not start, says
+		// something about the moment, and must not mark the blob unreadable
+		// for good (#670).
+		if rejectedInput(err) {
+			return nil, fmt.Errorf("%w: %w", ErrProbeFailed, err)
+		}
+		return nil, fmt.Errorf("probe: %w", err)
 	}
 	return out, nil
 }

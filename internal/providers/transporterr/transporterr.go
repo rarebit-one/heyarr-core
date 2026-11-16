@@ -70,3 +70,24 @@ func Classify(err error) string {
 	}
 	return "unreachable"
 }
+
+// Transient reports whether err is a transport failure that is a property of
+// the moment rather than of the request: the endpoint timed out, refused or
+// reset the connection, had no route, or its name did not resolve. These clear
+// on their own, so a job may wrap them with jobs.ErrTransient (#670).
+//
+// A firewall or sandbox denial and a TLS verification failure are NOT
+// transient: they are configuration, and stay on the attempt cap so an
+// operator sees them. Neither is an error nothing recognises — a broken job
+// wrapped as transient retries forever, which is the costlier mistake.
+func Transient(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch Classify(err) {
+	case "timed out", "connection refused", "no route to the host",
+		"the connection was reset", "the endpoint's host name did not resolve":
+		return true
+	}
+	return false
+}

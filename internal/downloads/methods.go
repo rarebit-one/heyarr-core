@@ -260,6 +260,14 @@ func (c *Client) resolvePath(t torrent) string {
 	return full
 }
 
+// Add hands source to the client. A transport failure that clears on its own
+// is marked providers.ErrUnavailable, so a grab can retry it as transient
+// (#670); see add for the call itself.
+func (c *Client) Add(ctx context.Context, source secret.Value) (providers.Transfer, error) {
+	t, err := c.add(ctx, source)
+	return t, markUnavailable(err)
+}
+
 // Add queues a release, tagged as ours.
 //
 // Idempotent by construction: Transmission answers a duplicate with
@@ -267,7 +275,7 @@ func (c *Client) resolvePath(t torrent) string {
 // treating as an error. That matters because the job that calls this WILL be
 // re-run (invariant 9), and a second copy of a transfer already downloading is
 // the duplicate grab this whole design exists to prevent.
-func (c *Client) Add(ctx context.Context, source secret.Value) (providers.Transfer, error) {
+func (c *Client) add(ctx context.Context, source secret.Value) (providers.Transfer, error) {
 	// Reveal() here and nowhere else in this method: this is the point the
 	// value goes on the wire — to the indexer as a .torrent fetch, or to
 	// Transmission as a magnet. It must not reach the error below, the labels

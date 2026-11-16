@@ -87,3 +87,33 @@ func TestClassifySeesThroughWrapping(t *testing.T) {
 		t.Fatalf("the API key leaked into a health detail: %q", got)
 	}
 }
+
+// TestTransient: each transport failure that clears on its own is transient;
+// configuration (a firewall denial, a TLS failure) and anything unrecognised
+// is not, because a broken job wrapped as transient retries forever (#670).
+func TestTransient(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"context deadline", context.DeadlineExceeded, true},
+		{"net timeout", timeoutError{}, true},
+		{"connection refused", dialing(syscall.ECONNREFUSED), true},
+		{"connection reset", dialing(syscall.ECONNRESET), true},
+		{"no route", dialing(syscall.EHOSTUNREACH), true},
+		{"DNS", &net.DNSError{Err: "no such host", Name: "feed.invalid", IsNotFound: true}, true},
+		{"wrapped as an http.Client does", fmt.Errorf("Get %q: %w", "https://feed.example/", dialing(syscall.ECONNREFUSED)), true},
+		{"firewall denial is configuration", dialing(syscall.EPERM), false},
+		{"TLS verification is configuration", &tls.CertificateVerificationError{Err: errors.New("x509")}, false},
+		{"unrecognised", errors.New("something else"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Transient(tc.err); got != tc.want {
+				t.Errorf("Transient(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}

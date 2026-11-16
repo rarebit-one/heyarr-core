@@ -143,6 +143,16 @@ func GrabReleaseHandler(
 			// last_error carries it: "why is nothing downloading" has to be
 			// answerable from the queue, and #225's whole lesson is that a
 			// want resting quietly is how this goes unnoticed.
+			//
+			// When every client failed for a reason of the moment — down,
+			// timed out, or unable to fetch the torrent because the indexer
+			// did not answer — the grab is transient (#670): it retries on the
+			// long backoff rather than dying in five quick attempts during an
+			// outage. A genuine refusal keeps the attempt cap.
+			if errors.Is(err, providers.ErrUnavailable) {
+				return fmt.Errorf("%w: worker: grabbing %s for %s: %w",
+					jobs.ErrTransient, candidateID, payload.DesiredItemID, err)
+			}
 			return fmt.Errorf("worker: grabbing %s for %s: %w",
 				candidateID, payload.DesiredItemID, err)
 		}

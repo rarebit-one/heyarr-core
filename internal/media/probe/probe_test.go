@@ -325,8 +325,12 @@ func TestAnUnauthorisedProbeFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("a probe with the wrong credential succeeded")
 	}
-	if !errors.Is(err, probe.ErrProbeFailed) {
-		t.Errorf("error = %v, want ErrProbeFailed", err)
+	// NOT ErrProbeFailed (#670): that is "ffprobe read these bytes and they
+	// are not media", which the job layer turns into a permanent failure. A
+	// refused credential says nothing about the bytes — the probe job mints a
+	// fresh one each attempt — so it stays on the ordinary retry path.
+	if errors.Is(err, probe.ErrProbeFailed) {
+		t.Errorf("error = %v: a refused fetch was marked as a verdict on the bytes", err)
 	}
 	// It tried the fallback too, and that also failed — which is the correct
 	// amount of trying rather than giving up on the first 401.
@@ -601,6 +605,84 @@ func TestAnAbsurdSampleRateIsAbsentNotTruncated(t *testing.T) {
 			}
 			if audio.SampleRate != tc.want {
 				t.Errorf("sample_rate = %d, want %d", audio.SampleRate, tc.want)
+			}
+		})
+	}
+}
+
+// scriptFFprobe is a stand-in ffprobe that runs body as a shell script.
+func scriptFFprobe(t *testing.T, body string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in is a shell script; the classification itself is platform-neutral")
+	}
+	path := filepath.Join(t.TempDir(), "ffprobe")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil { //nolint:gosec // a test fixture that must be executable
+		t.Fatal(err)
+	}
+	return path
+}
+
+// 🔴 ErrProbeFailed — which the probe job turns into a permanent failure — is
+// ffprobe's verdict on the bytes and nothing else (#670). ffprobe running and
+// rejecting the input is one; ffprobe hanging past its deadline, or the blob
+// not being fetchable for the fallback, is a property of the moment and must
+// stay retryable.
+func TestOnlyFFprobeRejectingTheBytesIsAVerdict(t *testing.T) {
+	body := fixtures.SampleMP4(1)
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "the store is briefly unavailable", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(failing.Close)
+
+	cases := []struct {
+		name    string
+		script  string
+		url     func(*peer) string
+		timeout time.Duration
+		verdict bool
+	}{
+		{
+			name:    "ffprobe reads the bytes and rejects them",
+			script:  `echo "Invalid data found when processing input" >&2; exit 1`,
+			verdict: true,
+		},
+		{
+			// Over ranges it rejects the URL at once, so the fallback fetches
+			// the whole blob and ffprobe then hangs on the local copy: the
+			// timeout is the last word, and must not read as a verdict.
+			name: "ffprobe hangs past its deadline",
+			script: `case "$*" in *http*) echo "Invalid data found when processing input" >&2; exit 1;; esac
+exec sleep 5`,
+			timeout: time.Second,
+		},
+		{
+			name:   "the blob cannot be fetched for the fallback",
+			script: `echo "Server returned 5XX Server Error reply" >&2; exit 1`,
+			url:    func(*peer) string { return failing.URL + "/blob" },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPeer(t, body, "")
+			prober, err := probe.New(probe.Options{
+				FFprobePath: scriptFFprobe(t, tc.script),
+				TempDir:     t.TempDir(),
+				Timeout:     tc.timeout,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			url := p.URL + "/blob"
+			if tc.url != nil {
+				url = tc.url(p)
+			}
+			_, _, err = prober.Probe(t.Context(), probe.Target{URL: url, Size: int64(len(body))})
+			if err == nil {
+				t.Fatal("the probe succeeded")
+			}
+			if got := errors.Is(err, probe.ErrProbeFailed); got != tc.verdict {
+				t.Errorf("ErrProbeFailed = %v, want %v: %v", got, tc.verdict, err)
 			}
 		})
 	}

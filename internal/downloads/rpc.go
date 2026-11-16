@@ -8,8 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/transporterr"
 )
 
 // The Transmission RPC transport.
@@ -177,6 +182,9 @@ func (t *transport) call(ctx context.Context, method string, args any, out any) 
 			// Transmission reports application-level failures in `result`
 			// with a 200. Reading only the status would treat "duplicate
 			// torrent" as a success.
+			if fetchUnavailable(env.Result) {
+				return fmt.Errorf("%w: %w: %s", ErrRPCFailure, providers.ErrUnavailable, env.Result)
+			}
 			return fmt.Errorf("%w: %s", ErrRPCFailure, env.Result)
 		}
 		if out != nil && len(env.Arguments) > 0 {
@@ -270,4 +278,35 @@ func summarise(body []byte) string {
 		s = s[:limit] + "…"
 	}
 	return s
+}
+
+// fetchStatus is the HTTP status Transmission reports when it could not fetch
+// a torrent file itself: "Couldn't fetch torrent: No Response (0)".
+var fetchStatus = regexp.MustCompile(`Couldn't fetch torrent: .*\((\d+)\)\s*$`)
+
+// fetchUnavailable reports whether a Transmission result is it failing to
+// fetch the torrent because the far end did not answer — no response at all
+// (0), a timeout (408), throttling (429) or a server error (5xx). That is the
+// indexer or tracker being down for now, not the release being bad (#670). A
+// 404 or any other answer is left as a plain refusal.
+func fetchUnavailable(result string) bool {
+	m := fetchStatus.FindStringSubmatch(result)
+	if m == nil {
+		return false
+	}
+	code, err := strconv.Atoi(m[1])
+	if err != nil {
+		return false
+	}
+	return code == 0 || code == 408 || code == 429 || code >= 500
+}
+
+// markUnavailable marks err providers.ErrUnavailable when it is a transport
+// failure that clears on its own — the client down, slow or unresolvable
+// (#670). Anything else, a refusal included, is returned as it is.
+func markUnavailable(err error) error {
+	if err == nil || errors.Is(err, providers.ErrUnavailable) || !transporterr.Transient(err) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", providers.ErrUnavailable, err)
 }
