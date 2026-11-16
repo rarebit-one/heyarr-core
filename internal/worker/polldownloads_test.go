@@ -1,13 +1,18 @@
 package worker
 
 import (
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/secret"
 	"github.com/rarebit-one/heyarr-core/internal/downloads"
+	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
 // backdateLastSeen ages this want's acquisition row so it looks as though the
@@ -334,5 +339,88 @@ func TestATransientlyAbsentTransferSurvivesTheGrace(t *testing.T) {
 	}
 	if _, err := h.cat.AcquisitionFor(t.Context(), h.want); err != nil {
 		t.Fatalf("acquisition row gone (err=%v); a within-grace absence should keep it", err)
+	}
+}
+
+// killGrab walks this want's grab job to dead as its attempt cap does, dated
+// `ago` in the past.
+func (h *pollHarness) killGrab(t *testing.T, ago time.Duration) {
+	t.Helper()
+	at := sqlite.FormatTimestamp(time.Now().Add(-ago))
+	res, err := h.db.Writer().ExecContext(t.Context(),
+		`UPDATE jobs SET state = 'dead', finished_at = ?, last_error = 'no download client accepted it'
+		 WHERE dedupe_key = ? AND state = 'pending'`,
+		at, acquisition.GrabDedupeKey(h.want))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		t.Fatalf("setup: killed %d grab jobs, want 1", n)
+	}
+}
+
+// liveGrabs counts this want's pending or leased grab jobs.
+func (h *pollHarness) liveGrabs(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := h.db.Reader().QueryRowContext(t.Context(),
+		`SELECT count(*) FROM jobs WHERE dedupe_key = ? AND state IN ('pending', 'leased')`,
+		acquisition.GrabDedupeKey(h.want)).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// A grab that dies on its attempt cap — the download client down for longer
+// than the retries — left the want SELECTED with nothing to queue it again: the
+// search beat and the stuck-grab sweep both drive idle wants only (#801). The
+// poll queues the grab again once the grace has passed since it died, and only
+// then, so a client that stays down costs one dead grab per grace, not per beat.
+func TestAWantWhoseGrabDiedInSelectedIsGrabbedAgain(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		diedAgo  time.Duration
+		requeued bool
+	}{
+		{"the grab died long ago", 2 * strandedSelectionGrace, true},
+		{"the grab only just died", time.Minute, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newPollHarness(t)
+			h.client.Offer(secret.Value("magnet:?xt=urn:btih:good"), "Arrival.2016.2160p.mkv", []byte("the bytes of a film"))
+			h.fake.Offer("Arrival", offer("good", 2160, "hevc"))
+			if err := h.run(t); err != nil {
+				t.Fatal(err)
+			}
+			if got := h.state(t).Phase; got != acquisition.PhaseSelected {
+				t.Fatalf("setup: phase is %s, expected selected", got)
+			}
+			h.killGrab(t, tc.diedAgo)
+			h.backdatePhaseEntered(t, 2*strandedSelectionGrace)
+
+			h.poll(t)
+
+			if got, want := h.liveGrabs(t), map[bool]int{true: 1, false: 0}[tc.requeued]; got != want {
+				t.Fatalf("live grab jobs = %d, want %d", got, want)
+			}
+			if !tc.requeued {
+				return
+			}
+			// The re-queued grab is the ordinary grab, and it takes the want on.
+			payload, err := json.Marshal(acquisition.GrabPayload{DesiredItemID: h.want})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := GrabReleaseHandler(h.reg, h.cat, slog.New(slog.DiscardHandler))(
+				t.Context(), jobs.Job{Type: acquisition.GrabJobType, Payload: payload}); err != nil {
+				t.Fatal(err)
+			}
+			if got := h.state(t).Phase; got != acquisition.PhaseQueued {
+				t.Fatalf("phase = %s, want queued once the re-queued grab ran", got)
+			}
+		})
 	}
 }

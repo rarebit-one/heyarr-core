@@ -38,6 +38,13 @@ const stuckGrabGrace = 2 * time.Minute
 // re-enqueue is a no-op for those and only reaches wants with no job at all.
 const stuckIngestGrace = 20 * time.Minute
 
+// strandedSelectionGrace is how long a want may rest in SELECTED with no grab
+// job before the poll queues one again (#801), and how long after a grab died
+// before it is queued again. It paces a client outage: the ordinary retries
+// spend their attempt cap in about a minute, so without the second half a
+// client that stays down would leave a dead grab per want on every beat.
+const strandedSelectionGrace = 15 * time.Minute
+
 // PollDownloadsStore is the part of the catalog the download poll uses. A
 // *catalog.Catalog satisfies it; the handler depends on no more than it calls.
 type PollDownloadsStore interface {
@@ -54,6 +61,7 @@ type PollDownloadsStore interface {
 	SearchContextFor(ctx context.Context, desiredItemID string) (catalog.SearchContext, error)
 	StuckGrabs(ctx context.Context, grace time.Duration) ([]catalog.StuckGrab, error)
 	StuckIngests(ctx context.Context, grace time.Duration) ([]catalog.StuckIngest, error)
+	StrandedSelections(ctx context.Context, grace time.Duration) ([]catalog.StrandedSelection, error)
 }
 
 // PollDownloadsHandler asks every download client what it is doing and drives
@@ -150,6 +158,14 @@ func PollDownloadsHandler(
 		// client answered this pass.
 		redriven, rf := sweepStuckGrabs(ctx, cat, log)
 		failed += rf
+
+		// A want whose grab died on its attempt cap — the download client was
+		// down for longer than the retries — rests in SELECTED, where neither
+		// the search beat nor the sweep above looks (#801). Queue its grab
+		// again, paced by the grace.
+		requeued, sf := sweepStrandedSelections(ctx, cat, ingests, log)
+		redriven += requeued
+		failed += sf
 
 		// Logged only when something happened. A pass over a steady queue is
 		// the normal case and should be invisible.
@@ -479,6 +495,44 @@ func sweepStuckGrabs(
 			"candidate_id", g.CandidateID, "title", g.Title, "trouble", g.Trouble)
 	}
 	return redriven, failed
+}
+
+// sweepStrandedSelections queues a grab again for each want stranded in
+// SELECTED with no grab job to move it (#801).
+//
+// GrabReleaseHandler returns an ordinary error for a client that is down or
+// refusing, so an outage longer than the attempt window walks the grab to
+// dead and leaves the want SELECTED. Nothing else re-queues a SELECTED want,
+// so it waited for a `jobs retry` by hand. The re-queued grab grabs whatever
+// the want selects when it runs, and the queue dedupes it against a grab
+// queued in the meantime.
+//
+// The release is NOT blocked, unlike sweepStuckGrabs: a dead grab job says
+// the client could not be reached or would not take it, not that the release
+// is unfetchable, and blocking a good release for an outage would lose it.
+func sweepStrandedSelections(
+	ctx context.Context, cat PollDownloadsStore, q ProbeEnqueuer, log *slog.Logger,
+) (requeued, failed int) {
+	stranded, err := cat.StrandedSelections(ctx, strandedSelectionGrace)
+	if err != nil {
+		log.Warn("could not list wants stranded in selected", "error", err)
+		return 0, 1
+	}
+	for _, s := range stranded {
+		if ctx.Err() != nil {
+			return requeued, failed
+		}
+		if err := queueGrab(ctx, q, s.DesiredItemID, s.CandidateID); err != nil {
+			failed++
+			log.Warn("could not queue the grab for a want stranded in selected",
+				"desired_item_id", s.DesiredItemID, "candidate_id", s.CandidateID, "error", err)
+			continue
+		}
+		requeued++
+		log.Info("queued the grab again for a want stranded in selected",
+			"desired_item_id", s.DesiredItemID, "candidate_id", s.CandidateID)
+	}
+	return requeued, failed
 }
 
 // advancePipeline applies the §64 transition this transfer's state implies.
