@@ -436,8 +436,14 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (WantOutc
 	// are the API's business — the catalog's CreateDesiredItem takes ids already
 	// resolved. Both happen first, in one transaction, so a want and its work
 	// converge on the scanner's get-or-create (§55, and see resolveWorkDescriptor).
+	//
+	// The events those writes emit are collected and published only once the
+	// transaction has committed (#796): a subscriber must never read a Work
+	// before it is visible, nor hear of one a failed commit never made.
 	var profileID, workID string
+	var emitted []events.Event
 	if err := a.db.InTx(ctx, func(tx *sql.Tx) error {
+		emitted = nil
 		var err error
 		// A descriptor carries its content type. For a profileless work-id
 		// request, read the existing work's type in the same transaction so both
@@ -464,7 +470,7 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (WantOutc
 			if strings.TrimSpace(req.StoreRef) != "" {
 				return &badRequest{errors.New("put store_ref inside the work descriptor when wanting by work")}
 			}
-			workID, err = a.resolveWorkDescriptor(ctx, tx, *req.Work)
+			workID, err = a.resolveWorkDescriptor(ctx, tx, *req.Work, &emitted)
 			return err
 		}
 		// An edition-scoped want names its edition: check it belongs to this
@@ -481,10 +487,11 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (WantOutc
 				return err
 			}
 		}
-		return a.attachStoreRef(ctx, tx, workID, req.StoreRef)
+		return a.attachStoreRef(ctx, tx, workID, req.StoreRef, &emitted)
 	}); err != nil {
 		return WantOutcome{}, err
 	}
+	a.events.Publish(emitted...)
 
 	// ADR-0089: wanting a WHOLE SERIES is following it. A work-scoped want on a
 	// series work resolves the series' metadata id and establishes (or converges
@@ -726,7 +733,10 @@ func (a *API) profileIDByName(ctx context.Context, tx *sql.Tx, name string) (str
 // (M1-11), so wanting a film and later scanning it produce ONE Work. Using a
 // different key here would be the quiet kind of bug: everything works, and the
 // library slowly fills with pairs of works that are the same thing.
-func (a *API) resolveWorkDescriptor(ctx context.Context, tx *sql.Tx, d WorkDescriptor) (string, error) {
+//
+// The events it emits are appended to emitted, for the caller to publish once
+// tx has committed.
+func (a *API) resolveWorkDescriptor(ctx context.Context, tx *sql.Tx, d WorkDescriptor, emitted *[]events.Event) (string, error) {
 	contentType := strings.ToLower(strings.TrimSpace(d.ContentType))
 	title := strings.TrimSpace(d.Title)
 	if contentType == "" {
@@ -792,7 +802,7 @@ func (a *API) resolveWorkDescriptor(ctx context.Context, tx *sql.Tx, d WorkDescr
 		if err := refuseSecondStoreID(ctx, tx, id, storeSource, storeID); err != nil {
 			return "", err
 		}
-		return id, a.recordStoreRef(ctx, tx, id, storeSource, storeID)
+		return id, a.recordStoreRef(ctx, tx, id, storeSource, storeID, emitted)
 	case !errors.Is(err, sql.ErrNoRows):
 		return "", err
 	}
@@ -823,8 +833,8 @@ func (a *API) resolveWorkDescriptor(ctx context.Context, tx *sql.Tx, d WorkDescr
 	if err != nil {
 		return "", err
 	}
-	a.events.Publish(ev)
-	return id, a.recordStoreRef(ctx, tx, id, storeSource, storeID)
+	*emitted = append(*emitted, ev)
+	return id, a.recordStoreRef(ctx, tx, id, storeSource, storeID, emitted)
 }
 
 // parseStoreRef validates a descriptor's store_ref and splits it into the
@@ -853,8 +863,9 @@ func parseStoreRef(contentType, ref string) (source, value string, err error) {
 
 // attachStoreRef records a store_ref on an existing Work, refusing one that
 // does not fit it (not a game, malformed) rather than accepting a want that
-// could never be fetched. Empty is a no-op.
-func (a *API) attachStoreRef(ctx context.Context, tx *sql.Tx, workID, ref string) error {
+// could never be fetched. Empty is a no-op. Events go to emitted, as
+// recordStoreRef's do.
+func (a *API) attachStoreRef(ctx context.Context, tx *sql.Tx, workID, ref string, emitted *[]events.Event) error {
 	if strings.TrimSpace(ref) == "" {
 		return nil
 	}
@@ -885,7 +896,7 @@ func (a *API) attachStoreRef(ctx context.Context, tx *sql.Tx, workID, ref string
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return err
 	}
-	return a.recordStoreRef(ctx, tx, workID, source, value)
+	return a.recordStoreRef(ctx, tx, workID, source, value, emitted)
 }
 
 // refuseSecondStoreID refuses to attach a store id to a Work the title matched
@@ -916,8 +927,9 @@ func refuseSecondStoreID(ctx context.Context, tx *sql.Tx, workID, source, value 
 // what the store fetch beat looks for (ADR-0120). Idempotent on the table's
 // uniqueness. A Work that gains a store id has changed what it is known as, so
 // that emits content.work.updated in the same transaction (invariant 7); a
-// repeat that changes nothing emits nothing.
-func (a *API) recordStoreRef(ctx context.Context, tx *sql.Tx, workID, source, value string) error {
+// repeat that changes nothing emits nothing. The event is appended to emitted,
+// never published here: tx has not committed yet.
+func (a *API) recordStoreRef(ctx context.Context, tx *sql.Tx, workID, source, value string, emitted *[]events.Event) error {
 	if source == "" {
 		return nil
 	}
@@ -946,7 +958,7 @@ func (a *API) recordStoreRef(ctx context.Context, tx *sql.Tx, workID, source, va
 	if err != nil {
 		return err
 	}
-	a.events.Publish(ev)
+	*emitted = append(*emitted, ev)
 	return nil
 }
 
