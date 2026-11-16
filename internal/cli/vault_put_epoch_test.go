@@ -88,3 +88,35 @@ func TestVaultPutGivesUpAfterTwoRotations(t *testing.T) {
 		t.Fatalf("changes = %d (%v), want none", len(changes), err)
 	}
 }
+
+// 🔴 A write confirms its two uploads, and only once its change is accepted
+// (ADR-0096 amendment, #714): an unconfirmed upload is released to GC after a
+// day on a node with provisional upload pins. A write the peer refused twice
+// confirms nothing, so the uploads it left behind expire.
+func TestVaultPutConfirmsItsUploadsOnlyOnceTheChangeIsAccepted(t *testing.T) {
+	h := newPSHarness(t, auth.ScopeAdmin)
+	spaceID := h.createSpace()
+
+	var opens int
+	view, err := vaultPutFresh(h.ctx, h.client, h.rotatingOpen(spaceID, 0, &opens),
+		spaceID, "docs/a.txt", bytes.NewReader([]byte("confirmed once accepted")), time.Now().Unix())
+	if err != nil {
+		t.Fatalf("vaultPutFresh: %v", err)
+	}
+	got := h.pins.confirmedBlobs()
+	want := []string{view.ContentBlob, view.ManifestBlob}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("confirmed %v, want the write's content and manifest %v", got, want)
+	}
+
+	refused := newPSHarness(t, auth.ScopeAdmin)
+	refusedSpace := refused.createSpace()
+	opens = 0
+	if _, err := vaultPutFresh(refused.ctx, refused.client, refused.rotatingOpen(refusedSpace, 2, &opens),
+		refusedSpace, "docs/a.txt", bytes.NewReader([]byte("never recorded")), time.Now().Unix()); err == nil {
+		t.Fatal("a write refused twice succeeded")
+	}
+	if got := refused.pins.confirmedBlobs(); len(got) != 0 {
+		t.Errorf("a refused write confirmed %v — its uploads would never be reclaimed", got)
+	}
+}

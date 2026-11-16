@@ -50,6 +50,9 @@ var restrictedAllowList = []RestrictedRoute{
 	{http.MethodGet, APIPrefix + "/blobs/{hash}/content"},
 	{http.MethodHead, APIPrefix + "/blobs/{hash}/content"},
 	{http.MethodPut, APIPrefix + "/vault/blobs/{hash}"},
+	// Making its own upload pins permanent once its change is accepted
+	// (ADR-0096 amendment, #714). The handler confines it to blobs it uploaded.
+	{http.MethodPost, APIPrefix + "/vault/blobs/confirm"},
 	{http.MethodPost, APIPrefix + "/vault/placements"},
 	// Where a blob it placed is held (ADR-0114), so a writer can wait until it
 	// is safe at two sites. The route repeats the write-grant gate itself.

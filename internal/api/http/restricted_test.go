@@ -39,6 +39,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/guest"
 	"github.com/rarebit-one/heyarr-core/internal/leases"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	psstore "github.com/rarebit-one/heyarr-core/internal/personalstate/store"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
@@ -54,8 +55,12 @@ func (v vaultIndex) IsVaultBlob(_ context.Context, h string) (bool, error) { ret
 // pins records placement pins, accepting everything.
 type pins struct{}
 
-func (pins) RecordVaultBlob(context.Context, string, int64, string, func(context.Context) error) error {
+func (pins) RecordVaultUpload(context.Context, string, int64, string, catalog.UploadPin, func(context.Context) error) error {
 	return nil
+}
+
+func (pins) ConfirmUploadPins(context.Context, string, []string, string, bool) ([]catalog.ConfirmResult, error) {
+	return nil, nil
 }
 func (pins) PinPlacement(context.Context, string, string) error   { return nil }
 func (pins) UnpinPlacement(context.Context, string, string) error { return nil }

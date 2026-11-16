@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,6 +46,40 @@ func (c *Client) PutVaultBlob(ctx context.Context, hash string, r io.Reader) err
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
+}
+
+// ConfirmResult is one blob's answer to [Client.ConfirmVaultBlobs].
+type ConfirmResult struct {
+	Blob   string `json:"blob"`
+	Status string `json:"status"`
+}
+
+// ConfirmVaultBlobs makes this node's upload pins on blobs permanent via
+// POST /api/v1/vault/blobs/confirm (ADR-0096 amendment, #714). A writer calls
+// it once the drive change naming the blobs was accepted, never before: on a
+// node with provisional upload pins on, an unconfirmed upload is released to
+// GC after a day.
+//
+// A node that predates the route answers 404, and its upload pins are all
+// permanent, so there is nothing to confirm: that is reported as no results
+// and no error, so a newer client keeps working against an older node.
+func (c *Client) ConfirmVaultBlobs(ctx context.Context, blobs []string) ([]ConfirmResult, error) {
+	for _, b := range blobs {
+		if _, err := hashing.Parse(b); err != nil {
+			return nil, fmt.Errorf("%q is not a blob identifier — it must be blake3:<64 lowercase hex characters>", b)
+		}
+	}
+	var out struct {
+		Results []ConfirmResult `json:"results"`
+	}
+	if err := c.Post(ctx, "/vault/blobs/confirm", map[string][]string{"blobs": blobs}, &out); err != nil {
+		var apiErr *Error
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("confirming vault blobs: %w", err)
+	}
+	return out.Results, nil
 }
 
 // PinPlacement records a placement pin — an opaque (blob, peer) pair — via

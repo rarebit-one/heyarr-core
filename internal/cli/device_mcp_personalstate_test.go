@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	apiclient "github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 	psclient "github.com/rarebit-one/heyarr-core/internal/personalstate/client"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/crdt"
@@ -53,6 +55,8 @@ type psHarness struct {
 	// config, addr and token let a test drive the real cobra commands (h.cli)
 	// against the same controller.
 	config, addr, token string
+	// pins is what the vault upload route recorded and was asked to confirm.
+	pins *noPin
 }
 
 // newPSHarness's device token carries read and write; pass extra scopes (admin,
@@ -96,7 +100,8 @@ func newPSHarness(t *testing.T, extra ...auth.Scope) *psHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vaultBlobs, err := vaultblob.New(vaultblob.Options{Store: casStore, Pinner: noPin{}, SelfPeer: "peer-self"})
+	pins := &noPin{}
+	vaultBlobs, err := vaultblob.New(vaultblob.Options{Store: casStore, Pinner: pins, SelfPeer: "peer-self"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,15 +157,38 @@ func newPSHarness(t *testing.T, extra ...auth.Scope) *psHarness {
 	}
 	return &psHarness{
 		t: t, ctx: ctx, client: c, mgr: mgr, deviceDir: deviceDir,
-		config: cfgPath, addr: controller.URL, token: created.Secret,
+		config: cfgPath, addr: controller.URL, token: created.Secret, pins: pins,
 	}
 }
 
-// noPin is a vaultblob.Pinner that records nothing.
-type noPin struct{}
+// noPin is a vaultblob.Pinner that keeps no pins — there is no catalogue
+// here, and nothing in these tests collects garbage — but remembers what it
+// was asked to confirm, so a test can prove a write confirms its uploads.
+type noPin struct {
+	mu        sync.Mutex
+	confirmed []string
+}
 
-func (noPin) RecordVaultBlob(context.Context, string, int64, string, func(context.Context) error) error {
+func (*noPin) RecordVaultUpload(context.Context, string, int64, string, catalog.UploadPin, func(context.Context) error) error {
 	return nil
+}
+
+// ConfirmUploadPins answers every blob as confirmed.
+func (p *noPin) ConfirmUploadPins(_ context.Context, _ string, blobs []string, _ string, _ bool) ([]catalog.ConfirmResult, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]catalog.ConfirmResult, len(blobs))
+	for i, b := range blobs {
+		p.confirmed = append(p.confirmed, b)
+		out[i] = catalog.ConfirmResult{BlobHash: b, Status: catalog.ConfirmConfirmed}
+	}
+	return out, nil
+}
+
+func (p *noPin) confirmedBlobs() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.confirmed...)
 }
 
 // cli runs one `space`/`vault`-style command through the real cobra tree against

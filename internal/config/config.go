@@ -179,6 +179,20 @@ type Placement struct {
 	// ("5m"). Empty uses the default; "0" stops asking (this node still
 	// answers siblings that ask it).
 	Interval string `koanf:"interval"`
+	// ProvisionalUploadPins makes a vault upload's pin to this node
+	// provisional: kept for 24 hours unless the writer confirms it with
+	// POST /vault/blobs/confirm once the drive change naming the blob is
+	// accepted, then released to GC (ADR-0096 amendment, #714). It reclaims
+	// the blobs of a vault write that failed after uploading.
+	//
+	// Off by default, and leave it off until every client that writes to
+	// this node's vault sends confirm (heyarr's own CLI does from this
+	// release): a client that never confirms would see every upload expire.
+	// Pins recorded while it is off are permanent and stay so. Turning it off
+	// again stops expiry too: pins already provisional are then kept, never
+	// reclaimed, until it is turned back on — the safe side if a client that
+	// does not confirm turns up after it was enabled.
+	ProvisionalUploadPins bool `koanf:"provisional_upload_pins"`
 }
 
 // Acquisition configures fan-out acquisition (ADR-0119).

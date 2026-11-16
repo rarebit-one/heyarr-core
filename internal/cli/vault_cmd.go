@@ -283,19 +283,43 @@ func vaultPut(ctx context.Context, c *apiclient.Client, mgr *client.Manager, spa
 	if err != nil {
 		return vaultPushView{}, err
 	}
+	// Only now, with the change accepted, are the two uploads named by
+	// anything, so only now are they confirmed: a node with provisional upload
+	// pins releases an unconfirmed upload after a day (ADR-0096 amendment,
+	// #714). Confirming earlier would bring back the leak it exists to close.
+	if err := confirmVaultUploads(ctx, c, m.Content, manifestID); err != nil {
+		return vaultPushView{}, fmt.Errorf("the write was recorded as change %s, but %w — "+
+			"push the file again within a day so the node keeps its bytes", id, err)
+	}
 	return vaultPushView{
 		SpaceID: spaceID, Path: vaultPath, ManifestBlob: manifestID,
 		ContentBlob: m.Content, Size: m.PlaintextSize, ChangeID: id,
 	}, nil
 }
 
+// confirmVaultUploads confirms a write's uploads and fails unless each is now
+// permanent on the node.
+func confirmVaultUploads(ctx context.Context, c *apiclient.Client, blobs ...string) error {
+	results, err := c.ConfirmVaultBlobs(ctx, blobs)
+	if err != nil {
+		return err
+	}
+	for _, r := range results {
+		if r.Status != "confirmed" && r.Status != "already_permanent" {
+			return fmt.Errorf("the node did not confirm blob %s (%s)", r.Blob, r.Status)
+		}
+	}
+	return nil
+}
+
 // vaultPutFresh is vaultPut against a space that may be rotated mid-write
 // (#712). It opens the space, seals and publishes; if the peer refuses the
 // change because the key epoch moved on, it re-opens the space, rewinds r and
 // seals once more under the new key. A second refusal is an error with nothing
-// recorded in the drive. The blobs a refused attempt uploaded stay on the node,
-// self-pinned, with no change naming them: ciphertext under an unguessable id,
-// so not a disclosure, but storage nothing reclaims yet (#714).
+// recorded in the drive. The blobs a refused attempt uploaded stay on the node
+// with no change naming them — ciphertext under an unguessable id, so not a
+// disclosure — and are never confirmed, so a node with provisional upload pins
+// releases them to GC after a day (#714).
 func vaultPutFresh(ctx context.Context, c *apiclient.Client, open func(context.Context) (*client.Manager, error),
 	spaceID, vaultPath string, r io.ReadSeeker, mtime int64,
 ) (vaultPushView, error) {

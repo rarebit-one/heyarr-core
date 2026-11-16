@@ -185,6 +185,31 @@ took from it at the next start; the bytes then go by GC's grace window.
 `GET /api/v1/vault/blobs/{hash}/placement` reports where a blob is wanted and
 held. `sites_durable` is the number of sites holding the bytes.
 
+## Reclaiming failed vault writes (ADR-0096 amendment, #714)
+
+A vault write uploads its blobs first and then pushes the drive change that
+names them. If the push fails (a transport error, a refusal, a key rotation in
+between), the uploads stay pinned with nothing naming them. Provisional upload
+pins reclaim them:
+
+```yaml
+placement:
+  provisional_upload_pins: true   # default false
+```
+
+With it on, an upload's pin to this node lasts 24 hours unless the writer
+confirms it (`POST /api/v1/vault/blobs/confirm`) after its change is accepted.
+An unconfirmed pin is then removed, and the blob goes the way of an unpinned
+one: released, then reclaimed by GC after its grace window if nothing else
+wants it. Confirmed pins, pins recorded while the flag was off, and every pin
+from before this release are permanent.
+
+**Leave it off until every client that writes to this vault sends confirm.**
+heyarr's own `vault push` does from this release, and `/confirm` is served
+whether or not the flag is on. A client that never confirms would see each of
+its uploads released a day later. Turning the flag off again stops expiry as
+well, so pins already provisional are kept, not reclaimed, until it is back on.
+
 ## systemd
 
 The release archive includes `deploy/systemd/mnemosyne.service`. Copy it to

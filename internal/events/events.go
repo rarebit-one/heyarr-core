@@ -78,8 +78,20 @@ const (
 	// longer stands. A release that goes with its reclaimed blob emits only
 	// blob.reclaimed.
 	TypeBlobReleaseCleared = "blob.release_cleared"
-	TypeReplicaPresent     = "replica.present"
-	TypeReplicaCorrupt     = "replica.corrupt"
+	// TypePinProvisional is a vault upload pinned provisionally, or its expiry
+	// extended by a re-upload (ADR-0096 amendment, #714): kept until
+	// provisional_until unless its writer confirms it.
+	TypePinProvisional = "placement.pin_provisional"
+	// TypePinConfirmed is a provisional upload pin made permanent — by its
+	// writer's confirm after the drive change was accepted, or by an upload
+	// that leaves no single writer to confirm it (reason says which).
+	TypePinConfirmed = "placement.pin_confirmed"
+	// TypePinExpired is a provisional upload pin removed unconfirmed after its
+	// expiry: the write that uploaded it never landed, so its bytes are
+	// released to GC like an unpinned blob's.
+	TypePinExpired     = "placement.pin_expired"
+	TypeReplicaPresent = "replica.present"
+	TypeReplicaCorrupt = "replica.corrupt"
 	// TypeReplicaMissing is a blob the catalog knows about whose bytes are not
 	// on this peer at all. Distinct from corrupt: corrupt means we still hold
 	// evidence and it is quarantined, missing means we hold nothing.

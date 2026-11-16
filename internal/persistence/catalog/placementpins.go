@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/events"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/sqlite"
 )
 
 // PinPlacement records an opaque placement pin: a ciphertext blob should live on
@@ -77,6 +79,40 @@ func (c *Catalog) PinPlacement(ctx context.Context, blobHash, peerID string) err
 func (c *Catalog) RecordVaultBlob(
 	ctx context.Context, blobHash string, size int64, peerID string, present func(context.Context) error,
 ) error {
+	return c.RecordVaultUpload(ctx, blobHash, size, peerID, UploadPin{}, present)
+}
+
+// UploadPin says what kind of pin a vault upload records (ADR-0096 amendment,
+// #714). The zero value is the legacy permanent pin.
+type UploadPin struct {
+	// Uploader is the principal that uploaded the blob. It is recorded so a
+	// restricted executor can later confirm only blobs it uploaded itself.
+	Uploader string
+	// ProvisionalUntil, when set, makes the pin provisional: kept until then,
+	// and removed by [Catalog.ExpireProvisionalPins] unless the writer confirms
+	// it first ([Catalog.ConfirmUploadPins]).
+	ProvisionalUntil time.Time
+}
+
+// RecordVaultUpload is [Catalog.RecordVaultBlob] with an explicit upload pin.
+//
+// How a second upload of a blob already pinned to this peer combines with the
+// pin it finds — every rule leans towards keeping bytes, because a pin that
+// outlives its need costs storage and one that expires early loses a file:
+//
+//   - a permanent pin stays permanent (the amendment's dedupe rule);
+//   - a permanent upload makes a provisional pin permanent (the compatibility
+//     flag was switched off, or an older path wrote it);
+//   - a provisional upload by the SAME principal extends the expiry;
+//   - a provisional upload by a DIFFERENT principal makes the pin permanent.
+//     Only one uploader is recorded per pin, so otherwise one of the two could
+//     never confirm it, and its accepted write would lose the blob to expiry.
+//     Sealing uses a random file id, so two writers producing identical
+//     ciphertext is all but impossible; when it happens, a leak is the safe
+//     side to err on.
+func (c *Catalog) RecordVaultUpload(
+	ctx context.Context, blobHash string, size int64, peerID string, pin UploadPin, present func(context.Context) error,
+) error {
 	if blobHash == "" || peerID == "" {
 		return fmt.Errorf("catalog: a vault blob needs both a blob hash and a peer id")
 	}
@@ -126,13 +162,12 @@ func (c *Catalog) RecordVaultBlob(
 			}
 			pending = append(pending, ev)
 		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO placement_pins (blob_hash, peer_id, created_at) VALUES (?, ?, ?)
-			 ON CONFLICT (blob_hash, peer_id) DO NOTHING`,
-			blobHash, peerID, c.clock.Now().Format(timestampFormat)); err != nil {
-			return fmt.Errorf("catalog: recording a placement pin: %w", err)
+		evs, err := c.recordUploadPin(ctx, tx, blobHash, peerID, pin)
+		if err != nil {
+			return err
 		}
-		evs, err := c.markWanted(ctx, tx, blobHash, wantedByPin)
+		pending = append(pending, evs...)
+		evs, err = c.markWanted(ctx, tx, blobHash, wantedByPin)
 		if err != nil {
 			return err
 		}
@@ -146,6 +181,239 @@ func (c *Catalog) RecordVaultBlob(
 		c.events.Publish(pending...)
 	}
 	return nil
+}
+
+// recordUploadPin writes the upload's pin to this peer, combining it with any
+// pin already there by the rules [Catalog.RecordVaultUpload] lists, and emits
+// the transition when the pin's provisional state changed.
+func (c *Catalog) recordUploadPin(
+	ctx context.Context, tx *sql.Tx, blobHash, peerID string, pin UploadPin,
+) ([]events.Event, error) {
+	var (
+		prevUntil, prevUploader sql.NullString
+		exists                  = true
+	)
+	err := tx.QueryRowContext(ctx,
+		`SELECT provisional_until, uploader FROM placement_pins WHERE blob_hash = ? AND peer_id = ?`,
+		blobHash, peerID).Scan(&prevUntil, &prevUploader)
+	if errors.Is(err, sql.ErrNoRows) {
+		exists = false
+	} else if err != nil {
+		return nil, fmt.Errorf("catalog: reading the placement pin: %w", err)
+	}
+
+	until := ""
+	if !pin.ProvisionalUntil.IsZero() {
+		until = sqlite.FormatTimestamp(pin.ProvisionalUntil)
+	}
+	uploader := sql.NullString{String: pin.Uploader, Valid: pin.Uploader != ""}
+
+	if !exists {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO placement_pins (blob_hash, peer_id, created_at, provisional_until, uploader)
+			 VALUES (?, ?, ?, ?, ?)`,
+			blobHash, peerID, c.clock.Now().Format(timestampFormat),
+			sql.NullString{String: until, Valid: until != ""}, uploader); err != nil {
+			return nil, fmt.Errorf("catalog: recording a placement pin: %w", err)
+		}
+		if until == "" {
+			return nil, nil
+		}
+		return c.emitPinTransition(ctx, tx, events.TypePinProvisional, blobHash, peerID, map[string]any{
+			"provisional_until": until,
+		})
+	}
+
+	switch {
+	case !prevUntil.Valid:
+		return nil, nil // permanent stays permanent
+	case until == "" || prevUploader != uploader:
+		reason := "permanent_upload"
+		if until != "" {
+			reason = "second_uploader"
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE placement_pins SET provisional_until = NULL WHERE blob_hash = ? AND peer_id = ?`,
+			blobHash, peerID); err != nil {
+			return nil, fmt.Errorf("catalog: making a placement pin permanent: %w", err)
+		}
+		return c.emitPinTransition(ctx, tx, events.TypePinConfirmed, blobHash, peerID, map[string]any{
+			"reason": reason,
+		})
+	case until > prevUntil.String:
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE placement_pins SET provisional_until = ? WHERE blob_hash = ? AND peer_id = ?`,
+			until, blobHash, peerID); err != nil {
+			return nil, fmt.Errorf("catalog: extending a provisional pin: %w", err)
+		}
+		return c.emitPinTransition(ctx, tx, events.TypePinProvisional, blobHash, peerID, map[string]any{
+			"provisional_until": until,
+		})
+	}
+	return nil, nil
+}
+
+func (c *Catalog) emitPinTransition(
+	ctx context.Context, tx *sql.Tx, eventType, blobHash, peerID string, payload map[string]any,
+) ([]events.Event, error) {
+	payload["peer_id"] = peerID
+	ev, err := c.events.EmitTx(ctx, tx, eventType, "blob", blobHash, payload)
+	if err != nil {
+		return nil, err
+	}
+	return []events.Event{ev}, nil
+}
+
+// ConfirmResult is the outcome of confirming one blob's upload pin.
+type ConfirmResult struct {
+	BlobHash string
+	// Status is ConfirmConfirmed, ConfirmAlreadyPermanent, ConfirmNotHeld or
+	// ConfirmNotUploader.
+	Status string
+}
+
+// Confirm outcomes, as POST /vault/blobs/confirm reports them per blob.
+const (
+	ConfirmConfirmed        = "confirmed"
+	ConfirmAlreadyPermanent = "already_permanent"
+	ConfirmNotHeld          = "not_held"
+	ConfirmNotUploader      = "not_uploader"
+)
+
+// ConfirmUploadPins makes the upload pins on peerID for blobs permanent: the
+// writer's drive change naming them was accepted (ADR-0096 amendment, #714).
+//
+// Confirming is idempotent and never removes anything, so it is not a
+// destructive right: a confused or hostile caller can at worst keep bytes it
+// could already have uploaded. A restricted executor (restricted) may confirm
+// only pins whose recorded uploader is its own principal; any other caller may
+// confirm any pin it names. Each blob is answered on its own: one unknown blob
+// does not stop the rest.
+func (c *Catalog) ConfirmUploadPins(
+	ctx context.Context, peerID string, blobs []string, principal string, restricted bool,
+) ([]ConfirmResult, error) {
+	out := make([]ConfirmResult, 0, len(blobs))
+	var pending []events.Event
+	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		out, pending = out[:0], nil
+		for _, blob := range blobs {
+			var until, uploader sql.NullString
+			err := tx.QueryRowContext(ctx,
+				`SELECT provisional_until, uploader FROM placement_pins WHERE blob_hash = ? AND peer_id = ?`,
+				blob, peerID).Scan(&until, &uploader)
+			status := ConfirmConfirmed
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				status = ConfirmNotHeld
+			case err != nil:
+				return fmt.Errorf("catalog: reading the pin on %s: %w", blob, err)
+			case !until.Valid:
+				status = ConfirmAlreadyPermanent
+			case restricted && uploader.String != principal:
+				status = ConfirmNotUploader
+			}
+			out = append(out, ConfirmResult{BlobHash: blob, Status: status})
+			if status != ConfirmConfirmed {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE placement_pins SET provisional_until = NULL WHERE blob_hash = ? AND peer_id = ?`,
+				blob, peerID); err != nil {
+				return fmt.Errorf("catalog: confirming the pin on %s: %w", blob, err)
+			}
+			evs, err := c.emitPinTransition(ctx, tx, events.TypePinConfirmed, blob, peerID, map[string]any{
+				"reason": "confirmed",
+			})
+			if err != nil {
+				return err
+			}
+			pending = append(pending, evs...)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(pending) > 0 {
+		c.events.Publish(pending...)
+	}
+	return out, nil
+}
+
+// expireBatch bounds one expiry transaction, so a backlog never holds the
+// writer for long.
+const expireBatch = 200
+
+// ExpireProvisionalPins removes every provisional pin whose expiry is before
+// now, and returns how many it removed (ADR-0096 amendment, #714).
+//
+// This is how GC comes to treat an expired provisional pin as absent: the row
+// goes, and the blob is released exactly as an explicit unpin releases it —
+// recorded only if nothing else still wants it (another peer's pin, a taken
+// placement, an asset), with GC's grace window still to run before any byte is
+// unlinked (invariant 8). A pin confirmed in the meantime is permanent and is
+// never matched.
+func (c *Catalog) ExpireProvisionalPins(ctx context.Context, now time.Time) (int, error) {
+	cutoff := sqlite.FormatTimestamp(now)
+	stamp := now.UTC().Format(timestampFormat)
+	total := 0
+	for {
+		var pending []events.Event
+		n := 0
+		err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+			pending, n = nil, 0
+			rows, err := tx.QueryContext(ctx,
+				`SELECT blob_hash, peer_id, provisional_until FROM placement_pins
+				  WHERE provisional_until IS NOT NULL AND provisional_until < ?
+				  ORDER BY provisional_until LIMIT ?`, cutoff, expireBatch)
+			if err != nil {
+				return fmt.Errorf("catalog: listing expired provisional pins: %w", err)
+			}
+			type expired struct{ blob, peer, until string }
+			var batch []expired
+			for rows.Next() {
+				var e expired
+				if err := rows.Scan(&e.blob, &e.peer, &e.until); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				batch = append(batch, e)
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+			for _, e := range batch {
+				if _, err := tx.ExecContext(ctx,
+					`DELETE FROM placement_pins WHERE blob_hash = ? AND peer_id = ?`, e.blob, e.peer); err != nil {
+					return fmt.Errorf("catalog: removing an expired provisional pin: %w", err)
+				}
+				evs, err := c.emitPinTransition(ctx, tx, events.TypePinExpired, e.blob, e.peer, map[string]any{
+					"provisional_until": e.until,
+				})
+				if err != nil {
+					return err
+				}
+				pending = append(pending, evs...)
+				evs, err = c.recordReleaseIfUnwanted(ctx, tx, e.blob, releaseUnpinned, "", stamp)
+				if err != nil {
+					return err
+				}
+				pending = append(pending, evs...)
+			}
+			n = len(batch)
+			return nil
+		})
+		if err != nil {
+			return total, err
+		}
+		if len(pending) > 0 {
+			c.events.Publish(pending...)
+		}
+		total += n
+		if n < expireBatch {
+			return total, nil
+		}
+	}
 }
 
 // ErrBytesGone is RecordVaultBlob or RecordBlobTransferred finding the bytes
