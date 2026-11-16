@@ -4349,12 +4349,39 @@ paths:
         and are the point (§61 — never one version per title): the living-room
         copy and the phone-sized copy are two wants. The same target with the
         same profile is one want written twice, and is a `409`.
+
+        `?dry_run=true` previews the want and writes nothing (#794). It runs the
+        same resolution and the same insert in a transaction it rolls back, so it
+        is refused exactly as the real request would be (`400`, `409`). When the
+        want would succeed it answers `200` with the Work it would want. A
+        whole-series want's follow (ADR-0089) is previewed as an ordinary want.
+      parameters:
+        - name: dry_run
+          in: query
+          required: false
+          description: "`true` to preview the want without writing anything."
+          schema: { type: boolean }
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/CreateDesired" }
       responses:
+        "200":
+          description: "`dry_run=true`: the want would be accepted. Nothing was written."
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [new_work]
+                additionalProperties: false
+                properties:
+                  work_id:
+                    type: string
+                    description: The existing Work the want would attach to. Absent when it would create one.
+                  new_work:
+                    type: boolean
+                    description: The want would create its Work.
         "201":
           description: The want.
           headers:

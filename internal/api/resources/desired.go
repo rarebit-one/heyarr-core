@@ -400,36 +400,9 @@ func scanAcquisitionView(
 // onto JSON-RPC codes; a shared implementation that returned HTTP problems
 // would have made the MCP door translate out of a vocabulary it does not speak.
 func (a *API) WantContent(ctx context.Context, req WantContentRequest) (WantOutcome, error) {
-	if req.WorkID != "" && req.Work != nil {
-		return WantOutcome{}, &badRequest{errors.New(
-			"name the work with either work_id or work, not both")}
-	}
-	if req.WorkID == "" && req.Work == nil {
-		return WantOutcome{}, &badRequest{errors.New(
-			"a desired item must name a work — by work_id, or by a work descriptor " +
-				"if it does not exist yet")}
-	}
-	if req.QualityProfileID != "" && req.QualityProfile != "" {
-		return WantOutcome{}, &badRequest{errors.New(
-			"name the quality profile with either quality_profile_id or quality_profile, not both")}
-	}
-
-	monitor := true
-	if req.Monitor != nil {
-		monitor = *req.Monitor
-	}
-
-	// Validate the want's own fields BEFORE anything is written: resolving the
-	// Work can record a store_ref on it, and a request refused afterwards for a
-	// bad scope or edition must not have mutated the catalog (or named a game
-	// the store fetch would then go and download). The Work and profile are
-	// placeholders here; they are checked for real once resolved.
-	probe := desired.Item{
-		Scope: desired.Scope(req.Scope), WorkID: "probe", EditionID: req.EditionID,
-		QualityProfileID: "probe", Monitor: monitor, Reason: req.Reason,
-	}
-	if err := probe.Validate(); err != nil {
-		return WantOutcome{}, &badRequest{err}
+	monitor, err := checkWantRequest(req)
+	if err != nil {
+		return WantOutcome{}, err
 	}
 
 	// Resolving a profile name and getting-or-creating a work from a descriptor
@@ -445,49 +418,8 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (WantOutc
 	if err := a.db.InTx(ctx, func(tx *sql.Tx) error {
 		emitted = nil
 		var err error
-		// A descriptor carries its content type. For a profileless work-id
-		// request, read the existing work's type in the same transaction so both
-		// forms inherit the same seeded starting profile (ADR-0115).
-		var contentType string
-		if req.Work != nil {
-			contentType = strings.ToLower(strings.TrimSpace(req.Work.ContentType))
-		} else if req.QualityProfileID == "" && req.QualityProfile == "" {
-			err = tx.QueryRowContext(ctx,
-				`SELECT content_type FROM works WHERE id = ?`, req.WorkID).Scan(&contentType)
-			if errors.Is(err, sql.ErrNoRows) {
-				return &badRequest{fmt.Errorf("there is no work with the id %q", req.WorkID)}
-			}
-			if err != nil {
-				return err
-			}
-		}
-		profileID, err = a.resolveProfile(ctx, tx, req.QualityProfileID, req.QualityProfile, contentType)
-		if err != nil {
-			return err
-		}
-		workID = req.WorkID
-		if req.Work != nil {
-			if strings.TrimSpace(req.StoreRef) != "" {
-				return &badRequest{errors.New("put store_ref inside the work descriptor when wanting by work")}
-			}
-			workID, err = a.resolveWorkDescriptor(ctx, tx, *req.Work, &emitted)
-			return err
-		}
-		// An edition-scoped want names its edition: check it belongs to this
-		// Work before attaching anything, so a want refused for a missing edition
-		// never leaves a store_ref behind.
-		if req.EditionID != "" && strings.TrimSpace(req.StoreRef) != "" {
-			var one int
-			err := tx.QueryRowContext(ctx, `SELECT 1 FROM editions WHERE id = ? AND work_id = ?`,
-				req.EditionID, workID).Scan(&one)
-			if errors.Is(err, sql.ErrNoRows) {
-				return &badRequest{fmt.Errorf("work %s has no edition %q", workID, req.EditionID)}
-			}
-			if err != nil {
-				return err
-			}
-		}
-		return a.attachStoreRef(ctx, tx, workID, req.StoreRef, &emitted)
+		profileID, workID, err = a.resolveWant(ctx, tx, req, &emitted)
+		return err
 	}); err != nil {
 		return WantOutcome{}, err
 	}
@@ -568,6 +500,172 @@ func (a *API) WantContent(ctx context.Context, req WantContentRequest) (WantOutc
 			"desired_item_id", out.ID, "error", err)
 	}
 	return WantOutcome{Desired: &out}, nil
+}
+
+// checkWantRequest refuses a want request on its own fields, before anything
+// is resolved or written, and returns whether it monitors.
+//
+// The want's own fields are validated BEFORE anything is written: resolving
+// the Work can record a store_ref on it, and a request refused afterwards for
+// a bad scope or edition must not have mutated the catalog (or named a game
+// the store fetch would then go and download). The Work and profile are
+// placeholders here; they are checked for real once resolved.
+func checkWantRequest(req WantContentRequest) (bool, error) {
+	if req.WorkID != "" && req.Work != nil {
+		return false, &badRequest{errors.New(
+			"name the work with either work_id or work, not both")}
+	}
+	if req.WorkID == "" && req.Work == nil {
+		return false, &badRequest{errors.New(
+			"a desired item must name a work — by work_id, or by a work descriptor " +
+				"if it does not exist yet")}
+	}
+	if req.QualityProfileID != "" && req.QualityProfile != "" {
+		return false, &badRequest{errors.New(
+			"name the quality profile with either quality_profile_id or quality_profile, not both")}
+	}
+	monitor := true
+	if req.Monitor != nil {
+		monitor = *req.Monitor
+	}
+	probe := desired.Item{
+		Scope: desired.Scope(req.Scope), WorkID: "probe", EditionID: req.EditionID,
+		QualityProfileID: "probe", Monitor: monitor, Reason: req.Reason,
+	}
+	if err := probe.Validate(); err != nil {
+		return false, &badRequest{err}
+	}
+	return monitor, nil
+}
+
+// resolveWant resolves a want's quality profile and its Work inside tx: a
+// profile by id, name or the content type's default, and a Work by id or by
+// getting-or-creating it from a descriptor, recording any store_ref. It is
+// WantContent's whole first phase, and PreviewWant runs the same code in a
+// transaction it then rolls back, so a preview cannot drift from the real
+// thing. The events its writes emit are appended to emitted, for the caller to
+// publish once tx has committed — or, for a preview, never (#796).
+func (a *API) resolveWant(ctx context.Context, tx *sql.Tx, req WantContentRequest, emitted *[]events.Event) (profileID, workID string, err error) {
+	// A descriptor carries its content type. For a profileless work-id
+	// request, read the existing work's type in the same transaction so both
+	// forms inherit the same seeded starting profile (ADR-0115).
+	var contentType string
+	if req.Work != nil {
+		contentType = strings.ToLower(strings.TrimSpace(req.Work.ContentType))
+	} else if req.QualityProfileID == "" && req.QualityProfile == "" {
+		err = tx.QueryRowContext(ctx,
+			`SELECT content_type FROM works WHERE id = ?`, req.WorkID).Scan(&contentType)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", &badRequest{fmt.Errorf("there is no work with the id %q", req.WorkID)}
+		}
+		if err != nil {
+			return "", "", err
+		}
+	}
+	profileID, err = a.resolveProfile(ctx, tx, req.QualityProfileID, req.QualityProfile, contentType)
+	if err != nil {
+		return "", "", err
+	}
+	workID = req.WorkID
+	if req.Work != nil {
+		if strings.TrimSpace(req.StoreRef) != "" {
+			return "", "", &badRequest{errors.New("put store_ref inside the work descriptor when wanting by work")}
+		}
+		workID, err = a.resolveWorkDescriptor(ctx, tx, *req.Work, emitted)
+		return profileID, workID, err
+	}
+	// An edition-scoped want names its edition: check it belongs to this
+	// Work before attaching anything, so a want refused for a missing edition
+	// never leaves a store_ref behind.
+	if req.EditionID != "" && strings.TrimSpace(req.StoreRef) != "" {
+		var one int
+		err := tx.QueryRowContext(ctx, `SELECT 1 FROM editions WHERE id = ? AND work_id = ?`,
+			req.EditionID, workID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", &badRequest{fmt.Errorf("work %s has no edition %q", workID, req.EditionID)}
+		}
+		if err != nil {
+			return "", "", err
+		}
+	}
+	return profileID, workID, a.attachStoreRef(ctx, tx, workID, req.StoreRef, emitted)
+}
+
+// WantPreview is what a want would do, from [API.PreviewWant].
+type WantPreview struct {
+	// WorkID is the existing Work the want would attach to; empty when the
+	// want would create its Work.
+	WorkID string `json:"work_id,omitempty"`
+	// NewWork reports that the want would create its Work.
+	NewWork bool `json:"new_work"`
+}
+
+// errPreviewRollback rolls back PreviewWant's transaction once every check
+// has passed.
+var errPreviewRollback = errors.New("resources: preview rolled back")
+
+// PreviewWant answers what WantContent would do with req, and writes nothing
+// (#794): the same refusals (badRequest for a title collision or a store id
+// another Work holds, a unique violation when the same want already exists)
+// or, when it would succeed, which Work it would want.
+//
+// It does not re-implement any of those decisions. It runs WantContent's own
+// resolution AND the want's own insert, so the schema's own uniqueness and
+// foreign keys judge it, in one transaction it always rolls back; the events
+// those writes emit are collected as WantContent collects them and simply
+// never published. What it cannot preview is everything after the commit: a
+// whole-series want's follow (ADR-0089) is reported as an ordinary want.
+func (a *API) PreviewWant(ctx context.Context, req WantContentRequest) (WantPreview, error) {
+	monitor, err := checkWantRequest(req)
+	if err != nil {
+		return WantPreview{}, err
+	}
+	var out WantPreview
+	err = a.db.InTx(ctx, func(tx *sql.Tx) error {
+		out = WantPreview{}
+		before, err := maxWorkRowID(ctx, tx)
+		if err != nil {
+			return err
+		}
+		var discarded []events.Event
+		profileID, workID, err := a.resolveWant(ctx, tx, req, &discarded)
+		if err != nil {
+			return err
+		}
+		item := desired.Item{
+			ID: a.newID(), Scope: desired.Scope(req.Scope), WorkID: workID,
+			EditionID: req.EditionID, QualityProfileID: profileID,
+			Monitor: monitor, Reason: req.Reason,
+		}
+		if err := item.Validate(); err != nil {
+			return &badRequest{err}
+		}
+		if err := a.catalog.ProbeDesiredItemTx(ctx, tx, item); err != nil {
+			return err
+		}
+		// Inside this transaction a Work the want created looks like any
+		// other, so whether it existed is read from its rowid.
+		var rowid int64
+		if err := tx.QueryRowContext(ctx, `SELECT rowid FROM works WHERE id = ?`, workID).Scan(&rowid); err != nil {
+			return err
+		}
+		if rowid <= before {
+			out.WorkID = workID
+		} else {
+			out.NewWork = true
+		}
+		return errPreviewRollback
+	})
+	if !errors.Is(err, errPreviewRollback) {
+		return WantPreview{}, err
+	}
+	return out, nil
+}
+
+func maxWorkRowID(ctx context.Context, tx *sql.Tx) (int64, error) {
+	var n sql.NullInt64
+	err := tx.QueryRowContext(ctx, `SELECT max(rowid) FROM works`).Scan(&n)
+	return n.Int64, err
 }
 
 // WantOutcome is what wanting content produced. Exactly one field is set:
@@ -667,6 +765,18 @@ func (a *API) pollFollowNow(ctx context.Context, sourceID string) {
 func (a *API) createDesired(w http.ResponseWriter, r *http.Request) {
 	var body WantContentRequest
 	if !decodeOr400(w, r, &body) {
+		return
+	}
+	// ?dry_run=true answers what the want would do and writes nothing (#794):
+	// the same 400 and 409 the real request would get, or 200 with the Work it
+	// would want.
+	if r.URL.Query().Get("dry_run") == "true" {
+		preview, err := a.PreviewWant(r.Context(), body)
+		if err != nil {
+			a.failDesiredWrite(w, r, err)
+			return
+		}
+		a.write(w, r, http.StatusOK, preview)
 		return
 	}
 	out, err := a.WantContent(r.Context(), body)

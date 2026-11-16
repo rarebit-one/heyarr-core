@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -265,5 +266,80 @@ func TestAGameWhoseWorkWasDeletedIsWantedAgain(t *testing.T) {
 	if err := h.db.Reader().QueryRow(`SELECT x.entity_id FROM external_ids x JOIN works w ON w.id = x.entity_id
 		WHERE x.source = 'gog' AND x.value = 'some_game'`).Scan(&owner); err != nil {
 		t.Fatalf("the game's id does not name a live work: %v", err)
+	}
+}
+
+// 🔴 --dry-run asks the node, and writes nothing (#794).
+//
+// It used to list every syntactically valid game as "would want" without
+// asking, so after a library was synced it still promised to want all of it
+// and could not preview a refusal. Now each bucket is the node's own answer —
+// plus the one thing a preview cannot see on its own, two products in the
+// same listing that would take one title — and the catalogue is untouched.
+func TestStoresSyncDryRunPreviewsWhatTheNodeWouldDo(t *testing.T) {
+	h := newAPIHarness(t)
+	seedOwned(h)
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	h.mustRun("stores", "sync", "gog", "--from-file", write("synced.json", `[
+		{"gamename": "some_game", "title": "Some Game"}
+	]`), "--json")
+
+	counts := func() string {
+		var works, ids, wants, evs int
+		if err := h.db.Reader().QueryRow(`SELECT
+			(SELECT count(*) FROM works), (SELECT count(*) FROM external_ids),
+			(SELECT count(*) FROM desired_items), (SELECT count(*) FROM events)`).
+			Scan(&works, &ids, &wants, &evs); err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Sprintf("works=%d external_ids=%d desired=%d events=%d", works, ids, wants, evs)
+	}
+	before := counts()
+
+	out, _, err := h.run("stores", "sync", "gog", "--dry-run", "--json", "--from-file", write("library.json", `[
+		{"gamename": "some_game", "title": "Some Game"},
+		{"gamename": "some_game_classic", "title": "Some Game"},
+		{"gamename": "new_game", "title": "New Game"},
+		{"gamename": "new_game_gold", "title": "New Game"}
+	]`))
+	if err == nil {
+		t.Error("a dry run that previews refusals reported success")
+	}
+	var res storeSyncResult
+	if jerr := json.Unmarshal([]byte(out), &res); jerr != nil {
+		t.Fatalf("%v: %s", jerr, out)
+	}
+	if strings.Join(res.AlreadyWanted, ",") != "some_game" {
+		t.Errorf("already wanted = %v, want the synced game", res.AlreadyWanted)
+	}
+	if strings.Join(res.Wanted, ",") != "new_game" {
+		t.Errorf("would want = %v, want only the new game", res.Wanted)
+	}
+	if len(res.Failed) != 2 ||
+		!strings.HasPrefix(res.Failed[0], "some_game_classic") ||
+		!strings.HasPrefix(res.Failed[1], "new_game_gold") {
+		t.Errorf("would refuse = %v, want the product colliding with the catalogue "+
+			"and the one colliding with an earlier game in the listing", res.Failed)
+	}
+	if after := counts(); after != before {
+		t.Errorf("a dry run wrote to the catalogue:\n before %s\n after  %s", before, after)
+	}
+
+	// And the preview was right: the real sync does exactly that.
+	out, _, _ = h.run("stores", "sync", "gog", "--json", "--from-file", filepath.Join(dir, "library.json"))
+	var real storeSyncResult
+	if err := json.Unmarshal([]byte(out), &real); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if strings.Join(real.Wanted, ",") != "new_game" || len(real.Failed) != 2 ||
+		strings.Join(real.AlreadyWanted, ",") != "some_game" {
+		t.Errorf("the real sync %+v disagrees with its own preview %+v", real, res)
 	}
 }

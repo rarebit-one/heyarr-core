@@ -14,6 +14,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/client"
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
+	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 )
 
 // newStoresCommand is `heyarr stores`: the games an operator owns on a store,
@@ -82,7 +83,10 @@ client uses:
   sudo -u heyarr lgogdownloader --login        # once
   sudo -u heyarr heyarr stores sync gog
 
-Re-running is safe: a game already wanted is reported and left alone. Listing
+Re-running is safe: a game already wanted is reported and left alone.
+--dry-run asks the node what it would do with each game and changes nothing,
+so already-wanted games and refusals (a title another product holds) show up
+before anything is written. Listing
 a large library is slow (lgogdownloader asks GOG for every game's details); pass
 --from-file with a saved 'lgogdownloader --list json' to sync from that instead.`,
 		Args: cobra.ExactArgs(1),
@@ -108,24 +112,33 @@ a large library is slow (lgogdownloader asks GOG for every game's details); pass
 			want := func(ctx context.Context, c *client.Client) error {
 				// The profile is the same for every game: check it once, rather
 				// than discover it is missing as one refusal per game.
-				if c != nil {
-					name, err := profileExists(ctx, c, profile)
-					if err != nil {
-						return err
-					}
-					// Sent by name: the API resolves quality_profile as a name, so
-					// an id given on the command line is normalised here.
-					profile = name
+				name, err := profileExists(ctx, c, profile)
+				if err != nil {
+					return err
 				}
+				// Sent by name: the API resolves quality_profile as a name, so
+				// an id given on the command line is normalised here.
+				profile = name
+				// A dry run asks the node exactly the same question, and the
+				// node answers what it WOULD do, writing nothing (#794): so
+				// already-wanted games and refusals are previewed too.
+				path := "/desired"
+				if dryRun {
+					path += "?dry_run=true"
+				}
+				// A preview writes nothing, so it cannot see what an EARLIER
+				// game in this same listing would have done: two products
+				// with one title both preview as wanted, where a real sync
+				// creates the first and refuses the second. So the Work each
+				// previewed want would take — an existing one by id, or a new
+				// one by title key — is claimed here, and a later game that
+				// would take the same Work is reported as refused.
+				claimed := map[string]string{}
 				for _, g := range games {
 					name := strings.TrimSpace(g.GameName)
 					title := strings.TrimSpace(g.Title)
 					if !acquisition.ValidGOGGameName(name) || title == "" {
 						res.Skipped = append(res.Skipped, name)
-						continue
-					}
-					if dryRun {
-						res.Wanted = append(res.Wanted, name)
 						continue
 					}
 					req := client.CreateDesiredRequest{
@@ -136,10 +149,30 @@ a large library is slow (lgogdownloader asks GOG for every game's details); pass
 						QualityProfile: profile,
 						Reason:         "owned on GOG",
 					}
-					var item client.DesiredItem
-					err := c.Post(ctx, "/desired", req, &item)
+					var item json.RawMessage
+					err := c.Post(ctx, path, req, &item)
 					var apiErr *client.Error
 					switch {
+					case err == nil && dryRun:
+						var p struct {
+							WorkID  string `json:"work_id"`
+							NewWork bool   `json:"new_work"`
+						}
+						if err := json.Unmarshal(item, &p); err != nil {
+							return fmt.Errorf("reading the node's preview for %s: %w", name, err)
+						}
+						claim := p.WorkID
+						if p.NewWork {
+							key, _ := identification.Describe(identification.Game, title, 0)
+							claim = "new:" + key
+						}
+						if first, ok := claimed[claim]; ok {
+							res.Failed = append(res.Failed, name+": would be refused — "+first+
+								", earlier in this listing, would take the same title first")
+							continue
+						}
+						claimed[claim] = name
+						res.Wanted = append(res.Wanted, name)
 					case err == nil:
 						res.Wanted = append(res.Wanted, name)
 					case errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict:
@@ -156,11 +189,7 @@ a large library is slow (lgogdownloader asks GOG for every game's details); pass
 				}
 				return nil
 			}
-			if dryRun {
-				if err := want(cmd.Context(), nil); err != nil {
-					return err
-				}
-			} else if err := flags.withClient(cmd, configPath, want); err != nil {
+			if err := flags.withClient(cmd, configPath, want); err != nil {
 				return err
 			}
 			if flags.asJSON {
@@ -193,8 +222,8 @@ a large library is slow (lgogdownloader asks GOG for every game's details); pass
 	cmd.Flags().StringVar(&profile, "quality-profile", "",
 		"the profile each game is wanted under (defaults to the game default, owned)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false,
-		"list the valid games the listing would send, without asking the node (so it cannot "+
-			"tell what is already wanted)")
+		"ask the node what it would do with each game — would want, already wanted or "+
+			"refused — and change nothing")
 	return cmd
 }
 
