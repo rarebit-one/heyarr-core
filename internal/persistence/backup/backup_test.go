@@ -136,9 +136,9 @@ func TestConsistentUnderConcurrentWrites(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; ctx.Err() == nil; i++ {
-			// Writes on the single writer pool serialise with VACUUM INTO; the
-			// point is that the snapshot is consistent regardless of where in a
-			// write stream it lands.
+			// Writes now run CONCURRENTLY with VACUUM INTO, which reads on a
+			// reader connection (#718); the point is that the snapshot is
+			// consistent regardless of where in a write stream it lands.
 			_, _ = n.log.Emit(ctx, "test.churn", "churn", "x", nil)
 		}
 	}()
@@ -152,6 +152,88 @@ func TestConsistentUnderConcurrentWrites(t *testing.T) {
 		t.Fatalf("a backup taken under concurrent writes did not open consistently: %v", err)
 	}
 	_ = opened.Close()
+}
+
+// 🔴 A backup does not need the writer to take its snapshot (#718).
+//
+// The writer pool is one connection, so a VACUUM INTO on it held every write on
+// the node for the length of the backup — which on a large control database is
+// what made the first guest request (a lease mint, so a write) take up to 30s.
+// The deterministic shape of that: hold the writer, and the snapshot must still
+// be written and published. Take does need the writer afterwards, to record
+// backup_taken, so the assertion is on the published generation directory,
+// which lands before that event; with the VACUUM on the writer it never lands
+// at all while a write is open.
+func TestABackupSnapshotsWhileTheWriterIsBusy(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.emit(t, "seed")
+	dir := filepath.Join(n.dir, "backups")
+
+	tx, err := n.db.Writer().BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			_ = tx.Rollback()
+		}
+	}
+	defer release()
+
+	type result struct {
+		art backup.Artifact
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		art, err := backup.Take(t.Context(), backup.TakeOptions{
+			DB: n.db, Events: n.log, SourcePeerID: "peer-a", Dir: dir,
+			Clock: fixedClock{t: time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)},
+		})
+		done <- result{art, err}
+	}()
+
+	// A liveness bound, not a latency claim: the snapshot of a tiny database
+	// takes milliseconds, and a VACUUM waiting on the writer never finishes.
+	deadline := time.Now().Add(30 * time.Second)
+	for !publishedGeneration(t, dir) {
+		if time.Now().After(deadline) {
+			t.Fatal("no snapshot was published while a write transaction was open — the " +
+				"VACUUM INTO is waiting for the writer, so every backup blocks every write " +
+				"on the node for its whole duration (#718)")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	release()
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("Take failed once the writer was released: %v", res.err)
+	}
+	opened, err := backup.Open(t.Context(), res.art.Dir, backup.OpenOptions{})
+	if err != nil {
+		t.Fatalf("the snapshot taken beside an open write did not open consistently: %v", err)
+	}
+	_ = opened.Close()
+}
+
+// publishedGeneration reports whether a generation directory (not a staging
+// one) has appeared under dir.
+func publishedGeneration(t *testing.T, dir string) bool {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			return true
+		}
+	}
+	return false
 }
 
 // TestRPOMeasured writes transactions, loses more after the backup, restores,

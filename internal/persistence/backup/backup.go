@@ -237,11 +237,22 @@ type takenPayload struct {
 // is always one this package built under a caller-controlled directory, never
 // user input, and the escaping keeps it correct regardless.
 func vacuumInto(ctx context.Context, db *sqlite.DB, dest string) error {
-	// Run on the writer pool. VACUUM INTO reads a consistent snapshot and does
-	// not modify the source, but funnelling it through the single writer keeps
-	// it serialised with ordinary writes (ADR-0003) rather than racing them.
+	// Run on a READER connection, never the writer (#718). VACUUM INTO only
+	// reads the source, inside one read transaction, and in WAL mode that is a
+	// consistent snapshot which ordinary writes cannot disturb and do not wait
+	// for — so there is nothing to serialise against, and ADR-0003's single
+	// writer is not involved.
+	//
+	// It used to run on the writer "to keep it serialised with ordinary
+	// writes", and the cost of that was every write on the node: the writer
+	// pool is one connection, so for the whole VACUUM — seconds to tens of
+	// seconds on a multi-gigabyte control database — nothing could commit. The
+	// first guest request from a trusted source mints a lease, which is a write,
+	// and so answered in up to 30s whenever it landed inside a backup.
+	// Measured on a 489 MB database: a one-row write issued during the VACUUM
+	// waited 489 ms with it on the writer and 0 ms with it on a reader.
 	escaped := strings.ReplaceAll(dest, "'", "''")
-	if _, err := db.Writer().ExecContext(ctx, "VACUUM INTO '"+escaped+"'"); err != nil {
+	if _, err := db.Reader().ExecContext(ctx, "VACUUM INTO '"+escaped+"'"); err != nil {
 		return fmt.Errorf("backup: VACUUM INTO %s: %w", dest, err)
 	}
 	return nil

@@ -194,6 +194,13 @@ stable.
   alternative.
 
 ### Fixed
+- **A backup no longer stalls every write on the node** (#718). The backup's
+  `VACUUM INTO` ran on the single writer connection, so no write could commit
+  for its whole length: seconds to tens of seconds on a large control
+  database. A guest's first request mints a lease, which is a write, and so
+  could take up to 30 s to answer. The snapshot now runs on a reader
+  connection, where WAL gives it a consistent snapshot without holding the
+  writer.
 - **Local control-plane backups are now pruned** (#697). The backup beat
   wrote a whole-database copy into `<data_dir>/backups` every interval and
   never removed one, so an idle node grew by gigabytes a day. After each
