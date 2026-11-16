@@ -365,3 +365,45 @@ func TestAStuckGrabIsNotDueUntilTheSweepHasBlockedItsRelease(t *testing.T) {
 		t.Fatalf("due = %+v: with the row dropped the want is the search beat's again", due)
 	}
 }
+
+// An ingest returns its want to idle holding bytes nobody has evaluated
+// (managed, content unknown). Searched in that window, idle and not satisfied
+// read as missing: the search re-selected the release just ingested, grabbed it
+// again and published a second acquire op (#815). The want is left for
+// reconciliation, for a bounded while, and searched as ever once reconciled.
+func TestAJustIngestedWantIsNotDueUntilReconciled(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name     string
+		content  string
+		ingested time.Duration
+		due      bool
+	}{
+		{"just ingested, not yet reconciled", "unknown", time.Minute, false},
+		{"reconciliation never answered", "unknown", 2 * time.Hour, true},
+		{"reconciled as not satisfied", "not_satisfied", time.Minute, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			ctx := t.Context()
+			if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+				t.Fatal(err)
+			}
+			h.exec(t, `UPDATE acquisition_state
+				SET phase = 'idle', managed = 1, content = ?, placement = 'unknown', phase_entered_at = ?
+				WHERE desired_item_id = ?`,
+				tc.content, now.Add(-tc.ingested).Format(time.RFC3339Nano), h.want)
+
+			due, err := h.cat.DueSearches(ctx, now, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(due) == 1; got != tc.due {
+				t.Fatalf("due = %+v, want due=%v", due, tc.due)
+			}
+		})
+	}
+}
