@@ -55,23 +55,39 @@ func TestAnUploadPinCombinesWithThePinAlreadyThere(t *testing.T) {
 		permanent bool
 		until     time.Time
 	}{
-		{"a provisional upload is provisional",
-			catalog.UploadPin{Uploader: "exec-a", ProvisionalUntil: day}, catalog.UploadPin{},
-			false, day},
-		{"a permanent pin stays permanent under a provisional re-upload",
-			catalog.UploadPin{Uploader: "exec-a"}, catalog.UploadPin{Uploader: "exec-a", ProvisionalUntil: day},
-			true, time.Time{}},
-		{"a permanent re-upload settles a provisional pin",
-			catalog.UploadPin{Uploader: "exec-a", ProvisionalUntil: day}, catalog.UploadPin{Uploader: "exec-a"},
-			true, time.Time{}},
-		{"the same uploader extends the expiry",
+		{
+			"a provisional upload is provisional",
+			catalog.UploadPin{Uploader: "exec-a", ProvisionalUntil: day},
+			catalog.UploadPin{},
+			false, day,
+		},
+		{
+			"a permanent pin stays permanent under a provisional re-upload",
+			catalog.UploadPin{Uploader: "exec-a"},
+			catalog.UploadPin{Uploader: "exec-a", ProvisionalUntil: day},
+			true,
+			time.Time{},
+		},
+		{
+			"a permanent re-upload settles a provisional pin",
+			catalog.UploadPin{Uploader: "exec-a", ProvisionalUntil: day},
+			catalog.UploadPin{Uploader: "exec-a"},
+			true,
+			time.Time{},
+		},
+		{
+			"the same uploader extends the expiry",
 			catalog.UploadPin{Uploader: "exec-a", ProvisionalUntil: day},
 			catalog.UploadPin{Uploader: "exec-a", ProvisionalUntil: later},
-			false, later},
-		{"a second uploader makes it permanent, since only one uploader can confirm",
+			false, later,
+		},
+		{
+			"a second uploader makes it permanent, since only one uploader can confirm",
 			catalog.UploadPin{Uploader: "exec-a", ProvisionalUntil: day},
 			catalog.UploadPin{Uploader: "exec-b", ProvisionalUntil: later},
-			true, time.Time{}},
+			true,
+			time.Time{},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

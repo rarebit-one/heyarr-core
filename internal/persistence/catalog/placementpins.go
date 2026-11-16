@@ -362,24 +362,8 @@ func (c *Catalog) ExpireProvisionalPins(ctx context.Context, now time.Time) (int
 		n := 0
 		err := c.db.InTx(ctx, func(tx *sql.Tx) error {
 			pending, n = nil, 0
-			rows, err := tx.QueryContext(ctx,
-				`SELECT blob_hash, peer_id, provisional_until FROM placement_pins
-				  WHERE provisional_until IS NOT NULL AND provisional_until < ?
-				  ORDER BY provisional_until LIMIT ?`, cutoff, expireBatch)
+			batch, err := expiredPins(ctx, tx, cutoff)
 			if err != nil {
-				return fmt.Errorf("catalog: listing expired provisional pins: %w", err)
-			}
-			type expired struct{ blob, peer, until string }
-			var batch []expired
-			for rows.Next() {
-				var e expired
-				if err := rows.Scan(&e.blob, &e.peer, &e.until); err != nil {
-					_ = rows.Close()
-					return err
-				}
-				batch = append(batch, e)
-			}
-			if err := rows.Close(); err != nil {
 				return err
 			}
 			for _, e := range batch {
@@ -414,6 +398,30 @@ func (c *Catalog) ExpireProvisionalPins(ctx context.Context, now time.Time) (int
 			return total, nil
 		}
 	}
+}
+
+type expiredPin struct{ blob, peer, until string }
+
+// expiredPins reads one batch of provisional pins whose expiry is before
+// cutoff, oldest first.
+func expiredPins(ctx context.Context, tx *sql.Tx, cutoff string) ([]expiredPin, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT blob_hash, peer_id, provisional_until FROM placement_pins
+		  WHERE provisional_until IS NOT NULL AND provisional_until < ?
+		  ORDER BY provisional_until LIMIT ?`, cutoff, expireBatch)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: listing expired provisional pins: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var batch []expiredPin
+	for rows.Next() {
+		var e expiredPin
+		if err := rows.Scan(&e.blob, &e.peer, &e.until); err != nil {
+			return nil, err
+		}
+		batch = append(batch, e)
+	}
+	return batch, rows.Err()
 }
 
 // ErrBytesGone is RecordVaultBlob or RecordBlobTransferred finding the bytes
