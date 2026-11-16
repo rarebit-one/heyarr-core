@@ -217,6 +217,63 @@ func QuarantineSealed(dir string, now time.Time) (string, error) {
 // removeFile is os.Remove, replaceable by a test that needs an unlink to fail.
 var removeFile = os.Remove
 
+// renameFile is os.Rename, replaceable by a test that needs a rename to fail.
+var renameFile = os.Rename
+
+// replacedSuffix names a sealed file moved aside while its device is replaced
+// by a software one (#695).
+const replacedSuffix = ".replaced"
+
+// ReplaceWithSoftware replaces the device in store's directory with a new
+// software device (`device generate --force --custody software`), and leaves
+// no sealed file holding the old keys behind.
+//
+// The order is the point (#695). Generating first and unlinking the sealed
+// file after meant that an unlink the filesystem refused (an immutable file,
+// say) left the NEW device committed, the command reporting failure, and the
+// old private keys still recoverable from the sealed file; every retry then
+// generated yet another device before failing the same way. Instead the
+// sealed file is renamed aside first, as RemoveDevice removes it before the
+// record. If that fails, nothing has been replaced. If generating fails, it is
+// renamed back. Only once the new device is committed is the old file
+// deleted, and a deletion that fails is reported with where the file is; the
+// next replacement removes it before generating anything, so a retry never
+// stacks another device on top of one it could not clean up after.
+func ReplaceWithSoftware(store *device.Store, name string) (device.Device, error) {
+	sealed := SealedPath(store.Dir())
+	aside := sealed + replacedSuffix
+	if err := removeFile(aside); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return device.Device{}, fmt.Errorf("devicekeys: an earlier replacement left the old sealed file at %s, "+
+			"and it still cannot be removed: %w; nothing was replaced — remove it by hand, then retry", aside, err)
+	}
+	moved := true
+	if err := renameFile(sealed, aside); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return device.Device{}, fmt.Errorf("devicekeys: moving the sealed file %s aside before replacing its device: %w; "+
+				"nothing was replaced", sealed, err)
+		}
+		moved = false // a software device, or none: there are no sealed keys to leave behind
+	}
+	forget(sealed)
+
+	dev, err := store.Generate(name, true)
+	if err != nil {
+		if moved {
+			if rerr := renameFile(aside, sealed); rerr != nil {
+				return device.Device{}, fmt.Errorf("%w; and the old sealed file could not be put back from %s: %w", err, aside, rerr)
+			}
+		}
+		return device.Device{}, err
+	}
+	if moved {
+		if err := removeFile(aside); err != nil {
+			return dev, fmt.Errorf("devicekeys: the device was replaced, but the old sealed file could not be removed "+
+				"from %s: %w — it still holds the old keys; remove it by hand (the next replacement removes it first)", aside, err)
+		}
+	}
+	return dev, nil
+}
+
 // RemoveDevice removes the device id from store, and for a custody device its
 // sealed file. The sealed file goes FIRST: if it cannot be removed, the record
 // stays, so the device is still listed and a retry finds it. The other order

@@ -389,3 +389,103 @@ func TestUsable(t *testing.T) {
 		t.Fatal("a malformed sealed file is usable")
 	}
 }
+
+// A custody device replaced by a software one leaves no sealed file holding
+// the old keys, and a filesystem that refuses to let go of that file never
+// leaves a NEW device committed beside it (#695). Before, the replacement was
+// committed first and the unlink tried after, so a refused unlink reported
+// failure with the old keys still on disk, and every retry generated another
+// device. Not parallel: it replaces removeFile and renameFile.
+func TestReplaceWithSoftwareMovesTheSealedFileAsideFirst(t *testing.T) {
+	aside := func(dir string) string { return SealedPath(dir) + replacedSuffix }
+	custody := func(t *testing.T) (*device.Store, device.Device, string) {
+		t.Helper()
+		dir := filepath.Join(t.TempDir(), "device")
+		old, err := newStore(t, dir).GenerateInto("laptop", false, keysProvisioner{softwareKeys(t)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(SealedPath(dir), []byte("sealed keys"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// A fresh store, as `device generate` opens one: the store that made a
+		// custody device stays in custody mode and would refuse Generate.
+		return newStore(t, dir), old, dir
+	}
+	exists := func(t *testing.T, path string) bool {
+		t.Helper()
+		_, err := os.Stat(path)
+		return err == nil
+	}
+	injected := errors.New("injected filesystem refusal")
+	t.Cleanup(func() { removeFile, renameFile = os.Remove, os.Rename })
+
+	t.Run("replaced cleanly", func(t *testing.T) {
+		store, old, dir := custody(t)
+		dev, err := ReplaceWithSoftware(store, "laptop")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dev.ID == old.ID || dev.KeyCustody == device.KeyCustodyExternal {
+			t.Errorf("replacement = %s (%s), want a new software device", dev.ID, dev.KeyCustody)
+		}
+		if exists(t, SealedPath(dir)) || exists(t, aside(dir)) {
+			t.Error("the old sealed keys survived a clean replacement")
+		}
+	})
+
+	t.Run("the sealed file cannot be moved: nothing is replaced", func(t *testing.T) {
+		store, old, dir := custody(t)
+		renameFile = func(from, to string) error {
+			if from == SealedPath(dir) {
+				return injected
+			}
+			return os.Rename(from, to)
+		}
+		defer func() { renameFile = os.Rename }()
+		if _, err := ReplaceWithSoftware(store, "laptop"); !errors.Is(err, injected) {
+			t.Fatalf("ReplaceWithSoftware = %v, want the rename refusal", err)
+		}
+		if got, err := store.Get(""); err != nil || got.ID != old.ID {
+			t.Errorf("device after a refused move = %v (%v), want the old device untouched", got.ID, err)
+		}
+		if !exists(t, SealedPath(dir)) {
+			t.Error("the old sealed file is gone, so the untouched device cannot open its keys")
+		}
+	})
+
+	t.Run("the old file cannot be deleted: reported, and a retry stacks nothing", func(t *testing.T) {
+		store, old, dir := custody(t)
+		removeFile = func(path string) error {
+			if path == aside(dir) && exists(t, path) {
+				return injected
+			}
+			return os.Remove(path)
+		}
+		defer func() { removeFile = os.Remove }()
+		dev, err := ReplaceWithSoftware(store, "laptop")
+		if !errors.Is(err, injected) || !strings.Contains(err.Error(), aside(dir)) {
+			t.Fatalf("ReplaceWithSoftware = %v, want the unlink refusal naming %s", err, aside(dir))
+		}
+		if dev.ID == old.ID {
+			t.Fatal("the replacement was not committed")
+		}
+
+		// The retry removes the leftover before generating, and refuses
+		// while it cannot: no second new device.
+		if _, err := ReplaceWithSoftware(store, "laptop"); !errors.Is(err, injected) {
+			t.Fatalf("retry = %v, want the leftover's unlink refusal", err)
+		}
+		if got, _ := store.Get(""); got.ID != dev.ID {
+			t.Errorf("the retry generated device %s on top of %s before cleaning up", got.ID, dev.ID)
+		}
+
+		removeFile = os.Remove
+		if _, err := ReplaceWithSoftware(store, "laptop"); err != nil {
+			t.Fatalf("retry once the file can be deleted: %v", err)
+		}
+		if exists(t, aside(dir)) {
+			t.Error("the old sealed keys survived the successful retry")
+		}
+	})
+}

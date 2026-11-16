@@ -128,16 +128,18 @@ old one could. So a second generate refuses unless you pass --force.`,
 				if passphraseFile != "" {
 					return errors.New("--passphrase-file is for --custody sealedfile; a software device has no passphrase")
 				}
-				if dev, err = store.Generate(name, force); err != nil {
-					return err
-				}
 				// A custody device replaced with --force leaves no sealed
-				// file behind. Without --force there was no device to
-				// replace, and a sealed file with no record is left alone.
+				// file behind, and its sealed file is moved aside BEFORE the
+				// replacement is committed (#695). Without --force there was
+				// no device to replace, and a sealed file with no record is
+				// left alone.
 				if force {
-					if err := devicekeys.RemoveSealed(resolved); err != nil {
-						return err
-					}
+					dev, err = devicekeys.ReplaceWithSoftware(store, name)
+				} else {
+					dev, err = store.Generate(name, false)
+				}
+				if err != nil {
+					return err
 				}
 			case devicekeys.SealedFile:
 				dev, err = store.GenerateInto(name, force, &sealedfile.Provisioner{
