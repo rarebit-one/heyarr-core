@@ -130,6 +130,9 @@ type pair struct {
 	storeA  *leases.Store
 	target  leasesync.Target
 	sibs    *targets
+	// pinnedB is B's membership: the siblings whose keys it pins. A test
+	// deletes from it to take a sibling out of membership.
+	pinnedB keySet
 	cacheB  *leases.CacheStore
 	eventsB *events.Log
 	syncer  *leasesync.Syncer
@@ -180,9 +183,10 @@ func newPair(t *testing.T) *pair {
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.pinnedB = keySet{p.a.id: p.a.pub}
 	p.cacheB, err = leases.NewCache(leases.CacheOptions{
 		Writer: dbB.Writer(), Reader: dbB.Reader(), Events: p.eventsB,
-		Siblings: keySet{p.a.id: p.a.pub}, SelfID: p.b.id, SelfKey: p.b.pub,
+		Siblings: p.pinnedB, SelfID: p.b.id, SelfKey: p.b.pub,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -420,5 +424,44 @@ func TestAFetchAroundTheRefreshCachesAtLeastTheThreshold(t *testing.T) {
 				t.Fatalf("B's freshest cached lease has %v left, want at least %v", longest, leases.DeviceWriteRefreshThreshold)
 			}
 		})
+	}
+}
+
+// A sibling removed from membership is never fetched again, so nothing replaced
+// the leases cached from it and they stayed forever (#828). Authorise and
+// LiftDeviceWrite already refused them, since trust is read fresh, so the rows
+// only took space. The pass clears them, recorded as one lease.cached with
+// `removed`, and a pass after that has nothing left to do.
+func TestADepartedSiblingsCachedLeasesAreCleared(t *testing.T) {
+	t.Parallel()
+	p := newPair(t)
+	p.devices.set(deviceD, deviceE)
+	p.reconcileA(t)
+	p.sync(t)
+	if got := p.cachedAtB(t); len(got) != 2 {
+		t.Fatalf("setup: B caches %d from A, want 2", len(got))
+	}
+
+	// A leaves B's membership: not pinned, so not listed to fetch either.
+	delete(p.pinnedB, p.a.id)
+	p.sibs.set()
+
+	res := p.sync(t)
+	if res.Pruned != 1 || res.Changed != 1 {
+		t.Fatalf("result %+v, want A's cache pruned", res)
+	}
+	if got := p.cachedAtB(t); len(got) != 0 {
+		t.Fatalf("B still caches %d leases from departed A", len(got))
+	}
+	want := []cachedPayload{{p.a.id, 2, 0}, {p.a.id, 0, 2}}
+	if got := p.cachedEvents(t); !slices.Equal(got, want) {
+		t.Fatalf("lease.cached events %+v, want %+v", got, want)
+	}
+
+	if res := p.sync(t); res.Pruned != 0 || res.Changed != 0 {
+		t.Fatalf("a second pass %+v, want nothing left to prune", res)
+	}
+	if n := len(p.cachedEvents(t)); n != 2 {
+		t.Fatalf("%d lease.cached events after the second pass, want still 2", n)
 	}
 }

@@ -80,7 +80,7 @@ func runLeaseFetchBeat(ctx context.Context, f leaseFetcher, interval time.Durati
 			}
 			if res.Changed > 0 {
 				log.Info("sibling lease cache updated", "reason", reason,
-					"fetched", res.Fetched, "changed", res.Changed, "deferred", res.Deferred)
+					"fetched", res.Fetched, "changed", res.Changed, "deferred", res.Deferred, "pruned", res.Pruned)
 			}
 		},
 	})
