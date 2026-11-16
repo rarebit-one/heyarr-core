@@ -51,6 +51,44 @@ func fakeDownloadClient(dir string) providers.Entry {
 	}
 }
 
+// runningController is a controller started by runUntilCleanup. err is
+// Run's result, and is only safe to read once stopped is closed.
+type runningController struct {
+	stopped chan struct{}
+	err     error
+}
+
+// runUntilCleanup runs a controller for the rest of the test, and its cleanup
+// stops it AND WAITS for Run to return.
+//
+// The wait is the point (#842). These tests used to `defer cancel()` and
+// return, so the controller was still shutting down — closing its database,
+// writing beside it — when t.TempDir's own cleanup ran RemoveAll over the
+// data directory. On a loaded macOS runner under -race that lost the race
+// once: "TempDir RemoveAll cleanup: ... directory not empty", on a commit that
+// was green the night before and the night after. Cleanups run last-in
+// first-out, and cfg's TempDir is registered before this one, so the
+// controller is gone before its directory is removed.
+func runUntilCleanup(t *testing.T, cfg config.Config) *runningController {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	rc := &runningController{stopped: make(chan struct{})}
+	go func() {
+		defer close(rc.stopped)
+		rc.err = New(cfg, discard()).Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-rc.stopped:
+		case <-time.After(15 * time.Second):
+			t.Error("the controller did not stop within 15s of cancellation, so its " +
+				"data directory may still be in use when the test removes it")
+		}
+	})
+	return rc
+}
+
 // countPollJobs reads the job table directly, for the reason countHealthJobs
 // does: the claim under test is whether a row EXISTS at all, which is precisely
 // what a caller of Enqueue cannot establish about itself.
@@ -85,11 +123,7 @@ func countPollJobs(t *testing.T, reader *sql.DB) int {
 // again, so `QUEUED -> downloaded -> ingest` could not happen on a running node.
 func TestAControllerWithADownloadClientEnqueuesAPollAtStartup(t *testing.T) {
 	cfg := downloadTestConfig(t, fakeDownloadClient(t.TempDir()))
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() { done <- New(cfg, discard()).Run(ctx) }()
+	exited := runUntilCleanup(t, cfg)
 	waitForMigratedDatabase(t, cfg.Database.Path)
 
 	db, err := sqlite.Open(context.Background(), sqlite.Options{Path: cfg.Database.Path})
@@ -109,8 +143,8 @@ func TestAControllerWithADownloadClientEnqueuesAPollAtStartup(t *testing.T) {
 	deadline := time.Now().Add(30 * time.Second)
 	for countPollJobs(t, db.Reader()) == 0 {
 		select {
-		case err := <-done:
-			t.Fatalf("the controller exited before enqueueing a poll: %v", err)
+		case <-exited.stopped:
+			t.Fatalf("the controller exited before enqueueing a poll: %v", exited.err)
 		default:
 		}
 		if time.Now().After(deadline) {
@@ -131,11 +165,7 @@ func TestAControllerWithADownloadClientEnqueuesAPollAtStartup(t *testing.T) {
 // in GET /api/v1/jobs.
 func TestAControllerWithNoDownloadClientEnqueuesNoPoll(t *testing.T) {
 	cfg := downloadTestConfig(t) // no providers at all
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() { done <- New(cfg, discard()).Run(ctx) }()
+	exited := runUntilCleanup(t, cfg)
 	waitForMigratedDatabase(t, cfg.Database.Path)
 
 	db, err := sqlite.Open(context.Background(), sqlite.Options{Path: cfg.Database.Path})
@@ -149,8 +179,8 @@ func TestAControllerWithNoDownloadClientEnqueuesNoPoll(t *testing.T) {
 	// startup pass is enqueued before the listeners bind.
 	time.Sleep(2 * time.Second)
 	select {
-	case err := <-done:
-		t.Fatalf("the controller exited: %v", err)
+	case <-exited.stopped:
+		t.Fatalf("the controller exited: %v", exited.err)
 	default:
 	}
 	if n := countPollJobs(t, db.Reader()); n != 0 {
@@ -264,5 +294,31 @@ func TestTheDownloadBeatStopsWithItsContext(t *testing.T) {
 	clock.awaitStop(t)
 	if after := countPollJobs(t, db.Reader()); after != before {
 		t.Errorf("the beat enqueued after its context was cancelled: %d then %d", before, after)
+	}
+}
+
+// 🔴 A test that runs a controller does not outlive it (#842).
+//
+// The regression is a teardown race, so it cannot be provoked on demand: it
+// needs a runner slow enough that RemoveAll wins. What CAN be asserted
+// deterministically is the property that rules it out — by the time a test
+// using runUntilCleanup has finished, including its cleanups, the controller
+// has returned. The old `defer cancel()` shape fails this every time, because
+// cancelling does not wait.
+func TestARunningControllerHasStoppedWhenItsTestFinishes(t *testing.T) {
+	var rc *runningController
+	t.Run("uses a controller", func(t *testing.T) {
+		cfg := downloadTestConfig(t, fakeDownloadClient(t.TempDir()))
+		rc = runUntilCleanup(t, cfg)
+		waitForMigratedDatabase(t, cfg.Database.Path)
+	})
+	select {
+	case <-rc.stopped:
+	default:
+		t.Fatal("the controller was still running after its test and cleanups finished — " +
+			"its data directory was removed while it may still have been writing to it")
+	}
+	if rc.err != nil {
+		t.Errorf("Run returned %v on clean shutdown, want nil", rc.err)
 	}
 }
