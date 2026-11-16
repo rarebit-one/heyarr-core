@@ -384,7 +384,7 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 	// because Mnemosyne carries no library and no providers.
 	if c.cfg.Profile == config.ProfilePersonal {
 		startBackup(ctx, db, reconcileEvents, c.cfg.DataDir, c.cfg.Backup.Dir,
-			backupInterval, self.PeerID, c.log, material, members)
+			backupInterval, backupRetention(c.cfg.Backup.Retain), self.PeerID, c.log, material, members)
 		startStatePlaneReplication(ctx, db, reconcileEvents, backupInterval,
 			self.PeerID, c.log, material, members)
 		placementInterval, err := c.cfg.PlacementInterval()
@@ -466,7 +466,7 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 	startDownloadPoll(ctx, c.cfg.Providers, reconcileQueue, c.log, wallTicker)
 
 	startBackup(ctx, db, reconcileEvents, c.cfg.DataDir, c.cfg.Backup.Dir,
-		backupInterval, self.PeerID, c.log, material, members)
+		backupInterval, backupRetention(c.cfg.Backup.Retain), self.PeerID, c.log, material, members)
 
 	// Encrypted personal state replicates to every trusted Full Peer by default
 	// (§37, §45). It shares the backup cadence — both are peer-sync RPO intervals,

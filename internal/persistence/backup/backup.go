@@ -259,12 +259,14 @@ func vacuumInto(ctx context.Context, db *sqlite.DB, dest string) error {
 // measures what a backup captures, and a backup does not capture its own record
 // of having been taken (it is emitted after the snapshot). So two backups of the
 // same control-plane state report the SAME generation, and only a real state
-// transition moves it.
+// transition moves it. Retention's backup_pruned events are excluded for the
+// same reason: a prune after every Take would otherwise make the next Take a
+// new generation every time, and the cadence would never be idempotent again.
 func meaningfulGeneration(ctx context.Context, db *sqlite.DB) (int64, error) {
 	var seq sql.NullInt64
 	if err := db.Reader().QueryRowContext(ctx,
-		`SELECT max(seq) FROM events WHERE type NOT IN (?, ?, ?)`,
-		EventTaken, EventRefused, EventRestored).Scan(&seq); err != nil {
+		`SELECT max(seq) FROM events WHERE type NOT IN (?, ?, ?, ?)`,
+		EventTaken, EventRefused, EventRestored, EventPruned).Scan(&seq); err != nil {
 		return 0, fmt.Errorf("backup: reading the control-plane generation: %w", err)
 	}
 	return seq.Int64, nil

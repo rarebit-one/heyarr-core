@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/rarebit-one/heyarr-core/internal/config"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/peer/backupsync"
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
@@ -19,6 +20,11 @@ import (
 type beatClock struct{}
 
 func (beatClock) Now() time.Time { return time.Now().UTC() }
+
+// backupRetention is the configured local backup retention (#697).
+func backupRetention(r config.BackupRetain) backup.Retention {
+	return backup.Retention{Last: r.Last, Hourly: r.Hourly, Daily: r.Daily}
+}
 
 // startBackup runs the continuous control-plane backup (§49, ADR-0044) — the
 // beat that turns the configured interval into an RPO bound.
@@ -41,15 +47,17 @@ func (beatClock) Now() time.Time { return time.Now().UTC() }
 // the VACUUM still runs to discover that). The cadence is the interval; an
 // operator who wants one now runs `heyarr backup`.
 //
-// # Take, then distribute
+// # Take, prune, then distribute
 //
-// Each cycle takes a backup and then pushes it to every trusted Full Peer (§50,
+// Each cycle takes a backup, prunes the local generations retention no longer
+// keeps (#697: without it the directory grew by a whole database every
+// interval), and then pushes it to every trusted Full Peer (§50,
 // ADR-0046). A node with no peers pushes to nobody and the cycle is just the
 // backup. The push never blocks the beat on an unreachable peer (ADR-0041): the
 // distribution makes progress with whoever it has and records the rest.
 func startBackup(ctx context.Context, db *sqlite.DB, eventLog *events.Log,
-	dataDir, dir string, interval time.Duration, selfPeerID string, log *slog.Logger,
-	material *mtls.Material, members *membership.Store,
+	dataDir, dir string, interval time.Duration, retention backup.Retention,
+	selfPeerID string, log *slog.Logger, material *mtls.Material, members *membership.Store,
 ) {
 	if interval <= 0 {
 		log.Info("continuous backup is disabled (backup.interval is empty or 0); " +
@@ -77,6 +85,14 @@ func startBackup(ctx context.Context, db *sqlite.DB, eventLog *events.Log,
 		})
 		if err != nil {
 			return err
+		}
+		// A failed prune does not undo the backup that was taken, and must not
+		// stop it reaching peers; the next cycle prunes again.
+		if _, err := backup.Prune(ctx, backup.PruneOptions{
+			Dir: dir, Events: eventLog, Retention: retention,
+			Protect: []int64{art.Manifest.Generation},
+		}); err != nil {
+			log.Warn("could not prune old local backups; the next cycle will try again", "error", err)
 		}
 		if material == nil || members == nil || signer == nil {
 			return nil // no peer surface, or nothing to sign a crossing backup with

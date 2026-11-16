@@ -514,6 +514,21 @@ type Backup struct {
 	// default. Keeping only the newest leaves nothing when the newest is the
 	// copy written during the incident, so the default is more than one.
 	PeerRetain int `koanf:"peer_retain"`
+	// Retain bounds this node's OWN backups under Dir (#697). Without it the
+	// cadence writes a whole-database copy every interval for ever.
+	Retain BackupRetain `koanf:"retain"`
+}
+
+// BackupRetain is grandfather-father-son retention for local backups: the
+// newest Last generations, plus the newest of each of the last Hourly hours and
+// Daily days. Zero uses the default (12, 24 and 7: an hour of generations at
+// the default cadence, a day of hourly ones, a week of daily ones); a negative
+// value is refused at startup. More than the newest few, for PeerRetain's
+// reason: the newest may be the copy written during the incident.
+type BackupRetain struct {
+	Last   int `koanf:"last"`
+	Hourly int `koanf:"hourly"`
+	Daily  int `koanf:"daily"`
 }
 
 // Retention configures how long the events table and finished job rows survive
@@ -1326,6 +1341,10 @@ func (c Config) Validate() error {
 	}
 	if _, err := c.BackupInterval(); err != nil {
 		return err
+	}
+	if r := c.Backup.Retain; r.Last < 0 || r.Hourly < 0 || r.Daily < 0 {
+		return fmt.Errorf("config: backup.retain.last, .hourly and .daily must not be negative "+
+			"(0 uses the default), got %d, %d, %d", r.Last, r.Hourly, r.Daily)
 	}
 	if _, _, _, err := c.RetentionDurations(); err != nil {
 		return err

@@ -90,6 +90,24 @@ func TestBackupIntervalAndDir(t *testing.T) {
 	}
 }
 
+// Local backup retention (#697) loads from the file, and a negative count is a
+// startup error: zero is the default, so a negative one can only be a mistake.
+func TestBackupRetainLoadsAndRefusesNegatives(t *testing.T) {
+	cfg, err := Load(writeConfig(t, "data_dir: /srv/heyarr\nbackup:\n  retain:\n    last: 6\n    hourly: 12\n    daily: 3\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := cfg.Backup.Retain, (BackupRetain{Last: 6, Hourly: 12, Daily: 3}); got != want {
+		t.Errorf("backup.retain = %+v, want %+v", got, want)
+	}
+
+	for _, bad := range []string{"last: -1", "hourly: -1", "daily: -2"} {
+		if _, err := Load(writeConfig(t, "data_dir: /srv/heyarr\nbackup:\n  retain:\n    "+bad+"\n")); err == nil {
+			t.Errorf("backup.retain %q loaded without error", bad)
+		}
+	}
+}
+
 func TestExplicitPathBeatsDerivedDefault(t *testing.T) {
 	cfg, err := Load(writeConfig(t, "data_dir: /srv/heyarr\ncas:\n  root: /mnt/big/cas\n"))
 	if err != nil {
