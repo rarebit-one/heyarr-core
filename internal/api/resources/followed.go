@@ -19,6 +19,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
+	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -327,7 +328,9 @@ func (a *API) FollowSource(ctx context.Context, req FollowSourceRequest) (Follow
 	// — the same shape WantContent takes, and for the same reason: the catalog's
 	// CreateFollowSource takes ids already resolved.
 	var profileID, workID string
+	var emitted []events.Event
 	if err := a.db.InTx(ctx, func(tx *sql.Tx) error {
+		emitted = nil
 		var e error
 		// A follow that names no profile inherits the source's content-type
 		// default (ADR-0082): an rss_feed is a `document` and inherits `published`,
@@ -340,12 +343,14 @@ func (a *API) FollowSource(ctx context.Context, req FollowSourceRequest) (Follow
 		if req.WorkID == "" {
 			workID, e = a.resolveWorkDescriptor(ctx, tx, WorkDescriptor{
 				ContentType: workContentType(srcType), Title: req.Title, Year: req.Year,
-			})
+			}, &emitted)
 		}
 		return e
 	}); err != nil {
 		return FollowedSourceView{}, err
 	}
+	// After the commit, never inside it (#796).
+	a.events.Publish(emitted...)
 
 	src, err := a.catalog.CreateFollowSource(ctx, followed.Source{
 		WorkID:           workID,
