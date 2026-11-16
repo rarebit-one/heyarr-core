@@ -50,6 +50,19 @@ type DueSearch struct {
 	FirstEver bool
 }
 
+// unreconciledIngestGrace is how long a want that has just ingested is left
+// for reconciliation before the search beat may look at it again (#815).
+//
+// An ingest returns the want to idle holding bytes nobody has evaluated
+// (managed, content unknown), and only reconciliation answers whether they
+// satisfy. Until it does, idle and not satisfied reads as missing, so the
+// search beat searched again, re-selected the release just ingested, grabbed
+// it, re-ingested it and published a second acquire op. Reconciliation runs
+// every five minutes; the grace is a few of its passes, and it is a bound
+// rather than a wait for an answer so a want whose reconciliation keeps
+// failing is still searched.
+const unreconciledIngestGrace = 15 * time.Minute
+
 // DueSearches lists the wants that should be searched as of now.
 //
 // A want with no schedule row is due immediately: a want nobody has ever
@@ -75,6 +88,10 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 	// (#824). The sweep blocks the release and clears the schedule, and the
 	// want is due again then.
 	//
+	// Nor, for a while, is a want that has just ingested (#815): it holds bytes
+	// reconciliation has not evaluated yet, and searching it now re-selects
+	// the release it just took. See unreconciledIngestGrace.
+	//
 	// The phase filter is in the QUERY rather than in Go. Most of a library is
 	// resting most of the time, but a library mid-import is not, and reading
 	// every want in order to discard the ones that are downloading is the sort
@@ -91,12 +108,14 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 		`+searchBackoff.leftJoin("d.id")+`
 		WHERE a.phase = 'idle'
 		  AND NOT EXISTS (SELECT 1 FROM fan_out_wants f WHERE f.desired_item_id = d.id)
+		  AND NOT (a.managed = 1 AND a.content = 'unknown' AND a.phase_entered_at >= ?)
 		  AND NOT (a.content <> 'satisfied' AND EXISTS (
 		      SELECT 1 FROM acquisitions q
 		      JOIN release_candidates rc ON rc.desired_item_id = q.desired_item_id AND rc.selected = 1
 		      WHERE q.desired_item_id = d.id AND q.trouble <> ''))
 		  AND `+searchBackoff.dueWhere()+`
-		ORDER BY `+searchBackoff.dueOrder()+`, d.id`, sqlite.FormatTimestamp(now))
+		ORDER BY `+searchBackoff.dueOrder()+`, d.id`,
+		sqlite.FormatTimestamp(now.Add(-unreconciledIngestGrace)), sqlite.FormatTimestamp(now))
 	if err != nil {
 		return nil, fmt.Errorf("catalog: listing wants due a search: %w", err)
 	}
