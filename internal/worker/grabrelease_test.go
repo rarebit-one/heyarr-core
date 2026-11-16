@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -261,6 +262,53 @@ func TestAGrabAgainstADownClientFailsLoudlyAndKeepsTheSelection(t *testing.T) {
 	}
 	if got := h.state(t).Name(); got != "SELECTED" {
 		t.Errorf("the want is %s, want SELECTED so the retry still has its selection", got)
+	}
+}
+
+// 🔴 A grab whose client is unavailable for now retries on the long transient
+// backoff; one a client genuinely refused keeps the attempt cap (#670). The
+// dead-job sample in #557 had grabs dying in five quick attempts against
+// "Couldn't fetch torrent: No Response (0)", an outage that clears itself.
+func TestAGrabIsTransientOnlyWhenTheClientWasUnavailable(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		err       error
+		transient bool
+	}{
+		{
+			"the client could not fetch the torrent: no response",
+			fmt.Errorf("transmission: the call was declined: %w: Couldn't fetch torrent: No Response (0)",
+				providers.ErrUnavailable), true,
+		},
+		{
+			"the client refused the release",
+			errors.New("transmission: the call was declined: invalid or corrupt torrent file"), false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newGrabHarness(t)
+			h.client.FailWith(tc.err)
+			h.fake.Offer("Arrival", offer("good", 2160, "hevc"))
+			if err := h.run(t); err != nil {
+				t.Fatal(err)
+			}
+			err := h.grab(t, h.selectedID(t))
+			if err == nil {
+				t.Fatal("the grab succeeded")
+			}
+			if got := errors.Is(err, jobs.ErrTransient); got != tc.transient {
+				t.Errorf("ErrTransient = %v, want %v: %v", got, tc.transient, err)
+			}
+			if errors.Is(err, jobs.ErrPermanent) {
+				t.Error("a grab failure was made permanent; a refusal keeps the attempt cap")
+			}
+			if got := h.state(t).Name(); got != "SELECTED" {
+				t.Errorf("the want is %s, want SELECTED so the retry still has its selection", got)
+			}
+		})
 	}
 }
 

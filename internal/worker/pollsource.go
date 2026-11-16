@@ -2,9 +2,11 @@ package worker
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
@@ -14,6 +16,8 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/httpjson"
+	"github.com/rarebit-one/heyarr-core/internal/providers/transporterr"
 )
 
 // subtitleProfileName is the seeded profile a projected subtitle want is judged
@@ -112,7 +116,7 @@ func PollSourceHandler(
 			// providers.FeedProvider). Fail the job so it retries on the queue's
 			// backoff, and do NOT advance the poll schedule — a poll that did not
 			// happen must not count as one that found nothing.
-			return fmt.Errorf("worker: enumerating source %s: %w", payload.SourceID, err)
+			return classifyPollFailure(fmt.Errorf("worker: enumerating source %s: %w", payload.SourceID, err))
 		}
 
 		// Record the series' catalogue id on its work, so identification-dependent
@@ -358,4 +362,39 @@ func enqueuePollReconcile(ctx context.Context, queue *jobs.Queue, desiredItemID 
 		log.Warn("could not enqueue reconciliation for a projected want",
 			"desired_item_id", desiredItemID, "error", err)
 	}
+}
+
+// classifyPollFailure marks a failed enumeration as transient or permanent
+// where it can name which (#670), and leaves it on the attempt cap otherwise.
+//
+//   - An outage clears on its own: a timeout, a refused or reset connection,
+//     a name that did not resolve, HTTP 408, 429 or any 5xx. Transient: the
+//     poll retries on the long backoff instead of dying after five quick
+//     attempts during an outage.
+//   - The source itself is wrong: HTTP 404 or 410 (the feed is gone), 401 or
+//     403 (the credential is refused, and stays refused until someone changes
+//     it), or a body that is not well-formed XML. Permanent: the same input
+//     gives the same answer, so the attempts are not spent relearning it.
+//   - Anything else, 406 included, keeps the default: a misclassified broken
+//     job retrying forever is the costlier mistake (jobs.ErrTransient).
+func classifyPollFailure(err error) error {
+	var status *httpjson.Error
+	if errors.As(err, &status) {
+		switch code := status.Status; {
+		case code == http.StatusRequestTimeout, code == http.StatusTooManyRequests, code >= 500:
+			return fmt.Errorf("%w: %w", jobs.ErrTransient, err)
+		case code == http.StatusNotFound, code == http.StatusGone,
+			code == http.StatusUnauthorized, code == http.StatusForbidden:
+			return fmt.Errorf("%w: %w", jobs.ErrPermanent, err)
+		}
+		return err
+	}
+	var syntax *xml.SyntaxError
+	if errors.As(err, &syntax) {
+		return fmt.Errorf("%w: %w", jobs.ErrPermanent, err)
+	}
+	if transporterr.Transient(err) {
+		return fmt.Errorf("%w: %w", jobs.ErrTransient, err)
+	}
+	return err
 }

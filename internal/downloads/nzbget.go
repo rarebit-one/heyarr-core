@@ -167,6 +167,14 @@ func (c *NZBGetClient) Check(ctx context.Context) providers.Health {
 	return providers.Healthy(strings.TrimSpace(ver), at)
 }
 
+// Add hands source to the client. A transport failure that clears on its own
+// is marked providers.ErrUnavailable, so a grab can retry it as transient
+// (#670); see add for the call itself.
+func (c *NZBGetClient) Add(ctx context.Context, source secret.Value) (providers.Transfer, error) {
+	t, err := c.add(ctx, source)
+	return t, markUnavailable(err)
+}
+
 // Add queues a release by URL, tagged with this client's category.
 //
 // Idempotent by construction, which NZBGet does not give for free — appending
@@ -177,7 +185,7 @@ func (c *NZBGetClient) Check(ctx context.Context) providers.Health {
 // first call rather than a duplicate download. It is the same discipline
 // SABnzbd's Add uses, because idempotency is the contract's requirement, not a
 // property of either wire.
-func (c *NZBGetClient) Add(ctx context.Context, source secret.Value) (providers.Transfer, error) {
+func (c *NZBGetClient) add(ctx context.Context, source secret.Value) (providers.Transfer, error) {
 	// Reveal() only here and nowhere else in this method: an .nzb URL on a
 	// private indexer carries an api key identifying a person, and it must not
 	// reach a log line or the error below.

@@ -547,6 +547,17 @@ func hasCapability(caps []Capability, want Capability) bool {
 // would make "why is nothing downloading" unanswerable from the want.
 var ErrNoSource = errors.New("the indexer offered no way to fetch this release")
 
+// ErrUnavailable marks a provider failure that is a property of the moment,
+// not of the request: the client could not be reached, or it could not fetch
+// the source because the far end did not answer (#670). A job seeing it may
+// retry on the long transient backoff instead of dying at the attempt cap.
+//
+// A provider marks only what it can name as such — this package knows
+// nothing of transport, so a download client marks its own unreachable,
+// timed-out or unanswered calls. A refusal of the request itself — a bad
+// torrent, a type no client takes — is never marked.
+var ErrUnavailable = errors.New("providers: unavailable for now")
+
 // Grab hands a release to a download client and returns the transfer.
 //
 // # It routes to ONE client, unlike Search which asks them all
@@ -593,6 +604,7 @@ func (r *Registry) Grab(ctx context.Context, source secret.Value, protocol acqui
 	}
 
 	var refusals []string
+	allUnavailable := true
 	for _, dl := range downloaders {
 		if err := ctx.Err(); err != nil {
 			return Transfer{}, "", err
@@ -602,9 +614,18 @@ func (r *Registry) Grab(ctx context.Context, source secret.Value, protocol acqui
 			// %v rather than %w, as in Search: this is a report for an
 			// operator, and %v renders a Secret through its redacting String.
 			refusals = append(refusals, fmt.Sprintf("%s: %v", dl.Name(), err))
+			allUnavailable = allUnavailable && errors.Is(err, ErrUnavailable)
 			continue
 		}
 		return t, dl.Name(), nil
+	}
+	// Flattening the causes to text loses their types, so the one thing a
+	// caller needs from them is decided here: only when EVERY client failed
+	// for a reason of the moment is the whole grab one (#670). One client
+	// genuinely refusing keeps the attempt cap, so it is seen.
+	if allUnavailable {
+		return Transfer{}, "", fmt.Errorf("%w: no download client accepted it: %s",
+			ErrUnavailable, strings.Join(refusals, "; "))
 	}
 	return Transfer{}, "", fmt.Errorf("no download client accepted it: %s",
 		strings.Join(refusals, "; "))

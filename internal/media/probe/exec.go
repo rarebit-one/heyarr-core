@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -30,9 +31,34 @@ func runCommand(ctx context.Context, bin string, args ...string) ([]byte, error)
 		// "it refused" need different responses and both otherwise arrive as
 		// "exit status 1".
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("%s timed out: %s", bin, detail)
+			return nil, &commandError{msg: fmt.Sprintf("%s timed out: %s", bin, detail), err: err, timedOut: true}
 		}
-		return nil, fmt.Errorf("%s failed: %s", bin, detail)
+		return nil, &commandError{msg: fmt.Sprintf("%s failed: %s", bin, detail), err: err}
 	}
 	return out, nil
+}
+
+// commandError keeps the message runCommand has always produced and the cause
+// beneath it, so a caller can tell ffprobe RUNNING and rejecting its input (an
+// *exec.ExitError within the deadline) from ffprobe never finishing or never
+// starting (#670).
+type commandError struct {
+	msg      string
+	err      error
+	timedOut bool
+}
+
+func (e *commandError) Error() string { return e.msg }
+func (e *commandError) Unwrap() error { return e.err }
+
+// rejectedInput reports whether err is ffprobe having run to completion and
+// exited non-zero: it read the input and refused it. A timeout, a binary that
+// would not start, or a cancelled context is a property of the moment.
+func rejectedInput(err error) bool {
+	var ce *commandError
+	if !errors.As(err, &ce) || ce.timedOut {
+		return false
+	}
+	var exit *exec.ExitError
+	return errors.As(ce.err, &exit)
 }

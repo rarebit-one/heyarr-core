@@ -202,6 +202,14 @@ func isUsenetSource(raw string) (string, bool) {
 	return "", false
 }
 
+// Add hands source to the client. A transport failure that clears on its own
+// is marked providers.ErrUnavailable, so a grab can retry it as transient
+// (#670); see add for the call itself.
+func (c *SABClient) Add(ctx context.Context, source secret.Value) (providers.Transfer, error) {
+	t, err := c.add(ctx, source)
+	return t, markUnavailable(err)
+}
+
 // Add queues a release by URL, tagged with this client's category.
 //
 // Idempotent by construction, which SABnzbd does not give for free — re-adding
@@ -210,7 +218,7 @@ func isUsenetSource(raw string) (string, bool) {
 // carrying that name (in the queue or the history) and returns it. A job WILL be
 // re-run (invariant 9), and this makes the re-run indistinguishable from the
 // first call rather than a duplicate download.
-func (c *SABClient) Add(ctx context.Context, source secret.Value) (providers.Transfer, error) {
+func (c *SABClient) add(ctx context.Context, source secret.Value) (providers.Transfer, error) {
 	// Reveal() only here and nowhere else in this method: an .nzb URL on a
 	// private indexer carries an api key identifying a person, and it must not
 	// reach a log line or the error below.

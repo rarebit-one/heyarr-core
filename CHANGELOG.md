@@ -267,6 +267,18 @@ stable.
   a stalled node or plane cannot spend the deadline. The failure is printed at once, a
   refused device credential (401/403) says to re-enrol the device, and a
   timeout names the failed wake.
+- **Jobs that fail on an outage retry it out; jobs that fail on bad input stop
+  at once** (#670).
+  - `poll_source`: HTTP 408, 429 and 5xx, timeouts, refused or reset
+    connections and DNS failures now retry on the long transient backoff.
+    404, 410, 401, 403 and malformed feed XML fail once.
+  - `grab_release`: retries transiently when every download client was down
+    or could not fetch the torrent because the far end did not answer
+    (Transmission's "No Response (0)", 408, 429, 5xx). A client refusing the
+    release still stops at the attempt cap.
+  - `probe_blob`: only ffprobe rejecting the bytes is permanent now. A
+    timeout, or failing to fetch the blob for the fallback, used to be marked
+    permanent as well.
 - **GC no longer reclaims pinned vault blobs (#719).** A vault upload made
   before #659 wrote a placement pin but no `blobs` row, and the untracked
   sweep reclaimed those bytes as orphans. On one node that destroyed 70k vault

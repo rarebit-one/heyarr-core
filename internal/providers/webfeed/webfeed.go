@@ -50,6 +50,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/buildinfo"
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/httpjson"
 	"github.com/rarebit-one/heyarr-core/internal/webfeedparse"
 )
 
@@ -151,7 +152,9 @@ func (c *Client) Enumerate(ctx context.Context, ref string) ([]followed.FeedItem
 		return nil, fmt.Errorf("webfeed: reading the feed: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("webfeed: the feed returned HTTP %d", resp.StatusCode)
+		// Typed, so a poll can tell an outage (5xx, 429) from a feed
+		// that is gone (404, 410) without reading the message (#670).
+		return nil, &httpjson.Error{Service: "webfeed", Op: "the feed", Status: resp.StatusCode}
 	}
 
 	entries, err := webfeedparse.ParseFeed(raw)

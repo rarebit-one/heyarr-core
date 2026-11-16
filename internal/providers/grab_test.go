@@ -2,6 +2,7 @@ package providers
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -280,5 +281,56 @@ func TestGrabWithoutAProtocolOrWithoutAClientForIt(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "DO-NOT-LEAK") {
 		t.Fatalf("the source reached the error: %v", err)
+	}
+}
+
+// 🔴 A grab is "unavailable for now" only when EVERY client failed for a
+// reason of the moment (#670). The causes are flattened to text for the
+// operator (and to keep the source out of them), so this is the one place
+// their types are still known — and one client genuinely refusing keeps the
+// grab on the attempt cap, where it is seen.
+func TestAGrabIsUnavailableOnlyWhenEveryClientWasUnavailable(t *testing.T) {
+	// As a download client marks its own calls (this package knows nothing
+	// of transport): refused connection, timed out, or the far end silent.
+	down := func() error {
+		return fmt.Errorf("transmission: %w: dial tcp: connection refused", ErrUnavailable)
+	}
+	noAnswer := func() error {
+		return fmt.Errorf("transmission: the call was declined: %w: Couldn't fetch torrent: No Response (0)", ErrUnavailable)
+	}
+	refused := func() error {
+		return errors.New("transmission: the call was declined: invalid or corrupt torrent file")
+	}
+
+	cases := []struct {
+		name    string
+		errs    []error
+		transit bool
+	}{
+		{"the only client is down", []error{down()}, true},
+		{"the client could not fetch the torrent: no response", []error{noAnswer()}, true},
+		{"every client is down or unanswered", []error{down(), noAnswer()}, true},
+		{"the only client refused the release", []error{refused()}, false},
+		{"one down, one refusing", []error{down(), refused()}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := New(nil)
+			for i, err := range tc.errs {
+				if err := reg.Register(NewFake(fmt.Sprintf("client-%d", i), CapabilityDownload).FailWith(err)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, _, err := reg.Grab(t.Context(), secret.Value(theSource), acquisition.ProtocolUnknown)
+			if err == nil {
+				t.Fatal("the grab succeeded")
+			}
+			if got := errors.Is(err, ErrUnavailable); got != tc.transit {
+				t.Errorf("ErrUnavailable = %v, want %v: %v", got, tc.transit, err)
+			}
+			if strings.Contains(err.Error(), "DO-NOT-LEAK") {
+				t.Error("the source reached the error")
+			}
+		})
 	}
 }

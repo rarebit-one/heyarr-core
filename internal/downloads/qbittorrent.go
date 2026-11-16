@@ -200,6 +200,14 @@ func isTorrentSource(raw string) bool {
 	return strings.HasSuffix(lower, ".torrent")
 }
 
+// Add hands source to the client. A transport failure that clears on its own
+// is marked providers.ErrUnavailable, so a grab can retry it as transient
+// (#670); see add for the call itself.
+func (c *QBClient) Add(ctx context.Context, source secret.Value) (providers.Transfer, error) {
+	t, err := c.add(ctx, source)
+	return t, markUnavailable(err)
+}
+
 // Add queues a release, tagged with this client's category.
 //
 // qBittorrent's add answers only "Ok.", so the transfer is resolved afterwards:
@@ -208,7 +216,7 @@ func isTorrentSource(raw string) bool {
 // magnet qBittorrent already holds is a no-op, and the resolve returns the same
 // transfer either way, so a re-run (invariant 9) is indistinguishable from the
 // first call.
-func (c *QBClient) Add(ctx context.Context, source secret.Value) (providers.Transfer, error) {
+func (c *QBClient) add(ctx context.Context, source secret.Value) (providers.Transfer, error) {
 	// Reveal() only here and nowhere else in this method: on a private tracker a
 	// magnet carries a passkey identifying a person, and it must not reach a log
 	// line or the error below.
