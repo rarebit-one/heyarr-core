@@ -214,6 +214,14 @@ stable.
   `uuid%3A…` in the path; the controller had compared that spelling with a
   cached `uuid:…` and returned 404 before it contacted the renderer. Play,
   status and transport controls now resolve both forms.
+- **`device generate --force --custody software` no longer strands the old
+  sealed keys** (#695). It committed the new software device first and deleted
+  the old `device.sealed` after, so a filesystem that refused the delete left
+  the old private keys recoverable on disk and the command reporting failure.
+  Each retry also generated another device. The sealed file is now moved aside
+  first (if that fails, nothing is replaced), put back if generation fails, and
+  deleted once the new device is committed. A leftover is removed before any
+  retry generates anything.
 - **Mnemosyne mounts `/api/v1/peers`, so `mnemosyne peers add` can enrol a
   sibling (#762).** The personal profile (ADR-0107) left the whole resource API
   unmounted, but every `peers` subcommand is a client over `/api/v1/peers` —
