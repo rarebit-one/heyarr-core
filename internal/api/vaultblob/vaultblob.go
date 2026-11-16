@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rarebit-one/void-which-binds-go/hashing"
@@ -39,6 +40,21 @@ import (
 // a mismatch, so the cap needs no separate error path.
 const defaultMaxBytes = int64(16) << 30 // 16 GiB
 
+// ProvisionalTTL is how long an unconfirmed upload pin keeps its blob (ADR-0096
+// amendment, #714): long enough for any writer to push its change and confirm,
+// short enough that a write which never landed stops costing storage within a
+// day.
+const ProvisionalTTL = 24 * time.Hour
+
+// maxConfirmBlobs bounds one confirm request. A write names two blobs (the
+// manifest and the content); a sync engine batching many writes names more,
+// and a thousand is generous for that.
+const maxConfirmBlobs = 1000
+
+// maxConfirmBody bounds the confirm request body: maxConfirmBlobs digests of
+// 71 bytes each, quoted and comma-separated, with room to spare.
+const maxConfirmBody = 128 << 10
+
 // Store is the narrow slice of the CAS this handler needs: verify-against-expected
 // ingest. *cas.FS (and the cas.Store interface) satisfies it.
 type Store interface {
@@ -49,7 +65,8 @@ type Store interface {
 }
 
 // Pinner records a stored vault blob in the catalogue — its blob row, this
-// node's replica, and the placement pin that retains it (ADR-0096, #658).
+// node's replica, and the placement pin that retains it (ADR-0096, #658) — and
+// confirms upload pins once the change naming them is accepted (#714).
 // *catalog.Catalog satisfies it.
 //
 // It is one call rather than a bare pin because a pin alone left the bytes
@@ -59,8 +76,10 @@ type Store interface {
 type Pinner interface {
 	// present runs inside the recording transaction and confirms the bytes are
 	// still stored; see catalog.Catalog.RecordVaultBlob.
-	RecordVaultBlob(ctx context.Context, blobHash string, size int64, peerID string,
-		present func(context.Context) error) error
+	RecordVaultUpload(ctx context.Context, blobHash string, size int64, peerID string,
+		pin catalog.UploadPin, present func(context.Context) error) error
+	ConfirmUploadPins(ctx context.Context, peerID string, blobs []string, principal string,
+		restricted bool) ([]catalog.ConfirmResult, error)
 }
 
 // Options configure a Handler.
@@ -80,6 +99,14 @@ type Options struct {
 	// on some space (ADR-0104). Optional; nil refuses every restricted caller.
 	// Every other caller is unaffected.
 	Grants httpapi.SpaceWriteGrants
+	// ProvisionalPins makes an upload's pin provisional for ProvisionalTTL
+	// until its writer confirms it (placement.provisional_upload_pins, #714).
+	// Off — the default during rollout — every upload pin is permanent, as
+	// before, for clients that predate confirm. Confirm is served either way.
+	ProvisionalPins bool
+	// Now is the clock a provisional pin's expiry is measured from. Nil uses
+	// the wall clock (ADR-0017).
+	Now func() time.Time
 }
 
 // Handler serves the vault-ingest route.
@@ -90,6 +117,9 @@ type Handler struct {
 	log      *slog.Logger
 	maxBytes int64
 	grants   httpapi.SpaceWriteGrants
+
+	provisional bool
+	now         func() time.Time
 }
 
 // New builds the handler, failing at construction if a dependency is missing
@@ -112,6 +142,10 @@ func New(opts Options) (*Handler, error) {
 	if maxBytes == 0 {
 		maxBytes = defaultMaxBytes
 	}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
 	return &Handler{
 		store:    opts.Store,
 		pinner:   opts.Pinner,
@@ -119,6 +153,9 @@ func New(opts Options) (*Handler, error) {
 		log:      log.With("component", "vaultblob-api"),
 		maxBytes: maxBytes,
 		grants:   opts.Grants,
+
+		provisional: opts.ProvisionalPins,
+		now:         now,
 	}, nil
 }
 
@@ -134,6 +171,11 @@ type uploadResult struct {
 func (h *Handler) Mount(r chi.Router) {
 	r.With(httpapi.RequireScope(auth.ScopeWrite), httpapi.RequireRestrictedWriteGrant(h.grants)).
 		Method(http.MethodPut, "/vault/blobs/{hash}", http.HandlerFunc(h.upload))
+	// Confirming makes upload pins permanent once the change naming them is
+	// accepted (ADR-0096 amendment, #714). Same gate as uploading: a restricted
+	// executor that may upload may confirm, and only what it uploaded itself.
+	r.With(httpapi.RequireScope(auth.ScopeWrite), httpapi.RequireRestrictedWriteGrant(h.grants)).
+		Post("/vault/blobs/confirm", h.confirm)
 }
 
 // upload receives a client-encrypted, content-addressed ciphertext blob at the id
@@ -182,7 +224,16 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}
-	if err := h.pinner.RecordVaultBlob(r.Context(), expected.String(), desc.Size, h.selfPeer, present); err != nil {
+	// The pin records who uploaded the blob, and — with provisional pins on —
+	// is kept only until its writer confirms it (#714).
+	var pin catalog.UploadPin
+	if id, ok := httpapi.IdentityFrom(r.Context()); ok {
+		pin.Uploader = id.Principal.ID
+	}
+	if h.provisional {
+		pin.ProvisionalUntil = h.now().Add(ProvisionalTTL)
+	}
+	if err := h.pinner.RecordVaultUpload(r.Context(), expected.String(), desc.Size, h.selfPeer, pin, present); err != nil {
 		if errors.Is(err, catalog.ErrBytesGone) {
 			httpapi.Fail(w, r, problem.ServiceUnavailable(
 				"the blob was reclaimed while this upload was being recorded; upload it again"))
@@ -194,4 +245,62 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpapi.WriteJSON(w, r, h.log, http.StatusCreated, uploadResult{Hash: expected.String(), Size: desc.Size})
+}
+
+// confirmInput is the confirm request: the blob ids an accepted change names.
+type confirmInput struct {
+	Blobs []string `json:"blobs"`
+}
+
+// confirmResult is one blob's outcome. Status is confirmed, already_permanent,
+// not_held (this node holds no upload pin for it) or not_uploader (a restricted
+// caller naming a blob another principal uploaded).
+type confirmResult struct {
+	Blob   string `json:"blob"`
+	Status string `json:"status"`
+}
+
+type confirmResponse struct {
+	Results []confirmResult `json:"results"`
+}
+
+// confirm makes this node's upload pins on the named blobs permanent (ADR-0096
+// amendment, #714). The writer calls it after the drive change naming them was
+// accepted. It answers per blob, so one blob this node does not hold does not
+// fail the others, and it is idempotent: confirming twice is the same as once.
+func (h *Handler) confirm(w http.ResponseWriter, r *http.Request) {
+	var in confirmInput
+	if err := httpapi.DecodeJSON(w, r, &in, maxConfirmBody); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	if len(in.Blobs) == 0 {
+		httpapi.Fail(w, r, problem.BadRequest("blobs is required — name the blob ids the accepted change references"))
+		return
+	}
+	if len(in.Blobs) > maxConfirmBlobs {
+		httpapi.Fail(w, r, problem.BadRequest(fmt.Sprintf("at most %d blobs per confirm", maxConfirmBlobs)))
+		return
+	}
+	for i, b := range in.Blobs {
+		parsed, err := hashing.Parse(b)
+		if err != nil {
+			httpapi.Fail(w, r, problem.BadRequest("each blob must be a blake3:<hex> digest: "+err.Error()))
+			return
+		}
+		in.Blobs[i] = parsed.String()
+	}
+
+	id, _ := httpapi.IdentityFrom(r.Context())
+	results, err := h.pinner.ConfirmUploadPins(r.Context(), h.selfPeer, in.Blobs, id.Principal.ID, id.Restricted)
+	if err != nil {
+		h.log.Error("confirming upload pins", "count", len(in.Blobs), "error", err)
+		httpapi.Fail(w, r, problem.Internal())
+		return
+	}
+	out := confirmResponse{Results: make([]confirmResult, 0, len(results))}
+	for _, res := range results {
+		out.Results = append(out.Results, confirmResult{Blob: res.BlobHash, Status: res.Status})
+	}
+	httpapi.WriteJSON(w, r, h.log, http.StatusOK, out)
 }

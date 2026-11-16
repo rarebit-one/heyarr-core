@@ -776,3 +776,23 @@ func TestLeaseIssuersDefaultOffAndLoadFromFile(t *testing.T) {
 		t.Errorf("a well-formed opt-in should validate: %v", err)
 	}
 }
+
+// placement.provisional_upload_pins (ADR-0096 amendment, #714) is off unless an
+// operator turns it on: a client that predates confirm would otherwise see
+// every vault upload expire. On, it loads as written.
+func TestProvisionalUploadPinsDefaultOffAndLoadFromFile(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Placement.ProvisionalUploadPins {
+		t.Error("placement.provisional_upload_pins is on by default, want off until every client confirms")
+	}
+	cfg, err = Load(writeConfig(t, "data_dir: /srv/heyarr\nplacement:\n  provisional_upload_pins: true\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Placement.ProvisionalUploadPins {
+		t.Error("placement.provisional_upload_pins: true did not load")
+	}
+}

@@ -10,6 +10,17 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **Failed vault writes stop leaking storage, behind a flag** (ADR-0096
+  amendment, #714). A vault write uploads its blobs before pushing the change
+  that names them, so a write that failed in between left them pinned for
+  ever. With `placement.provisional_upload_pins: true`, an upload's pin lasts
+  24 hours unless the writer confirms it with the new
+  `POST /api/v1/vault/blobs/confirm`. Unconfirmed pins are then released to GC
+  (events `placement.pin_provisional`, `.pin_confirmed`, `.pin_expired`). A
+  restricted executor may confirm only its own uploads. `heyarr vault push`
+  confirms after its change is accepted. The flag is off by default: leave it
+  off until every client writing to the vault confirms (heyarr-kmp does not
+  yet). Existing pins are permanent.
 - **`make demo` proves a lease is honoured across a partition** (ADR-0048,
   #285; claim `lease-honoured-across-partition`). A new two-node scene stands up
   two auth-enabled controllers, pins one user at both, grants device D write at

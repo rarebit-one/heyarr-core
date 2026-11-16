@@ -393,6 +393,11 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 		}
 		startSiblingPlacement(ctx, db, reconcileEvents, placementInterval,
 			c.cfg.Placement.Siblings, c.cfg.Peer.Name, c.cfg.Peer.Site, c.log, material, members)
+		// Unconfirmed vault upload pins (ADR-0096 amendment, #714): the vault
+		// is this profile's alone (#754), and the beat runs only while
+		// placement.provisional_upload_pins is on.
+		startPinExpiry(ctx, db, reconcileEvents, c.cfg.Placement.ProvisionalUploadPins,
+			c.cfg.Peer.Name, c.cfg.Peer.Site, c.log, wallTicker)
 
 		eventsWindow, succeededWindow, deadWindow, _ := c.cfg.RetentionDurations()
 		startRetention(ctx, db, reconcileEvents,
@@ -1194,6 +1199,8 @@ func (c *Controller) contentRoutes(d mountDeps, queue *jobs.Queue, cat *catalog.
 		SelfPeer: d.selfPeerID,
 		Logger:   c.log,
 		Grants:   grants,
+		// Off by default during rollout (ADR-0096 amendment, #714).
+		ProvisionalPins: c.cfg.Placement.ProvisionalUploadPins,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: %w", err)

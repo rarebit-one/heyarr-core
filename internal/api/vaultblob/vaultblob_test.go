@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,13 +47,15 @@ type fakePinner struct {
 	pinnedHash string
 	pinnedPeer string
 	pinnedSize int64
+	pin        catalog.UploadPin
 	err        error
 }
 
-func (f *fakePinner) RecordVaultBlob(ctx context.Context, blobHash string, size int64, peerID string,
-	present func(context.Context) error,
+func (f *fakePinner) RecordVaultUpload(ctx context.Context, blobHash string, size int64, peerID string,
+	pin catalog.UploadPin, present func(context.Context) error,
 ) error {
 	f.calls++
+	f.pin = pin
 	if present != nil {
 		if err := present(ctx); err != nil {
 			return fmt.Errorf("%w: %w", catalog.ErrBytesGone, err)
@@ -62,6 +65,10 @@ func (f *fakePinner) RecordVaultBlob(ctx context.Context, blobHash string, size 
 	f.pinnedPeer = peerID
 	f.pinnedSize = size
 	return f.err
+}
+
+func (f *fakePinner) ConfirmUploadPins(context.Context, string, []string, string, bool) ([]catalog.ConfirmResult, error) {
+	return nil, errors.New("fakePinner does not confirm; the confirm route is tested against a real catalog")
 }
 
 const goodHash = "blake3:" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
