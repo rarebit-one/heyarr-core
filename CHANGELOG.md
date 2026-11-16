@@ -194,6 +194,16 @@ stable.
   alternative.
 
 ### Fixed
+- **Local control-plane backups are now pruned** (#697). The backup beat
+  wrote a whole-database copy into `<data_dir>/backups` every interval and
+  never removed one, so an idle node grew by gigabytes a day. After each
+  backup the beat now keeps the newest 12 generations, the newest of each of
+  the last 24 hours, and the newest of each of the last 7 days, and removes
+  the rest. Each removal is recorded as a `control.backup_pruned` event. Tune
+  it with `backup.retain.last`, `.hourly` and `.daily` (0 uses the default).
+  The first cycle after upgrading prunes an existing backlog. Directories
+  retention cannot identify (staging dirs, torn writes, anything else) are left
+  alone.
 - **Replication no longer leaks one connection per pulled blob** (#846). The
   transfer puller builds a pinned client per operation, and each one left its
   kept-alive connection in an idle pool nothing used again, so a node pulling a
