@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
@@ -123,5 +124,34 @@ func TestTheConstructorServesTheNewznabKind(t *testing.T) {
 	}
 	if _, ok := p.(*Client); !ok {
 		t.Fatalf("a newznab kind produced a %T, not the indexer client", p)
+	}
+}
+
+// One client serves both kinds, so the kind is what says how its releases are
+// fetched (#836): a newznab provider's candidates go to a usenet client and a
+// torznab provider's to a torrent client, whichever client is configured first.
+func TestTheConstructorRoutesCandidatesByTheProvidersKind(t *testing.T) {
+	endpoint, err := url.Parse("http://an-indexer.invalid/api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		kind providers.Kind
+		want acquisition.Protocol
+	}{
+		{providers.KindNewznab, acquisition.ProtocolUsenet},
+		{providers.KindTorznab, acquisition.ProtocolTorrent},
+	} {
+		p, _, err := Constructor(providers.Resolved{
+			Name: "an-indexer", Kind: tc.kind, Endpoint: endpoint,
+			Credential:   providers.TokenCredential("NOT-A-REAL-KEY"),
+			Capabilities: []providers.Capability{providers.CapabilityIndexer},
+		}, func() time.Time { return time.Now().UTC() })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := p.(*Client).protocol; got != tc.want {
+			t.Errorf("a %s provider's candidates have protocol %q, want %q", tc.kind, got, tc.want)
+		}
 	}
 }

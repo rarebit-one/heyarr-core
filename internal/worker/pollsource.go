@@ -337,6 +337,8 @@ func directReleaseCandidate(
 		Title:    fi.Title,
 		Provider: string(src.Type),
 		Source:   secret.Value(enclosure),
+		// An enclosure is the payload itself, never a .torrent (#836).
+		Protocol: acquisition.ProtocolDirect,
 	}
 }
 

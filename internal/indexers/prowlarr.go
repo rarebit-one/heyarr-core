@@ -211,6 +211,9 @@ type prowlarrRelease struct {
 	Indexer     string             `json:"indexer"`
 	IndexerID   int                `json:"indexerId"`
 	Categories  []prowlarrCategory `json:"categories"`
+	// Protocol is Prowlarr's own word for how the release is fetched,
+	// "torrent" or "usenet" (#836).
+	Protocol string `json:"protocol"`
 }
 
 // Search fans one query across every indexer Prowlarr manages (§59, §60).
@@ -300,6 +303,7 @@ func prowlarrCandidates(provider string, releases []prowlarrRelease, parseTitles
 			Provider:   provider,
 			Attributes: prowlarrAttributes(r, parseTitles, privacy[r.IndexerID]),
 			Source:     prowlarrSource(r),
+			Protocol:   acquisition.ParseProtocol(r.Protocol),
 		})
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].ID < out[b].ID })

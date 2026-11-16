@@ -20,7 +20,7 @@ type GrabStore interface {
 	AdvanceAcquisition(ctx context.Context, desiredItemID string, t acquisition.Transition, detail string) (catalog.AcquisitionRecord, error)
 	AdvanceAcquisitionIfSelected(ctx context.Context, desiredItemID, candidateID string, t acquisition.Transition, detail string) (catalog.AcquisitionRecord, error)
 	RecordAcquisition(ctx context.Context, a catalog.Acquisition) (bool, error)
-	SelectedSource(ctx context.Context, desiredItemID string) (candidateID string, source secret.Value, err error)
+	SelectedSource(ctx context.Context, desiredItemID string) (candidateID string, source secret.Value, protocol acquisition.Protocol, err error)
 }
 
 // GrabReleaseHandler hands a want's selected release to a download client —
@@ -87,7 +87,7 @@ func GrabReleaseHandler(
 			return nil
 		}
 
-		candidateID, source, err := cat.SelectedSource(ctx, payload.DesiredItemID)
+		candidateID, source, protocol, err := cat.SelectedSource(ctx, payload.DesiredItemID)
 		if errors.Is(err, catalog.ErrNoSelection) {
 			// The selection went away between enqueue and now — a later search
 			// superseded it. The grab no longer applies; it is not a failure.
@@ -115,7 +115,7 @@ func GrabReleaseHandler(
 				"queued_for", payload.CandidateID, "now", candidateID)
 		}
 
-		transfer, provider, err := reg.Grab(ctx, source)
+		transfer, provider, err := reg.Grab(ctx, source, protocol)
 		if errors.Is(err, providers.ErrNoSource) {
 			// The indexer offered no way to fetch this release. Distinct from
 			// every other failure here: retrying cannot help, because nothing

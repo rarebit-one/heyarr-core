@@ -91,6 +91,43 @@ type ReleaseCandidate struct {
 	// release. That is a candidate which can be explained and cannot be
 	// acquired, and the grab says so rather than failing obscurely.
 	Source secret.Value
+	// Protocol is how Source is fetched, and so which download clients may be
+	// handed it (#836). Empty is a release whose provider did not say; the grab
+	// then offers it to every client, as it did before the field existed.
+	Protocol Protocol
+}
+
+// Protocol is how a release's bytes are fetched (#836).
+//
+// A grab routes on it rather than on the source's shape, because the shape
+// does not decide: an http(s) URL is a .torrent to a torrent client and the
+// payload itself to a direct-download client, and both accept it. Offering
+// the source to clients in configuration order made the order decide, and no
+// order is right for both.
+type Protocol string
+
+const (
+	// ProtocolUnknown is a release whose provider did not say.
+	ProtocolUnknown Protocol = ""
+	// ProtocolTorrent is fetched from a swarm: a magnet, or a .torrent's URL.
+	ProtocolTorrent Protocol = "torrent"
+	// ProtocolUsenet is fetched from usenet: an .nzb's URL.
+	ProtocolUsenet Protocol = "usenet"
+	// ProtocolDirect is fetched as itself: a feed enclosure, a store's
+	// package, a page or a video a tool captures.
+	ProtocolDirect Protocol = "direct"
+)
+
+// ParseProtocol reads a provider's or a stored row's protocol. Anything it
+// does not know is ProtocolUnknown, which routes as before rather than to no
+// client at all.
+func ParseProtocol(s string) Protocol {
+	switch p := Protocol(strings.ToLower(strings.TrimSpace(s))); p {
+	case ProtocolTorrent, ProtocolUsenet, ProtocolDirect:
+		return p
+	default:
+		return ProtocolUnknown
+	}
 }
 
 // Result is what happened to one rule.

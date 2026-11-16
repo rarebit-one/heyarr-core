@@ -8,7 +8,8 @@
     "magnetUrl": "magnet:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01&dn=ubuntu",
     "indexer": "LinuxTracker",
     "indexerId": 1,
-    "categories": [{"id": 4000, "name": "PC"}]
+    "categories": [{"id": 4000, "name": "PC"}],
+    "protocol": "torrent"
   },
   {
     "title": "Big Buck Bunny 2008 1080p BluRay",
@@ -17,7 +18,8 @@
     "downloadUrl": "https://archive.example/download/bbb.torrent",
     "indexer": "Internet Archive",
     "indexerId": 2,
-    "categories": [{"id": 2000, "name": "Movies"}]
+    "categories": [{"id": 2000, "name": "Movies"}],
+    "protocol": "torrent"
   },
   {
     "title": "",

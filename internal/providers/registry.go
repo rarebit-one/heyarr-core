@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -563,13 +564,32 @@ var ErrNoSource = errors.New("the indexer offered no way to fetch this release")
 // collected, and they are ALL returned when none succeeded — because "the only
 // client you have is unreachable" and "every client refused this particular
 // magnet" look identical from the outside and want very different responses.
-func (r *Registry) Grab(ctx context.Context, source secret.Value) (Transfer, string, error) {
+//
+// # Only clients of the release's protocol are asked
+//
+// A torrent client fetches an http(s) URL as a .torrent and a direct-download
+// client fetches it as the payload, so first-acceptor routing let
+// configuration order decide what a URL was (#836). A release that names its
+// protocol is offered only to clients that fetch that protocol, and to any
+// that do not say. Within a protocol the first acceptor still wins. A release
+// with no protocol is offered to every client, as before.
+func (r *Registry) Grab(ctx context.Context, source secret.Value, protocol acquisition.Protocol) (Transfer, string, error) {
 	if source.IsZero() {
 		return Transfer{}, "", ErrNoSource
 	}
 	downloaders := r.Downloaders()
 	if len(downloaders) == 0 {
 		return Transfer{}, "", fmt.Errorf("%w: %s", ErrNoProvider, CapabilityDownload)
+	}
+	if protocol != acquisition.ProtocolUnknown {
+		downloaders = slices.DeleteFunc(slices.Clone(downloaders), func(dl Downloader) bool {
+			p, ok := dl.(ProtocolDownloader)
+			return ok && p.Protocol() != protocol
+		})
+		if len(downloaders) == 0 {
+			return Transfer{}, "", fmt.Errorf("%w: no download client fetches %s releases",
+				ErrNoProvider, protocol)
+		}
 	}
 
 	var refusals []string

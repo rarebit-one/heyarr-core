@@ -161,6 +161,7 @@ func applyOne(ctx context.Context, cat FanOutStore, q ProbeEnqueuer, op catalogo
 		Title:    a.Title,
 		Provider: catalog.FanOutProviderPrefix + a.Site,
 		Source:   secret.Value(magnetFor(a)),
+		Protocol: acquisition.ProtocolTorrent,
 	}
 	if a.Size > 0 {
 		cand.Attributes = acquisition.Attributes{policy.AttrSizeBytes: policy.Num(a.Size)}

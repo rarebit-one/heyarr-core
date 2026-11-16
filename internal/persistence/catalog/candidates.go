@@ -182,14 +182,15 @@ func (c *Catalog) RecordSearch(
 				INSERT INTO release_candidates
 					(id, desired_item_id, search_id, provider, candidate_id, title,
 					 attributes, evaluation, accepted, score, terminal, selected,
-					 overridden, override_detail, searched_at, created_at, source, selected_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, ?, ?)`,
+					 overridden, override_detail, searched_at, created_at, source, selected_at, protocol)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, ?, ?, ?)`,
 				uuid.Must(uuid.NewV7()).String(), desiredItemID, searchID,
 				r.Candidate.Provider, r.Candidate.ID, r.Candidate.Title,
 				string(attrs), string(eval),
 				boolToInt(r.Evaluation.Accepted), r.Evaluation.Score,
 				boolToInt(r.Evaluation.Terminal), selected,
-				stamp, stamp, r.Candidate.Source.Reveal(), selectedAt); err != nil {
+				stamp, stamp, r.Candidate.Source.Reveal(), selectedAt,
+				string(r.Candidate.Protocol)); err != nil {
 				return fmt.Errorf("catalog: recording candidate %s: %w", r.Candidate.ID, err)
 			}
 		}
@@ -618,22 +619,23 @@ var ErrNoSelection = errors.New("catalog: this want has no selected candidate")
 // Returns the candidate id alongside it so the caller can record WHICH release
 // it grabbed without a second query — and so a grab can tell that the selection
 // changed under it rather than silently fetching a different release than the
-// one whose id it was enqueued with.
+// one whose id it was enqueued with. And the release's protocol, which decides
+// which download clients may be handed the source (#836).
 func (c *Catalog) SelectedSource(ctx context.Context, desiredItemID string) (
-	candidateID string, source secret.Value, err error,
+	candidateID string, source secret.Value, protocol acquisition.Protocol, err error,
 ) {
-	var raw string
+	var raw, proto string
 	err = c.db.Reader().QueryRowContext(ctx,
-		`SELECT candidate_id, source FROM release_candidates
+		`SELECT candidate_id, source, protocol FROM release_candidates
 		 WHERE desired_item_id = ? AND selected = 1`, desiredItemID).
-		Scan(&candidateID, &raw)
+		Scan(&candidateID, &raw, &proto)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", fmt.Errorf("%w: %s", ErrNoSelection, desiredItemID)
+		return "", "", "", fmt.Errorf("%w: %s", ErrNoSelection, desiredItemID)
 	}
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return candidateID, secret.Value(raw), nil
+	return candidateID, secret.Value(raw), acquisition.ParseProtocol(proto), nil
 }
 
 // Held is what this want already holds, in the shape the domain compares
