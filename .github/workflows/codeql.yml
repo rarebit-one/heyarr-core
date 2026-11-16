@@ -12,7 +12,8 @@ permissions:
   security-events: write
 
 # CodeQL autobuilds the Go module, which fetches the private void-which-binds-go
-# dependency. GOPRIVATE + the private-modules token below let that fetch succeed.
+# dependency. GOPRIVATE + the private-modules token below let that fetch succeed;
+# Dependabot-triggered runs fall back to GO_PRIVATE_READ_PAT (see ci.yml).
 env:
   GOPRIVATE: github.com/rarebit-one/*
 
@@ -28,7 +29,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
-          token: ${{ secrets.AUTOLAND_PAT }}
+          token: ${{ secrets.AUTOLAND_PAT || secrets.GO_PRIVATE_READ_PAT }}
       - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with: { languages: go }
       - uses: github/codeql-action/autobuild@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1

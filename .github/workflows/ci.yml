@@ -29,7 +29,10 @@ permissions:
 
 # void-which-binds-go is a private module in this org. GOPRIVATE keeps its path off the
 # public proxy and checksum database; the private-modules action (used in each
-# compiling job below) supplies the token that lets git fetch it.
+# compiling job below) supplies the token that lets git fetch it. Runs that Dependabot
+# triggers receive only Dependabot secrets, so AUTOLAND_PAT is empty there and
+# they fall back to GO_PRIVATE_READ_PAT, a read-only PAT held as an org
+# Dependabot secret. Other runs still use AUTOLAND_PAT.
 env:
   GOPRIVATE: github.com/rarebit-one/*
 
@@ -87,7 +90,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
-          token: ${{ secrets.AUTOLAND_PAT }}
+          token: ${{ secrets.AUTOLAND_PAT || secrets.GO_PRIVATE_READ_PAT }}
       # The module's own Go, not `stable`: golangci-lint is a pinned binary built
       # against one Go release, and it typechecks the standard library of the Go
       # it runs under. The day `stable` moved to the next minor (1.27.2,
@@ -150,7 +153,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
-          token: ${{ secrets.AUTOLAND_PAT }}
+          token: ${{ secrets.AUTOLAND_PAT || secrets.GO_PRIVATE_READ_PAT }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: stable, cache: true }
       - run: ./scripts/gen.sh
@@ -186,7 +189,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
-          token: ${{ secrets.AUTOLAND_PAT }}
+          token: ${{ secrets.AUTOLAND_PAT || secrets.GO_PRIVATE_READ_PAT }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go }}
@@ -290,7 +293,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
-          token: ${{ secrets.AUTOLAND_PAT }}
+          token: ${{ secrets.AUTOLAND_PAT || secrets.GO_PRIVATE_READ_PAT }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: stable, cache: true }
       - name: install the pinned media toolchain
@@ -364,7 +367,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
-          token: ${{ secrets.AUTOLAND_PAT }}
+          token: ${{ secrets.AUTOLAND_PAT || secrets.GO_PRIVATE_READ_PAT }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: stable, cache: true }
       - run: go test -count=1 -v ${{ matrix.flags }} ./internal/storagefabric/chunking/...
@@ -382,7 +385,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
-          token: ${{ secrets.AUTOLAND_PAT }}
+          token: ${{ secrets.AUTOLAND_PAT || secrets.GO_PRIVATE_READ_PAT }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: stable, cache: true }
       - env:
@@ -415,7 +418,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
-          token: ${{ secrets.AUTOLAND_PAT }}
+          token: ${{ secrets.AUTOLAND_PAT || secrets.GO_PRIVATE_READ_PAT }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: stable, cache: true }
       - name: install the pinned media toolchain
@@ -465,7 +468,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/private-modules
         with:
-          token: ${{ secrets.AUTOLAND_PAT }}
+          token: ${{ secrets.AUTOLAND_PAT || secrets.GO_PRIVATE_READ_PAT }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: stable, cache: true }
       - name: assert this runner has no toolchain

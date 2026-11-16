@@ -1,7 +1,18 @@
 version: 2
+# The gomod updater must fetch the private github.com/rarebit-one/void-which-binds-go
+# module over git; GO_PRIVATE_READ_PAT is a read-only PAT held as an org
+# Dependabot secret.
+registries:
+  github-rarebit-one:
+    type: git
+    url: https://github.com
+    username: x-access-token
+    password: ${{secrets.GO_PRIVATE_READ_PAT}}
 updates:
   - package-ecosystem: gomod
     directory: /
+    registries:
+      - github-rarebit-one
     schedule: { interval: weekly }
     cooldown: { default-days: 3, semver-major-days: 7 }
     groups:
