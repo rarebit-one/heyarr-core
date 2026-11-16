@@ -58,6 +58,21 @@ func (c *Catalog) CreateDesiredItem(ctx context.Context, item desired.Item) (Des
 	return c.createDesiredItem(ctx, item, nil)
 }
 
+// ProbeDesiredItemTx inserts item's row — only the row, no acquisition state
+// and no events — into the caller's transaction, which the caller MUST roll
+// back. It exists for a preview (#794): the same insert CreateDesiredItem
+// makes, so the schema's own uniqueness and foreign keys say whether the want
+// would be accepted, rather than a second reading of them that could drift.
+func (c *Catalog) ProbeDesiredItemTx(ctx context.Context, tx *sql.Tx, item desired.Item) error {
+	if err := item.Validate(); err != nil {
+		return err
+	}
+	if item.ID == "" {
+		item.ID = uuid.Must(uuid.NewV7()).String()
+	}
+	return insertDesiredItem(ctx, tx, item, c.clock.Now().UTC())
+}
+
 // createDesiredItem is CreateDesiredItem with alsoTx run inside the same
 // transaction once the want exists, for a caller whose own record of the want
 // must commit with it or not at all (fan-out's marker).

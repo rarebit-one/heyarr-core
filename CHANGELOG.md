@@ -60,6 +60,12 @@ stable.
   sibling's cache emits one `lease.cached` with the sibling and the counts added
   and removed; a fetch that changes nothing emits nothing. The request path
   reads the cache only on a node that opts in (`peer.lease_issuers`, above).
+- **`heyarr stores sync gog --dry-run` previews against the node** (#794). It
+  used to list every valid game as "would want" without asking. Now it asks
+  the node through the new `POST /api/v1/desired?dry_run=true`, which runs
+  the real resolution and insert in a transaction it rolls back. It reports
+  would-want, already-wanted and would-be-refused, including two products in
+  one listing that would take the same title, and changes nothing.
 - **A peer issues device write leases for its siblings** (ADR-0048, #285). Every
   5 minutes, and at startup, the controller gives each device it has authorised
   for write (`heyarr admin management grant`, ADR-0065) a lease for every sibling
