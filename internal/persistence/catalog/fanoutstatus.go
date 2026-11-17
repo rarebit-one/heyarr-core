@@ -60,50 +60,9 @@ type FanOutStatus struct {
 // reported it unsourced, and the hold outcomes for its work. found is false
 // for a want fan-out did not create.
 func (c *Catalog) FanOutStatusFor(ctx context.Context, desiredItemID string) (FanOutStatus, bool, error) {
-	rows, err := c.db.Reader().QueryContext(ctx, `
-		SELECT o.op_hash, o.outcome, o.detail, o.applied_at, c.token
-		  FROM catalog_op_applications o JOIN catalog_ops c ON c.op_hash = o.op_hash
-		 WHERE o.desired_item_id = ? AND c.op = 'acquire'`, desiredItemID)
-	if err != nil {
-		return FanOutStatus{}, false, fmt.Errorf("catalog: reading the fan-out of %s: %w", desiredItemID, err)
-	}
-	var (
-		out   FanOutStatus
-		found bool
-		pick  catalogop.Op
-	)
-	for rows.Next() {
-		var (
-			s         FanOutStatus
-			at, token string
-		)
-		if err := rows.Scan(&s.OpHash, &s.Outcome, &s.Detail, &at, &token); err != nil {
-			_ = rows.Close()
-			return FanOutStatus{}, false, fmt.Errorf("catalog: reading the fan-out of %s: %w", desiredItemID, err)
-		}
-		op, err := catalogop.Verify(token)
-		if err != nil || op.Acquire == nil {
-			continue
-		}
-		// The newest selection, ties to the greater hash, as catalogop's view
-		// picks the effective acquire.
-		newer := !found || op.Acquire.SelectedAt.After(pick.Acquire.SelectedAt) ||
-			(op.Acquire.SelectedAt.Equal(pick.Acquire.SelectedAt) && op.Hash > pick.Hash)
-		if !newer {
-			continue
-		}
-		s.AppliedAt = parseStamp(at)
-		s.Site, s.Infohash, s.ReleaseTitle = op.Acquire.Site, op.Acquire.Infohash, op.Acquire.Title
-		s.Scope, s.Aspect = op.Acquire.Scope, op.Acquire.Aspect
-		out, pick, found = s, op, true
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return FanOutStatus{}, false, fmt.Errorf("catalog: reading the fan-out of %s: %w", desiredItemID, err)
-	}
-	_ = rows.Close()
-	if !found {
-		return FanOutStatus{}, false, nil
+	out, pick, found, err := c.newestFanOut(ctx, desiredItemID)
+	if err != nil || !found {
+		return FanOutStatus{}, false, err
 	}
 
 	var selfKey []byte
@@ -154,4 +113,50 @@ func (c *Catalog) FanOutStatusFor(ctx context.Context, desiredItemID string) (Fa
 		out.HoldLibraries[h.OpHash] = lib
 	}
 	return out, true, holds.Err()
+}
+
+// newestFanOut is the newest selection among the acquire ops a want was
+// applied for, with its recorded outcome.
+func (c *Catalog) newestFanOut(ctx context.Context, desiredItemID string) (FanOutStatus, catalogop.Op, bool, error) {
+	rows, err := c.db.Reader().QueryContext(ctx, `
+		SELECT o.op_hash, o.outcome, o.detail, o.applied_at, c.token
+		  FROM catalog_op_applications o JOIN catalog_ops c ON c.op_hash = o.op_hash
+		 WHERE o.desired_item_id = ? AND c.op = 'acquire'`, desiredItemID)
+	if err != nil {
+		return FanOutStatus{}, catalogop.Op{}, false, fmt.Errorf("catalog: reading the fan-out of %s: %w", desiredItemID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var (
+		out   FanOutStatus
+		pick  catalogop.Op
+		found bool
+	)
+	for rows.Next() {
+		var (
+			s         FanOutStatus
+			at, token string
+		)
+		if err := rows.Scan(&s.OpHash, &s.Outcome, &s.Detail, &at, &token); err != nil {
+			return FanOutStatus{}, catalogop.Op{}, false, fmt.Errorf("catalog: reading the fan-out of %s: %w", desiredItemID, err)
+		}
+		op, err := catalogop.Verify(token)
+		if err != nil || op.Acquire == nil {
+			continue
+		}
+		// The newest selection, ties to the greater hash, as catalogop's view
+		// picks the effective acquire.
+		newer := !found || op.Acquire.SelectedAt.After(pick.Acquire.SelectedAt) ||
+			(op.Acquire.SelectedAt.Equal(pick.Acquire.SelectedAt) && op.Hash > pick.Hash)
+		if !newer {
+			continue
+		}
+		s.AppliedAt = parseStamp(at)
+		s.Site, s.Infohash, s.ReleaseTitle = op.Acquire.Site, op.Acquire.Infohash, op.Acquire.Title
+		s.Scope, s.Aspect = op.Acquire.Scope, op.Acquire.Aspect
+		out, pick, found = s, op, true
+	}
+	if err := rows.Err(); err != nil {
+		return FanOutStatus{}, catalogop.Op{}, false, fmt.Errorf("catalog: reading the fan-out of %s: %w", desiredItemID, err)
+	}
+	return out, pick, found, nil
 }
