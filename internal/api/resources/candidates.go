@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -75,9 +76,11 @@ type CandidatesResponse struct {
 	Candidates []CandidateView `json:"candidates"`
 }
 
-// selectRequest is the POST /desired/{id}/select body.
+// selectRequest is the POST /desired/{id}/select body: a candidate the want's
+// search returned, or a URL to fetch as the want's direct release (#836).
 type selectRequest struct {
 	CandidateID string `json:"candidate_id"`
+	URL         string `json:"url"`
 }
 
 func candidateView(c catalog.Candidate) CandidateView {
@@ -391,8 +394,17 @@ func (a *API) selectCandidate(w http.ResponseWriter, r *http.Request) {
 	if !decodeOr400(w, r, &body) {
 		return
 	}
+	if body.URL != "" {
+		if body.CandidateID != "" {
+			httpapi.Fail(w, r, problem.BadRequest(
+				"name either candidate_id or url, not both"))
+			return
+		}
+		a.selectURL(w, r, id, body.URL)
+		return
+	}
 	if err := required("candidate_id", body.CandidateID); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()+" (or url, for a direct release)"))
 		return
 	}
 
@@ -451,21 +463,93 @@ func (a *API) AcquireRelease(
 	// no more able to fetch itself than one chosen by the scorer — and wiring
 	// only the automatic route would have left §60's manual override as the
 	// one path that still dead-ends, which is the harder half to notice.
-	//
-	// Enqueue failure is logged rather than returned: the override itself is
-	// durable and is what the caller asked for. The want stays SELECTED and the
-	// next search re-enqueues.
+	a.enqueueGrab(ctx, id, chosen.CandidateID)
+	return chosen, nil
+}
+
+// enqueueGrab queues the grab for a release selected by hand.
+//
+// Enqueue failure is logged rather than returned: the selection itself is
+// durable and is what the caller asked for. The want stays SELECTED and the
+// next search re-enqueues.
+func (a *API) enqueueGrab(ctx context.Context, id, candidateID string) {
 	if _, err := a.jobs.Enqueue(ctx, jobs.EnqueueOptions{
 		Type: acquisition.GrabJobType,
 		Payload: acquisition.GrabPayload{
 			DesiredItemID: id,
-			CandidateID:   chosen.CandidateID,
+			CandidateID:   candidateID,
 		},
 		DedupeKey:          acquisition.GrabDedupeKey(id),
 		RequiredCapability: providers.CapabilityDownload.JobCapability(),
 	}); err != nil {
 		a.log.Warn("could not queue the grab for a hand-selected release",
-			"desired_item_id", id, "candidate", chosen.CandidateID, "error", err)
+			"desired_item_id", id, "candidate", candidateID, "error", err)
 	}
-	return chosen, nil
+}
+
+// ErrNoHTTPClient is a direct URL handed over on a node with no download
+// client that fetches one: the grab could only fail.
+var ErrNoHTTPClient = errors.New("no http download client is configured on this node, " +
+	"so a direct URL cannot be fetched; configure a provider of type http first")
+
+// ErrNotResting is a direct URL handed over for a want that is not resting in
+// MISSING: something is in flight for it, or it already holds bytes, and a
+// direct release replaces neither.
+var ErrNotResting = errors.New("a direct release can only be handed over for a want resting in MISSING")
+
+// AcquireURL records an operator's URL as the want's single, pre-selected
+// direct release and queues its grab (#836) — the same walk a podcast
+// enclosure takes (ADR-0060), with the operator as the provenance.
+//
+// The release carries protocol direct, so the grab offers it only to the http
+// client whatever the configuration order, and the transfer that results names
+// that client in the acquisition status. A magnet or a .torrent is refused:
+// it is a torrent release, and it reaches a want from a search, as before.
+func (a *API) AcquireURL(ctx context.Context, id, rawURL string) (catalog.Candidate, error) {
+	// Resolve the want first, so an unknown id is a clean client fault rather
+	// than a missing acquisition row.
+	if _, err := desiredByID(ctx, a.reader, id); err != nil {
+		return catalog.Candidate{}, err
+	}
+	cand, err := acquisition.OperatorRelease(rawURL)
+	if err != nil {
+		return catalog.Candidate{}, err
+	}
+	if !a.providers.FetchesHTTP() {
+		return catalog.Candidate{}, ErrNoHTTPClient
+	}
+	selected, err := a.catalog.RecordDirectRelease(ctx, id, cand)
+	if err != nil {
+		return catalog.Candidate{}, err
+	}
+	if !selected {
+		rec, err := a.catalog.Acquisition(ctx, id)
+		if err != nil {
+			return catalog.Candidate{}, err
+		}
+		return catalog.Candidate{}, fmt.Errorf("%w; this one is %s", ErrNotResting, rec.State.Name())
+	}
+	a.enqueueGrab(ctx, id, cand.ID)
+	return a.catalog.SelectedCandidate(ctx, id)
+}
+
+// selectURL is the url form of POST /api/v1/desired/{id}/select.
+func (a *API) selectURL(w http.ResponseWriter, r *http.Request, id, rawURL string) {
+	chosen, err := a.AcquireURL(r.Context(), id, rawURL)
+	switch {
+	case errors.Is(err, acquisition.ErrTorrentURL):
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()+
+			" — search for the want and select its candidate instead"))
+		return
+	case errors.Is(err, acquisition.ErrNotDirectURL), errors.Is(err, ErrNoHTTPClient):
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	case errors.Is(err, ErrNotResting):
+		httpapi.Fail(w, r, problem.Conflict(err.Error()))
+		return
+	case err != nil:
+		a.fail(w, r, "candidate", err)
+		return
+	}
+	a.write(w, r, http.StatusOK, candidateView(chosen))
 }

@@ -110,6 +110,14 @@ type ProtocolDownloader interface {
 	Protocol() acquisition.Protocol
 }
 
+// HTTPFetcher is a direct Downloader that fetches an http(s) URL as the payload
+// itself — the http client. The other direct clients take only their own
+// tagged sources, so a node with none of these cannot fetch a direct URL at
+// all, and an operator handing one over is told so up front (#836).
+type HTTPFetcher interface {
+	FetchesHTTP() bool
+}
+
 // Remover is a Downloader that can take one of its own transfers out of the
 // client. Optional, and asked for only to stop a release Heyarr has refused
 // outright: a program posing as media (#819), which must not keep seeding.

@@ -5,22 +5,25 @@
         "heyarr/requiredScope": "write",
         "readOnlyHint": false
       },
-      "description": "Choose one specific release for a want and start fetching it — §60's manual override. Use it when someone names the release they want rather than letting the scorer decide. A candidate the quality profile REJECTED is refused, and the refusal names the rule: change the profile if it should be acceptable, rather than overriding it here.",
+      "description": "Choose one specific release for a want and start fetching it — §60's manual override. Use it when someone names the release they want rather than letting the scorer decide. A candidate the quality profile REJECTED is refused, and the refusal names the rule: change the profile if it should be acceptable, rather than overriding it here. Given a url instead of a candidate, it fetches that direct link as the want's release.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "candidate_id": {
-            "description": "The candidate to acquire, from get_content_satisfaction or a prior search. It must be one this want's last search returned.",
+            "description": "The candidate to acquire, from get_content_satisfaction or a prior search. It must be one this want's last search returned. Give this or url.",
             "type": "string"
           },
           "desired_item_id": {
             "description": "The want the release should satisfy.",
             "type": "string"
+          },
+          "url": {
+            "description": "A direct http(s) link to the file itself, to fetch as this want's only release instead of a candidate. Only for a want resting in MISSING, and only on a node with an http download client. A magnet or .torrent link is refused: acquire a torrent through its candidate. Give this or candidate_id.",
+            "type": "string"
           }
         },
         "required": [
-          "desired_item_id",
-          "candidate_id"
+          "desired_item_id"
         ],
         "type": "object"
       },

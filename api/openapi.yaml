@@ -4829,6 +4829,23 @@ paths:
         than an override, and is not recorded as a disagreement: putting a
         departure in the audit trail that never happened is its own kind of
         wrong.
+
+        ### Or hand over a URL as the want's direct release
+
+        Send `url` instead of `candidate_id` to fetch that http(s) link as the
+        want's only release (#836): ADR-0060's direct release, with the
+        operator as its provenance. It is recorded as a selected candidate
+        from provider `operator` with protocol `direct`, so the grab offers it
+        only to the `http` download client whatever the client order, and
+        `transfer.provider` in the acquisition status names that client. The
+        candidate's id is a digest of the link and its title is the file the
+        link names, so a token in the URL never reaches a response.
+
+        A magnet or a `.torrent` link is refused (`400`): it is a torrent
+        release, which a want still gets from a search, as a candidate. So is
+        a URL on a node with no `http` download client (`400`), and a URL for a
+        want that is not resting in `MISSING` (`409`) — a direct release does
+        not replace a transfer in flight or bytes already held.
       parameters:
         - name: id
           in: path
@@ -4840,13 +4857,19 @@ paths:
           application/json:
             schema:
               type: object
-              required: [candidate_id]
+              description: Exactly one of `candidate_id` and `url`.
               properties:
                 candidate_id:
                   type: string
                   description: |
                     The **provider's** id for the release, as returned by
                     `/candidates`.
+                url:
+                  type: string
+                  format: uri
+                  description: |
+                    An http(s) link to the file itself, fetched as the want's
+                    direct release. Not a magnet or a `.torrent`.
       responses:
         "200":
           description: The chosen candidate.
@@ -4864,7 +4887,9 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "409":
-          description: That candidate was rejected by the quality profile.
+          description: |
+            That candidate was rejected by the quality profile, or a `url` was
+            handed over for a want that is not resting in `MISSING`.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }

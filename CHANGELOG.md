@@ -10,6 +10,18 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **An operator can hand over a URL as a want's direct release** (ADR-0060,
+  #836). `POST /api/v1/desired/{id}/select` and MCP `acquire_release` now take
+  `url` in place of `candidate_id`: an http(s) link to the file itself. It is
+  recorded as the want's one selected release, from provider `operator` with
+  protocol `direct`, so the grab gives it only to the `http` download client
+  whatever order the clients are configured in, and `get_acquisition_status`
+  names that client. The release is accepted by provenance
+  (`release/direct-operator`), not ranked against the profile. Its id is a
+  digest of the link and its title the file the link names, so a token in the
+  URL stays out of responses and events. Refused: a magnet or `.torrent` link
+  (a torrent release still comes from a search, as a candidate), a URL on a
+  node with no `http` client, and a URL for a want not resting in `MISSING`.
 - **Failed vault writes stop leaking storage, behind a flag** (ADR-0096
   amendment, #714). A vault write uploads its blobs before pushing the change
   that names them, so a write that failed in between left them pinned for

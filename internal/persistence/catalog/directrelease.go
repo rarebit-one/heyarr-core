@@ -69,11 +69,24 @@ var storeReleaseReason = acquisition.Reason{
 	Detail:  "the operator's own copy from the store it is owned on; no indexer search",
 }
 
-// directReasonFor names where a direct release came from: a store package, or
-// a followed source's feed.
+// operatorReleaseReason is the provenance of a URL an operator handed over as
+// the want's release (#836): the person named the file, so there was nothing
+// to search for or rank.
+var operatorReleaseReason = acquisition.Reason{
+	Rule:    "release/direct-operator",
+	Section: "provenance",
+	Result:  acquisition.ResultPass,
+	Detail:  "handed over by an operator as the release to fetch; no indexer search",
+}
+
+// directReasonFor names where a direct release came from: a store package, an
+// operator's URL, or a followed source's feed.
 func directReasonFor(cand acquisition.ReleaseCandidate) acquisition.Reason {
 	if _, _, _, ok := acquisition.StoreFacts(cand.Attributes); ok {
 		return storeReleaseReason
+	}
+	if cand.Provider == acquisition.OperatorProvider {
+		return operatorReleaseReason
 	}
 	return directReleaseReason
 }

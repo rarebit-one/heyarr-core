@@ -265,15 +265,20 @@ var schemaSearchReleases = obj(map[string]any{
 
 // schemaAcquireRelease is acquire_release's input (§71).
 //
-// Both arguments are required. A candidate id with no want is ambiguous — the
-// same release may be a candidate for several wants — and a want with no
-// candidate would make this "acquire something", which is what the scorer is
-// for.
+// The want and one release are required. A candidate id with no want is
+// ambiguous — the same release may be a candidate for several wants — and a
+// want with no release would make this "acquire something", which is what the
+// scorer is for. The release is a candidate, or a direct URL (#836); the
+// schema cannot say "exactly one of" without oneOf, so the handler does.
 var schemaAcquireRelease = obj(map[string]any{
 	"desired_item_id": str("The want the release should satisfy."),
 	"candidate_id": str("The candidate to acquire, from get_content_satisfaction or a " +
-		"prior search. It must be one this want's last search returned."),
-}, "desired_item_id", "candidate_id")
+		"prior search. It must be one this want's last search returned. Give this or url."),
+	"url": str("A direct http(s) link to the file itself, to fetch as this want's only " +
+		"release instead of a candidate. Only for a want resting in MISSING, and only on a " +
+		"node with an http download client. A magnet or .torrent link is refused: acquire " +
+		"a torrent through its candidate. Give this or candidate_id."),
+}, "desired_item_id")
 
 // The property helpers. Each returns the same map a literal would, so the
 // published schema is unchanged; they exist so a schema reads as a list of
