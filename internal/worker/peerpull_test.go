@@ -86,8 +86,10 @@ func newSite(t *testing.T, db *sqlite.DB, cat *catalog.Catalog, store *cas.FS, s
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &site{t: t, db: db, events: ev, cat: cat, ops: ops, pipeline: pipeline, queue: queue,
-		store: store, signer: signer, rootDir: filepath.Join(t.TempDir(), "roms")}
+	s := &site{
+		t: t, db: db, events: ev, cat: cat, ops: ops, pipeline: pipeline, queue: queue,
+		store: store, signer: signer, rootDir: filepath.Join(t.TempDir(), "roms"),
+	}
 	if err := os.MkdirAll(s.rootDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -191,21 +193,7 @@ func (s *site) count(query string, args ...any) int {
 // fabric's real puller, and marks each one done.
 func (s *site) runPulls(f *transferFabric) int {
 	s.t.Helper()
-	rows, err := s.db.Reader().Query(`SELECT id, payload FROM jobs WHERE type = ? AND state = 'pending' ORDER BY id`,
-		replication.ReplicateBlobJobType)
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	type pending struct{ id, payload string }
-	var todo []pending
-	for rows.Next() {
-		var p pending
-		if err := rows.Scan(&p.id, &p.payload); err != nil {
-			s.t.Fatal(err)
-		}
-		todo = append(todo, p)
-	}
-	_ = rows.Close()
+	todo := s.pendingPulls()
 	for _, p := range todo {
 		job := jobs.Job{ID: p.id, Type: replication.ReplicateBlobJobType, Payload: json.RawMessage(p.payload)}
 		if err := f.handler()(s.t.Context(), job); err != nil {
@@ -214,6 +202,32 @@ func (s *site) runPulls(f *transferFabric) int {
 		s.exec(`UPDATE jobs SET state = 'succeeded' WHERE id = ?`, p.id)
 	}
 	return len(todo)
+}
+
+type pendingPull struct{ id, payload string }
+
+// pendingPulls reads the queue's pending replicate_blob jobs, closing the rows
+// before any of them runs (the single-writer pool would otherwise wait on them).
+func (s *site) pendingPulls() []pendingPull {
+	s.t.Helper()
+	rows, err := s.db.Reader().Query(`SELECT id, payload FROM jobs WHERE type = ? AND state = 'pending' ORDER BY id`,
+		replication.ReplicateBlobJobType)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []pendingPull
+	for rows.Next() {
+		var p pendingPull
+		if err := rows.Scan(&p.id, &p.payload); err != nil {
+			s.t.Fatal(err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		s.t.Fatal(err)
+	}
+	return out
 }
 
 // replicaStatus calls the MCP tool an operator or an agent would ask.
