@@ -104,7 +104,9 @@ failure names what broke and what it expected.
 
 ## Roadmap
 
-Milestones 1 and 2 are **done**.
+Milestones 1, 2, 3, 5, 7, 10 and 12 are **done**; 4, 6, 8, 9 and 11 are still
+open. The numbers are the [GitHub milestones](https://github.com/rarebit-one/heyarr-core/milestones);
+1–11 follow the delivery sequence in [spec §84](docs/spec/heyarr-spec.md).
 
 Heyarr scans a library, brings its bytes under management, serves them over
 HTTP with byte ranges, and tells you what it did. It probes media over those
@@ -125,15 +127,23 @@ without a media toolchain.
 |---|---|---|---|
 | 1 | Local Heyarr | controller, local full peer, content model, BLAKE3 CAS, scanner, HTTP Range, API, CLI | ✅ |
 | 2 | Consumption | playback sessions, direct A/V, publications, ffprobe, remux | ✅ |
-| 3 | Desired State & Acquisition | DesiredItem, quality profiles, Prowlarr, Transmission, ingest, upgrades | |
+| 3 | Desired State & Acquisition | DesiredItem, quality profiles, candidate evaluation, Torznab discovery (Prowlarr), Transmission, ingest, upgrades | ✅ |
 | 4 | Second Full Peer | registration, inventory exchange, replication, catalog snapshots, read routing | |
-| 5 | Efficient Replication | FastCDC, chunk manifests, resumable transfer, integrity repair | |
+| 5 | Efficient Replication | FastCDC, chunk manifests, resumable replication, chunk reuse, integrity repair | ✅ |
 | 6 | Cooperative Acquisition | TransferSession, internal BitTorrent transport, web-seeding | |
-| 7 | Controller Resilience | continuous backup, restore tooling, cached leases, degraded read mode | |
+| 7 | Controller Resilience | continuous control-plane backup, pushed to the peers it trusts, `heyarr recover --from-peer` ¹ | ✅ |
 | 8 | Self-Sovereign Identity | device keys, delegations, grants, pairing, recovery | |
 | 9 | Encrypted Personal State | encrypted spaces, wrapped keys, CRDT sync, offline concurrent edits | |
-| 10 | Progressive Playback | playback over a partially-available blob | |
+| 10 | Progressive Playback | playback over a partially-available blob, playback-window piece priority, hand-over to the complete replica | ✅ |
 | 11 | Compatibility | OpenSubsonic, OPDS, more clients and providers | |
+| 12 | Followed Sources | follow TV series, podcasts, YouTube channels and RSS feeds; new items are acquired into the library | ✅ |
+
+¹ §84 also lists cached access leases and a degraded local-read mode for
+Milestone 7. Under [ADR-0038](docs/adr/0038-there-is-no-central-authority-peers-are-repositories.md),
+where each peer is the authority for its own site, the leases moved to
+Milestone 8 ([#285](https://github.com/rarebit-one/heyarr-core/issues/285)) and the
+degraded mode was dropped ([#286](https://github.com/rarebit-one/heyarr-core/issues/286)):
+what §53 asked of it was already true.
 
 ## Licence
 
