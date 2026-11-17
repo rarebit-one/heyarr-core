@@ -10,6 +10,24 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **A dead swarm's release reaches the sibling from its origin** (ADR-0119
+  #800 amendment). When a sibling's fan-out grab of a release stalls and the
+  stuck-grab sweep blocks it, the sibling records `no_site_source` and holds
+  nothing. In a library both sites list in `acquisition.peer_pull.libraries`,
+  the sibling now reports that with a new `unsourced` op naming the `acquire`.
+  The origin answers with the ordinary `hold` for the asset, and the sibling
+  pulls it over the peer surface, as for a non-swarm asset. The same cap
+  applies: a release over `max_blob_bytes` is not reported when its size is
+  known, and a blob over it is not published. A report counts only from a
+  current member, and only for the selection it names: a newer `acquire` for
+  the same scope covers the asset again until it is reported in turn. Once
+  the pulled asset satisfies the want, the `acquire`'s outcome at the sibling
+  moves to `held`. `get_acquisition_status` now carries a `fan_out` block for
+  a want a sibling's choice created (#799, in part): the origin site and
+  release, the outcome and detail here, whether this site reported it, and
+  each hold's peer-pull outcome. Off with the opt-in, as before. Migration
+  00075 admits the op kind. List a library only once both sites run this
+  build: an older one refuses a sync carrying an `unsourced` op.
 - **A library held at one site reaches its sibling by peer-pull, opt-in per
   library** (ADR-0119 amendment, #833). Fan-out reaches a sibling only through
   a swarm, so a scanned `rom` library, or an HTTP, usenet or direct fetch, was

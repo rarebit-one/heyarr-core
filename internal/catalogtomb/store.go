@@ -219,7 +219,7 @@ func (s *Store) recordInto(ctx context.Context, tx *sql.Tx, parsed []catalogop.O
 	if len(fresh) == 0 {
 		return nil
 	}
-	// An acquire op (ADR-0119) or a hold (its amendment) cannot change the
+	// An acquire op (ADR-0119), a hold or an unsourced report (its amendments) cannot change the
 	// tombstone view by itself, so a batch of nothing but those skips the
 	// re-materialisation: with one op per grabbed release or held blob,
 	// re-evaluating the whole log on every one would make a large backfill
@@ -270,7 +270,7 @@ func citedByRecordedOp(ctx context.Context, tx *sql.Tx, hashes []string) (bool, 
 // onlyBodyOps reports a non-empty batch with no delete or restore in it.
 func onlyBodyOps(ops []catalogop.Op) bool {
 	for _, op := range ops {
-		if op.Kind != catalogop.OpAcquire && op.Kind != catalogop.OpHold {
+		if op.Kind != catalogop.OpAcquire && op.Kind != catalogop.OpHold && op.Kind != catalogop.OpUnsourced {
 			return false
 		}
 	}

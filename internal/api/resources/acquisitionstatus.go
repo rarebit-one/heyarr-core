@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 )
@@ -28,6 +29,45 @@ type AcquisitionStatusView struct {
 	// Transfer is the download in flight. Absent when nothing is downloading —
 	// a want that is idle, still searching, or already satisfied has none.
 	Transfer *AcquisitionTransfer `json:"transfer,omitempty"`
+	// FanOut is where a want fan-out created came from and what became of it
+	// here (ADR-0119, #799). Absent for a want this site created itself.
+	FanOut *AcquisitionFanOut `json:"fan_out,omitempty"`
+}
+
+// AcquisitionFanOut is the sibling's acquire op behind a want and this site's
+// outcomes for it: the answer to "why didn't this site get X".
+type AcquisitionFanOut struct {
+	// OriginSite is the site that chose the release.
+	OriginSite string `json:"origin_site"`
+	// OpHash is the acquire op's hash.
+	OpHash      string `json:"op_hash"`
+	Infohash    string `json:"infohash"`
+	ReleaseName string `json:"release_name"`
+	Scope       string `json:"scope"`
+	Aspect      string `json:"aspect"`
+	// Outcome is what this site did with the op: applied, held, deferred,
+	// tombstoned, scope_unresolved or no_site_source.
+	Outcome   string `json:"outcome"`
+	Detail    string `json:"detail,omitempty"`
+	AppliedAt string `json:"applied_at"`
+	// ReportedUnsourced is whether this site told the origin it can resolve
+	// no source for the release (an `unsourced` op), so the origin holds it
+	// for this site to pull (ADR-0119 #800 amendment).
+	ReportedUnsourced bool `json:"reported_unsourced"`
+	// PeerPull is this site's outcome for each hold op naming the want's
+	// work. Absent when none does.
+	PeerPull []AcquisitionHold `json:"peer_pull,omitempty"`
+}
+
+// AcquisitionHold is what this site did with one hold op, as
+// get_replica_status reports it.
+type AcquisitionHold struct {
+	OpHash    string `json:"op_hash"`
+	BlobHash  string `json:"blob_hash"`
+	Outcome   string `json:"outcome"`
+	Detail    string `json:"detail,omitempty"`
+	Library   string `json:"library,omitempty"`
+	AppliedAt string `json:"applied_at"`
 }
 
 // AcquisitionTransfer is the download client's side of an in-flight acquisition.
@@ -99,6 +139,24 @@ func (a *API) AcquisitionStatus(ctx context.Context, id string) (AcquisitionStat
 			BytesDone:   tr.BytesDone,
 			PercentDone: pct,
 			Trouble:     tr.Trouble,
+		}
+	}
+
+	fo, found, err := a.catalog.FanOutStatusFor(ctx, id)
+	if err != nil {
+		return AcquisitionStatusView{}, err
+	}
+	if found {
+		out.FanOut = &AcquisitionFanOut{
+			OriginSite: fo.Site, OpHash: fo.OpHash, Infohash: fo.Infohash, ReleaseName: fo.ReleaseTitle,
+			Scope: fo.Scope, Aspect: fo.Aspect, Outcome: string(fo.Outcome), Detail: fo.Detail,
+			AppliedAt: fo.AppliedAt.UTC().Format(time.RFC3339), ReportedUnsourced: fo.Reported,
+		}
+		for _, h := range fo.Holds {
+			out.FanOut.PeerPull = append(out.FanOut.PeerPull, AcquisitionHold{
+				OpHash: h.OpHash, BlobHash: h.BlobHash, Outcome: string(h.Outcome), Detail: h.Detail,
+				Library: fo.HoldLibraries[h.OpHash], AppliedAt: h.AppliedAt.UTC().Format(time.RFC3339),
+			})
 		}
 	}
 	return out, nil

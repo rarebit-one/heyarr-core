@@ -42,6 +42,9 @@
 //   - Its amendment (#833) adds a fourth, `hold`: a blob a site holds for the
 //     work with no swarm behind it, which an opted-in sibling pulls from the
 //     signer. Newest per (target, blob), suppressed by a tombstone. See Hold.
+//   - Its #800 amendment adds a fifth, `unsourced`: a sibling's report that it
+//     can resolve no source for an acquire, which the acquire's signer
+//     answers with a hold. One per (acquire, reporter). See Unsourced.
 //   - WHO may sign a catalog op is ADR-0073 open question 2 — a node/library
 //     fact is probably peer-signed under its ADR-0012 identity, which is the
 //     model assumed here (`by` is a peer public key). Finer authority and the
@@ -64,6 +67,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -112,7 +116,23 @@ const (
 	// opted the library in pulls them from the signer over the peer surface.
 	// Newest per (target, blob) wins; a tombstone on the work suppresses it.
 	OpHold Kind = "hold"
+	// OpUnsourced reports that the signer can resolve no source for the
+	// release a sibling's acquire names (ADR-0119 #800 amendment): "for (ct,
+	// wk), I could not fetch the release of the acquire with this hash". The
+	// acquire's signer publishes a hold for the asset in answer, in a library
+	// both sites opted in. One per (acquire, reporter); never withdrawn; a
+	// tombstone on the work suppresses it.
+	OpUnsourced Kind = "unsourced"
 )
+
+// Unsourced is the body of an OpUnsourced: which acquire the signer could not
+// source, and who says so. Nothing about why: the outcome is the reporter's.
+type Unsourced struct {
+	// Acquire is the hash of the acquire op, which the op also cites in prev.
+	Acquire string
+	// Site is the reporter's site name (peer.site); display only.
+	Site string
+}
 
 // Hold is the body of an OpHold: what a sibling needs to pull the bytes and
 // record them under the same work and edition, and nothing about the origin's
@@ -247,6 +267,8 @@ type Op struct {
 	Acquire *Acquire
 	// Hold is the body of an OpHold; nil for every other kind.
 	Hold *Hold
+	// Unsourced is the body of an OpUnsourced; nil for every other kind.
+	Unsourced *Unsourced
 }
 
 // Target is a work's cross-site-stable natural key: the pair a rescan converges
@@ -276,6 +298,14 @@ type payload struct {
 	Acq *acquirePayload `json:"acq,omitempty"`
 	// Hold is present on OpHold only, omitempty for the same reason as Acq.
 	Hold *holdPayload `json:"hold,omitempty"`
+	// Uns is present on OpUnsourced only, omitempty for the same reason.
+	Uns *unsourcedPayload `json:"uns,omitempty"`
+}
+
+// unsourcedPayload is the signed form of Unsourced.
+type unsourcedPayload struct {
+	Acquire string `json:"acquire"`
+	Site    string `json:"site"`
 }
 
 // holdPayload is the signed form of Hold. Field order is fixed by this struct
@@ -338,7 +368,7 @@ func Sign(signer ed25519.PrivateKey, kind Kind, ct, wk string, prev []string, is
 	if kind != OpDelete && kind != OpRestore {
 		return "", fmt.Errorf("%w: unknown kind %q", ErrMalformed, kind)
 	}
-	return sign(signer, kind, ct, wk, nil, nil, prev, issuedAt)
+	return sign(signer, kind, ct, wk, body{}, prev, issuedAt)
 }
 
 // SignAcquire mints a v1 acquire op (ADR-0119): the signer selected the release
@@ -349,7 +379,7 @@ func SignAcquire(signer ed25519.PrivateKey, ct, wk string, a Acquire, prev []str
 	if err := ap.validate(); err != nil {
 		return "", err
 	}
-	return sign(signer, OpAcquire, ct, wk, ap, nil, prev, issuedAt)
+	return sign(signer, OpAcquire, ct, wk, body{acq: ap}, prev, issuedAt)
 }
 
 // SignHold mints a v1 hold op (ADR-0119 amendment, #833): the signer holds the
@@ -359,10 +389,29 @@ func SignHold(signer ed25519.PrivateKey, ct, wk string, h Hold, prev []string, i
 	if err := hp.validate(); err != nil {
 		return "", err
 	}
-	return sign(signer, OpHold, ct, wk, nil, hp, prev, issuedAt)
+	return sign(signer, OpHold, ct, wk, body{hold: hp}, prev, issuedAt)
 }
 
-func sign(signer ed25519.PrivateKey, kind Kind, ct, wk string, acq *acquirePayload, hold *holdPayload, prev []string, issuedAt time.Time) (string, error) {
+// SignUnsourced mints a v1 unsourced op (ADR-0119 #800 amendment): the signer
+// can resolve no source for the release of the acquire u names, on the work
+// (ct, wk). The acquire is added to prev, so the report is never evaluated
+// before the op it is about.
+func SignUnsourced(signer ed25519.PrivateKey, ct, wk string, u Unsourced, prev []string, issuedAt time.Time) (string, error) {
+	up := &unsourcedPayload{Acquire: u.Acquire, Site: u.Site}
+	if err := up.validate(); err != nil {
+		return "", err
+	}
+	return sign(signer, OpUnsourced, ct, wk, body{uns: up}, append(append([]string(nil), prev...), u.Acquire), issuedAt)
+}
+
+// body is the one kind-specific payload an op carries, if any.
+type body struct {
+	acq  *acquirePayload
+	hold *holdPayload
+	uns  *unsourcedPayload
+}
+
+func sign(signer ed25519.PrivateKey, kind Kind, ct, wk string, b body, prev []string, issuedAt time.Time) (string, error) {
 	if len(signer) != ed25519.PrivateKeySize {
 		return "", fmt.Errorf("%w: a signing key is required", ErrIncomplete)
 	}
@@ -385,8 +434,9 @@ func sign(signer ed25519.PrivateKey, kind Kind, ct, wk string, acq *acquirePaylo
 		By:          by,
 		Prev:        prev,
 		IssuedAt:    issuedAt.UTC().Unix(),
-		Acq:         acq,
-		Hold:        hold,
+		Acq:         b.acq,
+		Hold:        b.hold,
+		Uns:         b.uns,
 	})
 	if err != nil {
 		return "", fmt.Errorf("catalogop: encoding payload: %w", err)
@@ -494,6 +544,35 @@ func (hp *holdPayload) validate() error {
 		return fmt.Errorf("%w: hold held-at is required", ErrMalformed)
 	}
 	return nil
+}
+
+// validate is the whole shape rule for an unsourced report, applied at Sign
+// and at Verify. That the acquire is also cited in prev is checked at Verify,
+// where prev is final.
+func (up *unsourcedPayload) validate() error {
+	if !isOpHash(up.Acquire) {
+		return fmt.Errorf("%w: unsourced acquire %q is not an op hash", ErrMalformed, up.Acquire)
+	}
+	if up.Site == "" || len(up.Site) > MaxSite {
+		return fmt.Errorf("%w: unsourced site", ErrMalformed)
+	}
+	return nil
+}
+
+// isOpHash admits HashPrefix + 64 lower-case hex, the shape Hash renders.
+func isOpHash(s string) bool {
+	hexPart, ok := strings.CutPrefix(s, HashPrefix)
+	return ok && len(hexPart) == 64 && isLowerHex(hexPart)
+}
+
+func isLowerHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func isBlake3(s string) bool {
@@ -678,22 +757,32 @@ func Verify(token string) (Op, error) {
 	}
 	switch p.Op {
 	case OpDelete, OpRestore:
-		if p.Acq != nil || p.Hold != nil {
+		if p.Acq != nil || p.Hold != nil || p.Uns != nil {
 			return Op{}, fmt.Errorf("%w: a %s op carries a body", ErrMalformed, p.Op)
 		}
 	case OpAcquire:
-		if p.Acq == nil || p.Hold != nil {
+		if p.Acq == nil || p.Hold != nil || p.Uns != nil {
 			return Op{}, fmt.Errorf("%w: an acquire op needs its acquire body and no other", ErrMalformed)
 		}
 		if err := p.Acq.validate(); err != nil {
 			return Op{}, err
 		}
 	case OpHold:
-		if p.Hold == nil || p.Acq != nil {
+		if p.Hold == nil || p.Acq != nil || p.Uns != nil {
 			return Op{}, fmt.Errorf("%w: a hold op needs its hold body and no other", ErrMalformed)
 		}
 		if err := p.Hold.validate(); err != nil {
 			return Op{}, err
+		}
+	case OpUnsourced:
+		if p.Uns == nil || p.Acq != nil || p.Hold != nil {
+			return Op{}, fmt.Errorf("%w: an unsourced op needs its unsourced body and no other", ErrMalformed)
+		}
+		if err := p.Uns.validate(); err != nil {
+			return Op{}, err
+		}
+		if !slices.Contains(p.Prev, p.Uns.Acquire) {
+			return Op{}, fmt.Errorf("%w: an unsourced op must cite the acquire it names", ErrMalformed)
 		}
 	default:
 		return Op{}, fmt.Errorf("%w: unknown kind %q", ErrMalformed, p.Op)
@@ -737,6 +826,9 @@ func Verify(token string) (Op, error) {
 	}
 	if p.Hold != nil {
 		op.Hold = p.Hold.hold()
+	}
+	if p.Uns != nil {
+		op.Unsourced = &Unsourced{Acquire: p.Uns.Acquire, Site: p.Uns.Site}
 	}
 	return op, nil
 }
@@ -790,6 +882,11 @@ type View struct {
 	// (ADR-0119 amendment): the newest by issued-at, ties broken by hash, for
 	// a work that is not tombstoned.
 	Holds map[string]Op
+	// Unsourced holds, per acquire op hash, the effective reports that a site
+	// other than the acquire's signer can resolve no source for it (ADR-0119
+	// #800 amendment), sorted by hash: one per reporter, for a work that is
+	// not tombstoned.
+	Unsourced map[string][]Op
 }
 
 // HoldKey renders the key Holds is indexed by.
@@ -829,6 +926,7 @@ func Evaluate(tokens []string) View {
 		Rejected:     map[string]Reason{},
 		Acquisitions: map[string]Op{},
 		Holds:        map[string]Op{},
+		Unsourced:    map[string][]Op{},
 	}
 
 	// Pass 1: parse + signature-check. A token that fails is rejected and
@@ -950,6 +1048,40 @@ func Evaluate(tokens []string) View {
 		if !ok || newerByIssue(op, cur) {
 			v.Holds[key] = op
 		}
+	}
+
+	// Pass 6: a report counts only when it names an accepted acquire on the
+	// same work, signed by another key, for a work that is not tombstoned
+	// (ADR-0119 #800 amendment). A second report by the same signer adds
+	// nothing.
+	reporters := map[string]map[string]Op{}
+	for _, op := range v.Accepted {
+		if op.Kind != OpUnsourced || op.Unsourced == nil {
+			continue
+		}
+		acq, ok := v.Accepted[op.Unsourced.Acquire]
+		if !ok || acq.Kind != OpAcquire || acq.Target != op.Target || acq.By == op.By {
+			continue
+		}
+		if _, dead := v.Tombstoned[op.Target.Key()]; dead {
+			continue
+		}
+		by := reporters[acq.Hash]
+		if by == nil {
+			by = map[string]Op{}
+			reporters[acq.Hash] = by
+		}
+		if cur, seen := by[op.By]; !seen || op.Hash < cur.Hash {
+			by[op.By] = op
+		}
+	}
+	for acq, by := range reporters {
+		ops := make([]Op, 0, len(by))
+		for _, op := range by {
+			ops = append(ops, op)
+		}
+		sort.Slice(ops, func(i, j int) bool { return ops[i].Hash < ops[j].Hash })
+		v.Unsourced[acq] = ops
 	}
 
 	v.Heads = heads(v.Accepted)
