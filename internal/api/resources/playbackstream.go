@@ -60,6 +60,13 @@ type ClientCaps struct {
 	AudioLanguages []string `json:"audio_languages,omitempty"`
 	// AudioTrack selects a zero-based source audio ordinal, including commentary.
 	AudioTrack *int `json:"audio_track,omitempty"`
+	// SupportsHDR and MaxBitrateBPS steer which of a work's copies is chosen
+	// when the request names a work (#885). They do not change how the chosen
+	// copy is planned: nothing here tone-maps (#886) or caps a stream's
+	// bitrate, so a plan by asset_id reads neither. SupportsHDR absent is
+	// unstated, not false — a named device's stored value fills it.
+	SupportsHDR   *bool `json:"supports_hdr,omitempty"`
+	MaxBitrateBPS int64 `json:"max_bitrate_bps,omitempty"`
 }
 
 func (c ClientCaps) profile() playback.ClientProfile {
@@ -134,7 +141,7 @@ type PlaybackStreamer interface {
 // the client's declaration as a device profile when no device_id was sent, so
 // a client and a registered device are explained in one vocabulary — and it
 // adds the leg: what to fetch.
-func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanRequest) {
+func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanRequest, selection *SelectionResponse) {
 	ctx := r.Context()
 	client := body.Client.profile()
 	audioLanguages := body.Client.AudioLanguages
@@ -195,6 +202,7 @@ func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanReq
 
 	plan := playback.Choose(media, device, replicasOf(route))
 	out := renderPlan(body.AssetID, deviceID, plan, route, blobHash)
+	out.Selection = selection
 	if media.Known {
 		out.Source = &SourceInfo{
 			Container: media.Container, Video: media.VideoCodec, Audio: media.AudioCodec,
