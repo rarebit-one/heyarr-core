@@ -17,7 +17,10 @@
       "edition_label": "2160p",
       "edition_type": "remux",
       "blob_size": 42949672960,
-      "blob_mime": "video/x-matroska"
+      "blob_mime": "video/x-matroska",
+      "height": null,
+      "hdr": null,
+      "bitrate_bps": null
     }
   ]
 }

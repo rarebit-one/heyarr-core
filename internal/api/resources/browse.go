@@ -134,9 +134,9 @@ func assetPick(ctx context.Context, scope, role, rank string) pick {
 const (
 	artworkColumns  = `art.id, art.blob_hash, art.mime`
 	backdropColumns = `bd.id, bd.blob_hash, bd.mime`
-	primaryColumns  = `pa.id, pa.edition_id, pa.blob_hash, COALESCE(pa.mime, pb.mime), pb.size, pp.duration_seconds`
+	primaryColumns  = `pa.id, pa.edition_id, pa.blob_hash, COALESCE(pa.mime, pb.mime), pb.size, pp.duration_seconds, pp.bitrate_bps, pp.streams`
 	nullArtwork     = `NULL, NULL, NULL`
-	nullPrimary     = `NULL, NULL, NULL, NULL, NULL, NULL`
+	nullPrimary     = `NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL`
 )
 
 // cardEmbeds says which browse projections a card read should resolve. A
@@ -191,15 +191,16 @@ func primaryJoins(p pick) string {
 }
 
 // scanPrimary reads the primaryColumns into a ref, or nil when the pick found
-// nothing. dest is the scanner's six destinations, in primaryColumns order.
+// nothing. dests are the scanner's destinations, in primaryColumns order.
 type primaryScan struct {
 	id, edition, blob, mime sql.NullString
-	size                    sql.NullInt64
+	size, bitrate           sql.NullInt64
 	duration                sql.NullFloat64
+	streams                 sql.NullString
 }
 
 func (p *primaryScan) dests() []any {
-	return []any{&p.id, &p.edition, &p.blob, &p.mime, &p.size, &p.duration}
+	return []any{&p.id, &p.edition, &p.blob, &p.mime, &p.size, &p.duration, &p.bitrate, &p.streams}
 }
 
 func (p *primaryScan) ref() *PrimaryAssetRef {
@@ -209,6 +210,7 @@ func (p *primaryScan) ref() *PrimaryAssetRef {
 	out := &PrimaryAssetRef{
 		AssetID: p.id.String, EditionID: p.edition.String, BlobHash: p.blob.String,
 		MIME: nullString(p.mime), Size: nullInt(p.size), ContentURL: blobContentURL(p.blob.String),
+		PictureFacts: pictureFacts(p.bitrate, p.streams),
 	}
 	if p.duration.Valid {
 		d := p.duration.Float64
@@ -244,15 +246,11 @@ func scanCard(rows interface{ Scan(...any) error }) (cardRow, error) {
 	var c cardRow
 	var artID, artBlob, artMIME sql.NullString
 	var bdID, bdBlob, bdMIME sql.NullString
-	var paID, paEdition, paBlob, paMIME sql.NullString
-	var paSize sql.NullInt64
-	var paDuration sql.NullFloat64
-	work, err := scanWork(appendedScan{rows: rows, extra: []any{
-		&c.createdRaw,
-		&artID, &artBlob, &artMIME,
-		&paID, &paEdition, &paBlob, &paMIME, &paSize, &paDuration,
-		&bdID, &bdBlob, &bdMIME,
-	}})
+	var pa primaryScan
+	extra := []any{&c.createdRaw, &artID, &artBlob, &artMIME}
+	extra = append(extra, pa.dests()...)
+	extra = append(extra, &bdID, &bdBlob, &bdMIME)
+	work, err := scanWork(appendedScan{rows: rows, extra: extra})
 	if err != nil {
 		return cardRow{}, err
 	}
@@ -275,20 +273,7 @@ func scanCard(rows interface{ Scan(...any) error }) (cardRow, error) {
 			Sizes:      artworkSizesURL(work.ID, bdBlob.String, "backdrop"),
 		}
 	}
-	if paID.Valid && paBlob.Valid {
-		c.primary = &PrimaryAssetRef{
-			AssetID:    paID.String,
-			EditionID:  paEdition.String,
-			BlobHash:   paBlob.String,
-			MIME:       nullString(paMIME),
-			Size:       nullInt(paSize),
-			ContentURL: blobContentURL(paBlob.String),
-		}
-		if paDuration.Valid {
-			d := paDuration.Float64
-			c.primary.DurationSeconds = &d
-		}
-	}
+	c.primary = pa.ref()
 	return c, nil
 }
 

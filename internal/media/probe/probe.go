@@ -50,6 +50,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -74,14 +75,19 @@ type Result struct {
 
 // Stream is one elementary stream.
 type Stream struct {
-	Index           int    `json:"index"`
-	Type            string `json:"type"` // video, audio, subtitle, data
-	Codec           string `json:"codec"`
-	Profile         string `json:"profile,omitempty"`
-	Level           int    `json:"level,omitempty"`
-	Width           int    `json:"width,omitempty"`
-	Height          int    `json:"height,omitempty"`
-	FrameRate       string `json:"frame_rate,omitempty"`
+	Index     int    `json:"index"`
+	Type      string `json:"type"` // video, audio, subtitle, data
+	Codec     string `json:"codec"`
+	Profile   string `json:"profile,omitempty"`
+	Level     int    `json:"level,omitempty"`
+	Width     int    `json:"width,omitempty"`
+	Height    int    `json:"height,omitempty"`
+	FrameRate string `json:"frame_rate,omitempty"`
+	// ColorTransfer is ffprobe's color_transfer: the transfer characteristic
+	// the picture was mastered for. It is what says HDR — smpte2084 (PQ, which
+	// HDR10 and Dolby Vision ride) or arib-std-b67 (HLG). Empty when ffprobe
+	// reported none, and on every probe taken before it was recorded.
+	ColorTransfer   string `json:"color_transfer,omitempty"`
 	Channels        int    `json:"channels,omitempty"`
 	SampleRate      int    `json:"sample_rate,omitempty"`
 	BitrateBPS      int64  `json:"bitrate_bps,omitempty"`
@@ -89,6 +95,19 @@ type Stream struct {
 	Title           string `json:"title,omitempty"`
 	Commentary      bool   `json:"commentary,omitempty"`
 	AttachedPicture bool   `json:"attached_picture,omitempty"`
+}
+
+// hdrTransfers are the transfer characteristics a picture is HDR under: PQ
+// (SMPTE ST 2084) and HLG (ARIB STD-B67), as ffprobe names them.
+var hdrTransfers = map[string]bool{"smpte2084": true, "arib-std-b67": true}
+
+// HDR reports whether a video stream is high dynamic range: its transfer
+// characteristic is PQ or HLG, or — the older and weaker signal — its codec
+// profile names HDR. A ten-bit profile alone is not HDR; plenty of SDR is
+// encoded at ten bits.
+func (s Stream) HDR() bool {
+	return hdrTransfers[strings.ToLower(s.ColorTransfer)] ||
+		strings.Contains(strings.ToLower(s.Profile), "hdr")
 }
 
 // VideoStream returns the first moving-picture stream, excluding embedded artwork.
@@ -579,6 +598,7 @@ type ffprobeJSON struct {
 		Width          int               `json:"width"`
 		Height         int               `json:"height"`
 		RFrameRate     string            `json:"r_frame_rate"`
+		ColorTransfer  string            `json:"color_transfer"`
 		Channels       int               `json:"channels"`
 		SampleRate     string            `json:"sample_rate"`
 		BitRate        string            `json:"bit_rate"`
@@ -628,6 +648,7 @@ func parse(raw []byte) (Result, error) {
 			Width:           s.Width,
 			Height:          s.Height,
 			FrameRate:       s.RFrameRate,
+			ColorTransfer:   s.ColorTransfer,
 			Channels:        s.Channels,
 			SampleRate:      parseSampleRate(s.SampleRate),
 			BitrateBPS:      parseInt(s.BitRate),

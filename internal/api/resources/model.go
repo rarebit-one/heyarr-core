@@ -357,6 +357,23 @@ type WorkAsset struct {
 	// reported as "unknown size" rather than failing the whole listing.
 	BlobSize *int64  `json:"blob_size"`
 	BlobMIME *string `json:"blob_mime"`
+	// The probed picture (#885): see PictureFacts.
+	PictureFacts
+}
+
+// PictureFacts is what the probe found about a file's picture and rate (#885):
+// the first video stream's height, whether it is HDR, and the container's
+// overall bitrate. Enough for a client to offer "2160p HDR" against "1080p"
+// without parsing an edition label, and what playback chooses a copy by.
+//
+// Each is null when nothing has probed the blob. Height and HDR are also null
+// when the file has no picture — an audio track, a caption. HDR is read from
+// the transfer characteristic the probe records; a probe taken before it was
+// recorded reads as SDR until the blob is probed again.
+type PictureFacts struct {
+	Height     *int   `json:"height"`
+	HDR        *bool  `json:"hdr"`
+	BitrateBPS *int64 `json:"bitrate_bps"`
 }
 
 // WorkDetail is one work as GET /api/v1/works/{id} presents it: the Work plus
@@ -426,6 +443,8 @@ type PrimaryAssetRef struct {
 	// else null — a progress bar needs it, and the probe table already holds it.
 	DurationSeconds *float64 `json:"duration_seconds"`
 	ContentURL      string   `json:"content_url"`
+	// The probed picture (#885), so a card can badge "4K HDR".
+	PictureFacts
 }
 
 // WorkCard is a listing row with the browse embeds a caller asked for via
