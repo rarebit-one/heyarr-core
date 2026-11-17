@@ -1,7 +1,14 @@
 # 0119. A site publishes the release it chose, and its siblings acquire it themselves
 
-**Status:** Proposed
+**Status:** Accepted (2026-11-17, the owner's decision on #833)
 **Date:** 2026-10-20
+**Amended:** 2026-11-17. An asset a site holds without an infohash (a scan, an
+HTTP, usenet or direct fetch) reaches the sibling by **peer-pull**, for
+libraries both sites opt in: the origin publishes a `hold` op naming the blob,
+and the sibling pulls the bytes over the peer surface and verifies them. Default
+off. See *Amendment: a non-swarm asset is pulled from the origin, per library
+(2026-11-17, #833)*. Passages changed in place are marked *(amended
+2026-11-17)*.
 **Follows:** ADR-0038 (desire is per site), ADR-0042 (a peer does not join a
 swarm to replicate), ADR-0060 (a direct release), ADR-0073 (the catalog
 converges by an op-log), ADR-0076 (heyarr resolves the `.torrent`), ADR-0090
@@ -114,7 +121,10 @@ converges on the same work.**
   sibling's own indexers.
 - A release the swarm no longer carries is not acquired at the sibling. The op
   records the gap (`no_site_source`); pulling finished bytes from the origin
-  over the peer surface is a separate decision (see below).
+  over the peer surface is a separate decision (see below). *(amended
+  2026-11-17)* The amendment decides it for assets with no swarm at all, in
+  opted-in libraries. A dead swarm for a release that has one is still not
+  decided (#800).
 - Fan-out is a per-site switch. A site that does not enable it sees the ops
   and ignores them, exactly as a site that does not list a sibling ignores
   placement (ADR-0114).
@@ -128,7 +138,9 @@ converges on the same work.**
 - **Extend placement (ADR-0114) to the media profile.** Placement moves bytes
   over the peer surface, which is the link this decision avoids, and it needs
   a local blob row the sibling does not have until it has the bytes. It remains
-  the right fallback for a dead swarm.
+  the right fallback for a dead swarm. *(amended 2026-11-17)* For an asset with
+  no swarm, the amendment takes this shape after all, bounded to libraries both
+  sites opt in, with an op standing in for the offer.
 - **Carry the `.torrent` in the op.** It would carry a private tracker's
   credential across sites and into a signed, content-addressed log.
 - **Let the sibling run its own search for the work.** It may pick a different
@@ -139,8 +151,130 @@ converges on the same work.**
 - A sibling that regularly cannot resolve a source (a thin swarm, a private
   indexer with one account). Then the origin should publish the blob digest
   after ingest and the sibling should pull it over the peer surface, the
-  placement way (#704, #779).
+  placement way (#704, #779). *(amended 2026-11-17)* The `hold` op and the
+  op-sourced blob row are that mechanism; extending them to swarm-acquired
+  assets is #800's decision.
 - More than two sites, or sites that should hold different subsets. The op is
   broadcast; a subset policy would need a placement class.
 - An indexer ecosystem where infohash identity is routinely unavailable
   (title-only indexers, ADR-0091). Then the op has nothing to pin.
+
+## Amendment: a non-swarm asset is pulled from the origin, per library (2026-11-17, #833)
+
+The `acquire` op covers only what a swarm can reproduce. Two ways of holding an
+asset publish nothing: a library scan (a `rom` library seeded by hand, ADR-0121
+§3), and a transfer with no infohash (an HTTP enclosure, a usenet article, a
+direct URL). For content that exists at one site only, the sibling has no source
+of its own, so it never holds it. Moving those bytes over the site-to-site link
+is what this record set out to avoid. For a small collection the owner accepts
+the cost (decision on #833, 2026-11-17): **peer-pull, as a per-library opt-in.**
+
+### The decisions
+
+1. **The origin publishes a `hold` op.** It is a new op kind on the same
+   ADR-0073 log, keyed on the work's `(content_type, work_key)`. It carries the
+   scope (the asset's edition key), the blob's BLAKE3 digest and size, the
+   file's path relative to its library root and its asset role, the work's title
+   and year, the origin library's name and site, and when it was held. It
+   carries no absolute path and nothing else about the origin's disk. There is
+   one op per `(work, blob)`; the newest by issue time wins, ties fall to the
+   hash. A hold is never withdrawn by another op. A tombstone on the work
+   (ADR-0073) suppresses it, as it does an `acquire`.
+2. **Only for an asset with no swarm.** The origin publishes a hold for an asset
+   of an opted-in library unless it has already published an `acquire` for the
+   asset's work, edition or item. Those reach the sibling through its own swarm,
+   and the link stays unused. Publishing is a periodic pass, not part of ingest,
+   so a library opted in after its scan publishes what it already holds. The
+   pass is idempotent: a `(work, blob)` this site already published is skipped.
+3. **The opt-in is per library, at both sites.**
+   `acquisition.peer_pull.libraries` lists library names in node config, and it
+   is empty by default. At the origin the list decides what is published. At the
+   sibling it decides what is pulled and where it lands: in the listed library
+   of the op's content type, preferring one with the origin library's name. If
+   several listed libraries share the content type and none has that name,
+   nothing is pulled, and the sibling says why. Validation refuses the setting
+   outside the media profile, and refuses duplicate or empty names. A name that
+   matches no library is reported at startup and otherwise ignored. With the
+   list empty, nothing is published, nothing is applied, and every existing path
+   behaves exactly as before. The setting is independent of
+   `acquisition.fan_out`.
+4. **Who may pull, and what is trusted.** Any pinned member may already read any
+   blob on the peer surface (ADR-0030); the amendment adds no route. A sibling
+   acts on a hold only when the op verifies under its `by` key, which recording
+   refuses otherwise, and when that key is a current member here. It pulls only
+   from that signer. The op is the origin's claim about its own disk (ADR-0033),
+   the same claim an ADR-0114 offer makes. The bytes are hashed on arrival
+   against the op's digest and recorded present only if they match (invariant 1,
+   §21). The op's size is a hint, and the verified length replaces it. Nothing
+   else is trusted.
+5. **An op can source a blob row (#800's prerequisite).** Applying a hold
+   records a `blobs` row from the op's digest and size, and a `present` replica
+   for the signing peer. This is metadata only, the way an ADR-0114 offer adopts
+   one. `replicate_blob` then pulls it like any other gap. Before this, a media
+   node with no local row for a blob refused the pull.
+6. **The pulled asset lands on the origin's keys.** Once the bytes are present,
+   the sibling records the asset through ingest's own recording, against the
+   chosen library. The op's work key overrides what the path would derive, as an
+   acquisition's want does (`applyWorkOverride`, #224), and its edition key
+   overrides the derived one in the same way. The sibling's own rules supply the
+   per-file facts: label, region, role. The bytes live in the content store, and
+   the library's root on disk is not written, as for an acquired asset.
+7. **Bounds on the link.**
+   - **Size:** `acquisition.peer_pull.max_blob_bytes` caps the size of one blob,
+     with a default of 4 GiB. A larger asset is not published, and a larger hold
+     is not pulled.
+   - **Concurrency:** pulls run in the existing `replicate_blob` lane, at two
+     per node.
+   - **Queue depth:** one pass queues a bounded number of new pulls.
+   - **Crossing once:** a blob crosses once. A digest held here is recorded
+     without a transfer, and a hold that is held is never pulled again.
+   - **Retries:** a failed pull is not retried until an hour after it failed.
+
+   There is no rate limit on the link. If one is needed, that is a reason to
+   revisit (see below).
+8. **Failure and retry.** Each hold op's outcome is recorded per op hash, with
+   an event (invariant 7):
+   - `own`: this site signed it. Final.
+   - `held`: the asset is recorded here. Final, so deleting it at the sibling is
+     respected and it is not pulled again.
+   - `pulling`: the pull is queued or awaiting retry.
+   - `no_library`: no listed library takes it, or the choice is ambiguous.
+   - `too_large`: the blob is over the size cap.
+   - `no_site_source`: the signer is not a member here.
+   - `tombstoned`: the work is tombstoned here.
+
+   Every outcome except `own` and `held` is re-evaluated on each pass. Bytes
+   that fail verification are quarantined (ADR-0018) and retried after the
+   hour. `get_replica_status` reports a blob's hold outcome beside its
+   replicas.
+
+### How it relates to #704 and #800
+
+- **#704.** A pulled asset takes the origin's work and edition keys. The
+  path-key divergence of an independently scanned sibling (#704) therefore does
+  not arise in an opted-in library. Scanning a copy of the same files at the
+  sibling as well would add a second, path-keyed asset of the same blob, so seed
+  one way or the other.
+- **#800.** The dead-swarm fallback would reuse decisions 1 and 5 for an asset
+  that an `acquire` covers. That would move large public-media bytes across the
+  link, so it is not decided here, and decision 2 keeps such assets out.
+
+### Consequences
+
+- The op-log gains a kind, and a node gains a table recording hold outcomes.
+  There is no new peer route. The catalog-ops sync carries the op.
+- **An older build refuses a sync batch with an op kind it does not know.** That
+  stops catalog sync for the pair, tombstones included. List a library only once
+  both sites run a build that reads `hold`.
+- Deleting an edition or asset at the origin publishes nothing (ADR-0073 has no
+  op for it), so the sibling keeps its copy. Deleting the work tombstones it at
+  both sites.
+
+### What would make us revisit
+
+- Collections large enough that the size cap and the retry spacing do not bound
+  the link. That would call for a rate limit, or a schedule for when the link
+  may carry pulls.
+- A wish to pull a dead swarm's release this way (#800).
+- More than two sites. A hold is broadcast, and each sibling pulls from the
+  signer only.
