@@ -80,8 +80,10 @@ func (d *transmissionDouble) serve(w http.ResponseWriter, r *http.Request) {
 	var out map[string]any
 	switch env.Method {
 	case "session-get":
-		out = map[string]any{"version": "4.0.6", "rpc-version": 17,
-			"download-dir": "/downloads/complete/games/snes", "start-added-torrents": d.startAdded}
+		out = map[string]any{
+			"version": "4.0.6", "rpc-version": 17,
+			"download-dir": "/downloads/complete/games/snes", "start-added-torrents": d.startAdded,
+		}
 	case "torrent-add":
 		d.addArgs = env.Arguments
 		out = d.add(env.Arguments)
@@ -125,17 +127,17 @@ func (d *transmissionDouble) add(args map[string]any) map[string]any {
 	if !given {
 		paused = !d.startAdded
 	}
-	tor := &stubTorrent{ID: int64(len(d.queue) + 1), Name: "grab", HashString: hash,
-		Status: statusDownloading, DownloadDir: "/downloads/complete/games/snes"}
+	tor := &stubTorrent{
+		ID: int64(len(d.queue) + 1), Name: "grab", HashString: hash,
+		Status: statusDownloading, DownloadDir: "/downloads/complete/games/snes",
+	}
 	if paused {
 		tor.Status = statusStopped
 	}
 	if dir, ok := args["download-dir"].(string); ok {
 		tor.DownloadDir = dir
 	}
-	for _, l := range asStrings(args["labels"]) {
-		tor.Labels = append(tor.Labels, l)
-	}
+	tor.Labels = append(tor.Labels, asStrings(args["labels"])...)
 	d.queue = append(d.queue, tor)
 	return map[string]any{"torrent-added": map[string]any{"id": tor.ID, "name": tor.Name, "hashString": tor.HashString}}
 }
@@ -189,8 +191,10 @@ func asStrings(v any) []string {
 
 func doubleClient(t *testing.T, url, downloadDir string) *Client {
 	t.Helper()
-	c, err := New(Options{Name: "test", Endpoint: url, Label: "heyarr", DownloadDir: downloadDir,
-		Now: func() time.Time { return fixedNow }})
+	c, err := New(Options{
+		Name: "test", Endpoint: url, Label: "heyarr", DownloadDir: downloadDir,
+		Now: func() time.Time { return fixedNow },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
