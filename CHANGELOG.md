@@ -262,6 +262,20 @@ stable.
   alternative.
 
 ### Fixed
+- **A grab starts even when the download client adds torrents stopped**
+  (#882). Transmission's `torrent-add` was sent without `paused`, so an
+  instance with `start-added-torrents` off added every grab stopped, and it sat
+  at 0% with the want reading `QUEUED` indefinitely. The add now says
+  `paused: false`, as qBittorrent's now says `paused`/`stopped: false`. A grab
+  that finds its torrent already there, stopped and incomplete, starts it; and
+  the download poll starts a held transfer whose want is still queued on it.
+  Held means stopped, incomplete, without an error, and never run (no
+  `activityDate`, `downloadedEver` or `secondsDownloading`), so a transfer an
+  operator paused after it started is left alone. Provider health warns when
+  `start-added-torrents` is off. A Transmission provider takes an optional
+  `download_dir`, sent as `download-dir`, so grabs stop landing wherever the
+  client's UI last pointed; unset keeps the session default. When Heyarr sees
+  the client's disk under another prefix, `path_map` must cover it.
 - **A backup no longer stalls every write on the node** (#718). The backup's
   `VACUUM INTO` ran on the single writer connection, so no write could commit
   for its whole length: seconds to tens of seconds on a large control

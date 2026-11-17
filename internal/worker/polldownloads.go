@@ -223,10 +223,53 @@ func reconcileTransfer(
 		}
 	}
 
+	if t.Held {
+		if err := startHeldTransfer(ctx, cat, client, existing, t, log); err != nil {
+			return 0, err
+		}
+	}
+
 	// existing.BytesDone is last pass's figure — RecordAcquisition above has
 	// just overwritten the row with this pass's, so it is captured here, before,
 	// to let advancePipeline tell a stuck transfer from one still pulling bytes.
 	return advancePipeline(ctx, cat, ingests, provider, existing.DesiredItemID, t, existing.BytesDone, log)
+}
+
+// startHeldTransfer starts a transfer the client is holding stopped before it
+// ever ran (#882): added stopped because the client's own default said so,
+// which left grabs at 0% for weeks with the want reading QUEUED throughout.
+//
+// Only while the want is in flight on THIS transfer — its row names it (the
+// caller found it by it) and the phase is QUEUED or DOWNLOADING. A want Heyarr
+// failed, blocked or moved on from is not waiting on the transfer, and a
+// labelled transfer with no row never reaches here: neither is Heyarr's to
+// start. Which transfers count as held is the client's call (Transfer.Held),
+// and it excludes one an operator stopped after it ran. Starting changes no
+// phase, so no event: the transfer's first fetched bytes move the want as
+// they always do. A failed start is logged and left for the next poll.
+func startHeldTransfer(
+	ctx context.Context, cat PollDownloadsStore, client providers.Downloader,
+	acq catalog.Acquisition, t providers.Transfer, log *slog.Logger,
+) error {
+	s, ok := client.(providers.Starter)
+	if !ok {
+		return nil
+	}
+	state, err := cat.Acquisition(ctx, acq.DesiredItemID)
+	if err != nil {
+		return err
+	}
+	if p := state.State.Phase; p != acquisition.PhaseQueued && p != acquisition.PhaseDownloading {
+		return nil
+	}
+	if err := s.Start(ctx, t.ID); err != nil {
+		log.Warn("could not start a transfer the client is holding stopped; the next poll retries",
+			"provider", client.Name(), "transfer", t.ID, "error", err)
+		return nil
+	}
+	log.Info("started a transfer the client had added stopped",
+		"provider", client.Name(), "transfer", t.ID, "desired_item_id", acq.DesiredItemID)
+	return nil
 }
 
 // refuseProgramTransfer stops a transfer whose every file is a program (#819)

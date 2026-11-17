@@ -137,6 +137,7 @@ func Constructor(r providers.Resolved, now func() time.Time) (providers.Provider
 		Capabilities: r.Capabilities,
 		Now:          now,
 		StallAfter:   r.StallAfter,
+		DownloadDir:  r.DownloadDir,
 	})
 	if err != nil {
 		return nil, true, err
