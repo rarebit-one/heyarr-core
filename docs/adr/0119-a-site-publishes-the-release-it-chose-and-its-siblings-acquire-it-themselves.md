@@ -1,14 +1,18 @@
 # 0119. A site publishes the release it chose, and its siblings acquire it themselves
 
-**Status:** Accepted (2026-11-17, the owner's decision on #833)
+**Status:** Accepted (2026-11-17, the owner's decisions on #833 and #800)
 **Date:** 2026-10-20
 **Amended:** 2026-11-17. An asset a site holds without an infohash (a scan, an
 HTTP, usenet or direct fetch) reaches the sibling by **peer-pull**, for
 libraries both sites opt in: the origin publishes a `hold` op naming the blob,
 and the sibling pulls the bytes over the peer surface and verifies them. Default
 off. See *Amendment: a non-swarm asset is pulled from the origin, per library
-(2026-11-17, #833)*. Passages changed in place are marked *(amended
-2026-11-17)*.
+(2026-11-17, #833)*. A second amendment the same day extends it to a dead
+swarm: when the sibling reports that it can resolve no source for an `acquire`
+(an `unsourced` op), the origin publishes a `hold` for that asset, in the same
+opted-in libraries and under the same size cap. See *Amendment: a dead swarm's
+release is pulled from the origin, on the sibling's report (2026-11-17, #800)*.
+Passages changed in place are marked *(amended 2026-11-17)*.
 **Follows:** ADR-0038 (desire is per site), ADR-0042 (a peer does not join a
 swarm to replicate), ADR-0060 (a direct release), ADR-0073 (the catalog
 converges by an op-log), ADR-0076 (heyarr resolves the `.torrent`), ADR-0090
@@ -123,8 +127,9 @@ converges on the same work.**
   records the gap (`no_site_source`); pulling finished bytes from the origin
   over the peer surface is a separate decision (see below). *(amended
   2026-11-17)* The amendment decides it for assets with no swarm at all, in
-  opted-in libraries. A dead swarm for a release that has one is still not
-  decided (#800).
+  opted-in libraries. The second amendment (#800) decides it for a release
+  whose swarm the sibling cannot fetch: the origin holds it once the sibling
+  says so, in the same libraries and under the same cap.
 - Fan-out is a per-site switch. A site that does not enable it sees the ops
   and ignores them, exactly as a site that does not list a sibling ignores
   placement (ADR-0114).
@@ -152,8 +157,8 @@ converges on the same work.**
   indexer with one account). Then the origin should publish the blob digest
   after ingest and the sibling should pull it over the peer surface, the
   placement way (#704, #779). *(amended 2026-11-17)* The `hold` op and the
-  op-sourced blob row are that mechanism; extending them to swarm-acquired
-  assets is #800's decision.
+  op-sourced blob row are that mechanism, and the #800 amendment extends them
+  to a swarm-acquired asset the sibling reports it cannot source.
 - More than two sites, or sites that should hold different subsets. The op is
   broadcast; a subset policy would need a placement class.
 - An indexer ecosystem where infohash identity is routinely unavailable
@@ -182,7 +187,9 @@ the cost (decision on #833, 2026-11-17): **peer-pull, as a per-library opt-in.**
    (ADR-0073) suppresses it, as it does an `acquire`.
 2. **Only for an asset with no swarm.** The origin publishes a hold for an asset
    of an opted-in library unless an `acquire`, its own or a sibling's, names the
-   asset's work, edition or item. Those reach the sibling through its own swarm,
+   asset's work, edition or item. *(amended 2026-11-17)* An `acquire` this site
+   signed stops counting once a sibling reports it `unsourced` (#800
+   amendment). Those reach the sibling through its own swarm,
    and the link stays unused. An asset this site pulled from a hold is never
    published back. Publishing is a periodic pass, not part of ingest,
    so a library opted in after its scan publishes what it already holds. The
@@ -256,9 +263,9 @@ the cost (decision on #833, 2026-11-17): **peer-pull, as a per-library opt-in.**
   not arise in an opted-in library. Scanning a copy of the same files at the
   sibling as well would add a second, path-keyed asset of the same blob, so seed
   one way or the other.
-- **#800.** The dead-swarm fallback would reuse decisions 1 and 5 for an asset
-  that an `acquire` covers. That would move large public-media bytes across the
-  link, so it is not decided here, and decision 2 keeps such assets out.
+- **#800.** The dead-swarm fallback reuses decisions 1 and 5 for an asset that
+  an `acquire` covers. *(amended 2026-11-17)* The owner allowed it on #800, and
+  the amendment below records how.
 
 ### Consequences
 
@@ -281,6 +288,104 @@ the cost (decision on #833, 2026-11-17): **peer-pull, as a per-library opt-in.**
 - Collections large enough that the size cap and the retry spacing do not bound
   the link. That would call for a rate limit, or a schedule for when the link
   may carry pulls.
-- A wish to pull a dead swarm's release this way (#800).
+- A wish to pull a dead swarm's release this way (#800). *(amended
+  2026-11-17)* Decided: see the next amendment.
 - More than two sites. A hold is broadcast, and each sibling pulls from the
   signer only.
+
+## Amendment: a dead swarm's release is pulled from the origin, on the sibling's report (2026-11-17, #800)
+
+A sibling that cannot fetch the release an `acquire` names records
+`no_site_source` and holds nothing (see *Decision*). Usually the swarm is dead:
+nobody seeds it, the grab stalls, and the stuck-grab sweep blocks the release
+for the want. The origin holds the finished bytes, and the #833 amendment built
+everything needed to move them: the `hold` op, the op-sourced blob row, the
+pull. Its decision 2 kept swarm-covered assets out, because moving public media
+over the link is what this record set out to avoid. The owner decided on #800
+(2026-11-17) to accept that cost here as well.
+
+### The owner's decisions
+
+1. **The fallback is allowed.**
+2. **It uses the same opt-in.** A library listed in
+   `acquisition.peer_pull.libraries` at both sites takes the fallback. There is
+   no setting of its own, and with the list empty nothing changes.
+3. **It uses the same cap.** `acquisition.peer_pull.max_blob_bytes` (4 GiB by
+   default) bounds one blob, as it does for a non-swarm hold.
+4. **A hold is published only on the sibling's report.** The origin publishes a
+   hold for a swarm-acquired asset only once the sibling has reported
+   `no_site_source` for the matching `acquire`, never for every grab. Origins
+   therefore sign nothing extra for a release the sibling fetched itself.
+
+### How the report reaches the origin
+
+The outcome is recorded only at the sibling, in `catalog_op_applications`.
+Nothing on the op-log or the peer surface carries it, and the op-log is the one
+channel the Partial-Peer pair shares (see *Decision*). So the report is an op:
+
+5. **The sibling signs an `unsourced` op.** It is a new op kind on the same
+   log, keyed on the `acquire`'s `(content_type, work_key)`. Its body names the
+   `acquire`'s hash and the reporting site, and nothing else. It also cites the
+   `acquire` in `prev`, so it cannot be evaluated before the op it is about has
+   arrived. It is effective only when the op it names is an `acquire` on the
+   same work, signed by another key. There is one per `(acquire, reporter)`. It
+   is never withdrawn, and a tombstone on the work suppresses it. A peer route
+   the origin polls was rejected: it would be a second channel between the
+   sites and would need its own membership checks, and the op-log already
+   carries signed, durable statements both ways.
+6. **The sibling reports when all of these hold:**
+   - the `acquire`'s outcome here is `no_site_source`;
+   - an opted-in library here has the op's content type;
+   - the release size the op carries, if it carries one, is within this node's
+     cap;
+   - this node has not already reported that op.
+
+   The report is part of the peer-pull pass. With the opt-in off the pass does
+   not run, and nothing is signed. Every shape of `no_site_source` counts: a
+   release blocked for the want after it failed to fetch here, a private
+   release this site cannot resolve, and a content type with no profile here.
+   The owner's rule names the outcome, not its cause.
+7. **The origin publishes on a report.** In the publish pass, an `acquire` this
+   site signed no longer counts as covering an asset once a current member,
+   other than this site, has reported it `unsourced`. An asset is published
+   when no `acquire` that names it remains unreported. A newer `acquire` for
+   the same scope, an upgrade, counts again until it is reported in turn.
+   Everything else in the #833 amendment applies as written: the same `hold`
+   op, the cap, the transfer lane, the spacing, the outcomes, and the rule that
+   a pulled asset is never published back.
+8. **The sibling's want settles.** Once the pulled asset is recorded, the
+   `acquire`'s outcome here moves from `no_site_source` to `held`, with a
+   detail naming the origin. A fan-out want is never searched by this site's
+   scorer, so nothing else changes for it.
+9. **The outcome is visible where the want is.** The acquisition status of a
+   want that fan-out created reports where it came from (the origin site and
+   the `acquire`'s hash), the `acquire`'s outcome and detail here, whether this
+   site reported it `unsourced`, and the outcome of the hold that names the
+   want's work. This is the part of #799 the fallback needs.
+
+### Consequences
+
+- The op-log gains a second new kind, and `catalog_ops`' kind CHECK widens
+  again. No table is added: whether a report was already signed is read from
+  the log.
+- **An older build refuses a sync batch with an op kind it does not know,** as
+  with `hold`. List a library only once both sites run a build that reads
+  `unsourced`.
+- A dead swarm's release costs one op at the sibling and one at the origin,
+  then the bytes cross the link once. A release over the cap is never reported
+  when its size is known, and is never published.
+- A private release is reported as soon as fan-out sees it, because this site
+  cannot resolve it at all. In an opted-in library, a private release therefore
+  reaches the sibling by peer-pull. That is the case *What would make us
+  revisit* named, a private indexer with one account.
+
+### What would make us revisit
+
+- Reports that become routine rather than occasional, enough that the cap and
+  the retry spacing no longer bound the link. That would call for a rate limit
+  or a schedule.
+- Resolving a private release through the sibling's own indexers, once it is
+  built. A sibling that can resolve one never reports it, so private releases
+  would stop reaching it by peer-pull.
+- More than two sites. Only the origin publishes, and any current member's
+  report triggers the hold.

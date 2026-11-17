@@ -113,7 +113,7 @@ An ADR that merely describes the code is not worth having.
 | [0116](0116-subsonic-projects-music-assets-as-tracks.md) | Subsonic projects music assets as tracks | Proposed |
 | [0117](0117-opds-offers-each-book-asset.md) | OPDS offers each book asset | Proposed |
 | [0118](0118-game-is-a-first-class-content-type.md) | `game` is a first-class content type, fetched from a store it is owned on | Proposed |
-| [0119](0119-a-site-publishes-the-release-it-chose-and-its-siblings-acquire-it-themselves.md) | A site publishes the release it chose, and its siblings acquire it themselves | Accepted (amended: a non-swarm asset is pulled from the origin, per library) |
+| [0119](0119-a-site-publishes-the-release-it-chose-and-its-siblings-acquire-it-themselves.md) | A site publishes the release it chose, and its siblings acquire it themselves | Accepted (amended: a non-swarm asset, and a dead swarm's release on the sibling's report, are pulled from the origin, per library) |
 | [0120](0120-a-game-is-fetched-from-its-store-and-verified-before-it-counts.md) | A game is fetched from its store, and verified before it counts | Proposed |
 | [0121](0121-a-rom-is-searched-by-platform-and-title.md) | A ROM is its own content type, searched by platform and title | Proposed |
 | [0122](0122-held-films-and-series-are-enriched-on-the-node-and-a-backdrop-is-its-own-face.md) | Held films and series are enriched on the node, and a backdrop is its own face | Proposed |
