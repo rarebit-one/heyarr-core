@@ -8297,11 +8297,18 @@ components:
     PrimaryAssetRef:
       type: object
       description: |
-        The one file a card tap plays (ADR-0075): the first `primary`-role
-        asset of the work that holds bytes and is not missing — an arbitrary
-        but stable choice among a work's editions. Enough to hand to
-        `POST /playback/plan` or the blob route without a second read; a
-        client that wants to choose lists `GET /works/{id}/assets`.
+        The one file a card tap plays (ADR-0075): a `primary`-role asset of
+        the work that holds bytes and is not missing. **For a film** it is the
+        copy `POST /playback/plan` with `work_id` would choose for a client
+        that declares nothing (ADR-0123): a probed copy with a picture before
+        one without, SDR before HDR, then the tallest, then the highest
+        bitrate, then the asset id. **For any other content type** it is the
+        first such asset in creation order, because a series' files are
+        different episodes. Stable across requests either way. Enough to hand
+        to `POST /playback/plan` or the blob route without a second read. A
+        client that can show more should plan by `work_id` and declare what it
+        shows. A client that wants to offer a choice should list
+        `GET /works/{id}/assets`.
       required: [asset_id, edition_id, blob_hash, mime, size, duration_seconds, content_url, height, hdr, bitrate_bps]
       properties:
         asset_id: { type: string }

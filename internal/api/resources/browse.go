@@ -83,13 +83,47 @@ func backdropPick(ctx context.Context, workRef string) pick {
 	return assetPick(ctx, "e2.work_id = "+workRef+" AND "+backdropFilter, "artwork", backdropRank)
 }
 
-// primaryPick selects the one file a card tap should play: the first
-// `primary`-role asset of the work, in creation order. A work with several
-// editions has several; the first is an arbitrary but STABLE answer, and a
-// client that wants to choose lists the work's assets.
+// primaryPick selects the one file a card tap should play (ADR-0123).
+//
+// For a film it is the copy a plan by work_id would choose for a client that
+// declares nothing (playback.Select with an empty Fit): a probed copy with a
+// picture before one that is not, SDR before HDR, then the tallest, then the
+// highest bitrate, then the id. A phone tapping a card is handed the 1080p SDR
+// copy rather than the 4K HDR remux; a client that can show more plans by
+// work_id and says so. For every other content type it is the first
+// `primary`-role asset in creation order — a series' copies span episodes,
+// and ranking them by picture would pick an arbitrary episode. Either way the
+// answer is stable across requests.
 func primaryPick(ctx context.Context, workRef string) pick {
-	return assetPick(ctx, "e2.work_id = "+workRef, "primary", "")
+	return assetPick(ctx, "e2.work_id = "+workRef, "primary", filmCopyRank)
 }
+
+// firstVideo is the first moving-picture stream of a2's probe, as JSON, or
+// NULL when nothing has probed a2 or it holds no video — probe.VideoStream in
+// SQL.
+const firstVideo = `(SELECT j.value FROM blob_probes bp, json_each(bp.streams) j
+	WHERE bp.blob_hash = a2.blob_hash AND json_extract(j.value, '$.type') = 'video'
+	  AND NOT coalesce(json_extract(j.value, '$.attached_picture'), 0)
+	ORDER BY CAST(j.key AS INTEGER) LIMIT 1)`
+
+// filmCopyRank orders a film's copies as playback.Select ranks them for a
+// client that declares nothing (ADR-0123), and leaves every other content
+// type to the id. probe.Stream.HDR is the HDR rule, restated here; a test
+// asserts the browse default and a work_id plan agree.
+var filmCopyRank = func() string {
+	film := `(SELECT content_type FROM works WHERE id = e2.work_id) = 'movie'`
+	height := `coalesce(json_extract(` + firstVideo + `, '$.height'), 0)`
+	hdr := `(lower(coalesce(json_extract(` + firstVideo + `, '$.color_transfer'), '')) IN ('smpte2084', 'arib-std-b67')
+		OR instr(lower(coalesce(json_extract(` + firstVideo + `, '$.profile'), '')), 'hdr') > 0)`
+	bitrate := `coalesce((SELECT bitrate_bps FROM blob_probes WHERE blob_hash = a2.blob_hash), 0)`
+	when := func(expr string) string { return `CASE WHEN ` + film + ` THEN ` + expr + ` ELSE 0 END` }
+	return strings.Join([]string{
+		when(`(` + height + ` <= 0)`),
+		when(hdr),
+		when(`-` + height),
+		when(`-` + bitrate),
+	}, ", ")
+}()
 
 // editionPrimaryPick is primaryPick scoped to ONE edition (editionRef is a
 // column reference, e.g. `e.id`) — an episode's file, for a search hit.

@@ -429,10 +429,12 @@ type ArtworkRef struct {
 	Sizes map[string]string `json:"sizes,omitempty"`
 }
 
-// PrimaryAssetRef is the one file a card tap plays (ADR-0075): the first
-// `primary`-role asset of the work that holds bytes. Enough to hand straight
-// to `POST /playback/plan` or the blob route without a second read; a client
-// that wants to choose between editions lists the work's assets instead.
+// PrimaryAssetRef is the one file a card tap plays (ADR-0075): a
+// `primary`-role asset of the work that holds bytes — for a film, the copy a
+// plan by work_id would choose for a client that declares nothing (ADR-0123).
+// Enough to hand straight to `POST /playback/plan` or the blob route without a
+// second read; a client that wants to choose plans by work_id or lists the
+// work's assets.
 type PrimaryAssetRef struct {
 	AssetID   string  `json:"asset_id"`
 	EditionID string  `json:"edition_id"`
