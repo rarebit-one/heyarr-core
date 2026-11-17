@@ -674,6 +674,36 @@ func TestGetReplicaStatus(t *testing.T) {
 	}
 }
 
+// A blob no hold op names answers exactly as before peer-pull existed: no
+// peer_pull key at all. A blob a hold names reports its outcome beside the
+// replicas (ADR-0119 amendment, #833).
+func TestGetReplicaStatusReportsHoldsOnlyWhenThereAreSome(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, false)
+	var raw json.RawMessage
+	h.call("", "get_replica_status", `{"blob_hash":"`+blobHash+`"}`).structured(t, &raw)
+	if strings.Contains(string(raw), "peer_pull") {
+		t.Fatalf("a blob with no hold op grew a peer_pull key: %s", raw)
+	}
+
+	h.exec(`INSERT INTO catalog_ops (op_hash, content_type, work_key, op, signer, prev, iat, token, received_at)
+		VALUES ('sha256:hold', 'rom', 'rom:snes:x', 'hold', 'ed25519:x', '[]', ?, 'tok', ?)`, stamp, stamp)
+	h.exec(`INSERT INTO libraries (id, name, content_type, created_at) VALUES ('lib-roms', 'roms', 'rom', ?)`, stamp)
+	h.exec(`INSERT INTO catalog_hold_applications (op_hash, blob_hash, library_id, outcome, detail, applied_at)
+		VALUES ('sha256:hold', ?, 'lib-roms', 'held', 'from site north; recorded in library roms', ?)`, blobHash, stamp)
+	var out struct {
+		Holds []struct {
+			OpHash  string `json:"op_hash"`
+			Outcome string `json:"outcome"`
+			Library string `json:"library"`
+		} `json:"peer_pull"`
+	}
+	h.call("", "get_replica_status", `{"blob_hash":"`+blobHash+`"}`).structured(t, &out)
+	if len(out.Holds) != 1 || out.Holds[0].Outcome != "held" || out.Holds[0].Library != "roms" {
+		t.Fatalf("peer_pull = %+v, want the one hold, held in roms", out.Holds)
+	}
+}
+
 func TestVerifyBlobQueuesRatherThanRuns(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, false)

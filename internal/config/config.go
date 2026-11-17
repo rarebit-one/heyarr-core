@@ -208,8 +208,52 @@ type Acquisition struct {
 	// placement.
 	FanOut bool `koanf:"fan_out"`
 	// Interval is how often this node applies the ops it has received, as a
-	// duration ("5m"). Empty uses the default; "0" disables the beat.
+	// duration ("5m"). Empty uses the default; "0" disables the beat. The
+	// peer-pull pass runs on the same interval.
 	Interval string `koanf:"interval"`
+	// PeerPull opts libraries into peer-pull (ADR-0119 amendment, #833).
+	PeerPull PeerPull `koanf:"peer_pull"`
+}
+
+// PeerPull configures peer-pull of non-swarm assets (ADR-0119 amendment,
+// #833).
+//
+// An asset with no swarm behind it (a library scan, an HTTP, usenet or direct
+// fetch) never reaches a sibling through fan-out. For a library named here,
+// this node publishes a `hold` op for each such asset, and pulls the assets a
+// sibling's holds name into it over the peer surface, verifying every byte.
+// Both sites list the library: the origin's list decides what is published,
+// the sibling's what is pulled and where it lands.
+//
+//	acquisition:
+//	  peer_pull:
+//	    libraries: [roms]
+//	    max_blob_bytes: 4294967296
+//
+// Empty, the default, publishes nothing and applies nothing. It is
+// independent of fan_out. List a library only once both sites run a build
+// that reads `hold` ops: an older build refuses a sync batch carrying one,
+// which stops catalog sync for the pair.
+type PeerPull struct {
+	// Libraries names this node's libraries that take part, by name.
+	Libraries []string `koanf:"libraries"`
+	// MaxBlobBytes caps one blob's size: a larger asset is not published and a
+	// larger hold is not pulled. 0 uses the default, 4 GiB.
+	MaxBlobBytes int64 `koanf:"max_blob_bytes"`
+}
+
+// DefaultPeerPullMaxBlobBytes is the per-blob cap when max_blob_bytes is unset.
+const DefaultPeerPullMaxBlobBytes int64 = 4 << 30
+
+// Enabled reports whether any library is opted in.
+func (p PeerPull) Enabled() bool { return len(p.Libraries) > 0 }
+
+// MaxBlob is the per-blob cap, the default when unset.
+func (p PeerPull) MaxBlob() int64 {
+	if p.MaxBlobBytes <= 0 {
+		return DefaultPeerPullMaxBlobBytes
+	}
+	return p.MaxBlobBytes
 }
 
 // defaultFanOutInterval is how often received acquire ops are applied.
@@ -243,6 +287,26 @@ func (c Config) validateAcquisition() error {
 	if c.Acquisition.FanOut && c.Profile != ProfileMedia {
 		return fmt.Errorf("config: acquisition.fan_out is for the media profile only (ADR-0107, ADR-0119); "+
 			"profile is %q", c.Profile)
+	}
+	pp := c.Acquisition.PeerPull
+	if pp.Enabled() && c.Profile != ProfileMedia {
+		return fmt.Errorf("config: acquisition.peer_pull is for the media profile only (ADR-0107, ADR-0119); "+
+			"profile is %q", c.Profile)
+	}
+	if pp.MaxBlobBytes < 0 {
+		return fmt.Errorf("config: acquisition.peer_pull.max_blob_bytes must not be negative, got %d", pp.MaxBlobBytes)
+	}
+	seen := make(map[string]bool, len(pp.Libraries))
+	for _, name := range pp.Libraries {
+		switch {
+		case name == "":
+			return errors.New("config: acquisition.peer_pull.libraries contains an empty name")
+		case strings.TrimSpace(name) != name:
+			return fmt.Errorf("config: acquisition.peer_pull.libraries entry %q has surrounding whitespace", name)
+		case seen[name]:
+			return fmt.Errorf("config: acquisition.peer_pull.libraries lists %q twice", name)
+		}
+		seen[name] = true
 	}
 	return nil
 }

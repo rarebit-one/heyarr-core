@@ -39,6 +39,9 @@
 //     want on the work, so a sibling can acquire the same bytes itself. It
 //     rides the same signed G-set; its view is "newest selection wins" per
 //     (target, scope, aspect), suppressed by a tombstone. See Acquire.
+//   - Its amendment (#833) adds a fourth, `hold`: a blob a site holds for the
+//     work with no swarm behind it, which an opted-in sibling pulls from the
+//     signer. Newest per (target, blob), suppressed by a tombstone. See Hold.
 //   - WHO may sign a catalog op is ADR-0073 open question 2 — a node/library
 //     fact is probably peer-signed under its ADR-0012 identity, which is the
 //     model assumed here (`by` is a peer public key). Finer authority and the
@@ -64,6 +67,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rarebit-one/heyarr-core/internal/peer/identity"
 )
@@ -102,7 +106,42 @@ const (
 	// release with its own download client. Newest selection wins per
 	// (target, scope, aspect); a tombstone on the work suppresses it.
 	OpAcquire Kind = "acquire"
+	// OpHold publishes that a site holds a blob for the work with no swarm a
+	// sibling could fetch it from (ADR-0119 amendment, #833): "for (ct, wk), in
+	// this edition, I hold the bytes with this BLAKE3 digest". A sibling that
+	// opted the library in pulls them from the signer over the peer surface.
+	// Newest per (target, blob) wins; a tombstone on the work suppresses it.
+	OpHold Kind = "hold"
 )
+
+// Hold is the body of an OpHold: what a sibling needs to pull the bytes and
+// record them under the same work and edition, and nothing about the origin's
+// disk beyond the path a scan of its library root would see.
+type Hold struct {
+	// Scope is the asset's edition, ScopeEditionPrefix + its edition key.
+	Scope string
+	// Blob is the canonical byte identity, "blake3:<64 lowercase hex>"
+	// (ADR-0005). The sibling hashes what arrives against it.
+	Blob string
+	// Size is the blob's size in bytes: a hint until the bytes verify.
+	Size int64
+	// Path is the file's path relative to its library root, slash-separated:
+	// what the sibling's own identification reads per-file facts from.
+	Path string
+	// Role is the asset's role ("primary", "artwork", …).
+	Role string
+	// WorkTitle and Year describe the work, so a sibling that has never seen
+	// it creates it under the key the op names (as Acquire does).
+	WorkTitle string
+	Year      int
+	// Library is the origin library's name: a sibling with several opted-in
+	// libraries of the content type prefers the one with this name.
+	Library string
+	// Site is the origin's site name (peer.site).
+	Site string
+	// HeldAt is when the origin recorded the asset; display only.
+	HeldAt time.Time
+}
 
 // Acquire is the body of an OpAcquire: what a sibling needs to acquire the
 // same bytes, and nothing it must not. It never carries the indexer URL, the
@@ -169,6 +208,12 @@ const (
 	MaxProfile = 128
 	// MaxScope bounds a scope string (prefix + key) in bytes.
 	MaxScope = 512
+	// MaxPath bounds a hold's relative path in bytes.
+	MaxPath = 1024
+	// MaxRole bounds a hold's asset role in bytes.
+	MaxRole = 64
+	// MaxLibrary bounds a hold's library name in bytes.
+	MaxLibrary = 128
 )
 
 // Reason explains why Evaluate rejected a token (it is not part of the state
@@ -200,6 +245,8 @@ type Op struct {
 	IssuedAt time.Time
 	// Acquire is the body of an OpAcquire; nil for every other kind.
 	Acquire *Acquire
+	// Hold is the body of an OpHold; nil for every other kind.
+	Hold *Hold
 }
 
 // Target is a work's cross-site-stable natural key: the pair a rescan converges
@@ -227,6 +274,23 @@ type payload struct {
 	// payload byte-identical to the pre-ADR-0119 shape, so every op already
 	// in a log keeps its hash.
 	Acq *acquirePayload `json:"acq,omitempty"`
+	// Hold is present on OpHold only, omitempty for the same reason as Acq.
+	Hold *holdPayload `json:"hold,omitempty"`
+}
+
+// holdPayload is the signed form of Hold. Field order is fixed by this struct
+// for the same canonical re-marshal reason as payload.
+type holdPayload struct {
+	Scope     string `json:"scope"`
+	Blob      string `json:"blob"`
+	Size      int64  `json:"size"`
+	Path      string `json:"path"`
+	Role      string `json:"role"`
+	WorkTitle string `json:"work_title"`
+	Year      int    `json:"year"`
+	Library   string `json:"library"`
+	Site      string `json:"site"`
+	HeldAt    int64  `json:"held"` // UnixNano
 }
 
 // acquirePayload is the signed form of Acquire. Field order is fixed by this
@@ -274,7 +338,7 @@ func Sign(signer ed25519.PrivateKey, kind Kind, ct, wk string, prev []string, is
 	if kind != OpDelete && kind != OpRestore {
 		return "", fmt.Errorf("%w: unknown kind %q", ErrMalformed, kind)
 	}
-	return sign(signer, kind, ct, wk, nil, prev, issuedAt)
+	return sign(signer, kind, ct, wk, nil, nil, prev, issuedAt)
 }
 
 // SignAcquire mints a v1 acquire op (ADR-0119): the signer selected the release
@@ -285,10 +349,20 @@ func SignAcquire(signer ed25519.PrivateKey, ct, wk string, a Acquire, prev []str
 	if err := ap.validate(); err != nil {
 		return "", err
 	}
-	return sign(signer, OpAcquire, ct, wk, ap, prev, issuedAt)
+	return sign(signer, OpAcquire, ct, wk, ap, nil, prev, issuedAt)
 }
 
-func sign(signer ed25519.PrivateKey, kind Kind, ct, wk string, acq *acquirePayload, prev []string, issuedAt time.Time) (string, error) {
+// SignHold mints a v1 hold op (ADR-0119 amendment, #833): the signer holds the
+// blob h names for the work (ct, wk). It validates h the way Verify will.
+func SignHold(signer ed25519.PrivateKey, ct, wk string, h Hold, prev []string, issuedAt time.Time) (string, error) {
+	hp := h.payload()
+	if err := hp.validate(); err != nil {
+		return "", err
+	}
+	return sign(signer, OpHold, ct, wk, nil, hp, prev, issuedAt)
+}
+
+func sign(signer ed25519.PrivateKey, kind Kind, ct, wk string, acq *acquirePayload, hold *holdPayload, prev []string, issuedAt time.Time) (string, error) {
 	if len(signer) != ed25519.PrivateKeySize {
 		return "", fmt.Errorf("%w: a signing key is required", ErrIncomplete)
 	}
@@ -312,6 +386,7 @@ func sign(signer ed25519.PrivateKey, kind Kind, ct, wk string, acq *acquirePaylo
 		Prev:        prev,
 		IssuedAt:    issuedAt.UTC().Unix(),
 		Acq:         acq,
+		Hold:        hold,
 	})
 	if err != nil {
 		return "", fmt.Errorf("catalogop: encoding payload: %w", err)
@@ -363,6 +438,91 @@ func (ap *acquirePayload) acquire() *Acquire {
 		Trackers:   append([]string(nil), ap.Trackers...),
 		Private:    ap.Private,
 	}
+}
+
+func (h Hold) payload() *holdPayload {
+	var held int64
+	if !h.HeldAt.IsZero() {
+		held = h.HeldAt.UTC().UnixNano()
+	}
+	return &holdPayload{
+		Scope: h.Scope, Blob: h.Blob, Size: h.Size, Path: h.Path, Role: h.Role,
+		WorkTitle: h.WorkTitle, Year: h.Year, Library: h.Library, Site: h.Site, HeldAt: held,
+	}
+}
+
+func (hp *holdPayload) hold() *Hold {
+	return &Hold{
+		Scope: hp.Scope, Blob: hp.Blob, Size: hp.Size, Path: hp.Path, Role: hp.Role,
+		WorkTitle: hp.WorkTitle, Year: hp.Year, Library: hp.Library, Site: hp.Site,
+		HeldAt: time.Unix(0, hp.HeldAt).UTC(),
+	}
+}
+
+// validate is the whole shape rule for a hold, applied at Sign and at Verify.
+// The path is relative and cannot climb: a sibling joins nothing with it, but
+// a path that names somewhere else is not the path a scan of a root sees.
+func (hp *holdPayload) validate() error {
+	if !strings.HasPrefix(hp.Scope, ScopeEditionPrefix) || len(hp.Scope) == len(ScopeEditionPrefix) || len(hp.Scope) > MaxScope {
+		return fmt.Errorf("%w: hold scope %q is not an edition", ErrMalformed, hp.Scope)
+	}
+	if !isBlake3(hp.Blob) {
+		return fmt.Errorf("%w: hold blob %q is not blake3:<64 lower-case hex>", ErrMalformed, hp.Blob)
+	}
+	if hp.Size < 0 {
+		return fmt.Errorf("%w: hold size %d", ErrMalformed, hp.Size)
+	}
+	if !relativePath(hp.Path) {
+		return fmt.Errorf("%w: hold path %q is not a relative path", ErrMalformed, hp.Path)
+	}
+	if hp.Role == "" || len(hp.Role) > MaxRole {
+		return fmt.Errorf("%w: hold role", ErrMalformed)
+	}
+	if hp.WorkTitle == "" || len(hp.WorkTitle) > MaxTitle {
+		return fmt.Errorf("%w: hold work title", ErrMalformed)
+	}
+	if hp.Year < 0 || hp.Year > 9999 {
+		return fmt.Errorf("%w: hold year %d", ErrMalformed, hp.Year)
+	}
+	if hp.Library == "" || len(hp.Library) > MaxLibrary {
+		return fmt.Errorf("%w: hold library", ErrMalformed)
+	}
+	if hp.Site == "" || len(hp.Site) > MaxSite {
+		return fmt.Errorf("%w: hold site", ErrMalformed)
+	}
+	if hp.HeldAt <= 0 {
+		return fmt.Errorf("%w: hold held-at is required", ErrMalformed)
+	}
+	return nil
+}
+
+func isBlake3(s string) bool {
+	hexPart, ok := strings.CutPrefix(s, "blake3:")
+	if !ok || len(hexPart) != 64 {
+		return false
+	}
+	for i := 0; i < len(hexPart); i++ {
+		c := hexPart[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// relativePath admits a slash-separated path that stays below its root: not
+// empty, not absolute, no backslash or NUL, no empty, "." or ".." segment.
+func relativePath(p string) bool {
+	if p == "" || len(p) > MaxPath || !utf8.ValidString(p) || strings.HasPrefix(p, "/") ||
+		strings.ContainsAny(p, "\\\x00") {
+		return false
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // validate is the whole ADR-0119 shape rule, applied at Sign and at Verify.
@@ -518,14 +678,21 @@ func Verify(token string) (Op, error) {
 	}
 	switch p.Op {
 	case OpDelete, OpRestore:
-		if p.Acq != nil {
-			return Op{}, fmt.Errorf("%w: a %s op carries an acquire body", ErrMalformed, p.Op)
+		if p.Acq != nil || p.Hold != nil {
+			return Op{}, fmt.Errorf("%w: a %s op carries a body", ErrMalformed, p.Op)
 		}
 	case OpAcquire:
-		if p.Acq == nil {
-			return Op{}, fmt.Errorf("%w: an acquire op without a body", ErrMalformed)
+		if p.Acq == nil || p.Hold != nil {
+			return Op{}, fmt.Errorf("%w: an acquire op needs its acquire body and no other", ErrMalformed)
 		}
 		if err := p.Acq.validate(); err != nil {
+			return Op{}, err
+		}
+	case OpHold:
+		if p.Hold == nil || p.Acq != nil {
+			return Op{}, fmt.Errorf("%w: a hold op needs its hold body and no other", ErrMalformed)
+		}
+		if err := p.Hold.validate(); err != nil {
 			return Op{}, err
 		}
 	default:
@@ -567,6 +734,9 @@ func Verify(token string) (Op, error) {
 	}
 	if p.Acq != nil {
 		op.Acquire = p.Acq.acquire()
+	}
+	if p.Hold != nil {
+		op.Hold = p.Hold.hold()
 	}
 	return op, nil
 }
@@ -616,7 +786,14 @@ type View struct {
 	// acquire op (ADR-0119): the newest selection, ties broken by hash, for a
 	// work that is not tombstoned.
 	Acquisitions map[string]Op
+	// Holds holds, per HoldKey (target, blob), the effective hold op
+	// (ADR-0119 amendment): the newest by issued-at, ties broken by hash, for
+	// a work that is not tombstoned.
+	Holds map[string]Op
 }
+
+// HoldKey renders the key Holds is indexed by.
+func HoldKey(t Target, blob string) string { return t.Key() + unitSep + blob }
 
 // IsTombstoned reports whether a work is currently tombstoned in the view.
 func (v View) IsTombstoned(t Target) bool { _, ok := v.Tombstoned[t.Key()]; return ok }
@@ -651,6 +828,7 @@ func Evaluate(tokens []string) View {
 		Accepted:     map[string]Op{},
 		Rejected:     map[string]Reason{},
 		Acquisitions: map[string]Op{},
+		Holds:        map[string]Op{},
 	}
 
 	// Pass 1: parse + signature-check. A token that fails is rejected and
@@ -758,8 +936,33 @@ func Evaluate(tokens []string) View {
 		}
 	}
 
+	// Pass 5: newest hold wins per (target, blob), for works that are not
+	// tombstoned (ADR-0119 amendment, #833).
+	for _, op := range v.Accepted {
+		if op.Kind != OpHold || op.Hold == nil {
+			continue
+		}
+		if _, dead := v.Tombstoned[op.Target.Key()]; dead {
+			continue
+		}
+		key := HoldKey(op.Target, op.Hold.Blob)
+		cur, ok := v.Holds[key]
+		if !ok || newerByIssue(op, cur) {
+			v.Holds[key] = op
+		}
+	}
+
 	v.Heads = heads(v.Accepted)
 	return v
+}
+
+// newerByIssue reports whether a should replace b: later issued-at wins;
+// equal issued-at falls to the greater hash.
+func newerByIssue(a, b Op) bool {
+	if !a.IssuedAt.Equal(b.IssuedAt) {
+		return a.IssuedAt.After(b.IssuedAt)
+	}
+	return a.Hash > b.Hash
 }
 
 // newerAcquire reports whether a should replace b as the effective acquire:

@@ -420,6 +420,12 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 		fanOutInterval, _ := c.cfg.FanOutInterval()
 		startFanOutBeat(ctx, reconcileQueue, fanOutInterval, c.log, wallTicker)
 	}
+	// Peer-pull (ADR-0119 amendment, #833): publish and land holds on the
+	// same interval, for the libraries acquisition.peer_pull names.
+	if c.cfg.Acquisition.PeerPull.Enabled() {
+		peerPullInterval, _ := c.cfg.FanOutInterval()
+		startPeerPullBeat(ctx, reconcileQueue, peerPullInterval, c.log, wallTicker)
+	}
 	// The provider health beat (#164). Same queue and the same serving
 	// context: it is ongoing work and it must stop when the controller does.
 	// See healthbeat.go for why a minute, why it runs on a degraded node, and

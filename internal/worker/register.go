@@ -55,6 +55,9 @@ type workerDeps struct {
 	// fanOut is set when this node applies siblings' acquire ops
 	// (acquisition.fan_out); nil otherwise.
 	fanOut *fanOutDeps
+	// peerPull is set when acquisition.peer_pull names a library and this
+	// node can sign; nil otherwise, and the pass is not registered.
+	peerPull *PeerPull
 }
 
 // registerStorageJobs registers the CAS and library jobs: ingest, the scanner,
@@ -189,6 +192,17 @@ func registerReplicationJobs(reg *Registry, d workerDeps) {
 		Puller:  transferPuller,
 		Logger:  d.log,
 	}))
+
+	// Peer-pull (ADR-0119 amendment, #833): publish this node's non-swarm
+	// assets as holds and land siblings' ones. Registered only when a library
+	// is opted in. One pass at a time; no capability, because it needs only
+	// the database, the store and the queue: the bytes move in replicate_blob.
+	if d.peerPull != nil {
+		reg.Register(replication.PeerPullJobType, Registration{
+			Handler:       PeerPullHandler(*d.peerPull),
+			MaxConcurrent: 1,
+		})
+	}
 
 	// Lazy chunking (§16, §75, ADR-0034, M5-04). §75 has listed chunk_blob
 	// since Milestone 1 and nothing has ever handled it, which was the honest

@@ -219,10 +219,11 @@ func (s *Store) recordInto(ctx context.Context, tx *sql.Tx, parsed []catalogop.O
 	if len(fresh) == 0 {
 		return nil
 	}
-	// An acquire op (ADR-0119) cannot change the tombstone view by itself, so
-	// a batch of nothing but acquires skips the re-materialisation: with one
-	// op per grabbed release, re-evaluating the whole log on every grab would
-	// make a large backfill quadratic in the log's length.
+	// An acquire op (ADR-0119) or a hold (its amendment) cannot change the
+	// tombstone view by itself, so a batch of nothing but those skips the
+	// re-materialisation: with one op per grabbed release or held blob,
+	// re-evaluating the whole log on every one would make a large backfill
+	// quadratic in the log's length.
 	//
 	// It can change the view INDIRECTLY: a restore cites the heads it saw, and
 	// those may be acquires, directly or through a chain of acquires that cite
@@ -233,7 +234,7 @@ func (s *Store) recordInto(ctx context.Context, tx *sql.Tx, parsed []catalogop.O
 	// only by acquires also reconciles) and cheap: in-order delivery, a local
 	// publish included, never has a recorded op citing the newcomer, and
 	// following the chain to find out would cost more than reconciling.
-	if onlyAcquires(parsed) {
+	if onlyBodyOps(parsed) {
 		cited, err := citedByRecordedOp(ctx, tx, fresh)
 		if err != nil {
 			return err
@@ -266,9 +267,10 @@ func citedByRecordedOp(ctx context.Context, tx *sql.Tx, hashes []string) (bool, 
 	return true, nil
 }
 
-func onlyAcquires(ops []catalogop.Op) bool {
+// onlyBodyOps reports a non-empty batch with no delete or restore in it.
+func onlyBodyOps(ops []catalogop.Op) bool {
 	for _, op := range ops {
-		if op.Kind != catalogop.OpAcquire {
+		if op.Kind != catalogop.OpAcquire && op.Kind != catalogop.OpHold {
 			return false
 		}
 	}

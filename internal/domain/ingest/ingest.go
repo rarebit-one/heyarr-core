@@ -466,6 +466,101 @@ func (p *Pipeline) Ingest(ctx context.Context, req Request) (Result, error) {
 	return res, nil
 }
 
+// AdoptRequest records bytes the store already holds as an asset, under keys a
+// sibling named (ADR-0119 amendment, #833). Nothing is materialised: the bytes
+// arrived by a verified transfer, so the blob is already this node's.
+type AdoptRequest struct {
+	// RootID names the library root the asset is recorded under. Its library
+	// gives identification its content type.
+	RootID string
+	// BlobHash is the held blob, "blake3:<64 lowercase hex>".
+	BlobHash string
+	// RelPath is the file's path relative to the ORIGIN's library root. The
+	// per-file facts (edition label, region, role) are read from it by this
+	// node's own rules.
+	RelPath string
+	// SourcePath is provenance: where the asset came from. Never identity.
+	SourcePath string
+	// Work is the origin's Work, which overrides what the path would derive.
+	Work WorkOverride
+	// EditionKey is the origin's edition key, which overrides the derived one,
+	// so both sites hold the asset under the same edition.
+	EditionKey string
+}
+
+// Adopt records a held blob as an asset under the keys a sibling named.
+//
+// It is Ingest without the byte move: the same root, identification, override,
+// tombstone check, examination and Record. Re-running it records the same
+// asset again and changes nothing (invariant 9).
+func (p *Pipeline) Adopt(ctx context.Context, req AdoptRequest) (Result, error) {
+	switch {
+	case req.RootID == "":
+		return Result{}, errors.New("ingest: root_id must be set")
+	case req.BlobHash == "":
+		return Result{}, errors.New("ingest: an adopted blob needs its hash")
+	case req.RelPath == "" || req.SourcePath == "":
+		return Result{}, errors.New("ingest: an adopted blob needs its relative and source paths")
+	case req.Work.ContentType == "" || req.Work.WorkKey == "":
+		return Result{}, errors.New("ingest: an adopted blob needs the work it belongs to")
+	}
+	root, err := p.cat.Root(ctx, req.RootID)
+	if err != nil {
+		return Result{}, err
+	}
+	if !root.Enabled {
+		return Result{}, fmt.Errorf("%w: %s", ErrRootDisabled, root.ID)
+	}
+
+	candidate := p.ident.Identify(req.RelPath, root.LibraryContentType)
+	candidate = applyWorkOverride(withROMPlatform(candidate, req.RelPath, req.Work), req.Work)
+	candidate.Source = identification.SourceSiblingHold
+	if req.EditionKey != "" {
+		candidate.EditionKey = req.EditionKey
+	}
+
+	tombstoned, err := p.cat.Tombstoned(ctx, candidate.ContentType, candidate.WorkKey)
+	if err != nil {
+		return Result{}, fmt.Errorf("ingest: checking tombstone for %s: %w", req.SourcePath, err)
+	}
+	if tombstoned {
+		return Result{Tombstoned: true}, nil
+	}
+	peerID, err := p.cat.SelfPeer(ctx)
+	if err != nil {
+		return Result{}, fmt.Errorf("ingest: resolving this peer: %w", err)
+	}
+
+	// The size is the store's: the bytes verified on arrival, so their length
+	// is the fact, never the op's hint.
+	r, size, err := p.store.OpenBlob(ctx, req.BlobHash)
+	if err != nil {
+		return Result{}, fmt.Errorf("ingest: opening adopted blob %s: %w", req.BlobHash, err)
+	}
+	_ = r.Close()
+
+	filename := Base(req.RelPath)
+	res, err := p.cat.Record(ctx, Recording{
+		Root:        root,
+		Candidate:   candidate,
+		Blob:        Blob{Hash: req.BlobHash, Size: size, Materialised: None, Deduplicated: true},
+		SourcePath:  req.SourcePath,
+		RelPath:     req.RelPath,
+		Filename:    filename,
+		MIME:        MIMEForExtension(Ext(filename)),
+		PeerID:      peerID,
+		Now:         p.clock.Now(),
+		Publication: p.examinePublication(ctx, req.BlobHash, filename),
+	})
+	if err != nil {
+		return Result{}, fmt.Errorf("ingest: recording adopted %s: %w", req.SourcePath, err)
+	}
+	p.logger.Info("adopted a sibling's held blob",
+		"source_path", req.SourcePath, "blob", res.BlobHash, "asset", res.AssetID,
+		"asset_created", res.AssetCreated, "work", res.WorkID, "edition_created", res.EditionCreated)
+	return res, nil
+}
+
 // warnIfTheLadderFellToACopy raises the first copy-where-a-cheap-rung-was-asked
 // -for to a WARNING, once.
 //

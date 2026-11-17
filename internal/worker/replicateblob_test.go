@@ -147,7 +147,9 @@ type transferFabric struct {
 	self  string
 
 	// The source: a real peer surface over real mTLS.
-	sourceID     string
+	sourceID string
+	// sourceKey is the source's identity key, for a test that signs as it.
+	sourceKey    ed25519.PrivateKey
 	sourceStore  *cas.FS
 	sourceSrv    *peerapi.Server
 	sourceBlobs  *countingBlobServer
@@ -205,6 +207,7 @@ func newTransferFabric(t *testing.T) *transferFabric {
 	destPub, destPriv := generateKey(t)
 	srcPub, srcPriv := generateKey(t)
 
+	f.sourceKey = srcPriv
 	f.sourceID = "01990000-0000-7000-8000-0000000source"
 	f.exec(`INSERT INTO peers (id, name, site, mode, is_self, public_key, endpoint, health, created_at, enrolled_at)
 		VALUES (?, 'source', 'site-a', 'full', 0, ?, '', 'reachable', ?, ?)`,

@@ -10,6 +10,27 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **A library held at one site reaches its sibling by peer-pull, opt-in per
+  library** (ADR-0119 amendment, #833). Fan-out reaches a sibling only through
+  a swarm, so a scanned `rom` library, or an HTTP, usenet or direct fetch, was
+  never held at the other site. A library listed in
+  `acquisition.peer_pull.libraries` at both sites now gets a new `hold` op per
+  asset that no `acquire` covers. The sibling verifies the op and records the
+  blob as op-sourced. It then pulls the bytes from the signer over the peer
+  surface with the ordinary `replicate_blob`, hashed on arrival, and records
+  the asset under the origin's work and edition keys
+  (`identification_source = sibling-hold`). Outcomes are recorded per op with a
+  `replication.hold_changed` event. `get_replica_status` reports them as
+  `peer_pull`. The link is bounded:
+  - `max_blob_bytes` caps one blob (4 GiB by default);
+  - pulls run in the two-slot transfer lane, at most 64 queued per pass;
+  - a failed pull waits an hour;
+  - publishing stops short of the catalog-sync body limit.
+
+  Off by default, and then nothing is published or applied. Migration 00074
+  admits the op kind and adds `catalog_hold_applications`. List a library only
+  once both sites run this build: an older one refuses a sync carrying a
+  `hold`.
 - **An operator can hand over a URL as a want's direct release** (ADR-0060,
   #836). `POST /api/v1/desired/{id}/select` and MCP `acquire_release` now take
   `url` in place of `candidate_id`: an http(s) link to the file itself. It is

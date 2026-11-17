@@ -47,6 +47,11 @@ const (
 	// operator asking why an asset is on a Work needs to be able to tell them
 	// apart (#224).
 	SourceDesiredItem = "desired-item"
+	// SourceSiblingHold is an asset pulled from a sibling site on its hold op
+	// (ADR-0119 amendment, #833): its Work and Edition keys are the origin's.
+	// It is also how the publisher knows not to echo the asset back as a hold
+	// of this site's own.
+	SourceSiblingHold = "sibling-hold"
 )
 
 // Asset roles (assets.role). A non-primary asset attaches to the same Work as
