@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/api/resources"
+	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 )
 
@@ -179,6 +180,7 @@ func (s *Server) searchReleases(ctx context.Context, raw json.RawMessage) (any, 
 type acquireReleaseArgs struct {
 	DesiredItemID string `json:"desired_item_id"`
 	CandidateID   string `json:"candidate_id"`
+	URL           string `json:"url"`
 }
 
 // acquireRelease is §71's acquire_release.
@@ -196,8 +198,15 @@ func (s *Server) acquireRelease(ctx context.Context, raw json.RawMessage) (any, 
 	if args.DesiredItemID == "" {
 		return nil, invalidParams("desired_item_id is required")
 	}
+	if args.URL != "" {
+		if args.CandidateID != "" {
+			return nil, invalidParams("name either candidate_id or url, not both")
+		}
+		return s.acquireURL(ctx, args)
+	}
 	if args.CandidateID == "" {
-		return nil, invalidParams("candidate_id is required — name the release to acquire")
+		return nil, invalidParams("candidate_id is required — name the release to acquire " +
+			"(or url, for a direct link to the file itself)")
 	}
 	chosen, err := s.resources.AcquireRelease(ctx, args.DesiredItemID, args.CandidateID)
 	switch {
@@ -223,6 +232,31 @@ func (s *Server) acquireRelease(ctx context.Context, raw json.RawMessage) (any, 
 		"score":           chosen.Evaluation.Score,
 		"accepted":        chosen.Evaluation.Accepted,
 		"status":          "selected; a grab has been queued",
+	}, nil
+}
+
+// acquireURL is acquire_release handed a URL: the want's direct release
+// (#836), fetched by the http client. A magnet or .torrent is refused and
+// pointed back at the candidates, where a torrent release comes from.
+func (s *Server) acquireURL(ctx context.Context, args acquireReleaseArgs) (any, error) {
+	chosen, err := s.resources.AcquireURL(ctx, args.DesiredItemID, args.URL)
+	switch {
+	case errors.Is(err, acquisition.ErrTorrentURL):
+		return nil, invalidParams("%s — run search_releases and acquire its candidate instead", err)
+	case errors.Is(err, acquisition.ErrNotDirectURL),
+		errors.Is(err, resources.ErrNoHTTPClient),
+		errors.Is(err, resources.ErrNotResting):
+		return nil, invalidParams("%s", err)
+	case err != nil:
+		return nil, classify(err)
+	}
+	return map[string]any{
+		"desired_item_id": args.DesiredItemID,
+		"candidate_id":    chosen.CandidateID,
+		"provider":        chosen.Provider,
+		"title":           chosen.Title,
+		"accepted":        chosen.Evaluation.Accepted,
+		"status":          "selected as a direct release; a grab has been queued",
 	}, nil
 }
 

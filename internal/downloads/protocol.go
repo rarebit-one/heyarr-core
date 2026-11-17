@@ -23,6 +23,8 @@ var (
 	_ providers.ProtocolDownloader = (*GOGClient)(nil)
 	_ providers.ProtocolDownloader = (*WebCaptureClient)(nil)
 	_ providers.ProtocolDownloader = (*YtDlpClient)(nil)
+
+	_ providers.HTTPFetcher = (*HTTPClient)(nil)
 )
 
 // Protocol implements providers.ProtocolDownloader: Transmission fetches torrents.
@@ -40,6 +42,10 @@ func (c *NZBGetClient) Protocol() acquisition.Protocol { return acquisition.Prot
 // Protocol implements providers.ProtocolDownloader: the http client fetches
 // the URL as the payload.
 func (c *HTTPClient) Protocol() acquisition.Protocol { return acquisition.ProtocolDirect }
+
+// FetchesHTTP implements providers.HTTPFetcher: of the direct clients, only
+// this one takes a plain http(s) URL.
+func (c *HTTPClient) FetchesHTTP() bool { return true }
 
 // Protocol implements providers.ProtocolDownloader: a store's package is
 // fetched from the store itself.

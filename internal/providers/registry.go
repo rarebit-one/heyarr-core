@@ -197,6 +197,17 @@ func (r *Registry) Downloaders() []Downloader {
 	return out
 }
 
+// FetchesHTTP reports whether a configured download client fetches an http(s)
+// URL as the payload itself (#836).
+func (r *Registry) FetchesHTTP() bool {
+	for _, dl := range r.Downloaders() {
+		if f, ok := dl.(HTTPFetcher); ok && f.FetchesHTTP() {
+			return true
+		}
+	}
+	return false
+}
+
 // FeedProviders is every provider that can enumerate a source's items, in
 // routing order (M12). It is the metadata capability's routing accessor, the
 // sibling of Indexers and Downloaders: the follow pipeline asks the registry
