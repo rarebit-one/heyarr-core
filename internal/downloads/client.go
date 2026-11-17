@@ -91,6 +91,10 @@ type Options struct {
 	// StallAfter is the no-progress window (#811): zero is DefaultStallAfter,
 	// negative turns the rule off.
 	StallAfter time.Duration
+	// DownloadDir is where Heyarr's transfers go, in the CLIENT's namespace
+	// (#882). Empty leaves the instance's session default, which its own UI
+	// changes whenever somebody picks a folder by hand.
+	DownloadDir string
 }
 
 // Client drives one Transmission instance.
@@ -103,6 +107,8 @@ type Client struct {
 	now     func() time.Time
 	// stallAfter is Options.StallAfter (#811).
 	stallAfter time.Duration
+	// dir is Options.DownloadDir (#882): empty means the session default.
+	dir string
 	// progress dates each transfer's last fetched piece for the stall rule.
 	progress *progressClock
 	// payloads remembers which transfers carry only programs (#819).
@@ -129,6 +135,9 @@ type sessionInfo struct {
 	DownloadDir          string
 	IncompleteDir        string
 	IncompleteDirEnabled bool
+	// AddsStopped is start-added-torrents reported off (#882): the instance
+	// adds anything not told otherwise stopped.
+	AddsStopped bool
 	// Known is false until a session-get has succeeded. Distinct from a
 	// zero-valued struct: "we have not asked" and "it reported zeros" lead to
 	// different behaviour, and the labels decision turns on it.
@@ -178,6 +187,7 @@ func New(opts Options) (*Client, error) {
 		label:      label,
 		now:        now,
 		stallAfter: opts.StallAfter,
+		dir:        strings.TrimSpace(opts.DownloadDir),
 		progress:   newProgressClock(),
 		payloads:   newPayloadVerdicts(),
 		httpc:      httpc,
@@ -203,7 +213,11 @@ func rpcURL(endpoint string) string {
 	return trimmed + "/transmission/rpc"
 }
 
-var _ providers.Downloader = (*Client)(nil)
+var (
+	_ providers.Downloader = (*Client)(nil)
+	_ providers.Remover    = (*Client)(nil)
+	_ providers.Starter    = (*Client)(nil)
+)
 
 // Name implements providers.Provider.
 func (c *Client) Name() string { return c.name }
@@ -258,6 +272,14 @@ func (c *Client) Check(ctx context.Context) providers.Health {
 			"reachable; RPC version %d has no torrent labels (needs %d), "+
 				"so transfers are tagged by download subdirectory instead",
 			session.RPCVersion, labelsRPCVersion)
+	}
+	if session.AddsStopped {
+		// A warning, not unhealthy: Heyarr starts its own grabs explicitly and
+		// starts any it finds held. Said because the setting is what stranded
+		// every grab for weeks before that (#882), and an operator looking at a
+		// stopped transfer in the client should find the reason here.
+		health.Detail += "; warning: start-added-torrents is off, so the instance " +
+			"adds transfers stopped — Heyarr starts its own, anything else added stays stopped"
 	}
 	return health
 }

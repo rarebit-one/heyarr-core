@@ -47,6 +47,10 @@ type fakeQB struct {
 	files map[string][]string
 	// filesAsked counts torrents/files calls, to prove a verdict is cached.
 	filesAsked int
+	// addsStopped models the "do not start the download automatically"
+	// preference (#882): an add that does not say otherwise is added stopped.
+	// qBittorrent 4 reads `paused`, 5 renamed it `stopped`.
+	addsStopped bool
 }
 
 func newFakeQB() *fakeQB {
@@ -107,9 +111,13 @@ func (f *fakeQB) server(t *testing.T) *httptest.Server {
 			_, _ = w.Write([]byte("Ok."))
 			return
 		}
+		state := "downloading"
+		if f.addsStopped && r.FormValue("paused") != "false" && r.FormValue("stopped") != "false" {
+			state = "pausedDL"
+		}
 		if h := magnetInfoHash(src); h != "" {
 			f.torrents = append(f.torrents, qbTorrent{
-				Hash: h, Name: magnetName(src), State: "downloading",
+				Hash: h, Name: magnetName(src), State: state,
 				Progress: 0, Size: 1000, Category: cat, SavePath: "/downloads",
 			})
 		} else if f.registerHash != "" {
@@ -250,6 +258,22 @@ func TestQBAddMagnetResolvesByHash(t *testing.T) {
 	}
 	if len(f.addedURLs) != 1 || f.addedURLs[0] != qbMagnet {
 		t.Errorf("the magnet was not handed to torrents/add: %v", f.addedURLs)
+	}
+}
+
+// #882's qBittorrent half: with "do not start the download automatically"
+// on, an add that says nothing is added stopped. The add says paused=false and
+// stopped=false (qBittorrent 4 and 5 spell it differently; each ignores the
+// other's), so a grab downloads regardless of the preference.
+func TestQBAddStartsRegardlessOfTheAddStoppedPreference(t *testing.T) {
+	f := newFakeQB()
+	f.addsStopped = true
+	c := qbClient(t, f.server(t).URL)
+	if _, err := c.Add(context.Background(), secret.Value(qbMagnet)); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.torrents) != 1 || f.torrents[0].State != "downloading" {
+		t.Fatalf("the grab was added as %+v, want it downloading", f.torrents)
 	}
 }
 

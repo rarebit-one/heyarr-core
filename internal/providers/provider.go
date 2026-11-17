@@ -126,6 +126,15 @@ type Remover interface {
 	Remove(ctx context.Context, id string, deleteData bool) error
 }
 
+// Starter is a Downloader that can start one of its own transfers the client
+// is holding stopped. Optional, and asked for only for a transfer the client
+// reports Held (#882): one a client added stopped because of its own default,
+// which would otherwise sit at 0% forever. Implementations refuse a transfer
+// that is not Heyarr's and leave alone one that is no longer held.
+type Starter interface {
+	Start(ctx context.Context, id string) error
+}
+
 // Transfer is one external transfer, as a value.
 //
 // Deliberately not the download client's own struct: identity is the client's
@@ -161,6 +170,12 @@ type Transfer struct {
 	// False when the client has not said or the file list is not known yet:
 	// unknown is never a verdict.
 	Executable bool
+	// Held reports that the client holds the transfer stopped, incomplete and
+	// without an error, and that it has never run: no activity, nothing
+	// fetched. That is a transfer added stopped by the client's own default
+	// (#882), not one an operator paused after it started, which has run. A
+	// Starter starts it; false when the client cannot tell.
+	Held bool
 }
 
 // Query is what to search for (§60's manual search, and M3-12's job).

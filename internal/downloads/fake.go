@@ -366,6 +366,34 @@ func (f *Fake) MarkExecutable(id string) error {
 	return nil
 }
 
+// Hold reports a transfer as held (#882): stopped before it ever ran, the way
+// a real client leaves one it added stopped by its own default.
+func (f *Fake) Hold(id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	t, ok := f.transfers[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNotOurs, id)
+	}
+	t.transfer.Held = true
+	return nil
+}
+
+// Start implements providers.Starter: a held transfer is no longer held, and
+// one it does not hold is refused, as the real client refuses.
+func (f *Fake) Start(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	t, ok := f.transfers[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNotOurs, id)
+	}
+	t.transfer.Held = false
+	return nil
+}
+
 // FailNextRemove makes the next Remove fail with err, as a client that is
 // briefly unreachable would.
 func (f *Fake) FailNextRemove(err error) {

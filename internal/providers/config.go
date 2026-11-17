@@ -437,6 +437,15 @@ type Entry struct {
 	// Empty is the default (6h); "0" turns the rule off. Ignored for every
 	// other kind.
 	StallAfter string `koanf:"stall_after"`
+	// DownloadDir is where a Transmission client puts Heyarr's transfers, in
+	// the CLIENT's filesystem namespace (#882), sent as torrent-add's
+	// download-dir. Unset leaves the instance's session default, which is what
+	// every grab got before this existed — and which Transmission's own UI
+	// changes whenever somebody picks a folder by hand. Must be absolute, and
+	// when Heyarr sees the client's disk under another prefix, path_map must
+	// cover it: a completed transfer's path is resolved through the mapping
+	// like any other. Refused for every other kind.
+	DownloadDir string `koanf:"download_dir"`
 	// PathMap translates the download client's filesystem namespace into
 	// Heyarr's. Meaningful only for a download provider.
 	//
@@ -513,6 +522,9 @@ type Resolved struct {
 	// StallAfter is the resolved stall_after: zero for the default, negative
 	// for off (#811).
 	StallAfter time.Duration
+	// DownloadDir is the resolved download_dir: empty for the session default
+	// (#882). Set only on a Transmission provider.
+	DownloadDir string
 	// Offers is a fake indexer's canned answers, already converted into domain
 	// candidates so nothing downstream has to parse configuration.
 	Offers map[string][]acquisition.ReleaseCandidate
@@ -593,6 +605,10 @@ func Validate(entries []Entry) ([]Resolved, error) {
 		if err != nil {
 			return nil, err
 		}
+		downloadDir, err := resolveDownloadDir(name, kind, e.DownloadDir)
+		if err != nil {
+			return nil, err
+		}
 		offers, err := resolveOffers(name, kind, e.Offers)
 		if err != nil {
 			return nil, err
@@ -609,6 +625,7 @@ func Validate(entries []Entry) ([]Resolved, error) {
 			Enabled:      enabled,
 			ParseTitles:  e.ParseTitles,
 			StallAfter:   stallAfter,
+			DownloadDir:  downloadDir,
 			Offers:       offers,
 		})
 	}
@@ -805,6 +822,25 @@ func validatePathMap(name string, maps []PathMapping) error {
 		seen[remote] = true
 	}
 	return nil
+}
+
+// resolveDownloadDir reads a provider's download_dir (#882): empty is the
+// client's session default; anything else must be an absolute path on a
+// Transmission provider. Refused elsewhere rather than ignored, so a config
+// file never says something Heyarr does not do.
+func resolveDownloadDir(name string, kind Kind, raw string) (string, error) {
+	dir := strings.TrimSpace(raw)
+	switch {
+	case dir == "":
+		return "", nil
+	case kind != KindTransmission:
+		return "", fmt.Errorf(
+			"provider %q: download_dir is only meaningful for a transmission provider, not a %s", name, kind)
+	case !strings.HasPrefix(dir, "/"):
+		return "", fmt.Errorf(
+			"provider %q: download_dir %q must be absolute — it is a path in the download client's filesystem", name, dir)
+	}
+	return dir, nil
 }
 
 // resolveStallAfter reads a provider's stall_after (#811): empty is the

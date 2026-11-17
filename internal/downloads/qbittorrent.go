@@ -453,6 +453,12 @@ func (c *QBClient) addTorrent(ctx context.Context, source string) error {
 	form := url.Values{
 		"urls":     {source},
 		"category": {c.label},
+		// Started explicitly, never left to the "do not start the download
+		// automatically" preference (#882), which would add it stopped at 0%.
+		// qBittorrent 4 reads `paused`; 5 renamed it `stopped`. Each ignores the
+		// other's, so both are sent.
+		"paused":  {"false"},
+		"stopped": {"false"},
 	}
 	body, err := c.api.post(ctx, "/api/v2/torrents/add", form)
 	if err != nil {

@@ -44,13 +44,20 @@ type torrent struct {
 	// this field is the whole reason that file exists.
 	TrackerStats []trackerStat `json:"trackerStats"`
 	// AddedDate (Unix seconds) tells a re-added transfer from the same one, for
-	// the no-progress stall rule (#811). activityDate is deliberately not read:
-	// uploads move it too (see progressClock). PeersConnected and
+	// the no-progress stall rule (#811). activityDate is deliberately not used
+	// for that rule: uploads move it too (see progressClock). PeersConnected and
 	// MetadataPercentComplete only describe the stall in the detail. They are
 	// absent from the 2026-08-21 capture and read as zero there.
 	AddedDate               int64   `json:"addedDate"`
 	PeersConnected          int     `json:"peersConnected"`
 	MetadataPercentComplete float64 `json:"metadataPercentComplete"`
+	// ActivityDate, DownloadedEver and SecondsDownloading are read only to
+	// tell a transfer that has never run from one that has (see held, #882).
+	// All three survive a daemon restart, which startDate does not. They are
+	// absent from the 2026-08-21 capture and read as zero there.
+	ActivityDate       int64 `json:"activityDate"`
+	DownloadedEver     int64 `json:"downloadedEver"`
+	SecondsDownloading int64 `json:"secondsDownloading"`
 }
 
 type trackerStat struct {
@@ -70,6 +77,7 @@ var torrentFields = []string{
 	"id", "name", "hashString", "status", "percentDone", "downloadDir",
 	"labels", "error", "errorString", "trackerStats", "isFinished", "eta", "totalSize",
 	"addedDate", "peersConnected", "metadataPercentComplete",
+	"activityDate", "downloadedEver", "secondsDownloading",
 }
 
 // Transmission's status codes. Only the ones that mean something to §64's
@@ -90,6 +98,7 @@ func (c *Client) sessionGet(ctx context.Context) (sessionInfo, error) {
 		DownloadDir          string `json:"download-dir"`
 		IncompleteDir        string `json:"incomplete-dir"`
 		IncompleteDirEnabled bool   `json:"incomplete-dir-enabled"`
+		StartAddedTorrents   *bool  `json:"start-added-torrents"`
 	}
 	if err := c.rpc.call(ctx, "session-get", nil, &raw); err != nil {
 		return sessionInfo{}, err
@@ -101,7 +110,10 @@ func (c *Client) sessionGet(ctx context.Context) (sessionInfo, error) {
 		DownloadDir:          raw.DownloadDir,
 		IncompleteDir:        raw.IncompleteDir,
 		IncompleteDirEnabled: raw.IncompleteDirEnabled,
-		Known:                true,
+		// Absent reads as on, Transmission's own default, so only an instance
+		// that says it is off is reported.
+		AddsStopped: raw.StartAddedTorrents != nil && !*raw.StartAddedTorrents,
+		Known:       true,
 	}, nil
 }
 
@@ -222,6 +234,7 @@ func (c *Client) toTransfer(t torrent) providers.Transfer {
 		BytesTotal: t.TotalSize,
 		BytesDone:  int64(float64(t.TotalSize) * t.PercentDone),
 		Trackers:   announceURLs(t.TrackerStats),
+		Held:       held(t),
 	}
 
 	if trouble, bad := inspect(t); bad {
@@ -243,6 +256,29 @@ func (c *Client) toTransfer(t torrent) providers.Transfer {
 		out.Path = c.resolvePath(t)
 	}
 	return out
+}
+
+// stoppedIncomplete reports a transfer Transmission holds stopped, short of
+// complete and without an error of its own. An errored transfer is left
+// stopped: its error is the pipeline's to act on, not something a start
+// should paper over.
+func stoppedIncomplete(t torrent) bool {
+	return t.Status == statusStopped && t.PercentDone < 1 && !t.IsFinished && t.Error == 0
+}
+
+// held reports a stopped, incomplete transfer that has NEVER RUN (#882).
+//
+// With start-added-torrents off, Transmission adds every torrent stopped, and
+// one that never started has done nothing at all: no activity, nothing
+// downloaded, no time spent downloading. An operator who pauses a transfer
+// after it started leaves at least one of those non-zero, so this tells "the
+// client's default held it" from "somebody stopped it", and only the first is
+// Heyarr's to start. All three must be zero: any evidence the transfer ran
+// leaves it alone. startDate is not used because Transmission does not keep it
+// across a restart, so it would read as never started after one.
+func held(t torrent) bool {
+	return stoppedIncomplete(t) &&
+		t.ActivityDate == 0 && t.DownloadedEver == 0 && t.SecondsDownloading == 0
 }
 
 // resolvePath translates the client's path into one Heyarr can open.
@@ -295,8 +331,17 @@ func (c *Client) add(ctx context.Context, source secret.Value) (providers.Transf
 	if err != nil {
 		return providers.Transfer{}, err
 	}
+	// Started explicitly, never left to the instance's start-added-torrents
+	// (#882). With that off and no `paused` sent, Transmission adds the
+	// transfer stopped and it sits at 0% with nothing anywhere saying why.
+	args["paused"] = false
 	if c.session.SupportsLabels() {
 		args["labels"] = []string{c.label}
+		// Only when configured: unset leaves the instance's own default, which
+		// is what every grab got before download_dir existed.
+		if c.dir != "" {
+			args["download-dir"] = c.dir
+		}
 	} else {
 		// The fallback, for instances below RPC 16. A subdirectory of the
 		// download directory standing in for a label — which is what the *arr
@@ -324,30 +369,69 @@ func (c *Client) add(ctx context.Context, source secret.Value) (providers.Transf
 			"%w: torrent-add reported success but named no transfer", ErrRPCFailure)
 	}
 	out := c.toTransfer(added)
-	// torrent-add answers with id, name and hash only, so the announce list
-	// is read back in one torrent-get. Best effort: a failure here costs the
-	// trackers a fan-out op could carry (ADR-0119), never the grab itself.
-	if trackers, err := c.trackersOf(ctx, added.HashString); err == nil {
-		out.Trackers = trackers
+	// torrent-add answers with id, name and hash only, so the transfer is read
+	// back in one torrent-get for its announce list and its state. Best
+	// effort: a failure here costs the trackers a fan-out op could carry
+	// (ADR-0119), never the grab itself.
+	full, ok, err := c.readBack(ctx, added.HashString)
+	if err != nil || !ok {
+		return out, nil
+	}
+	out.Trackers = announceURLs(full.TrackerStats)
+	// A duplicate ignores `paused`: Transmission returns the transfer it
+	// already holds, as it is. One of ours that is stopped short of complete is
+	// started here, because this grab is Heyarr asking for it again — which is
+	// what recovers a transfer an earlier grab left stranded (#882). Best
+	// effort for the same reason as above: the poll retries a held one.
+	if res.Duplicate != nil && c.isOurs(full) && stoppedIncomplete(full) {
+		_ = c.start(ctx, full.ID)
 	}
 	return out, nil
 }
 
-// trackersOf reads one transfer's announce URLs.
-func (c *Client) trackersOf(ctx context.Context, hash string) ([]string, error) {
+// readBack reads one transfer's full state by infohash.
+func (c *Client) readBack(ctx context.Context, hash string) (torrent, bool, error) {
 	var raw struct {
 		Torrents []torrent `json:"torrents"`
 	}
-	args := map[string]any{"ids": []string{hash}, "fields": []string{"hashString", "trackerStats"}}
+	args := map[string]any{"ids": []string{hash}, "fields": torrentFields}
 	if err := c.rpc.call(ctx, "torrent-get", args, &raw); err != nil {
-		return nil, err
+		return torrent{}, false, err
 	}
 	for _, t := range raw.Torrents {
 		if strings.EqualFold(t.HashString, hash) {
-			return announceURLs(t.TrackerStats), nil
+			return t, true, nil
 		}
 	}
-	return nil, nil
+	return torrent{}, false, nil
+}
+
+// Start starts one of Heyarr's transfers that the client is holding (#882).
+//
+// Like Remove it looks the id up in OUR filtered view first and refuses a
+// transfer that is not ours. It re-reads the transfer rather than trusting the
+// caller's earlier sight of it, and does nothing unless it is still held: an
+// operator may have started and stopped it since, and a stop after it ran is
+// theirs to keep.
+func (c *Client) Start(ctx context.Context, id string) error {
+	ours, err := c.ours(ctx)
+	if err != nil {
+		return err
+	}
+	for _, t := range ours {
+		if strings.EqualFold(t.HashString, id) {
+			if !held(t) {
+				return nil
+			}
+			return c.start(ctx, t.ID)
+		}
+	}
+	return fmt.Errorf("%w: %s is not a transfer Heyarr queued", ErrNotOurs, id)
+}
+
+// start issues torrent-start for one transfer by Transmission's id.
+func (c *Client) start(ctx context.Context, id int64) error {
+	return c.rpc.call(ctx, "torrent-start", map[string]any{"ids": []any{id}}, nil)
 }
 
 // announceURLs lists a transfer's announce URLs once each, in order.
@@ -591,13 +675,17 @@ func (c *Client) Remove(ctx context.Context, id string, deleteData bool) error {
 // and should not be attempted.
 var ErrNotOurs = errors.New("downloads: that transfer does not belong to Heyarr")
 
-// downloadDir is where the instance said it puts things.
+// downloadDir is where Heyarr's transfers go: the configured download_dir when
+// there is one, otherwise where the instance said it puts things.
 //
 // Falls back to a relative "downloads" only when nothing has asked yet, which
 // cannot happen in practice: Add is reached through the poll job, which runs
 // after a health check. It exists so the fallback path has no nil case rather
 // than because it is expected.
 func (c *Client) downloadDir() string {
+	if c.dir != "" {
+		return c.dir
+	}
 	if c.session.DownloadDir != "" {
 		return c.session.DownloadDir
 	}
