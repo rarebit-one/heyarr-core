@@ -17,7 +17,10 @@
       "edition_label": "first",
       "edition_type": "print",
       "blob_size": null,
-      "blob_mime": null
+      "blob_mime": null,
+      "height": null,
+      "hdr": null,
+      "bitrate_bps": null
     }
   ]
 }

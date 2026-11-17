@@ -30,7 +30,10 @@
         "mime": "video/x-matroska",
         "size": 42949672960,
         "duration_seconds": 6960.5,
-        "content_url": "/api/v1/blobs/blake3:1111111111111111111111111111111111111111111111111111111111111111/content"
+        "content_url": "/api/v1/blobs/blake3:1111111111111111111111111111111111111111111111111111111111111111/content",
+        "height": 2160,
+        "hdr": true,
+        "bitrate_bps": 49000000
       }
     },
     {

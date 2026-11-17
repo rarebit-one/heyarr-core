@@ -61,7 +61,9 @@ func (h *harness) seedBrowse() *harness {
 
 	h.exec(`INSERT INTO blob_probes (blob_hash, container, format_long, duration_seconds, bitrate_bps,
 			streams, bytes_read, materialised, probed_at) VALUES
-		(?, 'matroska,webm', 'Matroska / WebM', 6960.5, 49000000, '[]', 0, 0, ?)`, blob1Hash, seedTime)
+		(?, 'matroska,webm', 'Matroska / WebM', 6960.5, 49000000,
+		 '[{"index":0,"type":"video","codec":"hevc","profile":"Main 10","width":3840,"height":2160,"color_transfer":"smpte2084"}]',
+		 0, 0, ?)`, blob1Hash, seedTime)
 
 	h.exec(`INSERT INTO libraries (id, name, content_type, enabled, created_at) VALUES (?, 'music', 'music', 1, ?)`,
 		libMusicID, seedTime)
@@ -554,5 +556,62 @@ func TestArtworkSizesInEmbed(t *testing.T) {
 		if !strings.Contains(url, wantV) {
 			t.Errorf("sizes[%q] = %q, want &v=%s", b, url, posterBlobHash)
 		}
+	}
+}
+
+// The work-asset listing and the primary_asset embed both carry the probed
+// picture (#885): a client offers "2160p HDR" from these, not from parsing an
+// edition label. A blob nothing has probed answers null for each — unknown,
+// which is not the same as SDR or zero.
+func TestAssetsCarryTheProbedPicture(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed().seedBrowse()
+
+	type facts struct {
+		ID         string `json:"id"`
+		AssetID    string `json:"asset_id"`
+		Height     *int   `json:"height"`
+		HDR        *bool  `json:"hdr"`
+		BitrateBPS *int64 `json:"bitrate_bps"`
+	}
+	check := func(t *testing.T, what string, got facts) {
+		t.Helper()
+		if got.Height == nil || *got.Height != 2160 {
+			t.Errorf("%s height = %v, want 2160", what, got.Height)
+		}
+		if got.HDR == nil || !*got.HDR {
+			t.Errorf("%s hdr = %v, want true (PQ transfer)", what, got.HDR)
+		}
+		if got.BitrateBPS == nil || *got.BitrateBPS != 49000000 {
+			t.Errorf("%s bitrate_bps = %v, want 49000000", what, got.BitrateBPS)
+		}
+	}
+
+	// The film's primary file, among the artwork the browse seed adds.
+	film := func() facts {
+		t.Helper()
+		var listing struct{ Items []facts }
+		decode(t, h, "/api/v1/works/"+work1ID+"/assets", &listing)
+		for _, item := range listing.Items {
+			if item.ID == asset1ID {
+				return item
+			}
+		}
+		t.Fatalf("the film's primary asset is not in its work's listing: %+v", listing.Items)
+		return facts{}
+	}
+	check(t, "work asset", film())
+
+	var detail struct {
+		PrimaryAsset facts `json:"primary_asset"`
+	}
+	decode(t, h, "/api/v1/works/"+work1ID, &detail)
+	check(t, "primary_asset", detail.PrimaryAsset)
+
+	// Unprobed: every fact is null rather than a guess.
+	h.exec(`DELETE FROM blob_probes WHERE blob_hash = ?`, blob1Hash)
+	if got := film(); got.Height != nil || got.HDR != nil || got.BitrateBPS != nil {
+		t.Errorf("an unprobed blob reported height=%v hdr=%v bitrate=%v, want all null",
+			got.Height, got.HDR, got.BitrateBPS)
 	}
 }

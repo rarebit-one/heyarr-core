@@ -14,6 +14,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/guest"
+	"github.com/rarebit-one/heyarr-core/internal/media/probe"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
@@ -520,10 +521,11 @@ func (a *API) listWorkAssets(w http.ResponseWriter, r *http.Request) {
 	// (ADR-0020): an INNER join would silently drop every linked file from a
 	// work's listing, which is the one place a person is counting the files.
 	//nolint:gosec // the query is assembled only from the literal fragments above; every value is bound
-	stmt := `SELECT ` + prefixed(assetColumns, "assets") + `, e.label, e.edition_type, b.size, b.mime, assets.attributes
+	stmt := `SELECT ` + prefixed(assetColumns, "assets") + `, e.label, e.edition_type, b.size, b.mime, assets.attributes, bp.bitrate_bps, bp.streams
 		FROM assets
 		JOIN editions e ON e.id = assets.edition_id
 		LEFT JOIN blobs b ON b.hash = assets.blob_hash
+		LEFT JOIN blob_probes bp ON bp.blob_hash = assets.blob_hash
 		WHERE ` + strings.Join(where, " AND ") + `
 		ORDER BY assets.id ASC LIMIT ?`
 
@@ -553,7 +555,8 @@ func (a *API) listWorkAssets(w http.ResponseWriter, r *http.Request) {
 		func(x WorkAsset) []string { return []string{x.ID} }, "work-assets"))
 }
 
-// scanWorkAsset reads an asset row followed by the four joined columns.
+// scanWorkAsset reads an asset row followed by the joined edition, blob and
+// probe columns.
 //
 // It reuses scanAsset for the asset half rather than restating thirteen
 // columns: a column added to assetColumns is then scanned here too, instead of
@@ -563,8 +566,10 @@ func scanWorkAsset(rows *sql.Rows) (WorkAsset, error) {
 	var size sql.NullInt64
 	var blobMIME sql.NullString
 	var attributes string
+	var bitrate sql.NullInt64
+	var streams sql.NullString
 	asset, err := scanAsset(appendedScan{rows: rows, extra: []any{
-		&item.EditionLabel, &item.EditionType, &size, &blobMIME, &attributes,
+		&item.EditionLabel, &item.EditionType, &size, &blobMIME, &attributes, &bitrate, &streams,
 	}})
 	if err != nil {
 		return WorkAsset{}, err
@@ -585,7 +590,29 @@ func scanWorkAsset(rows *sql.Rows) (WorkAsset, error) {
 		item.BlobSize = &v
 	}
 	item.BlobMIME = nullString(blobMIME)
+	item.PictureFacts = pictureFacts(bitrate, streams)
 	return item, nil
+}
+
+// pictureFacts reads PictureFacts out of a blob_probes row's bitrate and
+// streams columns, both null when nothing probed the blob. A streams value
+// that does not parse reads as no picture rather than failing the listing it
+// sits in: the facts are a convenience, and the file is still listable.
+func pictureFacts(bitrate sql.NullInt64, streams sql.NullString) PictureFacts {
+	var out PictureFacts
+	out.BitrateBPS = nullInt(bitrate)
+	if !streams.Valid {
+		return out
+	}
+	var parsed []probe.Stream
+	if json.Unmarshal([]byte(streams.String), &parsed) != nil {
+		return out
+	}
+	if v, ok := (probe.Result{Streams: parsed}).VideoStream(); ok && v.Height > 0 {
+		height, hdr := v.Height, v.HDR()
+		out.Height, out.HDR = &height, &hdr
+	}
+	return out
 }
 
 // appendedScan lets a scanner written for one row shape read a WIDER row: it

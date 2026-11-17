@@ -17,7 +17,10 @@
         "mime": "video/mp4",
         "size": 1073741824,
         "duration_seconds": null,
-        "content_url": "/api/v1/blobs/blake3:8888888888888888888888888888888888888888888888888888888888888888/content"
+        "content_url": "/api/v1/blobs/blake3:8888888888888888888888888888888888888888888888888888888888888888/content",
+        "height": null,
+        "hdr": null,
+        "bitrate_bps": null
       }
     },
     {

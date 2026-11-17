@@ -3955,8 +3955,9 @@ paths:
           with the video copied where the client decodes it and the audio
           re-encoded to stereo AAC where it does not (the AC-3 and MP2
           cases), the whole thing re-wrapped when the container is the
-          problem (AVI), and the video re-encoded and capped to `max_height`
-          only when the client cannot decode the picture. `reason` says which.
+          problem (AVI), and the video re-encoded when the client cannot
+          decode the picture **or** the picture is taller than `max_height`
+          (scaled down to it). `reason` says which.
         - `mode: unplayable` — no peer holds the bytes; `reason` is routing's.
 
         With `client`, media nothing has probed is **probed now** when this
@@ -8291,7 +8292,7 @@ components:
         but stable choice among a work's editions. Enough to hand to
         `POST /playback/plan` or the blob route without a second read; a
         client that wants to choose lists `GET /works/{id}/assets`.
-      required: [asset_id, edition_id, blob_hash, mime, size, duration_seconds, content_url]
+      required: [asset_id, edition_id, blob_hash, mime, size, duration_seconds, content_url, height, hdr, bitrate_bps]
       properties:
         asset_id: { type: string }
         edition_id: { type: string }
@@ -8302,6 +8303,25 @@ components:
           type: [number, "null"]
           description: From the blob's probe when one has been taken, else null.
         content_url: { type: string }
+        height:
+          type: [integer, "null"]
+          description: |
+            The first video stream's height in pixels, from the blob's probe
+            (#885). Null when nothing has probed the blob or it has no picture.
+        hdr:
+          type: [boolean, "null"]
+          description: |
+            Whether that picture is HDR: its transfer characteristic is PQ
+            (`smpte2084`, which HDR10 and Dolby Vision carry) or HLG
+            (`arib-std-b67`). Null when nothing has probed the blob or it has
+            no picture. A probe taken before the transfer was recorded reads
+            `false` until the blob is probed again.
+        bitrate_bps:
+          type: [integer, "null"]
+          format: int64
+          description: |
+            The container's overall bitrate in bit/s, from the probe. Null when
+            nothing has probed the blob or the container declares none.
 
     EditionDetail:
       description: An edition with its external identifiers. Returned by `GET /editions/{id}`.
@@ -8380,7 +8400,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/Asset"
         - type: object
-          required: [edition_label, edition_type, blob_size, blob_mime]
+          required: [edition_label, edition_type, blob_size, blob_mime, height, hdr, bitrate_bps]
           properties:
             edition_label: { type: string }
             edition_type: { type: string }
@@ -8392,6 +8412,25 @@ components:
             blob_mime: { type: [string, "null"] }
             language: { type: string, description: "Caption language from asset metadata." }
             hearing_impaired: { type: boolean, description: "Caption marked SDH by its source." }
+            height:
+              type: [integer, "null"]
+              description: |
+                The first video stream's height in pixels, from the blob's probe
+                (#885). Null when nothing has probed the blob or it has no picture.
+            hdr:
+              type: [boolean, "null"]
+              description: |
+                Whether that picture is HDR: its transfer characteristic is PQ
+                (`smpte2084`, which HDR10 and Dolby Vision carry) or HLG
+                (`arib-std-b67`). Null when nothing has probed the blob or it has
+                no picture. A probe taken before the transfer was recorded reads
+                `false` until the blob is probed again.
+            bitrate_bps:
+              type: [integer, "null"]
+              format: int64
+              description: |
+                The container's overall bitrate in bit/s, from the probe. Null when
+                nothing has probed the blob or the container declares none.
 
     Blob:
       type: object
@@ -9656,7 +9695,11 @@ components:
         max_height:
           type: integer
           minimum: 0
-          description: The tallest picture the client will take. Zero or absent means no limit.
+          description: |
+            The tallest picture the client will take. Zero or absent means no
+            limit. A taller picture is still served: as a `stream` with the
+            video re-encoded and scaled down to this height, even when the
+            client decodes the source codec.
       example:
         containers: [mp4, mkv, webm]
         video: [h264, hevc, vp9, av1]

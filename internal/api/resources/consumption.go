@@ -505,7 +505,7 @@ func (a *API) ContinueRail(ctx context.Context, req ContinueRailRequest) ([]Cont
 		SELECT ` + prefixed(sessionColumns, "s") + `,
 		       w.id, w.content_type, w.title, w.year,
 		       e.id, e.label, e.attributes,
-		       a.id, a.edition_id, a.blob_hash, COALESCE(a.mime, b.mime), b.size, p.duration_seconds,
+		       a.id, a.edition_id, a.blob_hash, COALESCE(a.mime, b.mime), b.size, p.duration_seconds, p.bitrate_bps, p.streams,
 		       ` + artworkColumns + `
 		FROM ranked r
 		JOIN consumption_sessions s ON s.id = r.session_id
