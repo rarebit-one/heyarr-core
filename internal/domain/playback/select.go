@@ -71,21 +71,21 @@ const (
 	// rank by; the lowest asset id is chosen.
 	SelectedNotProbed = "not_probed"
 
-	// PassedNeedsVideoReencode: it fits, but the client does not decode its
+	// LostNeedsVideoReencode: it fits, but the client does not decode its
 	// video and the chosen copy plays without re-encoding.
-	PassedNeedsVideoReencode = "needs_video_reencode"
-	// PassedHDRNotDeclared: it fits, but it is HDR, the client does not
+	LostNeedsVideoReencode = "needs_video_reencode"
+	// LostHDRNotDeclared: it fits, but it is HDR, the client does not
 	// declare HDR, and an SDR copy was available.
-	PassedHDRNotDeclared = "hdr_not_declared"
-	// PassedSmaller: it fits, and the chosen copy is taller.
-	PassedSmaller = "smaller"
-	// PassedEqual: it fits at the chosen copy's height and lost the tie.
-	PassedEqual = "equal_lost_tie"
-	// PassedLarger: nothing fits, and it is further over the limit than the
+	LostHDRNotDeclared = "hdr_not_declared"
+	// LostSmaller: it fits, and the chosen copy is taller.
+	LostSmaller = "smaller"
+	// LostEqual: it fits at the chosen copy's height and lost the tie.
+	LostEqual = "equal_lost_tie"
+	// LostLarger: nothing fits, and it is further over the limit than the
 	// chosen copy.
-	PassedLarger = "larger"
-	// PassedNotProbed: nothing has probed it, so its height is unknown.
-	PassedNotProbed = "not_probed"
+	LostLarger = "larger"
+	// LostNotProbed: nothing has probed it, so its height is unknown.
+	LostNotProbed = "not_probed"
 )
 
 // Candidate is one copy and why it was chosen or passed over.
@@ -240,9 +240,9 @@ func chosenReason(c ranked, rest []ranked, fit Fit) Reason {
 func passedReason(r, chosen ranked, fit Fit) Reason {
 	switch {
 	case r.tier == tierUnknown:
-		return Reason{Code: PassedNotProbed, Detail: "nothing has probed this copy, so its height is unknown"}
+		return Reason{Code: LostNotProbed, Detail: "nothing has probed this copy, so its height is unknown"}
 	case r.tier == tierOverLimit && chosen.tier == tierOverLimit:
-		return Reason{Code: PassedLarger, Detail: fmt.Sprintf("%dp is further over the limit than the copy chosen", r.Height)}
+		return Reason{Code: LostLarger, Detail: fmt.Sprintf("%dp is further over the limit than the copy chosen", r.Height)}
 	case r.tooTall:
 		return Reason{
 			Code:   ReasonResolutionTooHigh,
@@ -255,15 +255,15 @@ func passedReason(r, chosen ranked, fit Fit) Reason {
 		}
 	case r.reencode && !chosen.reencode:
 		return Reason{
-			Code:   PassedNeedsVideoReencode,
+			Code:   LostNeedsVideoReencode,
 			Detail: fmt.Sprintf("the client does not declare %s video, and another copy plays without re-encoding", r.VideoCodec),
 		}
 	case r.hdrMismatch && !chosen.hdrMismatch:
-		return Reason{Code: PassedHDRNotDeclared, Detail: "HDR, and the client does not declare HDR; an SDR copy fits"}
+		return Reason{Code: LostHDRNotDeclared, Detail: "HDR, and the client does not declare HDR; an SDR copy fits"}
 	case r.Height < chosen.Height:
-		return Reason{Code: PassedSmaller, Detail: fmt.Sprintf("%dp fits, and a taller copy does too", r.Height)}
+		return Reason{Code: LostSmaller, Detail: fmt.Sprintf("%dp fits, and a taller copy does too", r.Height)}
 	default:
-		return Reason{Code: PassedEqual, Detail: fmt.Sprintf("%dp, as tall as the copy chosen, which won on HDR, bitrate or id", r.Height)}
+		return Reason{Code: LostEqual, Detail: fmt.Sprintf("%dp, as tall as the copy chosen, which won on HDR, bitrate or id", r.Height)}
 	}
 }
 
