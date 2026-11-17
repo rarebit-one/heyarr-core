@@ -62,6 +62,11 @@ type PrimaryAssetRef struct {
 	Size            *int64   `json:"size"`
 	DurationSeconds *float64 `json:"duration_seconds"`
 	ContentURL      string   `json:"content_url"`
+	// The probed picture (#885): height, HDR (PQ or HLG transfer) and the
+	// container's bitrate. Each null when nothing has probed the blob.
+	Height     *int   `json:"height"`
+	HDR        *bool  `json:"hdr"`
+	BitrateBPS *int64 `json:"bitrate_bps"`
 }
 
 // Edition is one concrete form of a Work.
