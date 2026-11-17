@@ -151,10 +151,23 @@ func applyOne(ctx context.Context, cat FanOutStore, q ProbeEnqueuer, op catalogo
 		return "", "", "", err
 	}
 	for _, b := range blocked {
-		if b.CandidateID == "infohash:"+a.Infohash {
-			return catalog.FanOutNoSiteSource, want.DesiredItemID,
-				detail + "; the release did not fetch here and is blocked for this want", nil
+		if b.CandidateID != "infohash:"+a.Infohash {
+			continue
 		}
+		// The release may have reached this site another way: the origin
+		// holds it for a site that reported it unsourced, and it is pulled
+		// over the peer surface (ADR-0119 #800 amendment). Once the want holds
+		// its content the op is held, not unsourced.
+		state, err := cat.Acquisition(ctx, want.DesiredItemID)
+		if err != nil {
+			return "", "", "", err
+		}
+		if state.State.Managed && state.State.Content == acquisition.SatisfactionSatisfied {
+			return catalog.FanOutHeld, want.DesiredItemID,
+				detail + "; the release did not fetch here, and the want holds its content", nil
+		}
+		return catalog.FanOutNoSiteSource, want.DesiredItemID,
+			detail + "; the release did not fetch here and is blocked for this want", nil
 	}
 	cand := acquisition.ReleaseCandidate{
 		ID:       "infohash:" + a.Infohash,

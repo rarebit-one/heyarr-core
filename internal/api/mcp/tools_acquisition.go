@@ -109,7 +109,10 @@ func (s *Server) registerAcquisitionTools() {
 			"flight, the transfer behind it: which release was chosen — its name carries the " +
 			"resolution and size — how far it has downloaded, and any trouble the client " +
 			"reported. This is the read for \"what is this want actually doing\" and \"why is " +
-			"it still not here\", without opening the download client.",
+			"it still not here\", without opening the download client. A want a sibling site's " +
+			"choice created carries `fan_out`: the origin site and release, what this site did " +
+			"with it (no_site_source when it could not fetch it), whether it reported that to the " +
+			"origin, and the peer-pull outcome of any hold the origin published for the work.",
 		InputSchema: schemaDesiredItemID,
 		Handler:     s.getAcquisitionStatus,
 	})

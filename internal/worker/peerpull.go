@@ -23,10 +23,15 @@ import (
 
 // Peer-pull of non-swarm assets (ADR-0119 amendment, #833).
 //
-// One pass does both halves, in order, for the libraries this node opted in:
+// One pass does three things, in order, for the libraries this node opted in:
 //
+//   - REPORT. Each sibling's acquire this node recorded `no_site_source` for
+//     (a dead swarm, ADR-0119 #800 amendment) gets an `unsourced` op, once,
+//     so its origin holds the asset for this node.
 //   - PUBLISH. Each asset no swarm covers (a scan, an HTTP, usenet or direct
-//     fetch) gets a `hold` op naming its blob, once per (work, blob).
+//     fetch) gets a `hold` op naming its blob, once per (work, blob). An
+//     acquire this site signed stops covering its asset once a sibling has
+//     reported it unsourced.
 //   - APPLY. Each sibling's hold is landed in an opted-in library here: the
 //     blob is recorded as op-sourced (the signer's claim), pulled from the
 //     signer by the ordinary replicate_blob, and once it is held, recorded as
@@ -73,6 +78,8 @@ type PeerPullCatalog interface {
 	RecordOpSourcedBlob(ctx context.Context, b catalog.OpSourcedBlob) (string, error)
 	LastFailedPull(ctx context.Context, blobHash string) (time.Time, error)
 	SelfPeer(ctx context.Context) (string, error)
+	FanOutApplications(ctx context.Context) (map[string]catalog.FanOutApplication, error)
+	IsSiblingKey(ctx context.Context, key string) (bool, error)
 }
 
 // BlobHolder reports whether this node's content store holds a blob.
@@ -126,6 +133,15 @@ func PeerPullHandler(p PeerPull) HandlerFunc {
 		if err != nil {
 			return err
 		}
+		reported, err := p.report(ctx, tokens, selfKey, now().UTC(), log)
+		if err != nil {
+			return err
+		}
+		if reported > 0 {
+			if tokens, err = p.Ops.Ops(ctx); err != nil {
+				return err
+			}
+		}
 		published, err := p.publish(ctx, tokens, selfKey, now().UTC(), log)
 		if err != nil {
 			return err
@@ -139,6 +155,85 @@ func PeerPullHandler(p PeerPull) HandlerFunc {
 	}
 }
 
+// report signs an unsourced op for each effective acquire a sibling signed
+// that this node recorded `no_site_source` for, in a content type an opted-in
+// library here takes, whose release fits the cap when the op gives its size,
+// and that this node has not reported already (ADR-0119 #800 amendment). It
+// returns how many it wrote.
+func (p PeerPull) report(ctx context.Context, tokens []string, selfKey string, now time.Time, log *slog.Logger) (int, error) {
+	view := catalogop.Evaluate(tokens)
+	if len(view.Acquisitions) == 0 {
+		return 0, nil
+	}
+	apps, err := p.Catalog.FanOutApplications(ctx)
+	if err != nil {
+		return 0, err
+	}
+	libs, err := p.Catalog.PeerPullLibraries(ctx, p.Libraries)
+	if err != nil {
+		return 0, err
+	}
+	types := map[string]bool{}
+	for _, l := range libs {
+		types[l.ContentType] = true
+	}
+	done := map[string]bool{}
+	for _, op := range view.Accepted {
+		if op.Kind == catalogop.OpUnsourced && op.By == selfKey {
+			done[op.Unsourced.Acquire] = true
+		}
+	}
+	var due []catalogop.Op
+	for _, op := range view.Acquisitions {
+		app, ok := apps[op.Hash]
+		switch {
+		case op.By == selfKey || done[op.Hash] || !types[op.Target.ContentType]:
+		case !ok || app.Outcome != catalog.FanOutNoSiteSource:
+		case op.Acquire.Size > p.MaxBlobBytes:
+			// The origin would not publish it, and the link stays unused.
+		default:
+			due = append(due, op)
+		}
+	}
+	if len(due) == 0 {
+		return 0, nil
+	}
+	sort.Slice(due, func(i, j int) bool { return due[i].Hash < due[j].Hash })
+
+	logBytes := opLogBytes(tokens)
+	site := p.siteName()
+	// Each report cites the one before it, as holds do, leaving room for the
+	// acquire it names.
+	heads := view.Heads
+	if len(heads) > catalogop.MaxPrev-1 {
+		heads = heads[len(heads)-(catalogop.MaxPrev-1):]
+	}
+	var batch []string
+	for _, op := range due {
+		tok, err := catalogop.SignUnsourced(p.Signer, op.Target.ContentType, op.Target.WorkKey,
+			catalogop.Unsourced{Acquire: op.Hash, Site: site}, heads, now)
+		if err != nil {
+			return 0, fmt.Errorf("worker: signing the report for acquire %s: %w", op.Hash, err)
+		}
+		if logBytes+len(tok) > maxOpLogBytes {
+			log.Warn("not reporting further unsourced releases: the catalog op-log is near the catalog-sync limit",
+				"log_bytes", logBytes, "limit", maxOpLogBytes)
+			break
+		}
+		logBytes += len(tok)
+		heads = []string{catalogop.Hash(tok)}
+		batch = append(batch, tok)
+	}
+	if len(batch) == 0 {
+		return 0, nil
+	}
+	if err := p.Ops.RecordOps(ctx, batch); err != nil {
+		return 0, fmt.Errorf("worker: recording unsourced ops: %w", err)
+	}
+	log.Info("reported siblings' releases this site cannot source, for their origins to hold", "reported", len(batch))
+	return len(batch), nil
+}
+
 // publish signs a hold for every candidate asset no swarm covers and this node
 // has not already published, and records them. It returns how many it wrote.
 func (p PeerPull) publish(ctx context.Context, tokens []string, selfKey string, now time.Time, log *slog.Logger) (int, error) {
@@ -147,12 +242,22 @@ func (p PeerPull) publish(ctx context.Context, tokens []string, selfKey string, 
 		return 0, err
 	}
 	view := catalogop.Evaluate(tokens)
+	unsourced, err := p.reportedBySibling(ctx, view, selfKey)
+	if err != nil {
+		return 0, err
+	}
 	published := map[string]bool{}
 	covered := map[string]bool{}
 	for _, op := range view.Accepted {
 		switch {
 		case op.Kind == catalogop.OpHold && op.By == selfKey:
 			published[catalogop.HoldKey(op.Target, op.Hold.Blob)] = true
+		case op.Kind == catalogop.OpAcquire && op.By == selfKey &&
+			unsourced[catalogop.AcquireKey(op.Target, op.Acquire.Scope, op.Acquire.Aspect)]:
+			// This site's selection, whose effective acquire a sibling
+			// reported it cannot source (a dead swarm, #800): neither it nor an
+			// earlier one for the same scope covers the asset any longer, which
+			// is held for the sibling instead.
 		case op.Kind == catalogop.OpAcquire:
 			// A swarm covers it: an acquire, this site's or a sibling's, names
 			// the work, the edition or the item. Its bytes reach the sibling
@@ -160,14 +265,8 @@ func (p PeerPull) publish(ctx context.Context, tokens []string, selfKey string, 
 			covered[op.Target.Key()+"\x1f"+op.Acquire.Scope] = true
 		}
 	}
-	logBytes := 0
-	for _, t := range tokens {
-		logBytes += len(t)
-	}
-	site := clipBytes(p.Site, catalogop.MaxSite)
-	if site == "" {
-		site = "unnamed"
-	}
+	logBytes := opLogBytes(tokens)
+	site := p.siteName()
 
 	// Each hold cites the one before it, so the log keeps a single head: a
 	// batch citing the same heads would leave every hold a head, and the next
@@ -251,6 +350,56 @@ func (p PeerPull) publish(ctx context.Context, tokens []string, selfKey string, 
 		log.Info("published held assets for siblings to pull", "published", written, "not_expressible", skipped)
 	}
 	return written, nil
+}
+
+// reportedBySibling is the set of AcquireKeys whose effective acquire this
+// node signed and a current member other than this node reported unsourced.
+// A report on a selection since superseded counts for nothing: the newer one
+// covers until it is reported in turn.
+func (p PeerPull) reportedBySibling(ctx context.Context, view catalogop.View, selfKey string) (map[string]bool, error) {
+	out := map[string]bool{}
+	member := map[string]bool{}
+	for hash, reports := range view.Unsourced {
+		acq, ok := view.Accepted[hash]
+		if !ok || acq.By != selfKey {
+			continue
+		}
+		key := catalogop.AcquireKey(acq.Target, acq.Acquire.Scope, acq.Acquire.Aspect)
+		if eff, ok := view.Acquisitions[key]; !ok || eff.Hash != hash {
+			continue
+		}
+		for _, r := range reports {
+			is, seen := member[r.By]
+			if !seen {
+				var err error
+				if is, err = p.Catalog.IsSiblingKey(ctx, r.By); err != nil {
+					return nil, err
+				}
+				member[r.By] = is
+			}
+			if is {
+				out[key] = true
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+// siteName is this node's site name as an op carries it.
+func (p PeerPull) siteName() string {
+	if site := clipBytes(p.Site, catalogop.MaxSite); site != "" {
+		return site
+	}
+	return "unnamed"
+}
+
+func opLogBytes(tokens []string) int {
+	n := 0
+	for _, t := range tokens {
+		n += len(t)
+	}
+	return n
 }
 
 // apply lands every effective hold op that has not settled.

@@ -37,8 +37,13 @@ func TestGetAcquisitionStatus(t *testing.T) {
 			BytesDone   int64   `json:"bytes_done"`
 			PercentDone float64 `json:"percent_done"`
 		} `json:"transfer"`
+		FanOut *struct{} `json:"fan_out"`
 	}
 	h.call("", "get_acquisition_status", `{"desired_item_id":"`+id+`"}`).structured(t, &out)
+
+	if out.FanOut != nil {
+		t.Error("a want this site created reported a fan_out block")
+	}
 
 	if out.Phase != "downloading" {
 		t.Errorf("phase = %q, want downloading", out.Phase)

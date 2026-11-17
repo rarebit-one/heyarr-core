@@ -233,6 +233,13 @@ func (s *site) pendingPulls() []pendingPull {
 // replicaStatus calls the MCP tool an operator or an agent would ask.
 func (s *site) replicaStatus(blob string) map[string]any {
 	s.t.Helper()
+	return s.tool("get_replica_status", `{"blob_hash":"`+blob+`"}`)
+}
+
+// tool calls one MCP tool at this site, as an operator or an agent would, and
+// returns its reply as JSON.
+func (s *site) tool(name, args string) map[string]any {
+	s.t.Helper()
 	tokens, err := auth.NewStore(auth.StoreOptions{Writer: s.db.Writer(), Reader: s.db.Reader()})
 	if err != nil {
 		s.t.Fatal(err)
@@ -249,10 +256,10 @@ func (s *site) replicaStatus(blob string) map[string]any {
 		s.t.Fatal(err)
 	}
 	for _, tool := range srv.Tools() {
-		if tool.Name != "get_replica_status" {
+		if tool.Name != name {
 			continue
 		}
-		out, err := tool.Handler(s.t.Context(), json.RawMessage(`{"blob_hash":"`+blob+`"}`))
+		out, err := tool.Handler(s.t.Context(), json.RawMessage(args))
 		if err != nil {
 			s.t.Fatal(err)
 		}
@@ -266,7 +273,7 @@ func (s *site) replicaStatus(blob string) map[string]any {
 		}
 		return m
 	}
-	s.t.Fatal("no get_replica_status tool")
+	s.t.Fatalf("no %s tool", name)
 	return nil
 }
 
