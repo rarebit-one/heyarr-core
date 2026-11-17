@@ -211,10 +211,14 @@ func TestAcquireReleaseRefusesAURLItCannotTakeAsADirectRelease(t *testing.T) {
 		reg             func(*testing.T) *providers.Registry
 		phase           string
 	}{
-		{"a magnet", "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
-			"torrent release", both, ""},
-		{"a .torrent link", "https://tracker.example/dl/1/Some.Game.torrent?passkey=abc",
-			"torrent release", both, ""},
+		{
+			"a magnet", "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+			"torrent release", both, "",
+		},
+		{
+			"a .torrent link", "https://tracker.example/dl/1/Some.Game.torrent?passkey=abc",
+			"torrent release", both, "",
+		},
 		{"not http", "ftp://files.example/game.zip", "http(s) URL", both, ""},
 		{"no http client", "https://files.example/game.zip", "no http download client", torrentOnly, ""},
 		{"a want already downloading", "https://files.example/game.zip", "MISSING", both, "downloading"},

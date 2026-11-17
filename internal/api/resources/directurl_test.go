@@ -93,17 +93,27 @@ func TestDirectURLRefusals(t *testing.T) {
 		status     int
 		want       string
 	}{
-		{"a magnet", `{"url":"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"}`,
-			false, false, 400, "select its candidate instead"},
-		{"a .torrent", `{"url":"https://tracker.example/1/game.torrent?passkey=abc"}`,
-			false, false, 400, "torrent release"},
+		{
+			"a magnet", `{"url":"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"}`,
+			false, false, 400, "select its candidate instead",
+		},
+		{
+			"a .torrent", `{"url":"https://tracker.example/1/game.torrent?passkey=abc"}`,
+			false, false, 400, "torrent release",
+		},
 		{"not http", `{"url":"file:///srv/game.zip"}`, false, false, 400, "http(s) URL"},
-		{"both", `{"url":"https://files.example/game.zip","candidate_id":"good"}`,
-			false, false, 400, "not both"},
-		{"no http client", `{"url":"https://files.example/game.zip"}`,
-			true, false, 400, "no http download client"},
-		{"a want that holds bytes", `{"url":"https://files.example/game.zip"}`,
-			false, true, 409, "PLACEMENT_CONVERGING"},
+		{
+			"both", `{"url":"https://files.example/game.zip","candidate_id":"good"}`,
+			false, false, 400, "not both",
+		},
+		{
+			"no http client", `{"url":"https://files.example/game.zip"}`,
+			true, false, 400, "no http download client",
+		},
+		{
+			"a want that holds bytes", `{"url":"https://files.example/game.zip"}`,
+			false, true, 409, "PLACEMENT_CONVERGING",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
