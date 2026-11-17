@@ -181,9 +181,10 @@ the cost (decision on #833, 2026-11-17): **peer-pull, as a per-library opt-in.**
    hash. A hold is never withdrawn by another op. A tombstone on the work
    (ADR-0073) suppresses it, as it does an `acquire`.
 2. **Only for an asset with no swarm.** The origin publishes a hold for an asset
-   of an opted-in library unless it has already published an `acquire` for the
+   of an opted-in library unless an `acquire`, its own or a sibling's, names the
    asset's work, edition or item. Those reach the sibling through its own swarm,
-   and the link stays unused. Publishing is a periodic pass, not part of ingest,
+   and the link stays unused. An asset this site pulled from a hold is never
+   published back. Publishing is a periodic pass, not part of ingest,
    so a library opted in after its scan publishes what it already holds. The
    pass is idempotent: a `(work, blob)` this site already published is skipped.
 3. **The opt-in is per library, at both sites.**
@@ -263,6 +264,11 @@ the cost (decision on #833, 2026-11-17): **peer-pull, as a per-library opt-in.**
 
 - The op-log gains a kind, and a node gains a table recording hold outcomes.
   There is no new peer route. The catalog-ops sync carries the op.
+- Each hold cites the one published before it, so the log keeps one head and
+  the next op signed there stays within its bound on cited heads.
+- The whole log rides one catalog-sync body, capped at 8 MiB. The publisher
+  stops short of that, so a very large library is published only in part,
+  and says so. This is the first kind that can approach the cap.
 - **An older build refuses a sync batch with an op kind it does not know.** That
   stops catalog sync for the pair, tombstones included. List a library only once
   both sites run a build that reads `hold`.

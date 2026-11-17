@@ -707,10 +707,22 @@ func (s *Server) getReplicaStatus(ctx context.Context, raw json.RawMessage) (any
 		// it from a state name it has to know the vocabulary of.
 		Counts bool `json:"counts_for_placement"`
 	}
+	// hold is what this node did with a sibling's hold op naming the blob, or
+	// that it published one itself (ADR-0119 amendment, #833).
+	type hold struct {
+		OpHash    string `json:"op_hash"`
+		Outcome   string `json:"outcome"`
+		Detail    string `json:"detail,omitempty"`
+		Library   string `json:"library,omitempty"`
+		AppliedAt string `json:"applied_at"`
+	}
 	out := struct {
 		truncatable
 		BlobHash string    `json:"blob_hash"`
 		Replicas []replica `json:"replicas"`
+		// Holds is absent when no hold op names the blob, which is every blob
+		// on a node without peer-pull: its reply is unchanged.
+		Holds []hold `json:"peer_pull,omitempty"`
 	}{BlobHash: args.BlobHash, Replicas: []replica{}}
 
 	for rows.Next() {
@@ -725,6 +737,25 @@ func (s *Server) getReplicaStatus(ctx context.Context, raw json.RawMessage) (any
 		return nil, err
 	}
 	out.Count = len(out.Replicas)
+
+	holds, err := s.reader.QueryContext(ctx, `
+		SELECT h.op_hash, h.outcome, h.detail, COALESCE(l.name, ''), h.applied_at
+		FROM catalog_hold_applications h LEFT JOIN libraries l ON l.id = h.library_id
+		WHERE h.blob_hash = ? ORDER BY h.applied_at, h.op_hash`, args.BlobHash)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = holds.Close() }()
+	for holds.Next() {
+		var h hold
+		if err := holds.Scan(&h.OpHash, &h.Outcome, &h.Detail, &h.Library, &h.AppliedAt); err != nil {
+			return nil, err
+		}
+		out.Holds = append(out.Holds, h)
+	}
+	if err := holds.Err(); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

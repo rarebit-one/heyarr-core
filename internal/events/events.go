@@ -367,6 +367,12 @@ const (
 	// later pass is not a transition and emits nothing.
 	TypeFanOutApplicationChanged = "acquisition.fan_out_changed"
 
+	// TypeHoldApplicationChanged is this node's outcome for a hold op changing
+	// (ADR-0119 amendment, #833): first recorded, or moved, such as pulling to
+	// held. Emitted in the same transaction as the catalog_hold_applications
+	// row; an unchanged outcome on a later pass emits nothing.
+	TypeHoldApplicationChanged = "replication.hold_changed"
+
 	// The upgrade workflow (§60, M3-06).
 	//
 	// TypeUpgradeFound is a strictly better release being available for

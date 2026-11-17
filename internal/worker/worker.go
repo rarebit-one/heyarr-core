@@ -237,6 +237,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		peerID: peerID, providers: providerRegistry, toolchain: toolchain,
 	}
 	deps.acquire, deps.fanOut = newAcquireFanOut(w.cfg, db, cat, w.log)
+	deps.peerPull = newPeerPull(w.cfg, db, cat, store, pipeline, queue, w.log)
 	registry := NewRegistry()
 	registerStorageJobs(registry, deps)
 	registerAcquisitionJobs(registry, deps)
@@ -411,4 +412,35 @@ func newAcquireFanOut(cfg config.Config, db *sqlite.DB, cat *catalog.Catalog, lo
 		return pub, nil
 	}
 	return pub, &fanOutDeps{ops: ops, selfKey: identity.FormatPublicKey(signer.Public().(ed25519.PublicKey))}
+}
+
+// newPeerPull builds the peer-pull pass (ADR-0119 amendment, #833) for a media
+// node with an identity key and at least one library opted in. Anything else
+// gets nil, and the pass is never registered: with acquisition.peer_pull empty,
+// nothing is published and nothing is applied.
+func newPeerPull(
+	cfg config.Config, db *sqlite.DB, cat *catalog.Catalog, store *cas.FS,
+	pipeline *ingest.Pipeline, queue *jobs.Queue, log *slog.Logger,
+) *PeerPull {
+	pp := cfg.Acquisition.PeerPull
+	if cfg.Profile != config.ProfileMedia || !pp.Enabled() {
+		return nil
+	}
+	signer, err := identity.Signer(cfg.DataDir)
+	if err != nil {
+		log.Warn("acquisition.peer_pull names libraries but this node has no identity key yet; "+
+			"peer-pull starts once it has one and the worker restarts", "error", err)
+		return nil
+	}
+	ops, err := catalogtomb.New(catalogtomb.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		log.Warn("catalog op store unavailable; peer-pull is off", "error", err)
+		return nil
+	}
+	return &PeerPull{
+		Ops: ops, Catalog: cat, Store: store, Adopter: pipeline, Queue: queue,
+		Signer: signer, Site: cfg.Peer.Site,
+		Libraries: append([]string(nil), pp.Libraries...), MaxBlobBytes: pp.MaxBlob(),
+		Log: log,
+	}
 }

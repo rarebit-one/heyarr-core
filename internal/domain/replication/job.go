@@ -73,3 +73,12 @@ type ReplicateBlobPayload struct {
 	// DestinationPeerID is the peer that must end up holding the bytes.
 	DestinationPeerID string `json:"destination_peer_id"`
 }
+
+// PeerPullJobType is one peer-pull pass (ADR-0119 amendment, #833): publish a
+// `hold` op for each asset of an opted-in library that no swarm covers, and
+// apply siblings' holds by pulling their blobs and recording the assets.
+const PeerPullJobType = "peer_pull"
+
+// PeerPullDedupeKey is the queue's idempotency key for the pass: one in flight
+// at a time, so a slow pass cannot pile up behind itself.
+const PeerPullDedupeKey = "peer_pull"

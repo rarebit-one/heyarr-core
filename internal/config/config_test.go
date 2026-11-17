@@ -248,6 +248,22 @@ func TestValidateRejectsBadValues(t *testing.T) {
 			c.Acquisition.FanOut = true
 		}, "media profile only"},
 		{"bad fan-out interval", func(c *Config) { c.Acquisition.Interval = "soon" }, "acquisition.interval"},
+		{"peer-pull on the personal profile", func(c *Config) {
+			c.Profile = ProfilePersonal
+			c.Acquisition.PeerPull.Libraries = []string{"roms"}
+		}, "acquisition.peer_pull is for the media profile only"},
+		{"peer-pull empty library name", func(c *Config) {
+			c.Acquisition.PeerPull.Libraries = []string{""}
+		}, "contains an empty name"},
+		{"peer-pull library with whitespace", func(c *Config) {
+			c.Acquisition.PeerPull.Libraries = []string{"roms "}
+		}, "surrounding whitespace"},
+		{"peer-pull library twice", func(c *Config) {
+			c.Acquisition.PeerPull.Libraries = []string{"roms", "roms"}
+		}, "lists \"roms\" twice"},
+		{"peer-pull negative cap", func(c *Config) {
+			c.Acquisition.PeerPull.MaxBlobBytes = -1
+		}, "max_blob_bytes must not be negative"},
 		{"library without name", func(c *Config) {
 			c.Libraries = []Library{{Roots: []string{"/srv/media"}}}
 		}, "has no name"},
@@ -794,5 +810,24 @@ func TestProvisionalUploadPinsDefaultOffAndLoadFromFile(t *testing.T) {
 	}
 	if !cfg.Placement.ProvisionalUploadPins {
 		t.Error("placement.provisional_upload_pins: true did not load")
+	}
+}
+
+// Peer-pull is off unless a library is named (ADR-0119 amendment, #833), and
+// its cap falls back to 4 GiB.
+func TestPeerPullDefaultsOff(t *testing.T) {
+	cfg := Defaults()
+	if cfg.Acquisition.PeerPull.Enabled() {
+		t.Fatal("peer-pull is on by default")
+	}
+	if got := cfg.Acquisition.PeerPull.MaxBlob(); got != 4<<30 {
+		t.Fatalf("default cap = %d, want 4 GiB", got)
+	}
+	cfg.Acquisition.PeerPull = PeerPull{Libraries: []string{"roms"}, MaxBlobBytes: 1 << 20}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a valid opt-in was refused: %v", err)
+	}
+	if !cfg.Acquisition.PeerPull.Enabled() || cfg.Acquisition.PeerPull.MaxBlob() != 1<<20 {
+		t.Fatalf("opt-in = %+v", cfg.Acquisition.PeerPull)
 	}
 }
