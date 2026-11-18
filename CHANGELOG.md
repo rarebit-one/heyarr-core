@@ -10,6 +10,17 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **A plan honours the person's preferred quality** (#887, ADR-0123
+  addendum). `POST /playback/plan` takes an optional `preference`:
+  `quality` (`fit`, `best` or `data_saver`) and the person's own
+  `max_height` / `max_bitrate_bps` cap. The client resolves it from the
+  person's synced default and its own override, because the node cannot read
+  personal state. `best` lifts the screen's height limit, so the tallest copy
+  is chosen and played without scaling. `data_saver` stops at 720 lines and
+  takes the leaner of two copies of equal height. The cap applies under any
+  quality. The height bounds the plan by `asset_id` as well as by `work_id`.
+  The answer echoes the preference it applied. An absent preference plans
+  exactly as before.
 - **Graded prefer rules** (#888). A quality profile's prefer section may now
   name one attribute and comparison more than once with different values —
   `audio_channels gte 6` weight 5 and `gte 8` weight 5 — and the weights add

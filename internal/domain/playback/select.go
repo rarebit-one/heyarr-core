@@ -26,8 +26,8 @@ import (
 //     nothing here tone-maps (#886), so HDR on an SDR screen looks washed out;
 //  3. then the tallest picture;
 //  4. then, at equal height, an HDR copy when the client declares HDR, the
-//     higher bitrate, and the asset id — so the answer is stable across
-//     requests.
+//     higher bitrate (the lower, for a data saver: #887), and the asset id —
+//     so the answer is stable across requests.
 //
 // When nothing fits, the smallest copy over the limit is chosen and scaled
 // down as any too-tall source is. Copies nothing has probed rank last: their
@@ -57,6 +57,10 @@ type Fit struct {
 	// VideoCodecs is what the client decodes; empty means not stated, and no
 	// copy is then held to need a re-encode.
 	VideoCodecs []string
+	// Quality is the person's preference (#887), already folded into the
+	// limits above by [Preference.Apply]. Here it only breaks a tie: a data
+	// saver takes the lower bitrate of two copies of equal height.
+	Quality Quality
 }
 
 // Selection codes. Stable, like the planner's reason codes: a client shows the
@@ -175,7 +179,11 @@ func compareRanked(a, b ranked, fit Fit) int {
 				return c
 			}
 		}
-		if c := cmp.Compare(b.BitrateBPS, a.BitrateBPS); c != 0 {
+		if fit.Quality == QualityDataSaver {
+			if c := cmp.Compare(a.BitrateBPS, b.BitrateBPS); c != 0 {
+				return c
+			}
+		} else if c := cmp.Compare(b.BitrateBPS, a.BitrateBPS); c != 0 {
 			return c
 		}
 	case tierOverLimit:
@@ -267,8 +275,16 @@ func passedReason(r, chosen ranked, fit Fit) Reason {
 	}
 }
 
-// limits renders the client's ceilings for a sentence.
+// limits renders the client's ceilings for a sentence, naming the person's
+// preference when it is not the default.
 func limits(fit Fit) string {
+	if q := fit.Quality.label(); q != "" {
+		return ceilings(fit) + " (" + q + ")"
+	}
+	return ceilings(fit)
+}
+
+func ceilings(fit Fit) string {
 	switch {
 	case fit.MaxHeight > 0 && fit.MaxBitrateBPS > 0:
 		return fmt.Sprintf("the client's max height %d and %d bit/s", fit.MaxHeight, fit.MaxBitrateBPS)

@@ -9850,6 +9850,41 @@ components:
             What the caller can decode (ADR-0069). Present, the answer carries
             the leg — `mode`, `url`, `mime`, `reason`, `source` — and
             `device_id` may be omitted.
+        preference:
+          allOf: [{ $ref: "#/components/schemas/PlaybackPreference" }]
+          description: |
+            The person's preferred quality (#887): their synced default with
+            this device's override laid over it, resolved by the client because
+            the node cannot read personal state. Absent is `fit`, the plan as
+            it was before.
+
+    PlaybackPreference:
+      type: object
+      description: |
+        A person's playback quality (#887, ADR-0123's addendum). It bounds the
+        choice of copy and the plan of the copy chosen, by asset or by work:
+        `fit` limits the picture to the screen's `max_height`; `best` lifts
+        that limit, so the tallest copy is chosen and handed over without
+        scaling; `data_saver` limits it to 720 lines or the screen, whichever
+        is shorter, and takes the lower bitrate of two copies of equal height.
+        `max_height` and `max_bitrate_bps` are the person's own cap, a further
+        ceiling under any quality. The codecs and HDR stay the device's facts:
+        `best` on a screen without HDR still prefers an SDR copy. Like the
+        client's, the bitrate cap steers the choice only.
+      properties:
+        quality:
+          type: string
+          enum: [fit, best, data_saver]
+          description: Empty or absent is `fit`.
+        max_height:
+          type: integer
+          minimum: 0
+          description: The person's height cap, in lines. Zero is no cap.
+        max_bitrate_bps:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The person's bitrate cap. Zero is no cap.
 
     ClientCapabilities:
       type: object
@@ -10028,6 +10063,12 @@ components:
             Present exactly when the request named a `work_id` and no
             `asset_id` (#885): the copy chosen — the plan's `asset_id` — why,
             and every other copy with why not.
+        preference:
+          allOf: [{ $ref: "#/components/schemas/PlaybackPreference" }]
+          description: |
+            The preference the plan applied (#887), `quality` filled in,
+            present exactly when the request carried one. A client that sent
+            one and finds this absent is talking to a node that ignored it.
 
     PlaybackSelection:
       type: object

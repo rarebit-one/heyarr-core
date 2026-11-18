@@ -40,6 +40,51 @@ type PlanRequest struct {
 	// answer carries the leg (mode, url, mime, reason, source) as well as the
 	// decision, and device_id may be omitted.
 	Client *ClientCaps `json:"client,omitempty"`
+	// Preference is the person's playback quality (#887): their synced
+	// default with this device's override laid over it. It is personal state,
+	// which the node cannot read, so the client resolves it and sends the
+	// result here. Absent is "fit": the plan is exactly what it was before.
+	Preference *PlanPreference `json:"preference,omitempty"`
+}
+
+// PlanPreference is a playback quality preference on the wire (#887).
+type PlanPreference struct {
+	// Quality is fit, best or data_saver. Empty is fit.
+	Quality string `json:"quality,omitempty"`
+	// MaxHeight and MaxBitrateBPS are the person's own cap, a further
+	// ceiling over what the screen can show. Zero is no cap.
+	MaxHeight     int64 `json:"max_height,omitempty"`
+	MaxBitrateBPS int64 `json:"max_bitrate_bps,omitempty"`
+}
+
+// preference is the request's preference in the domain's shape, or an error
+// naming the field a client got wrong.
+func (body PlanRequest) preference() (playback.Preference, error) {
+	p := body.Preference
+	if p == nil {
+		return playback.Preference{}, nil
+	}
+	q := playback.Quality(p.Quality)
+	switch {
+	case !q.Valid():
+		return playback.Preference{}, errors.New("preference.quality must be fit, best or data_saver")
+	case p.MaxHeight < 0 || p.MaxBitrateBPS < 0:
+		return playback.Preference{}, errors.New("preference.max_height and preference.max_bitrate_bps must not be negative")
+	}
+	if q == "" {
+		q = playback.QualityFit
+	}
+	return playback.Preference{Quality: q, MaxHeight: p.MaxHeight, MaxBitrateBPS: p.MaxBitrateBPS}, nil
+}
+
+// renderPreference echoes the preference the plan applied, so a client can
+// tell a node that honoured it from one that predates #887 and ignored the
+// field. Nil when the request carried none.
+func renderPreference(body PlanRequest, p playback.Preference) *PlanPreference {
+	if body.Preference == nil {
+		return nil
+	}
+	return &PlanPreference{Quality: string(p.Quality), MaxHeight: p.MaxHeight, MaxBitrateBPS: p.MaxBitrateBPS}
 }
 
 // PlanResponse is the planner's answer, rendered.
@@ -83,6 +128,10 @@ type PlanResponse struct {
 	// asset (#885): the copy chosen, why, and every other copy with why not.
 	// AssetID above is the chosen copy.
 	Selection *SelectionResponse `json:"selection,omitempty"`
+	// Preference is the quality preference the plan applied (#887), present
+	// when the request carried one. Its absence on an answer to a request
+	// that sent one means the node ignored it.
+	Preference *PlanPreference `json:"preference,omitempty"`
 }
 
 // SelectionResponse is the copy selection, rendered (#885).
@@ -145,12 +194,17 @@ func (a *API) planPlayback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	pref, err := body.preference()
+	if err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
 	// An explicit asset wins; only a request naming a work alone is chosen
 	// for (#885).
 	var selection *SelectionResponse
 	if strings.TrimSpace(body.AssetID) == "" {
 		var ok bool
-		if selection, ok = a.selectCopy(w, r, body); !ok {
+		if selection, ok = a.selectCopy(w, r, body, pref); !ok {
 			return
 		}
 		body.AssetID = selection.Chosen.AssetID
@@ -158,7 +212,7 @@ func (a *API) planPlayback(w http.ResponseWriter, r *http.Request) {
 	// A client that says what it can decode gets the leg as well as the
 	// decision, and need not be a registered device (ADR-0069).
 	if body.Client != nil {
-		a.planForClient(w, r, body, selection)
+		a.planForClient(w, r, body, pref, selection)
 		return
 	}
 
@@ -167,6 +221,7 @@ func (a *API) planPlayback(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, "device", err)
 		return
 	}
+	device = pref.Bound(device)
 	media, blobHash, err := a.mediaProfile(r.Context(), body.AssetID, nil)
 	if err != nil {
 		a.fail(w, r, "asset", err)
@@ -181,6 +236,7 @@ func (a *API) planPlayback(w http.ResponseWriter, r *http.Request) {
 	plan := playback.Choose(media, device, replicasOf(route))
 	out := renderPlan(body.AssetID, body.DeviceID, plan, route, blobHash)
 	out.Selection = selection
+	out.Preference = renderPreference(body, pref)
 	a.write(w, r, http.StatusOK, out)
 }
 
@@ -189,8 +245,11 @@ func (a *API) planPlayback(w http.ResponseWriter, r *http.Request) {
 //
 // What the client can show comes from its declaration; anything it leaves
 // unstated is filled from the registered device it names, field by field, so
-// a television that registered once need declare nothing per request.
-func (a *API) selectCopy(w http.ResponseWriter, r *http.Request, body PlanRequest) (*SelectionResponse, bool) {
+// a television that registered once need declare nothing per request. The
+// person's preference is laid over the result (#887).
+func (a *API) selectCopy(
+	w http.ResponseWriter, r *http.Request, body PlanRequest, pref playback.Preference,
+) (*SelectionResponse, bool) {
 	ctx := r.Context()
 	var contentType string
 	if err := a.reader.QueryRowContext(ctx,
@@ -212,6 +271,7 @@ func (a *API) selectCopy(w http.ResponseWriter, r *http.Request, body PlanReques
 		a.fail(w, r, "device", err)
 		return nil, false
 	}
+	fit = pref.Apply(fit)
 	copies, err := a.queryCopies(ctx, copiesOfFilm, body.WorkID, body.EditionID, body.EditionID)
 	if err != nil {
 		a.fail(w, r, "asset", err)
