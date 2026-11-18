@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
 )
 
 // The token is the plan: what it names is what the route does, and only the
@@ -147,5 +148,36 @@ func TestAudioTrackIsSignedAndLegacyTokensKeepFirstAudio(t *testing.T) {
 	tok.AudioTrack = -1
 	if _, err := tok.sign(key); err == nil {
 		t.Fatal("signed negative audio ordinal")
+	}
+}
+
+// The tone-map is signed with the rest of the repackage (#886): it rides as
+// flag bits, a token naming both transfers is malformed, and a token minted
+// before tone-maps reads as none.
+func TestToneMapIsSignedInTheToken(t *testing.T) {
+	now := time.Now()
+	key := streamKey([]byte("secret"))
+	for _, tm := range []ffmpeg.ToneMap{ffmpeg.ToneMapNone, ffmpeg.ToneMapPQ, ffmpeg.ToneMapHLG} {
+		tok := streamToken{BlobHash: "blake3:abc", Subject: "p1", MaxHeight: 1080, ToneMap: tm, ExpiresAt: now.Add(time.Hour)}
+		signed, err := tok.sign(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := verifyStreamToken(key, signed, "p1", now)
+		if err != nil || got.ToneMap != tm || got.CopyVideo || got.MaxHeight != 1080 {
+			t.Errorf("%q: round trip = %+v, %v", tm, got, err)
+		}
+	}
+
+	fields := strings.Split(streamToken{BlobHash: "blake3:abc", Subject: "p1", ExpiresAt: now.Add(time.Hour)}.payload(), ".")
+	fields[3] = "12" // PQ and HLG at once
+	payload := strings.Join(fields, ".")
+	if _, err := verifyStreamToken(key, payload+"."+b64(streamMAC(key, payload)), "p1", now); !errors.Is(err, errStreamTokenMalformed) {
+		t.Errorf("both transfers: err = %v, want malformed", err)
+	}
+	fields[3] = "16"
+	payload = strings.Join(fields, ".")
+	if _, err := verifyStreamToken(key, payload+"."+b64(streamMAC(key, payload)), "p1", now); !errors.Is(err, errStreamTokenMalformed) {
+		t.Errorf("an unknown flag: err = %v, want malformed", err)
 	}
 }

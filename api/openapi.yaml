@@ -4037,8 +4037,17 @@ paths:
           cases), the whole thing re-wrapped when the container is the
           problem (AVI), and the video re-encoded when the client cannot
           decode the picture **or** the picture is taller than `max_height`
-          (scaled down to it). `reason` says which.
-        - `mode: unplayable` — no peer holds the bytes; `reason` is routing's.
+          (scaled down to it). `reason` says which. A video re-encode of an
+          HDR source (PQ or HLG, including Dolby Vision with an HDR10 or HLG
+          base) for a client that does not declare `supports_hdr` is
+          **tone-mapped** to BT.709 SDR and tagged so (#886); `reason` says
+          that too. A node whose ffmpeg lacks the zscale/tonemap filters
+          streams it untone-mapped and says so.
+        - `mode: unplayable` — no peer holds the bytes, and `reason` is
+          routing's; or the video needs a re-encode and is Dolby Vision with no
+          compatible base layer (profile 5), which this node cannot re-encode
+          in the right colours (`dolby_vision_no_compatible_base` among
+          `reasons`). A client that decodes such a file as it is gets `direct`.
 
         With `client`, media nothing has probed is **probed now** when this
         node has ffprobe and holds the bytes, and the result is cached in
@@ -9919,11 +9928,12 @@ components:
         supports_hdr:
           type: boolean
           description: |
-            The client shows HDR. Used only to choose among a work's copies
-            (`work_id`): when absent or false, an SDR copy is preferred among
-            those that fit. Absent is unstated rather than false, and a named
-            device's stored value fills it. It does not change how a copy is
-            planned — nothing tone-maps yet — so a plan by `asset_id` ignores it.
+            The client shows HDR. Choosing among a work's copies (`work_id`),
+            an SDR copy is preferred among those that fit when it is absent or
+            false. When the chosen copy's video is re-encoded anyway, an HDR
+            source is tone-mapped to SDR unless this is true (#886); it never
+            causes a re-encode by itself. Absent is unstated rather than
+            false, and a named device's stored value fills it.
         max_bitrate_bps:
           type: integer
           format: int64
@@ -9962,6 +9972,15 @@ components:
           items: { $ref: "#/components/schemas/PlaybackAudioTrack" }
         width: { type: integer }
         height: { type: integer }
+        dynamic_range:
+          type: string
+          enum: [sdr, pq, hlg, dolby_vision_only]
+          description: |
+            The picture as a re-encode sees it (#886): what the decoder hands
+            the encoder, which for Dolby Vision is its base layer. `pq` is
+            HDR10 and Dolby Vision 7/8.1, `hlg` includes 8.4, and
+            `dolby_vision_only` is a base no ordinary decoder renders
+            correctly (profile 5). Absent for media with no picture.
         duration_seconds:
           type: number
           description: |
@@ -10035,7 +10054,8 @@ components:
             The leg, present only when the request carried `client`
             (ADR-0069). `direct` — fetch `url`, the ordinary blob endpoint.
             `stream` — fetch `url`, the on-the-fly repackage. `unplayable` —
-            nothing holds the bytes.
+            nothing holds the bytes, or the re-encode the client needs would
+            come out in the wrong colours (Dolby Vision profile 5).
         url:
           type: string
           description: |
@@ -10187,7 +10207,7 @@ components:
             [no_replica, container_unsupported, video_codec_unsupported,
              audio_codec_unsupported, resolution_too_high, bitrate_too_high,
              hdr_unsupported, no_probe, remote_replica_only,
-             device_declares_nothing]
+             device_declares_nothing, dolby_vision_no_compatible_base]
           description: Stable. Clients branch on this, and a client branching on prose breaks when the prose improves.
         detail:
           type: string

@@ -41,6 +41,10 @@ type ClientProfile struct {
 	// MaxHeight is the tallest picture the client will take. Zero means no
 	// limit stated.
 	MaxHeight int
+	// SupportsHDR is whether the client shows HDR. It does not decide whether
+	// the video is re-encoded; it decides, when it is, whether an HDR source
+	// is tone-mapped to SDR on the way (#886).
+	SupportsHDR bool
 }
 
 // Declares reports whether the client said anything at all. A client that
@@ -71,6 +75,9 @@ const (
 	// LegStream means the on-the-fly repackage: fragmented MP4 produced by
 	// ffmpeg from the blob, one process per client.
 	LegStream LegMode = "stream"
+	// LegUnplayable means the client needs a re-encode this node cannot
+	// make correctly, and is told so rather than handed wrong colours.
+	LegUnplayable LegMode = "unplayable"
 )
 
 // Leg is the answer: what to fetch, why, and — for a stream — what the
@@ -88,6 +95,10 @@ type Leg struct {
 	// TargetHeight is the height to scale down to, when the source is taller
 	// than the client takes. Zero means keep the source height.
 	TargetHeight int
+	// ToneMapFrom is the HDR transfer a video re-encode converts to BT.709
+	// SDR, because the client does not declare HDR. Empty when there is no
+	// tone-map: video is copied, the source is SDR, or the client shows HDR.
+	ToneMapFrom DynamicRange
 }
 
 // Direct reports whether the client should fetch the blob itself.
@@ -187,6 +198,34 @@ func Negotiate(media MediaProfile, client ClientProfile) Leg {
 	if leg.Mode == LegDirect {
 		// A clean direct copies nothing; the flags are about a stream.
 		return Leg{Mode: LegDirect}
+	}
+	// What the picture is only matters once it is being re-encoded. A copy
+	// hands the client the source's own colour, whatever it is; a re-encode
+	// decodes the base layer and writes eight-bit H.264, so an HDR source
+	// has to be tone-mapped for an SDR screen, and a source with no base
+	// layer worth decoding cannot be re-encoded at all (#886).
+	if !leg.CopyVideo {
+		switch media.Range {
+		case RangeDolbyVisionOnly:
+			// Refused for every client, not only an SDR one: a re-encode
+			// drops the Dolby Vision metadata either way, so an HDR screen
+			// would be handed the same wrong colours.
+			leg.Mode = LegUnplayable
+			leg.Reasons = append(leg.Reasons, Reason{
+				Code: ReasonDolbyVisionNoBase,
+				Detail: "the video is Dolby Vision with no base layer an ordinary decoder renders (profile 5); " +
+					"re-encoding it would come out in the wrong colours, so it is not re-encoded",
+			})
+			sentences = append(sentences, "Dolby Vision with no compatible base layer cannot be re-encoded in the right colours")
+		case RangePQ, RangeHLG:
+			// No sentence here: whether the tone-map happens is the
+			// repackager's to say (its ffmpeg may lack the filters, or
+			// there may be no ffmpeg at all), so the caller that mints the
+			// stream says it.
+			if !client.SupportsHDR {
+				leg.ToneMapFrom = media.Range
+			}
+		}
 	}
 	leg.Reason = strings.Join(sentences, "; ")
 	return leg

@@ -59,6 +59,12 @@ const (
 	ReasonRemoteReplicaOnly     = "remote_replica_only"
 	ReasonDeviceDeclaresNothing = "device_declares_nothing"
 	ReasonForcedDirect          = "forced_direct"
+	// ReasonDolbyVisionNoBase refuses a re-encode of Dolby Vision with no
+	// base layer an ordinary decoder renders (profile 5, #886). The encoder
+	// would be handed IPTPQc2 samples as if they were YCbCr, and the picture
+	// would come out green and purple; no tone-map this node has can apply
+	// the RPU that makes them right.
+	ReasonDolbyVisionNoBase = "dolby_vision_no_compatible_base"
 )
 
 // Reason is one contribution to a decision.
@@ -81,11 +87,15 @@ type MediaProfile struct {
 	// Container is ffprobe's format_name: a comma-separated list of every name
 	// the demuxer answers to. Matching is by membership, because which of
 	// those a file "is" is a question with no answer.
-	Container     string
-	VideoCodec    string
-	Width         int
-	Height        int
-	HDR           bool
+	Container  string
+	VideoCodec string
+	Width      int
+	Height     int
+	HDR        bool
+	// Range is what the picture's samples mean to a decoder that ignores
+	// Dolby Vision metadata, which is what a re-encode is (#886). The zero
+	// value reads as SDR.
+	Range         DynamicRange
 	AudioCodec    string
 	AudioTrack    int
 	AudioLanguage string
@@ -97,6 +107,22 @@ type MediaProfile struct {
 	// one that grows with what has been encoded so far.
 	DurationSec float64
 }
+
+// DynamicRange is a picture's dynamic range as a re-encode sees it: what the
+// decoder hands the encoder, which for Dolby Vision is its base layer.
+type DynamicRange string
+
+const (
+	// RangeSDR is standard dynamic range, or nothing said otherwise.
+	RangeSDR DynamicRange = "sdr"
+	// RangePQ is the SMPTE ST 2084 transfer: HDR10, HDR10+, and Dolby
+	// Vision profiles 7 and 8.1.
+	RangePQ DynamicRange = "pq"
+	// RangeHLG is hybrid log-gamma, including Dolby Vision 8.4.
+	RangeHLG DynamicRange = "hlg"
+	// RangeDolbyVisionOnly is Dolby Vision with no compatible base layer.
+	RangeDolbyVisionOnly DynamicRange = "dolby_vision_only"
+)
 
 // DeviceProfile is what a device declared it can play (§68, M2-05).
 //
