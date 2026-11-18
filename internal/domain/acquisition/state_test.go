@@ -24,6 +24,8 @@ var legalEdges = map[Phase]map[Transition]Phase{
 		// for that want they describe what actually happened.
 		TransitionAdopt: PhaseVerifying,
 		TransitionLost:  PhaseIdle,
+		// A person choosing from the last search's candidates (#888).
+		TransitionSelect: PhaseSelected,
 	},
 	PhaseSearching: {
 		TransitionCandidatesFound: PhaseCandidatesFound,

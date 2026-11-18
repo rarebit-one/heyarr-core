@@ -265,94 +265,14 @@ func (c *Catalog) SelectedCandidate(ctx context.Context, desiredItemID string) (
 func (c *Catalog) OverrideSelection(
 	ctx context.Context, desiredItemID, candidateID string,
 ) (Candidate, error) {
-	now := sqlite.FormatTimestamp(c.clock.Now())
-
 	var (
 		chosen Candidate
 		ev     events.Event
 	)
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		chosen, err = scanCandidate(tx.QueryRowContext(ctx,
-			`SELECT `+candidateCols+` FROM release_candidates
-			 WHERE desired_item_id = ? AND candidate_id = ?`, desiredItemID, candidateID))
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: %s", ErrNoCandidate, candidateID)
-		}
-		if err != nil {
-			return err
-		}
-		if !chosen.Evaluation.Accepted {
-			return fmt.Errorf("%w: %s", ErrNotAcceptable, candidateID)
-		}
-
-		// What the scorer would have chosen, so the disagreement is recorded
-		// rather than merely the departure.
-		previous, prevErr := scanCandidate(tx.QueryRowContext(ctx,
-			`SELECT `+candidateCols+` FROM release_candidates
-			 WHERE desired_item_id = ? AND selected = 1`, desiredItemID))
-		// Every branch below sets this, and there is deliberately no default
-		// value: a half-written override detail would be worse than none,
-		// because it would look like a record of a decision nobody made.
-		var detail string
-		switch {
-		case errors.Is(prevErr, sql.ErrNoRows):
-			detail = fmt.Sprintf("chosen by hand; the scorer had selected nothing, "+
-				"and this candidate scores %d", chosen.Evaluation.Score)
-		case prevErr != nil:
-			return prevErr
-		case previous.CandidateID == chosen.CandidateID:
-			// Overriding to the candidate already chosen is not a
-			// disagreement. Recording it as one would put a departure in the
-			// audit trail that never happened.
-			detail = ""
-		default:
-			detail = fmt.Sprintf("chosen by hand over %s from %s, which scored %d; "+
-				"this candidate scores %d",
-				previous.CandidateID, previous.Provider,
-				previous.Evaluation.Score, chosen.Evaluation.Score)
-		}
-
-		// Clear first: the partial unique index permits exactly one selected
-		// row per want, so setting the new one before clearing the old would
-		// be refused by the database.
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE release_candidates SET selected = 0, overridden = 0, override_detail = '', selected_at = NULL
-			WHERE desired_item_id = ? AND selected = 1`, desiredItemID); err != nil {
-			return err
-		}
-		overridden := 1
-		if detail == "" {
-			// Re-selecting what was already selected. Still a selection, not
-			// an override.
-			overridden = 0
-		}
-		// selected_at is the moment of THIS choice (ADR-0119 ranks siblings'
-		// selections by it), not the search that listed the row.
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE release_candidates
-			   SET selected = 1, overridden = ?, override_detail = ?, selected_at = ?
-			 WHERE id = ?`, overridden, detail, sqlite.FormatTimestamp(c.clock.Now()), chosen.ID); err != nil {
-			return err
-		}
-		chosen.Selected = true
-		chosen.Overridden = overridden == 1
-		chosen.OverrideDetail = detail
-
-		if overridden == 0 {
-			return nil
-		}
-		var emitErr error
-		ev, emitErr = c.events.EmitTx(ctx, tx, events.TypeCandidateOverridden,
-			"desired_item", desiredItemID, map[string]any{
-				"desired_item_id": desiredItemID,
-				"candidate_id":    chosen.CandidateID,
-				"provider":        chosen.Provider,
-				"score":           chosen.Evaluation.Score,
-				"detail":          detail,
-				"at":              now,
-			})
-		return emitErr
+		chosen, ev, err = c.overrideSelectionTx(ctx, tx, desiredItemID, candidateID)
+		return err
 	})
 	if err != nil {
 		return Candidate{}, err
@@ -361,6 +281,97 @@ func (c *Catalog) OverrideSelection(
 		c.events.Publish(ev)
 	}
 	return chosen, nil
+}
+
+// overrideSelectionTx is OverrideSelection inside a caller's transaction. The
+// override event is returned for the caller to publish once it commits, and is
+// only meaningful when chosen.Overridden.
+func (c *Catalog) overrideSelectionTx(
+	ctx context.Context, tx *sql.Tx, desiredItemID, candidateID string,
+) (chosen Candidate, ev events.Event, err error) {
+	now := sqlite.FormatTimestamp(c.clock.Now())
+	chosen, err = scanCandidate(tx.QueryRowContext(ctx,
+		`SELECT `+candidateCols+` FROM release_candidates
+		 WHERE desired_item_id = ? AND candidate_id = ?`, desiredItemID, candidateID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Candidate{}, events.Event{}, fmt.Errorf("%w: %s", ErrNoCandidate, candidateID)
+	}
+	if err != nil {
+		return Candidate{}, events.Event{}, err
+	}
+	if !chosen.Evaluation.Accepted {
+		return Candidate{}, events.Event{}, fmt.Errorf("%w: %s", ErrNotAcceptable, candidateID)
+	}
+
+	// What the scorer would have chosen, so the disagreement is recorded
+	// rather than merely the departure.
+	previous, prevErr := scanCandidate(tx.QueryRowContext(ctx,
+		`SELECT `+candidateCols+` FROM release_candidates
+		 WHERE desired_item_id = ? AND selected = 1`, desiredItemID))
+	// Every branch below sets this, and there is deliberately no default
+	// value: a half-written override detail would be worse than none,
+	// because it would look like a record of a decision nobody made.
+	var detail string
+	switch {
+	case errors.Is(prevErr, sql.ErrNoRows):
+		detail = fmt.Sprintf("chosen by hand; the scorer had selected nothing, "+
+			"and this candidate scores %d", chosen.Evaluation.Score)
+	case prevErr != nil:
+		return Candidate{}, events.Event{}, prevErr
+	case previous.CandidateID == chosen.CandidateID:
+		// Overriding to the candidate already chosen is not a
+		// disagreement. Recording it as one would put a departure in the
+		// audit trail that never happened.
+		detail = ""
+	default:
+		detail = fmt.Sprintf("chosen by hand over %s from %s, which scored %d; "+
+			"this candidate scores %d",
+			previous.CandidateID, previous.Provider,
+			previous.Evaluation.Score, chosen.Evaluation.Score)
+	}
+
+	// Clear first: the partial unique index permits exactly one selected
+	// row per want, so setting the new one before clearing the old would
+	// be refused by the database.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE release_candidates SET selected = 0, overridden = 0, override_detail = '', selected_at = NULL
+		WHERE desired_item_id = ? AND selected = 1`, desiredItemID); err != nil {
+		return Candidate{}, events.Event{}, err
+	}
+	overridden := 1
+	if detail == "" {
+		// Re-selecting what was already selected. Still a selection, not
+		// an override.
+		overridden = 0
+	}
+	// selected_at is the moment of THIS choice (ADR-0119 ranks siblings'
+	// selections by it), not the search that listed the row.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE release_candidates
+		   SET selected = 1, overridden = ?, override_detail = ?, selected_at = ?
+		 WHERE id = ?`, overridden, detail, sqlite.FormatTimestamp(c.clock.Now()), chosen.ID); err != nil {
+		return Candidate{}, events.Event{}, err
+	}
+	chosen.Selected = true
+	chosen.Overridden = overridden == 1
+	chosen.OverrideDetail = detail
+
+	if overridden == 0 {
+		return chosen, events.Event{}, nil
+	}
+	ev, err = c.events.EmitTx(ctx, tx, events.TypeCandidateOverridden,
+		"desired_item", desiredItemID, map[string]any{
+			"desired_item_id": desiredItemID,
+			"candidate_id":    chosen.CandidateID,
+			"provider":        chosen.Provider,
+			"score":           chosen.Evaluation.Score,
+			"detail":          detail,
+			"at":              now,
+		})
+	if err != nil {
+		return Candidate{}, events.Event{}, err
+	}
+	return chosen, ev, nil
 }
 
 // SearchContext is what the search job needs to build a query.

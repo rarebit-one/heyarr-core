@@ -239,3 +239,28 @@ const ApplyAcquireJobType = "apply_acquire_ops"
 
 // ApplyAcquireDedupeKey collapses concurrent passes into one.
 const ApplyAcquireDedupeKey = "apply_acquire_ops"
+
+// RemoveTransferJobType takes a transfer out of its download client after a
+// by-hand decision took its want off it (#888): a select that replaced it, or
+// a block on the release it was fetching. The want has already moved on in
+// the catalog; this is the client's half, and it is a job because the node
+// that answered the person may not be the node with the client (invariant 4).
+const RemoveTransferJobType = "remove_transfer"
+
+// RemoveTransferDedupeKey makes the removal idempotent per transfer.
+func RemoveTransferDedupeKey(provider, externalID string) string {
+	return "remove-transfer:" + provider + ":" + externalID
+}
+
+// RemoveTransferPayload names the transfer to remove.
+type RemoveTransferPayload struct {
+	// DesiredItemID is the want the transfer was for, for the log.
+	DesiredItemID string `json:"desired_item_id"`
+	// Provider is the download client's configured name.
+	Provider string `json:"provider"`
+	// ExternalID is the client's own id for the transfer — an infohash, never
+	// a name, and safe to store.
+	ExternalID string `json:"external_id"`
+	// Reason is why, for the log: "replaced by hand", "its release was blocked".
+	Reason string `json:"reason,omitempty"`
+}

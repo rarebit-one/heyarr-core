@@ -4762,6 +4762,20 @@ paths:
         offered the candidate from exactly one provider; name it otherwise (a
         fan-out release, one a later search may find, or an id two providers
         offered). Lift it again with DELETE …/blocked/{candidate}.
+
+        ### Blocking the release the want is fetching cancels it (#888)
+
+        When the want's selection is this release and it is in flight on it —
+        `SELECTED` with its grab still to run, or `QUEUED`/`DOWNLOADING` on a
+        transfer grabbed for it — the want is cancelled back to idle in the
+        same request, its search backoff is cleared and a search is queued at
+        once, so it chooses another release now. The transfer, when there was
+        one, is removed from its download client with its partial data by a
+        `remove_transfer` job, and the response carries `cancelled: true` and
+        the `displaced` transfer. A want already verifying or importing its
+        download is not stopped: the block only changes what the next search
+        may choose. Repeating a block (200) finishes a cancel an earlier one
+        could not.
       parameters:
         - name: id
           in: path
@@ -4791,8 +4805,10 @@ paths:
                   title: { type: string }
                   reason: { type: string }
                   detail: { type: string }
+                  cancelled: { type: boolean, description: "the want was fetching this release and was taken off it to search again (#888); absent otherwise" }
+                  displaced: { $ref: "#/components/schemas/DisplacedTransfer" }
         "200":
-          description: It was already blocked; nothing changed.
+          description: It was already blocked; the block is unchanged, and a want still fetching the release is cancelled as on a 201.
           content:
             application/json:
               schema:
@@ -4803,6 +4819,8 @@ paths:
                   title: { type: string }
                   reason: { type: string }
                   detail: { type: string }
+                  cancelled: { type: boolean, description: "the want was fetching this release and was taken off it to search again (#888); absent otherwise" }
+                  displaced: { $ref: "#/components/schemas/DisplacedTransfer" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -4892,6 +4910,24 @@ paths:
         a URL on a node with no `http` download client (`400`), and a URL for a
         want that is not resting in `MISSING` (`409`) — a direct release does
         not replace a transfer in flight or bytes already held.
+
+        ### Against a want that is already doing something (#888)
+
+        The selection and the acquisition pipeline move together:
+
+        | the want is | a select |
+        |---|---|
+        | idle (`MISSING`, `AVAILABLE`, satisfied) or `CANDIDATES_FOUND` | moves it to `SELECTED` and queues the grab |
+        | `SELECTED` | the grab still to run fetches the new selection |
+        | `QUEUED` or `DOWNLOADING`, transfer has fetched nothing | **replaces** the transfer: the want is cancelled to idle and selected again, the old transfer is removed from its client by a `remove_transfer` job, and the grab is queued; the response's `replaced` names the old transfer |
+        | `QUEUED` or `DOWNLOADING`, transfer has fetched bytes | `409` naming the state and how far it got, unless `force` is true, which replaces it and discards the partial download |
+        | `SEARCHING` | `409`: the search is about to replace the candidates |
+        | `VERIFYING` or `INGESTING` | `409`: the bytes are here; select again once they are held, as an upgrade |
+
+        Naming the release already in flight changes nothing. Zero bytes is
+        the line because a transfer that has fetched nothing has cost nothing;
+        past it, discarding progress is the operator's call, and `force`
+        makes it.
       parameters:
         - name: id
           in: path
@@ -4916,12 +4952,22 @@ paths:
                   description: |
                     An http(s) link to the file itself, fetched as the want's
                     direct release. Not a magnet or a `.torrent`.
+                force:
+                  type: boolean
+                  description: |
+                    Replace a transfer in flight even when it has fetched
+                    bytes, discarding them. Ignored with `url`.
       responses:
         "200":
-          description: The chosen candidate.
+          description: The chosen candidate, and the transfer it replaced when there was one.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Candidate" }
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Candidate"
+                  - type: object
+                    properties:
+                      replaced: { $ref: "#/components/schemas/DisplacedTransfer" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -4934,8 +4980,11 @@ paths:
               schema: { $ref: "#/components/schemas/Problem" }
         "409":
           description: |
-            That candidate was rejected by the quality profile, or a `url` was
-            handed over for a want that is not resting in `MISSING`.
+            That candidate was rejected by the quality profile, a `url` was
+            handed over for a want that is not resting in `MISSING`, or the
+            want is in a state a select does not replace (above): a search
+            running, a download being verified or imported, or a transfer that
+            has fetched bytes without `force`. The detail names the state.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -10131,6 +10180,18 @@ components:
           type: array
           items: { $ref: "#/components/schemas/Candidate" }
 
+    DisplacedTransfer:
+      type: object
+      description: |
+        A transfer a by-hand select or block took its want off (#888). Its
+        row is gone and a `remove_transfer` job removes it, with its partial
+        data, from the download client.
+      properties:
+        provider: { type: string, description: the download client's configured name }
+        external_id: { type: string, description: the client's id for the transfer, an infohash for a torrent }
+        name: { type: string }
+        bytes_done: { type: integer, format: int64 }
+        bytes_total: { type: integer, format: int64 }
     Candidate:
       type: object
       required: [candidate_id, provider, accepted, score, terminal, selected, reasons]

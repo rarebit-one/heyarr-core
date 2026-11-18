@@ -81,6 +81,36 @@ type CandidatesResponse struct {
 type selectRequest struct {
 	CandidateID string `json:"candidate_id"`
 	URL         string `json:"url"`
+	// Force replaces a transfer in flight even when it has fetched bytes
+	// (#888). Without it such a select is refused with 409.
+	Force bool `json:"force"`
+}
+
+// DisplacedView is a transfer a by-hand select or block took its want off.
+// It is removed from its download client, with its partial data, by a job.
+type DisplacedView struct {
+	Provider   string `json:"provider"`
+	ExternalID string `json:"external_id"`
+	Name       string `json:"name,omitempty"`
+	BytesDone  int64  `json:"bytes_done"`
+	BytesTotal int64  `json:"bytes_total"`
+}
+
+func displacedView(d *catalog.Displaced) *DisplacedView {
+	if d == nil {
+		return nil
+	}
+	return &DisplacedView{
+		Provider: d.Provider, ExternalID: d.ExternalID, Name: d.ExternalName,
+		BytesDone: d.BytesDone, BytesTotal: d.BytesTotal,
+	}
+}
+
+// SelectionView is the answer to a select: the chosen candidate, and the
+// transfer it replaced when the want had one in flight.
+type SelectionView struct {
+	CandidateView
+	Replaced *DisplacedView `json:"replaced,omitempty"`
 }
 
 func candidateView(c catalog.Candidate) CandidateView {
@@ -260,6 +290,11 @@ type BlockedReleaseView struct {
 	Title       string `json:"title"`
 	Reason      string `json:"reason"`
 	Detail      string `json:"detail"`
+	// Cancelled reports, on a block, that the want was fetching this release
+	// and has been taken off it to search again (#888). Displaced is the
+	// transfer that was at the client, when there was one.
+	Cancelled bool           `json:"cancelled,omitempty"`
+	Displaced *DisplacedView `json:"displaced,omitempty"`
 }
 
 // listBlocked is GET /api/v1/desired/{id}/blocked: what this want will not
@@ -327,6 +362,14 @@ func (a *API) blockRelease(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, "blocked release", err)
 		return
 	}
+	// A want fetching the release it just blocked is taken off it (#888),
+	// whether or not this call wrote the block: a repeat after a cancel that
+	// failed must still be able to finish it.
+	displaced, cancelled, err := a.CancelBlockedInFlight(r.Context(), id, b)
+	if err != nil {
+		a.fail(w, r, "acquisition", err)
+		return
+	}
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated
@@ -334,7 +377,62 @@ func (a *API) blockRelease(w http.ResponseWriter, r *http.Request) {
 	a.write(w, r, status, BlockedReleaseView{
 		Provider: b.Provider, CandidateID: b.CandidateID, Title: b.Title,
 		Reason: string(b.Reason), Detail: b.Detail,
+		Cancelled: cancelled, Displaced: displacedView(displaced),
 	})
+}
+
+// CancelBlockedInFlight takes a want off a release that was just blocked, if
+// it was fetching it (#888): its grab or its transfer is cancelled, the
+// transfer is queued for removal from its client, and a search is queued at
+// once with the want's backoff cleared, so it chooses again now rather than
+// on a schedule that may be a day out.
+//
+// Exported for the same reason SearchReleases is: MCP may block too, and two
+// implementations would disagree about whether a block stops a download.
+func (a *API) CancelBlockedInFlight(
+	ctx context.Context, id string, b catalog.BlockedRelease,
+) (*catalog.Displaced, bool, error) {
+	displaced, cancelled, err := a.catalog.CancelInFlightRelease(ctx, id, b.Provider, b.CandidateID,
+		"its release "+b.CandidateID+" was blocked by hand")
+	if err != nil || !cancelled {
+		return nil, false, err
+	}
+	a.enqueueRemoval(ctx, displaced, "its release was blocked by hand")
+	if err := a.catalog.ClearSearchSchedule(ctx, id); err != nil {
+		a.log.Warn("cancelled a blocked release but could not clear the want's search backoff",
+			"desired_item_id", id, "error", err)
+	}
+	if _, err := a.SearchReleases(ctx, id); err != nil {
+		// The cleared backoff makes the want due on the next search beat, so
+		// a lost enqueue costs one beat, not the re-plan.
+		a.log.Warn("cancelled a blocked release but could not queue the search that replaces it",
+			"desired_item_id", id, "error", err)
+	}
+	return displaced, true, nil
+}
+
+// enqueueRemoval queues the removal of a displaced transfer from its client.
+//
+// Logged rather than returned: the want has already moved on durably, and a
+// transfer left behind is a labelled transfer with no row, which the poll
+// reports on every pass, not a want that is wrong.
+func (a *API) enqueueRemoval(ctx context.Context, d *catalog.Displaced, reason string) {
+	if d == nil {
+		return
+	}
+	if _, err := a.jobs.Enqueue(ctx, jobs.EnqueueOptions{
+		Type: acquisition.RemoveTransferJobType,
+		Payload: acquisition.RemoveTransferPayload{
+			DesiredItemID: d.DesiredItemID, Provider: d.Provider,
+			ExternalID: d.ExternalID, Reason: reason,
+		},
+		DedupeKey:          acquisition.RemoveTransferDedupeKey(d.Provider, d.ExternalID),
+		RequiredCapability: providers.CapabilityDownload.JobCapability(),
+	}); err != nil {
+		a.log.Warn("could not queue the removal of a displaced transfer; remove it at the client by hand",
+			"desired_item_id", d.DesiredItemID, "provider", d.Provider,
+			"transfer", d.ExternalID, "error", err)
+	}
 }
 
 // unblockRelease is DELETE /api/v1/desired/{id}/blocked/{candidate}: the want
@@ -408,7 +506,7 @@ func (a *API) selectCandidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chosen, err := a.AcquireRelease(r.Context(), id, body.CandidateID)
+	sel, err := a.AcquireRelease(r.Context(), id, body.CandidateID, body.Force)
 	switch {
 	case errors.Is(err, catalog.ErrNoCandidate):
 		httpapi.Fail(w, r, problem.NotFound(
@@ -419,11 +517,34 @@ func (a *API) selectCandidate(w http.ResponseWriter, r *http.Request) {
 			"that candidate was rejected by the quality profile — "+
 				"change the profile if it should be acceptable, rather than overriding it here"))
 		return
+	case errors.Is(err, catalog.ErrTransferInProgress),
+		errors.Is(err, catalog.ErrSearchInFlight), errors.Is(err, catalog.ErrImportInProgress):
+		httpapi.Fail(w, r, problem.Conflict(SelectRefusal(err)))
+		return
 	case err != nil:
 		a.fail(w, r, "candidate", err)
 		return
 	}
-	a.write(w, r, http.StatusOK, candidateView(chosen))
+	a.write(w, r, http.StatusOK, SelectionView{
+		CandidateView: candidateView(sel.Candidate), Replaced: displacedView(sel.Displaced),
+	})
+}
+
+// SelectRefusal is the sentence a refused by-hand select answers with: the
+// state the want is in, and what to do instead. Shared with MCP, which quotes
+// it to the person an agent is helping.
+func SelectRefusal(err error) string {
+	switch {
+	case errors.Is(err, catalog.ErrTransferInProgress):
+		return err.Error() + " — select with force to replace it anyway (its partial download is discarded)"
+	case errors.Is(err, catalog.ErrSearchInFlight):
+		return "a search is running for this want and is about to replace its candidates — " +
+			"select once it has finished"
+	case errors.Is(err, catalog.ErrImportInProgress):
+		return err.Error() + " — the download has finished; select again once it is held, " +
+			"which replaces it as an upgrade"
+	}
+	return err.Error()
 }
 
 // AcquireRelease selects one candidate for a want and arranges for it to be
@@ -439,23 +560,26 @@ func (a *API) selectCandidate(w http.ResponseWriter, r *http.Request) {
 // suggestion. Wanting something outside the profile is expressible by changing
 // the profile — which is visible and durable — rather than by a one-off that
 // leaves the profile saying something nobody means.
+//
+// # Against a want that is already doing something (#888)
+//
+// The selection and the pipeline move together (catalog.SelectByHand). A want
+// at rest or choosing is moved to SELECTED. One with a grab still to run has
+// it take the new selection. One whose transfer is at the client has that
+// transfer REPLACED when it has fetched nothing — cancelled to idle, selected,
+// and the transfer queued for removal from its client — and is refused with
+// catalog.ErrTransferInProgress when it has fetched bytes, unless force says
+// to discard them. A running search, or a download being verified and
+// imported, is refused: the first is about to replace the candidates, and the
+// second already has the bytes.
 func (a *API) AcquireRelease(
-	ctx context.Context, id, candidateID string,
-) (catalog.Candidate, error) {
-	chosen, err := a.catalog.OverrideSelection(ctx, id, candidateID)
+	ctx context.Context, id, candidateID string, force bool,
+) (catalog.HandSelection, error) {
+	sel, err := a.catalog.SelectByHand(ctx, id, candidateID, force)
 	if err != nil {
-		return catalog.Candidate{}, err
+		return catalog.HandSelection{}, err
 	}
-
-	// The state machine only moves if the want was not already SELECTED. An
-	// override during CANDIDATES_FOUND advances it; one that merely re-points
-	// an existing selection changes the row and not the phase.
-	if _, err := a.catalog.AdvanceAcquisition(ctx, id,
-		acquisition.TransitionSelect, "selected by hand"); err != nil {
-		if !errors.Is(err, acquisition.ErrIllegalTransition) {
-			return catalog.Candidate{}, err
-		}
-	}
+	a.enqueueRemoval(ctx, sel.Displaced, "replaced by hand with "+sel.Candidate.CandidateID)
 
 	// And queue the grab, exactly as the search beat does (#225).
 	//
@@ -463,8 +587,10 @@ func (a *API) AcquireRelease(
 	// no more able to fetch itself than one chosen by the scorer — and wiring
 	// only the automatic route would have left §60's manual override as the
 	// one path that still dead-ends, which is the harder half to notice.
-	a.enqueueGrab(ctx, id, chosen.CandidateID)
-	return chosen, nil
+	if sel.Changed {
+		a.enqueueGrab(ctx, id, sel.Candidate.CandidateID)
+	}
+	return sel, nil
 }
 
 // enqueueGrab queues the grab for a release selected by hand.

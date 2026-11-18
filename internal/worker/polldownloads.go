@@ -420,6 +420,17 @@ func sweepOrphanedDownloads(
 			log.Warn("failed an orphaned download but could not drop its row",
 				"desired_item_id", o.DesiredItemID, "error", err)
 		}
+		// Due a search now, not when its backoff says (#888). The backoff
+		// was set by the search that chose this transfer, and for a want
+		// that already holds bytes it can be a day out: the want sat idle
+		// with "transfer absent" and nothing chose again. The release is NOT
+		// blocked — a transfer lost to a client restart is still a good one,
+		// and a person who removed it because it was bad blocks it, which
+		// now removes the transfer too.
+		if err := cat.ClearSearchSchedule(ctx, o.DesiredItemID); err != nil {
+			log.Warn("failed an orphaned download but could not clear its search backoff",
+				"desired_item_id", o.DesiredItemID, "error", err)
+		}
 		advanced++
 		log.Info("failed a want whose transfer left the download client",
 			"desired_item_id", o.DesiredItemID, "provider", o.Provider,

@@ -183,33 +183,17 @@ func (c *Catalog) BlockTransferRelease(
 		}
 		ours = true
 		b := BlockedRelease{DesiredItemID: desiredItemID, Detail: detail, Reason: reason}
-		var selectedAt sql.NullString
-		switch err := tx.QueryRowContext(ctx, `
-			SELECT provider, candidate_id, title, selected_at FROM release_candidates
-			 WHERE desired_item_id = ? AND selected = 1`, desiredItemID,
-		).Scan(&b.Provider, &b.CandidateID, &b.Title, &selectedAt); {
-		case errors.Is(err, sql.ErrNoRows):
-			return nil
-		case err != nil:
-			return err
+		var (
+			found bool
+			serr  error
+		)
+		b.Provider, b.CandidateID, b.Title, found, serr = transferSelection(ctx, tx, desiredItemID, externalID, grabbedAt)
+		if serr != nil || !found {
+			return serr
 		}
-		// A selection made AFTER this transfer was grabbed is not its release:
-		// a by-hand override while it was in flight (which moves the selection
-		// and not the phase), or a later search's pick. Blocking it would name
-		// the wrong release, so nothing is blocked. A selection with no stamp
-		// predates selected_at and has not changed since (every selection path
-		// stamps it), so it is the transfer's. Compared as times: the two
-		// columns are written in different layouts. A selection that names this
-		// transfer's infohash is its release whatever the stamps say (#824).
-		if selectedAt.Valid && !strings.EqualFold(b.CandidateID, "infohash:"+externalID) {
-			sel, serr := time.Parse(time.RFC3339Nano, selectedAt.String)
-			grab, gerr := time.Parse(time.RFC3339Nano, grabbedAt)
-			if serr == nil && gerr == nil && sel.After(grab) {
-				return nil
-			}
-		}
-		ev, created, err = c.blockReleaseTx(ctx, tx, b)
-		return err
+		var berr error
+		ev, created, berr = c.blockReleaseTx(ctx, tx, b)
+		return berr
 	})
 	if err != nil {
 		return false, err
@@ -218,6 +202,39 @@ func (c *Catalog) BlockTransferRelease(
 		c.events.Publish(ev)
 	}
 	return ours, nil
+}
+
+// transferSelection is the release a want's transfer came from: its selected
+// candidate, when that selection is the one the transfer was grabbed for.
+//
+// A selection made AFTER the transfer was grabbed is not its release: a by-hand
+// override while it was in flight (which moves the selection and not the
+// phase), or a later search's pick, and found is false. A selection with no
+// stamp predates selected_at and has not changed since (every selection path
+// stamps it), so it is the transfer's. Compared as times: the two columns are
+// written in different layouts. A selection that names this transfer's
+// infohash is its release whatever the stamps say (#824).
+func transferSelection(
+	ctx context.Context, tx *sql.Tx, desiredItemID, externalID, grabbedAt string,
+) (provider, candidateID, title string, found bool, err error) {
+	var selectedAt sql.NullString
+	switch err := tx.QueryRowContext(ctx, `
+		SELECT provider, candidate_id, title, selected_at FROM release_candidates
+		 WHERE desired_item_id = ? AND selected = 1`, desiredItemID,
+	).Scan(&provider, &candidateID, &title, &selectedAt); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", "", "", false, nil
+	case err != nil:
+		return "", "", "", false, err
+	}
+	if selectedAt.Valid && !strings.EqualFold(candidateID, "infohash:"+externalID) {
+		sel, serr := time.Parse(time.RFC3339Nano, selectedAt.String)
+		grab, gerr := time.Parse(time.RFC3339Nano, grabbedAt)
+		if serr == nil && gerr == nil && sel.After(grab) {
+			return "", "", "", false, nil
+		}
+	}
+	return provider, candidateID, title, true, nil
 }
 
 // ErrNotBlocked is UnblockRelease asked to lift a block that is not there.

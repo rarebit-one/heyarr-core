@@ -117,6 +117,12 @@ func Transitions() []Transition {
 var table = map[Phase]map[Transition]Phase{
 	PhaseIdle: {
 		TransitionSearch: PhaseSearching,
+		// A person choosing one of the candidates the last search left (§60's
+		// manual override, #888): a want that rests idle on a selection the
+		// search made, or that a by-hand replacement just cancelled off its
+		// transfer. Walking it through search → candidates_found would record
+		// a search nobody ran, the objection TransitionAdopt makes too.
+		TransitionSelect: PhaseSelected,
 		// Bytes from outside the pipeline (§65). See TransitionAdopt.
 		TransitionAdopt: PhaseVerifying,
 		// The bytes went away — a deleted asset, or a scan finding the file
