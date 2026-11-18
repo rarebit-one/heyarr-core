@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
+	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
 // AcquisitionStatusView is where a want is in §64's pipeline, plus the in-flight
@@ -86,6 +87,50 @@ type AcquisitionTransfer struct {
 	PercentDone float64 `json:"percent_done"`
 	// Trouble is the client's last error for this transfer, empty when healthy.
 	Trouble string `json:"trouble,omitempty"`
+	// Stopped reports that the client has held the transfer stopped for
+	// longer than StoppedGrace (#883). Absent while it runs, and for a stop
+	// too recent to be more than a poll catching up. It is not trouble: the
+	// want is still waiting on this transfer, and nothing fails it.
+	Stopped *AcquisitionStopped `json:"stopped,omitempty"`
+}
+
+// AcquisitionStopped is why a transfer is stopped at its client, and since when.
+type AcquisitionStopped struct {
+	// Reason is "held" — added stopped by the client's own default and never
+	// run — or "after_run" — stopped after it ran, by an operator or the
+	// client.
+	Reason string `json:"reason"`
+	Since  string `json:"since"`
+	// Detail says it in a sentence, with what to do about it.
+	Detail string `json:"detail"`
+}
+
+// StoppedGrace is how long a transfer must stay stopped before status reports
+// it. A held transfer is started by the next poll when its client can start
+// one (#882), so a stop younger than a few polls is the poll catching up, not
+// something to show.
+const StoppedGrace = 10 * time.Minute
+
+// stoppedView renders a stopped transfer for status, nil when it is running
+// or has not been stopped for StoppedGrace.
+func stoppedView(tr catalog.Acquisition, now time.Time) *AcquisitionStopped {
+	if tr.Stopped == "" || tr.StoppedSince.IsZero() || now.Sub(tr.StoppedSince) < StoppedGrace {
+		return nil
+	}
+	out := &AcquisitionStopped{
+		Reason: string(tr.Stopped),
+		Since:  tr.StoppedSince.UTC().Format(time.RFC3339),
+	}
+	switch tr.Stopped {
+	case providers.StoppedHeld:
+		out.Detail = "held stopped at " + tr.Provider + " since it was added, by the client's own " +
+			"default, and it has not started — start it in the client, or set the client to " +
+			"start the transfers it is given"
+	default:
+		out.Detail = "stopped at " + tr.Provider + " after it ran — resume it in the client, " +
+			"or select another release for this want"
+	}
+	return out
 }
 
 // AcquisitionStatus reports a want's pipeline phase and its in-flight transfer.
@@ -139,6 +184,7 @@ func (a *API) AcquisitionStatus(ctx context.Context, id string) (AcquisitionStat
 			BytesDone:   tr.BytesDone,
 			PercentDone: pct,
 			Trouble:     tr.Trouble,
+			Stopped:     stoppedView(tr, a.now()),
 		}
 	}
 

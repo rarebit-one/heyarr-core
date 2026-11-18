@@ -43,20 +43,39 @@ type Acquisition struct {
 	// the grab time BlockTransferRelease compares that selection against
 	// (#824). A poll keeps the stamp it found.
 	Grab bool
+	// Stopped is why the client holds the transfer stopped, empty while it
+	// runs (#883). Not trouble: a stopped transfer has not failed its want.
+	Stopped providers.StopReason
+	// StoppedSince is when the poll first saw the current Stopped reason,
+	// zero while it runs. Written by the store, never by the caller: a
+	// change of reason restarts it and a repeat keeps it.
+	StoppedSince time.Time
 }
 
 // ErrNoAcquisitionRow is returned when a want has no in-flight transfer.
 var ErrNoAcquisitionRow = errors.New("catalog: no acquisition for that desired item")
 
 const acquisitionCols = `id, desired_item_id, provider, external_id, external_name,
-	remote_path, local_path, bytes_total, bytes_done, trouble`
+	remote_path, local_path, bytes_total, bytes_done, trouble, stopped, stopped_since`
 
 func scanAcquisitionRow(row interface{ Scan(...any) error }) (Acquisition, error) {
-	var a Acquisition
+	var (
+		a       Acquisition
+		stopped string
+		since   sql.NullString
+	)
 	if err := row.Scan(&a.ID, &a.DesiredItemID, &a.Provider, &a.ExternalID,
 		&a.ExternalName, &a.RemotePath, &a.LocalPath,
-		&a.BytesTotal, &a.BytesDone, &a.Trouble); err != nil {
+		&a.BytesTotal, &a.BytesDone, &a.Trouble, &stopped, &since); err != nil {
 		return Acquisition{}, err
+	}
+	a.Stopped = providers.StopReason(stopped)
+	if since.Valid {
+		t, err := sqlite.ParseTimestamp(since.String)
+		if err != nil {
+			return Acquisition{}, fmt.Errorf("catalog: reading when %s stopped: %w", a.ExternalID, err)
+		}
+		a.StoppedSince = t
 	}
 	return a, nil
 }
@@ -120,12 +139,20 @@ func (c *Catalog) RecordAcquisition(ctx context.Context, a Acquisition) (bool, e
 			return err
 		}
 
+		// stopped_since is the moment the CURRENT reason was first seen
+		// (#883): kept while the reason repeats, restarted when it changes,
+		// cleared when the transfer runs. That is what lets status wait out a
+		// grace before reporting a stop.
+		var since any
+		if a.Stopped != "" {
+			since = now
+		}
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO acquisitions
 				(id, desired_item_id, provider, external_id, external_name,
 				 remote_path, local_path, bytes_total, bytes_done, trouble,
-				 created_at, updated_at, last_seen_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				 stopped, stopped_since, created_at, updated_at, last_seen_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (provider, external_id) DO UPDATE SET
 				external_name = excluded.external_name,
 				remote_path   = excluded.remote_path,
@@ -133,12 +160,18 @@ func (c *Catalog) RecordAcquisition(ctx context.Context, a Acquisition) (bool, e
 				bytes_total   = excluded.bytes_total,
 				bytes_done    = excluded.bytes_done,
 				trouble       = excluded.trouble,
+				stopped_since = CASE
+					WHEN excluded.stopped = '' THEN NULL
+					WHEN excluded.stopped = acquisitions.stopped AND acquisitions.stopped_since IS NOT NULL
+						THEN acquisitions.stopped_since
+					ELSE excluded.stopped_since END,
+				stopped       = excluded.stopped,
 				created_at    = CASE WHEN ? THEN excluded.created_at ELSE acquisitions.created_at END,
 				updated_at    = excluded.updated_at,
 				last_seen_at  = excluded.last_seen_at`,
 			a.ID, a.DesiredItemID, a.Provider, a.ExternalID, a.ExternalName,
 			a.RemotePath, a.LocalPath, a.BytesTotal, a.BytesDone, a.Trouble,
-			now, now, now, a.Grab)
+			string(a.Stopped), since, now, now, now, a.Grab)
 		if err != nil {
 			return fmt.Errorf("catalog: recording acquisition %s: %w", a.ExternalID, err)
 		}
@@ -462,5 +495,6 @@ func TransferToAcquisition(
 		BytesTotal:    t.BytesTotal,
 		BytesDone:     t.BytesDone,
 		Trouble:       t.Error,
+		Stopped:       t.Stopped,
 	}
 }

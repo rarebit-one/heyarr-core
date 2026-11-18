@@ -109,8 +109,9 @@ func (s *Server) registerAcquisitionTools() {
 		Description: "Report where a want is in the acquisition pipeline (idle, searching, " +
 			"selected, queued, downloading, verifying, ingesting) and, when a download is in " +
 			"flight, the transfer behind it: which release was chosen — its name carries the " +
-			"resolution and size — how far it has downloaded, and any trouble the client " +
-			"reported. This is the read for \"what is this want actually doing\" and \"why is " +
+			"resolution and size — how far it has downloaded, any trouble the client " +
+			"reported, and `stopped` when the client has held it stopped for more than ten " +
+			"minutes (reason held, added stopped and never run, or after_run). This is the read for \"what is this want actually doing\" and \"why is " +
 			"it still not here\", without opening the download client. A want a sibling site's " +
 			"choice created carries `fan_out`: the origin site and release, what this site did " +
 			"with it (no_site_source when it could not fetch it), whether it reported that to the " +

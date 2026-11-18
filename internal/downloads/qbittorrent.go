@@ -485,6 +485,20 @@ func qbDone(t qbTorrent) bool {
 	return false
 }
 
+// qbStopReason is why qBittorrent holds a transfer stopped short of complete
+// (#883). qBittorrent 4 says pausedDL, 5 says stoppedDL. Nothing ever
+// downloaded is the "added stopped" case; it is not reported Held, because
+// this client has no Starter to act on it.
+func qbStopReason(t qbTorrent, done bool) providers.StopReason {
+	if done || (t.State != "pausedDL" && t.State != "stoppedDL") {
+		return ""
+	}
+	if t.Downloaded == 0 {
+		return providers.StoppedHeld
+	}
+	return providers.StoppedAfterRun
+}
+
 // toTransfer reduces qBittorrent's shape to the registry's value type.
 func (c *QBClient) toTransfer(t qbTorrent) providers.Transfer {
 	done := qbDone(t)
@@ -498,6 +512,7 @@ func (c *QBClient) toTransfer(t qbTorrent) providers.Transfer {
 	if out.BytesDone == 0 && t.Downloaded > 0 {
 		out.BytesDone = t.Downloaded
 	}
+	out.Stopped = qbStopReason(t, done)
 	switch t.State {
 	case "error", "missingFiles":
 		out.Error = "qBittorrent reported state " + t.State
