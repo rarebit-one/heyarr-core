@@ -116,7 +116,7 @@ func (c *Catalog) SelectByHand(
 			}
 		}
 
-		chosen, overrideEv, _, err := c.overrideSelectionTx(ctx, tx, desiredItemID, candidateID)
+		chosen, overrideEv, err := c.overrideSelectionTx(ctx, tx, desiredItemID, candidateID)
 		if err != nil {
 			return err
 		}
