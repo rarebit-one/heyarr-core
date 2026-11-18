@@ -212,12 +212,15 @@ func searchSynthesised(t *testing.T) []acquisition.ReleaseCandidate {
 // Attributes
 // ---------------------------------------------------------------------------
 
-// Against the two REAL servers, size is determined and nothing else is.
+// Against the two REAL servers, size and seeders are determined and nothing
+// else is — no quality attribute.
 //
 // Stated as an assertion rather than left in a comment, because it is the
 // honest coverage claim of this whole change and it should fail loudly if a
-// recapture ever changes it.
-func TestAgainstRealServersOnlySizeIsDetermined(t *testing.T) {
+// recapture ever changes it. Seeders joined it with #888: both captured
+// servers emit `seeders` on every torrent item, and it is the swarm's reading,
+// not a claim about the release's quality.
+func TestAgainstRealServersOnlySizeAndSeedersAreDetermined(t *testing.T) {
 	for _, server := range []string{"jackett", "prowlarr"} {
 		t.Run(server, func(t *testing.T) {
 			got, err := searchAgainst(t, server, "search-with-results",
@@ -225,10 +228,10 @@ func TestAgainstRealServersOnlySizeIsDetermined(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var withSize int
+			var withSize, withSeeders int
 			for _, c := range got {
 				for attr := range c.Attributes {
-					if attr != policy.AttrSizeBytes {
+					if attr != policy.AttrSizeBytes && attr != policy.AttrSeeders {
 						t.Errorf("%q determined %q from a real feed — no real capture "+
 							"carries a quality attribute, so this came from somewhere "+
 							"it should not have", c.Title, attr)
@@ -237,9 +240,15 @@ func TestAgainstRealServersOnlySizeIsDetermined(t *testing.T) {
 				if _, ok := c.Attributes[policy.AttrSizeBytes]; ok {
 					withSize++
 				}
+				if _, ok := c.Attributes[policy.AttrSeeders]; ok {
+					withSeeders++
+				}
 			}
 			if withSize == 0 {
 				t.Error("no candidate had a size, though every captured item has a <size>")
+			}
+			if withSeeders == 0 {
+				t.Error("no candidate had seeders, though every captured torrent item carries them")
 			}
 		})
 	}

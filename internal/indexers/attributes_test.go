@@ -90,6 +90,19 @@ func TestProwlarrAttributesParseTitles(t *testing.T) {
 	}
 }
 
+// Prowlarr's seed count is asserted, so it is read whatever parse_titles says
+// (#888), and a release that carries none (usenet) has no seeders attribute.
+func TestProwlarrAttributesCarrySeeders(t *testing.T) {
+	seeders := int64(42)
+	got := prowlarrAttributes(prowlarrRelease{Title: "x", Seeders: &seeders}, false, "")
+	if v, ok := got[policy.AttrSeeders]; !ok || v.Num != 42 || v.Derived {
+		t.Errorf("seeders = %+v (present %v), want asserted 42", v, ok)
+	}
+	if _, ok := prowlarrAttributes(prowlarrRelease{Title: "x"}, false, "")[policy.AttrSeeders]; ok {
+		t.Error("a release with no seed count gained a seeders attribute")
+	}
+}
+
 func TestResolutionLines(t *testing.T) {
 	cases := map[string]struct {
 		want int64

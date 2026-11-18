@@ -11539,6 +11539,7 @@ components:
               hdr,
               language,
               resolution,
+              seeders,
               size_bytes,
               source,
               video_codec,

@@ -10,6 +10,13 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **Candidates the profile scores equally are ranked by seeders** (#888).
+  A tie used to fall to the candidate id, a hash, which picked arbitrarily
+  among a dozen releases scoring the same. Torznab and Prowlarr results now
+  carry the swarm's seed count as a `seeders` attribute, and the ranking is
+  accepted, score, seeders descending (a known count above none), then id.
+  `seeders` may also be named in a profile rule, such as a prefer on
+  `seeders gte 10`.
 - **Acquisition status says when a transfer is stopped at its client**
   (#883). A transfer held stopped left its want reading `QUEUED` with no
   reason. The poll now records the client's stop on the transfer row, beside

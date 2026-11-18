@@ -351,6 +351,38 @@ func TestTiesAreBrokenByAStableKey(t *testing.T) {
 	}
 }
 
+// Among releases the profile scored equally, the one the swarm is carrying
+// wins (#888): seeders descending, a known count — even zero — above an
+// unknown one, and only then the id. List order never decides.
+func TestTiesBreakOnSeedersBeforeTheID(t *testing.T) {
+	profile := testProfile()
+	with := func(id string, seeders int64) ReleaseCandidate {
+		attrs := Attributes{policy.AttrResolution: policy.Num(1080)}
+		if seeders >= 0 {
+			attrs[policy.AttrSeeders] = policy.Num(seeders)
+		}
+		return candidate(id, attrs)
+	}
+	ranked := EvaluateAll([]ReleaseCandidate{
+		with("aaa", -1), with("bbb", 0), with("ccc", 12), with("ddd", 300), with("eee", 12),
+	}, profile)
+	got := make([]string, len(ranked))
+	for i, r := range ranked {
+		got[i] = r.Candidate.ID
+	}
+	if want := "ddd,ccc,eee,bbb,aaa"; strings.Join(got, ",") != want {
+		t.Errorf("ranked %v, want %s", got, want)
+	}
+	// Seeders never outrank the score: a better-scoring release with no
+	// seed count still comes first.
+	better := candidate("zzz", Attributes{
+		policy.AttrResolution: policy.Num(1080), policy.AttrVideoCodec: policy.Text("hevc"),
+	})
+	if r := EvaluateAll([]ReleaseCandidate{with("ddd", 300), better}, profile); r[0].Candidate.ID != "zzz" {
+		t.Errorf("seeders outranked the score: %s first", r[0].Candidate.ID)
+	}
+}
+
 // Accepted candidates always outrank rejected ones, whatever they scored: a
 // rejected candidate's score is a number about something that will not be used.
 func TestAcceptedAlwaysOutranksRejected(t *testing.T) {
