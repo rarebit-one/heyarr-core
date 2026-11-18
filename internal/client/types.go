@@ -260,6 +260,12 @@ type CreateRootRequest struct {
 	Enabled    *bool  `json:"enabled,omitempty"`
 }
 
+// UpdateLibraryRequest is the PATCH /libraries/{id} body. A field is a pointer
+// so an omitted one leaves that setting untouched.
+type UpdateLibraryRequest struct {
+	Name *string `json:"name,omitempty"`
+}
+
 // UpdateRootRequest is the PATCH /libraries/{id}/roots/{rootID} body. A field
 // is a pointer so an omitted one leaves that setting untouched.
 type UpdateRootRequest struct {

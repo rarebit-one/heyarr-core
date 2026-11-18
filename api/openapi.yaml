@@ -1729,6 +1729,41 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [content]
+      operationId: updateLibrary
+      summary: Rename a library in place. Requires `write`.
+      description: |
+        Changes the library's name and nothing else: its id is its identity,
+        and its roots and assets reference the id, so they are untouched
+        (ADR-0124). The new name is trimmed and must be non-empty and unique,
+        as at creation; a name another library holds is a `409`. Renaming to
+        the current name is a `200` that emits no event. `content_type` cannot
+        be changed in place and is refused as an unknown field. A library
+        declared in the configuration file is reconciled by name at start, so
+        it must be renamed there too or the next start recreates the old name.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              additionalProperties: false
+              properties:
+                name: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: The renamed library, with its roots.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Library" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
     delete:
       tags: [content]
       operationId: deleteLibrary

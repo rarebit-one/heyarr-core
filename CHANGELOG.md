@@ -10,6 +10,16 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **A library can be renamed in place** (ADR-0124). `PATCH
+  /api/v1/libraries/{id}` with `{"name": ...}` (`write`), and `heyarr library
+  rename <library> <new-name>`, change a library's name and nothing else. Its
+  id, roots and assets stay as they are. The name is validated as at creation:
+  it is trimmed and must be non-empty, and a name another library holds is a
+  `409`. `content_type` is not patchable. Each rename emits
+  `content.library.renamed` with the new name and `previous_name`. A library
+  declared in the configuration file, or listed in
+  `acquisition.peer_pull.libraries`, is matched by name, so rename it there
+  too.
 - **A dead swarm's release reaches the sibling from its origin** (ADR-0119
   #800 amendment). When a sibling's fan-out grab of a release stalls and the
   stuck-grab sweep blocks it, the sibling records `no_site_source` and holds

@@ -406,6 +406,9 @@ func (a *API) Mount(r chi.Router) {
 
 	// Writes.
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/libraries", a.createLibrary)
+	// Renaming a library in place (ADR-0124): the id, roots and assets stay, only
+	// the label changes. `write`, like the rest of library management.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Patch("/libraries/{id}", a.updateLibrary)
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/libraries/{id}/roots", a.createLibraryRoot)
 	// Amend an existing root's ingest configuration in place — today its
 	// materialisation mode (#222), so a store that shipped on `reflink` and

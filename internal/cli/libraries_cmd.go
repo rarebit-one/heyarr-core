@@ -28,9 +28,50 @@ through the API, so they work against a controller on another host.`,
 	cmd.AddCommand(
 		newLibraryAddCommand(opts, configPath),
 		newLibraryListCommand(opts, configPath),
+		newLibraryRenameCommand(opts, configPath),
 		newLibraryRmCommand(opts, configPath),
 		newLibraryRootCommand(opts, configPath),
 	)
+	return cmd
+}
+
+func newLibraryRenameCommand(_ Options, configPath *string) *cobra.Command {
+	var flags clientFlags
+	cmd := &cobra.Command{
+		Use:   "rename <library> <new-name>",
+		Short: "Rename a library, keeping its id, roots and content",
+		Long: `Rename a library, named by id or name (ADR-0124).
+
+The library's id is its identity and its name is a label, so a rename changes
+nothing else: its roots, its assets and everything that references it stay as
+they are. The new name must be unique, as it must be for ` + "`library add`" + `.
+
+A library declared in the configuration file is reconciled by name at every
+start, so rename it there too — otherwise the next start creates a new, empty
+library under the old name.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				lib, err := resolveLibrary(ctx, c, args[0])
+				if err != nil {
+					return err
+				}
+				name := args[1]
+				var updated client.Library
+				if err := c.Patch(ctx, "/libraries/"+lib.ID,
+					client.UpdateLibraryRequest{Name: &name}, &updated); err != nil {
+					return err
+				}
+				if flags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), updated)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "renamed library %s to %s (%s)\n",
+					lib.Name, updated.Name, updated.ID)
+				return nil
+			})
+		},
+	}
+	flags.register(cmd)
 	return cmd
 }
 
