@@ -87,27 +87,113 @@ type Stream struct {
 	// the picture was mastered for. It is what says HDR — smpte2084 (PQ, which
 	// HDR10 and Dolby Vision ride) or arib-std-b67 (HLG). Empty when ffprobe
 	// reported none, and on every probe taken before it was recorded.
-	ColorTransfer   string `json:"color_transfer,omitempty"`
-	Channels        int    `json:"channels,omitempty"`
-	SampleRate      int    `json:"sample_rate,omitempty"`
-	BitrateBPS      int64  `json:"bitrate_bps,omitempty"`
-	Language        string `json:"language,omitempty"`
-	Title           string `json:"title,omitempty"`
-	Commentary      bool   `json:"commentary,omitempty"`
-	AttachedPicture bool   `json:"attached_picture,omitempty"`
+	ColorTransfer string `json:"color_transfer,omitempty"`
+	// ColorPrimaries and ColorSpace are ffprobe's color_primaries and
+	// color_space: the gamut (bt709, bt2020) and the matrix that turns the
+	// stored YCbCr into RGB (bt709, bt2020nc). With ColorTransfer they are
+	// what a tone-map has to undo (#886). Empty when ffprobe reported none.
+	ColorPrimaries string `json:"color_primaries,omitempty"`
+	ColorSpace     string `json:"color_space,omitempty"`
+	// DolbyVision is the stream's Dolby Vision configuration record, nil when
+	// it has none. It is recorded separately from the transfer because a
+	// Dolby Vision profile 5 stream declares no transfer at all, and it is the
+	// one HDR picture an ordinary decoder renders in the wrong colours.
+	DolbyVision     *DolbyVision `json:"dolby_vision,omitempty"`
+	Channels        int          `json:"channels,omitempty"`
+	SampleRate      int          `json:"sample_rate,omitempty"`
+	BitrateBPS      int64        `json:"bitrate_bps,omitempty"`
+	Language        string       `json:"language,omitempty"`
+	Title           string       `json:"title,omitempty"`
+	Commentary      bool         `json:"commentary,omitempty"`
+	AttachedPicture bool         `json:"attached_picture,omitempty"`
 }
+
+// DolbyVision is ffprobe's "DOVI configuration record" side data, which the
+// MP4 and Matroska demuxers read from the dvcC/dvvC box or block mapping.
+type DolbyVision struct {
+	// Profile is dv_profile: 5 (no backward-compatible base layer), 7 (the
+	// Blu-ray dual layer), 8 (one layer over a compatible base), 10 (AV1).
+	Profile int `json:"profile"`
+	Level   int `json:"level,omitempty"`
+	// BaseCompatibility is dv_bl_signal_compatibility_id: what the base layer
+	// is to a decoder that ignores the Dolby Vision metadata. 1 and 6 are
+	// HDR10, 2 is SDR, 4 is HLG, and 0 is nothing an ordinary decoder can
+	// show correctly (profile 5).
+	BaseCompatibility int  `json:"bl_compatibility_id"`
+	RPU               bool `json:"rpu,omitempty"`
+	EnhancementLayer  bool `json:"el,omitempty"`
+	BaseLayer         bool `json:"bl,omitempty"`
+}
+
+// DynamicRange is what a picture's samples mean to a decoder that ignores any
+// Dolby Vision metadata, which is every re-encode this node makes. It is the
+// question a tone-map asks before it can start (#886).
+type DynamicRange string
+
+const (
+	// RangeSDR is standard dynamic range, or nothing said otherwise.
+	RangeSDR DynamicRange = "sdr"
+	// RangePQ is HDR10 and HDR10+: the SMPTE ST 2084 transfer. A Dolby Vision
+	// profile 7 or 8.1 stream is this underneath.
+	RangePQ DynamicRange = "pq"
+	// RangeHLG is hybrid log-gamma (ARIB STD-B67), including Dolby Vision 8.4.
+	RangeHLG DynamicRange = "hlg"
+	// RangeDolbyVisionOnly is Dolby Vision with no base layer an ordinary
+	// decoder renders correctly (profile 5): the samples are IPTPQc2, and
+	// without the RPU applied they come out green and purple.
+	RangeDolbyVisionOnly DynamicRange = "dolby_vision_only"
+)
 
 // hdrTransfers are the transfer characteristics a picture is HDR under: PQ
 // (SMPTE ST 2084) and HLG (ARIB STD-B67), as ffprobe names them.
 var hdrTransfers = map[string]bool{"smpte2084": true, "arib-std-b67": true}
 
 // HDR reports whether a video stream is high dynamic range: its transfer
-// characteristic is PQ or HLG, or — the older and weaker signal — its codec
-// profile names HDR. A ten-bit profile alone is not HDR; plenty of SDR is
-// encoded at ten bits.
+// characteristic is PQ or HLG, it carries Dolby Vision, or — the older and
+// weaker signal — its codec profile names HDR. A ten-bit profile alone is not
+// HDR; plenty of SDR is encoded at ten bits.
+//
+// Dolby Vision counts whatever its base layer is. A profile 8.2 stream's base
+// is SDR, but the picture it was mastered as is not, and the flag is what a
+// client offering "2160p HDR" reads.
 func (s Stream) HDR() bool {
 	return hdrTransfers[strings.ToLower(s.ColorTransfer)] ||
+		s.DolbyVision != nil ||
 		strings.Contains(strings.ToLower(s.Profile), "hdr")
+}
+
+// DynamicRange classifies the picture for a re-encode. A Dolby Vision
+// record's base-layer compatibility decides when there is one, because that is
+// what the decoder will actually hand the encoder; otherwise the transfer
+// does. A profile string naming HDR with no transfer is not enough to choose a
+// tone-map curve, and reads as SDR — which is what every re-encode did before
+// there was a tone-map at all.
+func (s Stream) DynamicRange() DynamicRange {
+	if dv := s.DolbyVision; dv != nil {
+		// Profile 5 has no compatible base by definition, whatever the
+		// stream's VUI happens to claim; trusting a PQ tag on one is how a
+		// re-encode comes out green.
+		if dv.Profile == 5 {
+			return RangeDolbyVisionOnly
+		}
+		switch dv.BaseCompatibility {
+		case 1, 6:
+			return RangePQ
+		case 2:
+			return RangeSDR
+		case 4:
+			return RangeHLG
+		default:
+			return RangeDolbyVisionOnly
+		}
+	}
+	switch strings.ToLower(s.ColorTransfer) {
+	case "smpte2084":
+		return RangePQ
+	case "arib-std-b67":
+		return RangeHLG
+	}
+	return RangeSDR
 }
 
 // VideoStream returns the first moving-picture stream, excluding embedded artwork.
@@ -599,6 +685,9 @@ type ffprobeJSON struct {
 		Height         int               `json:"height"`
 		RFrameRate     string            `json:"r_frame_rate"`
 		ColorTransfer  string            `json:"color_transfer"`
+		ColorPrimaries string            `json:"color_primaries"`
+		ColorSpace     string            `json:"color_space"`
+		SideData       []ffprobeSideData `json:"side_data_list"`
 		Channels       int               `json:"channels"`
 		SampleRate     string            `json:"sample_rate"`
 		BitRate        string            `json:"bit_rate"`
@@ -606,6 +695,33 @@ type ffprobeJSON struct {
 		Disposition    map[string]int    `json:"disposition"`
 		CodecTagString string            `json:"codec_tag_string"`
 	} `json:"streams"`
+}
+
+// ffprobeSideData is one entry of a stream's side_data_list. Only the Dolby
+// Vision configuration record is read; its fields are integers in ffprobe's
+// JSON, unlike the quoted rates above.
+type ffprobeSideData struct {
+	Type                    string `json:"side_data_type"`
+	DVProfile               int    `json:"dv_profile"`
+	DVLevel                 int    `json:"dv_level"`
+	RPUPresent              int    `json:"rpu_present_flag"`
+	ELPresent               int    `json:"el_present_flag"`
+	BLPresent               int    `json:"bl_present_flag"`
+	BLSignalCompatibilityID int    `json:"dv_bl_signal_compatibility_id"`
+}
+
+// dovi is the stream's Dolby Vision configuration record, or nil.
+func dovi(side []ffprobeSideData) *DolbyVision {
+	for _, d := range side {
+		if d.Type != "DOVI configuration record" {
+			continue
+		}
+		return &DolbyVision{
+			Profile: d.DVProfile, Level: d.DVLevel, BaseCompatibility: d.BLSignalCompatibilityID,
+			RPU: d.RPUPresent == 1, EnhancementLayer: d.ELPresent == 1, BaseLayer: d.BLPresent == 1,
+		}
+	}
+	return nil
 }
 
 // parseAndCheck decodes ffprobe's output and rejects a result that cannot
@@ -649,6 +765,9 @@ func parse(raw []byte) (Result, error) {
 			Height:          s.Height,
 			FrameRate:       s.RFrameRate,
 			ColorTransfer:   s.ColorTransfer,
+			ColorPrimaries:  s.ColorPrimaries,
+			ColorSpace:      s.ColorSpace,
+			DolbyVision:     dovi(s.SideData),
 			Channels:        s.Channels,
 			SampleRate:      parseSampleRate(s.SampleRate),
 			BitrateBPS:      parseInt(s.BitRate),

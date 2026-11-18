@@ -3823,6 +3823,51 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/v1/probes/backfill:
+    post:
+      tags: [content]
+      operationId: backfillProbes
+      summary: Re-probe video whose probe cannot say whether it is HDR (#886).
+      description: |
+        Queues a `probe_blob` job for every distinct blob of a managed video in
+        scope whose stored probe records neither a `color_transfer` nor a
+        `dolby_vision` record on any picture stream — including blobs never
+        probed at all.
+
+        A probe runs at ingest and the bytes never change, so a rescan enqueues
+        nothing. Probes taken before colour was recorded read as SDR: copy
+        selection then offers an HDR remux to a screen that cannot show it, and
+        a re-encode of it skips the tone-map. This is the operator's lever to
+        re-read them once.
+
+        A scope is required — `library_id`, `work_id`, or `all`. A probe that
+        already answers is left alone, and a job already pending for a blob is
+        not duplicated, so a re-run is cheap. SDR video whose container declares
+        no colour at all is re-probed on each run.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                library_id: { type: string }
+                work_id: { type: string }
+                all: { type: boolean }
+      responses:
+        "202":
+          description: The probes were queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  candidates: { type: integer }
+                  enqueued: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /api/v1/subtitles/want:
     post:
       tags: [subtitles]
@@ -9627,6 +9672,33 @@ components:
         width: { type: integer }
         height: { type: integer }
         frame_rate: { type: string }
+        color_transfer:
+          type: string
+          description: |
+            ffprobe's transfer characteristic: `smpte2084` (PQ: HDR10, HDR10+
+            and most Dolby Vision) or `arib-std-b67` (HLG) say HDR. Absent when
+            the container declared none, or the probe predates it being
+            recorded (`heyarr probe backfill` re-probes those).
+        color_primaries:
+          type: string
+          description: The gamut, as ffprobe names it (`bt709`, `bt2020`).
+        color_space:
+          type: string
+          description: The YCbCr matrix, as ffprobe names it (`bt709`, `bt2020nc`).
+        dolby_vision:
+          type: object
+          description: |
+            The stream's Dolby Vision configuration record, absent when it has
+            none. `bl_compatibility_id` is what the base layer is to a decoder
+            that ignores Dolby Vision: 1 or 6 HDR10, 2 SDR, 4 HLG, 0 nothing it
+            can show correctly (profile 5).
+          properties:
+            profile: { type: integer }
+            level: { type: integer }
+            bl_compatibility_id: { type: integer }
+            rpu: { type: boolean }
+            el: { type: boolean }
+            bl: { type: boolean }
         channels: { type: integer }
         sample_rate: { type: integer }
         bitrate_bps: { type: integer, format: int64 }

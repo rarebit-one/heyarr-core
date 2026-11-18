@@ -114,6 +114,7 @@ var filmCopyRank = func() string {
 	film := `(SELECT content_type FROM works WHERE id = e2.work_id) = 'movie'`
 	height := `coalesce(json_extract(` + firstVideo + `, '$.height'), 0)`
 	hdr := `(lower(coalesce(json_extract(` + firstVideo + `, '$.color_transfer'), '')) IN ('smpte2084', 'arib-std-b67')
+		OR json_extract(` + firstVideo + `, '$.dolby_vision') IS NOT NULL
 		OR instr(lower(coalesce(json_extract(` + firstVideo + `, '$.profile'), '')), 'hdr') > 0)`
 	bitrate := `coalesce((SELECT bitrate_bps FROM blob_probes WHERE blob_hash = a2.blob_hash), 0)`
 	when := func(expr string) string { return `CASE WHEN ` + film + ` THEN ` + expr + ` ELSE 0 END` }
