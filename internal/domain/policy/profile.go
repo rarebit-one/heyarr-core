@@ -146,8 +146,22 @@ func (p *Profile) Validate() error {
 			// A profile that rejects everything and says why is legible; a
 			// half-implemented contradiction check that misses most cases is
 			// not.
+			//
+			// Prefer is the exception, for a different VALUE (#888): two
+			// prefer rules on one comparison are a graded preference —
+			// "audio_channels gte 6" for 5 and "gte 8" for 5 more — because
+			// prefer weights add up. Two gates on one comparison cannot be
+			// graded: one of them always decides alone, so the second is
+			// still the paste. The same value twice is a paste in any section.
 			key := string(rule.Attribute) + "/" + string(rule.Op)
+			if section == SectionPrefer {
+				key += "/" + rule.Value.String()
+			}
 			if seen[key] {
+				if section == SectionPrefer {
+					return fmt.Errorf("the %s section names %s %s %s twice",
+						section, rule.Attribute, rule.Op, rule.Value)
+				}
 				return fmt.Errorf("the %s section names %s %s twice",
 					section, rule.Attribute, rule.Op)
 			}

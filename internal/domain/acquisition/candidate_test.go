@@ -600,3 +600,24 @@ func renderReasons(e Evaluation) string {
 	}
 	return strings.Join(parts, " ")
 }
+
+// Graded prefer rules (#888) add up: a release past both thresholds earns both
+// weights, one past only the lower earns one.
+func TestGradedPreferRulesAddUp(t *testing.T) {
+	p := policy.Profile{Name: "surround", Prefer: []policy.Rule{
+		{Attribute: policy.AttrAudioChannels, Op: policy.OpGTE, Value: policy.Num(6), Weight: 5},
+		{Attribute: policy.AttrAudioChannels, Op: policy.OpGTE, Value: policy.Num(8), Weight: 5},
+	}}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		channels int64
+		want     int
+	}{{2, 0}, {6, 5}, {8, 10}} {
+		e := Evaluate(candidate("c", Attributes{policy.AttrAudioChannels: policy.Num(tc.channels)}), p)
+		if e.Score != tc.want {
+			t.Errorf("%d channels scored %d, want %d: %s", tc.channels, e.Score, tc.want, renderReasons(e))
+		}
+	}
+}
