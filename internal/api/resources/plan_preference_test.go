@@ -145,3 +145,31 @@ func TestPlanPreferenceRefusals(t *testing.T) {
 		}
 	}
 }
+
+// A registered device planned by asset under a preference: the planner holds
+// the picture to the width and the height together, so both move (Codex P2
+// on #893). A data saver on the 2160p television refuses the 1080p copy as too
+// tall, and so does one on a device that never stated a frame at all.
+func TestPlanByAssetForADeviceUnderAPreference(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed().seedTwoCopies()
+	hasResolution := func(p preferredPlan) bool {
+		for _, r := range p.Reasons {
+			if r.Code == "resolution_too_high" {
+				return true
+			}
+		}
+		return false
+	}
+	body := `{"asset_id":"` + assetFHDID + `","device_id":"` + device1ID + `"`
+	if hasResolution(h.planPreferred(t, body+`}`)) {
+		t.Fatalf("the 1080p copy is too tall for the 2160p television without a preference")
+	}
+	if !hasResolution(h.planPreferred(t, body+`,"preference":{"quality":"data_saver"}}`)) {
+		t.Errorf("data saver: the 1080p copy passed a 720-line limit")
+	}
+	h.exec(`UPDATE devices SET max_width = 0, max_height = 0 WHERE id = ?`, device1ID)
+	if !hasResolution(h.planPreferred(t, body+`,"preference":{"quality":"data_saver"}}`)) {
+		t.Errorf("data saver on a device with no stated frame: the 1080p copy passed a 720-line limit")
+	}
+}

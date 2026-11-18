@@ -188,3 +188,35 @@ func TestSelectUnderAPreference(t *testing.T) {
 		})
 	}
 }
+
+// A registered device's width moves with the height the preference sets,
+// because the planner reads the two as a pair.
+func TestPreferenceBoundsADevice(t *testing.T) {
+	uhdTV := playback.DeviceProfile{MaxWidth: 3840, MaxHeight: 2160, VideoCodecs: []string{"hevc"}}
+	fhdTV := playback.DeviceProfile{MaxWidth: 1920, MaxHeight: 1080}
+	undeclared := playback.DeviceProfile{VideoCodecs: []string{"h264"}}
+	cases := []struct {
+		name          string
+		pref          playback.Preference
+		device        playback.DeviceProfile
+		width, height int64
+	}{
+		{"fit: as stored", playback.Preference{}, uhdTV, 3840, 2160},
+		{"data saver scales the stated frame", playback.Preference{Quality: playback.QualityDataSaver}, uhdTV, 1280, 720},
+		{"best under a cap over the screen widens it too", playback.Preference{Quality: playback.QualityBest, MaxHeight: 2160}, fhdTV, 3840, 2160},
+		{"best with no cap lifts both", playback.Preference{Quality: playback.QualityBest}, fhdTV, 0, 0},
+		{"data saver on a device that stated no frame: a 16:9 one", playback.Preference{Quality: playback.QualityDataSaver}, undeclared, 1280, 720},
+		{"a cap on a device that stated no frame", playback.Preference{MaxHeight: 1080}, undeclared, 1920, 1080},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.pref.Bound(tc.device)
+			if got.MaxWidth != tc.width || got.MaxHeight != tc.height {
+				t.Errorf("bound = %dx%d, want %dx%d", got.MaxWidth, got.MaxHeight, tc.width, tc.height)
+			}
+			if len(got.VideoCodecs) != len(tc.device.VideoCodecs) {
+				t.Errorf("Bound touched the device's codecs: %+v", got)
+			}
+		})
+	}
+}

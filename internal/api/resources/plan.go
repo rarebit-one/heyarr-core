@@ -221,7 +221,7 @@ func (a *API) planPlayback(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, "device", err)
 		return
 	}
-	device.MaxHeight = pref.Height(device.MaxHeight)
+	device = pref.Bound(device)
 	media, blobHash, err := a.mediaProfile(r.Context(), body.AssetID, nil)
 	if err != nil {
 		a.fail(w, r, "asset", err)

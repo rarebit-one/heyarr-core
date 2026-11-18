@@ -199,7 +199,7 @@ func (a *API) planForClient(
 			a.fail(w, r, "device", err)
 			return
 		}
-		device.MaxHeight = pref.Height(device.MaxHeight)
+		device = pref.Bound(device)
 	}
 	route, err := a.routeBlob(ctx, blobHash)
 	if err != nil {

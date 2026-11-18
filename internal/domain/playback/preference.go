@@ -85,6 +85,30 @@ func (p Preference) Height(screenHeight int64) int64 {
 	}
 }
 
+// Bound is a registered device's profile with the preference laid over it:
+// the limits the planner reads. The planner holds a picture to the device's
+// width and height as a pair, so the width moves with the height. It scales in
+// proportion when the device stated both, and when it stated no width it is
+// the 16:9 frame of the new height. A height the preference lifts entirely
+// lifts the width with it. When the preference leaves the height as it was,
+// the profile is returned untouched.
+func (p Preference) Bound(d DeviceProfile) DeviceProfile {
+	h := p.Height(d.MaxHeight)
+	if h == d.MaxHeight {
+		return d
+	}
+	switch {
+	case h <= 0:
+		d.MaxWidth = 0
+	case d.MaxWidth > 0 && d.MaxHeight > 0:
+		d.MaxWidth = d.MaxWidth * h / d.MaxHeight
+	default:
+		d.MaxWidth = h * 16 / 9
+	}
+	d.MaxHeight = h
+	return d
+}
+
 // Apply is fit with the preference laid over it: the limits selection ranks
 // against. The bitrate cap steers the choice only, as max_bitrate_bps always
 // has (ADR-0123): the repackager does not cap a stream.
