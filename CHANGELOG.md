@@ -10,6 +10,11 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **Graded prefer rules** (#888). A quality profile's prefer section may now
+  name one attribute and comparison more than once with different values —
+  `audio_channels gte 6` weight 5 and `gte 8` weight 5 — and the weights add
+  up. The same rule twice, and two accept or terminal gates on one
+  comparison, are still refused as a paste.
 - **A library can be renamed in place** (ADR-0124). `PATCH
   /api/v1/libraries/{id}` with `{"name": ...}` (`write`), and `heyarr library
   rename <library> <new-name>`, change a library's name and nothing else. Its

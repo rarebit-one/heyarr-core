@@ -169,6 +169,21 @@ func TestValidate(t *testing.T) {
 			wantErr: "twice",
 		},
 		{
+			name: "two prefer rules on one comparison with different values are a graded preference (#888)",
+			profile: Profile{Name: "p", Prefer: []Rule{
+				{Attribute: AttrAudioChannels, Op: OpGTE, Value: Num(6), Weight: 5},
+				{Attribute: AttrAudioChannels, Op: OpGTE, Value: Num(8), Weight: 5},
+			}},
+		},
+		{
+			name: "the same prefer rule twice is still a paste",
+			profile: Profile{Name: "p", Prefer: []Rule{
+				{Attribute: AttrAudioChannels, Op: OpGTE, Value: Num(6), Weight: 5},
+				{Attribute: AttrAudioChannels, Op: OpGTE, Value: Num(6), Weight: 10},
+			}},
+			wantErr: "twice",
+		},
+		{
 			name: "the same attribute with DIFFERENT comparisons is fine — that is a range",
 			profile: Profile{Name: "p", Accept: []Rule{
 				{Attribute: AttrResolution, Op: OpGTE, Value: Num(720)},
