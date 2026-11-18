@@ -102,6 +102,13 @@ const (
 	// must resolve the release through its own credentialed indexer. Absent
 	// when the indexer does not say.
 	AttrIndexerPrivacy Attribute = "indexer_privacy"
+	// AttrSeeders is how many peers were seeding a torrent release when the
+	// search listed it, as the indexer reports it (torznab's `seeders`,
+	// Prowlarr's `seeders`). A reading of the swarm at one moment, not a
+	// property of the bytes: it ranks candidates the profile scored equally
+	// (#888) and may be preferred on, and is absent for a release that is not
+	// a torrent or whose indexer does not say.
+	AttrSeeders Attribute = "seeders"
 )
 
 // Indexer privacy classes, the normalised values AttrIndexerPrivacy carries.
@@ -127,6 +134,7 @@ var attributeKinds = map[Attribute]Kind{
 	AttrPlatform:       KindText,
 	AttrRegion:         KindText,
 	AttrIndexerPrivacy: KindText,
+	AttrSeeders:        KindInt,
 }
 
 // KindOf reports an attribute's kind, and whether it is known at all.

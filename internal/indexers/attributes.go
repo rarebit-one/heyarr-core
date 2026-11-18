@@ -53,6 +53,7 @@ import (
 // BE PRECISE ABOUT WHICH OF THESE HAS SEEN A REAL SERVER:
 //
 //	size_bytes   REAL. Both captured servers emit <size> on every item.
+//	seeders      REAL. Both captured servers emit it on every torrent item.
 //	resolution   SYNTHESISED, and so are video, audio and language.
 //
 // The reason is not laziness. The only tracker safe to capture from into a
@@ -73,6 +74,7 @@ var torznabAttribute = map[string]policy.Attribute{
 	"video":      policy.AttrVideoCodec,
 	"audio":      policy.AttrAudioCodec,
 	"language":   policy.AttrLanguage,
+	"seeders":    policy.AttrSeeders,
 }
 
 // attributesOf is everything the release actually asserted, plus — when

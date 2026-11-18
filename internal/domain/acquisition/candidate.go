@@ -501,6 +501,10 @@ type Ranked struct {
 //   - accepted candidates always rank above rejected ones, because a rejected
 //     candidate's score is a number about something that will not be used;
 //   - then by score, descending;
+//   - then by seeders, descending, a release whose seeders are known above
+//     one whose are not (#888): among releases the profile cannot tell
+//     apart, the one the swarm is actually carrying fetches, and the busiest
+//     is the one most people kept rather than deleted;
 //   - then by candidate ID, ascending, which is a stable key that does not
 //     depend on the order the provider returned things in.
 //
@@ -519,7 +523,7 @@ func EvaluateAll(candidates []ReleaseCandidate, p policy.Profile) []Ranked {
 
 // SortRanked orders a set of already-evaluated candidates into §63's TOTAL,
 // DETERMINISTIC order in place: accepted before rejected, then by score
-// descending, then by candidate ID ascending.
+// descending, then by seeders descending, then by candidate ID ascending.
 //
 // Exposed so a caller that has evaluated some candidates itself — ADR-0093's
 // season/episode gate rejects a candidate with a match reason BEFORE it is
@@ -536,8 +540,21 @@ func SortRanked(ranked []Ranked) {
 		if a.Evaluation.Score != b.Evaluation.Score {
 			return a.Evaluation.Score > b.Evaluation.Score
 		}
+		if sa, sb := seedersOf(a.Candidate), seedersOf(b.Candidate); sa != sb {
+			return sa > sb
+		}
 		return a.Candidate.ID < b.Candidate.ID
 	})
+}
+
+// seedersOf is a candidate's seed count for the tie-break, -1 when the
+// indexer did not say, so a known count of zero still outranks no count.
+func seedersOf(c ReleaseCandidate) int64 {
+	v, ok := c.Attributes[policy.AttrSeeders]
+	if !ok || v.Kind != policy.KindInt {
+		return -1
+	}
+	return v.Num
 }
 
 // Best returns the highest-ranked ACCEPTED candidate, if any.

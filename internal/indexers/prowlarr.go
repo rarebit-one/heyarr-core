@@ -214,6 +214,9 @@ type prowlarrRelease struct {
 	// Protocol is Prowlarr's own word for how the release is fetched,
 	// "torrent" or "usenet" (#836).
 	Protocol string `json:"protocol"`
+	// Seeders is the swarm's seed count for a torrent (#888), a pointer for
+	// the same reason Size is: a usenet release carries none.
+	Seeders *int64 `json:"seeders"`
 }
 
 // Search fans one query across every indexer Prowlarr manages (§59, §60).
@@ -363,6 +366,9 @@ func prowlarrAttributes(r prowlarrRelease, parseTitles bool, privacy string) acq
 	}
 	if privacy != "" {
 		attrs[policy.AttrIndexerPrivacy] = policy.Text(privacy)
+	}
+	if r.Seeders != nil && *r.Seeders >= 0 {
+		attrs[policy.AttrSeeders] = policy.Num(*r.Seeders)
 	}
 	if parseTitles {
 		fillAbsent(attrs, titleAttributes(r.Title))
