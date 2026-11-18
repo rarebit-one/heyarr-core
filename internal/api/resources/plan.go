@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
@@ -23,7 +24,15 @@ import (
 
 // PlanRequest is the POST /playback/plan body.
 type PlanRequest struct {
+	// AssetID names the file to plan. It always wins: when it is given,
+	// WorkID and EditionID are ignored and the plan is exactly what it was
+	// before a work could be named.
 	AssetID string `json:"asset_id"`
+	// WorkID names a film instead, and the node chooses which of its copies
+	// to plan from what the client can show (#885). EditionID narrows the
+	// choice to one edition's copies.
+	WorkID    string `json:"work_id,omitempty"`
+	EditionID string `json:"edition_id,omitempty"`
 	// DeviceID names a registered device. Required unless Client is given.
 	DeviceID string `json:"device_id"`
 	// Client is what the CALLER can decode, for a client that is not a
@@ -69,6 +78,30 @@ type PlanResponse struct {
 	// Source is what the probe found, so a client can show "AC-3 5.1" next
 	// to the reason it is being served a stream.
 	Source *SourceInfo `json:"source,omitempty"`
+
+	// Selection is present when the request named a work rather than an
+	// asset (#885): the copy chosen, why, and every other copy with why not.
+	// AssetID above is the chosen copy.
+	Selection *SelectionResponse `json:"selection,omitempty"`
+}
+
+// SelectionResponse is the copy selection, rendered (#885).
+type SelectionResponse struct {
+	Chosen SelectionCandidate `json:"chosen"`
+	// Alternatives is every other copy, best first, each with the reason it
+	// lost. Never nil, like Routing.Rejected.
+	Alternatives []SelectionCandidate `json:"alternatives"`
+}
+
+// SelectionCandidate is one copy of the work as selection saw it: enough for
+// a client to offer the alternatives as a manual choice.
+type SelectionCandidate struct {
+	AssetID      string `json:"asset_id"`
+	EditionID    string `json:"edition_id"`
+	EditionLabel string `json:"edition_label"`
+	PictureFacts
+	VideoCodec string     `json:"video_codec,omitempty"`
+	Reason     PlanReason `json:"reason"`
 }
 
 // RoutingResponse is the source selection, rendered (§32).
@@ -102,18 +135,30 @@ func (a *API) planPlayback(w http.ResponseWriter, r *http.Request) {
 	if !decodeOr400(w, r, &body) {
 		return
 	}
-	if err := required("asset_id", body.AssetID); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	if strings.TrimSpace(body.AssetID) == "" && strings.TrimSpace(body.WorkID) == "" {
+		httpapi.Fail(w, r, problem.BadRequest("asset_id or work_id is required"))
 		return
+	}
+	if body.Client == nil {
+		if err := required("device_id", body.DeviceID); err != nil {
+			httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+			return
+		}
+	}
+	// An explicit asset wins; only a request naming a work alone is chosen
+	// for (#885).
+	var selection *SelectionResponse
+	if strings.TrimSpace(body.AssetID) == "" {
+		var ok bool
+		if selection, ok = a.selectCopy(w, r, body); !ok {
+			return
+		}
+		body.AssetID = selection.Chosen.AssetID
 	}
 	// A client that says what it can decode gets the leg as well as the
 	// decision, and need not be a registered device (ADR-0069).
 	if body.Client != nil {
-		a.planForClient(w, r, body)
-		return
-	}
-	if err := required("device_id", body.DeviceID); err != nil {
-		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		a.planForClient(w, r, body, selection)
 		return
 	}
 
@@ -134,7 +179,114 @@ func (a *API) planPlayback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	plan := playback.Choose(media, device, replicasOf(route))
-	a.write(w, r, http.StatusOK, renderPlan(body.AssetID, body.DeviceID, plan, route, blobHash))
+	out := renderPlan(body.AssetID, body.DeviceID, plan, route, blobHash)
+	out.Selection = selection
+	a.write(w, r, http.StatusOK, out)
+}
+
+// selectCopy chooses which of a film's copies to plan (#885), or fails the
+// request and reports false.
+//
+// What the client can show comes from its declaration; anything it leaves
+// unstated is filled from the registered device it names, field by field, so
+// a television that registered once need declare nothing per request.
+func (a *API) selectCopy(w http.ResponseWriter, r *http.Request, body PlanRequest) (*SelectionResponse, bool) {
+	ctx := r.Context()
+	var contentType string
+	if err := a.reader.QueryRowContext(ctx,
+		`SELECT content_type FROM works WHERE id = ?`, body.WorkID).Scan(&contentType); err != nil {
+		a.fail(w, r, "work", err)
+		return nil, false
+	}
+	if contentType != "movie" {
+		// A season edition holds every episode, so "a copy of this work"
+		// would offer a different episode. Copies of an episode are planned
+		// by asset until a client can name the item.
+		httpapi.Fail(w, r, problem.BadRequest(
+			"work_id chooses among a film's copies; plan an episode or track by asset_id"))
+		return nil, false
+	}
+
+	fit, err := a.selectionFit(ctx, body)
+	if err != nil {
+		a.fail(w, r, "device", err)
+		return nil, false
+	}
+	copies, err := a.queryCopies(ctx, copiesOfFilm, body.WorkID, body.EditionID, body.EditionID)
+	if err != nil {
+		a.fail(w, r, "asset", err)
+		return nil, false
+	}
+	byID := make(map[string]workCopy, len(copies))
+	candidates := make([]playback.Copy, 0, len(copies))
+	for _, c := range copies {
+		if c.Probed && !c.Picture {
+			continue // probed, and no picture: not a copy of the film
+		}
+		byID[c.AssetID] = c
+		candidates = append(candidates, c.copy())
+	}
+	sel, ok := playback.Select(candidates, fit)
+	if !ok {
+		httpapi.Fail(w, r, problem.NotFound("that work holds no playable copy"))
+		return nil, false
+	}
+
+	render := func(c playback.Candidate) SelectionCandidate {
+		row := byID[c.AssetID]
+		out := SelectionCandidate{
+			AssetID: row.AssetID, EditionID: row.EditionID, EditionLabel: row.EditionLabel,
+			PictureFacts: row.PictureFacts,
+			Reason:       PlanReason{Code: c.Reason.Code, Detail: c.Reason.Detail},
+		}
+		if row.Picture {
+			out.VideoCodec = row.Video.Codec
+		}
+		return out
+	}
+	out := &SelectionResponse{
+		Chosen:       render(sel.Chosen),
+		Alternatives: make([]SelectionCandidate, 0, len(sel.Passed)),
+	}
+	for _, p := range sel.Passed {
+		out.Alternatives = append(out.Alternatives, render(p))
+	}
+	return out, true
+}
+
+// selectionFit is what the client can show: its declaration, with each field
+// it leaves unstated filled from the registered device it names.
+func (a *API) selectionFit(ctx context.Context, body PlanRequest) (playback.Fit, error) {
+	var (
+		fit       playback.Fit
+		hdrStated bool
+	)
+	if c := body.Client; c != nil {
+		fit.MaxHeight, fit.MaxBitrateBPS, fit.VideoCodecs = int64(c.MaxHeight), c.MaxBitrateBPS, c.Video
+		if c.SupportsHDR != nil {
+			fit.SupportsHDR, hdrStated = *c.SupportsHDR, true
+		}
+	}
+	if body.DeviceID == "" {
+		return fit, nil
+	}
+	device, err := a.deviceProfile(ctx, body.DeviceID)
+	if err != nil {
+		return playback.Fit{}, err
+	}
+	if fit.MaxHeight == 0 {
+		fit.MaxHeight = device.MaxHeight
+	}
+	if fit.MaxBitrateBPS == 0 {
+		fit.MaxBitrateBPS = device.MaxBitrateBPS
+	}
+	if !hdrStated {
+		fit.SupportsHDR = device.SupportsHDR
+	}
+	if len(fit.VideoCodecs) == 0 {
+		fit.VideoCodecs = device.VideoCodecs
+	}
+	return fit, nil
 }
 
 // renderPlan maps the domain's plan onto the wire type. It is shared with

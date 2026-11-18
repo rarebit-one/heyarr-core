@@ -14,7 +14,6 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/guest"
-	"github.com/rarebit-one/heyarr-core/internal/media/probe"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/manifests"
 )
 
@@ -599,16 +598,8 @@ func scanWorkAsset(rows *sql.Rows) (WorkAsset, error) {
 // that does not parse reads as no picture rather than failing the listing it
 // sits in: the facts are a convenience, and the file is still listable.
 func pictureFacts(bitrate sql.NullInt64, streams sql.NullString) PictureFacts {
-	var out PictureFacts
-	out.BitrateBPS = nullInt(bitrate)
-	if !streams.Valid {
-		return out
-	}
-	var parsed []probe.Stream
-	if json.Unmarshal([]byte(streams.String), &parsed) != nil {
-		return out
-	}
-	if v, ok := (probe.Result{Streams: parsed}).VideoStream(); ok && v.Height > 0 {
+	out := PictureFacts{BitrateBPS: nullInt(bitrate)}
+	if v, ok := probedVideo(streams); ok {
 		height, hdr := v.Height, v.HDR()
 		out.Height, out.HDR = &height, &hdr
 	}

@@ -117,3 +117,4 @@ An ADR that merely describes the code is not worth having.
 | [0120](0120-a-game-is-fetched-from-its-store-and-verified-before-it-counts.md) | A game is fetched from its store, and verified before it counts | Proposed |
 | [0121](0121-a-rom-is-searched-by-platform-and-title.md) | A ROM is its own content type, searched by platform and title | Proposed |
 | [0122](0122-held-films-and-series-are-enriched-on-the-node-and-a-backdrop-is-its-own-face.md) | Held films and series are enriched on the node, and a backdrop is its own face | Proposed |
+| [0123](0123-playback-chooses-among-a-works-copies-by-what-the-client-can-show.md) | Playback chooses among a work's copies by what the client can show | Accepted |

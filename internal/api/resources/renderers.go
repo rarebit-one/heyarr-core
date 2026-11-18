@@ -3,7 +3,6 @@ package resources
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -1133,65 +1132,28 @@ func (a *API) assetBitrateKbps(ctx context.Context, assetID string) float64 {
 	return float64(bitrate.Int64) / 1000
 }
 
-// siblingAssets returns the other primary-role assets held by this node for the
-// same work as assetID. Used to surface smaller-copy alternatives in a
-// route-refused 409.
+// siblingAssets returns the other probed copies of the thing assetID holds
+// (copies.go). Used to surface smaller-copy alternatives in a route-refused
+// 409; a copy whose height is unknown cannot be offered as smaller.
 func (a *API) siblingAssets(ctx context.Context, assetID string) []renderroute.SiblingAsset {
-	rows, err := a.reader.QueryContext(ctx, `
-		SELECT a2.id, bp.bitrate_bps, bp.streams
-		FROM assets a1
-		JOIN editions e1 ON e1.id = a1.edition_id
-		JOIN works w ON w.id = e1.work_id
-		JOIN editions e2 ON e2.work_id = w.id
-		JOIN assets a2 ON a2.edition_id = e2.id
-		JOIN blob_probes bp ON bp.blob_hash = a2.blob_hash
-		WHERE a1.id = ?
-		  AND a2.id != ?
-		  AND a2.role = 'primary'
-		  AND a2.blob_hash IS NOT NULL
-		  -- Another copy of the SAME thing: the same episode when both assets
-		  -- know their item, or any copy of a film. A season edition holds every
-		  -- episode, so "same work" alone would offer a different episode.
-		  AND ((a1.item_id IS NOT NULL AND a2.item_id = a1.item_id)
-		       OR (a1.item_id IS NULL AND w.content_type = 'movie'))`, assetID, assetID)
+	copies, err := a.queryCopies(ctx, siblingsOf, assetID, assetID)
 	if err != nil {
 		return nil
 	}
-	defer func() { _ = rows.Close() }()
 	var out []renderroute.SiblingAsset
-	for rows.Next() {
-		var (
-			id      string
-			bitrate sql.NullInt64
-			streams string
-		)
-		if err := rows.Scan(&id, &bitrate, &streams); err != nil {
-			continue
+	for _, c := range copies {
+		if !c.Picture {
+			continue // unprobed, or no picture: not a copy of a video
 		}
-		var parsed []struct {
-			Type            string `json:"type"`
-			Height          int    `json:"height"`
-			AttachedPicture bool   `json:"attached_picture"`
-		}
-		_ = json.Unmarshal([]byte(streams), &parsed)
-		height := 0
-		for _, s := range parsed {
-			if s.Type == "video" && !s.AttachedPicture && s.Height > 0 {
-				height = s.Height
-				break
-			}
-		}
-		if height == 0 {
-			continue // no picture: not a copy of a video
+		var bitrate int64
+		if c.BitrateBPS != nil {
+			bitrate = *c.BitrateBPS
 		}
 		out = append(out, renderroute.SiblingAsset{
-			AssetID:     id,
-			HeightPx:    height,
-			BitrateKbps: float64(bitrate.Int64) / 1000,
+			AssetID:     c.AssetID,
+			HeightPx:    c.Video.Height,
+			BitrateKbps: float64(bitrate) / 1000,
 		})
-	}
-	if rows.Err() != nil {
-		return nil
 	}
 	return out
 }

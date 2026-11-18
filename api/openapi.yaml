@@ -3967,6 +3967,16 @@ paths:
         to another peer answers `direct` on that peer and says why. A node
         with no ffmpeg answers `direct` with the reason and the note that it
         cannot repackage — the bytes and the truth, not a black player.
+
+        **A film can be named instead of a file (#885).** Send `work_id`
+        (optionally `edition_id`) in place of `asset_id` and the node chooses
+        which copy to plan from what the client can show — `max_height`,
+        `supports_hdr`, `max_bitrate_bps` and its video codecs, each filled
+        from the named device when unstated. The plan is then for the chosen
+        copy, exactly as if its `asset_id` had been sent, plus a `selection`
+        naming the copy, the reason, and the alternatives. An explicit
+        `asset_id` always wins, and a request carrying one is answered as it
+        always was.
       requestBody:
         required: true
         content:
@@ -9647,9 +9657,25 @@ components:
               expires_at: { type: string, format: date-time }
     PlanRequest:
       type: object
-      required: [asset_id]
+      description: |
+        Name the file with `asset_id`, or a film with `work_id` and let the
+        node choose the copy (#885). One of the two is required; when both are
+        given `asset_id` wins and `work_id` is ignored.
       properties:
-        asset_id: { type: string }
+        asset_id:
+          type: string
+          description: The file to plan. Always wins over `work_id`.
+        work_id:
+          type: string
+          description: |
+            A film (`content_type: movie`) whose copies the node chooses among
+            by what the client can show; the answer's `asset_id` is the copy
+            chosen and `selection` says why. Any other content type is a 400:
+            a series' edition can hold every episode, so plan those by
+            `asset_id`.
+        edition_id:
+          type: string
+          description: Narrows a `work_id` choice to that edition's copies.
         device_id:
           type: string
           description: |
@@ -9692,6 +9718,22 @@ components:
           description: |
             Zero-based source audio ordinal. Overrides audio_languages. An
             ordinal absent from the probe returns HTTP 400.
+        supports_hdr:
+          type: boolean
+          description: |
+            The client shows HDR. Used only to choose among a work's copies
+            (`work_id`): when absent or false, an SDR copy is preferred among
+            those that fit. Absent is unstated rather than false, and a named
+            device's stored value fills it. It does not change how a copy is
+            planned — nothing tone-maps yet — so a plan by `asset_id` ignores it.
+        max_bitrate_bps:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            The highest overall bitrate the client takes, in bit/s. Used only to
+            choose among a work's copies, as `supports_hdr` is; zero or absent
+            means no limit, and a named device's stored value fills it.
         max_height:
           type: integer
           minimum: 0
@@ -9699,7 +9741,8 @@ components:
             The tallest picture the client will take. Zero or absent means no
             limit. A taller picture is still served: as a `stream` with the
             video re-encoded and scaled down to this height, even when the
-            client decodes the source codec.
+            client decodes the source codec. When choosing among a work's
+            copies, a copy taller than this does not fit.
       example:
         containers: [mp4, mkv, webm]
         video: [h264, hevc, vp9, av1]
@@ -9816,6 +9859,60 @@ components:
         source:
           allOf: [{ $ref: "#/components/schemas/PlaybackSource" }]
           description: What the probe found, when anything has probed the bytes.
+        selection:
+          allOf: [{ $ref: "#/components/schemas/PlaybackSelection" }]
+          description: |
+            Present exactly when the request named a `work_id` and no
+            `asset_id` (#885): the copy chosen — the plan's `asset_id` — why,
+            and every other copy with why not.
+
+    PlaybackSelection:
+      type: object
+      description: |
+        Which of a film's copies was planned (#885). The rule: a copy fits
+        when it is at or under the client's `max_height` and
+        `max_bitrate_bps`. Among the fits, one whose video the client decodes
+        beats one it does not. When the client does not declare HDR, SDR beats
+        HDR. Then the tallest wins, and at equal height HDR when it is
+        declared, then the higher bitrate, then the asset id. When nothing
+        fits, the smallest copy over the limit is chosen and scaled down.
+        Unprobed copies rank last. Capabilities the client leaves unstated come
+        from the `device_id` it names.
+      required: [chosen, alternatives]
+      properties:
+        chosen: { $ref: "#/components/schemas/PlaybackCopy" }
+        alternatives:
+          type: array
+          description: Every other copy, best first, each with the reason it lost.
+          items: { $ref: "#/components/schemas/PlaybackCopy" }
+
+    PlaybackCopy:
+      type: object
+      description: One copy of the film as selection saw it — enough to offer it as a manual choice.
+      required: [asset_id, edition_id, edition_label, height, hdr, bitrate_bps, reason]
+      properties:
+        asset_id: { type: string }
+        edition_id: { type: string }
+        edition_label: { type: string }
+        height: { type: [integer, "null"], description: "Probed picture height; null when unprobed." }
+        hdr: { type: [boolean, "null"], description: "PQ or HLG transfer; null when unprobed." }
+        bitrate_bps: { type: [integer, "null"], format: int64 }
+        video_codec: { type: string, description: "ffprobe's codec name, when probed." }
+        reason:
+          type: object
+          required: [code, detail]
+          properties:
+            code:
+              type: string
+              enum:
+                [best_fit, smallest_over_limit, not_probed,
+                 resolution_too_high, bitrate_too_high, needs_video_reencode,
+                 hdr_not_declared, smaller, equal_lost_tie, larger]
+              description: |
+                Stable. On `chosen`: `best_fit`, `smallest_over_limit` or
+                `not_probed` (nothing was probed, so the lowest id was taken).
+                On an alternative: why it lost.
+            detail: { type: string, description: "Prose for a human; may change." }
 
     RoutingDecision:
       type: object
