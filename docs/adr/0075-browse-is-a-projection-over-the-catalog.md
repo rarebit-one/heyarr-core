@@ -1,6 +1,6 @@
 # 0075. Browse is a projection over the catalog
 
-**Status:** Accepted; superseded in part by ADR-0109
+**Status:** Accepted; superseded in part by ADR-0109; the film `primary_asset` pick amended by ADR-0123
 **Date:** 2026-09-05
 **Builds on:** ADR-0013 (one byte endpoint), ADR-0017 (time, identifiers, determinism), ADR-0020 (managed / linked / vault assets), ADR-0024 (one consumption-session model), ADR-0054 (the first-party client is the product; compat adapters are reach), ADR-0056 (the Item entity), ADR-0074 (guest is a first-class read-only mode)
 **Tracks:** #456
@@ -50,7 +50,8 @@ table, an entity or a stored image.**
    byte-identical to before. An embed not asked for is *absent*; one asked for
    that the work lacks is `null` — "I did not ask" and "there is no poster" are
    different answers. `GET /works/{id}` carries both always: one row, two cheap
-   lookups. `primary_asset` is the first `primary`-role asset holding bytes,
+   lookups. `primary_asset` is the first `primary`-role asset holding bytes
+   (for a film, the best default copy since ADR-0123),
    with its size and probed duration inlined, so a tap can go straight to
    `POST /playback/plan`.
 

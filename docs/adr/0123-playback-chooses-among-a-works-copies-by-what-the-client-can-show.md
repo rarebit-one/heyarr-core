@@ -58,6 +58,14 @@ chose, why, and what it passed over.**
   flag and bitrate are on `WorkAsset` and `PrimaryAssetRef`, so a client can
   offer a manual choice without parsing `edition_label`.
 
+- **Browse's `primary_asset` for a film is the copy this rule chooses for a
+  client that declares nothing.** That means SDR before HDR, then the tallest,
+  then the highest bitrate, then the id, with unprobed copies last. It replaces
+  "the oldest primary asset". A card tap then plays a copy every screen shows
+  correctly, and the answer is stable across requests. The pick is SQL and the
+  rule is Go, so a test holds the two to one answer. Other content types keep
+  creation order: a series' primary files are different episodes.
+
 ## Consequences
 
 A phone that sends `work_id` and `max_height: 1080` gets the 1080p copy,

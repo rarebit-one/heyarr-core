@@ -244,3 +244,96 @@ func TestPlanByWorkRefusals(t *testing.T) {
 		})
 	}
 }
+
+// Browse's primary_asset for a film is the copy a plan by work_id chooses for
+// a client that declares nothing (ADR-0123). The pick is SQL and the choice is
+// Go, so this holds them to one answer across the layouts that matter.
+func TestBrowseDefaultIsTheCopyAnUndeclaredPlanChooses(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed().seedTwoCopies()
+
+	agree := func(t *testing.T, want string) {
+		t.Helper()
+		var detail struct {
+			PrimaryAsset struct {
+				AssetID string `json:"asset_id"`
+			} `json:"primary_asset"`
+		}
+		decode(t, h, "/api/v1/works/"+work1ID, &detail)
+		_, p, raw := h.planBody(t, `{"work_id":"`+work1ID+`","client":{}}`)
+		if p.AssetID != detail.PrimaryAsset.AssetID {
+			t.Fatalf("browse default %s, undeclared plan %s — they must agree\n%s",
+				detail.PrimaryAsset.AssetID, p.AssetID, raw)
+		}
+		if p.AssetID != want {
+			t.Errorf("both chose %s, want %s", p.AssetID, want)
+		}
+	}
+
+	// 2160p HDR and 1080p SDR: SDR, though it is shorter and newer.
+	agree(t, assetFHDID)
+
+	// A 2160p SDR copy joins: the tallest SDR.
+	const (
+		editionUHDSDR = "01990000-0000-7000-8000-00000000e1us"
+		assetUHDSDR   = "01990000-0000-7000-8000-00000000a1us"
+		blobUHDSDR    = "blake3:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+	)
+	h.exec(`INSERT INTO blobs (hash, size, mime, first_seen_at) VALUES (?, 21474836480, 'video/x-matroska', ?)`, blobUHDSDR, seedTime)
+	h.exec(`INSERT INTO blob_probes (blob_hash, container, format_long, duration_seconds, bitrate_bps, streams, bytes_read, materialised, probed_at)
+		VALUES (?, 'matroska,webm', '', 6960, 30000000, ?, 0, 0, ?)`, blobUHDSDR,
+		`[{"index":0,"type":"video","codec":"hevc","width":3840,"height":2160,"color_transfer":"bt709"}]`, seedTime)
+	h.exec(`INSERT INTO editions (id, work_id, label, edition_type, language, attributes, edition_key, created_at)
+		VALUES (?, ?, '2160p SDR', 'web', 'en', '{}', '2160p-sdr', ?)`, editionUHDSDR, work1ID, seedTime)
+	h.exec(`INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash, source_path,
+			role, filename, mime, identification_source, missing_since, created_at, updated_at)
+		VALUES (?, ?, ?, 'managed', ?, '/srv/films/Arrival.2160p.sdr.mkv', 'primary', 'Arrival.2160p.sdr.mkv',
+			'video/x-matroska', 'path', NULL, ?, ?)`, assetUHDSDR, editionUHDSDR, libFilmsID, blobUHDSDR, seedTime, seedTime)
+	h.exec(`INSERT INTO replicas (blob_hash, peer_id, state, bytes_present, verified_at, reported_at, updated_at)
+		VALUES (?, ?, 'present', 21474836480, ?, ?, ?)`, blobUHDSDR, peerID, seedTime, seedTime, seedTime)
+	agree(t, assetUHDSDR)
+
+	// Nothing probed: the lowest id, which is what "oldest" used to mean.
+	h.exec(`DELETE FROM blob_probes`)
+	agree(t, asset1ID)
+}
+
+// A series keeps creation order: its primary-role files are different
+// episodes, and ranking them by picture would pick an arbitrary one.
+func TestBrowseDefaultForASeriesIsStillTheFirstFile(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+
+	const (
+		series   = "01990000-0000-7000-8000-00000000ws01"
+		ep1, ep2 = "01990000-0000-7000-8000-00000000es01", "01990000-0000-7000-8000-00000000es02"
+		a1, a2   = "01990000-0000-7000-8000-00000000as01", "01990000-0000-7000-8000-00000000as02"
+		b1       = "blake3:e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+		b2       = "blake3:e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2"
+	)
+	h.exec(`INSERT INTO works (id, content_type, work_key, title, sort_title, year, attributes, created_at, updated_at)
+		VALUES (?, 'series', 'a-series', 'A Series', 'series', 2020, '{}', ?, ?)`, series, seedTime, seedTime)
+	h.exec(`INSERT INTO editions (id, work_id, label, edition_type, language, attributes, edition_key, created_at) VALUES
+		(?, ?, 'S01E01', 'episode', NULL, '{}', 's01e01', ?), (?, ?, 'S01E02', 'episode', NULL, '{}', 's01e02', ?)`,
+		ep1, series, seedTime, ep2, series, seedTime)
+	h.exec(`INSERT INTO blobs (hash, size, mime, first_seen_at) VALUES (?, 1, 'video/mp4', ?), (?, 1, 'video/mp4', ?)`,
+		b1, seedTime, b2, seedTime)
+	// The second episode is the taller, probed one; the first is unprobed.
+	h.exec(`INSERT INTO blob_probes (blob_hash, container, format_long, duration_seconds, bitrate_bps, streams, bytes_read, materialised, probed_at)
+		VALUES (?, 'mov,mp4', '', 2700, 9000000, '[{"index":0,"type":"video","codec":"h264","height":2160}]', 0, 0, ?)`, b2, seedTime)
+	h.exec(`INSERT INTO assets (id, edition_id, library_id, source_class, blob_hash, source_path,
+			role, filename, mime, identification_source, missing_since, created_at, updated_at) VALUES
+		(?, ?, ?, 'managed', ?, '/srv/tv/e1.mp4', 'primary', 'e1.mp4', 'video/mp4', 'path', NULL, ?, ?),
+		(?, ?, ?, 'managed', ?, '/srv/tv/e2.mp4', 'primary', 'e2.mp4', 'video/mp4', 'path', NULL, ?, ?)`,
+		a1, ep1, libFilmsID, b1, seedTime, seedTime, a2, ep2, libFilmsID, b2, seedTime, seedTime)
+
+	var detail struct {
+		PrimaryAsset struct {
+			AssetID string `json:"asset_id"`
+		} `json:"primary_asset"`
+	}
+	decode(t, h, "/api/v1/works/"+series, &detail)
+	if detail.PrimaryAsset.AssetID != a1 {
+		t.Errorf("series primary_asset = %s, want the first episode's file %s", detail.PrimaryAsset.AssetID, a1)
+	}
+}
