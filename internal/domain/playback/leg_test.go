@@ -194,3 +194,103 @@ func TestClientProfileRendersAsADeviceProfile(t *testing.T) {
 		t.Errorf("the planner's reasons lack the audio code: %+v", plan.Reasons)
 	}
 }
+
+// A re-encode decodes the base layer and writes eight-bit H.264, so what the
+// source's samples mean decides what else the re-encode must do (#886). A
+// copy is never touched: the client gets the source's own colour.
+func TestNegotiateToneMapsHDRForAClientWithoutIt(t *testing.T) {
+	sdrPhone := playback.ClientProfile{
+		Containers: []string{"mp4", "mkv"}, VideoCodecs: []string{"h264", "hevc"}, AudioCodecs: []string{"aac", "eac3"}, MaxHeight: 1080,
+	}
+	hdrPhone := sdrPhone
+	hdrPhone.SupportsHDR = true
+	browser := playback.ClientProfile{Containers: []string{"mp4"}, VideoCodecs: []string{"h264"}, AudioCodecs: []string{"aac"}}
+
+	remux := func(height int, rng playback.DynamicRange) playback.MediaProfile {
+		return playback.MediaProfile{
+			Known: true, Container: "matroska,webm", VideoCodec: "hevc", Width: height * 16 / 9, Height: height,
+			HDR: rng != playback.RangeSDR, Range: rng, AudioCodec: "eac3", Channels: 6,
+		}
+	}
+
+	cases := []struct {
+		name     string
+		media    playback.MediaProfile
+		client   playback.ClientProfile
+		mode     playback.LegMode
+		copy     bool
+		toneMap  playback.DynamicRange
+		reason   string
+		wantCode string
+	}{
+		{
+			name: "2160p HDR10 scaled for an SDR phone: tone-mapped from PQ", media: remux(2160, playback.RangePQ),
+			client: sdrPhone, mode: playback.LegStream, toneMap: playback.RangePQ, reason: "exceeds client max_height 1080",
+		},
+		{
+			name: "HLG re-encoded for a browser that cannot decode HEVC: tone-mapped from HLG", media: remux(1080, playback.RangeHLG),
+			client: browser, mode: playback.LegStream, toneMap: playback.RangeHLG, reason: "video hevc not decodable by client",
+		},
+		{
+			name: "the same HDR10 re-encode for a client that declares HDR: no tone-map", media: remux(2160, playback.RangePQ),
+			client: hdrPhone, mode: playback.LegStream,
+		},
+		{
+			name: "HDR10 the SDR phone decodes as it is: direct, never tone-mapped", media: remux(1080, playback.RangePQ),
+			client: sdrPhone, mode: playback.LegDirect,
+		},
+		{
+			name:   "HDR10 in a container the client refuses: a remux copies the video, so no tone-map",
+			media:  playback.MediaProfile{Known: true, Container: "avi", VideoCodec: "hevc", Height: 1080, HDR: true, Range: playback.RangePQ, AudioCodec: "aac"},
+			client: sdrPhone, mode: playback.LegStream, copy: true,
+		},
+		{
+			name: "SDR re-encoded: nothing to tone-map", media: remux(2160, playback.RangeSDR),
+			client: sdrPhone, mode: playback.LegStream,
+		},
+		{
+			name: "Dolby Vision profile 5 that needs a re-encode: refused for an SDR client", media: remux(2160, playback.RangeDolbyVisionOnly),
+			client: sdrPhone, mode: playback.LegUnplayable, reason: "cannot be re-encoded in the right colours",
+			wantCode: playback.ReasonDolbyVisionNoBase,
+		},
+		{
+			name: "and for an HDR client, whose re-encode would drop the RPU just the same", media: remux(2160, playback.RangeDolbyVisionOnly),
+			client: hdrPhone, mode: playback.LegUnplayable, wantCode: playback.ReasonDolbyVisionNoBase,
+		},
+		{
+			name: "Dolby Vision profile 5 the client decodes as it is: direct, the bytes untouched", media: remux(1080, playback.RangeDolbyVisionOnly),
+			client: sdrPhone, mode: playback.LegDirect,
+		},
+		{
+			name:   "Dolby Vision profile 5 needing only an audio re-encode: the video is copied, so it streams",
+			media:  playback.MediaProfile{Known: true, Container: "matroska,webm", VideoCodec: "hevc", Height: 1080, HDR: true, Range: playback.RangeDolbyVisionOnly, AudioCodec: "dts"},
+			client: sdrPhone, mode: playback.LegStream, copy: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := playback.Negotiate(tc.media, tc.client)
+			if got.Mode != tc.mode {
+				t.Fatalf("mode = %q, want %q (reason %q)", got.Mode, tc.mode, got.Reason)
+			}
+			if got.Mode == playback.LegStream && got.CopyVideo != tc.copy {
+				t.Errorf("copy video = %v, want %v", got.CopyVideo, tc.copy)
+			}
+			if got.ToneMapFrom != tc.toneMap {
+				t.Errorf("tone-map from = %q, want %q", got.ToneMapFrom, tc.toneMap)
+			}
+			if tc.reason != "" && !strings.Contains(got.Reason, tc.reason) {
+				t.Errorf("reason = %q, want it to carry %q", got.Reason, tc.reason)
+			}
+			if tc.wantCode != "" {
+				found := false
+				for _, r := range got.Reasons {
+					found = found || r.Code == tc.wantCode
+				}
+				if !found {
+					t.Errorf("reasons = %+v, want %s among them", got.Reasons, tc.wantCode)
+				}
+			}
+		})
+	}
+}

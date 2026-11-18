@@ -67,9 +67,62 @@ type StreamSpec struct {
 	// Zero keeps the source height. Ignored when CopyVideo is set — a copy
 	// cannot scale.
 	MaxHeight int
+	// ToneMap converts an HDR picture to BT.709 SDR on the way through the
+	// re-encode, from the transfer it names (#886). Empty is no tone-map.
+	// Ignored when CopyVideo is set, like MaxHeight.
+	ToneMap ToneMap
 	// Start seeks the input to this many seconds before producing anything.
 	// A restarted stream, not a seek within one (§33 note in ADR-0069).
 	Start float64
+}
+
+// ToneMap names the HDR transfer a re-encode tone-maps from.
+type ToneMap string
+
+const (
+	// ToneMapNone leaves the picture's samples as the decoder hands them.
+	ToneMapNone ToneMap = ""
+	// ToneMapPQ is SMPTE ST 2084: HDR10, HDR10+, and the HDR10 base layer of
+	// Dolby Vision profiles 7 and 8.1.
+	ToneMapPQ ToneMap = "pq"
+	// ToneMapHLG is ARIB STD-B67, including Dolby Vision 8.4's base.
+	ToneMapHLG ToneMap = "hlg"
+)
+
+// toneMapFilters is the software tone-map, as -vf filters (#886).
+//
+// It is zimg (zscale) and ffmpeg's tonemap, because that is what the pinned
+// static build carries: libzimg, and neither libplacebo nor a hardware
+// tone-mapper this node would encode after (the encoder is libx264). In
+// order:
+//
+//	zscale tin/min/pin/rin  name the source's transfer, matrix, primaries and
+//	                        range rather than trusting the frames to carry
+//	                        them; a remux that dropped its colour tags would
+//	                        otherwise fail with "no path between colorspaces".
+//	                        HDR is mastered in BT.2020; that is assumed.
+//	t=linear:npl=100        to linear light, with SDR white at 100 nits, in
+//	format=gbrpf32le        float RGB, which is what tonemap works on.
+//	zscale p=bt709          into the BT.709 gamut, before the curve compresses
+//	                        the range, so out-of-gamut colour is compressed too.
+//	tonemap hable desat=0   Hable's filmic curve, which keeps highlight detail
+//	                        rather than clipping it; no desaturation, because
+//	                        hable already rolls saturation off with the luminance.
+//	zscale t/m/r bt709 tv   back to BT.709 gamma, the BT.709 matrix, limited
+//	format=yuv420p          range, eight-bit 4:2:0 for libx264.
+func toneMapFilters(from ToneMap) []string {
+	tin := "smpte2084"
+	if from == ToneMapHLG {
+		tin = "arib-std-b67"
+	}
+	return []string{
+		"zscale=tin=" + tin + ":min=bt2020nc:pin=bt2020:rin=tv:t=linear:npl=100",
+		"format=gbrpf32le",
+		"zscale=p=bt709",
+		"tonemap=tonemap=hable:desat=0",
+		"zscale=t=bt709:m=bt709:r=tv",
+		"format=yuv420p",
+	}
 }
 
 // StreamArgs is the command line, in one place so it can be read and tested.
@@ -96,6 +149,12 @@ type StreamSpec struct {
 //	                    copying video with widely spaced source keyframes.
 //	-force_key_frames   encoded video gets a keyframe each second so the first
 //	                    playable fragment does not wait for x264's default GOP.
+//	-vf scale,...       the height cap first, so a 2160p source is tone-mapped
+//	                    at the client's size rather than at four times it;
+//	                    then the tone-map (see toneMapFilters).
+//	-color_*            a tone-mapped stream is TAGGED BT.709. Without the
+//	                    tags libx264 inherits the source's PQ and BT.2020, and
+//	                    a player that honours them undoes the tone-map.
 //
 //	-f mp4 -            to stdout, which is the response.
 func StreamArgs(spec StreamSpec) []string {
@@ -109,9 +168,19 @@ func StreamArgs(spec StreamSpec) []string {
 	} else {
 		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
 			"-force_key_frames", "expr:gte(t,n_forced*1)")
+		var filters []string
 		if spec.MaxHeight > 0 {
 			// -2 keeps the width even, which libx264 with yuv420p requires.
-			args = append(args, "-vf", fmt.Sprintf("scale=-2:'min(%d,ih)'", spec.MaxHeight))
+			filters = append(filters, fmt.Sprintf("scale=-2:'min(%d,ih)'", spec.MaxHeight))
+		}
+		if spec.ToneMap != ToneMapNone {
+			filters = append(filters, toneMapFilters(spec.ToneMap)...)
+		}
+		if len(filters) > 0 {
+			args = append(args, "-vf", strings.Join(filters, ","))
+		}
+		if spec.ToneMap != ToneMapNone {
+			args = append(args, "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709")
 		}
 	}
 	if spec.CopyAudio {
@@ -139,6 +208,11 @@ type Streamer struct {
 	slots  chan struct{}
 	active atomic.Int64
 	log    *slog.Logger
+
+	// toneMapMu guards the answer ToneMaps learned, once it learned one.
+	toneMapMu    sync.Mutex
+	toneMapKnown bool
+	toneMaps     bool
 }
 
 // NewStreamer builds a Streamer.
@@ -159,6 +233,69 @@ func NewStreamer(opts StreamerOptions) (*Streamer, error) {
 		slots: make(chan struct{}, n),
 		log:   log.With("component", "ffmpeg.stream"),
 	}, nil
+}
+
+// toneMapListTimeout bounds `-filters`, which reads no input and touches no
+// device; generous only because the binary may be cold.
+const toneMapListTimeout = 10 * time.Second
+
+// toneMapNeeds is every filter toneMapFilters uses that a build can lack.
+// zscale is libzimg, which is an optional dependency of ffmpeg; tonemap is
+// built in, but a trimmed build can leave it out.
+var toneMapNeeds = []string{"zscale", "tonemap"}
+
+// ToneMaps reports whether this ffmpeg has the filters a tone-map needs.
+//
+// It asks the binary once and remembers the answer. A binary that could not be
+// asked — a timeout, a cancelled request — is "no" for this call and asked
+// again next time, because that is a property of the moment and not of the
+// build. Asking is cheap and touches nothing; a stream that is planned with a
+// tone-map and then fails to start on a missing filter is a black player.
+func (s *Streamer) ToneMaps(ctx context.Context) bool {
+	s.toneMapMu.Lock()
+	defer s.toneMapMu.Unlock()
+	if s.toneMapKnown {
+		return s.toneMaps
+	}
+	ctx, cancel := context.WithTimeout(ctx, toneMapListTimeout)
+	defer cancel()
+	// #nosec G204 -- the binary is the resolved toolchain (ADR-0023) and every
+	// argument is a literal.
+	out, err := exec.CommandContext(ctx, s.bin, "-hide_banner", "-filters").Output()
+	if err != nil {
+		s.log.Warn("could not list ffmpeg's filters; streaming without a tone-map for now", "error", err)
+		return false
+	}
+	have := map[string]bool{}
+	for _, f := range ParseFilterList(string(out)) {
+		have[f] = true
+	}
+	s.toneMaps, s.toneMapKnown = true, true
+	for _, need := range toneMapNeeds {
+		if !have[need] {
+			s.toneMaps = false
+			s.log.Warn("this ffmpeg has no "+need+" filter; HDR re-encodes will not be tone-mapped", "binary", Base(s.bin))
+		}
+	}
+	return s.toneMaps
+}
+
+// ParseFilterList reads `ffmpeg -filters`: a legend, then one filter per
+// line as three flag characters, the name, its pads ("V->V") and a
+// description. A line is a filter when it has that shape; the legend's lines
+// ("T.. = Timeline support") do not, and there is no separator line to wait
+// for, unlike `-encoders`.
+func ParseFilterList(out string) []string {
+	var names []string
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || len(fields[0]) != 3 || strings.Trim(fields[0], "TSC.") != "" ||
+			!strings.Contains(fields[2], "->") {
+			continue
+		}
+		names = append(names, fields[1])
+	}
+	return names
 }
 
 // Active is how many streams are running now — the metrics gauge.
@@ -203,7 +340,7 @@ func (s *Streamer) Stream(ctx context.Context, spec StreamSpec, w io.Writer) err
 	started := time.Now()
 	s.log.Info("stream starting", "source", Base(spec.Source),
 		"copy_video", spec.CopyVideo, "copy_audio", spec.CopyAudio,
-		"max_height", spec.MaxHeight, "start", spec.Start, "active", s.Active())
+		"max_height", spec.MaxHeight, "tone_map", string(spec.ToneMap), "start", spec.Start, "active", s.Active())
 
 	err := cmd.Run()
 	elapsed := time.Since(started)

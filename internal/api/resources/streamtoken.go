@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rarebit-one/heyarr-core/internal/auth"
+	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
 )
 
 // The stream token (ADR-0069).
@@ -71,9 +72,14 @@ type streamToken struct {
 	Subject string
 	// CopyVideo, CopyAudio and MaxHeight are the repackage, as the domain
 	// decided it. Signed, so a client cannot upgrade a copy to a transcode.
-	CopyVideo  bool
-	CopyAudio  bool
-	MaxHeight  int
+	CopyVideo bool
+	CopyAudio bool
+	MaxHeight int
+	// ToneMap is the HDR tone-map the re-encode applies (#886), carried as
+	// flag bits beside the copies. An older node reading a token with them
+	// set refuses it as malformed rather than streaming without the
+	// tone-map, which is what the version prefix exists to guarantee.
+	ToneMap    ffmpeg.ToneMap
 	AudioTrack int
 	ExpiresAt  time.Time
 }
@@ -122,6 +128,12 @@ func (t streamToken) payload() string {
 	}
 	if t.CopyAudio {
 		flags |= 2
+	}
+	switch t.ToneMap {
+	case ffmpeg.ToneMapPQ:
+		flags |= flagToneMapPQ
+	case ffmpeg.ToneMapHLG:
+		flags |= flagToneMapHLG
 	}
 	return strings.Join([]string{
 		streamTokenVersion,
@@ -184,7 +196,7 @@ func verifyStreamToken(key []byte, token, subject string, now time.Time) (stream
 		return streamToken{}, errStreamTokenMalformed
 	}
 	flags, err := strconv.Atoi(fields[3])
-	if err != nil || flags < 0 || flags > 3 {
+	if err != nil || flags < 0 || flags > 15 || flags&flagToneMapPQ != 0 && flags&flagToneMapHLG != 0 {
 		return streamToken{}, errStreamTokenMalformed
 	}
 	height, err := strconv.Atoi(fields[4])
@@ -208,6 +220,7 @@ func verifyStreamToken(key []byte, token, subject string, now time.Time) (stream
 		Subject:    string(subj),
 		CopyVideo:  flags&1 != 0,
 		CopyAudio:  flags&2 != 0,
+		ToneMap:    toneMapOf(flags),
 		MaxHeight:  height,
 		ExpiresAt:  time.Unix(unix, 0).UTC(),
 	}
@@ -218,6 +231,23 @@ func verifyStreamToken(key []byte, token, subject string, now time.Time) (stream
 		return streamToken{}, errStreamTokenSubject
 	}
 	return t, nil
+}
+
+// The tone-map's flag bits. One at most: a picture has one transfer.
+const (
+	flagToneMapPQ  = 4
+	flagToneMapHLG = 8
+)
+
+func toneMapOf(flags int) ffmpeg.ToneMap {
+	switch {
+	case flags&flagToneMapPQ != 0:
+		return ffmpeg.ToneMapPQ
+	case flags&flagToneMapHLG != 0:
+		return ffmpeg.ToneMapHLG
+	default:
+		return ffmpeg.ToneMapNone
+	}
 }
 
 func streamMAC(key []byte, payload string) []byte {

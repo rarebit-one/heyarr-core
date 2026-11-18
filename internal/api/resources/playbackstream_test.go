@@ -32,6 +32,8 @@ type fakeStreamer struct {
 	block     bool
 	cancelled chan struct{}
 	active    int
+	// noToneMap is an ffmpeg built without zscale.
+	noToneMap bool
 }
 
 const fakeBody = "ftypisom....moov....moof....mdat"
@@ -58,6 +60,8 @@ func (f *fakeStreamer) Stream(ctx context.Context, spec ffmpeg.StreamSpec, w io.
 }
 
 func (f *fakeStreamer) Active() int { f.mu.Lock(); defer f.mu.Unlock(); return f.active }
+
+func (f *fakeStreamer) ToneMaps(context.Context) bool { return !f.noToneMap }
 
 func (f *fakeStreamer) last(t *testing.T) ffmpeg.StreamSpec {
 	t.Helper()

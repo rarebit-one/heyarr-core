@@ -36,6 +36,20 @@ stable.
   declared in the configuration file, or listed in
   `acquisition.peer_pull.libraries`, is matched by name, so rename it there
   too.
+- **An HDR re-encode for a screen without HDR is tone-mapped** (#886,
+  ADR-0125). When a stream re-encodes the video (a codec the client cannot
+  decode, or a picture taller than `max_height`) and the client does not
+  declare `supports_hdr`, an HDR10 or HLG source is tone-mapped to BT.709 SDR
+  (zscale and Hable) and tagged so. That includes Dolby Vision with an HDR10 or
+  HLG base. Before, the client got eight-bit H.264 still tagged PQ, which looks
+  washed out. `supports_hdr` falls back to a named device's stored value. The
+  plan's `reason` says when a stream is tone-mapped, and `source.dynamic_range`
+  reports `sdr`, `pq`, `hlg` or `dolby_vision_only`. A re-encode of Dolby
+  Vision profile 5, which has no base layer an ordinary decoder renders, is
+  refused as `mode: unplayable` with `dolby_vision_no_compatible_base` rather
+  than streamed in the wrong colours. A node whose ffmpeg lacks zscale streams
+  without the tone-map and says so. A stream token minted by this build is
+  refused by an older node.
 - **The probe records a picture's colour and Dolby Vision** (#886). A video
   stream's probe now records its colour primaries and matrix beside the
   transfer, and its Dolby Vision configuration record (profile, level, base-layer

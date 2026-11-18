@@ -23,7 +23,9 @@ import (
 //  1. one that plays without re-encoding video beats one that does — a
 //     re-encode costs a core per stream and some picture;
 //  2. when the client does not declare HDR, an SDR copy beats an HDR one —
-//     nothing here tone-maps (#886), so HDR on an SDR screen looks washed out;
+//     an HDR copy played as it is on an SDR screen looks washed out, and
+//     even re-encoded, a tone-map (#886) is an approximation of what the SDR
+//     grade shows as mastered;
 //  3. then the tallest picture;
 //  4. then, at equal height, an HDR copy when the client declares HDR, the
 //     higher bitrate (the lower, for a data saver: #887), and the asset id —

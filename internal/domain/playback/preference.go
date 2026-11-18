@@ -23,8 +23,8 @@ package playback
 // Either way the person's own cap (MaxHeight, MaxBitrateBPS) is a further
 // ceiling, and the tighter of two ceilings is the one that holds. The video
 // codecs and the HDR flag are facts about the device and are never touched:
-// "best" on a screen without HDR still prefers an SDR copy, because nothing
-// here tone-maps (#886).
+// "best" on a screen without HDR still prefers an SDR copy, because a
+// tone-mapped re-encode (#886, ADR-0125) only approximates the SDR grade.
 
 // Quality is the person's preferred trade between picture and bytes.
 type Quality string

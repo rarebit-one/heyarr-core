@@ -48,6 +48,37 @@ func TestStreamArgsAreTheContract(t *testing.T) {
 			},
 		},
 		{
+			name: "HDR10 tone-mapped for an SDR client, scaled first",
+			spec: ffmpeg.StreamSpec{Source: "/srv/x.mkv", MaxHeight: 1080, ToneMap: ffmpeg.ToneMapPQ},
+			want: []string{
+				"-vf scale=-2:'min(1080,ih)',zscale=tin=smpte2084:min=bt2020nc:pin=bt2020:rin=tv:t=linear:npl=100," +
+					"format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p",
+				"-color_primaries bt709 -color_trc bt709 -colorspace bt709",
+				"-c:v libx264", "-pix_fmt yuv420p",
+			},
+		},
+		{
+			name: "HLG tone-mapped with no height cap",
+			spec: ffmpeg.StreamSpec{Source: "/srv/x.mkv", ToneMap: ffmpeg.ToneMapHLG},
+			want: []string{
+				"-vf zscale=tin=arib-std-b67:min=bt2020nc:pin=bt2020:rin=tv:t=linear:npl=100,format=gbrpf32le,",
+				"-color_trc bt709",
+			},
+			wantNot: []string{"scale=-2", "smpte2084"},
+		},
+		{
+			name:    "a copied picture is never tone-mapped",
+			spec:    ffmpeg.StreamSpec{Source: "/srv/x.mkv", CopyVideo: true, ToneMap: ffmpeg.ToneMapPQ},
+			want:    []string{"-c:v copy"},
+			wantNot: []string{"-vf", "zscale", "tonemap", "-color_trc"},
+		},
+		{
+			name:    "an SDR re-encode carries no colour tags of its own",
+			spec:    ffmpeg.StreamSpec{Source: "/srv/x.mkv", MaxHeight: 720},
+			want:    []string{"-vf scale=-2:'min(720,ih)'"},
+			wantNot: []string{"zscale", "-color_trc"},
+		},
+		{
 			name:    "transcode video with no cap scales nothing",
 			spec:    ffmpeg.StreamSpec{Source: "/srv/x.mkv"},
 			want:    []string{"-c:v libx264"},
@@ -343,6 +374,105 @@ func TestFirstStreamingFragmentIsPlayableBeforeTheLongSourceGopEnds(t *testing.T
 			}
 			if b, err := exec.CommandContext(t.Context(), ffmpegPath, "-v", "error", "-i", prefix, "-frames:v", "1", "-f", "null", "-").CombinedOutput(); err != nil {
 				t.Fatalf("first fragment is not playable: %v %s", err, b)
+			}
+		})
+	}
+}
+
+// The listing is matched by line shape: the legend above it is not a filter,
+// and ffmpeg 6 and 7 print no separator line before the first one.
+func TestParseFilterList(t *testing.T) {
+	out := `Filters:
+  T.. = Timeline support
+  .S. = Slice threading
+  ..C = Command support
+  A = Audio input/output
+  V = Video input/output
+  N = Dynamic number and/or type of input/output
+  | = Source or sink filter
+ ... abench            A->A       Benchmark part of a filtergraph.
+ .S. tonemap           V->V       Conversion to/from different dynamic ranges.
+ .SC zscale            V->V       Apply resizing, colorspace and bit depth conversion.
+ ... testsrc2          |->V       Generate another test pattern.
+`
+	got := strings.Join(ffmpeg.ParseFilterList(out), ",")
+	if got != "abench,tonemap,zscale,testsrc2" {
+		t.Errorf("filters = %q", got)
+	}
+}
+
+// colourTags is ffprobe's transfer and primaries for a file's first video
+// stream, "transfer/primaries".
+func colourTags(t *testing.T, ffprobePath, path string) string {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), ffprobePath, "-v", "error", "-select_streams", "v:0",
+		"-show_entries", "stream=codec_name,pix_fmt,height,color_transfer,color_primaries,color_space",
+		"-of", "default=nw=1", path).Output()
+	if err != nil {
+		t.Fatalf("probing %s: %v", path, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// A real HDR10 and HLG source through a real ffmpeg (#886). Without the
+// tone-map, the eight-bit H.264 a phone receives is still tagged PQ BT.2020,
+// which is the washed-out picture the issue reports; with it, the stream is
+// BT.709 SDR and says so. The pinned build has zscale; a build without it is
+// what ToneMaps reports, and this asserts the pinned one is not that build.
+func TestStreamToneMapsHDRToTaggedSDR(t *testing.T) {
+	ffmpegPath, ffprobePath := toolchain(t)
+	s, err := ffmpeg.NewStreamer(ffmpeg.StreamerOptions{FFmpegPath: ffmpegPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.ToneMaps(t.Context()) {
+		t.Fatal("the pinned ffmpeg reports no zscale/tonemap; the tone-map would never run")
+	}
+
+	sources := []struct {
+		name     string
+		transfer string
+		toneMap  ffmpeg.ToneMap
+	}{
+		{"hdr10.mkv", "smpte2084", ffmpeg.ToneMapPQ},
+		{"hlg.mkv", "arib-std-b67", ffmpeg.ToneMapHLG},
+	}
+	for _, src := range sources {
+		t.Run(src.name, func(t *testing.T) {
+			path := generate(t, ffmpegPath, src.name, "-map", "0:v", "-map", "1:a",
+				"-vf", "scale=320:240,format=yuv420p10le", "-c:v", "libx265", "-x265-params", "log-level=error",
+				"-color_primaries", "bt2020", "-color_trc", src.transfer, "-colorspace", "bt2020nc",
+				"-c:a", "aac")
+			if got := colourTags(t, ffprobePath, path); !strings.Contains(got, "color_transfer="+src.transfer) {
+				t.Fatalf("the source is not what the test needs: %s", got)
+			}
+
+			stream := func(spec ffmpeg.StreamSpec) string {
+				t.Helper()
+				var buf bytes.Buffer
+				if err := s.Stream(t.Context(), spec, &buf); err != nil {
+					t.Fatal(err)
+				}
+				out := filepath.Join(t.TempDir(), "out.mp4")
+				if err := os.WriteFile(out, buf.Bytes(), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return colourTags(t, ffprobePath, out)
+			}
+
+			plain := stream(ffmpeg.StreamSpec{Source: path, MaxHeight: 180})
+			if !strings.Contains(plain, "color_transfer="+src.transfer) {
+				t.Errorf("control: an untone-mapped re-encode should still carry the source's transfer, got\n%s", plain)
+			}
+			mapped := stream(ffmpeg.StreamSpec{Source: path, MaxHeight: 180, ToneMap: src.toneMap})
+			want := []string{
+				"codec_name=h264", "pix_fmt=yuv420p", "height=180",
+				"color_space=bt709", "color_transfer=bt709", "color_primaries=bt709",
+			}
+			for _, want := range want {
+				if !strings.Contains(mapped, want) {
+					t.Errorf("tone-mapped stream lacks %s:\n%s", want, mapped)
+				}
 			}
 		})
 	}

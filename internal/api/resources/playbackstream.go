@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -61,18 +62,25 @@ type ClientCaps struct {
 	// AudioTrack selects a zero-based source audio ordinal, including commentary.
 	AudioTrack *int `json:"audio_track,omitempty"`
 	// SupportsHDR and MaxBitrateBPS steer which of a work's copies is chosen
-	// when the request names a work (#885). They do not change how the chosen
-	// copy is planned: nothing here tone-maps (#886) or caps a stream's
-	// bitrate, so a plan by asset_id reads neither. SupportsHDR absent is
-	// unstated, not false — a named device's stored value fills it.
+	// when the request names a work (#885). SupportsHDR also decides, when the
+	// chosen copy's video has to be re-encoded anyway, whether an HDR source is
+	// tone-mapped to SDR on the way (#886); it never causes a re-encode by
+	// itself. Nothing caps a stream's bitrate, so MaxBitrateBPS steers the
+	// choice only. SupportsHDR absent is unstated, not false — a named
+	// device's stored value fills it, and with neither the client is taken
+	// not to show HDR.
 	SupportsHDR   *bool `json:"supports_hdr,omitempty"`
 	MaxBitrateBPS int64 `json:"max_bitrate_bps,omitempty"`
 }
 
 func (c ClientCaps) profile() playback.ClientProfile {
-	return playback.ClientProfile{
+	p := playback.ClientProfile{
 		Containers: c.Containers, VideoCodecs: c.Video, AudioCodecs: c.Audio, MaxHeight: c.MaxHeight,
 	}
+	if c.SupportsHDR != nil {
+		p.SupportsHDR = *c.SupportsHDR
+	}
+	return p
 }
 
 // SourceInfo is what the probe found, rendered for a client deciding whether
@@ -86,6 +94,10 @@ type SourceInfo struct {
 	AudioTracks   []AudioTrackInfo `json:"audio_tracks,omitempty"`
 	Width         int              `json:"width,omitempty"`
 	Height        int              `json:"height,omitempty"`
+	// DynamicRange is the picture as a re-encode would see it: sdr, pq, hlg,
+	// or dolby_vision_only (#886). A client can say "HDR, shown as SDR" next
+	// to a stream that is tone-mapped.
+	DynamicRange string `json:"dynamic_range,omitempty"`
 	// Duration is the source's full runtime in seconds. The client uses it as
 	// the scrubber total for a `stream` plan, whose transcode cannot report its
 	// own length until it finishes producing.
@@ -133,6 +145,8 @@ type PathProber interface {
 type PlaybackStreamer interface {
 	Stream(ctx context.Context, spec ffmpeg.StreamSpec, w io.Writer) error
 	Active() int
+	// ToneMaps reports whether this ffmpeg can tone-map HDR to SDR (#886).
+	ToneMaps(ctx context.Context) bool
 }
 
 // planForClient answers POST /playback/plan when the body carries `client`.
@@ -200,6 +214,11 @@ func (a *API) planForClient(
 			return
 		}
 		device = pref.Bound(device)
+		// Field by field, as selection fills it (ADR-0123): an unstated
+		// supports_hdr is the registered device's.
+		if body.Client.SupportsHDR == nil {
+			client.SupportsHDR = device.SupportsHDR
+		}
 	}
 	route, err := a.routeBlob(ctx, blobHash)
 	if err != nil {
@@ -215,7 +234,8 @@ func (a *API) planForClient(
 		out.Source = &SourceInfo{
 			Container: media.Container, Video: media.VideoCodec, Audio: media.AudioCodec,
 			Width: media.Width, Height: media.Height, Duration: media.DurationSec,
-			AudioTrack: media.AudioTrack, AudioLanguage: media.AudioLanguage,
+			DynamicRange: string(media.Range),
+			AudioTrack:   media.AudioTrack, AudioLanguage: media.AudioLanguage,
 			AudioTracks: audioTrackInfos(streams),
 		}
 	}
@@ -245,20 +265,42 @@ func (a *API) planForClient(
 		// A stream is produced where the bytes are, and this node does not
 		// hold them. Same idiom as the render capability (ADR-0040).
 		direct(leg.Reason + "; the replica is on another peer, and a stream is produced only by the peer holding the bytes")
+	case leg.Mode == playback.LegUnplayable:
+		// The client needs a re-encode this node would get wrong (#886). Said
+		// as a refusal with its code, not served as a stream in the wrong
+		// colours: a client that knows why can offer another copy, or the
+		// direct bytes to a screen that decodes Dolby Vision itself.
+		out.Mode, out.Reason = ModeUnplayable, leg.Reason
+		for _, reason := range leg.Reasons {
+			if reason.Code == playback.ReasonDolbyVisionNoBase {
+				out.Reasons = append(out.Reasons, PlanReason{Code: reason.Code, Detail: reason.Detail})
+			}
+		}
 	default:
+		toneMap, reason := streamToneMap(leg.ToneMapFrom), leg.Reason
+		switch {
+		case toneMap == ffmpeg.ToneMapNone:
+		case a.streamer.ToneMaps(ctx):
+			reason += fmt.Sprintf("; HDR (%s) tone-mapped to SDR because the client does not declare HDR", leg.ToneMapFrom)
+		default:
+			// The re-encode still plays; it is the picture from before
+			// there was a tone-map, and the client is told so.
+			toneMap = ffmpeg.ToneMapNone
+			reason += "; this node's ffmpeg has no zscale/tonemap filters, so the HDR picture is not tone-mapped and will look washed out"
+		}
 		id, _ := httpapi.IdentityFrom(ctx)
 		token, err := streamToken{
 			BlobHash: blobHash, Subject: streamSubject(id),
 			CopyVideo: leg.CopyVideo, CopyAudio: leg.CopyAudio, MaxHeight: leg.TargetHeight,
-			AudioTrack: media.AudioTrack,
-			ExpiresAt:  a.now().UTC().Add(streamTokenTTL),
+			ToneMap: toneMap, AudioTrack: media.AudioTrack,
+			ExpiresAt: a.now().UTC().Add(streamTokenTTL),
 		}.sign(a.streamKey)
 		if err != nil {
 			a.log.Error("signing a stream token", "request_id", httpapi.RequestIDFrom(ctx), "error", err)
 			httpapi.Fail(w, r, problem.Internal())
 			return
 		}
-		out.Mode, out.URL, out.MIME, out.Reason = ModeStream, streamPath+token, streamMIME, leg.Reason
+		out.Mode, out.URL, out.MIME, out.Reason = ModeStream, streamPath+token, streamMIME, reason
 	}
 	a.write(w, r, http.StatusOK, out)
 }
@@ -338,12 +380,41 @@ func profileFromProbe(result probe.Result, audioLanguages []string) playback.Med
 	if v, ok := result.VideoStream(); ok {
 		media.VideoCodec, media.Width, media.Height = v.Codec, v.Width, v.Height
 		media.HDR = strings.Contains(strings.ToLower(v.Profile), "hdr")
+		media.Range = dynamicRange(v.DynamicRange())
 	}
 	if au, ordinal, ok := result.AudioForLanguages(audioLanguages); ok {
 		media.AudioCodec, media.Channels = au.Codec, au.Channels
 		media.AudioTrack, media.AudioLanguage = ordinal, au.Language
 	}
 	return media
+}
+
+// dynamicRange is the probe's classification in the domain's vocabulary. The
+// two are spelled the same; the mapping is written out so the domain never
+// imports the prober.
+func dynamicRange(r probe.DynamicRange) playback.DynamicRange {
+	switch r {
+	case probe.RangePQ:
+		return playback.RangePQ
+	case probe.RangeHLG:
+		return playback.RangeHLG
+	case probe.RangeDolbyVisionOnly:
+		return playback.RangeDolbyVisionOnly
+	default:
+		return playback.RangeSDR
+	}
+}
+
+// streamToneMap is the leg's tone-map in the repackager's vocabulary.
+func streamToneMap(from playback.DynamicRange) ffmpeg.ToneMap {
+	switch from {
+	case playback.RangePQ:
+		return ffmpeg.ToneMapPQ
+	case playback.RangeHLG:
+		return ffmpeg.ToneMapHLG
+	default:
+		return ffmpeg.ToneMapNone
+	}
 }
 
 // assetMIME is the asset's declared type, or empty when it has none.
@@ -411,7 +482,7 @@ func (a *API) streamPlayback(w http.ResponseWriter, r *http.Request) {
 	sw := &streamWriter{w: w, rc: http.NewResponseController(w)}
 	err = a.streamer.Stream(ctx, ffmpeg.StreamSpec{
 		Source: path, CopyVideo: tok.CopyVideo, CopyAudio: tok.CopyAudio,
-		MaxHeight: tok.MaxHeight, Start: start, AudioTrack: tok.AudioTrack,
+		MaxHeight: tok.MaxHeight, ToneMap: tok.ToneMap, Start: start, AudioTrack: tok.AudioTrack,
 	}, sw)
 	switch {
 	case err == nil, ctx.Err() != nil:
