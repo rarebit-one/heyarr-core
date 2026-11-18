@@ -278,6 +278,9 @@ var schemaAcquireRelease = obj(map[string]any{
 		"release instead of a candidate. Only for a want resting in MISSING, and only on a " +
 		"node with an http download client. A magnet or .torrent link is refused: acquire " +
 		"a torrent through its candidate. Give this or candidate_id."),
+	"force": boolean("Replace the want's transfer in flight even when it has already " +
+		"fetched bytes, discarding them. Without it, acquiring a different release for a " +
+		"want whose download has started is refused, and the refusal says how far it got."),
 }, "desired_item_id")
 
 // The property helpers. Each returns the same map a literal would, so the

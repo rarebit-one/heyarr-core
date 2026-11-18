@@ -320,6 +320,13 @@ func registerProviderJobs(reg *Registry, d workerDeps) {
 			Handler:            GrabReleaseHandler(d.providers, d.cat, d.log, WithAcquirePublisher(d.acquire)),
 			RequiredCapability: providers.CapabilityDownload.JobCapability(),
 		})
+		// The client's half of a by-hand select or block that took a want off
+		// its transfer (#888). Same condition as the grab: only a node with
+		// the client can remove from it.
+		reg.Register(acquisition.RemoveTransferJobType, Registration{
+			Handler:            RemoveTransferHandler(d.providers, d.cat, d.log),
+			RequiredCapability: providers.CapabilityDownload.JobCapability(),
+		})
 		// Fan-out acquisition (ADR-0119): apply the releases siblings
 		// published. Under the same download-client condition, because every
 		// application ends in a grab, and a node that cannot grab would only

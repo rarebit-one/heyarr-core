@@ -181,6 +181,7 @@ type acquireReleaseArgs struct {
 	DesiredItemID string `json:"desired_item_id"`
 	CandidateID   string `json:"candidate_id"`
 	URL           string `json:"url"`
+	Force         bool   `json:"force"`
 }
 
 // acquireRelease is §71's acquire_release.
@@ -208,7 +209,7 @@ func (s *Server) acquireRelease(ctx context.Context, raw json.RawMessage) (any, 
 		return nil, invalidParams("candidate_id is required — name the release to acquire " +
 			"(or url, for a direct link to the file itself)")
 	}
-	chosen, err := s.resources.AcquireRelease(ctx, args.DesiredItemID, args.CandidateID)
+	sel, err := s.resources.AcquireRelease(ctx, args.DesiredItemID, args.CandidateID, args.Force)
 	switch {
 	case errors.Is(err, catalog.ErrNoCandidate):
 		// Named explicitly rather than left to classify, which would answer
@@ -221,8 +222,19 @@ func (s *Server) acquireRelease(ctx context.Context, raw json.RawMessage) (any, 
 		return nil, invalidParams("that candidate was rejected by the quality profile — " +
 			"change the profile if it should be acceptable, rather than overriding it here; " +
 			"explain_release will say which rule rejected it")
+	case errors.Is(err, catalog.ErrTransferInProgress),
+		errors.Is(err, catalog.ErrSearchInFlight), errors.Is(err, catalog.ErrImportInProgress):
+		return nil, invalidParams("%s", resources.SelectRefusal(err))
 	case err != nil:
 		return nil, classify(err)
+	}
+	chosen := sel.Candidate
+	status := "selected; a grab has been queued"
+	switch {
+	case sel.Displaced != nil:
+		status = "selected; the transfer in flight is being removed and a grab has been queued"
+	case !sel.Changed:
+		status = "already fetching this release; nothing changed"
 	}
 	return map[string]any{
 		"desired_item_id": args.DesiredItemID,
@@ -231,7 +243,7 @@ func (s *Server) acquireRelease(ctx context.Context, raw json.RawMessage) (any, 
 		"title":           chosen.Title,
 		"score":           chosen.Evaluation.Score,
 		"accepted":        chosen.Evaluation.Accepted,
-		"status":          "selected; a grab has been queued",
+		"status":          status,
 	}, nil
 }
 

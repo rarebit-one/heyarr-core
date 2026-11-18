@@ -262,6 +262,23 @@ stable.
   alternative.
 
 ### Fixed
+- **A by-hand select or block on a want with a grab already queued now does
+  what it says** (#888). `POST /desired/{id}/select` used to answer 200 for a
+  want that was `QUEUED`, `DOWNLOADING` or resting idle, and the grab it queued
+  then skipped. It now moves the pipeline with the selection: an idle want is
+  selected and grabbed; a transfer in flight that has fetched nothing is
+  replaced (the want is cancelled and selected again, the old transfer is
+  removed from its client with its partial data by a new `remove_transfer`
+  job, and the response's `replaced` names it); one that has fetched bytes is
+  refused with 409 naming the state and progress unless `force` is set (also
+  on MCP `acquire_release`); a running search or a download being verified or
+  imported is refused with 409. `POST /desired/{id}/blocked` on the release a
+  want is fetching cancels its grab or transfer, removes the transfer, clears
+  the want's search backoff and queues a search, answering `cancelled: true`.
+  A want whose transfer vanished from its client is now due a search at once
+  rather than when its last search's backoff ran out. The acquisition state
+  machine gains one edge, idle → `select`, for a person choosing from the last
+  search's candidates.
 - **A grab starts even when the download client adds torrents stopped**
   (#882). Transmission's `torrent-add` was sent without `paused`, so an
   instance with `start-added-torrents` off added every grab stopped, and it sat

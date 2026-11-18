@@ -55,7 +55,9 @@ func (s *Server) registerAcquisitionTools() {
 			"§60's manual override. Use it when someone names the release they want " +
 			"rather than letting the scorer decide. A candidate the quality profile " +
 			"REJECTED is refused, and the refusal names the rule: change the profile if " +
-			"it should be acceptable, rather than overriding it here. Given a url instead " +
+			"it should be acceptable, rather than overriding it here. A want already " +
+			"fetching another release has that transfer replaced when it has fetched " +
+			"nothing; one that has fetched bytes needs force. Given a url instead " +
 			"of a candidate, it fetches that direct link as the want's release.",
 		InputSchema: schemaAcquireRelease,
 		Handler:     s.acquireRelease,
