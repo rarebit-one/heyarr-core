@@ -293,6 +293,13 @@ func TestBrowseDefaultIsTheCopyAnUndeclaredPlanChooses(t *testing.T) {
 		VALUES (?, ?, 'present', 21474836480, ?, ?, ?)`, blobUHDSDR, peerID, seedTime, seedTime, seedTime)
 	agree(t, assetUHDSDR)
 
+	// The same 2160p copy turns out to be Dolby Vision profile 5, which
+	// declares no transfer at all. It is HDR all the same (#886), so the
+	// 1080p SDR copy is the default again — in the SQL and in the Go.
+	h.exec(`UPDATE blob_probes SET streams = ? WHERE blob_hash = ?`,
+		`[{"index":0,"type":"video","codec":"hevc","width":3840,"height":2160,"dolby_vision":{"profile":5,"bl_compatibility_id":0}}]`, blobUHDSDR)
+	agree(t, assetFHDID)
+
 	// Nothing probed: the lowest id, which is what "oldest" used to mean.
 	h.exec(`DELETE FROM blob_probes`)
 	agree(t, asset1ID)

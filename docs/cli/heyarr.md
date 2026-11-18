@@ -38,6 +38,7 @@ One logical library, multiple complete sovereign peers.
 * [heyarr peer](heyarr_peer.md)	 - Serve and replicate bytes
 * [heyarr peers](heyarr_peers.md)	 - Inspect and manage the peers of this instance
 * [heyarr play](heyarr_play.md)	 - Play an asset on a television, speaker or projector (§68)
+* [heyarr probe](heyarr_probe.md)	 - Media probe operations
 * [heyarr quality-profile](heyarr_quality-profile.md)	 - Author and inspect the quality profiles a want is measured against
 * [heyarr recipient](heyarr_recipient.md)	 - Register executors' public keys as space-key recipients (ADR-0104)
 * [heyarr recover](heyarr_recover.md)	 - Rebuild this peer's control plane from a surviving peer (§51, §82, M7-04)

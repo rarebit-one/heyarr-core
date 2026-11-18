@@ -20,6 +20,16 @@ stable.
   declared in the configuration file, or listed in
   `acquisition.peer_pull.libraries`, is matched by name, so rename it there
   too.
+- **The probe records a picture's colour and Dolby Vision** (#886). A video
+  stream's probe now records its colour primaries and matrix beside the
+  transfer, and its Dolby Vision configuration record (profile, level, base-layer
+  compatibility). The `hdr` flag on a copy, and the browse default, count Dolby
+  Vision as HDR, so a profile 5 file that declares no transfer is no longer
+  offered to an SDR screen as SDR. `GET /blobs/{hash}/probe` returns the new
+  fields. Probes taken before this read as SDR until the blob is probed again:
+  `heyarr probe backfill --work|--library|--all` (`POST /probes/backfill`)
+  queues a probe for each managed video whose probe records neither a transfer
+  nor Dolby Vision.
 - **A dead swarm's release reaches the sibling from its origin** (ADR-0119
   #800 amendment). When a sibling's fan-out grab of a release stalls and the
   stuck-grab sweep blocks it, the sibling records `no_site_source` and holds

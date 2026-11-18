@@ -553,6 +553,9 @@ func (a *API) Mount(r chi.Router) {
 	// Reprocess already-ingested video for embedded subtitles (ADR-0084): a
 	// write, because it queues work.
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/subtitles/backfill", a.backfillSubtitles)
+	// Re-probe already-ingested video whose probe predates the colour facts
+	// (#886): a write, because it queues work.
+	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/probes/backfill", a.backfillProbes)
 	// Request subtitles for held content that has none in a language (ADR-0085):
 	// creates a want per video, which the fetch driver then acquires. A write, it
 	// creates desired state.
