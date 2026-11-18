@@ -79,3 +79,45 @@ read as SDR until the blob is probed again (the ADR-0106 stance).
 A client can name an episode's item, which makes selection safe for series. A
 per-user or per-device quality preference (#887) wants a say in the ranking.
 Or tone-mapping (#886) makes an HDR copy a fair choice for an SDR screen.
+
+## Addendum (2026-11-18): a person's preferred quality has a say (#887)
+
+The first "revisit when" arrived. A person wants *best quality*, *fit this
+screen* or *data saver*, with an optional height or bitrate cap of their own,
+and wants it to follow them from phone to television, with one device able to
+differ.
+
+**Decision.** The preference is personal state, so the node never reads it.
+The client resolves it and sends the result as `preference` on
+`POST /playback/plan`; the node applies what it is sent and stores nothing.
+
+- **Where it lives.** The synced default is a last-writer-wins register in the
+  person's encrypted personal state: a `preferences` role space, folded with
+  the reading-position lattice (a per-key LWW map of opaque strings, §45),
+  under the key `playback.quality`. No new CRDT and no new wire format; the
+  server sees ciphertext (Invariant 6). A device's override is a local setting
+  on that device and is never synced. The client lays the override over the
+  default (an override replaces the default's quality; the cap is the
+  person's), and an absent preference is `fit`.
+- **Finding the space on another device.** Role spaces are recorded per
+  device. A device that has recorded no preferences space adopts one it can
+  open whose fold holds the key, the lowest space id when there are several,
+  so two devices that each minted one converge on the same space.
+- **What the node does with it** (`playback.Preference`, pure). `fit` keeps
+  the screen's height as the limit. `best` lifts it: the tallest copy is
+  chosen and planned without scaling, because the screen downscales better than
+  a re-encode does. `data_saver` limits the height to 720 lines or the screen,
+  whichever is shorter, and takes the lower bitrate at equal height. The
+  person's cap is a further ceiling under any quality. The same height bounds
+  the choice and the plan, by `asset_id` as well as by `work_id`. The codecs
+  and HDR stay the device's facts, so `best` on a screen without HDR still
+  prefers an SDR copy. The bitrate cap steers the choice only, like
+  `max_bitrate_bps`.
+- **The answer echoes the preference it applied.** A client that sent one and
+  gets no echo is talking to a node that predates this and ignored the field.
+  It can then fall back to choosing the copy itself.
+
+**Revisit when** the node gains a personal-state reader of its own (a trusted
+service recipient, ADR-0107), which would let a television that cannot run a
+client still follow the person's preference; or when role spaces are
+discovered by a tagged kind (ADR-0113) rather than by what they hold.

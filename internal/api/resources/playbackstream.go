@@ -141,9 +141,15 @@ type PlaybackStreamer interface {
 // the client's declaration as a device profile when no device_id was sent, so
 // a client and a registered device are explained in one vocabulary — and it
 // adds the leg: what to fetch.
-func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanRequest, selection *SelectionResponse) {
+func (a *API) planForClient(
+	w http.ResponseWriter, r *http.Request, body PlanRequest, pref playback.Preference, selection *SelectionResponse,
+) {
 	ctx := r.Context()
 	client := body.Client.profile()
+	// The person's preference bounds the leg as it bounded the choice, so a
+	// copy chosen for its picture under "best" is not scaled back down to the
+	// screen (#887).
+	client.MaxHeight = int(pref.Height(int64(client.MaxHeight)))
 	audioLanguages := body.Client.AudioLanguages
 	if audioLanguages == nil {
 		audioLanguages = a.audioLanguages
@@ -193,6 +199,7 @@ func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanReq
 			a.fail(w, r, "device", err)
 			return
 		}
+		device.MaxHeight = pref.Height(device.MaxHeight)
 	}
 	route, err := a.routeBlob(ctx, blobHash)
 	if err != nil {
@@ -203,6 +210,7 @@ func (a *API) planForClient(w http.ResponseWriter, r *http.Request, body PlanReq
 	plan := playback.Choose(media, device, replicasOf(route))
 	out := renderPlan(body.AssetID, deviceID, plan, route, blobHash)
 	out.Selection = selection
+	out.Preference = renderPreference(body, pref)
 	if media.Known {
 		out.Source = &SourceInfo{
 			Container: media.Container, Video: media.VideoCodec, Audio: media.AudioCodec,
