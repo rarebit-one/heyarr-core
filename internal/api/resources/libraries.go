@@ -243,6 +243,88 @@ func (a *API) createLibrary(w http.ResponseWriter, r *http.Request) {
 	a.write(w, r, http.StatusCreated, lib)
 }
 
+// updateLibraryRequest is the PATCH /libraries/{id} body.
+//
+// Name is a pointer so a patch that names no field is refused rather than read
+// as "rename to the empty string". It is the only field: content_type cannot be
+// changed in place (it would re-identify every work under the library), and the
+// strict decoder refuses it as an unknown field.
+type updateLibraryRequest struct {
+	Name *string `json:"name"`
+}
+
+// updateLibrary renames a library in place (ADR-0124).
+//
+// The id is the library's identity and the name is a label: assets, roots,
+// scanned files and jobs all reference the id, so a rename touches one column
+// of one row and nothing that hangs off it. The name is validated the way
+// createLibrary validates it — trimmed, non-empty, unique, with a duplicate a
+// 409 rather than a 500 — so a rename cannot produce a library that `library
+// add` would have refused.
+//
+// Renaming to the name it already has is a 200 with no event: nothing
+// transitioned, so there is nothing to put on the log.
+func (a *API) updateLibrary(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	var body updateLibraryRequest
+	if !decodeOr400(w, r, &body) {
+		return
+	}
+	if body.Name == nil {
+		httpapi.Fail(w, r, problem.BadRequest("a library patch must change something — name"))
+		return
+	}
+	if err := required("name", *body.Name); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	name := strings.TrimSpace(*body.Name)
+
+	var (
+		ev      events.Event
+		emitted bool
+	)
+	err := a.db.InTx(r.Context(), func(tx *sql.Tx) error {
+		// A missing library is ErrNoRows here, which a.fail turns into a 404.
+		var previous string
+		if err := tx.QueryRowContext(r.Context(),
+			`SELECT name FROM libraries WHERE id = ?`, id).Scan(&previous); err != nil {
+			return err
+		}
+		if previous == name {
+			return nil
+		}
+		if _, err := tx.ExecContext(r.Context(),
+			`UPDATE libraries SET name = ? WHERE id = ?`, name, id); err != nil {
+			return err
+		}
+		var emitErr error
+		ev, emitErr = a.events.EmitTx(r.Context(), tx, events.TypeLibraryRenamed, "library", id,
+			map[string]any{"library_id": id, "name": name, "previous_name": previous})
+		emitted = emitErr == nil
+		return emitErr
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			httpapi.Fail(w, r, problem.Conflict("a library named "+name+" already exists"))
+			return
+		}
+		a.fail(w, r, "library", err)
+		return
+	}
+	if emitted {
+		a.events.Publish(ev)
+	}
+
+	lib, err := a.loadLibrary(r.Context(), id)
+	if err != nil {
+		a.fail(w, r, "library", err)
+		return
+	}
+	a.write(w, r, http.StatusOK, lib)
+}
+
 // createRootRequest is the POST /libraries/{id}/roots body.
 type createRootRequest struct {
 	Path       string `json:"path"`

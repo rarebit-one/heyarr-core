@@ -76,6 +76,46 @@ func TestLibraryRootSetIngestMode(t *testing.T) {
 	}
 }
 
+// Renaming a library end to end through the CLI (ADR-0124): named by its old
+// name, it keeps its id and roots and answers to the new name only; a name
+// another library holds is refused.
+func TestLibraryRename(t *testing.T) {
+	h := newAPIHarness(t)
+	h.mustRun("library", "add", "verify-92", "--content-type", "movie", "--root", "/srv/a")
+	h.mustRun("library", "add", "books", "--content-type", "book")
+	before := listLibraries(t, h)
+
+	out := h.mustRun("library", "rename", "verify-92", "Movies", "--json")
+	var renamed client.Library
+	if err := json.Unmarshal([]byte(out), &renamed); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	var original client.Library
+	for _, l := range before {
+		if l.Name == "verify-92" {
+			original = l
+		}
+	}
+	if renamed.ID != original.ID || renamed.Name != "Movies" {
+		t.Fatalf("rename = %+v, want id %s name Movies", renamed, original.ID)
+	}
+	if len(renamed.Roots) != 1 || renamed.Roots[0].Path != "/srv/a" {
+		t.Fatalf("rename lost the root: %+v", renamed.Roots)
+	}
+
+	// By id works too, and the old name no longer resolves.
+	h.mustRun("library", "rename", renamed.ID, "Films")
+	if _, _, err := h.run("library", "rename", "verify-92", "Other"); err == nil {
+		t.Error("the old name still resolves after the rename")
+	}
+
+	if _, stderr, err := h.run("library", "rename", "Films", "books"); err == nil {
+		t.Error("renaming onto another library's name succeeded")
+	} else if !strings.Contains(err.Error()+stderr, "already exists") {
+		t.Errorf("error does not say the name is taken: err=%v stderr=%s", err, stderr)
+	}
+}
+
 // Naming a root or a library that is not there is a clear error, not a panic.
 func TestLibraryRootRmUnknownRoot(t *testing.T) {
 	h := newAPIHarness(t)

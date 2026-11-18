@@ -144,6 +144,11 @@ const (
 	// content. Logical, like every deletion here (ADR-0018, ADR-0083): no byte
 	// is unlinked, and the payload says so.
 	TypeLibraryDeleted = "content.library.deleted"
+	// TypeLibraryRenamed is a library's name changing in place (ADR-0124). The
+	// id, roots and assets are untouched — the name is a label, the id is the
+	// library's identity — and the payload carries both names so a reader can
+	// follow a library across the change.
+	TypeLibraryRenamed = "content.library.renamed"
 	// TypeLibraryRootRemoved is one root leaving a library (#228): Heyarr stops
 	// scanning that directory. The counterpart to content.library_root.added.
 	// Assets ingested through the root are unaffected — an asset references its

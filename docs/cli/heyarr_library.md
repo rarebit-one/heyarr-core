@@ -21,5 +21,6 @@ through the API, so they work against a controller on another host.
 * [heyarr](heyarr.md)	 - Self-hosted content lifecycle, replication and consumption
 * [heyarr library add](heyarr_library_add.md)	 - Create a library, optionally with roots
 * [heyarr library list](heyarr_library_list.md)	 - List libraries and their roots
+* [heyarr library rename](heyarr_library_rename.md)	 - Rename a library, keeping its id, roots and content
 * [heyarr library rm](heyarr_library_rm.md)	 - Remove an empty library and its roots
 * [heyarr library root](heyarr_library_root.md)	 - Add or remove a library's roots
