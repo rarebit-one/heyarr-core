@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rarebit-one/void-which-binds-go/device"
 	"github.com/rarebit-one/void-which-binds-go/enrolment"
@@ -44,7 +45,14 @@ func (h *apiHarness) enrolUser(t *testing.T, name string) householdUser {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert, err := enrolment.SignCert(userPriv, dev.PublicKey, dev.EncryptionKeyString(), h.clock.Now(), 0)
+	// The cert is read on two clocks: the controller's, which is the harness's
+	// fixed one, and the device store's, which the CLI under test opens on the
+	// wall clock. Issued at the fixed time with only the default lifetime, it
+	// expired on the wall clock once CertLifetime had passed since fixedTime.
+	// So it is issued where the controller expects it and lives long enough to
+	// still be valid on the wall clock as well.
+	lifetime := time.Since(h.clock.Now()) + enrolment.CertLifetime
+	cert, err := enrolment.SignCert(userPriv, dev.PublicKey, dev.EncryptionKeyString(), h.clock.Now(), lifetime)
 	if err != nil {
 		t.Fatal(err)
 	}
