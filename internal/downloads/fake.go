@@ -377,6 +377,37 @@ func (f *Fake) Hold(id string) error {
 		return fmt.Errorf("%w: %s", ErrNotOurs, id)
 	}
 	t.transfer.Held = true
+	t.transfer.Stopped = providers.StoppedHeld
+	return nil
+}
+
+// Stop reports a transfer as stopped after it ran (#883), the way a real
+// client shows one an operator paused.
+func (f *Fake) Stop(id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	t, ok := f.transfers[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNotOurs, id)
+	}
+	t.transfer.Held = false
+	t.transfer.Stopped = providers.StoppedAfterRun
+	return nil
+}
+
+// Resume reports a stopped transfer as running again, as an operator resuming
+// it in the client would.
+func (f *Fake) Resume(id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	t, ok := f.transfers[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNotOurs, id)
+	}
+	t.transfer.Held = false
+	t.transfer.Stopped = ""
 	return nil
 }
 
@@ -390,7 +421,12 @@ func (f *Fake) Start(_ context.Context, id string) error {
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrNotOurs, id)
 	}
-	t.transfer.Held = false
+	if t.transfer.Held {
+		// The real client starts only a held transfer, and leaves one an
+		// operator stopped after it ran alone.
+		t.transfer.Held = false
+		t.transfer.Stopped = ""
+	}
 	return nil
 }
 

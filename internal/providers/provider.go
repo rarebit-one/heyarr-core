@@ -176,7 +176,25 @@ type Transfer struct {
 	// (#882), not one an operator paused after it started, which has run. A
 	// Starter starts it; false when the client cannot tell.
 	Held bool
+	// Stopped is why the client holds the transfer stopped, incomplete and
+	// without an error (#883), empty while it runs or when the client cannot
+	// tell. StoppedHeld whenever Held; StoppedAfterRun for one stopped after it
+	// ran. A fact for acquisition status, never a trouble: a stopped transfer
+	// has not failed.
+	Stopped StopReason
 }
+
+// StopReason is why a download client holds a transfer stopped (#883).
+type StopReason string
+
+const (
+	// StoppedHeld is a transfer the client added stopped by its own default
+	// and that has never run (#882).
+	StoppedHeld StopReason = "held"
+	// StoppedAfterRun is a transfer stopped after it ran: an operator paused
+	// it, or something else stopped it at the client.
+	StoppedAfterRun StopReason = "after_run"
+)
 
 // Query is what to search for (§60's manual search, and M3-12's job).
 //

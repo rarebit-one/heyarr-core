@@ -235,6 +235,7 @@ func (c *Client) toTransfer(t torrent) providers.Transfer {
 		BytesDone:  int64(float64(t.TotalSize) * t.PercentDone),
 		Trackers:   announceURLs(t.TrackerStats),
 		Held:       held(t),
+		Stopped:    stopReason(t),
 	}
 
 	if trouble, bad := inspect(t); bad {
@@ -279,6 +280,20 @@ func stoppedIncomplete(t torrent) bool {
 func held(t torrent) bool {
 	return stoppedIncomplete(t) &&
 		t.ActivityDate == 0 && t.DownloadedEver == 0 && t.SecondsDownloading == 0
+}
+
+// stopReason is why Transmission holds a transfer stopped (#883): held, when
+// it never ran, otherwise stopped after it ran. Empty for one that is running,
+// complete or errored.
+func stopReason(t torrent) providers.StopReason {
+	switch {
+	case !stoppedIncomplete(t):
+		return ""
+	case held(t):
+		return providers.StoppedHeld
+	default:
+		return providers.StoppedAfterRun
+	}
 }
 
 // resolvePath translates the client's path into one Heyarr can open.

@@ -10,6 +10,16 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **Acquisition status says when a transfer is stopped at its client**
+  (#883). A transfer held stopped left its want reading `QUEUED` with no
+  reason. The poll now records the client's stop on the transfer row, beside
+  trouble but not as trouble (it never fails the want), and
+  `get_acquisition_status` reports `transfer.stopped` once the stop has lasted
+  ten minutes: `held` for one the client added stopped by its own default and
+  that never ran, `after_run` for one stopped after it ran, with since and a
+  sentence on what to do. Read from Transmission and qBittorrent (`pausedDL` /
+  `stoppedDL`); the usenet clients do not report it yet. Migration 00076 adds
+  the two columns.
 - **A plan honours the person's preferred quality** (#887, ADR-0123
   addendum). `POST /playback/plan` takes an optional `preference`:
   `quality` (`fit`, `best` or `data_saver`) and the person's own

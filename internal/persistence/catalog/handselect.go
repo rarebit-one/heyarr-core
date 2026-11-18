@@ -281,18 +281,18 @@ func (c *Catalog) CancelInFlightRelease(
 // acquisitionRowTx reads a want's transfer row and the moment it was grabbed,
 // nil when it has none.
 func acquisitionRowTx(ctx context.Context, tx *sql.Tx, desiredItemID string) (*Acquisition, string, error) {
-	var grabbedAt string
-	var a Acquisition
-	err := tx.QueryRowContext(ctx, `
-		SELECT `+acquisitionCols+`, created_at FROM acquisitions WHERE desired_item_id = ?`,
-		desiredItemID).Scan(&a.ID, &a.DesiredItemID, &a.Provider, &a.ExternalID,
-		&a.ExternalName, &a.RemotePath, &a.LocalPath,
-		&a.BytesTotal, &a.BytesDone, &a.Trouble, &grabbedAt)
+	a, err := scanAcquisitionRow(tx.QueryRowContext(ctx,
+		`SELECT `+acquisitionCols+` FROM acquisitions WHERE desired_item_id = ?`, desiredItemID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", nil
 	}
 	if err != nil {
 		return nil, "", fmt.Errorf("catalog: reading the transfer for %s: %w", desiredItemID, err)
+	}
+	var grabbedAt string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT created_at FROM acquisitions WHERE id = ?`, a.ID).Scan(&grabbedAt); err != nil {
+		return nil, "", fmt.Errorf("catalog: reading when %s was grabbed: %w", desiredItemID, err)
 	}
 	return &a, grabbedAt, nil
 }
