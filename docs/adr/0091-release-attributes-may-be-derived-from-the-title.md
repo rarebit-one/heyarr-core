@@ -166,3 +166,37 @@ is, per ADR-0026, either fixtured or deleted.
   no provider of it: resolution/source/codec are properties of a release, not a
   work, and no work-metadata service (TMDB included) knows them. The title is the
   only source that exists.
+
+## Addendum (2026-11-19): audio language is derived too, and it is a set (#888)
+
+A search listed fourteen candidates at one score and took the first: a release
+named `… Org Hindi DDP 2.0 Eng`, whose language nobody read, so the household's
+language penalty never applied. The owner chose to read language from the name
+and to make `language` a set, as `region` is (ADR-0121 §5), so that name is
+`{hi, en}`.
+
+**Decision.** `language` joins the attributes §2 derives, under every rule
+above: only with `parse_titles` on, only where the indexer asserted no
+language, and marked derived. §2's "audio is not derived" still holds for
+codec and channel count, which the parser does not model.
+
+- **What is read.** `identification.ParseReleaseLanguages` reads the release
+  metadata run: the tokens from the first quality token, year or season marker
+  onwards, plus any bracketed tag. It reads only language names and
+  three-letter codes, folded to ISO 639-1. A word in the work's title ("The
+  French Dispatch") is never read. A two-letter code is never read either,
+  because in a name it is as often a word or a flag ("it", "hi"). A language
+  followed by a subtitle word ("Eng.Subs") is skipped, and "multi" and "dual"
+  add nothing because they do not say which languages.
+- **A set, everywhere.** A torznab `language` attribute is split on commas and
+  slashes. A held copy's single edition language is a set of one. Stored
+  candidates were migrated to that shape (migration 77). A rule holds when any
+  member matches, so `{hi, en}` earns an `eq en` bonus and an `in [hi, …]`
+  penalty together. With the configured default (+50 for `en`, −100 for a
+  foreign list that includes `hi`) it ranks below a plain English release and
+  below an untagged one, and it is still never rejected for its language.
+
+**Revisit when** a primary language has to win over the others, for example
+when a multi-audio release should count as English for a household that does
+not mind the extra track. That would be a profile-level choice to score a set
+by one member instead of all of them.

@@ -78,8 +78,8 @@ var torznabAttribute = map[string]policy.Attribute{
 }
 
 // attributesOf is everything the release actually asserted, plus — when
-// parseTitles is on (ADR-0091) — what its title asserts about its own quality,
-// for the attributes the indexer left out.
+// parseTitles is on (ADR-0091) — what its title asserts about its own quality
+// and audio languages, for the attributes the indexer left out.
 func attributesOf(i item, title string, parseTitles bool) acquisition.Attributes {
 	attrs := acquisition.Attributes{}
 
@@ -124,18 +124,27 @@ func attributesOf(i item, title string, parseTitles bool) acquisition.Attributes
 	return attrs
 }
 
-// titleAttributes reads a release NAME's own quality claims into policy's typed
-// vocabulary, each value marked Derived (ADR-0091) so §63 names it as read from
-// the title. It is the one place the release-name parser is mapped onto policy,
-// shared by the torznab and prowlarr clients. Returns nil when the name carried
-// nothing recognisable — the same "determined nothing" signal as an empty
-// structured extraction.
+// titleAttributes reads a release NAME's own quality and language claims into
+// policy's typed vocabulary, each value marked Derived (ADR-0091) so §63 names
+// it as read from the title. It is the one place the release-name parser is
+// mapped onto policy, shared by the torznab and prowlarr clients. Returns nil
+// when the name carried nothing recognisable — the same "determined nothing"
+// signal as an empty structured extraction.
 func titleAttributes(title string) acquisition.Attributes {
+	attrs := acquisition.Attributes{}
+	if langs := identification.ParseReleaseLanguages(title); len(langs) > 0 {
+		// A SET, like region: "Org Hindi DDP 2.0 Eng" is a Hindi release and an
+		// English one at once (#888), so a language bonus and a dub penalty can
+		// both apply to it.
+		attrs[policy.AttrLanguage] = policy.Texts(langs...).AsDerived()
+	}
 	q := identification.ParseReleaseQuality(title)
 	if q.Empty() {
-		return nil
+		if len(attrs) == 0 {
+			return nil
+		}
+		return attrs
 	}
-	attrs := acquisition.Attributes{}
 	if lines, ok := resolutionLines(q.Resolution); ok {
 		attrs[policy.AttrResolution] = policy.Num(lines).AsDerived()
 	}
@@ -224,6 +233,9 @@ func valueFor(a policy.Attribute, raw string) (policy.Value, bool) {
 		}
 		return policy.Num(n), true
 	case policy.KindText:
+		if a == policy.AttrLanguage {
+			return languageSet(raw)
+		}
 		return policy.Text(raw), true
 	case policy.KindFlag:
 		switch strings.ToLower(raw) {
@@ -237,6 +249,23 @@ func valueFor(a policy.Attribute, raw string) (policy.Value, bool) {
 	default:
 		return policy.Value{}, false
 	}
+}
+
+// languageSet reads a torznab language attribute as the set policy's language
+// attribute is (#888): one value, or several separated by commas or slashes
+// ("hindi, english"). Declined when it names nothing.
+func languageSet(raw string) (policy.Value, bool) {
+	parts := strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '/' })
+	var langs []string
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			langs = append(langs, p)
+		}
+	}
+	if len(langs) == 0 {
+		return policy.Value{}, false
+	}
+	return policy.Texts(langs...), true
 }
 
 // sizeOf reads a release's size from the three places a server may put it.

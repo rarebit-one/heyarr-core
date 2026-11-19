@@ -540,6 +540,44 @@ func TestExplainReleaseRanksROMRegions(t *testing.T) {
 	}
 }
 
+// explain_release takes a release's audio languages as the set a search records
+// (#888): a Hindi-and-English release earns the English bonus and the dub
+// penalty together, and a single name is a set of one.
+func TestExplainReleaseTakesLanguageAsASet(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, false)
+	h.exec(`INSERT INTO quality_profiles
+		(id, name, description, accept, prefer, terminal, seeded, created_at, updated_at)
+		VALUES ('01990000-0000-7000-8000-0000000000l1', 'lang', '', '[]',
+		'[{"attribute":"language","op":"eq","value":"en","weight":50},
+		  {"attribute":"language","op":"in","value":["hi","it"],"weight":-100}]',
+		'[]', 0, ?, ?)`, stamp, stamp)
+
+	var out struct {
+		Ranked []struct {
+			ID    string `json:"id"`
+			Score int    `json:"score"`
+		} `json:"ranked"`
+	}
+	h.call("", "explain_release", `{"quality_profile":"lang","releases":[
+		{"id":"hi-en","attributes":{"language":["hi","en"]}},
+		{"id":"en","attributes":{"language":"en"}},
+		{"id":"und","attributes":{}}]}`).structured(t, &out)
+
+	scores := map[string]int{}
+	var order []string
+	for _, r := range out.Ranked {
+		scores[r.ID] = r.Score
+		order = append(order, r.ID)
+	}
+	if scores["en"] != 50 || scores["und"] != 0 || scores["hi-en"] != -50 {
+		t.Errorf("scores %v, want en 50, und 0, hi-en -50", scores)
+	}
+	if strings.Join(order, ",") != "en,und,hi-en" {
+		t.Errorf("ranking %v, want en, und, hi-en", order)
+	}
+}
+
 // A misspelled attribute is refused rather than silently scored against
 // nothing, which would produce an explanation that looks right.
 func TestExplainReleaseRefusesAnUnknownAttribute(t *testing.T) {

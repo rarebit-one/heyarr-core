@@ -358,7 +358,9 @@ func (c *Catalog) assetsAndPackagesForWant(
 			view.Attributes[policy.AttrSource] = policy.Text(editionType.String)
 		}
 		if language.Valid && strings.TrimSpace(language.String) != "" {
-			view.Attributes[policy.AttrLanguage] = policy.Text(language.String)
+			// A set of one: language is set-valued on a candidate (#888), and
+			// the held copy is compared against the same rules.
+			view.Attributes[policy.AttrLanguage] = policy.Texts(language.String)
 		}
 		if editionAttrs.Valid {
 			if blobs := applyEditionAttributes(view.Attributes, editionAttrs.String); len(blobs) > 0 {

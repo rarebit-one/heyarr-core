@@ -73,7 +73,12 @@ const (
 	// AttrSizeBytes is the release size. Useful as a gate — "nothing over
 	// 40 GB" — and as a penalty.
 	AttrSizeBytes Attribute = "size_bytes"
-	// AttrLanguage is an audio language tag.
+	// AttrLanguage is the audio languages a release carries, as ISO-639-1
+	// tags. A SET, like AttrRegion, because one release often carries several
+	// ("Org Hindi DDP 2.0 Eng" is {hi, en}, #888), so a rule holds when ANY of
+	// them matches: such a release earns an `eq en` bonus and an `in [hi, …]`
+	// penalty together. Asserted by a torznab `language` attribute, or read
+	// from the release name when the indexer opts into parse_titles (ADR-0091).
 	AttrLanguage Attribute = "language"
 	// AttrStore is the store a copy came from: gog, steam, epic (ADR-0118).
 	// Populated from the edition's attributes, which a store fetch writes once
